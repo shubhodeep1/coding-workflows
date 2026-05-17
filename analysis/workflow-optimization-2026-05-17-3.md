@@ -625,3 +625,165 @@ No `TODO` / `FIXME` / `HACK` markers were present in `.github/workflows/*.yml` o
 | Code modularization | 9-12 | Large |
 | Expression size reduction | 5-8 | Large |
 | Medium/Low fixes | 6-8 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-17)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlap was proven safe to collapse without changing endpoint/filter/error/concurrency behavior; `NEEDS_VERIFICATION` means the redundancy looks real but at least one safety precondition is not statically proven; `RISKY_SKIP` means the redundancy is visible, but the call lives in pagination/retry/race-defense code and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+- **MERGE-001 — NEEDS_VERIFICATION**
+  - **File path and lines:** `scripts/review_rb_judge.sh:246-256`, `scripts/review_rb_judge.sh:267-284`
+  - **Current call count:** `1` GraphQL call plus either `1` REST PR fetch (empty-linked path) or `1..N` REST issue fetches (linked-issue path)
+  - **Proposed call count:** `1`
+  - **Endpoint(s):** GraphQL `repository.pullRequest(number).closingIssuesReferences`; REST `GET /repos/{repo}/pulls/{pr_number}`; REST `GET /repos/{repo}/issues/{issue_number}`
+  - **Evidence:**
+    ```bash
+    ISSUE_NUMBERS="$(gh_retry gh api graphql \
+      ... pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } ...)"
+
+    if [ -z "${ISSUE_NUMBERS}" ]; then
+      PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
+    fi
+
+    ISSUE_META_JSON="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" || echo '{}')"
+    BODY="$(printf '%s' "${ISSUE_META_JSON}" | jq -r '.body // ""' ...)"
+    FIRST_ISSUE_LABELS_JSON="$(printf '%s' "${ISSUE_META_JSON}" | jq -c '[(.labels // [])[]?.name]' ...)"
+    ```
+  - **Proposed fix:** Capture the full GraphQL payload once, widen the selection to `pullRequest { title body closingIssuesReferences(first:50) { nodes { number body labels(first:50){nodes{name}} } } }`, and derive `ISSUE_NUMBERS`, `FIRST_ISSUE_BODY`, `FIRST_ISSUE_LABELS_JSON`, and PR title/body fallback locally from that single payload; use the existing batched-GraphQL style documented in `agents.md` and exemplified by `_fetch_candidate_issue_details_graphql` in `scripts/orchestrate_poll_process.sh`.
+  - **Safety rationale:** `NEEDS_VERIFICATION` because this replaces two REST fail-open branches with one richer GraphQL payload, so empty/error handling and “first usable issue body” behavior must be re-proved.
+  - **Downstream signal:** Verify that the widened `closingIssuesReferences` payload exposes `body` and `labels` for the referenced issues and that the single-payload fallback still matches today's empty-linked and first-issue selection semantics before removing the REST calls.
+
+- **MERGE-002 — NEEDS_VERIFICATION**
+  - **File path and lines:** `.github/workflows/review_autofix.yml:514-523`
+  - **Current call count:** `2` on the `closingIssuesReferences == []` path
+  - **Proposed call count:** `1`
+  - **Endpoint(s):** GraphQL `repository.pullRequest(number)`; REST `GET /repos/{repo}/pulls/{pr_number}`
+  - **Evidence:**
+    ```bash
+    issue_nodes_json="$(gh api graphql \
+      ... pullRequest(number:$number) {
+        closingIssuesReferences(first: 50) {
+          nodes { number labels(first: 100) { nodes { name } } }
+        }
+      } ...)"
+
+    if [ -z "${issue_nodes_json}" ] || [ "${issue_nodes_json}" = "[]" ]; then
+      pr_data="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' ...)"
+    fi
+    ```
+  - **Proposed fix:** In step `Dispatch standalone validate for orchestrator short-circuit issues`, stop `--jq`-extracting only `issue_nodes_json`; instead capture the full GraphQL payload once, add `title` and `body` to the `pullRequest` selection, and derive the regex fallback `pr_data` from the same payload. This is separate from Deep Audit `BATCH-001`, which covers the per-issue label enrichment loop.
+  - **Safety rationale:** `NEEDS_VERIFICATION` because the merged payload changes the fallback source and requires preserving current behavior when GraphQL succeeds with empty links versus when the GraphQL request itself fails.
+  - **Downstream signal:** Verify that merged/closed PRs always return a usable `pullRequest` object in this job, then switch to a single captured GraphQL payload and retain the REST PR fetch only as a GraphQL-request-failure fallback.
+
+- **MERGE-003 — NEEDS_VERIFICATION**
+  - **File path and lines:** `.github/workflows/test-and-mark-stable.yml:2797-2807`
+  - **Current call count:** `2` per poll iteration after `EXISTING_RUN_ID` is found
+  - **Proposed call count:** `1` per poll iteration
+  - **Endpoint(s):** REST `GET /repos/{repo}/actions/runs/{run_id}`
+  - **Evidence:**
+    ```bash
+    while [ "${EXISTING_STATUS}" != "completed" ] ...; do
+      sleep 5
+      EXISTING_STATUS=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" \
+        --jq '.status // ""' ...)
+      EXISTING_CONCLUSION=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" \
+        --jq '.conclusion // ""' ...)
+    done
+    ```
+  - **Proposed fix:** Replace the paired field fetches with one `gh api "repos/.../actions/runs/${EXISTING_RUN_ID}"` call per loop iteration, parse `{status, conclusion}` locally, and keep the surrounding timeout/logging unchanged.
+  - **Safety rationale:** `NEEDS_VERIFICATION` because a single fetch changes how partial field-read failures surface inside the timeout loop.
+  - **Downstream signal:** Verify that one empty/malformed combined fetch produces the same timeout/failure behavior as today's split field fetches before collapsing the two GETs.
+
+- **MERGE-004 — RISKY_SKIP**
+  - **File path and lines:** `.github/workflows/cancel_on_pr_close.yml:68-89`
+  - **Current call count:** `2` logical paginated list-runs queries
+  - **Proposed call count:** `1` logical list-runs query
+  - **Endpoint(s):** REST `GET /repos/{repo}/actions/runs`
+  - **Evidence:**
+    ```bash
+    queued_runs_json="$(
+      _gh_retry gh api ... "repos/${REPOSITORY}/actions/runs" --paginate -f status=queued ...
+    )"
+    in_progress_runs_json="$(
+      _gh_retry gh api ... "repos/${REPOSITORY}/actions/runs" --paginate -f status=in_progress ...
+    )"
+    ```
+  - **Proposed fix:** If this path is manually reviewed and approved, replace the two status-specific queries with one branch/event-filtered list-runs query and apply the `queued|in_progress` filter client-side.
+  - **Safety rationale:** `RISKY_SKIP` because this code is both paginated and on a PR-close cancellation/race path, so changing query shape can alter page-boundary and timing behavior.
+  - **Downstream signal:** Do not auto-implement; manually test busy-branch close events to prove one status-agnostic list query returns the exact same cancel set before changing this race-defense step.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **REUSE-001 — NEEDS_VERIFICATION**
+  - **File path and lines:** `.github/workflows/issue_pr_status.yml:284-349`, `.github/workflows/issue_pr_status.yml:383-386`, `.github/workflows/issue_pr_status.yml:503-512`
+  - **Current call count:** `1..N` REST issue-body fetches in the merged-alert step
+  - **Proposed call count:** `0` extra API calls in the merged-alert step
+  - **Endpoint(s):** Earlier GraphQL `repository { issue(number) { labels body } }` batch; later REST `GET /repos/{repo}/issues/{issue_number}`
+  - **Evidence:**
+    ```bash
+    ORCH_RESP="$(gh_retry gh api graphql -f query="${ORCH_QUERY}" ...)"
+    ...
+    MANAGED_ISSUES="${_managed_issues}"
+    ...
+    echo "LINKED_ISSUE_NUMBERS<<EOF" >> "$GITHUB_ENV"
+    echo "${ISSUE_NUMBERS}" >> "$GITHUB_ENV"
+
+    BODY="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' || echo "")"
+    if printf '%s' "${BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
+      IS_ORCHESTRATED="true"
+    fi
+    ```
+  - **Proposed fix:** In `Update linked issue labels when PR closes`, export a boolean such as `HAS_ORCHESTRATED_LINKED_ISSUE` (or export `MANAGED_ISSUES`) alongside `LINKED_ISSUE_NUMBERS`; in `Send PR merged Telegram alert`, consume that exported value instead of re-fetching each issue body.
+  - **Safety rationale:** `NEEDS_VERIFICATION` because the alert-step suppression rule must match the earlier managed/tracking classification exactly before replacing the live body scan.
+  - **Downstream signal:** Verify whether the alert should suppress on `MANAGED_ISSUES`, `TRACKING_ISSUES`, or both, then export that exact earlier classification result and remove the later per-issue body GET loop.
+
+### Dead Calls (DEAD-API-###)
+
+- **DEAD-API-001 — NEEDS_VERIFICATION**
+  - **File path and lines:** `.github/workflows/issue_pr_status.yml:181-207` (call site), `.github/workflows/internal-issue-pr-status.yml:3-12` and `workflow-templates/ai-issue-pr-status.yml:5-12` (in-repo caller evidence)
+  - **Current call count:** `0..1` per run
+  - **Proposed call count:** `0`
+  - **Endpoint(s):** REST `GET /repos/{repo}/pulls/{pr_number}`
+  - **Evidence:**
+    ```bash
+    PR_TITLE: ${{ github.event.pull_request.title }}
+    PR_BODY: ${{ github.event.pull_request.body || '' }}
+    ...
+    PR_DATA="${PR_TITLE:-} ${PR_BODY:-}"
+    if [ -z "$(printf '%s' "${PR_DATA}" | tr -d '[:space:]')" ]; then
+      PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' ...)"
+    fi
+    ```
+
+    ```yaml
+    on:
+      pull_request:
+        types: [closed]
+    jobs:
+      sync-status:
+        uses: shubhodeep1/coding-workflows/.github/workflows/issue_pr_status.yml@main
+    ```
+  - **Proposed fix:** After verifying supported callers always invoke this reusable workflow from `pull_request.closed` (or otherwise always provide non-blank `github.event.pull_request.title/body`), delete the conditional `gh api pulls/{PR_NUMBER}` fallback and rely on the already-injected event payload.
+  - **Safety rationale:** `NEEDS_VERIFICATION` because `issue_pr_status.yml` is a reusable `workflow_call` entrypoint, so repo-local wrappers are not proof of every external caller's payload contract.
+  - **Downstream signal:** Verify every supported caller invokes `issue_pr_status.yml` from a `pull_request.closed` event with non-blank title/body payloads; only then remove the fallback PR fetch.
+
+### Cross-References to Deep Audit Section
+
+- `API-001`: `RISKY_SKIP` — valid redundancy, but it sits in `scripts/orchestrate_poll_process.sh` final-merge/race-defense code, which this pass must not auto-collapse.
+- `BATCH-001`: `NEEDS_VERIFICATION` — batching the fallback issue-label enrichment is directionally correct, but it changes the standalone-validate step’s GraphQL/REST fallback semantics.
+- `API-002`: `RISKY_SKIP` — the retry-wrapper change is sound, but the call is inside a backoff/retry path and needs manual review.
+- `API-003`: `RISKY_SKIP` — the overlap is real, but both reads are paginated comment fetches, so page-shape semantics must be checked manually.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 5 | MERGE-001, MERGE-002, MERGE-003, REUSE-001, DEAD-API-001 |
+| RISKY_SKIP | 1 | MERGE-004 |
+
+### Implement-Stage Handoff
+
+- No SAFE_TO_MERGE findings in this pass.
