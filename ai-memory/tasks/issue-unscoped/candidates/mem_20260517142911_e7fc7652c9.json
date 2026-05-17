@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_synthesise_smoke.sh:41-56 | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: `behavioural_smoke_emit_extractor_stderr` can abort the script if `cat \"${path}\"` fails after the preceding `-s` check, breaking the intended fail-open emission of `BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL`.\n  WHY: All reviewers identified the same TOCTOU/read-failure race in the diagnostic path, and under `set -euo pipefail` that non-zero `cat` exit stops the script before the fail-open logging step.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_synthesise_smoke.sh:41-55 | confidence=2\n  PROBLEM: `behavioural_smoke_emit_extractor_stderr` can abort the script if `cat \"${path}\"` fails after the `-s` check, so the fail-open path may not emit `BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL`.\n  WHY: The function runs under `set -euo pipefail`, and a transient delete/readability change between the size test and `cat` would make the compound command fail before the fallback logging.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_synthesise_smoke.sh:42-56 | confidence=4\n  PROBLEM: `behavioural_smoke_emit_extractor_stderr` can abort the script if `cat \"${path}\"` fails after the `-s` check, so the fail-open path may not emit `BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL`.\n  WHY: The function is called in the fail-open synthesis-failure path, and a transient read failure under `set -e` would stop the script before `behavioural_smoke_log_fail` runs.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_synthesise_smoke.sh:41-56 | confidence=4\n  PROBLEM: `behavioural_smoke_emit_extractor_stderr` can abort the script if `cat \"${path}\"` fails after the `-s` check, so the fail-open path may not emit `BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL`.\n  WHY: A transient filesystem race or permissions change between the size check and the read causes the compound command to fail under `set -euo pipefail`, preventing the intended fail-open continuation.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/review_synthesise_smoke.sh:41-56 | confidence=4\n  PROBLEM: `behavioural_smoke_emit_extractor_stderr` can abort the script if `cat \"${path}\"` fails after the `-s` check, breaking fail-open behavior and suppressing `BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL`. (2 related items)\n  WHY: The same unprotected `cat` was reported in both SECURITY & INPUT VALIDATION and ERROR PATHS & EDGE CASES; under `set -euo pipefail`, a transient read failure terminates the script before the intended fail-open logging.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/review_synthesise_smoke.sh:52 | confidence=4\n  PROBLEM: `cat \"${path}\"` inside `behavioural_smoke_emit_extractor_stderr` can fail under `set -euo pipefail` and abort the script before `BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL` is emitted, breaking the fail-open contract.\n  WHY: The function checks `[ ! -s \"${path}\" ]` and then cats the file inside a compound command; if the file disappears or becomes unreadable between those operations, `cat` exits non-zero and `set -e` aborts the script immediately.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "378d625b25438b846b3c452363bcf2f67563aeb3ddcf5ad2e5a9bee7766a2d8c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2699,
+    "run_id": "25993074779",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25993074779",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517142911_e7fc7652c9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2699,
+    "run_id": "25993074779"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-17T14:29:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
