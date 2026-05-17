@@ -70,6 +70,10 @@ def _run_discover_tests(workspace: Path, *, include_synthesised: str | None) -> 
 	env["CANARY_REQUIRED"] = "1"
 	if include_synthesised is not None:
 		env["VALIDATION_INCLUDE_SYNTHESISED"] = include_synthesised
+	else:
+		# Keep the default-behaviour assertion isolated from any ambient runner
+		# env var so the test exercises the script's own :-false fallback.
+		env.pop("VALIDATION_INCLUDE_SYNTHESISED", None)
 
 	script = (
 		'VALIDATION_INCLUDE_SYNTHESISED="${VALIDATION_INCLUDE_SYNTHESISED:-false}"\n'
