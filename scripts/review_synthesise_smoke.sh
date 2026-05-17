@@ -204,6 +204,111 @@ def load_candidates(text: str):
 	return candidates
 
 
+def strip_outer_code_fence(text: str) -> str:
+	stripped = text.strip()
+	lines = stripped.splitlines()
+	if len(lines) >= 2 and lines[0].startswith("```") and lines[-1].strip() == "```":
+		return "\n".join(lines[1:-1]).strip("\n")
+	return text
+
+
+def normalize_content(text: str) -> str:
+	text = text.replace("\r\n", "\n").replace("\r", "\n")
+	text = strip_outer_code_fence(text)
+	lines = text.splitlines()
+	while lines and not lines[0].strip():
+		lines.pop(0)
+	if lines and lines[0].startswith("#!"):
+		lines = lines[1:]
+	text = "\n".join(lines).strip()
+	if not text:
+		raise ValueError("empty_content")
+	for raw_line in text.splitlines():
+		stripped = raw_line.strip()
+		if "`" in stripped or "$(" in stripped or "<(" in stripped or ">(" in stripped:
+			raise ValueError("body_unsafe_shell_construct")
+		lexer = shlex.shlex(stripped, posix=True, punctuation_chars=";&|(){}><")
+		lexer.whitespace_split = True
+		lexer.commenters = "#"
+		tokens = list(lexer)
+		expect_command = True
+		passthrough_command = ""
+		passthrough_option_value = False
+		pending_redirection_target = False
+		separator_tokens = {";", "&", "&&", "||", "|", "|&", "(", ")", "{", "}", "if", "then", "do", "else", "elif", "while", "until", "!"}
+		redirection_tokens = {">", ">>", "<", "<<", "<<<", "<>", "<&", ">&", ">|", "&>", "&>>"}
+		passthrough_tokens = {"command", "builtin", "env", "nohup", "nice", "timeout", "setsid", "time"}
+		passthrough_value_tokens = {
+			"env": {"-u", "-C", "--unset", "--chdir"},
+			"nice": {"-n", "--adjustment"},
+			"time": {"-f", "--format", "-o", "--output"},
+			"timeout": {"-s", "--signal", "-k", "--kill-after"},
+		}
+		dangerous_command_tokens = {
+			".",
+			"bash",
+			"csh",
+			"dash",
+			"eval",
+			"exec",
+			"ksh",
+			"perl",
+			"php",
+			"ruby",
+			"sh",
+			"source",
+			"sudo",
+			"tcsh",
+			"xargs",
+			"zsh",
+		}
+		for index, token in enumerate(tokens):
+			next_token = tokens[index + 1] if index + 1 < len(tokens) else ""
+			if pending_redirection_target:
+				pending_redirection_target = False
+				continue
+			if token in separator_tokens:
+				expect_command = True
+				passthrough_command = ""
+				passthrough_option_value = False
+				continue
+			if token in redirection_tokens:
+				pending_redirection_target = True
+				continue
+			if token.isdigit() and next_token in redirection_tokens:
+				continue
+			if expect_command and passthrough_option_value:
+				passthrough_option_value = False
+				continue
+			if expect_command and re.match(r"[A-Za-z_][A-Za-z0-9_]*=.*", token):
+				continue
+			if expect_command and token in passthrough_tokens:
+				passthrough_command = token
+				continue
+			if expect_command and passthrough_command:
+				if passthrough_command == "env" and (
+					token == "-S"
+					or token.startswith("-S")
+					or token == "--split-string"
+					or token.startswith("--split-string=")
+				):
+					raise ValueError("body_unsafe_shell_construct")
+				if token.startswith("-"):
+					if token in passthrough_value_tokens.get(passthrough_command, set()):
+						passthrough_option_value = True
+					continue
+				if passthrough_command == "nice" and re.match(r"-?\d+$", token):
+					continue
+				if passthrough_command == "timeout" and re.match(r"\d+(?:\.\d+)?[smhd]?$", token):
+					continue
+			if expect_command and token in dangerous_command_tokens:
+				raise ValueError("body_unsafe_shell_construct")
+			expect_command = False
+			passthrough_command = ""
+			passthrough_option_value = False
+	return text + "\n"
+
+
 def normalize_issue(issue):
 	if not isinstance(issue, dict):
 		return None
@@ -300,15 +405,16 @@ def normalize_generated_items(candidate, issue_count: int):
 			return None
 		if not isinstance(content, str):
 			return None
-		content = content.replace('\r\n', '\n').replace('\r', '\n').strip('\n')
-		if not content.strip():
+		try:
+			content = normalize_content(content)
+		except Exception:
 			return None
 		if type(expected_to_fail_until_fixed) is not bool:
 			return None
 		normalized.append(
 			{
 				'path': squish(path_value, 200),
-				'content': content + '\n',
+				'content': content,
 				'expected_to_fail_until_fixed': expected_to_fail_until_fixed,
 			}
 		)
@@ -426,6 +532,7 @@ for candidate in load_candidates(raw):
 		break
 
 if validated_items is None:
+	print('Behavioural smoke synthesis skipped: could not validate synthesis output', file=sys.stderr)
 	sys.exit(1)
 
 synth_dir_path = Path(synth_dir)
@@ -589,7 +696,7 @@ rm -rf "${SYNTH_DIR}"
 
 if [ "${CURRENT_ISSUES_COUNT}" = "0" ]; then
 	printf '[]\n' > "${RAW_OUTPUT_FILE}"
-	if synth_count="$(extract_and_write_synth_bundle "${RAW_OUTPUT_FILE}" "${JUDGE_ARTIFACT}" "${SYNTH_DIR}" "${MANIFEST_PATH}" "${CURRENT_ROUND}" "${CURRENT_HEAD_SHA}" "${LANGUAGE_HINT}" 2>/dev/null)" \
+	if synth_count="$(extract_and_write_synth_bundle "${RAW_OUTPUT_FILE}" "${JUDGE_ARTIFACT}" "${SYNTH_DIR}" "${MANIFEST_PATH}" "${CURRENT_ROUND}" "${CURRENT_HEAD_SHA}" "${LANGUAGE_HINT}")" \
 		&& [ -s "${MANIFEST_PATH}" ]; then
 		behavioural_smoke_log_ok "${synth_count}" "${CURRENT_ROUND}" "${LANGUAGE_HINT}" "${MANIFEST_PATH}"
 		exit 0
@@ -662,13 +769,13 @@ else
 	cmd_rc=$?
 fi
 
-if synth_count="$(extract_and_write_synth_bundle "${RAW_OUTPUT_FILE}" "${JUDGE_ARTIFACT}" "${SYNTH_DIR}" "${MANIFEST_PATH}" "${CURRENT_ROUND}" "${CURRENT_HEAD_SHA}" "${LANGUAGE_HINT}" 2>/dev/null)" \
+if synth_count="$(extract_and_write_synth_bundle "${RAW_OUTPUT_FILE}" "${JUDGE_ARTIFACT}" "${SYNTH_DIR}" "${MANIFEST_PATH}" "${CURRENT_ROUND}" "${CURRENT_HEAD_SHA}" "${LANGUAGE_HINT}")" \
 	&& [ -s "${MANIFEST_PATH}" ]; then
 	behavioural_smoke_log_ok "${synth_count}" "${CURRENT_ROUND}" "${LANGUAGE_HINT}" "${MANIFEST_PATH}"
 	exit 0
 fi
 
-if synth_count="$(extract_and_write_synth_bundle "${STDERR_FILE}" "${JUDGE_ARTIFACT}" "${SYNTH_DIR}" "${MANIFEST_PATH}" "${CURRENT_ROUND}" "${CURRENT_HEAD_SHA}" "${LANGUAGE_HINT}" 2>/dev/null)" \
+if synth_count="$(extract_and_write_synth_bundle "${STDERR_FILE}" "${JUDGE_ARTIFACT}" "${SYNTH_DIR}" "${MANIFEST_PATH}" "${CURRENT_ROUND}" "${CURRENT_HEAD_SHA}" "${LANGUAGE_HINT}")" \
 	&& [ -s "${MANIFEST_PATH}" ]; then
 	behavioural_smoke_log_ok "${synth_count}" "${CURRENT_ROUND}" "${LANGUAGE_HINT}" "${MANIFEST_PATH}"
 	exit 0

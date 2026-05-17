@@ -387,7 +387,82 @@ def test_review_synthesise_smoke_fails_open_on_wrong_item_count() -> None:
 		combined_output = result.stdout + result.stderr
 		assert result.returncode == 0, combined_output
 		assert not manifest.exists(), combined_output
+		assert "could not validate synthesis output" in combined_output
 		assert "BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL reason=json_parse_failed round=1" in combined_output
+
+
+def test_review_synthesise_smoke_rejects_unsafe_shell_constructs() -> None:
+	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_unsafe_") as td:
+		workspace = Path(td)
+		runtime_dir = workspace / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		mock_bin_dir = workspace / "mock_bin"
+		head_sha = _seed_repo_with_autofix_commit(workspace)
+		_write_judge_artifact(
+			workspace,
+			head_sha,
+			[_make_issue("src/module.py:2:branch-check", 2, 3, "Branch still always returns autofix")],
+		)
+		env = _base_env(workspace, runtime_dir, mock_bin_dir)
+		manifest = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth" / "synth_round_1_manifest.json"
+
+		for content in (
+			'result="$(whoami)"\nbehavioural_smoke_inconclusive "unsafe"',
+			'bash -c "printf unsafe"\nbehavioural_smoke_inconclusive "unsafe"',
+			'eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'exec /bin/false\nbehavioural_smoke_inconclusive "unsafe"',
+			'env -S "printf unsafe"\nbehavioural_smoke_inconclusive "unsafe"',
+			'env --split-string="printf unsafe"\nbehavioural_smoke_inconclusive "unsafe"',
+			'source ./payload.sh\nbehavioural_smoke_inconclusive "unsafe"',
+			'. ./payload.sh\nbehavioural_smoke_inconclusive "unsafe"',
+			'cmd & eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'cmd |& eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'> /dev/null eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'2>/dev/null eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'env eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'env -u SOME_VAR eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'sudo eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'sudo -u root eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'time eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'time -o /dev/null eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'time --format %E eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'time -p eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'! eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'timeout 1 eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'timeout 10s eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'timeout -s KILL 1 eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'xargs eval\nbehavioural_smoke_inconclusive "unsafe"',
+			'xargs -d , eval\nbehavioural_smoke_inconclusive "unsafe"',
+			'command -p eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'builtin -- source ./payload.sh\nbehavioural_smoke_inconclusive "unsafe"',
+			'if eval "$PAYLOAD"; then behavioural_smoke_inconclusive "unsafe"; fi',
+		):
+			_install_mock_codex(
+				mock_bin_dir,
+				stdout_text=json.dumps(
+					[
+						{
+							"path": "validation/tests/unsafe.sh",
+							"content": content,
+							"expected_to_fail_until_fixed": True,
+						}
+					]
+				)
+				+ "\n",
+			)
+
+			result = subprocess.run(
+				["bash", str(SYNTH_SCRIPT)],
+				cwd=workspace,
+				env=env,
+				capture_output=True,
+				text=True,
+			)
+
+			combined_output = result.stdout + result.stderr
+			assert result.returncode == 0, f"{content}: {combined_output}"
+			assert "could not validate synthesis output" in combined_output, f"{content}: {combined_output}"
+			assert not manifest.exists(), f"{content}: {combined_output}"
 
 
 def test_review_synthesise_smoke_invalid_lang_falls_back_to_repo_detection() -> None:
