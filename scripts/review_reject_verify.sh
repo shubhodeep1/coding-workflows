@@ -152,6 +152,10 @@ def sticky_line_bucket() -> int:
 	return int(raw) if raw.isdigit() else 5
 
 
+def sticky_findings_enabled() -> bool:
+	return os.getenv("STICKY_FINDINGS_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def parse_evidence_map(text: str) -> dict[str, list[str]]:
 	data: dict[str, list[str]] = {}
 	for raw in text.splitlines():
@@ -413,10 +417,14 @@ def verify_prior_round(block: dict[str, object], repo_root: Path, pr_number: str
 		prior_lines = str(row.get("lines", ""))
 		current_lines = str(block["fields"].get("LINES", ""))  # type: ignore[index]
 		if prior_lines != current_lines:
+			if not sticky_findings_enabled():
+				return "does-not-support", "Prior-round verifier artifact points at a different line range."
 			prior_range = parse_line_spec(prior_lines)
 			current_range = parse_line_spec(current_lines)
-			if prior_range is None or current_range is None:
-				return "does-not-support", "Prior-round verifier artifact points at a different line range."
+			if prior_range is None:
+				return "does-not-support", "Prior-round verifier artifact has an unparseable line range."
+			if current_range is None:
+				return "does-not-support", "Current review issue has an unparseable line range."
 			if line_range_distance(*prior_range, *current_range) > sticky_line_bucket():
 				return "does-not-support", "Prior-round verifier artifact points at a different line range."
 		return "support", f"Prior-round verifier artifact still supports issue {issue_id}."

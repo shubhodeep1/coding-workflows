@@ -186,6 +186,91 @@ CONTENT_END
 		assert payload["matches"][0]["current_lines"] == [27]
 
 
+def test_path_qualified_reference_with_digits_uses_trailing_line_number() -> None:
+	prior_text = """=== ISSUE 011 ===
+FILE: scripts/orchestrate_state_v2.py
+LINES: 123
+LENS: CORRECTNESS & LOGIC
+SEVERITY: med
+FLAGGED_BY: reviewer_alpha
+CLASSIFICATION: non-actionable
+EVIDENCE:
+  reviewer_alpha> Sticky matcher should use the trailing line number.
+CURRENT_CODE:
+  return current_state
+SUGGESTED_APPROACH:
+  Keep the current line anchor.
+NOTES:
+  Prior round note for the versioned path regression.
+=== END ISSUE 011 ===
+"""
+	bundle_text = """FILE_PATH: /tmp/review_alpha.txt
+CONTENT_START
+File: scripts/orchestrate_state_v2.py
+Code: scripts/orchestrate_state_v2.py:123
+Problem: Sticky matcher should use the trailing line number.
+Why it fails at runtime: Versioned file names otherwise parse as line 2.
+ISSUE_CONFIDENCE: 5
+CONTENT_END
+"""
+
+	with tempfile.TemporaryDirectory(prefix="sticky_path_digits_") as td:
+		workspace = Path(td)
+		result, _, sticky_json, _ = _run_annotator(
+			workspace,
+			prior_text=prior_text,
+			bundle_text=bundle_text,
+		)
+
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert sticky_json.exists(), result.stdout + result.stderr
+		payload = json.loads(sticky_json.read_text(encoding="utf-8"))
+		assert payload["matches"][0]["file"] == "scripts/orchestrate_state_v2.py"
+		assert payload["matches"][0]["current_lines"] == [123]
+
+
+def test_line_reference_with_suffix_text_still_matches() -> None:
+	prior_text = """=== ISSUE 012 ===
+FILE: src/module.py
+LINES: 27-28
+LENS: CORRECTNESS & LOGIC
+SEVERITY: med
+FLAGGED_BY: reviewer_alpha
+CLASSIFICATION: non-actionable
+EVIDENCE:
+  reviewer_alpha> Sticky matcher should keep verbose line references.
+CURRENT_CODE:
+  return token
+SUGGESTED_APPROACH:
+  Keep the sticky anchor.
+NOTES:
+  Prior round note for verbose line references.
+=== END ISSUE 012 ===
+"""
+	bundle_text = """FILE_PATH: /tmp/review_alpha.txt
+CONTENT_START
+File: src/module.py
+Line or code reference: verify_prior_round function, lines 27-28 (new branch added by last run)
+Problem: Sticky matcher should keep verbose line references.
+Why it fails at runtime: The reviewer bundle carries descriptive suffix text after the line range.
+ISSUE_CONFIDENCE: 4
+CONTENT_END
+"""
+
+	with tempfile.TemporaryDirectory(prefix="sticky_verbose_lines_") as td:
+		workspace = Path(td)
+		result, _, sticky_json, _ = _run_annotator(
+			workspace,
+			prior_text=prior_text,
+			bundle_text=bundle_text,
+		)
+
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert sticky_json.exists(), result.stdout + result.stderr
+		payload = json.loads(sticky_json.read_text(encoding="utf-8"))
+		assert payload["matches"][0]["current_lines"] == [27]
+
+
 def test_missing_prior_artifact_is_noop_and_leaves_no_sticky_outputs() -> None:
 	bundle_text = """FILE_PATH: /tmp/review_alpha.txt
 CONTENT_START

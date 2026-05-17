@@ -120,14 +120,20 @@ def identity_key(file_path: str, symptom: str) -> str:
 def parse_line_spec(value: str) -> tuple[int, int] | None:
 	if not isinstance(value, str):
 		return None
-	match = re.search(r'([0-9]+)(?:\s*-\s*([0-9]+))?', value)
-	if not match:
-		return None
-	start = int(match.group(1))
-	end = int(match.group(2) or match.group(1))
-	if start < 1 or end < start:
-		return None
-	return start, end
+	text = squish(value)
+	for pattern in (
+		r'(?i)\blines?\s+(\d+)(?:\s*-\s*(\d+))?\b',
+		r'^(\d+)(?:\s*-\s*(\d+))?$',
+	):
+		match = re.search(pattern, text)
+		if not match:
+			continue
+		start = int(match.group(1))
+		end = int(match.group(2) or match.group(1))
+		if start < 1 or end < start:
+			return None
+		return start, end
+	return None
 
 
 def line_range_distance(
@@ -267,11 +273,15 @@ def parse_reviewer_findings(path: str) -> list[dict[str, object]]:
 				line_ref = stripped.split(':', 1)[1].strip()
 			elif lower.startswith('problem:'):
 				symptom = stripped.split(':', 1)[1].strip()
-		if not file_path and line_ref:
-			path_match = re.search(r'([A-Za-z0-9_./-]+):([0-9]+)', line_ref)
-			if path_match:
-				file_path = normalize_file(path_match.group(1))
-		parsed_lines = parse_line_spec(line_ref)
+		parsed_line_ref = line_ref
+		path_match = None
+		if line_ref:
+			path_match = re.search(r'([A-Za-z0-9_./-]+):([0-9]+(?:\s*-\s*[0-9]+)?)\s*$', line_ref)
+		if not file_path and path_match:
+			file_path = normalize_file(path_match.group(1))
+		if path_match:
+			parsed_line_ref = path_match.group(2)
+		parsed_lines = parse_line_spec(parsed_line_ref)
 		if not file_path or not symptom or parsed_lines is None:
 			return None
 		return {
