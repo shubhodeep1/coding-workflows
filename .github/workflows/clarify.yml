@@ -653,6 +653,12 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Source sanitize_codex_prompt_file (best-effort) so invalid
+          # UTF-8 in the prompt cannot deterministically kill every
+          # clarify retry.
+          # shellcheck source=/dev/null
+          source scripts/gh_helpers.sh 2>/dev/null || true
+
           PROMPT_TEMPLATE_FILE="${RUNTIME_DIR}/mode-clarify-inline.txt"
           cat > "${PROMPT_TEMPLATE_FILE}" <<'PROMPT'
           === CLARIFICATION TASK ===
@@ -815,6 +821,10 @@ jobs:
             echo "=== ISSUE CONTEXT ==="
             cat "${ISSUE_CONTEXT_FILE}"
           } > "${CODEX_PROMPT_FILE}"
+
+          if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+            sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
+          fi
 
           # Pass prompt via stdin to avoid ARG_MAX limits with large context files
           max_attempts=3

@@ -31,6 +31,9 @@ if ! command -v _embed_input_file >/dev/null 2>&1; then
     cat "${_p}"
   }
 fi
+if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+  sanitize_codex_prompt_file() { :; }
+fi
 
 # Filter workflow-generated Serena runtime artifacts from the editor
 # no-op detector only when the repo did not already own the Serena
@@ -941,6 +944,15 @@ prompt_tmp="$(mktemp)"
   cat "${EDITOR_PROMPT_BODY_FILE}"
 } > "${prompt_tmp}"
 mv "${prompt_tmp}" "${EDITOR_PROMPT_FILE}"
+
+# Last-line-of-defence UTF-8 sanitisation: Codex CLI's stdin reader
+# strictly validates UTF-8 and aborts on the first invalid byte. Any
+# embedded input that leaks invalid bytes (e.g. floor_tags.txt with a
+# mid-codepoint truncation from scripts/review_floor_rules.sh — the
+# bug from multi-user-ai-agent PR #33) would otherwise kill the
+# editor across every retry. See `sanitize_codex_prompt_file` in
+# scripts/gh_helpers.sh for the design.
+sanitize_codex_prompt_file "${EDITOR_PROMPT_FILE}"
 
 echo "Editor prompt bytes: $(wc -c < "${EDITOR_PROMPT_FILE}")"
 echo "Editor prompt sha256: $(sha256sum "${EDITOR_PROMPT_FILE}" | awk '{print $1}')"

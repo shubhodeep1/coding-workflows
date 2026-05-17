@@ -1292,6 +1292,14 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Source sanitize_codex_prompt_file (best-effort). Codex
+          # CLI's stdin reader strictly validates UTF-8; any invalid
+          # byte that leaked into the prompt would abort the
+          # implementer immediately. Stripping invalid bytes before
+          # piping is the cheapest insurance.
+          # shellcheck source=/dev/null
+          source scripts/gh_helpers.sh 2>/dev/null || true
+
           PROMPT_TEMPLATE_FILE="${RUNTIME_DIR}/mode-implement-inline.txt"
           cat > "${PROMPT_TEMPLATE_FILE}" <<'EOF'
           === IMPLEMENTATION TASK ===
@@ -1761,6 +1769,9 @@ jobs:
             # the cumulative log by line offset.
             attempt_log_file="${RUNTIME_DIR}/codex_log_attempt_${attempt}.txt"
             : > "${attempt_log_file}"
+            if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+              sanitize_codex_prompt_file "${PROMPT_FILE_TO_USE}"
+            fi
             (
               exec codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${PROMPT_FILE_TO_USE}"
             ) > "${CODEX_OUTPUT_FILE}" 2> >(
@@ -2375,6 +2386,11 @@ jobs:
           set -euo pipefail
           echo "repaired=false" >> "$GITHUB_OUTPUT"
 
+          # Source sanitize_codex_prompt_file (best-effort) so the
+          # repair-prompt pipe to codex strips invalid UTF-8 first.
+          # shellcheck source=/dev/null
+          source scripts/gh_helpers.sh 2>/dev/null || true
+
           REPAIR_PROMPT_TEMPLATE="prompts/mode-implement-repair.txt"
           REPAIR_VALIDATOR_SCRIPT="scripts/validate_changed_files_syntax.sh"
           CAPTURE_FILE="${RUNTIME_DIR}/post_codex_validation_errors.txt"
@@ -2689,6 +2705,9 @@ jobs:
 
             REPAIR_OUTPUT_FILE="${RUNTIME_DIR}/post_codex_repair_output_attempt_${attempt}.txt"
             REPAIR_LOG_FILE="${RUNTIME_DIR}/post_codex_repair_log_attempt_${attempt}.txt"
+            if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+              sanitize_codex_prompt_file "${REPAIR_PROMPT_FILE}"
+            fi
             if ! codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${REPAIR_PROMPT_FILE}" > "${REPAIR_OUTPUT_FILE}" 2> >(tee -a "${REPAIR_LOG_FILE}" >&2); then
               echo "::warning::Post-Codex repair attempt ${attempt} failed while invoking Codex."
               continue
@@ -3951,6 +3970,11 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Source sanitize_codex_prompt_file (best-effort) so the
+          # concatenated prompt is UTF-8-clean before piping to codex.
+          # shellcheck source=/dev/null
+          source scripts/gh_helpers.sh 2>/dev/null || true
+
           cat > "${ISSUE_SUMMARY_PROMPT_FILE}" <<EOF
           Generate a concise issue summary for a pull request comment.
 
@@ -3973,11 +3997,18 @@ jobs:
             cat "${PLAN_FILE}"
           } > "${RUNTIME_DIR}/issue_context_for_summary.txt"
 
-          trap 'rm -f "${RUNTIME_DIR}/issue_context_for_summary.txt"' EXIT
+          _summary_combined_prompt="${RUNTIME_DIR}/issue_summary_combined_prompt.txt"
+          trap 'rm -f "${RUNTIME_DIR}/issue_context_for_summary.txt" "${_summary_combined_prompt}"' EXIT
 
           for _summary_attempt in 1 2 3; do
-            cat "${ISSUE_SUMMARY_PROMPT_FILE}" "${RUNTIME_DIR}/issue_context_for_summary.txt" \
-              | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${ISSUE_SUMMARY_FILE}" || true
+            # Materialise the concatenation into a temp file so we
+            # can sanitize invalid UTF-8 before piping to codex
+            # (codex's stdin reader strictly validates UTF-8).
+            cat "${ISSUE_SUMMARY_PROMPT_FILE}" "${RUNTIME_DIR}/issue_context_for_summary.txt" > "${_summary_combined_prompt}"
+            if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+              sanitize_codex_prompt_file "${_summary_combined_prompt}"
+            fi
+            codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_summary_combined_prompt}" > "${ISSUE_SUMMARY_FILE}" || true
             if [ -s "${ISSUE_SUMMARY_FILE}" ] && grep -q '^### AI Issue Summary' "${ISSUE_SUMMARY_FILE}"; then
               echo "Summary generated on attempt ${_summary_attempt}."
               break

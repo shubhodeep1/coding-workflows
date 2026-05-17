@@ -573,6 +573,15 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Source sanitize_codex_prompt_file (best-effort). Codex
+          # CLI's stdin reader strictly validates UTF-8; any invalid
+          # byte that leaked into the prompt (e.g. via a byte-based
+          # truncation in an upstream awk script) would abort the
+          # decomposer immediately. Stripping invalid bytes before
+          # piping is the cheapest insurance.
+          # shellcheck source=/dev/null
+          source scripts/gh_helpers.sh 2>/dev/null || true
+
           # Author-enumeration enforcement.
           #
           # When the project description explicitly enumerates sub-issues
@@ -657,6 +666,9 @@ jobs:
             attempt_ok=0
             attempt_started_at="$(date +%s)"
             attempt_worktree_before="$(git status --porcelain=v1 --untracked-files=all)"
+            if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+              sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
+            fi
             # `--` terminates `timeout`'s option parsing so a leading
             # '-' in DURATION cannot be mistaken for an option (defence
             # in depth on top of the regex check above). stdin

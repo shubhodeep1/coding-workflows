@@ -599,6 +599,9 @@ PY
 }
 
 DIAGNOSE_SUCCESS=false
+if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+  sanitize_codex_prompt_file "${IMPLEMENT_DIAGNOSE_PROMPT_FILE}"
+fi
 if timeout "${IMPLEMENT_DIAGNOSE_TIMEOUT_SEC}"s codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${DIAGNOSE_MODEL}" --sandbox danger-full-access \
   < "${IMPLEMENT_DIAGNOSE_PROMPT_FILE}" > "${IMPLEMENT_DIAGNOSE_OUTPUT_FILE}" \
   2> >(tee -a "${IMPLEMENT_DIAGNOSE_LOG_FILE}" >&2); then
