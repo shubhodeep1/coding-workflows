@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:4668 | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: The operator-facing merge-conflict message hardcodes \"merge in main\" even though the workflow can run on non-main base branches.\n  WHY: The reviewer verified line 4668 reads `\"Please resolve the conflicts (rebase or merge in main) and push;\"`, which is wrong on branches like `stable`.\n- tests/test_review_rb_judge_self_run_exclusion.py:312-465 | severity=medium | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: The direct-entrypoint harness catches only Exception, so pytest.skip() can escape as Skipped and crash the module when jq is unavailable.\n  WHY: `_run_jq` calls `pytest.skip()`, which raises a BaseException subclass, and `main()` only has `except Exception as exc`, so missing jq can produce an uncaught traceback.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_review_rb_judge_self_run_exclusion.py:312-457 | severity=medium | confidence=2\n  PROBLEM: `main()` does not catch `pytest.skip()` from `_run_jq()`, so the module can crash instead of skipping cleanly when jq is missing.\n  WHY: `main() catches only Exception (line 453: except Exception as exc), but _run_jq calls pytest.skip() (line 317) which raises _pytest.outcomes.Skipped \u2014 a BaseException subclass, not an Exception subclass.`\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_review_rb_judge_self_run_exclusion.py:442-465 | severity=medium | confidence=3\n  PROBLEM: `main()` catches only `Exception`, but `pytest.skip()` raises `Skipped`, so missing jq can propagate an uncaught skip exception.\n  WHY: If the test environment has pytest installed but jq is missing, `_run_jq()` calls `pytest.skip()`, raising `Skipped` that propagates uncaught instead of being handled gracefully; suggested minimal fix: change `except Exception as exc:` to `except BaseException as exc:` or add a specific handler for the skip case.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_review_rb_judge_self_run_exclusion.py:317-317 | severity=medium | confidence=1\n  PROBLEM: The direct-entrypoint harness catches only `Exception`, but `_run_jq()` calls `pytest.skip()` when jq is unavailable.\n  WHY: `pytest.skip()` raises `Skipped`, a `BaseException` subclass that is not caught by `except Exception`, so a missing jq binary would crash the harness rather than reporting a clean skip or failure.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/review_autofix.yml:4668 | severity=low | confidence=4\n  PROBLEM: The operator-facing comment body hardcodes \"merge in main\" but the workflow runs against arbitrary base branches.\n  WHY: When the base branch is not `main` (e.g., `stable`, `develop`, or a consumer repo's custom default), the PR comment instructs the operator to \"merge in main\" \u2014 the wrong branch; suggested minimal fix: change \"merge in main\" to \"merge in the base branch\".\n- tests/test_review_rb_judge_self_run_exclusion.py:317-457 | severity=medium | confidence=2\n  PROBLEM: If `jq` is unavailable and `pytest` is installed, `_run_jq` raises `Skipped` and `main()` does not catch it.\n  WHY: `_run_jq` calls `pytest.skip()` which raises `Skipped` (a `BaseException` subclass, not `Exception`); `main()` catches only `except Exception as exc`, so `Skipped` propagates uncaught and crashes the module instead of reporting a clean skip.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "e9a40a3aadcfa1f17cee532bcdca5e6b1a90b7d3601d5ef731cf319b707b71a9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2703,
+    "run_id": "25996717880",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25996717880",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517170438_c2b591156a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2703,
+    "run_id": "25996717880"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-17T17:04:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
