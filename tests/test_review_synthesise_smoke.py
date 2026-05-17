@@ -306,6 +306,45 @@ def test_review_synthesise_smoke_fails_open_on_malformed_output() -> None:
 		assert "BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL reason=json_parse_failed round=1" in combined_output
 
 
+def test_review_synthesise_smoke_surfaces_codex_stderr_on_failure() -> None:
+	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_stderr_") as td:
+		workspace = Path(td)
+		runtime_dir = workspace / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		mock_bin_dir = workspace / "mock_bin"
+		head_sha = _seed_repo_with_autofix_commit(workspace)
+		_write_judge_artifact(
+			workspace,
+			head_sha,
+			[_make_issue("src/module.py:2:branch-check", 2, 3, "Branch still always returns autofix")],
+		)
+		_install_mock_codex(
+			mock_bin_dir,
+			stdout_text="",
+			stderr_text="mock model lookup failed\n",
+			exit_code=1,
+		)
+		env = _base_env(workspace, runtime_dir, mock_bin_dir)
+		env["MOCK_CODEX_EXIT_CODE"] = "1"
+
+		result = subprocess.run(
+			["bash", str(SYNTH_SCRIPT)],
+			cwd=workspace,
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+
+		manifest = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth" / "synth_round_1_manifest.json"
+		combined_output = result.stdout + result.stderr
+		assert result.returncode == 0, combined_output
+		assert not manifest.exists(), combined_output
+		assert "BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL reason=llm_failed round=1" in combined_output
+		assert "BEHAVIOURAL_SMOKE_SYNTHESIS_STDERR_BEGIN" in result.stderr
+		assert "mock model lookup failed" in result.stderr
+		assert "BEHAVIOURAL_SMOKE_SYNTHESIS_STDERR_END" in result.stderr
+
+
 def test_review_synthesise_smoke_fails_open_on_wrong_item_count() -> None:
 	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_count_mismatch_") as td:
 		workspace = Path(td)
@@ -561,7 +600,10 @@ def test_validate_workflows_restore_cached_behavioural_smoke_artifacts() -> None
 	review_workflow = REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
 
 	assert "description: \"Review PR number for restoring cached behavioural smoke artifacts (0 to auto-detect from tracking issue)\"" in validate_workflow
+	assert "- name: Normalize behavioural smoke include flag" in validate_workflow
+	assert "id: behavioural_smoke_gate" in validate_workflow
 	assert "- name: Resolve behavioural smoke source PR" in validate_workflow
+	assert "if: steps.behavioural_smoke_gate.outputs.enabled == 'true'" in validate_workflow
 	assert "- name: Restore behavioural smoke runtime cache" in validate_workflow
 	assert "path: .ai/review_runtime/" in validate_workflow
 	assert "review-ledger-${{ github.repository }}-pr-${{ steps.behavioural_smoke_pr.outputs.pr_number }}-" in validate_workflow
@@ -753,6 +795,64 @@ def test_validate_process_materializes_latest_cached_synthesised_smoke_tests() -
 		assert latest_manifest.exists()
 		assert json.loads(latest_manifest.read_text(encoding="utf-8"))["round"] == 3
 		assert not old_target.exists()
+
+
+def test_validate_process_warns_when_synth_sources_are_missing() -> None:
+	with tempfile.TemporaryDirectory(prefix="validate_process_synth_missing_") as td:
+		workspace = Path(td)
+
+		round3_dir = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-3" / "synth"
+		round3_dir.mkdir(parents=True, exist_ok=True)
+		(round3_dir / "synth_round_3_manifest.json").write_text(
+			json.dumps(
+				{
+					"round": 3,
+					"head_sha": "newsha",
+					"language": "python",
+					"source_artifact": ".ai/review_runtime/pr-4242/round-3/judge_interim.json",
+					"target_manifest_relpath": "validation/tests/synth_round_3_manifest.json",
+					"files": [
+						{
+							"issue_id": "latest",
+							"file": "src/module.py",
+							"line_start": 3,
+							"line_end": 3,
+							"severity": "must-fix",
+							"slug": "latest_issue",
+							"cache_relpath": ".ai/review_runtime/pr-4242/round-3/synth/missing_wrapper.sh",
+							"target_relpath": "validation/tests/synth_round_3_latest_issue.sh",
+							"suggested_path": "validation/tests/synth_round_3_latest_issue.sh",
+							"expected_to_fail_until_fixed": True,
+						}
+					],
+				},
+				indent=2,
+			)
+			+ "\n",
+			encoding="utf-8",
+		)
+
+		function_text = _extract_shell_function(VALIDATE_PROCESS, "materialize_synthesised_behavioural_smoke_tests")
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				+ "VALIDATION_INCLUDE_SYNTHESISED=true\n"
+				+ function_text
+				+ "materialize_synthesised_behavioural_smoke_tests\n",
+			],
+			cwd=workspace,
+			capture_output=True,
+			text=True,
+			check=True,
+		)
+
+		manifest_target = workspace / "validation" / "tests" / "synth_round_3_manifest.json"
+		assert manifest_target.exists()
+		assert "missing synthesised smoke source" in result.stderr
+		assert "listed 1 file(s) but none were materialized into validation/tests" in result.stderr
+		assert "Materialized synthesised behavioural smoke tests" not in result.stdout
 
 
 def main() -> int:

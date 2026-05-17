@@ -674,6 +674,14 @@ if synth_count="$(extract_and_write_synth_bundle "${STDERR_FILE}" "${JUDGE_ARTIF
 	exit 0
 fi
 
+if [ -s "${STDERR_FILE}" ]; then
+	{
+		echo 'BEHAVIOURAL_SMOKE_SYNTHESIS_STDERR_BEGIN'
+		tail -n 80 "${STDERR_FILE}" || true
+		echo 'BEHAVIOURAL_SMOKE_SYNTHESIS_STDERR_END'
+	} >&2
+fi
+
 rm -rf "${SYNTH_DIR}"
 failure_reason="json_parse_failed"
 if [ "${cmd_rc}" -eq 124 ]; then

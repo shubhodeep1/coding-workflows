@@ -1315,7 +1315,7 @@ runtime_root = (repo_root / '.ai' / 'review_runtime').resolve()
 target_root = (repo_root / 'validation' / 'tests').resolve()
 
 
-def _manifest_key(path: Path) -> tuple[int, int, str]:
+def _manifest_key(path: Path):
     round_match = re.search(r'/round-(\d+)/', path.as_posix())
     pr_match = re.search(r'/pr-(\d+)/', path.as_posix())
     round_value = int(round_match.group(1)) if round_match else -1
@@ -1389,7 +1389,16 @@ if target_manifest_path is not None:
 else:
     print('validate_process: skipping synthesised smoke manifest copy because target_manifest_relpath is invalid.', file=sys.stderr)
 
-print(f'Materialized synthesised behavioural smoke tests from {manifest_path.relative_to(repo_root).as_posix()} into validation/tests (files={copied}).')
+if copied == 0 and rows:
+    print(
+        'validate_process: warning: manifest at {} listed {} file(s) but none were materialized into validation/tests.'.format(
+            manifest_path.relative_to(repo_root).as_posix(),
+            len(rows),
+        ),
+        file=sys.stderr,
+    )
+else:
+    print(f'Materialized synthesised behavioural smoke tests from {manifest_path.relative_to(repo_root).as_posix()} into validation/tests (files={copied}).')
 PY
 )"; then
     echo "::warning::Failed to materialize synthesised behavioural smoke tests from .ai/review_runtime; continuing without them." >&2

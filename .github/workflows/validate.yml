@@ -598,9 +598,23 @@ jobs:
           path: .ai/validate-hints-cache
           key: validate-hints-v1-${{ hashFiles('docker-compose*.yml', 'compose*.yml', '**/Dockerfile', '**/Dockerfile.*', '**/package.json', '**/pyproject.toml', '**/requirements*.txt', '**/go.mod', '**/Cargo.toml') }}
 
+      - name: Normalize behavioural smoke include flag
+        id: behavioural_smoke_gate
+        run: |
+          set -euo pipefail
+
+          include_synthesised="true"
+          case "$(printf '%s' "${VALIDATION_INCLUDE_SYNTHESISED:-true}" | tr '[:upper:]' '[:lower:]')" in
+            0|false|no|off)
+              include_synthesised="false"
+              ;;
+          esac
+
+          echo "enabled=${include_synthesised}" >> "$GITHUB_OUTPUT"
+
       - name: Resolve behavioural smoke source PR
         id: behavioural_smoke_pr
-        if: env.VALIDATION_INCLUDE_SYNTHESISED == 'true'
+        if: steps.behavioural_smoke_gate.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           INPUT_PR_NUMBER: ${{ inputs.pr_number || '0' }}
@@ -650,7 +664,7 @@ jobs:
           fi
 
       - name: Restore behavioural smoke runtime cache
-        if: env.VALIDATION_INCLUDE_SYNTHESISED == 'true' && steps.behavioural_smoke_pr.outputs.pr_number != ''
+        if: steps.behavioural_smoke_gate.outputs.enabled == 'true' && steps.behavioural_smoke_pr.outputs.pr_number != ''
         continue-on-error: true
         uses: actions/cache/restore@v4
         with:
