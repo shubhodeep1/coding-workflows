@@ -1,0 +1,396 @@
+#!/usr/bin/env python3
+"""Regression tests for the merge_with_followup self-deadlock fix.
+
+Background
+----------
+scripts/review_rb_judge.sh runs inside the `review / codex-agent` job
+hosted by .github/workflows/review_autofix.yml (or its dispatch wrapper
+review_rb_judge_dispatch.yml). When the judge decides
+`merge_with_followup`, the script queries
+`/repos/{owner}/{repo}/commits/{head_sha}/check-runs` and refuses the
+merge while ANY check-run is still incomplete.
+
+Before this fix, that query counted the rb_judge's own host job — itself
+a check-run on the PR head SHA with `status=in_progress` — as a blocking
+check-run, so the gate ALWAYS refused merge_with_followup. The workflow
+then fell through to the generic "max autofix iterations" review-blocked
+comment, which misled operators into thinking the iteration cap was the
+proximate cause. The orchestrator's `_pr_checks_completed` helper in
+scripts/orchestrate_poll_process.sh has the same shape but does not need
+this exclusion because it runs from a separate workflow (the orchestrate
+poller), whose host job is never on the polled SHA's check-run list.
+
+End-to-end evidence: shubhodeep1/tele-funtoken-msg-scoring PR #2989,
+run 25993440211, log line "PR #2989 has 1 blocking check-run(s) for SHA
+c52b838 — refusing merge_with_followup" emitted at 14:32:32Z while the
+hosting codex-agent job ran from 14:23:47Z to 14:33:01Z.
+
+The fix
+-------
+1. scripts/review_rb_judge.sh captures ${GITHUB_RUN_ID} into _self_run_id
+   and threads it into the jq filter via --arg self_run. A new
+   `_is_self_check_run` predicate matches Actions-emitted check-runs by
+   their `details_url` (always `/actions/runs/<run_id>/job/<job_id>` for
+   Actions check-runs). The `select` clauses now AND the existing
+   pending-status predicate with `(_is_self_check_run | not)`. Empty
+   $self_run preserves legacy behavior for non-Actions / test callers.
+2. Each refusal path in the merge_with_followup branch now emits a
+   distinct `judge_skip_reason` (unresolved_head_sha,
+   check_runs_query_failed, blocking_check_runs, sync_merge_failed,
+   auto_merge_disabled, merge_conflict, mergeability_pending) so the
+   workflow can distinguish them from a true "max iterations" exhaustion.
+3. .github/workflows/review_autofix.yml's "Post review-blocked comment
+   on PR (autofix exhaustion)" step now branches on JUDGE_SKIP_REASON
+   and posts a reason-specific body. Empty JUDGE_SKIP_REASON falls
+   through to the original "max iterations" body for backward
+   compatibility.
+
+These tests pin both the script-side filter shape and the workflow-side
+reason routing so a future refactor cannot silently re-introduce the
+self-deadlock or the misleading fallback comment.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import subprocess
+import shutil
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+RB_JUDGE_SCRIPT = REPO_ROOT / "scripts" / "review_rb_judge.sh"
+REVIEW_AUTOFIX_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
+
+
+def _rb_judge_text() -> str:
+	return RB_JUDGE_SCRIPT.read_text(encoding="utf-8")
+
+
+def _review_autofix_text() -> str:
+	return REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Script-side: self-run exclusion in the check-runs jq filter.
+# ---------------------------------------------------------------------------
+
+
+def test_script_captures_github_run_id() -> None:
+	"""scripts/review_rb_judge.sh must capture ${GITHUB_RUN_ID:-} into a
+	local variable before invoking jq. A future refactor that drops the
+	capture would re-deadlock the merge_with_followup path because the
+	jq filter would have no value to compare details_url against."""
+	src = _rb_judge_text()
+	assert '_self_run_id="${GITHUB_RUN_ID:-}"' in src, (
+		"scripts/review_rb_judge.sh must capture GITHUB_RUN_ID into "
+		"_self_run_id so the check-runs gate can exclude its own host "
+		"GitHub Actions run from the blocking-check-run count. Without "
+		"this capture, the merge_with_followup path self-deadlocks (see "
+		"tele-funtoken-msg-scoring PR #2989)."
+	)
+
+
+def test_script_threads_self_run_into_jq_arg() -> None:
+	"""The jq invocation that counts incomplete check-runs must pass
+	_self_run_id via --arg self_run. Without the --arg threading, the
+	predicate has no value to compare and the gate self-deadlocks."""
+	src = _rb_judge_text()
+	# Anchor on the merge_with_followup gate's specific jq call —
+	# there are other jq calls in the file we don't want to match.
+	pat = re.compile(
+		r'_incomplete_checks="\$\(printf \'%s\' "\$\{_check_runs_json\}" \| '
+		r'jq -r --arg self_run "\$\{_self_run_id\}"',
+	)
+	assert pat.search(src), (
+		"scripts/review_rb_judge.sh's merge_with_followup check-runs "
+		"gate must invoke jq with `--arg self_run \"${_self_run_id}\"` "
+		"so the filter can identify and exclude the rb_judge's own host "
+		"Actions run."
+	)
+
+
+def test_script_defines_self_check_run_predicate() -> None:
+	"""The jq filter must define a _is_self_check_run predicate that
+	matches an Actions check-run's details_url against the captured run
+	id. The /actions/runs/<id>(/|$) anchor prevents prefix collisions
+	(e.g. run id 12 matching run 123)."""
+	src = _rb_judge_text()
+	assert (
+		'def _is_self_check_run: ($self_run != "") and '
+		'((.details_url // "") | test("/actions/runs/" + $self_run + "(/|$)"));'
+	) in src, (
+		"scripts/review_rb_judge.sh must define _is_self_check_run "
+		"in the check-runs jq filter exactly as documented; the "
+		"empty-$self_run guard preserves legacy behavior for non-Actions "
+		"callers and the (/|$) anchor prevents run-id prefix collisions."
+	)
+
+
+def test_script_excludes_self_in_both_jq_branches() -> None:
+	"""Both jq filter branches (the production --paginate --slurp
+	array-of-pages shape and the legacy single-object shape) must
+	exclude self runs. Dropping the predicate from either branch would
+	leave a path where the gate still self-deadlocks."""
+	src = _rb_judge_text()
+	# The select clause must AND _is_pending with the negated self-check.
+	# We check that BOTH branch lines contain this exact AND clause.
+	expected = "select(_is_pending and (_is_self_check_run | not))"
+	occurrences = src.count(expected)
+	assert occurrences >= 2, (
+		f"scripts/review_rb_judge.sh must apply the self-run exclusion "
+		f"in both jq filter branches (paginated array and legacy single-"
+		f"object). Found {occurrences} occurrence(s) of "
+		f"`{expected}`; expected at least 2."
+	)
+
+
+# ---------------------------------------------------------------------------
+# Script-side: reason emission for every merge_with_followup refusal path.
+# ---------------------------------------------------------------------------
+
+
+EXPECTED_MERGE_WITH_FOLLOWUP_SKIP_REASONS = {
+	"unresolved_head_sha",
+	"check_runs_query_failed",
+	"blocking_check_runs",
+	"sync_merge_failed",
+	"auto_merge_disabled",
+	"merge_conflict",
+	"mergeability_pending",
+}
+
+
+def test_each_merge_with_followup_refusal_emits_distinct_skip_reason() -> None:
+	"""Every refusal path inside the merge_with_followup branch must
+	emit a distinct `judge_skip_reason` to $GITHUB_OUTPUT so the
+	workflow's review-blocked fallback comment can distinguish them
+	from "max iterations reached". Before this fix, these paths left
+	judge_skip_reason empty and the workflow posted a misleading body."""
+	src = _rb_judge_text()
+	for reason in EXPECTED_MERGE_WITH_FOLLOWUP_SKIP_REASONS:
+		needle = f'echo "judge_skip_reason={reason}" >> "$GITHUB_OUTPUT"'
+		assert needle in src, (
+			f"scripts/review_rb_judge.sh must emit "
+			f"`judge_skip_reason={reason}` from the corresponding "
+			f"merge_with_followup refusal path. Without it the workflow "
+			f"falls through to the generic max-iterations body, which "
+			f"is what confused operators on tele-funtoken-msg-scoring "
+			f"PR #2989."
+		)
+
+
+# ---------------------------------------------------------------------------
+# Workflow-side: review-blocked comment routes on JUDGE_SKIP_REASON.
+# ---------------------------------------------------------------------------
+
+
+def test_workflow_threads_judge_skip_reason_into_comment_step() -> None:
+	"""The `Post review-blocked comment on PR (autofix exhaustion)` step
+	must read steps.rb_judge.outputs.judge_skip_reason as env. Without
+	this plumbing the case branches below cannot fire."""
+	wf = _review_autofix_text()
+	# Anchor on the step name to scope the search to this specific step.
+	step_anchor = "- name: Post review-blocked comment on PR (autofix exhaustion)"
+	idx = wf.find(step_anchor)
+	assert idx >= 0, (
+		"`Post review-blocked comment on PR (autofix exhaustion)` step "
+		"must exist in .github/workflows/review_autofix.yml; the fix "
+		"depends on it being present to route the reason-specific body."
+	)
+	# Look at the next ~120 lines following the step header (the step
+	# body) for the env plumbing.
+	step_body = wf[idx:idx + 6000]
+	assert "JUDGE_SKIP_REASON: ${{ steps.rb_judge.outputs.judge_skip_reason }}" in step_body, (
+		"`Post review-blocked comment on PR (autofix exhaustion)` step "
+		"must thread `JUDGE_SKIP_REASON: ${{ steps.rb_judge.outputs."
+		"judge_skip_reason }}` as env so the bash case below can route "
+		"the body."
+	)
+
+
+def test_workflow_branches_comment_body_on_each_reason() -> None:
+	"""The fallback comment step's case statement must include a branch
+	for each merge_with_followup skip reason emitted by the script.
+	Missing a branch means that reason falls through to the generic
+	"max iterations" body, re-introducing the misleading-comment bug."""
+	wf = _review_autofix_text()
+	step_anchor = "- name: Post review-blocked comment on PR (autofix exhaustion)"
+	idx = wf.find(step_anchor)
+	assert idx >= 0
+	# Scope to the step body (until the next "- name:" sibling).
+	next_step = wf.find("\n      - name:", idx + len(step_anchor))
+	step_body = wf[idx:next_step if next_step > 0 else len(wf)]
+
+	for reason in EXPECTED_MERGE_WITH_FOLLOWUP_SKIP_REASONS:
+		# Match the case label "    reason)" line — leading-whitespace
+		# is workflow-indentation-dependent, just check the token.
+		assert re.search(rf"\n\s*{re.escape(reason)}\)\s*\n", step_body), (
+			f"`Post review-blocked comment on PR (autofix exhaustion)` "
+			f"step must include a `case` branch for "
+			f"`JUDGE_SKIP_REASON={reason}` so that reason no longer "
+			f"falls through to the generic max-iterations body."
+		)
+
+
+def test_workflow_preserves_max_iterations_fallback() -> None:
+	"""The default `*)` branch of the case must preserve the original
+	"maximum number of autofix iterations" body so legacy callers (no
+	judge_skip_reason set) keep the same behavior. This is the only
+	backward-compatibility lever for the workflow change."""
+	wf = _review_autofix_text()
+	assert "maximum number of autofix iterations" in wf, (
+		"The `*)` (default) branch of the comment step's case statement "
+		"must keep the original `maximum number of autofix iterations` "
+		"body for backward compatibility with pre-fix script callers "
+		"that don't set judge_skip_reason."
+	)
+
+
+# ---------------------------------------------------------------------------
+# Runtime: actually invoke jq on synthetic fixtures and verify the count.
+# ---------------------------------------------------------------------------
+
+
+JQ_FILTER = '''
+def _is_self_check_run: ($self_run != "") and ((.details_url // "") | test("/actions/runs/" + $self_run + "(/|$)"));
+def _is_pending: .status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled");
+if (type == "array") then
+  [.[]? | (.check_runs // [])[] | select(_is_pending and (_is_self_check_run | not))] | length
+elif (type == "object" and (.check_runs | type == "array")) then
+  [.check_runs[] | select(_is_pending and (_is_self_check_run | not))] | length
+else
+  empty
+end
+'''
+
+
+def _run_jq(payload: object, self_run: str) -> str:
+	if shutil.which("jq") is None:
+		import pytest
+		pytest.skip("jq binary not available in test environment")
+	result = subprocess.run(
+		["jq", "-r", "--arg", "self_run", self_run, JQ_FILTER],
+		input=json.dumps(payload),
+		capture_output=True,
+		text=True,
+		check=True,
+	)
+	return result.stdout.strip()
+
+
+def test_jq_filter_excludes_self_run_only_blocker() -> None:
+	"""Reproduces the tele-funtoken-msg-scoring PR #2989 scenario: the
+	only in_progress check-run is the rb_judge's own host job. After
+	exclusion the gate should see 0 blocking check-runs and let the
+	merge proceed."""
+	payload = [
+		{
+			"check_runs": [
+				{
+					"name": "review / codex-agent",
+					"status": "in_progress",
+					"conclusion": None,
+					"details_url": "https://github.com/owner/repo/actions/runs/12345/job/789",
+				},
+				{
+					"name": "other-ci",
+					"status": "completed",
+					"conclusion": "success",
+					"details_url": "https://github.com/owner/repo/actions/runs/99999/job/000",
+				},
+			]
+		}
+	]
+	assert _run_jq(payload, "12345") == "0"
+
+
+def test_jq_filter_keeps_genuine_blocker_after_self_exclusion() -> None:
+	"""The exclusion must be narrow — only the matching self run is
+	removed. A second still-running CI check on the same SHA must still
+	count as 1 blocker so the gate refuses the merge."""
+	payload = [
+		{
+			"check_runs": [
+				{
+					"name": "review / codex-agent",
+					"status": "in_progress",
+					"conclusion": None,
+					"details_url": "https://github.com/owner/repo/actions/runs/12345/job/789",
+				},
+				{
+					"name": "blocking-ci",
+					"status": "in_progress",
+					"conclusion": None,
+					"details_url": "https://github.com/owner/repo/actions/runs/99999/job/000",
+				},
+			]
+		}
+	]
+	assert _run_jq(payload, "12345") == "1"
+
+
+def test_jq_filter_legacy_single_object_shape_without_self_run() -> None:
+	"""Empty $self_run (non-Actions callers, tests, or legacy invocation)
+	must disable the exclusion entirely so the gate behaves exactly as
+	before this fix — preserving backward compatibility."""
+	payload = {
+		"check_runs": [
+			{
+				"name": "ci-1",
+				"status": "in_progress",
+				"conclusion": None,
+				"details_url": "https://github.com/owner/repo/actions/runs/77/job/1",
+			},
+			{
+				"name": "ci-2",
+				"status": "completed",
+				"conclusion": "success",
+				"details_url": None,
+			},
+		]
+	}
+	assert _run_jq(payload, "") == "1"
+
+
+def test_jq_filter_self_run_prefix_does_not_match() -> None:
+	"""The (/|$) anchor in the details_url regex must prevent run-id
+	prefix collisions: run id 12 must NOT match a check-run pointing at
+	run 123. Without the anchor, a numerically-shorter $self_run could
+	accidentally exclude an unrelated check-run and let the gate pass
+	while real blockers are still running."""
+	payload = [
+		{
+			"check_runs": [
+				{
+					"name": "blocking-ci",
+					"status": "in_progress",
+					"conclusion": None,
+					"details_url": "https://github.com/owner/repo/actions/runs/123/job/1",
+				},
+			]
+		}
+	]
+	# self_run="12" must NOT match the run-id "123".
+	assert _run_jq(payload, "12") == "1"
+
+
+def test_jq_filter_no_self_collision_on_non_actions_details_url() -> None:
+	"""Non-Actions check-runs (third-party CI integrations) have
+	details_urls that don't carry /actions/runs/<id>/job/<id>. The
+	self-exclusion must NOT match them — they must still count as
+	blockers per their status."""
+	payload = [
+		{
+			"check_runs": [
+				{
+					"name": "third-party-ci",
+					"status": "in_progress",
+					"conclusion": None,
+					"details_url": "https://third-party-ci.example.com/builds/abc",
+				},
+			]
+		}
+	]
+	assert _run_jq(payload, "12345") == "1"
