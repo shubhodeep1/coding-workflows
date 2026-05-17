@@ -366,6 +366,12 @@ def test_llm_verifier_does_not_support_reverses_classification() -> None:
 		workspace = Path(td)
 		runtime = _seed_repo(workspace)
 		mock_bin = workspace / "mock_bin"
+		long_reason = (
+			"The quoted spec passage does not support dismissing the reviewer finding because "
+			+ ("x" * 180)
+		)
+		expected_reason = long_reason[:197] + "..."
+		assert len(expected_reason) == 200
 		_install_mock_codex(
 			mock_bin,
 			responses=[
@@ -377,7 +383,7 @@ def test_llm_verifier_does_not_support_reverses_classification() -> None:
 									"issue_id": "001",
 									"rejection_kind": "spec-doesnt-support",
 									"verdict": "does-not-support",
-									"reason": "The quoted spec passage does not support dismissing the reviewer finding.",
+									"reason": long_reason,
 								}
 							]
 						}
@@ -398,9 +404,10 @@ def test_llm_verifier_does_not_support_reverses_classification() -> None:
 		assert verify_result.returncode == 0, verify_result.stderr
 		block = _extract_issue_block((runtime / "review_issues.txt").read_text(encoding="utf-8"), "001")
 		assert "CLASSIFICATION: must-fix" in block
-		assert "REVERSAL_REASON: The quoted spec passage does not support dismissing the reviewer finding." in block
+		assert f"REVERSAL_REASON: {expected_reason}" in block
 		artifact = _load_artifact(workspace)
 		assert artifact["results"][0]["verdict"] == "does-not-support"
+		assert artifact["results"][0]["reason"] == expected_reason
 		assert "CONSOLIDATOR_REJECT_REVERSED issue=001 kind=spec-doesnt-support" in verify_result.stdout
 
 

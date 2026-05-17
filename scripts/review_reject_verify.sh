@@ -107,6 +107,7 @@ LLM_REJECTION_KINDS = {"reviewer-wrong", "spec-doesnt-support"}
 VERDICT_VALUES = {"support", "does-not-support", "inconclusive"}
 LLM_VERIFIER_MODEL = "openai/gpt-5.4-mini"
 LLM_VERIFIER_TIMEOUT_SECS = 120
+LLM_VERIFIER_REASON_MAX_CHARS = 200
 
 REJECT_EVIDENCE_HEADERS = (
 	"EVIDENCE_DIFF_HUNK",
@@ -470,7 +471,7 @@ def validate_llm_batch_output(payload: object, batch: list[dict[str, object]]) -
 		issue_id = str(row.get("issue_id", "")).strip()
 		rejection_kind = str(row.get("rejection_kind", "")).strip()
 		verdict = str(row.get("verdict", "")).strip()
-		reason = squish(str(row.get("reason", "")), 400)
+		reason = squish(str(row.get("reason", "")), LLM_VERIFIER_REASON_MAX_CHARS)
 		if issue_id not in expected:
 			raise ValueError("unexpected_issue_id")
 		if issue_id in validated:
@@ -499,32 +500,33 @@ def run_llm_verifier_batch(batch: list[dict[str, object]], template_text: str) -
 		)
 	timeout_bin = shutil.which("timeout")
 	prompt_text = build_llm_prompt_text(template_text, batch)
-	codex_home = prepare_llm_codex_home(LLM_VERIFIER_REASONING)
-	cmd = [
-		codex_bin,
-		"--ask-for-approval",
-		"never",
-		"-c",
-		"model_verbosity=low",
-		"-c",
-		"include_apply_patch_tool=true",
-		"exec",
-		"--model",
-		LLM_VERIFIER_MODEL,
-		"--sandbox",
-		"read-only",
-	]
-	if timeout_bin:
-		cmd = [
-			timeout_bin,
-			"--signal=TERM",
-			"--kill-after=30s",
-			"--",
-			str(LLM_VERIFIER_TIMEOUT_SECS),
-		] + cmd
-	env = os.environ.copy()
-	env["CODEX_HOME"] = str(codex_home)
+	codex_home: Path | None = None
 	try:
+		codex_home = prepare_llm_codex_home(LLM_VERIFIER_REASONING)
+		cmd = [
+			codex_bin,
+			"--ask-for-approval",
+			"never",
+			"-c",
+			"model_verbosity=low",
+			"-c",
+			"include_apply_patch_tool=true",
+			"exec",
+			"--model",
+			LLM_VERIFIER_MODEL,
+			"--sandbox",
+			"read-only",
+		]
+		if timeout_bin:
+			cmd = [
+				timeout_bin,
+				"--signal=TERM",
+				"--kill-after=30s",
+				"--",
+				str(LLM_VERIFIER_TIMEOUT_SECS),
+			] + cmd
+		env = os.environ.copy()
+		env["CODEX_HOME"] = str(codex_home)
 		completed = subprocess.run(
 			cmd,
 			input=prompt_text,
@@ -534,14 +536,14 @@ def run_llm_verifier_batch(batch: list[dict[str, object]], template_text: str) -
 			timeout=None if timeout_bin else LLM_VERIFIER_TIMEOUT_SECS,
 		)
 	except subprocess.TimeoutExpired:
-		shutil.rmtree(codex_home, ignore_errors=True)
 		return llm_batch_fail_results(
 			batch,
 			"timeout",
 			f"LLM reject verifier timed out after {LLM_VERIFIER_TIMEOUT_SECS}s.",
 		)
 	finally:
-		shutil.rmtree(codex_home, ignore_errors=True)
+		if codex_home is not None:
+			shutil.rmtree(codex_home, ignore_errors=True)
 
 	if completed.returncode in {124, 137}:
 		return llm_batch_fail_results(
