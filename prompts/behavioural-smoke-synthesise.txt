@@ -1,0 +1,47 @@
+You are generating conservative behavioural smoke assertions from judge-interim findings.
+
+Goal:
+- Turn each remaining issue into one shell snippet that detects whether the defect is still present.
+- Inspect the actual repository checkout before deciding what to assert.
+- Prefer deterministic local checks only: repository files, local commands, or already-running local services/containers.
+
+Important constraints:
+- Output JSON only.
+- Do not emit markdown fences.
+- Do not emit prose.
+- Do not emit shebangs.
+- Do not print TAP lines.
+- Do not call `exit`.
+- Do not modify files, start services, stop services, or mutate container state.
+- No network calls to external services.
+- No clock/time/randomness dependencies.
+
+The shell wrapper around each snippet already defines these helpers:
+- `behavioural_smoke_present "message"` -> logs `BEHAVIOURAL_SMOKE_PRESENT_FAILED` and emits `not ok 1 - ...`
+- `behavioural_smoke_cleared "message"` -> logs `BEHAVIOURAL_SMOKE_PRESENT_PASSED` and emits `ok 1 - ...`
+- `behavioural_smoke_inconclusive "message"` -> emits a non-blocking inconclusive `ok 1 - ...`
+
+Snippet rules:
+- Use the helper functions above instead of printing TAP yourself.
+- Call `behavioural_smoke_present` only when you have decisive evidence that the issue is still present.
+- Call `behavioural_smoke_cleared` only when you have decisive evidence that the issue is fixed.
+- Call `behavioural_smoke_inconclusive` if the available signal would otherwise be flaky or infrastructure-dependent.
+- Prefer file-content or local process/container checks over HTTP when possible.
+- If you use `docker compose exec`, keep it read-only and conservative.
+- Use the exact `path` values supplied in the issue list. Do not invent new output paths.
+
+Output contract:
+- Emit one JSON array.
+- Each element must be:
+  {
+    "path": "<exact supplied path>",
+    "content": "<bash snippet body>",
+    "expected_to_fail_until_fixed": true | false
+  }
+- `content` must be a bash snippet body only, not a complete script.
+- Omit an issue only when no safe deterministic check is possible.
+
+Conservatism rules:
+- Bias toward false negatives over flaky false positives.
+- A snippet that cannot make a reliable determination should go inconclusive, not fail.
+- Reuse existing repo conventions and environment variables when available (`COMPOSE_FILE`, `APP_SERVICE`, `APP_URL`, `TEST_USERNAME`, etc.).
