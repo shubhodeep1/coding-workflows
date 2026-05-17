@@ -18,13 +18,15 @@ Decision rules
 Output contract
 - Return JSON only.
 - Do not wrap the JSON in markdown fences.
+- `issue_id` must exactly match the corresponding input item's `issue_id`.
 - `rejection_kind` must exactly match the input item's `rejection_kind`.
 - `verdict` must be exactly one of: `support`, `does-not-support`, `inconclusive`.
+- Return exactly one `results` row for each input item.
 - Use exactly this shape:
 {
   "results": [
     {
-      "issue_id": "<issue id>",
+      "issue_id": "<exact input issue_id>",
       "rejection_kind": "<exact input rejection_kind>",
       "verdict": "<exact verdict>",
       "reason": "one short sentence"

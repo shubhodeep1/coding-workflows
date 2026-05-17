@@ -438,6 +438,7 @@ def prepare_llm_codex_home(reasoning: str) -> Path:
 				text = cfg.read_text(encoding="utf-8")
 			except OSError:
 				text = ""
+			text = upsert_toml_string_key(text, "web_search", "disabled")
 			text = upsert_toml_string_key(text, "model_reasoning_effort", reasoning)
 			text = upsert_toml_string_key(text, "sandbox_mode", "read-only")
 			try:
@@ -451,7 +452,11 @@ def prepare_llm_codex_home(reasoning: str) -> Path:
 			try:
 				cfg.write_text(
 					upsert_toml_string_key(
-						upsert_toml_string_key("", "model_reasoning_effort", reasoning),
+						upsert_toml_string_key(
+							upsert_toml_string_key("", "web_search", "disabled"),
+							"model_reasoning_effort",
+							reasoning,
+						),
 						"sandbox_mode",
 						"read-only",
 					),
@@ -542,6 +547,8 @@ def run_llm_verifier_batch(batch: list[dict[str, object]], template_text: str) -
 			"-c",
 			f"model_reasoning_effort={LLM_VERIFIER_REASONING}",
 			"-c",
+			"web_search=disabled",
+			"-c",
 			"include_apply_patch_tool=true",
 			"exec",
 			"--model",
@@ -607,7 +614,6 @@ def run_llm_verifier_batch(batch: list[dict[str, object]], template_text: str) -
 			else "LLM reject verifier returned incomplete or malformed results."
 		)
 		return llm_batch_fail_results(batch, reason_code, reason_text)
-
 
 def verify_llm_rejections(items: list[dict[str, object]]) -> dict[str, tuple[str, str]]:
 	results: dict[str, tuple[str, str]] = {}

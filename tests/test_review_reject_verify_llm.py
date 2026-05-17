@@ -353,7 +353,9 @@ def test_llm_verifier_support_keeps_non_actionable_and_uses_fixed_model() -> Non
 		args = json.loads((calls_dir / "call_1.args").read_text(encoding="utf-8"))
 		assert "openai/gpt-5.4-mini" in args
 		assert "model_reasoning_effort=medium" in args
+		assert "web_search=disabled" in args
 		config_snapshot = (calls_dir / "call_1.config").read_text(encoding="utf-8")
+		assert 'web_search = "disabled"' in config_snapshot
 		assert 'model_reasoning_effort = "medium"' in config_snapshot
 		assert 'sandbox_mode = "read-only"' in config_snapshot
 		payload = _read_prompt_payload(calls_dir, 1)
@@ -743,6 +745,7 @@ def test_llm_verifier_tolerates_config_write_failures_and_keeps_script_only_chec
 		assert _codex_call_count(calls_dir) == 1
 		args = json.loads((calls_dir / "call_1.args").read_text(encoding="utf-8"))
 		assert "model_reasoning_effort=low" in args
+		assert "web_search=disabled" in args
 		assert "CONSOLIDATOR_REJECT_VERIFIER_FAIL" not in verify_result.stdout
 		assert "CONSOLIDATOR_REJECT_VERIFIED issue=002 kind=already-fixed verdict=support" in verify_result.stdout
 		artifact = _load_artifact(workspace)

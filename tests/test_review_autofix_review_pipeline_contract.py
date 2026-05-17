@@ -14,6 +14,7 @@ WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 MARK_STABLE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "mark-stable.yml"
 TEST_AND_MARK_STABLE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
+REJECT_VERIFIER_PROMPT = REPO_ROOT / "prompts" / "consolidator-reject-verifier.txt"
 REVIEWERS = REPO_ROOT / "scripts" / "review_run_reviewers.sh"
 APPLY_FIXES = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
 
@@ -324,6 +325,7 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 
 def test_reject_verifier_prompt_staging_and_pytest_contracts() -> None:
 	workflow = _workflow_text()
+	prompt = REJECT_VERIFIER_PROMPT.read_text(encoding="utf-8")
 	for expected in (
 		'if [ ! -f "${SUPPORT_PROMPTS_DIR}/consolidator-reject-verifier.txt" ]; then',
 		'src=".codex-workflow-src/prompts/consolidator-reject-verifier.txt"',
@@ -331,6 +333,12 @@ def test_reject_verifier_prompt_staging_and_pytest_contracts() -> None:
 		'CONSOLIDATOR_REJECT_VERIFIER_ENABLED:-0',
 	):
 		assert expected in workflow, f"Missing reject-verifier prompt wiring: {expected}"
+	for expected in (
+		"`issue_id` must exactly match the corresponding input item's `issue_id`.",
+		"Return exactly one `results` row for each input item.",
+		'"issue_id": "<exact input issue_id>"',
+	):
+		assert expected in prompt, f"Missing reject-verifier prompt contract text: {expected}"
 	for path in (CI_WORKFLOW, MARK_STABLE_WORKFLOW, TEST_AND_MARK_STABLE_WORKFLOW):
 		text = path.read_text(encoding="utf-8")
 		assert 'python3 -c "import pytest" >/dev/null 2>&1 || python3 -m pip install --quiet pytest' in text
