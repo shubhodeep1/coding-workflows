@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:lines 1-7 (entire file) | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: tests/e2e_smoke_canary.txt contains corrupted bait content instead of the required three-line canary spec.\n  WHY: The status, run_id, and updated-by values are wrong and extra lines are present, so the byte-for-byte/spec checks and smoke gate will fail.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:lines 1-6 (entire file) | confidence=5\n  PROBLEM: The file contains corrupted bait content instead of the issue-#2677 three-line canary spec.\n  WHY: The status, run_id, and updated-by values are all wrong and the file has three extra lines, so the spec check and smoke gate fail.\n- tests/e2e_smoke_canary.txt:line 1 (status field) | confidence=5\n  PROBLEM: The status field value is \"BROKEN_BY_E2E_BAIT_25980238302\" instead of \"ok\".\n  WHY: The byte-for-byte comparison in `test_canary_matches_issue_spec_byte_for_byte` fails on the first line.\n- tests/e2e_smoke_canary.txt:line 2 (run_id field) | confidence=5\n  PROBLEM: The run_id field value is \"WRONG_VALUE_SHOULD_BE_25980238302\" instead of \"25980238302\".\n  WHY: The byte-for-byte comparison fails on the second line and the run_id is wrong for downstream correlation.\n- tests/e2e_smoke_canary.txt:line 3 (updated-by field) | confidence=5\n  PROBLEM: The updated-by field value is \"e2e-bait-injector\" instead of \"ai-pipeline\".\n  WHY: The byte-for-byte comparison fails on the third line and the attribution is incorrect.\n- tests/e2e_smoke_canary.txt:lines 4-6 | confidence=5\n  PROBLEM: Three extra lines violate the requirement for exactly three lines.\n  WHY: The file is 6 lines instead of 3, and line 6 contains the `E2E_EDITOR_BAIT_` marker that triggers the bait-marker test.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:Line: 1-7 (entire file) | confidence=5\n  PROBLEM: The committed file contains corrupted bait content instead of the required three-line format from issue #2677.\n  WHY: The file's values are wrong and it includes extra lines, so downstream consumers expecting exactly three `key: value` lines will fail.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:lines 1-7 (entire file) | confidence=5\n  PROBLEM: The file contains corrupted bait content that does not match the linked issue specification.\n  WHY: The current content has the wrong status, wrong run_id, wrong updater, and two extra lines, so the E2E smoke test and downstream parsing fail.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:lines 1-7 (entire file) | confidence=5\n  PROBLEM: The file on disk does not match the PR diff or the linked issue specification.\n  WHY: It contains wrong `status`, wrong `run_id`, wrong `updated-by`, and extra lines, so the canary check and any downstream consumer parsing this file will fail.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:lines 1-6 (entire file on disk) | confidence=5\n  PROBLEM: The file on disk does not match the linked issue #2677 specification.\n  WHY: It contains six lines of corrupted bait content instead of the required three-line format, so smoke-test assertions and downstream parsing will fail.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "2d074acc601a6d74645aef805dbfe3774e56e5d2f8e73a27360bcca10fc92800",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2683,
+    "run_id": "25980371048",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25980371048",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517034611_b93665f3c3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2683,
+    "run_id": "25980371048"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-17T03:46:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
