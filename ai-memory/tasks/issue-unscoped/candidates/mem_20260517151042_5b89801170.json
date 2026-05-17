@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_floor_rules.py:203-214 | confidence=[4]\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: The subprocess shell command interpolates `GH_HELPERS` and `prompt_file` without quoting, so paths with spaces or metacharacters can break the test.\n  WHY: Unquoted bash word-splitting can make `source` resolve the wrong path or fail under `check=True`, aborting the test before sanitization runs.\n- scripts/gh_helpers.sh:1431-1463 | confidence=[2]\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: If `iconv` empties an all-invalid input and truncating `_tmp` fails, the function returns before the python3 fallback and leaves the original invalid bytes untouched.\n  WHY: The rare truncation failure path exits early instead of continuing to the fallback, so the prompt can remain invalid UTF-8.\n- scripts/gh_helpers.sh:1431-1463 | confidence=[2]\n  flagged_by: [moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: On musl-based systems, `iconv` may ignore `//IGNORE` and pass invalid bytes through unchanged, letting the function return without the python3 fallback.\n  WHY: The code only checks for non-empty output, not UTF-8 validity, so a passthrough `iconv` result would leave invalid bytes in place.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_review_floor_rules.py:203-214 | confidence=[4]\n  PROBLEM: The shell command string uses unquoted path interpolations in `subprocess.run`.\n  WHY: If the repository or temp path contains spaces or shell metacharacters, bash word-splitting will break `source` or pass the wrong arguments, causing the test to fail before exercising sanitization.\n- scripts/gh_helpers.sh:1431-1437 | confidence=[2]\n  PROBLEM: When `iconv` produces empty output from an all-invalid UTF-8 file, a failure in `: > \"${_tmp}\"` returns early without trying the python3 fallback.\n  WHY: If truncating the temp file fails, the function gives up and leaves the original invalid bytes in place instead of falling through to python3.\n- scripts/gh_helpers.sh:1431-1463 | confidence=[2]\n  PROBLEM: On musl-based systems, `iconv` may silently ignore `//IGNORE` and pass invalid bytes through unchanged.\n  WHY: The current logic only checks whether `_tmp` is non-empty, so a passthrough `iconv` result would skip the python3 fallback and preserve invalid UTF-8.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/gh_helpers.sh:1431-1463 | confidence=[2]\n  PROBLEM: When `iconv` discards every byte from an all-invalid input, a truncation failure on `_tmp` can return before the python3 fallback runs.\n  WHY: The inner `|| { rm -f \"${_tmp}\"; return 0; }` exits early, so the original invalid bytes can survive into Codex's stdin pipe.\n- tests/test_review_floor_rules.py:203-214 | confidence=[2]\n  PROBLEM: The shell command string does not quote the substituted paths.\n  WHY: Any spaces or shell metacharacters in the repo or temp path would break `source` under `check=True`, so the test would abort before calling the sanitization function.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/gh_helpers.sh:1431-1463 | confidence=[2]\n  PROBLEM: On musl-based systems, `iconv` may ignore `//IGNORE` and pass invalid bytes through unchanged, bypassing the python3 fallback.\n  WHY: The code only checks whether `_tmp` is non-empty, not whether the output is valid UTF-8, so a passthrough `iconv` result would leave invalid bytes in place.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "bf229635b9f766ed9dd21d44d6eead8206ed10ed17d450e7dccfa1262f3ef803",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2702,
+    "run_id": "25994068470",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25994068470",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517151042_5b89801170",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2702,
+    "run_id": "25994068470"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-17T15:10:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
