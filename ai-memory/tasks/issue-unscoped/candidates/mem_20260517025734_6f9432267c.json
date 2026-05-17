@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_synthesise_smoke.py:~335-357 | confidence=2\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: Missing test coverage for the syntactically valid JSON array with incorrect item count path in `normalize_generated_items()`.\n  WHY: Both reviewers identified the `len(candidate) != issue_count` branch as untested even though the broader fail-open behavior is already covered.\n- scripts/review_synthesise_smoke.sh:476-498\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: PR_NUMBER is not sanitized before use in path construction, so path traversal sequences could point SYNTH_DIR outside the intended subtree.\n  WHY: The script builds `SYNTH_DIR` from `PR_NUMBER` before later destructive cleanup, and the reviewer noted a crafted invocation could affect `rm -rf` targets.\n- scripts/review_synthesise_smoke.sh:583, 592, 672\n  flagged_by: [moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: `SYNTH_DIR` is derived from `PR_NUMBER` and `CURRENT_ROUND` without an independent guard around `rm -rf \"${SYNTH_DIR}\"`.\n  WHY: Both reviewers flagged the lack of an in-script safety check, noting that a crafted `PR_NUMBER` could produce an unexpected delete target if the script is invoked directly.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_synthesise_smoke.sh:476-498\n  PROBLEM: PR_NUMBER is not sanitized before use in path construction.\n  WHY: If PR_NUMBER contained path traversal sequences, SYNTH_DIR could point outside the intended `.ai/review_runtime/pr-` subtree and later `rm -rf` calls would target an unexpected path.\n- tests/test_review_synthesise_smoke.py:~335-357 | confidence=2\n  PROBLEM: No test case verifies the behavior when the LLM returns a syntactically valid JSON array but with an incorrect item count.\n  WHY: The `len(candidate) != issue_count` branch in `normalize_generated_items()` returns None and falls through to the fail-open exit 0 path.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_review_synthesise_smoke.py:After line 357 (test_behavioural_smoke_emit_warning_is_best_effort_when_fd3_is_closed) | confidence=2\n  PROBLEM: Missing test coverage for LLM returning syntactically valid JSON array with incorrect item count\n  WHY: The `normalize_generated_items()` branch at lines 290-291 returns None when `len(candidate) != issue_count`, causing synthesis to fail open with exit 0.\n- scripts/review_synthesise_smoke.sh:Lines 583, 592, 672\n  PROBLEM: `SYNTH_DIR` is derived from `PR_NUMBER` and `CURRENT_ROUND` without an independent guard.\n  WHY: A crafted `PR_NUMBER` could produce an unexpected `rm -rf` target even though upstream validation usually constrains the workflow input.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/review_synthesise_smoke.sh:lines 583, 592, 672\n  PROBLEM: `SYNTH_DIR` is derived from `PR_NUMBER` and `CURRENT_ROUND` without sanitization in the script itself.\n  WHY: If invoked directly, a crafted `PR_NUMBER` with path traversal characters could produce an unexpected `rm -rf` target.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "1303a1a67d7132124191a3055644260602000ce521f15454d0491343580162c7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2667,
+    "run_id": "25979414939",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25979414939",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517025734_6f9432267c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2667,
+    "run_id": "25979414939"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-17T02:57:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
