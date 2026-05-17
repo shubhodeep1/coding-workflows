@@ -1332,7 +1332,8 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
           RB_SPOT_FIX_REASON="feature_flag_disabled"
         else
           RB_HEAD_SHA="$(gh_retry gh pr view "${PR_NUMBER}" --repo "${REPOSITORY}" --json headRefOid --jq '.headRefOid' 2>/dev/null || true)"
-          if ! [[ "${RB_HEAD_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+          RB_HEAD_SHA="$(printf '%s' "${RB_HEAD_SHA}" | tr '[:upper:]' '[:lower:]')"
+          if ! [[ "${RB_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
             RB_EFFECTIVE_REISSUE_MODE="redo"
             RB_SPOT_FIX_REASON="head_ref_unavailable"
           elif ! git cat-file -e "${RB_HEAD_SHA}^{commit}" >/dev/null 2>&1; then
