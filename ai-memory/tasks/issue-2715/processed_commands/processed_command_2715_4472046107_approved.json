@@ -5,13 +5,30 @@
   "entry_id": "processed_command_2715_4472046107_approved",
   "issue_number": 2715,
   "metadata": {
+    "branch": "ai/issue-2715",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      ".github/workflows/mark-stable.yml",
+      ".github/workflows/review_autofix.yml",
+      ".github/workflows/test-and-mark-stable.yml",
+      "prompts/consolidator-reject-verifier.txt",
+      "scripts/review_reject_verify.sh",
+      "tests/test_review_autofix_review_pipeline_contract.py",
+      "tests/test_review_reject_verify.py",
+      "tests/test_review_reject_verify_llm.py"
+    ],
+    "issue_number": 2715,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/2715",
+    "pr_number": 2717,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/2717",
+    "run_attempt": "1",
+    "run_id": "25998794281",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/25998794281"
   },
   "run_attempt": 1,
   "run_id": "25998794281",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-05-17T18:15:27Z",
+  "status": "completed",
+  "timestamp": "2026-05-17T18:26:35Z",
   "workflow": "implement"
 }
