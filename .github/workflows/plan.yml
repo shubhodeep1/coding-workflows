@@ -61,7 +61,12 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{ runner.tool_cache }}/codex
-          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          # -v2: previous cache only stored @openai/codex (no platform binary),
+          # so cache hits restored a stub-only install and Codex crashed at
+          # startup with "Missing optional dependency @openai/codex-linux-x64".
+          # Bump invalidates the broken entries; persist+restore below now
+          # handle both packages symmetrically.
+          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}-v2
 
       - name: Install Codex CLI
         if: steps.cache-codex.outputs.cache-hit != 'true'
@@ -75,14 +80,23 @@ jobs:
           set -euo pipefail
           CODEX_BIN="$(which codex)"
           mkdir -p "${{ runner.tool_cache }}/codex"
-          cp -r "$(npm root -g)/@openai/codex" "${{ runner.tool_cache }}/codex/package"
+          cp -r "$(npm root -g)/@openai/codex"           "${{ runner.tool_cache }}/codex/package"
+          cp -r "$(npm root -g)/@openai/codex-linux-x64" "${{ runner.tool_cache }}/codex/codex-linux-x64"
           cp "${CODEX_BIN}" "${{ runner.tool_cache }}/codex/codex"
 
       - name: Restore Codex CLI from cache
         if: steps.cache-codex.outputs.cache-hit == 'true'
         run: |
           set -euo pipefail
-          npm install -g "${{ runner.tool_cache }}/codex/package" --include=optional --no-audit --no-fund
+          # Install BOTH packages from the cached local paths so the platform
+          # binary is restored deterministically. --include=optional is
+          # unreliable for global installs (npm/cli#4828) and cannot resolve
+          # the npm alias from a local path anyway.
+          npm install -g \
+            "${{ runner.tool_cache }}/codex/package" \
+            "${{ runner.tool_cache }}/codex/codex-linux-x64" \
+            --no-audit --no-fund
+          codex --version
 
       - name: Resolve integration ref
         id: refctx
