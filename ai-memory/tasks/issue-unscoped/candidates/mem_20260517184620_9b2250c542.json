@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_annotate_sticky.sh:326-330 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: The sticky match filter compares only the prior issue's `line_start` against the current finding's `line_start`, so it misses matches near the end of a multi-line prior range.\n  WHY: With a prior range like `LINES: 10-20` and a finding at line 24, `abs(10 - 24) = 14 > 5` drops a legitimate sticky match even though 24 is within the bucket-expanded range.\n- tests/test_review_annotate_sticky.py:entire file | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: The new sticky annotator test file is not wired into the explicit CI/release test allowlists.\n  WHY: The workflows invoke tests one-by-one, but this file is absent from `.github/workflows/ci.yml`, `.github/workflows/test-and-mark-stable.yml`, and `.github/workflows/mark-stable.yml`, so it never runs in CI.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_annotate_sticky.sh:326-330 | confidence=5\n  PROBLEM: The sticky match filter compares only the prior issue's `line_start` against the current finding's `line_start`, ignoring the prior issue's `line_end`.\n  WHY: A prior issue spanning `LINES: 10-20` and a finding at line 24 yields `abs(10 - 24) = 14 > 5`, so a valid repeat finding near the end of the prior range loses sticky annotation and the consolidator misses prior rejection context.\n- tests/test_review_annotate_sticky.py:entire file | confidence=5\n  PROBLEM: The new test file `tests/test_review_annotate_sticky.py` is not listed in the CI/release workflows that invoke tests.\n  WHY: `.github/workflows/ci.yml`, `.github/workflows/mark-stable.yml`, and `.github/workflows/test-and-mark-stable.yml` enumerate tests explicitly, and this file is absent from all three, so the sticky annotator tests never execute.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_annotate_sticky.sh:326-330 | confidence=5\n  PROBLEM: The sticky match filter only compares the prior issue's `line_start` against the current finding's start line, ignoring the prior issue's `line_end`.\n  WHY: When a prior issue spans multiple lines, a finding near the end of that range is incorrectly dropped because the start-line distance exceeds the default bucket, so repeated findings lose sticky rejection context.\n- tests/test_review_annotate_sticky.py:entire file | confidence=5\n  PROBLEM: The new test file is not wired into any CI workflow.\n  WHY: It is not listed in `.github/workflows/ci.yml`, `.github/workflows/mark-stable.yml`, or `.github/workflows/test-and-mark-stable.yml`, so the sticky annotator tests never execute in CI or release validation.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_annotate_sticky.sh:326-330 | confidence=5\n  PROBLEM: The sticky match filter only compares prior issue `line_start` to current finding `line_start`, ignoring `line_end`.\n  WHY: A prior issue like `LINES: 10-20` and a finding at line 24 should match, but `abs(10 - 24) = 14 > 5` drops it, so repeat findings near the end of a multi-line prior range are missed.\n- tests/test_review_annotate_sticky.py:entire file | confidence=5\n  PROBLEM: The new test file is not wired into the repository's explicit CI/release test allowlists.\n  WHY: The file is absent from `.github/workflows/ci.yml`, `.github/workflows/test-and-mark-stable.yml`, and `.github/workflows/mark-stable.yml`, so the sticky annotator tests never run in CI.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/review_annotate_sticky.sh:326-330 | confidence=5\n  PROBLEM: The sticky match filter compares only the prior issue's `line_start` against the current finding's `line_start`, ignoring `line_end`.\n  WHY: For a prior `LINES: 10-20` and a current finding at line 24, `abs(10 - 24) = 14 > 5` drops a valid sticky match even though 24 is within `[10-5, 20+5]`.\n- tests/test_review_annotate_sticky.py:entire file | confidence=5\n  PROBLEM: The new test file is not wired into the repository's CI/release test allowlists.\n  WHY: It is absent from `.github/workflows/ci.yml`, `.github/workflows/test-and-mark-stable.yml`, and `.github/workflows/mark-stable.yml`, so the sticky annotator tests never execute.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/review_annotate_sticky.sh:326-330 | confidence=5\n  PROBLEM: The sticky match filter compares only the prior issue's `line_start` against the current finding's `line_start`, ignoring the prior issue's `line_end`.\n  WHY: A repeat finding at line 24 against a prior `LINES: 10-20` with bucket=5 is a legitimate sticky match, but the start-line-only comparison rejects it and the consolidator never sees the sticky prior.\n- tests/test_review_annotate_sticky.py:entire file | confidence=5\n  PROBLEM: The new test file is not wired into any CI or release-validation workflow.\n  WHY: Every other review-pipeline test file is invoked individually in `.github/workflows/ci.yml`, `.github/workflows/mark-stable.yml`, and `.github/workflows/test-and-mark-stable.yml`, but this one is missing from all three, so the new coverage never executes in CI.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "d636cdcc3d947a7085b453027bc4551a42eb9befa74c7d78dcfe4b2f2f283807",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2718,
+    "run_id": "25999136729",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25999136729",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517184620_9b2250c542",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2718,
+    "run_id": "25999136729"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-17T18:46:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
