@@ -12,6 +12,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+AGENTS_MD = REPO_ROOT / "agents.md"
 PARSER_SCRIPT = REPO_ROOT / "scripts" / "review_parse_consolidator.sh"
 VERIFIER_SCRIPT = REPO_ROOT / "scripts" / "review_reject_verify.sh"
 FIXTURES = REPO_ROOT / "tests" / "fixtures" / "review_pipeline"
@@ -829,6 +830,24 @@ def test_prior_round_rejection_reverses_when_cached_artifact_disagrees() -> None
 		assert "Prior-round verifier artifact points at a different line range." in block
 		artifact = _load_artifact(workspace)
 		assert artifact["results"][0]["verdict"] == "does-not-support"
+
+
+def test_agents_md_declares_stable_reject_and_behavioural_smoke_log_prefixes() -> None:
+	text = AGENTS_MD.read_text(encoding="utf-8")
+	for marker in (
+		"CONSOLIDATOR_REJECT_TYPED",
+		"CONSOLIDATOR_REJECT_EVIDENCE_MALFORMED",
+		"CONSOLIDATOR_REJECT_VERIFIED",
+		"CONSOLIDATOR_REJECT_REVERSED",
+		"CONSOLIDATOR_REJECT_VERIFIER_INCONCLUSIVE",
+		"CONSOLIDATOR_REJECT_VERIFIER_FAIL",
+		"BEHAVIOURAL_SMOKE_SYNTHESISED",
+		"BEHAVIOURAL_SMOKE_PRESENT_FAILED",
+		"BEHAVIOURAL_SMOKE_PRESENT_INCONCLUSIVE",
+		"BEHAVIOURAL_SMOKE_PRESENT_PASSED",
+		"BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL",
+	):
+		assert text.count(f"- `{marker}`") == 1
 
 
 def main() -> int:

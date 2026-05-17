@@ -38,6 +38,22 @@ behavioural_smoke_emit_warning()
 	(printf '::warning::%s\n' "${message}" >&3) 2>/dev/null || true
 }
 
+behavioural_smoke_emit_extractor_stderr()
+{
+	local label="$1"
+	local path="$2"
+
+	if [ ! -s "${path}" ]; then
+		return 0
+	fi
+
+	{
+		printf 'behavioural_smoke extractor %s stderr begin\n' "${label}"
+		cat "${path}" 2>/dev/null || true
+		printf 'behavioural_smoke extractor %s stderr end\n' "${label}"
+	} >&2
+}
+
 behavioural_smoke_has_requirements_files()
 {
 	compgen -G 'requirements*.txt' >/dev/null 2>&1
@@ -166,6 +182,19 @@ src, judge_artifact, synth_dir, manifest_path, expected_round_raw, expected_head
 expected_round = int(expected_round_raw)
 
 
+class GeneratedItemValidationError(ValueError):
+	pass
+
+
+SHELL_REENTRY_COMMANDS = {'bash', 'sh', 'dash', 'ksh', 'zsh', 'csh', 'tcsh', 'fish'}
+COMMAND_SEPARATORS = {';', '&', '&&', '||', '|', '|&', '(', ')', '{', '}', ';;', ';&', ';;&'}
+CONTROL_TOKENS = {'if', 'then', 'do', 'elif', 'else', 'while', 'until', '!'}
+REDIRECTION_TOKENS = {'<', '>', '<<', '<<-', '<<<', '>>', '>&', '<&', '&>', '&>>'}
+TOKEN_KIND_OPERATOR = 'operator'
+TOKEN_KIND_WORD = 'word'
+SHELL_OPERATORS = (';;&', '<<<', '<<-', '&&', '||', '&>>', '|&', '&>', ';;', ';&', '>>', '>&', '<&', '<<', '&')
+
+
 def squish(value, limit=None):
 	text = re.sub(r'\s+', ' ', str(value)).strip()
 	if limit is not None and len(text) > limit:
@@ -223,102 +252,18 @@ def normalize_content(text: str) -> str:
 	text = "\n".join(lines).strip()
 	if not text:
 		raise ValueError("empty_content")
-	# Validate backslash-continued shell lines as one logical command so
-	# dangerous dispatchers cannot hide behind line continuations.
-	validation_text = re.sub(r'\\\n[ \t]*', ' ', text)
-	for raw_line in validation_text.splitlines():
-		stripped = raw_line.strip()
-		if "`" in stripped or "$(" in stripped or "<(" in stripped or ">(" in stripped:
-			raise ValueError("body_unsafe_shell_construct")
-		lexer = shlex.shlex(stripped, posix=True, punctuation_chars=";&|(){}><")
-		lexer.whitespace_split = True
-		# Keep '#' literal so shlex does not hide trailing separators/commands
-		# that bash would still execute when '#' appears mid-word.
-		lexer.commenters = ""
-		tokens = list(lexer)
-		expect_command = True
-		passthrough_command = ""
-		passthrough_option_value = False
-		pending_redirection_target = False
-		separator_tokens = {";", "&", "&&", "||", "|", "|&", "(", ")", "{", "}", "if", "then", "do", "else", "elif", "while", "until", "!"}
-		redirection_tokens = {">", ">>", "<", "<<", "<<<", "<>", "<&", ">&", ">|", "&>", "&>>"}
-		passthrough_tokens = {"command", "builtin", "env", "nohup", "nice", "timeout", "setsid", "time"}
-		passthrough_value_tokens = {
-			"env": {"-u", "-C", "--unset", "--chdir"},
-			"nice": {"-n", "--adjustment"},
-			"time": {"-f", "--format", "-o", "--output"},
-			"timeout": {"-s", "--signal", "-k", "--kill-after"},
-		}
-		dangerous_command_tokens = {
-			"coproc",
-			".",
-			"bash",
-			"csh",
-			"dash",
-			"eval",
-			"exec",
-			"ksh",
-			"perl",
-			"php",
-			"ruby",
-			"sh",
-			"source",
-			"sudo",
-			"tcsh",
-			"xargs",
-			"zsh",
-		}
-		for index, token in enumerate(tokens):
-			next_token = tokens[index + 1] if index + 1 < len(tokens) else ""
-			token_basename = os.path.basename(token)
-			if pending_redirection_target:
-				pending_redirection_target = False
-				continue
-			if token in separator_tokens:
-				expect_command = True
-				passthrough_command = ""
-				passthrough_option_value = False
-				continue
-			if token in redirection_tokens:
-				pending_redirection_target = True
-				continue
-			if token.isdigit() and next_token in redirection_tokens:
-				continue
-			if expect_command and passthrough_option_value:
-				passthrough_option_value = False
-				continue
-			if expect_command and re.match(r"[A-Za-z_][A-Za-z0-9_]*=.*", token):
-				continue
-			if expect_command and token_basename in passthrough_tokens:
-				passthrough_command = token_basename
-				continue
-			if expect_command and passthrough_command:
-				if passthrough_command == "env" and (
-					token == "-S"
-					or token.startswith("-S")
-					or token == "--split-string"
-					or token.startswith("--split-string=")
-				):
-					raise ValueError("body_unsafe_shell_construct")
-				if token.startswith("-"):
-					if token in passthrough_value_tokens.get(passthrough_command, set()):
-						passthrough_option_value = True
-					continue
-				if passthrough_command == "nice" and re.match(r"-?\d+$", token):
-					continue
-				if passthrough_command == "timeout" and re.match(r"\d+(?:\.\d+)?[smhd]?$", token):
-					continue
-				if token_basename in passthrough_tokens:
-					passthrough_command = token_basename
-					continue
-			if expect_command and token.startswith("$"):
-				raise ValueError("body_unsafe_shell_construct")
-			if expect_command and token_basename in dangerous_command_tokens:
-				raise ValueError("body_unsafe_shell_construct")
-			expect_command = False
-			passthrough_command = ""
-			passthrough_option_value = False
 	return text + "\n"
+
+
+def prefer_generated_item_error(existing, candidate):
+	if existing is None:
+		return candidate
+	if isinstance(candidate, GeneratedItemValidationError):
+		if not isinstance(existing, GeneratedItemValidationError):
+			return candidate
+		if str(existing) == 'missing_files_tests_or_items_key' and str(candidate) != 'missing_files_tests_or_items_key':
+			return candidate
+	return existing
 
 
 def normalize_issue(issue):
@@ -392,6 +337,572 @@ def load_judge_payload(path: str):
 	}
 
 
+def fail_generated_item(message: str):
+	raise GeneratedItemValidationError(message)
+
+
+def strip_comments(line: str) -> str:
+	result = []
+	in_single = False
+	in_double = False
+	escaped = False
+	for index, char in enumerate(line):
+		if escaped:
+			result.append(char)
+			escaped = False
+			continue
+		if in_single:
+			result.append(char)
+			if char == "'":
+				in_single = False
+			continue
+		if in_double:
+			result.append(char)
+			if char == '\\':
+				escaped = True
+			elif char == '"':
+				in_double = False
+			continue
+		if char == '\\':
+			result.append(char)
+			escaped = True
+			continue
+		if char == "'":
+			result.append(char)
+			in_single = True
+			continue
+		if char == '"':
+			result.append(char)
+			in_double = True
+			continue
+		if char == '#' and (index == 0 or line[index - 1].isspace() or line[index - 1] in ';|&(){}'):
+			break
+		result.append(char)
+	return ''.join(result)
+
+
+def detect_and_mask_shell_evaluation(line: str, line_number: int) -> str:
+	in_single = False
+	in_double = False
+	escaped = False
+	index = 0
+	while index < len(line):
+		char = line[index]
+		if escaped:
+			escaped = False
+			index += 1
+			continue
+		if in_single:
+			if char == "'":
+				in_single = False
+			index += 1
+			continue
+		if in_double:
+			if char == '\\':
+				escaped = True
+				index += 1
+				continue
+			if char == '`':
+				fail_generated_item(f'line {line_number}: backticks are not allowed')
+			if char == '$' and index + 1 < len(line) and line[index + 1] == '(' and (index + 2 >= len(line) or line[index + 2] != '('):
+				fail_generated_item(f'line {line_number}: command substitution is not allowed')
+			if char == '"':
+				in_double = False
+			index += 1
+			continue
+		if char == '\\':
+			escaped = True
+			index += 1
+			continue
+		if char == "'":
+			in_single = True
+			index += 1
+			continue
+		if char == '"':
+			in_double = True
+			index += 1
+			continue
+		if char == '`':
+			fail_generated_item(f'line {line_number}: backticks are not allowed')
+		if char == '$' and index + 1 < len(line) and line[index + 1] == '(' and (index + 2 >= len(line) or line[index + 2] != '('):
+			fail_generated_item(f'line {line_number}: command substitution is not allowed')
+		if char in '<>' and index + 1 < len(line) and line[index + 1] == '(':
+			fail_generated_item(f'line {line_number}: process substitution is not allowed')
+		index += 1
+	return line
+
+
+def has_line_continuation(masked_line: str) -> bool:
+	stripped = masked_line.rstrip()
+	if not stripped:
+		return False
+	trailing_backslashes = len(stripped) - len(stripped.rstrip('\\'))
+	return trailing_backslashes % 2 == 1
+
+
+def trim_line_continuation(masked_line: str) -> str:
+	stripped = masked_line.rstrip()
+	if stripped.endswith('\\'):
+		return stripped[:-1]
+	return stripped
+
+
+def is_assignment_token(token: str) -> bool:
+	return bool(re.match(r'^[A-Za-z_][A-Za-z0-9_]*=.*$', token))
+
+
+def command_basename(token: str) -> str:
+	return os.path.basename(token.lstrip('\\'))
+
+
+def tokenize_command_line(line: str):
+	tokens = []
+	current = []
+	in_single = False
+	in_double = False
+	escaped = False
+
+	def flush_current():
+		if current:
+			tokens.append((TOKEN_KIND_WORD, ''.join(current)))
+			current.clear()
+
+	index = 0
+	while index < len(line):
+		char = line[index]
+		if escaped:
+			current.append(char)
+			escaped = False
+			index += 1
+			continue
+		if in_single:
+			if char == "'":
+				in_single = False
+			else:
+				current.append(char)
+			index += 1
+			continue
+		if in_double:
+			if char == '\\':
+				escaped = True
+			elif char == '"':
+				in_double = False
+			else:
+				current.append(char)
+			index += 1
+			continue
+		if char == '\\':
+			escaped = True
+			index += 1
+			continue
+		if char == "'":
+			in_single = True
+			index += 1
+			continue
+		if char == '"':
+			in_double = True
+			index += 1
+			continue
+		if char.isspace():
+			flush_current()
+			index += 1
+			continue
+		operator = next((candidate for candidate in SHELL_OPERATORS if line.startswith(candidate, index)), None)
+		if operator is None and char in ';|(){}<>&':
+			operator = char
+		if operator is not None:
+			flush_current()
+			tokens.append((TOKEN_KIND_OPERATOR, operator))
+			index += len(operator)
+			continue
+		current.append(char)
+		index += 1
+	if escaped:
+		current.append('\\')
+	flush_current()
+	return tokens
+
+
+def is_shell_reentry_command(token: str) -> bool:
+	return command_basename(token) in SHELL_REENTRY_COMMANDS
+
+
+def iter_non_redirection_args(args):
+	index = 0
+	while index < len(args):
+		arg = args[index]
+		if arg in REDIRECTION_TOKENS:
+			index += 2
+			continue
+		if arg.isdigit() and index + 1 < len(args) and args[index + 1] in REDIRECTION_TOKENS:
+			index += 3
+			continue
+		yield arg
+		index += 1
+
+
+def env_uses_split_string(arg: str) -> bool:
+	return arg == '-S' or arg.startswith('--split-string') or bool(re.match(r'^-[A-Za-z]*S[A-Za-z]*$', arg))
+
+
+def env_option_consumes_value(arg: str) -> bool:
+	return arg in {'-C', '-u', '-a', '--argv0', '--chdir', '--unset', '--block-signal', '--default-signal', '--ignore-signal'}
+
+
+def exec_option_consumes_value(arg: str) -> bool:
+	return arg == '-a'
+
+
+def time_option_consumes_value(arg: str) -> bool:
+	return arg in {'-f', '--format', '-o', '--output'}
+
+
+def nice_option_consumes_value(arg: str) -> bool:
+	return arg in {'-n', '--adjustment'}
+
+
+def timeout_option_consumes_value(arg: str) -> bool:
+	return arg in {'-s', '--signal', '-k', '--kill-after'}
+
+
+def timeout_duration_token(arg: str) -> bool:
+	return bool(re.match(r'^\d+(?:\.\d+)?[smhd]?$', arg))
+
+
+def timeout_command_with_tail(args, line_number: int):
+	command, tail = first_command_with_tail(args, line_number, option_takes_value=timeout_option_consumes_value)
+	if command is None:
+		return None, []
+	if timeout_duration_token(command):
+		if not tail:
+			return None, []
+		return first_command_with_tail(tail, line_number, option_takes_value=timeout_option_consumes_value)
+	return command, tail
+
+
+def first_command_with_tail(args, line_number: int, *, allow_assignments: bool = False, option_takes_value=None):
+	if option_takes_value is None:
+		option_takes_value = lambda arg: False
+	end_of_options = False
+	index = 0
+	while index < len(args):
+		arg = args[index]
+		if arg.isdigit() and index + 1 < len(args) and args[index + 1] in REDIRECTION_TOKENS:
+			if index + 2 >= len(args):
+				fail_generated_item(f'line {line_number}: redirection requires a target')
+			index += 3
+			continue
+		if arg in REDIRECTION_TOKENS:
+			if index + 1 >= len(args):
+				fail_generated_item(f'line {line_number}: redirection requires a target')
+			index += 2
+			continue
+		if end_of_options:
+			return arg, args[index + 1 :]
+		if arg == '--':
+			end_of_options = True
+			index += 1
+			continue
+		if allow_assignments and is_assignment_token(arg):
+			index += 1
+			continue
+		if option_takes_value(arg):
+			if index + 1 >= len(args):
+				fail_generated_item(f'line {line_number}: option {arg} requires a value')
+			index += 2
+			continue
+		if arg.startswith('-'):
+			index += 1
+			continue
+		return arg, args[index + 1 :]
+	return None, []
+
+
+def validate_command(command: str, args, line_number: int):
+	if command == '.':
+		fail_generated_item(f'line {line_number}: dot sourcing is not allowed')
+	if '$' in command:
+		fail_generated_item(f'line {line_number}: variable expansion in command position is not allowed')
+	base = command_basename(command)
+	if base == 'coproc':
+		fail_generated_item(f'line {line_number}: coproc is not allowed')
+	if base == 'eval':
+		fail_generated_item(f'line {line_number}: eval is not allowed')
+	if base == 'source':
+		fail_generated_item(f'line {line_number}: source is not allowed')
+	if base == 'sudo':
+		fail_generated_item(f'line {line_number}: sudo is not allowed')
+	if base == 'xargs':
+		fail_generated_item(f'line {line_number}: xargs is not allowed')
+	if base in {'perl', 'php', 'ruby'}:
+		fail_generated_item(f'line {line_number}: {base} is not allowed')
+	if is_shell_reentry_command(command):
+		fail_generated_item(f'line {line_number}: shell re-entry via {base} is not allowed')
+	if base == 'env':
+		for arg in iter_non_redirection_args(args):
+			if env_uses_split_string(arg):
+				fail_generated_item(f'line {line_number}: env split-string execution is not allowed')
+		env_command, env_tail = first_command_with_tail(args, line_number, allow_assignments=True, option_takes_value=env_option_consumes_value)
+		if env_command is not None:
+			validate_command(env_command, env_tail, line_number)
+	if base == 'exec':
+		exec_command, exec_tail = first_command_with_tail(args, line_number, option_takes_value=exec_option_consumes_value)
+		if exec_command is not None:
+			validate_command(exec_command, exec_tail, line_number)
+	if base == 'command':
+		command_command, command_tail = first_command_with_tail(args, line_number)
+		if command_command is not None:
+			validate_command(command_command, command_tail, line_number)
+	if base == 'builtin':
+		builtin_command, builtin_tail = first_command_with_tail(args, line_number)
+		if builtin_command is not None:
+			validate_command(builtin_command, builtin_tail, line_number)
+	if base == 'time':
+		time_command, time_tail = first_command_with_tail(args, line_number, option_takes_value=time_option_consumes_value)
+		if time_command is not None:
+			validate_command(time_command, time_tail, line_number)
+	if base == 'timeout':
+		timeout_command, timeout_tail = timeout_command_with_tail(args, line_number)
+		if timeout_command is not None:
+			validate_command(timeout_command, timeout_tail, line_number)
+	if base in {'nohup', 'setsid'}:
+		nested_command, nested_tail = first_command_with_tail(args, line_number)
+		if nested_command is not None:
+			validate_command(nested_command, nested_tail, line_number)
+	if base == 'nice':
+		nice_command, nice_tail = first_command_with_tail(args, line_number, option_takes_value=nice_option_consumes_value)
+		if nice_command is not None:
+			validate_command(nice_command, nice_tail, line_number)
+
+
+def validate_command_line(masked_line: str, line_number: int):
+	tokens = tokenize_command_line(masked_line)
+	expect_command = True
+	index = 0
+	while index < len(tokens):
+		token_kind, token = tokens[index]
+		if token_kind == TOKEN_KIND_OPERATOR and token in COMMAND_SEPARATORS:
+			expect_command = True
+			index += 1
+			continue
+		if token_kind == TOKEN_KIND_WORD and token in CONTROL_TOKENS:
+			expect_command = True
+			index += 1
+			continue
+		if expect_command:
+			if token_kind == TOKEN_KIND_WORD and token.isdigit() and index + 1 < len(tokens):
+				next_kind, next_token = tokens[index + 1]
+				if next_kind == TOKEN_KIND_OPERATOR and next_token in REDIRECTION_TOKENS:
+					if index + 2 >= len(tokens) or tokens[index + 2][0] != TOKEN_KIND_WORD:
+						fail_generated_item(f'line {line_number}: redirection requires a target')
+					index += 3
+					continue
+			if token_kind == TOKEN_KIND_OPERATOR and token in REDIRECTION_TOKENS:
+				if index + 1 >= len(tokens) or tokens[index + 1][0] != TOKEN_KIND_WORD:
+					fail_generated_item(f'line {line_number}: redirection requires a target')
+				index += 2
+				continue
+			if token_kind != TOKEN_KIND_WORD:
+				index += 1
+				continue
+			if is_assignment_token(token):
+				index += 1
+				continue
+			args = []
+			next_index = index + 1
+			while next_index < len(tokens):
+				next_kind, next_token = tokens[next_index]
+				if (next_kind == TOKEN_KIND_OPERATOR and next_token in COMMAND_SEPARATORS) or (next_kind == TOKEN_KIND_WORD and next_token in CONTROL_TOKENS):
+					break
+				if next_kind == TOKEN_KIND_OPERATOR and next_token in REDIRECTION_TOKENS:
+					if next_index + 1 >= len(tokens) or tokens[next_index + 1][0] != TOKEN_KIND_WORD:
+						fail_generated_item(f'line {line_number}: redirection requires a target')
+					args.append(next_token)
+					next_index += 1
+					args.append(tokens[next_index][1])
+					next_index += 1
+					continue
+				args.append(next_token)
+				next_index += 1
+			validate_command(token, args, line_number)
+			expect_command = False
+			index = next_index
+			continue
+		index += 1
+
+
+def unquote_heredoc_delimiter(token: str):
+	try:
+		parts = shlex.split(token, posix=True)
+	except ValueError:
+		return None
+	if len(parts) != 1:
+		return None
+	return parts[0]
+
+
+def parse_heredoc_openers(line: str):
+	openers = []
+	in_single = False
+	in_double = False
+	escaped = False
+	index = 0
+	while index < len(line):
+		char = line[index]
+		if escaped:
+			escaped = False
+			index += 1
+			continue
+		if in_single:
+			if char == "'":
+				in_single = False
+			index += 1
+			continue
+		if in_double:
+			if char == '\\':
+				escaped = True
+			elif char == '"':
+				in_double = False
+			index += 1
+			continue
+		if char == '#':
+			if index == 0 or line[index - 1].isspace() or line[index - 1] in ';|&(){}':
+				break
+		if char == '\\':
+			escaped = True
+			index += 1
+			continue
+		if char == "'":
+			in_single = True
+			index += 1
+			continue
+		if char == '"':
+			in_double = True
+			index += 1
+			continue
+		if line.startswith('<<', index):
+			if line.startswith('<<<', index):
+				index += 3
+				continue
+			strip_tabs = False
+			token_start = index + 2
+			if token_start < len(line) and line[token_start] == '-':
+				strip_tabs = True
+				token_start += 1
+			while token_start < len(line) and line[token_start].isspace():
+				token_start += 1
+			token_chars = []
+			token_in_single = False
+			token_in_double = False
+			token_escaped = False
+			while token_start < len(line):
+				token_char = line[token_start]
+				if token_escaped:
+					token_chars.append(token_char)
+					token_escaped = False
+					token_start += 1
+					continue
+				if token_in_single:
+					token_chars.append(token_char)
+					if token_char == "'":
+						token_in_single = False
+					token_start += 1
+					continue
+				if token_in_double:
+					token_chars.append(token_char)
+					if token_char == '\\':
+						token_escaped = True
+					elif token_char == '"':
+						token_in_double = False
+					token_start += 1
+					continue
+				if token_char in "'\"":
+					token_chars.append(token_char)
+					if token_char == "'":
+						token_in_single = True
+					else:
+						token_in_double = True
+					token_start += 1
+					continue
+				if token_char == '\\':
+					token_chars.append(token_char)
+					token_escaped = True
+					token_start += 1
+					continue
+				if token_char.isspace() or token_char in ';|&(){}<>':
+					break
+				token_chars.append(token_char)
+				token_start += 1
+			token = ''.join(token_chars)
+			if token:
+				quoted = any(char in token for char in "'\\\"")
+				delimiter = unquote_heredoc_delimiter(token)
+				if delimiter:
+					openers.append((delimiter, strip_tabs, quoted))
+			index = token_start
+			continue
+		index += 1
+	return openers
+
+
+def validate_unquoted_heredoc_line(line: str, line_number: int):
+	escaped = False
+	index = 0
+	while index < len(line):
+		char = line[index]
+		if escaped:
+			escaped = False
+			index += 1
+			continue
+		if char == '\\':
+			escaped = True
+			index += 1
+			continue
+		if char == '`':
+			fail_generated_item(f'line {line_number}: backticks are not allowed')
+		if char == '$' and index + 1 < len(line) and line[index + 1] == '(' and (index + 2 >= len(line) or line[index + 2] != '('):
+			fail_generated_item(f'line {line_number}: command substitution is not allowed')
+		if char in '<>' and index + 1 < len(line) and line[index + 1] == '(':
+			fail_generated_item(f'line {line_number}: process substitution is not allowed')
+		index += 1
+
+
+def validate_shell_content(content: str, path_value: str, item_index: int):
+	# Caller-owned wrapping adds item/path context to any rejection raised here.
+	_ = (path_value, item_index)
+	pending_heredocs = []
+	logical_line = ''
+	logical_line_start = 1
+	for line_number, raw_line in enumerate(content.split('\n'), start=1):
+		if pending_heredocs:
+			delimiter, strip_tabs, quoted = pending_heredocs[0]
+			candidate_line = raw_line.lstrip('\t') if strip_tabs else raw_line
+			if candidate_line == delimiter:
+				pending_heredocs.pop(0)
+				continue
+			if not quoted:
+				validate_unquoted_heredoc_line(raw_line, line_number)
+			continue
+		control_line = strip_comments(raw_line)
+		masked_line = detect_and_mask_shell_evaluation(control_line, line_number)
+		pending_heredocs.extend(parse_heredoc_openers(control_line))
+		if not logical_line:
+			logical_line_start = line_number
+		if masked_line.strip():
+			masked_fragment = trim_line_continuation(masked_line) if has_line_continuation(masked_line) else masked_line
+			logical_line = f'{logical_line}{masked_fragment}'.strip() if logical_line else masked_fragment
+			if not has_line_continuation(masked_line):
+				validate_command_line(logical_line, logical_line_start)
+				logical_line = ''
+		elif logical_line:
+			validate_command_line(logical_line, logical_line_start)
+			logical_line = ''
+	if pending_heredocs:
+		fail_generated_item('unterminated heredoc content')
+	if logical_line:
+		validate_command_line(logical_line, logical_line_start)
+
+
 def normalize_generated_items(candidate, issue_count: int):
 	if isinstance(candidate, str):
 		candidate = json.loads(candidate)
@@ -401,28 +912,34 @@ def normalize_generated_items(candidate, issue_count: int):
 				candidate = candidate[key]
 				break
 		else:
-			return None
+			fail_generated_item('missing_files_tests_or_items_key')
 	if not isinstance(candidate, list):
-		return None
+		fail_generated_item('generated_payload_is_not_a_list')
 	if len(candidate) != issue_count:
-		return None
+		fail_generated_item(f'item_count_mismatch expected={issue_count} got={len(candidate)}')
 	normalized = []
-	for item in candidate:
+	for item_index, item in enumerate(candidate):
 		if not isinstance(item, dict):
-			return None
+			fail_generated_item(f'item[{item_index}] is not an object')
 		path_value = item.get('path')
 		content = item.get('content')
 		expected_to_fail_until_fixed = item.get('expected_to_fail_until_fixed')
 		if not isinstance(path_value, str) or not squish(path_value, 200):
-			return None
+			fail_generated_item(f'item[{item_index}] has invalid path')
 		if not isinstance(content, str):
-			return None
+			fail_generated_item(f'item[{item_index}] path={squish(path_value, 200)} has non-string content')
 		try:
 			content = normalize_content(content)
-		except Exception:
-			return None
+		except ValueError as exc:
+			if str(exc) == 'empty_content':
+				fail_generated_item(f'item[{item_index}] path={squish(path_value, 200)} has empty content')
+			fail_generated_item(f'item[{item_index}] path={squish(path_value, 200)} has invalid content: {exc}')
 		if type(expected_to_fail_until_fixed) is not bool:
-			return None
+			fail_generated_item(f'item[{item_index}] path={squish(path_value, 200)} has invalid expected_to_fail_until_fixed flag')
+		try:
+			validate_shell_content(content, path_value, item_index)
+		except GeneratedItemValidationError as exc:
+			fail_generated_item(f'item[{item_index}] path={squish(path_value, 200)} rejected: {exc}')
 		normalized.append(
 			{
 				'path': squish(path_value, 200),
@@ -535,16 +1052,23 @@ issues = judge_payload['remaining_issues']
 raw = load_raw(src)
 
 validated_items = None
+last_generated_item_error = None
 for candidate in load_candidates(raw):
 	try:
 		validated_items = normalize_generated_items(candidate, len(issues))
-	except Exception:
+		last_generated_item_error = None
+	except Exception as exc:
+		last_generated_item_error = prefer_generated_item_error(last_generated_item_error, exc)
 		validated_items = None
 	if validated_items is not None:
 		break
 
 if validated_items is None:
 	print('Behavioural smoke synthesis skipped: could not validate synthesis output', file=sys.stderr)
+	if last_generated_item_error is not None:
+		print(f'behavioural_smoke extractor rejected generated content: {last_generated_item_error}', file=sys.stderr)
+	else:
+		print('behavioural_smoke extractor rejected generated content: no valid JSON candidate found', file=sys.stderr)
 	sys.exit(1)
 
 synth_dir_path = Path(synth_dir)
@@ -641,6 +1165,8 @@ LANGUAGE_HINT="$(detect_behavioural_smoke_language)"
 PROMPT_FILE="${RUNTIME_DIR}/behavioural_smoke_prompt.txt"
 RAW_OUTPUT_FILE="${RUNTIME_DIR}/behavioural_smoke_raw.txt"
 STDERR_FILE="${RUNTIME_DIR}/behavioural_smoke_stderr.txt"
+EXTRACT_STDOUT_STDERR_FILE="${RUNTIME_DIR}/behavioural_smoke_extract_stdout_stderr.txt"
+EXTRACT_STDERR_STDERR_FILE="${RUNTIME_DIR}/behavioural_smoke_extract_stderr_stderr.txt"
 VALIDATION_ENV_FILE="${VALIDATE_ENV_FILE:-validation/validate.env}"
 BEHAVIOURAL_SMOKE_MODEL="${BEHAVIOURAL_SMOKE_MODEL:-openai/gpt-5.4-mini}"
 BEHAVIOURAL_SMOKE_TIMEOUT_DEFAULT=120
@@ -708,11 +1234,12 @@ rm -rf "${SYNTH_DIR}"
 
 if [ "${CURRENT_ISSUES_COUNT}" = "0" ]; then
 	printf '[]\n' > "${RAW_OUTPUT_FILE}"
-	if synth_count="$(extract_and_write_synth_bundle "${RAW_OUTPUT_FILE}" "${JUDGE_ARTIFACT}" "${SYNTH_DIR}" "${MANIFEST_PATH}" "${CURRENT_ROUND}" "${CURRENT_HEAD_SHA}" "${LANGUAGE_HINT}")" \
+	if synth_count="$(extract_and_write_synth_bundle "${RAW_OUTPUT_FILE}" "${JUDGE_ARTIFACT}" "${SYNTH_DIR}" "${MANIFEST_PATH}" "${CURRENT_ROUND}" "${CURRENT_HEAD_SHA}" "${LANGUAGE_HINT}" 2>"${EXTRACT_STDOUT_STDERR_FILE}")" \
 		&& [ -s "${MANIFEST_PATH}" ]; then
 		behavioural_smoke_log_ok "${synth_count}" "${CURRENT_ROUND}" "${LANGUAGE_HINT}" "${MANIFEST_PATH}"
 		exit 0
 	fi
+	behavioural_smoke_emit_extractor_stderr "stdout" "${EXTRACT_STDOUT_STDERR_FILE}"
 	rm -rf "${SYNTH_DIR}"
 	behavioural_smoke_log_fail "json_parse_failed" "${CURRENT_ROUND}" "${MANIFEST_PATH}"
 	exit 0
@@ -781,17 +1308,20 @@ else
 	cmd_rc=$?
 fi
 
-if synth_count="$(extract_and_write_synth_bundle "${RAW_OUTPUT_FILE}" "${JUDGE_ARTIFACT}" "${SYNTH_DIR}" "${MANIFEST_PATH}" "${CURRENT_ROUND}" "${CURRENT_HEAD_SHA}" "${LANGUAGE_HINT}")" \
+if synth_count="$(extract_and_write_synth_bundle "${RAW_OUTPUT_FILE}" "${JUDGE_ARTIFACT}" "${SYNTH_DIR}" "${MANIFEST_PATH}" "${CURRENT_ROUND}" "${CURRENT_HEAD_SHA}" "${LANGUAGE_HINT}" 2>"${EXTRACT_STDOUT_STDERR_FILE}")" \
 	&& [ -s "${MANIFEST_PATH}" ]; then
 	behavioural_smoke_log_ok "${synth_count}" "${CURRENT_ROUND}" "${LANGUAGE_HINT}" "${MANIFEST_PATH}"
 	exit 0
 fi
 
-if synth_count="$(extract_and_write_synth_bundle "${STDERR_FILE}" "${JUDGE_ARTIFACT}" "${SYNTH_DIR}" "${MANIFEST_PATH}" "${CURRENT_ROUND}" "${CURRENT_HEAD_SHA}" "${LANGUAGE_HINT}")" \
+if synth_count="$(extract_and_write_synth_bundle "${STDERR_FILE}" "${JUDGE_ARTIFACT}" "${SYNTH_DIR}" "${MANIFEST_PATH}" "${CURRENT_ROUND}" "${CURRENT_HEAD_SHA}" "${LANGUAGE_HINT}" 2>"${EXTRACT_STDERR_STDERR_FILE}")" \
 	&& [ -s "${MANIFEST_PATH}" ]; then
 	behavioural_smoke_log_ok "${synth_count}" "${CURRENT_ROUND}" "${LANGUAGE_HINT}" "${MANIFEST_PATH}"
 	exit 0
 fi
+
+behavioural_smoke_emit_extractor_stderr "stdout" "${EXTRACT_STDOUT_STDERR_FILE}"
+behavioural_smoke_emit_extractor_stderr "stderr" "${EXTRACT_STDERR_STDERR_FILE}"
 
 if [ -s "${STDERR_FILE}" ]; then
 	{

@@ -397,7 +397,7 @@ def test_review_synthesise_smoke_fails_open_on_wrong_item_count() -> None:
 		assert "BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL reason=json_parse_failed round=1" in combined_output
 
 
-def test_review_synthesise_smoke_rejects_unsafe_shell_constructs() -> None:
+def test_review_synthesise_smoke_rejects_unsafe_shell_constructs_with_visible_diagnostics() -> None:
 	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_unsafe_") as td:
 		workspace = Path(td)
 		runtime_dir = workspace / "runtime"
@@ -412,54 +412,82 @@ def test_review_synthesise_smoke_rejects_unsafe_shell_constructs() -> None:
 		env = _base_env(workspace, runtime_dir, mock_bin_dir)
 		manifest = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth" / "synth_round_1_manifest.json"
 
-		for content in (
-			'printf hello#;eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'AWK=eval\n$AWK "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'coproc eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'coproc\\\n eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'coproc /bin/bash -c "printf unsafe"\nbehavioural_smoke_inconclusive "unsafe"',
-			'coproc env eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'coproc\\\n env eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'/bin/bash -c "printf unsafe"\nbehavioural_smoke_inconclusive "unsafe"',
-			'/usr/bin/env eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'result="$(whoami)"\nbehavioural_smoke_inconclusive "unsafe"',
-			'bash -c "printf unsafe"\nbehavioural_smoke_inconclusive "unsafe"',
-			'eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'exec /bin/false\nbehavioural_smoke_inconclusive "unsafe"',
-			'env -S "printf unsafe"\nbehavioural_smoke_inconclusive "unsafe"',
-			'env --split-string="printf unsafe"\nbehavioural_smoke_inconclusive "unsafe"',
-			'source ./payload.sh\nbehavioural_smoke_inconclusive "unsafe"',
-			'. ./payload.sh\nbehavioural_smoke_inconclusive "unsafe"',
-			'cmd & eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'cmd |& eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'> /dev/null eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'2>/dev/null eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'env eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'env -u SOME_VAR eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'sudo eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'sudo -u root eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'time eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'time -o /dev/null eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'time --format %E eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'time -p eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'time /usr/bin/env eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'! eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'timeout 1 eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'timeout 10s eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'timeout -s KILL 1 eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'xargs eval\nbehavioural_smoke_inconclusive "unsafe"',
-			'xargs -d , eval\nbehavioural_smoke_inconclusive "unsafe"',
-			'command -p eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
-			'builtin -- source ./payload.sh\nbehavioural_smoke_inconclusive "unsafe"',
-			'if eval "$PAYLOAD"; then behavioural_smoke_inconclusive "unsafe"; fi',
-		):
+		cases = [
+			("bash_reentry", "bash -c 'echo unsafe'\n", "shell re-entry via bash is not allowed"),
+			("backslash_reentry", "\\bash -c 'echo unsafe'\n", "shell re-entry via bash is not allowed"),
+			("csh_reentry", "csh -c 'echo unsafe'\n", "shell re-entry via csh is not allowed"),
+			("fish_reentry", "fish -c 'echo unsafe'\n", "shell re-entry via fish is not allowed"),
+			("command_builtin_reentry", "command bash -c 'echo unsafe'\n", "shell re-entry via bash is not allowed"),
+			("builtin_eval", "builtin eval 'echo unsafe'\n", "eval is not allowed"),
+			("exec_argv0_reentry", "exec -a renamed bash -c 'echo unsafe'\n", "shell re-entry via bash is not allowed"),
+			("env_option_reentry", "env -C /tmp bash -c 'echo unsafe'\n", "shell re-entry via bash is not allowed"),
+			("fd_prefixed_reentry", "2>/dev/null bash -c 'echo unsafe'\n", "shell re-entry via bash is not allowed"),
+			("env_fd_prefixed_reentry", "env 2>/dev/null bash -c 'echo unsafe'\n", "shell re-entry via bash is not allowed"),
+			("background_reentry", "echo safe & bash -c 'echo unsafe'\n", "shell re-entry via bash is not allowed"),
+			("continued_reentry", "ba\\\nsh -c 'echo unsafe'\n", "shell re-entry via bash is not allowed"),
+			("tcsh_reentry", "tcsh -c 'echo unsafe'\n", "shell re-entry via tcsh is not allowed"),
+			("spaced_continued_reentry", "bash \\" "\n-c 'echo unsafe'\n", "shell re-entry via bash is not allowed"),
+			("mixed_quoted_eval", "e\"v\"al 'echo unsafe'\n", "eval is not allowed"),
+			("variable_command_reentry", "cmd=bash\n$cmd -c 'echo unsafe'\n", "variable expansion in command position is not allowed"),
+			("braced_variable_command_reentry", "${SHELL} -c 'echo unsafe'\n", "variable expansion in command position is not allowed"),
+			("wrapped_variable_command_reentry", "command ${SHELL} -c 'echo unsafe'\n", "variable expansion in command position is not allowed"),
+			("command_substitution", "value=$(python3 -V)\necho \"$value\"\nexit 1\n", "command substitution is not allowed"),
+			("unquoted_heredoc_substitution", "cat <<EOF\n$(python3 -V)\nEOF\n", "command substitution is not allowed"),
+			("unquoted_heredoc_process_substitution", "cat <<EOF\n<(python3 -V)\nEOF\n", "process substitution is not allowed"),
+			("malformed_redirection", "echo >\n", "redirection requires a target"),
+			("hello_hash_eval", 'printf hello#;eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"', "eval is not allowed"),
+			("indirect_eval", 'AWK=eval\n$AWK "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"', "variable expansion in command position is not allowed"),
+			("coproc_eval", 'coproc eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"', "coproc is not allowed"),
+			("coproc_continued_eval", 'coproc\\\n eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"', "coproc is not allowed"),
+			("coproc_shell", 'coproc /bin/bash -c "printf unsafe"\nbehavioural_smoke_inconclusive "unsafe"', "coproc is not allowed"),
+			("coproc_env_eval", 'coproc env eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"', "coproc is not allowed"),
+			("coproc_continued_env_eval", 'coproc\\\n env eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"', "coproc is not allowed"),
+			("path_bash_reentry", '/bin/bash -c "printf unsafe"\nbehavioural_smoke_inconclusive "unsafe"', "shell re-entry via bash is not allowed"),
+			("env_eval_with_path", '/usr/bin/env eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"', "eval is not allowed"),
+			("quoted_command_substitution", 'result="$(whoami)"\nbehavioural_smoke_inconclusive "unsafe"', "command substitution is not allowed"),
+			("direct_eval", 'eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"', "eval is not allowed"),
+			("env_split_string", 'env -S "printf unsafe"\nbehavioural_smoke_inconclusive "unsafe"', "env split-string execution is not allowed"),
+			("env_split_string_long", 'env --split-string="printf unsafe"\nbehavioural_smoke_inconclusive "unsafe"', "env split-string execution is not allowed"),
+			("source_payload", 'source ./payload.sh\nbehavioural_smoke_inconclusive "unsafe"', "source is not allowed"),
+			("dot_payload", '. ./payload.sh\nbehavioural_smoke_inconclusive "unsafe"', "dot sourcing is not allowed"),
+			("background_eval", 'cmd & eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"', "eval is not allowed"),
+			("nohup_reentry", "nohup bash -c 'echo unsafe'\n", "shell re-entry via bash is not allowed"),
+			("nice_reentry", "nice -n 5 bash -c 'echo unsafe'\n", "shell re-entry via bash is not allowed"),
+			("pipefail_eval", 'cmd |& eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"', "eval is not allowed"),
+			("perl_eval", "perl -e 'print qq(unsafe)'\n", "perl is not allowed"),
+			("php_eval", "php -r 'echo 1;'\n", "php is not allowed"),
+			("redirect_prefix_eval", '> /dev/null eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"', "eval is not allowed"),
+			("fd_redirect_prefix_eval", '2>/dev/null eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"', "eval is not allowed"),
+			("ruby_eval", "ruby -e 'puts :unsafe'\n", "ruby is not allowed"),
+			("setsid_reentry", "setsid bash -c 'echo unsafe'\n", "shell re-entry via bash is not allowed"),
+			("env_eval", 'env eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"', "eval is not allowed"),
+			("env_unset_eval", 'env -u SOME_VAR eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"', "eval is not allowed"),
+			("sudo_eval", 'sudo eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"', "sudo is not allowed"),
+			("sudo_user_eval", 'sudo -u root eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"', "sudo is not allowed"),
+			("time_eval", 'time eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"', "eval is not allowed"),
+			("time_output_eval", 'time -o /dev/null eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"', "eval is not allowed"),
+			("time_format_eval", 'time --format %E eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"', "eval is not allowed"),
+			("time_portable_eval", 'time -p eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"', "eval is not allowed"),
+			("time_env_eval", 'time /usr/bin/env eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"', "eval is not allowed"),
+			("bang_eval", '! eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"', "eval is not allowed"),
+			("timeout_eval", 'timeout 1 eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"', "eval is not allowed"),
+			("timeout_duration_suffix_eval", 'timeout 10s eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"', "eval is not allowed"),
+			("timeout_signal_eval", 'timeout -s KILL 1 eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"', "eval is not allowed"),
+			("xargs_eval", 'xargs eval\nbehavioural_smoke_inconclusive "unsafe"', "xargs is not allowed"),
+			("xargs_delim_eval", 'xargs -d , eval\nbehavioural_smoke_inconclusive "unsafe"', "xargs is not allowed"),
+			("command_path_eval", 'command -p eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"', "eval is not allowed"),
+			("builtin_source_payload", 'builtin -- source ./payload.sh\nbehavioural_smoke_inconclusive "unsafe"', "source is not allowed"),
+			("if_eval", 'if eval "$PAYLOAD"; then behavioural_smoke_inconclusive "unsafe"; fi', "eval is not allowed"),
+		]
+
+		for case_name, generated_content, expected_diagnostic in cases:
 			_install_mock_codex(
 				mock_bin_dir,
 				stdout_text=json.dumps(
 					[
 						{
-							"path": "validation/tests/unsafe.sh",
-							"content": content,
+							"path": f"validation/tests/{case_name}.sh",
+							"content": generated_content,
 							"expected_to_fail_until_fixed": True,
 						}
 					]
@@ -476,12 +504,147 @@ def test_review_synthesise_smoke_rejects_unsafe_shell_constructs() -> None:
 				timeout=60,
 			)
 
+			synth_dir = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth"
 			combined_output = result.stdout + result.stderr
-			assert result.returncode == 0, f"{content}: {combined_output}"
-			assert "could not validate synthesis output" in combined_output, f"{content}: {combined_output}"
-			assert "BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL reason=json_parse_failed round=1" in combined_output, f"{content}: {combined_output}"
-			assert not manifest.exists(), f"{content}: {combined_output}"
+			assert result.returncode == 0, f"{case_name}: {combined_output}"
+			assert "could not validate synthesis output" in combined_output, f"{case_name}: {combined_output}"
+			assert "BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL reason=json_parse_failed round=1" in combined_output, f"{case_name}: {combined_output}"
+			assert not manifest.exists(), f"{case_name}: {combined_output}"
+			assert not synth_dir.exists(), f"{case_name}: {combined_output}"
+			assert "behavioural_smoke extractor rejected generated content:" in result.stderr, f"{case_name}: {combined_output}"
+			assert expected_diagnostic in result.stderr, f"{case_name}: {combined_output}"
 
+
+def test_review_synthesise_smoke_heredoc_rejection_reports_a_single_rejected_prefix() -> None:
+	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_unterminated_heredoc_") as td:
+		workspace = Path(td)
+		runtime_dir = workspace / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		mock_bin_dir = workspace / "mock_bin"
+		head_sha = _seed_repo_with_autofix_commit(workspace)
+		_write_judge_artifact(
+			workspace,
+			head_sha,
+			[_make_issue("src/module.py:2:branch-check", 2, 3, "Branch still always returns autofix")],
+		)
+		_install_mock_codex(
+			mock_bin_dir,
+			stdout_text=json.dumps(
+				[
+					{
+						"path": "validation/tests/unterminated_heredoc.sh",
+						"content": "cat <<'EOF'\nunterminated\n",
+						"expected_to_fail_until_fixed": True,
+					}
+				]
+			)
+			+ "\n",
+		)
+		env = _base_env(workspace, runtime_dir, mock_bin_dir)
+
+		result = subprocess.run(
+			["bash", str(SYNTH_SCRIPT)],
+			cwd=workspace,
+			env=env,
+			capture_output=True,
+			text=True,
+			timeout=60,
+		)
+
+		combined_output = result.stdout + result.stderr
+		assert result.returncode == 0, combined_output
+		assert "behavioural_smoke extractor rejected generated content: item[0] path=validation/tests/unterminated_heredoc.sh rejected: unterminated heredoc content" in result.stderr
+		assert "rejected: item[0] path=validation/tests/unterminated_heredoc.sh rejected:" not in result.stderr
+
+
+def test_review_synthesise_smoke_allows_comment_and_heredoc_literals_that_look_unsafe() -> None:
+	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_safe_literals_") as td:
+		workspace = Path(td)
+		runtime_dir = workspace / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		mock_bin_dir = workspace / "mock_bin"
+		head_sha = _seed_repo_with_autofix_commit(workspace)
+		_write_judge_artifact(
+			workspace,
+			head_sha,
+			[_make_issue("src/module.py:2:branch-check", 2, 3, "Branch still always returns autofix")],
+		)
+		_install_mock_codex(
+			mock_bin_dir,
+			stdout_text=json.dumps(
+				[
+					{
+						"path": "validation/tests/safe_literals.sh",
+						"content": '# sudo bash -c \'ignored\'\npython3 - <<\'PY\'\nprint("literal $(whoami)")\nprint("literal `uname`")\nprint("literal source ./venv/bin/activate")\nraise SystemExit(1)\nPY',
+						"expected_to_fail_until_fixed": True,
+					}
+				]
+			)
+			+ "\n",
+		)
+		env = _base_env(workspace, runtime_dir, mock_bin_dir)
+
+		result = subprocess.run(
+			["bash", str(SYNTH_SCRIPT)],
+			cwd=workspace,
+			env=env,
+			capture_output=True,
+			text=True,
+			timeout=60,
+		)
+
+		manifest = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth" / "synth_round_1_manifest.json"
+		combined_output = result.stdout + result.stderr
+		assert result.returncode == 0, combined_output
+		assert manifest.exists(), combined_output
+		payload = json.loads(manifest.read_text(encoding="utf-8"))
+		assert len(payload["files"]) == 1
+		assert "BEHAVIOURAL_SMOKE_SYNTHESISED count=1 round=1 language=python" in combined_output
+
+
+def test_review_synthesise_smoke_allows_append_both_redirection() -> None:
+	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_append_both_") as td:
+		workspace = Path(td)
+		runtime_dir = workspace / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		mock_bin_dir = workspace / "mock_bin"
+		head_sha = _seed_repo_with_autofix_commit(workspace)
+		_write_judge_artifact(
+			workspace,
+			head_sha,
+			[_make_issue("src/module.py:2:branch-check", 2, 3, "Branch still always returns autofix")],
+		)
+		_install_mock_codex(
+			mock_bin_dir,
+			stdout_text=json.dumps(
+				[
+					{
+						"path": "validation/tests/append_both_redirection.sh",
+						"content": "printf 'still present\\n' &>> smoke.log\nexit 1\n",
+						"expected_to_fail_until_fixed": True,
+					}
+				]
+			)
+			+ "\n",
+		)
+		env = _base_env(workspace, runtime_dir, mock_bin_dir)
+
+		result = subprocess.run(
+			["bash", str(SYNTH_SCRIPT)],
+			cwd=workspace,
+			env=env,
+			capture_output=True,
+			text=True,
+			timeout=60,
+		)
+
+		manifest = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth" / "synth_round_1_manifest.json"
+		combined_output = result.stdout + result.stderr
+		assert result.returncode == 0, combined_output
+		assert manifest.exists(), combined_output
+		payload = json.loads(manifest.read_text(encoding="utf-8"))
+		assert len(payload["files"]) == 1
+		assert "BEHAVIOURAL_SMOKE_SYNTHESISED count=1 round=1 language=python" in combined_output
 
 def test_review_synthesise_smoke_invalid_lang_falls_back_to_repo_detection() -> None:
 	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_lang_") as td:
@@ -535,6 +698,45 @@ def test_behavioural_smoke_emit_warning_is_best_effort_when_fd3_is_closed() -> N
 	assert result.returncode == 0, result.stdout + result.stderr
 	assert result.stdout.strip() == "after"
 	assert result.stderr == ""
+
+
+def test_behavioural_smoke_emit_extractor_stderr_is_best_effort_on_read_failure() -> None:
+	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_emit_extractor_stderr_") as td:
+		workspace = Path(td)
+		mock_bin_dir = workspace / "mock_bin"
+		mock_bin_dir.mkdir(parents=True, exist_ok=True)
+		(mock_bin_dir / "cat").write_text(
+			"#!/usr/bin/env bash\n"
+			"exit 1\n",
+			encoding="utf-8",
+		)
+		(mock_bin_dir / "cat").chmod(0o755)
+		stderr_path = workspace / "extractor.stderr"
+		stderr_path.write_text("diagnostic\n", encoding="utf-8")
+
+		function_text = _extract_shell_function(SYNTH_SCRIPT, "behavioural_smoke_emit_extractor_stderr")
+		env = os.environ.copy()
+		env["PATH"] = f"{mock_bin_dir}:{env.get('PATH', '')}"
+		env["TEST_STDERR_PATH"] = str(stderr_path)
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				+ function_text
+				+ "behavioural_smoke_emit_extractor_stderr stdout \"${TEST_STDERR_PATH}\"\n"
+				+ "echo after\n",
+			],
+			env=env,
+			capture_output=True,
+			text=True,
+			timeout=60,
+		)
+
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert result.stdout.strip() == "after"
+		assert "behavioural_smoke extractor stdout stderr begin" in result.stderr
+		assert "behavioural_smoke extractor stdout stderr end" in result.stderr
 
 
 def test_review_synthesise_smoke_clamps_large_timeout_values() -> None:
