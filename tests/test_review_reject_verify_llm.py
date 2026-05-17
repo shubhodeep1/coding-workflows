@@ -171,7 +171,7 @@ def _install_mock_codex(mock_bin_dir: Path, responses: list[dict[str, object]]) 
 		"config_parts = []\n"
 		"for rel in ('config.toml', '.codex/config.toml'):\n"
 		"\tpath = Path(os.environ.get('CODEX_HOME', '')) / rel\n"
-		"\tif path.exists():\n"
+		"\tif path.is_file():\n"
 		"\t\tconfig_parts.append(f'=== {rel} ===\\n' + path.read_text(encoding='utf-8'))\n"
 		"(calls_dir / f'call_{count}.config').write_text('\\n'.join(config_parts), encoding='utf-8')\n"
 		"stdout_path = responses_dir / f'call_{count}.stdout'\n"
@@ -199,6 +199,7 @@ def _run_verifier(
 	verifier_batch_max: str = "8",
 	support_prompts_dir: Path | None = None,
 	timeout_mode: str = "pass",
+	extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
 	home_dir = workspace_dir / "home"
 	(home_dir / ".codex").mkdir(parents=True, exist_ok=True)
@@ -224,6 +225,8 @@ def _run_verifier(
 	env["CONSOLIDATOR_REJECT_VERIFIER_BATCH_MAX"] = verifier_batch_max
 	if support_prompts_dir is not None:
 		env["SUPPORT_PROMPTS_DIR"] = str(support_prompts_dir)
+	if extra_env is not None:
+		env.update(extra_env)
 	return subprocess.run(
 		["bash", str(VERIFIER_SCRIPT)],
 		cwd=workspace_dir,
@@ -595,6 +598,148 @@ def test_llm_verifier_splits_batches_at_configured_max() -> None:
 		artifact = _load_artifact(workspace)
 		assert len(artifact["results"]) == 9
 		assert all(row["verdict"] == "support" for row in artifact["results"])
+
+
+def test_llm_verifier_tolerates_config_write_failures_and_keeps_script_only_checks() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		workspace = Path(td)
+		runtime = _seed_repo(workspace)
+		mock_bin = workspace / "mock_bin"
+		calls_dir, _ = _install_mock_codex(
+			mock_bin,
+			responses=[
+				{
+					"stdout": json.dumps(
+						{
+							"results": [
+								{
+									"issue_id": "001",
+									"rejection_kind": "reviewer-wrong",
+									"verdict": "support",
+									"reason": "The supplied runtime-path evidence supports keeping this rejection non-actionable.",
+								}
+							]
+						}
+					)
+				}
+			],
+		)
+		_install_mock_timeout(mock_bin)
+		source_codex_home = workspace / "source_codex_home"
+		source_codex_home.mkdir(parents=True, exist_ok=True)
+		(source_codex_home / "config.toml").mkdir()
+		runner_temp = workspace / "runner_temp"
+		runner_temp.mkdir(parents=True, exist_ok=True)
+		_write_pr_diff(
+			runtime,
+			workspace,
+			[
+				"def sample(x):",
+				"    if x is None:",
+				"        return None",
+				"    return x",
+				"line5",
+				"line6",
+				"line7",
+				"line8",
+				"line9",
+				"line10",
+			],
+		)
+		raw_text = "".join([
+			_issue_block(
+				issue_id="001",
+				rejection_kind="reviewer-wrong",
+				typed_header="EVIDENCE_RUNTIME_PATH",
+				typed_body="location: process_request:187\nrationale: Guard returns before the reviewer-described call path.",
+			),
+			_issue_block(
+				issue_id="002",
+				rejection_kind="already-fixed",
+				typed_header="EVIDENCE_DIFF_HUNK",
+				typed_body="file: src/module.py\nlines: 2-3\nexcerpt: if x is None:",
+			),
+		])
+		parse_result = _run_parser(workspace, runtime, raw_text=raw_text)
+		assert parse_result.returncode == 0, parse_result.stderr
+		verify_result = _run_verifier(
+			workspace,
+			runtime,
+			verifier_enabled="true",
+			mock_bin_dir=mock_bin,
+			support_prompts_dir=REPO_ROOT / "prompts",
+			extra_env={
+				"CODEX_HOME": str(source_codex_home),
+				"RUNNER_TEMP": str(runner_temp),
+			},
+		)
+		assert verify_result.returncode == 0, verify_result.stderr
+		assert _codex_call_count(calls_dir) == 1
+		assert "CONSOLIDATOR_REJECT_VERIFIER_FAIL" not in verify_result.stdout
+		assert "CONSOLIDATOR_REJECT_VERIFIED issue=002 kind=already-fixed verdict=support" in verify_result.stdout
+		artifact = _load_artifact(workspace)
+		assert [row["verdict"] for row in artifact["results"]] == ["support", "support"]
+		temp_root = runner_temp / "codex_home_reject_verify"
+		if temp_root.exists():
+			assert list(temp_root.iterdir()) == []
+
+
+def test_llm_verifier_internal_errors_fail_open_and_keep_script_only_checks() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		workspace = Path(td)
+		runtime = _seed_repo(workspace)
+		mock_bin = workspace / "mock_bin"
+		calls_dir, _ = _install_mock_codex(mock_bin, responses=[])
+		_install_mock_timeout(mock_bin)
+		runner_temp_file = workspace / "runner_temp_file"
+		runner_temp_file.write_text("not a directory\n", encoding="utf-8")
+		_write_pr_diff(
+			runtime,
+			workspace,
+			[
+				"def sample(x):",
+				"    if x is None:",
+				"        return None",
+				"    return x",
+				"line5",
+				"line6",
+				"line7",
+				"line8",
+				"line9",
+				"line10",
+			],
+		)
+		raw_text = "".join([
+			_issue_block(
+				issue_id="001",
+				rejection_kind="reviewer-wrong",
+				typed_header="EVIDENCE_RUNTIME_PATH",
+				typed_body="location: process_request:187\nrationale: Guard returns before the reviewer-described call path.",
+			),
+			_issue_block(
+				issue_id="002",
+				rejection_kind="already-fixed",
+				typed_header="EVIDENCE_DIFF_HUNK",
+				typed_body="file: src/module.py\nlines: 2-3\nexcerpt: if x is None:",
+			),
+		])
+		parse_result = _run_parser(workspace, runtime, raw_text=raw_text)
+		assert parse_result.returncode == 0, parse_result.stderr
+		verify_result = _run_verifier(
+			workspace,
+			runtime,
+			verifier_enabled="true",
+			mock_bin_dir=mock_bin,
+			support_prompts_dir=REPO_ROOT / "prompts",
+			extra_env={"RUNNER_TEMP": str(runner_temp_file)},
+		)
+		assert verify_result.returncode == 0, verify_result.stderr
+		assert _codex_call_count(calls_dir) == 0
+		assert "CONSOLIDATOR_REJECT_VERIFIER_FAIL reason=unexpected_exception first_issue=001 batch_size=1" in verify_result.stdout
+		assert "CONSOLIDATOR_REJECT_VERIFIED issue=002 kind=already-fixed verdict=support" in verify_result.stdout
+		artifact = _load_artifact(workspace)
+		assert [row["verdict"] for row in artifact["results"]] == ["inconclusive", "support"]
+		assert artifact["results"][0]["reason"] == "LLM reject verifier hit an unexpected internal error."
 
 
 def test_script_only_rejections_bypass_llm_when_feature_flag_is_on() -> None:

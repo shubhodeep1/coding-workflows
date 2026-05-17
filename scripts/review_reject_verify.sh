@@ -367,6 +367,14 @@ def llm_batch_fail_results(batch: list[dict[str, object]], reason_code: str, rea
 	return {str(item["issue_id"]): ("inconclusive", reason_text) for item in batch}
 
 
+def llm_unexpected_error_results(batch: list[dict[str, object]]) -> dict[str, tuple[str, str]]:
+	return llm_batch_fail_results(
+		batch,
+		"unexpected_exception",
+		"LLM reject verifier hit an unexpected internal error.",
+	)
+
+
 def upsert_toml_string_key(text: str, key: str, value: str) -> str:
 	replacement = f'{key} = "{value}"'
 	pattern = re.compile(rf"^[ \t]*{re.escape(key)}[ \t]*=.*$", re.MULTILINE)
@@ -381,41 +389,51 @@ def prepare_llm_codex_home(reasoning: str) -> Path:
 	root = Path(os.environ.get("RUNNER_TEMP") or REPO_ROOT / ".ai" / "tmp") / "codex_home_reject_verify"
 	root.mkdir(parents=True, exist_ok=True)
 	codex_home = Path(tempfile.mkdtemp(prefix="reject-verifier.", dir=str(root)))
-	source: Path | None = None
-	if os.environ.get("CODEX_HOME") and Path(os.environ["CODEX_HOME"]).is_dir():
-		source = Path(os.environ["CODEX_HOME"])
-	elif (Path.home() / ".codex").is_dir():
-		source = Path.home() / ".codex"
-	if source is not None:
-		try:
-			shutil.copytree(source, codex_home, dirs_exist_ok=True)
-		except OSError:
-			pass
-	config_paths = [codex_home / "config.toml", codex_home / ".codex" / "config.toml"]
-	config_written = False
-	for cfg in config_paths:
-		if not cfg.exists():
-			continue
-		try:
-			text = cfg.read_text(encoding="utf-8")
-		except OSError:
-			text = ""
-		text = upsert_toml_string_key(text, "model_reasoning_effort", reasoning)
-		text = upsert_toml_string_key(text, "sandbox_mode", "read-only")
-		cfg.parent.mkdir(parents=True, exist_ok=True)
-		cfg.write_text(text, encoding="utf-8")
-		config_written = True
-	if not config_written:
-		cfg = codex_home / "config.toml"
-		cfg.write_text(
-			upsert_toml_string_key(
-				upsert_toml_string_key("", "model_reasoning_effort", reasoning),
-				"sandbox_mode",
-				"read-only",
-			),
-			encoding="utf-8",
-		)
-	return codex_home
+	try:
+		source: Path | None = None
+		if os.environ.get("CODEX_HOME") and Path(os.environ["CODEX_HOME"]).is_dir():
+			source = Path(os.environ["CODEX_HOME"])
+		elif (Path.home() / ".codex").is_dir():
+			source = Path.home() / ".codex"
+		if source is not None:
+			try:
+				shutil.copytree(source, codex_home, dirs_exist_ok=True)
+			except OSError:
+				pass
+		config_paths = [codex_home / "config.toml", codex_home / ".codex" / "config.toml"]
+		config_written = False
+		for cfg in config_paths:
+			if not cfg.exists():
+				continue
+			try:
+				text = cfg.read_text(encoding="utf-8")
+			except OSError:
+				text = ""
+			text = upsert_toml_string_key(text, "model_reasoning_effort", reasoning)
+			text = upsert_toml_string_key(text, "sandbox_mode", "read-only")
+			try:
+				cfg.parent.mkdir(parents=True, exist_ok=True)
+				cfg.write_text(text, encoding="utf-8")
+			except OSError:
+				continue
+			config_written = True
+		if not config_written:
+			cfg = codex_home / "config.toml"
+			try:
+				cfg.write_text(
+					upsert_toml_string_key(
+						upsert_toml_string_key("", "model_reasoning_effort", reasoning),
+						"sandbox_mode",
+						"read-only",
+					),
+					encoding="utf-8",
+				)
+			except OSError:
+				pass
+		return codex_home
+	except Exception:
+		shutil.rmtree(codex_home, ignore_errors=True)
+		raise
 
 
 def build_llm_prompt_text(template_text: str, batch: list[dict[str, object]]) -> str:
@@ -579,7 +597,10 @@ def verify_llm_rejections(items: list[dict[str, object]]) -> dict[str, tuple[str
 			results.update(llm_batch_fail_results(batch, "prompt_read_error", llm_prompt_missing_reason(PROMPT_TEMPLATE)))
 		return results
 	for batch in chunked(items, LLM_VERIFIER_BATCH_MAX):
-		results.update(run_llm_verifier_batch(batch, template_text))
+		try:
+			results.update(run_llm_verifier_batch(batch, template_text))
+		except Exception:
+			results.update(llm_unexpected_error_results(batch))
 	return results
 
 
@@ -733,7 +754,10 @@ if SCHEMA_ENABLED:
 				"fields": fields,
 			})
 
-	llm_results = verify_llm_rejections(llm_pending)
+	try:
+		llm_results = verify_llm_rejections(llm_pending)
+	except Exception:
+		llm_results = llm_unexpected_error_results(llm_pending)
 
 	for block in blocks:
 		fields = block["fields"]  # type: ignore[assignment]
@@ -755,7 +779,7 @@ if SCHEMA_ENABLED:
 			)
 		else:
 			verdict = "inconclusive"
-			reason = f"{rejection_kind} is not handled by the reject verifier."
+			reason = f"{rejection_kind} remains pending the Phase C PR-2 LLM verifier."
 
 		result = {
 			"issue_id": issue_id,

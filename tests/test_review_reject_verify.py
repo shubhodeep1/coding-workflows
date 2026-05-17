@@ -392,6 +392,21 @@ def test_verifier_leaves_llm_only_rejections_inconclusive_when_flag_is_off() -> 
 		)
 
 
+def test_unknown_rejection_kind_preserves_legacy_pending_message() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		workspace = Path(td)
+		runtime = _seed_repo(workspace)
+		(runtime / "review_issues.txt").write_text(
+			_issue_block(rejection_kind="future-kind"),
+			encoding="utf-8",
+		)
+		verify_result = _run_verifier(workspace, runtime, schema_enabled="true")
+		assert verify_result.returncode == 0, verify_result.stderr
+		artifact = _load_artifact(workspace)
+		assert artifact["results"][0]["verdict"] == "inconclusive"
+		assert artifact["results"][0]["reason"] == "future-kind remains pending the Phase C PR-2 LLM verifier."
+
+
 def test_already_fixed_rejection_supports_when_pr_diff_matches() -> None:
 	with tempfile.TemporaryDirectory() as td:
 		workspace = Path(td)
