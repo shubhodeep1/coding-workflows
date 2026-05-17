@@ -847,7 +847,7 @@ def test_agents_md_declares_stable_reject_and_behavioural_smoke_log_prefixes() -
 		"BEHAVIOURAL_SMOKE_PRESENT_PASSED",
 		"BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL",
 	):
-		assert f"- `{marker}`" in text
+		assert text.count(f"- `{marker}`") == 1
 
 
 def main() -> int:

@@ -186,7 +186,7 @@ class GeneratedItemValidationError(ValueError):
 	pass
 
 
-SHELL_REENTRY_COMMANDS = {'bash', 'sh', 'dash', 'ksh', 'zsh'}
+SHELL_REENTRY_COMMANDS = {'bash', 'sh', 'dash', 'ksh', 'zsh', 'csh', 'tcsh'}
 COMMAND_SEPARATORS = {';', '&', '&&', '||', '|', '|&', '(', ')', '{', '}', ';;', ';&', ';;&'}
 CONTROL_TOKENS = {'if', 'then', 'do', 'elif', 'else', 'while', 'until', '!'}
 REDIRECTION_TOKENS = {'<', '>', '<<', '<<-', '<<<', '>>', '>&', '<&', '&>', '&>>'}
@@ -557,6 +557,10 @@ def time_option_consumes_value(arg: str) -> bool:
 	return arg in {'-f', '--format', '-o', '--output'}
 
 
+def nice_option_consumes_value(arg: str) -> bool:
+	return arg in {'-n', '--adjustment'}
+
+
 def timeout_option_consumes_value(arg: str) -> bool:
 	return arg in {'-s', '--signal', '-k', '--kill-after'}
 
@@ -630,6 +634,8 @@ def validate_command(command: str, args, line_number: int):
 		fail_generated_item(f'line {line_number}: sudo is not allowed')
 	if base == 'xargs':
 		fail_generated_item(f'line {line_number}: xargs is not allowed')
+	if base in {'perl', 'php', 'ruby'}:
+		fail_generated_item(f'line {line_number}: {base} is not allowed')
 	if base in SHELL_REENTRY_COMMANDS:
 		fail_generated_item(f'line {line_number}: shell re-entry via {base} is not allowed')
 	if base == 'env':
@@ -659,6 +665,14 @@ def validate_command(command: str, args, line_number: int):
 		timeout_command, timeout_tail = timeout_command_with_tail(args, line_number)
 		if timeout_command is not None:
 			validate_command(timeout_command, timeout_tail, line_number)
+	if base in {'nohup', 'setsid'}:
+		nested_command, nested_tail = first_command_with_tail(args, line_number)
+		if nested_command is not None:
+			validate_command(nested_command, nested_tail, line_number)
+	if base == 'nice':
+		nice_command, nice_tail = first_command_with_tail(args, line_number, option_takes_value=nice_option_consumes_value)
+		if nice_command is not None:
+			validate_command(nice_command, nice_tail, line_number)
 
 
 def validate_command_line(masked_line: str, line_number: int):
