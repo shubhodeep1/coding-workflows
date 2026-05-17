@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_synthesise_smoke.sh:31-39 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: `printf '::warning::%s\\n' \"${message}\" >&3` is unguarded, so a broken fd 3 can make `set -e` abort the script instead of taking the intended fail-open path.\n  WHY: All four reviewers reported the same advisory-warning failure mode; one also noted the config-rewrite call site (`line 642`) and another the `detect_behavioural_smoke_language()` command-substitution path (`line 59`), with suggested `|| true` handling to keep the warning non-fatal.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_synthesise_smoke.sh:31-39 | severity=medium | confidence=2\n  PROBLEM: `printf '::warning::%s\\n' \"${message}\" >&3` can fail if fd 3 is closed, and `set -e` can exit the script before the fail-open paths.\n  WHY: This is reported for `behavioural_smoke_emit_warning` and the config-rewrite call site (`line 642`); the suggested minimal fix is `|| true` on the `printf` so an advisory warning does not abort the step. (2 related items)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_synthesise_smoke.sh:38 | severity=medium | confidence=4\n  PROBLEM: The `behavioural_smoke_emit_warning` function writes to fd 3 with `printf '::warning::%s\\n' \"${message}\" >&3`, but with `set -euo pipefail` enabled at line 2, if fd 3 is closed, broken, or unavailable in the parent environment, the printf will return non-zero and cause the script to exit prematurely.\n  WHY: The warning is advisory - it should not affect the step's success. However, with `set -e`, any command failure causes immediate exit. If the GitHub Actions workflow or parent shell closes fd 3 before this script runs, or if fd 3 was never allocated, the script will exit with failure instead of continuing with the fail-open behavior intended for advisory warnings.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_synthesise_smoke.sh:39 | severity=medium | confidence=3\n  PROBLEM: The printf to fd 3 lacks error handling. If fd 3 is closed or invalid, the script exits due to set -e before reaching fail-open exit paths.\n  WHY: Advisory warnings should be non-fatal. A broken annotation channel (closed fd 3, resource exhaustion, or sandbox restriction) triggers set -e termination instead of graceful degradation. The function is called from detect_behavioural_smoke_language (line 59) and config update failure paths (line 642), both of which are intended to be recoverable/fail-open. (2 related items)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/review_synthesise_smoke.sh:31-39 | severity=medium | confidence=3\n  PROBLEM: `printf '::warning::%s\\n' \"${message}\" >&3` is not guarded against fd 3 failure. If fd 3 is closed or broken (e.g. by a wrapper that manipulates fds), this printf returns non-zero, and `set -euo pipefail` causes the script to abort before reaching the intended fail-open `exit 0`.\n  WHY: The warning is explicitly advisory/fail-open. A broken annotation channel should not short-circuit the synthesis step \u2014 it should warn (if possible) and let the script exit 0 as designed. Without `|| true` on the printf, the shell exits at the warning call.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "a4ac674dedcef9214c8655f383216e305a1276509c9c81c2649b3f088bc13bf7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2667,
+    "run_id": "25978893406",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25978893406",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517023439_7fd44573af",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2667,
+    "run_id": "25978893406"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-17T02:34:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
