@@ -698,7 +698,7 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true' && (steps.baseline_refctx.outputs.branch == '' || steps.checkout_baseline.outcome != 'success')
         uses: actions/checkout@v5
         with:
-          ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
+          ref: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
 
@@ -716,7 +716,7 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
           set -euo pipefail
-          echo "Resolved fallback ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+          echo "Resolved fallback ref: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}"
           baseline_status="${{ steps.baseline_refctx.outputs.status }}"
           if [ -z "${baseline_status}" ]; then
             baseline_status="step-no-output"
