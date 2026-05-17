@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_synthesise_smoke.sh:240-270 | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The validator still accepts dangerous `coproc` shell constructs, including variants like `coproc eval \"$PAYLOAD\"` and `coproc /bin/bash -c \"printf unsafe\"`.\n  WHY: If these variants pass validation, they can be wrapped and executed by bash, creating a real command-execution/security defect.\n- scripts/review_apply_fixes.sh:123 | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The new `PR_NUMBER` validation is correct, but the condition ordering could be clearer.\n  WHY: It does not cause a runtime failure, but the added check sits alongside the existing `AUTOFIX_ITERATION` validation and may be harder to read.\n- tests/test_review_judge_interim_round_trip.py:New test `test_review_run_judge_interim_rejects_non_numeric_pr_number` | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The new non-numeric `PR_NUMBER` test depends on `assert not artifact.exists()`, so it only passes if fail-open path construction remains correct.\n  WHY: If the validation regresses, the artifact path could be constructed from a malicious `PR_NUMBER` value.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_synthesise_smoke.sh:Line 240-270 (normalize_content function) | confidence=4\n  PROBLEM: `coproc` is already present in `dangerous_command_tokens`, but `coproc eval \"$PAYLOAD\"`, `coproc /bin/bash -c \"printf unsafe\"`, and `coproc env eval \"$PAYLOAD\"` are still being accepted by the validator.\n  WHY: The validator accepts these dangerous constructs, which are later wrapped and executed by bash, creating a real command-execution/security defect.\n- scripts/review_apply_fixes.sh:Line 123 | confidence=2\n  PROBLEM: The validation `! [[ \"${PR_NUMBER}\" =~ ^[0-9]+$ ]]` was added, but `PR_NUMBER` was already being validated on the next line with `! [[ \"${AUTOFIX_ITERATION:-}\" =~ ^[0-9]+$ ]]`.\n  WHY: The addition is correct for security, but the condition ordering could be clearer.\n- scripts/review_run_judge_interim.sh:Line 184-188 | confidence=1\n  PROBLEM: The PR_NUMBER validation check `if [[ ! \"${PR_NUMBER}\" =~ ^[0-9]+$ ]]; then` is correct, but there is a redundant check.\n  WHY: The function already validates `PR_NUMBER` is not empty on line 181, then validates it's numeric on line 184.\n- scripts/review_rb_judge.sh:Line 184-190 | confidence=1\n  PROBLEM: The PR_NUMBER validation guard was added before any PR-scoped API calls.\n  WHY: This is correct and addresses the security concern raised in the review comments.\n- tests/test_review_judge_interim_round_trip.py:New test `test_review_run_judge_interim_rejects_non_numeric_pr_number` | confidence=2\n  PROBLEM: The test validates that non-numeric `PR_NUMBER` values are rejected, but the test expectation `assert not artifact.exists()` relies on the fail-open behavior being correct.\n  WHY: If the validation logic fails, the artifact path could be constructed with a malicious `PR_NUMBER` value.\n- agents.md:Line 139-154 | confidence=1\n  PROBLEM: The PR description requires adding `BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL` to the stable log-prefix list in agents.md.\n  WHY: Missing log prefixes in agents.md won't cause runtime failures but breaks the contractual logging expectations.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===",
+  "fingerprint": "42cac9b0189eb08392a3a3f977320336fa1b1a8e48bb0e69504335578c334b4f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2697,
+    "run_id": "25988502780",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25988502780",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517105727_c6d6ac8753",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2697,
+    "run_id": "25988502780"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-17T10:57:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
