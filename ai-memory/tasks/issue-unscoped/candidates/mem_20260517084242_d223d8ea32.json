@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_synthesise_smoke.sh:249-269 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: Exact-string matching in `dangerous_command_tokens` lets path-qualified dangerous commands bypass validation.\n  WHY: Multiple reviewers verified that tokens like `/bin/bash`, `/bin/sh`, and `/usr/bin/env` are compared as full strings instead of basenames, so they are accepted in command position.\n- scripts/review_synthesise_smoke.sh:282-312 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: After a passthrough wrapper consumes one non-option token, `expect_command` becomes false and later dangerous tokens on the same line are never checked.\n  WHY: Reviewers traced inputs like `time /usr/bin/env eval \"$PAYLOAD\"` to a state transition where the wrapper payload is accepted, then subsequent `eval`-style tokens bypass the dangerous-command guard.\n- scripts/review_synthesise_smoke.sh:267-281 | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The digit-plus-redirection skip logic can misalign command-position tracking across chained redirections.\n  WHY: The reviewer traced sequences such as `2>&1 3>file cmd` and warned the state machine may lose track of whether later tokens should be validated as commands.\n- tests/test_review_synthesise_smoke.py:415-417 | confidence=3\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The regression test covers the newline-separated `AWK=eval` case but not the semicolon-separated form.\n  WHY: The two reviewers said the semicolon form may exercise a different tokenizer path; deepseek_deepseek-v4-pro explicitly refuted this as not a bug, so this item is disputed.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_synthesise_smoke.sh:249-264 | confidence=4\n  PROBLEM: Exact-string matching in `dangerous_command_tokens` lets path-qualified dangerous commands bypass validation.\n  WHY: The validator compares full tokens against a basename-only set, so `/bin/sh` and `/bin/bash` tokenize as single tokens and are not matched.\n- scripts/review_synthesise_smoke.sh:283-312 | confidence=4\n  PROBLEM: After a passthrough command consumes one payload token, subsequent dangerous tokens on the same line are never checked.\n  WHY: In a case like `time /usr/bin/env eval \"$PAYLOAD\"`, the wrapper payload is accepted and `expect_command` becomes false before `eval` is reached.\n- scripts/review_synthesise_smoke.sh:306-307 | confidence=5\n  PROBLEM: No bug: the `$` guard does fire for redirection-prefixed variable-expansion command words.\n  WHY: The token trace for `2>&1 $VAR \"$PAYLOAD\"` still leaves `expect_command=True` when `$VAR` is processed, so the guard blocks it.\n- tests/test_review_synthesise_smoke.py:415-417 | confidence=5\n  PROBLEM: No bug: the semicolon form is already covered by the same code path as the newline form.\n  WHY: The reviewer traced `AWK=eval; $AWK \"$PAYLOAD\"` through the assignment skip and separator reset logic and concluded the existing test coverage is sufficient.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_synthesise_smoke.sh:253-265 | confidence=4\n  PROBLEM: Exact-string matching in `dangerous_command_tokens` lets path-qualified dangerous commands bypass validation.\n  WHY: Tokens like `/bin/sh`, `/bin/bash`, and `/usr/bin/env bash` are not equal to the basename-only entries, so they pass validation.\n- scripts/review_synthesise_smoke.sh:282-297 | confidence=4\n  PROBLEM: A passthrough command followed by a path-qualified executor can bypass validation.\n  WHY: After the passthrough block consumes one token, `/usr/bin/env` and later `eval` do not reach the dangerous-command check.\n- tests/test_review_synthesise_smoke.py:415-417 | confidence=2\n  PROBLEM: The test does not cover the semicolon-separated form `AWK=eval; $AWK \"$PAYLOAD\"`.\n  WHY: The existing newline-separated case may behave differently from the single-line semicolon form, so the gap could miss a bypass.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_synthesise_smoke.sh:249-266 | confidence=5\n  PROBLEM: Exact-string matching for dangerous commands and passthrough wrappers allows path-qualified commands to bypass validation.\n  WHY: `/bin/bash` and `/usr/bin/env` are not in the basename-only token sets, so they are accepted and can clear `expect_command` before later dangerous tokens are checked.\n- scripts/review_synthesise_smoke.sh:267-281 | confidence=3\n  PROBLEM: The digit+redirection skip logic can misalign state tracking in complex redirection patterns.\n  WHY: The reviewer traced chained redirections like `2>&1 3>file cmd` and warned the validator may lose track of command position.\n- tests/test_review_synthesise_smoke.py:415-417 | confidence=3\n  PROBLEM: The `AWK=eval` test uses newline separation but does not test the semicolon-separated form.\n  WHY: The reviewer said the semicolon form could exercise different tokenizer behavior, so the current test might miss a bypass.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/review_synthesise_smoke.sh:253-305 | confidence=4\n  PROBLEM: Exact-string matching in `dangerous_command_tokens` and passthrough handling lets path-qualified commands bypass validation.\n  WHY: `/bin/bash`, `/bin/sh`, and `/usr/bin/env` do not equal the basename entries, and passthrough wrappers consume one token before `expect_command` is cleared.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/review_synthesise_smoke.sh:283-300 | confidence=5\n  PROBLEM: Path-qualified command tokens bypass the validator because the dangerous and passthrough token checks use exact-string matching.\n  WHY: `/bin/bash`, `/bin/sh`, `/usr/bin/perl`, and `/usr/bin/env` are accepted as non-matches instead of being rejected or treated as wrappers.\n- scripts/review_synthesise_smoke.sh:289-302 | confidence=5\n  PROBLEM: After a passthrough wrapper is recognized, the next non-option token is accepted as the real command and later tokens are never checked.\n  WHY: In `time /usr/bin/env eval \"$PAYLOAD\"`, `/usr/bin/env` is accepted as the wrapper payload and `eval` is processed with `expect_command=False`.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "1ed322695ca02198cc72c9c32bd4b4169d446ca8026fe17ec01374b224b8259c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2675,
+    "run_id": "25985650682",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25985650682",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517084242_d223d8ea32",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2675,
+    "run_id": "25985650682"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-17T08:42:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
