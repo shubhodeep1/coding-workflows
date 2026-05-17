@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_floor_rules.sh:607 | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: Uses a fixed `${OUT_FILE}.utf8tmp` temp file name for UTF-8 sanitization.\n  WHY: Concurrent runs with the same `OUT_FILE` can collide on the shared temp path, causing races on reads, writes, or deletion.\n- scripts/review_floor_rules.sh:607-622 | confidence=3\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The inline `iconv` sanitization block diverges from `sanitize_codex_prompt_file` on all-invalid UTF-8 input.\n  WHY: If `iconv` strips everything, the `[ -s \"${_tmp}\" ]` gate keeps the original invalid file instead of producing valid empty UTF-8, unlike the helper\u2019s fallback behavior.\n- tests/test_review_floor_rules.py:214-218 | confidence=3\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The test replaces PATH with only `/usr/bin:/bin`.\n  WHY: On non-Ubuntu hosts, that can hide `python3` and make the test fail spuriously even though the CI environment passes.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_floor_rules.sh:607-622 | confidence=2\n  PROBLEM: Inline `iconv` sanitization diverges from `sanitize_codex_prompt_file`'s all-invalid-input handling.\n  WHY: When `OUT_FILE` contains only invalid UTF-8 bytes, `iconv` can produce empty output and the `[ -s \"${_tmp}\" ]` gate keeps the original invalid file instead of rewriting it to empty valid UTF-8.\n- tests/test_review_floor_rules.py:214-218 | confidence=3\n  PROBLEM: The test replaces the entire subprocess environment with a restricted PATH.\n  WHY: On non-Ubuntu hosts, the restricted PATH can make `python3` undiscoverable and cause a false-negative when the helper under test needs it.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_floor_rules.sh:607 | confidence=3\n  PROBLEM: Uses fixed temp file name `${OUT_FILE}.utf8tmp` instead of `mktemp` for UTF-8 sanitization temp file.\n  WHY: Concurrent runs with the same `OUT_FILE` can collide on the shared temp file path, causing race conditions on the sanitization output.\n- scripts/review_floor_rules.sh:607-622 | confidence=2\n  PROBLEM: Inline iconv sanitization diverges from `sanitize_codex_prompt_file` helper behavior for all-invalid-input edge case.\n  WHY: When `OUT_FILE` contains only invalid UTF-8 bytes, `iconv` can produce empty output and the `[ -s \"${_floor_tags_utf8_tmp}\" ]` gate keeps the original invalid file intact instead of producing valid empty UTF-8.\n- tests/test_review_floor_rules.py:214-218 | confidence=3\n  PROBLEM: The test replaces the entire subprocess environment with a restricted PATH.\n  WHY: On non-Ubuntu hosts, the restricted PATH can make `python3` undiscoverable and cause a false-negative when the helper under test needs it.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "c546138d08a22ee283071cf7bbcdc1229178ba0ac357c277e0f1a0f82a48601b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2702,
+    "run_id": "25994705386",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25994705386",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517153823_dfc5d96f0a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2702,
+    "run_id": "25994705386"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-17T15:38:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
