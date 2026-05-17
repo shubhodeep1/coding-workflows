@@ -510,6 +510,8 @@ def run_llm_verifier_batch(batch: list[dict[str, object]], template_text: str) -
 			"-c",
 			"model_verbosity=low",
 			"-c",
+			f"model_reasoning_effort={LLM_VERIFIER_REASONING}",
+			"-c",
 			"include_apply_patch_tool=true",
 			"exec",
 			"--model",
