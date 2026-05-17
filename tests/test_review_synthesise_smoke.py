@@ -85,31 +85,33 @@ def _seed_repo_with_autofix_commit(workspace: Path) -> str:
 	module = workspace / "src" / "module.py"
 	module.write_text("def run():\n\treturn 'seed'\n", encoding="utf-8")
 
-	subprocess.run(["git", "init", "-q", "-b", "main"], cwd=workspace, check=True)
+	subprocess.run(["git", "init", "-q", "-b", "main"], cwd=workspace, check=True, timeout=60)
 	for key, value in (
 		("user.email", "test@local"),
 		("user.name", "test"),
 		("commit.gpgsign", "false"),
 	):
-		subprocess.run(["git", "config", key, value], cwd=workspace, check=True)
-	subprocess.run(["git", "add", "src/module.py"], cwd=workspace, check=True)
+		subprocess.run(["git", "config", key, value], cwd=workspace, check=True, timeout=60)
+	subprocess.run(["git", "add", "src/module.py"], cwd=workspace, check=True, timeout=60)
 	subprocess.run(
 		["git", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "seed"],
 		cwd=workspace,
 		check=True,
+		timeout=60,
 	)
 
 	module.write_text(
 		"def run():\n\tif True:\n\t\treturn 'autofix'\n\treturn 'seed'\n",
 		encoding="utf-8",
 	)
-	subprocess.run(["git", "add", "src/module.py"], cwd=workspace, check=True)
+	subprocess.run(["git", "add", "src/module.py"], cwd=workspace, check=True, timeout=60)
 	subprocess.run(
 		["git", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "[ai-autofix] adjust module"],
 		cwd=workspace,
 		check=True,
+		timeout=60,
 	)
-	return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=workspace, text=True).strip()
+	return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=workspace, text=True, timeout=60).strip()
 
 
 def _base_env(workspace: Path, runtime_dir: Path, mock_bin_dir: Path) -> dict[str, str]:
@@ -233,7 +235,7 @@ def test_review_synthesise_smoke_writes_manifest_and_cached_wrappers() -> None:
 					},
 					{
 						"path": "validation/tests/suggested_stale_value.sh",
-						"content": "python3 - <<'PY'\nprint('cleared')\nraise SystemExit(0)\nPY",
+						"content": "node - <<'NODE'\nconsole.log('cleared')\nprocess.exit(0)\nNODE",
 						"expected_to_fail_until_fixed": True,
 					},
 				]
@@ -248,6 +250,7 @@ def test_review_synthesise_smoke_writes_manifest_and_cached_wrappers() -> None:
 			env=env,
 			capture_output=True,
 			text=True,
+			timeout=60,
 		)
 
 		manifest = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth" / "synth_round_1_manifest.json"
@@ -296,6 +299,7 @@ def test_review_synthesise_smoke_fails_open_on_malformed_output() -> None:
 			env=env,
 			capture_output=True,
 			text=True,
+			timeout=60,
 		)
 
 		manifest = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth" / "synth_round_1_manifest.json"
@@ -331,6 +335,7 @@ def test_review_synthesise_smoke_surfaces_codex_stderr_on_failure() -> None:
 			env=env,
 			capture_output=True,
 			text=True,
+			timeout=60,
 		)
 
 		manifest = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth" / "synth_round_1_manifest.json"
@@ -381,13 +386,101 @@ def test_review_synthesise_smoke_fails_open_on_wrong_item_count() -> None:
 			env=env,
 			capture_output=True,
 			text=True,
+			timeout=60,
 		)
 
 		manifest = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth" / "synth_round_1_manifest.json"
 		combined_output = result.stdout + result.stderr
 		assert result.returncode == 0, combined_output
 		assert not manifest.exists(), combined_output
+		assert "could not validate synthesis output" in combined_output
 		assert "BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL reason=json_parse_failed round=1" in combined_output
+
+
+def test_review_synthesise_smoke_rejects_unsafe_shell_constructs() -> None:
+	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_unsafe_") as td:
+		workspace = Path(td)
+		runtime_dir = workspace / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		mock_bin_dir = workspace / "mock_bin"
+		head_sha = _seed_repo_with_autofix_commit(workspace)
+		_write_judge_artifact(
+			workspace,
+			head_sha,
+			[_make_issue("src/module.py:2:branch-check", 2, 3, "Branch still always returns autofix")],
+		)
+		env = _base_env(workspace, runtime_dir, mock_bin_dir)
+		manifest = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth" / "synth_round_1_manifest.json"
+
+		for content in (
+			'printf hello#;eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'AWK=eval\n$AWK "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'coproc eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'coproc\\\n eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'coproc /bin/bash -c "printf unsafe"\nbehavioural_smoke_inconclusive "unsafe"',
+			'coproc env eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'coproc\\\n env eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'/bin/bash -c "printf unsafe"\nbehavioural_smoke_inconclusive "unsafe"',
+			'/usr/bin/env eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'result="$(whoami)"\nbehavioural_smoke_inconclusive "unsafe"',
+			'bash -c "printf unsafe"\nbehavioural_smoke_inconclusive "unsafe"',
+			'eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'exec /bin/false\nbehavioural_smoke_inconclusive "unsafe"',
+			'env -S "printf unsafe"\nbehavioural_smoke_inconclusive "unsafe"',
+			'env --split-string="printf unsafe"\nbehavioural_smoke_inconclusive "unsafe"',
+			'source ./payload.sh\nbehavioural_smoke_inconclusive "unsafe"',
+			'. ./payload.sh\nbehavioural_smoke_inconclusive "unsafe"',
+			'cmd & eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'cmd |& eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'> /dev/null eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'2>/dev/null eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'env eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'env -u SOME_VAR eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'sudo eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'sudo -u root eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'time eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'time -o /dev/null eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'time --format %E eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'time -p eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'time /usr/bin/env eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'! eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'timeout 1 eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'timeout 10s eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'timeout -s KILL 1 eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'xargs eval\nbehavioural_smoke_inconclusive "unsafe"',
+			'xargs -d , eval\nbehavioural_smoke_inconclusive "unsafe"',
+			'command -p eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'builtin -- source ./payload.sh\nbehavioural_smoke_inconclusive "unsafe"',
+			'if eval "$PAYLOAD"; then behavioural_smoke_inconclusive "unsafe"; fi',
+		):
+			_install_mock_codex(
+				mock_bin_dir,
+				stdout_text=json.dumps(
+					[
+						{
+							"path": "validation/tests/unsafe.sh",
+							"content": content,
+							"expected_to_fail_until_fixed": True,
+						}
+					]
+				)
+				+ "\n",
+			)
+
+			result = subprocess.run(
+				["bash", str(SYNTH_SCRIPT)],
+				cwd=workspace,
+				env=env,
+				capture_output=True,
+				text=True,
+				timeout=60,
+			)
+
+			combined_output = result.stdout + result.stderr
+			assert result.returncode == 0, f"{content}: {combined_output}"
+			assert "could not validate synthesis output" in combined_output, f"{content}: {combined_output}"
+			assert "BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL reason=json_parse_failed round=1" in combined_output, f"{content}: {combined_output}"
+			assert not manifest.exists(), f"{content}: {combined_output}"
 
 
 def test_review_synthesise_smoke_invalid_lang_falls_back_to_repo_detection() -> None:
@@ -409,6 +502,7 @@ def test_review_synthesise_smoke_invalid_lang_falls_back_to_repo_detection() -> 
 			env=env,
 			capture_output=True,
 			text=True,
+			timeout=60,
 		)
 
 		manifest = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth" / "synth_round_1_manifest.json"
@@ -435,6 +529,7 @@ def test_behavioural_smoke_emit_warning_is_best_effort_when_fd3_is_closed() -> N
 		],
 		capture_output=True,
 		text=True,
+		timeout=60,
 	)
 
 	assert result.returncode == 0, result.stdout + result.stderr
@@ -478,6 +573,7 @@ def test_review_synthesise_smoke_clamps_large_timeout_values() -> None:
 			env=env,
 			capture_output=True,
 			text=True,
+			timeout=60,
 		)
 
 		manifest = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-1" / "synth" / "synth_round_1_manifest.json"
@@ -532,6 +628,7 @@ def test_generated_wrappers_report_pass_fail_and_inconclusive_advisory_states() 
 			env=env,
 			capture_output=True,
 			text=True,
+			timeout=60,
 		)
 		assert result.returncode == 0, result.stdout + result.stderr
 
@@ -549,6 +646,7 @@ def test_generated_wrappers_report_pass_fail_and_inconclusive_advisory_states() 
 				cwd=workspace,
 				capture_output=True,
 				text=True,
+				timeout=60,
 			)
 			assert wrapper_result.returncode == 0, wrapper_result.stdout + wrapper_result.stderr
 			assert markers[row["issue_id"]] in wrapper_result.stdout
@@ -650,6 +748,7 @@ def test_validate_driver_can_exclude_synthesised_smoke_files() -> None:
 			capture_output=True,
 			text=True,
 			check=True,
+			timeout=60,
 		)
 		include_false = subprocess.run(
 			[
@@ -663,6 +762,7 @@ def test_validate_driver_can_exclude_synthesised_smoke_files() -> None:
 			capture_output=True,
 			text=True,
 			check=True,
+			timeout=60,
 		)
 
 		included_paths = include_true.stdout.splitlines()
@@ -763,6 +863,7 @@ def test_validate_process_materializes_latest_cached_synthesised_smoke_tests() -
 			capture_output=True,
 			text=True,
 			check=True,
+			timeout=60,
 		)
 		assert "skipping synthesised behavioural smoke materialization" in disabled.stderr
 		assert not (workspace / "validation" / "tests" / "synth_round_3_latest_issue.sh").exists()
@@ -780,6 +881,7 @@ def test_validate_process_materializes_latest_cached_synthesised_smoke_tests() -
 			capture_output=True,
 			text=True,
 			check=True,
+			timeout=60,
 		)
 
 		latest_target = workspace / "validation" / "tests" / "synth_round_3_latest_issue.sh"
@@ -793,6 +895,68 @@ def test_validate_process_materializes_latest_cached_synthesised_smoke_tests() -
 		assert latest_manifest.exists()
 		assert json.loads(latest_manifest.read_text(encoding="utf-8"))["round"] == 3
 		assert not old_target.exists()
+
+
+def test_validate_process_skips_wrapper_copy_when_manifest_target_is_invalid() -> None:
+	with tempfile.TemporaryDirectory(prefix="validate_process_synth_manifest_invalid_") as td:
+		workspace = Path(td)
+
+		round3_dir = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-3" / "synth"
+		round3_dir.mkdir(parents=True, exist_ok=True)
+		latest_wrapper = round3_dir / "synth_round_3_latest_issue.sh"
+		latest_wrapper.write_text("#!/usr/bin/env bash\necho latest\n", encoding="utf-8")
+		latest_wrapper.chmod(0o755)
+		(round3_dir / "synth_round_3_manifest.json").write_text(
+			json.dumps(
+				{
+					"round": 3,
+					"head_sha": "newsha",
+					"language": "python",
+					"source_artifact": ".ai/review_runtime/pr-4242/round-3/judge_interim.json",
+					"target_manifest_relpath": "../outside.json",
+					"files": [
+						{
+							"issue_id": "latest",
+							"file": "src/module.py",
+							"line_start": 3,
+							"line_end": 3,
+							"severity": "must-fix",
+							"slug": "latest_issue",
+							"cache_relpath": ".ai/review_runtime/pr-4242/round-3/synth/synth_round_3_latest_issue.sh",
+							"target_relpath": "validation/tests/synth_round_3_latest_issue.sh",
+							"suggested_path": "validation/tests/synth_round_3_latest_issue.sh",
+							"expected_to_fail_until_fixed": True,
+						}
+					],
+				},
+				indent=2,
+			)
+			+ "\n",
+			encoding="utf-8",
+		)
+
+		function_text = _extract_shell_function(VALIDATE_PROCESS, "materialize_synthesised_behavioural_smoke_tests")
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				+ "VALIDATION_INCLUDE_SYNTHESISED=true\n"
+				+ function_text
+				+ "materialize_synthesised_behavioural_smoke_tests\n",
+			],
+			cwd=workspace,
+			capture_output=True,
+			text=True,
+			check=True,
+			timeout=60,
+		)
+
+		latest_target = workspace / "validation" / "tests" / "synth_round_3_latest_issue.sh"
+		assert not latest_target.exists()
+		assert not (workspace / "outside.json").exists()
+		assert "skipping synthesised smoke materialization because target_manifest_relpath is invalid" in result.stderr
+		assert "Materialized synthesised behavioural smoke tests" not in result.stdout
 
 
 def test_validate_process_warns_when_synth_sources_are_missing() -> None:
@@ -844,6 +1008,7 @@ def test_validate_process_warns_when_synth_sources_are_missing() -> None:
 			capture_output=True,
 			text=True,
 			check=True,
+			timeout=60,
 		)
 
 		manifest_target = workspace / "validation" / "tests" / "synth_round_3_manifest.json"

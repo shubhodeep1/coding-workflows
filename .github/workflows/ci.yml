@@ -252,6 +252,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_synthesise_smoke.py
 
+      - name: Validate driver synthesised filter contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_driver_synthesised_filter.py
+
       - name: Review apply-fixes smoke deterministic contract test
         run: |
           set -euo pipefail

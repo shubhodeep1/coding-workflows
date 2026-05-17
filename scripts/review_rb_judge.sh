@@ -181,6 +181,14 @@ if [ "${CAN_PUSH:-false}" != "true" ]; then
   exit 0
 fi
 
+if [ -z "${PR_NUMBER:-}" ] || ! [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+  echo "Invalid PR_NUMBER — skipping review-blocked judge."
+  echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+  echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+  echo "judge_skip_reason=invalid_pr_number" >> "$GITHUB_OUTPUT"
+  exit 0
+fi
+
 # Early guard: skip judge when the PR is closed-without-merge. Merged
 # PRs (state=closed + merged=true) ARE allowed through so the judge can
 # choose merge_with_followup against an already-merged PR — that's the
@@ -945,7 +953,7 @@ ${RB_FIX_DESC}"
     # the review-blocked fallback path (or the next judge retry) takes
     # over instead of papering over the omission.
     FOLLOWUP_TITLE="$(printf '%s\n' "${JUDGE_JSON}" | jq -r '.followup_issue.title // empty')"
-    FOLLOWUP_BODY="$(printf '%s\n' "${JUDGE_JSON}" | jq -r '.followup_issue.body // empty' | sed 's/\\n/\n/g')"
+    FOLLOWUP_BODY="$(printf '%s\n' "${JUDGE_JSON}" | jq -r '.followup_issue.body // empty')"
     if [ -z "${FOLLOWUP_TITLE}" ] || [ -z "${FOLLOWUP_BODY}" ]; then
       echo "::error::Judge chose merge_with_followup but provided no follow-up issue details (followup_issue.title or .body empty). Refusing the action — leaving linked issues in ai:review-blocked for retry/fallback so the deferred gap is not lost."
       # Emit structured outputs so downstream log analysis can
@@ -1306,7 +1314,7 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
 
     # Create replacement issue
     NEW_ISSUE_TITLE="$(printf '%s\n' "${JUDGE_JSON}" | jq -r '.new_issue.title // empty')"
-    NEW_ISSUE_BODY="$(printf '%s\n' "${JUDGE_JSON}" | jq -r '.new_issue.body // empty' | sed 's/\\n/\n/g')"
+    NEW_ISSUE_BODY="$(printf '%s\n' "${JUDGE_JSON}" | jq -r '.new_issue.body // empty')"
     RB_REISSUE_MODE_RAW="$(printf '%s\n' "${JUDGE_JSON}" | jq -r '.reissue_mode // empty')"
     RB_REQUESTED_REISSUE_MODE="$(normalize_rb_reissue_mode "${RB_REISSUE_MODE_RAW}")"
     RB_EFFECTIVE_REISSUE_MODE="${RB_REQUESTED_REISSUE_MODE}"
@@ -1324,7 +1332,8 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
           RB_SPOT_FIX_REASON="feature_flag_disabled"
         else
           RB_HEAD_SHA="$(gh_retry gh pr view "${PR_NUMBER}" --repo "${REPOSITORY}" --json headRefOid --jq '.headRefOid' 2>/dev/null || true)"
-          if ! [[ "${RB_HEAD_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+          RB_HEAD_SHA="$(printf '%s' "${RB_HEAD_SHA}" | tr '[:upper:]' '[:lower:]')"
+          if ! [[ "${RB_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
             RB_EFFECTIVE_REISSUE_MODE="redo"
             RB_SPOT_FIX_REASON="head_ref_unavailable"
           elif ! git cat-file -e "${RB_HEAD_SHA}^{commit}" >/dev/null 2>&1; then

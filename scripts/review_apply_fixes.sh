@@ -120,7 +120,7 @@ prepare_judge_interim_priors()
 			;;
 	esac
 
-	if [ -z "${PR_NUMBER:-}" ] || ! [[ "${AUTOFIX_ITERATION:-}" =~ ^[0-9]+$ ]] || [ "${AUTOFIX_ITERATION}" -le 1 ]; then
+	if [ -z "${PR_NUMBER:-}" ] || ! [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] || ! [[ "${AUTOFIX_ITERATION:-}" =~ ^[0-9]+$ ]] || [ "${AUTOFIX_ITERATION}" -le 1 ]; then
 		echo "JUDGE_INTERIM_PRIORS_MERGED count=0 source=none"
 		return 0
 	fi

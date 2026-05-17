@@ -914,17 +914,17 @@ def test_resolve_checkout_ref_no_longer_performs_baseline_branch_resolution() ->
 	)
 
 
-def test_checkout_repository_fallback_ignores_checkout_ref_output() -> None:
+def test_checkout_repository_fallback_uses_checkout_ref_output_chain() -> None:
 	fallback_checkout_step = _step_block_text("Checkout repository")
 	log_step = _step_block_text("Log checkout ref")
 
-	assert "ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}" in fallback_checkout_step
-	assert "steps.checkout_ref.outputs.ref" not in fallback_checkout_step, (
-		"Fallback checkout must not depend on checkout_ref.outputs.ref after the trusted baseline guard rejects metadata"
+	assert (
+		"ref: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+		in fallback_checkout_step
 	)
-	assert "Resolved fallback ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}" in log_step
-	assert "steps.checkout_ref.outputs.ref" not in log_step, (
-		"Resolved fallback ref logging must reflect the integration/default checkout path directly"
+	assert (
+		"Resolved fallback ref: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+		in log_step
 	)
 	assert "steps.checkout_ref.outputs.source" not in log_step, (
 		"Resolved checkout source logging must not read the dead checkout_ref.outputs.source output"

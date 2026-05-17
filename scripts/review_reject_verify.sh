@@ -323,24 +323,27 @@ def verify_already_fixed(block: dict[str, object], diff_available: bool, patches
 	parsed = parse_line_spec(line_spec)
 	if not file_path or parsed is None:
 		return "inconclusive", "Parsed rejection evidence was incomplete after the parser stage."
+	display_path = normalize_patch_path(file_path) or file_path
 	patch = patches.get(file_path)
 	if patch is None:
-		return "does-not-support", f"PR diff does not touch {file_path}."
+		patch = patches.get(display_path)
+	if patch is None:
+		return "does-not-support", f"PR diff does not touch {display_path}."
 	if bool(patch.get("metadata_only")) or (not patch.get("deleted") and not patch.get("hunks")):
-		return "inconclusive", f"PR diff touches {file_path} but does not contain verifiable line hunks for the cited diff hunk."
+		return "inconclusive", f"PR diff touches {display_path} but does not contain verifiable line hunks for the cited diff hunk."
 	if bool(patch.get("deleted")):
 		if excerpt and excerpt not in str(patch.get("text", "")):
-			return "does-not-support", f"PR diff for {file_path} does not contain the cited excerpt."
-		return "support", f"PR diff deletes {file_path}, which covers the cited fix."
+			return "does-not-support", f"PR diff for {display_path} does not contain the cited excerpt."
+		return "support", f"PR diff deletes {display_path}, which covers the cited fix."
 	start, end = parsed
 	for hunk_start, hunk_end in patch.get("hunks", []):
 		if hunk_end < hunk_start:
 			continue
 		if not (end < hunk_start or hunk_end < start):
 			if excerpt and excerpt not in str(patch.get("text", "")):
-				return "does-not-support", f"PR diff for {file_path} does not contain the cited excerpt."
-			return "support", f"PR diff contains a matching hunk for {file_path}:{line_spec}."
-	return "does-not-support", f"PR diff does not contain a hunk covering {file_path}:{line_spec}."
+				return "does-not-support", f"PR diff for {display_path} does not contain the cited excerpt."
+			return "support", f"PR diff contains a matching hunk for {display_path}:{line_spec}."
+	return "does-not-support", f"PR diff does not contain a hunk covering {display_path}:{line_spec}."
 
 
 def verify_out_of_scope(block: dict[str, object], linked_issue_text: str) -> tuple[str, str]:
