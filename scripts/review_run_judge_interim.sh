@@ -181,6 +181,11 @@ if [ -z "${PR_NUMBER}" ]; then
 	exit 0
 fi
 
+if [[ ! "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+	judge_interim_log_fail "invalid_pr_number" "0" ".ai/review_runtime/pr-invalid/round-unknown/judge_interim.json"
+	exit 0
+fi
+
 ROUND_NUMBER_BASE="${ROUND_NUMBER:-}"
 if [[ "${ROUND_NUMBER_BASE}" =~ ^[0-9]+$ ]]; then
 	CURRENT_ROUND="$((ROUND_NUMBER_BASE + 1))"

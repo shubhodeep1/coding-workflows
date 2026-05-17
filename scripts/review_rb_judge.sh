@@ -181,6 +181,14 @@ if [ "${CAN_PUSH:-false}" != "true" ]; then
   exit 0
 fi
 
+if [ -z "${PR_NUMBER:-}" ] || ! [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+  echo "Invalid PR_NUMBER — skipping review-blocked judge."
+  echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+  echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+  echo "judge_skip_reason=invalid_pr_number" >> "$GITHUB_OUTPUT"
+  exit 0
+fi
+
 # Early guard: skip judge when the PR is closed-without-merge. Merged
 # PRs (state=closed + merged=true) ARE allowed through so the judge can
 # choose merge_with_followup against an already-merged PR — that's the

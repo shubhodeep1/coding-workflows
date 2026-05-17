@@ -1562,6 +1562,19 @@ def test_merged_pr_action_guard_runs_before_judge_comment() -> None:
 	)
 
 
+def test_review_rb_judge_validates_pr_number_before_pr_lookups() -> None:
+	src = _rb_judge_text()
+	guard = 'if [ -z "${PR_NUMBER:-}" ] || ! [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then'
+	guard_pos = src.find(guard)
+	lookup_pos = src.find('repos/${REPOSITORY}/pulls/${PR_NUMBER}')
+	assert guard_pos != -1 and 'judge_skip_reason=invalid_pr_number' in src, (
+		"review_rb_judge.sh must reject missing or non-numeric PR_NUMBER values before any PR-scoped API calls."
+	)
+	assert lookup_pos != -1 and guard_pos < lookup_pos, (
+		"PR_NUMBER validation must run before review_rb_judge.sh performs PR-scoped lookups or path construction."
+	)
+
+
 def main() -> int:
 	# Direct `python3 tests/<file>.py` entrypoint — the repo's CI runs
 	# tests via that pattern (see ci.yml) rather than pytest discovery,
