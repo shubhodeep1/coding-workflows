@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":2715,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/2715\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/2717\",\"pr_number\":2717,\"branch\":\"ai/issue-2715\",\"run_id\":\"25998794281\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/25998794281\",\"changed_files\":[\".github/workflows/ci.yml\",\".github/workflows/mark-stable.yml\",\".github/workflows/review_autofix.yml\",\".github/workflows/test-and-mark-stable.yml\",\"prompts/consolidator-reject-verifier.txt\",\"scripts/review_reject_verify.sh\",\"tests/test_review_autofix_review_pipeline_contract.py\",\"tests/test_review_reject_verify.py\",\"tests/test_review_reject_verify_llm.py\"]}",
+  "fingerprint": "a51f91e3023db7d7674d4a341322b50dbdacb6ec463f0028cf56248b7346a5ec",
+  "lineage": {
+    "issue_number": 2715,
+    "parent_ids": [],
+    "pr_number": 2717,
+    "run_id": "25998794281",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25998794281",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/2717"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260517182621_a6533f1cba",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2715,
+    "level": "run",
+    "pr_number": 2717,
+    "run_id": "25998794281"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #2715: https://github.com/shubhodeep1/coding-workflows/pull/2717",
+  "timestamps": {
+    "created_at": "2026-05-17T18:26:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
