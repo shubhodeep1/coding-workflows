@@ -143,6 +143,8 @@ def _run_verifier(
 	schema_enabled: str,
 	pr_number: str = "4242",
 	autofix_iteration: str = "1",
+	sticky_line_bucket: str | None = None,
+	sticky_findings_enabled: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
 	env = os.environ.copy()
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -153,6 +155,14 @@ def _run_verifier(
 	env["PR_NUMBER"] = pr_number
 	env["AUTOFIX_ITERATION"] = autofix_iteration
 	env["CONSOLIDATOR_REJECT_SCHEMA_ENABLED"] = schema_enabled
+	if sticky_line_bucket is None:
+		env.pop("STICKY_LINE_BUCKET", None)
+	else:
+		env["STICKY_LINE_BUCKET"] = sticky_line_bucket
+	if sticky_findings_enabled is None:
+		env.pop("STICKY_FINDINGS_ENABLED", None)
+	else:
+		env["STICKY_FINDINGS_ENABLED"] = sticky_findings_enabled
 	return subprocess.run(
 		["bash", str(VERIFIER_SCRIPT)],
 		cwd=workspace_dir,
@@ -795,7 +805,7 @@ def test_prior_round_rejection_supports_when_cached_artifact_matches() -> None:
 		assert "CONSOLIDATOR_REJECT_VERIFIED issue=001 kind=already-rejected-with-evidence verdict=support" in verify_result.stdout
 
 
-def test_prior_round_rejection_reverses_when_cached_artifact_disagrees() -> None:
+def test_prior_round_rejection_shifted_match_requires_sticky_feature_flag() -> None:
 	with tempfile.TemporaryDirectory() as td:
 		workspace = Path(td)
 		runtime = _seed_repo(workspace)
@@ -805,10 +815,10 @@ def test_prior_round_rejection_reverses_when_cached_artifact_disagrees() -> None
 				{
 					"issue_id": "001",
 					"file": "src/module.py",
-					"lines": "9",
+					"lines": "20-22",
 					"rejection_kind": "already-fixed",
 					"verdict": "support",
-					"reason": "prior support on a different anchor",
+					"reason": "prior support on nearby lines",
 				}
 			],
 		)
@@ -816,6 +826,7 @@ def test_prior_round_rejection_reverses_when_cached_artifact_disagrees() -> None
 			workspace,
 			runtime,
 			raw_text=_issue_block(
+				line_spec="27",
 				rejection_kind="already-rejected-with-evidence",
 				typed_header="EVIDENCE_PRIOR_ROUND",
 				typed_body="round: 1\nissue_id: 001\nrejection_kind: already-fixed\nsticky: true",
@@ -823,7 +834,142 @@ def test_prior_round_rejection_reverses_when_cached_artifact_disagrees() -> None
 			schema_enabled="true",
 		)
 		assert parse_result.returncode == 0, parse_result.stderr
-		verify_result = _run_verifier(workspace, runtime, schema_enabled="true")
+		verify_result = _run_verifier(
+			workspace,
+			runtime,
+			schema_enabled="true",
+			sticky_findings_enabled="false",
+		)
+		assert verify_result.returncode == 0, verify_result.stderr
+		block = _extract_issue_block((runtime / "review_issues.txt").read_text(encoding="utf-8"), "001")
+		assert "CLASSIFICATION: must-fix" in block
+		assert "Prior-round verifier artifact points at a different line range." in block
+		artifact = _load_artifact(workspace)
+		assert artifact["results"][0]["verdict"] == "does-not-support"
+
+
+def test_prior_round_rejection_supports_shifted_sticky_match_with_default_bucket() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		workspace = Path(td)
+		runtime = _seed_repo(workspace)
+		_write_prior_artifact(
+			workspace,
+			results=[
+				{
+					"issue_id": "001",
+					"file": "src/module.py",
+					"lines": "20-22",
+					"rejection_kind": "already-fixed",
+					"verdict": "support",
+					"reason": "prior support on nearby lines",
+				}
+			],
+		)
+		parse_result = _run_parser(
+			workspace,
+			runtime,
+			raw_text=_issue_block(
+				line_spec="27",
+				rejection_kind="already-rejected-with-evidence",
+				typed_header="EVIDENCE_PRIOR_ROUND",
+				typed_body="round: 1\nissue_id: 001\nrejection_kind: already-fixed\nsticky: true",
+			),
+			schema_enabled="true",
+		)
+		assert parse_result.returncode == 0, parse_result.stderr
+		verify_result = _run_verifier(
+			workspace,
+			runtime,
+			schema_enabled="true",
+			sticky_findings_enabled="true",
+		)
+		assert verify_result.returncode == 0, verify_result.stderr
+		block = _extract_issue_block((runtime / "review_issues.txt").read_text(encoding="utf-8"), "001")
+		assert "CLASSIFICATION: non-actionable" in block
+		artifact = _load_artifact(workspace)
+		assert artifact["results"][0]["verdict"] == "support"
+		assert "CONSOLIDATOR_REJECT_VERIFIED issue=001 kind=already-rejected-with-evidence verdict=support" in verify_result.stdout
+
+
+def test_prior_round_rejection_reports_unparseable_prior_line_range() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		workspace = Path(td)
+		runtime = _seed_repo(workspace)
+		_write_prior_artifact(
+			workspace,
+			results=[
+				{
+					"issue_id": "001",
+					"file": "src/module.py",
+					"lines": "10-5",
+					"rejection_kind": "already-fixed",
+					"verdict": "support",
+					"reason": "prior support stored malformed lines",
+				}
+			],
+		)
+		parse_result = _run_parser(
+			workspace,
+			runtime,
+			raw_text=_issue_block(
+				line_spec="27",
+				rejection_kind="already-rejected-with-evidence",
+				typed_header="EVIDENCE_PRIOR_ROUND",
+				typed_body="round: 1\nissue_id: 001\nrejection_kind: already-fixed\nsticky: true",
+			),
+			schema_enabled="true",
+		)
+		assert parse_result.returncode == 0, parse_result.stderr
+		verify_result = _run_verifier(
+			workspace,
+			runtime,
+			schema_enabled="true",
+			sticky_findings_enabled="true",
+		)
+		assert verify_result.returncode == 0, verify_result.stderr
+		block = _extract_issue_block((runtime / "review_issues.txt").read_text(encoding="utf-8"), "001")
+		assert "CLASSIFICATION: must-fix" in block
+		assert "Prior-round verifier artifact has an unparseable line range." in block
+		artifact = _load_artifact(workspace)
+		assert artifact["results"][0]["reason"] == "Prior-round verifier artifact has an unparseable line range."
+
+
+def test_prior_round_rejection_reverses_when_shift_exceeds_configured_bucket() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		workspace = Path(td)
+		runtime = _seed_repo(workspace)
+		_write_prior_artifact(
+			workspace,
+			results=[
+				{
+					"issue_id": "001",
+					"file": "src/module.py",
+					"lines": "20-22",
+					"rejection_kind": "already-fixed",
+					"verdict": "support",
+					"reason": "prior support on nearby lines",
+				}
+			],
+		)
+		parse_result = _run_parser(
+			workspace,
+			runtime,
+			raw_text=_issue_block(
+				line_spec="27",
+				rejection_kind="already-rejected-with-evidence",
+				typed_header="EVIDENCE_PRIOR_ROUND",
+				typed_body="round: 1\nissue_id: 001\nrejection_kind: already-fixed\nsticky: true",
+			),
+			schema_enabled="true",
+		)
+		assert parse_result.returncode == 0, parse_result.stderr
+		verify_result = _run_verifier(
+			workspace,
+			runtime,
+			schema_enabled="true",
+			sticky_line_bucket="4",
+			sticky_findings_enabled="true",
+		)
 		assert verify_result.returncode == 0, verify_result.stderr
 		block = _extract_issue_block((runtime / "review_issues.txt").read_text(encoding="utf-8"), "001")
 		assert "CLASSIFICATION: must-fix" in block

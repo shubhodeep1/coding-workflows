@@ -28,6 +28,11 @@ Optional carry-over input:
 - Do not add `judge_interim` to `FLAGGED_BY`, and do not fabricate reviewer quotes from the priors block.
 - Use priors to keep unresolved issues visible or to merge with matching reviewer findings, but do not let priors suppress reviewer-bundle findings.
 - If a prior has no current reviewer support, mention it only when it materially helps explain ambiguity or persistence.
+- Repeat findings (sticky):
+- The prompt may also include a `<sticky_findings_priors>` block describing repeat findings that matched the prior round's parsed consolidator output.
+- Treat sticky priors as advisory carry-over metadata, not as a replacement for the current reviewer bundle.
+- The sticky block carries the prior round's notes verbatim for the matched finding; use that context to judge whether the current reviewer report is a repeated unresolved issue.
+- When a finding is marked `sticky: true`, a repeat dismissal is only valid with `REJECTION_KIND: already-rejected-with-evidence` plus the required `EVIDENCE_PRIOR_ROUND` block; otherwise promote the finding to `must-fix`.
 
 Use these seven lenses exactly:
 1. SECURITY & INPUT VALIDATION

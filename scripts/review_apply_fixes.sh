@@ -235,6 +235,65 @@ PY
 	return 0
 }
 
+prepare_sticky_finding_priors()
+{
+	local sticky_script=""
+	local sticky_tmp=""
+
+	JUDGE_INTERIM_PRIORS_FILE="${JUDGE_INTERIM_PRIORS_FILE:-${RUNTIME_DIR}/judge_interim_priors.txt}"
+	STICKY_FINDINGS_PRIORS_FILE="${STICKY_FINDINGS_PRIORS_FILE:-${RUNTIME_DIR}/sticky_findings_priors.txt}"
+	if [ -n "${PR_NUMBER:-}" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] && [[ "${AUTOFIX_ITERATION:-}" =~ ^[0-9]+$ ]]; then
+		STICKY_FINDINGS_JSON_FILE="${STICKY_FINDINGS_JSON_FILE:-.ai/review_runtime/pr-${PR_NUMBER}/round-${AUTOFIX_ITERATION}/sticky_findings.json}"
+	else
+		STICKY_FINDINGS_JSON_FILE="${STICKY_FINDINGS_JSON_FILE:-${RUNTIME_DIR}/sticky_findings.json}"
+	fi
+	rm -f "${STICKY_FINDINGS_PRIORS_FILE}" "${STICKY_FINDINGS_JSON_FILE}" 2>/dev/null || true
+
+	case "$(printf '%s' "${STICKY_FINDINGS_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" in
+		1|true|yes|on) ;;
+		*)
+			return 0
+			;;
+	esac
+
+	if ! sticky_script="$(resolve_support_script review_annotate_sticky.sh)"; then
+		echo "::warning::review_annotate_sticky.sh not found; skipping sticky annotator stage"
+		return 0
+	fi
+
+	if ! STICKY_FINDINGS_JSON_FILE="${STICKY_FINDINGS_JSON_FILE}" \
+		STICKY_FINDINGS_PRIORS_FILE="${STICKY_FINDINGS_PRIORS_FILE}" \
+		bash "${sticky_script}"; then
+		echo "::warning::review_annotate_sticky.sh failed; continuing without sticky priors"
+		rm -f "${STICKY_FINDINGS_PRIORS_FILE}" "${STICKY_FINDINGS_JSON_FILE}" 2>/dev/null || true
+		return 0
+	fi
+
+	if [ ! -s "${STICKY_FINDINGS_PRIORS_FILE}" ]; then
+		return 0
+	fi
+
+	if [ -s "${JUDGE_INTERIM_PRIORS_FILE}" ]; then
+		sticky_tmp="$(mktemp 2>/dev/null || printf '')"
+		if [ -z "${sticky_tmp}" ] || ! {
+			cat "${JUDGE_INTERIM_PRIORS_FILE}"
+			printf '\n'
+			cat "${STICKY_FINDINGS_PRIORS_FILE}"
+		} > "${sticky_tmp}" || ! mv -f "${sticky_tmp}" "${JUDGE_INTERIM_PRIORS_FILE}"; then
+			rm -f "${sticky_tmp}" 2>/dev/null || true
+			echo "::warning::Failed to merge sticky priors into ${JUDGE_INTERIM_PRIORS_FILE}; continuing without sticky priors"
+			return 0
+		fi
+	else
+		if ! cp "${STICKY_FINDINGS_PRIORS_FILE}" "${JUDGE_INTERIM_PRIORS_FILE}"; then
+			echo "::warning::Failed to copy sticky priors into ${JUDGE_INTERIM_PRIORS_FILE}; continuing without sticky priors"
+			return 0
+		fi
+	fi
+
+	return 0
+}
+
 if [ ! -s "${LAST_RUN_DIFF_FILE}" ]; then
   echo "LAST_RUN_DIFF_FILE is missing or empty before editor stage; using placeholder context."
   echo "No previous AI autofix run diff is available." > "${LAST_RUN_DIFF_FILE}"
@@ -318,6 +377,7 @@ fi
 export AUTOFIX_ITERATION
 
 prepare_judge_interim_priors
+prepare_sticky_finding_priors
 
 floor_rules_script=""
 if floor_rules_script="$(resolve_support_script review_floor_rules.sh)"; then
@@ -344,14 +404,28 @@ else
 fi
 
 parse_script=""
+parsed_consolidator_completed=false
 if parse_script="$(resolve_support_script review_parse_consolidator.sh)"; then
   if ! bash "${parse_script}"; then
     echo "::warning::review_parse_consolidator.sh failed; continuing"
+  else
+    parsed_consolidator_completed=true
   fi
 else
   : > "${REVIEW_ISSUES_FILE}"
   : > "${PARSER_STATS_FILE}"
   echo "::warning::review_parse_consolidator.sh not found; skipping parser stage"
+fi
+
+if [ "${parsed_consolidator_completed}" = true ] \
+   && [ -e "${REVIEW_ISSUES_FILE}" ] \
+   && [ -n "${PR_NUMBER:-}" ] \
+   && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] \
+   && [[ "${AUTOFIX_ITERATION:-}" =~ ^[0-9]+$ ]]; then
+  CONSOLIDATOR_PARSED_CACHE_FILE=".ai/review_runtime/pr-${PR_NUMBER}/round-${AUTOFIX_ITERATION}/consolidator_parsed.txt"
+  if ! mkdir -p "$(dirname "${CONSOLIDATOR_PARSED_CACHE_FILE}")" || ! cp "${REVIEW_ISSUES_FILE}" "${CONSOLIDATOR_PARSED_CACHE_FILE}"; then
+    echo "::warning::Failed to cache parsed consolidator output at ${CONSOLIDATOR_PARSED_CACHE_FILE}; continuing without sticky prior cache"
+  fi
 fi
 
 verify_script=""
@@ -676,7 +750,7 @@ $(_embed_input_file "${RUNTIME_DIR}/floor_tags.txt" 50000)
 === END ${RUNTIME_DIR}/floor_tags.txt ===
 
 $(if [ -s "${JUDGE_INTERIM_PRIORS_FILE:-}" ]; then
-	printf '=== BEGIN %s (advisory carry-over from the prior round interim judge) ===\n' "${JUDGE_INTERIM_PRIORS_FILE}"
+	printf '=== BEGIN %s (advisory carry-over from prior rounds) ===\n' "${JUDGE_INTERIM_PRIORS_FILE}"
 	_embed_input_file "${JUDGE_INTERIM_PRIORS_FILE}" 20000
 	printf '\n=== END %s ===\n' "${JUDGE_INTERIM_PRIORS_FILE}"
 fi)

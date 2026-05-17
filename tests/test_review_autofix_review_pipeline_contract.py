@@ -310,6 +310,8 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEW_LEDGER_PATH: ${{ vars.REVIEW_LEDGER_PATH || format('.ai/review_issue_ledger/pr-{0}.txt', inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number || '0') }}",
 		"REVIEW_REVIEWER_CHECKLIST_ENABLED: ${{ vars.REVIEW_REVIEWER_CHECKLIST_ENABLED || '1' }}",
 		"REVIEW_REVIEWER_ITERATION_SCOPING: ${{ vars.REVIEW_REVIEWER_ITERATION_SCOPING || '1' }}",
+		"STICKY_FINDINGS_ENABLED: ${{ vars.STICKY_FINDINGS_ENABLED || 'false' }}",
+		"STICKY_LINE_BUCKET: ${{ vars.STICKY_LINE_BUCKET || '5' }}",
 	):
 		assert expected in workflow, f"Missing codex-agent env wiring: {expected}"
 
@@ -317,11 +319,17 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 def test_reject_verifier_bootstrap_and_stage_order_contract() -> None:
 	workflow = _workflow_text()
 	apply_fixes = _apply_fixes_text()
-	assert "review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh" in workflow
+	assert "review_apply_fixes.sh review_annotate_sticky.sh review_reject_verify.sh" in workflow
+	assert "scripts/review_apply_fixes.sh scripts/review_annotate_sticky.sh scripts/review_rb_judge.sh" in workflow
+	assert "review_apply_fixes.sh review_annotate_sticky.sh review_rb_judge.sh" in workflow
+	sticky_idx = apply_fixes.rindex("prepare_sticky_finding_priors")
+	consolidate_idx = apply_fixes.index('if consolidate_script="$(resolve_support_script review_consolidate.sh)"; then')
 	parse_idx = apply_fixes.index('if parse_script="$(resolve_support_script review_parse_consolidator.sh)"; then')
+	cache_copy_idx = apply_fixes.index('consolidator_parsed.txt')
 	verify_idx = apply_fixes.index('if verify_script="$(resolve_support_script review_reject_verify.sh)"; then')
 	ledger_idx = apply_fixes.index('if ledger_script="$(resolve_support_script review_issue_ledger.sh)"; then')
-	assert parse_idx < verify_idx < ledger_idx
+	assert sticky_idx < consolidate_idx
+	assert parse_idx < cache_copy_idx < verify_idx < ledger_idx
 	assert 'CONSOLIDATOR_REJECT_SCHEMA_ENABLED="${CONSOLIDATOR_REJECT_SCHEMA_ENABLED:-false}"' in apply_fixes
 
 
