@@ -335,6 +335,27 @@ def test_review_synthesise_smoke_invalid_lang_falls_back_to_repo_detection() -> 
 		assert "BEHAVIOURAL_SMOKE_SYNTHESISED count=0 round=1 language=python" in combined_output
 
 
+def test_behavioural_smoke_emit_warning_is_best_effort_when_fd3_is_closed() -> None:
+	function_text = _extract_shell_function(SYNTH_SCRIPT, "behavioural_smoke_emit_warning")
+	result = subprocess.run(
+		[
+			"bash",
+			"-c",
+			"set -euo pipefail\n"
+			"exec 3>&-\n"
+			+ function_text
+			+ "behavioural_smoke_emit_warning $'broken\\nwarning'\n"
+			+ "echo after\n",
+		],
+		capture_output=True,
+		text=True,
+	)
+
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert result.stdout.strip() == "after"
+	assert result.stderr == ""
+
+
 def test_review_synthesise_smoke_clamps_large_timeout_values() -> None:
 	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_timeout_") as td:
 		workspace = Path(td)

@@ -35,7 +35,7 @@ behavioural_smoke_emit_warning()
 	message="${message//%/%25}"
 	message="${message//$'\r'/%0D}"
 	message="${message//$'\n'/%0A}"
-	printf '::warning::%s\n' "${message}" >&3
+	(printf '::warning::%s\n' "${message}" >&3) 2>/dev/null || true
 }
 
 behavioural_smoke_has_requirements_files()
