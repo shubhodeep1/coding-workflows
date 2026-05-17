@@ -189,10 +189,10 @@ class GeneratedItemValidationError(ValueError):
 SHELL_REENTRY_COMMANDS = {'bash', 'sh', 'dash', 'ksh', 'zsh'}
 COMMAND_SEPARATORS = {';', '&', '&&', '||', '|', '|&', '(', ')', '{', '}', ';;', ';&', ';;&'}
 CONTROL_TOKENS = {'if', 'then', 'do', 'elif', 'else', 'while', 'until', '!'}
-REDIRECTION_TOKENS = {'<', '>', '<<', '<<-', '<<<', '>>', '>&', '<&', '&>'}
+REDIRECTION_TOKENS = {'<', '>', '<<', '<<-', '<<<', '>>', '>&', '<&', '&>', '&>>'}
 TOKEN_KIND_OPERATOR = 'operator'
 TOKEN_KIND_WORD = 'word'
-SHELL_OPERATORS = (';;&', '<<<', '<<-', '&&', '||', '|&', '&>', ';;', ';&', '>>', '>&', '<&', '<<', '&')
+SHELL_OPERATORS = (';;&', '<<<', '<<-', '&&', '||', '&>>', '|&', '&>', ';;', ';&', '>>', '>&', '<&', '<<', '&')
 
 
 def squish(value, limit=None):
@@ -421,7 +421,7 @@ def has_line_continuation(masked_line: str) -> bool:
 def trim_line_continuation(masked_line: str) -> str:
 	stripped = masked_line.rstrip()
 	if stripped.endswith('\\'):
-		return stripped[:-1].rstrip()
+		return stripped[:-1]
 	return stripped
 
 
@@ -506,15 +506,17 @@ def is_shell_reentry_command(token: str) -> bool:
 
 
 def iter_non_redirection_args(args):
-	skip_target = False
-	for arg in args:
-		if skip_target:
-			skip_target = False
-			continue
+	index = 0
+	while index < len(args):
+		arg = args[index]
 		if arg in REDIRECTION_TOKENS:
-			skip_target = True
+			index += 2
+			continue
+		if arg.isdigit() and index + 1 < len(args) and args[index + 1] in REDIRECTION_TOKENS:
+			index += 3
 			continue
 		yield arg
+		index += 1
 
 
 def env_uses_split_string(arg: str) -> bool:
@@ -536,6 +538,11 @@ def first_command_with_tail(args, line_number: int, *, allow_assignments: bool =
 	index = 0
 	while index < len(args):
 		arg = args[index]
+		if arg.isdigit() and index + 1 < len(args) and args[index + 1] in REDIRECTION_TOKENS:
+			if index + 2 >= len(args):
+				fail_generated_item(f'line {line_number}: redirection requires a target')
+			index += 3
+			continue
 		if arg in REDIRECTION_TOKENS:
 			if index + 1 >= len(args):
 				fail_generated_item(f'line {line_number}: redirection requires a target')
@@ -612,6 +619,13 @@ def validate_command_line(masked_line: str, line_number: int):
 			index += 1
 			continue
 		if expect_command:
+			if token_kind == TOKEN_KIND_WORD and token.isdigit() and index + 1 < len(tokens):
+				next_kind, next_token = tokens[index + 1]
+				if next_kind == TOKEN_KIND_OPERATOR and next_token in REDIRECTION_TOKENS:
+					if index + 2 >= len(tokens) or tokens[index + 2][0] != TOKEN_KIND_WORD:
+						fail_generated_item(f'line {line_number}: redirection requires a target')
+					index += 3
+					continue
 			if token_kind == TOKEN_KIND_OPERATOR and token in REDIRECTION_TOKENS:
 				if index + 1 >= len(tokens) or tokens[index + 1][0] != TOKEN_KIND_WORD:
 					fail_generated_item(f'line {line_number}: redirection requires a target')
