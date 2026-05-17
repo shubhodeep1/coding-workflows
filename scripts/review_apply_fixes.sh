@@ -274,15 +274,21 @@ prepare_sticky_finding_priors()
 	fi
 
 	if [ -s "${JUDGE_INTERIM_PRIORS_FILE}" ]; then
-		sticky_tmp="$(mktemp)"
-		{
+		sticky_tmp="$(mktemp 2>/dev/null || printf '')"
+		if [ -z "${sticky_tmp}" ] || ! {
 			cat "${JUDGE_INTERIM_PRIORS_FILE}"
 			printf '\n'
 			cat "${STICKY_FINDINGS_PRIORS_FILE}"
-		} > "${sticky_tmp}"
-		mv -f "${sticky_tmp}" "${JUDGE_INTERIM_PRIORS_FILE}"
+		} > "${sticky_tmp}" || ! mv -f "${sticky_tmp}" "${JUDGE_INTERIM_PRIORS_FILE}"; then
+			rm -f "${sticky_tmp}" 2>/dev/null || true
+			echo "::warning::Failed to merge sticky priors into ${JUDGE_INTERIM_PRIORS_FILE}; continuing without sticky priors"
+			return 0
+		fi
 	else
-		cp "${STICKY_FINDINGS_PRIORS_FILE}" "${JUDGE_INTERIM_PRIORS_FILE}"
+		if ! cp "${STICKY_FINDINGS_PRIORS_FILE}" "${JUDGE_INTERIM_PRIORS_FILE}"; then
+			echo "::warning::Failed to copy sticky priors into ${JUDGE_INTERIM_PRIORS_FILE}; continuing without sticky priors"
+			return 0
+		fi
 	fi
 
 	return 0
