@@ -129,6 +129,19 @@ def parse_line_spec(value: str) -> tuple[int, int] | None:
 	return start, end
 
 
+def line_range_distance(
+	left_start: int,
+	left_end: int,
+	right_start: int,
+	right_end: int,
+) -> int:
+	if left_end < right_start:
+		return right_start - left_end
+	if right_end < left_start:
+		return left_start - right_end
+	return 0
+
+
 def reviewer_from_path(path: str) -> str:
 	name = os.path.basename(squish(path))
 	if '.' in name:
@@ -323,22 +336,39 @@ for rows in prior_by_key.values():
 aggregated: dict[tuple[str, str], dict[str, object]] = {}
 for finding in current_findings:
 	identity = str(finding['identity_key'])
+	finding_start = int(finding['line_start'])
+	finding_end = int(finding['line_end'])
+
+	def candidate_key(issue: dict[str, object]) -> tuple[int, int, str]:
+		return (
+			line_range_distance(
+				int(issue['line_start']),
+				int(issue['line_end']),
+				finding_start,
+				finding_end,
+			),
+			abs(int(issue['line_start']) - finding_start),
+			str(issue['issue_id']),
+		)
+
 	candidates = [
 		issue
 		for issue in prior_by_key.get(identity, [])
-		if abs(int(issue['line_start']) - int(finding['line_start'])) <= line_bucket
+		if candidate_key(issue)[0] <= line_bucket
 	]
 	if not candidates:
 		continue
-	best = min(candidates, key=lambda issue: (abs(int(issue['line_start']) - int(finding['line_start'])), str(issue['issue_id'])))
+	best = min(candidates, key=candidate_key)
+	best_key = candidate_key(best)
 	aggregate_key = (identity, str(best['issue_id']))
 	entry = aggregated.get(aggregate_key)
 	if entry is None:
 		entry = {
 			'identity_key': identity,
 			'file': str(best['file']),
-			'current_line': int(finding['line_start']),
-			'current_lines': {int(finding['line_start'])},
+			'current_line': finding_start,
+			'current_line_match_key': best_key,
+			'current_lines': {finding_start},
 			'current_symptom': str(finding['symptom']),
 			'current_reviewers': {str(finding['reviewer'])},
 			'prior_issue_id': str(best['issue_id']),
@@ -351,10 +381,11 @@ for finding in current_findings:
 		}
 		aggregated[aggregate_key] = entry
 	else:
-		entry['current_lines'].add(int(finding['line_start']))
+		entry['current_lines'].add(finding_start)
 		entry['current_reviewers'].add(str(finding['reviewer']))
-		if abs(int(best['line_start']) - int(finding['line_start'])) < abs(int(best['line_start']) - int(entry['current_line'])):
-			entry['current_line'] = int(finding['line_start'])
+		if best_key < tuple(entry['current_line_match_key']):
+			entry['current_line'] = finding_start
+			entry['current_line_match_key'] = best_key
 			entry['current_symptom'] = str(finding['symptom'])
 
 matches: list[dict[str, object]] = []

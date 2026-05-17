@@ -137,7 +137,7 @@ CONTENT_END
 def test_line_bucket_matches_plus_five_and_skips_plus_six() -> None:
 	prior_text = """=== ISSUE 007 ===
 FILE: src/module.py
-LINES: 20
+LINES: 20-22
 LENS: CORRECTNESS & LOGIC
 SEVERITY: med
 FLAGGED_BY: reviewer_alpha
@@ -155,12 +155,12 @@ NOTES:
 	bundle_text = """FILE_PATH: /tmp/review_alpha.txt
 CONTENT_START
 File: src/module.py
-Line or code reference: line 25
+Line or code reference: line 27
 Problem: Retry token is dropped before the fallback branch.
 Why it fails at runtime: The retry cannot resume.
 ISSUE_CONFIDENCE: 4
 File: src/module.py
-Line or code reference: line 26
+Line or code reference: line 28
 Problem: Retry token is dropped before the fallback branch.
 Why it fails at runtime: The retry cannot resume.
 ISSUE_CONFIDENCE: 4
@@ -180,7 +180,7 @@ CONTENT_END
 		assert priors_file.exists()
 		payload = json.loads(sticky_json.read_text(encoding="utf-8"))
 		assert len(payload["matches"]) == 1
-		assert payload["matches"][0]["current_lines"] == [25]
+		assert payload["matches"][0]["current_lines"] == [27]
 
 
 def test_missing_prior_artifact_is_noop_and_leaves_no_sticky_outputs() -> None:
