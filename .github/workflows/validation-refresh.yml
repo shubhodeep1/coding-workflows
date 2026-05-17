@@ -34,7 +34,17 @@ permissions:
   contents: read
 
 concurrency:
-  group: validation-refresh-${{ github.repository }}
+  # Include `branch_name` in the group key so smoke-test dispatches from
+  # `test-and-mark-stable.yml` (which pass a per-run branch name like
+  # `ai/validation-refresh-smoke-<run_id>`) cannot be cancelled by the
+  # daily cron or by a parallel default-branch manual dispatch, which
+  # would otherwise share the same group and surface as
+  # `orphan-workflows-test` failing with `concluded cancelled`.
+  # Schedule events and dispatches without an override both resolve to
+  # `ai/validation-refresh` (the workflow's documented default), so they
+  # still share one group and the cancel-in-progress semantics for
+  # production runs are preserved.
+  group: validation-refresh-${{ github.repository }}-${{ github.event.inputs.branch_name || 'ai/validation-refresh' }}
   cancel-in-progress: true
 
 jobs:
