@@ -244,23 +244,31 @@ jobs:
         run: |
           set -euo pipefail
           CODEX_BIN="$(which codex)"
+          NPM_GLOBAL_ROOT="$(npm root -g)"
           mkdir -p "${{ runner.tool_cache }}/codex"
-          cp -r "$(npm root -g)/@openai/codex"           "${{ runner.tool_cache }}/codex/package"
-          cp -r "$(npm root -g)/@openai/codex-linux-x64" "${{ runner.tool_cache }}/codex/codex-linux-x64"
+          [ -d "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64" ] || {
+            echo "::error::Codex platform package @openai/codex-linux-x64 missing after install"
+            exit 1
+          }
+          cp -r "${NPM_GLOBAL_ROOT}/@openai/codex"           "${{ runner.tool_cache }}/codex/package"
+          cp -r "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64" "${{ runner.tool_cache }}/codex/codex-linux-x64"
           cp "${CODEX_BIN}" "${{ runner.tool_cache }}/codex/codex"
 
       - name: Restore Codex CLI from cache
         if: steps.cache-codex.outputs.cache-hit == 'true'
         run: |
           set -euo pipefail
-          # Install BOTH packages from the cached local paths so the platform
-          # binary is restored deterministically. --include=optional is
-          # unreliable for global installs (npm/cli#4828) and cannot resolve
-          # the npm alias from a local path anyway.
-          npm install -g \
-            "${{ runner.tool_cache }}/codex/package" \
-            "${{ runner.tool_cache }}/codex/codex-linux-x64" \
-            --no-audit --no-fund
+          NPM_GLOBAL_ROOT="$(npm root -g)"
+          NPM_GLOBAL_PREFIX="$(npm prefix -g)"
+          # Restore the cached directories directly into the global npm tree so
+          # the @openai/codex-linux-x64 alias name is preserved. npm install -g
+          # on the local paths re-reads package.json, and both cached
+          # directories report "name": "@openai/codex".
+          mkdir -p "${NPM_GLOBAL_ROOT}/@openai" "${NPM_GLOBAL_PREFIX}/bin"
+          rm -rf "${NPM_GLOBAL_ROOT}/@openai/codex" "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64"
+          cp -r "${{ runner.tool_cache }}/codex/package" "${NPM_GLOBAL_ROOT}/@openai/codex"
+          cp -r "${{ runner.tool_cache }}/codex/codex-linux-x64" "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64"
+          ln -sf "${NPM_GLOBAL_ROOT}/@openai/codex/bin/codex.js" "${NPM_GLOBAL_PREFIX}/bin/codex"
           codex --version
 
       - name: Create Codex config
@@ -862,23 +870,31 @@ jobs:
         run: |
           set -euo pipefail
           CODEX_BIN="$(which codex)"
+          NPM_GLOBAL_ROOT="$(npm root -g)"
           mkdir -p "${{ runner.tool_cache }}/codex"
-          cp -r "$(npm root -g)/@openai/codex"           "${{ runner.tool_cache }}/codex/package"
-          cp -r "$(npm root -g)/@openai/codex-linux-x64" "${{ runner.tool_cache }}/codex/codex-linux-x64"
+          [ -d "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64" ] || {
+            echo "::error::Codex platform package @openai/codex-linux-x64 missing after install"
+            exit 1
+          }
+          cp -r "${NPM_GLOBAL_ROOT}/@openai/codex"           "${{ runner.tool_cache }}/codex/package"
+          cp -r "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64" "${{ runner.tool_cache }}/codex/codex-linux-x64"
           cp "${CODEX_BIN}" "${{ runner.tool_cache }}/codex/codex"
 
       - name: Restore Codex CLI from cache
         if: steps.cache-codex.outputs.cache-hit == 'true'
         run: |
           set -euo pipefail
-          # Install BOTH packages from the cached local paths so the platform
-          # binary is restored deterministically. --include=optional is
-          # unreliable for global installs (npm/cli#4828) and cannot resolve
-          # the npm alias from a local path anyway.
-          npm install -g \
-            "${{ runner.tool_cache }}/codex/package" \
-            "${{ runner.tool_cache }}/codex/codex-linux-x64" \
-            --no-audit --no-fund
+          NPM_GLOBAL_ROOT="$(npm root -g)"
+          NPM_GLOBAL_PREFIX="$(npm prefix -g)"
+          # Restore the cached directories directly into the global npm tree so
+          # the @openai/codex-linux-x64 alias name is preserved. npm install -g
+          # on the local paths re-reads package.json, and both cached
+          # directories report "name": "@openai/codex".
+          mkdir -p "${NPM_GLOBAL_ROOT}/@openai" "${NPM_GLOBAL_PREFIX}/bin"
+          rm -rf "${NPM_GLOBAL_ROOT}/@openai/codex" "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64"
+          cp -r "${{ runner.tool_cache }}/codex/package" "${NPM_GLOBAL_ROOT}/@openai/codex"
+          cp -r "${{ runner.tool_cache }}/codex/codex-linux-x64" "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64"
+          ln -sf "${NPM_GLOBAL_ROOT}/@openai/codex/bin/codex.js" "${NPM_GLOBAL_PREFIX}/bin/codex"
           codex --version
 
       - name: Create Codex config
@@ -1321,23 +1337,31 @@ jobs:
         run: |
           set -euo pipefail
           CODEX_BIN="$(which codex)"
+          NPM_GLOBAL_ROOT="$(npm root -g)"
           mkdir -p "${{ runner.tool_cache }}/codex"
-          cp -r "$(npm root -g)/@openai/codex"           "${{ runner.tool_cache }}/codex/package"
-          cp -r "$(npm root -g)/@openai/codex-linux-x64" "${{ runner.tool_cache }}/codex/codex-linux-x64"
+          [ -d "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64" ] || {
+            echo "::error::Codex platform package @openai/codex-linux-x64 missing after install"
+            exit 1
+          }
+          cp -r "${NPM_GLOBAL_ROOT}/@openai/codex"           "${{ runner.tool_cache }}/codex/package"
+          cp -r "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64" "${{ runner.tool_cache }}/codex/codex-linux-x64"
           cp "${CODEX_BIN}" "${{ runner.tool_cache }}/codex/codex"
 
       - name: Restore Codex CLI from cache
         if: steps.cache-codex.outputs.cache-hit == 'true'
         run: |
           set -euo pipefail
-          # Install BOTH packages from the cached local paths so the platform
-          # binary is restored deterministically. --include=optional is
-          # unreliable for global installs (npm/cli#4828) and cannot resolve
-          # the npm alias from a local path anyway.
-          npm install -g \
-            "${{ runner.tool_cache }}/codex/package" \
-            "${{ runner.tool_cache }}/codex/codex-linux-x64" \
-            --no-audit --no-fund
+          NPM_GLOBAL_ROOT="$(npm root -g)"
+          NPM_GLOBAL_PREFIX="$(npm prefix -g)"
+          # Restore the cached directories directly into the global npm tree so
+          # the @openai/codex-linux-x64 alias name is preserved. npm install -g
+          # on the local paths re-reads package.json, and both cached
+          # directories report "name": "@openai/codex".
+          mkdir -p "${NPM_GLOBAL_ROOT}/@openai" "${NPM_GLOBAL_PREFIX}/bin"
+          rm -rf "${NPM_GLOBAL_ROOT}/@openai/codex" "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64"
+          cp -r "${{ runner.tool_cache }}/codex/package" "${NPM_GLOBAL_ROOT}/@openai/codex"
+          cp -r "${{ runner.tool_cache }}/codex/codex-linux-x64" "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64"
+          ln -sf "${NPM_GLOBAL_ROOT}/@openai/codex/bin/codex.js" "${NPM_GLOBAL_PREFIX}/bin/codex"
           codex --version
 
       - name: Create Codex config
