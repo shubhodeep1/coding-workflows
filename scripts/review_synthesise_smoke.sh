@@ -303,6 +303,8 @@ def normalize_content(text: str) -> str:
 					continue
 				if passthrough_command == "timeout" and re.match(r"\d+(?:\.\d+)?[smhd]?$", token):
 					continue
+			if expect_command and token.startswith("$"):
+				raise ValueError("body_unsafe_shell_construct")
 			if expect_command and token in dangerous_command_tokens:
 				raise ValueError("body_unsafe_shell_construct")
 			expect_command = False

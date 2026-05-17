@@ -85,31 +85,33 @@ def _seed_repo_with_autofix_commit(workspace: Path) -> str:
 	module = workspace / "src" / "module.py"
 	module.write_text("def run():\n\treturn 'seed'\n", encoding="utf-8")
 
-	subprocess.run(["git", "init", "-q", "-b", "main"], cwd=workspace, check=True)
+	subprocess.run(["git", "init", "-q", "-b", "main"], cwd=workspace, check=True, timeout=60)
 	for key, value in (
 		("user.email", "test@local"),
 		("user.name", "test"),
 		("commit.gpgsign", "false"),
 	):
-		subprocess.run(["git", "config", key, value], cwd=workspace, check=True)
-	subprocess.run(["git", "add", "src/module.py"], cwd=workspace, check=True)
+		subprocess.run(["git", "config", key, value], cwd=workspace, check=True, timeout=60)
+	subprocess.run(["git", "add", "src/module.py"], cwd=workspace, check=True, timeout=60)
 	subprocess.run(
 		["git", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "seed"],
 		cwd=workspace,
 		check=True,
+		timeout=60,
 	)
 
 	module.write_text(
 		"def run():\n\tif True:\n\t\treturn 'autofix'\n\treturn 'seed'\n",
 		encoding="utf-8",
 	)
-	subprocess.run(["git", "add", "src/module.py"], cwd=workspace, check=True)
+	subprocess.run(["git", "add", "src/module.py"], cwd=workspace, check=True, timeout=60)
 	subprocess.run(
 		["git", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "[ai-autofix] adjust module"],
 		cwd=workspace,
 		check=True,
+		timeout=60,
 	)
-	return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=workspace, text=True).strip()
+	return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=workspace, text=True, timeout=60).strip()
 
 
 def _base_env(workspace: Path, runtime_dir: Path, mock_bin_dir: Path) -> dict[str, str]:
@@ -412,6 +414,7 @@ def test_review_synthesise_smoke_rejects_unsafe_shell_constructs() -> None:
 
 		for content in (
 			'printf hello#;eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'AWK=eval\n$AWK "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
 			'result="$(whoami)"\nbehavioural_smoke_inconclusive "unsafe"',
 			'bash -c "printf unsafe"\nbehavioural_smoke_inconclusive "unsafe"',
 			'eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
