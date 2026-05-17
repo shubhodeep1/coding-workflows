@@ -3786,7 +3786,27 @@ jobs:
         # here: the ledger is bookkeeping and does not count as a productive
         # editor change, so the no-op disposition still needs validation
         # before downstream clean-review gates fire. See PR #1472.
-        if: "!cancelled() && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.EDITOR_CHANGES_LOST != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
+        #
+        # Skip on max_iterations_reached runs (autofix cap hit, or
+        # force_rb_judge=true short-circuit): in those modes the editor
+        # is intentionally not invoked, so `EDITOR_SUMMARY_FILE` is
+        # legitimately empty and there is no editor claim to validate.
+        # Running this step would set EDITOR_NOOP_SUSPICIOUS=true off
+        # the empty-summary branch (line below), which then gates off
+        # the "Detect merge conflicts" and "Resolve merge conflicts"
+        # steps (their `if:` filters on `EDITOR_NOOP_SUSPICIOUS != 'true'`
+        # for defence-in-depth against a leaked MERGE_CONFLICT). The
+        # net effect was a deadlock: an exhausted PR with merge
+        # conflicts could never reach the Codex conflict resolver, and
+        # the orchestrator-poll's `_dispatch_review_for_conflicts`
+        # (scripts/orchestrate_poll_process.sh) kept re-dispatching the
+        # same futile run every cycle. See PR #2667 / runs 25968901129+
+        # for the original deadlock. Downstream auto-merge / mark-ready
+        # gates that also consume `EDITOR_NOOP_SUSPICIOUS` already
+        # short-circuit independently on `max_iterations_reached != 'true'`,
+        # so leaving the env var unset on these runs does not relax any
+        # auto-merge safety.
+        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.EDITOR_CHANGES_LOST != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
         run: |
           set -euo pipefail
 
@@ -3868,15 +3888,17 @@ jobs:
         # Actual
         # resolution is gated separately below.
         #
-        # Skip when EDITOR_NOOP_SUSPICIOUS=true: the editor never produced a
-        # validated commit, so even a successful conflict resolver run would
-        # have nothing fix-related to push. Running merge detection here
-        # otherwise wastes ~30s and — if the defensive fallback at the
-        # end of this step trips on an unrelated git issue — sets
-        # MERGE_CONFLICT=true, which in turn fires the (futile) Codex
-        # resolver and produces a `FAILED_STEPS=1` cascade that the e2e
-        # poller treats as the proximate failure (analysis: e2e-smoke-
-        # failure-25126757724.md §B/D).
+        # Skip when EDITOR_NOOP_SUSPICIOUS=true on ordinary editor-tail runs:
+        # the editor never produced a validated commit, so even a successful
+        # conflict resolver run would have nothing fix-related to push. This
+        # does not apply when max_iterations_reached=true, because the
+        # disposition step is skipped in that mode and conflict resolution is
+        # independent of the editor cycle. Running merge detection here
+        # otherwise wastes ~30s and — if the defensive fallback at the end of
+        # this step trips on an unrelated git issue — sets MERGE_CONFLICT=true,
+        # which in turn fires the (futile) Codex resolver and produces a
+        # `FAILED_STEPS=1` cascade that the e2e poller treats as the proximate
+        # failure (analysis: e2e-smoke-failure-25126757724.md §B/D).
         if: success() && env.CAN_PUSH == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -4146,11 +4168,13 @@ jobs:
         # is deferred — both autofix and conflict resolution are pushed together.
         #
         # The EDITOR_NOOP_SUSPICIOUS != 'true' clause mirrors the gate on
-        # "Detect merge conflicts" above: if the editor never produced a
-        # validated commit, MERGE_CONFLICT cannot legitimately be true here
-        # (the prior step is skipped and leaves the env var unset), but we
-        # repeat the guard for defence-in-depth in case future code paths set
-        # MERGE_CONFLICT outside that step.
+        # "Detect merge conflicts" above: on ordinary editor-tail runs, if the
+        # editor never produced a validated commit, that step was also skipped
+        # and left MERGE_CONFLICT unset. We repeat the guard for defence-in-
+        # depth in case future code paths set MERGE_CONFLICT outside that
+        # step. On max_iterations_reached runs, EDITOR_NOOP_SUSPICIOUS stays
+        # unset, so this guard is a no-op and MERGE_CONFLICT can legitimately
+        # come from the detect step above.
         if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
