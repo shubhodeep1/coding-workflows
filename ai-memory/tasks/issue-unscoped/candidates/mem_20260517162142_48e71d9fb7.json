@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_workflow_checkout_integration_ref_audit.py:75-89 | severity=medium | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: The last autofix run broadened `\"/git/ref/heads/\"` from an `implement.yml`-only check into `base_disallowed_inline_markers`, making it universally disallowed across all `REQUIRED_RESOLVER_WORKFLOWS` even though issue #2704 only asked to flip the `VALIDATION_INCLUDE_SYNTHESISED` default.\n  WHY: This is scope expansion rather than a runtime failure; the reviewers note it currently passes because none of the five required workflows contain the marker, but it violates the issue's explicit scope constraint.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_workflow_checkout_integration_ref_audit.py:lines 75-82, 86-89 | confidence=4\n  PROBLEM: The last autofix run expanded the scope of the audit test to add `\"/git/ref/heads/\"` to the base disallowed markers, making it universally prohibited across ALL `REQUIRED_RESOLVER_WORKFLOWS` (plan.yml, clarify.yml, orchestrate_clarify_respond.yml, implement.yml, validate.yml).\n  WHY: This is a scope-creep issue - the issue #2704 explicitly states \"Do not broaden scope beyond this default/contract correction.\" The change is technically correct but was not part of the required fix.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_workflow_checkout_integration_ref_audit.py:Lines 75-82 (base_disallowed_inline_markers tuple) | confidence=4\n  PROBLEM: The last autofix run introduced scope expansion beyond issue #2704 requirements. The change moved \"/git/ref/heads/\" from being conditionally applied only to implement.yml (line 89 in original) to being universally included in base_disallowed_inline_markers for all REQUIRED_RESOLVER_WORKFLOWS.\n  WHY: While technically correct (none of the 5 required workflows currently contain \"/git/ref/heads/\"), this change violates the explicit scope boundary set in the issue requirements. The modification should not have been made as part of this PR.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_workflow_checkout_integration_ref_audit.py:lines 75-89 | confidence=4\n  PROBLEM: The most recent AI autofix run modified this test to move `\"/git/ref/heads/\"` from a conditional addition (only for `implement.yml`) into the shared `base_disallowed_inline_markers` tuple, making it universally disallowed across all `REQUIRED_RESOLVER_WORKFLOWS`.\n  WHY: The test change does not cause a runtime failure today \u2014 none of the five required workflows currently contain `/git/ref/heads/` \u2014 but it violates the issue's explicit instruction \"Do not broaden scope beyond this default/contract correction.\" The test's prior behavior was that only `implement.yml` was checked for this marker because the inline ref-resolution path in that workflow could plausibly use the GitHub refs API as a baseline fallback; other workflows resolve refs locally and were not checked.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/test_workflow_checkout_integration_ref_audit.py:lines 78 and 89 | confidence=4\n  PROBLEM: The last autofix run modified `tests/test_workflow_checkout_integration_ref_audit.py` \u2014 a file completely unrelated to issue #2704. The change broadens the `/git/ref/heads/` audit marker from conditionally applied (only for `implement.yml`) to universally applied across all `REQUIRED_RESOLVER_WORKFLOWS`.\n  WHY: While the change is technically harmless (none of the 5 required workflows contain that pattern today), it is scope expansion that violates the issue's explicit instruction: \"Do not broaden scope beyond this default/contract correction.\"\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "c12c8e65879d1ae22ef61144d19469ec1ac729e4ad9474c1a8daf63ae9f7f834",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2705,
+    "run_id": "25995803306",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25995803306",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517162142_48e71d9fb7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2705,
+    "run_id": "25995803306"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-17T16:21:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
