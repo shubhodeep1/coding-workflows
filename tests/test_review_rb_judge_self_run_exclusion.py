@@ -35,15 +35,14 @@ The fix
    pending-status predicate with `(_is_self_check_run | not)`. Empty
    $self_run preserves legacy behavior for non-Actions / test callers.
 2. Each refusal path in the merge_with_followup branch now emits a
-   distinct `judge_skip_reason` (unresolved_head_sha,
-   check_runs_query_failed, blocking_check_runs, sync_merge_failed,
-   auto_merge_disabled, merge_conflict, mergeability_pending) so the
+   distinct `judge_skip_reason`, including the pre-existing
+   `missing_followup_details` / `followup_issue_create_failed` paths and
+   the seven merge-gate refusal reasons added by this fix, so the
    workflow can distinguish them from a true "max iterations" exhaustion.
-3. .github/workflows/review_autofix.yml's "Post review-blocked comment
-   on PR (autofix exhaustion)" step now branches on JUDGE_SKIP_REASON
-   and posts a reason-specific body. Empty JUDGE_SKIP_REASON falls
-   through to the original "max iterations" body for backward
-   compatibility.
+3. .github/workflows/review_autofix.yml's review-blocked PR-comment and
+   Telegram-notification steps now branch on JUDGE_SKIP_REASON and post
+   reason-specific bodies. Empty JUDGE_SKIP_REASON falls through to the
+   original "max iterations" messaging for backward compatibility.
 
 These tests pin both the script-side filter shape and the workflow-side
 reason routing so a future refactor cannot silently re-introduce the
@@ -152,6 +151,7 @@ def test_script_excludes_self_in_both_jq_branches() -> None:
 
 
 EXPECTED_MERGE_WITH_FOLLOWUP_SKIP_REASONS = {
+	"missing_followup_details",
 	"unresolved_head_sha",
 	"check_runs_query_failed",
 	"blocking_check_runs",
@@ -159,6 +159,7 @@ EXPECTED_MERGE_WITH_FOLLOWUP_SKIP_REASONS = {
 	"auto_merge_disabled",
 	"merge_conflict",
 	"mergeability_pending",
+	"followup_issue_create_failed",
 }
 
 
@@ -234,6 +235,26 @@ def test_workflow_branches_comment_body_on_each_reason() -> None:
 		)
 
 
+def test_workflow_branches_telegram_message_on_each_reason() -> None:
+	"""The Telegram review-blocked notification must mirror the
+	reason-specific routing so merge_with_followup refusal reasons do not
+	fall through to the generic autofix-exhausted alert."""
+	wf = _review_autofix_text()
+	step_anchor = "- name: Telegram review-blocked judge decision"
+	idx = wf.find(step_anchor)
+	assert idx >= 0
+	next_step = wf.find("\n      - name:", idx + len(step_anchor))
+	step_body = wf[idx:next_step if next_step > 0 else len(wf)]
+
+	for reason in EXPECTED_MERGE_WITH_FOLLOWUP_SKIP_REASONS:
+		assert re.search(rf"\n\s*{re.escape(reason)}\)\s*\n", step_body), (
+			f"`Telegram review-blocked judge decision` step must include "
+			f"a `case` branch for `JUDGE_SKIP_REASON={reason}` so "
+			f"reason-specific refusals do not fall through to the generic "
+			f"autofix-exhausted alert."
+		)
+
+
 def test_workflow_preserves_max_iterations_fallback() -> None:
 	"""The default `*)` branch of the case must preserve the original
 	"maximum number of autofix iterations" body so legacy callers (no
@@ -253,6 +274,9 @@ def test_workflow_preserves_max_iterations_fallback() -> None:
 # ---------------------------------------------------------------------------
 
 
+# Snapshot of the production jq filter. The text-shape tests above are
+# the change-detection guard against drift; keep this copy in sync with
+# scripts/review_rb_judge.sh when the live filter changes.
 JQ_FILTER = '''
 def _is_self_check_run: ($self_run != "") and ((.details_url // "") | test("/actions/runs/" + $self_run + "(/|$)"));
 def _is_pending: .status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled");

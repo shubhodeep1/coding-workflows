@@ -4639,6 +4639,10 @@ jobs:
           # actually happened. Empty reason = legacy / pre-fix script,
           # falls through to the original body.
           case "${JUDGE_SKIP_REASON:-}" in
+            missing_followup_details)
+              BODY_HEADING="AI review/autofix — judge omitted follow-up issue details"
+              BODY_DETAIL="The review-blocked judge chose \`merge_with_followup\` but returned an empty \`followup_issue.title\` and/or \`.body\`, so the workflow refused the action rather than merge code without durable tracking for the deferred gap. Stall recovery will re-fire the judge; if this repeats, inspect the judge output in the workflow log."
+              ;;
             blocking_check_runs)
               BODY_HEADING="AI review/autofix — merge gated by in-flight check-runs"
               BODY_DETAIL="The review-blocked judge approved this PR but other CI check-runs on the head commit had not yet completed when the merge was attempted. Stall recovery will re-fire the judge after the remaining check-runs settle; no action is required unless the blocking checks themselves are stuck. Linked issues remain labelled \`ai:review-blocked\` so the recovery ladder will retry."
@@ -4666,6 +4670,10 @@ jobs:
             mergeability_pending)
               BODY_HEADING="AI review/autofix — mergeability still computing"
               BODY_DETAIL="The review-blocked judge could not act because GitHub was still computing the PR's mergeability state when the gate ran. Stall recovery will re-fire the judge shortly; no action is required unless the state remains unknown for an extended period."
+              ;;
+            followup_issue_create_failed)
+              BODY_HEADING="AI review/autofix — merge landed but follow-up issue creation failed"
+              BODY_DETAIL="The review-blocked judge approved \`merge_with_followup\` and the PR merge succeeded, but GitHub failed while creating the follow-up issue. The deferred gap is not yet tracked; please create the follow-up manually if needed, or let stall recovery / a subsequent judge run retry issue creation."
               ;;
             *)
               BODY_HEADING="AI review/autofix blocked — needs human intervention"
@@ -5332,6 +5340,24 @@ jobs:
                 MSG="$(printf 'PR review blocked — autofix exhausted (%s iterations), judge disabled\nNeeds human intervention' "${MAX_AUTOFIX_ITERATIONS}")" ;;
               not_writable)
                 MSG="$(printf 'PR review blocked — autofix exhausted (%s iterations), branch not writable\nNeeds human intervention' "${MAX_AUTOFIX_ITERATIONS}")" ;;
+              missing_followup_details)
+                MSG="PR review blocked — judge selected merge_with_followup but omitted follow-up details\nNeeds judge retry or manual follow-up issue creation" ;;
+              unresolved_head_sha)
+                MSG="PR review blocked — judge could not resolve PR head SHA\nStall recovery will retry automatically" ;;
+              check_runs_query_failed)
+                MSG="PR review blocked — judge could not query head check-runs\nStall recovery will retry automatically" ;;
+              blocking_check_runs)
+                MSG="PR review blocked — merge_with_followup approved but check-runs are still in flight\nStall recovery will retry automatically" ;;
+              sync_merge_failed)
+                MSG="PR review blocked — merge_with_followup approved but gh pr merge failed\nNeeds retry or manual merge investigation" ;;
+              auto_merge_disabled)
+                MSG="PR review blocked — merge_with_followup approved but ENABLE_AUTO_MERGE=false\nManual merge required before follow-up creation" ;;
+              merge_conflict)
+                MSG="PR review blocked — PR has merge conflicts\nNeeds rebase or conflict resolution" ;;
+              mergeability_pending)
+                MSG="PR review blocked — GitHub mergeability still computing\nStall recovery will retry automatically" ;;
+              followup_issue_create_failed)
+                MSG="PR review blocked — PR merged but follow-up issue creation failed\nNeeds follow-up issue creation or retry" ;;
               llm_failed_critical_issues|json_parse_failed_critical_issues)
                 MSG="$(printf 'PR review blocked — autofix exhausted (%s iterations), judge LLM failed, deterministic fallback found critical issues\nNeeds human intervention' "${MAX_AUTOFIX_ITERATIONS}")" ;;
               llm_failed*|json_parse_failed*)
