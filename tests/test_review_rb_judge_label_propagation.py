@@ -338,6 +338,7 @@ def _run_close_and_reissue(
 	judge_payload: dict | None = None,
 	reissue_preserve_baseline_enabled: str = "false",
 	repo_files: dict[str, str] | None = None,
+	pr_view_head_ref_oid: str | None = None,
 	precreate_baseline_branch: bool = False,
 	enable_xpg_echo: bool = False,
 ) -> dict:
@@ -361,10 +362,15 @@ def _run_close_and_reissue(
 		repo_branch_before = ""
 		if repo_files is not None:
 			run_cwd, repo_head_before, repo_branch_before = _bootstrap_repo_with_remote(tmp_path, repo_files)
-			mock_state["pr_view_head_ref_oid"] = repo_head_before
+			resolved_head_ref_oid = pr_view_head_ref_oid or repo_head_before
+			if resolved_head_ref_oid == "__UPPER_REPO_HEAD__":
+				resolved_head_ref_oid = repo_head_before.upper()
+			mock_state["pr_view_head_ref_oid"] = resolved_head_ref_oid
 			if precreate_baseline_branch:
 				expected_baseline_branch = f"ai/reissue-baseline/pr-42-{repo_head_before[:12]}-777-1"
 				_git(["git", "branch", expected_baseline_branch], cwd=run_cwd)
+		elif pr_view_head_ref_oid is not None:
+			mock_state["pr_view_head_ref_oid"] = pr_view_head_ref_oid
 		gh_state_file.write_text(json.dumps(mock_state), encoding="utf-8")
 
 		labels_file = runtime_dir / "ensure_labels.txt"
@@ -600,6 +606,38 @@ def test_close_and_reissue_spot_fix_preserves_baseline_branch_and_keeps_caller_c
 	)
 
 
+def test_close_and_reissue_spot_fix_lowercases_baseline_branch_sha_prefix() -> None:
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		judge_payload={
+			"action": "close_and_reissue",
+			"reissue_mode": "spot-fix",
+			"justification": "Uppercase head SHAs must still produce a trusted preserved baseline branch.",
+			"remaining_issues": [
+				{"file": "src/app.py", "line_start": 10, "line_end": 14, "symptom": "Guard missing"},
+			],
+			"new_issue": {
+				"title": "Reissue: lowercase preserved baseline",
+				"body": "Keep the prior implementation and patch only the grounded gap.",
+			},
+		},
+		reissue_preserve_baseline_enabled="true",
+		repo_files={"src/app.py": "print('hello')\n"},
+		pr_view_head_ref_oid="__UPPER_REPO_HEAD__",
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1, f"expected one reissue create call, got: {creates}"
+	body = creates[0][creates[0].index("--body") + 1]
+	match = re.search(r"prior_pr_baseline_branch: ([^\n]+)", body)
+	assert match, f"expected prior_pr_baseline_branch metadata in body:\n{body}"
+	baseline_branch = match.group(1).strip()
+	expected_head_sha = str(state["_repo_head_before"]).lower()
+	assert baseline_branch == f"ai/reissue-baseline/pr-42-{expected_head_sha[:12]}-777-1"
+	assert f"refs/heads/{baseline_branch}" in state.get("_remote_heads", "")
+	assert f"REISSUE_BASELINE_PRESERVED branch={baseline_branch} head_sha={expected_head_sha}" in state["_stdout"]
+
+
 def test_close_and_reissue_invalid_reissue_mode_falls_back_to_redo() -> None:
 	state = _run_close_and_reissue(
 		["ai:orchestrator-managed"],
@@ -638,7 +676,7 @@ def test_close_and_reissue_preserves_judge_json_bytes_under_xpg_echo() -> None:
 			"justification": "Quoted reissues should not be dropped.",
 			"new_issue": {
 				"title": 'Reissue: handle "quoted" follow-up',
-				"body": 'First line keeps "quotes" intact.\nSecond line stays attached.',
+				"body": 'First line keeps "quotes" and literal \\n intact.\nSecond line stays attached.',
 			},
 		},
 		enable_xpg_echo=True,
@@ -652,7 +690,7 @@ def test_close_and_reissue_preserves_judge_json_bytes_under_xpg_echo() -> None:
 	title = args[args.index("--title") + 1]
 	body = args[args.index("--body") + 1]
 	assert title == 'Reissue: handle "quoted" follow-up'
-	assert body.startswith('First line keeps "quotes" intact.\nSecond line stays attached.')
+	assert body.startswith('First line keeps "quotes" and literal \\n intact.\nSecond line stays attached.')
 
 
 def test_close_and_reissue_spot_fix_invalid_remaining_issue_file_falls_back_to_redo() -> None:
@@ -1419,7 +1457,7 @@ def test_merge_with_followup_preserves_judge_json_bytes_under_xpg_echo() -> None
 	state = _run_merge_with_followup(
 		parent_label_set=["ai:orchestrator-managed"],
 		followup_title='Follow-up: handle "quoted" wiring',
-		followup_body='First line keeps "quotes" intact.\nSecond line stays attached.',
+		followup_body='First line keeps "quotes" and literal \\n intact.\nSecond line stays attached.',
 		enable_xpg_echo=True,
 	)
 
@@ -1431,7 +1469,7 @@ def test_merge_with_followup_preserves_judge_json_bytes_under_xpg_echo() -> None
 	title = args[args.index("--title") + 1]
 	body = args[args.index("--body") + 1]
 	assert title == 'Follow-up: handle "quoted" wiring'
-	assert body.startswith('First line keeps "quotes" intact.\nSecond line stays attached.')
+	assert body.startswith('First line keeps "quotes" and literal \\n intact.\nSecond line stays attached.')
 
 
 def test_review_blocked_preamble_uses_printf_for_judge_json_extraction() -> None:
@@ -1442,6 +1480,9 @@ RB_JUSTIFICATION="$(printf '%s\\n' "${JUDGE_JSON}" | jq -r '.justification // "n
 RB_FIX_DESC="$(printf '%s\\n' "${JUDGE_JSON}" | jq -r '.fix_description // ""')"
 RB_REMAINING="$(printf '%s\\n' "${JUDGE_JSON}" | jq -r '.remaining_issues_summary // ""')""" in src
 	assert 'RB_ACTION="$(echo "${JUDGE_JSON}" | jq -r' not in src
+	assert "FOLLOWUP_BODY=\"$(printf '%s\\n' \"${JUDGE_JSON}\" | jq -r '.followup_issue.body // empty')\"" in src
+	assert "NEW_ISSUE_BODY=\"$(printf '%s\\n' \"${JUDGE_JSON}\" | jq -r '.new_issue.body // empty')\"" in src
+	assert "| sed 's/\\\\n/\\n/g'" not in src
 
 
 def test_review_blocked_pr_metadata_parsing_uses_printf_under_xpg_echo() -> None:
@@ -1556,6 +1597,19 @@ def test_merged_pr_action_guard_runs_before_judge_comment() -> None:
 		f"merged-PR action guard (pos={guard_pos}) must run BEFORE "
 		f"the JUDGE_COMMENT post (pos={comment_pos}) so a refused "
 		f"action does not leave a misleading audit trail on the PR."
+	)
+
+
+def test_review_rb_judge_validates_pr_number_before_pr_lookups() -> None:
+	src = _rb_judge_text()
+	guard = 'if [ -z "${PR_NUMBER:-}" ] || ! [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then'
+	guard_pos = src.find(guard)
+	lookup_pos = src.find('repos/${REPOSITORY}/pulls/${PR_NUMBER}')
+	assert guard_pos != -1 and 'judge_skip_reason=invalid_pr_number' in src, (
+		"review_rb_judge.sh must reject missing or non-numeric PR_NUMBER values before any PR-scoped API calls."
+	)
+	assert lookup_pos != -1 and guard_pos < lookup_pos, (
+		"PR_NUMBER validation must run before review_rb_judge.sh performs PR-scoped lookups or path construction."
 	)
 
 

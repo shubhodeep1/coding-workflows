@@ -233,6 +233,28 @@ def load_candidates(text: str):
 	return candidates
 
 
+def strip_outer_code_fence(text: str) -> str:
+	stripped = text.strip()
+	lines = stripped.splitlines()
+	if len(lines) >= 2 and lines[0].startswith("```") and lines[-1].strip() == "```":
+		return "\n".join(lines[1:-1]).strip("\n")
+	return text
+
+
+def normalize_content(text: str) -> str:
+	text = text.replace("\r\n", "\n").replace("\r", "\n")
+	text = strip_outer_code_fence(text)
+	lines = text.splitlines()
+	while lines and not lines[0].strip():
+		lines.pop(0)
+	if lines and lines[0].startswith("#!"):
+		lines = lines[1:]
+	text = "\n".join(lines).strip()
+	if not text:
+		raise ValueError("empty_content")
+	return text + "\n"
+
+
 def prefer_generated_item_error(existing, candidate):
 	if existing is None:
 		return candidate
@@ -531,6 +553,29 @@ def exec_option_consumes_value(arg: str) -> bool:
 	return arg == '-a'
 
 
+def time_option_consumes_value(arg: str) -> bool:
+	return arg in {'-f', '--format', '-o', '--output'}
+
+
+def timeout_option_consumes_value(arg: str) -> bool:
+	return arg in {'-s', '--signal', '-k', '--kill-after'}
+
+
+def timeout_duration_token(arg: str) -> bool:
+	return bool(re.match(r'^\d+(?:\.\d+)?[smhd]?$', arg))
+
+
+def timeout_command_with_tail(args, line_number: int):
+	command, tail = first_command_with_tail(args, line_number, option_takes_value=timeout_option_consumes_value)
+	if command is None:
+		return None, []
+	if timeout_duration_token(command):
+		if not tail:
+			return None, []
+		return first_command_with_tail(tail, line_number, option_takes_value=timeout_option_consumes_value)
+	return command, tail
+
+
 def first_command_with_tail(args, line_number: int, *, allow_assignments: bool = False, option_takes_value=None):
 	if option_takes_value is None:
 		option_takes_value = lambda arg: False
@@ -575,6 +620,8 @@ def validate_command(command: str, args, line_number: int):
 	if '$' in command:
 		fail_generated_item(f'line {line_number}: variable expansion in command position is not allowed')
 	base = command_basename(command)
+	if base == 'coproc':
+		fail_generated_item(f'line {line_number}: coproc is not allowed')
 	if base == 'eval':
 		fail_generated_item(f'line {line_number}: eval is not allowed')
 	if base == 'source':
@@ -604,6 +651,14 @@ def validate_command(command: str, args, line_number: int):
 		builtin_command, builtin_tail = first_command_with_tail(args, line_number)
 		if builtin_command is not None:
 			validate_command(builtin_command, builtin_tail, line_number)
+	if base == 'time':
+		time_command, time_tail = first_command_with_tail(args, line_number, option_takes_value=time_option_consumes_value)
+		if time_command is not None:
+			validate_command(time_command, time_tail, line_number)
+	if base == 'timeout':
+		timeout_command, timeout_tail = timeout_command_with_tail(args, line_number)
+		if timeout_command is not None:
+			validate_command(timeout_command, timeout_tail, line_number)
 
 
 def validate_command_line(masked_line: str, line_number: int):
@@ -857,9 +912,12 @@ def normalize_generated_items(candidate, issue_count: int):
 			fail_generated_item(f'item[{item_index}] has invalid path')
 		if not isinstance(content, str):
 			fail_generated_item(f'item[{item_index}] path={squish(path_value, 200)} has non-string content')
-		content = content.replace('\r\n', '\n').replace('\r', '\n').strip('\n')
-		if not content.strip():
-			fail_generated_item(f'item[{item_index}] path={squish(path_value, 200)} has empty content')
+		try:
+			content = normalize_content(content)
+		except ValueError as exc:
+			if str(exc) == 'empty_content':
+				fail_generated_item(f'item[{item_index}] path={squish(path_value, 200)} has empty content')
+			fail_generated_item(f'item[{item_index}] path={squish(path_value, 200)} has invalid content: {exc}')
 		if type(expected_to_fail_until_fixed) is not bool:
 			fail_generated_item(f'item[{item_index}] path={squish(path_value, 200)} has invalid expected_to_fail_until_fixed flag')
 		try:
@@ -869,7 +927,7 @@ def normalize_generated_items(candidate, issue_count: int):
 		normalized.append(
 			{
 				'path': squish(path_value, 200),
-				'content': content + '\n',
+				'content': content,
 				'expected_to_fail_until_fixed': expected_to_fail_until_fixed,
 			}
 		)
@@ -990,6 +1048,7 @@ for candidate in load_candidates(raw):
 		break
 
 if validated_items is None:
+	print('Behavioural smoke synthesis skipped: could not validate synthesis output', file=sys.stderr)
 	if last_generated_item_error is not None:
 		print(f'behavioural_smoke extractor rejected generated content: {last_generated_item_error}', file=sys.stderr)
 	else:

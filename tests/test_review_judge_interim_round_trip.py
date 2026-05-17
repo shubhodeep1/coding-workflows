@@ -175,13 +175,14 @@ def _run_prepare_priors_function(
 	runtime_dir: Path,
 	*,
 	autofix_iteration: int,
+	pr_number: str = "4242",
 	enabled: bool = True,
 ) -> subprocess.CompletedProcess[str]:
 	function_text = _extract_shell_function(REVIEW_APPLY_FIXES, "prepare_judge_interim_priors")
 	env = os.environ.copy()
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
 	env["RUNTIME_DIR"] = str(runtime_dir)
-	env["PR_NUMBER"] = "4242"
+	env["PR_NUMBER"] = pr_number
 	env["AUTOFIX_ITERATION"] = str(autofix_iteration)
 	env["JUDGE_INTERIM_ENABLED"] = "true" if enabled else "false"
 	env["JUDGE_INTERIM_PRIORS_FILE"] = str(runtime_dir / "judge_interim_priors.txt")
@@ -304,6 +305,31 @@ def test_review_run_judge_interim_fails_open_on_malformed_output() -> None:
 		assert result.returncode == 0, combined_output
 		assert not artifact.exists(), combined_output
 		assert "JUDGE_INTERIM_PASS_FAIL reason=json_parse_failed" in combined_output
+
+
+def test_review_run_judge_interim_rejects_non_numeric_pr_number() -> None:
+	with tempfile.TemporaryDirectory(prefix="judge_interim_invalid_pr_") as td:
+		workspace = Path(td)
+		runtime_dir = workspace / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		mock_bin_dir = workspace / "mock_bin"
+		_seed_repo_with_autofix_commit(workspace)
+		env = _base_env(workspace, runtime_dir, mock_bin_dir)
+		env["PR_NUMBER"] = "../../oops"
+
+		result = subprocess.run(
+			["bash", str(JUDGE_INTERIM_SCRIPT)],
+			cwd=workspace,
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+
+		artifact = workspace / ".ai" / "review_runtime" / "pr-invalid" / "round-unknown" / "judge_interim.json"
+		combined_output = result.stdout + result.stderr
+		assert result.returncode == 0, combined_output
+		assert not artifact.exists(), combined_output
+		assert "JUDGE_INTERIM_PASS_FAIL reason=invalid_pr_number round=0 path=.ai/review_runtime/pr-invalid/round-unknown/judge_interim.json" in combined_output
 
 
 def test_review_run_judge_interim_logs_timeout_reason() -> None:
@@ -587,6 +613,26 @@ def test_prepare_priors_is_noop_on_round_one_cache_miss() -> None:
 			workspace,
 			runtime_dir,
 			autofix_iteration=1,
+		)
+
+		priors_file = runtime_dir / "judge_interim_priors.txt"
+		assert result.returncode == 0, result.stderr
+		assert not priors_file.exists()
+		assert "JUDGE_INTERIM_PRIORS_MERGED count=0 source=none" in result.stdout
+
+
+def test_prepare_priors_is_noop_on_non_numeric_pr_number() -> None:
+	with tempfile.TemporaryDirectory(prefix="judge_interim_invalid_pr_prior_") as td:
+		workspace = Path(td)
+		workspace.mkdir(parents=True, exist_ok=True)
+		runtime_dir = workspace / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+
+		result = _run_prepare_priors_function(
+			workspace,
+			runtime_dir,
+			autofix_iteration=2,
+			pr_number="../../oops",
 		)
 
 		priors_file = runtime_dir / "judge_interim_priors.txt"
