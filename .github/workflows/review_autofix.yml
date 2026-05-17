@@ -3786,7 +3786,27 @@ jobs:
         # here: the ledger is bookkeeping and does not count as a productive
         # editor change, so the no-op disposition still needs validation
         # before downstream clean-review gates fire. See PR #1472.
-        if: "!cancelled() && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.EDITOR_CHANGES_LOST != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
+        #
+        # Skip on max_iterations_reached runs (autofix cap hit, or
+        # force_rb_judge=true short-circuit): in those modes the editor
+        # is intentionally not invoked, so `EDITOR_SUMMARY_FILE` is
+        # legitimately empty and there is no editor claim to validate.
+        # Running this step would set EDITOR_NOOP_SUSPICIOUS=true off
+        # the empty-summary branch (line below), which then gates off
+        # the "Detect merge conflicts" and "Resolve merge conflicts"
+        # steps (their `if:` filters on `EDITOR_NOOP_SUSPICIOUS != 'true'`
+        # for defence-in-depth against a leaked MERGE_CONFLICT). The
+        # net effect was a deadlock: an exhausted PR with merge
+        # conflicts could never reach the Codex conflict resolver, and
+        # the orchestrator-poll's `_dispatch_review_for_conflicts`
+        # (scripts/orchestrate_poll_process.sh) kept re-dispatching the
+        # same futile run every cycle. See PR #2667 / runs 25968901129+
+        # for the original deadlock. Downstream auto-merge / mark-ready
+        # gates that also consume `EDITOR_NOOP_SUSPICIOUS` already
+        # short-circuit independently on `max_iterations_reached != 'true'`,
+        # so leaving the env var unset on these runs does not relax any
+        # auto-merge safety.
+        if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.EDITOR_CHANGES_LOST != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'"
         run: |
           set -euo pipefail
 
