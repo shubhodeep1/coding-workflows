@@ -55,6 +55,7 @@ import json
 import re
 import subprocess
 import shutil
+import unittest
 from pathlib import Path
 
 
@@ -290,6 +291,19 @@ def test_workflow_preserves_max_iterations_fallback() -> None:
 	)
 
 
+def test_workflow_merge_conflict_comment_is_branch_agnostic() -> None:
+	"""The merge-conflict remediation text must not hardcode `main`
+	because review_autofix runs on arbitrary base branches."""
+	wf = _review_autofix_text()
+	step_anchor = "- name: Post review-blocked comment on PR (autofix exhaustion)"
+	idx = wf.find(step_anchor)
+	assert idx >= 0
+	next_step = wf.find("\n      - name:", idx + len(step_anchor))
+	step_body = wf[idx:next_step if next_step > 0 else len(wf)]
+	assert "merge the base branch" in step_body
+	assert "merge in main" not in step_body
+
+
 # ---------------------------------------------------------------------------
 # Runtime: actually invoke jq on synthetic fixtures and verify the count.
 # ---------------------------------------------------------------------------
@@ -313,8 +327,7 @@ end
 
 def _run_jq(payload: object, self_run: str) -> str:
 	if shutil.which("jq") is None:
-		import pytest
-		pytest.skip("jq binary not available in test environment")
+		raise unittest.SkipTest("jq binary not available in test environment")
 	result = subprocess.run(
 		["jq", "-r", "--arg", "self_run", self_run, JQ_FILTER],
 		input=json.dumps(payload),
@@ -323,6 +336,20 @@ def _run_jq(payload: object, self_run: str) -> str:
 		check=True,
 	)
 	return result.stdout.strip()
+
+
+def test_run_jq_missing_binary_raises_skiptest() -> None:
+	original_which = shutil.which
+	try:
+		shutil.which = lambda _binary: None
+		try:
+			_run_jq([], "")
+		except unittest.SkipTest as exc:
+			assert "jq binary not available" in str(exc)
+		else:
+			raise AssertionError("_run_jq() must raise SkipTest when jq is unavailable")
+	finally:
+		shutil.which = original_which
 
 
 def test_jq_filter_excludes_self_run_only_blocker() -> None:
@@ -447,6 +474,7 @@ def main() -> int:
 	# invoke them directly to ensure the assertions actually execute.
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	passed = 0
+	skipped = 0
 	failed = 0
 	for func in test_funcs:
 		name = func.__name__
@@ -454,10 +482,13 @@ def main() -> int:
 			func()
 			print(f"  PASS  {name}")
 			passed += 1
+		except unittest.SkipTest as exc:
+			print(f"  SKIP  {name}: {exc}")
+			skipped += 1
 		except Exception as exc:
 			print(f"  FAIL  {name}: {exc}")
 			failed += 1
-	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	print(f"\n{passed} passed, {skipped} skipped, {failed} failed, {passed + skipped + failed} total")
 	return 1 if failed > 0 else 0
 
 

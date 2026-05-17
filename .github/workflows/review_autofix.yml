@@ -4665,7 +4665,7 @@ jobs:
               ;;
             merge_conflict)
               BODY_HEADING="AI review/autofix — PR has merge conflicts"
-              BODY_DETAIL="The review-blocked judge could not act because the PR has merge conflicts against its base branch (mergeable=false). Please resolve the conflicts (rebase or merge in main) and push; the autofix loop will re-run."
+              BODY_DETAIL="The review-blocked judge could not act because the PR has merge conflicts against its base branch (mergeable=false). Please resolve the conflicts (rebase or merge the base branch) and push; the autofix loop will re-run."
               ;;
             mergeability_pending)
               BODY_HEADING="AI review/autofix — mergeability still computing"
