@@ -1079,6 +1079,7 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
         # scripts/orchestrate_poll_process.sh:232).
         if [ -z "${PR_HEAD_SHA}" ]; then
           echo "::warning::PR #${PR_NUMBER} head SHA could not be resolved from the PR JSON — refusing merge_with_followup. Without a known SHA the merge cannot be bound via --match-head-commit (a concurrent push could land unjudged code). Leaving linked issues in ai:review-blocked."
+          echo "judge_skip_reason=unresolved_head_sha" >> "$GITHUB_OUTPUT"
         else
           # Fallback to '{}' (NOT '[]') on API failure — same fail-
           # closed rationale as orchestrate_poll_process.sh's
@@ -1088,29 +1089,54 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
           # neither branch and trips the numeric guard below for the
           # "could not query" refusal path.
           _check_runs_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" 2>/dev/null || echo '{}')"
+          # Self-run exclusion: this script runs inside the
+          # `review / codex-agent` job hosted by review_autofix.yml
+          # (or its dispatch wrapper). That job IS itself a check-run
+          # on PR_HEAD_SHA with status=in_progress while this gate
+          # executes, so a naive "any incomplete check-run blocks"
+          # filter self-deadlocks the merge_with_followup path —
+          # observed end-to-end in shubhodeep1/tele-funtoken-msg-scoring
+          # PR #2989 (run 25993440211): judge decided merge_with_followup
+          # at 14:32:30Z, gate at 14:32:32Z counted the still-in_progress
+          # codex-agent job (which completed at 14:33:01Z), refused the
+          # merge, and the workflow then posted the misleading
+          # "max autofix iterations" fallback comment. The orchestrator's
+          # `_pr_checks_completed` helper does NOT need this exclusion
+          # because it runs from a separate workflow (ai-orchestrate-
+          # poll.yml) whose host job is never on the polled SHA's
+          # check-run list. Match Actions-emitted check-runs by their
+          # `details_url` which always carries `/actions/runs/<run_id>/
+          # job/<job_id>`. Empty $self_run preserves the original
+          # behavior for non-Actions / test callers (no exclusion).
+          _self_run_id="${GITHUB_RUN_ID:-}"
           # jq filter: --paginate --slurp emits an array of page
           # response objects; the elif branch handles legacy single-
           # object shape from tests / older callers. Either way we
           # flatten every page check_runs and count items that have
-          # not yet completed with an acceptable conclusion. Without
-          # pagination, commits with >100 check-runs would hide
-          # pending/failing runs on later pages and let the gate
+          # not yet completed with an acceptable conclusion AND are
+          # not the current GitHub Actions run hosting this script.
+          # Without pagination, commits with >100 check-runs would
+          # hide pending/failing runs on later pages and let the gate
           # incorrectly report success. (Note: comments stay outside
           # the jq script — apostrophes inside the heredoc-style
           # single-quoted jq expression would terminate it early.)
-          _incomplete_checks="$(printf '%s' "${_check_runs_json}" | jq -r '
+          _incomplete_checks="$(printf '%s' "${_check_runs_json}" | jq -r --arg self_run "${_self_run_id}" '
+            def _is_self_check_run: ($self_run != "") and ((.details_url // "") | test("/actions/runs/" + $self_run + "(/|$)"));
+            def _is_pending: .status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled");
             if (type == "array") then
-              [.[]? | (.check_runs // [])[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled"))] | length
+              [.[]? | (.check_runs // [])[] | select(_is_pending and (_is_self_check_run | not))] | length
             elif (type == "object" and (.check_runs | type == "array")) then
-              [.check_runs[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled"))] | length
+              [.check_runs[] | select(_is_pending and (_is_self_check_run | not))] | length
             else
               empty
             end
           ' 2>/dev/null | tail -n1)"
           if ! [[ "${_incomplete_checks}" =~ ^[0-9]+$ ]]; then
             echo "::warning::PR #${PR_NUMBER} could not query check-runs for SHA ${PR_HEAD_SHA:0:7} — refusing merge_with_followup to avoid creating a follow-up against unvalidated code. Leaving linked issues in ai:review-blocked."
+            echo "judge_skip_reason=check_runs_query_failed" >> "$GITHUB_OUTPUT"
           elif [ "${_incomplete_checks}" -gt 0 ]; then
             echo "::warning::PR #${PR_NUMBER} has ${_incomplete_checks} blocking check-run(s) for SHA ${PR_HEAD_SHA:0:7} — refusing merge_with_followup until all checks complete with success/neutral/skipped/cancelled. Leaving linked issues in ai:review-blocked; stall recovery will re-fire the judge after checks settle."
+            echo "judge_skip_reason=blocking_check_runs" >> "$GITHUB_OUTPUT"
           elif [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
             # Sync merge only — NEVER --auto enrollment. The whole point
             # of the conservative ladder is to ensure follow-up creation
@@ -1138,15 +1164,19 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
               MERGE_CONFIRMED="true"
             else
               echo "::warning::PR #${PR_NUMBER} sync merge failed despite passing check-runs (typically: branch protection rules / merge queue / permissions / 422 / concurrent push changing HEAD). Leaving linked issues in ai:review-blocked — stall recovery will re-fire the judge."
+              echo "judge_skip_reason=sync_merge_failed" >> "$GITHUB_OUTPUT"
             fi
           else
             echo "::warning::PR #${PR_NUMBER} is mergeable but ENABLE_AUTO_MERGE=false — manual merge required. Leaving linked issues in ai:review-blocked so the follow-up is not opened against unmerged code; operator should merge manually and the judge can run again to create the follow-up."
+            echo "judge_skip_reason=auto_merge_disabled" >> "$GITHUB_OUTPUT"
           fi
         fi
       elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
         echo "::warning::PR #${PR_NUMBER} has merge conflicts (mergeable=false); judge cannot merge as-is. Leaving linked issues in ai:review-blocked so the follow-up is not opened against unmerged code."
+        echo "judge_skip_reason=merge_conflict" >> "$GITHUB_OUTPUT"
       else
         echo "::warning::PR #${PR_NUMBER} state=${PR_STATE} mergeable=${PR_MERGEABLE:-null} merged=${PR_MERGED:-false}, cannot confirm merge (mergeability still computing or PR not open). Leaving linked issues in ai:review-blocked."
+        echo "judge_skip_reason=mergeability_pending" >> "$GITHUB_OUTPUT"
       fi
 
       if [ "${MERGE_CONFIRMED}" = "true" ]; then
