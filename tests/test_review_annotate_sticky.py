@@ -21,7 +21,7 @@ def _run_annotator(
 	prior_text: str | None,
 	bundle_text: str,
 	autofix_iteration: int = 2,
-	line_bucket: str = "5",
+	line_bucket: str | None = "5",
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path, Path]:
 	runtime_dir = workspace / "runtime"
 	runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -42,9 +42,12 @@ def _run_annotator(
 			"PR_NUMBER": "4242",
 			"AUTOFIX_ITERATION": str(autofix_iteration),
 			"STICKY_FINDINGS_ENABLED": "true",
-			"STICKY_LINE_BUCKET": line_bucket,
 		}
 	)
+	if line_bucket is None:
+		env.pop("STICKY_LINE_BUCKET", None)
+	else:
+		env["STICKY_LINE_BUCKET"] = line_bucket
 	result = subprocess.run(
 		["bash", str(SCRIPT)],
 		cwd=workspace,
@@ -207,6 +210,50 @@ CONTENT_END
 		assert "STICKY_ANNOTATOR_NOOP reason=prior_artifact_missing" in combined_output
 		assert not sticky_json.exists()
 		assert not priors_file.exists()
+
+
+def test_unset_line_bucket_defaults_to_five() -> None:
+	prior_text = """=== ISSUE 009 ===
+FILE: src/module.py
+LINES: 20-22
+LENS: CORRECTNESS & LOGIC
+SEVERITY: med
+FLAGGED_BY: reviewer_alpha
+CLASSIFICATION: unclassified
+EVIDENCE:
+  reviewer_alpha> Retry token is dropped before the fallback branch.
+CURRENT_CODE:
+  token = None
+SUGGESTED_APPROACH:
+  Preserve the token.
+NOTES:
+  Prior round note for the retry token regression.
+=== END ISSUE 009 ===
+"""
+	bundle_text = """FILE_PATH: /tmp/review_alpha.txt
+CONTENT_START
+File: src/module.py
+Line or code reference: line 27
+Problem: Retry token is dropped before the fallback branch.
+Why it fails at runtime: The retry cannot resume.
+ISSUE_CONFIDENCE: 4
+CONTENT_END
+"""
+
+	with tempfile.TemporaryDirectory(prefix="sticky_default_bucket_") as td:
+		workspace = Path(td)
+		result, _, sticky_json, _ = _run_annotator(
+			workspace,
+			prior_text=prior_text,
+			bundle_text=bundle_text,
+			line_bucket=None,
+		)
+
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert sticky_json.exists(), result.stdout + result.stderr
+		payload = json.loads(sticky_json.read_text(encoding="utf-8"))
+		assert payload["line_bucket"] == 5
+		assert payload["matches"][0]["current_lines"] == [27]
 
 
 def main() -> int:

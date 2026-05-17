@@ -32,7 +32,8 @@ if ! is_truthy "${STICKY_FINDINGS_ENABLED:-false}"; then
 	exit 0
 fi
 
-if ! [[ "${STICKY_LINE_BUCKET:-5}" =~ ^[0-9]+$ ]]; then
+STICKY_LINE_BUCKET="${STICKY_LINE_BUCKET:-5}"
+if ! [[ "${STICKY_LINE_BUCKET}" =~ ^[0-9]+$ ]]; then
 	STICKY_LINE_BUCKET=5
 fi
 

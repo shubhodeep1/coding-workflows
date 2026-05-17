@@ -417,8 +417,9 @@ if [ "${parsed_consolidator_completed}" = true ] \
    && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] \
    && [[ "${AUTOFIX_ITERATION:-}" =~ ^[0-9]+$ ]]; then
   CONSOLIDATOR_PARSED_CACHE_FILE=".ai/review_runtime/pr-${PR_NUMBER}/round-${AUTOFIX_ITERATION}/consolidator_parsed.txt"
-  mkdir -p "$(dirname "${CONSOLIDATOR_PARSED_CACHE_FILE}")"
-  cp "${REVIEW_ISSUES_FILE}" "${CONSOLIDATOR_PARSED_CACHE_FILE}"
+  if ! mkdir -p "$(dirname "${CONSOLIDATOR_PARSED_CACHE_FILE}")" || ! cp "${REVIEW_ISSUES_FILE}" "${CONSOLIDATOR_PARSED_CACHE_FILE}"; then
+    echo "::warning::Failed to cache parsed consolidator output at ${CONSOLIDATOR_PARSED_CACHE_FILE}; continuing without sticky prior cache"
+  fi
 fi
 
 verify_script=""
