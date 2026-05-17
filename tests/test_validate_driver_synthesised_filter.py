@@ -72,7 +72,7 @@ def _run_discover_tests(workspace: Path, *, include_synthesised: str | None) -> 
 		env["VALIDATION_INCLUDE_SYNTHESISED"] = include_synthesised
 
 	script = (
-		'VALIDATION_INCLUDE_SYNTHESISED="${VALIDATION_INCLUDE_SYNTHESISED:-true}"\n'
+		'VALIDATION_INCLUDE_SYNTHESISED="${VALIDATION_INCLUDE_SYNTHESISED:-false}"\n'
 		+ function_text
 		+ "\n"
 		+ "fail_fast()\n"
@@ -119,12 +119,29 @@ def _seed_test_dir(workspace: Path) -> None:
 	(test_dir / "synth_round_4_manifest.json").write_text("{}\n", encoding="utf-8")
 
 
-def test_discover_tests_includes_synthesised_scripts_by_default() -> None:
+def test_discover_tests_excludes_synthesised_scripts_by_default() -> None:
 	with tempfile.TemporaryDirectory(prefix="validate_driver_synth_default_") as td:
 		workspace = Path(td)
 		_seed_test_dir(workspace)
 
 		result = _run_discover_tests(workspace, include_synthesised=None)
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert _parse_canary(result.stdout) == "validation/tests/00_canary.sh"
+		assert _parse_test_files(result.stdout) == [
+			"validation/tests/00_canary.sh",
+			"validation/tests/20_health.sh",
+		]
+		assert "synth_round_4_manifest.json" not in result.stdout
+		assert "validation/tests/synth_round_4_issue.sh" not in result.stdout
+		assert "excluded 1 synthesised behavioural smoke script(s)" in result.stderr
+
+
+def test_discover_tests_includes_synthesised_scripts_when_enabled() -> None:
+	with tempfile.TemporaryDirectory(prefix="validate_driver_synth_enabled_") as td:
+		workspace = Path(td)
+		_seed_test_dir(workspace)
+
+		result = _run_discover_tests(workspace, include_synthesised="true")
 		assert result.returncode == 0, result.stdout + result.stderr
 		assert _parse_canary(result.stdout) == "validation/tests/00_canary.sh"
 		assert _parse_test_files(result.stdout) == [

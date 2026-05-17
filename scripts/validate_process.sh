@@ -90,7 +90,7 @@ SERENA_PROJECT_BOOTSTRAP_HASH="${SERENA_PROJECT_BOOTSTRAP_HASH:-}"
 VALIDATION_TEST_USERNAME="${VALIDATION_TEST_USERNAME:-test-user}"
 VALIDATION_TEST_PASSWORD="${VALIDATION_TEST_PASSWORD:-test-password}"
 VALIDATION_TEST_API_KEY="${VALIDATION_TEST_API_KEY:-test-api-key}"
-VALIDATION_INCLUDE_SYNTHESISED="${VALIDATION_INCLUDE_SYNTHESISED:-true}"
+VALIDATION_INCLUDE_SYNTHESISED="${VALIDATION_INCLUDE_SYNTHESISED:-false}"
 VALIDATION_USE_TEMPLATES="${VALIDATION_USE_TEMPLATES:-true}"
 VALIDATION_USE_TEMPLATES_ENABLED="false"
 case "$(printf '%s' "${VALIDATION_USE_TEMPLATES}" | tr '[:upper:]' '[:lower:]')" in
@@ -1287,14 +1287,14 @@ materialize_synthesised_behavioural_smoke_tests()
   local include_synthesised="true"
   local materialize_output=""
 
-  case "$(printf '%s' "${VALIDATION_INCLUDE_SYNTHESISED:-true}" | tr '[:upper:]' '[:lower:]')" in
+  case "$(printf '%s' "${VALIDATION_INCLUDE_SYNTHESISED:-false}" | tr '[:upper:]' '[:lower:]')" in
     0|false|no|off)
       include_synthesised="false"
       ;;
   esac
 
   if [ "${include_synthesised}" != "true" ]; then
-    echo "validate_process: skipping synthesised behavioural smoke materialization (VALIDATION_INCLUDE_SYNTHESISED=${VALIDATION_INCLUDE_SYNTHESISED:-true})." >&2
+    echo "validate_process: skipping synthesised behavioural smoke materialization (VALIDATION_INCLUDE_SYNTHESISED=${VALIDATION_INCLUDE_SYNTHESISED:-false})." >&2
     return 0
   fi
 

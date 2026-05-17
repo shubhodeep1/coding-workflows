@@ -862,8 +862,8 @@ def test_review_autofix_workflow_wires_behavioural_smoke_after_interim_judge() -
 	assert "BEHAVIOURAL_SMOKE_LANG: ${{ vars.BEHAVIOURAL_SMOKE_LANG || '' }}" in workflow
 	assert "BEHAVIOURAL_SMOKE_MODEL: ${{ vars.BEHAVIOURAL_SMOKE_MODEL || 'openai/gpt-5.4-mini' }}" in workflow
 	assert "BEHAVIOURAL_SMOKE_TIMEOUT_S: ${{ vars.BEHAVIOURAL_SMOKE_TIMEOUT_S || '120' }}" in workflow
-	assert "VALIDATION_INCLUDE_SYNTHESISED: ${{ vars.VALIDATION_INCLUDE_SYNTHESISED || 'true' }}" in workflow
-	assert "VALIDATION_INCLUDE_SYNTHESISED: ${{ vars.VALIDATION_INCLUDE_SYNTHESISED || 'true' }}" in validate_workflow
+	assert "VALIDATION_INCLUDE_SYNTHESISED: ${{ vars.VALIDATION_INCLUDE_SYNTHESISED || 'false' }}" in workflow
+	assert "VALIDATION_INCLUDE_SYNTHESISED: ${{ vars.VALIDATION_INCLUDE_SYNTHESISED || 'false' }}" in validate_workflow
 	bootstrap_line = next(
 		(line for line in workflow.splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line),
 		"",
@@ -898,7 +898,9 @@ def test_validate_workflows_restore_cached_behavioural_smoke_artifacts() -> None
 	review_workflow = REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
 
 	assert "description: \"Review PR number for restoring cached behavioural smoke artifacts (0 to auto-detect from tracking issue)\"" in validate_workflow
+	assert "VALIDATION_INCLUDE_SYNTHESISED: ${{ vars.VALIDATION_INCLUDE_SYNTHESISED || 'false' }}" in validate_workflow
 	assert "- name: Normalize behavioural smoke include flag" in validate_workflow
+	assert '${VALIDATION_INCLUDE_SYNTHESISED:-false}' in validate_workflow
 	assert "id: behavioural_smoke_gate" in validate_workflow
 	assert "- name: Resolve behavioural smoke source PR" in validate_workflow
 	assert "if: steps.behavioural_smoke_gate.outputs.enabled == 'true'" in validate_workflow
@@ -1051,6 +1053,24 @@ def test_validate_process_materializes_latest_cached_synthesised_smoke_tests() -
 		)
 
 		function_text = _extract_shell_function(VALIDATE_PROCESS, "materialize_synthesised_behavioural_smoke_tests")
+
+		default_disabled = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				+ "unset VALIDATION_INCLUDE_SYNTHESISED\n"
+				+ function_text
+				+ "materialize_synthesised_behavioural_smoke_tests\n",
+			],
+			cwd=workspace,
+			capture_output=True,
+			text=True,
+			check=True,
+			timeout=60,
+		)
+		assert "skipping synthesised behavioural smoke materialization" in default_disabled.stderr
+		assert not (workspace / "validation" / "tests" / "synth_round_3_latest_issue.sh").exists()
 
 		disabled = subprocess.run(
 			[
