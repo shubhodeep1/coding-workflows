@@ -572,6 +572,8 @@ def first_command_with_tail(args, line_number: int, *, allow_assignments: bool =
 def validate_command(command: str, args, line_number: int):
 	if command == '.':
 		fail_generated_item(f'line {line_number}: dot sourcing is not allowed')
+	if '$' in command:
+		fail_generated_item(f'line {line_number}: variable expansion in command position is not allowed')
 	base = command_basename(command)
 	if base == 'eval':
 		fail_generated_item(f'line {line_number}: eval is not allowed')

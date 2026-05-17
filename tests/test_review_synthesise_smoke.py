@@ -453,6 +453,21 @@ def test_review_synthesise_smoke_rejects_unsafe_shell_constructs_with_visible_di
 			"eval is not allowed",
 		),
 		(
+			"variable_command_reentry",
+			"cmd=bash\n$cmd -c 'echo unsafe'\n",
+			"variable expansion in command position is not allowed",
+		),
+		(
+			"braced_variable_command_reentry",
+			"${SHELL} -c 'echo unsafe'\n",
+			"variable expansion in command position is not allowed",
+		),
+		(
+			"wrapped_variable_command_reentry",
+			"command ${SHELL} -c 'echo unsafe'\n",
+			"variable expansion in command position is not allowed",
+		),
+		(
 			"command_substitution",
 			"value=$(python3 -V)\necho \"$value\"\nexit 1\n",
 			"command substitution is not allowed",
