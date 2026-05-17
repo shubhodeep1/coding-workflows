@@ -4168,11 +4168,13 @@ jobs:
         # is deferred — both autofix and conflict resolution are pushed together.
         #
         # The EDITOR_NOOP_SUSPICIOUS != 'true' clause mirrors the gate on
-        # "Detect merge conflicts" above: if the editor never produced a
-        # validated commit, MERGE_CONFLICT cannot legitimately be true here
-        # (the prior step is skipped and leaves the env var unset), but we
-        # repeat the guard for defence-in-depth in case future code paths set
-        # MERGE_CONFLICT outside that step.
+        # "Detect merge conflicts" above: on ordinary editor-tail runs, if the
+        # editor never produced a validated commit, that step was also skipped
+        # and left MERGE_CONFLICT unset. We repeat the guard for defence-in-
+        # depth in case future code paths set MERGE_CONFLICT outside that
+        # step. On max_iterations_reached runs, EDITOR_NOOP_SUSPICIOUS stays
+        # unset, so this guard is a no-op and MERGE_CONFLICT can legitimately
+        # come from the detect step above.
         if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
