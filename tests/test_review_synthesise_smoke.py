@@ -423,6 +423,16 @@ def test_review_synthesise_smoke_rejects_unsafe_shell_constructs_with_visible_di
 			"shell re-entry via bash is not allowed",
 		),
 		(
+			"background_reentry",
+			"echo safe & bash -c 'echo unsafe'\n",
+			"shell re-entry via bash is not allowed",
+		),
+		(
+			"continued_reentry",
+			"ba\\\nsh -c 'echo unsafe'\n",
+			"shell re-entry via bash is not allowed",
+		),
+		(
 			"mixed_quoted_eval",
 			"e\"v\"al 'echo unsafe'\n",
 			"eval is not allowed",
@@ -436,6 +446,11 @@ def test_review_synthesise_smoke_rejects_unsafe_shell_constructs_with_visible_di
 			"unquoted_heredoc_substitution",
 			"cat <<EOF\n$(python3 -V)\nEOF\n",
 			"command substitution is not allowed",
+		),
+		(
+			"unquoted_heredoc_process_substitution",
+			"cat <<EOF\n<(python3 -V)\nEOF\n",
+			"process substitution is not allowed",
 		),
 		(
 			"malformed_redirection",

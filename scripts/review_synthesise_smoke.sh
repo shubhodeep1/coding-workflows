@@ -187,13 +187,12 @@ class GeneratedItemValidationError(ValueError):
 
 
 SHELL_REENTRY_COMMANDS = {'bash', 'sh', 'dash', 'ksh', 'zsh'}
-COMMAND_SEPARATORS = {';', '&&', '||', '|', '|&', '(', ')', '{', '}', ';;', ';&', ';;&'}
+COMMAND_SEPARATORS = {';', '&', '&&', '||', '|', '|&', '(', ')', '{', '}', ';;', ';&', ';;&'}
 CONTROL_TOKENS = {'if', 'then', 'do', 'elif', 'else', 'while', 'until', '!'}
-REDIRECTION_TOKENS = {'<', '>', '<<', '<<-', '<<<', '>>', '>&', '<&'}
-TOKEN_PATTERN = re.compile(r'\|\||&&|\|&|;;&|;;|;&|<<<|<<-?|>>|[<>][&]?|[;|(){}]|[^\s;|(){}<>]+')
+REDIRECTION_TOKENS = {'<', '>', '<<', '<<-', '<<<', '>>', '>&', '<&', '&>'}
 TOKEN_KIND_OPERATOR = 'operator'
 TOKEN_KIND_WORD = 'word'
-SHELL_OPERATORS = (';;&', '<<<', '<<-', '&&', '||', '|&', ';;', ';&', '>>', '>&', '<&', '<<')
+SHELL_OPERATORS = (';;&', '<<<', '<<-', '&&', '||', '|&', '&>', ';;', ';&', '>>', '>&', '<&', '<<', '&')
 
 
 def squish(value, limit=None):
@@ -487,7 +486,7 @@ def tokenize_command_line(line: str):
 			index += 1
 			continue
 		operator = next((candidate for candidate in SHELL_OPERATORS if line.startswith(candidate, index)), None)
-		if operator is None and char in ';|(){}<>':
+		if operator is None and char in ';|(){}<>&':
 			operator = char
 		if operator is not None:
 			flush_current()
@@ -778,6 +777,8 @@ def validate_unquoted_heredoc_line(line: str, line_number: int):
 			fail_generated_item(f'line {line_number}: backticks are not allowed')
 		if char == '$' and index + 1 < len(line) and line[index + 1] == '(' and (index + 2 >= len(line) or line[index + 2] != '('):
 			fail_generated_item(f'line {line_number}: command substitution is not allowed')
+		if char in '<>' and index + 1 < len(line) and line[index + 1] == '(':
+			fail_generated_item(f'line {line_number}: process substitution is not allowed')
 		index += 1
 
 
@@ -802,7 +803,7 @@ def validate_shell_content(content: str, path_value: str, item_index: int):
 			logical_line_start = line_number
 		if masked_line.strip():
 			masked_fragment = trim_line_continuation(masked_line) if has_line_continuation(masked_line) else masked_line
-			logical_line = f'{logical_line} {masked_fragment}'.strip() if logical_line else masked_fragment
+			logical_line = f'{logical_line}{masked_fragment}'.strip() if logical_line else masked_fragment
 			if not has_line_continuation(masked_line):
 				validate_command_line(logical_line, logical_line_start)
 				logical_line = ''
