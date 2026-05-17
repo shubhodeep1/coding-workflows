@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- prompts/consolidator-reject-verifier.txt:24-33 | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: The output contract gives an exact-match rule for `rejection_kind` but no equivalent instruction for `issue_id`, even though `validate_llm_batch_output()` rejects any unexpected `issue_id`.\n  WHY: A semantically correct but reformatted `issue_id` can trigger `unexpected_issue_id`, causing the whole batch to fail open to inconclusive results; reviewers agreed on the bug, with ISSUE_CONFIDENCE values 3, 4, 3, 3, and 3.\n- scripts/review_reject_verify.sh:111,159-160 | confidence=2\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: The single-sentence detection regex can misclassify valid reasons as multi-sentence for common abbreviation and decimal patterns.\n  WHY: `is_single_sentence_reason()` can raise `multi_sentence_reason` on inputs like `E.g. The ...` or `approx. 3`, which fail open to inconclusive and unnecessarily reduce verifier effectiveness.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- prompts/consolidator-reject-verifier.txt:27-33 | confidence=3\n  PROBLEM: The prompt explicitly instructs the model that `rejection_kind` must exactly match the input item's `rejection_kind` but provides no equivalent instruction for `issue_id`.\n  WHY: The validation code in `scripts/review_reject_verify.sh` line ~508 (`if issue_id not in expected: raise ValueError(\"unexpected_issue_id\")`) requires exact match, so a correctly judged but reformatted `issue_id` causes the batch to fail open as inconclusive.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- prompts/consolidator-reject-verifier.txt:27-33 | confidence=4\n  PROBLEM: The Output contract section explicitly instructs the model that \"`rejection_kind` must exactly match the input item's `rejection_kind`\" but provides no equivalent instruction for `issue_id`.\n  WHY: The validation code in `scripts/review_reject_verify.sh` at lines 503-504 strictly requires `issue_id` to match the expected input IDs, so LLM reformatting can trigger unnecessary validation failures that fail open to \"inconclusive\" verdicts.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- prompts/consolidator-reject-verifier.txt:27-33 | confidence=3\n  PROBLEM: The prompt requires `issue_id` in each result row to exactly match the input item's `issue_id`, but unlike `rejection_kind` it does not explicitly instruct the model to echo `issue_id` unchanged.\n  WHY: The validation code in `validate_llm_batch_output()` at line 514-515 of `scripts/review_reject_verify.sh` requires `issue_id` to exactly match expected input IDs, so reformatted IDs can cause `unexpected_issue_id` validation failures that trigger fail-open inconclusive results.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- prompts/consolidator-reject-verifier.txt:24-33 | confidence=3\n  PROBLEM: The prompt template tells the verifier that `rejection_kind` \"must exactly match the input item's `rejection_kind`\" but provides no equivalent instruction for `issue_id`.\n  WHY: `validate_llm_batch_output()` at `scripts/review_reject_verify.sh:503-504` rejects any result row whose `issue_id` does not exactly match an expected input ID as `unexpected_issue_id`, so reformatted IDs fail open as `inconclusive`.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- prompts/consolidator-reject-verifier.txt:27-33 | confidence=3\n  PROBLEM: The prompt's Output contract explicitly instructs the model to exactly match `rejection_kind` from the input, but provides no corresponding instruction for `issue_id`.\n  WHY: `validate_llm_batch_output()` in `scripts/review_reject_verify.sh` requires `issue_id` to exactly match via `if issue_id not in expected: raise ValueError(\"unexpected_issue_id\")`, so reformatted values like `\"1\"` for input `\"001\"` trigger a fail-open inconclusive batch.\n- scripts/review_reject_verify.sh:111,159-160 | confidence=2\n  PROBLEM: The single-sentence detection regex can produce false positives for common abbreviation patterns and decimal-number patterns.\n  WHY: `MULTI_SENTENCE_REASON_RE` together with `is_single_sentence_reason()` can treat valid reasons such as `E.g. The guard returns early.` or `approx. 3` as multi-sentence, causing `multi_sentence_reason` and fail-open inconclusive results.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "99a82b78d49fd3b02a4e8fa2a5d7f65e0d0a8c163c21d7fbf2542dd26f5484b9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2717,
+    "run_id": "26003533855",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26003533855",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517220204_573cd801c5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2717,
+    "run_id": "26003533855"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-17T22:02:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
