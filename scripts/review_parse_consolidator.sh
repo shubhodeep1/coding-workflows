@@ -81,6 +81,247 @@ validate_file_path()
 	return 0
 }
 
+validate_repo_relative_path_syntax()
+{
+	local file_path="$1"
+	if [ -z "${file_path}" ]; then
+		return 1
+	fi
+	if [[ "${file_path}" == /* ]]; then
+		return 1
+	fi
+	if [[ "${file_path}" == ".." ]] || [[ "${file_path}" == ../* ]] || [[ "${file_path}" == */../* ]] || [[ "${file_path}" == */.. ]]; then
+		return 1
+	fi
+	if [[ "${file_path}" =~ [[:cntrl:]] ]]; then
+		return 1
+	fi
+	return 0
+}
+
+is_truthy()
+{
+	local normalized
+	normalized="$(trim "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')")"
+	case "${normalized}" in
+		1|true|yes|on)
+			return 0
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+extract_evidence_value()
+{
+	local text="$1"
+	local key="$2"
+	printf '%s\n' "${text}" | awk -v key="${key}" '
+		{
+			line = $0
+			sub(/^[[:space:]]+/, "", line)
+			if (line ~ ("^" key ":[[:space:]]*")) {
+				sub("^" key ":[[:space:]]*", "", line)
+				sub(/[[:space:]]+$/, "", line)
+				print line
+				exit
+			}
+		}
+	'
+}
+
+EXPECTED_REJECTION_EVIDENCE_FIELD=""
+TYPED_REJECTION_VALIDATION_ERROR=""
+validate_typed_rejection()
+{
+	local rejection_kind="$1"
+	local evidence_diff_hunk="$2"
+	local evidence_files_touched="$3"
+	local evidence_runtime_path="$4"
+	local evidence_spec_quote="$5"
+	local evidence_prior_round="$6"
+	local expected_field=""
+	local expected_content=""
+	local nonempty_blocks=0
+	local evidence_name=""
+	local evidence_content=""
+	local file_value=""
+	local lines_value=""
+	local cited_path_value=""
+	local files_touched_value=""
+	local location_value=""
+	local rationale_value=""
+	local source_value=""
+	local quote_stats=""
+	local quote_count="0"
+	local round_value=""
+	local issue_id_value=""
+	local prior_kind_value=""
+	local sticky_value=""
+
+	EXPECTED_REJECTION_EVIDENCE_FIELD=""
+	TYPED_REJECTION_VALIDATION_ERROR=""
+
+	case "${rejection_kind}" in
+		already-fixed)
+			expected_field="EVIDENCE_DIFF_HUNK"
+			expected_content="${evidence_diff_hunk}"
+			;;
+		out-of-scope)
+			expected_field="EVIDENCE_FILES_TOUCHED"
+			expected_content="${evidence_files_touched}"
+			;;
+		reviewer-wrong)
+			expected_field="EVIDENCE_RUNTIME_PATH"
+			expected_content="${evidence_runtime_path}"
+			;;
+		spec-doesnt-support)
+			expected_field="EVIDENCE_SPEC_QUOTE"
+			expected_content="${evidence_spec_quote}"
+			;;
+		already-rejected-with-evidence)
+			expected_field="EVIDENCE_PRIOR_ROUND"
+			expected_content="${evidence_prior_round}"
+			;;
+		*)
+			TYPED_REJECTION_VALIDATION_ERROR="unknown_rejection_kind"
+			return 1
+			;;
+	esac
+	EXPECTED_REJECTION_EVIDENCE_FIELD="${expected_field}"
+
+	for evidence_name in EVIDENCE_DIFF_HUNK EVIDENCE_FILES_TOUCHED EVIDENCE_RUNTIME_PATH EVIDENCE_SPEC_QUOTE EVIDENCE_PRIOR_ROUND; do
+		case "${evidence_name}" in
+			EVIDENCE_DIFF_HUNK)
+				evidence_content="${evidence_diff_hunk}"
+				;;
+			EVIDENCE_FILES_TOUCHED)
+				evidence_content="${evidence_files_touched}"
+				;;
+			EVIDENCE_RUNTIME_PATH)
+				evidence_content="${evidence_runtime_path}"
+				;;
+			EVIDENCE_SPEC_QUOTE)
+				evidence_content="${evidence_spec_quote}"
+				;;
+			EVIDENCE_PRIOR_ROUND)
+				evidence_content="${evidence_prior_round}"
+				;;
+		esac
+		if [ -n "$(trim "${evidence_content}")" ]; then
+			nonempty_blocks=$((nonempty_blocks + 1))
+		fi
+	done
+
+	if [ -z "$(trim "${expected_content}")" ]; then
+		TYPED_REJECTION_VALIDATION_ERROR="missing_${expected_field}"
+		return 1
+	fi
+
+	if [ "${nonempty_blocks}" -ne 1 ]; then
+		TYPED_REJECTION_VALIDATION_ERROR="multiple_typed_evidence_blocks"
+		return 1
+	fi
+
+	case "${rejection_kind}" in
+		already-fixed)
+			file_value="$(extract_evidence_value "${expected_content}" "file")"
+			lines_value="$(extract_evidence_value "${expected_content}" "lines")"
+			if ! validate_repo_relative_path_syntax "${file_value}"; then
+				TYPED_REJECTION_VALIDATION_ERROR="invalid_diff_hunk_file"
+				return 1
+			fi
+			if ! parse_line_range "${lines_value}"; then
+				TYPED_REJECTION_VALIDATION_ERROR="invalid_diff_hunk_lines"
+				return 1
+			fi
+			;;
+		out-of-scope)
+			cited_path_value="$(extract_evidence_value "${expected_content}" "cited_path")"
+			files_touched_value="$(extract_evidence_value "${expected_content}" "files_touched")"
+			if ! validate_repo_relative_path_syntax "${cited_path_value}"; then
+				TYPED_REJECTION_VALIDATION_ERROR="invalid_cited_path"
+				return 1
+			fi
+			if [ -z "$(trim "${files_touched_value}")" ]; then
+				TYPED_REJECTION_VALIDATION_ERROR="missing_files_touched"
+				return 1
+			fi
+			;;
+		reviewer-wrong)
+			location_value="$(extract_evidence_value "${expected_content}" "location")"
+			rationale_value="$(extract_evidence_value "${expected_content}" "rationale")"
+			if [[ ! "${location_value}" =~ :[0-9]+$ ]]; then
+				TYPED_REJECTION_VALIDATION_ERROR="invalid_runtime_path_location"
+				return 1
+			fi
+			if [ -z "$(trim "${rationale_value}")" ]; then
+				TYPED_REJECTION_VALIDATION_ERROR="missing_runtime_path_rationale"
+				return 1
+			fi
+			;;
+		spec-doesnt-support)
+			source_value="$(extract_evidence_value "${expected_content}" "source")"
+			if [ -z "$(trim "${source_value}")" ]; then
+				TYPED_REJECTION_VALIDATION_ERROR="missing_spec_source"
+				return 1
+			fi
+			quote_stats="$(printf '%s\n' "${expected_content}" | awk '
+				BEGIN {
+					count = 0
+				}
+				{
+					line = $0
+					sub(/^[[:space:]]+/, "", line)
+					if (line ~ /^quote:[[:space:]]*/) {
+						sub(/^quote:[[:space:]]*/, "", line)
+						if (line != "") {
+							count++
+						}
+					}
+				}
+				END {
+					printf "%s", count
+				}
+			')"
+			quote_count="${quote_stats}"
+			if [ "${quote_count}" -lt 1 ]; then
+				TYPED_REJECTION_VALIDATION_ERROR="missing_spec_quote"
+				return 1
+			fi
+			;;
+		already-rejected-with-evidence)
+			round_value="$(extract_evidence_value "${expected_content}" "round")"
+			issue_id_value="$(extract_evidence_value "${expected_content}" "issue_id")"
+			prior_kind_value="$(extract_evidence_value "${expected_content}" "rejection_kind")"
+			sticky_value="$(extract_evidence_value "${expected_content}" "sticky")"
+			if [[ ! "${round_value}" =~ ^[0-9]+$ ]] || [ "${round_value}" -lt 1 ]; then
+				TYPED_REJECTION_VALIDATION_ERROR="invalid_prior_round"
+				return 1
+			fi
+			if [ -z "$(trim "${issue_id_value}")" ]; then
+				TYPED_REJECTION_VALIDATION_ERROR="missing_prior_issue_id"
+				return 1
+			fi
+			case "${prior_kind_value}" in
+				already-fixed|out-of-scope|reviewer-wrong|spec-doesnt-support|already-rejected-with-evidence)
+					;;
+				*)
+					TYPED_REJECTION_VALIDATION_ERROR="invalid_prior_rejection_kind"
+					return 1
+					;;
+			esac
+			if [ "$(printf '%s' "${sticky_value}" | tr '[:upper:]' '[:lower:]')" != "true" ]; then
+				TYPED_REJECTION_VALIDATION_ERROR="missing_prior_sticky_true"
+				return 1
+			fi
+			;;
+	esac
+
+	return 0
+}
+
 declare -A FILE_LINE_COUNT_CACHE=()
 get_file_line_count()
 {
@@ -191,6 +432,7 @@ sanitize_flagged_by()
 
 RUNTIME_DIR="${RUNTIME_DIR:?RUNTIME_DIR is required}"
 REVIEW_PARSER_FAILOPEN="${REVIEW_PARSER_FAILOPEN:-1}"
+CONSOLIDATOR_REJECT_SCHEMA_ENABLED="${CONSOLIDATOR_REJECT_SCHEMA_ENABLED:-false}"
 CONSOLIDATOR_RAW_FILE="${CONSOLIDATOR_RAW_FILE:-${RUNTIME_DIR}/consolidator_raw.txt}"
 REVIEWER_BUNDLE_FILE="${REVIEWER_BUNDLE_FILE:-${RUNTIME_DIR}/reviewer_bundle.txt}"
 REVIEW_ISSUES_FILE="${REVIEW_ISSUES_FILE:-${RUNTIME_DIR}/review_issues.txt}"
@@ -283,7 +525,14 @@ block_lens=""
 block_severity=""
 block_flagged_by=""
 block_classification=""
+block_rejection_kind=""
 block_merged_from=""
+block_evidence_diff_hunk=""
+block_evidence_files_touched=""
+block_evidence_runtime_path=""
+block_evidence_spec_quote=""
+block_evidence_prior_round=""
+block_reversal_reason=""
 block_evidence=""
 block_current_code=""
 block_suggested_approach=""
@@ -311,7 +560,14 @@ reset_block()
 	block_severity=""
 	block_flagged_by=""
 	block_classification=""
+	block_rejection_kind=""
 	block_merged_from=""
+	block_evidence_diff_hunk=""
+	block_evidence_files_touched=""
+	block_evidence_runtime_path=""
+	block_evidence_spec_quote=""
+	block_evidence_prior_round=""
+	block_reversal_reason=""
 	block_evidence=""
 	block_current_code=""
 	block_suggested_approach=""
@@ -324,7 +580,8 @@ process_block()
 {
 	local issue_id="$1"
 	local file_path line_spec lens severity flagged_by classification merged_from notes
-	local unknown evidence code_block suggested
+	local unknown evidence code_block suggested rejection_kind reversal_reason
+	local evidence_diff_hunk evidence_files_touched evidence_runtime_path evidence_spec_quote evidence_prior_round
 	local -a parser_tags=()
 
 	file_path="$(trim "${block_file}")"
@@ -333,9 +590,16 @@ process_block()
 	severity="$(trim "${block_severity}")"
 	flagged_by="$(trim "${block_flagged_by}")"
 	classification="$(trim "${block_classification}")"
+	rejection_kind="$(trim "${block_rejection_kind}")"
 	merged_from="$(trim "${block_merged_from}")"
+	reversal_reason="$(trim "${block_reversal_reason}")"
 	notes="$(trim "${block_notes}")"
 	unknown="${block_unknown}"
+	evidence_diff_hunk="${block_evidence_diff_hunk}"
+	evidence_files_touched="${block_evidence_files_touched}"
+	evidence_runtime_path="${block_evidence_runtime_path}"
+	evidence_spec_quote="${block_evidence_spec_quote}"
+	evidence_prior_round="${block_evidence_prior_round}"
 	evidence="${block_evidence}"
 	code_block="${block_current_code}"
 	suggested="${block_suggested_approach}"
@@ -369,6 +633,29 @@ process_block()
 	if [ -z "${severity}" ]; then
 		severity="low"
 	fi
+	if [ "${classification}" = "non-actionable" ] && is_truthy "${CONSOLIDATOR_REJECT_SCHEMA_ENABLED}"; then
+		if [ -z "${rejection_kind}" ]; then
+			classification="unclassified"
+			printf 'CONSOLIDATOR_REJECT_EVIDENCE_MALFORMED issue=%s kind=missing reason=%s\n' \
+				"${issue_id}" "missing_rejection_kind" >&2
+		elif ! validate_typed_rejection \
+			"${rejection_kind}" \
+			"${evidence_diff_hunk}" \
+			"${evidence_files_touched}" \
+			"${evidence_runtime_path}" \
+			"${evidence_spec_quote}" \
+			"${evidence_prior_round}"; then
+			classification="unclassified"
+			printf 'CONSOLIDATOR_REJECT_EVIDENCE_MALFORMED issue=%s kind=%s field=%s reason=%s\n' \
+				"${issue_id}" \
+				"${rejection_kind}" \
+				"${EXPECTED_REJECTION_EVIDENCE_FIELD:-unknown}" \
+				"${TYPED_REJECTION_VALIDATION_ERROR:-unknown}" >&2
+		else
+			printf 'CONSOLIDATOR_REJECT_TYPED issue=%s kind=%s schema_enabled=%s\n' \
+				"${issue_id}" "${rejection_kind}" "${CONSOLIDATOR_REJECT_SCHEMA_ENABLED}" >&2
+		fi
+	fi
 	if [ -z "${classification}" ]; then
 		classification="unclassified"
 	fi
@@ -386,8 +673,34 @@ process_block()
 		echo "SEVERITY: ${severity}"
 		echo "FLAGGED_BY: ${flagged_by}"
 		echo "CLASSIFICATION: ${classification}"
+		if [ -n "${rejection_kind}" ]; then
+			echo "REJECTION_KIND: ${rejection_kind}"
+		fi
 		if [ -n "${merged_from}" ]; then
 			echo "MERGED_FROM: ${merged_from}"
+		fi
+		if [ -n "$(trim "${evidence_diff_hunk}")" ]; then
+			echo "EVIDENCE_DIFF_HUNK:"
+			emit_indented "${evidence_diff_hunk}"
+		fi
+		if [ -n "$(trim "${evidence_files_touched}")" ]; then
+			echo "EVIDENCE_FILES_TOUCHED:"
+			emit_indented "${evidence_files_touched}"
+		fi
+		if [ -n "$(trim "${evidence_runtime_path}")" ]; then
+			echo "EVIDENCE_RUNTIME_PATH:"
+			emit_indented "${evidence_runtime_path}"
+		fi
+		if [ -n "$(trim "${evidence_spec_quote}")" ]; then
+			echo "EVIDENCE_SPEC_QUOTE:"
+			emit_indented "${evidence_spec_quote}"
+		fi
+		if [ -n "$(trim "${evidence_prior_round}")" ]; then
+			echo "EVIDENCE_PRIOR_ROUND:"
+			emit_indented "${evidence_prior_round}"
+		fi
+		if [ -n "${reversal_reason}" ]; then
+			echo "REVERSAL_REASON: ${reversal_reason}"
 		fi
 		echo "EVIDENCE:"
 		emit_indented "${evidence}"
@@ -444,7 +757,7 @@ while IFS= read -r line || [ -n "${line}" ]; do
 		continue
 	fi
 
-	if [[ "${line}" =~ ^(FILE|LINES|LENS|SEVERITY|FLAGGED_BY|CLASSIFICATION|MERGED_FROM|EVIDENCE|CURRENT_CODE|SUGGESTED_APPROACH|NOTES):[[:space:]]*(.*)$ ]]; then
+	if [[ "${line}" =~ ^(FILE|LINES|LENS|SEVERITY|FLAGGED_BY|CLASSIFICATION|REJECTION_KIND|MERGED_FROM|EVIDENCE_DIFF_HUNK|EVIDENCE_FILES_TOUCHED|EVIDENCE_RUNTIME_PATH|EVIDENCE_SPEC_QUOTE|EVIDENCE_PRIOR_ROUND|REVERSAL_REASON|EVIDENCE|CURRENT_CODE|SUGGESTED_APPROACH|NOTES):[[:space:]]*(.*)$ ]]; then
 		header="${BASH_REMATCH[1]}"
 		value="${BASH_REMATCH[2]}"
 		case "${header}" in
@@ -472,9 +785,37 @@ while IFS= read -r line || [ -n "${line}" ]; do
 				block_classification="${value}"
 				current_field=""
 				;;
+			REJECTION_KIND)
+				block_rejection_kind="${value}"
+				current_field=""
+				;;
 			MERGED_FROM)
 				block_merged_from="${value}"
 				current_field=""
+				;;
+			EVIDENCE_DIFF_HUNK)
+				block_evidence_diff_hunk="${value}"
+				current_field="EVIDENCE_DIFF_HUNK"
+				;;
+			EVIDENCE_FILES_TOUCHED)
+				block_evidence_files_touched="${value}"
+				current_field="EVIDENCE_FILES_TOUCHED"
+				;;
+			EVIDENCE_RUNTIME_PATH)
+				block_evidence_runtime_path="${value}"
+				current_field="EVIDENCE_RUNTIME_PATH"
+				;;
+			EVIDENCE_SPEC_QUOTE)
+				block_evidence_spec_quote="${value}"
+				current_field="EVIDENCE_SPEC_QUOTE"
+				;;
+			EVIDENCE_PRIOR_ROUND)
+				block_evidence_prior_round="${value}"
+				current_field="EVIDENCE_PRIOR_ROUND"
+				;;
+			REVERSAL_REASON)
+				block_reversal_reason="${value}"
+				current_field="REVERSAL_REASON"
 				;;
 			EVIDENCE)
 				block_evidence="${value}"
@@ -501,6 +842,24 @@ while IFS= read -r line || [ -n "${line}" ]; do
 	fi
 
 	case "${current_field}" in
+		EVIDENCE_DIFF_HUNK)
+			append_multiline_field block_evidence_diff_hunk "${line}"
+			;;
+		EVIDENCE_FILES_TOUCHED)
+			append_multiline_field block_evidence_files_touched "${line}"
+			;;
+		EVIDENCE_RUNTIME_PATH)
+			append_multiline_field block_evidence_runtime_path "${line}"
+			;;
+		EVIDENCE_SPEC_QUOTE)
+			append_multiline_field block_evidence_spec_quote "${line}"
+			;;
+		EVIDENCE_PRIOR_ROUND)
+			append_multiline_field block_evidence_prior_round "${line}"
+			;;
+		REVERSAL_REASON)
+			append_multiline_field block_reversal_reason "${line}"
+			;;
 		EVIDENCE)
 			append_multiline_field block_evidence "${line}"
 			;;

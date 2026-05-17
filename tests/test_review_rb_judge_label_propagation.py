@@ -41,15 +41,61 @@ import os
 import re
 import subprocess
 import tempfile
+import textwrap
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RB_JUDGE_SCRIPT = REPO_ROOT / "scripts" / "review_rb_judge.sh"
+RB_JUDGE_PROMPT = REPO_ROOT / "prompts" / "mode-judge-review-blocked.txt"
+REVIEW_AUTOFIX_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 
 
 def _rb_judge_text() -> str:
 	return RB_JUDGE_SCRIPT.read_text(encoding="utf-8")
+
+
+def _rb_judge_prompt_text() -> str:
+	return RB_JUDGE_PROMPT.read_text(encoding="utf-8")
+
+
+def _review_autofix_text() -> str:
+	return REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
+
+
+def _git(cmd: list[str], *, cwd: Path) -> str:
+	result = subprocess.run(
+		cmd,
+		cwd=str(cwd),
+		check=True,
+		text=True,
+		capture_output=True,
+	)
+	return result.stdout.strip()
+
+
+def _bootstrap_repo_with_remote(tmp_path: Path, files: dict[str, str]) -> tuple[Path, str, str]:
+	repo_dir = tmp_path / "repo"
+	remote_dir = tmp_path / "remote.git"
+	repo_dir.mkdir(parents=True, exist_ok=True)
+	_git(["git", "init", "--bare", str(remote_dir)], cwd=tmp_path)
+	_git(["git", "init"], cwd=repo_dir)
+	_git(["git", "checkout", "-b", "main"], cwd=repo_dir)
+	_git(["git", "config", "user.name", "tests"], cwd=repo_dir)
+	_git(["git", "config", "user.email", "tests@example.com"], cwd=repo_dir)
+	for rel, content in files.items():
+		path = repo_dir / rel
+		path.parent.mkdir(parents=True, exist_ok=True)
+		path.write_text(content, encoding="utf-8")
+	_git(["git", "add", "."], cwd=repo_dir)
+	_git(["git", "commit", "-m", "initial"], cwd=repo_dir)
+	_git(["git", "remote", "add", "origin", str(remote_dir)], cwd=repo_dir)
+	_git(["git", "push", "-u", "origin", "main"], cwd=repo_dir)
+	return (
+		repo_dir,
+		_git(["git", "rev-parse", "HEAD"], cwd=repo_dir),
+		_git(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_dir),
+	)
 
 
 def _extract_close_and_reissue_branch() -> str:
@@ -191,6 +237,18 @@ if args[:2] == ["pr", "close"]:
 	save()
 	sys.exit(0)
 
+if args[:2] == ["pr", "view"]:
+	state.setdefault("pr_view_args", []).append(args)
+	head_ref_oid = state.get("pr_view_head_ref_oid", "")
+	save()
+	if "--jq" in args:
+		jq_expr = args[args.index("--jq") + 1]
+		if jq_expr == ".headRefOid":
+			print(head_ref_oid)
+			sys.exit(0)
+	print(json.dumps({"headRefOid": head_ref_oid}))
+	sys.exit(0)
+
 if args[:2] == ["label", "create"]:
 	state.setdefault("label_create_args", []).append(args)
 	save()
@@ -246,13 +304,20 @@ sys.exit(0)
 	state_file.write_text("{}", encoding="utf-8")
 
 
-def _build_harness(branch: str, runtime_dir: Path, github_output: Path) -> str:
+def _build_harness(
+	branch: str,
+	runtime_dir: Path,
+	github_output: Path,
+	*,
+	enable_xpg_echo: bool = False,
+) -> str:
 	"""Wrap the extracted close_and_reissue branch in a self-contained
 	bash harness with stubs for the helpers it depends on."""
+	xpg_echo_line = "shopt -s xpg_echo\n\n" if enable_xpg_echo else ""
 	return f"""#!/usr/bin/env bash
 set -euo pipefail
 
-gh_retry() {{ "$@"; }}
+{xpg_echo_line}gh_retry() {{ "$@"; }}
 ensure_label_exists() {{ printf '%s\\n' "$1" >> "${{ENSURE_LABELS_FILE}}"; }}
 _resilient_phase_swap() {{ :; }}
 _safe_gh_jq() {{ :; }}
@@ -267,7 +332,16 @@ esac
 """
 
 
-def _run_close_and_reissue(parent_label_set: list[str]) -> dict:
+def _run_close_and_reissue(
+	parent_label_set: list[str],
+	*,
+	judge_payload: dict | None = None,
+	reissue_preserve_baseline_enabled: str = "false",
+	repo_files: dict[str, str] | None = None,
+	pr_view_head_ref_oid: str | None = None,
+	precreate_baseline_branch: bool = False,
+	enable_xpg_echo: bool = False,
+) -> dict:
 	"""Run the close_and_reissue branch with FIRST_ISSUE_LABELS_JSON
 	pre-seeded to ``parent_label_set`` and return the captured gh
 	mock state."""
@@ -282,6 +356,22 @@ def _run_close_and_reissue(parent_label_set: list[str]) -> dict:
 
 		gh_state_file = runtime_dir / "gh_state.json"
 		_install_mock_gh(bin_dir, gh_state_file)
+		mock_state: dict[str, object] = {}
+		run_cwd = tmp_path
+		repo_head_before = ""
+		repo_branch_before = ""
+		if repo_files is not None:
+			run_cwd, repo_head_before, repo_branch_before = _bootstrap_repo_with_remote(tmp_path, repo_files)
+			resolved_head_ref_oid = pr_view_head_ref_oid or repo_head_before
+			if resolved_head_ref_oid == "__UPPER_REPO_HEAD__":
+				resolved_head_ref_oid = repo_head_before.upper()
+			mock_state["pr_view_head_ref_oid"] = resolved_head_ref_oid
+			if precreate_baseline_branch:
+				expected_baseline_branch = f"ai/reissue-baseline/pr-42-{repo_head_before[:12]}-777-1"
+				_git(["git", "branch", expected_baseline_branch], cwd=run_cwd)
+		elif pr_view_head_ref_oid is not None:
+			mock_state["pr_view_head_ref_oid"] = pr_view_head_ref_oid
+		gh_state_file.write_text(json.dumps(mock_state), encoding="utf-8")
 
 		labels_file = runtime_dir / "ensure_labels.txt"
 		labels_file.write_text("", encoding="utf-8")
@@ -290,19 +380,26 @@ def _run_close_and_reissue(parent_label_set: list[str]) -> dict:
 
 		script_path = runtime_dir / "rb_branch_harness.sh"
 		script_path.write_text(
-			_build_harness(branch, runtime_dir, github_output),
+			_build_harness(
+				branch,
+				runtime_dir,
+				github_output,
+				enable_xpg_echo=enable_xpg_echo,
+			),
 			encoding="utf-8",
 		)
 		script_path.chmod(0o755)
 
-		judge_json = json.dumps({
-			"action": "close_and_reissue",
-			"justification": "rework needed",
-			"new_issue": {
-				"title": "Reissue: redo approach",
-				"body": "Try again with smaller scope.",
-			},
-		})
+		if judge_payload is None:
+			judge_payload = {
+				"action": "close_and_reissue",
+				"justification": "rework needed",
+				"new_issue": {
+					"title": "Reissue: redo approach",
+					"body": "Try again with smaller scope.",
+				},
+			}
+		judge_json = json.dumps(judge_payload)
 
 		env = {
 			"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
@@ -315,13 +412,16 @@ def _run_close_and_reissue(parent_label_set: list[str]) -> dict:
 			"FIRST_ISSUE_LABELS_JSON": json.dumps(parent_label_set),
 			"JUDGE_JSON": judge_json,
 			"RB_ACTION": "close_and_reissue",
+			"REISSUE_PRESERVE_BASELINE_ENABLED": reissue_preserve_baseline_enabled,
+			"GITHUB_RUN_ID": "777",
+			"GITHUB_RUN_ATTEMPT": "1",
 		}
 		run_env = os.environ.copy()
 		run_env.update(env)
 
 		proc = subprocess.run(
 			["bash", str(script_path)],
-			cwd=str(tmp_path),
+			cwd=str(run_cwd),
 			env=run_env,
 			text=True,
 			capture_output=True,
@@ -335,6 +435,15 @@ def _run_close_and_reissue(parent_label_set: list[str]) -> dict:
 		state = json.loads(gh_state_file.read_text(encoding="utf-8"))
 		state["_ensure_labels"] = labels_file.read_text(encoding="utf-8").strip().splitlines()
 		state["_stdout"] = proc.stdout
+		state["_stderr"] = proc.stderr
+		state["_github_output"] = github_output.read_text(encoding="utf-8")
+		if repo_files is not None:
+			state["_repo_head_before"] = repo_head_before
+			state["_repo_head_after"] = _git(["git", "rev-parse", "HEAD"], cwd=run_cwd)
+			state["_repo_branch_before"] = repo_branch_before
+			state["_repo_branch_after"] = _git(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=run_cwd)
+			state["_repo_status_after"] = _git(["git", "status", "--short"], cwd=run_cwd)
+			state["_remote_heads"] = _git(["git", "ls-remote", "--heads", "origin"], cwd=run_cwd)
 		return state
 
 
@@ -402,6 +511,249 @@ def test_empty_parent_label_set_does_not_propagate() -> None:
 	assert "ai:orchestrator-managed" not in args, (
 		f"reissue must NOT inherit ai:orchestrator-managed when parent "
 		f"label set is empty; got args: {args}"
+	)
+
+
+def test_review_blocked_prompt_includes_phase_e_schema_fields() -> None:
+	prompt = _rb_judge_prompt_text()
+
+	assert '"reissue_mode": "spot-fix" | "redo"' in prompt, (
+		"mode-judge-review-blocked.txt must require the new reissue_mode field "
+		"so the judge can choose spot-fix vs redo."
+	)
+	assert '"remaining_issues": [' in prompt, (
+		"mode-judge-review-blocked.txt must include the structured remaining_issues[] sibling."
+	)
+	assert '"file": "<repo-relative path>"' in prompt
+	assert '"line_start": <integer>' in prompt
+	assert '"line_end": <integer>' in prompt
+	assert '"symptom": "<brief grounded gap>"' in prompt
+
+
+def test_review_autofix_wires_reissue_preserve_baseline_flag_default_false() -> None:
+	wf = _review_autofix_text()
+	assert "REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'false' }}" in wf, (
+		"review_autofix.yml must pass REISSUE_PRESERVE_BASELINE_ENABLED to the "
+		"review-blocked judge and default it to false for Phase E bake-out safety."
+	)
+
+
+def test_close_and_reissue_spot_fix_preserves_baseline_branch_and_keeps_caller_checkout_clean() -> None:
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		judge_payload={
+			"action": "close_and_reissue",
+			"reissue_mode": "spot-fix",
+			"justification": "Approach is correct; only a small follow-up is needed.",
+			"remaining_issues": [
+				{"file": "src/app.py", "line_start": 10, "line_end": 14, "symptom": "Guard missing"},
+				{"file": "src/app.py", "line_start": 15, "line_end": 16, "symptom": "Duplicate anchor should dedupe"},
+				{"file": "README.md", "line_start": 1, "line_end": 2, "symptom": "Docs must mention the edge case"},
+			],
+			"new_issue": {
+				"title": "Reissue: surgical follow-up",
+				"body": "Keep the prior implementation and patch only the grounded gaps.",
+			},
+		},
+		reissue_preserve_baseline_enabled="true",
+		repo_files={
+			"src/app.py": "print('hello')\n",
+			"README.md": "hello\n",
+		},
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1, f"expected one reissue create call, got: {creates}"
+	body = creates[0][creates[0].index("--body") + 1]
+	match = re.search(r"prior_pr_baseline_branch: ([^\n]+)", body)
+	assert match, f"expected prior_pr_baseline_branch metadata in body:\n{body}"
+	baseline_branch = match.group(1).strip()
+	assert baseline_branch.startswith("ai/reissue-baseline/pr-42-"), baseline_branch
+	expected_footer = textwrap.dedent(
+		f"""\
+		---
+		**Review-blocked reissue metadata**
+		- Replaces: #41 (PR #42 closed — approach rework)
+		- Type: review-blocked-reissue
+		- prior_pr_baseline_branch: {baseline_branch}
+		- files_touched:
+		  - src/app.py
+		  - README.md"""
+	)
+	assert body.rstrip().endswith(expected_footer.rstrip()), (
+		"spot-fix reissue body must emit the canonical footer-scoped baseline metadata contract"
+	)
+	assert body.count("  - src/app.py") == 1, (
+		"spot-fix reissue body must dedupe repeated remaining_issues[].file entries"
+	)
+	assert "  - README.md" in body
+	assert f"refs/heads/{baseline_branch}" in state.get("_remote_heads", ""), (
+		"spot-fix must push the preserved baseline branch to origin before creating the reissue"
+	)
+	assert "REISSUE_BASELINE_PRESERVED" in state["_stdout"], (
+		"spot-fix success path must emit the REISSUE_BASELINE_PRESERVED log prefix"
+	)
+	assert "REISSUE_MODE requested_raw=spot-fix effective=spot-fix" in state["_stdout"]
+	assert "judge_handled=true" in state["_github_output"]
+	assert state.get("_repo_head_after") == state.get("_repo_head_before"), (
+		"git worktree preservation path must not change the caller checkout's HEAD commit"
+	)
+	assert state.get("_repo_branch_after") == state.get("_repo_branch_before") == "main", (
+		"git worktree preservation path must not switch the caller checkout off its original branch"
+	)
+	assert state.get("_repo_status_after", "") == "", (
+		"git worktree preservation path must leave the caller checkout clean"
+	)
+
+
+def test_close_and_reissue_spot_fix_lowercases_baseline_branch_sha_prefix() -> None:
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		judge_payload={
+			"action": "close_and_reissue",
+			"reissue_mode": "spot-fix",
+			"justification": "Uppercase head SHAs must still produce a trusted preserved baseline branch.",
+			"remaining_issues": [
+				{"file": "src/app.py", "line_start": 10, "line_end": 14, "symptom": "Guard missing"},
+			],
+			"new_issue": {
+				"title": "Reissue: lowercase preserved baseline",
+				"body": "Keep the prior implementation and patch only the grounded gap.",
+			},
+		},
+		reissue_preserve_baseline_enabled="true",
+		repo_files={"src/app.py": "print('hello')\n"},
+		pr_view_head_ref_oid="__UPPER_REPO_HEAD__",
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1, f"expected one reissue create call, got: {creates}"
+	body = creates[0][creates[0].index("--body") + 1]
+	match = re.search(r"prior_pr_baseline_branch: ([^\n]+)", body)
+	assert match, f"expected prior_pr_baseline_branch metadata in body:\n{body}"
+	baseline_branch = match.group(1).strip()
+	expected_head_sha = str(state["_repo_head_before"]).lower()
+	assert baseline_branch == f"ai/reissue-baseline/pr-42-{expected_head_sha[:12]}-777-1"
+	assert f"refs/heads/{baseline_branch}" in state.get("_remote_heads", "")
+	assert f"REISSUE_BASELINE_PRESERVED branch={baseline_branch} head_sha={expected_head_sha}" in state["_stdout"]
+
+
+def test_close_and_reissue_invalid_reissue_mode_falls_back_to_redo() -> None:
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		judge_payload={
+			"action": "close_and_reissue",
+			"reissue_mode": "unknown-mode",
+			"justification": "Malformed output from the judge should fail open.",
+			"remaining_issues": [
+				{"file": "src/app.py", "line_start": 1, "line_end": 2, "symptom": "Unused in redo fallback"},
+			],
+			"new_issue": {
+				"title": "Reissue: redo",
+				"body": "Re-derive the patch from scratch.",
+			},
+		},
+		reissue_preserve_baseline_enabled="true",
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1
+	body = creates[0][creates[0].index("--body") + 1]
+	assert "prior_pr_baseline_branch:" not in body
+	assert "files_touched:" not in body
+	assert "REISSUE_MODE requested_raw=unknown-mode effective=redo" in state["_stdout"], (
+		"invalid reissue_mode must fail open back to redo instead of attempting spot-fix"
+	)
+	assert "REISSUE_BASELINE_PRESERVED" not in state["_stdout"]
+
+
+def test_close_and_reissue_preserves_judge_json_bytes_under_xpg_echo() -> None:
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		judge_payload={
+			"action": "close_and_reissue",
+			"reissue_mode": "redo",
+			"justification": "Quoted reissues should not be dropped.",
+			"new_issue": {
+				"title": 'Reissue: handle "quoted" follow-up',
+				"body": 'First line keeps "quotes" and literal \\n intact.\nSecond line stays attached.',
+			},
+		},
+		enable_xpg_echo=True,
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1, (
+		"close_and_reissue must still create the replacement issue when bash xpg_echo is enabled"
+	)
+	args = creates[0]
+	title = args[args.index("--title") + 1]
+	body = args[args.index("--body") + 1]
+	assert title == 'Reissue: handle "quoted" follow-up'
+	assert body.startswith('First line keeps "quotes" and literal \\n intact.\nSecond line stays attached.')
+
+
+def test_close_and_reissue_spot_fix_invalid_remaining_issue_file_falls_back_to_redo() -> None:
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		judge_payload={
+			"action": "close_and_reissue",
+			"reissue_mode": "spot-fix",
+			"justification": "Path validation must reject unsafe files_touched metadata.",
+			"remaining_issues": [
+				{"file": "../escape.sh", "line_start": 1, "line_end": 1, "symptom": "Unsafe path"},
+			],
+			"new_issue": {
+				"title": "Reissue: invalid path should redo",
+				"body": "Fallback to redo when the structured file list is unsafe.",
+			},
+		},
+		reissue_preserve_baseline_enabled="true",
+		repo_files={"src/app.py": "print('hello')\n"},
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1
+	body = creates[0][creates[0].index("--body") + 1]
+	assert "prior_pr_baseline_branch:" not in body
+	assert "files_touched:" not in body
+	assert "REISSUE_BASELINE_DISCARDED requested=spot-fix reason=invalid_file_path:../escape.sh" in state["_stdout"], (
+		"unsafe remaining_issues[].file entries must discard the spot-fix baseline and redo instead"
+	)
+	assert "REISSUE_MODE requested_raw=spot-fix effective=redo" in state["_stdout"]
+
+
+def test_close_and_reissue_spot_fix_setup_failure_uses_setup_reason_and_surfaces_git_error() -> None:
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		judge_payload={
+			"action": "close_and_reissue",
+			"reissue_mode": "spot-fix",
+			"justification": "Baseline creation should fail open when local setup fails.",
+			"remaining_issues": [
+				{"file": "src/app.py", "line_start": 1, "line_end": 2, "symptom": "Needs a focused fix"},
+			],
+			"new_issue": {
+				"title": "Reissue: setup failure redo",
+				"body": "Fallback to redo when the baseline branch cannot be prepared locally.",
+			},
+		},
+		reissue_preserve_baseline_enabled="true",
+		repo_files={"src/app.py": "print('hello')\n"},
+		precreate_baseline_branch=True,
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1
+	body = creates[0][creates[0].index("--body") + 1]
+	assert "prior_pr_baseline_branch:" not in body
+	assert "files_touched:" not in body
+	assert "REISSUE_BASELINE_DISCARDED requested=spot-fix reason=baseline_branch_setup_failed" in state["_stdout"], (
+		"pre-push baseline setup failures must log the setup-specific discard reason"
+	)
+	assert "baseline_branch_push_failed" not in state["_stdout"]
+	assert "fatal: a branch named" in state["_stderr"], (
+		"git checkout -b setup failures must surface the underlying git error on stderr"
 	)
 
 
@@ -628,7 +980,12 @@ def _extract_merge_with_followup_branch() -> str:
 	return match.group("branch")
 
 
-def _build_merge_with_followup_harness(branch: str, github_output: Path) -> str:
+def _build_merge_with_followup_harness(
+	branch: str,
+	github_output: Path,
+	*,
+	enable_xpg_echo: bool = False,
+) -> str:
 	"""Wrap the extracted merge_with_followup branch in a self-contained
 	bash harness with stubs for the helpers it depends on.
 
@@ -640,10 +997,11 @@ def _build_merge_with_followup_harness(branch: str, github_output: Path) -> str:
 	  - `sleep` is no-op'd so the mergeability-poll backoff (which the
 	    real script measures in seconds) doesn't slow tests.
 	"""
+	xpg_echo_line = "shopt -s xpg_echo\n\n" if enable_xpg_echo else ""
 	return f"""#!/usr/bin/env bash
 set -euo pipefail
 
-gh_retry() {{ "$@"; }}
+{xpg_echo_line}gh_retry() {{ "$@"; }}
 ensure_label_exists() {{ printf '%s\\n' "$1" >> "${{ENSURE_LABELS_FILE}}"; }}
 _resilient_phase_swap() {{ :; }}
 _safe_gh_jq() {{ gh api "$@"; }}
@@ -670,6 +1028,7 @@ def _run_merge_with_followup(
 	enable_auto_merge: str = "true",
 	issue_create_should_fail: bool = False,
 	check_runs_state: str = "success",  # "success" (all complete + green) or "pending" (one in_progress)
+	enable_xpg_echo: bool = False,
 ) -> dict:
 	"""Run the merge_with_followup branch with a mocked PR mergeability
 	state and judge JSON.  Returns the captured gh-mock state plus the
@@ -751,7 +1110,11 @@ def _run_merge_with_followup(
 
 		script_path = runtime_dir / "rb_branch_harness.sh"
 		script_path.write_text(
-			_build_merge_with_followup_harness(branch, github_output),
+			_build_merge_with_followup_harness(
+				branch,
+				github_output,
+				enable_xpg_echo=enable_xpg_echo,
+			),
 			encoding="utf-8",
 		)
 		script_path.chmod(0o755)
@@ -1090,6 +1453,55 @@ def test_merge_with_followup_does_not_advance_when_issue_create_fails() -> None:
 	)
 
 
+def test_merge_with_followup_preserves_judge_json_bytes_under_xpg_echo() -> None:
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed"],
+		followup_title='Follow-up: handle "quoted" wiring',
+		followup_body='First line keeps "quotes" and literal \\n intact.\nSecond line stays attached.',
+		enable_xpg_echo=True,
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1, (
+		"merge_with_followup must still create the follow-up issue when bash xpg_echo is enabled"
+	)
+	args = creates[0]
+	title = args[args.index("--title") + 1]
+	body = args[args.index("--body") + 1]
+	assert title == 'Follow-up: handle "quoted" wiring'
+	assert body.startswith('First line keeps "quotes" and literal \\n intact.\nSecond line stays attached.')
+
+
+def test_review_blocked_preamble_uses_printf_for_judge_json_extraction() -> None:
+	src = _rb_judge_text()
+
+	assert """RB_ACTION="$(printf '%s\\n' "${JUDGE_JSON}" | jq -r '.action')"
+RB_JUSTIFICATION="$(printf '%s\\n' "${JUDGE_JSON}" | jq -r '.justification // "no justification"')"
+RB_FIX_DESC="$(printf '%s\\n' "${JUDGE_JSON}" | jq -r '.fix_description // ""')"
+RB_REMAINING="$(printf '%s\\n' "${JUDGE_JSON}" | jq -r '.remaining_issues_summary // ""')""" in src
+	assert 'RB_ACTION="$(echo "${JUDGE_JSON}" | jq -r' not in src
+	assert "FOLLOWUP_BODY=\"$(printf '%s\\n' \"${JUDGE_JSON}\" | jq -r '.followup_issue.body // empty')\"" in src
+	assert "NEW_ISSUE_BODY=\"$(printf '%s\\n' \"${JUDGE_JSON}\" | jq -r '.new_issue.body // empty')\"" in src
+	assert "| sed 's/\\\\n/\\n/g'" not in src
+
+
+def test_review_blocked_pr_metadata_parsing_uses_printf_under_xpg_echo() -> None:
+	src = _rb_judge_text()
+
+	assert '_rps_new="$(printf \'%s\\n\' "${_rps_cur}" | jq -c --argjson p "${_rps_phases}" --arg t "${_rps_target}"' in src
+	assert '_pr_state="$(printf \'%s\\n\' "${_pr_meta}" | jq -r \'.state // ""\')"' in src
+	assert '_pr_merged="$(printf \'%s\\n\' "${_pr_meta}" | jq -r \'(.merged_at != null) or (.merged == true)\')"' in src
+	assert '_guard_pr_merged="$(printf \'%s\\n\' "${_guard_pr_meta}" | jq -r \'(.merged_at != null) or (.merged == true)\')"' in src
+	assert 'PR_STATE="$(printf \'%s\\n\' "${_pr_json}" | jq -r \'.state // ""\'' in src
+	assert 'PR_MERGEABLE="$(printf \'%s\\n\' "${_pr_json}" | jq -r \'.mergeable // ""\'' in src
+	assert 'PR_HEAD_SHA="$(printf \'%s\\n\' "${_pr_json}" | jq -r \'.head.sha // ""\'' in src
+	assert 'PR_MERGED="$(printf \'%s\\n\' "${_pr_json}" | jq -r \'(.merged_at != null) or (.merged == true)\'' in src
+	assert 'echo "${_rps_cur}" | jq -c' not in src
+	assert 'echo "${_pr_meta}" | jq -r' not in src
+	assert 'echo "${_guard_pr_meta}" | jq -r' not in src
+	assert 'echo "${_pr_json}" | jq -r' not in src
+
+
 # =============================================================================
 # Merged-PR action guard coverage
 # =============================================================================
@@ -1185,6 +1597,19 @@ def test_merged_pr_action_guard_runs_before_judge_comment() -> None:
 		f"merged-PR action guard (pos={guard_pos}) must run BEFORE "
 		f"the JUDGE_COMMENT post (pos={comment_pos}) so a refused "
 		f"action does not leave a misleading audit trail on the PR."
+	)
+
+
+def test_review_rb_judge_validates_pr_number_before_pr_lookups() -> None:
+	src = _rb_judge_text()
+	guard = 'if [ -z "${PR_NUMBER:-}" ] || ! [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then'
+	guard_pos = src.find(guard)
+	lookup_pos = src.find('repos/${REPOSITORY}/pulls/${PR_NUMBER}')
+	assert guard_pos != -1 and 'judge_skip_reason=invalid_pr_number' in src, (
+		"review_rb_judge.sh must reject missing or non-numeric PR_NUMBER values before any PR-scoped API calls."
+	)
+	assert lookup_pos != -1 and guard_pos < lookup_pos, (
+		"PR_NUMBER validation must run before review_rb_judge.sh performs PR-scoped lookups or path construction."
 	)
 
 

@@ -337,6 +337,81 @@ jobs:
             echo "ref=" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Resolve checkout ref
+        if: env.SKIP_IMPLEMENT != 'true'
+        id: checkout_ref
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          DEFAULT_CHECKOUT_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+
+          gh_api_with_retry() {
+            local attempt=1
+            local backoff=2
+            local output=""
+            local cmd_status=0
+            local stderr_file=""
+
+            stderr_file="$(mktemp "${TMPDIR:-/tmp}/checkout-ref-gh-api.XXXXXX" 2>/dev/null || true)"
+
+            while :; do
+              output=""
+              cmd_status=0
+              if [ -n "${stderr_file}" ]; then
+                : > "${stderr_file}"
+                output="$("$@" 2>"${stderr_file}")" || cmd_status=$?
+              else
+                output="$("$@" 2>/dev/null)" || cmd_status=$?
+              fi
+              if [ "${cmd_status}" -eq 0 ]; then
+                if [ -n "${stderr_file}" ]; then
+                  rm -f "${stderr_file}" >/dev/null 2>&1 || true
+                fi
+                printf '%s' "${output}"
+                return 0
+              fi
+              if [ "${attempt}" -ge 3 ]; then
+                if [ -n "${stderr_file}" ] && [ -s "${stderr_file}" ]; then
+                  cat "${stderr_file}" >&2 || true
+                fi
+                if [ -n "${stderr_file}" ]; then
+                  rm -f "${stderr_file}" >/dev/null 2>&1 || true
+                fi
+                return "${cmd_status}"
+              fi
+              sleep "${backoff}"
+              backoff=$((backoff * 2))
+              attempt=$((attempt + 1))
+            done
+          }
+
+          checkout_ref="${DEFAULT_CHECKOUT_REF:-${{ github.event.repository.default_branch }}}"
+          issue_meta_json=""
+          if ! issue_meta_json="$(gh_api_with_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"; then
+            echo "::warning::Failed to fetch issue metadata for checkout context; using ${checkout_ref}."
+            echo "ref=${checkout_ref}" >> "$GITHUB_OUTPUT"
+            echo "source=integration/default" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! issue_body="$(printf '%s' "${issue_meta_json}" | jq -er '.body // ""' 2>/dev/null)"; then
+            echo "::warning::Ignoring invalid issue metadata for checkout context; using ${checkout_ref}."
+            echo "ref=${checkout_ref}" >> "$GITHUB_OUTPUT"
+            echo "source=integration/default" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          printf '%s\n' "${issue_meta_json}" > "${ISSUE_META_FILE}"
+          printf '%s\n' "${issue_body}" > "${ISSUE_BODY_FILE}"
+
+          # Trusted prior_pr_baseline_branch checkout is resolved only by the
+          # guarded baseline_refctx step below. This step exists to cache issue
+          # metadata for later consumers and to emit the integration/default
+          # fallback ref for normal checkout.
+          echo "ref=${checkout_ref}" >> "$GITHUB_OUTPUT"
+          echo "source=integration/default" >> "$GITHUB_OUTPUT"
+
       - name: Resolve trusted prior PR baseline branch
         if: env.SKIP_IMPLEMENT != 'true'
         id: baseline_refctx
@@ -355,7 +430,14 @@ jobs:
           from pathlib import Path
 
           output_path = Path(os.environ["GITHUB_OUTPUT"])
-          issue_body = os.environ.get("ISSUE_BODY", "").replace("\r\n", "\n")
+          issue_body = os.environ.get("ISSUE_BODY", "")
+          issue_body_file = Path(os.environ.get("ISSUE_BODY_FILE", ""))
+          if issue_body_file.is_file():
+              try:
+                  issue_body = issue_body_file.read_text(encoding="utf-8")
+              except (OSError, UnicodeDecodeError):
+                  print("::notice::Baseline override ignored: ISSUE_BODY_FILE could not be read; falling back to event body.")
+          issue_body = issue_body.replace("\r\n", "\n")
           issue_author_association = os.environ.get("ISSUE_AUTHOR_ASSOCIATION", "").strip().upper()
           feature_enabled = os.environ.get("REISSUE_PRESERVE_BASELINE_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
           repo = os.environ.get("GITHUB_REPOSITORY", "")
@@ -384,43 +466,103 @@ jobs:
               emit(status="issue-author-untrusted")
               raise SystemExit(0)
 
-          branch_matches = re.findall(r"(?m)^prior_pr_baseline_branch:\s*(\S+)\s*$", issue_body)
-          if len(branch_matches) != 1:
-              notice("Baseline override ignored: issue body does not contain exactly one prior_pr_baseline_branch entry.")
-              emit(status="absent")
-              raise SystemExit(0)
-
-          branch = branch_matches[0].strip()
-          branch_match = re.fullmatch(r"ai/reissue-pr-(\d+)-baseline-([0-9a-f]{12})", branch)
-          if branch_match is None:
-              notice("Baseline override ignored: prior_pr_baseline_branch is not in the trusted review-blocked format.")
-              emit(status="untrusted")
-              raise SystemExit(0)
-
-          files_touched_match = re.search(r"(?m)^files_touched:\s*\n(?:[ \t]*- [^\n]+\n?)+", issue_body)
-          if files_touched_match is None:
-              notice("Baseline override ignored: files_touched metadata is missing or empty.")
-              emit(status="files-missing")
-              raise SystemExit(0)
-
-          metadata_match = re.search(
-              r"(?m)^\*\*Review-blocked reissue metadata\*\*\s*\n(?P<block>(?:- [^\n]*\n?)*)",
+          metadata_footer_match = re.search(
+              r"(?:^|\n)---\n\*\*Review-blocked reissue metadata\*\*\n(?P<block>.*)\Z",
               issue_body,
+              re.DOTALL,
           )
-          if metadata_match is None:
+          if metadata_footer_match is None:
               notice("Baseline override ignored: review-blocked reissue metadata header is missing.")
               emit(status="metadata-missing")
               raise SystemExit(0)
 
-          metadata_block = metadata_match.group("block")
-          reissue_type_matches = re.findall(r"(?m)^- Type:\s*(review-blocked-reissue)\s*$", metadata_block)
-          replaces_matches = re.findall(
-              "(?m)^- Replaces:\\s*(?:#\\d+\\s+)?\\(PR #(\\d+) closed \\u2014 approach rework\\)\\s*$",
-              metadata_block,
-          )
+          metadata_block = metadata_footer_match.group("block")
+          metadata_lines = metadata_block.splitlines()
+          if not metadata_lines:
+              notice("Baseline override ignored: review-blocked reissue metadata footer is incomplete.")
+              emit(status="metadata-missing")
+              raise SystemExit(0)
+
+          branch_matches: list[str] = []
+          files_touched_entries: list[str] = []
+          files_touched_blocks = 0
+          reissue_type_matches: list[str] = []
+          replaces_matches: list[str] = []
+          current_key = ""
+
+          for line in metadata_lines:
+              if not line.strip():
+                  continue
+
+              if line.startswith("- "):
+                  current_key = ""
+
+                  replaces_match = re.fullmatch(
+                      r"- Replaces:\s*(?:#\d+\s+)?\(PR #(\d+) closed \u2014 approach rework\)\s*",
+                      line,
+                  )
+                  if replaces_match is not None:
+                      replaces_matches.append(replaces_match.group(1))
+                      continue
+
+                  reissue_type_match = re.fullmatch(r"- Type:\s*(review-blocked-reissue)\s*", line)
+                  if reissue_type_match is not None:
+                      reissue_type_matches.append(reissue_type_match.group(1))
+                      continue
+
+                  branch_line_match = re.fullmatch(r"- prior_pr_baseline_branch:\s*`?\s*([^`\n]+?)\s*`?\s*", line)
+                  if branch_line_match is not None:
+                      branch_matches.append(branch_line_match.group(1).strip())
+                      continue
+
+                  if re.fullmatch(r"- files_touched:\s*", line) is not None:
+                      files_touched_blocks += 1
+                      current_key = "files_touched"
+                      continue
+
+                  notice("Baseline override ignored: review-blocked reissue metadata footer is incomplete.")
+                  emit(status="metadata-missing")
+                  raise SystemExit(0)
+
+              if line.startswith("  - "):
+                  if current_key != "files_touched":
+                      notice("Baseline override ignored: review-blocked reissue metadata footer is incomplete.")
+                      emit(status="metadata-missing")
+                      raise SystemExit(0)
+
+                  file_path = line[4:].strip()
+                  if not file_path:
+                      notice("Baseline override ignored: files_touched metadata is missing or empty.")
+                      emit(status="files-missing")
+                      raise SystemExit(0)
+
+                  files_touched_entries.append(file_path)
+                  continue
+
+              notice("Baseline override ignored: review-blocked reissue metadata footer is incomplete.")
+              emit(status="metadata-missing")
+              raise SystemExit(0)
+
           if len(reissue_type_matches) != 1 or len(replaces_matches) != 1:
               notice("Baseline override ignored: review-blocked reissue metadata footer is incomplete.")
               emit(status="metadata-missing")
+              raise SystemExit(0)
+
+          if len(branch_matches) != 1:
+              notice("Baseline override ignored: review-blocked reissue metadata footer does not contain exactly one prior_pr_baseline_branch entry.")
+              emit(status="absent")
+              raise SystemExit(0)
+
+          if files_touched_blocks != 1 or not files_touched_entries:
+              notice("Baseline override ignored: files_touched metadata is missing or empty.")
+              emit(status="files-missing")
+              raise SystemExit(0)
+
+          branch = branch_matches[0].strip()
+          branch_match = re.fullmatch(r"ai/reissue-baseline/pr-(\d+)-([0-9a-f]{12})-\d+-\d+", branch)
+          if branch_match is None:
+              notice("Baseline override ignored: prior_pr_baseline_branch is not in the trusted review-blocked format.")
+              emit(status="untrusted")
               raise SystemExit(0)
 
           expected_pr_number = replaces_matches[0]
@@ -574,10 +716,17 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
           set -euo pipefail
+          echo "Resolved fallback ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
           baseline_status="${{ steps.baseline_refctx.outputs.status }}"
           if [ -z "${baseline_status}" ]; then
             baseline_status="step-no-output"
           fi
+          resolved_checkout_source="integration/default"
+          if [ "${baseline_status}" = "accepted" ] && [ "${{ steps.checkout_baseline.outcome }}" = "success" ]; then
+            resolved_checkout_source="${{ steps.baseline_refctx.outputs.branch }}"
+          fi
+          echo "Resolved checkout source: ${resolved_checkout_source}"
+          echo "PR base ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
           if [ "${{ steps.baseline_refctx.outputs.status }}" = "accepted" ] && [ "${{ steps.checkout_baseline.outcome }}" = "success" ]; then
             echo "Baseline override: accepted ${{ steps.baseline_refctx.outputs.branch }}"
           elif [ "${{ steps.baseline_refctx.outputs.status }}" = "accepted" ]; then
@@ -585,7 +734,6 @@ jobs:
           else
             echo "Baseline override: ignored (${baseline_status})"
           fi
-          echo "Resolved fallback ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
           echo "HEAD commit: $(git rev-parse HEAD)"
           if branch_name="$(git symbolic-ref --short HEAD 2>/dev/null)"; then
             echo "HEAD branch: ${branch_name}"
@@ -904,7 +1052,9 @@ jobs:
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
 
-          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
+          if [ ! -s "${ISSUE_META_FILE}" ]; then
+            gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
+          fi
 
           ISSUE_BODY="$(jq -r '.body // ""' "${ISSUE_META_FILE}")"
           ISSUE_TITLE="$(jq -r '.title // ""' "${ISSUE_META_FILE}")"
