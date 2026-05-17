@@ -423,6 +423,15 @@ def test_review_synthesise_smoke_rejects_unsafe_shell_constructs() -> None:
 			'exec /bin/false\nbehavioural_smoke_inconclusive "unsafe"',
 			'source ./payload.sh\nbehavioural_smoke_inconclusive "unsafe"',
 			'. ./payload.sh\nbehavioural_smoke_inconclusive "unsafe"',
+			'cmd & eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'cmd |& eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'> /dev/null eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'2>/dev/null eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'env eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'timeout 1 eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'command -p eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'builtin -- source ./payload.sh\nbehavioural_smoke_inconclusive "unsafe"',
+			'if eval "$PAYLOAD"; then behavioural_smoke_inconclusive "unsafe"; fi',
 		):
 			_install_mock_codex(
 				mock_bin_dir,

@@ -281,21 +281,41 @@ def normalize_content(text: str) -> str:
 		stripped = raw_line.strip()
 		if "`" in stripped or "$(" in stripped or "<(" in stripped or ">(" in stripped or "<<" in stripped:
 			raise ValueError("body_unsafe_shell_construct")
-		lexer = shlex.shlex(stripped, posix=True, punctuation_chars=";&|(){}")
+		lexer = shlex.shlex(stripped, posix=True, punctuation_chars=";&|(){}><")
 		lexer.whitespace_split = True
 		lexer.commenters = "#"
+		tokens = list(lexer)
 		expect_command = True
-		for token in lexer:
-			if token in {";", "&&", "||", "|", "(", ")", "{", "}", "then", "do", "else", "elif"}:
+		passthrough_command = False
+		pending_redirection_target = False
+		separator_tokens = {";", "&", "&&", "||", "|", "|&", "(", ")", "{", "}", "if", "then", "do", "else", "elif", "while", "until"}
+		redirection_tokens = {">", ">>", "<", "<<", "<<<", "<>", "<&", ">&", ">|", "&>", "&>>"}
+		passthrough_tokens = {"command", "builtin", "env", "nohup", "nice", "timeout", "setsid"}
+		for index, token in enumerate(tokens):
+			next_token = tokens[index + 1] if index + 1 < len(tokens) else ""
+			if pending_redirection_target:
+				pending_redirection_target = False
+				continue
+			if token in separator_tokens:
 				expect_command = True
+				passthrough_command = False
+				continue
+			if token in redirection_tokens:
+				pending_redirection_target = True
+				continue
+			if token.isdigit() and next_token in redirection_tokens:
 				continue
 			if expect_command and re.match(r"[A-Za-z_][A-Za-z0-9_]*=.*", token):
 				continue
-			if expect_command and token in {"command", "builtin"}:
+			if expect_command and token in passthrough_tokens:
+				passthrough_command = True
+				continue
+			if expect_command and passthrough_command and (token.startswith("-") or token.isdigit()):
 				continue
 			if expect_command and token in {"eval", "exec", "source", "."}:
 				raise ValueError("body_unsafe_shell_construct")
 			expect_command = False
+			passthrough_command = False
 		if stripped == "exit" or stripped.startswith("exit "):
 			raise ValueError("body_must_not_exit")
 	return text + "\n"
