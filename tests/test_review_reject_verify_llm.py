@@ -608,6 +608,37 @@ def test_llm_verifier_splits_batches_at_configured_max() -> None:
 		assert all(row["verdict"] == "support" for row in artifact["results"])
 
 
+def test_llm_verifier_missing_prompt_reason_is_capped() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		workspace = Path(td)
+		runtime = _seed_repo(workspace)
+		missing_prompt_dir = workspace.joinpath(*(["long-path-segment"] * 16))
+		raw_reason = f"LLM reject verifier prompt {missing_prompt_dir / 'consolidator-reject-verifier.txt'} is unavailable."
+		expected_reason = raw_reason[:197] + "..."
+		assert len(raw_reason) > 200
+		assert len(expected_reason) == 200
+		raw_text = _issue_block(
+			issue_id="001",
+			rejection_kind="reviewer-wrong",
+			typed_header="EVIDENCE_RUNTIME_PATH",
+			typed_body="location: process_request:187\nrationale: Guard returns before the reviewer-described call path.",
+		)
+		parse_result = _run_parser(workspace, runtime, raw_text=raw_text)
+		assert parse_result.returncode == 0, parse_result.stderr
+		verify_result = _run_verifier(
+			workspace,
+			runtime,
+			verifier_enabled="true",
+			support_prompts_dir=missing_prompt_dir,
+		)
+		assert verify_result.returncode == 0, verify_result.stderr
+		artifact = _load_artifact(workspace)
+		assert artifact["results"][0]["verdict"] == "inconclusive"
+		assert artifact["results"][0]["reason"] == expected_reason
+		assert len(artifact["results"][0]["reason"]) == 200
+		assert "CONSOLIDATOR_REJECT_VERIFIER_FAIL reason=missing_prompt first_issue=001 batch_size=1" in verify_result.stdout
+
+
 def test_llm_verifier_tolerates_config_write_failures_and_keeps_script_only_checks() -> None:
 	with tempfile.TemporaryDirectory() as td:
 		workspace = Path(td)

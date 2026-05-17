@@ -365,6 +365,7 @@ def llm_prompt_missing_reason(prompt_path: Path) -> str:
 def llm_batch_fail_results(batch: list[dict[str, object]], reason_code: str, reason_text: str) -> dict[str, tuple[str, str]]:
 	first_issue = batch[0]["issue_id"] if batch else "none"
 	print(f"CONSOLIDATOR_REJECT_VERIFIER_FAIL reason={reason_code} first_issue={first_issue} batch_size={len(batch)}")
+	reason_text = squish(reason_text, LLM_VERIFIER_REASON_MAX_CHARS)
 	return {str(item["issue_id"]): ("inconclusive", reason_text) for item in batch}
 
 
