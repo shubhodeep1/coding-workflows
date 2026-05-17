@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan\n\nPlanning ref: `orchestrator/project-2627` @ `6c4102cb2e61c8f4937f2bbaccad1a577625f12b`  \nIntegration metadata check: matched (`orchestrator/project-2627`)  \nClarification mapping: no Q1/Q2 batch was needed; `/answer [auto-answered-by-orchestrator]` just confirms continuation.\n\n1. Files likely to change\n- `.github/workflows/validate.yml`\n\t- Flip the workflow env default for `VALIDATION_INCLUDE_SYNTHESISED` to `'false'`.\n\t- Flip the `Normalize behavioural smoke include flag` step\u2019s fallback from `:-true` to `:-false` so the no-var path stays disabled.\n- `.github/workflows/review_autofix.yml`\n\t- Flip the exported env default for `VALIDATION_INCLUDE_SYNTHESISED` to `'false'` only; no other review-autofix behavior should change.\n- `scripts/validate_driver.sh`\n\t- Flip the script-level fallback to `:-false`.\n\t- Update the nearby inline comment that currently describes the synthesized tests as opt-out/default-included.\n- `scripts/validate_process.sh`\n\t- Flip the script-level fallback to `:-false`.\n\t- Flip the in-function fallback/logging inside `materialize_synthesised_behavioural_smoke_tests()` from `:-true` to `:-false`.\n- `tests/test_review_synthesise_smoke.py`\n\t- Update workflow-string assertions from default-`true` to default-`false`.\n\t- Adjust the validate-process coverage so the unset-variable path skips materialization, while explicit `true` still materializes as today.\n- `tests/test_validate_driver_synthesised_filter.py`\n\t- Flip the extracted-function harness default from `:-true` to `:-false`.\n\t- Change the default-behavior test to expect synthesized scripts to be excluded when the env var is unset.\n\t- Keep/add explicit `VALIDATION_INCLUDE_SYNTHESISED=true` coverage for the opt-in path.\n\n2. Functions/modules to update\n- `behavioural_smoke_gate` logic in `.github/workflows/validate.yml`\n\t- Keep the current falsey normalization style (`0|false|no|off` disables); only change the fallback default.\n- `discover_tests()` in `scripts/validate_driver.sh`\n\t- Preserve the `synth_round_*.sh` filter exactly as-is; only the default state changes.\n- `materialize_synthesised_behavioural_smoke_tests()` in `scripts/validate_process.sh`\n\t- Preserve manifest selection/copy behavior; only the unset-variable default changes.\n- Contract tests:\n\t- `test_review_autofix_workflow_wires_behavioural_smoke_after_interim_judge`\n\t- `test_validate_workflows_restore_cached_behavioural_smoke_artifacts`\n\t- `test_discover_tests_*` cases in `tests/test_validate_driver_synthesised_filter.py`\n\n3. Data structures affected\n- Existing env var contract: `VALIDATION_INCLUDE_SYNTHESISED`\n\t- Old default: `true`\n\t- New default: `false`\n\t- Explicit opt-in remains `true`\n- Derived workflow state: `steps.behavioural_smoke_gate.outputs.enabled`\n- Runtime discovery output: `TEST_FILES` in `scripts/validate_driver.sh`\n- Materialized synthesized artifacts under `validation/tests/synth_round_*.sh` and `validation/tests/synth_round_*_manifest.json`\n\n4. API or interface changes\n- No new API surface.\n- No rename/removal of `VALIDATION_INCLUDE_SYNTHESISED`.\n- No wrapper format changes.\n- No manifest shape changes.\n- No change to `BEHAVIOURAL_SMOKE_FROM_JUDGE_ENABLED`.\n- Effective contract after the fix:\n\t- unset / missing var => synthesized smoke restore/materialization/discovery disabled\n\t- `VALIDATION_INCLUDE_SYNTHESISED=true` => current restore/materialize/include behavior preserved\n\n5. Risks / edge cases\n- `validate_process.sh` and `validate_driver.sh` must both be updated independently. The generated wrapper executes `scripts/validate_driver.sh` in a new process, so changing only `validate_process.sh` would not fix discovery/execution defaults.\n- In `validate.yml` and `validate_process.sh`, changing only the top-level env assignment is not enough; the inner `:-true` fallbacks also need to become `:-false` or unset/test-extracted paths will still behave as default-true.\n- Preserve existing accepted falsey spellings (`0`, `false`, `no`, `off`) and truthy opt-in behavior.\n- `review_autofix.yml` appears to wire this flag for contract/plumbing only on the current ref; do not remove it even if it looks unused.\n- Historical design doc drift exists in `docs/plans/judge-loop-and-reissue-plan.md` (still mentions default `true`), but that looks out of scope for this targeted default/contract correction.\n\n6. Testing considerations\n- Required targeted runs:\n\t- `python3 tests/test_review_synthesise_smoke.py`\n\t- `python3 tests/test_validate_driver_synthesised_filter.py`\n\t- `python3 tests/test_review_autofix_review_pipeline_contract.py`\n- The updated tests should prove:\n\t- no-env workflow/script paths do not restore, materialize, or discover synthesized smoke tests\n\t- explicit `VALIDATION_INCLUDE_SYNTHESISED=true` still restores cached review-runtime artifacts and includes `synth_round_*.sh`\n\t- unrelated review-autofix contract coverage still passes after the YAML edit\n\nConflict / missing-context notes\n- No issue/codebase path mismatch found in the referenced files.\n- No integration-branch mismatch.\n- No additional clarification is required.\n\nActions taken\n- Inspected the referenced workflow/script entry points and the named contract tests on `orchestrator/project-2627`.\n\nAssumptions\n- Scope is limited to the default flip, contract assertions, and inline comment updates; historical plan docs remain out of scope unless explicitly requested.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "e2c396c90ef666de7d828f78f6874f7eca753c2fb5eb0ecd211fe2c0725aea05",
+  "lineage": {
+    "issue_number": 2704,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25995495769",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25995495769",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2704"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260517155848_37eb8b7df5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2704,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25995495769"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2704",
+  "timestamps": {
+    "created_at": "2026-05-17T15:58:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
