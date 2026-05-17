@@ -5,13 +5,30 @@
   "entry_id": "processed_command_2672_4468903793_approved",
   "issue_number": 2672,
   "metadata": {
+    "branch": "ai/issue-2672",
+    "changed_files": [
+      ".github/workflows/mark-stable.yml",
+      ".github/workflows/review_autofix.yml",
+      ".github/workflows/test-and-mark-stable.yml",
+      "agents.md",
+      "prompts/behavioural-smoke-synthesise.txt",
+      "scripts/review_synthesise_smoke.sh",
+      "scripts/validate_driver.sh",
+      "tests/test_review_synthesise_smoke.py",
+      "tests/test_validate_driver_synthesised_filter.py"
+    ],
+    "issue_number": 2672,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/2672",
+    "pr_number": 2675,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/2675",
+    "run_attempt": "1",
+    "run_id": "25979048822",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/25979048822"
   },
   "run_attempt": 1,
   "run_id": "25979048822",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-05-17T02:24:41Z",
+  "status": "completed",
+  "timestamp": "2026-05-17T02:41:47Z",
   "workflow": "implement"
 }
