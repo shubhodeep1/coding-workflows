@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CI check-run (lint workflow):N/A | severity=medium | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: The lint check-run is failing with empty title/summary, but the only changed file is a plain-text canary fixture, so the failure is not attributable to this PR.\n  WHY: The changed file exactly matches the issue spec and cannot plausibly trigger a lint error, so the failure is likely pre-existing or flaky and cannot be mapped to the diff.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- (CI check-run \u2014 lint workflow):N/A | severity=medium | confidence=3\n  PROBLEM: The lint check-run reports `conclusion: failure` with empty title and summary fields, making the specific violation unidentifiable.\n  WHY: The only changed file is `tests/e2e_smoke_canary.txt`, a plain-text data fixture with exactly 3 lines matching the issue spec, so the failure is likely pre-existing, unrelated to this PR, or a flaky linter run.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- CI check-run (lint workflow) \u2014 head SHA f07c8713653d434968196167fe59ab93973a8aa1:N/A | severity=medium | confidence=3\n  PROBLEM: The `lint` check-run reports failure on this PR but provides no title or summary details, and the only changed file (`tests/e2e_smoke_canary.txt`) is a plain-text `.txt` fixture with three lines of key-value pairs.\n  WHY: The failure is almost certainly a pre-existing, unrelated lint violation elsewhere in the repo, or a flaky linter invocation, because the fixture exactly matches the issue spec and cannot plausibly trigger the error.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "705f483acefae128c33522c344bd1455df71821b357ec1e67931791c4a5d9378",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2683,
+    "run_id": "25980612326",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25980612326",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517040530_886e6ef0cd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2683,
+    "run_id": "25980612326"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-17T04:05:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
