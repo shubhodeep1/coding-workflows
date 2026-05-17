@@ -286,11 +286,18 @@ def normalize_content(text: str) -> str:
 		lexer.commenters = "#"
 		tokens = list(lexer)
 		expect_command = True
-		passthrough_command = False
+		passthrough_command = ""
+		passthrough_option_value = False
 		pending_redirection_target = False
-		separator_tokens = {";", "&", "&&", "||", "|", "|&", "(", ")", "{", "}", "if", "then", "do", "else", "elif", "while", "until"}
+		separator_tokens = {";", "&", "&&", "||", "|", "|&", "(", ")", "{", "}", "if", "then", "do", "else", "elif", "while", "until", "!"}
 		redirection_tokens = {">", ">>", "<", "<<", "<<<", "<>", "<&", ">&", ">|", "&>", "&>>"}
-		passthrough_tokens = {"command", "builtin", "env", "nohup", "nice", "timeout", "setsid"}
+		passthrough_tokens = {"command", "builtin", "env", "nohup", "nice", "timeout", "setsid", "time"}
+		passthrough_value_tokens = {
+			"env": {"-u", "-C", "--unset", "--chdir"},
+			"nice": {"-n", "--adjustment"},
+			"timeout": {"-s", "--signal", "-k", "--kill-after"},
+		}
+		dangerous_command_tokens = {"eval", "exec", "source", ".", "sudo", "xargs"}
 		for index, token in enumerate(tokens):
 			next_token = tokens[index + 1] if index + 1 < len(tokens) else ""
 			if pending_redirection_target:
@@ -298,24 +305,36 @@ def normalize_content(text: str) -> str:
 				continue
 			if token in separator_tokens:
 				expect_command = True
-				passthrough_command = False
+				passthrough_command = ""
+				passthrough_option_value = False
 				continue
 			if token in redirection_tokens:
 				pending_redirection_target = True
 				continue
 			if token.isdigit() and next_token in redirection_tokens:
 				continue
+			if expect_command and passthrough_option_value:
+				passthrough_option_value = False
+				continue
 			if expect_command and re.match(r"[A-Za-z_][A-Za-z0-9_]*=.*", token):
 				continue
 			if expect_command and token in passthrough_tokens:
-				passthrough_command = True
+				passthrough_command = token
 				continue
-			if expect_command and passthrough_command and (token.startswith("-") or token.isdigit()):
-				continue
-			if expect_command and token in {"eval", "exec", "source", "."}:
+			if expect_command and passthrough_command:
+				if token.startswith("-"):
+					if token in passthrough_value_tokens.get(passthrough_command, set()):
+						passthrough_option_value = True
+					continue
+				if passthrough_command == "nice" and re.match(r"-?\d+$", token):
+					continue
+				if passthrough_command == "timeout" and re.match(r"\d+(?:\.\d+)?[smhd]?$", token):
+					continue
+			if expect_command and token in dangerous_command_tokens:
 				raise ValueError("body_unsafe_shell_construct")
 			expect_command = False
-			passthrough_command = False
+			passthrough_command = ""
+			passthrough_option_value = False
 		if stripped == "exit" or stripped.startswith("exit "):
 			raise ValueError("body_must_not_exit")
 	return text + "\n"
