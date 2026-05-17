@@ -486,6 +486,33 @@ def test_llm_verifier_inconclusive_leaves_classification_unchanged() -> None:
 			"LLM reject verifier returned incomplete or malformed results.",
 		),
 		(
+			"multi-sentence-reason",
+			[
+				{
+					"stdout": json.dumps(
+						{
+							"results": [
+								{
+									"issue_id": "001",
+									"rejection_kind": "reviewer-wrong",
+									"verdict": "support",
+									"reason": "First sentence. Second sentence.",
+								},
+								{
+									"issue_id": "002",
+									"rejection_kind": "spec-doesnt-support",
+									"verdict": "support",
+									"reason": "Single sentence.",
+								},
+							]
+						}
+					)
+				}
+			],
+			"pass",
+			"LLM reject verifier returned incomplete or malformed results.",
+		),
+		(
 			"timeout",
 			[{"stdout": json.dumps({"results": []})}],
 			"timeout",

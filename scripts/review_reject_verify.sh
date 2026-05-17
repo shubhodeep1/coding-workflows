@@ -108,6 +108,7 @@ VERDICT_VALUES = {"support", "does-not-support", "inconclusive"}
 LLM_VERIFIER_MODEL = "openai/gpt-5.4-mini"
 LLM_VERIFIER_TIMEOUT_SECS = 120
 LLM_VERIFIER_REASON_MAX_CHARS = 200
+MULTI_SENTENCE_REASON_RE = re.compile(r"[.!?][\"')\]]?\s+(?=[A-Z0-9\"'(])")
 
 REJECT_EVIDENCE_HEADERS = (
 	"EVIDENCE_DIFF_HUNK",
@@ -154,6 +155,10 @@ def squish(value: str, limit: int | None = None) -> str:
 	if limit is not None and len(text) > limit:
 		text = text[: max(limit - 3, 0)].rstrip() + "..."
 	return text
+
+
+def is_single_sentence_reason(value: str) -> bool:
+	return not MULTI_SENTENCE_REASON_RE.search(value)
 
 
 def parse_issue_id(start_marker: str) -> str:
@@ -505,6 +510,8 @@ def validate_llm_batch_output(payload: object, batch: list[dict[str, object]]) -
 			raise ValueError("invalid_verdict")
 		if not reason:
 			raise ValueError("missing_reason")
+		if not is_single_sentence_reason(reason):
+			raise ValueError("multi_sentence_reason")
 		validated[issue_id] = (verdict, reason)
 	if set(validated) != set(expected):
 		raise ValueError("missing_rows")
