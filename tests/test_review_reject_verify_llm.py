@@ -643,9 +643,7 @@ def test_llm_verifier_missing_prompt_reason_is_capped() -> None:
 		runtime = _seed_repo(workspace)
 		missing_prompt_dir = workspace.joinpath(*(["long-path-segment"] * 16))
 		raw_reason = f"LLM reject verifier prompt {missing_prompt_dir / 'consolidator-reject-verifier.txt'} is unavailable."
-		expected_reason = raw_reason[:197] + "..."
 		assert len(raw_reason) > 200
-		assert len(expected_reason) == 200
 		raw_text = _issue_block(
 			issue_id="001",
 			rejection_kind="reviewer-wrong",
@@ -662,9 +660,12 @@ def test_llm_verifier_missing_prompt_reason_is_capped() -> None:
 		)
 		assert verify_result.returncode == 0, verify_result.stderr
 		artifact = _load_artifact(workspace)
+		reason = artifact["results"][0]["reason"]
 		assert artifact["results"][0]["verdict"] == "inconclusive"
-		assert artifact["results"][0]["reason"] == expected_reason
-		assert len(artifact["results"][0]["reason"]) == 200
+		assert reason.startswith("LLM reject verifier prompt .../")
+		assert reason.endswith("/consolidator-reject-verifier.txt is unavailable.")
+		assert len(reason) <= 200
+		assert reason != raw_reason[:197] + "..."
 		assert "CONSOLIDATOR_REJECT_VERIFIER_FAIL reason=missing_prompt first_issue=001 batch_size=1" in verify_result.stdout
 
 

@@ -386,7 +386,16 @@ def chunked(items: list[dict[str, object]], size: int) -> list[list[dict[str, ob
 
 
 def llm_prompt_missing_reason(prompt_path: Path) -> str:
-	return f"LLM reject verifier prompt {prompt_path} is unavailable."
+	prefix = "LLM reject verifier prompt "
+	path_text = str(prompt_path)
+	path_budget = max(LLM_VERIFIER_REASON_MAX_CHARS - len(prefix) - len(" is unavailable.") - 4, 1)
+	while len(path_text) > path_budget and "/" in path_text:
+		path_text = path_text.split("/", 1)[1]
+	if len(path_text) > path_budget:
+		path_text = squish(path_text, path_budget)
+	if path_text != str(prompt_path):
+		path_text = f".../{path_text}"
+	return f"{prefix}{path_text} is unavailable."
 
 
 def llm_batch_fail_results(batch: list[dict[str, object]], reason_code: str, reason_text: str) -> dict[str, tuple[str, str]]:
