@@ -398,9 +398,49 @@ def test_review_synthesise_smoke_rejects_unsafe_shell_constructs_with_visible_di
 			"shell re-entry via bash is not allowed",
 		),
 		(
+			"backslash_reentry",
+			"\\bash -c 'echo unsafe'\n",
+			"shell re-entry via bash is not allowed",
+		),
+		(
+			"command_builtin_reentry",
+			"command bash -c 'echo unsafe'\n",
+			"shell re-entry via bash is not allowed",
+		),
+		(
+			"builtin_eval",
+			"builtin eval 'echo unsafe'\n",
+			"eval is not allowed",
+		),
+		(
+			"exec_argv0_reentry",
+			"exec -a renamed bash -c 'echo unsafe'\n",
+			"shell re-entry via bash is not allowed",
+		),
+		(
+			"env_option_reentry",
+			"env -C /tmp bash -c 'echo unsafe'\n",
+			"shell re-entry via bash is not allowed",
+		),
+		(
+			"mixed_quoted_eval",
+			"e\"v\"al 'echo unsafe'\n",
+			"eval is not allowed",
+		),
+		(
 			"command_substitution",
 			"value=$(python3 -V)\necho \"$value\"\nexit 1\n",
 			"command substitution is not allowed",
+		),
+		(
+			"unquoted_heredoc_substitution",
+			"cat <<EOF\n$(python3 -V)\nEOF\n",
+			"command substitution is not allowed",
+		),
+		(
+			"malformed_redirection",
+			"echo >\n",
+			"redirection requires a target",
 		),
 	]
 
@@ -448,6 +488,47 @@ def test_review_synthesise_smoke_rejects_unsafe_shell_constructs_with_visible_di
 			assert "BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL reason=json_parse_failed round=1" in combined_output
 			assert "behavioural_smoke extractor rejected generated content:" in result.stderr
 			assert expected_diagnostic in result.stderr
+
+
+def test_review_synthesise_smoke_heredoc_rejection_reports_a_single_rejected_prefix() -> None:
+	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_unterminated_heredoc_") as td:
+		workspace = Path(td)
+		runtime_dir = workspace / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		mock_bin_dir = workspace / "mock_bin"
+		head_sha = _seed_repo_with_autofix_commit(workspace)
+		_write_judge_artifact(
+			workspace,
+			head_sha,
+			[_make_issue("src/module.py:2:branch-check", 2, 3, "Branch still always returns autofix")],
+		)
+		_install_mock_codex(
+			mock_bin_dir,
+			stdout_text=json.dumps(
+				[
+					{
+						"path": "validation/tests/unterminated_heredoc.sh",
+						"content": "cat <<'EOF'\nunterminated\n",
+						"expected_to_fail_until_fixed": True,
+					}
+				]
+			)
+			+ "\n",
+		)
+		env = _base_env(workspace, runtime_dir, mock_bin_dir)
+
+		result = subprocess.run(
+			["bash", str(SYNTH_SCRIPT)],
+			cwd=workspace,
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+
+		combined_output = result.stdout + result.stderr
+		assert result.returncode == 0, combined_output
+		assert "behavioural_smoke extractor rejected generated content: item[0] path=validation/tests/unterminated_heredoc.sh rejected: unterminated heredoc content" in result.stderr
+		assert "rejected: item[0] path=validation/tests/unterminated_heredoc.sh rejected:" not in result.stderr
 
 
 def test_review_synthesise_smoke_allows_comment_and_heredoc_literals_that_look_unsafe() -> None:

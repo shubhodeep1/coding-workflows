@@ -191,6 +191,9 @@ COMMAND_SEPARATORS = {';', '&&', '||', '|', '|&', '(', ')', '{', '}', ';;', ';&'
 CONTROL_TOKENS = {'if', 'then', 'do', 'elif', 'else', 'while', 'until', '!'}
 REDIRECTION_TOKENS = {'<', '>', '<<', '<<-', '<<<', '>>', '>&', '<&'}
 TOKEN_PATTERN = re.compile(r'\|\||&&|\|&|;;&|;;|;&|<<<|<<-?|>>|[<>][&]?|[;|(){}]|[^\s;|(){}<>]+')
+TOKEN_KIND_OPERATOR = 'operator'
+TOKEN_KIND_WORD = 'word'
+SHELL_OPERATORS = (';;&', '<<<', '<<-', '&&', '||', '|&', ';;', ';&', '>>', '>&', '<&', '<<')
 
 
 def squish(value, limit=None):
@@ -358,7 +361,6 @@ def strip_comments(line: str) -> str:
 
 
 def detect_and_mask_shell_evaluation(line: str, line_number: int) -> str:
-	masked = []
 	in_single = False
 	in_double = False
 	escaped = False
@@ -366,19 +368,16 @@ def detect_and_mask_shell_evaluation(line: str, line_number: int) -> str:
 	while index < len(line):
 		char = line[index]
 		if escaped:
-			masked.append(' ' if in_single or in_double else char)
 			escaped = False
 			index += 1
 			continue
 		if in_single:
-			masked.append(' ')
 			if char == "'":
 				in_single = False
 			index += 1
 			continue
 		if in_double:
 			if char == '\\':
-				masked.append(' ')
 				escaped = True
 				index += 1
 				continue
@@ -386,23 +385,19 @@ def detect_and_mask_shell_evaluation(line: str, line_number: int) -> str:
 				fail_generated_item(f'line {line_number}: backticks are not allowed')
 			if char == '$' and index + 1 < len(line) and line[index + 1] == '(' and (index + 2 >= len(line) or line[index + 2] != '('):
 				fail_generated_item(f'line {line_number}: command substitution is not allowed')
-			masked.append(' ')
 			if char == '"':
 				in_double = False
 			index += 1
 			continue
 		if char == '\\':
-			masked.append(char)
 			escaped = True
 			index += 1
 			continue
 		if char == "'":
-			masked.append(' ')
 			in_single = True
 			index += 1
 			continue
 		if char == '"':
-			masked.append(' ')
 			in_double = True
 			index += 1
 			continue
@@ -412,9 +407,8 @@ def detect_and_mask_shell_evaluation(line: str, line_number: int) -> str:
 			fail_generated_item(f'line {line_number}: command substitution is not allowed')
 		if char in '<>' and index + 1 < len(line) and line[index + 1] == '(':
 			fail_generated_item(f'line {line_number}: process substitution is not allowed')
-		masked.append(char)
 		index += 1
-	return ''.join(masked)
+	return line
 
 
 def has_line_continuation(masked_line: str) -> bool:
@@ -437,7 +431,75 @@ def is_assignment_token(token: str) -> bool:
 
 
 def command_basename(token: str) -> str:
-	return os.path.basename(token)
+	return os.path.basename(token.lstrip('\\'))
+
+
+def tokenize_command_line(line: str):
+	tokens = []
+	current = []
+	in_single = False
+	in_double = False
+	escaped = False
+
+	def flush_current():
+		if current:
+			tokens.append((TOKEN_KIND_WORD, ''.join(current)))
+			current.clear()
+
+	index = 0
+	while index < len(line):
+		char = line[index]
+		if escaped:
+			current.append(char)
+			escaped = False
+			index += 1
+			continue
+		if in_single:
+			if char == "'":
+				in_single = False
+			else:
+				current.append(char)
+			index += 1
+			continue
+		if in_double:
+			if char == '\\':
+				escaped = True
+			elif char == '"':
+				in_double = False
+			else:
+				current.append(char)
+			index += 1
+			continue
+		if char == '\\':
+			escaped = True
+			index += 1
+			continue
+		if char == "'":
+			in_single = True
+			index += 1
+			continue
+		if char == '"':
+			in_double = True
+			index += 1
+			continue
+		if char.isspace():
+			flush_current()
+			index += 1
+			continue
+		operator = next((candidate for candidate in SHELL_OPERATORS if line.startswith(candidate, index)), None)
+		if operator is None and char in ';|(){}<>':
+			operator = char
+		if operator is not None:
+			flush_current()
+			tokens.append((TOKEN_KIND_OPERATOR, operator))
+			index += len(operator)
+			continue
+		current.append(char)
+		index += 1
+	if escaped:
+		current.append('\\')
+	flush_current()
+	return tokens
 
 
 def is_shell_reentry_command(token: str) -> bool:
@@ -460,30 +522,45 @@ def env_uses_split_string(arg: str) -> bool:
 	return arg == '-S' or arg.startswith('--split-string') or bool(re.match(r'^-[A-Za-z]*S[A-Za-z]*$', arg))
 
 
-def first_env_command_arg(args):
+def env_option_consumes_value(arg: str) -> bool:
+	return arg in {'-C', '-u', '-a', '--argv0', '--chdir', '--unset', '--block-signal', '--default-signal', '--ignore-signal'}
+
+
+def exec_option_consumes_value(arg: str) -> bool:
+	return arg == '-a'
+
+
+def first_command_with_tail(args, line_number: int, *, allow_assignments: bool = False, option_takes_value=None):
+	if option_takes_value is None:
+		option_takes_value = lambda arg: False
 	end_of_options = False
-	for arg in iter_non_redirection_args(args):
+	index = 0
+	while index < len(args):
+		arg = args[index]
+		if arg in REDIRECTION_TOKENS:
+			if index + 1 >= len(args):
+				fail_generated_item(f'line {line_number}: redirection requires a target')
+			index += 2
+			continue
 		if end_of_options:
-			return arg
+			return arg, args[index + 1 :]
 		if arg == '--':
 			end_of_options = True
+			index += 1
 			continue
-		if is_assignment_token(arg):
+		if allow_assignments and is_assignment_token(arg):
+			index += 1
 			continue
-		if arg.startswith('-'):
-			continue
-		return arg
-	return None
-
-
-def first_exec_command_arg(args):
-	for arg in iter_non_redirection_args(args):
-		if arg == '--':
+		if option_takes_value(arg):
+			if index + 1 >= len(args):
+				fail_generated_item(f'line {line_number}: option {arg} requires a value')
+			index += 2
 			continue
 		if arg.startswith('-'):
+			index += 1
 			continue
-		return arg
-	return None
+		return arg, args[index + 1 :]
+	return None, []
 
 
 def validate_command(command: str, args, line_number: int):
@@ -504,32 +581,45 @@ def validate_command(command: str, args, line_number: int):
 		for arg in iter_non_redirection_args(args):
 			if env_uses_split_string(arg):
 				fail_generated_item(f'line {line_number}: env split-string execution is not allowed')
-		env_command = first_env_command_arg(args)
-		if env_command is not None and is_shell_reentry_command(env_command):
-			fail_generated_item(f'line {line_number}: shell re-entry via env {command_basename(env_command)} is not allowed')
+		env_command, env_tail = first_command_with_tail(args, line_number, allow_assignments=True, option_takes_value=env_option_consumes_value)
+		if env_command is not None:
+			validate_command(env_command, env_tail, line_number)
 	if base == 'exec':
-		exec_command = first_exec_command_arg(args)
-		if exec_command is not None and is_shell_reentry_command(exec_command):
-			fail_generated_item(f'line {line_number}: shell re-entry via exec {command_basename(exec_command)} is not allowed')
+		exec_command, exec_tail = first_command_with_tail(args, line_number, option_takes_value=exec_option_consumes_value)
+		if exec_command is not None:
+			validate_command(exec_command, exec_tail, line_number)
+	if base == 'command':
+		command_command, command_tail = first_command_with_tail(args, line_number)
+		if command_command is not None:
+			validate_command(command_command, command_tail, line_number)
+	if base == 'builtin':
+		builtin_command, builtin_tail = first_command_with_tail(args, line_number)
+		if builtin_command is not None:
+			validate_command(builtin_command, builtin_tail, line_number)
 
 
 def validate_command_line(masked_line: str, line_number: int):
-	tokens = TOKEN_PATTERN.findall(masked_line)
+	tokens = tokenize_command_line(masked_line)
 	expect_command = True
 	index = 0
 	while index < len(tokens):
-		token = tokens[index]
-		if token in COMMAND_SEPARATORS:
+		token_kind, token = tokens[index]
+		if token_kind == TOKEN_KIND_OPERATOR and token in COMMAND_SEPARATORS:
 			expect_command = True
 			index += 1
 			continue
-		if token in CONTROL_TOKENS:
+		if token_kind == TOKEN_KIND_WORD and token in CONTROL_TOKENS:
 			expect_command = True
 			index += 1
 			continue
 		if expect_command:
-			if token in REDIRECTION_TOKENS:
+			if token_kind == TOKEN_KIND_OPERATOR and token in REDIRECTION_TOKENS:
+				if index + 1 >= len(tokens) or tokens[index + 1][0] != TOKEN_KIND_WORD:
+					fail_generated_item(f'line {line_number}: redirection requires a target')
 				index += 2
+				continue
+			if token_kind != TOKEN_KIND_WORD:
+				index += 1
 				continue
 			if is_assignment_token(token):
 				index += 1
@@ -537,9 +627,17 @@ def validate_command_line(masked_line: str, line_number: int):
 			args = []
 			next_index = index + 1
 			while next_index < len(tokens):
-				next_token = tokens[next_index]
-				if next_token in COMMAND_SEPARATORS or next_token in CONTROL_TOKENS:
+				next_kind, next_token = tokens[next_index]
+				if (next_kind == TOKEN_KIND_OPERATOR and next_token in COMMAND_SEPARATORS) or (next_kind == TOKEN_KIND_WORD and next_token in CONTROL_TOKENS):
 					break
+				if next_kind == TOKEN_KIND_OPERATOR and next_token in REDIRECTION_TOKENS:
+					if next_index + 1 >= len(tokens) or tokens[next_index + 1][0] != TOKEN_KIND_WORD:
+						fail_generated_item(f'line {line_number}: redirection requires a target')
+					args.append(next_token)
+					next_index += 1
+					args.append(tokens[next_index][1])
+					next_index += 1
+					continue
 				args.append(next_token)
 				next_index += 1
 			validate_command(token, args, line_number)
@@ -653,13 +751,34 @@ def parse_heredoc_openers(line: str):
 				token_start += 1
 			token = ''.join(token_chars)
 			if token:
+				quoted = any(char in token for char in "'\\\"")
 				delimiter = unquote_heredoc_delimiter(token)
 				if delimiter:
-					openers.append((delimiter, strip_tabs))
+					openers.append((delimiter, strip_tabs, quoted))
 			index = token_start
 			continue
 		index += 1
 	return openers
+
+
+def validate_unquoted_heredoc_line(line: str, line_number: int):
+	escaped = False
+	index = 0
+	while index < len(line):
+		char = line[index]
+		if escaped:
+			escaped = False
+			index += 1
+			continue
+		if char == '\\':
+			escaped = True
+			index += 1
+			continue
+		if char == '`':
+			fail_generated_item(f'line {line_number}: backticks are not allowed')
+		if char == '$' and index + 1 < len(line) and line[index + 1] == '(' and (index + 2 >= len(line) or line[index + 2] != '('):
+			fail_generated_item(f'line {line_number}: command substitution is not allowed')
+		index += 1
 
 
 def validate_shell_content(content: str, path_value: str, item_index: int):
@@ -668,10 +787,13 @@ def validate_shell_content(content: str, path_value: str, item_index: int):
 	logical_line_start = 1
 	for line_number, raw_line in enumerate(content.split('\n'), start=1):
 		if pending_heredocs:
-			delimiter, strip_tabs = pending_heredocs[0]
+			delimiter, strip_tabs, quoted = pending_heredocs[0]
 			candidate_line = raw_line.lstrip('\t') if strip_tabs else raw_line
 			if candidate_line == delimiter:
 				pending_heredocs.pop(0)
+				continue
+			if not quoted:
+				validate_unquoted_heredoc_line(raw_line, line_number)
 			continue
 		control_line = strip_comments(raw_line)
 		masked_line = detect_and_mask_shell_evaluation(control_line, line_number)
@@ -688,7 +810,7 @@ def validate_shell_content(content: str, path_value: str, item_index: int):
 			validate_command_line(logical_line, logical_line_start)
 			logical_line = ''
 	if pending_heredocs:
-		fail_generated_item(f'item[{item_index}] path={squish(path_value, 200)} rejected: unterminated heredoc content')
+		fail_generated_item('unterminated heredoc content')
 	if logical_line:
 		validate_command_line(logical_line, logical_line_start)
 
