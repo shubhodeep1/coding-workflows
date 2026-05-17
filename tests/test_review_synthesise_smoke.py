@@ -415,6 +415,8 @@ def test_review_synthesise_smoke_rejects_unsafe_shell_constructs() -> None:
 		for content in (
 			'printf hello#;eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
 			'AWK=eval\n$AWK "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'/bin/bash -c "printf unsafe"\nbehavioural_smoke_inconclusive "unsafe"',
+			'/usr/bin/env eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
 			'result="$(whoami)"\nbehavioural_smoke_inconclusive "unsafe"',
 			'bash -c "printf unsafe"\nbehavioural_smoke_inconclusive "unsafe"',
 			'eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
@@ -435,6 +437,7 @@ def test_review_synthesise_smoke_rejects_unsafe_shell_constructs() -> None:
 			'time -o /dev/null eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
 			'time --format %E eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
 			'time -p eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'time /usr/bin/env eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
 			'! eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
 			'timeout 1 eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
 			'timeout 10s eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',

@@ -266,6 +266,7 @@ def normalize_content(text: str) -> str:
 		}
 		for index, token in enumerate(tokens):
 			next_token = tokens[index + 1] if index + 1 < len(tokens) else ""
+			token_basename = os.path.basename(token)
 			if pending_redirection_target:
 				pending_redirection_target = False
 				continue
@@ -284,8 +285,8 @@ def normalize_content(text: str) -> str:
 				continue
 			if expect_command and re.match(r"[A-Za-z_][A-Za-z0-9_]*=.*", token):
 				continue
-			if expect_command and token in passthrough_tokens:
-				passthrough_command = token
+			if expect_command and token_basename in passthrough_tokens:
+				passthrough_command = token_basename
 				continue
 			if expect_command and passthrough_command:
 				if passthrough_command == "env" and (
@@ -303,9 +304,12 @@ def normalize_content(text: str) -> str:
 					continue
 				if passthrough_command == "timeout" and re.match(r"\d+(?:\.\d+)?[smhd]?$", token):
 					continue
+				if token_basename in passthrough_tokens:
+					passthrough_command = token_basename
+					continue
 			if expect_command and token.startswith("$"):
 				raise ValueError("body_unsafe_shell_construct")
-			if expect_command and token in dangerous_command_tokens:
+			if expect_command and token_basename in dangerous_command_tokens:
 				raise ValueError("body_unsafe_shell_construct")
 			expect_command = False
 			passthrough_command = ""
