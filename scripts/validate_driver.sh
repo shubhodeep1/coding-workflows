@@ -695,11 +695,11 @@ discover_tests()
 	local all_candidates=()
 	local helper_files=()
 	local synth_files=()
-	local include_synthesised="true"
+	local include_synthesised="false"
 
-	case "$(printf '%s' "${VALIDATION_INCLUDE_SYNTHESISED}" | tr '[:upper:]' '[:lower:]')" in
-		0|false|no|off)
-			include_synthesised="false"
+	case "$(printf '%s' "${VALIDATION_INCLUDE_SYNTHESISED:-false}" | tr '[:upper:]' '[:lower:]')" in
+		1|true|yes|on)
+			include_synthesised="true"
 			;;
 	esac
 
@@ -742,7 +742,7 @@ discover_tests()
 
 	if [ "${#synth_files[@]}" -gt 0 ]; then
 		{
-			echo "validate_driver: excluded ${#synth_files[@]} synthesised behavioural smoke script(s) from test discovery (VALIDATION_INCLUDE_SYNTHESISED=${VALIDATION_INCLUDE_SYNTHESISED}):"
+			echo "validate_driver: excluded ${#synth_files[@]} synthesised behavioural smoke script(s) from test discovery (VALIDATION_INCLUDE_SYNTHESISED=${VALIDATION_INCLUDE_SYNTHESISED:-false}):"
 			printf '  - %s\n' "${synth_files[@]}"
 		} >&2
 	fi

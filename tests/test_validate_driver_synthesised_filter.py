@@ -76,8 +76,7 @@ def _run_discover_tests(workspace: Path, *, include_synthesised: str | None) -> 
 		env.pop("VALIDATION_INCLUDE_SYNTHESISED", None)
 
 	script = (
-		'VALIDATION_INCLUDE_SYNTHESISED="${VALIDATION_INCLUDE_SYNTHESISED:-false}"\n'
-		+ function_text
+		function_text
 		+ "\n"
 		+ "fail_fast()\n"
 		+ "{\n"
