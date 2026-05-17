@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_synthesise_smoke.sh:526-528 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: `is_shell_reentry_command()` is defined but never called; the validator does the same membership check inline, so the helper is dead code in a security-critical path.\n  WHY: No runtime failure today, but the duplicated logic creates maintenance drift risk and could silently diverge if refactored.\n- scripts/review_synthesise_smoke.sh:870-871 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, qwen_qwen3_6-plus]\n  PROBLEM: `validate_shell_content(content, path_value, item_index)` accepts `path_value` and `item_index` but never uses them; the caller already wraps rejections with path/index context.\n  WHY: No runtime failure today, but the unused parameters misstate the contract and add noise to the validation path.\n- scripts/review_synthesise_smoke.sh:396 | confidence=3\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: `detect_and_mask_shell_evaluation` is named as if it masks or rewrites shell evaluation, but it only validates and returns the original line unchanged.\n  WHY: The misleading name suggests a stronger contract than the implementation provides, which can lead to future refactoring mistakes.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_synthesise_smoke.sh:526\u2013527 | confidence=3\n  PROBLEM: `is_shell_reentry_command()` is defined but never called.\n  WHY: The only active check is the inline `if base in SHELL_REENTRY_COMMANDS` path, so the helper is dead code inside a security-critical validator.\n- scripts/review_synthesise_smoke.sh:870 | confidence=2\n  PROBLEM: `validate_shell_content(content: str, path_value: str, item_index: int)` accepts `path_value` and `item_index` but never references them.\n  WHY: The caller at line 940 already prepends `item[{item_index}] path=... rejected:`, so the parameters are unused and misleading.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_synthesise_smoke.sh:526 | confidence=4\n  PROBLEM: The function `is_shell_reentry_command(token: str) -> bool` is defined but never called anywhere in the codebase.\n  WHY: This is dead code in a security-critical validator and creates maintenance drift risk.\n- scripts/review_synthesise_smoke.sh:870 | confidence=4\n  PROBLEM: Function `validate_shell_content(content: str, path_value: str, item_index: int)` accepts `path_value` and `item_index` parameters but never uses them.\n  WHY: The caller at line 938 already adds this context, making the parameters redundant and adding unnecessary complexity.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/review_synthesise_smoke.sh:527-528 | confidence=5\n  PROBLEM: `is_shell_reentry_command()` is defined but never called anywhere in the embedded validator.\n  WHY: Line 639 performs the same check inline with `if base in SHELL_REENTRY_COMMANDS:`, so the helper is dead code and introduces drift risk.\n- scripts/review_synthesise_smoke.sh:870-871 | confidence=5\n  PROBLEM: `validate_shell_content(content, path_value, item_index)` accepts `path_value` and `item_index` but never references them inside the function body.\n  WHY: The caller at line 940 already wraps any rejection with `item[{item_index}] path={...} rejected: {exc}`, so the extra parameters do not affect the error contract.\n- scripts/review_synthesise_smoke.sh:396 | confidence=3\n  PROBLEM: `detect_and_mask_shell_evaluation` is named as if it masks evaluation, but it only raises on unsafe constructs and otherwise returns the original line unchanged.\n  WHY: The name implies transformation that does not happen, which can mislead maintainers during future refactors.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/review_synthesise_smoke.sh:526 | \n  PROBLEM: `is_shell_reentry_command()` is defined but never called.\n  WHY: The inline check at line 639 already uses `base in SHELL_REENTRY_COMMANDS`, so the helper is dead code and may mislead future contributors about the canonical check.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "2b90feee4319cb404af99bcc0fa5fadee70f078c8192f4ad73257e868143c0a2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2699,
+    "run_id": "25994268096",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25994268096",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517151304_bdf000582f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2699,
+    "run_id": "25994268096"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-17T15:13:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
