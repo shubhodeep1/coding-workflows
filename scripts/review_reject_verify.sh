@@ -21,11 +21,31 @@ sanitize_numeric_identifier()
 	printf '%s' "${fallback}"
 }
 
+sanitize_positive_integer()
+{
+	local value="$1"
+	local fallback="$2"
+	value="$(trim_ascii_whitespace "${value}")"
+	if [[ "${value}" =~ ^[1-9][0-9]*$ ]]; then
+		printf '%s' "${value}"
+		return 0
+	fi
+	printf '%s' "${fallback}"
+}
+
 CONSOLIDATOR_REJECT_SCHEMA_ENABLED="${CONSOLIDATOR_REJECT_SCHEMA_ENABLED:-false}"
+CONSOLIDATOR_REJECT_VERIFIER_ENABLED="$(trim_ascii_whitespace "${CONSOLIDATOR_REJECT_VERIFIER_ENABLED:-false}")"
+CONSOLIDATOR_REJECT_VERIFIER_REASONING="$(trim_ascii_whitespace "${CONSOLIDATOR_REJECT_VERIFIER_REASONING:-low}")"
+case "${CONSOLIDATOR_REJECT_VERIFIER_REASONING}" in
+	xhigh|high|medium|low|none) ;;
+	*) CONSOLIDATOR_REJECT_VERIFIER_REASONING="low" ;;
+esac
+CONSOLIDATOR_REJECT_VERIFIER_BATCH_MAX="$(sanitize_positive_integer "${CONSOLIDATOR_REJECT_VERIFIER_BATCH_MAX:-8}" "8")"
 RUNTIME_DIR="${RUNTIME_DIR:?RUNTIME_DIR is required}"
 REVIEW_ISSUES_FILE="${REVIEW_ISSUES_FILE:-${RUNTIME_DIR}/review_issues.txt}"
 PR_DIFF_FILE="${PR_DIFF_FILE:-${RUNTIME_DIR}/pr_diff.patch}"
 LINKED_ISSUE_CONTEXT_FILE="${LINKED_ISSUE_CONTEXT_FILE:-${RUNTIME_DIR}/linked_issue_context.txt}"
+REJECT_VERIFIER_PROMPT_FILE="${REJECT_VERIFIER_PROMPT_FILE:-${SUPPORT_PROMPTS_DIR:-prompts}/consolidator-reject-verifier.txt}"
 PR_NUMBER="$(sanitize_numeric_identifier "${PR_NUMBER:-unknown}" "unknown")"
 
 ROUND_NUMBER_BASE="$(trim_ascii_whitespace "${ROUND_NUMBER:-}")"
@@ -49,13 +69,21 @@ if ! PYTHONDONTWRITEBYTECODE=1 python3 - \
 	"${ARTIFACT_PATH}" \
 	"${PR_NUMBER}" \
 	"${CURRENT_ROUND}" \
-	"${CONSOLIDATOR_REJECT_SCHEMA_ENABLED}" <<'PY'
+	"${CONSOLIDATOR_REJECT_SCHEMA_ENABLED}" \
+	"${CONSOLIDATOR_REJECT_VERIFIER_ENABLED}" \
+	"${CONSOLIDATOR_REJECT_VERIFIER_REASONING}" \
+	"${CONSOLIDATOR_REJECT_VERIFIER_BATCH_MAX}" \
+	"${REJECT_VERIFIER_PROMPT_FILE}" <<'PY'
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
+import shutil
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -66,7 +94,19 @@ ARTIFACT_PATH = Path(sys.argv[4])
 PR_NUMBER = sys.argv[5]
 CURRENT_ROUND = int(sys.argv[6])
 SCHEMA_ENABLED = sys.argv[7].strip().lower() in {"1", "true", "yes", "on"}
+LLM_VERIFIER_ENABLED = sys.argv[8].strip().lower() in {"1", "true", "yes", "on"}
+LLM_VERIFIER_REASONING = sys.argv[9].strip() or "low"
+try:
+	LLM_VERIFIER_BATCH_MAX = max(int(sys.argv[10]), 1)
+except ValueError:
+	LLM_VERIFIER_BATCH_MAX = 8
+PROMPT_TEMPLATE = Path(sys.argv[11])
 REPO_ROOT = Path.cwd()
+
+LLM_REJECTION_KINDS = {"reviewer-wrong", "spec-doesnt-support"}
+VERDICT_VALUES = {"support", "does-not-support", "inconclusive"}
+LLM_VERIFIER_MODEL = "openai/gpt-5.4-mini"
+LLM_VERIFIER_TIMEOUT_SECS = 120
 
 REJECT_EVIDENCE_HEADERS = (
 	"EVIDENCE_DIFF_HUNK",
@@ -313,6 +353,236 @@ def render_blocks(blocks: list[dict[str, object]]) -> str:
 	return "\n".join(rendered).rstrip() + ("\n" if rendered else "")
 
 
+def chunked(items: list[dict[str, object]], size: int) -> list[list[dict[str, object]]]:
+	return [items[idx : idx + size] for idx in range(0, len(items), size)]
+
+
+def llm_prompt_missing_reason(prompt_path: Path) -> str:
+	return f"LLM reject verifier prompt {prompt_path} is unavailable."
+
+
+def llm_batch_fail_results(batch: list[dict[str, object]], reason_code: str, reason_text: str) -> dict[str, tuple[str, str]]:
+	first_issue = batch[0]["issue_id"] if batch else "none"
+	print(f"CONSOLIDATOR_REJECT_VERIFIER_FAIL reason={reason_code} first_issue={first_issue} batch_size={len(batch)}")
+	return {str(item["issue_id"]): ("inconclusive", reason_text) for item in batch}
+
+
+def upsert_toml_string_key(text: str, key: str, value: str) -> str:
+	replacement = f'{key} = "{value}"'
+	pattern = re.compile(rf"^[ \t]*{re.escape(key)}[ \t]*=.*$", re.MULTILINE)
+	if pattern.search(text):
+		return pattern.sub(replacement, text, count=1)
+	if text and not text.endswith("\n"):
+		text += "\n"
+	return text + replacement + "\n"
+
+
+def prepare_llm_codex_home(reasoning: str) -> Path:
+	root = Path(os.environ.get("RUNNER_TEMP") or REPO_ROOT / ".ai" / "tmp") / "codex_home_reject_verify"
+	root.mkdir(parents=True, exist_ok=True)
+	codex_home = Path(tempfile.mkdtemp(prefix="reject-verifier.", dir=str(root)))
+	source: Path | None = None
+	if os.environ.get("CODEX_HOME") and Path(os.environ["CODEX_HOME"]).is_dir():
+		source = Path(os.environ["CODEX_HOME"])
+	elif (Path.home() / ".codex").is_dir():
+		source = Path.home() / ".codex"
+	if source is not None:
+		try:
+			shutil.copytree(source, codex_home, dirs_exist_ok=True)
+		except OSError:
+			pass
+	config_paths = [codex_home / "config.toml", codex_home / ".codex" / "config.toml"]
+	config_written = False
+	for cfg in config_paths:
+		if not cfg.exists():
+			continue
+		try:
+			text = cfg.read_text(encoding="utf-8")
+		except OSError:
+			text = ""
+		text = upsert_toml_string_key(text, "model_reasoning_effort", reasoning)
+		text = upsert_toml_string_key(text, "sandbox_mode", "read-only")
+		cfg.parent.mkdir(parents=True, exist_ok=True)
+		cfg.write_text(text, encoding="utf-8")
+		config_written = True
+	if not config_written:
+		cfg = codex_home / "config.toml"
+		cfg.write_text(
+			upsert_toml_string_key(
+				upsert_toml_string_key("", "model_reasoning_effort", reasoning),
+				"sandbox_mode",
+				"read-only",
+			),
+			encoding="utf-8",
+		)
+	return codex_home
+
+
+def build_llm_prompt_text(template_text: str, batch: list[dict[str, object]]) -> str:
+	items: list[dict[str, str]] = []
+	for item in batch:
+		fields: dict[str, str] = item["fields"]  # type: ignore[assignment]
+		payload = {
+			"issue_id": str(item["issue_id"]),
+			"rejection_kind": str(item["rejection_kind"]),
+			"FILE": fields.get("FILE", ""),
+			"LINES": fields.get("LINES", ""),
+			"EVIDENCE": fields.get("EVIDENCE", ""),
+			"CURRENT_CODE": fields.get("CURRENT_CODE", ""),
+		}
+		if item["rejection_kind"] == "reviewer-wrong":
+			payload["EVIDENCE_RUNTIME_PATH"] = fields.get("EVIDENCE_RUNTIME_PATH", "")
+		elif item["rejection_kind"] == "spec-doesnt-support":
+			payload["EVIDENCE_SPEC_QUOTE"] = fields.get("EVIDENCE_SPEC_QUOTE", "")
+		items.append(payload)
+	return template_text.rstrip() + "\n\nINPUT_PAYLOAD\n" + json.dumps({"items": items}, indent=2) + "\n"
+
+
+def validate_llm_batch_output(payload: object, batch: list[dict[str, object]]) -> dict[str, tuple[str, str]]:
+	if not isinstance(payload, dict):
+		raise ValueError("invalid_top_level")
+	rows = payload.get("results")
+	if not isinstance(rows, list):
+		raise ValueError("missing_results")
+	expected = {str(item["issue_id"]): str(item["rejection_kind"]) for item in batch}
+	validated: dict[str, tuple[str, str]] = {}
+	for row in rows:
+		if not isinstance(row, dict):
+			raise ValueError("invalid_row")
+		issue_id = str(row.get("issue_id", "")).strip()
+		rejection_kind = str(row.get("rejection_kind", "")).strip()
+		verdict = str(row.get("verdict", "")).strip()
+		reason = squish(str(row.get("reason", "")), 400)
+		if issue_id not in expected:
+			raise ValueError("unexpected_issue_id")
+		if issue_id in validated:
+			raise ValueError("duplicate_issue_id")
+		if rejection_kind != expected[issue_id]:
+			raise ValueError("rejection_kind_mismatch")
+		if verdict not in VERDICT_VALUES:
+			raise ValueError("invalid_verdict")
+		if not reason:
+			raise ValueError("missing_reason")
+		validated[issue_id] = (verdict, reason)
+	if set(validated) != set(expected):
+		raise ValueError("missing_rows")
+	return validated
+
+
+def run_llm_verifier_batch(batch: list[dict[str, object]], template_text: str) -> dict[str, tuple[str, str]]:
+	if not batch:
+		return {}
+	codex_bin = shutil.which("codex")
+	if not codex_bin:
+		return llm_batch_fail_results(
+			batch,
+			"missing_codex",
+			"codex CLI is unavailable, so the LLM reject verifier could not run.",
+		)
+	timeout_bin = shutil.which("timeout")
+	prompt_text = build_llm_prompt_text(template_text, batch)
+	codex_home = prepare_llm_codex_home(LLM_VERIFIER_REASONING)
+	cmd = [
+		codex_bin,
+		"--ask-for-approval",
+		"never",
+		"-c",
+		"model_verbosity=low",
+		"-c",
+		"include_apply_patch_tool=true",
+		"exec",
+		"--model",
+		LLM_VERIFIER_MODEL,
+		"--sandbox",
+		"read-only",
+	]
+	if timeout_bin:
+		cmd = [
+			timeout_bin,
+			"--signal=TERM",
+			"--kill-after=30s",
+			"--",
+			str(LLM_VERIFIER_TIMEOUT_SECS),
+		] + cmd
+	env = os.environ.copy()
+	env["CODEX_HOME"] = str(codex_home)
+	try:
+		completed = subprocess.run(
+			cmd,
+			input=prompt_text,
+			text=True,
+			capture_output=True,
+			env=env,
+			timeout=None if timeout_bin else LLM_VERIFIER_TIMEOUT_SECS,
+		)
+	except subprocess.TimeoutExpired:
+		shutil.rmtree(codex_home, ignore_errors=True)
+		return llm_batch_fail_results(
+			batch,
+			"timeout",
+			f"LLM reject verifier timed out after {LLM_VERIFIER_TIMEOUT_SECS}s.",
+		)
+	finally:
+		shutil.rmtree(codex_home, ignore_errors=True)
+
+	if completed.returncode in {124, 137}:
+		return llm_batch_fail_results(
+			batch,
+			"timeout",
+			f"LLM reject verifier timed out after {LLM_VERIFIER_TIMEOUT_SECS}s.",
+		)
+	if completed.returncode != 0:
+		return llm_batch_fail_results(
+			batch,
+			f"exit_{completed.returncode}",
+			f"LLM reject verifier exited with status {completed.returncode}.",
+		)
+	stdout_text = completed.stdout.strip()
+	if not stdout_text:
+		return llm_batch_fail_results(
+			batch,
+			"empty_output",
+			"LLM reject verifier returned empty output.",
+		)
+	try:
+		payload = json.loads(stdout_text)
+		return validate_llm_batch_output(payload, batch)
+	except (json.JSONDecodeError, ValueError) as exc:
+		reason_code = "malformed_json" if isinstance(exc, json.JSONDecodeError) else str(exc)
+		reason_text = (
+			"LLM reject verifier returned malformed JSON."
+			if isinstance(exc, json.JSONDecodeError)
+			else "LLM reject verifier returned incomplete or malformed results."
+		)
+		return llm_batch_fail_results(batch, reason_code, reason_text)
+
+
+def verify_llm_rejections(items: list[dict[str, object]]) -> dict[str, tuple[str, str]]:
+	results: dict[str, tuple[str, str]] = {}
+	if not items:
+		return results
+	if not LLM_VERIFIER_ENABLED:
+		for item in items:
+			results[str(item["issue_id"])] = (
+				"inconclusive",
+				"LLM reject verifier is disabled by CONSOLIDATOR_REJECT_VERIFIER_ENABLED=false.",
+			)
+		return results
+	if not PROMPT_TEMPLATE.exists():
+		for batch in chunked(items, LLM_VERIFIER_BATCH_MAX):
+			results.update(llm_batch_fail_results(batch, "missing_prompt", llm_prompt_missing_reason(PROMPT_TEMPLATE)))
+		return results
+	try:
+		template_text = PROMPT_TEMPLATE.read_text(encoding="utf-8")
+	except OSError:
+		for batch in chunked(items, LLM_VERIFIER_BATCH_MAX):
+			results.update(llm_batch_fail_results(batch, "prompt_read_error", llm_prompt_missing_reason(PROMPT_TEMPLATE)))
+		return results
+	for batch in chunked(items, LLM_VERIFIER_BATCH_MAX):
+		results.update(run_llm_verifier_batch(batch, template_text))
+	return results
+
+
 def verify_already_fixed(block: dict[str, object], diff_available: bool, patches: dict[str, dict[str, object]]) -> tuple[str, str]:
 	if not diff_available:
 		return "inconclusive", "PR diff was unavailable, so the cited diff hunk could not be verified."
@@ -447,6 +717,7 @@ results: list[dict[str, str | int | bool]] = []
 mutated = False
 
 if SCHEMA_ENABLED:
+	llm_pending: list[dict[str, object]] = []
 	for block in blocks:
 		fields: dict[str, str] = block["fields"]  # type: ignore[assignment]
 		classification = fields.get("CLASSIFICATION", "")
@@ -454,15 +725,37 @@ if SCHEMA_ENABLED:
 		if classification != "non-actionable" or not rejection_kind:
 			continue
 		issue_id = parse_issue_id(str(block["start"]))
+		block["issue_id"] = issue_id
+		if rejection_kind in LLM_REJECTION_KINDS:
+			llm_pending.append({
+				"issue_id": issue_id,
+				"rejection_kind": rejection_kind,
+				"fields": fields,
+			})
+
+	llm_results = verify_llm_rejections(llm_pending)
+
+	for block in blocks:
+		fields = block["fields"]  # type: ignore[assignment]
+		classification = fields.get("CLASSIFICATION", "")
+		rejection_kind = fields.get("REJECTION_KIND", "")
+		if classification != "non-actionable" or not rejection_kind:
+			continue
+		issue_id = str(block.get("issue_id") or parse_issue_id(str(block["start"])))
 		if rejection_kind == "already-fixed":
 			verdict, reason = verify_already_fixed(block, diff_available, patch_data)
 		elif rejection_kind == "out-of-scope":
 			verdict, reason = verify_out_of_scope(block, linked_issue_text)
 		elif rejection_kind == "already-rejected-with-evidence":
 			verdict, reason = verify_prior_round(block, REPO_ROOT, PR_NUMBER)
+		elif rejection_kind in LLM_REJECTION_KINDS:
+			verdict, reason = llm_results.get(
+				issue_id,
+				("inconclusive", "LLM reject verifier returned no result for this issue."),
+			)
 		else:
 			verdict = "inconclusive"
-			reason = f"{rejection_kind} remains pending the Phase C PR-2 LLM verifier."
+			reason = f"{rejection_kind} is not handled by the reject verifier."
 
 		result = {
 			"issue_id": issue_id,

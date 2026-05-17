@@ -11,6 +11,9 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
+CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+MARK_STABLE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "mark-stable.yml"
+TEST_AND_MARK_STABLE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
 REVIEWERS = REPO_ROOT / "scripts" / "review_run_reviewers.sh"
 APPLY_FIXES = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
 
@@ -305,6 +308,9 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT: ${{ vars.REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT || '16000' }}",
 		"REVIEW_PARSER_FAILOPEN: ${{ vars.REVIEW_PARSER_FAILOPEN || '1' }}",
 		"CONSOLIDATOR_REJECT_SCHEMA_ENABLED: ${{ vars.CONSOLIDATOR_REJECT_SCHEMA_ENABLED || 'false' }}",
+		"CONSOLIDATOR_REJECT_VERIFIER_ENABLED: ${{ vars.CONSOLIDATOR_REJECT_VERIFIER_ENABLED || 'false' }}",
+		"CONSOLIDATOR_REJECT_VERIFIER_REASONING: ${{ vars.CONSOLIDATOR_REJECT_VERIFIER_REASONING || 'low' }}",
+		"CONSOLIDATOR_REJECT_VERIFIER_BATCH_MAX: ${{ vars.CONSOLIDATOR_REJECT_VERIFIER_BATCH_MAX || '8' }}",
 		"REVIEW_LEDGER_ENABLED: ${{ vars.REVIEW_LEDGER_ENABLED || '1' }}",
 		"REVIEW_LEDGER_PERSIST_LIMIT: ${{ vars.REVIEW_LEDGER_PERSIST_LIMIT || '2' }}",
 		"REVIEW_LEDGER_PATH: ${{ vars.REVIEW_LEDGER_PATH || format('.ai/review_issue_ledger/pr-{0}.txt', inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number || '0') }}",
@@ -312,6 +318,21 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEW_REVIEWER_ITERATION_SCOPING: ${{ vars.REVIEW_REVIEWER_ITERATION_SCOPING || '1' }}",
 	):
 		assert expected in workflow, f"Missing codex-agent env wiring: {expected}"
+
+
+def test_reject_verifier_prompt_staging_and_pytest_contracts() -> None:
+	workflow = _workflow_text()
+	for expected in (
+		'if [ ! -f "${SUPPORT_PROMPTS_DIR}/consolidator-reject-verifier.txt" ]; then',
+		'src=".codex-workflow-src/prompts/consolidator-reject-verifier.txt"',
+		'check_soft_file "${SUPPORT_PROMPTS_DIR}/consolidator-reject-verifier.txt"',
+		'CONSOLIDATOR_REJECT_VERIFIER_ENABLED:-0',
+	):
+		assert expected in workflow, f"Missing reject-verifier prompt wiring: {expected}"
+	for path in (CI_WORKFLOW, MARK_STABLE_WORKFLOW, TEST_AND_MARK_STABLE_WORKFLOW):
+		text = path.read_text(encoding="utf-8")
+		assert 'python3 -c "import pytest" >/dev/null 2>&1 || python3 -m pip install --quiet pytest' in text
+		assert 'PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_review_reject_verify_llm.py -q' in text
 
 
 def test_reject_verifier_bootstrap_and_stage_order_contract() -> None:
@@ -588,6 +609,7 @@ def test_reviewer_iteration_scope_prepare_path_reports_missing_targeted_context_
 
 def main() -> int:
 	test_review_pipeline_knobs_are_wired_into_codex_agent_env()
+	test_reject_verifier_prompt_staging_and_pytest_contracts()
 	test_review_pipeline_summary_step_is_local_only_and_grep_friendly()
 	test_reviewer_prompt_output_rules_still_forbid_scripts()
 	test_reviewer_iteration_scope_first_iteration_keeps_full_diff_context()
