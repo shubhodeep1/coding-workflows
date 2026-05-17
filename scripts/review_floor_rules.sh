@@ -6,6 +6,16 @@ BUNDLE_FILE="${1:-reviewer_bundle.txt}"
 OUT_FILE="${2:-floor_tags.txt}"
 TOLERANCE_LINES=3
 
+# Source the shared UTF-8 sanitiser from the same directory when
+# available so floor_tags.txt gets the same mktemp + python fallback
+# behaviour as the other Codex prompt-entrypoint sanitisation paths.
+_floor_rules_script_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "${_floor_rules_script_dir}/gh_helpers.sh" ]; then
+	# shellcheck source=gh_helpers.sh
+	# shellcheck disable=SC1091
+	source "${_floor_rules_script_dir}/gh_helpers.sh" 2>/dev/null || true
+fi
+
 warn() {
 	local event="$1"
 	shift || true
@@ -597,24 +607,11 @@ fi
 # mawk's `substr` (and gawk's, under LC_ALL=C/POSIX) is byte-based, so
 # the cap can land mid-codepoint inside a multi-byte character (e.g.
 # the 3-byte em-dash U+2014 = \xe2\x80\x94) and leave an orphaned
-# lead-byte sequence in OUT_FILE. Codex CLI's stdin reader strictly
-# validates UTF-8 and aborts on the first invalid byte, so a single
-# truncated em-dash here was enough to kill the editor across all
-# retries on multi-user-ai-agent PR #33. iconv -t UTF-8//IGNORE
-# silently drops the orphaned bytes; on already-valid input it leaves
-# OUT_FILE byte-identical. Best-effort: skip if iconv is missing.
-if [ -s "${OUT_FILE}" ] && command -v iconv >/dev/null 2>&1; then
-	_floor_tags_utf8_tmp="${OUT_FILE}.utf8tmp"
-	# iconv exits non-zero whenever //IGNORE skips any bytes, even
-	# though the output IS correct; gate on whether output was
-	# produced, not on $?.
-	iconv -f UTF-8 -t UTF-8//IGNORE < "${OUT_FILE}" > "${_floor_tags_utf8_tmp}" 2>/dev/null || true
-	if [ -s "${_floor_tags_utf8_tmp}" ]; then
-		mv "${_floor_tags_utf8_tmp}" "${OUT_FILE}"
-	else
-		rm -f "${_floor_tags_utf8_tmp}"
-	fi
-	unset _floor_tags_utf8_tmp
+# lead-byte sequence in OUT_FILE. Reuse the shared helper so this path
+# gets the same mktemp collision-avoidance and all-invalid-input
+# fallback as every other prompt sanitisation call site.
+if [ -s "${OUT_FILE}" ] && command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+	sanitize_codex_prompt_file "${OUT_FILE}"
 fi
 
 anchors_scanned=0
