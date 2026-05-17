@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_reject_verify.sh:393-394 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: `verify_prior_round()` compares the stored `lines` value to the current block `LINES` as an exact string, so shifted sticky repeats that matched within `STICKY_LINE_BUCKET` are rejected and flipped back to `must-fix`.\n  WHY: The sticky annotator is interval-aware across line shifts, but the verifier only accepts identical line strings, making `already-rejected-with-evidence` unusable for the intended bucketed matches.\n- prompts/review-consolidator.txt:33-35 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5]\n  PROBLEM: The consolidator prompt requires `REJECTION_KIND: already-rejected-with-evidence` for sticky repeats, but that dismissal path is incompatible with the verifier\u2019s exact line matching for shifted-line cases.\n  WHY: Reviewers report this prompt/verifier mismatch causes valid sticky repeats to oscillate between dismissal and `must-fix` instead of being accepted.\n- scripts/review_apply_fixes.sh:276-283 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: When `mktemp` fails, the sticky-temp cleanup path still reaches `rm -f \"${sticky_tmp}\"` with an empty operand.\n  WHY: Reviewers note this is harmless/non-fatal on Linux, but it is semantically incorrect and noisy; one reviewer treats it as a cosmetic issue while others flag it as an error-path smell.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_reject_verify.sh:394 | severity=high | confidence=5\n  PROBLEM: `verify_prior_round()` uses exact string comparison on `LINES`, so a sticky repeat that shifted within `STICKY_LINE_BUCKET` is rejected as a different line range.\n  WHY: The sticky annotator matches findings across shifted ranges, but the verifier only accepts identical line strings, so `already-rejected-with-evidence` is reversed to `must-fix`.\n- prompts/review-consolidator.txt:33-35 | severity=high | confidence=5\n  PROBLEM: The prompt says a sticky repeat dismissal is only valid with `REJECTION_KIND: already-rejected-with-evidence` plus `EVIDENCE_PRIOR_ROUND`, which conflicts with the verifier\u2019s exact-line check.\n  WHY: For shifted-line sticky matches, the consolidator follows the prompt and emits a dismissal that the verifier rejects, creating an incompatibility loop.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_reject_verify.sh:394 | severity=high | confidence=5\n  PROBLEM: The verifier performs exact string equality on `LINES` when validating `already-rejected-with-evidence`, which breaks bucketed sticky matches with shifted line numbers.\n  WHY: A prior finding at `20-22` can legitimately match a current line like `27` within `STICKY_LINE_BUCKET=5`, but the exact comparison causes the dismissal to be reversed back to `must-fix`.\n- prompts/review-consolidator.txt:33-35 | severity=high | confidence=5\n  PROBLEM: The prompt instructs editors to dismiss sticky repeats with `REJECTION_KIND: already-rejected-with-evidence`, but that path is rejected by the verifier for bucketed sticky matches.\n  WHY: Editors following the prompt will attempt to dismiss shifted-line repeats, but the verifier will reverse those dismissals and force unnecessary `must-fix` promotions.\n- scripts/review_apply_fixes.sh:277-283 | severity=low | confidence=2\n  PROBLEM: When `mktemp` fails and `sticky_tmp` is empty, the cleanup path still reaches `rm -f \"${sticky_tmp}\"`, producing `rm -f \"\"`.\n  WHY: The reviewer calls this a defensive code smell rather than a runtime failure, but it is still incomplete error handling.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/review_reject_verify.sh:~lines 393-394 | severity=high | confidence=5\n  PROBLEM: The reject verifier requires `verified_rejections.json` `lines` to exactly equal the current block `LINES` for `already-rejected-with-evidence`, so shifted sticky matches are rejected.\n  WHY: Sticky matching is interval-aware within `STICKY_LINE_BUCKET`, but the exact string comparison makes the dismissal path dead code for shifted-line cases.\n- scripts/review_apply_fixes.sh:276-283 | severity=low | confidence=1\n  PROBLEM: When `mktemp` fails, `sticky_tmp` can be empty and the error block still invokes `rm -f \"${sticky_tmp}\"`, which becomes `rm -f \"\"`.\n  WHY: The reviewer says this is harmless on Linux and already prevented from aborting under `set -e`, but it is still a noisy empty-operand cleanup.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/review_reject_verify.sh:394 | severity=high | confidence=5\n  PROBLEM: The reject verifier performs exact string equality on the `LINES` field when validating `already-rejected-with-evidence`, so bucketed sticky matches with shifted line numbers fail verification.\n  WHY: The sticky annotator matches prior and current findings within `STICKY_LINE_BUCKET`, but the verifier compares the stored and current line strings exactly and reverses the dismissal to `must-fix`.\n- scripts/review_apply_fixes.sh:283 | severity=low | confidence=0\n  PROBLEM: `rm -f \"${sticky_tmp}\"` is called in the `mktemp`-failure path even when `sticky_tmp` is empty.\n  WHY: The reviewer describes this as harmless but semantically incorrect, and suggests guarding the removal with a non-empty check.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "70cf5c7f3eca2cb635d2797e6bcf24d6559a0abe24df3d732873bb191a3a7723",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2718,
+    "run_id": "26000891315",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26000891315",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517200450_6ba8e75bc3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2718,
+    "run_id": "26000891315"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-17T20:04:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
