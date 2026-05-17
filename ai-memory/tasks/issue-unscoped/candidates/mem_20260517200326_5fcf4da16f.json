@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_reject_verify.sh:504-521 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: model_reasoning_effort is only written into config.toml and is not passed as a -c CLI override, so a config-write failure can leave the verifier running with the model's default reasoning effort.\n  WHY: The reviewers agree the command lacks a belt-and-suspenders fallback; one reviewer disputed that this is a correctness bug and treated it as a hardening-only concern, but the shared issue is the missing CLI fallback.\n- scripts/review_reject_verify.sh:536-537 | severity=low\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: prepare_llm_codex_home can leak the temporary CODEX_HOME directory when it exits via BaseException subclasses that bypass the inner cleanup path.\n  WHY: The internal except Exception block will not catch KeyboardInterrupt/SystemExit, and codex_home remains None so the outer cleanup does not remove the mkdtemp directory.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_reject_verify.sh:lines 504-518 | confidence=3\n  PROBLEM: The LLM verifier relies exclusively on prepare_llm_codex_home() writing model_reasoning_effort into config.toml to set the reasoning level for the codex CLI invocation.\n  WHY: The cmd array has -c model_verbosity=low and -c include_apply_patch_tool=true but no -c model_reasoning_effort=low (or equivalent), so if config writes silently fail the codex call proceeds without the intended reasoning effort.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_reject_verify.sh:lines 505-521 | confidence=4\n  PROBLEM: model_reasoning_effort is set only via config.toml writes, not via the -c CLI flag.\n  WHY: If all config write paths fail in prepare_llm_codex_home, the codex call proceeds with the model's default reasoning effort, and the CLI command only includes -c model_verbosity=low and -c include_apply_patch_tool=true.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_reject_verify.sh:Lines 507-521 | confidence=4\n  PROBLEM: The model_reasoning_effort is set only via config.toml file modification in prepare_llm_codex_home(), but the codex CLI call does not include -c model_reasoning_effort={reasoning} as a CLI override.\n  WHY: If tempfile operations or config file writes fail, the codex call will use the model's default reasoning effort instead of the intended \"low\" setting.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/review_reject_verify.sh:~line 507-521\n  PROBLEM: model_reasoning_effort is set only via config.toml writes inside prepare_llm_codex_home, but not via the -c CLI flag.\n  WHY: If all config.toml write paths fail, the codex call proceeds with the model's default reasoning effort instead of the intended low/medium setting specified by CONSOLIDATOR_REJECT_VERIFIER_REASONING.\n- scripts/review_reject_verify.sh:~line 536-537\n  PROBLEM: When prepare_llm_codex_home raises an exception that is not a subclass of Exception, the temp directory created by mkdtemp is not cleaned up by either prepare_llm_codex_home or the outer finally block.\n  WHY: The internal except Exception block will not fire for KeyboardInterrupt/SystemExit, and codex_home remains None so the temp directory leaks on signal-based termination.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "63b8a9b7964d75600fe359f8b929309c3a1fdcab451eb72cb87fe2b0b0809d59",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2717,
+    "run_id": "26000889249",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26000889249",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517200326_5fcf4da16f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2717,
+    "run_id": "26000889249"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-17T20:03:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
