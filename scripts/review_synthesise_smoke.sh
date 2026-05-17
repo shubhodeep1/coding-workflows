@@ -636,7 +636,7 @@ def validate_command(command: str, args, line_number: int):
 		fail_generated_item(f'line {line_number}: xargs is not allowed')
 	if base in {'perl', 'php', 'ruby'}:
 		fail_generated_item(f'line {line_number}: {base} is not allowed')
-	if base in SHELL_REENTRY_COMMANDS:
+	if is_shell_reentry_command(command):
 		fail_generated_item(f'line {line_number}: shell re-entry via {base} is not allowed')
 	if base == 'env':
 		for arg in iter_non_redirection_args(args):
@@ -868,6 +868,8 @@ def validate_unquoted_heredoc_line(line: str, line_number: int):
 
 
 def validate_shell_content(content: str, path_value: str, item_index: int):
+	# Caller-owned wrapping adds item/path context to any rejection raised here.
+	_ = (path_value, item_index)
 	pending_heredocs = []
 	logical_line = ''
 	logical_line_start = 1
