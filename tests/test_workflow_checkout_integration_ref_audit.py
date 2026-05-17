@@ -75,8 +75,11 @@ def test_required_workflows_enforce_integration_ref_contract() -> None:
 		"base64 --decode >",
 		"sed -nE 's/^- Integration branch:",
 		"grep -Eq '^orchestrator/project-[0-9]+$'",
+		"/git/ref/heads/",
 	)
 
+	# Keep the GitHub ref-lookup ban shared so future baseline-resolution logic
+	# cannot slip into another required workflow without updating this audit.
 	for workflow_name in sorted(REQUIRED_RESOLVER_WORKFLOWS):
 		wf = _workflow_text(workflow_name)
 		disallowed_inline_markers = base_disallowed_inline_markers
@@ -86,7 +89,6 @@ def test_required_workflows_enforce_integration_ref_contract() -> None:
 			resolved_base_log = "echo \"PR base ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}\""
 			checkout_resolver_step = "- name: Resolve checkout ref"
 			checkout_resolver_id = "id: checkout_ref"
-			disallowed_inline_markers = base_disallowed_inline_markers + ("/git/ref/heads/",)
 		else:
 			checkout_ref = "ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
 			resolved_ref_log = "echo \"Resolved ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}\""
