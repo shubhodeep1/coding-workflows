@@ -631,6 +631,11 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Source sanitize_codex_prompt_file (best-effort) so the
+          # clarify-respond prompt is UTF-8-clean before piping.
+          # shellcheck source=/dev/null
+          source scripts/gh_helpers.sh 2>/dev/null || true
+
           # Keep static context first for cache reuse, then append run-specific
           # data so issue/comment changes do not invalidate the cached prefix.
           {
@@ -675,6 +680,9 @@ jobs:
           max_attempts=3
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex clarify-respond attempt ${attempt}/${max_attempts}..."
+            if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+              sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
+            fi
             if cat "${CODEX_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
               if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
                 echo "Codex clarify-respond succeeded on attempt ${attempt}."
@@ -701,6 +709,11 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           set -euo pipefail
+
+          # Source sanitize_codex_prompt_file (best-effort) so the
+          # critic + revised prompts are UTF-8-clean before piping.
+          # shellcheck source=/dev/null
+          source scripts/gh_helpers.sh 2>/dev/null || true
 
           # Self-critique pass for non-letter decisions
           HAS_NON_LETTER="false"
@@ -735,6 +748,9 @@ jobs:
             } > "${RUNTIME_DIR}/critic_prompt.txt"
 
             CRITIC_MODEL="${MODEL_EDITOR}"
+            if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+              sanitize_codex_prompt_file "${RUNTIME_DIR}/critic_prompt.txt"
+            fi
             if cat "${RUNTIME_DIR}/critic_prompt.txt" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec \
               --model "${CRITIC_MODEL}" --sandbox danger-full-access > "${RUNTIME_DIR}/critic_output.txt" 2>/dev/null; then
               if grep -q 'VERDICT: REJECT' "${RUNTIME_DIR}/critic_output.txt"; then
@@ -748,6 +764,9 @@ jobs:
                   echo "Revise your decisions to address this feedback."
                 } > "${CODEX_PROMPT_FILE}.v2"
 
+                if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+                  sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}.v2"
+                fi
                 if cat "${CODEX_PROMPT_FILE}.v2" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec \
                   --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${CODEX_OUTPUT_FILE}" 2>/dev/null; then
                   echo "Revised decision produced after self-critique."

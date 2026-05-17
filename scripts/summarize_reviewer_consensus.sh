@@ -59,6 +59,13 @@ fi
 : "${PREVIOUS_REVIEWS_DIR:?PREVIOUS_REVIEWS_DIR must be set}"
 : "${RUNTIME_DIR:?RUNTIME_DIR must be set}"
 
+# Source gh_helpers.sh for sanitize_codex_prompt_file (best-effort).
+if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" ]; then
+	# shellcheck source=gh_helpers.sh
+	# shellcheck disable=SC1091
+	source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
+fi
+
 SUMMARISER_MODEL="${XPOLL_SUMMARISER_MODEL:-openai/gpt-5.4-mini}"
 SUMMARISER_REASONING="${XPOLL_SUMMARISER_REASONING:-medium}"
 SUMMARISER_TARGET_PER_REVIEWER="${XPOLL_SUMMARISER_LINES_PER_REVIEWER:-160}"
@@ -302,6 +309,9 @@ while [ "${attempt}" -le "${SUMMARISER_MAX_ATTEMPTS}" ]; do
 	echo "summariser (${PREFIX}): attempt ${attempt}/${SUMMARISER_MAX_ATTEMPTS} — model=${SUMMARISER_MODEL} reasoning=${SUMMARISER_REASONING}" | tee -a "${log_file}"
 
 	last_rc=0
+	if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+		sanitize_codex_prompt_file "${prompt_file}"
+	fi
 	CODEX_HOME="${summariser_codex_home}" \
 		timeout --signal=KILL "${SUMMARISER_CALL_TIMEOUT}" \
 		"${codex_bin}" --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${SUMMARISER_MODEL}" --sandbox read-only < "${prompt_file}" \

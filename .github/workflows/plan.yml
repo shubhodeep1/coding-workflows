@@ -1002,6 +1002,10 @@ jobs:
               >/dev/null 2>&1 || true
           fi
 
+          if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+            sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
+          fi
+
           max_attempts=3
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex planning attempt ${attempt}/${max_attempts}..."

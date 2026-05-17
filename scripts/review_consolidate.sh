@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Source gh_helpers.sh for sanitize_codex_prompt_file. Best-effort: a
+# missing helpers file leaves the function undefined and the caller
+# below guards via `command -v`.
+if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" ]; then
+	# shellcheck source=gh_helpers.sh
+	source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
+fi
+
 review_log()
 {
 	printf 'stage=consolidator %s\n' "$*" >&2
@@ -143,6 +151,12 @@ fi
 
 cmd_rc=0
 
+# Strip any invalid UTF-8 from the consolidator prompt before piping
+# to codex (whose stdin reader strictly validates UTF-8). See
+# sanitize_codex_prompt_file in scripts/gh_helpers.sh for the design.
+if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+	sanitize_codex_prompt_file "${CONSOLIDATOR_PROMPT_FILE}"
+fi
 if ! CODEX_HOME="${consolidator_codex_home}" \
 	timeout "${REVIEW_CONSOLIDATOR_TIMEOUT_SECS}" \
 	"${codex_bin}" --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${REVIEW_CONSOLIDATOR_MODEL}" --sandbox danger-full-access \

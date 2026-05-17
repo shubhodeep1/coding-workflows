@@ -405,6 +405,13 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Source sanitize_codex_prompt_file (best-effort) so the
+          # log-analysis prompt is UTF-8-clean before piping. Log
+          # excerpts pulled from CI can carry control bytes from
+          # downstream tool output that may include invalid UTF-8.
+          # shellcheck source=/dev/null
+          source scripts/gh_helpers.sh 2>/dev/null || true
+
           TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
           TRACKING_ISSUE_NUM=""
           if [[ "${TRACKING_ISSUE_RAW}" =~ ^[0-9]+$ ]] && [ "${TRACKING_ISSUE_RAW}" -gt 0 ]; then
@@ -582,6 +589,9 @@ jobs:
           analyze_attempts_used=0
           for attempt in $(seq 1 "${max_attempts}"); do
             analyze_attempts_used="${attempt}"
+            if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+              sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
+            fi
             set +e
             codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" > "${REPORT_FILE}" 2> >(tee -a /tmp/workflow-analysis-codex.log >&2)
             ANALYZE_EXIT=$?
@@ -990,6 +1000,11 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Source sanitize_codex_prompt_file (best-effort) so the
+          # deep-audit prompt is UTF-8-clean before piping.
+          # shellcheck source=/dev/null
+          source scripts/gh_helpers.sh 2>/dev/null || true
+
           TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
           TRACKING_ISSUE_NUM=""
           if [[ "${TRACKING_ISSUE_RAW}" =~ ^[0-9]+$ ]] && [ "${TRACKING_ISSUE_RAW}" -gt 0 ]; then
@@ -1099,6 +1114,9 @@ jobs:
 
           AUDIT_EXIT=0
           for attempt in $(seq 1 "${max_attempts}"); do
+            if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+              sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
+            fi
             set +e
             codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" > "${SECTION_FILE}" 2> >(tee -a /tmp/workflow-audit-codex.log >&2)
             AUDIT_EXIT=$?
@@ -1448,6 +1466,11 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Source sanitize_codex_prompt_file (best-effort) so the
+          # API-redundancy prompt is UTF-8-clean before piping.
+          # shellcheck source=/dev/null
+          source scripts/gh_helpers.sh 2>/dev/null || true
+
           TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
           TRACKING_ISSUE_NUM=""
           if [[ "${TRACKING_ISSUE_RAW}" =~ ^[0-9]+$ ]] && [ "${TRACKING_ISSUE_RAW}" -gt 0 ]; then
@@ -1556,6 +1579,9 @@ jobs:
 
           API_EXIT=0
           for attempt in $(seq 1 "${max_attempts}"); do
+            if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+              sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
+            fi
             set +e
             codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" > "${SECTION_FILE}" 2> >(tee -a /tmp/workflow-api-redundancy-codex.log >&2)
             API_EXIT=$?
