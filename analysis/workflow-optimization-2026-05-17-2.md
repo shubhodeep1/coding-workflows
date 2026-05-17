@@ -312,3 +312,162 @@
 | Retrieve `fail_open:true` | 0 | No retrieval fail-open events |
 | Push attempts histogram | `1`: 23, `2`: 1 | One retry case in run `25980458060` |
 | Other AI-memory-prefixed op | `summarize_unselected_runs` | Run `25980248446` used 185,780 mini tokens for coverage widening |
+
+## Deep Audit — Workflows & Scripts (2026-05-17)
+
+### Section 1: Bug & Correctness Sweep
+
+Repo-wide syntax checks were clean (`yamllint` on workflows, `python -m py_compile` on `scripts/*.py`); the items below are logic/runtime defects.
+
+- **BUG-001**
+  - **File path:** `.github/workflows/plan.yml:393-399,482-487,604-625,646-684,729-748`
+  - **Severity:** High
+  - **Category tag:** `bug`
+  - **Description:** `Fetch issue comments` writes raw `gh api --paginate` output directly to `ISSUE_COMMENTS_FILE`. On page 2+, that file becomes concatenated JSON arrays, but later steps treat it as one JSON array (`jq '[ .[] | ... ]'`, `.[]`, `sort_by(...)`). Long issue threads can therefore mis-parse, skip stale-comment detection, delete the wrong clarification comments, or fail plan-context assembly.
+  - **Recommended fix:** Merge pages before writing, e.g. `gh_retry gh api --paginate ... | jq -s 'add // []' > "${ISSUE_COMMENTS_FILE}"`, matching `.github/workflows/implement.yml:1014-1015`; alternatively wrap it in a helper built on `scripts/gh_helpers.sh:549-615`.
+
+- **BUG-002**
+  - **File path:** `.github/workflows/plan.yml:450-473`
+  - **Severity:** Medium
+  - **Category tag:** `bug`
+  - **Description:** `LINKED_PR_COUNT` is computed with `gh api --paginate ... --jq '[...] | length'`, but `--jq` runs once per page. When the issue timeline spans multiple pages, the variable can contain multiple integers (for example `0\n1`), and the later `[ "${LINKED_PR_COUNT}" -gt 0 ]` numeric test becomes invalid or false-negative. That can let planning continue even when an open linked PR already exists.
+  - **Recommended fix:** Slurp pages before counting (`... --paginate | jq -s 'add // [] | map(...) | length'`), or replace the REST timeline count with a single batched GraphQL path modeled on `scripts/orchestrate_poll_process.sh:6512-6568`.
+
+- **BUG-003**
+  - **File path:** `scripts/validate_process.sh:2702-2718`
+  - **Severity:** Medium
+  - **Category tag:** `bug`
+  - **Description:** Prior validation-failure context is intended to be capped to the latest 3 comments, but `gh api --paginate --jq '[...] | .[-3:] | .[].body'` applies `.[-3:]` per page, not across the merged comment history. Multi-page tracking issues can therefore leak more than 3 old failures into the next-cycle prompt.
+  - **Recommended fix:** Slurp pages before slicing (`... --paginate | jq -s 'add // [] | map(select(...)) | .[-3:] | .[].body'`), or switch to a bounded GraphQL `comments(last: 3)` fetch.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+- **API-001**
+  - **File path:** `.github/workflows/review_autofix.yml:1529-1536; scripts/gh_helpers.sh:735-900`
+  - **Severity:** High
+  - **Category tag:** `api-redundancy`
+  - **Description:** `Collect PR metadata` performs 4 logical fetches on the hot `review_autofix` path: PR payload, issue comments, reviews, and review comments. The repo already has a GraphQL-first batching helper (`gh_pr_with_all_comments`) for this shape, but this workflow still uses separate REST calls.
+  - **Recommended fix:** Extend `gh_pr_with_all_comments` to also emit normalized review metadata (`state`, `body`, timestamps), then replace lines 1529-1536 with one helper call that writes the needed JSON files.
+  - **Current call count:** 4 logical calls minimum, plus pagination/retry expansion.
+  - **Proposed call count:** 1 logical helper call in the common case, with existing REST fallback only on pagination boundaries.
+  - **Batching pattern to extend:** `scripts/gh_helpers.sh:735-900` (`gh_pr_with_all_comments`).
+
+- **API-002**
+  - **File path:** `.github/workflows/clarify.yml:387-402`
+  - **Severity:** Medium
+  - **Category tag:** `api-redundancy`
+  - **Description:** When semantic cache is enabled, clarify fetches the same issue comments twice: once for `ISSUE_COMMENTS_FILE` (`per_page=50`) and again as full paginated history for `THREAD_HISTORY_FILE`. The second call already contains the first call’s data, so this is a duplicate logical fetch unless the exact server-side 50-comment truncation is treated as a contract. [NEEDS VERIFICATION]
+  - **Recommended fix:** Fetch the full comment array once, store it, derive `ISSUE_COMMENTS_FILE` locally with `jq '.[0:50]'`, and render `THREAD_HISTORY_FILE` from that same JSON.
+  - **Current call count:** 2 logical calls.
+  - **Proposed call count:** 1 logical call.
+  - **Batching pattern to extend:** No GraphQL batch is needed here; extend the single-fetch JSON-file pattern in `scripts/gh_helpers.sh:549-615`.
+
+I did not raise `issue_pr_status.yml` or `scripts/orchestrate_poll_process.sh` here because they already use the repo’s batched GraphQL patterns called out in `CLAUDE.md` §15.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **DUP-001**
+  - **File path:** `.github/workflows/mark-stable.yml:316-509; .github/workflows/test-and-mark-stable.yml:4629-4800; scripts/mark-stable.sh:1-111`
+  - **Severity:** High
+  - **Category tag:** `duplication`
+  - **Description:** The release path is duplicated across `mark-stable.yml` and `test-and-mark-stable.yml` and has already drifted: `mark-stable.yml` wraps consumer `repository_dispatch` calls in `_gh_retry`, while `test-and-mark-stable.yml` uses raw `gh api` in the equivalent loop.
+  - **Recommended fix:** Move shared release logic into a single owner such as new `scripts/release_helpers.sh` with functions like `verify_ci_passed <repo> <sha> <branch>`, `publish_release <version> <source_branch> <notes_file>`, and `dispatch_consumer_updates <consumer_file> <version>`. Update callers in both workflows and `scripts/mark-stable.sh`.
+
+- **DUP-002**
+  - **File path:** `.github/workflows/test-and-mark-stable.yml:3330-3437,3538-3581,3596-3646,3661-3705,4011-4058`
+  - **Severity:** Medium
+  - **Category tag:** `duplication`
+  - **Description:** `test-and-mark-stable.yml` repeats the same “capture PRE run id → dispatch workflow → poll for new run id → watch until completion” shell block at least 5 times, with only workflow name, timeout, inputs, and accepted conclusions changing.
+  - **Recommended fix:** Extract a shared watcher like `scripts/dispatch_and_watch_workflow.sh` with signature `dispatch_and_watch_workflow <repo> <workflow_file> <deadline_secs> [--field key=value ...] [--accept success,skipped] [--nonblocking]`. Update the workflow-log-analysis, validation-refresh, update_workflows, memory-maintenance, and internal-validate callers.
+
+- **DUP-003**
+  - **File path:** `scripts/install_semble.sh:10-44,62-99; scripts/setup_serena.sh:23-90,127-148`
+  - **Severity:** Low
+  - **Category tag:** `duplication`
+  - **Description:** The Semble and Serena installers duplicate the same bootstrap helpers (`log`, `write_github_env`, `append_github_path`, version-pin matching). The two scripts are already diverging in small behavior details.
+  - **Recommended fix:** Extract common bootstrap code to `scripts/tool_bootstrap_helpers.sh` with helpers such as `tool_log <tool> <msg>`, `write_github_env <key> <value>`, `append_github_path <dir>`, and `version_matches_pin <actual_version> <expected_regex>`. Update `install_semble.sh` and `setup_serena.sh` to source it.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+- **EXPR-001**
+  - **File path:** `.github/workflows/test-and-mark-stable.yml:1203-1586`
+  - **Severity:** High
+  - **Category tag:** `expression-limit`
+  - **Description:** The Phase 4 wait-review `run:` body is about **19,899 chars** and contains `${{ }}` interpolation, leaving only about **1,101 chars** of headroom before GitHub’s **21,000-char** expression ceiling.
+  - **Recommended fix:** Extract this poll/watch loop to `scripts/test_and_mark_stable_wait_review.sh` and pass only the small env surface it needs.
+
+- **EXPR-002**
+  - **File path:** `.github/workflows/review_autofix.yml:1445-1834`
+  - **Severity:** Medium
+  - **Category tag:** `expression-limit`
+  - **Description:** `Collect PR metadata` is about **17,408 chars**, leaving about **3,592 chars** of headroom. This is already the next large inline block on the review hot path, and it is likely to keep growing.
+  - **Recommended fix:** Extract to `scripts/review_collect_pr_metadata.sh`; that also pairs naturally with `API-001`.
+
+- **EXPR-003**
+  - **File path:** `.github/workflows/validate.yml:204-577`
+  - **Severity:** Medium
+  - **Category tag:** `expression-limit`
+  - **Description:** `Fetch workflow support files` is about **17,416 chars**, leaving about **3,584 chars** of headroom. It is a large inline bootstrap block with many future-growth points.
+  - **Recommended fix:** Extract it to `scripts/validate_fetch_support_files.sh` and keep the workflow step as a thin wrapper.
+
+- **EXPR-004**
+  - **File path:** `.github/workflows/test-and-mark-stable.yml:1673-2077`
+  - **Severity:** Medium
+  - **Category tag:** `expression-limit`
+  - **Description:** Phase 4b canary verification is about **17,408 chars**, leaving about **3,592 chars** of headroom. It is another large interpolated inline script in the same workflow that already has one near-limit block.
+  - **Recommended fix:** Move the canary-fetch / pytest / retry logic into `scripts/test_and_mark_stable_verify_canary.sh`.
+
+No workflow file exceeds the **800 KB** early-warning threshold; the largest is `.github/workflows/review_autofix.yml` at **334,445 bytes**.
+
+### Section 5: Cross-Cutting Concerns
+
+- **CONSIST-001**
+  - **File path:** `.github/workflows/issue_pr_status.yml:235-249; scripts/label_helpers.sh:146-194`
+  - **Severity:** Low
+  - **Category tag:** `consistency`
+  - **Description:** `issue_pr_status.yml` sources `scripts/label_helpers.sh` and then redefines a fallback `set_issue_phase_label_resilient` with weaker semantics. The inline fallback only POST-adds the target label, while the canonical helper fetches current labels and replaces the whole phase set via PUT, so the two paths can diverge and leave contradictory phase labels.
+  - **Recommended fix:** Keep one implementation only: either fail fast if `set_issue_phase_label_resilient` is missing after sourcing, or move any required fallback behavior into `scripts/label_helpers.sh`.
+
+- **SHELL-001**
+  - **File path:** `scripts/orchestrate_poll_process.sh:11424-11427`
+  - **Severity:** Low
+  - **Category tag:** `shellcheck`
+  - **Description:** `_sorted_issue_nums="$(printf '%s\n' ${ISSUE_NUMS} | sort -un)"` and `for inum in ${_sorted_issue_nums}; do` expand unquoted word lists. Unexpected whitespace or glob characters in `ISSUE_NUMS` can split or expand before sorting.
+  - **Recommended fix:** Normalize explicitly with quoting or arrays, e.g. build an array first and iterate `"${array[@]}"`.
+
+- **SHELL-002**
+  - **File path:** `scripts/review_commit_changes.sh:482-490; scripts/review_conflict_resolve.sh:1459-1461`
+  - **Severity:** Low
+  - **Category tag:** `shellcheck`
+  - **Description:** Both scripts set the authenticated remote with an unquoted credential-bearing URL: `git remote set-url origin https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}`. This is an avoidable SC2086-style expansion point and keeps the token in argv form longer than necessary.
+  - **Recommended fix:** Build a quoted variable first (`remote_url=...`; `git remote set-url origin "${remote_url}"`) or switch to an auth mechanism that does not embed the token in the command line.
+
+- **DEBT-001**
+  - **File path:** `.github/workflows/test-and-mark-stable.yml:242-248,3145-3148,3256-3259,4705-4708,4816-4819`
+  - **Severity:** Low
+  - **Category tag:** `tech-debt`
+  - **Description:** The temporary `git-checkout-diag` anchor is still wired into 4 jobs, and its own comments say it should be removed after the checkout exit-128 root cause is identified. It now represents long-lived debug scaffolding in the release smoke workflow.
+  - **Recommended fix:** Gate it behind an explicit debug input, or remove it once the checkout post-step investigation is closed.
+
+Repo-wide grep found no `TODO`/`FIXME`/`HACK` markers in workflows/scripts; the explicit remaining debt marker is the temporary checkout diagnostic above.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 4 | BUG-001, API-001, DUP-001, EXPR-001 |
+| Medium | 7 | BUG-002, BUG-003, API-002, DUP-002, EXPR-002, EXPR-003, EXPR-004 |
+| Low | 5 | DUP-003, CONSIST-001, SHELL-001, SHELL-002, DEBT-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 1 | Small |
+| API call optimization | 3 | Medium |
+| Code modularization | 6-7 | Large |
+| Expression size reduction | 5-7 | Large |
+| Medium/Low fixes | 7-8 | Medium |
