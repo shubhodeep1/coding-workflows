@@ -341,7 +341,10 @@ def test_reject_verifier_prompt_staging_and_pytest_contracts() -> None:
 		assert expected in prompt, f"Missing reject-verifier prompt contract text: {expected}"
 	for path in (CI_WORKFLOW, MARK_STABLE_WORKFLOW, TEST_AND_MARK_STABLE_WORKFLOW):
 		text = path.read_text(encoding="utf-8")
-		assert 'python3 -c "import pytest" >/dev/null 2>&1 || python3 -m pip install --quiet pytest' in text
+		assert 'PYTEST_INSTALL_LOG="${RUNNER_TEMP:-/tmp}/review_reject_verify_pytest_install.log"' in text
+		assert 'python3 -m pip install --quiet pytest >>"${PYTEST_INSTALL_LOG}" 2>&1 || {' in text
+		assert 'sudo apt-get install -y --no-install-recommends python3-pytest >>"${PYTEST_INSTALL_LOG}" 2>&1 || true' in text
+		assert 'python3 -c "import pytest" >/dev/null 2>&1 || { echo "::error::pytest is not importable after pip + apt install attempts"; echo "::group::pytest install diagnostics"; cat "${PYTEST_INSTALL_LOG}" || true; echo "::endgroup::"; exit 1; }' in text
 		assert 'PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_review_reject_verify_llm.py -q' in text
 
 
