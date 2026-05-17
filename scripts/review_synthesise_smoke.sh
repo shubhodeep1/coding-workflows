@@ -206,6 +206,7 @@ extract_and_validate_synthesis_batch()
 	PYTHONDONTWRITEBYTECODE=1 python3 - "${src}" "${dst}" "${issues_path}" <<'PY'
 import json
 import re
+import shlex
 import sys
 from json import JSONDecoder, JSONDecodeError
 
@@ -280,6 +281,21 @@ def normalize_content(text: str) -> str:
 		stripped = raw_line.strip()
 		if "`" in stripped or "$(" in stripped or "<(" in stripped or ">(" in stripped or "<<" in stripped:
 			raise ValueError("body_unsafe_shell_construct")
+		lexer = shlex.shlex(stripped, posix=True, punctuation_chars=";&|(){}")
+		lexer.whitespace_split = True
+		lexer.commenters = "#"
+		expect_command = True
+		for token in lexer:
+			if token in {";", "&&", "||", "|", "(", ")", "{", "}", "then", "do", "else", "elif"}:
+				expect_command = True
+				continue
+			if expect_command and re.match(r"[A-Za-z_][A-Za-z0-9_]*=.*", token):
+				continue
+			if expect_command and token in {"command", "builtin"}:
+				continue
+			if expect_command and token in {"eval", "exec", "source", "."}:
+				raise ValueError("body_unsafe_shell_construct")
+			expect_command = False
 		if stripped == "exit" or stripped.startswith("exit "):
 			raise ValueError("body_must_not_exit")
 	return text + "\n"

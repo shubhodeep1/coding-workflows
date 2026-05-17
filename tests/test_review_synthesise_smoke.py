@@ -414,33 +414,42 @@ def test_review_synthesise_smoke_rejects_unsafe_shell_constructs() -> None:
 			encoding="utf-8",
 		)
 		path_one = _expected_output_path(test_dir="validation/tests", issue=issues[0], round_number=1)
-		_install_mock_codex(
-			mock_bin_dir,
-			stdout_text=json.dumps(
-				[
-					{
-						"path": path_one,
-						"content": 'result="$(whoami)"\nbehavioural_smoke_inconclusive "unsafe"',
-						"expected_to_fail_until_fixed": True,
-					}
-				]
-			)
-			+ "\n",
-		)
 		env = _base_env(workspace, runtime_dir, mock_bin_dir)
+		manifest_path = workspace / "validation" / "tests" / "synth_round_1_manifest.json"
 
-		result = subprocess.run(
-			["bash", str(SCRIPT)],
-			cwd=workspace,
-			env=env,
-			capture_output=True,
-			text=True,
-		)
+		for content in (
+			'result="$(whoami)"\nbehavioural_smoke_inconclusive "unsafe"',
+			'eval "$PAYLOAD"\nbehavioural_smoke_inconclusive "unsafe"',
+			'exec /bin/false\nbehavioural_smoke_inconclusive "unsafe"',
+			'source ./payload.sh\nbehavioural_smoke_inconclusive "unsafe"',
+			'. ./payload.sh\nbehavioural_smoke_inconclusive "unsafe"',
+		):
+			_install_mock_codex(
+				mock_bin_dir,
+				stdout_text=json.dumps(
+					[
+						{
+							"path": path_one,
+							"content": content,
+							"expected_to_fail_until_fixed": True,
+						}
+					]
+				)
+				+ "\n",
+			)
 
-		combined = result.stdout + result.stderr
-		assert result.returncode == 0, combined
-		assert "could not validate synthesis output" in combined
-		assert not (workspace / "validation" / "tests" / "synth_round_1_manifest.json").exists()
+			result = subprocess.run(
+				["bash", str(SCRIPT)],
+				cwd=workspace,
+				env=env,
+				capture_output=True,
+				text=True,
+			)
+
+			combined = result.stdout + result.stderr
+			assert result.returncode == 0, f"{content}: {combined}"
+			assert "could not validate synthesis output" in combined, f"{content}: {combined}"
+			assert not manifest_path.exists(), f"{content}: {combined}"
 
 
 def test_review_synthesise_smoke_warns_when_zero_issue_manifest_write_fails() -> None:
