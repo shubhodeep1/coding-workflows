@@ -603,10 +603,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          include_synthesised="true"
+          include_synthesised="false"
           case "$(printf '%s' "${VALIDATION_INCLUDE_SYNTHESISED:-false}" | tr '[:upper:]' '[:lower:]')" in
-            0|false|no|off)
-              include_synthesised="false"
+            1|true|yes|on)
+              include_synthesised="true"
               ;;
           esac
 

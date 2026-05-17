@@ -1284,12 +1284,12 @@ EOF
 
 materialize_synthesised_behavioural_smoke_tests()
 {
-  local include_synthesised="true"
+  local include_synthesised="false"
   local materialize_output=""
 
   case "$(printf '%s' "${VALIDATION_INCLUDE_SYNTHESISED:-false}" | tr '[:upper:]' '[:lower:]')" in
-    0|false|no|off)
-      include_synthesised="false"
+    1|true|yes|on)
+      include_synthesised="true"
       ;;
   esac
 
