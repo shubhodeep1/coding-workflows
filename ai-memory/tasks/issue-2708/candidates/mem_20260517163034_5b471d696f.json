@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for issue #2708\n\nClarification mapping\n- No `Q1`/`Q2` items were asked in clarify.\n- The auto-posted `/answer [auto-answered-by-clarify]` therefore maps to: \u201cthe task is fully specified; no additional inputs are required.\u201d\n\nPlanning ref context\n- HEAD: `a09c3069a105438833a7e5b3ea66f53a4e95c1a5`\n- Checked-out ref: `main`\n- Symbolic ref: `main`\n- Integration branch metadata was empty, so there is no integration-branch mismatch blocker.\n\nFiles likely to change\n- `tests/e2e_smoke_canary.txt` only\n\nRepresentative repo context\n- `.github/workflows/test-and-mark-stable.yml:4388-4395` is the relevant source-of-truth for this alt-model smoke issue; it explicitly renders `run_id: alt-${GITHUB_RUN_ID}` and repeats the \u201conly modify this file\u201d constraint.\n- `tests/test_review_apply_fixes_smoke_deterministic.py:159-176` and `tests/test_e2e_editor_smoke_canary.py:18-40` show the canary contract is a byte-exact 3-line file with a trailing newline.\n\nFunctions or modules to implement\n- None. This is a direct single-file content replacement, not a code-path change.\n\nData structures affected\n- One plain-text canary file containing three ordered `key: value` lines:\n  - `status`\n  - `run_id`\n  - `updated-by`\n\nPlanned change\n1. Replace the entire contents of `tests/e2e_smoke_canary.txt` so it is exactly:\n   - `status: ok`\n   - `run_id: alt-25996282698`\n   - `updated-by: ai-pipeline`\n2. Preserve the required trailing newline after the third line.\n3. Do not modify any other file, including `tests/e2e_smoke_canary_spec.txt`, scripts, workflows, or tests.\n\nAPI or interface changes\n- None.\n\nPotential risks / edge cases\n- Exact-byte formatting matters: no extra whitespace, no extra blank lines, no CRLF drift, and no missing final newline.\n- The `alt-` prefix is intentional for this alt-model smoke issue and should be preserved exactly.\n- The current file already has the correct first and third lines; only the `run_id` value differs, but full-file overwrite is the safest way to guarantee exact content.\n\nTesting considerations\n- Verify `tests/e2e_smoke_canary.txt` matches the issue\u2019s 3-line payload exactly.\n- Verify only this file changed (`git diff --stat -- tests/e2e_smoke_canary.txt`).\n- No test code changes are expected.\n\nAssumptions\n- The note about `openai/gpt-5.4` is operational context only and does not require repo changes beyond the requested file update.\n\nMissing-context notes\n- None.\n\nConflicts detected\n- None.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "6b30104d208ee98098583caca191cd35748cec17d7d192f01906412ce1fd75b4",
+  "lineage": {
+    "issue_number": 2708,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25996334533",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25996334533",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2708"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260517163034_5b471d696f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2708,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25996334533"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2708",
+  "timestamps": {
+    "created_at": "2026-05-17T16:30:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
