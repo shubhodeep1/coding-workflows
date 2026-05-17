@@ -416,6 +416,7 @@ def test_review_synthesise_smoke_rejects_unsafe_shell_constructs_with_visible_di
 			("bash_reentry", "bash -c 'echo unsafe'\n", "shell re-entry via bash is not allowed"),
 			("backslash_reentry", "\\bash -c 'echo unsafe'\n", "shell re-entry via bash is not allowed"),
 			("csh_reentry", "csh -c 'echo unsafe'\n", "shell re-entry via csh is not allowed"),
+			("fish_reentry", "fish -c 'echo unsafe'\n", "shell re-entry via fish is not allowed"),
 			("command_builtin_reentry", "command bash -c 'echo unsafe'\n", "shell re-entry via bash is not allowed"),
 			("builtin_eval", "builtin eval 'echo unsafe'\n", "eval is not allowed"),
 			("exec_argv0_reentry", "exec -a renamed bash -c 'echo unsafe'\n", "shell re-entry via bash is not allowed"),

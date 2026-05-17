@@ -186,7 +186,7 @@ class GeneratedItemValidationError(ValueError):
 	pass
 
 
-SHELL_REENTRY_COMMANDS = {'bash', 'sh', 'dash', 'ksh', 'zsh', 'csh', 'tcsh'}
+SHELL_REENTRY_COMMANDS = {'bash', 'sh', 'dash', 'ksh', 'zsh', 'csh', 'tcsh', 'fish'}
 COMMAND_SEPARATORS = {';', '&', '&&', '||', '|', '|&', '(', ')', '{', '}', ';;', ';&', ';;&'}
 CONTROL_TOKENS = {'if', 'then', 'do', 'elif', 'else', 'while', 'until', '!'}
 REDIRECTION_TOKENS = {'<', '>', '<<', '<<-', '<<<', '>>', '>&', '<&', '&>', '&>>'}
