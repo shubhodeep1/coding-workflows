@@ -755,6 +755,7 @@ jobs:
       REVIEW_CONSOLIDATOR_TIMEOUT_SECS: ${{ vars.REVIEW_CONSOLIDATOR_TIMEOUT_SECS || '300' }}
       REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT: ${{ vars.REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT || '16000' }}
       REVIEW_PARSER_FAILOPEN: ${{ vars.REVIEW_PARSER_FAILOPEN || '1' }}
+      CONSOLIDATOR_REJECT_SCHEMA_ENABLED: ${{ vars.CONSOLIDATOR_REJECT_SCHEMA_ENABLED || 'false' }}
       REVIEW_LEDGER_ENABLED: ${{ vars.REVIEW_LEDGER_ENABLED || '1' }}
       REVIEW_LEDGER_PERSIST_LIMIT: ${{ vars.REVIEW_LEDGER_PERSIST_LIMIT || '2' }}
       REVIEW_LEDGER_PATH: ${{ vars.REVIEW_LEDGER_PATH || format('.ai/review_issue_ledger/pr-{0}.txt', inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number || '0') }}
@@ -941,7 +942,7 @@ jobs:
             echo "SUPPORT_AGENTS_FILE=${SUPPORT_ROOT_DIR}/agents.md"
           } >> "$GITHUB_ENV"
 
-          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh"
+          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh"
           # Optional bootstrap scripts: allowed to be missing from both
           # refs.  The bootstrap emits a warning and continues — callers
           # that depend on these must themselves tolerate absence.  Keep
@@ -2322,7 +2323,7 @@ jobs:
       - name: Count autofix iterations
         id: retrigger_guard
         env:
-          MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '3' }}
+          MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '5' }}
           FORCE_RB_JUDGE: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.force_rb_judge == 'true') || (github.event_name != 'workflow_dispatch' && inputs.force_rb_judge)) && 'true' || 'false' }}
           # Orchestrator PR autofix flow (see README §"Orchestrator PR autofix flow"):
           # When enabled, classify the PR by base/head branch for orchestrator-
@@ -2335,7 +2336,7 @@ jobs:
           #   - orch_final (orchestrator/project-* → any non-orch base, i.e.
           #       the default branch): same inner loop as legacy default; the
           #       orchestrate_poll_process.sh judge-cycle cap is bypassed for
-          #       this phase, giving unlimited 3-autofix→judge cycles until
+          #       this phase, giving unlimited 5-autofix→judge cycles until
           #       the PR is mergeable.
           #   - other (non-orchestrator PR): unchanged legacy behavior.
           # Setting ORCH_PR_AUTOFIX_FLOW_ENABLED=false forces orch_pr_mode to
@@ -2393,7 +2394,7 @@ jobs:
           echo "Orchestrator PR mode: ${orch_pr_mode} (head='${_head_ref_class:-?}' base='${_base_ref_class:-?}', flow_enabled=${ORCH_PR_AUTOFIX_FLOW_ENABLED})"
           echo "orch_pr_mode=${orch_pr_mode}" >> "$GITHUB_OUTPUT"
 
-          # All modes use MAX_AUTOFIX_ITERATIONS (legacy default 3).  The
+          # All modes use MAX_AUTOFIX_ITERATIONS (default 5).  The
           # former orch_intermediate cap of 1 was removed: catching blocking
           # issues per sub-issue PR (where the diff is small and the linked-
           # issue context is narrow) is cheaper and more reliable than
@@ -4568,7 +4569,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
-          MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '3' }}
+          MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '5' }}
         run: |
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
@@ -4648,7 +4649,7 @@ jobs:
         if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '3' }}
+          MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '5' }}
         run: |
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
@@ -5283,7 +5284,7 @@ jobs:
           JUDGE_ACTION: ${{ steps.rb_judge.outputs.judge_action }}
           JUDGE_HANDLED: ${{ steps.rb_judge.outputs.judge_handled }}
           JUDGE_SKIP_REASON: ${{ steps.rb_judge.outputs.judge_skip_reason }}
-          MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '3' }}
+          MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '5' }}
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
         run: |
           source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
