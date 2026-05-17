@@ -451,3 +451,124 @@ Audit note: no `TODO` / `FIXME` / `HACK` markers were present under `.github/wor
 | Code modularization | 8-11 | Large |
 | Expression size reduction | 4-6 | Medium |
 | Medium/Low fixes | 3-4 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-17)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlap is statically provable in one local code path with matching endpoint/filter/auth and preserved failure semantics; `NEEDS_VERIFICATION` means the overlap is real but freshness, cache-carrier, or fail-open behavior still needs a human check; `RISKY_SKIP` means the redundancy/dead fetch sits in retry/poll/race-defensive logic and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001 — SAFE_TO_MERGE
+- **File path and line ranges:** `scripts/implement_diagnose_post_codex_failure.sh:166-172`, `scripts/implement_diagnose_post_codex_failure.sh:261-272`
+- **Current call count:** 2 `GET /repos/{owner}/{repo}/issues/{issue_number}` calls on the cache-miss path
+- **Proposed call count:** 1 on that same cache-miss path
+- **Endpoint(s):** GitHub REST `GET /repos/{owner}/{repo}/issues/{issue_number}`
+- **Evidence:**
+  ```bash
+  if [ -z "${ISSUE_LABELS_JSON}" ]; then
+    ISSUE_LABELS_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]' || echo '[]')"
+  fi
+  ...
+  if [ ! -s "${ISSUE_BODY_FILE}" ]; then
+    gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}" --jq '.body // ""' > "${ISSUE_BODY_FILE}" || printf '' > "${ISSUE_BODY_FILE}"
+  fi
+  ```
+  The surrounding comments already describe both branches as the same fallback for a missing/invalid `ISSUE_META_FILE`.
+- **Proposed fix:** In the top-level diagnose flow, add one shared `_fallback_issue_meta_json` fetch when `ISSUE_META_FILE` is absent/unparseable; derive both `ISSUE_LABELS_JSON` and `ISSUE_BODY_FILE` from that JSON, and keep the existing body-only call only if the shared JSON fetch is empty/invalid.
+- **Safety rationale:** Both calls hit the same issue endpoint in one script path, nothing mutates the issue between them, and keeping the current second fetch as a fail-open backup preserves the existing fallback semantics.
+- **Downstream signal:** In `scripts/implement_diagnose_post_codex_failure.sh`, collapse the two cache-miss `issues/{ISSUE_NUMBER}` fetches into one shared fallback JSON fetch and derive both labels and body from it.
+
+#### MERGE-002 — RISKY_SKIP
+- **File path and line ranges:** `scripts/orchestrate_poll_process.sh:5709-5711`, `scripts/orchestrate_poll_process.sh:7498-7506`, `scripts/orchestrate_poll_process.sh:11019-11021`
+- **Current call count:** 6 total calls (2 at each site)
+- **Proposed call count:** 3 total calls (1 at each site)
+- **Endpoint(s):** GitHub REST `GET /repos/{owner}/{repo}/issues/{issue_number}`
+- **Evidence:**
+  ```bash
+  orig_title="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.title // ""' || echo "")"
+  orig_body="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.body // ""' || echo "")"
+  ```
+  The same title/body pair is re-fetched again at `7498-7506` and `11019-11021`.
+- **Proposed fix:** At each site, fetch one local issue JSON blob (for example `orig_issue_json` / `if_issue_json`) and extract `.title` and `.body` locally instead of issuing two `_safe_gh_jq` calls.
+- **Safety rationale:** This lives inside `scripts/orchestrate_poll_process.sh`, which the audit rules treat as a race-defensive path that must not be auto-changed.
+- **Downstream signal:** Do **not** auto-implement; manual review must confirm each reissue/stall-recovery branch keeps the same fail-open and logging behavior before collapsing the paired issue fetches.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001 — SAFE_TO_MERGE
+- **File path and line ranges:** `scripts/review_rb_judge.sh:210-227`, `scripts/review_rb_judge.sh:242-245`
+- **Current call count:** 2 `GET /repos/{owner}/{repo}/pulls/{pr_number}` calls when the linked-issue GraphQL lookup falls back to PR-body parsing
+- **Proposed call count:** 1 in the successful fast path
+- **Endpoint(s):** GitHub REST `GET /repos/{owner}/{repo}/pulls/{pr_number}`
+- **Evidence:**
+  ```bash
+  _pr_meta="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
+  ...
+  unset _pr_meta _pr_state _pr_merged
+  ...
+  if [ -z "${ISSUE_NUMBERS}" ]; then
+    PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
+  fi
+  ```
+- **Proposed fix:** Delay `unset _pr_meta` until after the linked-issue fallback block and derive `PR_DATA` from `_pr_meta` when it is a real object; keep the current `_safe_gh_jq ... --jq '.title + " " + (.body // "")'` call only when `_pr_meta` is empty/invalid.
+- **Safety rationale:** The same PR resource is already in memory in the same script block, no PR mutation happens between the two reads, and preserving the current second call on cache miss keeps failure behavior aligned.
+- **Downstream signal:** In `scripts/review_rb_judge.sh`, reuse `_pr_meta` for the PR title/body fallback and only keep the second `/pulls/{PR_NUMBER}` call as a fail-open backup.
+
+#### REUSE-002 — NEEDS_VERIFICATION
+- **File path and line ranges:** `.github/workflows/orchestrate_clarify_respond.yml:62-88`, `.github/workflows/orchestrate_clarify_respond.yml:404-420`
+- **Current call count:** up to 4 calls when `TRACKING_NUM` is present (child issue fetched twice, tracking issue fetched twice)
+- **Proposed call count:** up to 2
+- **Endpoint(s):** GitHub REST `GET /repos/{owner}/{repo}/issues/{issue_number}`
+- **Evidence:**
+  ```bash
+  ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ...
+  TRACKING_TITLE="$(gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.title // ""' 2>/dev/null || echo "")"
+  ```
+  ```bash
+  ISSUE_META="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ...
+  TRACKING_BODY="$(gh_retry gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.body // ""')"
+  ```
+- **Proposed fix:** Extend `check_orchestrator` to persist the child-issue payload and a richer tracking-issue payload (title + body) into `${RUNNER_TEMP}`, then have `Fetch issue and tracking context` read those files first and refetch only on file miss / parse failure.
+- **Safety rationale:** This is cross-step reuse in a comment-triggered workflow, so static review cannot prove that the later step is not intentionally relying on fresher issue/tracking bodies.
+- **Downstream signal:** Verify that no step between `Check orchestrator metadata` and `Fetch issue and tracking context` requires a fresh issue/tracking body, and verify the payloads are carried via temp files (not `GITHUB_OUTPUT`) without size-limit problems before applying this reuse.
+
+### Dead Calls (DEAD-API-###)
+
+#### DEAD-API-001 — RISKY_SKIP
+- **File path and line ranges:** `scripts/orchestrate_poll_process.sh:12163-12167`
+- **Current call count:** 1
+- **Proposed call count:** 0
+- **Endpoint(s):** GitHub REST `GET /repos/{owner}/{repo}`
+- **Evidence:**
+  ```bash
+  STANDALONE_COUNT="$(echo "${STANDALONE_PRS}" | jq 'length')"
+  echo "Found ${STANDALONE_COUNT} open PR(s) to scan."
+
+  CONFLICT_SWEEP_FIXED=0
+  DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+  ```
+  In the following standalone-conflict-sweep block (`12169-12238`), the loop reads `S_PR`, `S_HEAD`, `S_BASE`, `S_PR_JSON`, and `S_HEAD_SHA`, but never reads `DEFAULT_BRANCH`.
+- **Proposed fix:** Remove the `DEFAULT_BRANCH` lookup from the standalone conflict sweep unless manual review determines it was meant to feed a missing base-branch filter.
+- **Safety rationale:** Even though the fetch appears dead, it sits inside `scripts/orchestrate_poll_process.sh`, which is explicitly excluded from auto-implementation.
+- **Downstream signal:** Do **not** auto-implement; manual review must confirm the standalone conflict sweep does not need a default-branch gate before deleting this repo fetch.
+
+### Cross-References to Deep Audit Section
+- API-001: SAFE_TO_MERGE — same script, same PR scope, and the existing GraphQL query can carry first-issue body/labels without adding another round-trip.
+- BATCH-001: NEEDS_VERIFICATION — the helper extension is promising, but comment/review pagination and fail-open parity need proof before replacing the current REST fan-out.
+- API-002: NEEDS_VERIFICATION — the early classification result looks reusable, but merged-alert suppression semantics still need a human check before removing the later body re-fetches.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 3 | `API-001`, `MERGE-001`, `REUSE-001` |
+| NEEDS_VERIFICATION | 3 | `API-002`, `BATCH-001`, `REUSE-002` |
+| RISKY_SKIP | 2 | `DEAD-API-001`, `MERGE-002` |
+
+### Implement-Stage Handoff
+- `API-001`
+- `REUSE-001`
+- `MERGE-001`
