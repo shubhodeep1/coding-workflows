@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_synthesise_smoke.py:88-113 | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: Git subprocesses in `_seed_repo_with_autofix_commit` lack timeout protection, so a hung git command can block the test suite indefinitely.\n  WHY: The last run added `timeout=60` to the other subprocess calls in this file, but this shared setup helper was not updated.\n- .github/workflows/ci.yml:255-259\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: There is a missing blank line separator between the \"Validate driver synthesised filter contract test\" step and the \"Review apply-fixes smoke deterministic contract test\" step.\n  WHY: YAML is valid and the workflow will execute correctly, but the inconsistency reduces readability and goes against the established formatting pattern in the file.\n- scripts/review_synthesise_smoke.sh:`normalize_content`, cross-line variable-expansion bypass\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: The validator checks each line independently, so a two-line snippet like `AWK=eval` followed by `$AWK \"$PAYLOAD\"` can bypass the dangerous-command filter and execute `eval` at runtime.\n  WHY: This is an inherent limitation of line-by-line static analysis, and adding a check for bare `$[A-Za-z_]` tokens in command position would close the gap.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_review_synthesise_smoke.py:lines 88-112, function _seed_repo_with_autofix_commit | confidence=2\n  PROBLEM: Six subprocess.run calls and one subprocess.check_output call for git operations (init, config, add, commit, rev-parse) lack a timeout parameter.\n  WHY: If any git command hangs inside _seed_repo_with_autofix_commit, every test that calls this helper will block the test suite indefinitely.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_review_synthesise_smoke.py:88-107 (_seed_repo_with_autofix_commit function) | confidence=4\n  PROBLEM: The helper runs six git subprocesses (git init, git config x3, git add x2, git commit x2, git rev-parse) without timeout= parameter.\n  WHY: The last run added timeout=60 to many subprocess.run calls in the test file, but this setup helper was not updated. A hung git process (e.g., due to filesystem locks, network issues in git operations, or slow storage) would cause tests to hang with no timeout-based failure.\n- .github/workflows/ci.yml:258-259\n  PROBLEM: There is a missing blank line separator between the \"Validate driver synthesised filter contract test\" step and the \"Review apply-fixes smoke deterministic contract test\" step.\n  WHY: This is a cosmetic/formatting inconsistency. YAML is valid and the workflow will execute correctly, but the inconsistency reduces readability and goes against the established formatting pattern in the file.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_review_synthesise_smoke.py:88-107 (_seed_repo_with_autofix_commit function) | confidence=3\n  PROBLEM: Six git subprocess calls in the helper function lack timeout parameters, allowing indefinite blocking if git commands hang.\n  WHY: If git init, git config, git add, git commit, or git rev-parse hang due to network issues, credential prompts, or repository corruption, the test suite will block indefinitely until the CI job timeout fires.\n- .github/workflows/ci.yml:255-259\n  PROBLEM: Missing blank line separator between the \"Validate driver synthesised filter contract test\" step and the subsequent \"Review apply-fixes smoke deterministic contract test\" step.\n  WHY: While this does not cause runtime failure, it breaks formatting consistency with the rest of the workflow file where all other steps are separated by blank lines.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_review_synthesise_smoke.py:lines 88-107 (_seed_repo_with_autofix_commit helper) | confidence=4\n  PROBLEM: Six subprocess.run calls inside _seed_repo_with_autofix_commit invoke git init, git config (\u00d73), git add (\u00d72), and git commit (\u00d72) without timeout=.\n  WHY: If any git subprocess hung on an overloaded CI runner (e.g. due to filesystem contention or resource starvation in the test environment), the test would block indefinitely because only this helper's six subprocess calls lack the timeout that all other test subprocess calls now carry.\n- .github/workflows/ci.yml:255-259\n  PROBLEM: Missing blank line separator between the \"Validate driver synthesised filter contract test\" step and the subsequent \"Review apply-fixes smoke deterministic contract test\" step.\n  WHY: While this does not cause runtime failure, it breaks formatting consistency with the rest of the workflow file where all other steps are separated by blank lines.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/test_review_synthesise_smoke.py:lines 88-113, `_seed_repo_with_autofix_commit` helper\n  PROBLEM: Six `subprocess.run`/`subprocess.check_output` calls (git init, git config, git add, git commit) lack `timeout=`.\n  WHY: If any git command hangs (e.g., due to a stale lock file in the temp directory), the test process would block until the outer job timeout.\n- scripts/review_synthesise_smoke.sh:`normalize_content`, cross-line variable-expansion bypass\n  PROBLEM: The validator checks each line independently. A two-line snippet like `AWK=eval` (line 1, passes as variable assignment) followed by `$AWK \"$PAYLOAD\"` (line 2, passes because `$AWK` is not in `dangerous_command_tokens`) would bypass the dangerous-command filter and execute `eval` at runtime.\n  WHY: This is an inherent limitation of line-by-line static analysis and very unlikely to be generated by the LLM, but adding a check for bare `$[A-Za-z_]` tokens in command position would close the gap.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "1605b0315c3d91d5402d710230bf60bb79023e06ed740bca2dff2c1f7b7c2613",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2675,
+    "run_id": "25984961211",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25984961211",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517080908_25cf94ed12",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2675,
+    "run_id": "25984961211"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-17T08:09:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
