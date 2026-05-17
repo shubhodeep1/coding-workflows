@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_synthesise_smoke.sh:~340-~619 | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: Parameter expansion in command position is not blocked, so `$cmd`/`${SHELL}` can bypass the literal-name validator and execute a disallowed shell at runtime.\n  WHY: All reviewers describe the same runtime bypass: the validator checks literal tokens before expansion, while the shell later expands them to a blocked command.\n- agents.md:136-162 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: `BEHAVIOURAL_SMOKE_PRESENT_INCONCLUSIVE` is emitted by the script/tests but is missing from the documented stable log-prefix contract.\n  WHY: Downstream tooling that treats agents.md as authoritative will not recognise or may drop that prefix.\n- scripts/review_synthesise_smoke.sh:~745 | confidence=3\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: Variable expansion inside unquoted heredoc bodies is not checked or rejected.\n  WHY: Unquoted heredocs still perform parameter expansion at execution time, but the validator only rejects command substitution, backticks, and process substitution.\n- scripts/review_synthesise_smoke.sh:~421-~825 | confidence=2\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: Backslash-continuation reconstruction still mis-handles the `bash\\n-c` edge case and can fuse tokens into `bash-c`.\n  WHY: The reconstruction logic does not always preserve the whitespace semantics the shell applies around line continuations, so command-boundary analysis can still mis-split.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_synthesise_smoke.sh:~572-~619 | confidence=4\n  PROBLEM: Parameter expansion syntax in command position (`$cmd`, `${SHELL}`) bypasses the blocked-command validator.\n  WHY: The validator inspects the literal token text only, so a generated wrapper containing `cmd=bash; $cmd -c '...'` or `${SHELL} -c '...'` passes validation but expands to a blocked shell at runtime.\n- agents.md:142-151 | confidence=3\n  PROBLEM: `BEHAVIOURAL_SMOKE_PRESENT_INCONCLUSIVE` is emitted by `scripts/review_synthesise_smoke.sh` but is not listed in agents.md's stable log-prefix contract.\n  WHY: Downstream log analysis or monitoring that consumes agents.md as the authoritative log-prefix registry would miss or misclassify `BEHAVIOURAL_SMOKE_PRESENT_INCONCLUSIVE` lines.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_synthesise_smoke.sh:571-605 | confidence=4\n  PROBLEM: Parameter expansion tokens in command position bypass the blocked-command check.\n  WHY: The validator compares the literal token text against the hardcoded blocklist, but does not detect that these tokens contain shell variable expansion syntax.\n- agents.md:148-151 | confidence=5\n  PROBLEM: `BEHAVIOURAL_SMOKE_PRESENT_INCONCLUSIVE` is emitted by scripts/review_synthesise_smoke.sh but is NOT included in the documented stable log-prefix contract.\n  WHY: Downstream log analysis consumers that rely on agents.md as the authoritative contract will miss or mishandle this prefix, leading to incomplete log processing or silent data loss in monitoring pipelines.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_synthesise_smoke.sh:572-604 | confidence=4\n  PROBLEM: Parameter expansion tokens in command position bypass the blocked-command check.\n  WHY: `command_basename` only inspects the literal token, so `$cmd` or `${SHELL}` in command position passes validation even though the shell expands it to a blocked command at runtime.\n- agents.md:136-162 | confidence=5\n  PROBLEM: `BEHAVIOURAL_SMOKE_PRESENT_INCONCLUSIVE` is missing from the stable log-prefix contract, but it is emitted by scripts/review_synthesise_smoke.sh and referenced in tests/test_review_synthesise_smoke.py.\n  WHY: Downstream log analysis tools that rely on agents.md as the contract source may miss or mishandle `BEHAVIOURAL_SMOKE_PRESENT_INCONCLUSIVE` log entries because the prefix is not documented in the stable contract.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/review_synthesise_smoke.sh:~553-~553 | confidence=4\n  PROBLEM: Parameter expansion tokens in command position pass validation as literal words but expand to arbitrary commands at runtime.\n  WHY: The tokenizer emits `$VAR` and `${VAR}` as TOKEN_KIND_WORD tokens, and `command_basename(\"$cmd\")` returns `\"$cmd\"`, which matches none of the blocked basenames.\n- scripts/review_synthesise_smoke.sh:~745 | confidence=3\n  PROBLEM: Dollar-sign variable expansion (`${...}` or `$VAR`) inside unquoted heredoc bodies is not checked.\n  WHY: Unquoted heredocs perform parameter expansion at execution time, and the current check only rejects `$(...)`, backticks, and `<(`.\n- scripts/review_synthesise_smoke.sh:~421-~825 | confidence=2\n  PROBLEM: Logical-line reconstruction for backslash-continuation can still mis-split in edge cases.\n  WHY: The current code concatenates without a separator in the bare `bash\\n-c` case, producing `bash-c` instead of preserving the shell's command boundary semantics.\n- agents.md:~149 | confidence=5\n  PROBLEM: `BEHAVIOURAL_SMOKE_PRESENT_INCONCLUSIVE` is emitted by behavioural smoke validation wrapper scripts and is asserted-on by tests, but is not listed in the stable log-prefix contract.\n  WHY: Downstream log-analysis consumers that rely on agents.md as the authoritative stable-prefix list will not recognise `BEHAVIOURAL_SMOKE_PRESENT_INCONCLUSIVE`, so inconclusive wrapper results can be silently dropped.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/review_synthesise_smoke.sh:line 340 and line 573 | confidence=4\n  PROBLEM: Parameter expansion tokens in command position bypass the blocked-command validator entirely.\n  WHY: The validator compares literal token text against the blocklist before shell expansion occurs, so `$cmd` or `${SHELL}` passes validation but executes a blocked shell command at runtime.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "4435d33dfb9c0eda838591f496fd7cf421415c01c128989e6299e20d674cb0d2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2699,
+    "run_id": "25990361420",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25990361420",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517123946_d3c78c8ace",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2699,
+    "run_id": "25990361420"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-17T12:39:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
