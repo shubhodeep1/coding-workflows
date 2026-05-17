@@ -942,6 +942,15 @@ prompt_tmp="$(mktemp)"
 } > "${prompt_tmp}"
 mv "${prompt_tmp}" "${EDITOR_PROMPT_FILE}"
 
+# Last-line-of-defence UTF-8 sanitisation: Codex CLI's stdin reader
+# strictly validates UTF-8 and aborts on the first invalid byte. Any
+# embedded input that leaks invalid bytes (e.g. floor_tags.txt with a
+# mid-codepoint truncation from scripts/review_floor_rules.sh — the
+# bug from multi-user-ai-agent PR #33) would otherwise kill the
+# editor across every retry. See `sanitize_codex_prompt_file` in
+# scripts/gh_helpers.sh for the design.
+sanitize_codex_prompt_file "${EDITOR_PROMPT_FILE}"
+
 echo "Editor prompt bytes: $(wc -c < "${EDITOR_PROMPT_FILE}")"
 echo "Editor prompt sha256: $(sha256sum "${EDITOR_PROMPT_FILE}" | awk '{print $1}')"
 

@@ -1442,6 +1442,10 @@ run_reviewer() {
         sed -i "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*\".*\"/model_reasoning_effort = \"${reasoning_level}\"/" "${reviewer_codex_home}/.codex/config.toml" 2>/dev/null || true
       fi
     fi
+    # Strip any invalid UTF-8 from the reviewer prompt before piping
+    # to codex (whose stdin reader strictly validates UTF-8). See
+    # sanitize_codex_prompt_file in scripts/gh_helpers.sh.
+    sanitize_codex_prompt_file "${prompt_file}"
     (
       # Reviewers must not mutate the workspace: writes here pollute the pre-editor
       # snapshot used by review_autofix.yml's touched-file detector (comm -13 safety

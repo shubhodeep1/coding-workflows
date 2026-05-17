@@ -43,6 +43,14 @@ set -euo pipefail
 command -v jq >/dev/null 2>&1 || { echo "self-heal: jq is required" >&2; exit 2; }
 command -v patch >/dev/null 2>&1 || { echo "self-heal: patch is required" >&2; exit 2; }
 
+# Source gh_helpers.sh for sanitize_codex_prompt_file (best-effort —
+# the call site below guards via `command -v`).
+if [ -f "scripts/gh_helpers.sh" ]; then
+	# shellcheck source=gh_helpers.sh
+	# shellcheck disable=SC1091
+	source scripts/gh_helpers.sh 2>/dev/null || true
+fi
+
 SEMBLE_HELPERS_AVAILABLE="false"
 # shellcheck source=semble_helpers.sh
 if [ -f "scripts/semble_helpers.sh" ]; then
@@ -283,6 +291,9 @@ self_heal_serena_tool_hints="$(build_self_heal_serena_tool_hints || true)"
 SELF_HEAL_LLM_SUCCESS=false
 for _llm_attempt in 1 2; do
 	echo "self-heal: LLM call attempt ${_llm_attempt}/2" >> "${SELF_HEAL_LOG_FILE}"
+	if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+		sanitize_codex_prompt_file "${SELF_HEAL_PROMPT_FILE}"
+	fi
 	if cat "${SELF_HEAL_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${SELF_HEAL_OUTPUT_FILE}" 2>> "${SELF_HEAL_LOG_FILE}"; then
 		# Extract the last JSON object that contains a "target_prompt" key.
 		# Use json.JSONDecoder.raw_decode() which is string/escape-aware

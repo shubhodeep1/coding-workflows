@@ -3115,6 +3115,7 @@ invoke_judge_for_integration_conflict() {
     echo "   short diagnosis in the commit message."
   } > "${prompt_file}"
 
+  sanitize_codex_prompt_file "${prompt_file}"
   if cat "${prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR:-openai/gpt-5.4}" --sandbox danger-full-access > "${output_file}" 2>> "${RUNTIME_DIR}/integration_judge.log"; then
     echo "  [integration-heal] Judge exec completed for PR #${final_pr}."
     rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
@@ -6193,6 +6194,7 @@ invoke_stall_judge() {
       if [ -n "${MOCK_STALL_JUDGE_JSON:-}" ]; then
         printf '%s\n' "${MOCK_STALL_JUDGE_JSON}" > "${stall_judge_output_file}"
       else
+        sanitize_codex_prompt_file "${stall_judge_prompt_file}"
         codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${stall_judge_prompt_file}" > "${stall_judge_output_file}" 2>> "${RUNTIME_DIR}/stall_judge.log" || true
       fi
       if grep -q '[^[:space:]]' "${stall_judge_output_file}"; then
@@ -9983,6 +9985,7 @@ ${FOLLOWUP_BLOCK_REASON}"
       RB_JUDGE_SUCCESS=false
       for attempt in 1 2; do
         echo "  Review-blocked judge attempt ${attempt}/2..."
+        sanitize_codex_prompt_file "${RB_JUDGE_PROMPT_FILE}"
         cat "${RB_JUDGE_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null || true
         if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT_FILE}"; then
           RB_JUDGE_SUCCESS=true
@@ -11582,6 +11585,7 @@ ${PR_DIFF}
   max_attempts=2
   for attempt in $(seq 1 "${max_attempts}"); do
     echo "Judge attempt ${attempt}/${max_attempts}..."
+    sanitize_codex_prompt_file "${JUDGE_PROMPT_FILE}"
     # The pipeline may return 141 (SIGPIPE) when the prompt is larger
     # than the OS pipe buffer and codex closes stdin before cat finishes.
     # This is harmless — check the output file regardless of exit code.

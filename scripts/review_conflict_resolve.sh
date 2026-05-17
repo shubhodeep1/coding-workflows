@@ -41,6 +41,15 @@
 
 set -euo pipefail
 
+# Source gh_helpers.sh for sanitize_codex_prompt_file (and the broader
+# gh_retry / rate-limit helpers if they are needed later in this
+# script). Best-effort: a missing helpers file leaves the helper
+# undefined, and the caller block below guards against that.
+if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" ]; then
+  # shellcheck source=gh_helpers.sh
+  source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
+fi
+
 if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh" ]; then
   # shellcheck source=/dev/null
   source "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh"
@@ -908,6 +917,12 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   # _build_retry_prompt and the retry-log line for every iteration.
   _codex_exit=0
   _attempt_started_at=$(date +%s)
+  # Strip any invalid UTF-8 bytes that may have leaked into the
+  # retry-prompt (rebuilt inside the loop, so we sanitise each
+  # iteration). See sanitize_codex_prompt_file in scripts/gh_helpers.sh.
+  if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+    sanitize_codex_prompt_file "${_effective_prompt_file}"
+  fi
   timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
     codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" > "${tmp_output}" \
     || _codex_exit=$?

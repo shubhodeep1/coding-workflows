@@ -1387,3 +1387,60 @@ _embed_input_file()
 		printf '%s\n' "$(( _used + _emit_bytes ))" > "${_state}" 2>/dev/null || true
 	fi
 }
+
+# ---------------------------------------------------------------
+# sanitize_codex_prompt_file <path>
+#
+# Rewrite <path> in place with any invalid UTF-8 byte sequences
+# stripped, so the Codex CLI's strict UTF-8 stdin reader never
+# rejects the prompt on the first invalid byte. This is the
+# last-line-of-defence sanitisation for prompt files that get piped
+# to `codex … exec … < "${path}"`.
+#
+# Background: Codex CLI reads its prompt from stdin as a UTF-8
+# string and aborts on the first invalid byte with
+#   `Failed to read prompt from stdin: input is not valid UTF-8
+#    (invalid byte at offset N). Convert it to UTF-8 and retry`
+# Any upstream byte-based truncation that lands mid-codepoint
+# (e.g. mawk's byte-oriented `substr` on a 3-byte em-dash) — or any
+# other corruption that leaks invalid bytes into an embedded input
+# file — deterministically kills the editor, and the retry loop is
+# impotent because the same bad bytes survive into the regenerated
+# prompt. This helper makes that failure mode impossible at the
+# stdin boundary.
+#
+# Behaviour notes:
+#   • Best-effort. No-op if <path> is missing/empty, if `iconv` is
+#     not installed, or if the temp file write fails.
+#   • Uses `iconv -f UTF-8 -t UTF-8//IGNORE`, which drops invalid
+#     sequences. GNU iconv exits non-zero whenever it discards
+#     bytes even though the rewritten output is correct, so we
+#     accept any non-empty output regardless of exit status.
+#   • Idempotent. Running on already-valid UTF-8 leaves the file
+#     byte-identical (modulo the mv/rename, which the caller's
+#     downstream `wc -c` / `sha256sum` instrumentation will reflect).
+#   • Silent on success. The caller's existing `wc -c` / `sha256sum`
+#     echo lines around the codex pipe will surface any byte-count
+#     delta after sanitisation, so we don't add log noise here.
+# ---------------------------------------------------------------
+sanitize_codex_prompt_file()
+{
+	local _path="${1:-}"
+	if [ -z "${_path}" ] || [ ! -f "${_path}" ]; then
+		return 0
+	fi
+	if ! command -v iconv >/dev/null 2>&1; then
+		return 0
+	fi
+	local _tmp
+	_tmp="$(mktemp "${_path}.utf8XXXXXX" 2>/dev/null)" || return 0
+	# //IGNORE discards invalid sequences. iconv exits non-zero
+	# whenever it skips any, but the output IS correct, so don't
+	# gate the rewrite on $? — gate on whether output was produced.
+	iconv -f UTF-8 -t UTF-8//IGNORE < "${_path}" > "${_tmp}" 2>/dev/null || true
+	if [ -s "${_tmp}" ] || [ ! -s "${_path}" ]; then
+		mv "${_tmp}" "${_path}"
+	else
+		rm -f "${_tmp}"
+	fi
+}
