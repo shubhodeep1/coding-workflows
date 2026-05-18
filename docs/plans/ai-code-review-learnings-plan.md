@@ -91,10 +91,10 @@ the plan calls it out so reviewers can confirm rather than re-litigate.
   `review_autofix` pipeline itself reads at runtime; any reviewer /
   consolidator prompt change must be reflected here or in
   `agents.md`, not just in `CLAUDE.md`.
-- commit `03d231b` (judge-loop and reissue, shipped) — covers
+- `docs/completed/judge-loop-and-reissue-plan.md` (shipped) — covers
   judge-in-loop, sticky findings, typed rejections, behavioural smoke,
-  reissue baseline. **Phase F here (re-review awareness) overlaps the
-  shipped Phase A (judge-in-loop) and Phase B (sticky findings)**;
+  reissue baseline. **Phase F here (re-review awareness) overlaps that
+  plan's Phase A (judge-in-loop) and Phase B (sticky findings)**;
   this plan must reuse those flag namespaces (see Open Questions).
 
 ## Goals
@@ -143,9 +143,9 @@ lines 171–179).
    ("won't fix", "I disagree", "acknowledged" — promoted via the
    `CONSOLIDATOR_OVERRIDDEN: <issue_id> — <reason>` convention in
    `agents.md` line 175) and skip re-emitting fixed findings unless
-   the issue worsens. **Coordinate flag namespace with the shipped
-   judge-loop / reissue work (commit `03d231b`) Phase A / B before
-   landing.**
+   the issue worsens. **Coordinate flag namespace with
+   `docs/completed/judge-loop-and-reissue-plan.md` (shipped) Phase A / B
+   before landing.**
 7. **Phase G — Per-reviewer circuit breaker + same-family failback.**
    Extend the conflict-resolver's same-family failback policy into
    `scripts/review_run_reviewers.sh` so a failing reviewer (e.g.
@@ -290,8 +290,8 @@ lines 171–179).
 - **J (approval rubric) lands fourth** — depends on B (full vs. lite
   tier may bias decision) but not on F.
 - **F (re-review awareness) lands fifth** — must merge flag
-  namespace with the shipped judge-loop / reissue work (commit
-  `03d231b`) Phase A / B first; otherwise we'll ship conflicting ledger reads.
+  namespace with `docs/completed/judge-loop-and-reissue-plan.md`
+  (shipped) Phase A / B first; otherwise we'll ship conflicting ledger reads.
 - **G (per-reviewer circuit breaker) lands sixth** — requires
   cross-run state in `.ai/review_runtime/` and may interact with B
   (a degraded reviewer in `full` tier might collapse to `lite`).
@@ -305,7 +305,7 @@ lines 171–179).
 Each step lists the files touched and the new env vars introduced.
 Every new env var defaults `false` until the bake-out PR per phase
 flips the default, per the project's standing flag-gated rollout
-pattern (mirrored from the shipped judge-loop / reissue work, commit `03d231b`).
+pattern (mirrored from `docs/completed/judge-loop-and-reissue-plan.md`).
 
 ### Phase A — "What NOT to flag" anti-rules
 
@@ -508,9 +508,9 @@ ignore them.
 **Env vars:** `REVIEW_REREVIEW_AWARENESS_ENABLED` (default `0`).
 
 **Coordination requirement:** before merging this phase, audit
-the shipped judge-loop / reissue work (commit `03d231b`) Phase A
+`docs/completed/judge-loop-and-reissue-plan.md` (shipped) Phase A
 (judge-in-loop) and Phase B (sticky findings) for flag overlap. The
-simplest path is to **rename this phase's flag to match** the shipped
+simplest path is to **rename this phase's flag to match** that plan's
 `REVIEW_JUDGE_IN_LOOP_*` namespace, or to share `REVIEW_LEDGER_REREVIEW_ENABLED`.
 **Open question Q-OQ-1** — see Open Questions.
 
@@ -541,7 +541,7 @@ simplest path is to **rename this phase's flag to match** the shipped
 
 - New state file `.ai/review_runtime/reviewer_health.json` —
   persisted via the same `actions/cache@v4` mechanism as the ledger
-  (see judge-loop / reissue work, commit `03d231b`, "Context" section).
+  (`docs/completed/judge-loop-and-reissue-plan.md` "Context" section).
   Per-model state machine `healthy → degraded → open`; transitions
   on N consecutive retryable failures (default N=3); `open` state
   expires after `REVIEWER_HEALTH_OPEN_TTL_SECS` (default 1800).
@@ -807,7 +807,7 @@ phase's bake-out flip.
 
 ## Rollout
 
-### Per-phase rollout pattern (mirrors the shipped judge-loop / reissue work, commit `03d231b`)
+### Per-phase rollout pattern (mirrors `docs/completed/judge-loop-and-reissue-plan.md`)
 
 1. **PR-1**: Land the phase behind a flag that defaults `false`.
    Smoke test the matrix; no consumer-repo impact because the flag
@@ -857,8 +857,8 @@ behaviour change on pin — only on explicit opt-in.
 
 ## Open Questions
 
-- **Q-OQ-1**: Phase F (re-review awareness) overlaps the shipped
-  judge-loop / reissue work (commit `03d231b`) Phase A
+- **Q-OQ-1**: Phase F (re-review awareness) overlaps
+  `docs/completed/judge-loop-and-reissue-plan.md` (shipped) Phase A
   (judge-in-loop) and Phase B (sticky findings). Should this plan's
   Phase F:
   - **A**: Share the `REVIEW_JUDGE_IN_LOOP_*` namespace from that
@@ -909,7 +909,7 @@ behaviour change on pin — only on explicit opt-in.
   propagation, §15 GitHub API hygiene, §16 model tiering.
 - `unattended_system_instructions.md` — runtime rules for the
   `review_autofix` pipeline.
-- commit `03d231b` (judge-loop and reissue, shipped); Phase F here
+- `docs/completed/judge-loop-and-reissue-plan.md` (shipped); Phase F here
   coordinates with Phases A + B there.
 - `scripts/review_run_reviewers.sh:435–807` — existing prompt-
   injection fence pattern, the model for Phase E.
