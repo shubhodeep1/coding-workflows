@@ -294,3 +294,158 @@ The repo already treats API reuse as a contract: `CLAUDE.md §15` requires exten
 | `26006966699` | review_autofix | success | 1209 | `codex-agent` dominated runtime; Node 20 deprecation warnings |
 | `26008453323` | orchestrate_poll | success | 134 | Semble enabled but unavailable; healthy fail-open |
 | `26008674593` | copilot_pull_request_reviewer | success | 81 | artifact digest warning noise + GH API cleanup calls |
+
+## Deep Audit — Workflows & Scripts (2026-05-18)
+
+### Section 1: Bug & Correctness Sweep
+
+#### BUG-001
+- **File path** — `scripts/review_rb_judge.sh:246-256`; `.github/workflows/review_autofix.yml:4528-4548`
+- **Severity** — High
+- **Category tag** — bug
+- **Description** — Both fallback paths accept broad body/title matches like bare `issues/123` and `issue #123` when `closingIssuesReferences` is empty. `issue_pr_status.yml:196-210` explicitly documents that these broad forms already caused false-positive issue transitions (`#1469`) and therefore tightens its fallback to closing keywords or repo-scoped URLs only. Here, the parsed `ISSUE_NUMBERS` then drive label/state mutation: `review_rb_judge.sh` uses them for `_resilient_phase_swap` and close/reissue actions, and `review_autofix.yml` uses them to set `ai:ready-to-merge`.
+- **Recommended fix** — Extract one shared resolver (for example `resolve_closing_issue_numbers`) into `scripts/gh_helpers.sh` and make these call sites reuse the stricter `issue_pr_status.yml:196-210` rule set: GraphQL first, then fallback only for repo-scoped URLs and explicit closing keywords.
+
+#### CONSIST-001
+- **File path** — `scripts/label_helpers.sh:146-196`; `.github/workflows/review_autofix.yml:4489-4523`; `.github/workflows/issue_pr_status.yml:240-249`
+- **Severity** — Medium
+- **Category tag** — consistency
+- **Description** — The canonical `set_issue_phase_label_resilient` helper removes old phase labels, computes the replacement set, and `PUT`s the final label list. Both workflow-local fallbacks only `POST` the new label. In `review_autofix.yml:4487-4488`, that fallback is explicitly reachable if staged helper artifacts disappear late in the job, which can leave contradictory phase labels such as `ai:review-blocked` and `ai:ready-to-merge` on the same issue.
+- **Recommended fix** — Replace the inline fallbacks with a minimal shared helper that preserves the canonical GET/replace/PUT behavior from `scripts/label_helpers.sh:146-196`, or copy that helper into a protected runtime path that late cleanup steps do not remove.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### API-001
+- **File path** — `scripts/review_rb_judge.sh:221-223,254-256,305-323,666-667,732-746,792-795,1002-1024`
+- **Severity** — Medium
+- **Category tag** — api-redundancy
+- **Description** — `review_rb_judge.sh` re-fetches the same PR payload repeatedly: early closed/merged guard, fallback title/body lookup, merged guard, mergeability polling, exhausted-fix merge, and merge-with-followup polling. The file already builds `PRELOADED_PR_META` and already calls `gh_pr_with_all_comments`, so most later reads are against data it already had.
+  - **Current call count** — 4 fixed PR metadata reads on the common path, +1 optional fallback read at `254-256`, + up to 6 more reads in each mergeability loop (`PR_MERGEABLE_POLL_ATTEMPTS` defaults to 6 at `732-735` and `1002-1004`), + 1 diff fetch.
+  - **Proposed call count after fix** — 1 initial PR metadata fetch + 1 conditional freshness refresh + 1 diff fetch on the common path.
+  - **Existing batching/prefetch pattern to extend** — `scripts/gh_helpers.sh:735-860` (`gh_pr_with_all_comments`) plus the existing `PRELOADED_PR_META` handoff already built at `307-317`.
+- **Recommended fix** — Persist one canonical PR JSON blob before branching, reuse it for title/body/state/head-sha lookups, and only refresh once where a fresh merged/head check is semantically required.
+
+#### API-002
+- **File path** — `.github/workflows/issue_pr_status.yml:280-330,503-513`
+- **Severity** — Medium
+- **Category tag** — api-redundancy
+- **Description** — The workflow already classifies linked issues with one aliased GraphQL batch (`295-320`), then later re-fetches linked issue bodies one-by-one in the merged-alert step just to rediscover the same orchestrator marker.
+  - **Current call count** — 1 batched GraphQL request + `N` extra REST `issues/{n}` reads, where `N` is the number of linked issues.
+  - **Proposed call count after fix** — 1 batched request + 0 extra REST reads.
+  - **Existing batching/prefetch pattern to extend** — The existing aliased GraphQL classification block in the same workflow.
+- **Recommended fix** — Export `TRACKING_ISSUES`, `MANAGED_ISSUES`, or a boolean like `HAS_ORCHESTRATED_LINKED_ISSUE` from the earlier step via `GITHUB_ENV` or step outputs and reuse it in the alert step.
+
+#### BATCH-001
+- **File path** — `scripts/orchestrate_poll_process.sh:8818-8844,9123-9163,10715-10739,10855-10871`
+- **Severity** — High
+- **Category tag** — api-batching
+- **Description** — The poller already has cycle-local batch helpers (`_fetch_issue_labels_batch_graphql`, `_fetch_candidate_issue_details_graphql`, `_fetch_linked_pr_status_graphql`), but hot loops still do per-issue REST reads for labels/state/blocker status. That directly conflicts with `CLAUDE.md:415-445` and `agents.md:113-126`, which treat inner-loop per-item API calls as a blocker when batch caches exist.
+  - **Current call count** — `(#prior-wave cache misses) + (#current-wave state misses) + (#current-wave issues after review-blocked handling) + (#reissued issues) + (#implementation blockers)` extra REST requests per poll cycle.
+  - **Proposed call count after fix** — `ceil(label_refresh_issue_count/25) + ceil(blocker_count/25)` GraphQL calls on mutation paths, and 0 extra calls on cache hits.
+  - **Existing batching/prefetch pattern to extend** — `scripts/orchestrate_poll_process.sh:1519-1565`, `6398-6515`, and `6535-6565+`.
+- **Recommended fix** — After review-blocked mutations, rebuild `LABELS_JSON` with `_fetch_issue_labels_batch_graphql` over the union of current and reissued issues; batch blocker states through `_fetch_candidate_issue_details_graphql` or a lighter `state-only` variant; keep caches live instead of repopulating them one issue at a time.
+
+#### API-003
+- **File path** — `.github/workflows/review_autofix.yml:1473-1567`
+- **Severity** — Medium
+- **Category tag** — api-redundancy
+- **Description** — The “Collect PR metadata” step performs four separate PR-scope REST calls (`/pulls/{n}`, `/issues/{n}/comments`, `/pulls/{n}/reviews`, `/pulls/{n}/comments`) and then reconstructs a consolidated context file locally. The repo already has `gh_pr_with_all_comments` for this shape, but this step bypasses it.
+  - **Current call count** — 4 REST calls for PR context hydration + 1 diff fetch + 1 linked-issues GraphQL call per run.
+  - **Proposed call count after fix** — 1 consolidated PR-context call + 1 diff fetch + 1 linked-issues GraphQL call.
+  - **Existing batching/prefetch pattern to extend** — `scripts/gh_helpers.sh:735-860` (`gh_pr_with_all_comments`).
+- **Recommended fix** — Source `scripts/gh_helpers.sh`, extend `gh_pr_with_all_comments` to emit review-state/body fields if needed, and consume that single payload here instead of rebuilding PR context from four separate calls.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001
+- **File path** — `.github/workflows/clarify.yml:75-128`; `.github/workflows/plan.yml:126-182`; `.github/workflows/implement.yml:285-338`; `.github/workflows/validate.yml:99-152`; `.github/workflows/orchestrate_clarify_respond.yml:110-163`
+- **Severity** — Medium
+- **Category tag** — duplication
+- **Description** — The same resolver bootstrap is copied across five workflows: stage root creation, auth-header setup, `resolver_git()`, cleanup trap, clone/fetch/checkout, and `bash "${resolver_script}"`. This is the kind of drift surface that forces separate checkout-integration audits.
+- **Recommended fix** — Move the staging logic into a shared module such as `scripts/fetch_resolve_integration_ref.sh` with a signature like `fetch_resolve_integration_ref <resolver_repo> <resolver_ref> <issue_number> <output_file>`. Keep `scripts/resolve_integration_ref.sh` as the inner resolver, and have the five workflows call only the wrapper.
+
+#### DUP-002
+- **File path** — `.github/workflows/validate.yml:207-583`; `.github/workflows/issue_pr_status.yml:41-173`; `.github/workflows/validation-improvements-intake.yml:48-140`; `.github/workflows/plan.yml:215-335`; `.github/workflows/review_autofix.yml:866-1010`; `.github/workflows/orchestrate_poll.yml:234-340`
+- **Severity** — Medium
+- **Category tag** — duplication
+- **Description** — The repo repeats large support-bootstrap blocks: resolve support ref, clone staged support trees, copy scripts/prompts/schemas, fall back to `main`, and emit `.gitignore`/runtime metadata. The implementations differ slightly per workflow, so fixes have to be propagated manually.
+- **Recommended fix** — Extract the shared bootstrap into a module such as `scripts/fetch_workflow_support.sh` with a signature like `fetch_workflow_support <wf_source> <script_ref> <dest_root> <required_csv> [optional_csv]`. Callers to update: at least `validate.yml`, `issue_pr_status.yml`, `validation-improvements-intake.yml`, `plan.yml`, `review_autofix.yml`, and `orchestrate_poll.yml`.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+Measured below as dedented `run:` body length for blocks that contain at least one `${{ }}` interpolation. No `if:` expression exceeded the audit threshold. No workflow exceeded 800 KB; the largest is `review_autofix.yml` at 345,174 bytes.
+
+#### EXPR-001
+- **File path** — `.github/workflows/test-and-mark-stable.yml:1203-1587`
+- **Severity** — High
+- **Category tag** — expression-limit
+- **Description** — The “Phase 4: Wait for review & autofix to complete” shell block is already near the hard parser ceiling.
+  - **Estimated current character count** — ~19,900
+  - **Headroom remaining** — ~1,100
+- **Recommended fix** — Extract the wait loop into an external script such as `scripts/e2e_wait_review.sh` and pass only the few dynamic values as env vars.
+
+#### EXPR-002
+- **File path** — `.github/workflows/test-and-mark-stable.yml:1673-2078`
+- **Severity** — Medium
+- **Category tag** — expression-limit
+- **Description** — The “Verify editor restored canary” block includes retry dispatch, polling, pytest classification, and multiple `${{ }}` interpolations in one inline shell body.
+  - **Estimated current character count** — ~17,409
+  - **Headroom remaining** — ~3,591
+- **Recommended fix** — Move this logic to `scripts/e2e_verify_bait_removed.sh` and keep the workflow step to env wiring plus a single script invocation.
+
+#### EXPR-003
+- **File path** — `.github/workflows/validate.yml:210-583`
+- **Severity** — Medium
+- **Category tag** — expression-limit
+- **Description** — The support-fetch bootstrap is both long and highly interpolated, which makes future edits risky.
+  - **Estimated current character count** — ~17,417
+  - **Headroom remaining** — ~3,583
+- **Recommended fix** — Extract the support bootstrap to `scripts/fetch_workflow_support.sh` or a composite action and keep the workflow body thin.
+
+#### EXPR-004
+- **File path** — `.github/workflows/review_autofix.yml:1476-1865`
+- **Severity** — Medium
+- **Category tag** — expression-limit
+- **Description** — The PR-context collector step combines retry helpers, multiple API calls, linked-issue fallback logic, two inline Python blocks, and several `${{ }}` substitutions.
+  - **Estimated current character count** — ~17,409
+  - **Headroom remaining** — ~3,591
+- **Recommended fix** — Extract the whole collector to a script such as `scripts/review_collect_pr_context.sh`, and keep the workflow step to env setup and one invocation.
+
+### Section 5: Cross-Cutting Concerns
+
+#### SHELL-001
+- **File path** — `scripts/validate_changed_files_syntax.sh:70-75`
+- **Severity** — Low
+- **Category tag** — shellcheck
+- **Description** — ShellCheck flags this case arm with SC2221/SC2222: `*.env*` already matches before the later `*.envrc` / `.env*` arms, so the later patterns are dead and misleading.
+- **Recommended fix** — Collapse the secret-file denylist into one intentional pattern set, or reorder the arms so specific patterns come before the broader `*.env*` arm.
+
+#### DEBT-001
+- **File path** — `scripts/orchestrate_lib.py:988-1371`; `agents.md:160-167`; `README.md:1133`
+- **Severity** — Low
+- **Category tag** — tech-debt
+- **Description** — The contradiction-evidence helper stack (`parse_phase_failure_markers`, `choose_most_advanced_conclusive_evidence`, `resolve_label_repair_evidence`, plus `evaluate_phase_failure_resume`) is maintained code but has no external callers in workflows/scripts; docs explicitly say it is reserved and not wired into the active poller.
+- **Recommended fix** — Either wire the helper into `reconcile_managed_issue_labels`/resume gating, or move the reserved implementation behind a smaller module boundary with explicit tests and a narrower public surface so active poller code is easier to reason about.
+
+No `TODO`, `FIXME`, or `HACK` markers were present under `.github/workflows` or `scripts`.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 3 | BUG-001, BATCH-001, EXPR-001 |
+| Medium | 9 | CONSIST-001, API-001, API-002, API-003, DUP-001, DUP-002, EXPR-002, EXPR-003, EXPR-004 |
+| Low | 2 | SHELL-001, DEBT-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 3 | Medium |
+| API call optimization | 5 | Large |
+| Code modularization | 10+ | Large |
+| Expression size reduction | 4 | Medium |
+| Medium/Low fixes | 3 | Small |
