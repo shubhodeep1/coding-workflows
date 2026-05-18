@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- prompts/mode-judge-review-blocked.txt:25-34,166 | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The Option B/read-only fix path still reads as if the judge's `fix_description` drives the write-mode editor, and the `fix_description` schema text remains vague about non-`fix` cases.\n  WHY: The downstream fix step re-derives changes without seeing `RB_FIX_DESC`, so the prompt contract is misleading and reviewers also flagged the schema wording as under-specified.\n- scripts/review_rb_judge.sh:815-852 | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5]\n  PROBLEM: The second codex call that applies fixes does not include `RB_FIX_DESC`, so it cannot follow the judge's concrete fix plan.\n  WHY: `RB_FIX_DESC` is only used in the commit message, forcing the write-mode editor to reconstruct the fix from the original context instead of the judge's JSON.\n- prompts/mode-judge-review-blocked.txt:113-120 | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The new `merge_with_followup` exception for surgical critical defects relies on subjective terms like \"surgical\" and \"small bounded patch\".\n  WHY: Reviewers noted the lack of concrete boundaries/cross-references can make repeated judge runs interpret the same PR differently.\n- scripts/review_rb_judge.sh:419-429 | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, mistralai_mistral-small-2603]\n  PROBLEM: The IS_FINAL help text repeats the base \"no critical defects\" rule immediately before the exception, which creates a readability tension in the same paragraph.\n  WHY: The nearby exception is still machine-readable, but reviewers flagged the structure as easy to misparse and the prompt/script mirror keeps the same subjective wording.\n- scripts/review_rb_judge.sh:419-429 | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The updated exception wording is not synchronized with all in-repo documentation and history comments, leaving stale references to the older tighter gate.\n  WHY: x-ai specifically noted the top-file comments and `last_commit_stat.txt` still point at the old behavior, which can confuse future maintainers.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- prompts/mode-judge-review-blocked.txt:25-34,61-65,113-120,166 | confidence=2\n  PROBLEM: The two-phase model description for option B \u2014 \"emit JSON with fix_description in read-only mode; the workflow re-invokes the editor with write access and your fix_description\" \u2014 can imply that the write-mode editor receives the judge's fix_description.\n  WHY: The actual write-mode prompt does not inject `RB_FIX_DESC`; the fix description is only carried into the commit message, so the text describes a workflow detail that is not true.\n- scripts/review_rb_judge.sh:419-428 | confidence=1\n  PROBLEM: The IS_FINAL message tells the judge \"merge_with_followup if the PR is shippable (no build/test breakage, no critical correctness/security defects)\" and then immediately adds an EXCEPTION that still prefers `merge_with_followup` for surgical critical defects.\n  WHY: The base rule and exception are in tension and could be parsed inconsistently, even though the same structure is used consistently in the prompt file.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_rb_judge.sh:815-852 | confidence=4\n  PROBLEM: The prompt change describes a two-phase model where the judge's `fix_description` should be passed to the second codex call, but the code does not actually include the `fix_description` in that second prompt.\n  WHY: The write-mode codex call only receives the original judge prompt and generic \"apply the fixes you identified\" instructions, so it cannot see the judge's concrete fix plan.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- prompts/mode-judge-review-blocked.txt:25-34 | confidence=4\n  PROBLEM: Option B's instructions about the two-phase model may inadvertently suggest models need to apply fixes during the read-only phase.\n  WHY: The read-only/second-phase distinction is easy to miss, so the workflow can be interpreted incorrectly.\n- prompts/mode-judge-review-blocked.txt:113-120, scripts/review_rb_judge.sh:419-428 | confidence=4\n  PROBLEM: The surgical-patch exception and shell-script mirror use vague qualifiers without concrete boundaries (4 related items).\n  WHY: The terms are subjective and the docs layers do not operationalize them, so judge runs and maintainers may interpret them inconsistently.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- prompts/mode-judge-review-blocked.txt:113-120 | confidence=3\n  PROBLEM: The new exception clause for `merge_with_followup` on \"critical\" defects for surgical changes on integration branches is qualitative and can be interpreted inconsistently.\n  WHY: The judge prompt already has a large context load, so terms like \"surgical\" and \"acceptable\" may produce non-deterministic decisions across retries.\n- prompts/mode-judge-review-blocked.txt:25-34,166 | confidence=2\n  PROBLEM: The prompt now clarifies the read-only step, but the `fix_description` schema still uses placeholder language and does not explicitly say what happens if `fix_description` is non-empty on a non-`fix` action.\n  WHY: The downstream parser may encounter malformed JSON or ambiguous output-contract cases, and the schema text could be tightened to match the clearer prose above it.\n- scripts/review_rb_judge.sh:419-429 | confidence=4\n  PROBLEM: The shell script's help text for IS_FINAL was updated to match, but stale references elsewhere still point at the old behavior.\n  WHY: Future editors/reviewers reading the script or commit history may be confused by the unsynchronized contract.\n- prompts/mode-judge-review-blocked.txt:110-123 | confidence=3\n  PROBLEM: The change introduces a new behavioral exception for orchestrator integration branches without updating related contracts and documentation.\n  WHY: This creates documentation drift that can affect future judge behavior understanding and maintenance.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "3055ecaf4e21ac35068b8a6a36af1272461419fd6937d6e6d61775f1c2461636",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26044836903",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26044836903",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260518161256_d70f9c4cb8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26044836903"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-18T16:12:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
