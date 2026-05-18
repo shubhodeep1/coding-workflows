@@ -672,6 +672,7 @@ def test_multiround_review_runtime_and_spot_fix_reissue_baseline_contract() -> N
 		verify_two_output = verify_two_result.stdout + verify_two_result.stderr
 		assert verify_two_result.returncode == 0, verify_two_output
 		round_two_verified = round_two_dir / "verified_rejections.json"
+		# verify_three rewrites the same round-2 artifact in place before the final read below.
 		assert round_two_verified.exists(), verify_two_output
 		round_two_verified_payload = json.loads(round_two_verified.read_text(encoding="utf-8"))
 		assert round_two_verified_payload["round"] == 2
