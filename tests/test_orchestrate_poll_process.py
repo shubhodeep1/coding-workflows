@@ -8060,6 +8060,8 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	# when fingerprint verification rejects the resolver output.
 	assert "IS_INTEGRATION_SYNC" in resolve_body
 	assert "verify_integration_fingerprints.py" in resolve_body
+	assert "--baseline-fingerprints-state" in resolve_body
+	assert "--compare-against-baseline" in resolve_body
 	assert "Aborting [ai-merge-resolve] commit: integration fingerprint verification" in resolve_body
 
 

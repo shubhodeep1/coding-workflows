@@ -1,7 +1,7 @@
 # Sub-Issue Test Runs — Discovery Spike
 
 > Status: discovery only.
-> Source question: Phase 6 / G6.1 in `docs/plans/integration-sync-resolver-self-heal-plan.md`.
+> Source question: Phase 6 / G6.1 in `docs/completed/integration-sync-resolver-self-heal-plan.md`.
 > Decision: **NO-GO** on replacing fingerprints with sub-issue test runs as the sole gate.
 > Non-goal: this document does **not** implement G6.2; any G6.2 planning remains future work.
 
@@ -76,9 +76,10 @@ sub-issues.
 ### Current capture path
 
 `scripts/orchestrate_poll_process.sh::capture_intent_fingerprints_for_merged_subissue`
-fetches the merged sub-issue PR diff, keeps only allowlisted paths, converts net
-added lines into `must_contain` regexes, converts net removed lines into
-`must_not_contain` regexes, and stores the result under
+fetches the merged sub-issue PR diff, keeps only allowlisted paths for the
+line-based regex capture, converts net added lines into `must_contain` regexes,
+converts net removed lines into `must_not_contain` regexes, records outright file
+deletions under `must_not_exist`, and stores the result under
 `merged_issue_fingerprints[<issue_num>]` with these fields:
 
 - `issue`
@@ -86,6 +87,7 @@ added lines into `must_contain` regexes, converts net removed lines into
 - `captured_at`
 - `must_contain`
 - `must_not_contain`
+- `must_not_exist`
 
 The current allowlist is:
 
@@ -99,8 +101,9 @@ The current allowlist is:
 - `db/contracts/`
 - exact files `agents.md`, `README.md`, `CLAUDE.md`
 
-This allowlist matters for Phase 6: files outside it are invisible to the
-current fingerprint capture path.
+This allowlist matters for Phase 6's **line-based** capture: files outside it do
+not contribute `must_contain` / `must_not_contain` regexes, although outright
+deletions are still recorded path-agnostically under `must_not_exist`.
 
 ### Current verification path
 
@@ -108,7 +111,8 @@ current fingerprint capture path.
 the current tree by checking that:
 
 - every `must_contain` regex still matches, and
-- every `must_not_contain` regex still does **not** match.
+- every `must_not_contain` regex still does **not** match, and
+- every `must_not_exist` path still does **not** exist.
 
 Important properties for the comparison:
 
