@@ -249,6 +249,7 @@ def test_verify_integration_fingerprints_compare_mode_passes_on_pre_existing_dri
 			"Integration fingerprint verification PASSED with pre-existing drift — resolver did not introduce any new regressions "
 			"(pre_existing_drift_count=1; see PRE_EXISTING_FINGERPRINT_DRIFT_V1 markers above for triage)."
 		) in out
+		assert "Silent-regression detector" not in out
 		assert err == ""
 
 

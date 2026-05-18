@@ -994,8 +994,8 @@ def compare_against_baseline(
 	baseline_index = _baseline_satisfied_index(baseline_state)
 	violations: list[str] = []
 	pre_existing_drift_count = 0
-	mc_total_expected = 0
-	mc_total_satisfied = 0
+	mc_compare_expected = 0
+	mc_compare_satisfied = 0
 	file_cache: dict[str, tuple[str | None, str | None]] = {}
 	exists_cache: dict[str, tuple[bool, str | None]] = {}
 	cross_issue_exact_drops, cross_issue_exact_warnings = _cross_issue_exact_conflict_drops(fingerprints)
@@ -1039,11 +1039,12 @@ def compare_against_baseline(
 				state = _evaluate_fp_state(fp, kind, issue_num, pr_num, file_cache, exists_cache, ref=ref)
 				if state is None:
 					continue
-				if kind == "must_contain":
-					mc_total_expected += 1
-					if state["satisfied"]:
-						mc_total_satisfied += 1
 				baseline_satisfied = baseline_index.get((str(issue_key), kind, state["fp_key"]))
+				if kind == "must_contain":
+					if baseline_satisfied is not False:
+						mc_compare_expected += 1
+						if state["satisfied"]:
+							mc_compare_satisfied += 1
 				if state["check_error"] is not None:
 					if baseline_satisfied is False:
 						_emit_pre_existing_drift_marker(state, issue_num, fixed_by_resolver=False)
@@ -1065,7 +1066,7 @@ def compare_against_baseline(
 				_emit_pre_existing_drift_marker(state, issue_num, fixed_by_resolver=False)
 				pre_existing_drift_count += 1
 
-	_emit_must_contain_ratio(branch, mc_total_satisfied, mc_total_expected)
+	_emit_must_contain_ratio(branch, mc_compare_satisfied, mc_compare_expected)
 	if violations:
 		return _emit_verify_failure(violations)
 	if pre_existing_drift_count > 0:

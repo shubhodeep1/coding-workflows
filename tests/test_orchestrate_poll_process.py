@@ -8046,6 +8046,9 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 		'MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_conflict_resolve.sh '
 		'review_conflict_prepare.sh"'
 	) in wf_body
+	assert 'SUPPORT_ROOT_DIR="${RUNNER_TEMP}/coding-workflows-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in wf_body
+	assert 'SUPPORT_SCRIPTS_DIR="${SUPPORT_ROOT_DIR}/scripts"' in wf_body
+	assert 'SUPPORT_SCRIPTS_DIR="scripts"' not in wf_body
 	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh"' in wf_body
 	assert "for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do" in wf_body
 	assert "Bootstrapped ${f} from main snapshot (branch copy ignored)." in wf_body
