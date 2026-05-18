@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/codex_model_catalog.json:537 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The new `codestral-2508` catalog entry sets `apply_patch_tool_type` to `\"freeform\"`, which may trigger the announce-without-emit regression on the OpenRouter Responses path.\n  WHY: Deepseek cites the ablation suite as identifying `\"freeform\"` as the root cause of the regression; the risk is described as low because this model is reviewer-only and other reviewers use `\"freeform\"` without known issues.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/codex_model_catalog.json:537 | severity=low | confidence=2\n  PROBLEM: The new `codestral-2508` catalog entry sets `apply_patch_tool_type` to `\"freeform\"`, which may trigger the announce-without-emit regression on the OpenRouter Responses path.\n  WHY: Deepseek cites the ablation suite as identifying `\"freeform\"` as the root cause of the regression; the risk is described as low because this model is reviewer-only and other reviewers use `\"freeform\"` without known issues.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/codex_model_catalog.json:518-548\n  PROBLEM: The new `mistralai/codestral-2508` entry uses `apply_patch_tool_type: \"freeform\"`; if review runs underperform, `\"function\"` would be the first fallback to try.\n  WHY: This was explicitly framed as a non-blocking advisory, not a bug, and the chosen setting was described as the correct conservative default.\n- tests/test_consolidate_soft_error_reports.py:315\n  PROBLEM: The docstring mentions `\"glm-5\"` in historical prose.\n  WHY: This is only a comment/docstring reference; the reviewer explicitly said it does not need to change for correctness.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "6a65434221cc008e2c650a7ab2b73760326aaae2a103912241abed8d23b00a77",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26012292781",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26012292781",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260518035533_bf714c386b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26012292781"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-18T03:55:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
