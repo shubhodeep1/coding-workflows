@@ -522,3 +522,160 @@
 | Code modularization | 10 | Large |
 | Expression size reduction | 2 | Medium |
 | Medium/Low fixes | 7 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-18)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the consolidation is statically provable in the current code path without changing retry/error semantics; `NEEDS_VERIFICATION` means the overlap is real but equivalence is not fully provable from static reading alone; `RISKY_SKIP` means the duplication sits in a retry/race-sensitive path and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+- **ID:** `MERGE-001`  
+  **Safety tag:** `SAFE_TO_MERGE`  
+  **File path and line ranges:** `.github/workflows/orchestrate_clarify_respond.yml:68-83`, `.github/workflows/orchestrate_clarify_respond.yml:409-420`  
+  **Current call count:** 2 child-issue GETs plus up to 2 tracking-issue GETs per orchestrator-managed run with a tracking issue.  
+  **Proposed call count:** 1 child-issue GET plus up to 1 tracking-issue GET, with the later step reading cached payloads.  
+  **Endpoint(s):** `GET /repos/{owner}/{repo}/issues/{issue_number}`  
+  **Evidence:**
+  ```bash
+  ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ...
+  TRACKING_TITLE="$(gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.title // ""' ...)"
+
+  ISSUE_META="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ...
+  TRACKING_BODY="$(gh_retry gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.body // ""')"
+  ```
+  The first step already fetches the child issue, and conditionally fetches the tracking issue; the later `Fetch issue and tracking context` step re-fetches both objects from the same REST endpoint.  
+  **Proposed fix:** In `Check orchestrator metadata`, persist full child/tracking issue JSON to temp files (or `$GITHUB_ENV` file paths), not just derived strings; in `Fetch issue and tracking context`, parse those cached payloads first and call the current `gh_retry gh api` lines only on cache miss/unparseable cache.  
+  **Safety rationale:** Both pairs hit the same `GET /issues/{n}` endpoint in the same job, nothing between these steps mutates issue title/body, and preserving the later `gh_retry gh api` as cache-miss fallback keeps failure behavior aligned.  
+  **Downstream signal:** Persist full child/tracking issue payloads in `Check orchestrator metadata` and make `Fetch issue and tracking context` consume them before falling back to its current `gh_retry gh api` calls.
+
+- **ID:** `MERGE-002`  
+  **Safety tag:** `NEEDS_VERIFICATION`  
+  **File path and line ranges:** `scripts/review_rb_judge.sh:246-251`, `scripts/review_rb_judge.sh:267-283`  
+  **Current call count:** 1 GraphQL call plus up to `N` REST issue GETs (`N = linked issues`, stopping once the first non-empty body is found).  
+  **Proposed call count:** 1 GraphQL call on the common path; keep the REST loop only as fallback when GraphQL data is missing/insufficient.  
+  **Endpoint(s):** GraphQL `repository.pullRequest.closingIssuesReferences`; REST `GET /repos/{owner}/{repo}/issues/{issue_number}`  
+  **Evidence:**
+  ```bash
+  ISSUE_NUMBERS="$(gh_retry gh api graphql \
+    ... closingIssuesReferences(first: 50) { nodes { number } } ...)"
+
+  while IFS= read -r issue_number; do
+    ISSUE_META_JSON="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" || echo '{}')"
+    BODY="$(printf '%s' "${ISSUE_META_JSON}" | jq -r '.body // ""' ...)"
+    ...
+  done <<< "${ISSUE_NUMBERS}"
+  ```
+  The GraphQL call only asks for `number`, then the script rehydrates `body` and `labels` issue-by-issue via REST.  
+  **Proposed fix:** Extend the existing GraphQL query to request `nodes { number body labels(first: 100) { nodes { name } } }`, populate `FIRST_ISSUE_BODY` and `FIRST_ISSUE_LABELS_JSON` directly from that response, and retain the current REST loop only when the GraphQL node set is absent or insufficient. Use the repo’s existing batching style from `_fetch_candidate_issue_details_graphql` / `_fetch_linked_pr_status_graphql` as the reference pattern.  
+  **Safety rationale:** The overlap is real, but GraphQL node ordering/body nullability must be proven equivalent to the current “first linked issue with a non-empty body” loop before the REST hydration can be removed safely.  
+  **Downstream signal:** Verify on representative PRs that the extended GraphQL query yields the same `FIRST_ISSUE`, `FIRST_ISSUE_BODY`, and `FIRST_ISSUE_LABELS_JSON` as the current REST loop before dropping the per-issue GETs.
+
+- **ID:** `MERGE-003`  
+  **Safety tag:** `RISKY_SKIP`  
+  **File path and line ranges:** `scripts/orchestrate_poll_process.sh:3905-3945`, `scripts/orchestrate_poll_process.sh:3995-4000`, `scripts/orchestrate_poll_process.sh:4049-4051`  
+  **Current call count:** 8 REST PR GETs inside `finalize_integration_merge_if_needed()`.  
+  **Proposed call count:** 3 REST PR GETs if each same-block field bundle is collapsed to one JSON fetch while preserving fresh reads across mutation boundaries.  
+  **Endpoint(s):** `GET /repos/{owner}/{repo}/pulls/{pull_number}`  
+  **Evidence:**
+  ```bash
+  existing_pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' ...)"
+  existing_pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' ...)"
+
+  pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' ...)"
+  pr_mergeable="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.mergeable' ...)"
+  pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' ...)"
+
+  pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' ...)"
+  pr_mergeable="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.mergeable' ...)"
+  pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' ...)"
+  ```
+  Each block reads multiple fields from the same PR payload without mutation between those reads.  
+  **Proposed fix:** Add a local `_final_pr_json` fetch inside each state-check block in `finalize_integration_merge_if_needed()`, parse `.state/.mergeable/.merged_at` from that one object, and keep a separate fresh fetch after each state-changing boundary (`gh pr create`, merge attempt, state-file writes as needed).  
+  **Safety rationale:** This sits inside `orchestrate_poll_process.sh`’s final-merge/race-handling path, so even a correct-looking collapse can accidentally remove intentionally fresh reads across mutable boundaries.  
+  **Downstream signal:** Do not auto-implement; manual review must prove one fresh PR read is still preserved on each side of every merge/create boundary and that no log/diagnostic contract depends on today’s multi-read cadence.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID:** `REUSE-001`  
+  **Safety tag:** `SAFE_TO_MERGE`  
+  **File path and line ranges:** `.github/workflows/review_autofix.yml:1238-1244`, `.github/workflows/review_autofix.yml:1561-1575`, `scripts/review_rb_judge.sh:246-256`  
+  **Current call count:** 1 extra `GET /pulls/{PR_NUMBER}` on the GraphQL-empty fallback path in `review_rb_judge.sh`.  
+  **Proposed call count:** 0 extra calls on cache hit; keep the current API fallback only if `PR_META_FILE` is missing/blank.  
+  **Endpoint(s):** `GET /repos/{owner}/{repo}/pulls/{pull_number}`  
+  **Evidence:**
+  ```bash
+  echo "PR_META_FILE=${RUNTIME_DIR}/pr_meta.json"
+  ...
+  gh_retry "${PR_PAYLOAD_FILE}" api repos/${{ github.repository }}/pulls/"${PR_NUMBER}"
+  jq '{
+    title: (.title // ""),
+    body: (.body // ""),
+    ...
+  }' "${PR_PAYLOAD_FILE}" > "${PR_META_FILE}"
+  ```
+  ```bash
+  if [ -z "${ISSUE_NUMBERS}" ]; then
+    PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
+    ...
+  fi
+  ```
+  The workflow already materializes PR title/body into `PR_META_FILE` before invoking `review_rb_judge.sh`; the main workflow also already uses a `PR_META_FILE`-first pattern elsewhere:
+  ```bash
+  PR_DATA="$(jq -r '[.title // "", .body // ""] | join(" ")' "${PR_META_FILE}" ...)"
+  if [ -z "$(printf '%s' "${PR_DATA}" | tr -d '[:space:]')" ]; then
+    PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" ...)"
+  fi
+  ```  
+  **Proposed fix:** Mirror the existing `PR_META_FILE`-first fallback pattern from `review_autofix.yml:4528-4532` (or `5478-5482`) inside `scripts/review_rb_judge.sh` before calling `GET /pulls/{PR_NUMBER}`.  
+  **Safety rationale:** The cached metadata file is populated earlier in the same job from the same PR endpoint, and retaining the current API fallback on blank/missing cache preserves existing failure semantics.  
+  **Downstream signal:** Make `review_rb_judge.sh` read title/body from `PR_META_FILE` first and fall back to the current pull GET only when that file is absent or empty.
+
+- **ID:** `REUSE-002`  
+  **Safety tag:** `NEEDS_VERIFICATION`  
+  **File path and line ranges:** `.github/workflows/issue_pr_status.yml:291-330`, `.github/workflows/issue_pr_status.yml:503-512`  
+  **Current call count:** after the earlier orchestrator-classification step has already fetched issue bodies, the merged-alert step still performs up to `N` extra `GET /issues/{issue_number}` body reads (`N = linked issues`).  
+  **Proposed call count:** 0 extra alert-time reads when the earlier step successfully computed the needed body-marker signal; retain the current loop only when that earlier signal is unavailable.  
+  **Endpoint(s):** GraphQL aliased `issue(number: ...) { body ... }`; REST `GET /repos/{owner}/{repo}/issues/{issue_number}`  
+  **Evidence:**
+  ```bash
+  ORCH_ALIAS_FRAGMENT+=" i${ORCH_IDX}: issue(number: ${_orch_num}) { number labels(first: 50) { nodes { name } } body }"
+  ...
+  ORCH_RESP="$(gh_retry gh api graphql -f query="${ORCH_QUERY}" ...)"
+  ...
+  _orch_meta="$(gh_retry gh api "repos/${REPOSITORY}/issues/${_orch_num}" --jq '{labels:[.labels[].name], body:(.body // "")}' ...)"
+  ```
+  ```bash
+  while IFS= read -r issue_number; do
+    BODY="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' || echo "")"
+    if printf '%s' "${BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
+      IS_ORCHESTRATED="true"
+      break
+    fi
+  done
+  ```
+  The earlier step already has body text for the same linked issues, but the later alert step re-fetches it.  
+  **Proposed fix:** In the earlier classification step, compute and export a body-marker-only boolean (matching the later `grep -qF 'Managed by: AI Orchestrator'` semantics exactly) from `ORCH_RESP` / `_orch_meta`; in the alert step, consume that exported boolean first and fall back to the current `_safe_gh_jq` loop only if the boolean is unset.  
+  **Safety rationale:** The reused data comes from an earlier GraphQL/REST mix, so the body text and null-handling should be verified against the current alert-time REST reads before removing the later loop.  
+  **Downstream signal:** Verify on standalone, orchestrator-managed, and tracking-linked merged PRs that a precomputed body-marker boolean matches the current alert-time `_safe_gh_jq` loop exactly; only then replace the late re-fetch with that exported signal.
+
+### Dead Calls (DEAD-API-###)
+No findings.
+
+### Cross-References to Deep Audit Section
+- `API-001`: `RISKY_SKIP` — correct target, but it lives in `scripts/orchestrate_poll_process.sh`’s cycle-local reconcile path where stale-cache mistakes can change race recovery behavior.
+- `API-002`: `RISKY_SKIP` — worthwhile batching opportunity, but one call site is inside `scripts/orchestrate_poll_process.sh`, so ancestor-walk semantics need manual review before any auto-change.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 2 | `MERGE-001`, `REUSE-001` |
+| NEEDS_VERIFICATION | 2 | `MERGE-002`, `REUSE-002` |
+| RISKY_SKIP | 1 | `MERGE-003` |
+
+### Implement-Stage Handoff
+- `MERGE-001`
+- `REUSE-001`
