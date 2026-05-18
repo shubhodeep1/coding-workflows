@@ -553,9 +553,48 @@ near the top of the plan:
   its lifecycle and wiring.
 - For DB work: which gate pattern (§18.D) applies and where the gate
   lives in code.
+- For any new single-use / long-running script or supervisor: the
+  registry entry to be added to `docs/scripts-pending-removal.md`
+  (§18.F) — removal trigger and removal preflight checks.
 
 Plans that omit any of these MUST be revised before the orchestrator
 implements them.
+
+### F) Future-Removal Registry
+
+Every single-use script, long-running script, and long-running
+supervisor introduced under §18.A–C MUST get an entry in
+`docs/scripts-pending-removal.md` **in the same PR** that introduces
+it. The registry is one centralized doc — do not create per-script
+removal docs.
+
+Each entry MUST include:
+- **Script path** — the script, supervisor entry point, or workflow
+  file the entry is about.
+- **Introduced in** — PR number and date the script landed.
+- **Type** — `single-use`, `long-running`, or `supervisor`.
+- **Removal trigger** — the concrete condition that makes removal
+  safe (e.g. "after backfill `X` completes for all docs", "when
+  feature flag `Y` is GA for 30 days", "when supervisor v2 replaces
+  v1"). If no sunset applies, use **"permanent — review annually"** —
+  do not omit the field.
+- **Removal preflight checks** — explicit list of checks that MUST
+  pass before the script is removed, to verify the script has
+  already done its job. Each check names the exact command, query,
+  or signal to inspect and the expected result / threshold. These
+  checks are what protects against removing a script that hasn't
+  finished its work.
+- **Owner** — GitHub handle of the person / agent who owns the
+  removal decision.
+
+When a script is removed from the codebase, **delete its entry from
+the registry in the same PR**. The registry is a live list, not an
+audit log — there is no "removed" archive section. Git history is the
+audit trail.
+
+If a script is renamed or extended, update its entry (path, trigger,
+preflight checks) in the same PR — §6 (naming immutability) still
+applies, so renames require the §2 ask flow first.
 
 ---
 
