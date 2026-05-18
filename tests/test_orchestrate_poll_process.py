@@ -8040,9 +8040,15 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	wf_body = wf_path.read_text(encoding="utf-8")
 	prepare_body = prepare_path.read_text(encoding="utf-8")
 	resolve_body = resolve_path.read_text(encoding="utf-8")
-	# Verifier bootstrap must be in OPTIONAL list so older script_refs
-	# do not hard-fail.
-	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py"' in wf_body
+	# Resolver safety scripts must prefer the main snapshot so wedged
+	# integration branches still pick up the shipped self-heal helpers.
+	assert (
+		'MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_conflict_resolve.sh '
+		'review_conflict_prepare.sh"'
+	) in wf_body
+	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh"' in wf_body
+	assert "for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do" in wf_body
+	assert "Bootstrapped ${f} from main snapshot (branch copy ignored)." in wf_body
 	# The bootstrap still enumerates the script name in review_autofix.yml
 	# even after PR #1495 moved the resolver logic into support scripts.
 	assert "verify_integration_fingerprints.py" in wf_body

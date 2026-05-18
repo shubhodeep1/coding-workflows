@@ -9,6 +9,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -114,6 +115,69 @@ def test_verify_integration_fingerprints_baseline_capture_writes_schema_v1_json(
 				"fp_key": ["scripts/example.py", "BANNED_LINE"],
 				"file": "scripts/example.py",
 				"regex": "BANNED_LINE",
+				"satisfied": True,
+			}
+		]
+
+
+def test_verify_integration_fingerprints_baseline_capture_honours_ref_and_records_matching_head_sha():
+	mod = _verifier_module()
+	with tempfile.TemporaryDirectory(prefix="verifier-ref-baseline-") as td_root:
+		repo = Path(td_root) / "repo"
+		repo.mkdir()
+		subprocess.run(["git", "init", "--quiet"], cwd=repo, check=True)
+		subprocess.run(["git", "config", "user.email", "ci@example.com"], cwd=repo, check=True)
+		subprocess.run(["git", "config", "user.name", "CI"], cwd=repo, check=True)
+		(repo / "scripts").mkdir()
+		example = repo / "scripts" / "example.py"
+		example.write_text("REF_LINE\n", encoding="utf-8")
+		subprocess.run(["git", "add", "scripts/example.py"], cwd=repo, check=True)
+		subprocess.run(["git", "commit", "--quiet", "-m", "base"], cwd=repo, check=True)
+		baseline_sha = subprocess.run(
+			["git", "rev-parse", "HEAD"],
+			cwd=repo,
+			check=True,
+			capture_output=True,
+			text=True,
+		).stdout.strip()
+		subprocess.run(["git", "branch", "baseline-ref"], cwd=repo, check=True)
+		example.write_text("WORKTREE_LINE\n", encoding="utf-8")
+		subprocess.run(["git", "add", "scripts/example.py"], cwd=repo, check=True)
+		subprocess.run(["git", "commit", "--quiet", "-m", "head"], cwd=repo, check=True)
+		fingerprints = {
+			"1500": {
+				"issue": 1500,
+				"pr": 1501,
+				"must_contain": [
+					{"file": "scripts/example.py", "regex": r"REF_LINE"},
+				],
+				"must_not_contain": [],
+			}
+		}
+		fp_path = repo / "fingerprints.json"
+		baseline_path = repo / "baseline.json"
+		fp_path.write_text(json.dumps(fingerprints), encoding="utf-8")
+		rc, out, err = _run_verifier(
+			mod,
+			[
+				"--baseline-fingerprints-state",
+				str(baseline_path),
+				"--ref",
+				"baseline-ref",
+				str(fp_path),
+			],
+			repo,
+		)
+		assert rc == 0
+		assert out == ""
+		assert err == ""
+		state = json.loads(baseline_path.read_text(encoding="utf-8"))
+		assert state["head_sha"] == baseline_sha
+		assert state["fingerprints"]["1500"]["must_contain"] == [
+			{
+				"fp_key": ["scripts/example.py", "REF_LINE"],
+				"file": "scripts/example.py",
+				"regex": "REF_LINE",
 				"satisfied": True,
 			}
 		]
@@ -431,18 +495,18 @@ def test_verify_integration_fingerprints_compare_mode_excludes_invalid_regexes_f
 			sandbox,
 		)
 		assert rc == 0
-		assert "::warning::fingerprint regex compile failed" in capture_out
-		assert capture_err == ""
+		assert capture_out == ""
+		assert "::warning::fingerprint regex compile failed" in capture_err
 		rc, out, err = _run_verifier(
 			mod,
 			["--compare-against-baseline", str(baseline_path), str(fp_path)],
 			sandbox,
 		)
 		assert rc == 0
-		assert "::warning::fingerprint regex compile failed" in out
+		assert "::warning::fingerprint regex compile failed" not in out
 		assert "must_contain satisfied 1/1 (100%)" in out
 		assert "must_contain satisfied 1/2" not in out
-		assert err == ""
+		assert "::warning::fingerprint regex compile failed" in err
 
 
 def test_verify_integration_fingerprints_rejects_out_of_tree_fingerprint_paths():

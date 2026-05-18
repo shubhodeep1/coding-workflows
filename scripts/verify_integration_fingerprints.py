@@ -78,9 +78,10 @@ Inputs:
   for operator log readability.
 
 This script is referenced by `.github/workflows/review_autofix.yml` in
-the conflict-resolver step (post-codex, pre-commit). It is currently
-listed in `OPTIONAL_BOOTSTRAP_SCRIPTS` so older consumer-repo script
-refs can fail open until the next stable cut.
+the conflict-resolver step (post-codex, pre-commit). The resolver
+safety-script bootstrap now prefers the main snapshot for this file so
+wedged integration branches pick up verifier fixes from `main`, while
+still failing open when neither checked-out ref ships the script.
 
 Going-forward only: see `capture_intent_fingerprints_for_merged_subissue`
 in `scripts/orchestrate_poll_process.sh` for the capture half.
@@ -111,10 +112,12 @@ def _utc_now_iso() -> str:
 	return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def _current_head_sha() -> str:
+def _current_head_sha(ref: str | None = None) -> str:
+	ref = _normalize_ref(ref)
+	target = ref or "HEAD"
 	try:
 		result = subprocess.run(
-			["git", "rev-parse", "HEAD"],
+			["git", "rev-parse", target],
 			capture_output=True,
 			check=False,
 			timeout=GIT_COMMAND_TIMEOUT_SECS,
@@ -571,6 +574,7 @@ def _evaluate_fp_state(
 		print(
 			f"::warning::fingerprint regex compile failed for issue #{issue_num} ({exc}); skipping that pattern.",
 			flush=True,
+			file=sys.stderr,
 		)
 		return None
 
@@ -875,7 +879,12 @@ def _baseline_entry_from_state(state: dict[str, Any]) -> dict[str, Any]:
 	return entry
 
 
-def capture_baseline_state(fingerprints: dict[str, Any], out_path: str, branch: str) -> int:
+def capture_baseline_state(
+	fingerprints: dict[str, Any],
+	out_path: str,
+	branch: str,
+	ref: str | None = None,
+) -> int:
 	file_cache: dict[str, tuple[str | None, str | None]] = {}
 	exists_cache: dict[str, tuple[bool, str | None]] = {}
 	cross_issue_exact_drops, _cross_issue_exact_warnings = _cross_issue_exact_conflict_drops(fingerprints)
@@ -883,7 +892,7 @@ def capture_baseline_state(fingerprints: dict[str, Any], out_path: str, branch: 
 		"schema_version": 1,
 		"captured_at": _utc_now_iso(),
 		"branch": branch,
-		"head_sha": _current_head_sha(),
+		"head_sha": _current_head_sha(ref=ref),
 		"fingerprints": {},
 	}
 	for issue_key, entry in sorted(fingerprints.items()):
@@ -910,7 +919,7 @@ def capture_baseline_state(fingerprints: dict[str, Any], out_path: str, branch: 
 			("must_not_exist", must_not_exist),
 		):
 			for fp in fps:
-				state = _evaluate_fp_state(fp, kind, issue_num, pr_num, file_cache, exists_cache)
+				state = _evaluate_fp_state(fp, kind, issue_num, pr_num, file_cache, exists_cache, ref=ref)
 				if state is None:
 					continue
 				issue_state[kind].append(_baseline_entry_from_state(state))
@@ -963,13 +972,14 @@ def _baseline_satisfied_index(baseline_state: dict[str, Any]) -> dict[tuple[str,
 
 
 def _emit_pre_existing_drift_marker(state: dict[str, Any], issue_num: Any, fixed_by_resolver: bool) -> None:
+	path_json = json.dumps(state["path"])
 	message = (
 		f"{'::notice::' if fixed_by_resolver else '::warning::'}PRE_EXISTING_FINGERPRINT_DRIFT_V1 "
 		f"{'fixed_by_resolver' if fixed_by_resolver else 'unchanged'} "
-		f"fp_key={_format_fp_key(state['fp_key'])} issue=#{issue_num} path=\"{state['path']}\""
+		f"fp_key={_format_fp_key(state['fp_key'])} issue=#{issue_num} path={path_json}"
 	)
 	if state["regex"] and not fixed_by_resolver:
-		message += f" pattern=\"{state['regex']}\""
+		message += f" pattern={json.dumps(state['regex'])}"
 	if not fixed_by_resolver:
 		message += f" kind={state['kind']}"
 	print(message, flush=True)
@@ -1197,7 +1207,7 @@ def main(argv: list[str] | None = None) -> int:
 	assert data is not None  # for type narrowing
 
 	if baseline_out_path is not None:
-		return capture_baseline_state(data, baseline_out_path, branch)
+		return capture_baseline_state(data, baseline_out_path, branch, ref=ref)
 
 	if compare_baseline_path is not None:
 		baseline_state, baseline_err = _load_baseline_state(compare_baseline_path)

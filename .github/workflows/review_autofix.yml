@@ -943,21 +943,17 @@ jobs:
           } >> "$GITHUB_ENV"
 
           REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh"
+          # Main-primary bootstrap scripts: prefer the fresh main snapshot so
+          # wedged integration branches still pick up resolver safety fixes
+          # shipped on main. Missing from both refs remains fail-open so older
+          # consumer script_refs still bootstrap cleanly.
+          MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_conflict_resolve.sh review_conflict_prepare.sh"
           # Optional bootstrap scripts: allowed to be missing from both
           # refs.  The bootstrap emits a warning and continues — callers
           # that depend on these must themselves tolerate absence.  Keep
           # this list empty unless a genuinely optional helper is added;
           # the default should always be "required".
-          # Optional bootstrap entry for the integration-sync intent
-          # fingerprint verifier added by the #1057 auto-heal
-          # hardening work. Treated as optional so older script_refs
-          # (consumer repos still pinned to a stable channel that
-          # predates this script) bootstrap cleanly without erroring;
-          # the fingerprint verification step in the resolver is
-          # gated on the script's existence and falls open with a
-          # warning when missing.
-          OPTIONAL_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py"
-          OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} install_semble.sh build_semble_wrapper.sh semble_helpers.sh"
+          OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh"
           for f in ${REQUIRED_BOOTSTRAP_SCRIPTS}; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
@@ -966,6 +962,20 @@ jobs:
             if [ ! -f "${src}" ]; then
               echo "::error::Required bootstrap script '${f}' is missing from checked-out support sources (${SCRIPT_REF} and optional main snapshot) in ${wf_source}. This usually means review_autofix.yml references a file that was never committed (common cause: a hallucinated [ai-merge-resolve] commit added a new bootstrap entry without its corresponding script). Verify REQUIRED_BOOTSTRAP_SCRIPTS matches the current contents of scripts/."
               exit 1
+            fi
+            install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
+          done
+          for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do
+            src=".codex-workflow-src-main/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src/scripts/${f}" ]; then
+              src=".codex-workflow-src/scripts/${f}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::warning::Main-primary bootstrap script '${f}' not available in checked-out support sources; downstream features relying on this helper will be unavailable."
+              continue
+            fi
+            if [ "${src}" = ".codex-workflow-src-main/scripts/${f}" ] && [ -f ".codex-workflow-src/scripts/${f}" ]; then
+              echo "::notice::Bootstrapped ${f} from main snapshot (branch copy ignored)."
             fi
             install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
           done
