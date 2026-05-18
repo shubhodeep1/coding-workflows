@@ -81,8 +81,8 @@ the `model_verbosity = "low"` line that `scripts/write_codex_config.sh:242`
 writes into `config.toml`, and the `"default_verbosity": "low"` for
 `openai/gpt-5.4` in `scripts/codex_model_catalog.json:354`. Third-party
 reviewer models (`minimax/minimax-m2.5`, `moonshotai/kimi-k2.5`,
-`deepseek/deepseek-v4-pro`, `mistralai/codestral-2508`,
-`qwen/qwen3.6-plus`, `x-ai/grok-4.1-fast`)
+`deepseek/deepseek-v4-pro`, `z-ai/glm-5`, `qwen/qwen3.6-plus`,
+`x-ai/grok-4.1-fast`)
 carry `support_verbosity = false` in the catalog — codex CLI logs
 `model_verbosity is set but ignored as the model does not support verbosity`
 and continues; the value is operationally moot for those rows. The
@@ -106,8 +106,8 @@ ablation suite then identified the underlying root cause as
 
 The reviewer-only multi-model run (claude-branch-review) uses third-party
 models (`minimax/minimax-m2.5`, `moonshotai/kimi-k2.5`,
-`deepseek/deepseek-v4-pro`, `mistralai/codestral-2508`,
-`qwen/qwen3.6-plus`, `x-ai/grok-4.1-fast`) plus
+`deepseek/deepseek-v4-pro`, `z-ai/glm-5`, `qwen/qwen3.6-plus`,
+`x-ai/grok-4.1-fast`) plus
 `unattended_system_instructions.md` as system context.
 
 ---

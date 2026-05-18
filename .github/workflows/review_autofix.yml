@@ -97,7 +97,7 @@ env:
     minimax/minimax-m2.5
     moonshotai/kimi-k2.5
     deepseek/deepseek-v4-pro
-    mistralai/codestral-2508
+    z-ai/glm-5
     qwen/qwen3.6-plus
     x-ai/grok-4.1-fast
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
