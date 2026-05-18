@@ -43,12 +43,18 @@ For each violation above:
     previous resolution re-introduced a line a merged sub-issue
     intentionally deleted.  Remove content matching that regex
     (usually by keeping the HEAD side or synthesizing).
+  - `must_not_exist path '<path>' reappeared after resolver` means
+    a back-merge from the default branch resurrected a file a merged
+    sub-issue had deleted outright.  Delete the file (`git rm <path>`
+    or remove from disk and re-stage).  Do NOT try to satisfy this
+    by emptying the file's contents while leaving the path present.
 
 Re-open each named file, locate the regex, and revise the resolution
 so every `must_contain` pattern matches somewhere in the file and no
-`must_not_contain` pattern matches anywhere.  The per-file fingerprint
-pre-flight loop in the main prompt still applies — do it for every
-file touched by your resolution, not just the ones listed above, so
-you do not trade one regression for another.
+`must_not_contain` pattern matches anywhere.  For each
+`must_not_exist` violation, delete the named path.  The per-file
+fingerprint pre-flight loop in the main prompt still applies — do it
+for every file touched by your resolution, not just the ones listed
+above, so you do not trade one regression for another.
 
 === ORIGINAL TASK ===

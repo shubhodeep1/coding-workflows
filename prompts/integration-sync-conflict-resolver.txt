@@ -25,11 +25,12 @@ content already fails a captured sub-issue fingerprint — i.e. the
 auto-merge silently reverted a merged sub-issue's intent.  For
 those entries there will be nothing to remove; your job is to
 edit the file so every `must_contain` pattern in INTENT_FINGERPRINTS
-re-matches and every `must_not_contain` pattern stops matching,
-typically by restoring the HEAD-side content the auto-merge
-discarded.  Both kinds of entry are in-scope for edits; anything
-NOT in the list above is out-of-scope and will cause the run to
-abort.
+re-matches and every `must_not_contain` pattern stops matching, AND
+every `must_not_exist` path in INTENT_FINGERPRINTS is removed from
+the working tree (the auto-merge may have resurrected a file an
+earlier sub-issue deleted — `git rm <path>` it).  Both kinds of
+entry are in-scope for edits; anything NOT in the list above is
+out-of-scope and will cause the run to abort.
 
 === INTEGRATION PROJECT CONTEXT ===
 
@@ -59,6 +60,15 @@ acceptance criteria for your resolution. Two lists per sub-issue:
   resolution reintroduces any of these, your work has resurrected
   code that the sub-issue intentionally deleted and will be rejected.
 
+- `must_not_exist`: file paths the sub-issue DELETED outright. The
+  post-resolve tree MUST NOT contain any file at these paths. If
+  your resolution leaves the file in place (a back-merge from the
+  default branch is the most common source of resurrection), the
+  verifier rejects with `must_not_exist path '<path>' reappeared
+  after resolver`. The fix is `git rm <path>` (or delete the file
+  on disk) — do NOT attempt to satisfy this contract by emptying
+  the file's contents while leaving the path present.
+
 Fingerprints (JSON, may be empty for sub-issues merged before
 fingerprinting was enabled):
 {{INTENT_FINGERPRINTS_JSON}}
@@ -78,7 +88,9 @@ constraints simultaneously:
    match somewhere in its file in the post-resolve tree.
 3. No `must_not_contain` pattern in INTENT_FINGERPRINTS may match
    anywhere in its file in the post-resolve tree.
-4. The post-resolve tree must compile/parse logically.
+4. No path listed under any sub-issue's `must_not_exist` in
+   INTENT_FINGERPRINTS may exist in the post-resolve tree.
+5. The post-resolve tree must compile/parse logically.
 
 If the only way to keep both sides of a conflict hunk is to SYNTHESIZE
 a new hunk that combines them — i.e. the conflict is between two
