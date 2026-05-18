@@ -4,20 +4,36 @@ merged sub-issue intent.
 
 Reads a JSON fingerprints file (the same shape stored in the
 orchestrator state field `merged_issue_fingerprints`) and walks each
-sub-issue's `must_contain` / `must_not_contain` regex lists against the
-post-resolve working tree (i.e. the cwd this script is invoked from).
+sub-issue's `must_contain` / `must_not_contain` regex lists plus the
+``must_not_exist`` path list against either the post-resolve working
+tree (default — i.e. the cwd this script is invoked from) or a git
+ref's tree (``--ref <git_ref>`` mode — used by the wave-dispatch gate
+in ``scripts/orchestrate_poll_process.sh`` to verify the integration
+branch HEAD without checking it out).
+
+Three constraint kinds per merged sub-issue:
+
+  * ``must_contain``     — list of ``{file, regex}`` that MUST match.
+  * ``must_not_contain`` — list of ``{file, regex}`` that MUST NOT match.
+  * ``must_not_exist``   — list of ``{file}`` whose path MUST NOT
+                           exist.  Captured for every file a merged
+                           sub-PR removed outright (PR diff status
+                           ``removed``), path-agnostic — the deletion
+                           intent is enforced regardless of where in
+                           the consumer repo's tree the file lives.
 
 Two modes:
 
   1. Default (verify): exit 0 if all fingerprints are satisfied, 1 on
      violation, 2 on plumbing failure. Used by the conflict-resolver
-     step post-codex, pre-commit.
+     step post-codex, pre-commit, and by the wave-dispatch gate.
 
   2. --list-violated-files <fingerprints.json>: print one unique file
      path per line of every file that currently fails at least one
      fingerprint check (must_contain not matching, or must_not_contain
-     matching, or must_contain referenced file missing). Always exits 0
-     even when violations exist; plumbing failures still exit 2. Used by
+     matching, or must_contain referenced file missing, or
+     must_not_exist path present). Always exits 0 even when violations
+     exist; plumbing failures still exit 2. Used by
      `scripts/review_conflict_prepare.sh` to expand the resolver's
      working set so auto-merged files with silent sub-issue regressions
      are surfaced to Codex in addition to files git marked as unmerged.
@@ -44,6 +60,9 @@ Exit codes:
 Inputs:
   Positional argument — path to the fingerprints JSON file.
   Or env INTEGRATION_FINGERPRINTS_FILE — same path. Positional wins.
+  Optional flag ``--ref <git_ref>`` — verify against the tree at the
+  given git ref via ``git show`` / ``git cat-file -e`` instead of the
+  working tree.  Or env INTEGRATION_VERIFY_REF — same.  Flag wins.
   Optional env INTEGRATION_BRANCH_NAME — included in the summary line
   for operator log readability.
 
@@ -63,8 +82,14 @@ import os
 import re
 import subprocess
 import sys
-from datetime import datetime, timezone
 from typing import Any
+
+
+def _normalize_ref(ref: str | None) -> str | None:
+	if ref is None:
+		return None
+	ref = ref.strip()
+	return ref or None
 
 
 def _load_fingerprints(path: str) -> tuple[dict[str, Any] | None, str | None]:
@@ -82,88 +107,89 @@ def _load_fingerprints(path: str) -> tuple[dict[str, Any] | None, str | None]:
 	return data, None
 
 
-def _load_baseline_state(path: str) -> tuple[dict[str, Any] | None, str | None]:
-	try:
-		with open(path, "r", encoding="utf-8") as fh:
-			data = json.load(fh)
-	except FileNotFoundError:
-		return None, f"baseline file not found: {path}"
-	except json.JSONDecodeError as exc:
-		return None, f"baseline JSON unparseable ({exc})"
-	except Exception as exc:  # noqa: BLE001 — compare mode must fail-open to absolute verify
-		return None, f"baseline file unreadable ({exc})"
-	if not isinstance(data, dict):
-		return None, "baseline file is not a JSON object"
-	if data.get("schema_version") != 1:
-		return None, f"unexpected schema_version {data.get('schema_version')!r}"
-	if not isinstance(data.get("fingerprints"), dict):
-		return None, "baseline fingerprints field is not a JSON object"
-	return data, None
-
-
-def _utc_timestamp() -> str:
-	return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def _head_sha() -> str:
-	try:
-		proc = subprocess.run(
-			["git", "rev-parse", "HEAD"],
-			check=False,
-			capture_output=True,
-			text=True,
-		)
-	except Exception:  # noqa: BLE001 — capture metadata is best-effort only
-		return ""
-	if proc.returncode != 0:
-		return ""
-	return proc.stdout.strip()
-
-
-def _resolve_repo_path(path: str) -> tuple[str | None, str | None]:
-	repo_root = os.path.realpath(os.getcwd())
-	resolved_path = os.path.realpath(path if os.path.isabs(path) else os.path.join(repo_root, path))
-	try:
-		if os.path.commonpath([repo_root, resolved_path]) != repo_root:
-			return None, "fingerprint path resolves outside repository root"
-	except ValueError:
-		return None, "fingerprint path resolves outside repository root"
-	return resolved_path, None
-
-
-def _read_file(path: str, cache: dict[str, str | None]) -> str | None:
-	if path in cache:
-		return cache[path]
-	resolved_path, resolve_err = _resolve_repo_path(path)
-	if resolve_err is not None:
-		print(
-			f"::warning::fingerprint verifier could not read {path}: {resolve_err}",
-			flush=True,
-			file=sys.stderr,
-		)
-		cache[path] = None
-		return None
-	try:
-		with open(resolved_path, "r", encoding="utf-8", errors="replace") as fh:
-			content: str | None = fh.read()
-	except FileNotFoundError:
-		content = None
-	except Exception as exc:  # noqa: BLE001 — verifier must not crash on bad file
-		# Route to stderr: in --list-violated-files mode stdout carries
-		# file paths the caller consumes as data (see
-		# scripts/review_conflict_prepare.sh); a `::warning::` line on
-		# stdout would be captured as a phantom path and crash the
-		# downstream check_resolver_diff.sh guard.  GitHub Actions
-		# renders annotations from stderr too, so the verify-mode
-		# annotation contract is unaffected.
-		print(
-			f"::warning::fingerprint verifier could not read {path}: {exc}",
-			flush=True,
-			file=sys.stderr,
-		)
-		content = None
-	cache[path] = content
+def _read_file(path: str, cache: dict[str, str | None], ref: str | None = None) -> str | None:
+	ref = _normalize_ref(ref)
+	# Cache key prefix keeps ref-mode and working-tree-mode caches
+	# disjoint within a single verifier invocation.
+	cache_key = f"@ref:{ref}:{path}" if ref else path
+	if cache_key in cache:
+		return cache[cache_key]
+	if ref is None:
+		try:
+			with open(path, "r", encoding="utf-8", errors="replace") as fh:
+				content: str | None = fh.read()
+		except FileNotFoundError:
+			content = None
+		except Exception as exc:  # noqa: BLE001 — verifier must not crash on bad file
+			# Route to stderr: in --list-violated-files mode stdout carries
+			# file paths the caller consumes as data (see
+			# scripts/review_conflict_prepare.sh); a `::warning::` line on
+			# stdout would be captured as a phantom path and crash the
+			# downstream check_resolver_diff.sh guard.  GitHub Actions
+			# renders annotations from stderr too, so the verify-mode
+			# annotation contract is unaffected.
+			print(
+				f"::warning::fingerprint verifier could not read {path}: {exc}",
+				flush=True,
+				file=sys.stderr,
+			)
+			content = None
+	else:
+		# Ref mode: read the path's blob at <ref> via `git show`. A
+		# non-zero git exit (missing path at ref, ref unknown, not a
+		# git repo) maps to ``None`` — same shape the working-tree
+		# branch returns for FileNotFoundError, so callers don't have
+		# to branch on mode.
+		try:
+			result = subprocess.run(
+				["git", "show", f"{ref}:{path}"],
+				capture_output=True,
+				check=False,
+			)
+			if result.returncode != 0:
+				content = None
+			else:
+				content = result.stdout.decode("utf-8", errors="replace")
+		except Exception as exc:  # noqa: BLE001 — verifier must not crash on git failure
+			print(
+				f"::warning::fingerprint verifier could not read {ref}:{path}: {exc}",
+				flush=True,
+				file=sys.stderr,
+			)
+			content = None
+	cache[cache_key] = content
 	return content
+
+
+def _path_exists(path: str, exists_cache: dict[str, bool], ref: str | None = None) -> bool:
+	"""Return True iff ``path`` exists in the verification target.
+
+	Working-tree mode: ``os.path.exists``.
+	Ref mode: ``git cat-file -e <ref>:<path>`` — exit 0 ⇒ path exists at
+	the ref's tree.  Any git failure (ref unknown, repo missing) maps
+	to ``False`` so a plumbing failure never produces a spurious
+	must_not_exist violation; the verify-mode caller treats absence as
+	"contract satisfied" exactly as it would in working-tree mode.
+	"""
+	ref = _normalize_ref(ref)
+	cache_key = f"@ref:{ref}:{path}" if ref else path
+	if cache_key in exists_cache:
+		return exists_cache[cache_key]
+	if ref is None:
+		exists = os.path.exists(path)
+	else:
+		try:
+			result = subprocess.run(
+				["git", "cat-file", "-e", f"{ref}:{path}"],
+				stdout=subprocess.DEVNULL,
+				stderr=subprocess.DEVNULL,
+				check=False,
+			)
+			exists = result.returncode == 0
+		except Exception:  # noqa: BLE001 — fail-closed-as-absent on git failure
+			exists = False
+	exists_cache[cache_key] = exists
+	return exists
 
 
 def _fp_key(fp: Any) -> tuple[str, str] | None:
@@ -353,131 +379,6 @@ def _cross_issue_exact_conflict_drops(
 	return drops_by_issue, warnings_by_issue
 
 
-def _fp_key_json(key: tuple[str, str]) -> str:
-	return json.dumps([key[0], key[1]], separators=(",", ":"))
-
-
-def _fp_satisfied(
-	fp: Any,
-	file_cache: dict[str, str | None],
-	kind: str,
-) -> tuple[bool | None, bool, str | None]:
-	if not isinstance(fp, dict):
-		return None, False, None
-	path = fp.get("file", "")
-	regex_src = fp.get("regex", "")
-	if not path or not regex_src:
-		return None, False, None
-	content = _read_file(path, file_cache)
-	if content is None:
-		return (kind != "must_contain"), True, None
-	try:
-		pattern = re.compile(regex_src)
-	except re.error as exc:
-		return None, False, str(exc)
-	matched = bool(pattern.search(content))
-	return (matched if kind == "must_contain" else not matched), False, None
-
-
-def _iter_deduped_issue_fingerprints(
-	fingerprints: dict[str, Any],
-	*,
-	emit_warnings: bool,
-) -> list[tuple[str, Any, Any, str, Any]]:
-	entries: list[tuple[str, Any, Any, str, Any]] = []
-	cross_issue_exact_drops, cross_issue_exact_warnings = _cross_issue_exact_conflict_drops(fingerprints)
-
-	for issue_key, entry in sorted(fingerprints.items()):
-		if not isinstance(entry, dict):
-			continue
-		issue_num = entry.get("issue", issue_key)
-		pr_num = entry.get("pr", "?")
-		must_contain, must_not_contain, shared_keys, substring_drops, exact_conflict_drops = _dedup_issue_patterns(
-			issue_key,
-			entry,
-			cross_issue_exact_drops,
-		)
-		if emit_warnings:
-			if shared_keys:
-				print(
-					f"::warning::Fingerprint cross-dedup for issue #{issue_num} (PR #{pr_num}): "
-					f"skipping {len(shared_keys)} self-contradictory pattern(s) present in both "
-					f"must_contain and must_not_contain (capture-side refactor false positive).",
-					flush=True,
-				)
-			if substring_drops:
-				print(
-					f"::warning::Fingerprint substring-overlap dedup for issue #{issue_num} (PR #{pr_num}): "
-					f"skipping {len(substring_drops)} must_not_contain pattern(s) whose regex is a literal "
-					f"substring of a must_contain regex on the same file (capture-side: deleted line subsumed "
-					f"by added line under re.search; the longer must_contain already enforces the stronger intent).",
-					flush=True,
-				)
-			if exact_conflict_drops:
-				for warning in cross_issue_exact_warnings.get(issue_key, []):
-					print(warning, flush=True)
-		for fp in must_contain:
-			entries.append((issue_key, issue_num, pr_num, "must_contain", fp))
-		for fp in must_not_contain:
-			entries.append((issue_key, issue_num, pr_num, "must_not_contain", fp))
-
-	return entries
-
-
-def _regex_compile_warning(issue_num: Any, exc: str) -> None:
-	print(
-		f"::warning::fingerprint regex compile failed for issue #{issue_num} ({exc}); skipping that pattern.",
-		flush=True,
-	)
-
-
-def _violation_message(
-	issue_num: Any,
-	pr_num: Any,
-	kind: str,
-	path: str,
-	regex_src: str,
-	content_unavailable: bool,
-) -> str:
-	if kind == "must_contain" and content_unavailable:
-		_, path_err = _resolve_repo_path(path)
-		if path_err is not None:
-			return (
-				f"issue #{issue_num} (PR #{pr_num}): must_contain pattern in '{path}' "
-				f"could not be checked — {path_err}."
-			)
-		return (
-			f"issue #{issue_num} (PR #{pr_num}): must_contain pattern in '{path}' "
-			f"could not be checked — file does not exist in post-resolve tree."
-		)
-	if kind == "must_contain":
-		return (
-			f"issue #{issue_num} (PR #{pr_num}): must_contain pattern missing from '{path}' "
-			f"after resolver — sub-issue intent silently reverted. "
-			f"Pattern (first 200 chars): {regex_src[:200]}"
-		)
-	return (
-		f"issue #{issue_num} (PR #{pr_num}): must_not_contain pattern reappeared in '{path}' "
-		f"after resolver — sub-issue intentional deletion silently reverted. "
-		f"Pattern (first 200 chars): {regex_src[:200]}"
-	)
-
-
-def _emit_failure_block(violations: list[str]) -> int:
-	print(
-		"::error::Integration fingerprint verification FAILED — resolver output regressed merged sub-issue intent:",
-		flush=True,
-	)
-	for v in violations:
-		print(f"::error::  - {v}", flush=True)
-	print(
-		"::error::Refusing to create [ai-merge-resolve] commit. The orchestrator integration judge "
-		"will be invoked on the next poll tick if INTEGRATION_SYNC_CONFLICT_MAX_RETRIES has been reached.",
-		flush=True,
-	)
-	return 1
-
-
 def _dedup_issue_patterns(
 	issue_key: str,
 	entry: dict[str, Any],
@@ -499,90 +400,10 @@ def _dedup_issue_patterns(
 	return must_contain, must_not_contain, shared_keys, substring_drops, exact_conflict_drops
 
 
-def capture_baseline_state(fingerprints: dict[str, Any], branch: str, out_path: str) -> int:
-	state: dict[str, Any] = {
-		"schema_version": 1,
-		"captured_at": _utc_timestamp(),
-		"branch": branch,
-		"head_sha": _head_sha(),
-		"fingerprints": {},
-	}
-	file_cache: dict[str, str | None] = {}
-
-	for issue_key, issue_num, pr_num, kind, fp in _iter_deduped_issue_fingerprints(
-		fingerprints,
-		emit_warnings=False,
-	):
-		if not isinstance(fp, dict):
-			continue
-		path = fp.get("file", "")
-		regex_src = fp.get("regex", "")
-		if not path or not regex_src:
-			continue
-		satisfied, _content_unavailable, compile_error = _fp_satisfied(fp, file_cache, kind)
-		if compile_error is not None:
-			_regex_compile_warning(issue_num, compile_error)
-			continue
-		if satisfied is None:
-			continue
-		issue_state = state["fingerprints"].setdefault(
-			issue_key,
-			{
-				"issue": issue_num,
-				"pr": pr_num,
-				"must_contain": [],
-				"must_not_contain": [],
-			},
-		)
-		issue_state[kind].append(
-			{
-				"fp_key": [path, regex_src],
-				"file": path,
-				"regex": regex_src,
-				"satisfied": satisfied,
-			}
-		)
-
-	try:
-		os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
-		with open(out_path, "w", encoding="utf-8") as fh:
-			json.dump(state, fh, indent=2, sort_keys=True)
-			fh.write("\n")
-		os.chmod(out_path, 0o644)
-	except Exception as exc:  # noqa: BLE001 — capture-mode output path is warn-only
-		print(f"::warning::baseline capture failed: {exc}", flush=True)
-	return 0
-
-
-def _baseline_lookup(baseline_state: dict[str, Any]) -> dict[tuple[str, str, tuple[str, str]], bool]:
-	lookup: dict[tuple[str, str, tuple[str, str]], bool] = {}
-	for issue_key, entry in (baseline_state.get("fingerprints") or {}).items():
-		if not isinstance(entry, dict):
-			continue
-		for kind in ("must_contain", "must_not_contain"):
-			for fp in entry.get(kind, []) or []:
-				if not isinstance(fp, dict):
-					continue
-				fp_key_raw = fp.get("fp_key")
-				if (
-					isinstance(fp_key_raw, list)
-					and len(fp_key_raw) == 2
-					and all(isinstance(part, str) and part for part in fp_key_raw)
-				):
-					fp_key = (fp_key_raw[0], fp_key_raw[1])
-				else:
-					fp_key = _fp_key(fp)
-				if fp_key is None:
-					continue
-				satisfied = fp.get("satisfied")
-				if isinstance(satisfied, bool):
-					lookup[(str(issue_key), kind, fp_key)] = satisfied
-	return lookup
-
-
-def list_violated_files(fingerprints: dict[str, Any]) -> list[str]:
+def list_violated_files(fingerprints: dict[str, Any], ref: str | None = None) -> list[str]:
 	"""Return a sorted, de-duplicated list of file paths that currently
-	fail at least one fingerprint check against the cwd tree.
+	fail at least one fingerprint check against the cwd tree (or the
+	tree at ``ref`` when supplied).
 
 	Mirrors the matching logic in :func:`verify` but records only the
 	offending file paths (for expanding the resolver's working set
@@ -591,160 +412,201 @@ def list_violated_files(fingerprints: dict[str, Any]) -> list[str]:
 	"""
 	violated: set[str] = set()
 	file_cache: dict[str, str | None] = {}
+	exists_cache: dict[str, bool] = {}
+	cross_issue_exact_drops, _ = _cross_issue_exact_conflict_drops(fingerprints)
 
-	for _issue_key, _issue_num, _pr_num, kind, fp in _iter_deduped_issue_fingerprints(
-		fingerprints,
-		emit_warnings=False,
-	):
-		if not isinstance(fp, dict):
+	for issue_key, entry in fingerprints.items():
+		if not isinstance(entry, dict):
 			continue
-		path = fp.get("file", "")
-		regex_src = fp.get("regex", "")
-		if not path or not regex_src:
-			continue
-		satisfied, content_unavailable, compile_error = _fp_satisfied(fp, file_cache, kind)
-		if compile_error is not None or satisfied is None:
-			continue
-		if not satisfied:
-			if content_unavailable and _resolve_repo_path(path)[1] is not None:
-				# Keep --list-violated-files stdout restricted to in-repo
-				# working-set paths only.
+		# Cross-dedup: stay silent in list-violated-files mode — the stdout
+		# contract is "file paths ONLY" and the verify path already emits the
+		# operator-visible warnings.
+		must_contain, must_not_contain, _shared_keys, _substring_drops, _exact_conflict_drops = _dedup_issue_patterns(
+			issue_key,
+			entry,
+			cross_issue_exact_drops,
+		)
+		must_not_exist = entry.get("must_not_exist", []) or []
+
+		for fp in must_contain:
+			if not isinstance(fp, dict):
 				continue
-			violated.add(path)
+			path = fp.get("file", "")
+			regex_src = fp.get("regex", "")
+			if not path or not regex_src:
+				continue
+			content = _read_file(path, file_cache, ref=ref)
+			if content is None:
+				# Referenced file missing entirely — treat as violated
+				# so the resolver gets a chance to restore it.
+				violated.add(path)
+				continue
+			try:
+				pattern = re.compile(regex_src)
+			except re.error:
+				continue
+			if not pattern.search(content):
+				violated.add(path)
+
+		for fp in must_not_contain:
+			if not isinstance(fp, dict):
+				continue
+			path = fp.get("file", "")
+			regex_src = fp.get("regex", "")
+			if not path or not regex_src:
+				continue
+			content = _read_file(path, file_cache, ref=ref)
+			if content is None:
+				continue
+			try:
+				pattern = re.compile(regex_src)
+			except re.error:
+				continue
+			if pattern.search(content):
+				violated.add(path)
+
+		for fp in must_not_exist:
+			if not isinstance(fp, dict):
+				continue
+			path = fp.get("file", "")
+			if not path:
+				continue
+			if _path_exists(path, exists_cache, ref=ref):
+				# Path the sub-issue deleted is back on the
+				# verification target — surface to the resolver's
+				# working set so it can be re-removed.
+				violated.add(path)
 
 	return sorted(violated)
 
 
-def compare_against_baseline(
-	fingerprints: dict[str, Any],
-	baseline_state: dict[str, Any],
-	branch: str,
-) -> int:
+def verify(fingerprints: dict[str, Any], branch: str, ref: str | None = None) -> int:
 	violations: list[str] = []
-	file_cache: dict[str, str | None] = {}
-	baseline_lookup = _baseline_lookup(baseline_state)
 	mc_total_expected = 0
 	mc_total_satisfied = 0
-	pre_existing_drift = 0
+	file_cache: dict[str, str | None] = {}
+	exists_cache: dict[str, bool] = {}
+	cross_issue_exact_drops, cross_issue_exact_warnings = _cross_issue_exact_conflict_drops(fingerprints)
 
-	for issue_key, issue_num, pr_num, kind, fp in _iter_deduped_issue_fingerprints(
-		fingerprints,
-		emit_warnings=True,
-	):
-		if not isinstance(fp, dict):
+	for issue_key, entry in sorted(fingerprints.items()):
+		if not isinstance(entry, dict):
 			continue
-		path = fp.get("file", "")
-		regex_src = fp.get("regex", "")
-		if not path or not regex_src:
-			continue
-		satisfied, content_unavailable, compile_error = _fp_satisfied(fp, file_cache, kind)
-		if compile_error is not None:
-			_regex_compile_warning(issue_num, compile_error)
-			continue
-		if satisfied is None:
-			continue
-		if kind == "must_contain":
+		issue_num = entry.get("issue", issue_key)
+		pr_num = entry.get("pr", "?")
+
+		# Defensive cross-dedup: the extractor in
+		# capture_intent_fingerprints_for_merged_subissue
+		# (scripts/orchestrate_poll_process.sh) filters net-no-op lines,
+		# but that capture function is idempotent per issue — already-
+		# stored bad entries in an orchestrator state file persist until
+		# the state is rebuilt. A line a PR both removes and re-adds
+		# (e.g. wrapping a bare call in an if/else fallback) cannot
+		# simultaneously be required to appear AND required to be
+		# absent; skip any (file, regex) pair recorded in both sets for
+		# this issue so historic bad fingerprints don't produce
+		# perpetual false positives.
+
+		must_contain, must_not_contain, shared_keys, substring_drops, exact_conflict_drops = _dedup_issue_patterns(
+			issue_key,
+			entry,
+			cross_issue_exact_drops,
+		)
+		must_not_exist = entry.get("must_not_exist", []) or []
+		if shared_keys:
+			print(
+				f"::warning::Fingerprint cross-dedup for issue #{issue_num} (PR #{pr_num}): "
+				f"skipping {len(shared_keys)} self-contradictory pattern(s) present in both "
+				f"must_contain and must_not_contain (capture-side refactor false positive).",
+				flush=True,
+			)
+		if substring_drops:
+			print(
+				f"::warning::Fingerprint substring-overlap dedup for issue #{issue_num} (PR #{pr_num}): "
+				f"skipping {len(substring_drops)} must_not_contain pattern(s) whose regex is a literal "
+				f"substring of a must_contain regex on the same file (capture-side: deleted line subsumed "
+				f"by added line under re.search; the longer must_contain already enforces the stronger intent).",
+				flush=True,
+			)
+		if exact_conflict_drops:
+			for warning in cross_issue_exact_warnings.get(issue_key, []):
+				print(warning, flush=True)
+
+		for fp in must_contain:
+			if not isinstance(fp, dict):
+				continue
+			path = fp.get("file", "")
+			regex_src = fp.get("regex", "")
+			if not path or not regex_src:
+				continue
 			mc_total_expected += 1
-			if satisfied:
-				mc_total_satisfied += 1
-
-		fp_key = (path, regex_src)
-		baseline_satisfied = baseline_lookup.get((issue_key, kind, fp_key))
-		if baseline_satisfied is None:
-			if not satisfied:
+			content = _read_file(path, file_cache, ref=ref)
+			if content is None:
 				violations.append(
-					_violation_message(issue_num, pr_num, kind, path, regex_src, content_unavailable)
+					f"issue #{issue_num} (PR #{pr_num}): must_contain pattern in '{path}' "
+					f"could not be checked — file does not exist in post-resolve tree."
 				)
-			continue
-		if baseline_satisfied and not satisfied:
-			violations.append(
-				_violation_message(issue_num, pr_num, kind, path, regex_src, content_unavailable)
-			)
-			continue
-		if (not baseline_satisfied) and satisfied:
-			# Source-doc contract: newly-fixed fingerprints emit per-item
-			# PRE_EXISTING_FINGERPRINT_DRIFT_V1 notices, while the compare-mode
-			# summary only reports pre_existing_drift_count.
-			print(
-				f"::notice::PRE_EXISTING_FINGERPRINT_DRIFT_V1 fixed_by_resolver "
-				f"fp_key={_fp_key_json(fp_key)} issue=#{issue_num} "
-				f"path={json.dumps(path)}",
-				flush=True,
-			)
-			continue
-		if (not baseline_satisfied) and (not satisfied):
-			pre_existing_drift += 1
-			print(
-				f"::warning::PRE_EXISTING_FINGERPRINT_DRIFT_V1 unchanged "
-				f"fp_key={_fp_key_json(fp_key)} issue=#{issue_num} "
-				f"path={json.dumps(path)} pattern={json.dumps(regex_src)} kind={kind}",
-				flush=True,
-			)
+				continue
+			try:
+				pattern = re.compile(regex_src)
+			except re.error as exc:
+				print(
+					f"::warning::fingerprint regex compile failed for issue #{issue_num} ({exc}); skipping that pattern.",
+					flush=True,
+				)
+				continue
+			if pattern.search(content):
+				mc_total_satisfied += 1
+			else:
+				violations.append(
+					f"issue #{issue_num} (PR #{pr_num}): must_contain pattern missing from '{path}' "
+					f"after resolver — sub-issue intent silently reverted. "
+					f"Pattern (first 200 chars): {regex_src[:200]}"
+				)
 
-	if mc_total_expected > 0:
-		ratio_pct = (mc_total_satisfied * 100) // mc_total_expected
-		print(
-			f"Integration fingerprint verification (branch={branch}): "
-			f"must_contain satisfied {mc_total_satisfied}/{mc_total_expected} "
-			f"({ratio_pct}%)",
-			flush=True,
-		)
-		if violations and mc_total_satisfied < mc_total_expected:
-			print(
-				f"::warning::Silent-regression detector: post-resolve tree contains fewer "
-				f"must_contain fingerprint matches ({mc_total_satisfied}) than were captured "
-				f"({mc_total_expected}). Investigating violations below.",
-				flush=True,
-			)
+		for fp in must_not_contain:
+			if not isinstance(fp, dict):
+				continue
+			path = fp.get("file", "")
+			regex_src = fp.get("regex", "")
+			if not path or not regex_src:
+				continue
+			content = _read_file(path, file_cache, ref=ref)
+			if content is None:
+				continue
+			try:
+				pattern = re.compile(regex_src)
+			except re.error as exc:
+				print(
+					f"::warning::fingerprint regex compile failed for issue #{issue_num} ({exc}); skipping that pattern.",
+					flush=True,
+				)
+				continue
+			if pattern.search(content):
+				violations.append(
+					f"issue #{issue_num} (PR #{pr_num}): must_not_contain pattern reappeared in '{path}' "
+					f"after resolver — sub-issue intentional deletion silently reverted. "
+					f"Pattern (first 200 chars): {regex_src[:200]}"
+				)
 
-	if violations:
-		return _emit_failure_block(violations)
-
-	if pre_existing_drift:
-		print(
-			"Integration fingerprint verification PASSED with pre-existing drift — resolver did not introduce any new regressions "
-			f"(pre_existing_drift_count={pre_existing_drift}; see PRE_EXISTING_FINGERPRINT_DRIFT_V1 markers above for triage).",
-			flush=True,
-		)
-		return 0
-
-	print(
-		"Integration fingerprint verification PASSED — all merged sub-issue intent preserved.",
-		flush=True,
-	)
-	return 0
-
-
-def verify(fingerprints: dict[str, Any], branch: str) -> int:
-	violations: list[str] = []
-	mc_total_expected = 0
-	mc_total_satisfied = 0
-	file_cache: dict[str, str | None] = {}
-
-	for _issue_key, issue_num, pr_num, kind, fp in _iter_deduped_issue_fingerprints(
-		fingerprints,
-		emit_warnings=True,
-	):
-		if not isinstance(fp, dict):
-			continue
-		path = fp.get("file", "")
-		regex_src = fp.get("regex", "")
-		if not path or not regex_src:
-			continue
-		satisfied, content_unavailable, compile_error = _fp_satisfied(fp, file_cache, kind)
-		if kind == "must_contain":
-			mc_total_expected += 1
-		if compile_error is not None:
-			_regex_compile_warning(issue_num, compile_error)
-			continue
-		if satisfied is None:
-			continue
-		if kind == "must_contain" and satisfied:
-			mc_total_satisfied += 1
-		if not satisfied:
-			violations.append(
-				_violation_message(issue_num, pr_num, kind, path, regex_src, content_unavailable)
-			)
+		# must_not_exist: a sub-issue removed these files outright;
+		# their reappearance in the post-resolve tree (or at the
+		# verified ref) is a silent regression by an upstream merge
+		# resolver.  Path-agnostic — the contract does NOT honour the
+		# capture-side ALLOWED_PREFIXES allowlist (file existence is
+		# cheap to check and the deletion intent is unambiguous
+		# regardless of where the file lives in the consumer repo's
+		# tree).
+		for fp in must_not_exist:
+			if not isinstance(fp, dict):
+				continue
+			path = fp.get("file", "")
+			if not path:
+				continue
+			if _path_exists(path, exists_cache, ref=ref):
+				violations.append(
+					f"issue #{issue_num} (PR #{pr_num}): must_not_exist path '{path}' "
+					f"reappeared after resolver — sub-issue file deletion silently reverted."
+				)
 
 	# #5 silent-regression detector: log the must_contain satisfaction
 	# ratio. The hard match check above already rejects any specific
@@ -767,7 +629,18 @@ def verify(fingerprints: dict[str, Any], branch: str) -> int:
 			)
 
 	if violations:
-		return _emit_failure_block(violations)
+		print(
+			"::error::Integration fingerprint verification FAILED — resolver output regressed merged sub-issue intent:",
+			flush=True,
+		)
+		for v in violations:
+			print(f"::error::  - {v}", flush=True)
+		print(
+			"::error::Refusing to create [ai-merge-resolve] commit. The orchestrator integration judge "
+			"will be invoked on the next poll tick if INTEGRATION_SYNC_CONFLICT_MAX_RETRIES has been reached.",
+			flush=True,
+		)
+		return 1
 
 	print(
 		"Integration fingerprint verification PASSED — all merged sub-issue intent preserved.",
@@ -776,71 +649,74 @@ def verify(fingerprints: dict[str, Any], branch: str) -> int:
 	return 0
 
 
-def _verify_or_skip_empty(fingerprints: dict[str, Any], branch: str) -> int:
-	if not fingerprints:
-		print(
-			"Integration fingerprints object is empty; no merged sub-issues to verify. Skipping.",
-			flush=True,
-		)
-		return 0
-	return verify(fingerprints, branch)
-
-
 def main(argv: list[str] | None = None) -> int:
 	args = list(sys.argv[1:] if argv is None else argv)
 
+	# Optional --list-violated-files <fingerprints.json> and
+	# --ref <git_ref> flags.  Keep the parsing deliberately minimal
+	# (no argparse) so this stays a single-file utility safe to
+	# bootstrap on older script refs.  Both flags may appear in any
+	# order before the positional fingerprints path.
 	list_mode = False
-	baseline_out_path = ""
-	compare_baseline_path = ""
-	positionals: list[str] = []
-	idx = 0
-	while idx < len(args):
-		arg = args[idx]
-		if arg == "--list-violated-files":
+	ref: str | None = None
+	cli_ref_supplied = False
+	while args:
+		if args[0] == "--list-violated-files":
 			list_mode = True
-			idx += 1
+			args = args[1:]
 			continue
-		if arg == "--baseline-fingerprints-state":
-			if idx + 1 >= len(args):
+		if args[0] == "--ref":
+			if len(args) < 2:
 				print(
-					"::error::verify_integration_fingerprints: --baseline-fingerprints-state requires a path.",
+					"::warning::verify_integration_fingerprints: --ref requires an argument; ignoring.",
 					flush=True,
 					file=sys.stderr,
 				)
-				return 2
-			baseline_out_path = args[idx + 1]
-			idx += 2
+				args = args[1:]
+				continue
+			ref = args[1]
+			cli_ref_supplied = True
+			args = args[2:]
 			continue
-		if arg == "--compare-against-baseline":
-			if idx + 1 >= len(args):
-				print(
-					"::error::verify_integration_fingerprints: --compare-against-baseline requires a path.",
-					flush=True,
-					file=sys.stderr,
-				)
-				return 2
-			compare_baseline_path = args[idx + 1]
-			idx += 2
+		if args[0].startswith("--ref="):
+			ref = args[0][len("--ref="):]
+			cli_ref_supplied = True
+			args = args[1:]
 			continue
-		positionals.append(arg)
-		idx += 1
+		break
 
-	if baseline_out_path and compare_baseline_path:
+	raw_ref = ref
+	ref = _normalize_ref(ref)
+	if raw_ref is not None and ref is None:
 		print(
-			"::error::verify_integration_fingerprints: --baseline-fingerprints-state and --compare-against-baseline are mutually exclusive",
+			"::warning::verify_integration_fingerprints: blank --ref value supplied; ignoring and falling back to working-tree mode.",
+			flush=True,
+			file=sys.stderr,
+		)
+
+	if ref is None and not cli_ref_supplied:
+		env_ref = os.environ.get("INTEGRATION_VERIFY_REF", "").strip()
+		if env_ref:
+			ref = env_ref
+
+	if args and args[0].startswith("--"):
+		print(
+			f"::warning::verify_integration_fingerprints: unknown option '{args[0]}'; skipping verification.",
 			flush=True,
 			file=sys.stderr,
 		)
 		return 2
-	if list_mode and (baseline_out_path or compare_baseline_path):
-		print(
-			"::error::verify_integration_fingerprints: --list-violated-files cannot be combined with baseline capture/compare modes.",
-			flush=True,
-			file=sys.stderr,
-		)
-		return 2
 
-	fp_path = positionals[0] if positionals else os.environ.get("INTEGRATION_FINGERPRINTS_FILE", "")
+	fp_path = args[0] if args else os.environ.get("INTEGRATION_FINGERPRINTS_FILE", "")
+	if len(args) > 1:
+		extra_arg = args[1]
+		message = (
+			f"::warning::verify_integration_fingerprints: unknown option '{extra_arg}'; skipping verification."
+			if extra_arg.startswith("--")
+			else f"::warning::verify_integration_fingerprints: unexpected trailing argument '{extra_arg}' after fingerprints path; skipping verification."
+		)
+		print(message, flush=True, file=sys.stderr)
+		return 2
 	if not fp_path:
 		# Route to stderr so the stdout contract ("file paths ONLY") holds
 		# in list mode even on plumbing failures.  GitHub Actions still
@@ -864,31 +740,18 @@ def main(argv: list[str] | None = None) -> int:
 		# Always exit 0 in list mode — the caller is collecting input
 		# for the resolver's working set, not enforcing.  Empty JSON
 		# simply prints nothing.
-		for path in list_violated_files(data):
+		for path in list_violated_files(data, ref=ref):
 			print(path, flush=True)
 		return 0
 
-	if baseline_out_path:
-		return capture_baseline_state(data, branch, baseline_out_path)
+	if not data:
+		print(
+			"Integration fingerprints object is empty; no merged sub-issues to verify. Skipping.",
+			flush=True,
+		)
+		return 0
 
-	if compare_baseline_path:
-		if not data:
-			print(
-				"Integration fingerprints object is empty; no merged sub-issues to verify. Skipping.",
-				flush=True,
-			)
-			return 0
-		baseline_state, baseline_err = _load_baseline_state(compare_baseline_path)
-		if baseline_err is not None:
-			print(
-				f"::warning::baseline malformed ({baseline_err}); using absolute verification.",
-				flush=True,
-			)
-			return _verify_or_skip_empty(data, branch)
-		assert baseline_state is not None  # for type narrowing
-		return compare_against_baseline(data, baseline_state, branch)
-
-	return _verify_or_skip_empty(data, branch)
+	return verify(data, branch, ref=ref)
 
 
 if __name__ == "__main__":
