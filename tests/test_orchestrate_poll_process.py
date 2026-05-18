@@ -7716,6 +7716,18 @@ def test_verify_integration_fingerprints_blank_cli_ref_falls_back_to_working_tre
 		assert "blank --ref value supplied" in stderr_buf.getvalue()
 
 
+def test_verify_integration_fingerprints_unknown_flag_returns_exit_2():
+	import contextlib
+	import io
+
+	mod = _verifier_module()
+	stderr_buf = io.StringIO()
+	with contextlib.redirect_stderr(stderr_buf):
+		rc = mod.main(["--unknown-flag", "fingerprints.json"])
+	assert rc == 2
+	assert "unknown option '--unknown-flag'" in stderr_buf.getvalue()
+
+
 def test_wave_dispatch_gate_invokes_verifier_against_integration_ref():
 	# Static contract: the wave-dispatch gate block must invoke the
 	# verifier with --ref pointing at the integration branch before
@@ -7750,8 +7762,19 @@ def test_wave_dispatch_gate_invokes_verifier_against_integration_ref():
 	assert "verifier exited 2 (plumbing failure)" in script, (
 		"wave-dispatch gate warning must explain the fail-open verifier exit-2 path"
 	)
+	assert 'elif [ "${_gate_exit}" -ne 0 ]; then' in script, (
+		"wave-dispatch gate must warn on unexpected verifier exits instead of silently treating them as passes"
+	)
+	assert "verifier exited ${_gate_exit} (unexpected)" in script, (
+		"wave-dispatch gate warning must surface unexpected verifier exit codes while preserving fail-open dispatch"
+	)
 	assert "trap 'rm -f \"${_gate_fp_file:-}\" \"${_gate_log_file:-}\" 2>/dev/null || true' EXIT" in script, (
 		"wave-dispatch gate must protect temp-file cleanup with an EXIT trap"
+	)
+	assert script.index(
+		"trap 'rm -f \"${_gate_fp_file:-}\" \"${_gate_log_file:-}\" 2>/dev/null || true' EXIT"
+	) < script.index('_gate_fp_file="$(mktemp'), (
+		"wave-dispatch gate must register cleanup before allocating temp files"
 	)
 	assert 'trap - EXIT' in script, (
 		"wave-dispatch gate must clear its temporary EXIT trap after explicit cleanup"

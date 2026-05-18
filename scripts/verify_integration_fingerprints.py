@@ -698,6 +698,14 @@ def main(argv: list[str] | None = None) -> int:
 		if env_ref:
 			ref = env_ref
 
+	if args and args[0].startswith("--"):
+		print(
+			f"::warning::verify_integration_fingerprints: unknown option '{args[0]}'; skipping verification.",
+			flush=True,
+			file=sys.stderr,
+		)
+		return 2
+
 	fp_path = args[0] if args else os.environ.get("INTEGRATION_FINGERPRINTS_FILE", "")
 	if not fp_path:
 		# Route to stderr so the stdout contract ("file paths ONLY") holds

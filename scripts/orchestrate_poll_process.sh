@@ -12138,9 +12138,11 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
             fi
           fi
           if [ -n "${_gate_ref}" ] && git rev-parse --verify "${_gate_ref}" >/dev/null 2>&1; then
+            _gate_fp_file=""
+            _gate_log_file=""
+            trap 'rm -f "${_gate_fp_file:-}" "${_gate_log_file:-}" 2>/dev/null || true' EXIT
             _gate_fp_file="$(mktemp "${TMPDIR:-/tmp}/wave_dispatch_fp.XXXXXX")"
             _gate_log_file="$(mktemp "${TMPDIR:-/tmp}/wave_dispatch_log.XXXXXX")"
-            trap 'rm -f "${_gate_fp_file:-}" "${_gate_log_file:-}" 2>/dev/null || true' EXIT
             jq -c '.merged_issue_fingerprints // {}' "${STATE_FILE}" > "${_gate_fp_file}"
             _gate_exit=0
             INTEGRATION_BRANCH_NAME="${_gate_integration_branch}" \
@@ -12159,6 +12161,8 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
               _gate_violations="$(grep -E '^::error::  -' "${_gate_log_file}" | head -n 20 || true)"
             elif [ "${_gate_exit}" -eq 2 ]; then
               echo "::warning::Wave-dispatch gate: verifier exited 2 (plumbing failure); gate fails open and dispatch proceeds."
+            elif [ "${_gate_exit}" -ne 0 ]; then
+              echo "::warning::Wave-dispatch gate: verifier exited ${_gate_exit} (unexpected); gate fails open and dispatch proceeds."
             fi
             rm -f "${_gate_fp_file}" "${_gate_log_file}" 2>/dev/null || true
             trap - EXIT
