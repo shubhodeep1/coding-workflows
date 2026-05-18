@@ -151,8 +151,9 @@ def _load_test_module(module_name: str, relative_path: str) -> object:
 	sys.dont_write_bytecode = True
 	try:
 		module_path = REPO_ROOT / relative_path
+		assert module_path.is_file(), f"Missing helper test module: {module_path}"
 		spec = importlib.util.spec_from_file_location(module_name, module_path)
-		assert spec is not None and spec.loader is not None, module_path
+		assert spec is not None and spec.loader is not None, f"Unable to load helper test module: {module_path}"
 		module = importlib.util.module_from_spec(spec)
 		spec.loader.exec_module(module)
 		return module
@@ -242,8 +243,11 @@ def _parsed_issue_block(
 def _extract_issue_block(text: str, issue_id: str) -> str:
 	start = f"=== ISSUE {issue_id} ==="
 	end = f"=== END ISSUE {issue_id} ==="
-	start_idx = text.index(start)
-	end_idx = text.index(end, start_idx)
+	try:
+		start_idx = text.index(start)
+		end_idx = text.index(end, start_idx)
+	except ValueError as exc:
+		raise AssertionError(f"Missing issue block markers for {issue_id}:\n{text}") from exc
 	return text[start_idx:end_idx + len(end)]
 
 
