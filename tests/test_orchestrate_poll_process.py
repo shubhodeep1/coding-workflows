@@ -6228,6 +6228,24 @@ def _verifier_sandbox(files: dict[str, str], fingerprints: dict) -> tuple[Path, 
 	return td, fp_path
 
 
+def test_verify_integration_fingerprints_baseline_regressions():
+	# CI/release workflows run explicit `python3 tests/<file>.py` allowlists,
+	# so execute the dedicated baseline verifier suite from this already-
+	# allowlisted harness too.
+	import importlib.util
+
+	spec = importlib.util.spec_from_file_location(
+		"test_verify_integration_fingerprints_baseline",
+		REPO_ROOT / "tests" / "test_verify_integration_fingerprints_baseline.py",
+	)
+	assert spec is not None and spec.loader is not None
+	mod = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(mod)
+	for name, value in sorted(vars(mod).items()):
+		if name.startswith("test_") and callable(value):
+			value()
+
+
 def test_verify_integration_fingerprints_passes_when_intent_preserved():
 	mod = _verifier_module()
 	files = {
@@ -8022,9 +8040,18 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	wf_body = wf_path.read_text(encoding="utf-8")
 	prepare_body = prepare_path.read_text(encoding="utf-8")
 	resolve_body = resolve_path.read_text(encoding="utf-8")
-	# Verifier bootstrap must be in OPTIONAL list so older script_refs
-	# do not hard-fail.
-	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py"' in wf_body
+	# Resolver safety scripts must prefer the main snapshot so wedged
+	# integration branches still pick up the shipped self-heal helpers.
+	assert (
+		'MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_conflict_resolve.sh '
+		'review_conflict_prepare.sh"'
+	) in wf_body
+	assert 'SUPPORT_ROOT_DIR="${RUNNER_TEMP}/coding-workflows-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in wf_body
+	assert 'SUPPORT_SCRIPTS_DIR="${SUPPORT_ROOT_DIR}/scripts"' in wf_body
+	assert 'SUPPORT_SCRIPTS_DIR="scripts"' not in wf_body
+	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh"' in wf_body
+	assert "for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do" in wf_body
+	assert "Bootstrapped ${f} from main snapshot (branch copy ignored)." in wf_body
 	# The bootstrap still enumerates the script name in review_autofix.yml
 	# even after PR #1495 moved the resolver logic into support scripts.
 	assert "verify_integration_fingerprints.py" in wf_body
@@ -8042,6 +8069,8 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	# when fingerprint verification rejects the resolver output.
 	assert "IS_INTEGRATION_SYNC" in resolve_body
 	assert "verify_integration_fingerprints.py" in resolve_body
+	assert "--baseline-fingerprints-state" in resolve_body
+	assert "--compare-against-baseline" in resolve_body
 	assert "Aborting [ai-merge-resolve] commit: integration fingerprint verification" in resolve_body
 
 
