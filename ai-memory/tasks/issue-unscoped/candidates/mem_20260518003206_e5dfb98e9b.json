@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_pipeline_integration.py:149-162 | confidence=[3]\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: `spec.loader.exec_module(module)` can fail without any module-path context, making dynamic-import failures hard to diagnose.\n  WHY: Multiple reviewers flagged the same missing import/error-context hardening around the dynamic helper-module load path.\n- tests/test_review_pipeline_integration.py:151-165 | confidence=[3]\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `_load_test_module()` returns dynamically loaded helper modules without validating that the expected helper attributes exist before later use.\n  WHY: If the helper module changes, the test will fail later with a less clear `AttributeError` instead of an immediate load-site assertion.\n- tests/test_review_pipeline_integration.py:428-435 | confidence=[3]\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The test uses dynamically imported helper modules without checking that the expected helper attributes are present before calling them.\n  WHY: A missing helper function would surface as a cryptic `AttributeError` deep in the test body rather than a clear guard failure.\n- tests/test_review_pipeline_integration.py:516, 554, 581, 623, 664 | confidence=[3]\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The integration test hard-codes five subprocess timeouts at 60 seconds, which may be too tight on slower CI runners.\n  WHY: Under CI load, cumulative latency can turn into `TimeoutExpired` failures instead of stage-specific assertions.\n- tests/test_review_pipeline_integration.py:~line 162\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: `_commit_autofix_change()` relies on repository identity having been seeded earlier instead of setting its own git author/committer identity.\n  WHY: If the helper is reused or reordered, the commit can fail with an unhelpful git identity error.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_review_pipeline_integration.py:151-165 | confidence=3\n  PROBLEM: The function dynamically loads helper modules but does not validate that the expected attributes exist before returning.\n  WHY: If the helper modules are refactored and those functions are renamed or removed, the test will fail later with a less clear `AttributeError` instead of an immediate assertion at the load site.\n- tests/test_review_pipeline_integration.py:516, 554, 581, 623, 664 | confidence=3\n  PROBLEM: The integration test runs five subprocess-driven script invocations with a hard 60-second timeout, which may be too tight on slower runners.\n  WHY: On CI, scheduling and I/O jitter can cause `TimeoutExpired` failures instead of a clean stage-specific assertion.\n- tests/test_review_pipeline_integration.py:149-161 | confidence=2\n  PROBLEM: `spec.loader.exec_module(module)` is not wrapped in a try/except block, so import-time failures from the helper module are reported without module-path context.\n  WHY: A syntax error or missing dependency in a dynamically loaded helper produces a raw traceback that is harder to triage in CI.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_review_pipeline_integration.py:428-435 | confidence=3\n  PROBLEM: The test dynamically imports two helper test modules and later calls specific functions from them, but it never validates that the expected attributes actually exist before using them.\n  WHY: If either helper module is renamed, restructured, or loses a function, the failure will surface as a cryptic `AttributeError` deep inside the test body rather than a clear missing-helper assertion.\n- tests/test_review_pipeline_integration.py:149-161 | confidence=2\n  PROBLEM: `spec.loader.exec_module(module)` is not wrapped in a try/except, so import-time errors from the dynamically loaded helper module are reported without module context.\n  WHY: A helper-module syntax error or missing dependency produces a raw traceback that is harder to identify as a dynamic-load failure.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/test_review_pipeline_integration.py:~line 162\n  PROBLEM: If `exec_module` raises an import error from the helper module, the bare exception propagates without context about which module failed and why it was being loaded.\n  WHY: The assert-based guards only cover missing files and spec failures, so import-time helper failures remain hard to debug.\n- tests/test_review_pipeline_integration.py:~line 167\n  PROBLEM: `_commit_autofix_change()` depends on git user identity having already been configured elsewhere.\n  WHY: If the helper is called before `_seed_workspace_repo()` or in a different repo, the commit can fail with an unhelpful git error.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "220c84c75273cfd75d5bbd449679ff2a5985b69535eff6a007be9e4391afd4e9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2720,
+    "run_id": "26006966699",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26006966699",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260518003206_e5dfb98e9b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2720,
+    "run_id": "26006966699"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-18T00:32:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
