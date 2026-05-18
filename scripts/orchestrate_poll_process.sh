@@ -3292,9 +3292,30 @@ _refresh_integration_resolver_tooling() {
       git config user.name "codex-bot"
       git config user.email "codex@users.noreply.github.com"
 
+      # Resolve the merge-base ONCE before the per-file loop so we can
+      # compare each file's integration-branch hash against the hash it
+      # had when the two branches last shared history.  When int_hash
+      # differs from the merge-base hash, the integration branch has
+      # its own committed changes to the file since the branches
+      # diverged (e.g. via a merged sub-issue's PR like #2738 landing
+      # Phase 1A baseline/delta verifier changes).  Force-refreshing
+      # from default_branch in that case silently reverts those
+      # merged sub-issue changes, which the post-resolve merged
+      # sub-issue fingerprint verifier
+      # (scripts/verify_integration_fingerprints.py) then flags as a
+      # contract violation, blocking wave dispatch on the project
+      # tracking issue (see issue #2734 for the original incident).
+      # Fail-open: if the merge-base cannot be resolved, fall through
+      # to the legacy hash-only comparison rather than aborting the
+      # deadlock-breaking refresh entirely.
+      local merge_base=""
+      merge_base="$(git merge-base \
+        "refs/remotes/origin/${integration_branch}" \
+        "refs/remotes/origin/${default_branch}" 2>/dev/null || echo "")"
+
       local refreshed_count=0
       local refreshed_list=""
-      local f main_hash int_hash
+      local f main_hash int_hash base_hash
       for f in "${refresh_files[@]}"; do
         # Skip if file does not exist on default_branch — never delete
         # an integration-branch file just because main lacks it.
@@ -3306,6 +3327,28 @@ _refresh_integration_resolver_tooling() {
         [ -n "${main_hash}" ] || continue
         if [ "${main_hash}" = "${int_hash}" ]; then
           continue
+        fi
+        # Refuse to clobber a file the integration branch has its own
+        # committed changes to since the merge-base.  The deadlock-
+        # breaker is for files the integration branch has NOT touched
+        # but main has fixed — overwriting a file the integration
+        # branch HAS touched would silently revert merged sub-issue
+        # PR intent and trip the fingerprint verifier (issue #2734).
+        # Any legitimate main-side change to such a file must arrive
+        # via the normal main->integration sync (with 3-way merge),
+        # not via this refresh.  `[ -z "${base_hash}" ]` covers the
+        # "file did not exist at merge-base, integration added it"
+        # case the same way — never clobber an added file.
+        if [ -n "${merge_base}" ]; then
+          base_hash="$(git rev-parse "${merge_base}:${f}" 2>/dev/null || echo "")"
+          if [ "${int_hash}" != "${base_hash}" ]; then
+            local _int_short="${int_hash:0:8}"
+            local _base_short="${base_hash:0:8}"
+            [ -n "${_base_short}" ] || _base_short="none"
+            [ -n "${_int_short}" ] || _int_short="none"
+            echo "  ${log_prefix} skip ${f} — integration branch has committed changes since merge-base (int=${_int_short}, base=${_base_short}); main version must arrive via normal sync, not refresh."
+            continue
+          fi
         fi
         if git checkout "refs/remotes/origin/${default_branch}" -- "${f}" 2>/dev/null; then
           # Only count the file as refreshed if `git add` succeeds, so
