@@ -367,6 +367,78 @@ def test_verify_integration_fingerprints_compare_mode_emits_fixed_by_resolver_no
 		assert err == ""
 
 
+def test_verify_integration_fingerprints_compare_mode_rejects_must_not_exist_regression():
+	mod = _verifier_module()
+	fingerprints = {
+		"1500": {
+			"issue": 1500,
+			"pr": 1501,
+			"must_contain": [],
+			"must_not_contain": [],
+			"must_not_exist": [{"file": "scripts/deleted.py"}],
+		}
+	}
+	with _sandbox({}, fingerprints) as (sandbox, fp_path):
+		baseline_path = sandbox / "baseline.json"
+		rc, _out, _err = _run_verifier(
+			mod,
+			["--baseline-fingerprints-state", str(baseline_path), str(fp_path)],
+			sandbox,
+		)
+		assert rc == 0
+		deleted_path = sandbox / "scripts" / "deleted.py"
+		deleted_path.parent.mkdir(parents=True, exist_ok=True)
+		deleted_path.write_text("reintroduced\n", encoding="utf-8")
+		rc, out, err = _run_verifier(
+			mod,
+			["--compare-against-baseline", str(baseline_path), str(fp_path)],
+			sandbox,
+		)
+		assert rc == 1
+		assert "Integration fingerprint verification FAILED — resolver output regressed merged sub-issue intent:" in out
+		assert "must_not_exist path 'scripts/deleted.py' reappeared after resolver" in out
+		assert err == ""
+
+
+def test_verify_integration_fingerprints_compare_mode_passes_on_pre_existing_must_not_exist_violation():
+	mod = _verifier_module()
+	files = {
+		"scripts/deleted.py": "reintroduced\n",
+	}
+	fingerprints = {
+		"1500": {
+			"issue": 1500,
+			"pr": 1501,
+			"must_contain": [],
+			"must_not_contain": [],
+			"must_not_exist": [{"file": "scripts/deleted.py"}],
+		}
+	}
+	with _sandbox(files, fingerprints) as (sandbox, fp_path):
+		baseline_path = sandbox / "baseline.json"
+		rc, _out, _err = _run_verifier(
+			mod,
+			["--baseline-fingerprints-state", str(baseline_path), str(fp_path)],
+			sandbox,
+		)
+		assert rc == 0
+		rc, out, err = _run_verifier(
+			mod,
+			["--compare-against-baseline", str(baseline_path), str(fp_path)],
+			sandbox,
+		)
+		assert rc == 0
+		assert (
+			"::warning::PRE_EXISTING_FINGERPRINT_DRIFT_V1 unchanged "
+			'fp_key=["scripts/deleted.py"] issue=#1500 path="scripts/deleted.py" kind=must_not_exist'
+		) in out
+		assert (
+			"Integration fingerprint verification PASSED with pre-existing drift — resolver did not introduce any new regressions "
+			"(pre_existing_drift_count=1; see PRE_EXISTING_FINGERPRINT_DRIFT_V1 markers above for triage)."
+		) in out
+		assert err == ""
+
+
 def test_verify_integration_fingerprints_compare_mode_falls_back_to_absolute_check_for_current_only_fingerprints():
 	mod = _verifier_module()
 	files = {
