@@ -517,7 +517,7 @@
     {
       "slug": "mistralai/codestral-2508",
       "display_name": "Codestral 2508",
-      "description": "Mistral Codestral 2508 - 256K context, text-only, code-specialized with tool calling ($0.30/$0.90 per M). European-origin reviewer voice; ~50% cheaper than GLM-5 on both axes.",
+      "description": "Mistral Codestral 2508 - 256K context, text-only, code-specialized with tool calling ($0.30/$0.90 per M). Catalogued for evaluation; not enabled in the default reviewer panel.",
       "supported_reasoning_levels": [
         {"effort": "medium", "description": "Balanced reasoning"},
         {"effort": "high", "description": "Thorough reasoning"},
