@@ -387,3 +387,138 @@
 | `record-candidate` events | 1 |
 | `promote` / `compact` / `finalize-task` / `processed-command-*` events in deep dives | 0 observed |
 
+
+## Deep Audit — Workflows & Scripts (2026-05-18)
+
+### Section 1: Bug & Correctness Sweep
+
+- **ID:** `BUG-001`  
+  **File path:** `scripts/tg_helpers.sh:296-356,365-428`  
+  **Severity:** Medium  
+  **Category tag:** `bug`  
+  **Description:** Both `tg_cleanup_phase_msgs()` and `tg_cleanup_msgs()` paginate issue comments with `?page=${page}`, delete matching comments inside the same page loop, then increment `page`. On issues with more than 100 comments, deleting page-1 items shifts later comments left, so the next `page=2` fetch can skip tracked comments that moved onto page 1. The result is partial Telegram cleanup: orphaned tracking comments and undeleted TG message IDs.  
+  **Recommended fix:** Collect all matching comment IDs across all pages first, then delete in a second pass; alternatively, keep re-reading page 1 until no tracked comments remain. Prefer extracting a shared internal helper in `scripts/tg_helpers.sh` so both cleanup paths use one stable implementation, and route DELETEs through `curl_gh_api` for the same retry/backoff behavior as GETs.
+
+- **ID:** `BUG-002`  
+  **File path:** `.github/workflows/orchestrate_clarify_respond.yml:67-83`  
+  **Severity:** Medium  
+  **Category tag:** `bug`  
+  **Description:** The `Check orchestrator metadata` step runs under `set -euo pipefail` but performs its primary control-path lookup with raw `gh api` at line 68. A transient GitHub API/auth/rate-limit failure aborts the workflow before any retry helper is sourced. The tracking-title lookup at line 83 is also raw `gh api` (with a local `|| echo ""` fallback), so this step bypasses the repo’s normal `gh_retry` contract.  
+  **Recommended fix:** Source `scripts/gh_helpers.sh` at the top of the step and use `gh_retry`/`_safe_gh_jq` for both issue lookups. Keep the tracking-title path fail-open only after retries are exhausted.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+- **ID:** `API-001`  
+  **File path:** `scripts/orchestrate_poll_process.sh:6462-6555,9216-9238`  
+  **Severity:** Medium  
+  **Category tag:** `api-redundancy`  
+  **Description:** `_fetch_candidate_issue_details_graphql()` already fetches `linked_pr` data into `_current_wave_details_json` (`number`, `state`, `merged`, `head_ref`, `head_sha`, `mergeable`, `mergeStateStatus`, `headPushedAt`), but the current-wave reconcile loop ignores that cache and still calls `_issue_cross_ref_pr_number_last` plus `_fetch_pr_json` per issue. **Current call count:** after the existing batch call, the happy path still adds `N` timeline lookups + up to `N` PR GETs per cycle (`2N` logical calls). **Proposed call count:** `0` extra calls on cache hits, with per-issue fallback only when `.linked_pr` is absent. **Existing batching pattern to extend:** `_fetch_candidate_issue_details_graphql`.  
+  **Recommended fix:** Read `.linked_pr.number`, `.linked_pr.state`, and `.linked_pr.merged` from `_current_wave_details_json` inside the reconcile loop, and invoke `_issue_cross_ref_pr_number_last` / `_fetch_pr_json` only for cache misses.
+
+- **ID:** `API-002`  
+  **File path:** `.github/workflows/implement.yml:3550-3560; scripts/orchestrate_poll_process.sh:5198-5225`  
+  **Severity:** Low  
+  **Category tag:** `api-batching`  
+  **Description:** The “ancestor no-op” scan fetches parent issue body and parent comments separately on every hop in both implementations. **Current call count:** `2 × threshold` logical calls per implement invocation (default `4` at `IMPL_NOOP_ANCESTRY_THRESHOLD=2`) and `2 × max_depth` per poller invocation (default `6` at `max_depth=3`). **Proposed call count:** `threshold` / `max_depth` calls by fetching body+comments together once per hop, or fewer if the chain is batched. **Existing batching pattern to extend:** `_fetch_candidate_issue_details_graphql` (or a slimmer shared helper derived from it).  
+  **Recommended fix:** Add a shared helper that returns issue body plus recent comments in one query, and reuse it from both call sites.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **ID:** `DUP-001`  
+  **File path:** `.github/workflows/implement.yml:3550-3560; scripts/orchestrate_poll_process.sh:5198-5225`  
+  **Severity:** Low  
+  **Category tag:** `duplication`  
+  **Description:** The no-op ancestor-chain walk is duplicated across implement and orchestrator polling, with the same marker text, parent-number extraction regex, hop loop, and comment-count logic. This is the same hot path noted in `API-002`; any future fix has to land twice.  
+  **Recommended fix:** Move the logic into a shared module such as `scripts/noop_ancestry_helpers.sh` with a function like `count_noop_reissue_ancestors <repo> <issue_number> <max_depth> [marker_regex]`. Update callers in the implement no-op guard and `scripts/orchestrate_poll_process.sh`.
+
+- **ID:** `DUP-002`  
+  **File path:** `.github/workflows/review_autofix.yml:602-616; scripts/label_helpers.sh:110-143; scripts/review_rb_judge.sh:120-134; scripts/orchestrate_poll_process.sh:1368-1423`  
+  **Severity:** Low  
+  **Category tag:** `duplication`  
+  **Description:** The repo already has a canonical `ensure_label_exists` in `scripts/label_helpers.sh`, but review/autofix, the review-blocked judge, and the orchestrator each carry their own label-creation logic with hardcoded colors/descriptions. That duplicates label metadata from `.github/ai/label_contract.v1.json` and increases drift risk whenever a label is added or edited.  
+  **Recommended fix:** Standardize on `scripts/label_helpers.sh::ensure_label_exists <label_name> [repo]`. For lightweight jobs that avoid a full checkout, stage just `label_helpers.sh` (and `gh_helpers.sh`) the way `validate.yml` stages support files.
+
+- **ID:** `DUP-003`  
+  **File path:** `.github/workflows/cancel_on_pr_close.yml:40-53; .github/workflows/mark-stable.yml:344-357; .github/workflows/orchestrate_poll.yml:96-113; .github/workflows/test-and-mark-stable.yml:1728-1750`  
+  **Severity:** Low  
+  **Category tag:** `duplication`  
+  **Description:** Four workflows reimplement slightly different `_gh_retry` / `gh_api_with_retry` wrappers instead of reusing `scripts/gh_helpers.sh`. Backoff rules, stderr capture, and error wording now vary by workflow.  
+  **Recommended fix:** Extend `scripts/gh_helpers.sh` with one shared wrapper, e.g. `gh_retry_capture <stderr_file> -- gh api ...`, then replace the inline copies in these workflows.
+
+- **ID:** `DUP-004`  
+  **File path:** `scripts/tg_helpers.sh:296-356,365-428`  
+  **Severity:** Low  
+  **Category tag:** `duplication`  
+  **Description:** `tg_cleanup_phase_msgs()` and `tg_cleanup_msgs()` duplicate the same paginated fetch/delete loop, including the page-shift defect in `BUG-001`.  
+  **Recommended fix:** Add an internal helper such as `_tg_collect_tracking_comments <issue_num> [phase]` plus `_tg_delete_tracking_comments <comment_id...>`, and have both public cleanup functions call it.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+- **ID:** `EXPR-001`  
+  **File path:** `.github/workflows/test-and-mark-stable.yml:1203-1587`  
+  **Severity:** High  
+  **Category tag:** `expression-limit`  
+  **Description:** The `Phase 4: Wait for review & autofix to complete` `run:` block contains `${{ }}` interpolations and is about **19,899 chars** dedented, leaving only **1,101 chars** of headroom under GitHub’s **21,000-char** limit. It already embeds a local GH retry wrapper, polling loop, job-log probe, and multiple shortcut paths.  
+  **Recommended fix:** Extract the whole step to an external script (preferred), e.g. `scripts/test_and_mark_stable_wait_review.sh`, and pass the small set of env vars in from YAML.
+
+- **ID:** `EXPR-002`  
+  **File path:** `.github/workflows/validate.yml:210-583`  
+  **Severity:** Medium  
+  **Category tag:** `expression-limit`  
+  **Description:** `Fetch workflow support files` is about **17,416 chars** dedented, leaving **3,584 chars** of headroom. The inline clone/copy/bootstrap logic and long template list make this block likely to keep growing.  
+  **Recommended fix:** Extract the support-file bootstrap into `scripts/fetch_validate_support_files.sh`, or move the template/file lists into manifest files that the script reads at runtime.
+
+- **ID:** `EXPR-003`  
+  **File path:** `.github/workflows/test-and-mark-stable.yml:1673-2078`  
+  **Severity:** Medium  
+  **Category tag:** `expression-limit`  
+  **Description:** `Phase 4b: Verify editor restored canary (pytest + retry)` is about **17,408 chars** dedented, leaving **3,592 chars** of headroom. It inlines GH retry helpers, canary fetch helpers, pytest classification, retry-dispatch polling, and result handling in one YAML block.  
+  **Recommended fix:** Extract to an external script such as `scripts/verify_e2e_smoke_canary.sh`, keeping YAML responsible only for env/setup and final outputs.
+
+- **Workflow file size note:** No workflow exceeds **800 KB**. Largest files are `review_autofix.yml` (**345,188 bytes**) and `test-and-mark-stable.yml` (**281,597 bytes**).
+
+### Section 5: Cross-Cutting Concerns
+
+- **ID:** `DEAD-001`  
+  **File path:** `scripts/orchestrate_poll_process.sh:5299-5306,5416-5425`  
+  **Severity:** Low  
+  **Category tag:** `dead-code`  
+  **Description:** `read_standalone_state_json()` and `stall_recovery_action_is_terminal()` are defined but have no call sites in workflows or scripts; repository-wide search only finds their definitions.  
+  **Recommended fix:** Remove them, or mark them explicitly as reserved APIs and add tests/documentation showing the intended future caller.
+
+- **ID:** `DEAD-002`  
+  **File path:** `scripts/memory_helpers.sh:172-192,226-234`  
+  **Severity:** Low  
+  **Category tag:** `dead-code`  
+  **Description:** `memory_processed_command_list()` and `memory_promote()` are defined in the shared memory wrapper but have no workflow/script call sites.  
+  **Recommended fix:** Remove the unused wrappers, or annotate them as reserved and add a self-test that proves they are intentionally kept.
+
+- **ID:** `CONSIST-001`  
+  **File path:** `scripts/label_helpers.sh:110-143; scripts/orchestrate_poll_process.sh:1399-1422; scripts/review_rb_judge.sh:120-134; .github/workflows/review_autofix.yml:613-616`  
+  **Severity:** Medium  
+  **Category tag:** `consistency`  
+  **Description:** The same logical operation—“ensure this repo label exists”—has different return contracts in different places. `scripts/label_helpers.sh` returns failure on non-`already exists` errors, `scripts/orchestrate_poll_process.sh` logs a warning but still returns success, and the review/judge helpers swallow creation failures with `|| true`. That makes label-creation regressions visible in some paths and silent in others.  
+  **Recommended fix:** Standardize on `scripts/label_helpers.sh` as the canonical behavior. When a caller truly wants fail-open semantics, wrap the canonical helper at the call site (`ensure_label_exists ... || true`) so the policy choice is explicit.
+
+- **Shellcheck note:** A `shellcheck` pass over `scripts/*.sh` did not surface additional high-confidence warnings beyond the structural issues above.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 1 | EXPR-001 |
+| Medium | 6 | BUG-001, BUG-002, API-001, EXPR-002, EXPR-003, CONSIST-001 |
+| Low | 7 | API-002, DUP-001, DUP-002, DUP-003, DUP-004, DEAD-001, DEAD-002 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 0 | Small |
+| API call optimization | 2 | Medium |
+| Code modularization | 10 | Large |
+| Expression size reduction | 2 | Medium |
+| Medium/Low fixes | 7 | Medium |
