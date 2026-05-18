@@ -8064,10 +8064,12 @@ def _extract_refresh_function_body(poller_body: str) -> str:
 		) from None
 	depth = 1
 	nested_fn_open_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\(\)\s*\{$")
-	command_group_open_re = re.compile(r"(?:^|[;&|])\s*\{\s*(?:#.*)?$")
+	command_group_open_re = re.compile(
+		r"^(?:\{|(?:[^#\"']|\"[^\"]*\"|'[^']*')*(?:&&|\|\||;|\|)\s*\{)\s*(?:#.*)?$"
+	)
 	for idx in range(start_idx + 1, len(lines)):
 		stripped = lines[idx].strip()
-		if nested_fn_open_re.match(stripped) or command_group_open_re.search(stripped):
+		if nested_fn_open_re.match(stripped) or command_group_open_re.match(stripped):
 			depth += 1
 		elif stripped == "}":
 			depth -= 1
@@ -8084,7 +8086,7 @@ def test_extract_refresh_function_body_keeps_operator_attached_command_groups():
 	  test -n \"${x:-}\" && {
 	    echo inner
 	  }
-	  echo after
+	  echo after  # note | {
 	}
 	after() {
 	  :
@@ -8094,7 +8096,7 @@ def test_extract_refresh_function_body_keeps_operator_attached_command_groups():
 	  test -n \"${x:-}\" && {
 	    echo inner
 	  }
-	  echo after
+	  echo after  # note | {
 	}"""
 	assert _extract_refresh_function_body(sample) == expected
 
