@@ -673,7 +673,7 @@ duplicate those here.
     "borrow mechanisms from an external system, drop the parts that
     conflict with our values" plan; used as the template for this
     plan's `Cross-Cutting Goals` / `Cross-Cutting Non-Goals` framing.
-  - commit `03d231b` (judge-loop and reissue, shipped) — phase-gated rollout
+  - `docs/completed/judge-loop-and-reissue-plan.md` (shipped) — phase-gated rollout
     template for fail-open, flag-defaulted changes (this plan does
     not gate on flags because the edits are pure prose, but the
     rollback-per-phase model is borrowed).
