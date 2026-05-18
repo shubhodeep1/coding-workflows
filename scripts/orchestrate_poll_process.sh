@@ -12123,18 +12123,23 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
         if [ -n "${_gate_integration_branch}" ] \
            && [ "${_gate_fp_count}" -gt 0 ] \
            && [ -f "scripts/verify_integration_fingerprints.py" ]; then
-          # Fetch the integration branch so the verifier's --ref mode
-          # can resolve it via ``git show`` / ``git cat-file``. A fetch
-          # failure is non-fatal (gate fails open below).
-          git fetch --no-tags --quiet origin "${_gate_integration_branch}" 2>/dev/null || true
-          _gate_ref="refs/remotes/origin/${_gate_integration_branch}"
-          if ! git rev-parse --verify "${_gate_ref}" >/dev/null 2>&1; then
-            # Fall back to the local branch name if the remote-tracking
-            # ref isn't present (e.g. when running outside of a
-            # GitHub Actions checkout that resolves origin/<branch>).
+          # Resolve a fresh ref for the integration branch. In the normal
+          # GitHub Actions path, verify against FETCH_HEAD from the fetch
+          # we just performed so a fetch failure cannot silently fall back
+          # to a stale local ref. Outside that context (e.g. local
+          # sandboxes without an origin remote), fall back to the local
+          # branch name.
+          _gate_ref=""
+          if git remote get-url origin >/dev/null 2>&1; then
+            if git fetch --no-tags --quiet origin "${_gate_integration_branch}" >/dev/null 2>&1; then
+              _gate_ref="FETCH_HEAD"
+            else
+              echo "::warning::Wave-dispatch gate: fetch of integration branch '${_gate_integration_branch}' failed; gate fails open and dispatch proceeds."
+            fi
+          else
             _gate_ref="${_gate_integration_branch}"
           fi
-          if git rev-parse --verify "${_gate_ref}" >/dev/null 2>&1; then
+          if [ -n "${_gate_ref}" ] && git rev-parse --verify "${_gate_ref}" >/dev/null 2>&1; then
             _gate_fp_file="$(mktemp "${TMPDIR:-/tmp}/wave_dispatch_fp.XXXXXX")"
             jq -c '.merged_issue_fingerprints // {}' "${STATE_FILE}" > "${_gate_fp_file}"
             _gate_log_file="$(mktemp "${TMPDIR:-/tmp}/wave_dispatch_log.XXXXXX")"

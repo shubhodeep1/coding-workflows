@@ -85,6 +85,13 @@ import sys
 from typing import Any
 
 
+def _normalize_ref(ref: str | None) -> str | None:
+	if ref is None:
+		return None
+	ref = ref.strip()
+	return ref or None
+
+
 def _load_fingerprints(path: str) -> tuple[dict[str, Any] | None, str | None]:
 	try:
 		with open(path, "r", encoding="utf-8") as fh:
@@ -101,6 +108,7 @@ def _load_fingerprints(path: str) -> tuple[dict[str, Any] | None, str | None]:
 
 
 def _read_file(path: str, cache: dict[str, str | None], ref: str | None = None) -> str | None:
+	ref = _normalize_ref(ref)
 	# Cache key prefix keeps ref-mode and working-tree-mode caches
 	# disjoint within a single verifier invocation.
 	cache_key = f"@ref:{ref}:{path}" if ref else path
@@ -163,6 +171,7 @@ def _path_exists(path: str, exists_cache: dict[str, bool], ref: str | None = Non
 	must_not_exist violation; the verify-mode caller treats absence as
 	"contract satisfied" exactly as it would in working-tree mode.
 	"""
+	ref = _normalize_ref(ref)
 	cache_key = f"@ref:{ref}:{path}" if ref else path
 	if cache_key in exists_cache:
 		return exists_cache[cache_key]
@@ -671,6 +680,15 @@ def main(argv: list[str] | None = None) -> int:
 			args = args[1:]
 			continue
 		break
+
+	raw_ref = ref
+	ref = _normalize_ref(ref)
+	if raw_ref is not None and ref is None:
+		print(
+			"::warning::verify_integration_fingerprints: blank --ref value supplied; ignoring and falling back to working-tree mode.",
+			flush=True,
+			file=sys.stderr,
+		)
 
 	if ref is None:
 		env_ref = os.environ.get("INTEGRATION_VERIFY_REF", "").strip()

@@ -7667,6 +7667,46 @@ def test_verify_integration_fingerprints_ref_mode_honoured_via_env_var():
 				os.environ["INTEGRATION_VERIFY_REF"] = prev_env
 
 
+def test_verify_integration_fingerprints_blank_cli_ref_falls_back_to_working_tree():
+	# ``--ref=`` used to route reads through ``git show :path`` /
+	# ``git cat-file -e :path`` (the index), which is wrong when the
+	# caller really supplied a blank ref by mistake. Normalize blank CLI
+	# refs back to working-tree mode instead.
+	import contextlib
+	import io
+
+	mod = _verifier_module()
+	with tempfile.TemporaryDirectory() as td_root:
+		repo, _commit = _make_git_sandbox_with_blob(
+			Path(td_root),
+			{
+				"backend/file_back.py": "content from index\n",
+			},
+		)
+		(repo / "backend" / "file_back.py").unlink()
+		fingerprints = {
+			"2969": {
+				"issue": 2969,
+				"pr": 2970,
+				"must_contain": [],
+				"must_not_contain": [],
+				"must_not_exist": [{"file": "backend/file_back.py"}],
+			}
+		}
+		fp_path = Path(td_root) / "fp.json"
+		fp_path.write_text(json.dumps(fingerprints), encoding="utf-8")
+		prev_cwd = os.getcwd()
+		stderr_buf = io.StringIO()
+		try:
+			os.chdir(repo)
+			with contextlib.redirect_stderr(stderr_buf):
+				rc = mod.main(["--ref=", str(fp_path)])
+			assert rc == 0, "blank CLI ref must fall back to working-tree mode"
+		finally:
+			os.chdir(prev_cwd)
+		assert "blank --ref value supplied" in stderr_buf.getvalue()
+
+
 def test_wave_dispatch_gate_invokes_verifier_against_integration_ref():
 	# Static contract: the wave-dispatch gate block must invoke the
 	# verifier with --ref pointing at the integration branch before
@@ -7685,6 +7725,12 @@ def test_wave_dispatch_gate_invokes_verifier_against_integration_ref():
 	assert '--ref "${_gate_ref}"' in script, (
 		"wave-dispatch gate must run the verifier in --ref mode against the "
 		"integration branch HEAD (not the cwd working tree)"
+	)
+	assert '_gate_ref="FETCH_HEAD"' in script, (
+		"wave-dispatch gate must verify the freshly fetched integration ref, not a potentially stale local ref"
+	)
+	assert "fetch of integration branch" in script, (
+		"wave-dispatch gate must warn and fail open when the integration-branch fetch fails"
 	)
 	# Failure-path side effects: stall cycle bump, tracking comment,
 	# telegram alert.
