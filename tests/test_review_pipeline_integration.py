@@ -429,9 +429,15 @@ def test_multiround_review_runtime_and_spot_fix_reissue_baseline_contract() -> N
 		"test_review_rb_judge_label_propagation_integration",
 		"tests/test_review_rb_judge_label_propagation.py",
 	)
+	assert callable(getattr(label_propagation, "_run_close_and_reissue", None)), (
+		"Missing _run_close_and_reissue in tests/test_review_rb_judge_label_propagation.py"
+	)
 	reissue_baseline = _load_test_module(
 		"test_review_rb_judge_reissue_baseline_integration",
 		"tests/test_review_rb_judge_reissue_baseline.py",
+	)
+	assert callable(getattr(reissue_baseline, "_run_baseline_resolver", None)), (
+		"Missing _run_baseline_resolver in tests/test_review_rb_judge_reissue_baseline.py"
 	)
 
 	with tempfile.TemporaryDirectory(prefix="review_runtime_rollout_") as td:
