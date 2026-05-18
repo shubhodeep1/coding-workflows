@@ -479,3 +479,101 @@ No `TODO` / `FIXME` / `HACK` markers were found under `.github/workflows/` or `s
 | Code modularization | 11 | Large |
 | Expression size reduction | 3 | Medium |
 | Medium/Low fixes | 3 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-18)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlap is statically proven safe in the same code path with no mutation, retry, concurrency, pagination, or cache-contract change; `NEEDS_VERIFICATION` means the overlap is plausible but one or more SAFE preconditions are not proven from repo-local reading alone; `RISKY_SKIP` means the call sits in a poll/retry/race-defense/pagination/log-contract-sensitive path and must not be auto-implemented from this pass.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001 — NEEDS_VERIFICATION
+- **File path / lines:** `.github/workflows/test-and-mark-stable.yml:443-447` and `.github/workflows/test-and-mark-stable.yml:449-449` (`Create E2E test issue` step)
+- **Current call count:** 2 calls in the step.
+- **Proposed call count:** 1 call in the step.
+- **Endpoint(s):** `POST /repos/{repo}/issues` (via `gh api ... -f ...`), then `GET /repos/{repo}/issues/{issue_number}`.
+- **Evidence:**
+  ```bash
+  ISSUE_NUMBER=$(gh api "repos/${TEST_REPO}/issues" \
+    -f title="${TITLE}" \
+    -f body="${BODY}" \
+    --jq '.number')
+
+  ISSUE_URL=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" --jq '.html_url')
+  ```
+  The second call is only used to populate `ISSUE_URL` for the log line at `.github/workflows/test-and-mark-stable.yml:452`.
+- **Proposed fix:** In the `Create E2E test issue` step, capture both `.number` and `.html_url` from the create response in one parse (for example `--jq '[.number, .html_url] | @tsv'`), then populate `ISSUE_NUMBER` and `ISSUE_URL` locally and fail the step if either field is empty.
+- **Safety rationale:** `NEEDS_VERIFICATION` because the consolidation depends on the create-issue response carrying `.html_url` under the repo’s current `gh api` defaults, which is not proven from repo-local code alone.
+- **Downstream signal:** Verify on a disposable repo or recorded fixture that this exact `gh api "repos/${TEST_REPO}/issues" -f ...` response includes non-empty `.number` and `.html_url`; only then collapse the GET into the POST response parse and keep an explicit empty-field failure check.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001 — SAFE_TO_MERGE
+- **File path / lines:** `scripts/review_rb_judge.sh:221-223` and `scripts/review_rb_judge.sh:253-256` (top-level linked-issue fallback block)
+- **Current call count:** 2 `GET /pulls/{pr}` calls on the `ISSUE_NUMBERS` fallback path.
+- **Proposed call count:** 1 `GET /pulls/{pr}` call on the normal fallback path; keep the second read only when the cached JSON is empty/invalid.
+- **Endpoint(s):** `GET /repos/{repo}/pulls/{pull_number}`.
+- **Evidence:**
+  ```bash
+  _pr_meta="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
+  _pr_state="$(printf '%s\n' "${_pr_meta}" | jq -r '.state // ""')"
+  _pr_merged="$(printf '%s\n' "${_pr_meta}" | jq -r '(.merged_at != null) or (.merged == true)')"
+  ...
+  unset _pr_meta _pr_state _pr_merged
+  ...
+  if [ -z "${ISSUE_NUMBERS}" ]; then
+    PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
+  fi
+  ```
+  The earlier `_pr_meta` snapshot already contains the later-needed `.title` and `.body`.
+- **Proposed fix:** Reuse `_pr_meta` to derive `PR_DATA` before unsetting it, then move `unset _pr_meta _pr_state _pr_merged` below the fallback block; preserve the existing `_safe_gh_jq ... --jq '.title + " " + (.body // "")'` call only when `_pr_meta` is empty or fails `jq`.
+- **Safety rationale:** `SAFE_TO_MERGE` because both reads hit the same PR endpoint in the same top-level flow, no intervening mutation changes the PR, and retaining the current second read on invalid-cache fallback preserves the existing fail-open/non-retried behavior.
+- **Downstream signal:** Reuse `_pr_meta` for `PR_DATA` in `scripts/review_rb_judge.sh`, move the `unset _pr_meta...` below the fallback block, and keep the current `_safe_gh_jq` call only when `_pr_meta` is empty or unparsable.
+
+#### REUSE-002 — NEEDS_VERIFICATION
+- **File path / lines:** `scripts/implement_diagnose_post_codex_failure.sh:166-172` and `scripts/implement_diagnose_post_codex_failure.sh:261-272` (top-level post-Codex diagnose flow)
+- **Current call count:** 2 `GET /issues/{issue}` calls on the `ISSUE_META_FILE` cache-miss path.
+- **Proposed call count:** 1 `GET /issues/{issue}` call on the same cache-miss path; keep the later body-only GET only when the shared JSON is empty/invalid.
+- **Endpoint(s):** `GET /repos/{repo}/issues/{issue_number}`.
+- **Evidence:**
+  ```bash
+  if [ -z "${ISSUE_LABELS_JSON}" ]; then
+    ISSUE_LABELS_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]' || echo '[]')"
+  fi
+  ...
+  gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
+    --add-label 'ai:implementation-failed' \
+    --remove-label 'ai:implementing' \
+    --remove-label 'ai:awaiting-approval' >/dev/null 2>&1 || \
+  gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
+    --add-label 'ai:implementation-failed' >/dev/null 2>&1 || true
+  ...
+  if [ ! -s "${ISSUE_BODY_FILE}" ]; then
+    gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}" --jq '.body // ""' > "${ISSUE_BODY_FILE}" || printf '' > "${ISSUE_BODY_FILE}"
+  fi
+  ```
+  On cache miss, the script re-reads the same issue later for `.body`, but it also mutates labels between the two reads.
+- **Proposed fix:** Add a cache-miss-only `FALLBACK_ISSUE_META_JSON` fetch in `scripts/implement_diagnose_post_codex_failure.sh`, parse `[.labels[].name]` from it for the early label check, and later parse `.body // ""` from that same JSON before falling back to the existing body-only GET when the shared JSON is empty/invalid.
+- **Safety rationale:** `NEEDS_VERIFICATION` because the script edits issue labels between the two reads, so reusing the earlier snapshot is only safe if downstream logic truly depends on `.body` alone and never on refreshed label state.
+- **Downstream signal:** Verify on the `ISSUE_META_FILE` cache-miss path that reusing a pre-label-edit issue snapshot yields the same `ISSUE_BODY_FILE`, `TRACKING_ISSUE_NUM`, and diagnose prompt inputs as the current second GET; if it does, replace the two GETs with one shared JSON fetch plus the existing body-only GET as invalid-cache fallback.
+
+### Dead Calls (DEAD-API-###)
+No findings.
+
+### Cross-References to Deep Audit Section
+- API-001: RISKY_SKIP — inside the `test-and-mark-stable` cancel/wait poll loop, so this pass should not auto-change polling semantics.
+- API-002: RISKY_SKIP — lives in `scripts/orchestrate_poll_process.sh` final-merge race-defense logic, which the prompt explicitly excludes from SAFE treatment.
+- API-003: RISKY_SKIP — lives in `scripts/orchestrate_poll_process.sh` recovery handling and would change a race-sensitive fail-open path.
+- API-004: RISKY_SKIP — batching the 7-label sweep would alter pagination/query semantics inside the standalone stall watchdog in `scripts/orchestrate_poll_process.sh`.
+- API-005: RISKY_SKIP — the label rebuild sits in `scripts/orchestrate_poll_process.sh` current-wave/reissue handling, so it requires manual review rather than auto-implementation.
+- API-006: NEEDS_VERIFICATION — batching fallback label recovery in `review_autofix.yml` looks valid, but GraphQL partial-miss and fail-open parity need to be proven first.
+
+### Summary Counts
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 1 | REUSE-001 |
+| NEEDS_VERIFICATION | 2 | MERGE-001, REUSE-002 |
+| RISKY_SKIP | 0 | — |
+
+### Implement-Stage Handoff
+- REUSE-001
