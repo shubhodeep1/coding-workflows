@@ -357,10 +357,6 @@ def _fp_key_json(key: tuple[str, str]) -> str:
 	return json.dumps([key[0], key[1]], separators=(",", ":"))
 
 
-def _branch_suffix(branch: str) -> str:
-	return f" (branch={branch})" if branch else ""
-
-
 def _fp_satisfied(
 	fp: Any,
 	file_cache: dict[str, str | None],
