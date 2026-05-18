@@ -399,3 +399,133 @@ No `TODO`/`FIXME`/`HACK`/`XXX` markers were present in `.github/workflows/*.yml`
 | Code modularization | 5-6 | Large |
 | Expression size reduction | 4-8 | Large |
 | Medium/Low fixes | 2 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-18)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the consolidation/deletion is statically supported and can be implemented directly with no expected semantic change. `NEEDS_VERIFICATION` means the overlap is real but payload-shape, fallback, or ordering behavior must be checked before changing it. `RISKY_SKIP` means the duplication is visible, but it sits in a retry/poll/stall-recovery or other race-defensive path and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+- **ID** — `MERGE-001`
+  - **Safety tag** — `NEEDS_VERIFICATION`
+  - **File path and line ranges** — `scripts/review_rb_judge.sh:246-251`, `scripts/review_rb_judge.sh:267-283`
+  - **Current call count** — `1` GraphQL call + `1..N` REST issue GETs per judge run with linked issues
+  - **Proposed call count** — `1` GraphQL call total
+  - **Endpoint(s)** — GraphQL `repository.pullRequest(...).closingIssuesReferences(first: 50)`; REST `GET /repos/{owner}/{repo}/issues/{issue_number}`
+  - **Evidence**
+    ```sh
+    ISSUE_NUMBERS="$(gh_retry gh api graphql \
+      ...
+      -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } } }' \
+      --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].number' || true)"
+    ...
+    ISSUE_META_JSON="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" || echo '{}')"
+    BODY="$(printf '%s' "${ISSUE_META_JSON}" | jq -r '.body // ""' 2>/dev/null || echo "")"
+    FIRST_ISSUE_LABELS_JSON="$(printf '%s' "${ISSUE_META_JSON}" | jq -c '[(.labels // [])[]?.name]' 2>/dev/null || echo '[]')"
+    ```
+  - **Proposed fix** — Extend the existing `closingIssuesReferences` GraphQL query to request `nodes { number body labels(first: 100) { nodes { name } } }`, then populate `FIRST_ISSUE`, `FIRST_ISSUE_BODY`, and `FIRST_ISSUE_LABELS_JSON` from that payload; keep the current REST loop only as the GraphQL-failure fallback. Existing batching pattern to mirror: `_fetch_candidate_issue_details_graphql` / `_fetch_linked_pr_status_graphql` in `scripts/orchestrate_poll_process.sh:6462-6579,6599-6698`.
+  - **Safety rationale** — This is a true batchable overlap, but it changes the response shape and the current “first issue number + first non-empty body” selection behavior, so static reading alone is not enough for `SAFE_TO_MERGE`.
+  - **Downstream signal** — Verify with a multi-linked-issue fixture (including “first linked issue has labels but empty body”) that the batched GraphQL path preserves current `FIRST_ISSUE` / `FIRST_ISSUE_BODY` semantics before removing the REST loop.
+
+- **ID** — `MERGE-002`
+  - **Safety tag** — `RISKY_SKIP`
+  - **File path and line ranges** — `scripts/orchestrate_poll_process.sh:5777-5779`, `scripts/orchestrate_poll_process.sh:7567-7575`
+  - **Current call count** — `2` issue GETs per `close_and_reissue` branch (`4` across the mirrored orchestrator-managed + standalone branches)
+  - **Proposed call count** — `1` issue GET per branch
+  - **Endpoint(s)** — REST `GET /repos/{owner}/{repo}/issues/{issue_num}`
+  - **Evidence**
+    ```sh
+    orig_title="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.title // ""' || echo "")"
+    orig_body="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.body // ""' || echo "")"
+    ```
+  - **Proposed fix** — In each `close_and_reissue` branch, fetch full issue JSON once into a local variable and derive both `.title` and `.body` from it; keep log text and recovery comments unchanged.
+  - **Safety rationale** — The duplicate GETs are real, but both sites are inside `orchestrate_poll_process.sh` stall-recovery logic, which is explicitly a `RISKY_SKIP` path.
+  - **Downstream signal** — Do not auto-implement; manually review both stall-recovery branches, confirm no recovery-timing or log-contract behavior depends on the second GET, then consolidate to one cached `_safe_gh_jq` read per branch.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID** — `REUSE-001`
+  - **Safety tag** — `SAFE_TO_MERGE`
+  - **File path and line ranges** — `scripts/review_rb_judge.sh:221-238`, `scripts/review_rb_judge.sh:253-256`
+  - **Current call count** — `2` PR GETs on the `ISSUE_NUMBERS`-empty fallback path
+  - **Proposed call count** — `1` PR GET on the non-error path
+  - **Endpoint(s)** — REST `GET /repos/{owner}/{repo}/pulls/{pr_number}`
+  - **Evidence**
+    ```sh
+    _pr_meta="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
+    ...
+    if [ -z "${ISSUE_NUMBERS}" ]; then
+      PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
+    fi
+    ```
+  - **Proposed fix** — Reuse local PR metadata before re-fetching: build `PR_DATA` from `PR_META_FILE` first (same pattern already used in `.github/workflows/review_autofix.yml:4530-4532,4652-4654,5480-5482`), then from retained `_pr_meta`, and only keep the current line-254 GET as a last-resort fallback.
+  - **Safety rationale** — Same endpoint, same script, no intervening mutation, and preserving the current plain `_safe_gh_jq` as the final fallback keeps error-handling semantics intact.
+  - **Downstream signal** — Replace the extra `/pulls/${PR_NUMBER}` GET with `PR_META_FILE` → retained `_pr_meta` → existing API fallback, in that order.
+
+- **ID** — `REUSE-002`
+  - **Safety tag** — `SAFE_TO_MERGE`
+  - **File path and line ranges** — `scripts/implement_diagnose_post_codex_failure.sh:166-172`, `scripts/implement_diagnose_post_codex_failure.sh:261-273`
+  - **Current call count** — `2` issue GETs on the `ISSUE_META_FILE`-miss + `ISSUE_BODY_FILE`-miss path
+  - **Proposed call count** — `1` issue GET on that path
+  - **Endpoint(s)** — REST `GET /repos/{owner}/{repo}/issues/{issue_number}`
+  - **Evidence**
+    ```sh
+    if [ -z "${ISSUE_LABELS_JSON}" ]; then
+      ISSUE_LABELS_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]' || echo '[]')"
+    fi
+    ...
+    if [ ! -s "${ISSUE_BODY_FILE}" ]; then
+      gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}" --jq '.body // ""' > "${ISSUE_BODY_FILE}" || printf '' > "${ISSUE_BODY_FILE}"
+    fi
+    ```
+  - **Proposed fix** — When `ISSUE_META_FILE` is absent/invalid, fetch full issue JSON once into a local fallback variable/file, derive both labels and body from it, and retain the current body-only GET only if that unified fetch fails.
+  - **Safety rationale** — Same endpoint, same top-level script path, no intervening issue mutation, and keeping the body-only GET as cache-miss fallback preserves the current fail-open behavior.
+  - **Downstream signal** — Introduce one full-issue fallback fetch and reuse it for both label gating and body extraction before the existing body-only GET.
+
+### Dead Calls (DEAD-API-###)
+
+- **ID** — `DEAD-API-001`
+  - **Safety tag** — `SAFE_TO_MERGE`
+  - **File path and line ranges** — `.github/workflows/internal-review.yml:98-109`, `.github/workflows/internal-review.yml:121-134`
+  - **Current call count** — `2` calls on the observed skip path
+  - **Proposed call count** — `1` call on the skip path
+  - **Endpoint(s)** — REST `GET /repos/{owner}/{repo}/pulls?state=open&head={owner}:{ref}`; REST `GET /repos/{owner}/{repo}`
+  - **Evidence**
+    ```sh
+    existing_pr="$(gh api \
+      "repos/${REPOSITORY}/pulls?state=open&head=${REPOSITORY%/*}:${HEAD_REF}" \
+      --jq '[.[] | .number] | first // empty' 2>/dev/null || echo "")"
+    base_ref="$(gh api "repos/${REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo 'main')"
+    if [ -n "${existing_pr}" ]; then
+      echo "proceed=false"
+      echo "base_ref=${base_ref}"
+    fi
+    ```
+    ```yaml
+    review-claude-branch-push:
+      needs: resolve-claude-branch-pr
+      if: ${{ github.event_name == 'push' && needs.resolve-claude-branch-pr.outputs.proceed == 'true' }}
+    ```
+  - **Proposed fix** — Move the repo `default_branch` lookup below the `existing_pr` early-exit, or set a static/event-derived `base_ref` only on the skip branch so the repo GET runs only when `proceed=true`.
+  - **Safety rationale** — The repo GET’s result is only fed to `base_ref`, and the only downstream consumer job is already gated on `proceed == 'true'`, so the skip-path fetch is dead.
+  - **Downstream signal** — Move the `gh api "repos/${REPOSITORY}" --jq '.default_branch'` call after the `existing_pr` skip branch; keep skip-path output shape with a static/default `base_ref`.
+
+### Cross-References to Deep Audit Section
+
+- `API-001`: `NEEDS_VERIFICATION` — The helper-based GraphQL consolidation is correct in principle, but rollout must preserve `gh_pr_with_all_comments` pagination fail-open behavior and the current `PR_META_FILE` contract.
+- `API-002`: `NEEDS_VERIFICATION` — Reusing earlier orchestrator classification is the right direction, but it also changes merged-alert suppression for label-only managed issues, so that behavior needs an explicit verification decision.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 3 | `DEAD-API-001`, `REUSE-001`, `REUSE-002` |
+| NEEDS_VERIFICATION | 1 | `MERGE-001` |
+| RISKY_SKIP | 1 | `MERGE-002` |
+
+### Implement-Stage Handoff
+
+- `DEAD-API-001`
+- `REUSE-001`
+- `REUSE-002`
