@@ -169,14 +169,23 @@ def test_verify_integration_fingerprints_compare_mode_passes_on_pre_existing_dri
 			sandbox,
 		)
 		assert rc == 0
-		rc, out, err = _run_verifier(
-			mod,
-			["--compare-against-baseline", str(baseline_path), str(fp_path)],
-			sandbox,
-		)
+		prev_branch = os.environ.get("INTEGRATION_BRANCH_NAME")
+		os.environ["INTEGRATION_BRANCH_NAME"] = "orchestrator/project-1500"
+		try:
+			rc, out, err = _run_verifier(
+				mod,
+				["--compare-against-baseline", str(baseline_path), str(fp_path)],
+				sandbox,
+			)
+		finally:
+			if prev_branch is None:
+				os.environ.pop("INTEGRATION_BRANCH_NAME", None)
+			else:
+				os.environ["INTEGRATION_BRANCH_NAME"] = prev_branch
 		assert rc == 0
 		assert "::warning::PRE_EXISTING_FINGERPRINT_DRIFT_V1 unchanged" in out
 		assert "Integration fingerprint verification PASSED — no resolver-introduced regressions relative to baseline." in out
+		assert "(branch=orchestrator/project-1500)" in out
 		assert err == ""
 
 

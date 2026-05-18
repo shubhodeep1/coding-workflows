@@ -337,6 +337,10 @@ def _fp_key_json(key: tuple[str, str]) -> str:
 	return json.dumps([key[0], key[1]], separators=(",", ":"))
 
 
+def _branch_suffix(branch: str) -> str:
+	return f" (branch={branch})" if branch else ""
+
+
 def _fp_satisfied(
 	fp: Any,
 	file_cache: dict[str, str | None],
@@ -667,13 +671,15 @@ def compare_against_baseline(
 
 	if pre_existing_drift or newly_fixed:
 		print(
-			"Integration fingerprint verification PASSED — no resolver-introduced regressions relative to baseline.",
+			"Integration fingerprint verification PASSED — no resolver-introduced regressions relative to baseline."
+			f"{_branch_suffix(branch)}",
 			flush=True,
 		)
 		return 0
 
 	print(
-		"Integration fingerprint verification PASSED — all merged sub-issue intent preserved.",
+		"Integration fingerprint verification PASSED — all merged sub-issue intent preserved."
+		f"{_branch_suffix(branch)}",
 		flush=True,
 	)
 	return 0
