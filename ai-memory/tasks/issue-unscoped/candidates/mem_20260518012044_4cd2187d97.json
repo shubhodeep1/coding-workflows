@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_pipeline_integration.py:682-714 | severity=medium | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: The third verification block reads `round_two_verified` after `verify_three_result`, so it parses the round-2 `verified_rejections.json` artifact instead of a round-3-specific result.\n  WHY: `Path.read_text()` reads the file at call time, but both verification runs target the same round-2 path, so the test can validate the wrong artifact and miss a regression in the third invocation.\n- tests/test_review_pipeline_integration.py:707-707 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The `round_two_reversed_payload` / `round_two_verified` naming is misleading because the payload is read after `verify_three_result` overwrites the same file.\n  WHY: The test still works, but the variable and path names suggest the data came from verify_two, which can confuse maintainers about what is actually being asserted.\n- tests/test_review_pipeline_integration.py:710-713 | severity=low | confidence=3\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The promoted-block `REVERSAL_REASON` assertion depends on an exact verifier message string.\n  WHY: The assertion will false-fail if the verifier emits a different but equivalent reason text, making the test brittle to wording changes.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_review_pipeline_integration.py:707 | confidence=3\n  PROBLEM: Misleading variable name and potential confusion. The test reads from `round_two_verified` after running `verify_three_result`, but this file was overwritten by verify_three (both use `AUTOFIX_ITERATION=\"2\"`, writing to the same path).\n  WHY: The variable `round_two_reversed_payload` suggests it's from round two verification, but it actually contains the third verification's result.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_review_pipeline_integration.py:682-714 | confidence=5\n  PROBLEM: The third verification block reuses `round_two_verified` variable to read the verified_rejections.json file, but this path points to the round-2 artifact directory.\n  WHY: The assertion `round_two_reversed_payload = json.loads(round_two_verified.read_text(...))` reads stale data from the second verification instead of the third verification result.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_review_pipeline_integration.py:706-708 | confidence=5\n  PROBLEM: The third verification block reads `round_two_verified` (the round-2 artifact written by `verify_two_result`) instead of a round-3-specific artifact.\n  WHY: After `verify_three_result` runs, the test parses the prior round's JSON file, so the `does-not-support` verdict assertion is checking stale data unrelated to the third invocation.\n- tests/test_review_pipeline_integration.py:710-713 | confidence=3\n  PROBLEM: The promoted-block `REVERSAL_REASON` assertion expects an exact string that is not grounded in any script or prompt visible in the changed files or the plan doc.\n  WHY: If the verifier emits a different phrasing, the assertion will brittle-fail even when the underlying logic is correct.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "2af0e52d6f9395ec07233f0e5992d492e550831478b152cef8f0a563d933a5cb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2720,
+    "run_id": "26007857846",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26007857846",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260518012044_4cd2187d97",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2720,
+    "run_id": "26007857846"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-18T01:20:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
