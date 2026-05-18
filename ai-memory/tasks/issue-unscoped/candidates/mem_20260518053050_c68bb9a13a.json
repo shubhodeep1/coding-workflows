@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- PR description / PR title:N/A - metadata mismatch | severity=high | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The PR description/title claims to swap `z-ai/glm-5` for `mistralai/codestral-2508` in the active reviewer panel, but the actual implementation only updates the catalog description and does not enable codestral.\n  WHY: The PR's stated intent is not reflected in the code, so reviewers still run on GLM-5.\n- agents.md:83-85 and 107-110 | severity=medium | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The `agents.md` documentation lists the third-party reviewer enumerations in a way that is technically accurate for the catalog, but does not reflect the PR's stated intent of an active panel swap.\n  WHY: The documentation can confuse which models are actually in the active reviewer panel versus merely catalogued.\n- .github/workflows/review_autofix.yml:96-102 | severity=high | confidence=5\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The `REVIEWER_MODELS` block still lists `z-ai/glm-5` and does not include `mistralai/codestral-2508`, so the active reviewer panel was not swapped as the PR description/title claimed.\n  WHY: The cost-saving objective of the PR is unfulfilled because the workflow still dispatches reviews to GLM-5.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- PR description / PR title:N/A - metadata mismatch | severity=high | confidence=5\n  PROBLEM: The PR description and title claim to swap z-ai/glm-5 for mistralai/codestral-2508 in the active reviewer panel, but the actual implementation only adds codestral to the model catalog without enabling it in the workflow.\n  WHY: The PR promises cost savings from replacing GLM-5 with codestral in the active panel, but reviewers are still dispatched to GLM-5 since .github/workflows/review_autofix.yml was not modified.\n- agents.md:83-85 and 107-110 | severity=medium | confidence=3\n  PROBLEM: The agents.md documentation lists both z-ai/glm-5 and mistralai/codestral-2508 (the latter was added via cross-reference in the PR) in the third-party reviewer enumerations, but the PR description claims codestral replaces GLM-5.\n  WHY: Documentation inconsistency creates confusion about which models are actually in the active reviewer panel versus merely catalogued.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/review_autofix.yml:96-102 | severity=high | confidence=5\n  PROBLEM: The PR description and title state the intent is to swap `z-ai/glm-5` \u2192 `mistralai/codestral-2508` in the reviewer panel, but the active `REVIEWER_MODELS` block still lists `z-ai/glm-5` and does not include `mistralai/codestral-2508`.\n  WHY: The cost-saving objective of this PR is unfulfilled because `z-ai/glm-5` remains in the panel and codestral is not used.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "ad775fd5587a60f638ed667884b5bc4dbe0abaf5d86727046c6dab259725f764",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2731,
+    "run_id": "26014936008",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26014936008",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260518053050_c68bb9a13a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2731,
+    "run_id": "26014936008"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-18T05:30:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
