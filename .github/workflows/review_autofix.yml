@@ -97,9 +97,9 @@ env:
     minimax/minimax-m2.5
     moonshotai/kimi-k2.5
     deepseek/deepseek-v4-pro
-    z-ai/glm-5
+    mistralai/mistral-small-2603
     qwen/qwen3.6-plus
-    x-ai/grok-4.1-fast
+    x-ai/grok-4.20
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
   # Defaults to xhigh to match the repo-wide gpt-5.4 reasoning-level
   # policy. Override per-repo via vars.THINKING_LEVEL_REVIEWER; the smoke
