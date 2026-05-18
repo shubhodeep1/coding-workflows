@@ -181,7 +181,8 @@ def _path_exists(path: str, exists_cache: dict[str, bool], ref: str | None = Non
 		try:
 			result = subprocess.run(
 				["git", "cat-file", "-e", f"{ref}:{path}"],
-				capture_output=True,
+				stdout=subprocess.DEVNULL,
+				stderr=subprocess.DEVNULL,
 				check=False,
 			)
 			exists = result.returncode == 0
