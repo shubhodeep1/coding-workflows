@@ -473,6 +473,92 @@ Spawn rules:
 
 ---
 
+## §18. Automation Bias (Reduce Human Involvement)
+
+The overarching goal of every task, plan, and change is to **minimize
+human-in-the-loop**. Operations should run from code on a schedule, not
+from an operator typing into a shell. Plans that require an operator to
+run a script, run a mongo command, or babysit a process are incomplete
+and must be revised before they reach the orchestrator.
+
+### A) No Standalone Manual Scripts (Hard Rule)
+
+When making changes — or drafting plans for the orchestrator to
+implement — do NOT introduce standalone scripts that require manual
+shell invocation to run. Fold the work into an existing script or
+workflow that already runs automatically.
+
+If a manual-invocation script appears to be the only viable option,
+**STOP and ask** in the Q/A format (§2) before adding one, and record
+the justification in the plan. Default answer is "no — wire it in
+instead."
+
+### B) Wire Into the Scheduler
+
+Any new operation that is not folded into an existing script MUST be
+wired into the existing scheduler / PR-push automation so it runs on
+PR push (or the relevant trigger) without operator action. Plans MUST
+cite the specific workflow / cron file the change will touch so the
+orchestrator knows exactly where to wire it. Code changes MUST land the
+wiring in the same PR — never plan or accept a "wiring lands later"
+handoff.
+
+### C) Long-Running Supervisor
+
+If the work needs to run continuously, react to events between PRs, or
+supervise other automation, a long-running supervisor is required. If
+no suitable supervisor already exists, **one must be created as part of
+the same change** — do not defer it.
+
+Plans MUST specify:
+- Whether a new supervisor is being introduced or an existing one
+  extended.
+- Lifecycle: entry point, restart policy, shutdown signal handling,
+  crash-recovery behavior.
+- How the supervisor is wired into the scheduler / startup automation
+  so it comes up without operator action.
+
+A supervisor that needs an operator to start it is not a supervisor —
+it is a manual script (§18.A) and is subject to the same hard rule.
+
+### D) Database Operations Run From Code (Hard Rule)
+
+Database operations — one-time backfills, schema migrations, index
+rebuilds, long-running maintenance, recurring cleanup — MUST run from
+code with appropriate gates so they execute only as much as needed.
+Do NOT plan or accept "operator runs this mongo shell command" steps.
+
+Gates must use the patterns already established in §10:
+- Idempotency keys backed by unique indexes (§10.E) and atomic upserts
+  so repeated runs converge instead of duplicating.
+- Distributed locks via `_locks` with lease expiry (§10.C) for any
+  operation that must run at most once across processes.
+- Explicit "already applied" sentinels (run flags, marker documents,
+  versioned migration records) so the gate is observable and
+  auditable.
+
+If the right gate is not obvious for a given DB operation, route to
+§2 (STOP and ASK) — do not ship an ungated DB operation.
+
+### E) Plan Output Requirements
+
+Every plan for the orchestrator MUST surface, in a dedicated section
+near the top of the plan:
+
+- Whether the change introduces a new script, extends an existing one,
+  or only modifies existing code.
+- The exact scheduler / PR-push entry point the change wires into
+  (file path + trigger).
+- Whether a new long-running supervisor is required (§18.C), and if so
+  its lifecycle and wiring.
+- For DB work: which gate pattern (§18.D) applies and where the gate
+  lives in code.
+
+Plans that omit any of these MUST be revised before the orchestrator
+implements them.
+
+---
+
 ## FINAL REMINDER
 
 If uncertainty exists: **ASK (multiple-choice). DO NOT EXECUTE.**

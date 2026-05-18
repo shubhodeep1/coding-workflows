@@ -371,3 +371,87 @@ new `@stable` release is tagged.
 - Format: JSON array of `"owner/repo"` strings
 - The `GH_PAT` used in release workflows must have `repo` scope on every
   listed consumer repo for the dispatch to succeed.
+
+---
+
+## §20. Automation Bias (Reduce Human Involvement)
+
+The overarching goal of every plan and implementation is to minimize
+human-in-the-loop. Operations must run from code on a schedule, not from
+an operator typing into a shell. Plans that depend on an operator
+running a script, running a mongo command, or babysitting a process are
+incomplete and must be revised before implementation begins.
+
+### A) No Standalone Manual Scripts
+
+When generating plans or implementing changes, do NOT introduce
+standalone scripts that require manual shell invocation to run. Fold
+the work into an existing script or workflow that already runs
+automatically.
+
+If a manual-invocation script appears to be the only viable option,
+surface it explicitly in the plan output (and, for implementations, in
+the PR description) with the justification — do not silently ship it.
+Default to wiring it into an existing script or the scheduler instead.
+
+### B) Wire Into the Scheduler
+
+Any new operation that is not folded into an existing script MUST be
+wired into the existing scheduler / PR-push automation so it runs on
+PR push (or the relevant trigger) without operator action. Plans MUST
+cite the specific workflow / cron file the change will touch so the
+implement agent knows exactly where to wire it. Implement agents MUST
+land the wiring in the same PR — never plan or accept a "wiring lands
+later" handoff.
+
+### C) Long-Running Supervisor
+
+If the work needs to run continuously, react to events between PRs, or
+supervise other automation, a long-running supervisor is required. If
+no suitable supervisor already exists, one must be created as part of
+the same change — do not defer it.
+
+Plans MUST specify:
+- Whether a new supervisor is being introduced or an existing one
+  extended.
+- Lifecycle: entry point, restart policy, shutdown signal handling,
+  crash-recovery behavior.
+- How the supervisor is wired into the scheduler / startup automation
+  so it comes up without operator action.
+
+Implement agents MUST deliver the supervisor and its wiring in the same
+PR. A supervisor that needs an operator to start it is a manual script
+(§20.A) and is subject to the same constraint.
+
+### D) Database Operations Run From Code
+
+Database operations — one-time backfills, schema migrations, index
+rebuilds, long-running maintenance, recurring cleanup — MUST run from
+code with appropriate gates so they execute only as much as needed.
+Do NOT plan or implement "operator runs this mongo shell command"
+steps.
+
+Use the gate patterns established in §12 (MongoDB Rules):
+- Idempotency keys + atomic upserts so repeated runs converge.
+- Distributed locks via `_locks` with lease expiry for at-most-once
+  operations across processes.
+- Explicit "already applied" sentinels (run flags, marker documents,
+  versioned migration records) so the gate is observable and
+  auditable.
+
+### E) Plan Output Requirements
+
+Every plan emitted for orchestrator implementation MUST surface, in a
+dedicated section near the top of the plan:
+
+- Whether the change introduces a new script, extends an existing one,
+  or only modifies existing code.
+- The exact scheduler / PR-push entry point the change wires into
+  (file path + trigger).
+- Whether a new long-running supervisor is required (§20.C), and if so
+  its lifecycle and wiring.
+- For DB work: which gate pattern (§20.D) applies and where the gate
+  lives in code.
+
+Plans missing any of these are incomplete and must be revised before
+implementation begins.
