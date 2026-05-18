@@ -83,7 +83,7 @@ def test_verify_integration_fingerprints_baseline_capture_writes_schema_v1_json(
 		}
 	}
 	with _sandbox(files, fingerprints) as (sandbox, fp_path):
-		baseline_path = sandbox / "baseline.json"
+		baseline_path = sandbox / "nested" / "path" / "baseline.json"
 		rc, out, err = _run_verifier(
 			mod,
 			["--baseline-fingerprints-state", str(baseline_path), str(fp_path)],
@@ -92,6 +92,7 @@ def test_verify_integration_fingerprints_baseline_capture_writes_schema_v1_json(
 		assert rc == 0
 		assert out == ""
 		assert err == ""
+		assert baseline_path.stat().st_mode & 0o777 == 0o644
 		state = json.loads(baseline_path.read_text(encoding="utf-8"))
 		assert state["schema_version"] == 1
 		assert "captured_at" in state
@@ -169,23 +170,21 @@ def test_verify_integration_fingerprints_compare_mode_passes_on_pre_existing_dri
 			sandbox,
 		)
 		assert rc == 0
-		prev_branch = os.environ.get("INTEGRATION_BRANCH_NAME")
-		os.environ["INTEGRATION_BRANCH_NAME"] = "orchestrator/project-1500"
-		try:
-			rc, out, err = _run_verifier(
-				mod,
-				["--compare-against-baseline", str(baseline_path), str(fp_path)],
-				sandbox,
-			)
-		finally:
-			if prev_branch is None:
-				os.environ.pop("INTEGRATION_BRANCH_NAME", None)
-			else:
-				os.environ["INTEGRATION_BRANCH_NAME"] = prev_branch
+		rc, out, err = _run_verifier(
+			mod,
+			["--compare-against-baseline", str(baseline_path), str(fp_path)],
+			sandbox,
+		)
 		assert rc == 0
-		assert "::warning::PRE_EXISTING_FINGERPRINT_DRIFT_V1 unchanged" in out
-		assert "Integration fingerprint verification PASSED — no resolver-introduced regressions relative to baseline." in out
-		assert "(branch=orchestrator/project-1500)" in out
+		assert (
+			"::warning::PRE_EXISTING_FINGERPRINT_DRIFT_V1 unchanged "
+			'fp_key=["scripts/example.py","EXPECTED_LINE"] issue=#1500 '
+			'path="scripts/example.py" pattern="EXPECTED_LINE" kind=must_contain'
+		) in out
+		assert (
+			"Integration fingerprint verification PASSED with pre-existing drift — resolver did not introduce any new regressions "
+			"(pre_existing_drift_count=1; see PRE_EXISTING_FINGERPRINT_DRIFT_V1 markers above for triage)."
+		) in out
 		assert err == ""
 
 
@@ -254,7 +253,11 @@ def test_verify_integration_fingerprints_compare_mode_emits_fixed_by_resolver_no
 			sandbox,
 		)
 		assert rc == 0
-		assert "::notice::PRE_EXISTING_FINGERPRINT_DRIFT_V1 fixed_by_resolver" in out
+		assert (
+			"::notice::PRE_EXISTING_FINGERPRINT_DRIFT_V1 fixed_by_resolver "
+			'fp_key=["scripts/example.py","EXPECTED_LINE"] issue=#1500 path="scripts/example.py"'
+		) in out
+		assert "Integration fingerprint verification PASSED — all merged sub-issue intent preserved." in out
 		assert err == ""
 
 
@@ -365,7 +368,10 @@ def test_verify_integration_fingerprints_rejects_mutually_exclusive_baseline_fla
 		)
 		assert rc == 2
 		assert out == ""
-		assert "mutually exclusive" in err
+		assert (
+			err
+			== "::error::verify_integration_fingerprints: --baseline-fingerprints-state and --compare-against-baseline are mutually exclusive\n"
+		)
 
 
 def test_verify_integration_fingerprints_pr1569_fixture_passes_in_compare_mode_but_fails_in_legacy_mode():
@@ -394,7 +400,10 @@ def test_verify_integration_fingerprints_pr1569_fixture_passes_in_compare_mode_b
 		)
 		assert compare_rc == 0
 		assert "::warning::PRE_EXISTING_FINGERPRINT_DRIFT_V1 unchanged" in compare_out
-		assert "Integration fingerprint verification PASSED — no resolver-introduced regressions relative to baseline." in compare_out
+		assert (
+			"Integration fingerprint verification PASSED with pre-existing drift — resolver did not introduce any new regressions "
+			"(pre_existing_drift_count=3; see PRE_EXISTING_FINGERPRINT_DRIFT_V1 markers above for triage)."
+		) in compare_out
 		assert compare_err == ""
 
 
@@ -458,6 +467,14 @@ def test_verify_integration_fingerprints_rejects_out_of_tree_fingerprint_paths()
 			assert "could not be checked — fingerprint path resolves outside repository root." in out
 			assert "fingerprint verifier could not read" in err
 			assert "fingerprint path resolves outside repository root" in err
+			list_rc, list_out, list_err = _run_verifier(
+				mod,
+				["--list-violated-files", str(fp_path)],
+				sandbox,
+			)
+			assert list_rc == 0
+			assert list_out == ""
+			assert "fingerprint verifier could not read" in list_err
 
 
 if __name__ == "__main__":

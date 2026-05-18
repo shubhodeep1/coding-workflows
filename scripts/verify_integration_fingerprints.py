@@ -548,9 +548,11 @@ def capture_baseline_state(fingerprints: dict[str, Any], branch: str, out_path: 
 		)
 
 	try:
+		os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
 		with open(out_path, "w", encoding="utf-8") as fh:
 			json.dump(state, fh, indent=2, sort_keys=True)
 			fh.write("\n")
+		os.chmod(out_path, 0o644)
 	except Exception as exc:  # noqa: BLE001 — capture-mode output path is warn-only
 		print(f"::warning::baseline capture failed: {exc}", flush=True)
 	return 0
@@ -604,10 +606,14 @@ def list_violated_files(fingerprints: dict[str, Any]) -> list[str]:
 		regex_src = fp.get("regex", "")
 		if not path or not regex_src:
 			continue
-		satisfied, _content_unavailable, compile_error = _fp_satisfied(fp, file_cache, kind)
+		satisfied, content_unavailable, compile_error = _fp_satisfied(fp, file_cache, kind)
 		if compile_error is not None or satisfied is None:
 			continue
 		if not satisfied:
+			if content_unavailable and _resolve_repo_path(path)[1] is not None:
+				# Keep --list-violated-files stdout restricted to in-repo
+				# working-set paths only.
+				continue
 			violated.add(path)
 
 	return sorted(violated)
@@ -663,16 +669,18 @@ def compare_against_baseline(
 		if (not baseline_satisfied) and satisfied:
 			newly_fixed += 1
 			print(
-				f"::notice::PRE_EXISTING_FINGERPRINT_DRIFT_V1 fixed_by_resolver issue={issue_num} "
-				f"pr={pr_num} kind={kind} fp_key={_fp_key_json(fp_key)}",
+				f"::notice::PRE_EXISTING_FINGERPRINT_DRIFT_V1 fixed_by_resolver "
+				f"fp_key={_fp_key_json(fp_key)} issue=#{issue_num} "
+				f"path={json.dumps(path)}",
 				flush=True,
 			)
 			continue
 		if (not baseline_satisfied) and (not satisfied):
 			pre_existing_drift += 1
 			print(
-				f"::warning::PRE_EXISTING_FINGERPRINT_DRIFT_V1 unchanged issue={issue_num} "
-				f"pr={pr_num} kind={kind} fp_key={_fp_key_json(fp_key)}",
+				f"::warning::PRE_EXISTING_FINGERPRINT_DRIFT_V1 unchanged "
+				f"fp_key={_fp_key_json(fp_key)} issue=#{issue_num} "
+				f"path={json.dumps(path)} pattern={json.dumps(regex_src)} kind={kind}",
 				flush=True,
 			)
 
@@ -695,17 +703,16 @@ def compare_against_baseline(
 	if violations:
 		return _emit_failure_block(violations)
 
-	if pre_existing_drift or newly_fixed:
+	if pre_existing_drift:
 		print(
-			"Integration fingerprint verification PASSED — no resolver-introduced regressions relative to baseline."
-			f"{_branch_suffix(branch)}",
+			"Integration fingerprint verification PASSED with pre-existing drift — resolver did not introduce any new regressions "
+			f"(pre_existing_drift_count={pre_existing_drift}; see PRE_EXISTING_FINGERPRINT_DRIFT_V1 markers above for triage).",
 			flush=True,
 		)
 		return 0
 
 	print(
-		"Integration fingerprint verification PASSED — all merged sub-issue intent preserved."
-		f"{_branch_suffix(branch)}",
+		"Integration fingerprint verification PASSED — all merged sub-issue intent preserved.",
 		flush=True,
 	)
 	return 0
@@ -823,7 +830,7 @@ def main(argv: list[str] | None = None) -> int:
 
 	if baseline_out_path and compare_baseline_path:
 		print(
-			"::error::verify_integration_fingerprints: --baseline-fingerprints-state and --compare-against-baseline are mutually exclusive.",
+			"::error::verify_integration_fingerprints: --baseline-fingerprints-state and --compare-against-baseline are mutually exclusive",
 			flush=True,
 			file=sys.stderr,
 		)
