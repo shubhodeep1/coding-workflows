@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:12141-12143 | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: Both mktemp calls run before the EXIT trap is registered, so a failure of the second mktemp can orphan the first temp file and leave the gate without the intended cleanup path.\n  WHY: The first file has no cleanup handler yet, and reviewers noted the setup can fail before later verifier/log handling has a valid temp path.\n- scripts/orchestrate_poll_process.sh:12141-12161 | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: The gate only special-cases verifier exit codes 1 and 2, so any other non-zero exit, including signal deaths like 137 or 143, falls through as a clean pass.\n  WHY: That lets OOM-killed or externally terminated verifier runs advance dispatch on potentially broken integration state.\n- scripts/orchestrate_poll_process.sh:12164 | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_6-plus]\n  PROBLEM: trap - EXIT clears any existing EXIT trap globally, not just the gate-scoped one.\n  WHY: A prior or future cleanup handler elsewhere in the script could be silently removed when this block runs.\n- scripts/verify_integration_fingerprints.py:680-692 | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5]\n  PROBLEM: The argument parser breaks on the first unrecognized token and treats it as the positional fingerprint path instead of rejecting it.\n  WHY: A typo or future flag addition then fails later as a file-open/plumbing error rather than with a clear unknown-flag error.\n- scripts/orchestrate_poll_process.sh:Wave-dispatch gate blocked path, lines around the jq increment after WAVE_GATE_BLOCKED=true | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: When the wave gate blocks, the code increments judge_cycle and judge_stall_cycles but does not increment unresolved_ticks.\n  WHY: Repeated gate violations can be misrouted into stall-recovery instead of escalating to the judge path.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:12146-12161 | confidence=3\n  PROBLEM: The gate only branches on verifier exit codes 1 and 2, so any other non-zero exit, including signal deaths, falls through as a clean pass.\n  WHY: If the verifier is OOM-killed or terminated by a signal, dispatch can continue on potentially regressed integration state.\n- scripts/orchestrate_poll_process.sh:12141-12143 | confidence=2\n  PROBLEM: Both mktemp invocations execute before the EXIT trap is registered, so a failure of the second mktemp can leave the first temp file without cleanup.\n  WHY: The first file has no trap yet, and the later verifier redirect/log handling becomes unreliable if the second temp path is empty or missing.\n- scripts/orchestrate_poll_process.sh:12164 | confidence=2\n  PROBLEM: trap - EXIT resets all EXIT traps globally, not just the one registered by this gate.\n  WHY: Any earlier EXIT cleanup added elsewhere in the script would be silently removed when this block clears the trap.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/orchestrate_poll_process.sh:12141-12143 | confidence=4\n  PROBLEM: Both mktemp calls execute before the EXIT trap is registered.\n  WHY: If the second mktemp fails, the first temp file is leaked because no cleanup mechanism exists yet.\n- scripts/orchestrate_poll_process.sh:12145-12160 | confidence=3\n  PROBLEM: The gate only explicitly handles exit codes 1 and 2, so any other non-zero verifier exit falls through as a clean pass.\n  WHY: A verifier killed by OOM or SIGKILL/SIGTERM would incorrectly allow dispatch on potentially regressed integration state.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/verify_integration_fingerprints.py:680-692 | confidence=3\n  PROBLEM: The argument parser breaks on the first unrecognized argument, treating it as the positional fingerprint path.\n  WHY: A caller typo or future flag change would surface as a plumbing failure on the wrong argument instead of an explicit unknown-flag error.\n- scripts/orchestrate_poll_process.sh:Wave-dispatch gate blocked path, lines around the jq increment after WAVE_GATE_BLOCKED=true | confidence=3\n  PROBLEM: When the wave gate blocks, the code increments judge_cycle and judge_stall_cycles but does not increment unresolved_ticks.\n  WHY: Repeated gate violations can be misrouted into stall-recovery instead of escalating to the judge path.\n- scripts/orchestrate_poll_process.sh:12141-12146 | confidence=4\n  PROBLEM: The code only checks for exit codes 1 and 2, so signal deaths like SIGKILL or SIGTERM fall through and are treated as a clean pass.\n  WHY: If the verifier is killed by the OOM killer or a timeout signal, the gate can dispatch the next wave on broken integration state.\n- scripts/orchestrate_poll_process.sh:12141-12143 | confidence=4\n  PROBLEM: Both mktemp calls execute before the EXIT trap is registered.\n  WHY: If the second mktemp fails, the first temp file is orphaned with no cleanup mechanism.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/orchestrate_poll_process.sh:12141-12143 | confidence=3\n  PROBLEM: Both mktemp calls execute before the EXIT trap is registered.\n  WHY: If the second mktemp fails, the first temp file is orphaned with no registered cleanup path.\n- scripts/orchestrate_poll_process.sh:12164 | confidence=2\n  PROBLEM: trap - EXIT clears ALL EXIT traps globally, not just the gate-scoped one.\n  WHY: Any EXIT trap installed earlier in the script would be silently removed.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/orchestrate_poll_process.sh:12147-12160 | confidence=3\n  PROBLEM: Verifier exit codes other than 0, 1, or 2 fall through both checks and are silently treated as a clean pass.\n  WHY: A signal-killed or otherwise crashed verifier can let the wave gate dispatch on potentially regressed integration state.\n- scripts/orchestrate_poll_process.sh:12141-12143 | confidence=3\n  PROBLEM: Both mktemp calls execute before the EXIT trap is registered.\n  WHY: If the second mktemp fails, the first temp file remains in /tmp with no cleanup path.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "ceb39df6d5c47cc3d3dfb3e9bf82016c1b729b3f44bd495110c9a4f4d2f41106",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2739,
+    "run_id": "26031079673",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26031079673",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260518120402_9fc5c9ee76",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2739,
+    "run_id": "26031079673"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-18T12:04:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
