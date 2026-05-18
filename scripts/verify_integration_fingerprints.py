@@ -120,11 +120,31 @@ def _head_sha() -> str:
 	return proc.stdout.strip()
 
 
+def _resolve_repo_path(path: str) -> tuple[str | None, str | None]:
+	repo_root = os.path.realpath(os.getcwd())
+	resolved_path = os.path.realpath(path if os.path.isabs(path) else os.path.join(repo_root, path))
+	try:
+		if os.path.commonpath([repo_root, resolved_path]) != repo_root:
+			return None, "fingerprint path resolves outside repository root"
+	except ValueError:
+		return None, "fingerprint path resolves outside repository root"
+	return resolved_path, None
+
+
 def _read_file(path: str, cache: dict[str, str | None]) -> str | None:
 	if path in cache:
 		return cache[path]
+	resolved_path, resolve_err = _resolve_repo_path(path)
+	if resolve_err is not None:
+		print(
+			f"::warning::fingerprint verifier could not read {path}: {resolve_err}",
+			flush=True,
+			file=sys.stderr,
+		)
+		cache[path] = None
+		return None
 	try:
-		with open(path, "r", encoding="utf-8", errors="replace") as fh:
+		with open(resolved_path, "r", encoding="utf-8", errors="replace") as fh:
 			content: str | None = fh.read()
 	except FileNotFoundError:
 		content = None
@@ -424,6 +444,12 @@ def _violation_message(
 	content_unavailable: bool,
 ) -> str:
 	if kind == "must_contain" and content_unavailable:
+		_, path_err = _resolve_repo_path(path)
+		if path_err is not None:
+			return (
+				f"issue #{issue_num} (PR #{pr_num}): must_contain pattern in '{path}' "
+				f"could not be checked — {path_err}."
+			)
 		return (
 			f"issue #{issue_num} (PR #{pr_num}): must_contain pattern in '{path}' "
 			f"could not be checked — file does not exist in post-resolve tree."
@@ -611,15 +637,15 @@ def compare_against_baseline(
 		if not path or not regex_src:
 			continue
 		satisfied, content_unavailable, compile_error = _fp_satisfied(fp, file_cache, kind)
-		if kind == "must_contain":
-			mc_total_expected += 1
 		if compile_error is not None:
 			_regex_compile_warning(issue_num, compile_error)
 			continue
 		if satisfied is None:
 			continue
-		if kind == "must_contain" and satisfied:
-			mc_total_satisfied += 1
+		if kind == "must_contain":
+			mc_total_expected += 1
+			if satisfied:
+				mc_total_satisfied += 1
 
 		fp_key = (path, regex_src)
 		baseline_satisfied = baseline_lookup.get((issue_key, kind, fp_key))

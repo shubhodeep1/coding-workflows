@@ -398,6 +398,68 @@ def test_verify_integration_fingerprints_pr1569_fixture_passes_in_compare_mode_b
 		assert compare_err == ""
 
 
+def test_verify_integration_fingerprints_compare_mode_excludes_invalid_regexes_from_ratio():
+	mod = _verifier_module()
+	files = {
+		"scripts/example.py": "EXPECTED_LINE\n",
+	}
+	fingerprints = {
+		"1500": {
+			"issue": 1500,
+			"pr": 1501,
+			"must_contain": [
+				{"file": "scripts/example.py", "regex": r"EXPECTED_LINE"},
+				{"file": "scripts/example.py", "regex": r"["},
+			],
+			"must_not_contain": [],
+		}
+	}
+	with _sandbox(files, fingerprints) as (sandbox, fp_path):
+		baseline_path = sandbox / "baseline.json"
+		rc, capture_out, capture_err = _run_verifier(
+			mod,
+			["--baseline-fingerprints-state", str(baseline_path), str(fp_path)],
+			sandbox,
+		)
+		assert rc == 0
+		assert "::warning::fingerprint regex compile failed" in capture_out
+		assert capture_err == ""
+		rc, out, err = _run_verifier(
+			mod,
+			["--compare-against-baseline", str(baseline_path), str(fp_path)],
+			sandbox,
+		)
+		assert rc == 0
+		assert "::warning::fingerprint regex compile failed" in out
+		assert "must_contain satisfied 1/1 (100%)" in out
+		assert "must_contain satisfied 1/2" not in out
+		assert err == ""
+
+
+def test_verify_integration_fingerprints_rejects_out_of_tree_fingerprint_paths():
+	mod = _verifier_module()
+	with tempfile.TemporaryDirectory(prefix="verifier-out-of-tree-") as outside_td:
+		outside_path = Path(outside_td) / "secret.txt"
+		outside_path.write_text("EXPECTED_LINE\n", encoding="utf-8")
+		fingerprints = {
+			"1500": {
+				"issue": 1500,
+				"pr": 1501,
+				"must_contain": [
+					{"file": str(outside_path), "regex": r"EXPECTED_LINE"},
+				],
+				"must_not_contain": [],
+			}
+		}
+		with _sandbox({}, fingerprints) as (sandbox, fp_path):
+			rc, out, err = _run_verifier(mod, [str(fp_path)], sandbox)
+			assert rc == 1
+			assert "Integration fingerprint verification FAILED" in out
+			assert "could not be checked — fingerprint path resolves outside repository root." in out
+			assert "fingerprint verifier could not read" in err
+			assert "fingerprint path resolves outside repository root" in err
+
+
 if __name__ == "__main__":
 	for _name, _value in sorted(globals().items()):
 		if _name.startswith("test_") and callable(_value):
