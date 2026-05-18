@@ -4,20 +4,36 @@ merged sub-issue intent.
 
 Reads a JSON fingerprints file (the same shape stored in the
 orchestrator state field `merged_issue_fingerprints`) and walks each
-sub-issue's `must_contain` / `must_not_contain` regex lists against the
-post-resolve working tree (i.e. the cwd this script is invoked from).
+sub-issue's `must_contain` / `must_not_contain` regex lists plus the
+``must_not_exist`` path list against either the post-resolve working
+tree (default — i.e. the cwd this script is invoked from) or a git
+ref's tree (``--ref <git_ref>`` mode — used by the wave-dispatch gate
+in ``scripts/orchestrate_poll_process.sh`` to verify the integration
+branch HEAD without checking it out).
+
+Three constraint kinds per merged sub-issue:
+
+  * ``must_contain``     — list of ``{file, regex}`` that MUST match.
+  * ``must_not_contain`` — list of ``{file, regex}`` that MUST NOT match.
+  * ``must_not_exist``   — list of ``{file}`` whose path MUST NOT
+                           exist.  Captured for every file a merged
+                           sub-PR removed outright (PR diff status
+                           ``removed``), path-agnostic — the deletion
+                           intent is enforced regardless of where in
+                           the consumer repo's tree the file lives.
 
 Two modes:
 
   1. Default (verify): exit 0 if all fingerprints are satisfied, 1 on
      violation, 2 on plumbing failure. Used by the conflict-resolver
-     step post-codex, pre-commit.
+     step post-codex, pre-commit, and by the wave-dispatch gate.
 
   2. --list-violated-files <fingerprints.json>: print one unique file
      path per line of every file that currently fails at least one
      fingerprint check (must_contain not matching, or must_not_contain
-     matching, or must_contain referenced file missing). Always exits 0
-     even when violations exist; plumbing failures still exit 2. Used by
+     matching, or must_contain referenced file missing, or
+     must_not_exist path present). Always exits 0 even when violations
+     exist; plumbing failures still exit 2. Used by
      `scripts/review_conflict_prepare.sh` to expand the resolver's
      working set so auto-merged files with silent sub-issue regressions
      are surfaced to Codex in addition to files git marked as unmerged.
@@ -44,6 +60,9 @@ Exit codes:
 Inputs:
   Positional argument — path to the fingerprints JSON file.
   Or env INTEGRATION_FINGERPRINTS_FILE — same path. Positional wins.
+  Optional flag ``--ref <git_ref>`` — verify against the tree at the
+  given git ref via ``git show`` / ``git cat-file -e`` instead of the
+  working tree.  Or env INTEGRATION_VERIFY_REF — same.  Flag wins.
   Optional env INTEGRATION_BRANCH_NAME — included in the summary line
   for operator log readability.
 
@@ -61,6 +80,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
 from typing import Any
 
@@ -80,30 +100,86 @@ def _load_fingerprints(path: str) -> tuple[dict[str, Any] | None, str | None]:
 	return data, None
 
 
-def _read_file(path: str, cache: dict[str, str | None]) -> str | None:
-	if path in cache:
-		return cache[path]
-	try:
-		with open(path, "r", encoding="utf-8", errors="replace") as fh:
-			content: str | None = fh.read()
-	except FileNotFoundError:
-		content = None
-	except Exception as exc:  # noqa: BLE001 — verifier must not crash on bad file
-		# Route to stderr: in --list-violated-files mode stdout carries
-		# file paths the caller consumes as data (see
-		# scripts/review_conflict_prepare.sh); a `::warning::` line on
-		# stdout would be captured as a phantom path and crash the
-		# downstream check_resolver_diff.sh guard.  GitHub Actions
-		# renders annotations from stderr too, so the verify-mode
-		# annotation contract is unaffected.
-		print(
-			f"::warning::fingerprint verifier could not read {path}: {exc}",
-			flush=True,
-			file=sys.stderr,
-		)
-		content = None
-	cache[path] = content
+def _read_file(path: str, cache: dict[str, str | None], ref: str | None = None) -> str | None:
+	# Cache key prefix keeps ref-mode and working-tree-mode caches
+	# disjoint within a single verifier invocation.
+	cache_key = f"@ref:{ref}:{path}" if ref else path
+	if cache_key in cache:
+		return cache[cache_key]
+	if ref is None:
+		try:
+			with open(path, "r", encoding="utf-8", errors="replace") as fh:
+				content: str | None = fh.read()
+		except FileNotFoundError:
+			content = None
+		except Exception as exc:  # noqa: BLE001 — verifier must not crash on bad file
+			# Route to stderr: in --list-violated-files mode stdout carries
+			# file paths the caller consumes as data (see
+			# scripts/review_conflict_prepare.sh); a `::warning::` line on
+			# stdout would be captured as a phantom path and crash the
+			# downstream check_resolver_diff.sh guard.  GitHub Actions
+			# renders annotations from stderr too, so the verify-mode
+			# annotation contract is unaffected.
+			print(
+				f"::warning::fingerprint verifier could not read {path}: {exc}",
+				flush=True,
+				file=sys.stderr,
+			)
+			content = None
+	else:
+		# Ref mode: read the path's blob at <ref> via `git show`. A
+		# non-zero git exit (missing path at ref, ref unknown, not a
+		# git repo) maps to ``None`` — same shape the working-tree
+		# branch returns for FileNotFoundError, so callers don't have
+		# to branch on mode.
+		try:
+			result = subprocess.run(
+				["git", "show", f"{ref}:{path}"],
+				capture_output=True,
+				check=False,
+			)
+			if result.returncode != 0:
+				content = None
+			else:
+				content = result.stdout.decode("utf-8", errors="replace")
+		except Exception as exc:  # noqa: BLE001 — verifier must not crash on git failure
+			print(
+				f"::warning::fingerprint verifier could not read {ref}:{path}: {exc}",
+				flush=True,
+				file=sys.stderr,
+			)
+			content = None
+	cache[cache_key] = content
 	return content
+
+
+def _path_exists(path: str, exists_cache: dict[str, bool], ref: str | None = None) -> bool:
+	"""Return True iff ``path`` exists in the verification target.
+
+	Working-tree mode: ``os.path.exists``.
+	Ref mode: ``git cat-file -e <ref>:<path>`` — exit 0 ⇒ path exists at
+	the ref's tree.  Any git failure (ref unknown, repo missing) maps
+	to ``False`` so a plumbing failure never produces a spurious
+	must_not_exist violation; the verify-mode caller treats absence as
+	"contract satisfied" exactly as it would in working-tree mode.
+	"""
+	cache_key = f"@ref:{ref}:{path}" if ref else path
+	if cache_key in exists_cache:
+		return exists_cache[cache_key]
+	if ref is None:
+		exists = os.path.exists(path)
+	else:
+		try:
+			result = subprocess.run(
+				["git", "cat-file", "-e", f"{ref}:{path}"],
+				capture_output=True,
+				check=False,
+			)
+			exists = result.returncode == 0
+		except Exception:  # noqa: BLE001 — fail-closed-as-absent on git failure
+			exists = False
+	exists_cache[cache_key] = exists
+	return exists
 
 
 def _fp_key(fp: Any) -> tuple[str, str] | None:
@@ -314,9 +390,10 @@ def _dedup_issue_patterns(
 	return must_contain, must_not_contain, shared_keys, substring_drops, exact_conflict_drops
 
 
-def list_violated_files(fingerprints: dict[str, Any]) -> list[str]:
+def list_violated_files(fingerprints: dict[str, Any], ref: str | None = None) -> list[str]:
 	"""Return a sorted, de-duplicated list of file paths that currently
-	fail at least one fingerprint check against the cwd tree.
+	fail at least one fingerprint check against the cwd tree (or the
+	tree at ``ref`` when supplied).
 
 	Mirrors the matching logic in :func:`verify` but records only the
 	offending file paths (for expanding the resolver's working set
@@ -325,6 +402,7 @@ def list_violated_files(fingerprints: dict[str, Any]) -> list[str]:
 	"""
 	violated: set[str] = set()
 	file_cache: dict[str, str | None] = {}
+	exists_cache: dict[str, bool] = {}
 	cross_issue_exact_drops, _ = _cross_issue_exact_conflict_drops(fingerprints)
 
 	for issue_key, entry in fingerprints.items():
@@ -338,6 +416,7 @@ def list_violated_files(fingerprints: dict[str, Any]) -> list[str]:
 			entry,
 			cross_issue_exact_drops,
 		)
+		must_not_exist = entry.get("must_not_exist", []) or []
 
 		for fp in must_contain:
 			if not isinstance(fp, dict):
@@ -346,7 +425,7 @@ def list_violated_files(fingerprints: dict[str, Any]) -> list[str]:
 			regex_src = fp.get("regex", "")
 			if not path or not regex_src:
 				continue
-			content = _read_file(path, file_cache)
+			content = _read_file(path, file_cache, ref=ref)
 			if content is None:
 				# Referenced file missing entirely — treat as violated
 				# so the resolver gets a chance to restore it.
@@ -366,7 +445,7 @@ def list_violated_files(fingerprints: dict[str, Any]) -> list[str]:
 			regex_src = fp.get("regex", "")
 			if not path or not regex_src:
 				continue
-			content = _read_file(path, file_cache)
+			content = _read_file(path, file_cache, ref=ref)
 			if content is None:
 				continue
 			try:
@@ -376,14 +455,27 @@ def list_violated_files(fingerprints: dict[str, Any]) -> list[str]:
 			if pattern.search(content):
 				violated.add(path)
 
+		for fp in must_not_exist:
+			if not isinstance(fp, dict):
+				continue
+			path = fp.get("file", "")
+			if not path:
+				continue
+			if _path_exists(path, exists_cache, ref=ref):
+				# Path the sub-issue deleted is back on the
+				# verification target — surface to the resolver's
+				# working set so it can be re-removed.
+				violated.add(path)
+
 	return sorted(violated)
 
 
-def verify(fingerprints: dict[str, Any], branch: str) -> int:
+def verify(fingerprints: dict[str, Any], branch: str, ref: str | None = None) -> int:
 	violations: list[str] = []
 	mc_total_expected = 0
 	mc_total_satisfied = 0
 	file_cache: dict[str, str | None] = {}
+	exists_cache: dict[str, bool] = {}
 	cross_issue_exact_drops, cross_issue_exact_warnings = _cross_issue_exact_conflict_drops(fingerprints)
 
 	for issue_key, entry in sorted(fingerprints.items()):
@@ -409,6 +501,7 @@ def verify(fingerprints: dict[str, Any], branch: str) -> int:
 			entry,
 			cross_issue_exact_drops,
 		)
+		must_not_exist = entry.get("must_not_exist", []) or []
 		if shared_keys:
 			print(
 				f"::warning::Fingerprint cross-dedup for issue #{issue_num} (PR #{pr_num}): "
@@ -436,7 +529,7 @@ def verify(fingerprints: dict[str, Any], branch: str) -> int:
 			if not path or not regex_src:
 				continue
 			mc_total_expected += 1
-			content = _read_file(path, file_cache)
+			content = _read_file(path, file_cache, ref=ref)
 			if content is None:
 				violations.append(
 					f"issue #{issue_num} (PR #{pr_num}): must_contain pattern in '{path}' "
@@ -467,7 +560,7 @@ def verify(fingerprints: dict[str, Any], branch: str) -> int:
 			regex_src = fp.get("regex", "")
 			if not path or not regex_src:
 				continue
-			content = _read_file(path, file_cache)
+			content = _read_file(path, file_cache, ref=ref)
 			if content is None:
 				continue
 			try:
@@ -483,6 +576,26 @@ def verify(fingerprints: dict[str, Any], branch: str) -> int:
 					f"issue #{issue_num} (PR #{pr_num}): must_not_contain pattern reappeared in '{path}' "
 					f"after resolver — sub-issue intentional deletion silently reverted. "
 					f"Pattern (first 200 chars): {regex_src[:200]}"
+				)
+
+		# must_not_exist: a sub-issue removed these files outright;
+		# their reappearance in the post-resolve tree (or at the
+		# verified ref) is a silent regression by an upstream merge
+		# resolver.  Path-agnostic — the contract does NOT honour the
+		# capture-side ALLOWED_PREFIXES allowlist (file existence is
+		# cheap to check and the deletion intent is unambiguous
+		# regardless of where the file lives in the consumer repo's
+		# tree).
+		for fp in must_not_exist:
+			if not isinstance(fp, dict):
+				continue
+			path = fp.get("file", "")
+			if not path:
+				continue
+			if _path_exists(path, exists_cache, ref=ref):
+				violations.append(
+					f"issue #{issue_num} (PR #{pr_num}): must_not_exist path '{path}' "
+					f"reappeared after resolver — sub-issue file deletion silently reverted."
 				)
 
 	# #5 silent-regression detector: log the must_contain satisfaction
@@ -529,13 +642,40 @@ def verify(fingerprints: dict[str, Any], branch: str) -> int:
 def main(argv: list[str] | None = None) -> int:
 	args = list(sys.argv[1:] if argv is None else argv)
 
-	# Optional --list-violated-files <fingerprints.json> mode.  Keep the
-	# flag parsing deliberately minimal (no argparse) so this stays a
-	# single-file utility safe to bootstrap on older script refs.
+	# Optional --list-violated-files <fingerprints.json> and
+	# --ref <git_ref> flags.  Keep the parsing deliberately minimal
+	# (no argparse) so this stays a single-file utility safe to
+	# bootstrap on older script refs.  Both flags may appear in any
+	# order before the positional fingerprints path.
 	list_mode = False
-	if args and args[0] == "--list-violated-files":
-		list_mode = True
-		args = args[1:]
+	ref: str | None = None
+	while args:
+		if args[0] == "--list-violated-files":
+			list_mode = True
+			args = args[1:]
+			continue
+		if args[0] == "--ref":
+			if len(args) < 2:
+				print(
+					"::warning::verify_integration_fingerprints: --ref requires an argument; ignoring.",
+					flush=True,
+					file=sys.stderr,
+				)
+				args = args[1:]
+				continue
+			ref = args[1]
+			args = args[2:]
+			continue
+		if args[0].startswith("--ref="):
+			ref = args[0][len("--ref="):]
+			args = args[1:]
+			continue
+		break
+
+	if ref is None:
+		env_ref = os.environ.get("INTEGRATION_VERIFY_REF", "").strip()
+		if env_ref:
+			ref = env_ref
 
 	fp_path = args[0] if args else os.environ.get("INTEGRATION_FINGERPRINTS_FILE", "")
 	if not fp_path:
@@ -561,7 +701,7 @@ def main(argv: list[str] | None = None) -> int:
 		# Always exit 0 in list mode — the caller is collecting input
 		# for the resolver's working set, not enforcing.  Empty JSON
 		# simply prints nothing.
-		for path in list_violated_files(data):
+		for path in list_violated_files(data, ref=ref):
 			print(path, flush=True)
 		return 0
 
@@ -572,7 +712,7 @@ def main(argv: list[str] | None = None) -> int:
 		)
 		return 0
 
-	return verify(data, branch)
+	return verify(data, branch, ref=ref)
 
 
 if __name__ == "__main__":

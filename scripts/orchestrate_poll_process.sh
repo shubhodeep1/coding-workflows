@@ -2659,6 +2659,18 @@ judge_justification_fingerprint() {
 # the verifier also defensively skips self-contradictory pairs still
 # present in legacy state entries.
 #
+# In addition to the regex-based pair, every file the merged sub-PR
+# REMOVED outright (PR diff lists ``+++ /dev/null`` against the path)
+# is recorded under ``must_not_exist`` so a downstream back-merge
+# silently reintroducing the deleted file is rejected by
+# scripts/verify_integration_fingerprints.py. The path-existence
+# contract is enforced PATH-AGNOSTICALLY — the resolver-safe
+# ALLOWED_PREFIXES allowlist below applies only to text-regex capture
+# (where it filters binary-prone / generated / out-of-scope paths),
+# never to ``must_not_exist`` (where the contract is a cheap binary
+# check and the deletion intent is unambiguous regardless of where in
+# the consumer repo's tree the file lives).
+#
 # Storage: top-level state field `merged_issue_fingerprints`, an
 # object keyed by the sub-issue's GitHub issue number (string). Each
 # entry is:
@@ -2667,7 +2679,8 @@ judge_justification_fingerprint() {
 #     "pr":               <int>,           # github PR number
 #     "captured_at":      <iso8601>,
 #     "must_contain":     [ {file, regex}, ... ],
-#     "must_not_contain": [ {file, regex}, ... ]
+#     "must_not_contain": [ {file, regex}, ... ],
+#     "must_not_exist":   [ {file},         ... ]
 #   }
 #
 # Deliberately fail-open: any error in capture (no PR found, network
@@ -2680,8 +2693,9 @@ judge_justification_fingerprint() {
 #   - Files outside the resolver-safe allowlist
 #     (.github/, scripts/, prompts/, ai-memory/, tests/,
 #     workflow-templates/, docs/, db/contracts/, and root
-#     {agents,README,CLAUDE}.md) are skipped (binary-prone,
-#     generated, or out-of-scope for resolver edits).
+#     {agents,README,CLAUDE}.md) are skipped FOR TEXT-REGEX CAPTURE
+#     ONLY (binary-prone, generated, or out-of-scope for resolver
+#     edits). ``must_not_exist`` capture has NO allowlist filter.
 #   - Patterns shorter than FINGERPRINT_MIN_PATTERN_CHARS (after trim)
 #     are skipped — too generic to fingerprint reliably.
 #   - Patterns containing only whitespace, only braces/brackets, or
@@ -2754,8 +2768,17 @@ def is_useful(line: str) -> bool:
 
 per_file_added: dict[str, list[str]] = {}
 per_file_removed: dict[str, list[str]] = {}
+# Path-agnostic list of files the PR deleted outright (``+++ /dev/null``
+# paired with ``--- a/<path>``). NO ALLOWED_PREFIXES filter — see the
+# function docstring for the rationale.
+removed_paths: list[str] = []
 
 current = None
+# Most recent ``--- a/<path>`` line seen while scanning a diff header.
+# Captured separately so that, on encountering ``+++ /dev/null``, we
+# know which path the PR deleted (the unified-diff format pairs the
+# two lines but processes ``---`` before ``+++``).
+prev_minus_path: str | None = None
 diff_path = sys.argv[1]
 try:
     with open(diff_path, "r", encoding="utf-8", errors="replace") as fh:
@@ -2763,11 +2786,33 @@ try:
             line = cleanup(raw)
             if line.startswith("diff --git "):
                 current = None
+                prev_minus_path = None
+                continue
+            if line.startswith("--- a/"):
+                prev_minus_path = line[6:].strip()
+                continue
+            if line.startswith("--- /dev/null"):
+                # File didn't exist before this PR (pure addition);
+                # no deletion to record on the ``+++`` line that
+                # follows.
+                prev_minus_path = None
                 continue
             if line.startswith("+++ b/"):
                 current = line[6:].strip()
+                prev_minus_path = None
                 continue
-            if line.startswith("--- a/"):
+            if line.startswith("+++ /dev/null"):
+                # File was deleted by this PR.  Record the path
+                # captured from the preceding ``--- a/<path>`` line
+                # under removed_paths without applying the
+                # text-regex ALLOWED_PREFIXES filter — the deletion
+                # intent is a path-level binary fact, enforceable
+                # regardless of where in the consumer repo's tree
+                # the file lives.
+                if prev_minus_path:
+                    removed_paths.append(prev_minus_path)
+                current = None
+                prev_minus_path = None
                 continue
             if current is None or current == "/dev/null":
                 continue
@@ -2870,9 +2915,26 @@ for path, added_lines in list(per_file_added.items()):
     else:
         del per_file_removed[path]
 
+# De-duplicate removed_paths preserving first-seen order. A
+# unified diff lists at most one ``+++ /dev/null`` per file, but
+# the same path can legitimately appear across multiple diff
+# blocks in pathological histories (e.g. rename detection
+# disabled); preserve order so the captured fingerprint is stable
+# across re-runs and downstream operator inspection.
+seen_removed_paths: set[str] = set()
+removed_paths_unique: list[str] = []
+for p in removed_paths:
+    if not isinstance(p, str) or not p:
+        continue
+    if p in seen_removed_paths:
+        continue
+    seen_removed_paths.add(p)
+    removed_paths_unique.append(p)
+
 result = {
     "must_contain": to_patterns(per_file_added),
     "must_not_contain": to_patterns(per_file_removed),
+    "must_not_exist": [{"file": p} for p in removed_paths_unique],
 }
 print(json.dumps(result))
 PY
@@ -2886,10 +2948,11 @@ PY
     return 0
   fi
 
-  local mc_count nmc_count
+  local mc_count nmc_count mne_count
   mc_count="$(printf '%s' "${fp_json}" | jq -r '.must_contain | length' 2>/dev/null || echo 0)"
   nmc_count="$(printf '%s' "${fp_json}" | jq -r '.must_not_contain | length' 2>/dev/null || echo 0)"
-  if [ "${mc_count}" -eq 0 ] && [ "${nmc_count}" -eq 0 ]; then
+  mne_count="$(printf '%s' "${fp_json}" | jq -r '(.must_not_exist // []) | length' 2>/dev/null || echo 0)"
+  if [ "${mc_count}" -eq 0 ] && [ "${nmc_count}" -eq 0 ] && [ "${mne_count}" -eq 0 ]; then
     return 0
   fi
 
@@ -2905,10 +2968,11 @@ PY
         pr: $pr,
         captured_at: $ts,
         must_contain: $fp.must_contain,
-        must_not_contain: $fp.must_not_contain
+        must_not_contain: $fp.must_not_contain,
+        must_not_exist: ($fp.must_not_exist // [])
       }' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-  echo "  [intent-fp] Captured fingerprints for issue #${issue_num} (PR #${pr_num}): must_contain=${mc_count} must_not_contain=${nmc_count}"
+  echo "  [intent-fp] Captured fingerprints for issue #${issue_num} (PR #${pr_num}): must_contain=${mc_count} must_not_contain=${nmc_count} must_not_exist=${mne_count}"
 }
 
 # Create (or discover) the integration->default PR eagerly so that the
@@ -12032,6 +12096,94 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
         NEXT_WAVE_IDX=$(( NEXT_WAVE - 1 ))
 
         # -----------------------------------------------------------
+        # Wave-dispatch integration-state gate.
+        #
+        # Before creating new sub-issues for the next wave, run the
+        # merged-sub-issue fingerprint verifier against the
+        # integration branch HEAD.  Catches the case where a prior
+        # back-merge (e.g. ``[ai-merge-resolve] merge origin/main``)
+        # silently re-introduced a file a merged sub-issue had
+        # deleted, leaving integration in a state that contradicts
+        # the captured merged_issue_fingerprints contract.  Without
+        # this gate, the orchestrator would happily dispatch the
+        # next wave on top of broken state, and any planner whose
+        # final sanity check spans the regressed paths would emit
+        # BLOCKED — wasting the wave on a defect that originated
+        # several merges earlier.
+        #
+        # Fail-open on plumbing errors (no fingerprints captured,
+        # verifier script missing, fetch failure, git ref unknown):
+        # never block dispatch on a transient or pre-existing
+        # capture gap — only hard fingerprint violations gate.
+        # -----------------------------------------------------------
+        WAVE_GATE_BLOCKED=false
+        _gate_integration_branch="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
+        _gate_fp_count="$(jq -r '(.merged_issue_fingerprints // {}) | length' "${STATE_FILE}" 2>/dev/null || echo 0)"
+        _gate_violations=""
+        if [ -n "${_gate_integration_branch}" ] \
+           && [ "${_gate_fp_count}" -gt 0 ] \
+           && [ -f "scripts/verify_integration_fingerprints.py" ]; then
+          # Fetch the integration branch so the verifier's --ref mode
+          # can resolve it via ``git show`` / ``git cat-file``. A fetch
+          # failure is non-fatal (gate fails open below).
+          git fetch --no-tags --quiet origin "${_gate_integration_branch}" 2>/dev/null || true
+          _gate_ref="refs/remotes/origin/${_gate_integration_branch}"
+          if ! git rev-parse --verify "${_gate_ref}" >/dev/null 2>&1; then
+            # Fall back to the local branch name if the remote-tracking
+            # ref isn't present (e.g. when running outside of a
+            # GitHub Actions checkout that resolves origin/<branch>).
+            _gate_ref="${_gate_integration_branch}"
+          fi
+          if git rev-parse --verify "${_gate_ref}" >/dev/null 2>&1; then
+            _gate_fp_file="$(mktemp "${TMPDIR:-/tmp}/wave_dispatch_fp.XXXXXX")"
+            jq -c '.merged_issue_fingerprints // {}' "${STATE_FILE}" > "${_gate_fp_file}"
+            _gate_log_file="$(mktemp "${TMPDIR:-/tmp}/wave_dispatch_log.XXXXXX")"
+            _gate_exit=0
+            INTEGRATION_BRANCH_NAME="${_gate_integration_branch}" \
+              python3 scripts/verify_integration_fingerprints.py \
+                --ref "${_gate_ref}" \
+                "${_gate_fp_file}" \
+                > "${_gate_log_file}" 2>&1 || _gate_exit=$?
+            # Mirror the verifier output to the workflow log so
+            # operators can see the violation lines inline.
+            cat "${_gate_log_file}" || true
+            if [ "${_gate_exit}" -eq 1 ]; then
+              WAVE_GATE_BLOCKED=true
+              # Keep the first ~20 violation lines for the tracking
+              # comment so the human reader doesn't have to dig into
+              # the run log to see what broke.
+              _gate_violations="$(grep -E '^::error::  -' "${_gate_log_file}" | head -n 20 || true)"
+            fi
+            rm -f "${_gate_fp_file}" "${_gate_log_file}" 2>/dev/null || true
+          else
+            echo "::warning::Wave-dispatch gate: could not resolve integration branch ref '${_gate_integration_branch}' locally; gate fails open and dispatch proceeds."
+          fi
+        fi
+
+        if [ "${WAVE_GATE_BLOCKED}" = "true" ]; then
+          echo "::error::Wave ${NEXT_WAVE} dispatch BLOCKED — integration branch '${_gate_integration_branch}' HEAD violates merged sub-issue fingerprint contract."
+          # Consume a stall cycle so the orchestrator's stall-recovery
+          # path eventually escalates if the regression is not
+          # remediated.
+          jq '.judge_cycle += 1 | .judge_stall_cycles = ((.judge_stall_cycles // 0) + 1)' \
+            "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+          _gate_alert="## ⚠️ Wave ${NEXT_WAVE} dispatch BLOCKED — integration regression detected
+
+Integration branch \`${_gate_integration_branch}\` HEAD violates the captured merged sub-issue fingerprint contract. A prior back-merge silently re-introduced a file a merged sub-issue had deleted (or otherwise regressed merged sub-issue intent). Refusing to dispatch new work on top of broken integration state — the next planner run would almost certainly emit BLOCKED for the regressed paths.
+
+**Action:** inspect the integration branch HEAD against the \`merged_issue_fingerprints\` entries in the latest state comment. Re-delete the resurrected paths (or otherwise remediate the regression) on \`${_gate_integration_branch}\`, then the next poll tick will re-run the gate and advance.
+
+Verifier violations (first 20):
+\`\`\`
+${_gate_violations:-(no violation lines parsed — see workflow run log for the full verifier output)}
+\`\`\`"
+          post_tracking_comment "${_gate_alert}" || true
+          tg_notify "Project #${TRACKING_NUM}: wave ${NEXT_WAVE} dispatch blocked — integration branch HEAD violates merged sub-issue fingerprint contract. See tracking comment." "WARNING" || true
+          # Note: post_state_comment runs unconditionally at the end of
+          # the in_progress arm below, so no separate call here.
+        else
+
+        # -----------------------------------------------------------
         # Deferred issue creation: create issues for this wave now.
         # This triggers clarify.yml via the issues.opened event.
         # -----------------------------------------------------------
@@ -12119,6 +12271,8 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
         else
           echo "Wave ${NEXT_WAVE} advance: all sub-issues already exist; suppressing duplicate narration."
         fi
+
+        fi  # end: WAVE_GATE_BLOCKED guard
       else
         # All waves dispatched but judge says in_progress with new issues
         jq '.judge_cycle += 1 | .judge_stall_cycles = ((.judge_stall_cycles // 0) + 1)' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
