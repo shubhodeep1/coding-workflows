@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/codex_model_catalog.json:489 | severity=low | confidence=1\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The display_name for x-ai/grok-4.1-fast was changed to \"Grok 4.1 Fast (Historical, unavailable)\".\n  WHY: This is a cosmetic catalog-only metadata change on an entry already marked supported_in_api=false, so it has no runtime impact and is not actually a defect.\n- PR title line and description \"Summary\" section | severity=low | confidence=5\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The PR metadata says \"swap z-ai/glm-5 \u2192 mistralai/codestral-2508\" and describes adding a mistralai/codestral-2508 catalog entry, but the tracked changes actually use mistralai/mistral-small-2603 and x-ai/grok-4.20.\n  WHY: This metadata-only mismatch does not break runtime code, but it keeps confusing reviewers and wasting autofix cycles because the repository files and PR metadata disagree.\n- scripts/codex_model_catalog.json:line ~558 (relative to the added block) | severity=medium | confidence=2\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The newly added mistralai/mistral-small-2603 reviewer entry is listed with \"visibility\": \"list\", so it appears discoverable even though it has not been validated in a real reviewer panel.\n  WHY: Without a guard similar to the one added for x-ai/grok-4.1-fast, automation or operators may select it as production-ready and hit provider-level failures.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/codex_model_catalog.json:489 | severity=low | confidence=1\n  PROBLEM: The display_name for x-ai/grok-4.1-fast was changed to \"Grok 4.1 Fast (Historical, unavailable)\".\n  WHY: This is a cosmetic metadata change on a catalog entry already marked supported_in_api=false, so it has no runtime impact and is not actually a defect.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- PR title line and description \"Summary\" section | severity=low | confidence=5\n  PROBLEM: The PR metadata says \"swap z-ai/glm-5 \u2192 mistralai/codestral-2508\" and describes adding a mistralai/codestral-2508 catalog entry, but the actual repository changes do neither: `.github/workflows/review_autofix.yml:99` replaces `z-ai/glm-5` with `mistralai/mistral-small-2603`, and line 101 adds a second change `x-ai/grok-4.1-fast` \u2192 `x-ai/grok-4.20` that is never mentioned in the PR metadata.\n  WHY: This is a metadata-only mismatch \u2014 all on-disk files (workflow, agents.md, catalog) are internally consistent with each other, so there is no runtime code failure, but reviewers and autofix cycles keep getting misled by the disagreement.\n- scripts/codex_model_catalog.json:line ~558 (relative to the added block) | severity=medium | confidence=2\n  PROBLEM: The newly added `mistralai/mistral-small-2603` reviewer entry is set to `\"visibility\": \"list\"`, so it appears alongside functional reviewers despite never having been tested in a real reviewer panel.\n  WHY: The entry lacks an equivalent guard marking it unproven, so automation or operators could select it assuming it is production-ready and encounter provider-level failures.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "47c477f784d04512ecf3ea1e1b5774a90d3c0e5c1e36c5bf82036ee34b40254f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2731,
+    "run_id": "26017295568",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26017295568",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260518064355_fb1d2593d7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2731,
+    "run_id": "26017295568"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-18T06:43:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
