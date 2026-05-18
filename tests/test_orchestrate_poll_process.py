@@ -7166,6 +7166,659 @@ def test_verify_integration_fingerprints_substring_dedup_still_fails_on_unrelate
 		shutil.rmtree(sandbox, ignore_errors=True)
 
 
+# ===========================================================================
+# must_not_exist constraint: path-agnostic capture of merged sub-PR file
+# deletions and the verifier hard-reject when those paths reappear on the
+# integration tree. Covers the upstream regression where a back-merge
+# resolver silently reintroduced files an earlier sub-issue had deleted
+# because the text-regex contract did not (and structurally cannot) catch
+# deletions of files outside the resolver-safe ALLOWED_PREFIXES allowlist.
+# ===========================================================================
+
+
+def test_capture_intent_fingerprints_records_must_not_exist_on_file_deletion():
+	# A unified diff containing ``+++ /dev/null`` against ``--- a/<path>``
+	# must produce a ``must_not_exist`` entry for that path. Covers the
+	# core capture behavior new in this revision.
+	py_code = _extract_intent_fingerprint_extractor_py()
+
+	diff_text = (
+		"diff --git a/tests/test_canonicalize_autobet_profit.py b/tests/test_canonicalize_autobet_profit.py\n"
+		"deleted file mode 100644\n"
+		"--- a/tests/test_canonicalize_autobet_profit.py\n"
+		"+++ /dev/null\n"
+		"@@ -1,3 +0,0 @@\n"
+		"-import unittest\n"
+		"-\n"
+		"-class CanonicalizeProfitTest(unittest.TestCase): pass\n"
+	)
+
+	with tempfile.TemporaryDirectory() as td:
+		diff_file = Path(td) / "pr.diff"
+		diff_file.write_text(diff_text, encoding="utf-8")
+		env = {
+			**os.environ,
+			"FINGERPRINT_PER_FILE_CAP": "12",
+			"FINGERPRINT_MIN_PATTERN_CHARS": "12",
+		}
+		proc = subprocess.run(
+			["python3", "-c", py_code, str(diff_file)],
+			capture_output=True,
+			text=True,
+			env=env,
+			timeout=30,
+		)
+	assert proc.returncode == 0, f"extractor exited nonzero: stderr={proc.stderr!r}"
+	result = json.loads(proc.stdout or "{}")
+	mne_paths = [e.get("file") for e in result.get("must_not_exist", [])]
+	assert "tests/test_canonicalize_autobet_profit.py" in mne_paths, (
+		f"deleted file must appear in must_not_exist; got {mne_paths!r}"
+	)
+
+
+def test_capture_intent_fingerprints_must_not_exist_skips_allowed_prefixes_filter():
+	# Path-agnostic contract: a deletion of a file OUTSIDE the
+	# resolver-safe ALLOWED_PREFIXES (e.g. consumer ``backend/``) must
+	# still be recorded under ``must_not_exist`` even though the
+	# text-regex side of capture would skip the same path. This is the
+	# direct fix for the upstream failure mode the Phase 5 planner BLOCK
+	# surfaced: ``backend/canonicalize_autobet_profit.py`` was deleted by
+	# the original sub-issue but never fingerprinted because ``backend/``
+	# is not on the regex allowlist, so the resolver was free to
+	# resurrect it on a back-merge with no contract violation.
+	py_code = _extract_intent_fingerprint_extractor_py()
+
+	diff_text = (
+		"diff --git a/backend/canonicalize_autobet_profit.py b/backend/canonicalize_autobet_profit.py\n"
+		"deleted file mode 100644\n"
+		"--- a/backend/canonicalize_autobet_profit.py\n"
+		"+++ /dev/null\n"
+		"@@ -1,2 +0,0 @@\n"
+		'-PROFIT_MIRROR_FIELD = "profit_scaled"\n'
+		"-def run(): pass\n"
+	)
+
+	with tempfile.TemporaryDirectory() as td:
+		diff_file = Path(td) / "pr.diff"
+		diff_file.write_text(diff_text, encoding="utf-8")
+		env = {
+			**os.environ,
+			"FINGERPRINT_PER_FILE_CAP": "12",
+			"FINGERPRINT_MIN_PATTERN_CHARS": "12",
+		}
+		proc = subprocess.run(
+			["python3", "-c", py_code, str(diff_file)],
+			capture_output=True,
+			text=True,
+			env=env,
+			timeout=30,
+		)
+	assert proc.returncode == 0, f"extractor exited nonzero: stderr={proc.stderr!r}"
+	result = json.loads(proc.stdout or "{}")
+	mne_paths = [e.get("file") for e in result.get("must_not_exist", [])]
+	mnc_paths = {p.get("file") for p in result.get("must_not_contain", [])}
+	assert "backend/canonicalize_autobet_profit.py" in mne_paths, (
+		"must_not_exist must capture deletions path-agnostically, NOT honour the "
+		"text-regex ALLOWED_PREFIXES allowlist (else the very upstream regression "
+		f"this revision exists to fix is reintroduced). Got mne={mne_paths!r}"
+	)
+	# Sanity: the text-regex side correctly filters backend/ out — only
+	# must_not_exist provides the deletion guarantee for that path.
+	assert "backend/canonicalize_autobet_profit.py" not in mnc_paths, (
+		f"must_not_contain should still honour ALLOWED_PREFIXES; got mnc_paths={mnc_paths!r}"
+	)
+
+
+def test_capture_intent_fingerprints_must_not_exist_ignores_pure_additions():
+	# A diff that adds a new file (``--- /dev/null`` ⇒ ``+++ b/<path>``)
+	# must NOT produce a must_not_exist entry — only deletions do. The
+	# parser must distinguish the two transitions correctly.
+	py_code = _extract_intent_fingerprint_extractor_py()
+
+	diff_text = (
+		"diff --git a/scripts/new_helper.sh b/scripts/new_helper.sh\n"
+		"new file mode 100755\n"
+		"--- /dev/null\n"
+		"+++ b/scripts/new_helper.sh\n"
+		"@@ -0,0 +1,2 @@\n"
+		"+#!/usr/bin/env bash\n"
+		'+echo "newly added helper script"\n'
+	)
+
+	with tempfile.TemporaryDirectory() as td:
+		diff_file = Path(td) / "pr.diff"
+		diff_file.write_text(diff_text, encoding="utf-8")
+		env = {
+			**os.environ,
+			"FINGERPRINT_PER_FILE_CAP": "12",
+			"FINGERPRINT_MIN_PATTERN_CHARS": "12",
+		}
+		proc = subprocess.run(
+			["python3", "-c", py_code, str(diff_file)],
+			capture_output=True,
+			text=True,
+			env=env,
+			timeout=30,
+		)
+	assert proc.returncode == 0, f"extractor exited nonzero: stderr={proc.stderr!r}"
+	result = json.loads(proc.stdout or "{}")
+	assert result.get("must_not_exist", []) == [], (
+		"adding a file must not register a must_not_exist entry; "
+		f"got {result.get('must_not_exist')!r}"
+	)
+
+
+def test_capture_intent_fingerprints_storage_writes_must_not_exist_field():
+	# Static check: the bash storage jq writes ``must_not_exist`` to the
+	# state alongside must_contain / must_not_contain, and the diagnostic
+	# log line surfaces the must_not_exist count so operators can see
+	# capture coverage at a glance.
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert "must_not_exist: ($fp.must_not_exist // [])" in script, (
+		"capture function must persist must_not_exist into "
+		"merged_issue_fingerprints state entries"
+	)
+	assert "must_not_exist=${mne_count}" in script, (
+		"capture function must surface must_not_exist count in its log line"
+	)
+
+
+def test_verify_integration_fingerprints_passes_when_must_not_exist_path_absent():
+	# Working-tree mode: a must_not_exist entry whose path is not present
+	# on disk is the satisfied case — no violation, exit 0.
+	mod = _verifier_module()
+	files = {
+		"tests/unrelated_test.py": "import unittest\n",
+	}
+	fingerprints = {
+		"2969": {
+			"issue": 2969,
+			"pr": 2970,
+			"must_contain": [],
+			"must_not_contain": [],
+			"must_not_exist": [
+				{"file": "backend/canonicalize_autobet_profit.py"},
+				{"file": "tests/test_canonicalize_autobet_profit.py"},
+			],
+		}
+	}
+	sandbox, fp = _verifier_sandbox(files, fingerprints)
+	prev_cwd = os.getcwd()
+	try:
+		os.chdir(sandbox)
+		assert mod.main([str(fp)]) == 0
+	finally:
+		os.chdir(prev_cwd)
+		shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def test_verify_integration_fingerprints_rejects_must_not_exist_path_present():
+	# Working-tree mode: a path the sub-issue deleted is back on disk —
+	# the verifier must reject with exit 1 so the [ai-merge-resolve]
+	# commit is aborted (resolver path) or the wave dispatch is blocked
+	# (orchestrator path).
+	mod = _verifier_module()
+	files = {
+		# Same path the sub-issue removed has reappeared (back-merge from
+		# main brought it back). Even with reformatted contents, the
+		# verifier must catch it via must_not_exist alone.
+		"backend/canonicalize_autobet_profit.py": (
+			'PROFIT_MIRROR_FIELD = "profit_scaled"\n'
+			"def run():\n"
+			"    pass\n"
+		),
+	}
+	fingerprints = {
+		"2969": {
+			"issue": 2969,
+			"pr": 2970,
+			"must_contain": [],
+			"must_not_contain": [],
+			"must_not_exist": [
+				{"file": "backend/canonicalize_autobet_profit.py"},
+			],
+		}
+	}
+	sandbox, fp = _verifier_sandbox(files, fingerprints)
+	prev_cwd = os.getcwd()
+	try:
+		os.chdir(sandbox)
+		assert mod.main([str(fp)]) == 1
+	finally:
+		os.chdir(prev_cwd)
+		shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def test_verify_integration_fingerprints_must_not_exist_with_empty_or_malformed_entries():
+	# Robustness: entries missing the ``file`` key, non-dict entries, and
+	# an absent ``must_not_exist`` field must all be tolerated as
+	# fail-open no-ops — never crash the verifier and never produce a
+	# violation.
+	mod = _verifier_module()
+	files = {
+		"unrelated.txt": "content\n",
+	}
+	fingerprints = {
+		"1": {
+			"issue": 1,
+			"pr": 2,
+			"must_contain": [],
+			"must_not_contain": [],
+			# Mixed shapes: missing file key, non-dict, empty file value,
+			# none of which should violate.
+			"must_not_exist": [
+				{},
+				{"file": ""},
+				"not-a-dict",
+				{"other_key": "ignored"},
+			],
+		},
+		"3": {
+			"issue": 3,
+			"pr": 4,
+			"must_contain": [],
+			"must_not_contain": [],
+			# Absent must_not_exist field — handled via default.
+		},
+	}
+	sandbox, fp = _verifier_sandbox(files, fingerprints)
+	prev_cwd = os.getcwd()
+	try:
+		os.chdir(sandbox)
+		assert mod.main([str(fp)]) == 0
+	finally:
+		os.chdir(prev_cwd)
+		shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def test_verify_integration_fingerprints_list_mode_includes_must_not_exist_violations():
+	# --list-violated-files must surface must_not_exist regressions
+	# alongside must_contain / must_not_contain regressions so
+	# review_conflict_prepare.sh adds the resurrected path to the
+	# resolver's working set.
+	mod = _verifier_module()
+	files = {
+		"backend/canonicalize_autobet_profit.py": "any content\n",
+		"tests/clean.py": "content\n",
+	}
+	fingerprints = {
+		"2969": {
+			"issue": 2969,
+			"pr": 2970,
+			"must_contain": [],
+			"must_not_contain": [],
+			"must_not_exist": [
+				{"file": "backend/canonicalize_autobet_profit.py"},
+				# This path is not on disk — must NOT appear in output.
+				{"file": "backend/already_gone.py"},
+			],
+		}
+	}
+	sandbox, fp = _verifier_sandbox(files, fingerprints)
+	prev_cwd = os.getcwd()
+	try:
+		os.chdir(sandbox)
+		rc, out, _err = _run_verifier_list_mode(mod, fp)
+		assert rc == 0
+		printed = out.strip().splitlines()
+		assert "backend/canonicalize_autobet_profit.py" in printed, (
+			f"resurrected path must appear in list-violated-files output; got {printed!r}"
+		)
+		assert "backend/already_gone.py" not in printed, (
+			f"path that is genuinely absent must not appear; got {printed!r}"
+		)
+	finally:
+		os.chdir(prev_cwd)
+		shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def _make_git_sandbox_with_blob(tmp_root: Path, paths: dict[str, str]) -> tuple[Path, str]:
+	"""Initialize a tiny throwaway git repo containing ``paths`` and return
+	(repo_root, commit_sha). Helper for the verifier's --ref mode tests."""
+	repo = tmp_root / "repo"
+	repo.mkdir()
+	subprocess.run(["git", "init", "--quiet", "-b", "main"], cwd=repo, check=True)
+	subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+	subprocess.run(["git", "config", "user.name", "test"], cwd=repo, check=True)
+	subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, check=True)
+	for rel, content in paths.items():
+		p = repo / rel
+		p.parent.mkdir(parents=True, exist_ok=True)
+		p.write_text(content, encoding="utf-8")
+	subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+	subprocess.run(
+		["git", "commit", "--quiet", "-m", "seed"], cwd=repo, check=True
+	)
+	commit = subprocess.run(
+		["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+	).stdout.strip()
+	return repo, commit
+
+
+def test_verify_integration_fingerprints_ref_mode_rejects_resurrected_file():
+	# --ref mode: verify against a git ref's tree (no checkout). The
+	# wave-dispatch gate uses this to assert the integration branch HEAD
+	# still honours the merged sub-issue fingerprint contract without
+	# disturbing the cwd. A path captured in must_not_exist that is
+	# present at the ref must produce exit 1.
+	mod = _verifier_module()
+	with tempfile.TemporaryDirectory() as td_root:
+		repo, _commit = _make_git_sandbox_with_blob(
+			Path(td_root),
+			{
+				# This file was supposed to be deleted by the merged sub-issue
+				# but a back-merge brought it back at the ref's HEAD.
+				"backend/canonicalize_autobet_profit.py": (
+					'PROFIT_MIRROR_FIELD = "profit_scaled"\n'
+				),
+			},
+		)
+		fingerprints = {
+			"2969": {
+				"issue": 2969,
+				"pr": 2970,
+				"must_contain": [],
+				"must_not_contain": [],
+				"must_not_exist": [
+					{"file": "backend/canonicalize_autobet_profit.py"},
+				],
+			}
+		}
+		fp_path = Path(td_root) / "fp.json"
+		fp_path.write_text(json.dumps(fingerprints), encoding="utf-8")
+		prev_cwd = os.getcwd()
+		try:
+			# Run the verifier from inside the temp repo so git resolves
+			# the ref against this throwaway sandbox.
+			os.chdir(repo)
+			assert mod.main(["--ref", "HEAD", str(fp_path)]) == 1
+		finally:
+			os.chdir(prev_cwd)
+
+
+def test_verify_integration_fingerprints_ref_mode_passes_when_deletion_held():
+	# --ref mode: the same fingerprint, but the ref's tree honours the
+	# deletion (file absent) — exit 0.
+	mod = _verifier_module()
+	with tempfile.TemporaryDirectory() as td_root:
+		repo, _commit = _make_git_sandbox_with_blob(
+			Path(td_root),
+			{
+				# Some unrelated file so the commit isn't empty; the
+				# deleted path is intentionally not staged.
+				"README.md": "placeholder\n",
+			},
+		)
+		fingerprints = {
+			"2969": {
+				"issue": 2969,
+				"pr": 2970,
+				"must_contain": [],
+				"must_not_contain": [],
+				"must_not_exist": [
+					{"file": "backend/canonicalize_autobet_profit.py"},
+				],
+			}
+		}
+		fp_path = Path(td_root) / "fp.json"
+		fp_path.write_text(json.dumps(fingerprints), encoding="utf-8")
+		prev_cwd = os.getcwd()
+		try:
+			os.chdir(repo)
+			assert mod.main(["--ref", "HEAD", str(fp_path)]) == 0
+		finally:
+			os.chdir(prev_cwd)
+
+
+def test_verify_integration_fingerprints_ref_mode_must_contain_via_git_show():
+	# --ref mode also reads file contents through git show for the
+	# must_contain / must_not_contain regex checks. Cover the contract
+	# so future refactors don't accidentally break ref-mode regex
+	# reading (e.g. by routing only the existence check through git).
+	mod = _verifier_module()
+	with tempfile.TemporaryDirectory() as td_root:
+		repo, _commit = _make_git_sandbox_with_blob(
+			Path(td_root),
+			{
+				".github/workflows/implement.yml": (
+					'install -m 0755 "${src}" "${health_script}"\n'
+				),
+			},
+		)
+		fingerprints = {
+			"1059": {
+				"issue": 1059,
+				"pr": 1066,
+				"must_contain": [
+					{"file": ".github/workflows/implement.yml", "regex": r"install\ \-m\ 0755"},
+				],
+				"must_not_contain": [
+					{"file": ".github/workflows/implement.yml", "regex": r"BANNED_PATTERN"},
+				],
+			}
+		}
+		fp_path = Path(td_root) / "fp.json"
+		fp_path.write_text(json.dumps(fingerprints), encoding="utf-8")
+		prev_cwd = os.getcwd()
+		try:
+			os.chdir(repo)
+			# Use --ref=HEAD form to also exercise that flag-parse branch.
+			assert mod.main(["--ref=HEAD", str(fp_path)]) == 0
+		finally:
+			os.chdir(prev_cwd)
+
+
+def test_verify_integration_fingerprints_ref_mode_fails_open_on_unknown_ref():
+	# A ref the local git repo cannot resolve (typo, not fetched) must
+	# not produce phantom violations. _read_file and _path_exists both
+	# return None / False on git failure, which surfaces as
+	# (a) must_contain entries reporting "file does not exist" but
+	# (b) must_not_exist / must_not_contain entries silently passing.
+	# In a wave-dispatch gate context callers should treat ref-mode
+	# inability to resolve the branch as a plumbing failure (handled
+	# upstream by the rev-parse guard before invoking the verifier).
+	# Here we just guarantee no crash and a deterministic exit shape.
+	mod = _verifier_module()
+	with tempfile.TemporaryDirectory() as td_root:
+		repo, _commit = _make_git_sandbox_with_blob(
+			Path(td_root),
+			{"README.md": "x\n"},
+		)
+		fingerprints = {
+			"1": {
+				"issue": 1,
+				"pr": 2,
+				"must_contain": [],
+				"must_not_contain": [],
+				"must_not_exist": [
+					{"file": "some/path.py"},
+				],
+			}
+		}
+		fp_path = Path(td_root) / "fp.json"
+		fp_path.write_text(json.dumps(fingerprints), encoding="utf-8")
+		prev_cwd = os.getcwd()
+		try:
+			os.chdir(repo)
+			# Nonexistent ref: must_not_exist check returns False (path
+			# absent at unknown ref ⇒ contract satisfied) → exit 0.
+			rc = mod.main(["--ref", "refs/heads/does-not-exist", str(fp_path)])
+			assert rc == 0, f"unknown ref must not crash or fault; got rc={rc}"
+		finally:
+			os.chdir(prev_cwd)
+
+
+def test_verify_integration_fingerprints_ref_mode_honoured_via_env_var():
+	# INTEGRATION_VERIFY_REF env var is the fallback for callers that
+	# can't pass --ref through their argv plumbing.
+	mod = _verifier_module()
+	with tempfile.TemporaryDirectory() as td_root:
+		repo, _commit = _make_git_sandbox_with_blob(
+			Path(td_root),
+			{
+				"backend/file_back.py": "content\n",
+			},
+		)
+		fingerprints = {
+			"2969": {
+				"issue": 2969,
+				"pr": 2970,
+				"must_contain": [],
+				"must_not_contain": [],
+				"must_not_exist": [{"file": "backend/file_back.py"}],
+			}
+		}
+		fp_path = Path(td_root) / "fp.json"
+		fp_path.write_text(json.dumps(fingerprints), encoding="utf-8")
+		prev_cwd = os.getcwd()
+		prev_env = os.environ.get("INTEGRATION_VERIFY_REF")
+		try:
+			os.chdir(repo)
+			os.environ["INTEGRATION_VERIFY_REF"] = "HEAD"
+			rc = mod.main([str(fp_path)])
+			assert rc == 1, "env-supplied ref must trigger ref mode and detect the violation"
+		finally:
+			os.chdir(prev_cwd)
+			if prev_env is None:
+				os.environ.pop("INTEGRATION_VERIFY_REF", None)
+			else:
+				os.environ["INTEGRATION_VERIFY_REF"] = prev_env
+
+
+def test_verify_integration_fingerprints_blank_cli_ref_falls_back_to_working_tree():
+	# ``--ref=`` used to route reads through ``git show :path`` /
+	# ``git cat-file -e :path`` (the index), which is wrong when the
+	# caller really supplied a blank ref by mistake. Normalize blank CLI
+	# refs back to working-tree mode instead, even when the env-var
+	# fallback is set.
+	import contextlib
+	import io
+
+	mod = _verifier_module()
+	with tempfile.TemporaryDirectory() as td_root:
+		repo, _commit = _make_git_sandbox_with_blob(
+			Path(td_root),
+			{
+				"backend/file_back.py": "content from index\n",
+			},
+		)
+		(repo / "backend" / "file_back.py").unlink()
+		fingerprints = {
+			"2969": {
+				"issue": 2969,
+				"pr": 2970,
+				"must_contain": [],
+				"must_not_contain": [],
+				"must_not_exist": [{"file": "backend/file_back.py"}],
+			}
+		}
+		fp_path = Path(td_root) / "fp.json"
+		fp_path.write_text(json.dumps(fingerprints), encoding="utf-8")
+		prev_cwd = os.getcwd()
+		prev_env = os.environ.get("INTEGRATION_VERIFY_REF")
+		stderr_buf = io.StringIO()
+		try:
+			os.chdir(repo)
+			os.environ["INTEGRATION_VERIFY_REF"] = "HEAD"
+			with contextlib.redirect_stderr(stderr_buf):
+				rc = mod.main(["--ref=", str(fp_path)])
+			assert rc == 0, (
+				"blank CLI ref must keep working-tree mode even when the env fallback is set"
+			)
+		finally:
+			os.chdir(prev_cwd)
+			if prev_env is None:
+				os.environ.pop("INTEGRATION_VERIFY_REF", None)
+			else:
+				os.environ["INTEGRATION_VERIFY_REF"] = prev_env
+		assert "blank --ref value supplied" in stderr_buf.getvalue()
+
+
+def test_verify_integration_fingerprints_unknown_flag_returns_exit_2():
+	import contextlib
+	import io
+
+	mod = _verifier_module()
+	stderr_buf = io.StringIO()
+	with contextlib.redirect_stderr(stderr_buf):
+		rc = mod.main(["--unknown-flag", "fingerprints.json"])
+	assert rc == 2
+	assert "unknown option '--unknown-flag'" in stderr_buf.getvalue()
+
+
+def test_verify_integration_fingerprints_trailing_unknown_flag_returns_exit_2():
+	import contextlib
+	import io
+
+	mod = _verifier_module()
+	stderr_buf = io.StringIO()
+	with contextlib.redirect_stderr(stderr_buf):
+		rc = mod.main(["fingerprints.json", "--unknown-flag"])
+	assert rc == 2
+	assert "unknown option '--unknown-flag'" in stderr_buf.getvalue()
+
+
+def test_wave_dispatch_gate_invokes_verifier_against_integration_ref():
+	# Static contract: the wave-dispatch gate block must invoke the
+	# verifier with --ref pointing at the integration branch before
+	# advancing the wave, and must skip dispatch (no Wave Dispatched
+	# comment) when the verifier returns exit 1.
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	# Gate block markers.
+	assert "Wave-dispatch integration-state gate" in script, (
+		"poller must contain the wave-dispatch integration-state gate block"
+	)
+	assert "WAVE_GATE_BLOCKED" in script, (
+		"poller must use the WAVE_GATE_BLOCKED flag to skip dispatch on violation"
+	)
+	# Verifier invocation with --ref against the integration branch.
+	assert "python3 scripts/verify_integration_fingerprints.py" in script
+	assert '--ref "${_gate_ref}"' in script, (
+		"wave-dispatch gate must run the verifier in --ref mode against the "
+		"integration branch HEAD (not the cwd working tree)"
+	)
+	assert 'git rev-parse --verify FETCH_HEAD' in script, (
+		"wave-dispatch gate must pin the freshly fetched integration ref to a commit SHA before verification"
+	)
+	assert '_gate_ref="${_gate_integration_branch}"' not in script, (
+		"wave-dispatch gate must not fall back to a potentially stale local integration branch when origin is unavailable"
+	)
+	assert "fetch of integration branch" in script, (
+		"wave-dispatch gate must warn and fail open when the integration-branch fetch fails"
+	)
+	assert 'elif [ "${_gate_exit}" -eq 2 ]; then' in script, (
+		"wave-dispatch gate must surface verifier plumbing failures with an explicit warning"
+	)
+	assert "verifier exited 2 (plumbing failure)" in script, (
+		"wave-dispatch gate warning must explain the fail-open verifier exit-2 path"
+	)
+	assert 'elif [ "${_gate_exit}" -ne 0 ]; then' in script, (
+		"wave-dispatch gate must warn on unexpected verifier exits instead of silently treating them as passes"
+	)
+	assert "verifier exited ${_gate_exit} (unexpected)" in script, (
+		"wave-dispatch gate warning must surface unexpected verifier exit codes while preserving fail-open dispatch"
+	)
+	assert "trap 'rm -f \"${_gate_fp_file:-}\" \"${_gate_log_file:-}\" 2>/dev/null || true' EXIT" in script, (
+		"wave-dispatch gate must protect temp-file cleanup with an EXIT trap"
+	)
+	assert script.index(
+		"trap 'rm -f \"${_gate_fp_file:-}\" \"${_gate_log_file:-}\" 2>/dev/null || true' EXIT"
+	) < script.index('_gate_fp_file="$(mktemp'), (
+		"wave-dispatch gate must register cleanup before allocating temp files"
+	)
+	assert 'trap - EXIT' in script, (
+		"wave-dispatch gate must clear its temporary EXIT trap after explicit cleanup"
+	)
+	# Failure-path side effects: stall cycle bump, tracking comment,
+	# telegram alert.
+	assert "Wave ${NEXT_WAVE} dispatch BLOCKED" in script
+	assert "wave ${NEXT_WAVE} dispatch blocked" in script
+	# The dispatch block must be gated on WAVE_GATE_BLOCKED so the
+	# CREATED_NUMS / ACTUALLY_CREATED_COUNT bookkeeping only runs when
+	# the gate passes.
+	assert 'if [ "${WAVE_GATE_BLOCKED}" = "true" ]; then' in script
+
+
 def test_actions_runs_shared_loader_reuses_single_fetch_per_tick() -> None:
 	state = _base_state()
 	state["project_status"] = "in_progress"
