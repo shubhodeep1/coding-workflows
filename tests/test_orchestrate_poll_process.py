@@ -7728,6 +7728,18 @@ def test_verify_integration_fingerprints_unknown_flag_returns_exit_2():
 	assert "unknown option '--unknown-flag'" in stderr_buf.getvalue()
 
 
+def test_verify_integration_fingerprints_trailing_unknown_flag_returns_exit_2():
+	import contextlib
+	import io
+
+	mod = _verifier_module()
+	stderr_buf = io.StringIO()
+	with contextlib.redirect_stderr(stderr_buf):
+		rc = mod.main(["fingerprints.json", "--unknown-flag"])
+	assert rc == 2
+	assert "unknown option '--unknown-flag'" in stderr_buf.getvalue()
+
+
 def test_wave_dispatch_gate_invokes_verifier_against_integration_ref():
 	# Static contract: the wave-dispatch gate block must invoke the
 	# verifier with --ref pointing at the integration branch before
