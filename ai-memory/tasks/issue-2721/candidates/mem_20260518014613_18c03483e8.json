@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1\nWhich part of this repository should be improved? Please name the workflow, script, file, or subsystem if you know it.\nChoices:\nA. One specific workflow phase or script in this repo (clarify, plan, implement, review/autofix, orchestrate, validate, etc.) (RECOMMENDED)\nB. Documentation, prompts, or runbooks\nC. Cross-cutting infrastructure such as memory, notifications, or workflow-update behavior\nQ2\nWhat kind of improvement do you want in that area?\nChoices:\nA. Fix a concrete bug, regression, or failing run (RECOMMENDED)\nB. Improve reliability, safety, or observability without changing intended behavior\nC. Improve usability, documentation, performance, or maintainability\nQ3\nWhat should planning use as the definition of done?\nChoices:\nA. A specific example issue, PR, workflow run, or file behavior that should be corrected; include the exact example if possible (RECOMMENDED)\nB. A plain-language before/after behavior description\nC. A measurable target such as fewer failures, fewer retries/API calls, or faster runtime",
+  "fingerprint": "cd39ee989da3b6e9359abb4f3c4065d0aa664f1821b11f6346a9a0e641774279",
+  "lineage": {
+    "issue_number": 2721,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26009106994",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26009106994",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260518014613_18c03483e8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2721,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26009106994"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #2721 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-18T01:46:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
