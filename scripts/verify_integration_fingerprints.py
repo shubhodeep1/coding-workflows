@@ -626,7 +626,6 @@ def compare_against_baseline(
 	mc_total_expected = 0
 	mc_total_satisfied = 0
 	pre_existing_drift = 0
-	newly_fixed = 0
 
 	for issue_key, issue_num, pr_num, kind, fp in _iter_deduped_issue_fingerprints(
 		fingerprints,
@@ -663,7 +662,9 @@ def compare_against_baseline(
 			)
 			continue
 		if (not baseline_satisfied) and satisfied:
-			newly_fixed += 1
+			# Source-doc contract: newly-fixed fingerprints emit per-item
+			# PRE_EXISTING_FINGERPRINT_DRIFT_V1 notices, while the compare-mode
+			# summary only reports pre_existing_drift_count.
 			print(
 				f"::notice::PRE_EXISTING_FINGERPRINT_DRIFT_V1 fixed_by_resolver "
 				f"fp_key={_fp_key_json(fp_key)} issue=#{issue_num} "
