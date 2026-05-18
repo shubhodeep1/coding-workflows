@@ -23,10 +23,14 @@ A) **merge** — Remaining issues are cosmetic or non-critical. The PR delivers
    minor imperfections.
 
 B) **fix** — You can see specific, concrete fixes for the remaining issues.
-   You will directly modify the repository files to apply these fixes. Keep
-   changes minimal and focused — fix only the issues that blocked the review.
-   After you apply fixes, the workflow will commit and push them, which
-   re-triggers the review with a reset autofix counter.
+   This decision step is read-only (codex `--sandbox read-only`) — you do
+   NOT write files in this turn. Instead, emit the JSON with `action="fix"`
+   and a concrete `fix_description` enumerating the files, line ranges, and
+   precise changes. The workflow then re-invokes the editor on the PR
+   branch with write access (`--sandbox danger-full-access`) and your
+   `fix_description`, applies the changes, commits, and pushes. That push
+   re-triggers the review with a reset autofix counter. Keep the described
+   changes minimal and focused — only the issues that blocked the review.
 
 C) **close_and_reissue** — The PR is fundamentally broken (wrong approach,
    missing critical functionality, build-breaking errors you cannot fix).
@@ -54,8 +58,11 @@ D) **merge_with_followup** — Available primarily when retries are
 Rules:
 - Be precise. Cite specific files and line numbers.
 - Do not refactor, redesign, or expand scope.
-- For option B (fix): make the actual code changes in the repository. Do not
-  just describe what to change — apply the fixes directly using file writes.
+- For option B (fix): describe the changes precisely in `fix_description`
+  (files, line ranges, what to change). This decision step is read-only;
+  the workflow's subsequent write-mode editor step applies your described
+  changes — you do NOT write files in this turn. Be specific enough that
+  the downstream editor can land the fix without re-deriving the diagnosis.
 - For option C (close_and_reissue): write a detailed issue body that explains
   what went wrong and provides specific implementation guidance.
 - For option C (close_and_reissue): include grounded `remaining_issues[]`
@@ -103,7 +110,14 @@ Rules:
   close_and_reissue for standalone PRs when there's any doubt the
   sync merge will succeed. Do NOT pick this action if the PR has
   build/test breakage or critical correctness/security defects —
-  pick close_and_reissue instead.
+  pick close_and_reissue instead. EXCEPTION: when the only remaining
+  defect is surgical (single-file, small bounded patch) AND the PR
+  targets a non-mainline integration branch (e.g. orchestrator/* or
+  another in-progress integration line where shipping the residual
+  gap behind the in-progress project is acceptable), prefer
+  merge_with_followup over close_and_reissue even when the defect is
+  classed as critical — the follow-up issue tracks the surgical fix
+  and the PR's existing changes are preserved instead of discarded.
 - Prefer merge (A) over fix (B) when remaining issues are non-critical.
 - Prefer fix (B) over close_and_reissue (C) when the fix is straightforward.
 - Prefer merge_with_followup (D) over close_and_reissue (C) at IS_FINAL
@@ -149,7 +163,7 @@ Output contract:
         "symptom": "<brief grounded gap>"
       }
     ],
-    "fix_description": "<if action=fix: what you changed. else: empty>",
+    "fix_description": "<if action=fix: precise description of files, line ranges, and changes for the downstream write-mode editor to apply. else: empty>",
     "new_issue": {
       "title": "<only if action=close_and_reissue>",
       "body": "<only if action=close_and_reissue: full issue body with implementation guidance>"
