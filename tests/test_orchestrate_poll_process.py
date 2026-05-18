@@ -7671,7 +7671,8 @@ def test_verify_integration_fingerprints_blank_cli_ref_falls_back_to_working_tre
 	# ``--ref=`` used to route reads through ``git show :path`` /
 	# ``git cat-file -e :path`` (the index), which is wrong when the
 	# caller really supplied a blank ref by mistake. Normalize blank CLI
-	# refs back to working-tree mode instead.
+	# refs back to working-tree mode instead, even when the env-var
+	# fallback is set.
 	import contextlib
 	import io
 
@@ -7696,14 +7697,22 @@ def test_verify_integration_fingerprints_blank_cli_ref_falls_back_to_working_tre
 		fp_path = Path(td_root) / "fp.json"
 		fp_path.write_text(json.dumps(fingerprints), encoding="utf-8")
 		prev_cwd = os.getcwd()
+		prev_env = os.environ.get("INTEGRATION_VERIFY_REF")
 		stderr_buf = io.StringIO()
 		try:
 			os.chdir(repo)
+			os.environ["INTEGRATION_VERIFY_REF"] = "HEAD"
 			with contextlib.redirect_stderr(stderr_buf):
 				rc = mod.main(["--ref=", str(fp_path)])
-			assert rc == 0, "blank CLI ref must fall back to working-tree mode"
+			assert rc == 0, (
+				"blank CLI ref must keep working-tree mode even when the env fallback is set"
+			)
 		finally:
 			os.chdir(prev_cwd)
+			if prev_env is None:
+				os.environ.pop("INTEGRATION_VERIFY_REF", None)
+			else:
+				os.environ["INTEGRATION_VERIFY_REF"] = prev_env
 		assert "blank --ref value supplied" in stderr_buf.getvalue()
 
 
@@ -7726,11 +7735,26 @@ def test_wave_dispatch_gate_invokes_verifier_against_integration_ref():
 		"wave-dispatch gate must run the verifier in --ref mode against the "
 		"integration branch HEAD (not the cwd working tree)"
 	)
-	assert '_gate_ref="FETCH_HEAD"' in script, (
-		"wave-dispatch gate must verify the freshly fetched integration ref, not a potentially stale local ref"
+	assert 'git rev-parse --verify FETCH_HEAD' in script, (
+		"wave-dispatch gate must pin the freshly fetched integration ref to a commit SHA before verification"
+	)
+	assert '_gate_ref="${_gate_integration_branch}"' not in script, (
+		"wave-dispatch gate must not fall back to a potentially stale local integration branch when origin is unavailable"
 	)
 	assert "fetch of integration branch" in script, (
 		"wave-dispatch gate must warn and fail open when the integration-branch fetch fails"
+	)
+	assert 'elif [ "${_gate_exit}" -eq 2 ]; then' in script, (
+		"wave-dispatch gate must surface verifier plumbing failures with an explicit warning"
+	)
+	assert "verifier exited 2 (plumbing failure)" in script, (
+		"wave-dispatch gate warning must explain the fail-open verifier exit-2 path"
+	)
+	assert "trap 'rm -f \"${_gate_fp_file:-}\" \"${_gate_log_file:-}\" 2>/dev/null || true' EXIT" in script, (
+		"wave-dispatch gate must protect temp-file cleanup with an EXIT trap"
+	)
+	assert 'trap - EXIT' in script, (
+		"wave-dispatch gate must clear its temporary EXIT trap after explicit cleanup"
 	)
 	# Failure-path side effects: stall cycle bump, tracking comment,
 	# telegram alert.

@@ -12124,25 +12124,24 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
            && [ "${_gate_fp_count}" -gt 0 ] \
            && [ -f "scripts/verify_integration_fingerprints.py" ]; then
           # Resolve a fresh ref for the integration branch. In the normal
-          # GitHub Actions path, verify against FETCH_HEAD from the fetch
-          # we just performed so a fetch failure cannot silently fall back
-          # to a stale local ref. Outside that context (e.g. local
-          # sandboxes without an origin remote), fall back to the local
-          # branch name.
+          # GitHub Actions path, fetch the branch and pin FETCH_HEAD to a
+          # concrete commit SHA immediately so later git operations cannot
+          # retarget the verifier to a different commit. Outside that
+          # context (e.g. local sandboxes without an origin remote), fail
+          # open rather than verify a potentially stale local branch tip.
           _gate_ref=""
           if git remote get-url origin >/dev/null 2>&1; then
             if git fetch --no-tags --quiet origin "${_gate_integration_branch}" >/dev/null 2>&1; then
-              _gate_ref="FETCH_HEAD"
+              _gate_ref="$(git rev-parse --verify FETCH_HEAD 2>/dev/null || true)"
             else
               echo "::warning::Wave-dispatch gate: fetch of integration branch '${_gate_integration_branch}' failed; gate fails open and dispatch proceeds."
             fi
-          else
-            _gate_ref="${_gate_integration_branch}"
           fi
           if [ -n "${_gate_ref}" ] && git rev-parse --verify "${_gate_ref}" >/dev/null 2>&1; then
             _gate_fp_file="$(mktemp "${TMPDIR:-/tmp}/wave_dispatch_fp.XXXXXX")"
-            jq -c '.merged_issue_fingerprints // {}' "${STATE_FILE}" > "${_gate_fp_file}"
             _gate_log_file="$(mktemp "${TMPDIR:-/tmp}/wave_dispatch_log.XXXXXX")"
+            trap 'rm -f "${_gate_fp_file:-}" "${_gate_log_file:-}" 2>/dev/null || true' EXIT
+            jq -c '.merged_issue_fingerprints // {}' "${STATE_FILE}" > "${_gate_fp_file}"
             _gate_exit=0
             INTEGRATION_BRANCH_NAME="${_gate_integration_branch}" \
               python3 scripts/verify_integration_fingerprints.py \
@@ -12158,10 +12157,13 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
               # comment so the human reader doesn't have to dig into
               # the run log to see what broke.
               _gate_violations="$(grep -E '^::error::  -' "${_gate_log_file}" | head -n 20 || true)"
+            elif [ "${_gate_exit}" -eq 2 ]; then
+              echo "::warning::Wave-dispatch gate: verifier exited 2 (plumbing failure); gate fails open and dispatch proceeds."
             fi
             rm -f "${_gate_fp_file}" "${_gate_log_file}" 2>/dev/null || true
+            trap - EXIT
           else
-            echo "::warning::Wave-dispatch gate: could not resolve integration branch ref '${_gate_integration_branch}' locally; gate fails open and dispatch proceeds."
+            echo "::warning::Wave-dispatch gate: could not resolve a fresh verification ref for integration branch '${_gate_integration_branch}'; gate fails open and dispatch proceeds."
           fi
         fi
 

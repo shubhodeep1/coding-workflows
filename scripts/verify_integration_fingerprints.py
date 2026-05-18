@@ -658,6 +658,7 @@ def main(argv: list[str] | None = None) -> int:
 	# order before the positional fingerprints path.
 	list_mode = False
 	ref: str | None = None
+	cli_ref_supplied = False
 	while args:
 		if args[0] == "--list-violated-files":
 			list_mode = True
@@ -673,10 +674,12 @@ def main(argv: list[str] | None = None) -> int:
 				args = args[1:]
 				continue
 			ref = args[1]
+			cli_ref_supplied = True
 			args = args[2:]
 			continue
 		if args[0].startswith("--ref="):
 			ref = args[0][len("--ref="):]
+			cli_ref_supplied = True
 			args = args[1:]
 			continue
 		break
@@ -690,7 +693,7 @@ def main(argv: list[str] | None = None) -> int:
 			file=sys.stderr,
 		)
 
-	if ref is None:
+	if ref is None and not cli_ref_supplied:
 		env_ref = os.environ.get("INTEGRATION_VERIFY_REF", "").strip()
 		if env_ref:
 			ref = env_ref
