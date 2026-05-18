@@ -1,0 +1,396 @@
+#!/usr/bin/env python3
+"""Focused regression coverage for baseline-aware fingerprint verification."""
+
+from __future__ import annotations
+
+import contextlib
+import importlib.util
+import io
+import json
+import os
+import shutil
+import tempfile
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+FIXTURES_DIR = REPO_ROOT / "tests" / "fixtures" / "integration_fingerprints"
+
+
+def _verifier_module():
+	spec = importlib.util.spec_from_file_location(
+		"verify_integration_fingerprints",
+		REPO_ROOT / "scripts" / "verify_integration_fingerprints.py",
+	)
+	assert spec is not None and spec.loader is not None
+	mod = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(mod)
+	return mod
+
+
+def _verifier_sandbox(files: dict[str, str], fingerprints: dict) -> tuple[Path, Path]:
+	td = Path(tempfile.mkdtemp(prefix="verifier-baseline-test-"))
+	for rel, content in files.items():
+		path = td / rel
+		path.parent.mkdir(parents=True, exist_ok=True)
+		path.write_text(content, encoding="utf-8")
+	fp_path = td / "fingerprints.json"
+	fp_path.write_text(json.dumps(fingerprints), encoding="utf-8")
+	return td, fp_path
+
+
+@contextlib.contextmanager
+def _sandbox(files: dict[str, str], fingerprints: dict):
+	sandbox, fp_path = _verifier_sandbox(files, fingerprints)
+	try:
+		yield sandbox, fp_path
+	finally:
+		shutil.rmtree(sandbox, ignore_errors=True)
+
+
+def _run_verifier(mod, argv: list[str], cwd: Path) -> tuple[int, str, str]:
+	out_buf = io.StringIO()
+	err_buf = io.StringIO()
+	prev_cwd = os.getcwd()
+	try:
+		os.chdir(cwd)
+		with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
+			rc = mod.main(argv)
+	finally:
+		os.chdir(prev_cwd)
+	return rc, out_buf.getvalue(), err_buf.getvalue()
+
+
+def _write_json(path: Path, data: dict) -> None:
+	path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def test_verify_integration_fingerprints_baseline_capture_writes_schema_v1_json():
+	mod = _verifier_module()
+	files = {
+		"scripts/example.py": "EXPECTED_LINE\n",
+	}
+	fingerprints = {
+		"1500": {
+			"issue": 1500,
+			"pr": 1501,
+			"must_contain": [
+				{"file": "scripts/example.py", "regex": r"EXPECTED_LINE"},
+			],
+			"must_not_contain": [
+				{"file": "scripts/example.py", "regex": r"BANNED_LINE"},
+			],
+		}
+	}
+	with _sandbox(files, fingerprints) as (sandbox, fp_path):
+		baseline_path = sandbox / "baseline.json"
+		rc, out, err = _run_verifier(
+			mod,
+			["--baseline-fingerprints-state", str(baseline_path), str(fp_path)],
+			sandbox,
+		)
+		assert rc == 0
+		assert out == ""
+		assert err == ""
+		state = json.loads(baseline_path.read_text(encoding="utf-8"))
+		assert state["schema_version"] == 1
+		assert "captured_at" in state
+		assert "branch" in state
+		assert "head_sha" in state
+		issue = state["fingerprints"]["1500"]
+		assert issue["issue"] == 1500
+		assert issue["pr"] == 1501
+		assert issue["must_contain"] == [
+			{
+				"fp_key": ["scripts/example.py", "EXPECTED_LINE"],
+				"file": "scripts/example.py",
+				"regex": "EXPECTED_LINE",
+				"satisfied": True,
+			}
+		]
+		assert issue["must_not_contain"] == [
+			{
+				"fp_key": ["scripts/example.py", "BANNED_LINE"],
+				"file": "scripts/example.py",
+				"regex": "BANNED_LINE",
+				"satisfied": True,
+			}
+		]
+
+
+def test_verify_integration_fingerprints_baseline_capture_warns_but_exits_zero_on_output_write_failure():
+	mod = _verifier_module()
+	files = {
+		"scripts/example.py": "EXPECTED_LINE\n",
+	}
+	fingerprints = {
+		"1500": {
+			"issue": 1500,
+			"pr": 1501,
+			"must_contain": [
+				{"file": "scripts/example.py", "regex": r"EXPECTED_LINE"},
+			],
+			"must_not_contain": [],
+		}
+	}
+	with _sandbox(files, fingerprints) as (sandbox, fp_path):
+		baseline_dir = sandbox / "baseline-dir"
+		baseline_dir.mkdir()
+		rc, out, err = _run_verifier(
+			mod,
+			["--baseline-fingerprints-state", str(baseline_dir), str(fp_path)],
+			sandbox,
+		)
+		assert rc == 0
+		assert "::warning::baseline capture failed:" in out
+		assert err == ""
+
+
+def test_verify_integration_fingerprints_compare_mode_passes_on_pre_existing_drift():
+	mod = _verifier_module()
+	files = {
+		"scripts/example.py": "CURRENT_BRANCH_ONLY\n",
+	}
+	fingerprints = {
+		"1500": {
+			"issue": 1500,
+			"pr": 1501,
+			"must_contain": [
+				{"file": "scripts/example.py", "regex": r"EXPECTED_LINE"},
+			],
+			"must_not_contain": [],
+		}
+	}
+	with _sandbox(files, fingerprints) as (sandbox, fp_path):
+		baseline_path = sandbox / "baseline.json"
+		rc, _out, _err = _run_verifier(
+			mod,
+			["--baseline-fingerprints-state", str(baseline_path), str(fp_path)],
+			sandbox,
+		)
+		assert rc == 0
+		rc, out, err = _run_verifier(
+			mod,
+			["--compare-against-baseline", str(baseline_path), str(fp_path)],
+			sandbox,
+		)
+		assert rc == 0
+		assert "::warning::PRE_EXISTING_FINGERPRINT_DRIFT_V1 unchanged" in out
+		assert "Integration fingerprint verification PASSED — no resolver-introduced regressions relative to baseline." in out
+		assert err == ""
+
+
+def test_verify_integration_fingerprints_compare_mode_fails_on_resolver_introduced_regression():
+	mod = _verifier_module()
+	files = {
+		"scripts/example.py": "EXPECTED_LINE\n",
+	}
+	fingerprints = {
+		"1500": {
+			"issue": 1500,
+			"pr": 1501,
+			"must_contain": [
+				{"file": "scripts/example.py", "regex": r"EXPECTED_LINE"},
+			],
+			"must_not_contain": [],
+		}
+	}
+	with _sandbox(files, fingerprints) as (sandbox, fp_path):
+		baseline_path = sandbox / "baseline.json"
+		rc, _out, _err = _run_verifier(
+			mod,
+			["--baseline-fingerprints-state", str(baseline_path), str(fp_path)],
+			sandbox,
+		)
+		assert rc == 0
+		(sandbox / "scripts" / "example.py").write_text("REGRESSED_LINE\n", encoding="utf-8")
+		rc, out, err = _run_verifier(
+			mod,
+			["--compare-against-baseline", str(baseline_path), str(fp_path)],
+			sandbox,
+		)
+		assert rc == 1
+		assert "Integration fingerprint verification FAILED — resolver output regressed merged sub-issue intent:" in out
+		assert "Refusing to create [ai-merge-resolve] commit." in out
+		assert err == ""
+
+
+def test_verify_integration_fingerprints_compare_mode_emits_fixed_by_resolver_notice():
+	mod = _verifier_module()
+	files = {
+		"scripts/example.py": "CURRENT_BRANCH_ONLY\n",
+	}
+	fingerprints = {
+		"1500": {
+			"issue": 1500,
+			"pr": 1501,
+			"must_contain": [
+				{"file": "scripts/example.py", "regex": r"EXPECTED_LINE"},
+			],
+			"must_not_contain": [],
+		}
+	}
+	with _sandbox(files, fingerprints) as (sandbox, fp_path):
+		baseline_path = sandbox / "baseline.json"
+		rc, _out, _err = _run_verifier(
+			mod,
+			["--baseline-fingerprints-state", str(baseline_path), str(fp_path)],
+			sandbox,
+		)
+		assert rc == 0
+		(sandbox / "scripts" / "example.py").write_text("EXPECTED_LINE\n", encoding="utf-8")
+		rc, out, err = _run_verifier(
+			mod,
+			["--compare-against-baseline", str(baseline_path), str(fp_path)],
+			sandbox,
+		)
+		assert rc == 0
+		assert "::notice::PRE_EXISTING_FINGERPRINT_DRIFT_V1 fixed_by_resolver" in out
+		assert err == ""
+
+
+def test_verify_integration_fingerprints_compare_mode_falls_back_to_absolute_check_for_current_only_fingerprints():
+	mod = _verifier_module()
+	files = {
+		"scripts/stable.py": "STABLE_LINE\n",
+		"scripts/new.py": "WRONG_LINE\n",
+	}
+	baseline_fingerprints = {
+		"1500": {
+			"issue": 1500,
+			"pr": 1501,
+			"must_contain": [
+				{"file": "scripts/stable.py", "regex": r"STABLE_LINE"},
+			],
+			"must_not_contain": [],
+		}
+	}
+	current_fingerprints = {
+		**baseline_fingerprints,
+		"1600": {
+			"issue": 1600,
+			"pr": 1601,
+			"must_contain": [
+				{"file": "scripts/new.py", "regex": r"NEEDED_LINE"},
+			],
+			"must_not_contain": [],
+		},
+	}
+	with _sandbox(files, baseline_fingerprints) as (sandbox, baseline_fp_path):
+		current_fp_path = sandbox / "current-fingerprints.json"
+		_write_json(current_fp_path, current_fingerprints)
+		baseline_path = sandbox / "baseline.json"
+		rc, _out, _err = _run_verifier(
+			mod,
+			["--baseline-fingerprints-state", str(baseline_path), str(baseline_fp_path)],
+			sandbox,
+		)
+		assert rc == 0
+		rc, out, err = _run_verifier(
+			mod,
+			["--compare-against-baseline", str(baseline_path), str(current_fp_path)],
+			sandbox,
+		)
+		assert rc == 1
+		assert "issue #1600" in out
+		assert "must_contain pattern missing from 'scripts/new.py'" in out
+		assert err == ""
+
+
+def test_verify_integration_fingerprints_compare_mode_falls_back_to_absolute_verify_on_malformed_baseline():
+	mod = _verifier_module()
+	files = {
+		"scripts/example.py": "CURRENT_BRANCH_ONLY\n",
+	}
+	fingerprints = {
+		"1500": {
+			"issue": 1500,
+			"pr": 1501,
+			"must_contain": [
+				{"file": "scripts/example.py", "regex": r"EXPECTED_LINE"},
+			],
+			"must_not_contain": [],
+		}
+	}
+	with _sandbox(files, fingerprints) as (sandbox, fp_path):
+		bad_baseline = sandbox / "bad-baseline.json"
+		bad_baseline.write_text("not json at all", encoding="utf-8")
+		rc, out, err = _run_verifier(
+			mod,
+			["--compare-against-baseline", str(bad_baseline), str(fp_path)],
+			sandbox,
+		)
+		assert rc == 1
+		assert "::warning::baseline malformed (baseline JSON unparseable" in out
+		assert "Integration fingerprint verification FAILED — resolver output regressed merged sub-issue intent:" in out
+		assert err == ""
+
+
+def test_verify_integration_fingerprints_rejects_mutually_exclusive_baseline_flags():
+	mod = _verifier_module()
+	files = {
+		"scripts/example.py": "EXPECTED_LINE\n",
+	}
+	fingerprints = {
+		"1500": {
+			"issue": 1500,
+			"pr": 1501,
+			"must_contain": [
+				{"file": "scripts/example.py", "regex": r"EXPECTED_LINE"},
+			],
+			"must_not_contain": [],
+		}
+	}
+	with _sandbox(files, fingerprints) as (sandbox, fp_path):
+		baseline_path = sandbox / "baseline.json"
+		rc, out, err = _run_verifier(
+			mod,
+			[
+				"--baseline-fingerprints-state",
+				str(baseline_path),
+				"--compare-against-baseline",
+				str(baseline_path),
+				str(fp_path),
+			],
+			sandbox,
+		)
+		assert rc == 2
+		assert out == ""
+		assert "mutually exclusive" in err
+
+
+def test_verify_integration_fingerprints_pr1569_fixture_passes_in_compare_mode_but_fails_in_legacy_mode():
+	mod = _verifier_module()
+	fixture_path = FIXTURES_DIR / "pr1569_run_24872524074.json"
+	files = {
+		"scripts/review_conflict_resolve.sh": "preserved resolver line\nresolver body still present\n",
+		"scripts/review_conflict_prepare.sh": "prepare guard remains\n",
+	}
+	with _sandbox(files, {}) as (sandbox, _fp_path):
+		baseline_path = sandbox / "baseline.json"
+		rc, _out, _err = _run_verifier(
+			mod,
+			["--baseline-fingerprints-state", str(baseline_path), str(fixture_path)],
+			sandbox,
+		)
+		assert rc == 0
+		legacy_rc, legacy_out, legacy_err = _run_verifier(mod, [str(fixture_path)], sandbox)
+		assert legacy_rc == 1
+		assert "issue #1519" in legacy_out
+		assert legacy_err == ""
+		compare_rc, compare_out, compare_err = _run_verifier(
+			mod,
+			["--compare-against-baseline", str(baseline_path), str(fixture_path)],
+			sandbox,
+		)
+		assert compare_rc == 0
+		assert "::warning::PRE_EXISTING_FINGERPRINT_DRIFT_V1 unchanged" in compare_out
+		assert "Integration fingerprint verification PASSED — no resolver-introduced regressions relative to baseline." in compare_out
+		assert compare_err == ""
+
+
+if __name__ == "__main__":
+	for _name, _value in sorted(globals().items()):
+		if _name.startswith("test_") and callable(_value):
+			_value()
+	print("PASS")
