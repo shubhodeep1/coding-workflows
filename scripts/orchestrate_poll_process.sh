@@ -2279,7 +2279,6 @@ mark_integration_branch_missing_failed() {
 ${reason}"
   _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
   handle_comprehensive_release_callback_if_needed "failed" "${_tracking_labels}" "${COMMENTS:-[]}"
-  tg_cleanup_msgs "${TRACKING_NUM}"
   tg_notify "❌ Project #${TRACKING_NUM} failed: ${tg_reason}."
 }
 
@@ -4453,7 +4452,6 @@ ${reason}
 
 Failure class \`${_deterministic_class}\` is environment-deterministic; retrying this workflow on the same runner image will not help. Skipping the recovery budget. Manual intervention required."
     tg_notify "Project #${TRACKING_NUM} validation failed deterministically (class=${_deterministic_class}). Manual intervention required." "CRITICAL"
-    tg_cleanup_msgs "${TRACKING_NUM}"
     return 0
   fi
 
@@ -4496,7 +4494,6 @@ ${reason}
 
 Validation recovery exhausted (${val_recovery_count}/${MAX_VALIDATION_RECOVERY_ATTEMPTS}). Manual intervention required."
   tg_notify "Project #${TRACKING_NUM} validation failed after ${val_recovery_count} recovery attempt(s). Manual intervention required." "CRITICAL"
-  tg_cleanup_msgs "${TRACKING_NUM}"
 }
 
 mark_validation_complete() {
@@ -4565,7 +4562,6 @@ Runtime validation passed, but the final squash merge of \`${integration_branch}
 - Last recorded error: ${_final_err:-No specific error recorded; check final PR for branch protection or required-check failures.}
 
 Manual intervention required: resolve the blocking condition on the final PR (merge conflicts, required checks, branch protections) and re-trigger the poller, or merge manually."
-    tg_cleanup_msgs "${TRACKING_NUM}"
     tg_notify "Project #${TRACKING_NUM} blocked: validation passed but integration→${default_branch} merge did not land after ${MAX_FINAL_MERGE_ATTEMPTS} attempts. Manual intervention required." "CRITICAL"
     return 0
   fi
@@ -11452,7 +11448,6 @@ Judge has used ${JUDGE_STALL_CYCLES} stall cycle(s) (recovery/fix-ups) out of ${
 Clean wave advances do not count against this limit.
 Manual intervention required." >/dev/null
     tg_notify "Project #${TRACKING_NUM} FAILED: judge stall cycle limit (${JUDGE_STALL_CYCLES}/${MAX_JUDGE}) exceeded." "CRITICAL"
-    tg_cleanup_msgs "${TRACKING_NUM}"
     continue
   fi
 
@@ -11872,7 +11867,6 @@ The judge produced the same normalized failure fingerprint for ${JUDGE_FINGERPRI
 
 To avoid repeating the same recovery loop, the orchestrator is not creating additional fix-up issues or running another judge-driven auto-recovery cycle. Manual intervention is required."
 
-        tg_cleanup_msgs "${TRACKING_NUM}"
         tg_notify "Project #${TRACKING_NUM} blocked: repeated judge failure fingerprint exceeded JUDGE_REPEAT_FINGERPRINT_MAX=${JUDGE_REPEAT_FINGERPRINT_MAX}. Manual intervention required." "CRITICAL"
         continue
       fi
@@ -11895,7 +11889,6 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 **Assessment:** ${JUDGE_ASSESSMENT}" >/dev/null
 
         tg_notify "Project #${TRACKING_NUM} FAILED after ${RECOVERY_COUNT} recovery attempt(s). Manual intervention needed." "CRITICAL"
-        tg_cleanup_msgs "${TRACKING_NUM}"
         continue
       fi
 

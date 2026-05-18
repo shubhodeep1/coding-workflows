@@ -538,7 +538,7 @@ jobs:
           fi
 
       - name: Cleanup tracked Telegram messages
-        if: always()
+        if: always() && github.event.pull_request.merged == true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
