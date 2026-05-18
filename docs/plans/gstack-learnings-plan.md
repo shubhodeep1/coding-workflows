@@ -146,10 +146,10 @@ than re-litigate.
   they target different phases (this one: `mode-plan.txt`; sibling:
   `prompts/mode-judge*.txt`), so no flag-namespace collision is
   expected, but reviewers should sanity-check.
-- `docs/plans/judge-loop-and-reissue-plan.md` — sibling plan
-  covering judge-in-loop, sticky findings, typed rejections; Phase H
+- commit `03d231b` (judge-loop and reissue, shipped) — covers
+  judge-in-loop, sticky findings, typed rejections; Phase H
   here (lessons-learned capture from consolidator/judge) overlaps
-  that plan's sticky-findings work — same files (`scripts/review_consolidate.sh`,
+  the shipped sticky-findings work — same files (`scripts/review_consolidate.sh`,
   `prompts/mode-judge.txt`), different aim (this one writes to
   `ai-memory`, that one writes to the ledger), so the two changes
   can land independently but should share an env-var prefix.
@@ -1606,8 +1606,8 @@ implementation starts.
 - `docs/plans/ai-code-review-learnings-plan.md` — sibling plan
   applying Cloudflare's `ai-code-review` lessons (overlaps
   Phase E here).
-- `docs/plans/judge-loop-and-reissue-plan.md` — sibling plan
-  covering judge-in-loop, sticky findings, typed rejections
+- commit `03d231b` (judge-loop and reissue, shipped) — covers
+  judge-in-loop, sticky findings, typed rejections
   (overlaps Phase H here).
 - `docs/symphony-inspired-improvements.md` — sibling plan
   applying Symphony's lessons (overlaps Phase O here on strict

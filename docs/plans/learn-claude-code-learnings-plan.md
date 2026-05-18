@@ -1092,7 +1092,7 @@ zh:{title,description}, ja:{...} }`.
 
 - `docs/plans/complete-squad-improvements-plan.md:189-198` has an
   "Alternatives considered" prose section.
-- `docs/plans/judge-loop-and-reissue-plan.md` and
+- commit `03d231b` (judge-loop and reissue plan, now shipped) and
   `docs/plans/ai-code-review-learnings-plan.md` also have prose
   alternatives sections.
 - `docs/plans/apply-ai-tools-learnings-plan.md` does not.
@@ -1160,8 +1160,9 @@ workflow step; never blocks merge.
 - **Bake-out.** Land convention + linter with flag off. Validate
   the linter parses `apply-ai-tools-learnings-plan.md`,
   `ai-code-review-learnings-plan.md`,
-  `complete-squad-improvements-plan.md`,
-  `judge-loop-and-reissue-plan.md`, and this plan correctly.
+  `complete-squad-improvements-plan.md` (the judge-loop plan was
+  shipped as commit `03d231b` and its plan doc removed), and this
+  plan correctly.
   Flip flag on after one clean week.
 - **Fail-open.** Linter is advisory only. Plan PRs can land
   without `## Decisions`; the linter just warns. (`continue-on-error`
