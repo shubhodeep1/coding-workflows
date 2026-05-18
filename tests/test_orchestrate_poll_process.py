@@ -8108,12 +8108,19 @@ def test_resolver_tooling_refresh_function_has_merge_base_divergence_guard():
 			f"must reference {ref!r}; without it the divergence check would "
 			f"compare against the wrong baseline."
 		)
-	# Per-file base_hash lookup must happen.
-	assert 'base_hash="$(git rev-parse "${merge_base}:${f}"' in fn_body, (
-		"_refresh_integration_resolver_tooling must compute base_hash by "
-		'running `git rev-parse "${merge_base}:${f}"` for each file in the '
-		"refresh loop."
-	)
+	# Per-file tree-path lookups must use --verify/--quiet so a missing
+	# path resolves to an empty string rather than the literal REV:PATH
+	# token on stdout.
+	for lookup in (
+		'main_hash="$(git rev-parse --verify --quiet "refs/remotes/origin/${default_branch}:${f}"',
+		'int_hash="$(git rev-parse --verify --quiet "HEAD:${f}"',
+		'base_hash="$(git rev-parse --verify --quiet "${merge_base}:${f}"',
+	):
+		assert lookup in fn_body, (
+			"_refresh_integration_resolver_tooling must use `git rev-parse "
+			"--verify --quiet` for every tree-path hash lookup so missing "
+			"files produce an empty string instead of a literal REV:PATH token."
+		)
 	# The function must `continue` (skip refresh) when the integration
 	# branch's hash for the file diverges from the merge-base hash —
 	# this is the actual guard that prevents the issue #2734
@@ -8305,6 +8312,7 @@ def test_resolver_tooling_refresh_still_refreshes_files_unchanged_on_integration
 			)
 		(work / "scripts").mkdir()
 		refresh_target = work / "scripts" / "check_resolver_diff.sh"
+		main_only_target = work / "scripts" / "targeted_file_context.py"
 		refresh_target.write_text("# main v1\n", encoding="utf-8")
 
 		def _git(*args: str) -> None:
@@ -8328,6 +8336,11 @@ def test_resolver_tooling_refresh_still_refreshes_files_unchanged_on_integration
 		# Bump main with a fix to the allowlisted file.
 		_git("checkout", "main")
 		refresh_target.write_text("# main v2 with toolchain fix\n", encoding="utf-8")
+		# Also add a second allowlisted file that exists only on main.
+		# Missing-path tree lookups must resolve to empty strings here;
+		# otherwise git rev-parse writes literal REV:PATH tokens and the
+		# refresh incorrectly treats the file as integration-owned drift.
+		main_only_target.write_text("# main-only helper\n", encoding="utf-8")
 		_git("add", "-A")
 		_git("commit", "-m", "main: ship toolchain fix", "--quiet")
 		_git("push", "origin", "main", "--quiet")
@@ -8371,6 +8384,21 @@ def test_resolver_tooling_refresh_still_refreshes_files_unchanged_on_integration
 			"deadlock-breaking path regressed.\n"
 			f"Expected '# main v2 with toolchain fix' on the integration "
 			f"branch.\nGot: {actual!r}\n"
+			f"---\nrefresh stdout:\n{result.stdout}\n"
+			f"---\nrefresh stderr:\n{result.stderr}\n"
+		)
+		added_actual = subprocess.run(
+			["git", "-C", str(work), "show",
+			 "origin/orchestrator/project-99:scripts/targeted_file_context.py"],
+			capture_output=True, text=True, check=True,
+		).stdout
+		assert added_actual == "# main-only helper\n", (
+			"_refresh_integration_resolver_tooling failed to refresh a "
+			"main-only allowlisted file that was absent on the integration "
+			"branch. Missing-path tree lookups must resolve to empty strings, "
+			"not literal REV:PATH tokens.\n"
+			f"Expected '# main-only helper' on the integration branch.\n"
+			f"Got: {added_actual!r}\n"
 			f"---\nrefresh stdout:\n{result.stdout}\n"
 			f"---\nrefresh stderr:\n{result.stderr}\n"
 		)

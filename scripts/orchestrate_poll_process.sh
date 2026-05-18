@@ -3328,8 +3328,11 @@ _refresh_integration_resolver_tooling() {
         if ! git cat-file -e "refs/remotes/origin/${default_branch}:${f}" 2>/dev/null; then
           continue
         fi
-        main_hash="$(git rev-parse "refs/remotes/origin/${default_branch}:${f}" 2>/dev/null || echo "")"
-        int_hash="$(git rev-parse "HEAD:${f}" 2>/dev/null || echo "")"
+        # Keep --verify/--quiet on these tree-path lookups: without
+        # them, a missing path writes the unresolved REV:PATH token to
+        # stdout, which makes absent files look like real hashes.
+        main_hash="$(git rev-parse --verify --quiet "refs/remotes/origin/${default_branch}:${f}" 2>/dev/null || echo "")"
+        int_hash="$(git rev-parse --verify --quiet "HEAD:${f}" 2>/dev/null || echo "")"
         [ -n "${main_hash}" ] || continue
         if [ "${main_hash}" = "${int_hash}" ]; then
           continue
@@ -3347,7 +3350,7 @@ _refresh_integration_resolver_tooling() {
         # "file did not exist at merge-base, integration added it"
         # case the same way — never clobber an added file.
         if [ -n "${merge_base}" ]; then
-          base_hash="$(git rev-parse "${merge_base}:${f}" 2>/dev/null || echo "")"
+          base_hash="$(git rev-parse --verify --quiet "${merge_base}:${f}" 2>/dev/null || echo "")"
           if [ "${int_hash}" != "${base_hash}" ]; then
             skipped_count=$((skipped_count + 1))
             local _int_short="${int_hash:0:8}"
