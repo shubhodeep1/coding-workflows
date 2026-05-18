@@ -3313,8 +3313,14 @@ _refresh_integration_resolver_tooling() {
         "refs/remotes/origin/${integration_branch}" \
         "refs/remotes/origin/${default_branch}" 2>/dev/null || echo "")"
 
+      if [ -z "${merge_base}" ]; then
+        echo "::warning::${log_prefix} merge-base unresolved for ${integration_branch} vs ${default_branch}; falling back to legacy hash-only comparison." >&2
+      fi
+
       local refreshed_count=0
       local refreshed_list=""
+      local drifted_count=0
+      local skipped_count=0
       local f main_hash int_hash base_hash
       for f in "${refresh_files[@]}"; do
         # Skip if file does not exist on default_branch — never delete
@@ -3328,6 +3334,7 @@ _refresh_integration_resolver_tooling() {
         if [ "${main_hash}" = "${int_hash}" ]; then
           continue
         fi
+        drifted_count=$((drifted_count + 1))
         # Refuse to clobber a file the integration branch has its own
         # committed changes to since the merge-base.  The deadlock-
         # breaker is for files the integration branch has NOT touched
@@ -3342,6 +3349,7 @@ _refresh_integration_resolver_tooling() {
         if [ -n "${merge_base}" ]; then
           base_hash="$(git rev-parse "${merge_base}:${f}" 2>/dev/null || echo "")"
           if [ "${int_hash}" != "${base_hash}" ]; then
+            skipped_count=$((skipped_count + 1))
             local _int_short="${int_hash:0:8}"
             local _base_short="${base_hash:0:8}"
             [ -n "${_base_short}" ] || _base_short="none"
@@ -3365,7 +3373,13 @@ _refresh_integration_resolver_tooling() {
       done
 
       if [ "${refreshed_count}" -eq 0 ]; then
-        echo "  ${log_prefix} no resolver-toolchain drift; nothing to refresh."
+        if [ "${skipped_count}" -gt 0 ] && [ "${skipped_count}" -eq "${drifted_count}" ]; then
+          echo "  ${log_prefix} detected resolver-toolchain drift in ${drifted_count} file(s), but skipped refresh because integration-branch changes must land via normal sync."
+        elif [ "${drifted_count}" -gt 0 ]; then
+          echo "  ${log_prefix} detected resolver-toolchain drift in ${drifted_count} file(s), but nothing was refreshed."
+        else
+          echo "  ${log_prefix} no resolver-toolchain drift; nothing to refresh."
+        fi
         exit 0
       fi
 

@@ -8047,26 +8047,33 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 
 def _extract_refresh_function_body(poller_body: str) -> str:
 	"""Return the full text of `_refresh_integration_resolver_tooling`
-	(including the closing `}` on its own line) from the poller script
-	body. The function is well-formed: it opens with
-	`_refresh_integration_resolver_tooling() {` and closes with a `}`
-	on its own line. All inner `}` are part of `${...}` parameter
-	expansions, so the first standalone `^}$` is the function close.
+	(including the closing `}`) from the poller script body by
+	matching the function's outer brace pair. Standalone inner `{` / `}`
+	command-group braces and nested shell function definitions should
+	not truncate the extracted body.
 	"""
+	lines = poller_body.splitlines()
 	open_marker = "_refresh_integration_resolver_tooling() {"
-	open_idx = poller_body.find(open_marker)
-	if open_idx == -1:
+	try:
+		start_idx = next(i for i, line in enumerate(lines) if line == open_marker)
+	except StopIteration:
 		raise AssertionError(
 			f"{open_marker!r} not found in scripts/orchestrate_poll_process.sh — "
 			"function was renamed or removed."
-		)
-	close_re = re.compile(r"^}\s*$", re.MULTILINE)
-	close_match = close_re.search(poller_body, pos=open_idx + len(open_marker))
-	if close_match is None:
-		raise AssertionError(
-			"closing brace for _refresh_integration_resolver_tooling not found"
-		)
-	return poller_body[open_idx:close_match.end()]
+		) from None
+	depth = 1
+	nested_fn_open_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\(\)\s*\{$")
+	for idx in range(start_idx + 1, len(lines)):
+		stripped = lines[idx].strip()
+		if stripped == "{" or nested_fn_open_re.match(stripped):
+			depth += 1
+		elif stripped == "}":
+			depth -= 1
+			if depth == 0:
+				return "\n".join(lines[start_idx:idx + 1])
+	raise AssertionError(
+		"closing brace for _refresh_integration_resolver_tooling not found"
+	)
 
 
 def test_resolver_tooling_refresh_function_has_merge_base_divergence_guard():
@@ -8227,6 +8234,11 @@ def test_resolver_tooling_refresh_does_not_clobber_files_changed_on_integration_
 			["bash", str(runner)],
 			capture_output=True, text=True, timeout=60,
 		)
+		assert result.returncode == 0, (
+			"_refresh_integration_resolver_tooling fixture run failed before "
+			"the no-clobber assertions could validate its output.\n"
+			f"stdout:\n{result.stdout}\n---\nstderr:\n{result.stderr}\n"
+		)
 		# Source-of-truth for what's actually on the integration branch
 		# is the bare repo. Fetch it via the clone to read.
 		subprocess.run(
@@ -8338,6 +8350,11 @@ def test_resolver_tooling_refresh_still_refreshes_files_unchanged_on_integration
 		result = subprocess.run(
 			["bash", str(runner)],
 			capture_output=True, text=True, timeout=60,
+		)
+		assert result.returncode == 0, (
+			"_refresh_integration_resolver_tooling fixture run failed before "
+			"the deadlock-breaker assertions could validate its output.\n"
+			f"stdout:\n{result.stdout}\n---\nstderr:\n{result.stderr}\n"
 		)
 		subprocess.run(
 			["git", "-C", str(work), "fetch", "origin", "--quiet"],
