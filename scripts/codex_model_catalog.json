@@ -486,7 +486,7 @@
     },
     {
       "slug": "x-ai/grok-4.1-fast",
-      "display_name": "Grok 4.1 Fast",
+      "display_name": "Grok 4.1 Fast (Historical, unavailable)",
       "description": "xAI Grok 4.1 Fast - 2M context, multimodal (text/image), tool calling. Historical catalog entry retained for compatibility; the slug currently has no active OpenRouter endpoints.",
       "supported_reasoning_levels": [
         {"effort": "medium", "description": "Balanced reasoning"},
