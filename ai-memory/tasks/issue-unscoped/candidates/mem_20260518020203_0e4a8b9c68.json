@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:lines 1-7 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: The file contains corrupted bait content instead of the exact three-line specification required by issue #2723.\n  WHY: All reviewers report that the E2E smoke validation expects exactly \"status: ok\", \"run_id: 26009091997\", and \"updated-by: ai-pipeline\" with a trailing newline, but the current file has wrong values and forbidden extra lines that will fail the smoke gate.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:Lines 1-6 (entire file) | confidence=5\n  PROBLEM: The file content on disk does not match the specification in issue #2723 and contains 6 lines of deliberately corrupted bait content.\n  WHY: The E2E smoke validation checks this canary file for exact content, so the corrupted values and extra lines will cause the smoke gate to fail.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:lines 1-6 | confidence=5\n  PROBLEM: The file content does not match the specification in issue #2723 and currently contains corrupted bait content instead of the required three lines.\n  WHY: Issue #2723 explicitly requires the file to contain exactly three lines with specific values, and the current file has 6 lines with wrong values and forbidden extra content.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:lines 1-7 | confidence=5\n  PROBLEM: File contains corrupted bait content instead of the exact three-line specification required by issue #2723.\n  WHY: The E2E smoke test expects the file to match the canonical three-line format, and the corrupted content will cause the smoke test validation to fail.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:lines 1-6 | confidence=5\n  PROBLEM: The file contains corrupted E2E bait content (6 lines) instead of the exact three-line spec required by issue #2723.\n  WHY: The E2E smoke canary file is meant to be validated by downstream checks expecting exactly the three specified lines, and the corrupted content will fail those validation checks.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:lines 1-6 (entire file at HEAD ae4a4626) | confidence=5\n  PROBLEM: The file at PR HEAD does not match the issue #2723 specification.\n  WHY: The canary file is consumed by the E2E smoke test validation, which expects exactly the three specified lines, but the current HEAD content has wrong field values and three extra lines that violate the \"exactly 3 lines\" constraint.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "50e8efaf808229937dbec3fe7981c01c842bfb5ac416fb56f3c3f2c615d852ed",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2728,
+    "run_id": "26009335779",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26009335779",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260518020203_0e4a8b9c68",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2728,
+    "run_id": "26009335779"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-18T02:02:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
