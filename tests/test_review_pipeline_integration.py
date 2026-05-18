@@ -682,6 +682,39 @@ def test_multiround_review_runtime_and_spot_fix_reissue_baseline_contract() -> N
 			"001",
 		)
 
+		(runtime / "review_issues.txt").write_text(
+			_parsed_issue_block(
+				issue_id="001",
+				line_spec="10",
+				rejection_kind="already-rejected-with-evidence",
+				typed_header="EVIDENCE_PRIOR_ROUND",
+				typed_body="round: 1\nissue_id: 001\nrejection_kind: reviewer-wrong\nsticky: true",
+				evidence_text="Missing nil guard around sticky cache refresh.",
+				notes="Shift the repeated finding beyond the sticky bucket so the verifier must promote it.",
+			),
+			encoding="utf-8",
+		)
+		verify_three_result = subprocess.run(
+			["bash", str(REJECT_VERIFY_SCRIPT)],
+			cwd=workspace,
+			env=verify_two_env,
+			capture_output=True,
+			text=True,
+			timeout=60,
+		)
+		verify_three_output = verify_three_result.stdout + verify_three_result.stderr
+		assert verify_three_result.returncode == 0, verify_three_output
+		round_two_reversed_payload = json.loads(round_two_verified.read_text(encoding="utf-8"))
+		assert round_two_reversed_payload["round"] == 2
+		assert round_two_reversed_payload["results"][0]["verdict"] == "does-not-support"
+		promoted_block = _extract_issue_block(
+			(runtime / "review_issues.txt").read_text(encoding="utf-8"),
+			"001",
+		)
+		assert "CLASSIFICATION: must-fix" in promoted_block
+		assert "REVERSAL_REASON: Prior-round verifier artifact points at a different line range." in promoted_block
+		assert "CONSOLIDATOR_REJECT_REVERSED issue=001 kind=already-rejected-with-evidence" in verify_three_result.stdout
+
 		assert _codex_call_count(codex_calls) == 3
 		assert timeout_calls.read_text(encoding="utf-8").splitlines() == ["10", "120", "120"]
 
