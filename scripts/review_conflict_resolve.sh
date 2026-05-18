@@ -445,12 +445,18 @@ _capture_fingerprints_baseline()
   if [ "${_fp_size}" -le 2 ]; then
     return 0
   fi
+  local _baseline_capture_exit=0
   INTEGRATION_BRANCH_NAME="${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
     python3 "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
       --baseline-fingerprints-state "${RESOLVER_FP_BASELINE_STATE_FILE}" \
-      "${INTEGRATION_FINGERPRINTS_FILE}" || true
-  if [ ! -s "${RESOLVER_FP_BASELINE_STATE_FILE}" ]; then
-    echo "::warning::baseline capture unavailable; falling back to absolute fingerprint verification."
+      "${INTEGRATION_FINGERPRINTS_FILE}" || _baseline_capture_exit=$?
+  if [ "${_baseline_capture_exit}" -ne 0 ] || [ ! -s "${RESOLVER_FP_BASELINE_STATE_FILE}" ]; then
+    rm -f "${RESOLVER_FP_BASELINE_STATE_FILE}" 2>/dev/null || true
+    if [ "${_baseline_capture_exit}" -ne 0 ]; then
+      echo "::warning::baseline capture failed (exit ${_baseline_capture_exit}); falling back to absolute fingerprint verification."
+    else
+      echo "::warning::baseline capture unavailable; falling back to absolute fingerprint verification."
+    fi
   fi
 }
 
