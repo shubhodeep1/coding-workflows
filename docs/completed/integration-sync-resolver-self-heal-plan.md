@@ -623,7 +623,7 @@ phase begins. Each is in the same Q-ID format as CLAUDE.md §2.
 
 - Source design: [`docs/integration-sync-resolver-self-heal.md`](../integration-sync-resolver-self-heal.md)
 - Related plan: [`docs/plans/orchestrator-validation-resilience-plan.md`](../plans/orchestrator-validation-resilience-plan.md) — overlapping orchestrator-state and tracking-issue patterns.
-- Related plan: [`docs/plans/judge-loop-and-reissue-plan.md`](./judge-loop-and-reissue-plan.md) — judge-loop terminology referenced in Phase 2's escape valve.
+- Related plan: [`docs/completed/judge-loop-and-reissue-plan.md`](./judge-loop-and-reissue-plan.md) — judge-loop terminology referenced in Phase 2's escape valve.
 - Existing related script: [`scripts/orchestrate_poll_process.sh:3373`](../../scripts/orchestrate_poll_process.sh) (`heal_integration_branch_conflict`).
 - Existing related script: [`scripts/verify_integration_fingerprints.py:382`](../../scripts/verify_integration_fingerprints.py) (`verify()`).
 - Existing related workflow: [`.github/workflows/review_autofix.yml:945`](../../.github/workflows/review_autofix.yml) (`REQUIRED_BOOTSTRAP_SCRIPTS`).

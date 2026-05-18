@@ -1043,10 +1043,14 @@ def compare_against_baseline(
 					mc_total_expected += 1
 					if state["satisfied"]:
 						mc_total_satisfied += 1
-				if state["check_error"] is not None:
-					violations.append(state["violation"])
-					continue
 				baseline_satisfied = baseline_index.get((str(issue_key), kind, state["fp_key"]))
+				if state["check_error"] is not None:
+					if baseline_satisfied is False:
+						_emit_pre_existing_drift_marker(state, issue_num, fixed_by_resolver=False)
+						pre_existing_drift_count += 1
+					else:
+						violations.append(state["violation"])
+					continue
 				if baseline_satisfied is None:
 					if not state["satisfied"]:
 						violations.append(state["violation"])

@@ -252,6 +252,47 @@ def test_verify_integration_fingerprints_compare_mode_passes_on_pre_existing_dri
 		assert err == ""
 
 
+def test_verify_integration_fingerprints_compare_mode_passes_on_pre_existing_check_error():
+	mod = _verifier_module()
+	with tempfile.TemporaryDirectory(prefix="verifier-pre-existing-check-error-") as outside_td:
+		outside_path = Path(outside_td) / "secret.txt"
+		outside_path.write_text("EXPECTED_LINE\n", encoding="utf-8")
+		fingerprints = {
+			"1500": {
+				"issue": 1500,
+				"pr": 1501,
+				"must_contain": [
+					{"file": str(outside_path), "regex": r"EXPECTED_LINE"},
+				],
+				"must_not_contain": [],
+			}
+		}
+		with _sandbox({}, fingerprints) as (sandbox, fp_path):
+			baseline_path = sandbox / "baseline.json"
+			rc, _out, capture_err = _run_verifier(
+				mod,
+				["--baseline-fingerprints-state", str(baseline_path), str(fp_path)],
+				sandbox,
+			)
+			assert rc == 0
+			assert "fingerprint path resolves outside repository root" in capture_err
+			rc, out, err = _run_verifier(
+				mod,
+				["--compare-against-baseline", str(baseline_path), str(fp_path)],
+				sandbox,
+			)
+			assert rc == 0
+			assert "::warning::PRE_EXISTING_FINGERPRINT_DRIFT_V1 unchanged" in out
+			assert "issue=#1500" in out
+			assert "kind=must_contain" in out
+			assert "Integration fingerprint verification FAILED" not in out
+			assert (
+				"Integration fingerprint verification PASSED with pre-existing drift — resolver did not introduce any new regressions "
+				"(pre_existing_drift_count=1; see PRE_EXISTING_FINGERPRINT_DRIFT_V1 markers above for triage)."
+			) in out
+			assert "fingerprint path resolves outside repository root" in err
+
+
 def test_verify_integration_fingerprints_compare_mode_fails_on_resolver_introduced_regression():
 	mod = _verifier_module()
 	files = {
