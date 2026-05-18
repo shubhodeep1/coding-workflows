@@ -8049,8 +8049,9 @@ def _extract_refresh_function_body(poller_body: str) -> str:
 	"""Return the full text of `_refresh_integration_resolver_tooling`
 	(including the closing `}`) from the poller script body by
 	matching the function's outer brace pair. Standalone inner `{` / `}`
-	command-group braces and nested shell function definitions should
-	not truncate the extracted body.
+	command-group braces, operator-attached groups like `cmd && {`, and
+	nested shell function definitions should not truncate the extracted
+	body.
 	"""
 	lines = poller_body.splitlines()
 	open_marker = "_refresh_integration_resolver_tooling() {"
@@ -8063,9 +8064,10 @@ def _extract_refresh_function_body(poller_body: str) -> str:
 		) from None
 	depth = 1
 	nested_fn_open_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\(\)\s*\{$")
+	command_group_open_re = re.compile(r"(?:^|[;&|])\s*\{\s*(?:#.*)?$")
 	for idx in range(start_idx + 1, len(lines)):
 		stripped = lines[idx].strip()
-		if stripped == "{" or nested_fn_open_re.match(stripped):
+		if nested_fn_open_re.match(stripped) or command_group_open_re.search(stripped):
 			depth += 1
 		elif stripped == "}":
 			depth -= 1
@@ -8074,6 +8076,27 @@ def _extract_refresh_function_body(poller_body: str) -> str:
 	raise AssertionError(
 		"closing brace for _refresh_integration_resolver_tooling not found"
 	)
+
+
+def test_extract_refresh_function_body_keeps_operator_attached_command_groups():
+	sample = """_refresh_integration_resolver_tooling() {
+	  echo start
+	  test -n \"${x:-}\" && {
+	    echo inner
+	  }
+	  echo after
+	}
+	after() {
+	  :
+	}"""
+	expected = """_refresh_integration_resolver_tooling() {
+	  echo start
+	  test -n \"${x:-}\" && {
+	    echo inner
+	  }
+	  echo after
+	}"""
+	assert _extract_refresh_function_body(sample) == expected
 
 
 def test_resolver_tooling_refresh_function_has_merge_base_divergence_guard():
