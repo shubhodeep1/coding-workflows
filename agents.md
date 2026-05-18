@@ -145,6 +145,10 @@ and shipped:
 - `CONSOLIDATOR_REJECT_REVERSED`
 - `CONSOLIDATOR_REJECT_VERIFIER_INCONCLUSIVE`
 - `CONSOLIDATOR_REJECT_VERIFIER_FAIL`
+- `STICKY_FINDING_DETECTED`
+- `STICKY_FINDING_PROMOTED`
+- `STICKY_ANNOTATOR_NOOP`
+- `STICKY_FALSE_POS`
 - `BEHAVIOURAL_SMOKE_SYNTHESISED`
 - `BEHAVIOURAL_SMOKE_PRESENT_FAILED`
 - `BEHAVIOURAL_SMOKE_PRESENT_INCONCLUSIVE`
@@ -189,6 +193,7 @@ it is intentionally large.
 - `reviewer_bundle.txt` is the authoritative findings source. `review_issues.txt` and `ledger_status.txt` are advisory only and may not suppress valid raw-bundle findings.
 - `floor_tags.txt` is the only non-skippable advisory channel: findings promoted there must be fixed or explicitly rejected with reason.
 - The consolidator never gates. Empty `consolidator_raw.txt`, parser failure, uncovered anchors, or malformed prior-ledger state must not stop review/autofix.
+- `.ai/review_runtime/pr-${PR_NUMBER}/round-${N}/` is the per-round persistence root for fail-open runtime artifacts (`judge_interim.json`, `verified_rejections.json`, `sticky_findings.json`, `consolidator_parsed.txt`, and `synth/`). It is restored/saved via the same review-autofix cache flow as the ledger; restore misses and malformed prior-round files must degrade to "no priors" rather than block the editor loop.
 - Editor prompts use the grep-friendly override convention `CONSOLIDATOR_OVERRIDDEN: <issue_id> — <reason>` inside the "Ignored suggestions" section when the editor intentionally rejects advisory consolidator guidance. Use `no-issue-id` when the parsed advisory issue has no stable id.
 - Ledger identity is per-PR and stable across iterations via `REVIEW_LEDGER_PATH`. Status contract: `NEW`, `PERSISTING`, `FIXED`, `RESURGENT`, `accepted-residual`.
 - `REVIEW_LEDGER_PERSIST_LIMIT` controls the `PERSISTING -> accepted-residual` transition. Once the threshold is reached, `review_issues.txt` is rewritten to residual stubs while the durable ledger retains the full history.

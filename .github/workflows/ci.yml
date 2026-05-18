@@ -263,6 +263,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_synthesise_smoke.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_pipeline_integration.py
 
       - name: Validate driver synthesised filter contract test
         run: |
