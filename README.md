@@ -1299,9 +1299,9 @@ For non-orchestrator issues, human-intervention alerts are cleaned up automatica
 - **Clarification required** — sent by `clarify.yml` and `plan.yml` for non-orchestrator issues only, deleted when `plan.yml` runs (stored as `<!-- tg_phase:clarify:id -->`). Orchestrator-managed issues skip this alert because clarify uses a label-based fast path (`ai:orchestrator-managed`) that auto-posts `/answer [auto-answered-by-orchestrator]` unless a human forces `/reclarify`; if `plan.yml` cannot auto-parse recommended clarification answers it sends a general tracked `WARNING` and waits for a human `/answer`.
 - **Plan awaiting approval** — sent by `plan.yml` (when `AUTO_IMPLEMENT_ON_CLEAR_PLAN` is not true), deleted when `implement.yml` runs (stored as `<!-- tg_phase:plan:id -->`)
 
-**General tracked alerts (deleted at terminal state):**
-- Orchestrator-managed issue alerts use general tracking (`<!-- tg_cleanup:id1,id2,... -->`), cleaned up when the tracking issue reaches a terminal state (complete or failed) via the poller.
-- Any remaining tracked messages (general or phase) are cleaned up when a PR is closed/merged by `issue_pr_status.yml`.
+**General tracked alerts (deleted at successful terminal state only):**
+- Orchestrator-managed issue alerts use general tracking (`<!-- tg_cleanup:id1,id2,... -->`), cleaned up only when the tracking issue reaches a **successful** terminal state (project complete / validated and merged) via the poller. Failure / blocked terminal states (integration branch missing, validation failed deterministically, validation recovery exhausted, final-merge budget exhausted, judge stall-cycle limit exceeded, judge repeat-fingerprint breaker, recovery attempts exhausted) deliberately leave the tracked alert history intact so the alert chat retains the breadcrumb trail needed to diagnose the underlying issue.
+- Any remaining tracked messages (general or phase) are cleaned up by `issue_pr_status.yml` only when a PR is **merged**. PRs closed without merging (abandoned / failed) deliberately preserve their tracked alerts for post-mortem.
 
 **Requirements:**
 - `TG_BOT_SECRET` must be set (same secret used for sending).
