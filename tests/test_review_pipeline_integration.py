@@ -251,6 +251,15 @@ def _extract_issue_block(text: str, issue_id: str) -> str:
 	return text[start_idx:end_idx + len(end)]
 
 
+def _extract_flag_value(args: list[str], flag: str, context: str) -> str:
+	try:
+		idx = args.index(flag)
+	except ValueError as exc:
+		raise AssertionError(f"Missing {flag} in {context}: {args}") from exc
+	assert idx + 1 < len(args), f"Missing value after {flag} in {context}: {args}"
+	return args[idx + 1]
+
+
 def _codex_call_count(calls_dir: Path) -> int:
 	counter = calls_dir / "counter.txt"
 	if not counter.exists():
@@ -742,7 +751,7 @@ def test_multiround_review_runtime_and_spot_fix_reissue_baseline_contract() -> N
 		)
 		creates = judge_state.get("issue_create_args", [])
 		assert len(creates) == 1, creates
-		body = creates[0][creates[0].index("--body") + 1]
+		body = _extract_flag_value(creates[0], "--body", "reissue gh issue create args")
 		branch_line = [line for line in body.splitlines() if line.startswith("- prior_pr_baseline_branch: ")]
 		assert len(branch_line) == 1, body
 		branch = branch_line[0].split(": ", 1)[1].strip()
