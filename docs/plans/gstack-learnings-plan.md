@@ -146,7 +146,7 @@ than re-litigate.
   they target different phases (this one: `mode-plan.txt`; sibling:
   `prompts/mode-judge*.txt`), so no flag-namespace collision is
   expected, but reviewers should sanity-check.
-- commit `03d231b` (judge-loop and reissue, shipped) — covers
+- `docs/completed/judge-loop-and-reissue-plan.md` (shipped) — covers
   judge-in-loop, sticky findings, typed rejections; Phase H
   here (lessons-learned capture from consolidator/judge) overlaps
   the shipped sticky-findings work — same files (`scripts/review_consolidate.sh`,
@@ -1606,7 +1606,7 @@ implementation starts.
 - `docs/plans/ai-code-review-learnings-plan.md` — sibling plan
   applying Cloudflare's `ai-code-review` lessons (overlaps
   Phase E here).
-- commit `03d231b` (judge-loop and reissue, shipped) — covers
+- `docs/completed/judge-loop-and-reissue-plan.md` (shipped) — covers
   judge-in-loop, sticky findings, typed rejections
   (overlaps Phase H here).
 - `docs/symphony-inspired-improvements.md` — sibling plan
