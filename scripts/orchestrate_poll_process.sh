@@ -8443,23 +8443,6 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
 
   echo "${STATE_JSON}" > "${STATE_FILE}"
   PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
-
-  DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
-  INTEGRATION_BRANCH_TRACKING="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
-  if [ -n "${INTEGRATION_BRANCH_TRACKING}" ] \
-    && [ "${PROJECT_STATUS}" != "complete" ] \
-    && [ "${PROJECT_STATUS}" != "failed" ] \
-    && [ "${PROJECT_STATUS}" != "merge_conflict" ] \
-    && [ "${PROJECT_STATUS}" != "validation-failed" ]; then
-    if ! sync_default_into_integration_branch "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}"; then
-      continue
-    fi
-    PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
-    if [ "${PROJECT_STATUS}" = "failed" ]; then
-      continue
-    fi
-  fi
-
   TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
 
   # ---------------------------------------------------------------
@@ -8474,6 +8457,11 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   # but `final_merge_status` stayed `pending`, the wave-2 dispatch
   # gate re-fired every ~30 min, and the Telegram channel collected
   # several `Wave 2 dispatch BLOCKED` alerts per hour).
+  #
+  # This recovery must run BEFORE sync_default_into_integration_branch:
+  # external squash merges commonly delete the integration branch, and
+  # the sync path would otherwise mark the project failed before this
+  # block can observe the already-merged final PR.
   #
   # Mirror the same pinned-final-PR recovery shape that
   # `finalize_integration_merge_if_needed` already uses once a final PR
@@ -8535,6 +8523,22 @@ The orchestrator detected that the integration PR was squash-merged outside the 
           continue
         fi
       fi
+    fi
+  fi
+
+  DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+  INTEGRATION_BRANCH_TRACKING="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
+  if [ -n "${INTEGRATION_BRANCH_TRACKING}" ] \
+    && [ "${PROJECT_STATUS}" != "complete" ] \
+    && [ "${PROJECT_STATUS}" != "failed" ] \
+    && [ "${PROJECT_STATUS}" != "merge_conflict" ] \
+    && [ "${PROJECT_STATUS}" != "validation-failed" ]; then
+    if ! sync_default_into_integration_branch "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}"; then
+      continue
+    fi
+    PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
+    if [ "${PROJECT_STATUS}" = "failed" ]; then
+      continue
     fi
   fi
 

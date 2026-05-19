@@ -3029,6 +3029,38 @@ def test_external_finalize_detect_skips_terminal_fallthrough():
 	assert "Project already complete, skipping." not in result["stdout"]
 
 
+def test_external_finalize_detect_preempts_sync_branch_missing_failure():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_pr"] = 358
+	state["final_merge_status"] = "pending"
+	prs = [
+		{
+			"number": 358,
+			"state": "closed",
+			"merged": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": None,
+			"mergeable_state": "unknown",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main"],
+	)
+	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["final_merge_pr"] == 358
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert "ai:merged" in result["tracking_labels"]
+	assert not any("Integration branch missing" in body for body in tracking_bodies)
+
+
 def test_standalone_conflict_sweep_skips_integration_base_prs():
 	state = _base_state(status="complete")
 	prs = [
@@ -8135,29 +8167,34 @@ def test_external_finalize_detect_marks_project_complete_when_final_pr_already_m
 	# ~30 min) and never noticed PR #2750 had merged.
 	#
 	# The fix is an external-finalize detect block placed AFTER
-	# `TRACKING_LABELS` is fetched and BEFORE the
-	# `if [ "${PROJECT_STATUS}" = "merge_conflict" ]` switch in the
-	# orchestrator's per-tracking-issue loop: read `final_merge_pr` +
+	# `TRACKING_LABELS` is fetched and BEFORE
+	# `sync_default_into_integration_branch` in the orchestrator's
+	# per-tracking-issue loop: read `final_merge_pr` +
 	# `final_merge_status` from state, fetch the PR once via the shared
 	# `_fetch_pr_json` + `_jq_field` helper path, and on confirmed
-	# closed-and-merged, transition status to `complete` so the
-	# existing `[ "${PROJECT_STATUS}" = "complete" ]` early-skip kicks
-	# in on the same tick while leaving `merge_conflict`, `validating`,
-	# and `validation-fixing` projects on their dedicated
-	# finalize/validation-completion paths.  This test pins the
+	# closed-and-merged, transition status to `complete` before the sync
+	# path can mark a deleted integration branch as failed. The dedicated
+	# `merge_conflict`, `validating`, and `validation-fixing` paths still
+	# own their validation/finalize bookkeeping. This test pins the
 	# placement, the gate condition, AND the state mutation shape
 	# (status=complete + final_merge_status=merged) so a future refactor
 	# cannot silently drop any of the three.
 	poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
+	sync_marker = '    if ! sync_default_into_integration_branch "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}"; then'
+	sync_idx = poller_body.find(sync_marker)
+	assert sync_idx != -1, (
+		"sync_default_into_integration_branch call is missing from the "
+		"per-tracking-issue loop; the external-finalize block must precede "
+		"that sync path so deleted integration branches cannot preempt the "
+		"merged-PR recovery."
+	)
 	# Anchor on the `TRACKING_LABELS=` fetch that precedes the
-	# external-finalize block.  Only one such assignment exists in the
-	# main per-tracking-issue loop scope (the other two occurrences
-	# live inside the validation-fixing arm and a separate label-repair
-	# helper), and it is the documented insertion landmark; pinning on
-	# it makes the placement assertion robust against unrelated edits
-	# elsewhere in the file.
+	# external-finalize block. Several helpers reuse the same assignment,
+	# so search backward from the sync call and take the nearest preceding
+	# occurrence — that is the per-tracking-issue-loop landmark this
+	# regression is pinning.
 	anchor = '  TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"'
-	anchor_idx = poller_body.find(anchor)
+	anchor_idx = poller_body.rfind(anchor, 0, sync_idx)
 	assert anchor_idx != -1, (
 		"TRACKING_LABELS=... fetch (the documented insertion landmark for "
 		"the external-finalize detect block) is missing or renamed in "
@@ -8165,19 +8202,19 @@ def test_external_finalize_detect_marks_project_complete_when_final_pr_already_m
 		"the new landmark."
 	)
 	# Bound the search window to the block between the TRACKING_LABELS
-	# fetch and the merge_conflict switch so the assertion enforces
-	# *placement*, not just "appears anywhere in the file" (which would
-	# false-positive if a refactor moved the block to an unreachable
-	# branch).
+	# fetch and the sync call so the assertion enforces *placement*, not
+	# just "appears anywhere in the file" (which would false-positive if
+	# a refactor moved the block back below the sync path and reintroduced
+	# the deleted-branch failure).
 	merge_conflict_marker = 'if [ "${PROJECT_STATUS}" = "merge_conflict" ]; then'
-	merge_conflict_idx = poller_body.find(merge_conflict_marker, anchor_idx)
+	merge_conflict_idx = poller_body.find(merge_conflict_marker, sync_idx)
 	assert merge_conflict_idx != -1, (
 		'merge_conflict switch `if [ "${PROJECT_STATUS}" = "merge_conflict" ]` '
-		"is missing from the per-tracking-issue loop; the external-finalize "
-		"block must precede it so the new state transition is visible to "
-		"the same poll tick's project-status switch."
+		"is missing from the per-tracking-issue loop; the sync block must "
+		"still flow into the later merge_conflict arm after the external-"
+		"finalize pre-check."
 	)
-	window = poller_body[anchor_idx:merge_conflict_idx]
+	window = poller_body[anchor_idx:sync_idx]
 	# Gate condition: only fire when state is non-terminal, not already
 	# on the dedicated `merge_conflict` / validation-completion paths,
 	# a final PR is pinned, and `final_merge_status` is still `pending`.
@@ -8199,11 +8236,11 @@ def test_external_finalize_detect_marks_project_complete_when_final_pr_already_m
 		assert needle in window, (
 			f"external-finalize detect block in scripts/orchestrate_poll_process.sh "
 			f"no longer contains `{needle}` between the TRACKING_LABELS fetch and "
-			f"the merge_conflict switch — {why}"
+			f"the sync_default_into_integration_branch call — {why}"
 		)
 	assert window.count('_fetch_pr_json "${_orch_extfin_pr}"') == 1, (
-		"external-finalize detect block no longer uses a single PR fetch between "
-		"the TRACKING_LABELS fetch and the merge_conflict switch; duplicate "
+		"external-finalize detect block no longer uses a single PR fetch before "
+		"the sync_default_into_integration_branch call; duplicate "
 		"PR fetches reintroduce avoidable API churn and a narrow "
 		"state/merged-at race."
 	)
@@ -8220,8 +8257,8 @@ def test_external_finalize_detect_marks_project_complete_when_final_pr_already_m
 	):
 		assert needle in window, (
 			f"external-finalize detect block no longer performs the state "
-			f"mutation `{needle}` between TRACKING_LABELS and the merge_conflict "
-			f"switch — {why}"
+			f"mutation `{needle}` before the sync_default_into_integration_branch "
+			f"call — {why}"
 		)
 	# Side-effect surface: tracking comment + Telegram cleanup must
 	# both fire so the operator's open `Wave dispatch BLOCKED` alerts
