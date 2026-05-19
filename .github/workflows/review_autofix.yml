@@ -2062,8 +2062,9 @@ jobs:
               # the Checks API `details_url` (shape
               # `https://github.com/{owner}/{repo}/actions/runs/{run_id}/job/{job_id}`),
               # call `gh run view --log --job <job_id> -R <GITHUB_REPOSITORY>`,
-              # and return the last CHECK_RUNS_LOG_TAIL_BYTES bytes truncated
-              # to the last 200 lines.  Returns "" on any error so the
+              # and return the last CHECK_RUNS_LOG_TAIL_BYTES bytes (decoded
+              # with UTF-8 replacement) truncated to the last 200 lines.
+              # Returns "" on any error so the
               # snapshot still ships when gh is unavailable, the token
               # lacks `actions:read`, the job hasn't finished writing
               # logs, or the URL shape changes.
@@ -2078,16 +2079,16 @@ jobs:
               try:
                   proc = subprocess.run(
                       ["gh", "run", "view", "--log", "--job", job_id, "-R", _gh_repo],
-                      capture_output=True, text=True, timeout=60,
+                      capture_output=True, timeout=60,
                   )
               except (subprocess.TimeoutExpired, OSError, ValueError):
                   return ""
               if proc.returncode != 0:
                   return ""
-              out = proc.stdout or ""
+              out = proc.stdout or b""
               if len(out) > _log_tail_bytes:
                   out = out[-_log_tail_bytes:]
-              lines = out.splitlines()
+              lines = out.decode("utf-8", errors="replace").splitlines()
               if len(lines) > _log_tail_lines:
                   lines = lines[-_log_tail_lines:]
               return "\n".join(lines)
