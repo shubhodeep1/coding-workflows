@@ -68,7 +68,7 @@ def _wave_state_two_issues_all_merged() -> dict:
 	}
 
 
-def _run_check_wave_status(state: dict, integration_ahead_by: str | None) -> dict:
+def _run_check_wave_status(state: dict, integration_ahead_by: object | None) -> dict:
 	with tempfile.NamedTemporaryFile(
 		mode="w", suffix=".json", delete=False
 	) as f:
@@ -104,6 +104,16 @@ def test_project_complete_true_when_ahead_by_zero():
 	assert result["project_complete"] is True, result
 	assert result["integration_ahead_by"] == "0"
 	assert result["integration_contained_in_default"] is True
+
+
+def test_project_complete_true_when_ahead_by_zero_is_integer():
+	"""Direct Python callers may pass a scalar 0 instead of argparse's
+	string "0"; this must still mean integration is contained in default."""
+	result = _run_check_wave_status(
+		_wave_state_two_issues_all_merged(), integration_ahead_by=0
+	)
+	assert result["project_complete"] is True, result
+	assert result["integration_ahead_by"] == "0"
 
 
 def test_project_complete_false_when_ahead_by_nonzero():

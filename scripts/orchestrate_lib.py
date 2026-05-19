@@ -2407,7 +2407,8 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 	# completion while wave PRs remain stranded on the integration branch.
 	# See shubhodeep1/binance-blessings#135 for the regression case this gate
 	# prevents.
-	integration_ahead_by_raw = (getattr(args, "integration_ahead_by", "0") or "").strip()
+	integration_ahead_by_value = getattr(args, "integration_ahead_by", "0")
+	integration_ahead_by_raw = "" if integration_ahead_by_value is None else str(integration_ahead_by_value).strip()
 	integration_contained_in_default = integration_ahead_by_raw == "0"
 
 	project_complete = (

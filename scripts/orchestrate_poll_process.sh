@@ -3992,6 +3992,7 @@ finalize_integration_merge_if_needed() {
       jq '.final_merge_status = "pending" | .final_merge_pr = null | .final_merge_error = "compare API error during ahead_by re-check (failed closed)"' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       final_merge_status="pending"
+      post_state_comment || true
     elif [ "${_fimin_ahead_by:-0}" != "0" ]; then
       echo "  [final-merge] State pinned final_merge_status=merged for #${TRACKING_NUM:-?} but integration branch '${integration_branch}' is ahead of '${default_branch}' by ${_fimin_ahead_by} commit(s); clearing the pin so a fresh final PR can be opened for the new diff."
       jq --arg n "${_fimin_ahead_by}" --arg ib "${integration_branch}" --arg db "${default_branch}" \
@@ -4047,6 +4048,7 @@ finalize_integration_merge_if_needed() {
         jq '.final_merge_pr = null | .final_merge_status = "pending" | .final_merge_error = "compare API error during ahead_by re-check after recorded final PR was already merged (failed closed)"' \
           "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
         final_pr=""
+        post_state_comment || true
       elif [ "${_fimin_rd_ahead_by:-0}" != "0" ]; then
         echo "  [final-merge] Recorded final PR #${final_pr} is closed+merged but integration branch '${integration_branch}' is ahead of '${default_branch}' by ${_fimin_rd_ahead_by} commit(s); clearing the recorded PR and falling through to open a fresh final PR for the new diff."
         jq --arg n "${_fimin_rd_ahead_by}" --arg ib "${integration_branch}" --arg db "${default_branch}" \

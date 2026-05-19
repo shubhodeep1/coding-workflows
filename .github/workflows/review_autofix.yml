@@ -4977,25 +4977,36 @@ jobs:
           # Fail-closed on PR metadata fetch failure: skip auto-merge so a
           # transient API blip cannot inadvertently ship an orchestrator
           # integration PR. Mirrors the e2e-smoke-test guard above.
-          _orch_pr_meta_err_file="$(mktemp 2>/dev/null || echo /dev/null)"
-          if _ORCH_PR_META_JSON="$(gh_retry gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" 2>"${_orch_pr_meta_err_file}")"; then
-            [ "${_orch_pr_meta_err_file}" = /dev/null ] || rm -f "${_orch_pr_meta_err_file}"
-            _orch_pr_head_ref="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.head.ref // ""' 2>/dev/null || echo "")"
-            _orch_pr_body="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.body // ""' 2>/dev/null || echo "")"
-            if [[ "${_orch_pr_head_ref}" =~ ^orchestrator/project-([0-9]+)$ ]]; then
-              _orch_ref_tracking_num="${BASH_REMATCH[1]}"
-              _orch_body_tracking_num="$(printf '%s' "${_orch_pr_body}" | grep -oE '(Refs|Closes|Fixes|Resolves)[[:space:]]*#[0-9]+' | head -n1 | grep -oE '[0-9]+' || echo "")"
-              if [ -n "${_orch_body_tracking_num}" ] && [ "${_orch_body_tracking_num}" != "${_orch_ref_tracking_num}" ]; then
-                echo "::warning::PR #${PR_NUMBER} head ref '${_orch_pr_head_ref}' implies orchestrator tracking issue #${_orch_ref_tracking_num} but the PR body references #${_orch_body_tracking_num}. Suppressing auto-merge anyway — head-ref pattern matches an orchestrator integration PR; the orchestrator will land this via finalize_integration_merge_if_needed when the project is genuinely complete."
-              else
-                echo "PR #${PR_NUMBER} is the orchestrator integration PR for tracking #${_orch_ref_tracking_num} (head ref '${_orch_pr_head_ref}') — auto-merge suppressed. finalize_integration_merge_if_needed handles the legitimate final merge synchronously once the project is complete and the integration tip is contained in the default branch."
-              fi
+          _orch_pr_meta_err_file="$(mktemp 2>/dev/null || true)"
+          _orch_pr_meta_err=""
+          if [ -z "${_orch_pr_meta_err_file}" ]; then
+            if ! _ORCH_PR_META_JSON="$(gh_retry gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" 2>&1)"; then
+              _orch_pr_meta_err="${_ORCH_PR_META_JSON:-gh_retry error details unavailable because mktemp failed before stderr could be split from stdout}"
+              echo "::warning::Could not fetch PR metadata for #${PR_NUMBER} (gh_retry exhausted): ${_orch_pr_meta_err}. Failing closed: skipping auto-merge enablement so an orchestrator integration PR cannot be inadvertently shipped via auto-merge on a transient API blip. Next sync event will re-run review_autofix and retry."
+              exit 0
+            elif ! printf '%s' "${_ORCH_PR_META_JSON}" | jq empty >/dev/null 2>&1; then
+              echo "::warning::Could not parse PR metadata JSON for #${PR_NUMBER} after mktemp failed while preparing stderr capture. Failing closed: skipping auto-merge enablement so an orchestrator integration PR cannot be inadvertently shipped via auto-merge on a transient filesystem or API blip. Next sync event will re-run review_autofix and retry."
               exit 0
             fi
-          else
+          elif ! _ORCH_PR_META_JSON="$(gh_retry gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" 2>"${_orch_pr_meta_err_file}")"; then
             _orch_pr_meta_err="$(cat "${_orch_pr_meta_err_file}" 2>/dev/null || true)"
-            [ "${_orch_pr_meta_err_file}" = /dev/null ] || rm -f "${_orch_pr_meta_err_file}"
-            echo "::warning::Could not fetch PR metadata for #${PR_NUMBER} (gh_retry exhausted): ${_orch_pr_meta_err}. Failing closed: skipping auto-merge enablement so an orchestrator integration PR cannot be inadvertently shipped via auto-merge on a transient API blip. Next sync event will re-run review_autofix and retry."
+            rm -f "${_orch_pr_meta_err_file}"
+            echo "::warning::Could not fetch PR metadata for #${PR_NUMBER} (gh_retry exhausted): ${_orch_pr_meta_err:-gh_retry error details unavailable}. Failing closed: skipping auto-merge enablement so an orchestrator integration PR cannot be inadvertently shipped via auto-merge on a transient API blip. Next sync event will re-run review_autofix and retry."
+            exit 0
+          else
+            rm -f "${_orch_pr_meta_err_file}"
+          fi
+
+          _orch_pr_head_ref="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.head.ref // ""' 2>/dev/null || echo "")"
+          _orch_pr_body="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.body // ""' 2>/dev/null || echo "")"
+          if [[ "${_orch_pr_head_ref}" =~ ^orchestrator/project-([0-9]+)$ ]]; then
+            _orch_ref_tracking_num="${BASH_REMATCH[1]}"
+            _orch_body_tracking_num="$(printf '%s' "${_orch_pr_body}" | grep -oE '(Refs|Closes|Fixes|Resolves)[[:space:]]*#[0-9]+' | head -n1 | grep -oE '[0-9]+' || echo "")"
+            if [ -n "${_orch_body_tracking_num}" ] && [ "${_orch_body_tracking_num}" != "${_orch_ref_tracking_num}" ]; then
+              echo "::warning::PR #${PR_NUMBER} head ref '${_orch_pr_head_ref}' implies orchestrator tracking issue #${_orch_ref_tracking_num} but the PR body references #${_orch_body_tracking_num}. Suppressing auto-merge anyway — head-ref pattern matches an orchestrator integration PR; the orchestrator will land this via finalize_integration_merge_if_needed when the project is genuinely complete."
+            else
+              echo "PR #${PR_NUMBER} is the orchestrator integration PR for tracking #${_orch_ref_tracking_num} (head ref '${_orch_pr_head_ref}') — auto-merge suppressed. finalize_integration_merge_if_needed handles the legitimate final merge synchronously once the project is complete and the integration tip is contained in the default branch."
+            fi
             exit 0
           fi
 
