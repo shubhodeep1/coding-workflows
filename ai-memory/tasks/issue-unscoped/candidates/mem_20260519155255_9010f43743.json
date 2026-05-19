@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:4044-4113 | severity=critical | confidence=5\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The `_integration_branch_ahead_of_default` capture logic under `set -e` can still fail or skip fail-closed handling when the helper returns non-zero.\n  WHY: Mistralai reported the direct command-substitution hazard, and x-ai_grok_4_20 still flagged the shell-wrapper pattern as fragile around helper failure.\n- scripts/orchestrate_poll_process.sh:4047-4052 and 4106-4111 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok_4_20]\n  PROBLEM: The shell wrapper can still mis-handle partial numeric output from `_integration_branch_ahead_of_default()` if it exits non-zero after printing.\n  WHY: x-ai_grok_4_20 noted that the numeric fallback and rc checks both rely on the captured string, so garbage output in the failure case can keep the final-merge state inconsistent.\n- scripts/review_apply_fixes.sh:1195 | severity=low | confidence=2\n  flagged_by: [x-ai_grok_4_20]\n  PROBLEM: The refusal regex appears to use redundant escaping.\n  WHY: x-ai_grok_4_20 said the pattern is functionally correct and only stylistically questionable.\n- scripts/review_apply_fixes.sh:1323-1324 | severity=low | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The refusal regex appears to use redundant escaping.\n  WHY: Mistralai called the escaping redundant, but also noted that it does not cause a runtime failure.\n- scripts/review_apply_fixes.sh:1667-1693 | severity=medium | confidence=5\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok_4_20]\n  PROBLEM: The fallback summary writer is out of sync with the quoted-heredoc plus `printf` contract for `Runtime failure path:`.\n  WHY: Mistralai reported the older unquoted heredoc variant in the last-run diff, and x-ai_grok_4_20 said the reviewer bundle, symbol summary, and contract assertions are stale relative to the landed implementation.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/orchestrate_poll_process.sh:4044-4113 | severity=high | confidence=5\n  PROBLEM: Command substitution directly assigned to variable without fail-closed guard.\n  WHY: With `set -e`, a non-zero return from `_integration_branch_ahead_of_default()` causes immediate shell exit before `_fimin_ahead_rc` can be captured, preventing the fail-closed branch from executing.\n- scripts/review_apply_fixes.sh:1323-1324 | severity=low | confidence=3\n  PROBLEM: The refusal regex has redundant escaping.\n  WHY: The pattern contains no backslash escaping and works functionally; the concern is cosmetic only.\n- scripts/review_apply_fixes.sh:1667-1693 | severity=medium | confidence=5\n  PROBLEM: The fallback summary writer is out of sync with the quoted-heredoc plus `printf` fix.\n  WHY: The older unquoted heredoc variant would break the contract test expectation for the `Runtime failure path:` sentinel.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/orchestrate_poll_process.sh:4047-4052 and 4106-4111 | severity=high | confidence=4\n  PROBLEM: The `if command_substitution=...; then rc=0 else rc=$? fi` pattern is fragile around helper failure.\n  WHY: x-ai_grok_4_20 noted that the wrapper depends on the captured string and exit code, so failure or parse issues can leave the final-merge state inconsistent.\n- scripts/orchestrate_poll_process.sh:4047, 4106 | severity=medium | confidence=4\n  PROBLEM: The shell wrapper can still mis-handle partial numeric output from `_integration_branch_ahead_of_default()` if it exits non-zero after printing.\n  WHY: x-ai_grok_4_20 noted that the numeric fallback and rc checks both rely on the captured string, so garbage output in the failure case can keep the final-merge state inconsistent.\n- scripts/review_apply_fixes.sh:1667-1693 | severity=medium | confidence=5\n  PROBLEM: The quoted heredoc plus `printf '%s\\n' \"${_runtime_failure_path_line}\"` block is out of sync with the reviewer bundle and contract assertions.\n  WHY: x-ai_grok_4_20 said the reviewer bundle, symbol summary, and contract assertions are stale relative to the landed implementation.\n- scripts/review_apply_fixes.sh:1195 | severity=low | confidence=2\n  PROBLEM: The refusal regex appears to use redundant escaping.\n  WHY: x-ai_grok_4_20 said it is functionally correct and only stylistically questionable.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "0bfc9d5813b1f51c47b7e1d11d8c6f27d14d92f1d9ba79a12ee3c558115b5e7f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2793,
+    "run_id": "26106700565",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26106700565",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260519155255_9010f43743",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2793,
+    "run_id": "26106700565"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-19T15:52:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
