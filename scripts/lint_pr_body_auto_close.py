@@ -87,7 +87,10 @@ AUTO_CLOSE_RE = re.compile(
 # tracking issue stops wave dispatch.
 TRACKING_LABEL = "ai:orchestrator-tracking"
 FENCED_CODE_RE = re.compile(r"^\s*(```+|~~~+)")
-INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
+# Match inline code spans delimited by one or more backticks, reusing the
+# exact same fence length for the closer so double-backtick spans like
+# ``Fixes #2734`` are masked before keyword scanning.
+INLINE_CODE_RE = re.compile(r"(?P<fence>`+)(?P<code>[^\n]*?)(?P=fence)")
 
 
 class LintViolation:
@@ -238,13 +241,16 @@ def lint(
 	lookup_errors: list[str] = []
 	# Cache per-(repo, issue) lookups so a body with multiple references to the
 	# same issue makes one gh call, not N (CLAUDE.md §15).
-	issue_label_cache: dict[tuple[str, int], list[str] | None] = {}
+	issue_label_cache: dict[tuple[str, int], list[str]] = {}
 	for source, line_no, line, keyword, referenced_repo, issue in candidate_matches:
 		lookup_repo = referenced_repo or repo
 		cache_key = (lookup_repo, issue)
-		if cache_key not in issue_label_cache:
-			issue_label_cache[cache_key] = label_lookup(lookup_repo, issue)
-		labels = issue_label_cache[cache_key]
+		if cache_key in issue_label_cache:
+			labels = issue_label_cache[cache_key]
+		else:
+			labels = label_lookup(lookup_repo, issue)
+			if labels is not None:
+				issue_label_cache[cache_key] = labels
 		if labels is None:
 			lookup_errors.append(
 				f"could not fetch labels for {lookup_repo}#{issue} (matched in {source}:line {line_no}); "

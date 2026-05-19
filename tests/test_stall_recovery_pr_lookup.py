@@ -809,6 +809,10 @@ def _run_create_pr_recovery(
 	issue_url = f"https://github.com/owner/repo/issues/{issue_number}"
 	pr_body_dir = runtime_dir / "pr-body-lint"
 	pr_body_dir.mkdir(parents=True, exist_ok=True)
+	(pr_body_dir / "title.txt").write_text(
+		f"AI implementation for issue #{issue_number}\n",
+		encoding="utf-8",
+	)
 	(pr_body_dir / "body.txt").write_text(
 		f"Automated implementation. Closes {issue_url}\n",
 		encoding="utf-8",

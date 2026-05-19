@@ -154,11 +154,32 @@ def test_markdown_code_examples_in_pr_body_are_ignored():
 	assert matches[0][4] == 99
 
 
+def test_markdown_double_backtick_code_examples_are_ignored():
+	mod = _import_lint_module()
+	text = (
+		"Historical example: ``Fixes #2734`` should not be linted.\n\n"
+		"Real directive: Closes #99\n"
+	)
+	matches = mod._scan_text("PR body", text, markdown=True)
+	assert len(matches) == 1, f"expected only the non-code-span directive to match, got {matches!r}"
+	assert matches[0][4] == 99
+
+
 def test_workflow_lints_pr_title_and_body_together():
 	workflow = (REPO_ROOT / ".github/workflows/lint-pr-body-auto-close.yml").read_text(encoding="utf-8")
 	assert 'PR_TITLE: ${{ github.event.pull_request.title }}' in workflow
 	assert 'PR_BODY: ${{ github.event.pull_request.body }}' in workflow
 	assert "printf '%s\\n\\n%s' \"${PR_TITLE:-}\" \"${PR_BODY:-}\" > /tmp/pr-body-lint/body.txt" in workflow
+
+
+def test_implement_preflight_lints_title_and_body_together():
+	workflow = (REPO_ROOT / ".github/workflows/implement.yml").read_text(encoding="utf-8")
+	assert 'PR_TITLE_FILE="${RUNTIME_DIR}/pr-body-lint/title.txt"' in workflow
+	assert 'PR_BODY_FILE="${RUNTIME_DIR}/pr-body-lint/body.txt"' in workflow
+	assert 'PR_LINT_FILE="${RUNTIME_DIR}/pr-body-lint/lint-input.txt"' in workflow
+	assert 'PR_TITLE="AI implementation for issue #${ISSUE_NUMBER}"' in workflow
+	assert "printf '%s\\n\\n' \"${PR_TITLE}\" > \"${PR_LINT_FILE}\"" in workflow
+	assert 'cat "${PR_BODY_FILE}" >> "${PR_LINT_FILE}"' in workflow
 
 
 def test_cross_repo_reference_looks_up_referenced_repo_not_current_repo():
@@ -259,6 +280,27 @@ def test_lookup_failure_without_fail_open_reports_error_for_exit_2():
 	# errors are populated so main() returns exit 2.
 	assert violations == []
 	assert len(errors) == 1
+
+
+def test_lookup_failure_is_not_cached_across_later_references():
+	mod = _import_lint_module()
+	call_count = {"n": 0}
+	def flaky_lookup(repo: str, issue: int) -> list[str] | None:
+		call_count["n"] += 1
+		if call_count["n"] == 1:
+			return None
+		return ["ai:orchestrator-tracking"]
+	violations, errors = mod.lint(
+		pr_body="Fixes #2734\nCloses #2734\n",
+		commit_messages=[],
+		repo="owner/repo",
+		fail_open_on_lookup_error=False,
+		label_lookup=flaky_lookup,
+	)
+	assert call_count["n"] == 2
+	assert len(errors) == 1
+	assert len(violations) == 1
+	assert violations[0].keyword.lower() == "closes"
 
 
 def test_commit_messages_are_scanned_in_addition_to_pr_body():

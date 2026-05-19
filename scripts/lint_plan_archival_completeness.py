@@ -76,6 +76,7 @@ CHECKBOX_RE = re.compile(r"^\s*-\s*\[(?P<state>[ xX])\]\s*(?P<text>.*)$")
 # insensitive so a contributor doesn't have to memorise capitalisation.
 DESCOPE_HEADING_RE = re.compile(r"^\s{0,3}#{2,6}\s+de[- ]scoped\s+phases\b", re.IGNORECASE | re.MULTILINE)
 SECTION_HEADING_RE = re.compile(r"^\s{0,3}#{2,6}\s+\S")
+LIST_ITEM_RE = re.compile(r"^\s{0,3}(?:[-*+]\s+\S|\d+\.\s+\S)")
 
 # Files under this directory trigger the check.
 ARCHIVED_PLAN_DIR = "docs/completed/"
@@ -134,14 +135,14 @@ def _enumerate_unchecked_boxes(issue_body: str) -> list[str]:
 
 def _has_descope_section_content(pr_body: str) -> bool:
 	"""Return True when the de-scope heading exists and is followed by at
-	least one non-empty line before the next markdown heading."""
+	least one non-empty list item before the next markdown heading."""
 	match = DESCOPE_HEADING_RE.search(pr_body)
 	if match is None:
 		return False
 	for line in pr_body[match.end():].splitlines():
 		if SECTION_HEADING_RE.match(line):
 			break
-		if line.strip():
+		if LIST_ITEM_RE.match(line):
 			return True
 	return False
 
