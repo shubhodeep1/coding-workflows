@@ -3217,16 +3217,18 @@ invoke_judge_for_integration_conflict() {
 # default_branch changes onto the integration branch and create a
 # new wave of conflicts.
 #
-# Per-file safety check: each candidate file is also skipped when the
-# integration branch has commits touching it that are not in
-# default_branch.  This protects merged sub-issues whose scope
+# Per-file safety check: after fetching both refs, the helper computes
+# their merge-base once and skips any candidate file whose integration-
+# branch blob differs from the merge-base blob.  That means the
+# integration branch has committed its own change to the file since the
+# branches diverged, so the default_branch version must arrive via the
+# normal sync_default_into_integration_branch 3-way merge rather than
+# this one-way refresh.  This protects merged sub-issues whose scope
 # legitimately modifies a resolver-toolchain file (e.g. PR #2738 on
 # orchestrator/project-2734 evolved scripts/verify_integration_fingerprints.py
 # as part of the Phase 1A baseline/delta verifier rollout; the earlier
 # refresh logic, which compared blob hashes only, silently reverted that
-# work and tripped the wave-dispatch fingerprint gate).  The standard
-# sync_default_into_integration_branch flow handles real drift in the
-# opposite direction.
+# work and tripped the wave-dispatch fingerprint gate).
 #
 # Side effects: pushes a commit on success.  The push fires
 # pull_request.synchronize on the integration PR which itself
@@ -3342,7 +3344,7 @@ _refresh_integration_resolver_tooling() {
         # them, a missing path writes the unresolved REV:PATH token to
         # stdout, which makes absent files look like real hashes.
         main_hash="$(git rev-parse --verify --quiet "refs/remotes/origin/${default_branch}:${f}" 2>/dev/null || echo "")"
-        int_hash="$(git rev-parse --verify --quiet "HEAD:${f}" 2>/dev/null || echo "")"
+        int_hash="$(git rev-parse --verify --quiet "refs/remotes/origin/${integration_branch}:${f}" 2>/dev/null || echo "")"
         [ -n "${main_hash}" ] || continue
         if [ "${main_hash}" = "${int_hash}" ]; then
           continue

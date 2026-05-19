@@ -8026,6 +8026,8 @@ def test_resolver_tooling_refresh_allowlist_includes_both_retry_preludes():
 
 
 def test_resolver_tooling_refresh_skips_files_ahead_of_default_branch():
+	# Legacy test name retained for continuity; the shipped guard now
+	# keys off merge-base divergence rather than a `git rev-list` query.
 	# Regression guard for the orchestrator/project-2734 wave-2 dispatch
 	# block (tracked on issue #2734 / blocked by commit 026cfa7): the
 	# resolver-tooling refresh in `_refresh_integration_resolver_tooling`
@@ -8037,33 +8039,17 @@ def test_resolver_tooling_refresh_skips_files_ahead_of_default_branch():
 	# silently reverted the sub-issue's edits, tripped the merged-sub-issue
 	# fingerprint gate, and stalled wave dispatch.
 	#
-	# The fix is a per-file ahead-of-default gate over the explicit
-	# integration ref: skip the refresh when `git rev-list` finds a
-	# non-refresh integration-branch commit touching this file that is not
-	# yet in default_branch. This test pins the function-scoped placement
-	# of the gate plus the ref/path scope contract while still allowing
-	# safer hardening flags such as `--max-count=1` and `--invert-grep`.
+	# The shipped fix computes merge-base once, then skips the per-file
+	# refresh when the integration branch's blob for `${f}` differs from
+	# the merge-base blob. This test pins the loop-scoped placement of
+	# that guard plus the explicit integration-ref lookup so a future
+	# refactor cannot silently weaken it back to an implicit-HEAD or
+	# function-wide check.
 	poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
-	fn_marker = "_refresh_integration_resolver_tooling() {"
-	fn_open = poller_body.find(fn_marker)
-	assert fn_open != -1, (
-		"_refresh_integration_resolver_tooling function is missing from "
-		"scripts/orchestrate_poll_process.sh; the resolver-tooling refresh "
-		"path has been removed or renamed."
-	)
-	# The matching closing brace is the first `}` on its own line after
-	# fn_open. Matches the existing function-definition style in the
-	# script (every top-level helper closes with `^}$`).
-	close_re = re.compile(r"^}$", re.MULTILINE)
-	close_match = close_re.search(poller_body, pos=fn_open + len(fn_marker))
-	assert close_match is not None, (
-		"could not find closing `}` for _refresh_integration_resolver_tooling "
-		"in scripts/orchestrate_poll_process.sh; function brace style changed."
-	)
-	fn_body = poller_body[fn_open:close_match.end()]
+	fn_body = _extract_refresh_function_body(poller_body)
 	# Narrow further to the per-file `for f in "${refresh_files[@]}"; do
 	# ... done` loop so the assertion enforces per-file scope. A
-	# function-wide ahead check would skip the entire refresh whenever
+	# function-wide divergence check would skip the entire refresh whenever
 	# any single file diverged, which is a different (looser) contract.
 	loop_open = fn_body.find('for f in "${refresh_files[@]}"; do')
 	assert loop_open != -1, (
@@ -8081,60 +8067,37 @@ def test_resolver_tooling_refresh_skips_files_ahead_of_default_branch():
 		"_refresh_integration_resolver_tooling; loop style changed."
 	)
 	loop_body = fn_body[loop_open:done_match.end()]
-	# The ahead-of-default gate must be present inside the loop body so it
+	# The merge-base divergence gate must live inside the loop body so it
 	# runs per-file, not function-wide.
-	assert 'git rev-list' in loop_body, (
-		"_refresh_integration_resolver_tooling no longer uses `git rev-list` "
-		"inside the per-file refresh loop; without that ahead-of-default "
-		"query, a merged sub-issue whose scope edits a resolver-toolchain "
-		"file (e.g. PR #2738 on orchestrator/project-2734 evolving "
-		"scripts/verify_integration_fingerprints.py) will be silently "
-		"reverted on the next refresh tick — the exact regression that "
-		"blocked wave-2 dispatch on project #2734."
+	assert 'if [ -n "${merge_base}" ]; then' in loop_body, (
+		"_refresh_integration_resolver_tooling must scope the merge-base "
+		"guard to the per-file refresh loop; a function-wide guard would "
+		"skip every refresh candidate when any one file diverged."
 	)
-	assert '--max-count=1' in loop_body, (
-		"_refresh_integration_resolver_tooling's ahead-of-default gate must "
-		"use `git rev-list --max-count=1` (or equivalent native limiting) "
-		"rather than piping into `head`, which would reintroduce the "
-		"pipefail/SIGPIPE abort path in the refresh loop."
+	assert (
+		'int_hash="$(git rev-parse --verify --quiet '
+		'"refs/remotes/origin/${integration_branch}:${f}"'
+	) in loop_body, (
+		"_refresh_integration_resolver_tooling must resolve int_hash from "
+		"the explicit integration ref inside the per-file loop so detached-"
+		"HEAD or refactored invocation contexts cannot silently compare "
+		"against the wrong tree."
 	)
-	assert '${default_ref}..${integration_ref}' in loop_body, (
-		"_refresh_integration_resolver_tooling's ahead-of-default gate must "
-		"compare default_branch against the explicit integration ref, not "
-		"against implicit HEAD, so detached-head or refactored invocation "
-		"contexts cannot silently weaken the safety check."
+	assert 'base_hash="$(git rev-parse --verify --quiet "${merge_base}:${f}"' in loop_body, (
+		"_refresh_integration_resolver_tooling's per-file guard must look "
+		"up `${f}` against `${merge_base}`; without that path-scoped tree "
+		"lookup the helper cannot distinguish integration-owned divergence "
+		"from default-only drift."
 	)
-	assert '..HEAD' not in loop_body, (
-		"_refresh_integration_resolver_tooling's ahead-of-default gate must "
-		"not fall back to `..HEAD`; the explicit integration ref is required "
-		"to keep the comparison stable outside the current detached worktree "
-		"assumption."
+	diverge_skip_re = re.compile(
+		r'if\s+\[\s+"\$\{int_hash\}"\s+!=\s+"\$\{base_hash\}"\s+\]\s*;\s*then'
+		r'[\s\S]*?\bcontinue\b',
 	)
-	# The check must reference `${f}` (the per-iteration filename) so it
-	# is path-scoped, not branch-wide. `git rev-list ...` without a `--`
-	# pathspec would short-circuit the entire refresh whenever the
-	# integration branch had any commit ahead of default_branch, which
-	# is a different and substantially looser gate than the one this
-	# regression demands.
-	assert '-- "${f}"' in loop_body, (
-		"_refresh_integration_resolver_tooling's ahead-of-default gate is "
-		"missing the `-- \"${f}\"` pathspec, so it would skip the refresh "
-		"on any integration-branch divergence anywhere in the tree, not "
-		"just on the specific file being refreshed; that drops the safety "
-		"check's precision and re-opens the door to over-refreshing other "
-		"files in the allowlist."
-	)
-	assert '--invert-grep' in loop_body, (
-		"_refresh_integration_resolver_tooling's ahead-of-default gate must "
-		"ignore prior `[ai-maint] refresh resolver tooling ...` commits; "
-		"otherwise the helper's own maintenance commit permanently blocks "
-		"future refreshes of the same file."
-	)
-	assert '[ai-maint] refresh resolver tooling from ${default_branch}' in loop_body, (
-		"_refresh_integration_resolver_tooling's ahead-of-default gate must "
-		"explicitly ignore the helper's own refresh-commit subject; otherwise "
-		"a previous deadlock-breaking refresh is misclassified as deliberate "
-		"integration-only evolution on the next tick."
+	assert diverge_skip_re.search(loop_body), (
+		"_refresh_integration_resolver_tooling must `continue` the per-file "
+		"loop when int_hash differs from base_hash; otherwise the refresh "
+		"re-opens the issue #2734 clobbering regression for merged sub-"
+		"issue changes."
 	)
 
 
@@ -8280,7 +8243,7 @@ def test_resolver_tooling_refresh_function_has_merge_base_divergence_guard():
 	# token on stdout.
 	for lookup in (
 		'main_hash="$(git rev-parse --verify --quiet "refs/remotes/origin/${default_branch}:${f}"',
-		'int_hash="$(git rev-parse --verify --quiet "HEAD:${f}"',
+		'int_hash="$(git rev-parse --verify --quiet "refs/remotes/origin/${integration_branch}:${f}"',
 		'base_hash="$(git rev-parse --verify --quiet "${merge_base}:${f}"',
 	):
 		assert lookup in fn_body, (
