@@ -5004,7 +5004,7 @@ jobs:
           _orch_pr_body="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.body // ""' 2>/dev/null || echo "")"
           if [[ "${_orch_pr_head_ref}" =~ ^orchestrator/project-([0-9]+)$ ]]; then
             _orch_ref_tracking_num="${BASH_REMATCH[1]}"
-            _orch_body_tracking_num="$(printf '%s' "${_orch_pr_body}" | grep -oiE '(refs|closes|fixes|resolves)[[:space:]]*#[0-9]+' | head -n1 | grep -oE '[0-9]+' || echo "")"
+            _orch_body_tracking_num="$(printf '%s' "${_orch_pr_body}" | grep -im1 -oE '^[[:space:]]*refs[[:space:]]*#[0-9]+' | grep -oE '[0-9]+' || echo "")"
             if [ -n "${_orch_body_tracking_num}" ] && [ "${_orch_body_tracking_num}" != "${_orch_ref_tracking_num}" ]; then
               echo "::warning::PR #${PR_NUMBER} head ref '${_orch_pr_head_ref}' implies orchestrator tracking issue #${_orch_ref_tracking_num} but the PR body references #${_orch_body_tracking_num}. Suppressing auto-merge anyway — head-ref pattern matches an orchestrator integration PR; the orchestrator will land this via finalize_integration_merge_if_needed when the project is genuinely complete."
             else
