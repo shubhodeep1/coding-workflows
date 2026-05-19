@@ -8526,12 +8526,17 @@ The orchestrator detected that the integration PR was squash-merged outside the 
     fi
   fi
 
+  # Validation-owned states must bypass sync so mark_validation_complete
+  # can own externally merged/deleted final-PR completion without the
+  # integration-branch missing/conflict path preempting it.
   DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
   INTEGRATION_BRANCH_TRACKING="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
   if [ -n "${INTEGRATION_BRANCH_TRACKING}" ] \
     && [ "${PROJECT_STATUS}" != "complete" ] \
     && [ "${PROJECT_STATUS}" != "failed" ] \
     && [ "${PROJECT_STATUS}" != "merge_conflict" ] \
+    && [ "${PROJECT_STATUS}" != "validating" ] \
+    && [ "${PROJECT_STATUS}" != "validation-fixing" ] \
     && [ "${PROJECT_STATUS}" != "validation-failed" ]; then
     if ! sync_default_into_integration_branch "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}"; then
       continue

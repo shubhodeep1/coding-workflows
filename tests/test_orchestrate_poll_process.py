@@ -2999,6 +2999,79 @@ def test_external_finalize_detect_leaves_validation_completion_path_intact():
 	assert "ai:merged" not in result["tracking_labels"]
 
 
+def test_validation_completion_preempts_sync_branch_missing_failure_when_final_pr_already_merged():
+	state = _base_state(status="validating")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["validation_cycle"] = 2
+	state["final_merge_pr"] = 359
+	state["final_merge_status"] = "pending"
+	prs = [
+		{
+			"number": 359,
+			"state": "closed",
+			"merged": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": None,
+			"mergeable_state": "unknown",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main"],
+	)
+	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["validation_completed_cycle"] == 2
+	assert result["latest_state"]["final_merge_pr"] == 359
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert "ai:validated" in result["tracking_labels"]
+	assert "ai:merged" not in result["tracking_labels"]
+	assert not any("Integration branch missing" in body for body in tracking_bodies)
+
+
+def test_validation_fixing_completion_preempts_sync_branch_missing_failure_when_final_pr_already_merged():
+	state = _base_state(status="validation-fixing")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["validation_cycle"] = 2
+	state["validation_active_fix_issues"] = []
+	state["final_merge_pr"] = 360
+	state["final_merge_status"] = "pending"
+	prs = [
+		{
+			"number": 360,
+			"state": "closed",
+			"merged": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": None,
+			"mergeable_state": "unknown",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main"],
+	)
+	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["validation_completed_cycle"] == 2
+	assert result["latest_state"]["final_merge_pr"] == 360
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert "ai:validated" in result["tracking_labels"]
+	assert "ai:merged" not in result["tracking_labels"]
+	assert not any("Integration branch missing" in body for body in tracking_bodies)
+
+
 def test_external_finalize_detect_skips_terminal_fallthrough():
 	state = _base_state(status="in_progress")
 	state["integration_branch"] = "orchestrator/project-192"
