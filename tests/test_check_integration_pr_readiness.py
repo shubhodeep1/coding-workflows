@@ -10,7 +10,9 @@ HTTP call.
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import sys
 from pathlib import Path
 
@@ -160,11 +162,12 @@ def test_main_posts_noop_success_for_non_orchestrator_branch():
 
 def test_main_errors_when_non_orchestrator_status_post_fails():
 	mod = _import()
+	posted: list[tuple[str, str, str]] = []
 	original_post = mod._post_commit_status
 	original_fetch = mod._fetch_issue
 	old_argv = sys.argv
 	try:
-		mod._post_commit_status = lambda repo, sha, state, description, target_url="": False
+		mod._post_commit_status = lambda repo, sha, state, description, target_url="": posted.append((state, description, target_url)) or False
 		mod._fetch_issue = lambda repo, n: (_ for _ in ()).throw(AssertionError("_fetch_issue should not run for non-orchestrator branches"))
 		sys.argv = [
 			"check_integration_pr_readiness.py",
@@ -172,8 +175,16 @@ def test_main_errors_when_non_orchestrator_status_post_fails():
 			"--head-sha", "deadbeef",
 			"--repo", "owner/repo",
 		]
-		rc = mod.main()
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			rc = mod.main()
 		assert rc == 1
+		assert posted == [(
+			"success",
+			"head ref 'claude/fix-something' is not an orchestrator/project-* branch — readiness check does not apply",
+			"",
+		)]
+		assert "::error::[integration-pr-readiness] failed to post readiness commit status" in stderr.getvalue()
 	finally:
 		sys.argv = old_argv
 		mod._post_commit_status = original_post
@@ -209,11 +220,12 @@ def test_main_fails_closed_when_tracking_issue_has_no_checkboxes():
 
 def test_main_errors_when_failure_status_cannot_be_posted():
 	mod = _import()
+	posted: list[tuple[str, str, str]] = []
 	original_post = mod._post_commit_status
 	original_fetch = mod._fetch_issue
 	old_argv = sys.argv
 	try:
-		mod._post_commit_status = lambda repo, sha, state, description, target_url="": False
+		mod._post_commit_status = lambda repo, sha, state, description, target_url="": posted.append((state, description, target_url)) or False
 		mod._fetch_issue = lambda repo, n: {
 			"labels": [mod.TRACKING_LABEL],
 			"body": "- [ ] outstanding work\n",
@@ -224,12 +236,34 @@ def test_main_errors_when_failure_status_cannot_be_posted():
 			"--head-sha", "deadbeef",
 			"--repo", "owner/repo",
 		]
-		rc = mod.main()
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			rc = mod.main()
 		assert rc == 1
+		assert posted == [(
+			"failure",
+			"1/1 sub-issues on #2734 still unchecked: outstanding work",
+			"https://github.com/owner/repo/issues/2734",
+		)]
+		assert "::error::[integration-pr-readiness] failed to post readiness commit status" in stderr.getvalue()
 	finally:
 		sys.argv = old_argv
 		mod._post_commit_status = original_post
 		mod._fetch_issue = original_fetch
+
+
+def test_post_commit_status_logs_subprocess_failures():
+	mod = _import()
+	original_run = mod.subprocess.run
+	try:
+		mod.subprocess.run = lambda *args, **kwargs: (_ for _ in ()).throw(OSError("gh missing"))
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			ok = mod._post_commit_status("owner/repo", "deadbeef", "success", "desc")
+		assert ok is False
+		assert "::warning::[integration-pr-readiness] commit status POST failed: gh missing" in stderr.getvalue()
+	finally:
+		mod.subprocess.run = original_run
 
 
 def main() -> int:

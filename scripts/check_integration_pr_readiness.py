@@ -115,10 +115,12 @@ def _post_commit_status(
 		args += ["-f", f"target_url={target_url}"]
 	try:
 		result = subprocess.run(args, capture_output=True, text=True, timeout=30, check=False)
-	except (subprocess.SubprocessError, OSError):
+	except (subprocess.SubprocessError, OSError) as exc:
+		print(f"::warning::[integration-pr-readiness] commit status POST failed: {exc}", file=sys.stderr)
 		return False
 	if result.returncode != 0:
-		print(f"::warning::commit status POST failed: {result.stderr}", file=sys.stderr)
+		detail = (result.stderr or result.stdout or "").strip() or f"gh api exited {result.returncode}"
+		print(f"::warning::[integration-pr-readiness] commit status POST failed: {detail}", file=sys.stderr)
 		return False
 	return True
 
@@ -133,7 +135,7 @@ def _post_commit_status_or_error(
 	if _post_commit_status(repo, sha, state, description, target_url):
 		return True
 	print(
-		"::error::failed to post readiness commit status; required status context may be missing or stale",
+		"::error::[integration-pr-readiness] failed to post readiness commit status; required status context may be missing or stale",
 		file=sys.stderr,
 	)
 	return False
