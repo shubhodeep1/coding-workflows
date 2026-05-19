@@ -528,6 +528,7 @@ def _run_poller(
 	codex_touch_file: str | None = None,
 	mock_orch_state_v2_pack_mode: str | None = None,
 	mock_git_push_success: bool = False,
+	mock_git_checkout_fail: bool = False,
 	enable_stall_judge: str = "true",
 	stall_judge_trigger_count: str = "2",
 	enable_stall_human_terminalization: str = "false",
@@ -670,6 +671,7 @@ def _run_poller(
 		gh_mock = r'''#!/usr/bin/env python3
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -1570,6 +1572,32 @@ if args[0] == 'api':
 
 		etag = store.get('actions_runs_etag', '"etag-initial"')
 		workflow_runs = list(store.get('actions_runs_workflow_runs', []))
+		# The script calls this endpoint in two distinct shapes:
+		#   1. gh api -i ... (no --jq)  -> caller (_load_actions_runs_cached's
+		#      primary in_progress fetch) needs the full HTTP response with
+		#      headers so it can parse ETag and detect 304.
+		#   2. gh api ... --jq '.workflow_runs' (no -i)  -> caller
+		#      (_safe_gh_jq for queued/completed) needs just the jq-filtered
+		#      body so its `--argjson` merge stays valid.
+		# Distinguish via the presence of `jq` (the second case sets it).
+		if jq:
+			# Persist request bookkeeping even when the caller's jq filter
+			# fails: the HTTP round-trip already happened, so later calls in
+			# the same mock session should observe the consumed status/counts.
+			save()
+			if status != 200:
+				print(f'actions runs mock failed: HTTP {status}', file=sys.stderr)
+				sys.exit(1)
+			body_obj = {
+				'total_count': len(workflow_runs),
+				'workflow_runs': workflow_runs,
+			}
+			p = subprocess.run(['jq', '-r', jq], input=json.dumps(body_obj), capture_output=True, text=True)
+			if p.returncode != 0:
+				sys.stderr.write(p.stderr)
+				sys.exit(p.returncode)
+			sys.stdout.write(p.stdout)
+			sys.exit(0)
 		status_text = 'OK' if status == 200 else 'Not Modified'
 		headers = [
 			f'HTTP/1.1 {status} {status_text}',
@@ -1641,19 +1669,34 @@ if len(args) >= 2 and args[0] == 'merge-tree' and args[1] == '--write-tree' and 
 	sys.exit(0)
 
 if len(args) >= 2 and args[0] == 'push' and os.environ.get('MOCK_GIT_PUSH_SUCCESS', '') == 'true':
+	store.setdefault('git_push_calls', []).append(args[1:])
+	store_path.write_text(json.dumps(store), encoding='utf-8')
 	sys.exit(0)
 
-if len(args) == 4 and args[0] == 'fetch' and args[1] == '--no-tags' and args[2] == 'origin':
-	refspec = args[3]
-	if ':' in refspec:
+if args and args[0] == 'checkout' and os.environ.get('MOCK_GIT_CHECKOUT_FAIL', '') == 'true':
+	sys.exit(1)
+
+if args and args[0] == 'fetch':
+	refspec = None
+	if len(args) == 4 and args[1] == '--no-tags' and args[2] == 'origin':
+		refspec = args[3]
+	elif len(args) == 3 and args[1] == 'origin':
+		refspec = args[2]
+	if refspec and ':' in refspec:
 		src_ref, dst_ref = refspec.split(':', 1)
 		src_prefix = 'refs/heads/'
 		dst_prefix = 'refs/remotes/origin/'
-		if src_ref.startswith(src_prefix) and dst_ref.startswith(dst_prefix):
-			src_branch = src_ref[len(src_prefix):]
+		src_branch = src_ref[len(src_prefix):] if src_ref.startswith(src_prefix) else src_ref
+		if dst_ref.startswith(dst_prefix):
 			dst_branch = dst_ref[len(dst_prefix):]
+			known_branches = set(store.get('existing_branches', []))
+			known_branches.update(
+				str(pr.get('headRefFromApi', pr.get('headRefName', '')))
+				for pr in store.get('prs', [])
+				if pr.get('headRefFromApi', pr.get('headRefName', ''))
+			)
 			if src_branch == dst_branch:
-				if src_branch in set(store.get('existing_branches', [])):
+				if src_branch in known_branches:
 					head_rev = subprocess.run([real_git, 'rev-parse', 'HEAD'], capture_output=True, text=True)
 					if head_rev.returncode != 0:
 						sys.exit(head_rev.returncode)
@@ -1868,6 +1911,7 @@ sys.exit(proc.returncode)
 				"REAL_PYTHON_BIN": real_python,
 				"MOCK_CODEX_JSON": json.dumps(codex_json),
 				"MOCK_GIT_PUSH_SUCCESS": "true" if mock_git_push_success else "false",
+				"MOCK_GIT_CHECKOUT_FAIL": "true" if mock_git_checkout_fail else "false",
 				"PATH": f"{bin_dir}:{env.get('PATH', '')}",
 			}
 		)
@@ -3141,6 +3185,62 @@ def test_standalone_conflict_sweep_consumes_budget_after_override_cap():
 	assert len([d for d in result["review_dispatches"] if str(d.get("pr_number")) == "416"]) == 1
 
 
+def test_standalone_retrigger_review_skips_empty_commit_when_review_run_has_blank_head_branch_but_matching_sha():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:done",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	head_ref = "claude/issue-501"
+	head_sha = "a" * 40
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:done"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: 416},
+		mock_gh_issue_list_label_filter=True,
+		prs=[
+			{
+				"number": 416,
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": head_ref,
+				"headRefFromApi": head_ref,
+				"headSha": head_sha,
+				"mergeable": True,
+				"mergeable_state": "clean",
+			},
+		],
+		actions_runs_workflow_runs=[
+			{
+				"id": 26088864017,
+				"name": "Review Autofix",
+				"path": ".github/workflows/review_autofix.yml",
+				"status": "queued",
+				"head_branch": "",
+				"head_sha": head_sha,
+				"created_at": "2999-01-01T00:00:00Z",
+			},
+		],
+		mock_git_push_success=True,
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 0
+	assert result.get("git_push_calls", []) == [], (
+		f"expected no standalone empty-commit push when a blank-head_branch run matches "
+		f"the PR head_sha; got push calls {result.get('git_push_calls', [])}"
+	)
+
+
 def test_standalone_stall_recovery_skips_when_phase_attempts_exhausted():
 	state = _base_state(status="complete")
 	standalone_state_comment = (
@@ -3196,6 +3296,51 @@ def test_standalone_stall_recovery_honors_ai_done_phase_attempt_override():
 	assert standalone_state["stall_recovery_count"] == 1
 	assert standalone_state["phase_attempts"]["ai:done"] == 6
 	assert "ai:closed" not in result["issues"]["501"]["labels"]
+
+
+def test_standalone_retrigger_review_does_not_increment_when_empty_commit_checkout_fails():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:done",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	head_ref = "claude/issue-502"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 502: ["ai:done"]},
+		issue_comments={502: [standalone_state_comment]},
+		issue_linked_prs={502: 417},
+		mock_gh_issue_list_label_filter=True,
+		prs=[
+			{
+				"number": 417,
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": head_ref,
+				"headRefFromApi": head_ref,
+				"headSha": "sha417",
+				"mergeable": True,
+				"mergeable_state": "clean",
+			},
+		],
+		mock_git_push_success=True,
+		mock_git_checkout_fail=True,
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["502"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 0
+	assert result.get("git_push_calls", []) == [], (
+		f"expected checkout failure to skip the standalone empty-commit push; "
+		f"got push calls {result.get('git_push_calls', [])}"
+	)
 
 
 
@@ -5680,6 +5825,315 @@ def test_retrigger_review_does_not_increment_when_redispatch_skipped():
 	)
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_entry["stall_recovery_count"] == 0
+
+
+def test_retrigger_review_skips_empty_commit_when_review_run_inflight():
+	# When a fresh review_autofix run is already in_progress on the PR's
+	# head branch, retrigger_review must NOT push an empty commit — that
+	# push would flip the in-flight run's stale-base gate
+	# (check_external_branch_advance.sh classifies the orchestrator's
+	# commit subject as ADVANCE=external because it doesn't match the
+	# [ai-autofix] / [ai-merge-resolve] prefixes), causing the editor
+	# commit and downstream push/mark-ready steps to be skipped, which
+	# is exactly the 6h cycle observed on shubhodeep1/tele-funtoken-msg-scoring#3057.
+	# Recovery counter must NOT be incremented (no work was done).
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	head_ref = "claude/retrigger-review-inflight-run"
+	# run_started_at uses a far-future sentinel so the run is guaranteed
+	# to stay under the STALL_THRESHOLD_MINUTES zombie cutoff.
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 80},
+		prs=[
+			{
+				"number": 80,
+				"state": "open",
+				"mergeable": True,
+				"mergeable_state": "clean",
+				"headRefName": head_ref,
+				"headRefFromApi": head_ref,
+				"headSha": "sha80",
+				"baseRefName": "main",
+			},
+		],
+		actions_runs_workflow_runs=[
+			{
+				"id": 26088864015,
+				"name": "Review Autofix",
+				"path": ".github/workflows/review_autofix.yml",
+				"status": "in_progress",
+				"head_branch": head_ref,
+				"run_started_at": "2999-01-01T00:00:00Z",
+			},
+		],
+		mock_git_push_success=True,
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 0, (
+		f"expected stall_recovery_count to stay at 0 when an in-flight "
+		f"review_autofix run blocks the empty-commit push; "
+		f"got {issue_entry['stall_recovery_count']}"
+	)
+	dispatches_for_pr = [d for d in result.get("review_dispatches", []) if str(d.get("pr_number")) == "80"]
+	assert dispatches_for_pr == [], (
+		f"expected no redispatch when in-flight run blocks recovery; "
+		f"got: {dispatches_for_pr}"
+	)
+
+
+def test_retrigger_review_skips_empty_commit_when_review_run_has_blank_head_branch_but_matching_sha():
+	# workflow_dispatch review runs can report a blank/null head_branch in
+	# /actions/runs even though they still target the PR head SHA. Those
+	# runs must still block the empty-commit push; otherwise the new guard
+	# misses the same head_branch=null case called out in the PR summary.
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	head_ref = "claude/retrigger-review-blank-branch"
+	head_sha = "a" * 40
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 84},
+		prs=[
+			{
+				"number": 84,
+				"state": "open",
+				"mergeable": True,
+				"mergeable_state": "clean",
+				"headRefName": head_ref,
+				"headRefFromApi": head_ref,
+				"headSha": head_sha,
+				"baseRefName": "main",
+			},
+		],
+		actions_runs_workflow_runs=[
+			{
+				"id": 26088864016,
+				"name": "Review Autofix",
+				"path": ".github/workflows/review_autofix.yml",
+				"status": "in_progress",
+				"head_branch": "",
+				"head_sha": head_sha,
+				"run_started_at": "2999-01-01T00:00:00Z",
+			},
+		],
+		mock_git_push_success=True,
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 0, (
+		f"expected blank-head_branch review run with matching head_sha to "
+		f"block the empty-commit push; got stall_recovery_count="
+		f"{issue_entry['stall_recovery_count']}"
+	)
+	assert result.get("git_push_calls", []) == [], (
+		f"expected no empty-commit push when a blank-head_branch run matches "
+		f"the PR head_sha; got push calls {result.get('git_push_calls', [])}"
+	)
+
+
+def test_retrigger_review_ignores_inflight_run_on_unrelated_branch():
+	# Defense-in-depth: an in-flight review run on a DIFFERENT branch
+	# must NOT block the empty-commit push for this PR.  Without the
+	# head_branch filter, the guard would deadlock recovery whenever
+	# any other PR has a live review.
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	head_ref = "claude/retrigger-review-this-branch"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 81},
+		prs=[
+			{
+				"number": 81,
+				"state": "open",
+				"mergeable": True,
+				"mergeable_state": "clean",
+				"headRefName": head_ref,
+				"headRefFromApi": head_ref,
+				"headSha": "sha81",
+				"baseRefName": "main",
+			},
+		],
+		actions_runs_workflow_runs=[
+			{
+				"id": 99999999,
+				"name": "Review Autofix",
+				"path": ".github/workflows/review_autofix.yml",
+				"status": "in_progress",
+				"head_branch": "claude/some-other-branch",
+				"run_started_at": "2999-01-01T00:00:00Z",
+			},
+			{
+				"id": 99999998,
+				"name": "Review Autofix",
+				"path": ".github/workflows/review_autofix.yml",
+				"status": "queued",
+				"head_branch": "",
+				"head_sha": "b" * 40,
+				"created_at": "2999-01-01T00:00:00Z",
+			},
+		],
+		mock_git_push_success=True,
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 1, (
+		f"expected empty-commit push to proceed when in-flight run is on a "
+		f"different branch; got stall_recovery_count="
+		f"{issue_entry['stall_recovery_count']}"
+	)
+
+
+def test_retrigger_review_inflight_guard_treats_zombie_run_as_eligible():
+	# A run older than STALL_THRESHOLD_MINUTES is a zombie and must NOT
+	# block recovery — otherwise a stuck Actions runner could deadlock
+	# the autofix loop forever.  Mirrors the zombie cutoff in
+	# build_active_issue_set (line 4944-4954).
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	head_ref = "claude/retrigger-review-zombie-run"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 82},
+		prs=[
+			{
+				"number": 82,
+				"state": "open",
+				"mergeable": True,
+				"mergeable_state": "clean",
+				"headRefName": head_ref,
+				"headRefFromApi": head_ref,
+				"headSha": "sha82",
+				"baseRefName": "main",
+			},
+		],
+		actions_runs_workflow_runs=[
+			{
+				"id": 11111111,
+				"name": "Review Autofix",
+				"path": ".github/workflows/review_autofix.yml",
+				"status": "in_progress",
+				"head_branch": head_ref,
+				# Far in the past — past any reasonable STALL_THRESHOLD_MINUTES.
+				"run_started_at": "1970-01-02T00:00:00Z",
+			},
+		],
+		mock_git_push_success=True,
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 1, (
+		f"expected empty-commit push to proceed past zombie in-flight run; "
+		f"got stall_recovery_count={issue_entry['stall_recovery_count']}"
+	)
+
+
+def test_retrigger_review_skips_empty_commit_when_pr_head_advanced_after_snapshot():
+	# Defense-in-depth for the narrower PR-fetch→git-fetch race: if the
+	# PR head SHA changed after `_fetch_pr_json` captured `.head.sha`, the
+	# empty-commit retrigger should bail out instead of racing newer work.
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	head_ref = "claude/retrigger-review-advanced-head"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 83},
+		prs=[
+			{
+				"number": 83,
+				"state": "open",
+				"mergeable": True,
+				"mergeable_state": "clean",
+				"headRefName": head_ref,
+				"headRefFromApi": head_ref,
+				"headSha": "0" * 40,
+				"baseRefName": "main",
+			},
+		],
+		mock_git_push_success=True,
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 0, (
+		f"expected stale PR head snapshot to leave stall_recovery_count at 0; "
+		f"got {issue_entry['stall_recovery_count']}"
+	)
+	assert result.get("git_push_calls", []) == [], (
+		f"expected no empty-commit push when the PR head advanced; "
+		f"got push calls {result.get('git_push_calls', [])}"
+	)
+
+
+def test_retrigger_review_does_not_increment_when_empty_commit_checkout_fails():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	head_ref = "claude/retrigger-review-checkout-fails"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 85},
+		prs=[
+			{
+				"number": 85,
+				"state": "open",
+				"mergeable": True,
+				"mergeable_state": "clean",
+				"headRefName": head_ref,
+				"headRefFromApi": head_ref,
+				"headSha": "sha85",
+				"baseRefName": "main",
+			},
+		],
+		mock_git_push_success=True,
+		mock_git_checkout_fail=True,
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 0, (
+		f"expected checkout failure to leave stall_recovery_count at 0; "
+		f"got {issue_entry['stall_recovery_count']}"
+	)
+	assert result.get("git_push_calls", []) == [], (
+		f"expected checkout failure to skip the empty-commit push; "
+		f"got push calls {result.get('git_push_calls', [])}"
+	)
 
 
 def test_stall_judge_unknown_action_falls_back_to_declarative_recovery():
