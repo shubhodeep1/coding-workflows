@@ -490,3 +490,124 @@
 | Code modularization | 10 workflows + 1 script (+1 new shared helper/action) | Large |
 | Expression size reduction | 4 workflows | Large |
 | Medium/Low fixes | 1 workflow + 5 scripts | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-19)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlap is proven in-place and can be consolidated without changing retry/failure/concurrency semantics; `NEEDS_VERIFICATION` means the overlap is plausible but static reading does not fully prove safety; `RISKY_SKIP` means the overlap is real but sits in a race-, retry-, pagination-, or poller-sensitive path that must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+- **ID** — `MERGE-001`  
+  **Safety tag** — `SAFE_TO_MERGE`  
+  **File path and line ranges** — `scripts/review_rb_judge.sh:221-238,246-256`  
+  **Current call count** — `2` `GET /repos/{repo}/pulls/{pull_number}` reads on the `closingIssuesReferences`-empty branch.  
+  **Proposed call count** — `1` in the normal branch; keep the second read only as empty/parse fallback.  
+  **Endpoint(s)** — `GET /repos/{repo}/pulls/{pull_number}`  
+  **Evidence** — the script fetches the full PR payload, uses only state/merged, unsets it, then refetches the same PR for title/body fallback.
+  ```bash
+  _pr_meta="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
+  _pr_state="$(printf '%s\n' "${_pr_meta}" | jq -r '.state // ""')"
+  _pr_merged="$(printf '%s\n' "${_pr_meta}" | jq -r '(.merged_at != null) or (.merged == true)')"
+  ...
+  unset _pr_meta _pr_state _pr_merged
+  ...
+  if [ -z "${ISSUE_NUMBERS}" ]; then
+    PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
+  fi
+  ```  
+  **Proposed fix** — In `scripts/review_rb_judge.sh`, derive `PR_DATA_FROM_META` from `_pr_meta` before `unset`, use it in the `ISSUE_NUMBERS` fallback block, and retain the current line-254 `_safe_gh_jq` call only when the derived string is blank.  
+  **Safety rationale** — Same endpoint, same shell scope, no intervening mutation between the two reads, and keeping the current fallback preserves the existing fail-open/error-handling behavior.  
+  **Downstream signal** — Reuse `_pr_meta` for the title/body fallback in `review_rb_judge.sh`, and keep the existing second `/pulls/{PR_NUMBER}` call only when the derived text is empty.
+
+- **ID** — `MERGE-002`  
+  **Safety tag** — `RISKY_SKIP`  
+  **File path and line ranges** — `scripts/orchestrate_poll_process.sh:4000-4004,4054-4059,4108-4110`  
+  **Current call count** — `8` `GET /repos/{repo}/pulls/{final_pr}` reads per `finalize_integration_merge_if_needed()` pass that reaches all three checkpoints.  
+  **Proposed call count** — `3` reads total: one pre-existing-PR snapshot, one pre-merge snapshot, one post-merge-attempt snapshot.  
+  **Endpoint(s)** — `GET /repos/{repo}/pulls/{pull_number}`  
+  **Evidence** — the same PR is read multiple times just to split fields.
+  ```bash
+  existing_pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
+  existing_pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+
+  pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
+  pr_mergeable="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.mergeable' || echo "")"
+  pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+  ```  
+  **Proposed fix** — In `finalize_integration_merge_if_needed()`, fetch the full PR JSON once per decision point into a local temp variable/file and parse `.state`, `.mergeable`, and `.merged_at` locally; do not reuse a snapshot across the actual `gh pr merge` call.  
+  **Safety rationale** — `RISKY_SKIP` because this is inside `scripts/orchestrate_poll_process.sh` and in a race-defensive final-merge path.  
+  **Downstream signal** — Do not auto-implement; manual review must prove unchanged fail-open behavior, unchanged recovery logs, and no regression in mergeability-race handling.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID** — `REUSE-001`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — `.github/workflows/review_autofix.yml:1582-1596,4518-4547,4659-4687`; `scripts/review_rb_judge.sh:246-256`  
+  **Current call count** — `1` extra GraphQL linked-issue read in `review_rb_judge.sh` on every judge run, plus up to `1` extra `GET /repos/{repo}/pulls/{pull_number}` fallback in the script, beyond the workflow data already materialized into `LINKED_ISSUES_JSON` and `PR_META_FILE`.  
+  **Proposed call count** — `0` extra reads in the normal path; keep the script’s current GraphQL/REST fallbacks only when env/file inputs are absent or invalid.  
+  **Endpoint(s)** — GraphQL `pullRequest(number:) { closingIssuesReferences(first: 50) { nodes { number } } }`; `GET /repos/{repo}/pulls/{pull_number}`  
+  **Evidence** — the workflow already populates both reusable inputs, then invokes the judge script, which re-fetches them.
+  ```bash
+  # .github/workflows/review_autofix.yml
+  gh_retry "${PR_PAYLOAD_FILE}" api repos/${{ github.repository }}/pulls/"${PR_NUMBER}"
+  jq '{ title: (.title // ""), body: (.body // ""), ... }' "${PR_PAYLOAD_FILE}" > "${PR_META_FILE}"
+
+  if LINKED_ISSUES_JSON="$(gh_retry gh api graphql \
+    ... pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } ...
+  )"; then
+    :
+  fi
+  printf 'LINKED_ISSUES_JSON=%s\n' "${LINKED_ISSUES_JSON}" >> "$GITHUB_ENV"
+
+  bash "${SUPPORT_SCRIPTS_DIR}/review_rb_judge.sh"
+  ```
+  ```bash
+  # scripts/review_rb_judge.sh
+  ISSUE_NUMBERS="$(gh_retry gh api graphql \
+    ... pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } ...
+  )"
+
+  if [ -z "${ISSUE_NUMBERS}" ]; then
+    PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
+  fi
+  ```  
+  **Proposed fix** — Teach `scripts/review_rb_judge.sh` to consume `LINKED_ISSUES_JSON` first, then fall back to its current GraphQL query only when the env var is absent/invalid; for the title/body fallback, mirror the existing workflow pattern already used at `.github/workflows/review_autofix.yml:4637-4642,4760-4763,5587-5591` by reading `PR_META_FILE` before calling `/pulls/{PR_NUMBER}`.  
+  **Safety rationale** — `NEEDS_VERIFICATION` because this reuses cross-step state; static reading cannot fully prove that stale PR-body/closing-keyword edits between the refresh step and judge invocation are irrelevant on every judge path.  
+  **Downstream signal** — Verify that `review_rb_judge.sh` is only invoked after `LINKED_ISSUES_JSON` refresh and `PR_META_FILE` population, then keep the current GraphQL/REST fallbacks for missing or malformed env/file inputs.
+
+- **ID** — `REUSE-002`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — `.github/workflows/internal-review.yml:98-101`  
+  **Current call count** — `2`  
+  **Proposed call count** — `1`  
+  **Endpoint(s)** — `GET /repos/{repo}/pulls?state=open&head={owner}:{branch}`; `GET /repos/{repo}`  
+  **Evidence** — the step pays one extra repo-metadata read solely to recover the default branch.
+  ```bash
+  existing_pr="$(gh api \
+    "repos/${REPOSITORY}/pulls?state=open&head=${REPOSITORY%/*}:${HEAD_REF}" \
+    --jq '[.[] | .number] | first // empty' 2>/dev/null || echo "")"
+  base_ref="$(gh api "repos/${REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo 'main')"
+  ```
+  Existing in-repo precedent already uses the event payload for default-branch fallback at `.github/workflows/implement.yml:1063`.  
+  **Proposed fix** — In `Resolve PR for head branch`, set `base_ref` from `${{ github.event.repository.default_branch }}` and keep the current repo-metadata call only as an empty-field fallback until trigger coverage is proven.  
+  **Safety rationale** — `NEEDS_VERIFICATION` because this swaps a live repo read for webhook snapshot data.  
+  **Downstream signal** — Confirm `github.event.repository.default_branch` is always populated for this workflow’s push path and compare it against the API value on a test branch-rename scenario before removing the repo-metadata call.
+
+### Dead Calls (DEAD-API-###)
+No findings.
+
+### Cross-References to Deep Audit Section
+- API-001: SAFE_TO_MERGE — the earlier batched GraphQL classifier already carries the body/label data later re-read per issue in the merged-alert step.
+- BATCH-001: RISKY_SKIP — batching the standalone-label sweep inside `scripts/orchestrate_poll_process.sh` changes search/pagination behavior in a race-defensive poller path.
+- API-002: SAFE_TO_MERGE — the same Actions run endpoint is fetched twice in one watcher loop only to split `status` and `conclusion`.
+
+### Summary Counts
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 1 | MERGE-001 |
+| NEEDS_VERIFICATION | 2 | REUSE-001, REUSE-002 |
+| RISKY_SKIP | 1 | MERGE-002 |
+
+### Implement-Stage Handoff
+- MERGE-001
