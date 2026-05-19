@@ -74,9 +74,9 @@ _KEYWORD_ALT = "|".join(AUTO_CLOSE_KEYWORDS)
 AUTO_CLOSE_RE = re.compile(
 	rf"(?i)(?<![\w-])(?P<keyword>{_KEYWORD_ALT})\s*:?\s+"
 	rf"(?:"
-	rf"(?:[\w.-]+/[\w.-]+)?#(?P<issue_short>\d+)"
+	rf"(?:(?P<issue_repo_short>[\w.-]+/[\w.-]+))?#(?P<issue_short>\d+)"
 	rf"|"
-	rf"https?://github\.com/[\w.-]+/[\w.-]+/issues/(?P<issue_url>\d+)"
+	rf"https?://github\.com/(?P<issue_repo_url>[\w.-]+/[\w.-]+)/issues/(?P<issue_url>\d+)"
 	rf")(?![\w-])"
 )
 
@@ -91,18 +91,28 @@ INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
 class LintViolation:
 	"""A single auto-close keyword that references an orchestrator-tracking issue."""
 
-	def __init__(self, source: str, line_no: int, line: str, keyword: str, issue: int):
+	def __init__(
+		self,
+		source: str,
+		line_no: int,
+		line: str,
+		keyword: str,
+		issue: int,
+		issue_repo: str | None = None,
+	):
 		self.source = source
 		self.line_no = line_no
 		self.line = line.rstrip("\n")
 		self.keyword = keyword
 		self.issue = issue
+		self.issue_repo = issue_repo
 
 	def format(self) -> str:
+		issue_ref = f"{self.issue_repo}#{self.issue}" if self.issue_repo else f"#{self.issue}"
 		return (
 			f"::error::[lint_pr_body_auto_close] {self.source}:line {self.line_no} — "
 			f"auto-close keyword '{self.keyword}' references ai:orchestrator-tracking "
-			f"issue #{self.issue}. On merge this would auto-close the tracking issue "
+			f"issue {issue_ref}. On merge this would auto-close the tracking issue "
 			f"and stop the orchestrator's wave dispatch (see CLAUDE.md §19 and "
 			f"docs/postmortems/2026-05-18-project-2734-stall.md). Use 'Refs #' or "
 			f"'Related to #' instead.\n"
@@ -148,16 +158,18 @@ def _fetch_issue_labels_gh(repo: str, issue_number: int) -> list[str] | None:
 	return [str(label) for label in labels]
 
 
-def _scan_text(source: str, text: str, *, markdown: bool = False) -> list[tuple[int, str, str, int]]:
-	"""Return a list of (line_no, line, keyword, issue_number) tuples for every
-	auto-close keyword match in `text`. line_no is 1-based.
+def _scan_text(source: str, text: str, *, markdown: bool = False) -> list[tuple[int, str, str, str | None, int]]:
+	"""Return a list of (line_no, line, keyword, referenced_repo, issue_number)
+	tuples for every auto-close keyword match in `text`. line_no is 1-based.
 
 	The regex has two named groups for the issue number — `issue_short`
 	(for `#N` and `owner/repo#N` forms) and `issue_url` (for the full
 	`https://github.com/.../issues/N` form). Exactly one is populated per
-	match; we pick whichever fired.
+	match; we pick whichever fired. `referenced_repo` is None for same-repo
+	short-form references and `owner/repo` for cross-repo short or URL
+	forms so label lookup can target the actual referenced issue.
 	"""
-	matches: list[tuple[int, str, str, int]] = []
+	matches: list[tuple[int, str, str, str | None, int]] = []
 	in_fenced_code = False
 	fence_char = ""
 	fence_len = 0
@@ -183,7 +195,8 @@ def _scan_text(source: str, text: str, *, markdown: bool = False) -> list[tuple[
 			issue_str = m.group("issue_short") or m.group("issue_url")
 			if not issue_str:
 				continue
-			matches.append((line_no, line, m.group("keyword"), int(issue_str)))
+			referenced_repo = m.group("issue_repo_short") or m.group("issue_repo_url") or None
+			matches.append((line_no, line, m.group("keyword"), referenced_repo, int(issue_str)))
 	return matches
 
 
@@ -212,26 +225,28 @@ def lint(
 	if label_lookup is None:
 		label_lookup = _fetch_issue_labels_gh
 
-	candidate_matches: list[tuple[str, int, str, str, int]] = []
-	for line_no, line, keyword, issue in _scan_text("PR body", pr_body, markdown=True):
-		candidate_matches.append(("PR body", line_no, line, keyword, issue))
+	candidate_matches: list[tuple[str, int, str, str, str | None, int]] = []
+	for line_no, line, keyword, referenced_repo, issue in _scan_text("PR body", pr_body, markdown=True):
+		candidate_matches.append(("PR body", line_no, line, keyword, referenced_repo, issue))
 	for rec_no, msg in commit_messages:
-		for line_no, line, keyword, issue in _scan_text(f"commit message #{rec_no}", msg):
-			candidate_matches.append((f"commit message #{rec_no}", line_no, line, keyword, issue))
+		for line_no, line, keyword, referenced_repo, issue in _scan_text(f"commit message #{rec_no}", msg):
+			candidate_matches.append((f"commit message #{rec_no}", line_no, line, keyword, referenced_repo, issue))
 
 	violations: list[LintViolation] = []
 	lookup_errors: list[str] = []
-	# Cache per-issue lookups so a body with multiple references to the same
-	# issue makes one gh call, not N (CLAUDE.md §15).
-	issue_label_cache: dict[int, list[str] | None] = {}
-	for source, line_no, line, keyword, issue in candidate_matches:
-		if issue not in issue_label_cache:
-			issue_label_cache[issue] = label_lookup(repo, issue)
-		labels = issue_label_cache[issue]
+	# Cache per-(repo, issue) lookups so a body with multiple references to the
+	# same issue makes one gh call, not N (CLAUDE.md §15).
+	issue_label_cache: dict[tuple[str, int], list[str] | None] = {}
+	for source, line_no, line, keyword, referenced_repo, issue in candidate_matches:
+		lookup_repo = referenced_repo or repo
+		cache_key = (lookup_repo, issue)
+		if cache_key not in issue_label_cache:
+			issue_label_cache[cache_key] = label_lookup(lookup_repo, issue)
+		labels = issue_label_cache[cache_key]
 		if labels is None:
 			lookup_errors.append(
-				f"could not fetch labels for #{issue} (matched in {source}:line {line_no}); "
-				f"check gh auth and {repo!r} accessibility"
+				f"could not fetch labels for {lookup_repo}#{issue} (matched in {source}:line {line_no}); "
+				f"check gh auth and {lookup_repo!r} accessibility"
 			)
 			if fail_open_on_lookup_error:
 				continue
@@ -240,7 +255,7 @@ def lint(
 			# Surface as a lookup error which the caller maps to exit 2.
 			continue
 		if TRACKING_LABEL in labels:
-			violations.append(LintViolation(source, line_no, line, keyword, issue))
+			violations.append(LintViolation(source, line_no, line, keyword, issue, referenced_repo))
 	return violations, lookup_errors
 
 

@@ -68,24 +68,25 @@ def test_keyword_list_covers_all_github_auto_close_variants():
 def test_regex_matches_canonical_cases():
 	mod = _import_lint_module()
 	cases = [
-		("Fixes #2734", "Fixes", 2734),
-		("fixes #2734", "fixes", 2734),
-		("FIXES #2734", "FIXES", 2734),
-		("Closes: #100", "Closes", 100),
-		("Resolves owner/repo#42", "Resolves", 42),
-		("fixed #1", "fixed", 1),
-		("resolves #999999", "resolves", 999999),
+		("Fixes #2734", "Fixes", None, 2734),
+		("fixes #2734", "fixes", None, 2734),
+		("FIXES #2734", "FIXES", None, 2734),
+		("Closes: #100", "Closes", None, 100),
+		("Resolves owner/repo#42", "Resolves", "owner/repo", 42),
+		("fixed #1", "fixed", None, 1),
+		("resolves #999999", "resolves", None, 999999),
 		# `Close #N` with no plural / no separator is the GitHub-supported
 		# minimal form and must still match.
-		("Close #5", "Close", 5),
+		("Close #5", "Close", None, 5),
 	]
-	for text, keyword, issue in cases:
+	for text, keyword, referenced_repo, issue in cases:
 		matches = mod._scan_text("test", text)
 		assert len(matches) == 1, (
 			f"regex failed to match canonical case {text!r}; got {matches!r}"
 		)
-		_, _, kw, iss = matches[0]
+		_, _, kw, repo_ref, iss = matches[0]
 		assert kw.lower() == keyword.lower()
+		assert repo_ref == referenced_repo
 		assert iss == issue
 
 
@@ -98,20 +99,21 @@ def test_regex_matches_github_url_issue_form():
 	# See https://docs.github.com/articles/closing-issues-using-keywords.
 	mod = _import_lint_module()
 	cases = [
-		("Closes https://github.com/owner/repo/issues/2734", "Closes", 2734),
-		("Fixes https://github.com/owner/repo/issues/100", "Fixes", 100),
-		("Resolves: https://github.com/owner/repo/issues/9", "Resolves", 9),
+		("Closes https://github.com/owner/repo/issues/2734", "Closes", "owner/repo", 2734),
+		("Fixes https://github.com/owner/repo/issues/100", "Fixes", "owner/repo", 100),
+		("Resolves: https://github.com/owner/repo/issues/9", "Resolves", "owner/repo", 9),
 		# Lowercase + http (no s) — GitHub treats both the same.
-		("fixes http://github.com/owner/repo/issues/1", "fixes", 1),
+		("fixes http://github.com/owner/repo/issues/1", "fixes", "owner/repo", 1),
 	]
-	for text, keyword, issue in cases:
+	for text, keyword, referenced_repo, issue in cases:
 		matches = mod._scan_text("test", text)
 		assert len(matches) == 1, (
 			f"regex failed to match URL-form case {text!r}; got {matches!r}. "
 			f"GitHub auto-closes on this form too, so the lint must catch it."
 		)
-		_, _, kw, iss = matches[0]
+		_, _, kw, repo_ref, iss = matches[0]
 		assert kw.lower() == keyword.lower()
+		assert repo_ref == referenced_repo
 		assert iss == issue
 
 
@@ -147,7 +149,31 @@ def test_markdown_code_examples_in_pr_body_are_ignored():
 	)
 	matches = mod._scan_text("PR body", text, markdown=True)
 	assert len(matches) == 1, f"expected only the non-code-span directive to match, got {matches!r}"
-	assert matches[0][3] == 99
+	assert matches[0][4] == 99
+
+
+def test_cross_repo_reference_looks_up_referenced_repo_not_current_repo():
+	mod = _import_lint_module()
+	lookups: list[tuple[str, int]] = []
+
+	def fake_lookup(repo: str, issue: int) -> list[str]:
+		lookups.append((repo, issue))
+		if (repo, issue) == ("other/repo", 2734):
+			return ["ai:orchestrator-tracking"]
+		return []
+
+	violations, errors = mod.lint(
+		pr_body="Fixes other/repo#2734\n",
+		commit_messages=[],
+		repo="owner/current",
+		fail_open_on_lookup_error=False,
+		label_lookup=fake_lookup,
+	)
+	assert errors == []
+	assert lookups == [("other/repo", 2734)]
+	assert len(violations) == 1
+	assert violations[0].issue == 2734
+	assert violations[0].issue_repo == "other/repo"
 
 
 def test_tracking_labeled_issue_produces_violation():
