@@ -160,13 +160,15 @@ env:
   # written by the "Collect PR check-run failures" step. The writer pulls
   # the failing job's GitHub Actions log via `gh run view --log --job`
   # (using the run/job IDs parsed from the already-captured details_url)
-  # only when the Checks API summary is empty, then trims to the last
-  # CHECK_RUNS_LOG_TAIL_BYTES bytes followed by the last 200 lines —
+  # only when the Checks API summary is empty or whitespace-only, then
+  # trims to the last CHECK_RUNS_LOG_TAIL_BYTES bytes followed by the
+  # last 200 lines —
   # keeps actionable failure detail in reach when
   # consumer CI steps (bare `npm test`, `pytest`, `make test`) don't
   # emit `::error::` annotations and the Checks API output.summary is
   # empty. Fail-open: any fetch error writes an empty log_tail and the
-  # pipeline continues. Set to `0` to disable log_tail capture.
+  # pipeline continues. Set to `0` to disable log_tail capture; values
+  # above `131072` clamp to `131072` so the snapshot stays bounded.
   CHECK_RUNS_LOG_TAIL_BYTES: ${{ vars.CHECK_RUNS_LOG_TAIL_BYTES || '16384' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
   SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}
@@ -2009,7 +2011,7 @@ jobs:
           # the snapshot for one iteration but keeps the pipeline live.
           _writer_ok=true
           PYTHONDONTWRITEBYTECODE=1 python3 - "${_raw_file}" "${PR_CHECK_RUNS_CONTEXT_FILE}" "${HEAD_SHA}" "${_final_status}" <<'PYCR' || _writer_ok=false
-          import json, os, re, shutil, subprocess, sys
+          import json, os, re, shutil, subprocess, sys, tempfile
           raw_path, out_path, head_sha, final_status = sys.argv[1:5]
           runs = []
           try:
@@ -2046,14 +2048,16 @@ jobs:
 
           # Per-check-run cap on the bytes of failing-job log we attach as
           # `failed[i].log_tail`. Set CHECK_RUNS_LOG_TAIL_BYTES=0 (or any
-          # non-positive int) to disable log_tail capture entirely; the
-          # rest of the snapshot still ships.
+          # non-positive int) to disable log_tail capture entirely; values
+          # above 131072 clamp to 131072 so the snapshot stays bounded.
           try:
               _log_tail_bytes = int(os.environ.get("CHECK_RUNS_LOG_TAIL_BYTES", "16384"))
           except (TypeError, ValueError):
               _log_tail_bytes = 16384
           if _log_tail_bytes < 0:
               _log_tail_bytes = 0
+          if _log_tail_bytes > 131072:
+              _log_tail_bytes = 131072
           _log_tail_lines = 200
           _gh_available = bool(shutil.which("gh"))
           _gh_repo = os.environ.get("GITHUB_REPOSITORY", "")
@@ -2078,15 +2082,20 @@ jobs:
                   return ""
               job_id = m.group(2)
               try:
-                  proc = subprocess.run(
-                      ["gh", "run", "view", "--log", "--job", job_id, "-R", _gh_repo],
-                      capture_output=True, timeout=60,
-                  )
-              except (subprocess.TimeoutExpired, OSError, ValueError):
+                  with tempfile.TemporaryFile() as tmp:
+                      proc = subprocess.run(
+                          ["gh", "run", "view", "--log", "--job", job_id, "-R", _gh_repo],
+                          stdout=tmp, stderr=subprocess.DEVNULL, timeout=60,
+                      )
+                      if proc.returncode != 0:
+                          return ""
+                      if tmp.tell() > _log_tail_bytes:
+                          tmp.seek(-_log_tail_bytes, os.SEEK_END)
+                      else:
+                          tmp.seek(0)
+                      out = tmp.read()
+              except (subprocess.SubprocessError, OSError, ValueError):
                   return ""
-              if proc.returncode != 0:
-                  return ""
-              out = proc.stdout or b""
               if len(out) > _log_tail_bytes:
                   out = out[-_log_tail_bytes:]
               lines = out.decode("utf-8", errors="replace").splitlines()
@@ -2115,16 +2124,18 @@ jobs:
                   fh.write(f"failed[{i}].app: {short(app)}\n")
                   fh.write(f"failed[{i}].html_url: {short(r.get('html_url'))}\n")
                   fh.write(f"failed[{i}].details_url: {short(r.get('details_url'))}\n")
-                  summary = short(output.get('summary'), 1200)
+                  raw_summary = "" if output.get('summary') is None else str(output.get('summary'))
+                  summary = short(raw_summary, 1200)
                   fh.write(f"failed[{i}].title: {short(output.get('title'))}\n")
                   fh.write(f"failed[{i}].summary: {summary}\n")
                   # Pull the failing job's GitHub Actions log tail only when
-                  # the Checks API summary is empty; otherwise rely on the
+                  # the Checks API summary is empty or whitespace-only;
+                  # otherwise rely on the
                   # summary to avoid extra API calls and prompt bloat.
                   # See CHECK_RUNS_LOG_TAIL_BYTES at the workflow env
                   # block for sizing / opt-out.
                   log_tail = ""
-                  if not summary.strip():
+                  if not raw_summary.strip():
                       log_tail = fetch_log_tail(r.get("details_url") or "")
                   fh.write(f"failed[{i}].log_tail ({len(log_tail)} chars):\n")
                   if log_tail:
