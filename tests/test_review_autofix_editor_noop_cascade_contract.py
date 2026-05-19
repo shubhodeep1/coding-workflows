@@ -3,9 +3,10 @@
 `review_autofix.yml`, `review_apply_fixes.sh`, and the e2e poller in
 `test-and-mark-stable.yml`.
 
-The baseline no-op guard is documented in `agents.md` §20.10, and the
-refusal/cache-busting extension is documented in
-`probably_unnecessary_but_read_if_stuck.md` §20.10.1. Three baseline
+The baseline no-op guard is documented in
+`probably_unnecessary_but_read_if_stuck.md` §20.10, and the
+refusal/cache-busting extension is documented in the same file at
+§20.10.1. Three baseline
 invariants must hold together — if any one regresses, the run-25126757724
 cascade can re-emerge or the cross-workflow grep contract can silently
 break:

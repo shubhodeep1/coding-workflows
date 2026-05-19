@@ -1308,8 +1308,9 @@ while [ "${attempt}" -le 3 ]; do
   # Provider-side prompt-hash caching (OpenRouter / OpenAI) can serve
   # identical responses — including intermittent safety-policy refusals
   # — on every retry of a byte-identical prompt. Run 26081926521 (PR
-  # tele-funtoken-msg-scoring#3053) burned attempts 2–4 at 0 tokens
-  # each receiving a cached "I'm sorry, but I cannot assist" refusal
+  # tele-funtoken-msg-scoring#3053) burned the then-configured retry
+  # attempts 2–4 at 0 tokens each receiving a cached "I'm sorry,
+  # but I cannot assist" refusal
   # after attempt 1 tripped the filter. Appending a per-attempt nonce
   # trailer changes the prompt hash on every retry so each one hits
   # fresh inference; the trailer is metadata the model is asked to

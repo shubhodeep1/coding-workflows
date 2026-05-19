@@ -552,7 +552,7 @@ Operational rules:
 
 #### 20.10.1 Refusal-specific signal (`EDITOR_NOOP_REFUSAL`) and per-attempt cache-busting
 
-Context: PR `tele-funtoken-msg-scoring#3053` / Actions run `26081926521` (May 2026) — the editor model returned an OpenAI safety-policy refusal (`"I'm sorry, but I cannot assist with that request."`) as its final-channel output on attempt 1 after ~250k tokens of reasoning. Attempts 2–4 each used 0 tokens — provider-side prompt-hash caching served the same refusal instantly — and the 4-retry budget was wasted. Two earlier editor runs on the same PR within the preceding hour had succeeded, so the trip was intermittent.
+Context: PR `tele-funtoken-msg-scoring#3053` / Actions run `26081926521` (May 2026) — the editor model returned an OpenAI safety-policy refusal (`"I'm sorry, but I cannot assist with that request."`) as its final-channel output on attempt 1 after ~250k tokens of reasoning. In the then-4-attempt configuration, attempts 2–4 each used 0 tokens — provider-side prompt-hash caching served the same refusal instantly — and the full retry budget was wasted. Two earlier editor runs on the same PR within the preceding hour had succeeded, so the trip was intermittent.
 
 Two coordinated changes address this:
 
