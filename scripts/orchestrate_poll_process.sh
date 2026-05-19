@@ -5977,15 +5977,109 @@ STALL_EOF
           fi
         fi
         if [ -n "${head_ref}" ] && [ "${head_ref}" != "null" ]; then
-          if git fetch origin "${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null && \
-             git checkout "origin/${head_ref}" 2>/dev/null; then
-            git config user.name "codex-bot"
-            git config user.email "codex@users.noreply.github.com"
-            git commit --allow-empty -m "[orchestrator] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
-            if git push origin "HEAD:${head_ref}" 2>/dev/null; then
-              tg_notify "Stall recovery: re-triggered review for PR #${pr_num} (issue #${issue_num}, stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"PR: $(_gh_url "pull/${pr_num}")"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
+          # In-flight review guard.  An empty-commit push here flips the
+          # mid-run stale-base gate on any review_autofix run that is
+          # currently editing this branch: the orchestrator's commit
+          # subject does not match the [ai-autofix] / [ai-merge-resolve]
+          # prefixes in check_external_branch_advance.sh (line 151-160),
+          # so the gate prints ADVANCE=external, the pre-review
+          # (review_autofix.yml:2972-3009) and pre-editor
+          # (review_autofix.yml:3268-3309) steps set
+          # AUTOFIX_STALE_BASE_SKIP=true, and the editor commit / push /
+          # mark-ready-to-merge / re-trigger tail steps that are gated on
+          # AUTOFIX_STALE_BASE_SKIP != 'true' are all skipped — the
+          # editor's work is discarded and a brand-new review cycle
+          # starts from the empty commit.
+          #
+          # The active-workflow guard in recover_stalled_issue (via
+          # issue_has_active_workflow consuming build_active_issue_set)
+          # is the primary protection, but a single missed run in that
+          # 50-item blob
+          # (cache TTL, pagination edge, head_branch=null on
+          # workflow_dispatch) defeats every downstream stall check.
+          # This is a targeted defense-in-depth at the only push site
+          # that materially harms in-flight review_autofix runs.
+          #
+          # Reads from the per-tick _ACTIONS_RUNS_BLOB_CACHE populated
+          # by _load_actions_runs_cached so this adds zero API calls
+          # (§15).  Workflow filter mirrors
+          # cancel_zombie_runs_for_issue — both .name and .path so
+          # consumer-repo caller workflows that rename the display name
+          # are still caught.  Run matching prefers head_branch, with a
+          # blank-head_branch head_sha fallback for workflow_dispatch
+          # runs.  Zombie filter (STALL_THRESHOLD_MINUTES) mirrors
+          # build_active_issue_set so a genuinely hung run does not
+          # block recovery indefinitely.  Malformed or blank timestamps
+          # on a matching review run are treated as fresh so we
+          # conservatively avoid invalidating a potentially live
+          # autofix pass.  Other jq/cache errors still fail open, and
+          # if date +%s is unavailable we skip the guard entirely:
+          # empty result falls through to the legacy empty-commit path.
+          local _rtr_inflight_blob _rtr_inflight_id _rtr_now_epoch _rtr_stall_secs _rtr_origin_head_sha _rtr_push_succeeded
+          _rtr_inflight_blob="$(_load_actions_runs_cached 2>/dev/null || echo '{"workflow_runs":[]}')"
+          _rtr_now_epoch="$(date +%s 2>/dev/null || echo "")"
+          _rtr_stall_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))
+          _rtr_push_succeeded="false"
+          if [[ "${_rtr_now_epoch}" =~ ^[0-9]+$ ]]; then
+            _rtr_inflight_id="$(printf '%s' "${_rtr_inflight_blob}" | jq -r \
+              --arg br "${head_ref}" \
+              --arg sha "${_rtr_head_sha}" \
+              --argjson now "${_rtr_now_epoch}" \
+              --argjson threshold "${_rtr_stall_secs}" '
+              [.workflow_runs[]?
+               | select((.status // "") == "in_progress" or (.status // "") == "queued")
+               | select(
+                   ((.head_branch // "") == $br)
+                   or ((.head_branch // "") == "" and $sha != "" and (.head_sha // "") == $sha)
+                 )
+               | select(
+                   (.name // "") == "AI Review"
+                   or (.name // "") == "Internal Review"
+                   or (.name // "") == "Review Autofix"
+                   or ((.path // "") | endswith("ai-review.yml"))
+                   or ((.path // "") | endswith("internal-review.yml"))
+                   or ((.path // "") | endswith("review_autofix.yml"))
+                 )
+               | ([.run_started_at, .created_at]
+                  | map(select(type == "string" and . != ""))[0] // "") as $ts
+               | (if $ts != ""
+                  then (try ($ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch $now)
+                  else $now
+                  end) as $start_epoch
+               | select(($now - $start_epoch) < $threshold)
+              ] | (.[0].id // empty)
+            ' 2>/dev/null || echo "")"
+          else
+            _rtr_inflight_id=""
+          fi
+          if [ -n "${_rtr_inflight_id}" ]; then
+            echo "  Issue #${issue_num} PR #${pr_num} has in-flight review run #${_rtr_inflight_id} on ${head_ref} (fresh, <${STALL_THRESHOLD_MINUTES}m); skipping empty-commit push to avoid invalidating its stale-base gate."
+            STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
+            return 1
+          fi
+          if git fetch origin "${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
+            _rtr_origin_head_sha="$(git rev-parse --verify "refs/remotes/origin/${head_ref}" 2>/dev/null || echo "")"
+            if [[ "${_rtr_head_sha}" =~ ^[0-9a-f]{40}$ ]] && [[ "${_rtr_origin_head_sha}" =~ ^[0-9a-f]{40}$ ]] && \
+               [ "${_rtr_origin_head_sha}" != "${_rtr_head_sha}" ]; then
+              echo "  Issue #${issue_num} PR #${pr_num} head advanced from ${_rtr_head_sha} to ${_rtr_origin_head_sha} after the PR-state snapshot; skipping empty-commit push to avoid racing newer review work."
+              return 1
             fi
-            git checkout --detach HEAD 2>/dev/null || true
+            if git checkout "origin/${head_ref}" 2>/dev/null; then
+              git config user.name "codex-bot"
+              git config user.email "codex@users.noreply.github.com"
+              git commit --allow-empty -m "[orchestrator] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
+              if git push origin "HEAD:${head_ref}" 2>/dev/null; then
+                tg_notify "Stall recovery: re-triggered review for PR #${pr_num} (issue #${issue_num}, stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"PR: $(_gh_url "pull/${pr_num}")"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
+                _rtr_push_succeeded="true"
+              fi
+              git checkout --detach HEAD 2>/dev/null || true
+            else
+              echo "  Issue #${issue_num} PR #${pr_num} checkout origin/${head_ref} failed after fetch; skipping empty-commit push."
+            fi
+          fi
+          if [ "${_rtr_push_succeeded}" != "true" ]; then
+            echo "  Issue #${issue_num} PR #${pr_num} empty-commit retrigger did not reach a successful push; skipping recovery increment."
+            return 1
           fi
         fi
       else
@@ -7719,7 +7813,10 @@ STALL_EOF
         local pr_num
         local pr_lookup_ok="false"
         local head_ref
+        local head_sha
         local pr_json
+        local _std_rtr_inflight_blob _std_rtr_inflight_id _std_rtr_now_epoch _std_rtr_stall_secs _std_rtr_origin_head_sha _std_rtr_push_succeeded
+        _std_rtr_push_succeeded="false"
         if [[ "${_STD_ITER_PR_NUM_CACHED:-}" =~ ^[0-9]+$ ]]; then
           pr_num="${_STD_ITER_PR_NUM_CACHED}"
           pr_lookup_ok="true"
@@ -7742,12 +7839,86 @@ STALL_EOF
             pr_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" 2>/dev/null || echo "")"
           fi
           head_ref="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .head.ref?) then .head.ref else empty end' 2>/dev/null | tail -n1)"
-          if [ -n "${head_ref}" ] && git fetch origin "${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null && git checkout "origin/${head_ref}" 2>/dev/null; then
-            git config user.name "codex-bot"
-            git config user.email "codex@users.noreply.github.com"
-            git commit --allow-empty -m "[standalone] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
-            git push origin "HEAD:${head_ref}" 2>/dev/null || true
-            git checkout --detach HEAD 2>/dev/null || true
+          head_sha="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .head.sha?) then .head.sha else empty end' 2>/dev/null | tail -n1)"
+          if [ -n "${head_ref}" ] && { [ -z "${head_sha}" ] || [ "${head_sha}" = "null" ]; }; then
+            # The standalone conflict guard seeds _STD_ITER_PR_JSON_CACHED
+            # with a minimal {number, head.ref} payload to avoid a
+            # redundant pulls/{n} fetch on the fast path.  The
+            # retrigger-review empty-commit guard also needs head.sha for
+            # workflow_dispatch matching and remote-head rechecks, so
+            # refresh to the full PR payload only when the cached shape
+            # omitted it.
+            pr_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" 2>/dev/null || echo "${pr_json}")"
+            head_ref="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .head.ref?) then .head.ref else empty end' 2>/dev/null | tail -n1)"
+            head_sha="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .head.sha?) then .head.sha else empty end' 2>/dev/null | tail -n1)"
+          fi
+          if [ -n "${head_ref}" ] && [ "${head_ref}" != "null" ]; then
+            # Mirror execute_stall_recovery_action(retrigger_review):
+            # if issue_has_active_workflow misses a live review run on
+            # this PR, an empty-commit push here can still trip the
+            # stale-base gate and discard in-flight editor work.
+            _std_rtr_inflight_blob="$(_load_actions_runs_cached 2>/dev/null || echo '{"workflow_runs":[]}')"
+            _std_rtr_now_epoch="$(date +%s 2>/dev/null || echo "")"
+            _std_rtr_stall_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))
+            if [[ "${_std_rtr_now_epoch}" =~ ^[0-9]+$ ]]; then
+              _std_rtr_inflight_id="$(printf '%s' "${_std_rtr_inflight_blob}" | jq -r \
+                --arg br "${head_ref}" \
+                --arg sha "${head_sha}" \
+                --argjson now "${_std_rtr_now_epoch}" \
+                --argjson threshold "${_std_rtr_stall_secs}" '
+                [.workflow_runs[]?
+                 | select((.status // "") == "in_progress" or (.status // "") == "queued")
+                 | select(
+                     ((.head_branch // "") == $br)
+                     or ((.head_branch // "") == "" and $sha != "" and (.head_sha // "") == $sha)
+                   )
+                 | select(
+                     (.name // "") == "AI Review"
+                     or (.name // "") == "Internal Review"
+                     or (.name // "") == "Review Autofix"
+                     or ((.path // "") | endswith("ai-review.yml"))
+                     or ((.path // "") | endswith("internal-review.yml"))
+                     or ((.path // "") | endswith("review_autofix.yml"))
+                   )
+                 | ([.run_started_at, .created_at]
+                    | map(select(type == "string" and . != ""))[0] // "") as $ts
+                 | (if $ts != ""
+                    then (try ($ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch $now)
+                    else $now
+                    end) as $start_epoch
+                 | select(($now - $start_epoch) < $threshold)
+                ] | (.[0].id // empty)
+              ' 2>/dev/null || echo "")"
+            else
+              _std_rtr_inflight_id=""
+            fi
+            if [ -n "${_std_rtr_inflight_id}" ]; then
+              echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} has in-flight review run #${_std_rtr_inflight_id} on ${head_ref} (fresh, <${STALL_THRESHOLD_MINUTES}m); skipping empty-commit push to avoid invalidating its stale-base gate."
+              STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
+            elif git fetch origin "${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
+              _std_rtr_origin_head_sha="$(git rev-parse --verify "refs/remotes/origin/${head_ref}" 2>/dev/null || echo "")"
+              if [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] && [[ "${_std_rtr_origin_head_sha}" =~ ^[0-9a-f]{40}$ ]] && \
+                 [ "${_std_rtr_origin_head_sha}" != "${head_sha}" ]; then
+                echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} head advanced from ${head_sha} to ${_std_rtr_origin_head_sha} after the PR-state snapshot; skipping empty-commit push to avoid racing newer review work."
+              elif git checkout "origin/${head_ref}" 2>/dev/null; then
+                git config user.name "codex-bot"
+                git config user.email "codex@users.noreply.github.com"
+                git commit --allow-empty -m "[standalone] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
+                if git push origin "HEAD:${head_ref}" 2>/dev/null; then
+                  _std_rtr_push_succeeded="true"
+                fi
+                git checkout --detach HEAD 2>/dev/null || true
+              else
+                echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} checkout origin/${head_ref} failed after fetch; skipping empty-commit push."
+              fi
+            fi
+          fi
+          if [ "${_std_rtr_push_succeeded}" = "true" ]; then
+            tg_notify_issue "${issue_num}" "Standalone stall recovery: re-triggered review flow (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "WARNING"
+            STALL_RECOVERY_SHOULD_INCREMENT="true"
+            took_action="true"
+          elif [ "${STALL_RECOVERY_EFFECTIVE_ACTION}" != "retrigger_review_skipped_inflight" ]; then
+            echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} empty-commit retrigger did not reach a successful push; skipping recovery increment."
           fi
         elif [ "${pr_lookup_ok}" = "true" ]; then
           gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="$(cat <<'STALL_EOF'
@@ -7756,10 +7927,10 @@ STALL_EOF
 _Standalone stall recovery: issue marked done but no linked PR found. Re-triggering implementation._
 STALL_EOF
 )" >/dev/null 2>&1 || true
+          tg_notify_issue "${issue_num}" "Standalone stall recovery: re-triggered review flow (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "WARNING"
+          STALL_RECOVERY_SHOULD_INCREMENT="true"
+          took_action="true"
         fi
-        tg_notify_issue "${issue_num}" "Standalone stall recovery: re-triggered review flow (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "WARNING"
-        STALL_RECOVERY_SHOULD_INCREMENT="true"
-        took_action="true"
         ;;
       attempt_merge)
         local merge_pr
