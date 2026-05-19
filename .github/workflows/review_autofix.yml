@@ -154,8 +154,20 @@ env:
   # CI/lint failures are detected and fixed every run. See README and
   # agents.md for the contract.
   CHECK_RUNS_AUTOFIX_ENABLED: ${{ vars.CHECK_RUNS_AUTOFIX_ENABLED || 'true' }}
-  CHECK_RUNS_WAIT_TIMEOUT_SECS: ${{ vars.CHECK_RUNS_WAIT_TIMEOUT_SECS || '120' }}
-  CHECK_RUNS_POLL_INTERVAL_SECS: ${{ vars.CHECK_RUNS_POLL_INTERVAL_SECS || '30' }}
+  CHECK_RUNS_WAIT_TIMEOUT_SECS: ${{ vars.CHECK_RUNS_WAIT_TIMEOUT_SECS || '1200' }}
+  CHECK_RUNS_POLL_INTERVAL_SECS: ${{ vars.CHECK_RUNS_POLL_INTERVAL_SECS || '20' }}
+  # Per-failed-check-run cap on the `failed[i].log_tail` snapshot field
+  # written by the "Collect PR check-run failures" step. The writer resolves
+  # a short-lived Actions job-log URL (using the job ID parsed from the
+  # already-captured details_url), range-fetches only the final
+  # CHECK_RUNS_LOG_TAIL_BYTES bytes, then trims to the last 200 lines —
+  # keeps actionable failure detail in reach when
+  # consumer CI steps (bare `npm test`, `pytest`, `make test`) don't
+  # emit `::error::` annotations and the Checks API output.summary is
+  # empty. Fail-open: any fetch error writes an empty log_tail and the
+  # pipeline continues. Set to `0` to disable log_tail capture; values
+  # above `131072` clamp to `131072` so the snapshot stays bounded.
+  CHECK_RUNS_LOG_TAIL_BYTES: ${{ vars.CHECK_RUNS_LOG_TAIL_BYTES || '16384' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
   SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}
 
@@ -1922,13 +1934,13 @@ jobs:
 
           # Clamp configurable values to safe ranges. Invalid values fall back
           # to defaults rather than failing the workflow.
-          _wait_timeout="${CHECK_RUNS_WAIT_TIMEOUT_SECS:-120}"
+          _wait_timeout="${CHECK_RUNS_WAIT_TIMEOUT_SECS:-1200}"
           if ! [[ "${_wait_timeout}" =~ ^[0-9]+$ ]] || [ "${_wait_timeout}" -gt 3600 ]; then
-            _wait_timeout=120
+            _wait_timeout=1200
           fi
-          _poll_interval="${CHECK_RUNS_POLL_INTERVAL_SECS:-30}"
+          _poll_interval="${CHECK_RUNS_POLL_INTERVAL_SECS:-20}"
           if ! [[ "${_poll_interval}" =~ ^[0-9]+$ ]] || [ "${_poll_interval}" -lt 5 ] || [ "${_poll_interval}" -gt 300 ]; then
-            _poll_interval=30
+            _poll_interval=20
           fi
 
           _raw_file="$(mktemp)"
@@ -2006,7 +2018,7 @@ jobs:
           # the snapshot for one iteration but keeps the pipeline live.
           _writer_ok=true
           PYTHONDONTWRITEBYTECODE=1 python3 - "${_raw_file}" "${PR_CHECK_RUNS_CONTEXT_FILE}" "${HEAD_SHA}" "${_final_status}" <<'PYCR' || _writer_ok=false
-          import json, sys
+          import http.client, json, os, re, sys, urllib.error, urllib.request
           raw_path, out_path, head_sha, final_status = sys.argv[1:5]
           runs = []
           try:
@@ -2041,6 +2053,93 @@ jobs:
               s = s.replace("\r", " ").replace("\n", " | ")
               return s if len(s) <= limit else s[:limit] + "..."
 
+          # Per-check-run cap on the bytes of failing-job log we attach as
+          # `failed[i].log_tail`. Set CHECK_RUNS_LOG_TAIL_BYTES=0 (or any
+          # non-positive int) to disable log_tail capture entirely; values
+          # above 131072 clamp to 131072 so the snapshot stays bounded.
+          try:
+              _log_tail_bytes = int(os.environ.get("CHECK_RUNS_LOG_TAIL_BYTES", "16384"))
+          except (TypeError, ValueError):
+              _log_tail_bytes = 16384
+          if _log_tail_bytes < 0:
+              _log_tail_bytes = 0
+          if _log_tail_bytes > 131072:
+              _log_tail_bytes = 131072
+          _log_tail_lines = 200
+          _gh_repo = os.environ.get("GITHUB_REPOSITORY", "")
+          _gh_token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
+
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  return None
+
+          _log_redirect_opener = urllib.request.build_opener(NoRedirect)
+
+          def fetch_log_tail(details_url):
+              # Fail-open log-tail fetcher: parse `job_id` out of the Checks API
+              # `details_url` (shape
+              # `https://github.com/{owner}/{repo}/actions/runs/{run_id}/job/{job_id}`),
+              # resolve a short-lived signed log URL through the Actions job-log
+              # API, then range-fetch only the last CHECK_RUNS_LOG_TAIL_BYTES
+              # bytes (decoded with UTF-8 replacement) and truncate to the last
+              # 200 lines. Returns "" on any error so the snapshot still ships
+              # when the token lacks `actions:read`, the job has not finished
+              # writing logs, the URL shape changes, or the ranged fetch path is
+              # unavailable.
+              if _log_tail_bytes <= 0:
+                  return ""
+              if not details_url or not _gh_repo or not _gh_token:
+                  return ""
+              m = re.search(r"/actions/runs/(\d+)/job/(\d+)", details_url)
+              if not m:
+                  return ""
+              job_id = m.group(2)
+              try:
+                  api_req = urllib.request.Request(
+                      f"https://api.github.com/repos/{_gh_repo}/actions/jobs/{job_id}/logs",
+                      headers={
+                          "Authorization": f"Bearer {_gh_token}",
+                          "Accept": "application/vnd.github+json",
+                          "User-Agent": "coding-workflows-review-autofix",
+                          "X-GitHub-Api-Version": "2022-11-28",
+                      },
+                      method="GET",
+                  )
+                  try:
+                      _log_redirect_opener.open(api_req, timeout=10)
+                      return ""
+                  except urllib.error.HTTPError as e:
+                      if e.code not in (301, 302, 303, 307, 308):
+                          return ""
+                      blob_url = e.headers.get("Location") or ""
+                  if not blob_url:
+                      return ""
+                  head_req = urllib.request.Request(blob_url, method="HEAD")
+                  with urllib.request.urlopen(head_req, timeout=10) as resp:
+                      content_length = int(resp.headers.get("Content-Length", "0"))
+                  if content_length <= 0:
+                      return ""
+                  start = max(0, content_length - _log_tail_bytes)
+                  tail_req = urllib.request.Request(
+                      blob_url,
+                      headers={"Range": f"bytes={start}-{content_length - 1}"},
+                      method="GET",
+                  )
+                  with urllib.request.urlopen(tail_req, timeout=30) as resp:
+                      status = resp.getcode()
+                      if status == 206 or (status == 200 and content_length <= _log_tail_bytes):
+                          out = resp.read()
+                      else:
+                          return ""
+              except (OSError, ValueError, urllib.error.HTTPError, http.client.HTTPException):
+                  return ""
+              if len(out) > _log_tail_bytes:
+                  out = out[-_log_tail_bytes:]
+              lines = out.decode("utf-8", errors="replace").splitlines()
+              if len(lines) > _log_tail_lines:
+                  lines = lines[-_log_tail_lines:]
+              return "\n".join(lines)
+
           with open(out_path, "w", encoding="utf-8") as fh:
               fh.write("PR_CHECK_RUNS_CONTEXT\n")
               fh.write(f"head_sha: {head_sha}\n")
@@ -2062,8 +2161,24 @@ jobs:
                   fh.write(f"failed[{i}].app: {short(app)}\n")
                   fh.write(f"failed[{i}].html_url: {short(r.get('html_url'))}\n")
                   fh.write(f"failed[{i}].details_url: {short(r.get('details_url'))}\n")
+                  raw_summary = "" if output.get('summary') is None else str(output.get('summary'))
+                  summary = short(raw_summary, 1200)
                   fh.write(f"failed[{i}].title: {short(output.get('title'))}\n")
-                  fh.write(f"failed[{i}].summary: {short(output.get('summary'), 1200)}\n")
+                  fh.write(f"failed[{i}].summary: {summary}\n")
+                  # Pull the failing job's GitHub Actions log tail only when
+                  # the Checks API summary is empty or whitespace-only;
+                  # otherwise rely on the
+                  # summary to avoid extra API calls and prompt bloat.
+                  # See CHECK_RUNS_LOG_TAIL_BYTES at the workflow env
+                  # block for sizing / opt-out.
+                  log_tail = ""
+                  if not raw_summary.strip():
+                      log_tail = fetch_log_tail(r.get("details_url") or "")
+                  fh.write(f"failed[{i}].log_tail ({len(log_tail)} chars):\n")
+                  if log_tail:
+                      fh.write(log_tail)
+                      if not log_tail.endswith("\n"):
+                          fh.write("\n")
                   fh.write("\n")
               for i, r in enumerate(incomplete):
                   fh.write(f"incomplete[{i}].name: {short(r.get('name'))}\n")
