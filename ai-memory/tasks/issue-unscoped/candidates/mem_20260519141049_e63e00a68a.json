@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:5742-5770 | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro, mistralai_mistral-small-2603, moonshotai_kimi-k2_5]\n  PROBLEM: The `_rtr_now_epoch=0` fallback makes the in-flight guard fail closed when `date +%s` returns non-numeric output.\n  WHY: With `now=0`, the jq freshness test treats real timestamps as fresh and blocks the empty-commit path; one reviewer judged this acceptable conservatism, but the others flagged it as contrary to the documented fail-open intent.\n- scripts/orchestrate_poll_process.sh:5709-5783 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603, moonshotai_kimi-2_5, x-ai_grok-4_20]\n  PROBLEM: The cached in-flight-run snapshot creates a TOCTOU window between the check and the empty-commit push.\n  WHY: A `review_autofix` run that starts after the snapshot but before the push is missed, so the empty commit can still invalidate the stale-base gate.\n- tests/test_orchestrate_poll_process.py:1572-1590\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The mock exits with `SystemExit(0)` after writing filtered JSON, which truncates the HTTP headers needed by the cached loader path.\n  WHY: This breaks the shared cache contract in tests and hides regressions where jq failures propagate incorrectly.\n- scripts/orchestrate_poll_process.sh:5737-5747\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Empty `.run_started_at` and `.created_at` values can leave the timestamp block at a stale value.\n  WHY: The jq normalization falls through on empty strings, producing inconsistent freshness calculation.\n- scripts/orchestrate_poll_process.sh:5749-5750,5723-5770\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Missing or malformed `run_started_at`/`created_at` fields can default to Unix epoch `1970-01-01T00:00:00Z`.\n  WHY: That bad default can make fresh runs look like zombies and disable the guard on genuinely active branches.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:5750-5751 | confidence=2\n  PROBLEM: The `date +%s` numeric-validation fallback sets `_rtr_now_epoch=0` when the output is non-numeric.\n  WHY: With `$now=0`, the jq freshness check treats real timestamps as fresh and blocks the empty-commit path.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/orchestrate_poll_process.sh:5742-5748,5758-5770\n  PROBLEM: The numeric handling for `_rtr_now_epoch` uses a regex check and `0` fallback after capturing the date output, which makes the guard fail closed when the date output is malformed.\n  WHY: With `_rtr_now_epoch=0`, the jq age comparison becomes negative for real runs, so the guard treats them as fresh and blocks legitimate empty-commit pushes.\n- tests/test_orchestrate_poll_process.py:1572-1590\n  PROBLEM: The mock script sets `raise SystemExit(0)` after writing filtered JSON to stdout, which truncates the HTTP headers needed by `_load_actions_runs_cached`'s `-i`/ETag path.\n  WHY: This breaks the shared cache contract in tests and causes the tool to miss regression where jq failure propagates incorrectly.\n- scripts/orchestrate_poll_process.sh:5709-5783\n  PROBLEM: The TOCTOU window between the cached Actions runs snapshot and the empty-commit push means a `review_autofix` run can start after the snapshot but before the push and still slip through.\n  WHY: The guard relies on a per-tick cached blob, so a same-branch run that starts in that window is not detected and the empty commit can invalidate the stale-base gate.\n- scripts/orchestrate_poll_process.sh:5737-5747\n  PROBLEM: The jq filter selects the first non-empty timestamp from `.run_started_at`/`.created_at` to normalize, but if both fields are empty strings, the guarded pipeline falls through and the block remains at a stale value.\n  WHY: Truly empty timestamps can result in undefined epoch, impacting the freshness calculation.\n- scripts/orchestrate_poll_process.sh:5749-5750,5723-5770\n  PROBLEM: Missing or malformed `run_started_at`/`created_at` fields can default to Unix epoch `1970-01-01T00:00:00Z`, making these runs appear like zombies and disabling the guard on genuinely fresh runs for that branch.\n  WHY: The guard\u2019s freshness threshold may misclassify real runs as stale due to a bad default, allowing the empty-commit push to proceed and trigger the stale-base gate loop.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_poll_process.sh:5748-5782 | confidence=3\n  PROBLEM: The TOCTOU window between the cached in-flight-run check and the empty-commit push means a `review_autofix` run that starts after the snapshot but before the push can still slip through.\n  WHY: The guard uses a per-tick cached snapshot, so a same-branch run that appears after the snapshot is not detected and the empty commit invalidates the stale-base gate.\n- scripts/orchestrate_poll_process.sh:5749-5750 | confidence=2\n  PROBLEM: If `date +%s` yields non-numeric output and `_rtr_now_epoch` becomes 0, the jq check can block the empty-commit push even when no in-flight review run actually exists.\n  WHY: With `_rtr_now_epoch=0`, the age comparison is negative for real runs, so the comparison matches everything and blocks recovery indefinitely.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/orchestrate_poll_process.sh:5723-5759 | confidence=4\n  PROBLEM: Cached snapshot from `_load_actions_runs_cached` and the later git fetch/checkout/push sequence create a TOCTOU window that lets a `review_autofix` run start after the snapshot but before the push and evade the guard.\n  WHY: The once-per-tick snapshot is stale by the time the empty commit is pushed, so the fresh run is missed and the stale-base gate is invalidated.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "a9303c305fbfd57e09d3c6fc26261c2a7f024e9fb0d1386ee5e883c7323e0ff2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2790,
+    "run_id": "26101220601",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26101220601",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260519141049_e63e00a68a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2790,
+    "run_id": "26101220601"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-19T14:10:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
