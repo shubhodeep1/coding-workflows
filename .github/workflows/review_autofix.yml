@@ -157,12 +157,10 @@ env:
   CHECK_RUNS_WAIT_TIMEOUT_SECS: ${{ vars.CHECK_RUNS_WAIT_TIMEOUT_SECS || '1200' }}
   CHECK_RUNS_POLL_INTERVAL_SECS: ${{ vars.CHECK_RUNS_POLL_INTERVAL_SECS || '20' }}
   # Per-failed-check-run cap on the `failed[i].log_tail` snapshot field
-  # written by the "Collect PR check-run failures" step. The writer pulls
-  # the failing job's GitHub Actions log via `gh run view --log --job`
-  # (using the run/job IDs parsed from the already-captured details_url)
-  # only when the Checks API summary is empty or whitespace-only, then
-  # trims to the last CHECK_RUNS_LOG_TAIL_BYTES bytes followed by the
-  # last 200 lines —
+  # written by the "Collect PR check-run failures" step. The writer resolves
+  # a short-lived Actions job-log URL (using the job ID parsed from the
+  # already-captured details_url), range-fetches only the final
+  # CHECK_RUNS_LOG_TAIL_BYTES bytes, then trims to the last 200 lines —
   # keeps actionable failure detail in reach when
   # consumer CI steps (bare `npm test`, `pytest`, `make test`) don't
   # emit `::error::` annotations and the Checks API output.summary is
@@ -2011,7 +2009,7 @@ jobs:
           # the snapshot for one iteration but keeps the pipeline live.
           _writer_ok=true
           PYTHONDONTWRITEBYTECODE=1 python3 - "${_raw_file}" "${PR_CHECK_RUNS_CONTEXT_FILE}" "${HEAD_SHA}" "${_final_status}" <<'PYCR' || _writer_ok=false
-          import json, os, re, shutil, subprocess, sys, tempfile
+          import json, os, re, sys, urllib.error, urllib.request
           raw_path, out_path, head_sha, final_status = sys.argv[1:5]
           runs = []
           try:
@@ -2059,42 +2057,68 @@ jobs:
           if _log_tail_bytes > 131072:
               _log_tail_bytes = 131072
           _log_tail_lines = 200
-          _gh_available = bool(shutil.which("gh"))
           _gh_repo = os.environ.get("GITHUB_REPOSITORY", "")
+          _gh_token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
+
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  return None
+
+          _log_redirect_opener = urllib.request.build_opener(NoRedirect)
 
           def fetch_log_tail(details_url):
-              # Fail-open log-tail fetcher: parse `run_id`/`job_id` out of
-              # the Checks API `details_url` (shape
+              # Fail-open log-tail fetcher: parse `job_id` out of the Checks API
+              # `details_url` (shape
               # `https://github.com/{owner}/{repo}/actions/runs/{run_id}/job/{job_id}`),
-              # call `gh run view --log --job <job_id> -R <GITHUB_REPOSITORY>`,
-              # and return the last CHECK_RUNS_LOG_TAIL_BYTES bytes (decoded
-              # with UTF-8 replacement) truncated to the last 200 lines.
-              # Returns "" on any error so the
-              # snapshot still ships when gh is unavailable, the token
-              # lacks `actions:read`, the job hasn't finished writing
-              # logs, or the URL shape changes.
+              # resolve a short-lived signed log URL through the Actions job-log
+              # API, then range-fetch only the last CHECK_RUNS_LOG_TAIL_BYTES
+              # bytes (decoded with UTF-8 replacement) and truncate to the last
+              # 200 lines. Returns "" on any error so the snapshot still ships
+              # when the token lacks `actions:read`, the job has not finished
+              # writing logs, the URL shape changes, or the ranged fetch path is
+              # unavailable.
               if _log_tail_bytes <= 0:
                   return ""
-              if not details_url or not _gh_available or not _gh_repo:
+              if not details_url or not _gh_repo or not _gh_token:
                   return ""
               m = re.search(r"/actions/runs/(\d+)/job/(\d+)", details_url)
               if not m:
                   return ""
               job_id = m.group(2)
               try:
-                  with tempfile.TemporaryFile() as tmp:
-                      proc = subprocess.run(
-                          ["gh", "run", "view", "--log", "--job", job_id, "-R", _gh_repo],
-                          stdout=tmp, stderr=subprocess.DEVNULL, timeout=60,
-                      )
-                      if proc.returncode != 0:
+                  api_req = urllib.request.Request(
+                      f"https://api.github.com/repos/{_gh_repo}/actions/jobs/{job_id}/logs",
+                      headers={
+                          "Authorization": f"Bearer {_gh_token}",
+                          "Accept": "application/vnd.github+json",
+                          "User-Agent": "coding-workflows-review-autofix",
+                          "X-GitHub-Api-Version": "2022-11-28",
+                      },
+                      method="GET",
+                  )
+                  try:
+                      _log_redirect_opener.open(api_req, timeout=10)
+                      return ""
+                  except urllib.error.HTTPError as e:
+                      if e.code not in (301, 302, 303, 307, 308):
                           return ""
-                      if tmp.tell() > _log_tail_bytes:
-                          tmp.seek(-_log_tail_bytes, os.SEEK_END)
-                      else:
-                          tmp.seek(0)
-                      out = tmp.read()
-              except (subprocess.SubprocessError, OSError, ValueError):
+                      blob_url = e.headers.get("Location") or ""
+                  if not blob_url:
+                      return ""
+                  head_req = urllib.request.Request(blob_url, method="HEAD")
+                  with urllib.request.urlopen(head_req, timeout=10) as resp:
+                      content_length = int(resp.headers.get("Content-Length", "0"))
+                  if content_length <= 0:
+                      return ""
+                  start = max(0, content_length - _log_tail_bytes)
+                  tail_req = urllib.request.Request(
+                      blob_url,
+                      headers={"Range": f"bytes={start}-{content_length - 1}"},
+                      method="GET",
+                  )
+                  with urllib.request.urlopen(tail_req, timeout=30) as resp:
+                      out = resp.read()
+              except (OSError, ValueError, urllib.error.HTTPError):
                   return ""
               if len(out) > _log_tail_bytes:
                   out = out[-_log_tail_bytes:]
