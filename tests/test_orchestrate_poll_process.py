@@ -5762,6 +5762,62 @@ def test_retrigger_review_skips_empty_commit_when_review_run_inflight():
 	)
 
 
+def test_retrigger_review_skips_empty_commit_when_review_run_has_blank_head_branch_but_matching_sha():
+	# workflow_dispatch review runs can report a blank/null head_branch in
+	# /actions/runs even though they still target the PR head SHA. Those
+	# runs must still block the empty-commit push; otherwise the new guard
+	# misses the same head_branch=null case called out in the PR summary.
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	head_ref = "claude/retrigger-review-blank-branch"
+	head_sha = "a" * 40
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 84},
+		prs=[
+			{
+				"number": 84,
+				"state": "open",
+				"mergeable": True,
+				"mergeable_state": "clean",
+				"headRefName": head_ref,
+				"headRefFromApi": head_ref,
+				"headSha": head_sha,
+				"baseRefName": "main",
+			},
+		],
+		actions_runs_workflow_runs=[
+			{
+				"id": 26088864016,
+				"name": "Review Autofix",
+				"path": ".github/workflows/review_autofix.yml",
+				"status": "in_progress",
+				"head_branch": "",
+				"head_sha": head_sha,
+				"run_started_at": "2999-01-01T00:00:00Z",
+			},
+		],
+		mock_git_push_success=True,
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 0, (
+		f"expected blank-head_branch review run with matching head_sha to "
+		f"block the empty-commit push; got stall_recovery_count="
+		f"{issue_entry['stall_recovery_count']}"
+	)
+	assert result.get("git_push_calls", []) == [], (
+		f"expected no empty-commit push when a blank-head_branch run matches "
+		f"the PR head_sha; got push calls {result.get('git_push_calls', [])}"
+	)
+
+
 def test_retrigger_review_ignores_inflight_run_on_unrelated_branch():
 	# Defense-in-depth: an in-flight review run on a DIFFERENT branch
 	# must NOT block the empty-commit push for this PR.  Without the

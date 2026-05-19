@@ -5737,13 +5737,15 @@ STALL_EOF
           # (§15).  Workflow filter mirrors
           # cancel_zombie_runs_for_issue — both .name and .path so
           # consumer-repo caller workflows that rename the display name
-          # are still caught.  Zombie filter (STALL_THRESHOLD_MINUTES)
-          # mirrors build_active_issue_set so a genuinely hung run does
-          # not block recovery indefinitely.  Malformed or
-          # blank timestamps on a same-branch review run are treated as
-          # fresh so we conservatively avoid invalidating a potentially
-          # live autofix pass.  Other jq/cache errors still fail open,
-          # and if date +%s is unavailable we skip the guard entirely:
+          # are still caught.  Run matching prefers head_branch, with a
+          # blank-head_branch head_sha fallback for workflow_dispatch
+          # runs.  Zombie filter (STALL_THRESHOLD_MINUTES) mirrors
+          # build_active_issue_set so a genuinely hung run does not
+          # block recovery indefinitely.  Malformed or blank timestamps
+          # on a matching review run are treated as fresh so we
+          # conservatively avoid invalidating a potentially live
+          # autofix pass.  Other jq/cache errors still fail open, and
+          # if date +%s is unavailable we skip the guard entirely:
           # empty result falls through to the legacy empty-commit path.
           local _rtr_inflight_blob _rtr_inflight_id _rtr_now_epoch _rtr_stall_secs _rtr_origin_head_sha
           _rtr_inflight_blob="$(_load_actions_runs_cached 2>/dev/null || echo '{"workflow_runs":[]}')"
@@ -5752,11 +5754,15 @@ STALL_EOF
           if [[ "${_rtr_now_epoch}" =~ ^[0-9]+$ ]]; then
             _rtr_inflight_id="$(printf '%s' "${_rtr_inflight_blob}" | jq -r \
               --arg br "${head_ref}" \
+              --arg sha "${_rtr_head_sha}" \
               --argjson now "${_rtr_now_epoch}" \
               --argjson threshold "${_rtr_stall_secs}" '
               [.workflow_runs[]?
                | select((.status // "") == "in_progress" or (.status // "") == "queued")
-               | select((.head_branch // "") == $br)
+               | select(
+                   ((.head_branch // "") == $br)
+                   or ((.head_branch // "") == "" and $sha != "" and (.head_sha // "") == $sha)
+                 )
                | select(
                    (.name // "") == "AI Review"
                    or (.name // "") == "Internal Review"
