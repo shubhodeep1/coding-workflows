@@ -1647,19 +1647,31 @@ if len(args) >= 2 and args[0] == 'merge-tree' and args[1] == '--write-tree' and 
 	sys.exit(0)
 
 if len(args) >= 2 and args[0] == 'push' and os.environ.get('MOCK_GIT_PUSH_SUCCESS', '') == 'true':
+	store.setdefault('git_push_calls', []).append(args[1:])
+	store_path.write_text(json.dumps(store), encoding='utf-8')
 	sys.exit(0)
 
-if len(args) == 4 and args[0] == 'fetch' and args[1] == '--no-tags' and args[2] == 'origin':
-	refspec = args[3]
-	if ':' in refspec:
+if args and args[0] == 'fetch':
+	refspec = None
+	if len(args) == 4 and args[1] == '--no-tags' and args[2] == 'origin':
+		refspec = args[3]
+	elif len(args) == 3 and args[1] == 'origin':
+		refspec = args[2]
+	if refspec and ':' in refspec:
 		src_ref, dst_ref = refspec.split(':', 1)
 		src_prefix = 'refs/heads/'
 		dst_prefix = 'refs/remotes/origin/'
-		if src_ref.startswith(src_prefix) and dst_ref.startswith(dst_prefix):
-			src_branch = src_ref[len(src_prefix):]
+		src_branch = src_ref[len(src_prefix):] if src_ref.startswith(src_prefix) else src_ref
+		if dst_ref.startswith(dst_prefix):
 			dst_branch = dst_ref[len(dst_prefix):]
+			known_branches = set(store.get('existing_branches', []))
+			known_branches.update(
+				str(pr.get('headRefFromApi', pr.get('headRefName', '')))
+				for pr in store.get('prs', [])
+				if pr.get('headRefFromApi', pr.get('headRefName', ''))
+			)
 			if src_branch == dst_branch:
-				if src_branch in set(store.get('existing_branches', [])):
+				if src_branch in known_branches:
 					head_rev = subprocess.run([real_git, 'rev-parse', 'HEAD'], capture_output=True, text=True)
 					if head_rev.returncode != 0:
 						sys.exit(head_rev.returncode)
@@ -5847,6 +5859,48 @@ def test_retrigger_review_inflight_guard_treats_zombie_run_as_eligible():
 	assert issue_entry["stall_recovery_count"] == 1, (
 		f"expected empty-commit push to proceed past zombie in-flight run; "
 		f"got stall_recovery_count={issue_entry['stall_recovery_count']}"
+	)
+
+
+def test_retrigger_review_skips_empty_commit_when_pr_head_advanced_after_snapshot():
+	# Defense-in-depth for the narrower PR-fetch→git-fetch race: if the
+	# PR head SHA changed after `_fetch_pr_json` captured `.head.sha`, the
+	# empty-commit retrigger should bail out instead of racing newer work.
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	head_ref = "claude/retrigger-review-advanced-head"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 83},
+		prs=[
+			{
+				"number": 83,
+				"state": "open",
+				"mergeable": True,
+				"mergeable_state": "clean",
+				"headRefName": head_ref,
+				"headRefFromApi": head_ref,
+				"headSha": "0" * 40,
+				"baseRefName": "main",
+			},
+		],
+		mock_git_push_success=True,
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 0, (
+		f"expected stale PR head snapshot to leave stall_recovery_count at 0; "
+		f"got {issue_entry['stall_recovery_count']}"
+	)
+	assert result.get("git_push_calls", []) == [], (
+		f"expected no empty-commit push when the PR head advanced; "
+		f"got push calls {result.get('git_push_calls', [])}"
 	)
 
 

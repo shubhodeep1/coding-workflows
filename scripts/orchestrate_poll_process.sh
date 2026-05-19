@@ -5745,7 +5745,7 @@ STALL_EOF
           # live autofix pass.  Other jq/cache errors still fail open,
           # and if date +%s is unavailable we skip the guard entirely:
           # empty result falls through to the legacy empty-commit path.
-          local _rtr_inflight_blob _rtr_inflight_id _rtr_now_epoch _rtr_stall_secs
+          local _rtr_inflight_blob _rtr_inflight_id _rtr_now_epoch _rtr_stall_secs _rtr_origin_head_sha
           _rtr_inflight_blob="$(_load_actions_runs_cached 2>/dev/null || echo '{"workflow_runs":[]}')"
           _rtr_now_epoch="$(date +%s 2>/dev/null || echo "")"
           _rtr_stall_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))
@@ -5782,15 +5782,22 @@ STALL_EOF
             STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
             return 1
           fi
-          if git fetch origin "${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null && \
-             git checkout "origin/${head_ref}" 2>/dev/null; then
-            git config user.name "codex-bot"
-            git config user.email "codex@users.noreply.github.com"
-            git commit --allow-empty -m "[orchestrator] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
-            if git push origin "HEAD:${head_ref}" 2>/dev/null; then
-              tg_notify "Stall recovery: re-triggered review for PR #${pr_num} (issue #${issue_num}, stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"PR: $(_gh_url "pull/${pr_num}")"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
+          if git fetch origin "${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
+            _rtr_origin_head_sha="$(git rev-parse --verify "refs/remotes/origin/${head_ref}" 2>/dev/null || echo "")"
+            if [[ "${_rtr_head_sha}" =~ ^[0-9a-f]{40}$ ]] && [[ "${_rtr_origin_head_sha}" =~ ^[0-9a-f]{40}$ ]] && \
+               [ "${_rtr_origin_head_sha}" != "${_rtr_head_sha}" ]; then
+              echo "  Issue #${issue_num} PR #${pr_num} head advanced from ${_rtr_head_sha} to ${_rtr_origin_head_sha} after the PR-state snapshot; skipping empty-commit push to avoid racing newer review work."
+              return 1
             fi
-            git checkout --detach HEAD 2>/dev/null || true
+            if git checkout "origin/${head_ref}" 2>/dev/null; then
+              git config user.name "codex-bot"
+              git config user.email "codex@users.noreply.github.com"
+              git commit --allow-empty -m "[orchestrator] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
+              if git push origin "HEAD:${head_ref}" 2>/dev/null; then
+                tg_notify "Stall recovery: re-triggered review for PR #${pr_num} (issue #${issue_num}, stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"PR: $(_gh_url "pull/${pr_num}")"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
+              fi
+              git checkout --detach HEAD 2>/dev/null || true
+            fi
           fi
         fi
       else
