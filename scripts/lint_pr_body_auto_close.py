@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Lint a PR body (and optionally its commit messages) for GitHub auto-close
-keywords that target ai:orchestrator-tracking issues.
+"""Lint PR title/body text (and optionally commit messages) for GitHub auto-
+close keywords that target ai:orchestrator-tracking issues.
 
 Enforces CLAUDE.md §19 (and the mirror in unattended_system_instructions.md):
 no `Fixes/Closes/Resolves #N` keyword may reference an `ai:orchestrator-tracking`
@@ -19,7 +19,7 @@ Exit codes:
 
 Usage:
   python3 scripts/lint_pr_body_auto_close.py \\
-    --pr-body-file <path>            # required; path to PR body text file
+    --pr-body-file <path>            # required; path to PR title/body text file
     [--commit-messages-file <path>]  # optional; one commit message per record,
                                      #   records separated by NUL bytes
     [--repo <owner/repo>]            # default: $GITHUB_REPOSITORY
@@ -68,11 +68,13 @@ AUTO_CLOSE_KEYWORDS = (
 #   1. `keyword #N`                                          (same-repo short form)
 #   2. `keyword owner/repo#N`                                (cross-repo short form)
 #   3. `keyword https://github.com/owner/repo/issues/N`      (URL form)
+# Colon forms like `Closes: #N` are intentionally NOT matched because
+# GitHub does not auto-close on that syntax.
 # Boundaries `(?<![\w-])` / `(?![\w-])` prevent matches inside words
 # (e.g. "prefix" should not match "fix").
 _KEYWORD_ALT = "|".join(AUTO_CLOSE_KEYWORDS)
 AUTO_CLOSE_RE = re.compile(
-	rf"(?i)(?<![\w-])(?P<keyword>{_KEYWORD_ALT})\s*:?\s+"
+	rf"(?i)(?<![\w-])(?P<keyword>{_KEYWORD_ALT})\s+"
 	rf"(?:"
 	rf"(?:(?P<issue_repo_short>[\w.-]+/[\w.-]+))?#(?P<issue_short>\d+)"
 	rf"|"
@@ -261,10 +263,10 @@ def lint(
 
 def main() -> int:
 	parser = argparse.ArgumentParser(
-		description="Lint a PR body for auto-close keywords against ai:orchestrator-tracking issues.",
+		description="Lint PR title/body text for auto-close keywords against ai:orchestrator-tracking issues.",
 	)
 	parser.add_argument("--pr-body-file", required=True, type=Path,
-		help="Path to the PR body text file.")
+		help="Path to the PR title/body text file.")
 	parser.add_argument("--commit-messages-file", type=Path, default=None,
 		help="Optional path to a file containing NUL-separated commit messages.")
 	parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", ""),

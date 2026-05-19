@@ -71,7 +71,7 @@ def test_regex_matches_canonical_cases():
 		("Fixes #2734", "Fixes", None, 2734),
 		("fixes #2734", "fixes", None, 2734),
 		("FIXES #2734", "FIXES", None, 2734),
-		("Closes: #100", "Closes", None, 100),
+		("Closes #100", "Closes", None, 100),
 		("Resolves owner/repo#42", "Resolves", "owner/repo", 42),
 		("fixed #1", "fixed", None, 1),
 		("resolves #999999", "resolves", None, 999999),
@@ -101,7 +101,7 @@ def test_regex_matches_github_url_issue_form():
 	cases = [
 		("Closes https://github.com/owner/repo/issues/2734", "Closes", "owner/repo", 2734),
 		("Fixes https://github.com/owner/repo/issues/100", "Fixes", "owner/repo", 100),
-		("Resolves: https://github.com/owner/repo/issues/9", "Resolves", "owner/repo", 9),
+		("Resolves https://github.com/owner/repo/issues/9", "Resolves", "owner/repo", 9),
 		# Lowercase + http (no s) — GitHub treats both the same.
 		("fixes http://github.com/owner/repo/issues/1", "fixes", "owner/repo", 1),
 	]
@@ -129,6 +129,8 @@ def test_regex_does_not_match_substring_or_unrelated_words():
 		"link to #2734",       # no keyword
 		"Refs #2734",          # the recommended replacement — must NOT be flagged
 		"Related to #2734",    # also the recommended replacement
+		"Closes: #2734",       # GitHub does not auto-close on colon-form syntax
+		"Resolves: https://github.com/owner/repo/issues/9",
 	]
 	for text in false_positives:
 		matches = mod._scan_text("test", text)
@@ -150,6 +152,13 @@ def test_markdown_code_examples_in_pr_body_are_ignored():
 	matches = mod._scan_text("PR body", text, markdown=True)
 	assert len(matches) == 1, f"expected only the non-code-span directive to match, got {matches!r}"
 	assert matches[0][4] == 99
+
+
+def test_workflow_lints_pr_title_and_body_together():
+	workflow = (REPO_ROOT / ".github/workflows/lint-pr-body-auto-close.yml").read_text(encoding="utf-8")
+	assert 'PR_TITLE: ${{ github.event.pull_request.title }}' in workflow
+	assert 'PR_BODY: ${{ github.event.pull_request.body }}' in workflow
+	assert "printf '%s\\n\\n%s' \"${PR_TITLE:-}\" \"${PR_BODY:-}\" > /tmp/pr-body-lint/body.txt" in workflow
 
 
 def test_cross_repo_reference_looks_up_referenced_repo_not_current_repo():
