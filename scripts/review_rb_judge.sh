@@ -400,8 +400,9 @@ if [ "${PR_DIFF_BYTES_TOTAL}" -gt "${RB_JUDGE_PR_DIFF_MAX_BYTES}" ]; then
   if PR_DIFF_TRUNCATED_CONTENT="$(printf '%s' "${PR_DIFF}" | PYTHONDONTWRITEBYTECODE=1 python3 -c '
 import sys
 
-data = sys.stdin.buffer.read()
 cap = int(sys.argv[1])
+read_cap = cap + 1 if cap > 0 else 0
+data = sys.stdin.buffer.read(read_cap)
 if cap > 0 and len(data) > cap:
     i = cap
     while i > 0 and (data[i] & 0xC0) == 0x80:
