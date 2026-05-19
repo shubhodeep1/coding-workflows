@@ -304,6 +304,21 @@ fi
 # -----------------------------------------------------------
 PR_DIFF="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
   -H 'Accept: application/vnd.github.diff' 2>/dev/null || echo "(diff unavailable)")"
+# Cap the diff embedded in the judge prompt so codex's `turn/start`
+# stdin envelope (1,048,576 chars) is never breached. The reviewer
+# script uses the same pattern (scripts/review_run_reviewers.sh:447 —
+# `_embed_input_file "${PR_DIFF_FILE}" 400000 diff`). The deleted
+# `head -1000` truncation removed in PR #2564 (commit ebe2ecf3) was
+# the last guard here; this restores one at a byte budget instead
+# of a line budget so the cap is predictable across diff styles.
+# Override via the RB_JUDGE_PR_DIFF_MAX_BYTES repo var.
+RB_JUDGE_PR_DIFF_MAX_BYTES="${RB_JUDGE_PR_DIFF_MAX_BYTES:-400000}"
+PR_DIFF_TRUNCATED=false
+PR_DIFF_BYTES_TOTAL="${#PR_DIFF}"
+if [ "${PR_DIFF_BYTES_TOTAL}" -gt "${RB_JUDGE_PR_DIFF_MAX_BYTES}" ]; then
+  PR_DIFF="${PR_DIFF:0:${RB_JUDGE_PR_DIFF_MAX_BYTES}}"
+  PR_DIFF_TRUNCATED=true
+fi
 PRELOADED_PR_META="$(jq -c '{
   title: (.title // ""),
   body: (.body // ""),
@@ -390,10 +405,20 @@ RB_JUDGE_SEMBLE_PREFETCH="$(render_review_rb_semble_prefetch "${RB_JUDGE_SEMBLE_
   echo
   echo "=== PR #${PR_NUMBER} DIFF ==="
   echo
-  # Pass the full diff to the judge: forcing the model to exec-read
-  # files to reconstruct the truncated tail burns more context per
-  # turn than including the full diff up front. codex compacts older
-  # turns when its window fills, so a long diff degrades gracefully.
+  # Pass the diff to the judge (capped above at RB_JUDGE_PR_DIFF_MAX_BYTES,
+  # default 400000 bytes). Forcing the model to exec-read files to
+  # reconstruct a truncated tail burns more context per turn than
+  # passing what fits up front; codex compacts older turns when its
+  # reasoning window fills, so a long diff degrades gracefully —
+  # provided the CLI accepts the request at all. The hard byte cap
+  # above keeps us under codex's `turn/start` stdin envelope
+  # (1,048,576 chars); without it, a >1 MB diff is rejected before
+  # the model runs and every retry in the reasoning ladder fails
+  # identically (see PR shubhodeep1/bitsafe.io#368, run 26092826715).
+  if [ "${PR_DIFF_TRUNCATED}" = "true" ]; then
+    echo "[NOTE: PR diff is ${PR_DIFF_BYTES_TOTAL} bytes; truncated to first ${RB_JUDGE_PR_DIFF_MAX_BYTES} bytes to fit codex stdin (1 MB cap). Use exec-read on specific files for the elided tail if needed; the judge runs --sandbox read-only so file reads are available.]"
+    echo
+  fi
   printf '%s\n' "${PR_DIFF}"
   echo
   echo "=== PR #${PR_NUMBER} COMMENTS (editor summaries, reviewer findings) ==="
@@ -512,6 +537,18 @@ PY
 # -----------------------------------------------------------
 # Run the judge
 # -----------------------------------------------------------
+# Surface the rendered prompt size before invoking codex. The CLI's
+# `turn/start` envelope is a hard 1,048,576-character stdin cap; if
+# the prompt crosses it, every retry in the reasoning ladder fails
+# identically with the same `turn/start: Input exceeds the maximum
+# length` error because the ladder only steps reasoning effort, not
+# input size. Logging here keeps the next regression visible at the
+# top of the failing job instead of buried inside ~75k stderr lines.
+RB_JUDGE_PROMPT_BYTES="$(wc -c < "${RB_JUDGE_PROMPT}" 2>/dev/null | tr -d ' ' || echo 0)"
+echo "Review-blocked judge prompt size: ${RB_JUDGE_PROMPT_BYTES} bytes (codex stdin cap: 1048576)."
+if [ "${RB_JUDGE_PROMPT_BYTES:-0}" -gt 950000 ]; then
+  echo "::warning::Review-blocked judge prompt is ${RB_JUDGE_PROMPT_BYTES} bytes; close to or over codex 1 MB stdin cap. Expect turn/start failures unless RB_JUDGE_PR_DIFF_MAX_BYTES (current: ${RB_JUDGE_PR_DIFF_MAX_BYTES}) or upstream embed budgets are tightened."
+fi
 JUDGE_SUCCESS=false
 JUDGE_STDERR_FILE="${RUNTIME_DIR}/rb_judge_stderr.txt"
 for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
