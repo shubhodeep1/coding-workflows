@@ -3217,6 +3217,17 @@ invoke_judge_for_integration_conflict() {
 # default_branch changes onto the integration branch and create a
 # new wave of conflicts.
 #
+# Per-file safety check: each candidate file is also skipped when the
+# integration branch has commits touching it that are not in
+# default_branch.  This protects merged sub-issues whose scope
+# legitimately modifies a resolver-toolchain file (e.g. PR #2738 on
+# orchestrator/project-2734 evolved scripts/verify_integration_fingerprints.py
+# as part of the Phase 1A baseline/delta verifier rollout; the earlier
+# refresh logic, which compared blob hashes only, silently reverted that
+# work and tripped the wave-dispatch fingerprint gate).  The standard
+# sync_default_into_integration_branch flow handles real drift in the
+# opposite direction.
+#
 # Side effects: pushes a commit on success.  The push fires
 # pull_request.synchronize on the integration PR which itself
 # triggers review_autofix.yml; the explicit dispatch in
@@ -3293,7 +3304,7 @@ _refresh_integration_resolver_tooling() {
 
       local refreshed_count=0
       local refreshed_list=""
-      local f main_hash int_hash
+      local f main_hash int_hash ahead_commit
       for f in "${refresh_files[@]}"; do
         # Skip if file does not exist on default_branch — never delete
         # an integration-branch file just because main lacks it.
@@ -3304,6 +3315,20 @@ _refresh_integration_resolver_tooling() {
         int_hash="$(git rev-parse "HEAD:${f}" 2>/dev/null || echo "")"
         [ -n "${main_hash}" ] || continue
         if [ "${main_hash}" = "${int_hash}" ]; then
+          continue
+        fi
+        # Refuse to refresh if the integration branch has commits touching
+        # this file that are not in default_branch — that means a merged
+        # sub-issue (or other intentional change) on the integration
+        # branch has evolved this file ahead of default_branch, and
+        # refreshing would silently revert that work (the failure mode
+        # that produced PR #2738 -> commit 026cfa7 verifier regression on
+        # orchestrator/project-2734).  The standard
+        # sync_default_into_integration_branch flow will reconcile any
+        # genuine drift in the other direction.
+        ahead_commit="$(git rev-list "refs/remotes/origin/${default_branch}..HEAD" -- "${f}" 2>/dev/null | head -n 1)"
+        if [ -n "${ahead_commit}" ]; then
+          echo "  ${log_prefix} skipping ${f}: integration branch has commits not in ${default_branch} (deliberate evolution; defer to next default-branch sync)."
           continue
         fi
         if git checkout "refs/remotes/origin/${default_branch}" -- "${f}" 2>/dev/null; then

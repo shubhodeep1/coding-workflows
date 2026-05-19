@@ -8007,6 +8007,90 @@ def test_resolver_tooling_refresh_allowlist_includes_both_retry_preludes():
 	)
 
 
+def test_resolver_tooling_refresh_skips_files_ahead_of_default_branch():
+	# Regression guard for the orchestrator/project-2734 wave-2 dispatch
+	# block (tracked on issue #2734 / blocked by commit 026cfa7): the
+	# resolver-tooling refresh in `_refresh_integration_resolver_tooling`
+	# compared blob hashes only and clobbered any refresh-list file whose
+	# integration-branch hash differed from default_branch's hash — even
+	# when the integration branch was deliberately ahead, e.g. because a
+	# merged sub-issue (PR #2738, Phase 1A) had evolved
+	# scripts/verify_integration_fingerprints.py. The next refresh tick
+	# silently reverted the sub-issue's edits, tripped the merged-sub-issue
+	# fingerprint gate, and stalled wave dispatch.
+	#
+	# The fix is a per-file ahead-of-default gate: skip the refresh when
+	# `git rev-list refs/remotes/origin/<default_branch>..HEAD -- <file>`
+	# is non-empty (the integration branch has commits touching this file
+	# that are not yet in default_branch). This test pins both the
+	# function-scoped placement of the gate AND its rev-list ref-spec, so
+	# a future refactor cannot drop the safety check or weaken its scope
+	# (e.g. by checking branch-wide ahead-ness instead of per-file).
+	poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
+	fn_marker = "_refresh_integration_resolver_tooling() {"
+	fn_open = poller_body.find(fn_marker)
+	assert fn_open != -1, (
+		"_refresh_integration_resolver_tooling function is missing from "
+		"scripts/orchestrate_poll_process.sh; the resolver-tooling refresh "
+		"path has been removed or renamed."
+	)
+	# The matching closing brace is the first `}` on its own line after
+	# fn_open. Matches the existing function-definition style in the
+	# script (every top-level helper closes with `^}$`).
+	close_re = re.compile(r"^}$", re.MULTILINE)
+	close_match = close_re.search(poller_body, pos=fn_open + len(fn_marker))
+	assert close_match is not None, (
+		"could not find closing `}` for _refresh_integration_resolver_tooling "
+		"in scripts/orchestrate_poll_process.sh; function brace style changed."
+	)
+	fn_body = poller_body[fn_open:close_match.end()]
+	# Narrow further to the per-file `for f in "${refresh_files[@]}"; do
+	# ... done` loop so the assertion enforces per-file scope. A
+	# function-wide ahead check would skip the entire refresh whenever
+	# any single file diverged, which is a different (looser) contract.
+	loop_open = fn_body.find('for f in "${refresh_files[@]}"; do')
+	assert loop_open != -1, (
+		"per-file `for f in \"${refresh_files[@]}\"; do` loop is missing "
+		"from _refresh_integration_resolver_tooling; the refresh now "
+		"operates at a different granularity and this test must be updated."
+	)
+	# Closing `done` of the loop is the first `done` on its own line
+	# after loop_open (matching the existing style; nested loops in this
+	# function would be a separate refactor flagged by reviewers).
+	done_re = re.compile(r"^\s*done\s*$", re.MULTILINE)
+	done_match = done_re.search(fn_body, pos=loop_open)
+	assert done_match is not None, (
+		"could not find closing `done` for the per-file refresh loop in "
+		"_refresh_integration_resolver_tooling; loop style changed."
+	)
+	loop_body = fn_body[loop_open:done_match.end()]
+	# The ahead-of-default gate must be present inside the loop body so
+	# it runs per-file, not function-wide.
+	assert 'git rev-list "refs/remotes/origin/${default_branch}..HEAD"' in loop_body, (
+		"_refresh_integration_resolver_tooling no longer gates the per-file "
+		"refresh on `git rev-list refs/remotes/origin/${default_branch}..HEAD "
+		"-- ${f}`; without this check, a merged sub-issue whose scope edits "
+		"a resolver-toolchain file (e.g. PR #2738 on orchestrator/project-2734 "
+		"evolving scripts/verify_integration_fingerprints.py) will be silently "
+		"reverted on the next refresh tick — the exact regression that blocked "
+		"wave-2 dispatch on project #2734."
+	)
+	# The check must reference `${f}` (the per-iteration filename) so it
+	# is path-scoped, not branch-wide. `git rev-list ...` without a `--`
+	# pathspec would short-circuit the entire refresh whenever the
+	# integration branch had any commit ahead of default_branch, which
+	# is a different and substantially looser gate than the one this
+	# regression demands.
+	assert '-- "${f}"' in loop_body, (
+		"_refresh_integration_resolver_tooling's ahead-of-default gate is "
+		"missing the `-- \"${f}\"` pathspec, so it would skip the refresh "
+		"on any integration-branch divergence anywhere in the tree, not "
+		"just on the specific file being refreshed; that drops the safety "
+		"check's precision and re-opens the door to over-refreshing other "
+		"files in the allowlist."
+	)
+
+
 def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	# The resolver run: blocks were extracted into
 	# scripts/review_conflict_prepare.sh and
