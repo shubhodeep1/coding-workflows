@@ -304,6 +304,7 @@ fi
 # -----------------------------------------------------------
 PR_DIFF="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
   -H 'Accept: application/vnd.github.diff' 2>/dev/null || echo "(diff unavailable)")"
+[ -n "${PR_DIFF}" ] || PR_DIFF="(diff unavailable)"
 # Cap the diff embedded in the judge prompt so codex's `turn/start`
 # stdin envelope (1,048,576 chars) is never breached. The reviewer
 # script uses the same pattern (scripts/review_run_reviewers.sh:447 —
@@ -313,10 +314,27 @@ PR_DIFF="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
 # of a line budget so the cap is predictable across diff styles.
 # Override via the RB_JUDGE_PR_DIFF_MAX_BYTES repo var.
 RB_JUDGE_PR_DIFF_MAX_BYTES="${RB_JUDGE_PR_DIFF_MAX_BYTES:-400000}"
+if ! [[ "${RB_JUDGE_PR_DIFF_MAX_BYTES}" =~ ^[0-9]+$ ]] || [ "${RB_JUDGE_PR_DIFF_MAX_BYTES}" -le 0 ]; then
+  echo "::warning::Invalid RB_JUDGE_PR_DIFF_MAX_BYTES='${RB_JUDGE_PR_DIFF_MAX_BYTES}'; using 400000."
+  RB_JUDGE_PR_DIFF_MAX_BYTES=400000
+fi
 PR_DIFF_TRUNCATED=false
-PR_DIFF_BYTES_TOTAL="${#PR_DIFF}"
+PR_DIFF_BYTES_TOTAL="$(printf '%s' "${PR_DIFF}" | wc -c | tr -cd '0-9' || true)"
+[ -n "${PR_DIFF_BYTES_TOTAL}" ] || PR_DIFF_BYTES_TOTAL=0
 if [ "${PR_DIFF_BYTES_TOTAL}" -gt "${RB_JUDGE_PR_DIFF_MAX_BYTES}" ]; then
-  PR_DIFF="${PR_DIFF:0:${RB_JUDGE_PR_DIFF_MAX_BYTES}}"
+  PR_DIFF="$(printf '%s' "${PR_DIFF}" | PYTHONDONTWRITEBYTECODE=1 python3 - "${RB_JUDGE_PR_DIFF_MAX_BYTES}" <<'PY'
+import sys
+
+data = sys.stdin.buffer.read()
+cap = int(sys.argv[1])
+if cap > 0 and len(data) > cap:
+    i = cap
+    while i > 0 and (data[i] & 0xC0) == 0x80:
+        i -= 1
+    data = data[:i]
+sys.stdout.buffer.write(data)
+PY
+  )"
   PR_DIFF_TRUNCATED=true
 fi
 PRELOADED_PR_META="$(jq -c '{
@@ -416,7 +434,7 @@ RB_JUDGE_SEMBLE_PREFETCH="$(render_review_rb_semble_prefetch "${RB_JUDGE_SEMBLE_
   # the model runs and every retry in the reasoning ladder fails
   # identically (see PR shubhodeep1/bitsafe.io#368, run 26092826715).
   if [ "${PR_DIFF_TRUNCATED}" = "true" ]; then
-    echo "[NOTE: PR diff is ${PR_DIFF_BYTES_TOTAL} bytes; truncated to first ${RB_JUDGE_PR_DIFF_MAX_BYTES} bytes to fit codex stdin (1 MB cap). Use exec-read on specific files for the elided tail if needed; the judge runs --sandbox read-only so file reads are available.]"
+    echo "[NOTE: PR diff is ${PR_DIFF_BYTES_TOTAL} bytes; truncated to a UTF-8-safe prefix within ${RB_JUDGE_PR_DIFF_MAX_BYTES} bytes to fit codex stdin (1 MB cap). Use exec-read on specific files for the elided tail if needed; the judge runs --sandbox read-only so file reads are available.]"
     echo
   fi
   printf '%s\n' "${PR_DIFF}"
@@ -544,7 +562,8 @@ PY
 # length` error because the ladder only steps reasoning effort, not
 # input size. Logging here keeps the next regression visible at the
 # top of the failing job instead of buried inside ~75k stderr lines.
-RB_JUDGE_PROMPT_BYTES="$(wc -c < "${RB_JUDGE_PROMPT}" 2>/dev/null | tr -d ' ' || echo 0)"
+RB_JUDGE_PROMPT_BYTES="$(wc -c < "${RB_JUDGE_PROMPT}" 2>/dev/null | tr -cd '0-9' || true)"
+[ -n "${RB_JUDGE_PROMPT_BYTES}" ] || RB_JUDGE_PROMPT_BYTES=0
 echo "Review-blocked judge prompt size: ${RB_JUDGE_PROMPT_BYTES} bytes (codex stdin cap: 1048576)."
 if [ "${RB_JUDGE_PROMPT_BYTES:-0}" -gt 950000 ]; then
   echo "::warning::Review-blocked judge prompt is ${RB_JUDGE_PROMPT_BYTES} bytes; close to or over codex 1 MB stdin cap. Expect turn/start failures unless RB_JUDGE_PR_DIFF_MAX_BYTES (current: ${RB_JUDGE_PR_DIFF_MAX_BYTES}) or upstream embed budgets are tightened."
