@@ -95,7 +95,7 @@ def _fetch_issue_via_gh(repo: str, issue_number: int) -> dict | None:
 	except json.JSONDecodeError:
 		return None
 	return {
-		"labels": [l["name"] for l in data.get("labels", []) if isinstance(l, dict) and "name" in l],
+		"labels": [label["name"] for label in data.get("labels", []) if isinstance(label, dict) and "name" in label],
 		"body": data.get("body", "") or "",
 	}
 

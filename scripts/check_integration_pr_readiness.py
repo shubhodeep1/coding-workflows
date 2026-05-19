@@ -25,9 +25,9 @@ targeting the protected branch.
 
 Exit codes:
   0 — readiness check posted (success or failure), OR the head ref is
-	      outside `orchestrator/project-*` so the check does not apply.
+      outside `orchestrator/project-*` so the check does not apply.
   1 — head ref matched `orchestrator/project-*` but the script could not
-	      fetch the tracking issue or hit another unrecoverable error.
+      fetch the tracking issue or hit another unrecoverable error.
   2 — usage error.
 
 Usage:
@@ -77,7 +77,7 @@ def _fetch_issue(repo: str, n: int) -> dict | None:
 	except json.JSONDecodeError:
 		return None
 	return {
-		"labels": [l["name"] for l in data.get("labels", []) if isinstance(l, dict) and "name" in l],
+		"labels": [label["name"] for label in data.get("labels", []) if isinstance(label, dict) and "name" in label],
 		"body": data.get("body", "") or "",
 	}
 
