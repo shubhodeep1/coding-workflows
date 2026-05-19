@@ -37,6 +37,16 @@ fi
 if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   sanitize_codex_prompt_file() { :; }
 fi
+if ! command -v _embed_input_file >/dev/null 2>&1; then
+  _init_prompt_budget() { :; }
+  _cleanup_prompt_budget() { :; }
+  _embed_input_file() {
+    local _p="${1:-}"
+    if [ -z "${_p}" ] || [ ! -e "${_p}" ]; then printf '(missing)\n'; return 0; fi
+    if [ ! -s "${_p}" ]; then printf '(empty)\n'; return 0; fi
+    cat "${_p}"
+  }
+fi
 REVIEW_RB_SEMBLE_HELPERS_AVAILABLE="false"
 REVIEW_RB_SEMBLE_MAX_CHUNKS="4"
 REVIEW_RB_SEMBLE_QUERY_MAX_BYTES="12000"
@@ -366,8 +376,12 @@ fi
 RB_JUDGE_PROMPT="${RUNTIME_DIR}/rb_judge_prompt.txt"
 RB_JUDGE_OUTPUT="${RUNTIME_DIR}/rb_judge_output.txt"
 RB_JUDGE_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/rb_judge_semble_query.txt"
+RB_JUDGE_REQUIREMENT_FILE="${RUNTIME_DIR}/rb_judge_requirement.txt"
+RB_JUDGE_PR_META_RENDER_FILE="${RUNTIME_DIR}/rb_judge_pr_meta.json"
+RB_JUDGE_PR_COMMENTS_RENDER_FILE="${RUNTIME_DIR}/rb_judge_pr_comments.json"
+RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE="${RUNTIME_DIR}/rb_judge_pr_review_comments.json"
 RB_JUDGE_SEMBLE_PREFETCH=""
-trap 'rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE:-}"' EXIT
+trap 'rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE:-}" "${RB_JUDGE_REQUIREMENT_FILE:-}" "${RB_JUDGE_PR_META_RENDER_FILE:-}" "${RB_JUDGE_PR_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE:-}"' EXIT
 
 {
   printf '%s\n' 'Review-blocked judge context.'
@@ -386,6 +400,33 @@ Body: $(jq -r '.body // ""' "${PR_PAYLOAD_FILE}")" \
   append_review_rb_semble_query_section "PR review comments JSON:" "${PR_REVIEW_COMMENTS}" 2500
 } > "${RB_JUDGE_SEMBLE_QUERY_FILE}"
 RB_JUDGE_SEMBLE_PREFETCH="$(render_review_rb_semble_prefetch "${RB_JUDGE_SEMBLE_QUERY_FILE}" "Review-Blocked Judge Context")"
+
+# Keep the non-diff judge inputs under a shared budget so oversized PR
+# discussions / inline reviews cannot reintroduce the same `turn/start`
+# prompt-envelope failure the PR diff cap was added to prevent.
+if [ -n "${FIRST_ISSUE}" ]; then
+  printf '%s\n' "${FIRST_ISSUE_BODY}" > "${RB_JUDGE_REQUIREMENT_FILE}"
+else
+  {
+    echo "Title: $(jq -r '.title // ""' "${PR_META_FILE}")"
+    echo "Body: $(jq -r '.body // ""' "${PR_PAYLOAD_FILE}")"
+  } > "${RB_JUDGE_REQUIREMENT_FILE}"
+fi
+if ! printf '%s\n' "${PR_META_JSON}" | jq '.' > "${RB_JUDGE_PR_META_RENDER_FILE}" 2>/dev/null; then
+  printf '%s\n' "${PR_META_JSON}" > "${RB_JUDGE_PR_META_RENDER_FILE}"
+fi
+if ! printf '%s\n' "${PR_COMMENTS}" | jq '.' > "${RB_JUDGE_PR_COMMENTS_RENDER_FILE}" 2>/dev/null; then
+  printf '%s\n' "${PR_COMMENTS}" > "${RB_JUDGE_PR_COMMENTS_RENDER_FILE}"
+fi
+if ! printf '%s\n' "${PR_REVIEW_COMMENTS}" | jq '.' > "${RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE}" 2>/dev/null; then
+  printf '%s\n' "${PR_REVIEW_COMMENTS}" > "${RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE}"
+fi
+RB_JUDGE_CONTEXT_BUDGET_BYTES=300000
+RB_JUDGE_REQUIREMENT_MAX_BYTES=50000
+RB_JUDGE_PR_META_MAX_BYTES=50000
+RB_JUDGE_PR_COMMENTS_MAX_BYTES=150000
+RB_JUDGE_PR_REVIEW_COMMENTS_MAX_BYTES=100000
+_init_prompt_budget "${RB_JUDGE_CONTEXT_BUDGET_BYTES}"
 
 {
   if [ -f ./pre_assembled_static.txt ]; then
@@ -408,17 +449,16 @@ RB_JUDGE_SEMBLE_PREFETCH="$(render_review_rb_semble_prefetch "${RB_JUDGE_SEMBLE_
   if [ -n "${FIRST_ISSUE}" ]; then
     echo "=== ISSUE #${FIRST_ISSUE} (original requirement) ==="
     echo
-    echo "${FIRST_ISSUE_BODY}"
+    _embed_input_file "${RB_JUDGE_REQUIREMENT_FILE}" "${RB_JUDGE_REQUIREMENT_MAX_BYTES}"
   else
     echo "=== PR DESCRIPTION (no linked issue) ==="
     echo
-    echo "Title: $(jq -r '.title // ""' "${PR_META_FILE}")"
-    echo "Body: $(jq -r '.body // ""' "${PR_PAYLOAD_FILE}")"
+    _embed_input_file "${RB_JUDGE_REQUIREMENT_FILE}" "${RB_JUDGE_REQUIREMENT_MAX_BYTES}"
   fi
   echo
   echo "=== PR #${PR_NUMBER} METADATA ==="
   echo
-  printf '%s\n' "${PR_META_JSON}" | jq '.'
+  _embed_input_file "${RB_JUDGE_PR_META_RENDER_FILE}" "${RB_JUDGE_PR_META_MAX_BYTES}"
   echo
   echo "=== PR #${PR_NUMBER} DIFF ==="
   echo
@@ -440,11 +480,11 @@ RB_JUDGE_SEMBLE_PREFETCH="$(render_review_rb_semble_prefetch "${RB_JUDGE_SEMBLE_
   echo
   echo "=== PR #${PR_NUMBER} COMMENTS (editor summaries, reviewer findings) ==="
   echo
-  printf '%s\n' "${PR_COMMENTS}" | jq '.'
+  _embed_input_file "${RB_JUDGE_PR_COMMENTS_RENDER_FILE}" "${RB_JUDGE_PR_COMMENTS_MAX_BYTES}"
   echo
   echo "=== PR #${PR_NUMBER} INLINE REVIEW COMMENTS ==="
   echo
-  printf '%s\n' "${PR_REVIEW_COMMENTS}" | jq '.'
+  _embed_input_file "${RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE}" "${RB_JUDGE_PR_REVIEW_COMMENTS_MAX_BYTES}"
   echo
   echo "=== REVIEW-BLOCKED CONTEXT ==="
   echo "Review-blocked judge retry: $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}"
@@ -471,6 +511,7 @@ RB_JUDGE_SEMBLE_PREFETCH="$(render_review_rb_semble_prefetch "${RB_JUDGE_SEMBLE_
     echo "the PR's work should be discarded."
   fi
 } > "${RB_JUDGE_PROMPT}"
+_cleanup_prompt_budget
 rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE}"
 
 # -----------------------------------------------------------
