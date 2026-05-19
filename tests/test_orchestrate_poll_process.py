@@ -8074,6 +8074,392 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	assert "Aborting [ai-merge-resolve] commit: integration fingerprint verification" in resolve_body
 
 
+def _extract_refresh_function_body(poller_body: str) -> str:
+	"""Return the full text of `_refresh_integration_resolver_tooling`
+	(including the closing `}`) from the poller script body by
+	matching the function's outer brace pair. Standalone inner `{` / `}`
+	command-group braces, operator-attached groups like `cmd && {`, and
+	nested shell function definitions should not truncate the extracted
+	body.
+	"""
+	lines = poller_body.splitlines()
+	open_marker = "_refresh_integration_resolver_tooling() {"
+	try:
+		start_idx = next(i for i, line in enumerate(lines) if line == open_marker)
+	except StopIteration:
+		raise AssertionError(
+			f"{open_marker!r} not found in scripts/orchestrate_poll_process.sh — "
+			"function was renamed or removed."
+		) from None
+	depth = 1
+	nested_fn_open_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\(\)\s*\{$")
+	command_group_open_re = re.compile(
+		r"^(?:\{|(?:[^#\"']|\"[^\"]*\"|'[^']*')*(?:&&|\|\||;|\|)\s*\{)\s*(?:#.*)?$"
+	)
+	for idx in range(start_idx + 1, len(lines)):
+		stripped = lines[idx].strip()
+		if nested_fn_open_re.match(stripped) or command_group_open_re.match(stripped):
+			depth += 1
+		elif stripped == "}":
+			depth -= 1
+			if depth == 0:
+				return "\n".join(lines[start_idx:idx + 1])
+	raise AssertionError(
+		"closing brace for _refresh_integration_resolver_tooling not found"
+	)
+
+
+def test_extract_refresh_function_body_keeps_operator_attached_command_groups():
+	sample = """_refresh_integration_resolver_tooling() {
+	  echo start
+	  test -n \"${x:-}\" && {
+	    echo inner
+	  }
+	  echo after  # note | {
+	}
+	after() {
+	  :
+	}"""
+	expected = """_refresh_integration_resolver_tooling() {
+	  echo start
+	  test -n \"${x:-}\" && {
+	    echo inner
+	  }
+	  echo after  # note | {
+	}"""
+	assert _extract_refresh_function_body(sample) == expected
+
+
+def test_resolver_tooling_refresh_function_has_merge_base_divergence_guard():
+	# Static contract: _refresh_integration_resolver_tooling must
+	# compute the merge-base of integration_branch vs default_branch
+	# once before the per-file loop, and skip any file whose
+	# integration-branch hash differs from its merge-base hash.
+	#
+	# Without this guard, the [ai-maint] resolver-tooling refresh
+	# silently reverts files that merged sub-issue PRs intentionally
+	# modified (e.g. PR #2738 landing the Phase 1A baseline/delta
+	# verifier into scripts/verify_integration_fingerprints.py). The
+	# post-resolve merged sub-issue fingerprint verifier then flags
+	# those reverts as a contract violation and the orchestrator
+	# refuses to dispatch the next wave. That is exactly the failure
+	# documented in issue #2734.
+	poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
+	fn_body = _extract_refresh_function_body(poller_body)
+
+	assert "git merge-base" in fn_body, (
+		"_refresh_integration_resolver_tooling must run `git merge-base` "
+		"before the per-file refresh loop (regression guard for issue #2734)."
+	)
+	# Merge-base must be computed against the integration AND default
+	# branch refs, not just one of them.
+	for ref in (
+		"refs/remotes/origin/${integration_branch}",
+		"refs/remotes/origin/${default_branch}",
+	):
+		assert ref in fn_body, (
+			f"_refresh_integration_resolver_tooling's merge-base resolution "
+			f"must reference {ref!r}; without it the divergence check would "
+			f"compare against the wrong baseline."
+		)
+	# Per-file tree-path lookups must use --verify/--quiet so a missing
+	# path resolves to an empty string rather than the literal REV:PATH
+	# token on stdout.
+	for lookup in (
+		'main_hash="$(git rev-parse --verify --quiet "refs/remotes/origin/${default_branch}:${f}"',
+		'int_hash="$(git rev-parse --verify --quiet "HEAD:${f}"',
+		'base_hash="$(git rev-parse --verify --quiet "${merge_base}:${f}"',
+	):
+		assert lookup in fn_body, (
+			"_refresh_integration_resolver_tooling must use `git rev-parse "
+			"--verify --quiet` for every tree-path hash lookup so missing "
+			"files produce an empty string instead of a literal REV:PATH token."
+		)
+	# The function must `continue` (skip refresh) when the integration
+	# branch's hash for the file diverges from the merge-base hash —
+	# this is the actual guard that prevents the issue #2734
+	# regression. Match the conditional and the `continue` together so
+	# the assertion fails if a future refactor accidentally drops the
+	# `continue` while keeping the comparison.
+	diverge_skip_re = re.compile(
+		r'if\s+\[\s+"\$\{int_hash\}"\s+!=\s+"\$\{base_hash\}"\s+\]\s*;\s*then'
+		r'[\s\S]*?\bcontinue\b',
+	)
+	assert diverge_skip_re.search(fn_body), (
+		"_refresh_integration_resolver_tooling must `continue` (skip the "
+		"checkout/refresh) when int_hash differs from base_hash. Without "
+		"this, the function silently reverts files that a merged sub-issue "
+		"PR has modified on the integration branch — see issue #2734."
+	)
+
+
+def test_resolver_tooling_refresh_does_not_clobber_files_changed_on_integration_branch():
+	# Behavioural regression for issue #2734: run the real
+	# _refresh_integration_resolver_tooling function against a
+	# throwaway git fixture where the integration branch has its own
+	# committed change to a refresh-allowlisted file (simulating a
+	# merged sub-issue PR like #2738), and verify the function leaves
+	# that change intact instead of overwriting it with the
+	# default_branch version.
+	#
+	# Fixture layout:
+	#   bare.git           — origin
+	#   work/              — single clone with main + integration branches
+	#     scripts/check_resolver_diff.sh   ← refresh-allowlisted file
+	#
+	# Timeline:
+	#   1. main has 'main v1'.
+	#   2. orchestrator/project-99 branched off main, then committed
+	#      'sub-issue v1' (the merged sub-issue change we must preserve).
+	#   3. main bumped to 'main v2' (so per-file hashes differ — the
+	#      legacy hash-only check would otherwise refresh).
+	#   4. Run the real refresh function with cwd=work and origin
+	#      pointing at bare.git.
+	# Expected: the integration branch's file is still 'sub-issue v1'.
+	tmp_root = Path(tempfile.mkdtemp(prefix="refresh-noclobber-"))
+	try:
+		bare = tmp_root / "bare.git"
+		work = tmp_root / "work"
+		subprocess.run(
+			["git", "init", "--bare", "--quiet", str(bare)],
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+		)
+		subprocess.run(
+			["git", "init", "--quiet", str(work)],
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+		)
+		for k, v in [
+			("user.name", "test"),
+			("user.email", "t@example.com"),
+			("commit.gpgsign", "false"),
+			("commit.gpgSign", "false"),
+		]:
+			subprocess.run(
+				["git", "-C", str(work), "config", k, v],
+				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			)
+		(work / "scripts").mkdir()
+		# scripts/check_resolver_diff.sh is a real entry in the
+		# refresh_files allowlist (see scripts/orchestrate_poll_process.sh).
+		refresh_target = work / "scripts" / "check_resolver_diff.sh"
+		refresh_target.write_text("# main v1\n", encoding="utf-8")
+
+		def _git(*args: str) -> None:
+			subprocess.run(
+				["git", "-C", str(work), *args],
+				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			)
+
+		_git("checkout", "-B", "main")
+		_git("add", "-A")
+		_git("commit", "-m", "initial main", "--quiet")
+		_git("remote", "add", "origin", str(bare))
+		_git("push", "-u", "origin", "main", "--quiet")
+		# Integration branch with a merged sub-issue change to the
+		# allowlisted file.
+		_git("checkout", "-B", "orchestrator/project-99")
+		refresh_target.write_text("# sub-issue v1\n", encoding="utf-8")
+		_git("add", "-A")
+		_git("commit", "-m", "merged sub-issue PR", "--quiet")
+		_git("push", "-u", "origin", "orchestrator/project-99", "--quiet")
+		# Bump main with a different change so the legacy per-file
+		# hash check would treat the file as "drifted" and refresh.
+		_git("checkout", "main")
+		refresh_target.write_text("# main v2\n", encoding="utf-8")
+		_git("add", "-A")
+		_git("commit", "-m", "main v2", "--quiet")
+		_git("push", "origin", "main", "--quiet")
+
+		poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
+		fn_body = _extract_refresh_function_body(poller_body)
+
+		runtime_dir = tmp_root / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		runner = tmp_root / "run.sh"
+		# Use `set -uo pipefail` (no -e) so the function's own internal
+		# fail-open paths (`|| true`, `|| echo ""`, `|| continue`) behave
+		# the same way they do when sourced into the real poller — the
+		# real poller has `set -e` at the top, but every command inside
+		# the refresh function explicitly handles its own failure.
+		runner.write_text(
+			"#!/usr/bin/env bash\n"
+			"set -uo pipefail\n"
+			f"{fn_body}\n"
+			f"cd {str(work)!r}\n"
+			f"export RUNTIME_DIR={str(runtime_dir)!r}\n"
+			"_refresh_integration_resolver_tooling orchestrator/project-99 main\n",
+			encoding="utf-8",
+		)
+		runner.chmod(0o755)
+		result = subprocess.run(
+			["bash", str(runner)],
+			capture_output=True, text=True, timeout=60,
+		)
+		assert result.returncode == 0, (
+			"_refresh_integration_resolver_tooling fixture run failed before "
+			"the no-clobber assertions could validate its output.\n"
+			f"stdout:\n{result.stdout}\n---\nstderr:\n{result.stderr}\n"
+		)
+		# Source-of-truth for what's actually on the integration branch
+		# is the bare repo. Fetch it via the clone to read.
+		subprocess.run(
+			["git", "-C", str(work), "fetch", "origin", "--quiet"],
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+		)
+		actual = subprocess.run(
+			["git", "-C", str(work), "show",
+			 "origin/orchestrator/project-99:scripts/check_resolver_diff.sh"],
+			capture_output=True, text=True, check=True,
+		).stdout
+		assert actual == "# sub-issue v1\n", (
+			"_refresh_integration_resolver_tooling silently reverted a file "
+			"the integration branch had its own committed changes to "
+			"(issue #2734 regression).\n"
+			f"Expected '# sub-issue v1' on the integration branch.\n"
+			f"Got: {actual!r}\n"
+			f"---\nrefresh stdout:\n{result.stdout}\n"
+			f"---\nrefresh stderr:\n{result.stderr}\n"
+		)
+		# Belt-and-braces: the function should log a skip line naming
+		# the file, so an operator scanning the orchestrator log can see
+		# why the refresh did not advance the branch for this file.
+		assert "skip scripts/check_resolver_diff.sh" in result.stdout, (
+			"_refresh_integration_resolver_tooling did not log the "
+			"expected skip-on-divergence message for the protected file.\n"
+			f"stdout:\n{result.stdout}\n---\nstderr:\n{result.stderr}\n"
+		)
+	finally:
+		shutil.rmtree(tmp_root, ignore_errors=True)
+
+
+def test_resolver_tooling_refresh_still_refreshes_files_unchanged_on_integration_branch():
+	# Companion to the no-clobber test above: prove the deadlock-
+	# breaker still works when the integration branch is UNCHANGED for
+	# a refresh-allowlisted file. This is the legitimate use case the
+	# function was originally written for — main shipped a fix to the
+	# resolver toolchain, the integration branch is stuck on the older
+	# version, and the normal main->integration sync cannot proceed
+	# until the integration branch picks up the fix. The merge-base
+	# divergence guard introduced for issue #2734 must NOT regress
+	# this path.
+	tmp_root = Path(tempfile.mkdtemp(prefix="refresh-deadlock-"))
+	try:
+		bare = tmp_root / "bare.git"
+		work = tmp_root / "work"
+		subprocess.run(
+			["git", "init", "--bare", "--quiet", str(bare)],
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+		)
+		subprocess.run(
+			["git", "init", "--quiet", str(work)],
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+		)
+		for k, v in [
+			("user.name", "test"),
+			("user.email", "t@example.com"),
+			("commit.gpgsign", "false"),
+			("commit.gpgSign", "false"),
+		]:
+			subprocess.run(
+				["git", "-C", str(work), "config", k, v],
+				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			)
+		(work / "scripts").mkdir()
+		refresh_target = work / "scripts" / "check_resolver_diff.sh"
+		main_only_target = work / "scripts" / "targeted_file_context.py"
+		refresh_target.write_text("# main v1\n", encoding="utf-8")
+
+		def _git(*args: str) -> None:
+			subprocess.run(
+				["git", "-C", str(work), *args],
+				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			)
+
+		_git("checkout", "-B", "main")
+		_git("add", "-A")
+		_git("commit", "-m", "initial main", "--quiet")
+		_git("remote", "add", "origin", str(bare))
+		_git("push", "-u", "origin", "main", "--quiet")
+		# Integration branch with NO change to the allowlisted file —
+		# this is the deadlock-breaker scenario.
+		_git("checkout", "-B", "orchestrator/project-99")
+		(work / "scripts" / "unrelated.sh").write_text("# unrelated\n", encoding="utf-8")
+		_git("add", "-A")
+		_git("commit", "-m", "unrelated integration commit", "--quiet")
+		_git("push", "-u", "origin", "orchestrator/project-99", "--quiet")
+		# Bump main with a fix to the allowlisted file.
+		_git("checkout", "main")
+		refresh_target.write_text("# main v2 with toolchain fix\n", encoding="utf-8")
+		# Also add a second allowlisted file that exists only on main.
+		# Missing-path tree lookups must resolve to empty strings here;
+		# otherwise git rev-parse writes literal REV:PATH tokens and the
+		# refresh incorrectly treats the file as integration-owned drift.
+		main_only_target.write_text("# main-only helper\n", encoding="utf-8")
+		_git("add", "-A")
+		_git("commit", "-m", "main: ship toolchain fix", "--quiet")
+		_git("push", "origin", "main", "--quiet")
+
+		poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
+		fn_body = _extract_refresh_function_body(poller_body)
+		runtime_dir = tmp_root / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		runner = tmp_root / "run.sh"
+		runner.write_text(
+			"#!/usr/bin/env bash\n"
+			"set -uo pipefail\n"
+			f"{fn_body}\n"
+			f"cd {str(work)!r}\n"
+			f"export RUNTIME_DIR={str(runtime_dir)!r}\n"
+			"_refresh_integration_resolver_tooling orchestrator/project-99 main\n",
+			encoding="utf-8",
+		)
+		runner.chmod(0o755)
+		result = subprocess.run(
+			["bash", str(runner)],
+			capture_output=True, text=True, timeout=60,
+		)
+		assert result.returncode == 0, (
+			"_refresh_integration_resolver_tooling fixture run failed before "
+			"the deadlock-breaker assertions could validate its output.\n"
+			f"stdout:\n{result.stdout}\n---\nstderr:\n{result.stderr}\n"
+		)
+		subprocess.run(
+			["git", "-C", str(work), "fetch", "origin", "--quiet"],
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+		)
+		actual = subprocess.run(
+			["git", "-C", str(work), "show",
+			 "origin/orchestrator/project-99:scripts/check_resolver_diff.sh"],
+			capture_output=True, text=True, check=True,
+		).stdout
+		assert actual == "# main v2 with toolchain fix\n", (
+			"_refresh_integration_resolver_tooling failed to refresh a "
+			"file the integration branch had NOT modified — the "
+			"deadlock-breaking path regressed.\n"
+			f"Expected '# main v2 with toolchain fix' on the integration "
+			f"branch.\nGot: {actual!r}\n"
+			f"---\nrefresh stdout:\n{result.stdout}\n"
+			f"---\nrefresh stderr:\n{result.stderr}\n"
+		)
+		added_actual = subprocess.run(
+			["git", "-C", str(work), "show",
+			 "origin/orchestrator/project-99:scripts/targeted_file_context.py"],
+			capture_output=True, text=True, check=True,
+		).stdout
+		assert added_actual == "# main-only helper\n", (
+			"_refresh_integration_resolver_tooling failed to refresh a "
+			"main-only allowlisted file that was absent on the integration "
+			"branch. Missing-path tree lookups must resolve to empty strings, "
+			"not literal REV:PATH tokens.\n"
+			f"Expected '# main-only helper' on the integration branch.\n"
+			f"Got: {added_actual!r}\n"
+			f"---\nrefresh stdout:\n{result.stdout}\n"
+			f"---\nrefresh stderr:\n{result.stderr}\n"
+		)
+	finally:
+		shutil.rmtree(tmp_root, ignore_errors=True)
+
+
 def main() -> int:
 	# Force line-buffered stdout so PASS/FAIL messages surface to CI logs as
 	# each test completes, instead of sitting in Python's default block buffer
