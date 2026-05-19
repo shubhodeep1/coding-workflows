@@ -5723,9 +5723,10 @@ STALL_EOF
           # editor's work is discarded and a brand-new review cycle
           # starts from the empty commit.
           #
-          # The active-workflow guard at line 7887 (build_active_issue_set
-          # consumed via issue_has_active_workflow) is the primary
-          # protection, but a single missed run in that 50-item blob
+          # The active-workflow guard in recover_stalled_issue (via
+          # issue_has_active_workflow consuming build_active_issue_set)
+          # is the primary protection, but a single missed run in that
+          # 50-item blob
           # (cache TTL, pagination edge, head_branch=null on
           # workflow_dispatch) defeats every downstream stall check.
           # This is a targeted defense-in-depth at the only push site
@@ -5733,19 +5734,20 @@ STALL_EOF
           #
           # Reads from the per-tick _ACTIONS_RUNS_BLOB_CACHE populated
           # by _load_actions_runs_cached so this adds zero API calls
-          # (§15).  Workflow filter mirrors cancel_zombie_runs_for_issue
-          # at line 5031-5038 — both .name and .path so consumer-repo
-          # caller workflows that rename the display name are still
-          # caught.  Zombie filter (STALL_THRESHOLD_MINUTES) mirrors
-          # build_active_issue_set at line 4944-4954 so a genuinely
-          # hung run does not block recovery indefinitely.  Malformed or
+          # (§15).  Workflow filter mirrors
+          # cancel_zombie_runs_for_issue — both .name and .path so
+          # consumer-repo caller workflows that rename the display name
+          # are still caught.  Zombie filter (STALL_THRESHOLD_MINUTES)
+          # mirrors build_active_issue_set so a genuinely hung run does
+          # not block recovery indefinitely.  Malformed or
           # blank timestamps on a same-branch review run are treated as
           # fresh so we conservatively avoid invalidating a potentially
           # live autofix pass.  Other jq/cache errors still fail open:
           # empty result falls through to the legacy empty-commit path.
           local _rtr_inflight_blob _rtr_inflight_id _rtr_now_epoch _rtr_stall_secs
           _rtr_inflight_blob="$(_load_actions_runs_cached 2>/dev/null || echo '{"workflow_runs":[]}')"
-          _rtr_now_epoch="$(date +%s)"
+          _rtr_now_epoch="$(date +%s 2>/dev/null || echo "")"
+          [[ "${_rtr_now_epoch}" =~ ^[0-9]+$ ]] || _rtr_now_epoch=0
           _rtr_stall_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))
           _rtr_inflight_id="$(printf '%s' "${_rtr_inflight_blob}" | jq -r \
             --arg br "${head_ref}" \
