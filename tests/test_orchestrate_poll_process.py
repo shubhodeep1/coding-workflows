@@ -6432,6 +6432,9 @@ def test_retrigger_review_does_not_increment_when_empty_commit_checkout_fails():
 		f"expected checkout failure to leave stall_recovery_count at 0; "
 		f"got {issue_entry['stall_recovery_count']}"
 	)
+	assert f"Issue #10 PR #85 checkout origin/{head_ref} failed after fetch; skipping empty-commit push." in (
+		result["stdout"] + result["stderr"]
+	)
 	assert result.get("git_push_calls", []) == [], (
 		f"expected checkout failure to skip the empty-commit push; "
 		f"got push calls {result.get('git_push_calls', [])}"

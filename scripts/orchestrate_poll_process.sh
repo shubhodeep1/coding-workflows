@@ -6073,6 +6073,8 @@ STALL_EOF
                 _rtr_push_succeeded="true"
               fi
               git checkout --detach HEAD 2>/dev/null || true
+            else
+              echo "  Issue #${issue_num} PR #${pr_num} checkout origin/${head_ref} failed after fetch; skipping empty-commit push."
             fi
           fi
           if [ "${_rtr_push_succeeded}" != "true" ]; then
