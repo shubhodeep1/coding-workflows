@@ -3302,47 +3302,74 @@ _refresh_integration_resolver_tooling() {
       git config user.name "codex-bot"
       git config user.email "codex@users.noreply.github.com"
 
+      # Resolve the merge-base ONCE before the per-file loop so we can
+      # compare each file's integration-branch hash against the hash it
+      # had when the two branches last shared history.  When int_hash
+      # differs from the merge-base hash, the integration branch has
+      # its own committed changes to the file since the branches
+      # diverged (e.g. via a merged sub-issue's PR like #2738 landing
+      # Phase 1A baseline/delta verifier changes).  Force-refreshing
+      # from default_branch in that case silently reverts those
+      # merged sub-issue changes, which the post-resolve merged
+      # sub-issue fingerprint verifier
+      # (scripts/verify_integration_fingerprints.py) then flags as a
+      # contract violation, blocking wave dispatch on the project
+      # tracking issue (see issue #2734 for the original incident).
+      # Fail-open: if the merge-base cannot be resolved, fall through
+      # to the legacy hash-only comparison rather than aborting the
+      # deadlock-breaking refresh entirely.
+      local merge_base=""
+      merge_base="$(git merge-base \
+        "refs/remotes/origin/${integration_branch}" \
+        "refs/remotes/origin/${default_branch}" 2>/dev/null || echo "")"
+
+      if [ -z "${merge_base}" ]; then
+        echo "::warning::${log_prefix} merge-base unresolved for ${integration_branch} vs ${default_branch}; falling back to legacy hash-only comparison." >&2
+      fi
+
       local refreshed_count=0
       local refreshed_list=""
-      local default_ref="refs/remotes/origin/${default_branch}"
-      local integration_ref="refs/remotes/origin/${integration_branch}"
-      local f main_hash int_hash
+      local drifted_count=0
+      local skipped_count=0
+      local f main_hash int_hash base_hash
       for f in "${refresh_files[@]}"; do
-        local ahead_commit=""
         # Skip if file does not exist on default_branch — never delete
         # an integration-branch file just because main lacks it.
-        if ! git cat-file -e "${default_ref}:${f}" 2>/dev/null; then
+        if ! git cat-file -e "refs/remotes/origin/${default_branch}:${f}" 2>/dev/null; then
           continue
         fi
-        main_hash="$(git rev-parse "${default_ref}:${f}" 2>/dev/null || echo "")"
-        int_hash="$(git rev-parse "${integration_ref}:${f}" 2>/dev/null || echo "")"
+        # Keep --verify/--quiet on these tree-path lookups: without
+        # them, a missing path writes the unresolved REV:PATH token to
+        # stdout, which makes absent files look like real hashes.
+        main_hash="$(git rev-parse --verify --quiet "refs/remotes/origin/${default_branch}:${f}" 2>/dev/null || echo "")"
+        int_hash="$(git rev-parse --verify --quiet "HEAD:${f}" 2>/dev/null || echo "")"
         [ -n "${main_hash}" ] || continue
         if [ "${main_hash}" = "${int_hash}" ]; then
           continue
         fi
-        # Refuse to refresh if the integration branch has commits touching
-        # this file that are not in default_branch — that means a merged
-        # sub-issue (or other intentional change) on the integration
-        # branch has evolved this file ahead of default_branch, and
-        # refreshing would silently revert that work (the failure mode
-        # that produced PR #2738 -> commit 026cfa7 verifier regression on
-        # orchestrator/project-2734).  The standard
-        # sync_default_into_integration_branch flow will reconcile any
-        # genuine drift in the other direction. Ignore prior
-        # [ai-maint] refresh commits in this scan: those mirror
-        # default_branch and must not permanently block later refreshes
-        # of the same file.
-        if ! ahead_commit="$(
-          git rev-list --max-count=1 --fixed-strings --invert-grep \
-            --grep="[ai-maint] refresh resolver tooling from ${default_branch}" \
-            "${default_ref}..${integration_ref}" -- "${f}" 2>/dev/null
-        )"; then
-          echo "::warning::${log_prefix} git rev-list failed for ${f}; skipping refresh for safety." >&2
-          continue
-        fi
-        if [ -n "${ahead_commit}" ]; then
-          echo "  ${log_prefix} skipping ${f}: integration branch has commits not in ${default_branch} (deliberate evolution; defer to next default-branch sync)."
-          continue
+        drifted_count=$((drifted_count + 1))
+        # Refuse to clobber a file the integration branch has its own
+        # committed changes to since the merge-base.  The deadlock-
+        # breaker is for files the integration branch has NOT touched
+        # but main has fixed — overwriting a file the integration
+        # branch HAS touched would silently revert merged sub-issue
+        # PR intent and trip the fingerprint verifier (issue #2734).
+        # Any legitimate main-side change to such a file must arrive
+        # via the normal main->integration sync (with 3-way merge),
+        # not via this refresh.  `[ -z "${base_hash}" ]` covers the
+        # "file did not exist at merge-base, integration added it"
+        # case the same way — never clobber an added file.
+        if [ -n "${merge_base}" ]; then
+          base_hash="$(git rev-parse --verify --quiet "${merge_base}:${f}" 2>/dev/null || echo "")"
+          if [ "${int_hash}" != "${base_hash}" ]; then
+            skipped_count=$((skipped_count + 1))
+            local _int_short="${int_hash:0:8}"
+            local _base_short="${base_hash:0:8}"
+            [ -n "${_base_short}" ] || _base_short="none"
+            [ -n "${_int_short}" ] || _int_short="none"
+            echo "  ${log_prefix} skip ${f} — integration branch has committed changes since merge-base (int=${_int_short}, base=${_base_short}); main version must arrive via normal sync, not refresh."
+            continue
+          fi
         fi
         if git checkout "refs/remotes/origin/${default_branch}" -- "${f}" 2>/dev/null; then
           # Only count the file as refreshed if `git add` succeeds, so
@@ -3359,7 +3386,13 @@ _refresh_integration_resolver_tooling() {
       done
 
       if [ "${refreshed_count}" -eq 0 ]; then
-        echo "  ${log_prefix} no resolver-toolchain drift; nothing to refresh."
+        if [ "${skipped_count}" -gt 0 ] && [ "${skipped_count}" -eq "${drifted_count}" ]; then
+          echo "  ${log_prefix} detected resolver-toolchain drift in ${drifted_count} file(s), but skipped refresh because integration-branch changes must land via normal sync."
+        elif [ "${drifted_count}" -gt 0 ]; then
+          echo "  ${log_prefix} detected resolver-toolchain drift in ${drifted_count} file(s), but nothing was refreshed."
+        else
+          echo "  ${log_prefix} no resolver-toolchain drift; nothing to refresh."
+        fi
         exit 0
       fi
 
