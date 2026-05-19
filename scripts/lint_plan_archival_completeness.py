@@ -52,17 +52,23 @@ from pathlib import Path
 
 TRACKING_LABEL = "ai:orchestrator-tracking"
 
-# Matches `Refs #N`, `Related to #N`, `Closes #N`, `Fixes #N`, etc. We
+# Matches both `#N` and full GitHub issue URL forms in PR bodies. We
 # accept all reference forms — the §19 lint (lint_pr_body_auto_close.py)
 # is responsible for forbidding auto-close keywords against tracking
-# issues; here we just need to harvest every #N the PR body mentions, then
+# issues; here we just need to harvest every referenced issue number, then
 # filter to tracking-labeled ones.
-ISSUE_REF_RE = re.compile(r"(?<![\w-])#(?P<issue>\d+)(?![\w-])")
+ISSUE_REF_RE = re.compile(
+	r"(?:"
+	r"(?<![\w-])#(?P<issue_short>\d+)(?![\w-])"
+	r"|"
+	r"https?://github\.com/[\w.-]+/[\w.-]+/issues/(?P<issue_url>\d+)"
+	r")"
+)
 
 # Matches a GitHub markdown task list item. Capture the state ([ ] / [x] /
 # [X]) and the rest of the line so we can name unchecked items in the
 # error message.
-CHECKBOX_RE = re.compile(r"^\s*-\s*\[(?P<state>[ xX])\]\s+(?P<text>.+)$")
+CHECKBOX_RE = re.compile(r"^\s*-\s*\[(?P<state>[ xX])\]\s*(?P<text>.*)$")
 
 # Signature for the explicit de-scope acknowledgement section in the PR
 # body. The matched text must include a markdown heading (## or ###) and
@@ -101,11 +107,14 @@ def _fetch_issue_via_gh(repo: str, issue_number: int) -> dict | None:
 
 
 def _extract_referenced_issues(pr_body: str) -> list[int]:
-	"""Unique issue numbers referenced by `#N` in the PR body, in order of first appearance."""
+	"""Unique issue numbers referenced in the PR body, in order of first appearance."""
 	seen: set[int] = set()
 	ordered: list[int] = []
 	for m in ISSUE_REF_RE.finditer(pr_body):
-		n = int(m.group("issue"))
+		issue_str = m.group("issue_short") or m.group("issue_url")
+		if not issue_str:
+			continue
+		n = int(issue_str)
 		if n not in seen:
 			seen.add(n)
 			ordered.append(n)
@@ -118,7 +127,8 @@ def _enumerate_unchecked_boxes(issue_body: str) -> list[str]:
 	for line in issue_body.splitlines():
 		m = CHECKBOX_RE.match(line)
 		if m and m.group("state") == " ":
-			unchecked.append(m.group("text").strip())
+			text = (m.group("text") or "").strip()
+			unchecked.append(text or "<blank checkbox item>")
 	return unchecked
 
 

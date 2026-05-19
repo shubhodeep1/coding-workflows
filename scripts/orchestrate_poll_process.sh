@@ -3417,7 +3417,8 @@ _refresh_integration_resolver_tooling() {
                   echo "::warning::${log_prefix} git add failed after 3-way merge of ${f}; reverted worktree copy and excluded it from the refresh commit." >&2
                 fi
               else
-                echo "::warning::${log_prefix} could not copy 3-way merge result for ${f}; excluding from refresh commit." >&2
+                git checkout -- "${f}" 2>/dev/null || true
+                echo "::warning::${log_prefix} could not copy 3-way merge result for ${f}; reverted worktree copy and excluded it from the refresh commit." >&2
               fi
             else
               # Non-zero exit: conflicts (1+) or merge-file error

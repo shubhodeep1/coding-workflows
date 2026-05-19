@@ -8818,6 +8818,14 @@ def test_resolver_tooling_refresh_function_has_3way_merge_fallback():
 		"Without the revert, a staging failure leaves the poller worktree dirty and "
 		"out of sync with the refresh commit."
 	)
+	cp_fail_re = re.compile(
+		r'if\s+cp\s+"\$\{merge_tmpdir\}/int"\s+"\$\{f\}"[\s\S]{0,800}?\belse\b[\s\S]{0,200}?git\s+checkout\s+--\s+"\$\{f\}"'
+	)
+	assert cp_fail_re.search(fn_body), (
+		"the 3-way merge path must revert the worktree copy when copying the merged "
+		"tmpfile back into `${f}` fails. Without the revert, a partial copy can leave "
+		"the poller worktree dirty even though the file was excluded from the refresh commit."
+	)
 	# Conflict path must fall through to `skipped_count` (matching the
 	# existing skip semantics from PR #2760) — never stage a file with
 	# conflict markers. The conflict path is reached when `git merge-file`

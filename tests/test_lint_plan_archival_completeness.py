@@ -75,6 +75,26 @@ def test_archival_without_any_refs_is_violation():
 	assert "Refs #N" in violations[0]
 
 
+def test_archival_with_url_form_tracking_ref_is_checked():
+	# Full GitHub issue URLs must be harvested too; otherwise a PR body can
+	# bypass the archival gate by swapping `Refs #2734` for the URL form.
+	mod = _import_lint()
+	def fetch(repo: str, n: int) -> dict | None:
+		if n == 2734:
+			return {"labels": ["ai:orchestrator-tracking"], "body": _PROJECT_2734_BODY}
+		return {"labels": [], "body": ""}
+	violations, errors = mod.lint(
+		pr_body="Archive plan. Refs https://github.com/owner/repo/issues/2734\n",
+		added_files=["docs/completed/integration-sync-resolver-self-heal-plan.md"],
+		repo="owner/repo",
+		fail_open_on_lookup_error=False,
+		issue_fetcher=fetch,
+	)
+	assert errors == []
+	assert len(violations) == 1
+	assert "#2734" in violations[0]
+
+
 def test_archival_with_unticked_tracking_issue_no_descope_fails():
 	# THIS IS THE PROJECT-#2734 SCENARIO. The PR archives the plan but
 	# the tracking issue's checkboxes are all unticked and the PR body
@@ -168,6 +188,29 @@ def test_archival_with_empty_descope_section_still_fails():
 	assert errors == []
 	assert len(violations) == 1
 	assert "non-empty explicit `## De-scoped phases` section" in violations[0]
+
+
+def test_archival_with_blank_unchecked_checkbox_still_fails():
+	# Blank checkbox items count as unchecked in the readiness gate; the
+	# archival lint must classify them the same way.
+	mod = _import_lint()
+	def fetch(repo: str, n: int) -> dict | None:
+		if n == 2734:
+			return {
+				"labels": ["ai:orchestrator-tracking"],
+				"body": "## Project\n\n- [ ]\n- [x] done\n",
+			}
+		return None
+	violations, errors = mod.lint(
+		pr_body="Refs #2734\n",
+		added_files=["docs/completed/plan.md"],
+		repo="owner/repo",
+		fail_open_on_lookup_error=False,
+		issue_fetcher=fetch,
+	)
+	assert errors == []
+	assert len(violations) == 1
+	assert "<blank checkbox item>" in violations[0]
 
 
 def test_archival_with_non_tracking_ref_is_silent_pass():
