@@ -3304,15 +3304,18 @@ _refresh_integration_resolver_tooling() {
 
       local refreshed_count=0
       local refreshed_list=""
-      local f main_hash int_hash ahead_commit
+      local default_ref="refs/remotes/origin/${default_branch}"
+      local integration_ref="refs/remotes/origin/${integration_branch}"
+      local f main_hash int_hash
       for f in "${refresh_files[@]}"; do
+        local ahead_commit=""
         # Skip if file does not exist on default_branch — never delete
         # an integration-branch file just because main lacks it.
-        if ! git cat-file -e "refs/remotes/origin/${default_branch}:${f}" 2>/dev/null; then
+        if ! git cat-file -e "${default_ref}:${f}" 2>/dev/null; then
           continue
         fi
-        main_hash="$(git rev-parse "refs/remotes/origin/${default_branch}:${f}" 2>/dev/null || echo "")"
-        int_hash="$(git rev-parse "HEAD:${f}" 2>/dev/null || echo "")"
+        main_hash="$(git rev-parse "${default_ref}:${f}" 2>/dev/null || echo "")"
+        int_hash="$(git rev-parse "${integration_ref}:${f}" 2>/dev/null || echo "")"
         [ -n "${main_hash}" ] || continue
         if [ "${main_hash}" = "${int_hash}" ]; then
           continue
@@ -3325,8 +3328,18 @@ _refresh_integration_resolver_tooling() {
         # that produced PR #2738 -> commit 026cfa7 verifier regression on
         # orchestrator/project-2734).  The standard
         # sync_default_into_integration_branch flow will reconcile any
-        # genuine drift in the other direction.
-        ahead_commit="$(git rev-list "refs/remotes/origin/${default_branch}..HEAD" -- "${f}" 2>/dev/null | head -n 1)"
+        # genuine drift in the other direction. Ignore prior
+        # [ai-maint] refresh commits in this scan: those mirror
+        # default_branch and must not permanently block later refreshes
+        # of the same file.
+        if ! ahead_commit="$(
+          git rev-list --max-count=1 --fixed-strings --invert-grep \
+            --grep="[ai-maint] refresh resolver tooling from ${default_branch}" \
+            "${default_ref}..${integration_ref}" -- "${f}" 2>/dev/null
+        )"; then
+          echo "::warning::${log_prefix} git rev-list failed for ${f}; skipping refresh for safety." >&2
+          continue
+        fi
         if [ -n "${ahead_commit}" ]; then
           echo "  ${log_prefix} skipping ${f}: integration branch has commits not in ${default_branch} (deliberate evolution; defer to next default-branch sync)."
           continue

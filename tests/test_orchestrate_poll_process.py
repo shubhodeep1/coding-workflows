@@ -8019,13 +8019,12 @@ def test_resolver_tooling_refresh_skips_files_ahead_of_default_branch():
 	# silently reverted the sub-issue's edits, tripped the merged-sub-issue
 	# fingerprint gate, and stalled wave dispatch.
 	#
-	# The fix is a per-file ahead-of-default gate: skip the refresh when
-	# `git rev-list refs/remotes/origin/<default_branch>..HEAD -- <file>`
-	# is non-empty (the integration branch has commits touching this file
-	# that are not yet in default_branch). This test pins both the
-	# function-scoped placement of the gate AND its rev-list ref-spec, so
-	# a future refactor cannot drop the safety check or weaken its scope
-	# (e.g. by checking branch-wide ahead-ness instead of per-file).
+	# The fix is a per-file ahead-of-default gate over the explicit
+	# integration ref: skip the refresh when `git rev-list` finds a
+	# non-refresh integration-branch commit touching this file that is not
+	# yet in default_branch. This test pins the function-scoped placement
+	# of the gate plus the ref/path scope contract while still allowing
+	# safer hardening flags such as `--max-count=1` and `--invert-grep`.
 	poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
 	fn_marker = "_refresh_integration_resolver_tooling() {"
 	fn_open = poller_body.find(fn_marker)
@@ -8057,23 +8056,41 @@ def test_resolver_tooling_refresh_skips_files_ahead_of_default_branch():
 	# Closing `done` of the loop is the first `done` on its own line
 	# after loop_open (matching the existing style; nested loops in this
 	# function would be a separate refactor flagged by reviewers).
-	done_re = re.compile(r"^\s*done\s*$", re.MULTILINE)
+	done_re = re.compile(r"^\s*done(?:\s+#.*)?\s*$", re.MULTILINE)
 	done_match = done_re.search(fn_body, pos=loop_open)
 	assert done_match is not None, (
 		"could not find closing `done` for the per-file refresh loop in "
 		"_refresh_integration_resolver_tooling; loop style changed."
 	)
 	loop_body = fn_body[loop_open:done_match.end()]
-	# The ahead-of-default gate must be present inside the loop body so
-	# it runs per-file, not function-wide.
-	assert 'git rev-list "refs/remotes/origin/${default_branch}..HEAD"' in loop_body, (
-		"_refresh_integration_resolver_tooling no longer gates the per-file "
-		"refresh on `git rev-list refs/remotes/origin/${default_branch}..HEAD "
-		"-- ${f}`; without this check, a merged sub-issue whose scope edits "
-		"a resolver-toolchain file (e.g. PR #2738 on orchestrator/project-2734 "
-		"evolving scripts/verify_integration_fingerprints.py) will be silently "
-		"reverted on the next refresh tick — the exact regression that blocked "
-		"wave-2 dispatch on project #2734."
+	# The ahead-of-default gate must be present inside the loop body so it
+	# runs per-file, not function-wide.
+	assert 'git rev-list' in loop_body, (
+		"_refresh_integration_resolver_tooling no longer uses `git rev-list` "
+		"inside the per-file refresh loop; without that ahead-of-default "
+		"query, a merged sub-issue whose scope edits a resolver-toolchain "
+		"file (e.g. PR #2738 on orchestrator/project-2734 evolving "
+		"scripts/verify_integration_fingerprints.py) will be silently "
+		"reverted on the next refresh tick — the exact regression that "
+		"blocked wave-2 dispatch on project #2734."
+	)
+	assert '--max-count=1' in loop_body, (
+		"_refresh_integration_resolver_tooling's ahead-of-default gate must "
+		"use `git rev-list --max-count=1` (or equivalent native limiting) "
+		"rather than piping into `head`, which would reintroduce the "
+		"pipefail/SIGPIPE abort path in the refresh loop."
+	)
+	assert '${default_ref}..${integration_ref}' in loop_body, (
+		"_refresh_integration_resolver_tooling's ahead-of-default gate must "
+		"compare default_branch against the explicit integration ref, not "
+		"against implicit HEAD, so detached-head or refactored invocation "
+		"contexts cannot silently weaken the safety check."
+	)
+	assert '..HEAD' not in loop_body, (
+		"_refresh_integration_resolver_tooling's ahead-of-default gate must "
+		"not fall back to `..HEAD`; the explicit integration ref is required "
+		"to keep the comparison stable outside the current detached worktree "
+		"assumption."
 	)
 	# The check must reference `${f}` (the per-iteration filename) so it
 	# is path-scoped, not branch-wide. `git rev-list ...` without a `--`
@@ -8088,6 +8105,18 @@ def test_resolver_tooling_refresh_skips_files_ahead_of_default_branch():
 		"just on the specific file being refreshed; that drops the safety "
 		"check's precision and re-opens the door to over-refreshing other "
 		"files in the allowlist."
+	)
+	assert '--invert-grep' in loop_body, (
+		"_refresh_integration_resolver_tooling's ahead-of-default gate must "
+		"ignore prior `[ai-maint] refresh resolver tooling ...` commits; "
+		"otherwise the helper's own maintenance commit permanently blocks "
+		"future refreshes of the same file."
+	)
+	assert '[ai-maint] refresh resolver tooling from ${default_branch}' in loop_body, (
+		"_refresh_integration_resolver_tooling's ahead-of-default gate must "
+		"explicitly ignore the helper's own refresh-commit subject; otherwise "
+		"a previous deadlock-breaking refresh is misclassified as deliberate "
+		"integration-only evolution on the next tick."
 	)
 
 
