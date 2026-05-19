@@ -38,13 +38,75 @@ if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   sanitize_codex_prompt_file() { :; }
 fi
 if ! command -v _embed_input_file >/dev/null 2>&1; then
-  _init_prompt_budget() { :; }
-  _cleanup_prompt_budget() { :; }
+  : "${_PROMPT_BUDGET_TOTAL_BYTES:=800000}"
+  _prompt_budget_state_file() {
+    printf '%s/_prompt_input_budget_state.%s\n' "${TMPDIR:-/tmp}" "$$"
+  }
+  _init_prompt_budget() {
+    local _cap="${1:-${_PROMPT_BUDGET_TOTAL_BYTES}}"
+    local _state
+    _state="$(_prompt_budget_state_file)"
+    export _PROMPT_BUDGET_TOTAL_BYTES="${_cap}"
+    printf '0\n' > "${_state}" 2>/dev/null || true
+  }
+  _cleanup_prompt_budget() {
+    local _state
+    _state="$(_prompt_budget_state_file)"
+    rm -f "${_state}" 2>/dev/null || true
+  }
   _embed_input_file() {
     local _p="${1:-}"
+    local _cap="${2:-100000}"
+    local _mode="${3:-head}"
+    local _state _used _budget_remaining _effective_cap _size _emit_bytes
     if [ -z "${_p}" ] || [ ! -e "${_p}" ]; then printf '(missing)\n'; return 0; fi
     if [ ! -s "${_p}" ]; then printf '(empty)\n'; return 0; fi
-    cat "${_p}"
+
+    _state="$(_prompt_budget_state_file)"
+    _used=0
+    if [ -f "${_state}" ]; then
+      _used="$(cat "${_state}" 2>/dev/null)"
+      [ -n "${_used}" ] || _used=0
+    fi
+    _budget_remaining=$(( _PROMPT_BUDGET_TOTAL_BYTES - _used ))
+    if [ "${_budget_remaining}" -le 0 ]; then
+      printf '(omitted — total prompt input budget %d bytes exhausted; %d bytes already inlined)\n' \
+        "${_PROMPT_BUDGET_TOTAL_BYTES}" "${_used}"
+      return 0
+    fi
+
+    _effective_cap="${_cap}"
+    if [ "${_budget_remaining}" -lt "${_effective_cap}" ]; then
+      _effective_cap="${_budget_remaining}"
+    fi
+
+    _size="$(wc -c < "${_p}" 2>/dev/null | tr -d '[:space:]')"
+    [ -n "${_size}" ] || _size=0
+    if [ "${_size}" -le "${_effective_cap}" ]; then
+      cat "${_p}"
+      _emit_bytes="${_size}"
+    else
+      PYTHONDONTWRITEBYTECODE=1 python3 - "${_p}" "${_effective_cap}" 2>/dev/null <<'PY' || head -c "${_effective_cap}" "${_p}"
+from pathlib import Path
+import sys
+
+data = Path(sys.argv[1]).read_bytes()
+cap = int(sys.argv[2])
+if cap > 0 and len(data) > cap:
+    i = cap
+    while i > 0 and (data[i] & 0xC0) == 0x80:
+        i -= 1
+    data = data[:i]
+sys.stdout.buffer.write(data)
+PY
+      printf '\n[... TRUNCATED — file is %s bytes; first %s bytes shown above (mode=%s, per-file cap=%s, budget remaining was %s; fallback embedder) ...]\n' \
+        "${_size}" "${_effective_cap}" "${_mode}" "${_cap}" "${_budget_remaining}"
+      _emit_bytes="${_effective_cap}"
+    fi
+
+    if [ -n "${_emit_bytes}" ] && [ "${_emit_bytes}" -gt 0 ] 2>/dev/null; then
+      printf '%s\n' "$(( _used + _emit_bytes ))" > "${_state}" 2>/dev/null || true
+    fi
   }
 fi
 REVIEW_RB_SEMBLE_HELPERS_AVAILABLE="false"
@@ -322,7 +384,8 @@ PR_DIFF="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
 # `head -1000` truncation removed in PR #2564 (commit ebe2ecf3) was
 # the last guard here; this restores one at a byte budget instead
 # of a line budget so the cap is predictable across diff styles.
-# Override via the RB_JUDGE_PR_DIFF_MAX_BYTES repo var.
+# Override via the RB_JUDGE_PR_DIFF_MAX_BYTES environment variable
+# (for example, export a repository variable into env in the caller).
 RB_JUDGE_PR_DIFF_MAX_BYTES="${RB_JUDGE_PR_DIFF_MAX_BYTES:-400000}"
 if ! [[ "${RB_JUDGE_PR_DIFF_MAX_BYTES}" =~ ^[0-9]+$ ]] || [ "${RB_JUDGE_PR_DIFF_MAX_BYTES}" -le 0 ]; then
   echo "::warning::Invalid RB_JUDGE_PR_DIFF_MAX_BYTES='${RB_JUDGE_PR_DIFF_MAX_BYTES}'; using 400000."
@@ -381,7 +444,7 @@ RB_JUDGE_PR_META_RENDER_FILE="${RUNTIME_DIR}/rb_judge_pr_meta.json"
 RB_JUDGE_PR_COMMENTS_RENDER_FILE="${RUNTIME_DIR}/rb_judge_pr_comments.json"
 RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE="${RUNTIME_DIR}/rb_judge_pr_review_comments.json"
 RB_JUDGE_SEMBLE_PREFETCH=""
-trap 'rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE:-}" "${RB_JUDGE_REQUIREMENT_FILE:-}" "${RB_JUDGE_PR_META_RENDER_FILE:-}" "${RB_JUDGE_PR_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE:-}"' EXIT
+trap '_cleanup_prompt_budget; rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE:-}" "${RB_JUDGE_REQUIREMENT_FILE:-}" "${RB_JUDGE_PR_META_RENDER_FILE:-}" "${RB_JUDGE_PR_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE:-}"' EXIT
 
 {
   printf '%s\n' 'Review-blocked judge context.'
@@ -404,10 +467,14 @@ RB_JUDGE_SEMBLE_PREFETCH="$(render_review_rb_semble_prefetch "${RB_JUDGE_SEMBLE_
 # Keep the non-diff judge inputs under a shared budget so oversized PR
 # discussions / inline reviews cannot reintroduce the same `turn/start`
 # prompt-envelope failure the PR diff cap was added to prevent.
-if [ -n "${FIRST_ISSUE}" ]; then
+if [ -n "${FIRST_ISSUE}" ] && [ -n "${FIRST_ISSUE_BODY//[[:space:]]/}" ]; then
   printf '%s\n' "${FIRST_ISSUE_BODY}" > "${RB_JUDGE_REQUIREMENT_FILE}"
 else
   {
+    if [ -n "${FIRST_ISSUE}" ]; then
+      echo "[NOTE: linked issue #${FIRST_ISSUE} has no body; using PR title/body as requirement fallback.]"
+      echo
+    fi
     echo "Title: $(jq -r '.title // ""' "${PR_META_FILE}")"
     echo "Body: $(jq -r '.body // ""' "${PR_PAYLOAD_FILE}")"
   } > "${RB_JUDGE_REQUIREMENT_FILE}"
@@ -478,13 +545,15 @@ _init_prompt_budget "${RB_JUDGE_CONTEXT_BUDGET_BYTES}"
   fi
   printf '%s\n' "${PR_DIFF}"
   echo
-  echo "=== PR #${PR_NUMBER} COMMENTS (editor summaries, reviewer findings) ==="
-  echo
-  _embed_input_file "${RB_JUDGE_PR_COMMENTS_RENDER_FILE}" "${RB_JUDGE_PR_COMMENTS_MAX_BYTES}"
-  echo
   echo "=== PR #${PR_NUMBER} INLINE REVIEW COMMENTS ==="
   echo
   _embed_input_file "${RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE}" "${RB_JUDGE_PR_REVIEW_COMMENTS_MAX_BYTES}"
+  echo
+  # Keep the file/line reviewer findings ahead of general PR discussion
+  # so the shared prompt budget preserves the most actionable evidence.
+  echo "=== PR #${PR_NUMBER} COMMENTS (editor summaries, reviewer findings) ==="
+  echo
+  _embed_input_file "${RB_JUDGE_PR_COMMENTS_RENDER_FILE}" "${RB_JUDGE_PR_COMMENTS_MAX_BYTES}"
   echo
   echo "=== REVIEW-BLOCKED CONTEXT ==="
   echo "Review-blocked judge retry: $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}"
