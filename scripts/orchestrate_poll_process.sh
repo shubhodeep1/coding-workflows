@@ -5742,37 +5742,41 @@ STALL_EOF
           # not block recovery indefinitely.  Malformed or
           # blank timestamps on a same-branch review run are treated as
           # fresh so we conservatively avoid invalidating a potentially
-          # live autofix pass.  Other jq/cache errors still fail open:
+          # live autofix pass.  Other jq/cache errors still fail open,
+          # and if date +%s is unavailable we skip the guard entirely:
           # empty result falls through to the legacy empty-commit path.
           local _rtr_inflight_blob _rtr_inflight_id _rtr_now_epoch _rtr_stall_secs
           _rtr_inflight_blob="$(_load_actions_runs_cached 2>/dev/null || echo '{"workflow_runs":[]}')"
           _rtr_now_epoch="$(date +%s 2>/dev/null || echo "")"
-          [[ "${_rtr_now_epoch}" =~ ^[0-9]+$ ]] || _rtr_now_epoch=0
           _rtr_stall_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))
-          _rtr_inflight_id="$(printf '%s' "${_rtr_inflight_blob}" | jq -r \
-            --arg br "${head_ref}" \
-            --argjson now "${_rtr_now_epoch}" \
-            --argjson threshold "${_rtr_stall_secs}" '
-            [.workflow_runs[]?
-             | select((.status // "") == "in_progress" or (.status // "") == "queued")
-             | select((.head_branch // "") == $br)
-             | select(
-                 (.name // "") == "AI Review"
-                 or (.name // "") == "Internal Review"
-                 or (.name // "") == "Review Autofix"
-                 or ((.path // "") | endswith("ai-review.yml"))
-                 or ((.path // "") | endswith("internal-review.yml"))
-                 or ((.path // "") | endswith("review_autofix.yml"))
-               )
-             | ([.run_started_at, .created_at]
-                | map(select(type == "string" and . != ""))[0] // "") as $ts
-             | (if $ts != ""
-                then (try ($ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch $now)
-                else $now
-                end) as $start_epoch
-             | select(($now - $start_epoch) < $threshold)
-            ] | (.[0].id // empty)
-          ' 2>/dev/null || echo "")"
+          if [[ "${_rtr_now_epoch}" =~ ^[0-9]+$ ]]; then
+            _rtr_inflight_id="$(printf '%s' "${_rtr_inflight_blob}" | jq -r \
+              --arg br "${head_ref}" \
+              --argjson now "${_rtr_now_epoch}" \
+              --argjson threshold "${_rtr_stall_secs}" '
+              [.workflow_runs[]?
+               | select((.status // "") == "in_progress" or (.status // "") == "queued")
+               | select((.head_branch // "") == $br)
+               | select(
+                   (.name // "") == "AI Review"
+                   or (.name // "") == "Internal Review"
+                   or (.name // "") == "Review Autofix"
+                   or ((.path // "") | endswith("ai-review.yml"))
+                   or ((.path // "") | endswith("internal-review.yml"))
+                   or ((.path // "") | endswith("review_autofix.yml"))
+                 )
+               | ([.run_started_at, .created_at]
+                  | map(select(type == "string" and . != ""))[0] // "") as $ts
+               | (if $ts != ""
+                  then (try ($ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch $now)
+                  else $now
+                  end) as $start_epoch
+               | select(($now - $start_epoch) < $threshold)
+              ] | (.[0].id // empty)
+            ' 2>/dev/null || echo "")"
+          else
+            _rtr_inflight_id=""
+          fi
           if [ -n "${_rtr_inflight_id}" ]; then
             echo "  Issue #${issue_num} PR #${pr_num} has in-flight review run #${_rtr_inflight_id} on ${head_ref} (fresh, <${STALL_THRESHOLD_MINUTES}m); skipping empty-commit push to avoid invalidating its stale-base gate."
             STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
