@@ -24,10 +24,10 @@ no-op success status so the required-check context exists on every PR
 targeting the protected branch.
 
 Exit codes:
-  0 — readiness check posted (success or failure), OR the head ref is
-      outside `orchestrator/project-*` so the check does not apply.
-  1 — head ref matched `orchestrator/project-*` but the script could not
-      fetch the tracking issue or hit another unrecoverable error.
+  0 — readiness result emitted and, when not in `--dry-run`, the
+      corresponding commit status POST succeeded.
+  1 — the script could not fetch the tracking issue, could not post the
+      required commit status, or hit another unrecoverable error.
   2 — usage error.
 
 Usage:
@@ -123,6 +123,22 @@ def _post_commit_status(
 	return True
 
 
+def _post_commit_status_or_error(
+	repo: str,
+	sha: str,
+	state: str,
+	description: str,
+	target_url: str = "",
+) -> bool:
+	if _post_commit_status(repo, sha, state, description, target_url):
+		return True
+	print(
+		"::error::failed to post readiness commit status; required status context may be missing or stale",
+		file=sys.stderr,
+	)
+	return False
+
+
 def main() -> int:
 	parser = argparse.ArgumentParser(description=__doc__)
 	parser.add_argument("--head-ref", required=True)
@@ -142,11 +158,13 @@ def main() -> int:
 		# Not an orchestrator integration branch — no readiness check
 		# applies. Post a neutral success so the required-check context
 		# still exists on non-orchestrator PRs when branch protection
-		# marks this status required.
+		# marks this status required. If that POST fails, return non-zero
+		# so the workflow does not silently pass without the required
+		# status context.
 		desc = f"head ref {args.head_ref!r} is not an orchestrator/project-* branch — readiness check does not apply"
 		print(f"::notice::{desc}")
-		if not args.dry_run:
-			_post_commit_status(args.repo, args.head_sha, "success", desc)
+		if not args.dry_run and not _post_commit_status_or_error(args.repo, args.head_sha, "success", desc):
+			return 1
 		return 0
 
 	tracking_url = f"https://github.com/{args.repo}/issues/{tracking_num}"
@@ -159,8 +177,8 @@ def main() -> int:
 	if issue is None:
 		desc = f"could not fetch tracking issue #{tracking_num}; cannot assess readiness"
 		print(f"::warning::{desc}")
-		if not args.dry_run:
-			_post_commit_status(args.repo, args.head_sha, "error", desc, tracking_url)
+		if not args.dry_run and not _post_commit_status_or_error(args.repo, args.head_sha, "error", desc, tracking_url):
+			return 1
 		return 1
 
 	if TRACKING_LABEL not in issue["labels"]:
@@ -168,8 +186,8 @@ def main() -> int:
 		# not actually a tracking issue. Surface as neutral success.
 		desc = f"issue #{tracking_num} is not labeled {TRACKING_LABEL}; readiness check does not apply"
 		print(f"::notice::{desc}")
-		if not args.dry_run:
-			_post_commit_status(args.repo, args.head_sha, "success", desc, tracking_url)
+		if not args.dry_run and not _post_commit_status_or_error(args.repo, args.head_sha, "success", desc, tracking_url):
+			return 1
 		return 0
 
 	unchecked, total = _count_checkboxes(issue["body"])
@@ -180,8 +198,8 @@ def main() -> int:
 			f"merging despite {len(unchecked)}/{total} unchecked sub-issues on #{tracking_num}"
 		)
 		print(f"::notice::{desc}")
-		if not args.dry_run:
-			_post_commit_status(args.repo, args.head_sha, "success", desc, tracking_url)
+		if not args.dry_run and not _post_commit_status_or_error(args.repo, args.head_sha, "success", desc, tracking_url):
+			return 1
 		return 0
 
 	if total == 0:
@@ -190,15 +208,15 @@ def main() -> int:
 		# integration PR merge with zero completeness signal.
 		desc = f"tracking issue #{tracking_num} has no checkbox items in its body; readiness check cannot verify completeness"
 		print(f"::error::[integration-pr-readiness] {desc}", file=sys.stderr)
-		if not args.dry_run:
-			_post_commit_status(args.repo, args.head_sha, "failure", desc, tracking_url)
+		if not args.dry_run and not _post_commit_status_or_error(args.repo, args.head_sha, "failure", desc, tracking_url):
+			return 1
 		return 0
 
 	if not unchecked:
 		desc = f"all {total} sub-issue(s) on #{tracking_num} are ticked — integration PR is ready"
 		print(f"[ready] {desc}")
-		if not args.dry_run:
-			_post_commit_status(args.repo, args.head_sha, "success", desc, tracking_url)
+		if not args.dry_run and not _post_commit_status_or_error(args.repo, args.head_sha, "success", desc, tracking_url):
+			return 1
 		return 0
 
 	# Not ready: emit failure status + structured log.
@@ -212,8 +230,8 @@ def main() -> int:
 		f"apply the {OVERRIDE_LABEL!r} label to this PR.",
 		file=sys.stderr,
 	)
-	if not args.dry_run:
-		_post_commit_status(args.repo, args.head_sha, "failure", desc, tracking_url)
+	if not args.dry_run and not _post_commit_status_or_error(args.repo, args.head_sha, "failure", desc, tracking_url):
+		return 1
 	return 0
 
 

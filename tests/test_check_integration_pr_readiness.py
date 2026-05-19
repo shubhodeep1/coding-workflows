@@ -158,6 +158,28 @@ def test_main_posts_noop_success_for_non_orchestrator_branch():
 		mod._fetch_issue = original_fetch
 
 
+def test_main_errors_when_non_orchestrator_status_post_fails():
+	mod = _import()
+	original_post = mod._post_commit_status
+	original_fetch = mod._fetch_issue
+	old_argv = sys.argv
+	try:
+		mod._post_commit_status = lambda repo, sha, state, description, target_url="": False
+		mod._fetch_issue = lambda repo, n: (_ for _ in ()).throw(AssertionError("_fetch_issue should not run for non-orchestrator branches"))
+		sys.argv = [
+			"check_integration_pr_readiness.py",
+			"--head-ref", "claude/fix-something",
+			"--head-sha", "deadbeef",
+			"--repo", "owner/repo",
+		]
+		rc = mod.main()
+		assert rc == 1
+	finally:
+		sys.argv = old_argv
+		mod._post_commit_status = original_post
+		mod._fetch_issue = original_fetch
+
+
 def test_main_fails_closed_when_tracking_issue_has_no_checkboxes():
 	mod = _import()
 	posted: list[tuple[str, str]] = []
@@ -179,6 +201,31 @@ def test_main_fails_closed_when_tracking_issue_has_no_checkboxes():
 			"failure",
 			"tracking issue #2734 has no checkbox items in its body; readiness check cannot verify completeness",
 		)]
+	finally:
+		sys.argv = old_argv
+		mod._post_commit_status = original_post
+		mod._fetch_issue = original_fetch
+
+
+def test_main_errors_when_failure_status_cannot_be_posted():
+	mod = _import()
+	original_post = mod._post_commit_status
+	original_fetch = mod._fetch_issue
+	old_argv = sys.argv
+	try:
+		mod._post_commit_status = lambda repo, sha, state, description, target_url="": False
+		mod._fetch_issue = lambda repo, n: {
+			"labels": [mod.TRACKING_LABEL],
+			"body": "- [ ] outstanding work\n",
+		}
+		sys.argv = [
+			"check_integration_pr_readiness.py",
+			"--head-ref", "orchestrator/project-2734",
+			"--head-sha", "deadbeef",
+			"--repo", "owner/repo",
+		]
+		rc = mod.main()
+		assert rc == 1
 	finally:
 		sys.argv = old_argv
 		mod._post_commit_status = original_post
