@@ -29,16 +29,12 @@ from __future__ import annotations
 import io
 import json
 import os
-import shutil
 import subprocess
+import sys
 import tempfile
 import textwrap
 from contextlib import redirect_stdout
 from pathlib import Path
-
-import pytest
-
-import sys
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))

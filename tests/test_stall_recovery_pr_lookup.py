@@ -806,6 +806,17 @@ def _run_create_pr_recovery(
 
 	runtime_dir = tmp / "runtime"
 	runtime_dir.mkdir(parents=True, exist_ok=True)
+	issue_url = f"https://github.com/owner/repo/issues/{issue_number}"
+	pr_body_dir = runtime_dir / "pr-body-lint"
+	pr_body_dir.mkdir(parents=True, exist_ok=True)
+	(pr_body_dir / "title.txt").write_text(
+		f"AI implementation for issue #{issue_number}\n",
+		encoding="utf-8",
+	)
+	(pr_body_dir / "body.txt").write_text(
+		f"Automated implementation. Closes {issue_url}\n",
+		encoding="utf-8",
+	)
 	github_output = tmp / "github_output"
 	github_output.write_text("", encoding="utf-8")
 
@@ -813,7 +824,7 @@ def _run_create_pr_recovery(
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
 	env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
 	env["ISSUE_NUMBER"] = issue_number
-	env["ISSUE_URL"] = f"https://github.com/owner/repo/issues/{issue_number}"
+	env["ISSUE_URL"] = issue_url
 	env["TARGET_BRANCH"] = f"ai/issue-{issue_number}"
 	env["PR_BASE_BRANCH"] = "main"
 	env["IS_SMOKE_TEST"] = "false"
@@ -831,6 +842,10 @@ def _run_create_pr_recovery(
 		capture_output=True,
 		text=True,
 		timeout=30,
+	)
+	assert "PR creation failed." in proc.stdout, (
+		"create-PR recovery helper did not reach the gh pr create recovery path; "
+		f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
 	)
 	gh_out = github_output.read_text(encoding="utf-8")
 	return proc, gh_out
