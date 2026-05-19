@@ -2009,7 +2009,7 @@ jobs:
           # the snapshot for one iteration but keeps the pipeline live.
           _writer_ok=true
           PYTHONDONTWRITEBYTECODE=1 python3 - "${_raw_file}" "${PR_CHECK_RUNS_CONTEXT_FILE}" "${HEAD_SHA}" "${_final_status}" <<'PYCR' || _writer_ok=false
-          import json, os, re, sys, urllib.error, urllib.request
+          import http.client, json, os, re, sys, urllib.error, urllib.request
           raw_path, out_path, head_sha, final_status = sys.argv[1:5]
           runs = []
           try:
@@ -2117,8 +2117,12 @@ jobs:
                       method="GET",
                   )
                   with urllib.request.urlopen(tail_req, timeout=30) as resp:
-                      out = resp.read()
-              except (OSError, ValueError, urllib.error.HTTPError):
+                      status = resp.getcode()
+                      if status == 206 or (status == 200 and content_length <= _log_tail_bytes):
+                          out = resp.read()
+                      else:
+                          return ""
+              except (OSError, ValueError, urllib.error.HTTPError, http.client.HTTPException):
                   return ""
               if len(out) > _log_tail_bytes:
                   out = out[-_log_tail_bytes:]
