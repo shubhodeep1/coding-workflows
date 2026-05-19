@@ -31,10 +31,15 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REVIEW_AUTOFIX = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 TEST_AND_MARK_STABLE = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
+REVIEW_APPLY_FIXES = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
 
 VALIDATOR_WARNING_LITERAL = "::warning::Editor summary contains failure/fallback markers"
 RETRY_NOTICE_LITERAL = "::notice::Editor summary present but matched fallback-marker regex"
 NOOP_SUSPICIOUS_GUARD = "env.EDITOR_NOOP_SUSPICIOUS != 'true'"
+
+REFUSAL_SENTINEL_TEXT = "model refused (safety filter)"
+REFUSAL_VALIDATOR_NOTICE = "::notice::Editor returned a safety-policy refusal"
+REFUSAL_POLLER_WARNING = "::warning::Review workflow editor refused (safety filter)"
 
 NOOP_GUARDED_STEPS = (
 	"Detect merge conflicts",
@@ -161,10 +166,175 @@ def test_e2e_poller_uses_tempfile_not_variable_capture() -> None:
 	)
 
 
+def _review_apply_fixes_text() -> str:
+	return REVIEW_APPLY_FIXES.read_text(encoding="utf-8")
+
+
+def test_validator_sets_editor_noop_refusal_alongside_suspicious() -> None:
+	"""The validator must set `EDITOR_NOOP_REFUSAL` additively alongside
+	`EDITOR_NOOP_SUSPICIOUS` (CLAUDE.md §6 — never rename, add alongside).
+	Both env vars must be exported via GITHUB_ENV so downstream steps can
+	gate on either signal independently."""
+	block = _step_block(_review_autofix_text(), "Validate editor no-op disposition")
+	assert 'EDITOR_NOOP_REFUSAL="false"' in block, (
+		"Validator must initialize EDITOR_NOOP_REFUSAL=false at the top of "
+		"the block, mirroring EDITOR_NOOP_SUSPICIOUS's initial assignment."
+	)
+	assert 'echo "EDITOR_NOOP_REFUSAL=${EDITOR_NOOP_REFUSAL}" >> "$GITHUB_ENV"' in block, (
+		"Validator must export EDITOR_NOOP_REFUSAL via GITHUB_ENV alongside "
+		"EDITOR_NOOP_SUSPICIOUS so downstream steps can read it."
+	)
+	assert 'echo "EDITOR_NOOP_SUSPICIOUS=${EDITOR_NOOP_SUSPICIOUS}" >> "$GITHUB_ENV"' in block, (
+		"Existing EDITOR_NOOP_SUSPICIOUS export must remain — additive change."
+	)
+
+
+def test_validator_greps_for_refusal_sentinel() -> None:
+	"""The validator's refusal-specific check must grep for the exact
+	`model refused (safety filter)` sentinel that `review_apply_fixes.sh`
+	writes into the fallback summary's `Runtime failure path:` line.
+	Without the verbatim match the refusal alert is silently dropped."""
+	block = _step_block(_review_autofix_text(), "Validate editor no-op disposition")
+	assert "grep -qiE 'model refused \\(safety filter\\)'" in block, (
+		"Validator is missing the refusal-sentinel grep "
+		"(`grep -qiE 'model refused \\(safety filter\\)'`). The sentinel "
+		"text must match what `review_apply_fixes.sh` writes verbatim."
+	)
+	assert REFUSAL_VALIDATOR_NOTICE in block, (
+		f"Validator must emit the {REFUSAL_VALIDATOR_NOTICE!r} annotation "
+		f"when it detects a refusal — the e2e poller in test-and-mark-"
+		f"stable.yml greps for this exact text to pick the refusal-aware "
+		f"warning branch."
+	)
+
+
+def test_validator_refusal_notice_does_not_collide_with_warning_literal() -> None:
+	"""The new refusal `::notice::` must not contain the validator's
+	`::warning::Editor summary contains failure/fallback markers` literal
+	(otherwise the poller's early-exit grep would fire on the notice line
+	instead of the warning line, with the wrong branch consequence)."""
+	block = _step_block(_review_autofix_text(), "Validate editor no-op disposition")
+	for line in block.splitlines():
+		if REFUSAL_VALIDATOR_NOTICE in line:
+			assert VALIDATOR_WARNING_LITERAL not in line, (
+				f"Refusal notice line collides with validator warning "
+				f"literal: {line.strip()!r}. The poller relies on "
+				f"unambiguous prefix matching."
+			)
+
+
+def test_e2e_poller_has_refusal_aware_branch() -> None:
+	"""When the validator's refusal `::notice::` is present in the live
+	log, the poller must emit a refusal-specific `::warning::` so the
+	Telegram alert can distinguish 'model refused — re-run' from generic
+	'no-op suspicious'. The generic-noop warning literal stays unchanged
+	for the non-refusal branch (CLAUDE.md §6)."""
+	text = _test_and_mark_stable_text()
+	# Refusal-aware grep on the validator's notice.
+	expected_refusal_grep = f"grep -qaF '{REFUSAL_VALIDATOR_NOTICE}'"
+	assert expected_refusal_grep in text, (
+		f"e2e poller is missing the refusal-aware grep "
+		f"{expected_refusal_grep!r}. Without it the refusal-specific "
+		f"warning branch can never fire and the Telegram alert stays "
+		f"generic."
+	)
+	# Refusal-specific warning literal.
+	assert REFUSAL_POLLER_WARNING in text, (
+		f"e2e poller must emit a warning that begins with "
+		f"{REFUSAL_POLLER_WARNING!r} when the refusal notice is detected."
+	)
+	# Generic-noop warning literal preserved.
+	generic_warning = (
+		"::warning::Review workflow editor produced no validated summary "
+		"(EDITOR_NOOP_SUSPICIOUS marker observed); no autofix commit will be pushed"
+	)
+	assert generic_warning in text, (
+		"Generic-noop warning literal must be preserved for non-refusal "
+		"cases (CLAUDE.md §6 — additive)."
+	)
+
+
+def test_review_apply_fixes_has_per_attempt_cache_busting_nonce() -> None:
+	"""Each editor attempt must feed codex a byte-distinct prompt so
+	provider-side prompt-hash caching cannot serve a previous attempt's
+	response (refusal or otherwise) instantly to retries. PR #3053 /
+	run 26081926521 burned 4 attempts at 0 tokens each on a cached
+	refusal; the nonce closes that loop."""
+	text = _review_apply_fixes_text()
+	assert "attempt_prompt_file=\"${EDITOR_PROMPT_FILE}.attempt_${attempt}\"" in text, (
+		"Per-attempt prompt file (`${EDITOR_PROMPT_FILE}.attempt_${attempt}`) "
+		"is missing — without it every retry sends the same prompt bytes "
+		"and a cached refusal is served instantly to all attempts."
+	)
+	assert "retry_attempt=%d epoch=%s nonce=%s" in text, (
+		"Cache-busting nonce trailer (`retry_attempt=… epoch=… nonce=…`) "
+		"is missing from the per-attempt prompt build. The trailer is the "
+		"actual cache-buster; without it the per-attempt copy is byte-"
+		"identical and the cache still hits."
+	)
+	# codex must read the attempt-specific file, not the base prompt.
+	assert 'codex --ask-for-approval never' in text
+	assert '< "${attempt_prompt_file}"' in text, (
+		"codex stdin must be fed from the per-attempt prompt file, not "
+		"from the unchanging `${EDITOR_PROMPT_FILE}`."
+	)
+
+
+def test_review_apply_fixes_breaks_retry_loop_on_safety_refusal() -> None:
+	"""When the editor returns an OpenAI-style safety refusal, the
+	retry loop must touch the refusal flag and `break` rather than
+	consume the remaining attempts. Even with cache-busting, very sticky
+	provider-side filter trips can repeat the refusal — and the
+	fallback writer needs the flag to label the failure correctly."""
+	text = _review_apply_fixes_text()
+	assert "I'?m sorry,? but I (can ?not|can.?t) assist" in text, (
+		"Refusal-detection regex is missing the OpenAI-style "
+		"`I'm sorry, but I cannot assist` pattern."
+	)
+	assert 'touch "${PREVIOUS_REVIEWS_DIR}/editor_refused.flag"' in text, (
+		"Refusal short-circuit must touch the `editor_refused.flag` file "
+		"so the fallback summary writer can emit the refusal-specific "
+		"Runtime failure path line."
+	)
+
+
+def test_review_apply_fixes_fallback_distinguishes_refusal() -> None:
+	"""The fallback summary writer must emit a distinct
+	`Runtime failure path: - model refused (safety filter)` line when
+	the refusal flag is present, while preserving the other markers
+	(`editor failed before producing`, `unavailable (editor fallback)`)
+	verbatim — lockstep with the validator's Check 1 and the in-step
+	retry's `_instep_retry_summary_unusable` flag MUST be maintained."""
+	text = _review_apply_fixes_text()
+	assert '_runtime_failure_path_line="- model refused (safety filter)"' in text, (
+		"Fallback writer must set the refusal-specific Runtime failure "
+		"path line when `editor_refused.flag` exists."
+	)
+	assert '_runtime_failure_path_line="- unavailable (editor fallback)"' in text, (
+		"Non-refusal fallback path must keep the original "
+		"`unavailable (editor fallback)` Runtime failure path text — "
+		"removal would break lockstep with the validator and in-step retry."
+	)
+	# The lockstep markers must remain in the heredoc body verbatim.
+	assert "- none (editor failed before producing a validated summary)" in text, (
+		"Lockstep marker `editor failed before producing a validated "
+		"summary` removed from fallback — would break the validator's "
+		"Check 1 grep and the in-step retry's `_instep_retry_summary_unusable` "
+		"detection (see probably_unnecessary_but_read_if_stuck.md §20.10)."
+	)
+
+
 if __name__ == "__main__":
 	test_merge_conflict_chain_gates_on_editor_noop_suspicious()
 	test_validator_emits_exact_grep_literal()
 	test_retry_notice_does_not_collide_with_validator_literal()
 	test_e2e_poller_grep_includes_warning_prefix()
 	test_e2e_poller_uses_tempfile_not_variable_capture()
+	test_validator_sets_editor_noop_refusal_alongside_suspicious()
+	test_validator_greps_for_refusal_sentinel()
+	test_validator_refusal_notice_does_not_collide_with_warning_literal()
+	test_e2e_poller_has_refusal_aware_branch()
+	test_review_apply_fixes_has_per_attempt_cache_busting_nonce()
+	test_review_apply_fixes_breaks_retry_loop_on_safety_refusal()
+	test_review_apply_fixes_fallback_distinguishes_refusal()
 	print("All EDITOR_NOOP_SUSPICIOUS cascade-guard contract tests passed.")
