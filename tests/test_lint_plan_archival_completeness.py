@@ -211,6 +211,30 @@ def test_archival_with_placeholder_descope_text_still_fails():
 	assert "non-empty explicit `## De-scoped phases` section" in violations[0]
 
 
+def test_descope_section_allows_subheadings_before_list_items():
+	# Sub-headings inside the de-scope section are valid structure and
+	# must not hide later list items.
+	mod = _import_lint()
+	def fetch(repo: str, n: int) -> dict | None:
+		if n == 2734:
+			return {"labels": ["ai:orchestrator-tracking"], "body": _PROJECT_2734_BODY}
+		return None
+	violations, errors = mod.lint(
+		pr_body=(
+			"Refs #2734\n\n"
+			"## De-scoped phases\n\n"
+			"### Phase 2\n"
+			"- Retry-state escalation: deferred to follow-up tracking issue.\n"
+		),
+		added_files=["docs/completed/integration-sync-resolver-self-heal-plan.md"],
+		repo="owner/repo",
+		fail_open_on_lookup_error=False,
+		issue_fetcher=fetch,
+	)
+	assert errors == []
+	assert violations == []
+
+
 def test_archival_with_blank_unchecked_checkbox_still_fails():
 	# Blank checkbox items count as unchecked in the readiness gate; the
 	# archival lint must classify them the same way.

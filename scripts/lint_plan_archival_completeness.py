@@ -74,8 +74,8 @@ CHECKBOX_RE = re.compile(r"^\s*-\s*\[(?P<state>[ xX])\]\s*(?P<text>.*)$")
 # body. The matched text must include a markdown heading (## or ###) and
 # the literal phrase "De-scoped phases" — the comparison is case-
 # insensitive so a contributor doesn't have to memorise capitalisation.
-DESCOPE_HEADING_RE = re.compile(r"^\s{0,3}#{2,6}\s+de[- ]scoped\s+phases\b", re.IGNORECASE | re.MULTILINE)
-SECTION_HEADING_RE = re.compile(r"^\s{0,3}#{2,6}\s+\S")
+DESCOPE_HEADING_RE = re.compile(r"^\s{0,3}(?P<hashes>#{2,6})\s+de[- ]scoped\s+phases\b", re.IGNORECASE | re.MULTILINE)
+SECTION_HEADING_RE = re.compile(r"^\s{0,3}(?P<hashes>#{1,6})\s+\S")
 LIST_ITEM_RE = re.compile(r"^\s{0,3}(?:[-*+]\s+\S|\d+\.\s+\S)")
 
 # Files under this directory trigger the check.
@@ -135,12 +135,15 @@ def _enumerate_unchecked_boxes(issue_body: str) -> list[str]:
 
 def _has_descope_section_content(pr_body: str) -> bool:
 	"""Return True when the de-scope heading exists and is followed by at
-	least one non-empty list item before the next markdown heading."""
+	least one non-empty list item before the next same-or-higher-level
+	markdown heading."""
 	match = DESCOPE_HEADING_RE.search(pr_body)
 	if match is None:
 		return False
+	descope_level = len(match.group("hashes"))
 	for line in pr_body[match.end():].splitlines():
-		if SECTION_HEADING_RE.match(line):
+		heading_match = SECTION_HEADING_RE.match(line)
+		if heading_match and len(heading_match.group("hashes")) <= descope_level:
 			break
 		if LIST_ITEM_RE.match(line):
 			return True
