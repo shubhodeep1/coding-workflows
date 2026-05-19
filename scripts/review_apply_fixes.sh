@@ -1560,6 +1560,7 @@ while [ "${attempt}" -le 3 ]; do
           echo "::endgroup::"
           mv "${tmp_output}" "${EDITOR_SUMMARY_FILE}"
           rm -f "${tmp_err}"
+          rm -f "${attempt_prompt_file}"
           echo "Editor succeeded on attempt ${attempt}."
           # Diagnostic: capture working tree state at the very last moment
           # before this script exits.  Combined with checkpoints at the

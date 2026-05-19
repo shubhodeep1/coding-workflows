@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Contract tests for the EDITOR_NOOP_SUSPICIOUS cascade guard wired across
-`review_autofix.yml` and the e2e poller in `test-and-mark-stable.yml`.
+"""Contract tests for the editor-noop / refusal cascade guards wired across
+`review_autofix.yml`, `review_apply_fixes.sh`, and the e2e poller in
+`test-and-mark-stable.yml`.
 
-The guard is documented in `agents.md` §20.10. Three invariants must hold
-together — if any one regresses, the run-25126757724 cascade can re-emerge
-or the cross-workflow grep contract can silently break:
+The baseline no-op guard is documented in `agents.md` §20.10, and the
+refusal/cache-busting extension is documented in
+`probably_unnecessary_but_read_if_stuck.md` §20.10.1. Three baseline
+invariants must hold together — if any one regresses, the run-25126757724
+cascade can re-emerge or the cross-workflow grep contract can silently
+break:
 
 1. Three steps in `review_autofix.yml` must skip when the editor never
    produced a validated commit (`env.EDITOR_NOOP_SUSPICIOUS != 'true'`):
@@ -21,6 +25,9 @@ or the cross-workflow grep contract can silently break:
    `::warning::` prefix on its grep literal and (b) read the live log
    from a tempfile rather than from a `LOG_CONTENT=$(...)` shell capture
    (so NUL bytes in the log can't silently truncate the match).
+
+Additional tests below cover the refusal-specific signal, cache-busting
+prompt copies, and success-path cleanup of the per-attempt prompt file.
 """
 
 from __future__ import annotations
@@ -280,6 +287,22 @@ def test_review_apply_fixes_has_per_attempt_cache_busting_nonce() -> None:
 	)
 
 
+def test_review_apply_fixes_cleans_attempt_prompt_file_on_success() -> None:
+	"""A validated editor success exits directly from inside the retry
+	loop, so the per-attempt prompt copy must be removed before that
+	early exit rather than relying on the common cleanup tail."""
+	text = _review_apply_fixes_text()
+	success_start = text.find('mv "${tmp_output}" "${EDITOR_SUMMARY_FILE}"')
+	assert success_start != -1, "Success-path summary move not found in review_apply_fixes.sh"
+	success_end = text.find('echo "Editor succeeded on attempt ${attempt}."', success_start)
+	assert success_end != -1, "Success-path exit log not found in review_apply_fixes.sh"
+	success_block = text[success_start:success_end]
+	assert 'rm -f "${attempt_prompt_file}"' in success_block, (
+		"Success path must remove `${attempt_prompt_file}` before exiting; "
+		"the loop's common cleanup tail is skipped on validated success."
+	)
+
+
 def test_review_apply_fixes_breaks_retry_loop_on_safety_refusal() -> None:
 	"""When the editor returns an OpenAI-style safety refusal, the
 	retry loop must touch the refusal flag and `break` rather than
@@ -335,6 +358,7 @@ if __name__ == "__main__":
 	test_validator_refusal_notice_does_not_collide_with_warning_literal()
 	test_e2e_poller_has_refusal_aware_branch()
 	test_review_apply_fixes_has_per_attempt_cache_busting_nonce()
+	test_review_apply_fixes_cleans_attempt_prompt_file_on_success()
 	test_review_apply_fixes_breaks_retry_loop_on_safety_refusal()
 	test_review_apply_fixes_fallback_distinguishes_refusal()
 	print("All EDITOR_NOOP_SUSPICIOUS cascade-guard contract tests passed.")
