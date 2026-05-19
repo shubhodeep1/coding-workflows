@@ -528,6 +528,7 @@ def _run_poller(
 	codex_touch_file: str | None = None,
 	mock_orch_state_v2_pack_mode: str | None = None,
 	mock_git_push_success: bool = False,
+	mock_git_checkout_fail: bool = False,
 	enable_stall_judge: str = "true",
 	stall_judge_trigger_count: str = "2",
 	enable_stall_human_terminalization: str = "false",
@@ -1653,6 +1654,9 @@ if len(args) >= 2 and args[0] == 'push' and os.environ.get('MOCK_GIT_PUSH_SUCCES
 	store_path.write_text(json.dumps(store), encoding='utf-8')
 	sys.exit(0)
 
+if args and args[0] == 'checkout' and os.environ.get('MOCK_GIT_CHECKOUT_FAIL', '') == 'true':
+	sys.exit(1)
+
 if args and args[0] == 'fetch':
 	refspec = None
 	if len(args) == 4 and args[1] == '--no-tags' and args[2] == 'origin':
@@ -1888,6 +1892,7 @@ sys.exit(proc.returncode)
 				"REAL_PYTHON_BIN": real_python,
 				"MOCK_CODEX_JSON": json.dumps(codex_json),
 				"MOCK_GIT_PUSH_SUCCESS": "true" if mock_git_push_success else "false",
+				"MOCK_GIT_CHECKOUT_FAIL": "true" if mock_git_checkout_fail else "false",
 				"PATH": f"{bin_dir}:{env.get('PATH', '')}",
 			}
 		)
@@ -5967,6 +5972,46 @@ def test_retrigger_review_skips_empty_commit_when_pr_head_advanced_after_snapsho
 	)
 	assert result.get("git_push_calls", []) == [], (
 		f"expected no empty-commit push when the PR head advanced; "
+		f"got push calls {result.get('git_push_calls', [])}"
+	)
+
+
+def test_retrigger_review_does_not_increment_when_empty_commit_checkout_fails():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	head_ref = "claude/retrigger-review-checkout-fails"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 85},
+		prs=[
+			{
+				"number": 85,
+				"state": "open",
+				"mergeable": True,
+				"mergeable_state": "clean",
+				"headRefName": head_ref,
+				"headRefFromApi": head_ref,
+				"headSha": "sha85",
+				"baseRefName": "main",
+			},
+		],
+		mock_git_push_success=True,
+		mock_git_checkout_fail=True,
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 0, (
+		f"expected checkout failure to leave stall_recovery_count at 0; "
+		f"got {issue_entry['stall_recovery_count']}"
+	)
+	assert result.get("git_push_calls", []) == [], (
+		f"expected checkout failure to skip the empty-commit push; "
 		f"got push calls {result.get('git_push_calls', [])}"
 	)
 

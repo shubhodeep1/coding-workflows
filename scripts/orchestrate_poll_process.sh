@@ -5747,10 +5747,11 @@ STALL_EOF
           # autofix pass.  Other jq/cache errors still fail open, and
           # if date +%s is unavailable we skip the guard entirely:
           # empty result falls through to the legacy empty-commit path.
-          local _rtr_inflight_blob _rtr_inflight_id _rtr_now_epoch _rtr_stall_secs _rtr_origin_head_sha
+          local _rtr_inflight_blob _rtr_inflight_id _rtr_now_epoch _rtr_stall_secs _rtr_origin_head_sha _rtr_push_succeeded
           _rtr_inflight_blob="$(_load_actions_runs_cached 2>/dev/null || echo '{"workflow_runs":[]}')"
           _rtr_now_epoch="$(date +%s 2>/dev/null || echo "")"
           _rtr_stall_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))
+          _rtr_push_succeeded="false"
           if [[ "${_rtr_now_epoch}" =~ ^[0-9]+$ ]]; then
             _rtr_inflight_id="$(printf '%s' "${_rtr_inflight_blob}" | jq -r \
               --arg br "${head_ref}" \
@@ -5801,9 +5802,14 @@ STALL_EOF
               git commit --allow-empty -m "[orchestrator] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
               if git push origin "HEAD:${head_ref}" 2>/dev/null; then
                 tg_notify "Stall recovery: re-triggered review for PR #${pr_num} (issue #${issue_num}, stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"PR: $(_gh_url "pull/${pr_num}")"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
+                _rtr_push_succeeded="true"
               fi
               git checkout --detach HEAD 2>/dev/null || true
             fi
+          fi
+          if [ "${_rtr_push_succeeded}" != "true" ]; then
+            echo "  Issue #${issue_num} PR #${pr_num} empty-commit retrigger did not reach a successful push; skipping recovery increment."
+            return 1
           fi
         fi
       else
