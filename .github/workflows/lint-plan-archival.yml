@@ -1,0 +1,72 @@
+---
+# P6 from docs/postmortems/2026-05-18-project-2734-stall.md.
+#
+# Project #2734's integration PR moved the plan to `docs/completed/` and
+# labelled the tracking issue `ai:merged` while 7 of 9 sub-issue checkboxes
+# in the tracking issue body remained unchecked. The plan file's presence
+# in `docs/completed/` then became a load-bearing-but-misleading signal:
+# "this plan is done" when in fact most of it was unshipped.
+#
+# This workflow enforces that PRs adding files under `docs/completed/`
+# either:
+#   - reference a tracking issue whose checkboxes are ALL ticked, OR
+#   - include an explicit `## De-scoped phases` section in the PR body
+#     listing every unshipped item with rationale.
+name: Lint plan-archival completeness
+
+"on":
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+    branches: [main, stable]
+    paths:
+      - 'docs/completed/**'
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          # Need the merge-base diff to enumerate added files. Default
+          # checkout depth on pull_request is the merge commit; bump to
+          # full history so `git diff --diff-filter=A` against the base
+          # branch enumerates every added file in the PR.
+          fetch-depth: 0
+
+      - name: Write PR body to file
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/plan-archival-lint
+          printf '%s' "${PR_BODY:-}" > /tmp/plan-archival-lint/body.txt
+
+      - name: Enumerate added files in PR
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # --diff-filter=A keeps only added files; --name-only emits one
+          # path per line. Skip empty output (PR with no added files) by
+          # touching the output file first.
+          : > /tmp/plan-archival-lint/added.txt
+          git diff --diff-filter=A --name-only "${BASE_SHA}" "${HEAD_SHA}" \
+            > /tmp/plan-archival-lint/added.txt
+
+      - name: Run plan-archival completeness lint
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/lint_plan_archival_completeness.py \
+            --pr-body-file /tmp/plan-archival-lint/body.txt \
+            --added-files-file /tmp/plan-archival-lint/added.txt \
+            --repo "${GITHUB_REPOSITORY}"
