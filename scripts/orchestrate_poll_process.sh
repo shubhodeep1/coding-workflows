@@ -8483,11 +8483,16 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   # per poll tick when a final PR is pinned; skipped entirely when
   # `final_merge_pr` is unset (most projects pre-finalize),
   # `final_merge_status` is already terminal, or the project is already
-  # on the dedicated `merge_conflict` finalize path.
+  # on the dedicated `merge_conflict` / validation-completion paths.
+  # Validated projects must keep flowing through
+  # `mark_validation_complete` so `validation_completed_cycle` and the
+  # `ai:validated` label stay aligned with the final merge result.
   if [ "${PROJECT_STATUS}" != "complete" ] \
     && [ "${PROJECT_STATUS}" != "failed" ] \
     && [ "${PROJECT_STATUS}" != "validation-failed" ] \
-    && [ "${PROJECT_STATUS}" != "merge_conflict" ]; then
+    && [ "${PROJECT_STATUS}" != "merge_conflict" ] \
+    && [ "${PROJECT_STATUS}" != "validating" ] \
+    && [ "${PROJECT_STATUS}" != "validation-fixing" ]; then
     _orch_extfin_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
     _orch_extfin_status="$(jq -r '.final_merge_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo "pending")"
     if [ -n "${_orch_extfin_pr}" ] && [ "${_orch_extfin_pr}" != "null" ] \
