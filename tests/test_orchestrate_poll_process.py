@@ -5857,6 +5857,15 @@ def test_retrigger_review_ignores_inflight_run_on_unrelated_branch():
 				"head_branch": "claude/some-other-branch",
 				"run_started_at": "2999-01-01T00:00:00Z",
 			},
+			{
+				"id": 99999998,
+				"name": "Review Autofix",
+				"path": ".github/workflows/review_autofix.yml",
+				"status": "queued",
+				"head_branch": "",
+				"head_sha": "b" * 40,
+				"created_at": "2999-01-01T00:00:00Z",
+			},
 		],
 		mock_git_push_success=True,
 	)
