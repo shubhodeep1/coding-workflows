@@ -1192,6 +1192,9 @@ _hb_tmpdir=""
 _hb_fifo=""
 trap '[ -n "${_hb_tmpdir:-}" ] && rm -rf "${_hb_tmpdir}" 2>/dev/null || true' EXIT
 
+_REFUSAL_REGEX="I'?m sorry,? but I (can ?not|can.?t) assist|I (can ?not|can.?t) help with that"
+rm -f "${PREVIOUS_REVIEWS_DIR}/editor_refused.flag" 2>/dev/null || true
+
 attempt=1
 while [ "${attempt}" -le 3 ]; do
   # Early exit if PR was closed/merged (detected by reviewer or editor watchdog)
@@ -1301,10 +1304,30 @@ while [ "${attempt}" -le 3 ]; do
     done < "${_hb_fifo}" > "${tmp_err}"
   ) &
   _hb_reader_pid=$!
+  # ── Per-attempt cache-busting nonce ──
+  # Provider-side prompt-hash caching (OpenRouter / OpenAI) can serve
+  # identical responses — including intermittent safety-policy refusals
+  # — on every retry of a byte-identical prompt. Run 26081926521 (PR
+  # tele-funtoken-msg-scoring#3053) burned the then-configured retry
+  # attempts 2–4 at 0 tokens each receiving a cached "I'm sorry,
+  # but I cannot assist" refusal
+  # after attempt 1 tripped the filter. Appending a per-attempt nonce
+  # trailer changes the prompt hash on every retry so each one hits
+  # fresh inference; the trailer is metadata the model is asked to
+  # ignore.
+  attempt_prompt_file="${EDITOR_PROMPT_FILE}.attempt_${attempt}"
+  cp "${EDITOR_PROMPT_FILE}" "${attempt_prompt_file}"
+  {
+    printf '\n[ignore — retry-attempt diagnostic only, not part of the task]\n'
+    printf 'retry_attempt=%d epoch=%s nonce=%s\n' \
+      "${attempt}" \
+      "$(date +%s)" \
+      "$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+  } >> "${attempt_prompt_file}"
   # Run codex: stdout → tmp_output, stderr → FIFO (heartbeat reader).
   (
     trap '' PIPE
-    exec codex --ask-for-approval never -c model_verbosity="${EDITOR_VERBOSITY}" -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${EDITOR_PROMPT_FILE}" 2>"${_hb_fifo}"
+    exec codex --ask-for-approval never -c model_verbosity="${EDITOR_VERBOSITY}" -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${attempt_prompt_file}" 2>"${_hb_fifo}"
   ) > "${tmp_output}" &
   codex_bg_pid=$!
   echo "${codex_bg_pid}" > "${codex_pid_file}"
@@ -1321,7 +1344,7 @@ while [ "${attempt}" -le 3 ]; do
 
   if [ "${cmd_rc}" -eq 0 ]; then
     cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
-    if [ -s "${tmp_output}" ] && grep -q '^Changes made:' "${tmp_output}"                 && grep -q '^Change status:' "${tmp_output}"                 && grep -q '^Already satisfied (suggested but already present):' "${tmp_output}"                 && grep -q '^Ignored suggestions (with short reason):' "${tmp_output}"                 && grep -q '^Reviewer files processed:' "${tmp_output}"                 && grep -q '^Review file issue audit:' "${tmp_output}"                 && ! grep -qiE "I can.?t execute this|need to read|allow read/write shell commands|cannot proceed under the current constraints" "${tmp_output}"; then
+    if [ -s "${tmp_output}" ] && grep -q '^Changes made:' "${tmp_output}"                 && grep -q '^Change status:' "${tmp_output}"                 && grep -q '^Already satisfied (suggested but already present):' "${tmp_output}"                 && grep -q '^Ignored suggestions (with short reason):' "${tmp_output}"                 && grep -q '^Reviewer files processed:' "${tmp_output}"                 && grep -q '^Review file issue audit:' "${tmp_output}"                 && ! grep -qiE "I can.?t execute this|need to read|allow read/write shell commands|cannot proceed under the current constraints|${_REFUSAL_REGEX}" "${tmp_output}"; then
       reviewer_validation_ok=true
       changes_lost_detected=false
       while IFS= read -r manifest_path; do
@@ -1541,6 +1564,7 @@ while [ "${attempt}" -le 3 ]; do
           echo "::endgroup::"
           mv "${tmp_output}" "${EDITOR_SUMMARY_FILE}"
           rm -f "${tmp_err}"
+          rm -f "${attempt_prompt_file}"
           echo "Editor succeeded on attempt ${attempt}."
           # Diagnostic: capture working tree state at the very last moment
           # before this script exits.  Combined with checkpoints at the
@@ -1594,8 +1618,22 @@ while [ "${attempt}" -le 3 ]; do
   fi
   cp "${tmp_output}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.txt" || true
   cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
+  # ── Safety-policy refusal short-circuit ──
+  # An OpenAI-style refusal as the final-channel output (despite the
+  # cache-busting nonce above sometimes failing to defeat very sticky
+  # provider-side filter caches) makes further retries on this run
+  # almost certain to repeat the refusal. Touch a sentinel that the
+  # fallback writer (below) reads to label the failure as a refusal
+  # in the editor summary, then break out of the retry loop.
+  if grep -qiE "${_REFUSAL_REGEX}" "${tmp_output}" 2>/dev/null; then
+    echo "Editor model returned a safety-policy refusal on attempt ${attempt}; breaking out of retry loop (further attempts likely to repeat the refusal)."
+    touch "${PREVIOUS_REVIEWS_DIR}/editor_refused.flag"
+    rm -f "${tmp_output}" "${tmp_err}" "${attempt_prompt_file}"
+    break
+  fi
   rm -f "${tmp_output}"
   rm -f "${tmp_err}"
+  rm -f "${attempt_prompt_file}"
   attempt=$((attempt + 1))
   sleep 2
 done
@@ -1617,7 +1655,20 @@ if [ -n "${_last_changes_lost_file}" ] && [ -s "${_last_changes_lost_file}" ]; t
   cp "${_last_changes_lost_file}" "${EDITOR_SUMMARY_FILE}"
   echo "Editor failed after retries; using last changes-lost output as summary to trigger workflow-level recovery."
 else
-  cat > "${EDITOR_SUMMARY_FILE}" <<'__EDITOR_SUMMARY__'
+  # The other fallback markers ("editor failed before producing",
+  # "unavailable (editor fallback)") MUST remain verbatim to keep
+  # lockstep with the in-step retry and the validator in
+  # review_autofix.yml (see probably_unnecessary_but_read_if_stuck.md
+  # §20.10). Only the Runtime failure path line varies per cause, and
+  # the refusal variant is recognised by an additive validator check
+  # that sets EDITOR_NOOP_REFUSAL alongside EDITOR_NOOP_SUSPICIOUS.
+  if [ -f "${PREVIOUS_REVIEWS_DIR}/editor_refused.flag" ]; then
+    _runtime_failure_path_line="- model refused (safety filter)"
+  else
+    _runtime_failure_path_line="- unavailable (editor fallback)"
+  fi
+  {
+    cat <<'__EDITOR_SUMMARY__'
 Changes made:
 - none (editor failed before producing a validated summary)
 
@@ -1640,8 +1691,10 @@ Regression fingerprint:
 - unavailable (editor fallback)
 
 Runtime failure path:
-- unavailable (editor fallback)
 __EDITOR_SUMMARY__
+    printf '%s\n' "${_runtime_failure_path_line}"
+  } > "${EDITOR_SUMMARY_FILE}"
+  unset _runtime_failure_path_line
   echo "Editor failed after retries; continuing with fallback summary."
 fi
 final_editor_err="$(ls -1 "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.err 2>/dev/null | sort -V | tail -n 1 || true)"

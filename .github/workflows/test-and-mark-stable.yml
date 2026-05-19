@@ -1466,8 +1466,26 @@ jobs:
                     # workflow-command prefixes verbatim in the raw log
                     # bytes returned by /actions/jobs/{id}/logs.
                     if grep -qaF '::warning::Editor summary contains failure/fallback markers' "$LOG_FILE"; then
-                      echo "  ⚠ Editor noop marker detected in live log — editor never produced a validated commit; aborting wait early"
-                      echo "::warning::Review workflow editor produced no validated summary (EDITOR_NOOP_SUSPICIOUS marker observed); no autofix commit will be pushed"
+                      # When the editor's no-op was caused by a model
+                      # safety-policy refusal (an OpenAI-style "I'm
+                      # sorry, but I cannot assist" final-channel
+                      # output), the validator additionally emits the
+                      # `::notice::Editor returned a safety-policy
+                      # refusal` annotation (review_autofix.yml,
+                      # `Validate editor no-op disposition`). Re-running
+                      # after the provider-side prompt cache expires
+                      # typically clears the trip, so the operator-facing
+                      # warning carries that hint. The generic-noop
+                      # warning literal stays unchanged for non-refusal
+                      # cases to avoid breaking any downstream grep
+                      # consumer (CLAUDE.md §6).
+                      if grep -qaF '::notice::Editor returned a safety-policy refusal' "$LOG_FILE"; then
+                        echo "  ⚠ Editor safety-refusal detected in live log — model returned a refusal; provider-side cache will serve identical refusals briefly; aborting wait early"
+                        echo "::warning::Review workflow editor refused (safety filter) — re-run after a few minutes (EDITOR_NOOP_REFUSAL marker observed); no autofix commit will be pushed"
+                      else
+                        echo "  ⚠ Editor noop marker detected in live log — editor never produced a validated commit; aborting wait early"
+                        echo "::warning::Review workflow editor produced no validated summary (EDITOR_NOOP_SUSPICIOUS marker observed); no autofix commit will be pushed"
+                      fi
                       echo "status=completed_with_findings" >> "$GITHUB_OUTPUT"
                       echo "review_run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
                       rm -f "$LOG_FILE"
