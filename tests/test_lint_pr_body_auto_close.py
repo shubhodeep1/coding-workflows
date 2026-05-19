@@ -89,6 +89,32 @@ def test_regex_matches_canonical_cases():
 		assert iss == issue
 
 
+def test_regex_matches_github_url_issue_form():
+	# GitHub's auto-close logic fires equally on the URL form
+	# (https://github.com/owner/repo/issues/N) and the short-form (#N).
+	# The implement.yml flow uses URL form in its hardcoded PR body
+	# ("Automated implementation. Closes ${ISSUE_URL}"), and the lint
+	# must catch URL-form keyword references against tracking issues.
+	# See https://docs.github.com/articles/closing-issues-using-keywords.
+	mod = _import_lint_module()
+	cases = [
+		("Closes https://github.com/owner/repo/issues/2734", "Closes", 2734),
+		("Fixes https://github.com/owner/repo/issues/100", "Fixes", 100),
+		("Resolves: https://github.com/owner/repo/issues/9", "Resolves", 9),
+		# Lowercase + http (no s) — GitHub treats both the same.
+		("fixes http://github.com/owner/repo/issues/1", "fixes", 1),
+	]
+	for text, keyword, issue in cases:
+		matches = mod._scan_text("test", text)
+		assert len(matches) == 1, (
+			f"regex failed to match URL-form case {text!r}; got {matches!r}. "
+			f"GitHub auto-closes on this form too, so the lint must catch it."
+		)
+		_, _, kw, iss = matches[0]
+		assert kw.lower() == keyword.lower()
+		assert iss == issue
+
+
 def test_regex_does_not_match_substring_or_unrelated_words():
 	mod = _import_lint_module()
 	false_positives = [

@@ -3836,6 +3836,32 @@ jobs:
             exit 1
           }
 
+      - name: Pre-flight — lint PR body for auto-close keywords against tracking issues
+        # P4 from docs/postmortems/2026-05-18-project-2734-stall.md.
+        # The body composed below uses `Closes ${ISSUE_URL}` — correct
+        # when ISSUE_NUMBER points to a sub-issue (the convention), but
+        # if a future change or misconfiguration ever points it at an
+        # ai:orchestrator-tracking issue, the resulting auto-close would
+        # kill the orchestrator's wave dispatch (the project-#2734
+        # failure mode). Catch the violation at composition time so the
+        # PR is never created.  See unattended_system_instructions.md
+        # §21 and CLAUDE.md §19.
+        if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNTIME_DIR}/pr-body-lint"
+          PR_BODY_FILE="${RUNTIME_DIR}/pr-body-lint/body.txt"
+          # Build the exact body that the next step will pass to gh pr
+          # create. Keep these two strings in lockstep — drift means the
+          # lint is checking a different body than the one submitted.
+          printf 'Automated implementation. Closes %s\n' "${ISSUE_URL}" > "${PR_BODY_FILE}"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/lint_pr_body_auto_close.py \
+            --pr-body-file "${PR_BODY_FILE}" \
+            --repo "${GITHUB_REPOSITORY}"
+
       - name: Create Pull Request
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true'
         id: create_pr

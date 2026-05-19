@@ -627,13 +627,29 @@ Rules:
 - This rule is not superseded by §12 (PR Review Mode) or any proactive-
   fix scope. It applies to every AI-authored PR body in an interactive
   session.
+- The rule is enforced by **two** mechanisms, both anchored on
+  `scripts/lint_pr_body_auto_close.py`:
+  1. The `Lint PR body for auto-close keywords against orchestrator-tracking
+     issues` GitHub workflow (`.github/workflows/lint-pr-body-auto-close.yml`)
+     runs on every pull request and fails the check when a violation
+     is found.
+  2. The unattended pipelines' PR-body composition paths invoke the
+     same script as a pre-flight check before `gh pr create --body` —
+     see `unattended_system_instructions.md` §21 and the
+     `Pre-flight — lint PR body for auto-close keywords against
+     tracking issues` step in `.github/workflows/implement.yml`.
+  Both layers exist because §19 is a load-bearing invariant: a single
+  violation kills the orchestrator's state machine for the project it
+  targets.
 
 Historical incident: PR #2760 used `Fixes #2734` in its body. `#2734`
 was an `ai:orchestrator-tracking` issue for the integration-sync
 resolver self-heal project. On merge, GitHub auto-closed `#2734` and
 the orchestrator stopped dispatching waves 2-7; the bulk of the
 project's planned phases never shipped (see
-`docs/completed/integration-sync-resolver-self-heal-plan.md`).
+`docs/completed/integration-sync-resolver-self-heal-plan.md` and the
+full forensic timeline in
+`docs/postmortems/2026-05-18-project-2734-stall.md`).
 
 ---
 

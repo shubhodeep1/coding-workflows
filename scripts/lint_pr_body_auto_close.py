@@ -59,13 +59,21 @@ AUTO_CLOSE_KEYWORDS = (
 	"resolved",
 )
 
-# The pattern catches `keyword #N`, `keyword: #N`, and `keyword <space(s)> #N`
-# (with optional `owner/repo` qualifier before `#N`). The `(?<![\w-])` /
-# `(?![\w-])` boundaries prevent matches inside words (e.g. "prefix" should
-# not match "fix").
+# The pattern catches both `#N` form and full GitHub URL form, which
+# GitHub's auto-close logic treats equivalently. Three accepted shapes:
+#   1. `keyword #N`                                          (same-repo short form)
+#   2. `keyword owner/repo#N`                                (cross-repo short form)
+#   3. `keyword https://github.com/owner/repo/issues/N`      (URL form)
+# Boundaries `(?<![\w-])` / `(?![\w-])` prevent matches inside words
+# (e.g. "prefix" should not match "fix").
 _KEYWORD_ALT = "|".join(AUTO_CLOSE_KEYWORDS)
 AUTO_CLOSE_RE = re.compile(
-	rf"(?i)(?<![\w-])(?P<keyword>{_KEYWORD_ALT})\s*:?\s+(?:[\w.-]+/[\w.-]+)?#(?P<issue>\d+)(?![\w-])"
+	rf"(?i)(?<![\w-])(?P<keyword>{_KEYWORD_ALT})\s*:?\s+"
+	rf"(?:"
+	rf"(?:[\w.-]+/[\w.-]+)?#(?P<issue_short>\d+)"
+	rf"|"
+	rf"https?://github\.com/[\w.-]+/[\w.-]+/issues/(?P<issue_url>\d+)"
+	rf")(?![\w-])"
 )
 
 # Label that marks an orchestrator tracking issue. Auto-close keywords
@@ -137,11 +145,19 @@ def _fetch_issue_labels_gh(repo: str, issue_number: int) -> list[str] | None:
 def _scan_text(source: str, text: str) -> list[tuple[int, str, str, int]]:
 	"""Return a list of (line_no, line, keyword, issue_number) tuples for every
 	auto-close keyword match in `text`. line_no is 1-based.
+
+	The regex has two named groups for the issue number — `issue_short`
+	(for `#N` and `owner/repo#N` forms) and `issue_url` (for the full
+	`https://github.com/.../issues/N` form). Exactly one is populated per
+	match; we pick whichever fired.
 	"""
 	matches: list[tuple[int, str, str, int]] = []
 	for line_no, line in enumerate(text.splitlines(), start=1):
 		for m in AUTO_CLOSE_RE.finditer(line):
-			matches.append((line_no, line, m.group("keyword"), int(m.group("issue"))))
+			issue_str = m.group("issue_short") or m.group("issue_url")
+			if not issue_str:
+				continue
+			matches.append((line_no, line, m.group("keyword"), int(issue_str)))
 	return matches
 
 
