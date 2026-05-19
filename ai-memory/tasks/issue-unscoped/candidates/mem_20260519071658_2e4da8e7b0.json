@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:3978-4070 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, x-ai_grok-4_20]\n  PROBLEM: The compare-API-error clear-pin branches in finalize_integration_merge_if_needed update STATE_FILE but skip post_state_comment, leaving tracking-issue comments stale.\n  WHY: The state transitions to pending without the corresponding comment update, so operators see a merged pin that has already been cleared; both reviewers noted the missing comment on the compare-error path.\n- tests/test_orchestrate_integration_ahead_by_gate.py:170-189 | severity=low | confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The test force-patches the generated gh stub with a fragile string replacement that depends on the exact stub text.\n  WHY: Any future stub formatting change can prevent the 404 ref lookup from being injected, making the test exercise the compare path and fail.\n- scripts/orchestrate_poll_process.sh:2178-2210 | severity=medium | confidence=[3]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: _integration_branch_ahead_of_default probes branch existence with the raw branch name but percent-encodes only the compare call.\n  WHY: Reserved characters in branch names can make the existence check and compare endpoint refer to different refs, yielding incorrect ahead_by handling or fail-closed errors.\n- tests/test_orchestrate_integration_ahead_by_gate.py:test_finalize_clears_pin_when_integration_ahead_of_default and test_finalize_clears_pin_fail_closed_on_compare_api_error | severity=low | confidence=[3]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The finalize-pin-clearing tests assert on a non-zero exit from an implementation detail rather than the pin-clearing contract itself.\n  WHY: A future refactor that keeps the contract but changes internal control flow could make the tests fail for unrelated reasons.\n- scripts/orchestrate_lib.py:2578-2598 | severity=medium | confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Adding integration_ahead_by and integration_contained_in_default changes the JSON output shape for older consumers.\n  WHY: Callers that validate an exact schema or are not prepared to ignore sibling keys can break even though project_complete remains compatible.\n- tests/test_orchestrate_poll_process.py:1530-1530 | severity=low | confidence=[3]\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The compare-endpoint mock regex `[^.]+` does not match dotted branch names.\n  WHY: Valid Git branches can contain dots, so the mock may not trigger for some refs and can cause unexpected test failures or fall through to real API calls.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh: Lines 3990-3995 vs 3997-4001 (first re-check in finalize_integration_merge_if_needed) | confidence=3\n  PROBLEM: The compare-API-error branch (rc != 0) clears the pin (final_merge_status=\"pending\", final_merge_pr=null) but does NOT call post_state_comment.\n  WHY: The state file is updated correctly in both branches, but the tracking issue comment stays stale until a different path posts a comment.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_orchestrate_poll_process.py: line 1530 (approx) | confidence=3\n  PROBLEM: The regex pattern `[^.]+` for matching branch names in the compare API path doesn't allow dots in branch names, which are valid in Git branch names.\n  WHY: If the integration branch or default branch name contains a dot character, the regex won't match, causing the compare endpoint mock to not be triggered.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_orchestrate_integration_ahead_by_gate.py: lines 170-189 (the patched gh stub that overrides the git/ref/heads endpoint) + test_helper_returns_zero_when_branch_was_deleted | confidence=4\n  PROBLEM: The test manually patches the generated Python gh stub after _make_gh_stub has already written it, using a fragile string replace on a multi-line f-string that contains the exact text being replaced.\n  WHY: Any future change to the stub generator can silently stop forcing the 404 ref lookup, so the test hits the compare API and fails its assertion.\n- scripts/orchestrate_poll_process.sh: _integration_branch_ahead_of_default (new helper, lines ~2178-2210 in the PR diff) | confidence=3\n  PROBLEM: integration_branch_exists is called before percent-encoding the branch name for the compare URL, so the existence probe and compare call can become inconsistent.\n  WHY: A branch name with reserved characters can make the probe and compare endpoint refer to different refs, leading to incorrect ahead_by handling or API errors.\n- tests/test_orchestrate_integration_ahead_by_gate.py: test_finalize_clears_pin_when_integration_ahead_of_default and test_finalize_clears_pin_fail_closed_on_compare_api_error | confidence=3\n  PROBLEM: The tests rely on finalize_integration_merge_if_needed taking a non-zero exit on the recreate path instead of checking the pin-clearing contract directly.\n  WHY: A future refactor that preserves behavior but changes internal control flow could break the tests for unrelated reasons.\n- scripts/orchestrate_lib.py: cmd_check_wave_status (new --integration-ahead-by argument, default=\"0\", lines 2578-2598 in PR diff) + callers in orchestrate_poll_process.sh:9378-9416 | confidence=4\n  PROBLEM: The new --integration-ahead-by path adds extra JSON fields that older callers may not expect.\n  WHY: Consumers that validate an exact JSON shape or don't ignore sibling keys can break even though project_complete remains compatible.\n- scripts/orchestrate_poll_process.sh: finalize_integration_merge_if_needed (new re-check block ~3978-4008 and the recorded-PR block ~4040-4070) | confidence=4\n  PROBLEM: When the re-check clears the \"merged\" pin, the function falls through without guaranteeing that post_state_comment() has been called after the jq mutation.\n  WHY: The state file changes on disk but the tracking comment stays stale in the same poll tick.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "dc1f968f9ae7fff795e17adef54e7eb83f57110f53a3107172dd38a85624d36d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26080835104",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26080835104",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260519071658_2e4da8e7b0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26080835104"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 6 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-19T07:16:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
