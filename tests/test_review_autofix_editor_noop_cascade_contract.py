@@ -39,6 +39,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 REVIEW_AUTOFIX = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 TEST_AND_MARK_STABLE = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
 REVIEW_APPLY_FIXES = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
+RUNBOOK = REPO_ROOT / "probably_unnecessary_but_read_if_stuck.md"
 
 VALIDATOR_WARNING_LITERAL = "::warning::Editor summary contains failure/fallback markers"
 RETRY_NOTICE_LITERAL = "::notice::Editor summary present but matched fallback-marker regex"
@@ -175,6 +176,10 @@ def test_e2e_poller_uses_tempfile_not_variable_capture() -> None:
 
 def _review_apply_fixes_text() -> str:
 	return REVIEW_APPLY_FIXES.read_text(encoding="utf-8")
+
+
+def _runbook_text() -> str:
+	return RUNBOOK.read_text(encoding="utf-8")
 
 
 def test_validator_sets_editor_noop_refusal_alongside_suspicious() -> None:
@@ -355,6 +360,55 @@ def test_review_apply_fixes_fallback_distinguishes_refusal() -> None:
 	)
 
 
+def test_review_apply_fixes_centralizes_refusal_regex() -> None:
+	"""The refusal regex should be defined once in the shell script and
+	reused for both the structured-output validator and the retry-loop
+	short-circuit so the two checks cannot drift."""
+	text = _review_apply_fixes_text()
+	expected_regex = "_REFUSAL_REGEX=\"I'?m sorry,? but I (can ?not|can.?t) assist|I (can ?not|can.?t) help with that\""
+	assert expected_regex in text, (
+		"review_apply_fixes.sh must define `_REFUSAL_REGEX` exactly once so "
+		"the validator and short-circuit share the same refusal pattern."
+	)
+	assert text.count('${_REFUSAL_REGEX}') == 2, (
+		"review_apply_fixes.sh must reuse `${_REFUSAL_REGEX}` in both refusal "
+		"checks (structured-output validation and retry short-circuit)."
+	)
+
+
+def test_refusal_contract_literals_stay_in_lockstep_across_files() -> None:
+	"""The refusal sentinel/notice/warning strings are duplicated across
+	the shell script, workflows, and runbook by design; enforce lockstep
+	so wording drift fails fast in tests instead of silently disabling the
+	refusal-specific alert chain."""
+	for path_label, text in (
+		("review_apply_fixes.sh", _review_apply_fixes_text()),
+		("review_autofix.yml", _review_autofix_text()),
+		("probably_unnecessary_but_read_if_stuck.md", _runbook_text()),
+	):
+		assert REFUSAL_SENTINEL_TEXT in text, (
+			f"{path_label} must contain the refusal sentinel {REFUSAL_SENTINEL_TEXT!r} "
+			"so the cross-workflow refusal contract stays in sync."
+		)
+	for path_label, text in (
+		("review_autofix.yml", _review_autofix_text()),
+		("test-and-mark-stable.yml", _test_and_mark_stable_text()),
+		("probably_unnecessary_but_read_if_stuck.md", _runbook_text()),
+	):
+		assert REFUSAL_VALIDATOR_NOTICE in text, (
+			f"{path_label} must contain {REFUSAL_VALIDATOR_NOTICE!r} so the "
+			"validator notice and poller/docs stay in lockstep."
+		)
+	for path_label, text in (
+		("test-and-mark-stable.yml", _test_and_mark_stable_text()),
+		("probably_unnecessary_but_read_if_stuck.md", _runbook_text()),
+	):
+		assert REFUSAL_POLLER_WARNING in text, (
+			f"{path_label} must contain {REFUSAL_POLLER_WARNING!r} so the "
+			"refusal-specific operator warning stays in lockstep."
+		)
+
+
 if __name__ == "__main__":
 	test_merge_conflict_chain_gates_on_editor_noop_suspicious()
 	test_validator_emits_exact_grep_literal()
@@ -369,4 +423,6 @@ if __name__ == "__main__":
 	test_review_apply_fixes_cleans_attempt_prompt_file_on_success()
 	test_review_apply_fixes_breaks_retry_loop_on_safety_refusal()
 	test_review_apply_fixes_fallback_distinguishes_refusal()
+	test_review_apply_fixes_centralizes_refusal_regex()
+	test_refusal_contract_literals_stay_in_lockstep_across_files()
 	print("All EDITOR_NOOP_SUSPICIOUS cascade-guard contract tests passed.")

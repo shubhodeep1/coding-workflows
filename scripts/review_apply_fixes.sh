@@ -1192,6 +1192,9 @@ _hb_tmpdir=""
 _hb_fifo=""
 trap '[ -n "${_hb_tmpdir:-}" ] && rm -rf "${_hb_tmpdir}" 2>/dev/null || true' EXIT
 
+_REFUSAL_REGEX="I'?m sorry,? but I (can ?not|can.?t) assist|I (can ?not|can.?t) help with that"
+rm -f "${PREVIOUS_REVIEWS_DIR}/editor_refused.flag" 2>/dev/null || true
+
 attempt=1
 while [ "${attempt}" -le 3 ]; do
   # Early exit if PR was closed/merged (detected by reviewer or editor watchdog)
@@ -1340,7 +1343,7 @@ while [ "${attempt}" -le 3 ]; do
 
   if [ "${cmd_rc}" -eq 0 ]; then
     cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
-    if [ -s "${tmp_output}" ] && grep -q '^Changes made:' "${tmp_output}"                 && grep -q '^Change status:' "${tmp_output}"                 && grep -q '^Already satisfied (suggested but already present):' "${tmp_output}"                 && grep -q '^Ignored suggestions (with short reason):' "${tmp_output}"                 && grep -q '^Reviewer files processed:' "${tmp_output}"                 && grep -q '^Review file issue audit:' "${tmp_output}"                 && ! grep -qiE "I can.?t execute this|need to read|allow read/write shell commands|cannot proceed under the current constraints|I'?m sorry,? but I (can ?not|can.?t) assist|I (can ?not|can.?t) help with that" "${tmp_output}"; then
+    if [ -s "${tmp_output}" ] && grep -q '^Changes made:' "${tmp_output}"                 && grep -q '^Change status:' "${tmp_output}"                 && grep -q '^Already satisfied (suggested but already present):' "${tmp_output}"                 && grep -q '^Ignored suggestions (with short reason):' "${tmp_output}"                 && grep -q '^Reviewer files processed:' "${tmp_output}"                 && grep -q '^Review file issue audit:' "${tmp_output}"                 && ! grep -qiE "I can.?t execute this|need to read|allow read/write shell commands|cannot proceed under the current constraints|${_REFUSAL_REGEX}" "${tmp_output}"; then
       reviewer_validation_ok=true
       changes_lost_detected=false
       while IFS= read -r manifest_path; do
@@ -1621,7 +1624,7 @@ while [ "${attempt}" -le 3 ]; do
   # almost certain to repeat the refusal. Touch a sentinel that the
   # fallback writer (below) reads to label the failure as a refusal
   # in the editor summary, then break out of the retry loop.
-  if grep -qiE "I'?m sorry,? but I (can ?not|can.?t) assist|I (can ?not|can.?t) help with that" "${tmp_output}" 2>/dev/null; then
+  if grep -qiE "${_REFUSAL_REGEX}" "${tmp_output}" 2>/dev/null; then
     echo "Editor model returned a safety-policy refusal on attempt ${attempt}; breaking out of retry loop (further attempts likely to repeat the refusal)."
     touch "${PREVIOUS_REVIEWS_DIR}/editor_refused.flag"
     rm -f "${tmp_output}" "${tmp_err}" "${attempt_prompt_file}"
