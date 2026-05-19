@@ -369,6 +369,19 @@ def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
 	assert "curl https://api.github.com" not in block
 
 
+def test_auto_merge_guard_honours_configured_orchestrator_branch_pattern() -> None:
+	block = _step_block("Enable auto-merge on PR")
+	assert "ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}" in block
+	assert 'if [ -z "${_orch_pr_head_ref}" ]; then' in block
+	assert "empty/null .head.ref" in block
+	assert 'grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN}"' in block
+	assert "refs:?[[:space:]]*#[0-9]+" in block
+	assert "(closes|fixes|resolves):?[[:space:]]*#[0-9]+" in block
+	assert "matches ORCH_INTEGRATION_BRANCH_PATTERN='${ORCH_INTEGRATION_BRANCH_PATTERN}'" in block
+	assert "falling back to canonical '^orchestrator/project-([0-9]+)$' auto-merge suppressor" in block
+	assert "falling back to canonical '^orchestrator/project-[0-9]+$' auto-merge suppressor" not in block
+
+
 def test_reviewer_prompt_output_rules_still_forbid_scripts() -> None:
 	reviewers = _reviewers_text()
 	assert "OUTPUT RULES" in reviewers
@@ -589,6 +602,7 @@ def test_reviewer_iteration_scope_prepare_path_reports_missing_targeted_context_
 def main() -> int:
 	test_review_pipeline_knobs_are_wired_into_codex_agent_env()
 	test_review_pipeline_summary_step_is_local_only_and_grep_friendly()
+	test_auto_merge_guard_honours_configured_orchestrator_branch_pattern()
 	test_reviewer_prompt_output_rules_still_forbid_scripts()
 	test_reviewer_iteration_scope_first_iteration_keeps_full_diff_context()
 	test_reviewer_iteration_scope_valid_artifacts_narrow_to_last_run_and_actionable_ledger_files()

@@ -2398,7 +2398,24 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 			"decision_source": source,
 		})
 
-	project_complete = all_merged and (current_wave_idx + 1 >= len(waves))
+	# Gate project_complete on the default branch containing the integration
+	# branch tip. The shell caller computes ahead_by via the GitHub compare
+	# API and passes it in as --integration-ahead-by. A value of "0" means
+	# default contains the integration tip (project is genuinely complete).
+	# Any non-"0" value (including "" from a fail-closed compare API error)
+	# forces project_complete=False, so the orchestrator does not declare
+	# completion while wave PRs remain stranded on the integration branch.
+	# See shubhodeep1/binance-blessings#135 for the regression case this gate
+	# prevents.
+	integration_ahead_by_value = getattr(args, "integration_ahead_by", "0")
+	integration_ahead_by_raw = "" if integration_ahead_by_value is None else str(integration_ahead_by_value).strip()
+	integration_contained_in_default = integration_ahead_by_raw == "0"
+
+	project_complete = (
+		all_merged
+		and (current_wave_idx + 1 >= len(waves))
+		and integration_contained_in_default
+	)
 
 	_print_json({
 		"ok": True,
@@ -2408,6 +2425,8 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 		"any_review_blocked": any_review_blocked,
 		"any_not_created": any_not_created,
 		"project_complete": project_complete,
+		"integration_ahead_by": integration_ahead_by_raw,
+		"integration_contained_in_default": integration_contained_in_default,
 		"issues": statuses,
 	})
 	return 0
@@ -2560,6 +2579,21 @@ def build_parser() -> argparse.ArgumentParser:
 	p_check.add_argument("--labels-json", required=True, help='JSON: {"issue_num": ["label1", ...]}')
 	p_check.add_argument("--issue-states-json", default=None, help='Optional JSON: {"issue_num": "open|closed", ...}')
 	p_check.add_argument("--pr-states-json", default=None, help='Optional JSON: {"issue_num": {"state":"open|closed","merged":bool}, ...}')
+	p_check.add_argument(
+		"--integration-ahead-by",
+		default="0",
+		help=(
+			"Optional integer 'ahead_by' count of the integration branch vs the "
+			"default branch (from GitHub's compare API). Default '0' = the "
+			"default branch contains the integration tip (project is genuinely "
+			"complete). Any non-'0' value (including the empty string, which "
+			"callers should pass to fail closed on a compare API error) forces "
+			"project_complete=False so the orchestrator does not declare "
+			"completion while wave PRs remain stranded on the integration "
+			"branch. See shubhodeep1/binance-blessings#135 for the regression "
+			"this gate prevents."
+		),
+	)
 	p_check.set_defaults(func=cmd_check_wave_status)
 
 	p_rebuild = subparsers.add_parser("rebuild-state", help="Rebuild state from tracking body + issue map")

@@ -2166,6 +2166,63 @@ integration_branch_exists() {
   return 0
 }
 
+# Returns the integration branch's "ahead_by" count vs the default branch via
+# GitHub's compare API. Stdout: integer count (0 = default branch contains the
+# integration tip). Exit 0 on success, 1 on API or parse error.
+#
+# Callers should fail closed on exit 1: treat an unknown ahead_by as "default
+# does NOT contain integration tip" and refuse to advance any state machine
+# whose contract requires the integration tip to have landed on default
+# (project_complete, mark_validation_complete, finalize_integration_merge_if_needed).
+# Mirrors the fail-closed posture of the e2e-smoke-test label guard at
+# review_autofix.yml:4948-4951. See shubhodeep1/binance-blessings#135 for the
+# regression that motivated this helper.
+#
+# Special cases that return ahead_by=0 (success, no drift) without calling the
+# compare API:
+#  * integration_branch empty or equal to default_branch
+#  * integration_branch no longer exists on the remote (e.g. the legitimate
+#    finalize path's `gh pr merge --squash --delete-branch` already ran). A
+#    deleted branch cannot be ahead of default, and callers MUST be able to
+#    finalize cleanly in that state — the steady-state post-merge condition.
+#
+# API hygiene (§15): callers in tight inner loops should cache the result for
+# the cycle rather than re-invoking per iteration.
+_integration_branch_ahead_of_default() {
+  local integration_branch="$1"
+  local default_branch="${2:-main}"
+  if [ -z "${integration_branch}" ] || [ -z "${default_branch}" ]; then
+    echo "0"
+    return 0
+  fi
+  if [ "${integration_branch}" = "${default_branch}" ]; then
+    echo "0"
+    return 0
+  fi
+  # If the integration branch is gone (deleted by `gh pr merge --delete-branch`
+  # during the legitimate finalize path), there's no drift to detect. Treat as
+  # fully contained so the caller's pinned "merged" state remains valid.
+  # integration_branch_exists fails-open on API error (assumes the branch is
+  # still there), so a flaky API does NOT mask drift here — it falls through
+  # to the compare call below, which can then fail closed as usual.
+  if ! integration_branch_exists "${integration_branch}"; then
+    echo "0"
+    return 0
+  fi
+  local integration_ref default_ref
+  integration_ref="$(printf '%s' "${integration_branch}" | jq -sRr '@uri')"
+  default_ref="$(printf '%s' "${default_branch}" | jq -sRr '@uri')"
+  local ahead_by
+  if ! ahead_by="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/compare/${default_ref}...${integration_ref}" --jq '.ahead_by')"; then
+    return 1
+  fi
+  if ! [[ "${ahead_by}" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+  echo "${ahead_by}"
+  return 0
+}
+
 resolve_active_orchestrator_context_for_issue() {
   local issue_num="$1"
   local preferred_tracking_num="${2:-}"
@@ -3973,6 +4030,40 @@ finalize_integration_merge_if_needed() {
 
   local final_merge_status
   final_merge_status="$(jq -r '.final_merge_status // "pending"' "${STATE_FILE}")"
+
+  # Pinned "merged" state must be re-verified against the live integration
+  # branch on every finalize tick. Without this re-check, an early auto-merge
+  # of the eager final PR (e.g. via review_autofix.yml's auto-merge step when
+  # an integration-conflict self-healing dispatch raced ahead) pins the state
+  # to "merged" forever — even after subsequent wave PRs land on the
+  # integration branch and never reach default. The pin then silently lets
+  # mark_validation_complete declare ai:validated against a stale default
+  # branch. See shubhodeep1/binance-blessings#135 for the regression.
+  #
+  # "superseded-by-main" is a legitimate terminal state (sync deliberately
+  # gave up on the integration branch) and is NOT re-evaluated here.
+  if [ "${final_merge_status}" = "merged" ] && [ -n "${integration_branch}" ]; then
+    local _fimin_ahead_by _fimin_ahead_rc
+    _fimin_ahead_by="$(_integration_branch_ahead_of_default "${integration_branch}" "${default_branch}")"
+    _fimin_ahead_rc=$?
+    if [ "${_fimin_ahead_rc}" -ne 0 ]; then
+      echo "::warning::  [final-merge] State pinned final_merge_status=merged for #${TRACKING_NUM:-?} but the compare API failed during the ahead_by re-check; failing closed and clearing the pin so the next tick can reopen the final PR if integration has drifted."
+      jq '.final_merge_status = "pending" | .final_merge_pr = null | .final_merge_error = "compare API error during ahead_by re-check (failed closed)"' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      final_merge_status="pending"
+      post_state_comment || true
+    elif [ "${_fimin_ahead_by:-0}" != "0" ]; then
+      echo "  [final-merge] State pinned final_merge_status=merged for #${TRACKING_NUM:-?} but integration branch '${integration_branch}' is ahead of '${default_branch}' by ${_fimin_ahead_by} commit(s); clearing the pin so a fresh final PR can be opened for the new diff."
+      jq --arg n "${_fimin_ahead_by}" --arg ib "${integration_branch}" --arg db "${default_branch}" \
+        '.final_merge_status = "pending"
+         | .final_merge_pr = null
+         | .final_merge_error = ("integration branch " + $ib + " was ahead of " + $db + " by " + $n + " commit(s) after prior merge; reopening final PR for the new diff")' \
+        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      final_merge_status="pending"
+      post_state_comment || true
+    fi
+  fi
+
   if [ "${final_merge_status}" = "merged" ] || [ "${final_merge_status}" = "superseded-by-main" ]; then
     return 0
   fi
@@ -4002,10 +4093,36 @@ finalize_integration_merge_if_needed() {
     existing_pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
     existing_pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
     if [ "${existing_pr_state}" = "closed" ] && [ "${existing_pr_merged}" = "true" ]; then
-      jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged" | .final_merge_error = ""' \
-        "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-      post_state_comment || true
-      return 0
+      # Re-check ahead_by here too: even though the recorded final PR is
+      # closed+merged, additional wave PRs could have landed on the integration
+      # branch in the meantime (same regression path as the early-return
+      # above). Without this check the function would set state=merged and
+      # return, leaving the new diff stranded. See
+      # shubhodeep1/binance-blessings#135.
+      local _fimin_rd_ahead_by _fimin_rd_ahead_rc
+      _fimin_rd_ahead_by="$(_integration_branch_ahead_of_default "${integration_branch}" "${default_branch}")"
+      _fimin_rd_ahead_rc=$?
+      if [ "${_fimin_rd_ahead_rc}" -ne 0 ]; then
+        echo "::warning::  [final-merge] Recorded final PR #${final_pr} is closed+merged but the compare API failed during the ahead_by re-check; failing closed and clearing the recorded PR so the next code path can open a fresh one if integration has drifted."
+        jq '.final_merge_pr = null | .final_merge_status = "pending" | .final_merge_error = "compare API error during ahead_by re-check after recorded final PR was already merged (failed closed)"' \
+          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        final_pr=""
+        post_state_comment || true
+      elif [ "${_fimin_rd_ahead_by:-0}" != "0" ]; then
+        echo "  [final-merge] Recorded final PR #${final_pr} is closed+merged but integration branch '${integration_branch}' is ahead of '${default_branch}' by ${_fimin_rd_ahead_by} commit(s); clearing the recorded PR and falling through to open a fresh final PR for the new diff."
+        jq --arg n "${_fimin_rd_ahead_by}" --arg ib "${integration_branch}" --arg db "${default_branch}" \
+          '.final_merge_pr = null
+           | .final_merge_status = "pending"
+           | .final_merge_error = ("integration branch " + $ib + " was ahead of " + $db + " by " + $n + " commit(s) after recorded final PR merged; reopening for the new diff")' \
+          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        final_pr=""
+        post_state_comment || true
+      else
+        jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged" | .final_merge_error = ""' \
+          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        post_state_comment || true
+        return 0
+      fi
     fi
   fi
 
@@ -9404,11 +9521,39 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   # ---------------------------------------------------------------
   # Check wave status
   # ---------------------------------------------------------------
+
+  # Compute the integration branch's ahead_by vs the default branch before
+  # invoking check-wave-status. project_complete must NOT advance to true
+  # while the integration tip has not yet landed on default — otherwise the
+  # judge / validation / completion gates declare success against a stale
+  # default branch. Fail closed on a compare API error: pass "" so
+  # check-wave-status treats ahead_by as unknown and forces project_complete=
+  # false. See shubhodeep1/binance-blessings#135 for the regression case.
+  CWS_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+  [ "${CWS_INTEGRATION_BRANCH}" = "null" ] && CWS_INTEGRATION_BRANCH=""
+  if [ -n "${CWS_INTEGRATION_BRANCH}" ]; then
+    CWS_DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "")"
+    if [ -z "${CWS_DEFAULT_BRANCH}" ]; then
+      CWS_AHEAD_BY=""
+      echo "::warning::  [check-wave-status] Could not resolve default branch via GitHub API; passing empty ahead_by so check-wave-status fails closed and keeps project_complete=false."
+    elif CWS_AHEAD_BY="$(_integration_branch_ahead_of_default "${CWS_INTEGRATION_BRANCH}" "${CWS_DEFAULT_BRANCH}")"; then
+      :
+    else
+      CWS_AHEAD_BY=""
+      echo "::warning::  [check-wave-status] Compare API failed for ${CWS_DEFAULT_BRANCH}...${CWS_INTEGRATION_BRANCH}; failing closed (project_complete forced to false this tick)."
+    fi
+  else
+    # No integration branch (default-branch-only flow): ahead_by is trivially
+    # 0 since there is no integration→default merge gate to honour.
+    CWS_AHEAD_BY="0"
+  fi
+
   WAVE_STATUS="$(python3 scripts/orchestrate_lib.py check-wave-status \
     --state-file "${STATE_FILE}" \
     --labels-json "${LABELS_JSON}" \
     --issue-states-json "${ISSUE_STATES_JSON}" \
-    --pr-states-json "${PR_STATES_JSON}")"
+    --pr-states-json "${PR_STATES_JSON}" \
+    --integration-ahead-by "${CWS_AHEAD_BY}")"
 
   echo "Wave status: ${WAVE_STATUS}"
   WAVE_COMPLETE="$(echo "${WAVE_STATUS}" | jq -r '.wave_complete')"
