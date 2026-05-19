@@ -37,6 +37,79 @@ fi
 if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   sanitize_codex_prompt_file() { :; }
 fi
+if ! command -v _embed_input_file >/dev/null 2>&1; then
+  : "${_PROMPT_BUDGET_TOTAL_BYTES:=800000}"
+  _prompt_budget_state_file() {
+    printf '%s/_prompt_input_budget_state.%s\n' "${TMPDIR:-/tmp}" "$$"
+  }
+  _init_prompt_budget() {
+    local _cap="${1:-${_PROMPT_BUDGET_TOTAL_BYTES}}"
+    local _state
+    _state="$(_prompt_budget_state_file)"
+    export _PROMPT_BUDGET_TOTAL_BYTES="${_cap}"
+    printf '0\n' > "${_state}" 2>/dev/null || true
+  }
+  _cleanup_prompt_budget() {
+    local _state
+    _state="$(_prompt_budget_state_file)"
+    rm -f "${_state}" 2>/dev/null || true
+  }
+  _embed_input_file() {
+    local _p="${1:-}"
+    local _cap="${2:-100000}"
+    local _mode="${3:-head}"
+    local _state _used _budget_remaining _effective_cap _size _emit_bytes
+    if [ -z "${_p}" ] || [ ! -e "${_p}" ]; then printf '(missing)\n'; return 0; fi
+    if [ ! -s "${_p}" ]; then printf '(empty)\n'; return 0; fi
+
+    _state="$(_prompt_budget_state_file)"
+    _used=0
+    if [ -f "${_state}" ]; then
+      _used="$(cat "${_state}" 2>/dev/null)"
+      [[ "${_used}" =~ ^[0-9]+$ ]] || _used=0
+    fi
+    _budget_remaining=$(( _PROMPT_BUDGET_TOTAL_BYTES - _used ))
+    if [ "${_budget_remaining}" -le 0 ]; then
+      printf '(omitted — total prompt input budget %d bytes exhausted; %d bytes already inlined)\n' \
+        "${_PROMPT_BUDGET_TOTAL_BYTES}" "${_used}"
+      return 0
+    fi
+
+    _effective_cap="${_cap}"
+    if [ "${_budget_remaining}" -lt "${_effective_cap}" ]; then
+      _effective_cap="${_budget_remaining}"
+    fi
+
+    _size="$(wc -c < "${_p}" 2>/dev/null | tr -d '[:space:]')"
+    [[ "${_size}" =~ ^[0-9]+$ ]] || _size=0
+    if [ "${_size}" -le "${_effective_cap}" ]; then
+      cat "${_p}"
+      _emit_bytes="${_size}"
+    else
+      PYTHONDONTWRITEBYTECODE=1 python3 - "${_p}" "${_effective_cap}" 2>/dev/null <<'PY' || head -c "${_effective_cap}" "${_p}"
+import sys
+
+cap = int(sys.argv[2])
+read_cap = cap + 1 if cap > 0 else 0
+with open(sys.argv[1], 'rb') as fh:
+    data = fh.read(read_cap)
+if cap > 0 and len(data) > cap:
+    i = cap
+    while i > 0 and (data[i] & 0xC0) == 0x80:
+        i -= 1
+    data = data[:i]
+sys.stdout.buffer.write(data)
+PY
+      printf '\n[... TRUNCATED — file is %s bytes; first %s bytes shown above (mode=%s, per-file cap=%s, budget remaining was %s; fallback embedder) ...]\n' \
+        "${_size}" "${_effective_cap}" "${_mode}" "${_cap}" "${_budget_remaining}"
+      _emit_bytes="${_effective_cap}"
+    fi
+
+    if [ -n "${_emit_bytes}" ] && [ "${_emit_bytes}" -gt 0 ] 2>/dev/null; then
+      printf '%s\n' "$(( _used + _emit_bytes ))" > "${_state}" 2>/dev/null || true
+    fi
+  }
+fi
 REVIEW_RB_SEMBLE_HELPERS_AVAILABLE="false"
 REVIEW_RB_SEMBLE_MAX_CHUNKS="4"
 REVIEW_RB_SEMBLE_QUERY_MAX_BYTES="12000"
@@ -304,6 +377,83 @@ fi
 # -----------------------------------------------------------
 PR_DIFF="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
   -H 'Accept: application/vnd.github.diff' 2>/dev/null || echo "(diff unavailable)")"
+[ -n "${PR_DIFF}" ] || PR_DIFF="(diff unavailable)"
+# Cap the diff embedded in the judge prompt so codex's `turn/start`
+# stdin envelope (1,048,576 chars) is never breached. The reviewer
+# script uses the same pattern (scripts/review_run_reviewers.sh:447 —
+# `_embed_input_file "${PR_DIFF_FILE}" 400000 diff`). The deleted
+# `head -1000` truncation removed in PR #2564 (commit ebe2ecf3) was
+# the last guard here; this restores one at a byte budget instead
+# of a line budget so the cap is predictable across diff styles.
+# Override via the RB_JUDGE_PR_DIFF_MAX_BYTES environment variable
+# (for example, export a repository variable into env in the caller).
+RB_JUDGE_PR_DIFF_MAX_BYTES="${RB_JUDGE_PR_DIFF_MAX_BYTES:-400000}"
+if ! [[ "${RB_JUDGE_PR_DIFF_MAX_BYTES}" =~ ^[0-9]+$ ]] || [ "${RB_JUDGE_PR_DIFF_MAX_BYTES}" -le 0 ]; then
+  echo "::warning::Invalid RB_JUDGE_PR_DIFF_MAX_BYTES='${RB_JUDGE_PR_DIFF_MAX_BYTES}'; using 400000."
+  RB_JUDGE_PR_DIFF_MAX_BYTES=400000
+fi
+PR_DIFF_TRUNCATED=false
+PR_DIFF_TRUNCATE_FILE="$(mktemp "${TMPDIR:-/tmp}/review-rb-judge-pr-diff.XXXXXX" 2>/dev/null || printf '')"
+if [ -n "${PR_DIFF_TRUNCATE_FILE}" ] && [ -f "${PR_DIFF_TRUNCATE_FILE}" ] && \
+  printf '%s' "${PR_DIFF}" > "${PR_DIFF_TRUNCATE_FILE}"; then
+  PR_DIFF_BYTES_TOTAL="$(wc -c < "${PR_DIFF_TRUNCATE_FILE}" | tr -cd '0-9' || true)"
+else
+  if [ -n "${PR_DIFF_TRUNCATE_FILE}" ]; then
+    echo "::warning::Failed to populate PR diff temp file for truncation; falling back to in-memory truncation."
+  else
+    echo "::warning::Failed to create PR diff temp file for truncation; falling back to in-memory truncation."
+  fi
+  rm -f "${PR_DIFF_TRUNCATE_FILE:-}" 2>/dev/null || true
+  unset PR_DIFF_TRUNCATE_FILE
+  PR_DIFF_BYTES_TOTAL="$(printf '%s' "${PR_DIFF}" | wc -c | tr -cd '0-9' || true)"
+fi
+[ -n "${PR_DIFF_BYTES_TOTAL}" ] || PR_DIFF_BYTES_TOTAL=0
+if [ "${PR_DIFF_BYTES_TOTAL}" -gt "${RB_JUDGE_PR_DIFF_MAX_BYTES}" ]; then
+  PR_DIFF_TRUNCATED_CONTENT=""
+  if [ -n "${PR_DIFF_TRUNCATE_FILE:-}" ] && [ -f "${PR_DIFF_TRUNCATE_FILE}" ]; then
+    if PR_DIFF_TRUNCATED_CONTENT="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${PR_DIFF_TRUNCATE_FILE}" "${RB_JUDGE_PR_DIFF_MAX_BYTES}" 2>/dev/null <<'PY'
+import sys
+
+cap = int(sys.argv[2])
+read_cap = cap + 1 if cap > 0 else 0
+with open(sys.argv[1], 'rb') as fh:
+    data = fh.read(read_cap)
+if cap > 0 and len(data) > cap:
+    i = cap
+    while i > 0 and (data[i] & 0xC0) == 0x80:
+        i -= 1
+    data = data[:i]
+sys.stdout.buffer.write(data)
+PY
+)"; then
+      PR_DIFF="${PR_DIFF_TRUNCATED_CONTENT}"
+    else
+      echo "::warning::python3 unavailable for UTF-8-safe PR diff truncation; falling back to a raw byte prefix. sanitize_codex_prompt_file will strip any invalid trailing bytes before codex reads the prompt."
+      PR_DIFF="$(head -c "${RB_JUDGE_PR_DIFF_MAX_BYTES}" "${PR_DIFF_TRUNCATE_FILE}")"
+    fi
+  elif PR_DIFF_TRUNCATED_CONTENT="$({ printf '%s' "${PR_DIFF}" || true; } | PYTHONDONTWRITEBYTECODE=1 python3 -c '
+import sys
+
+cap = int(sys.argv[1])
+read_cap = cap + 1 if cap > 0 else 0
+data = sys.stdin.buffer.read(read_cap)
+if cap > 0 and len(data) > cap:
+    i = cap
+    while i > 0 and (data[i] & 0xC0) == 0x80:
+        i -= 1
+    data = data[:i]
+sys.stdout.buffer.write(data)
+' "${RB_JUDGE_PR_DIFF_MAX_BYTES}" 2>/dev/null)"; then
+    PR_DIFF="${PR_DIFF_TRUNCATED_CONTENT}"
+  else
+    echo "::warning::python3 unavailable for UTF-8-safe PR diff truncation; falling back to a raw byte prefix. sanitize_codex_prompt_file will strip any invalid trailing bytes before codex reads the prompt."
+    PR_DIFF="$(printf '%s' "${PR_DIFF}" | head -c "${RB_JUDGE_PR_DIFF_MAX_BYTES}" || true)"
+  fi
+  unset PR_DIFF_TRUNCATED_CONTENT
+  PR_DIFF_TRUNCATED=true
+fi
+rm -f "${PR_DIFF_TRUNCATE_FILE:-}" 2>/dev/null || true
+unset PR_DIFF_TRUNCATE_FILE
 PRELOADED_PR_META="$(jq -c '{
   title: (.title // ""),
   body: (.body // ""),
@@ -334,8 +484,12 @@ fi
 RB_JUDGE_PROMPT="${RUNTIME_DIR}/rb_judge_prompt.txt"
 RB_JUDGE_OUTPUT="${RUNTIME_DIR}/rb_judge_output.txt"
 RB_JUDGE_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/rb_judge_semble_query.txt"
+RB_JUDGE_REQUIREMENT_FILE="${RUNTIME_DIR}/rb_judge_requirement.txt"
+RB_JUDGE_PR_META_RENDER_FILE="${RUNTIME_DIR}/rb_judge_pr_meta.json"
+RB_JUDGE_PR_COMMENTS_RENDER_FILE="${RUNTIME_DIR}/rb_judge_pr_comments.json"
+RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE="${RUNTIME_DIR}/rb_judge_pr_review_comments.json"
 RB_JUDGE_SEMBLE_PREFETCH=""
-trap 'rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE:-}"' EXIT
+trap '_cleanup_prompt_budget; rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE:-}" "${RB_JUDGE_REQUIREMENT_FILE:-}" "${RB_JUDGE_PR_META_RENDER_FILE:-}" "${RB_JUDGE_PR_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE:-}"' EXIT
 
 {
   printf '%s\n' 'Review-blocked judge context.'
@@ -354,6 +508,37 @@ Body: $(jq -r '.body // ""' "${PR_PAYLOAD_FILE}")" \
   append_review_rb_semble_query_section "PR review comments JSON:" "${PR_REVIEW_COMMENTS}" 2500
 } > "${RB_JUDGE_SEMBLE_QUERY_FILE}"
 RB_JUDGE_SEMBLE_PREFETCH="$(render_review_rb_semble_prefetch "${RB_JUDGE_SEMBLE_QUERY_FILE}" "Review-Blocked Judge Context")"
+
+# Keep the non-diff judge inputs under a shared budget so oversized PR
+# discussions / inline reviews cannot reintroduce the same `turn/start`
+# prompt-envelope failure the PR diff cap was added to prevent.
+if [ -n "${FIRST_ISSUE}" ] && [ -n "${FIRST_ISSUE_BODY//[[:space:]]/}" ]; then
+  printf '%s\n' "${FIRST_ISSUE_BODY}" > "${RB_JUDGE_REQUIREMENT_FILE}"
+else
+  {
+    if [ -n "${FIRST_ISSUE}" ]; then
+      echo "[NOTE: linked issue #${FIRST_ISSUE} has no body; using PR title/body as requirement fallback.]"
+      echo
+    fi
+    echo "Title: $(jq -r '.title // ""' "${PR_META_FILE}")"
+    echo "Body: $(jq -r '.body // ""' "${PR_PAYLOAD_FILE}")"
+  } > "${RB_JUDGE_REQUIREMENT_FILE}"
+fi
+if ! printf '%s\n' "${PR_META_JSON}" | jq '.' > "${RB_JUDGE_PR_META_RENDER_FILE}" 2>/dev/null; then
+  printf '%s\n' "${PR_META_JSON}" > "${RB_JUDGE_PR_META_RENDER_FILE}"
+fi
+if ! printf '%s\n' "${PR_COMMENTS}" | jq '.' > "${RB_JUDGE_PR_COMMENTS_RENDER_FILE}" 2>/dev/null; then
+  printf '%s\n' "${PR_COMMENTS}" > "${RB_JUDGE_PR_COMMENTS_RENDER_FILE}"
+fi
+if ! printf '%s\n' "${PR_REVIEW_COMMENTS}" | jq '.' > "${RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE}" 2>/dev/null; then
+  printf '%s\n' "${PR_REVIEW_COMMENTS}" > "${RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE}"
+fi
+RB_JUDGE_CONTEXT_BUDGET_BYTES=300000
+RB_JUDGE_REQUIREMENT_MAX_BYTES=50000
+RB_JUDGE_PR_META_MAX_BYTES=50000
+RB_JUDGE_PR_COMMENTS_MAX_BYTES=150000
+RB_JUDGE_PR_REVIEW_COMMENTS_MAX_BYTES=100000
+_init_prompt_budget "${RB_JUDGE_CONTEXT_BUDGET_BYTES}"
 
 {
   if [ -f ./pre_assembled_static.txt ]; then
@@ -376,33 +561,44 @@ RB_JUDGE_SEMBLE_PREFETCH="$(render_review_rb_semble_prefetch "${RB_JUDGE_SEMBLE_
   if [ -n "${FIRST_ISSUE}" ]; then
     echo "=== ISSUE #${FIRST_ISSUE} (original requirement) ==="
     echo
-    echo "${FIRST_ISSUE_BODY}"
+    _embed_input_file "${RB_JUDGE_REQUIREMENT_FILE}" "${RB_JUDGE_REQUIREMENT_MAX_BYTES}"
   else
     echo "=== PR DESCRIPTION (no linked issue) ==="
     echo
-    echo "Title: $(jq -r '.title // ""' "${PR_META_FILE}")"
-    echo "Body: $(jq -r '.body // ""' "${PR_PAYLOAD_FILE}")"
+    _embed_input_file "${RB_JUDGE_REQUIREMENT_FILE}" "${RB_JUDGE_REQUIREMENT_MAX_BYTES}"
   fi
   echo
   echo "=== PR #${PR_NUMBER} METADATA ==="
   echo
-  printf '%s\n' "${PR_META_JSON}" | jq '.'
+  _embed_input_file "${RB_JUDGE_PR_META_RENDER_FILE}" "${RB_JUDGE_PR_META_MAX_BYTES}"
   echo
   echo "=== PR #${PR_NUMBER} DIFF ==="
   echo
-  # Pass the full diff to the judge: forcing the model to exec-read
-  # files to reconstruct the truncated tail burns more context per
-  # turn than including the full diff up front. codex compacts older
-  # turns when its window fills, so a long diff degrades gracefully.
+  # Pass the diff to the judge (capped above at RB_JUDGE_PR_DIFF_MAX_BYTES,
+  # default 400000 bytes). Forcing the model to exec-read files to
+  # reconstruct a truncated tail burns more context per turn than
+  # passing what fits up front; codex compacts older turns when its
+  # reasoning window fills, so a long diff degrades gracefully —
+  # provided the CLI accepts the request at all. The hard byte cap
+  # above keeps us under codex's `turn/start` stdin envelope
+  # (1,048,576 chars); without it, a >1 MB diff is rejected before
+  # the model runs and every retry in the reasoning ladder fails
+  # identically (see PR shubhodeep1/bitsafe.io#368, run 26092826715).
+  if [ "${PR_DIFF_TRUNCATED}" = "true" ]; then
+    echo "[NOTE: PR diff is ${PR_DIFF_BYTES_TOTAL} bytes; truncated to a prefix within ${RB_JUDGE_PR_DIFF_MAX_BYTES} bytes to fit codex stdin (1 MB cap). Use exec-read on specific files for the elided tail if needed; the judge runs --sandbox read-only so file reads are available.]"
+    echo
+  fi
   printf '%s\n' "${PR_DIFF}"
-  echo
-  echo "=== PR #${PR_NUMBER} COMMENTS (editor summaries, reviewer findings) ==="
-  echo
-  printf '%s\n' "${PR_COMMENTS}" | jq '.'
   echo
   echo "=== PR #${PR_NUMBER} INLINE REVIEW COMMENTS ==="
   echo
-  printf '%s\n' "${PR_REVIEW_COMMENTS}" | jq '.'
+  _embed_input_file "${RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE}" "${RB_JUDGE_PR_REVIEW_COMMENTS_MAX_BYTES}"
+  echo
+  # Keep the file/line reviewer findings ahead of general PR discussion
+  # so the shared prompt budget preserves the most actionable evidence.
+  echo "=== PR #${PR_NUMBER} COMMENTS (editor summaries, reviewer findings) ==="
+  echo
+  _embed_input_file "${RB_JUDGE_PR_COMMENTS_RENDER_FILE}" "${RB_JUDGE_PR_COMMENTS_MAX_BYTES}"
   echo
   echo "=== REVIEW-BLOCKED CONTEXT ==="
   echo "Review-blocked judge retry: $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}"
@@ -429,6 +625,7 @@ RB_JUDGE_SEMBLE_PREFETCH="$(render_review_rb_semble_prefetch "${RB_JUDGE_SEMBLE_
     echo "the PR's work should be discarded."
   fi
 } > "${RB_JUDGE_PROMPT}"
+_cleanup_prompt_budget
 rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE}"
 
 # -----------------------------------------------------------
@@ -512,6 +709,14 @@ PY
 # -----------------------------------------------------------
 # Run the judge
 # -----------------------------------------------------------
+# Surface the sanitized prompt size before the first codex exec. The
+# CLI's `turn/start` envelope is a hard 1,048,576-character stdin cap;
+# if the prompt crosses it, every retry in the reasoning ladder fails
+# identically with the same `turn/start: Input exceeds the maximum
+# length` error because the ladder only steps reasoning effort, not
+# input size. Logging here keeps the next regression visible near the
+# top of the failing job instead of buried inside ~75k stderr lines.
+RB_JUDGE_PROMPT_SIZE_LOGGED=false
 JUDGE_SUCCESS=false
 JUDGE_STDERR_FILE="${RUNTIME_DIR}/rb_judge_stderr.txt"
 for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
@@ -522,6 +727,15 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
     sed -i "s/model_reasoning_effort = \".*\"/model_reasoning_effort = \"${level}\"/" "${HOME}/.codex/config.toml"
   fi
   sanitize_codex_prompt_file "${RB_JUDGE_PROMPT}"
+  if [ "${RB_JUDGE_PROMPT_SIZE_LOGGED}" != "true" ]; then
+    RB_JUDGE_PROMPT_BYTES="$(wc -c < "${RB_JUDGE_PROMPT}" 2>/dev/null | tr -cd '0-9' || true)"
+    [ -n "${RB_JUDGE_PROMPT_BYTES}" ] || RB_JUDGE_PROMPT_BYTES=0
+    echo "Review-blocked judge prompt size: ${RB_JUDGE_PROMPT_BYTES} bytes (codex stdin cap: 1048576)."
+    if [ "${RB_JUDGE_PROMPT_BYTES:-0}" -gt 950000 ]; then
+      echo "::warning::Review-blocked judge prompt is ${RB_JUDGE_PROMPT_BYTES} bytes; close to or over codex 1 MB stdin cap. Expect turn/start failures unless RB_JUDGE_PR_DIFF_MAX_BYTES (current: ${RB_JUDGE_PR_DIFF_MAX_BYTES}) or upstream embed budgets are tightened."
+    fi
+    RB_JUDGE_PROMPT_SIZE_LOGGED=true
+  fi
   if codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox read-only < "${RB_JUDGE_PROMPT}" > "${RB_JUDGE_OUTPUT}" 2>"${JUDGE_STDERR_FILE}"; then
     if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT}"; then
       JUDGE_EFFECTIVE_REASONING_EFFORT="${level}"
