@@ -8025,6 +8025,112 @@ def test_resolver_tooling_refresh_allowlist_includes_both_retry_preludes():
 	)
 
 
+def test_external_finalize_detect_marks_project_complete_when_final_pr_already_merged():
+	# Regression guard for the orchestrator/project-2734 wave-2 dispatch
+	# loop (issue #2734): the orchestrator created the final integration
+	# PR (`final_merge_pr=2750`) eagerly via the self-healing pipeline,
+	# an operator squash-merged it at 2026-05-18T21:31:50Z, but
+	# `final_merge_status` stayed `pending` because
+	# `finalize_integration_merge_if_needed` is only invoked from the
+	# `merge_conflict` and judge-`complete` arms — never from the plain
+	# `in_progress` arm.  The poller kept cycling on the wave-dispatch
+	# gate (which fired Telegram `Wave 2 dispatch BLOCKED` alerts every
+	# ~30 min) and never noticed PR #2750 had merged.
+	#
+	# The fix is an external-finalize detect block placed AFTER
+	# `TRACKING_LABELS` is fetched and BEFORE the
+	# `if [ "${PROJECT_STATUS}" = "merge_conflict" ]` switch in the
+	# orchestrator's per-tracking-issue loop: read `final_merge_pr` +
+	# `final_merge_status` from state, fetch the PR's `.state` +
+	# `.merged_at` via the same `gh_retry _safe_gh_jq` call shape as
+	# `finalize_integration_merge_if_needed`, and on confirmed
+	# closed-and-merged, transition status to `complete` so the
+	# existing `[ "${PROJECT_STATUS}" = "complete" ]` early-skip kicks
+	# in on the same tick.  This test pins the placement, the gate
+	# condition (status pending + PR pinned), AND the state mutation
+	# shape (status=complete + final_merge_status=merged) so a future
+	# refactor cannot silently drop any of the three.
+	poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
+	# Anchor on the `TRACKING_LABELS=` fetch that precedes the
+	# external-finalize block.  Only one such assignment exists in the
+	# main per-tracking-issue loop scope (the other two occurrences
+	# live inside the validation-fixing arm and a separate label-repair
+	# helper), and it is the documented insertion landmark; pinning on
+	# it makes the placement assertion robust against unrelated edits
+	# elsewhere in the file.
+	anchor = '  TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"'
+	anchor_idx = poller_body.find(anchor)
+	assert anchor_idx != -1, (
+		"TRACKING_LABELS=... fetch (the documented insertion landmark for "
+		"the external-finalize detect block) is missing or renamed in "
+		"scripts/orchestrate_poll_process.sh; update this test to match "
+		"the new landmark."
+	)
+	# Bound the search window to the block between the TRACKING_LABELS
+	# fetch and the merge_conflict switch so the assertion enforces
+	# *placement*, not just "appears anywhere in the file" (which would
+	# false-positive if a refactor moved the block to an unreachable
+	# branch).
+	merge_conflict_marker = 'if [ "${PROJECT_STATUS}" = "merge_conflict" ]; then'
+	merge_conflict_idx = poller_body.find(merge_conflict_marker, anchor_idx)
+	assert merge_conflict_idx != -1, (
+		'merge_conflict switch `if [ "${PROJECT_STATUS}" = "merge_conflict" ]` '
+		"is missing from the per-tracking-issue loop; the external-finalize "
+		"block must precede it so the new state transition is visible to "
+		"the same poll tick's project-status switch."
+	)
+	window = poller_body[anchor_idx:merge_conflict_idx]
+	# Gate condition: only fire when state is non-terminal AND a final
+	# PR is pinned AND `final_merge_status` is still `pending`.  Each
+	# of these three protects a different failure mode (terminal states
+	# already handled, no PR pinned yet means orchestrator hasn't even
+	# created the integration PR, non-pending status means another
+	# code path already finalized).
+	for needle, why in (
+		('.final_merge_pr // empty', "external-finalize block no longer reads `.final_merge_pr` from state; without it the block has no PR to inspect."),
+		('.final_merge_status // "pending"', "external-finalize block no longer reads `.final_merge_status` from state; without it the block cannot tell pending from already-finalized projects and would re-finalize on every tick."),
+		('= "pending"', "external-finalize block no longer guards on `final_merge_status = pending`; without this guard the block would re-fire after the orchestrator's own finalize path already ran."),
+		('repos/${GITHUB_REPOSITORY}/pulls/', "external-finalize block no longer fetches the pinned PR's state via the gh REST `pulls/{number}` endpoint; without it the block has no way to detect an external merge."),
+		("'.state'", "external-finalize block no longer reads the pinned PR's `.state` field; without it the block cannot tell open from closed PRs."),
+		("'.merged_at != null'", "external-finalize block no longer reads the pinned PR's `.merged_at` field; without it the block would mis-treat a closed-without-merge PR as a successful finalize."),
+	):
+		assert needle in window, (
+			f"external-finalize detect block in scripts/orchestrate_poll_process.sh "
+			f"no longer contains `{needle}` between the TRACKING_LABELS fetch and "
+			f"the merge_conflict switch — {why}"
+		)
+	# State mutation shape: must set BOTH status=complete AND
+	# final_merge_status=merged in the same jq pass.  Setting only one
+	# would leave the other path inconsistent: status=complete without
+	# final_merge_status=merged would re-trigger finalize on the next
+	# tick (wasting API budget); final_merge_status=merged without
+	# status=complete would leave the project stuck in `in_progress`
+	# and the wave-dispatch loop running.
+	for needle, why in (
+		('.status = "complete"', "external-finalize block no longer transitions project status to `complete`; without this the project stays in_progress and the wave-dispatch loop keeps firing on every tick."),
+		('.final_merge_status = "merged"', "external-finalize block no longer marks `final_merge_status = merged`; finalize_integration_merge_if_needed's early-return check at line 3917 would re-enter the merge flow on the next tick if it were ever called."),
+	):
+		assert needle in window, (
+			f"external-finalize detect block no longer performs the state "
+			f"mutation `{needle}` between TRACKING_LABELS and the merge_conflict "
+			f"switch — {why}"
+		)
+	# Side-effect surface: tracking comment + Telegram cleanup must
+	# both fire so the operator's open `Wave dispatch BLOCKED` alerts
+	# on the tracking issue + Telegram channel are explicitly
+	# superseded.  Without these the user sees stale BLOCKED comments
+	# at the top of the tracking issue indefinitely.
+	for needle, why in (
+		('post_tracking_comment', "external-finalize block no longer posts a tracking comment explaining the external-merge transition; operators would have to guess why the project suddenly went quiet."),
+		('tg_cleanup_msgs', "external-finalize block no longer calls tg_cleanup_msgs so prior `Wave dispatch BLOCKED` Telegram alerts stay pinned in the channel after the project completes — defeats half of the user-visible silence."),
+		('set_tracking_phase_label "ai:merged"', "external-finalize block no longer sets the `ai:merged` phase label, so downstream label-driven automation (release callbacks, label-repair sweeps) cannot detect that this project is done."),
+	):
+		assert needle in window, (
+			f"external-finalize detect block no longer triggers `{needle}` "
+			f"in its side-effect block — {why}"
+		)
+
+
 def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	# The resolver run: blocks were extracted into
 	# scripts/review_conflict_prepare.sh and

@@ -8462,6 +8462,65 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
 
   TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
 
+  # ---------------------------------------------------------------
+  # External-finalize detect: if the orchestrator previously recorded
+  # a final integration PR and an operator (or any other actor)
+  # squash-merged it outside the orchestrator's wave-by-wave flow,
+  # `finalize_integration_merge_if_needed` is never reached from the
+  # `in_progress` arm — it only fires from the `merge_conflict` branch
+  # and from the judge-`complete` verdict.  Without this hook, the
+  # poller keeps cycling on wave-dispatch indefinitely (e.g.
+  # orchestrator/project-2734: PR #2750 merged 2026-05-18T21:31:50Z
+  # but `final_merge_status` stayed `pending`, the wave-2 dispatch
+  # gate re-fired every ~30 min, and the Telegram channel collected
+  # several `Wave 2 dispatch BLOCKED` alerts per hour).
+  #
+  # Mirror the same blob-recovery shape that
+  # `finalize_integration_merge_if_needed` lines 3940-3951 already
+  # use so the two paths stay structurally identical: read
+  # `final_merge_pr` from state, fetch the PR's `.state` +
+  # `.merged_at` once, and only transition when both confirm
+  # closed-and-merged.  Two REST reads per poll tick when a final PR
+  # is pinned (matches CLAUDE.md §15: extends existing call shape,
+  # no new data shape).  Skipped entirely when `final_merge_pr` is
+  # unset (most projects pre-finalize) or `final_merge_status` is
+  # already terminal — making this a no-op on the happy path.
+  if [ "${PROJECT_STATUS}" != "complete" ] \
+    && [ "${PROJECT_STATUS}" != "failed" ] \
+    && [ "${PROJECT_STATUS}" != "validation-failed" ]; then
+    _orch_extfin_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
+    _orch_extfin_status="$(jq -r '.final_merge_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo "pending")"
+    if [ -n "${_orch_extfin_pr}" ] && [ "${_orch_extfin_pr}" != "null" ] \
+      && [ "${_orch_extfin_status}" = "pending" ]; then
+      _orch_extfin_pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${_orch_extfin_pr}" --jq '.state' 2>/dev/null || echo "")"
+      _orch_extfin_pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${_orch_extfin_pr}" --jq '.merged_at != null' 2>/dev/null || echo "")"
+      if [ "${_orch_extfin_pr_state}" = "closed" ] && [ "${_orch_extfin_pr_merged}" = "true" ]; then
+        echo "  [external-finalize] PR #${_orch_extfin_pr} merged outside the wave-by-wave flow; transitioning project to complete."
+        jq --argjson final_pr "${_orch_extfin_pr}" \
+          '.final_merge_pr = $final_pr
+           | .final_merge_status = "merged"
+           | .final_merge_error = ""
+           | .status = "complete"
+           | .judge_cycle = ((.judge_cycle // 0) + 1)' \
+          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        post_state_comment || true
+        handle_comprehensive_release_callback_if_needed "complete" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
+        set_tracking_phase_label "ai:merged"
+        post_tracking_comment "## ✅ Project complete — integration PR #${_orch_extfin_pr} merged externally
+
+The orchestrator detected that the integration PR was squash-merged outside the wave-by-wave dispatch flow (the typical pattern when an operator finalizes a project ahead of the planner). Transitioning status to \`complete\`; future poll ticks will skip this project and any open wave-dispatch alerts can be ignored."
+        tg_cleanup_msgs "${TRACKING_NUM}"
+        MSG="✅ Project #${TRACKING_NUM} completed (integration PR #${_orch_extfin_pr} merged externally)."
+        MSG+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
+        if [ -n "${GITHUB_RUN_ID:-}" ]; then
+          MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
+        fi
+        tg_send_msg "${MSG}" >/dev/null
+        PROJECT_STATUS="complete"
+      fi
+    fi
+  fi
+
   if [ "${PROJECT_STATUS}" = "merge_conflict" ]; then
     FINAL_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
     FINAL_DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
