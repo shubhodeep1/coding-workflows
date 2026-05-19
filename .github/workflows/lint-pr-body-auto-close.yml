@@ -1,0 +1,88 @@
+---
+# P1 from docs/postmortems/2026-05-18-project-2734-stall.md.
+#
+# Enforces CLAUDE.md §19 (and the mirror in unattended_system_instructions.md):
+# no `Fixes/Closes/Resolves #N` keyword may reference an
+# `ai:orchestrator-tracking` issue in a PR body, PR title, or commit message
+# that will land on the default branch. On squash-merge GitHub uses the PR
+# title + body for the squash commit message and auto-closes referenced
+# issues, which kills the orchestrator's wave-by-wave dispatch (poller
+# filters tracking issues by `--state open`).
+#
+# This was the layer-3 failure mode in project #2734: PR #2760 used
+# `Fixes #2734` in its body → GitHub auto-closed #2734 → orchestrator
+# stopped dispatching Waves 2-7 → 7 of 9 sub-issues never shipped code.
+# §19 was added (PR #2776) as a prose reaction to this incident; this
+# workflow turns the prose into an enforced check.
+name: Lint PR body for auto-close keywords against orchestrator-tracking issues
+
+"on":
+  pull_request:
+    # `edited` catches PR body changes after creation; `synchronize`
+    # catches new commits pushed to the PR head; `reopened` and
+    # `ready_for_review` ensure the check re-runs when a draft PR
+    # transitions to ready-for-review (which is when the merge button
+    # becomes available).
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+    branches: [main, stable]
+
+permissions:
+  # Read-only on issues so the lint can resolve labels of referenced
+  # issues. No write permissions needed — the lint only fails the check.
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          # Only need the lint script + the commit range for this PR. The
+          # workflow does not run any tooling that needs full history.
+          # Fetch enough history to enumerate commits between base and head
+          # via the GH API below (no local git log needed).
+          fetch-depth: 1
+
+      - name: Write PR body to file
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          # The pull_request event payload exposes the PR body directly;
+          # write it to disk so the lint script can read it from a stable
+          # path. Empty body is fine — the script will exit 0 with no
+          # violations.
+          mkdir -p /tmp/pr-body-lint
+          printf '%s' "${PR_BODY:-}" > /tmp/pr-body-lint/body.txt
+
+      - name: Fetch commit messages for this PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Stream the PR's commit messages via the GitHub API. Each commit
+          # message is written as a NUL-separated record so the lint script
+          # can recover record boundaries reliably (commit messages may
+          # contain newlines).
+          # CLAUDE.md §15: one paginated GraphQL/REST call covers up to 250
+          # commits per PR; well under any single-tick threshold.
+          gh api -X GET "repos/${REPO}/pulls/${PR_NUM}/commits" \
+            --paginate --jq '.[].commit.message' \
+            | awk 'BEGIN{first=1} {if(!first){printf "\0"} first=0; print}' \
+            > /tmp/pr-body-lint/commits.bin
+
+      - name: Run auto-close keyword lint
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/lint_pr_body_auto_close.py \
+            --pr-body-file /tmp/pr-body-lint/body.txt \
+            --commit-messages-file /tmp/pr-body-lint/commits.bin \
+            --repo "${GITHUB_REPOSITORY}"
