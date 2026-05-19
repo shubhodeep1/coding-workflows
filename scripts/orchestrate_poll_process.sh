@@ -8475,19 +8475,19 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   # gate re-fired every ~30 min, and the Telegram channel collected
   # several `Wave 2 dispatch BLOCKED` alerts per hour).
   #
-  # Mirror the same blob-recovery shape that
-  # `finalize_integration_merge_if_needed` lines 3940-3951 already
-  # use so the two paths stay structurally identical: read
-  # `final_merge_pr` from state, fetch the PR once via the shared
-  # `_fetch_pr_json` helper, and only transition when `.state` +
-  # `.merged_at` confirm closed-and-merged.  One REST read per poll
-  # tick when a final PR is pinned; skipped entirely when
-  # `final_merge_pr` is unset (most projects pre-finalize) or
-  # `final_merge_status` is already terminal — making this a no-op on
-  # the happy path.
+  # Mirror the same pinned-final-PR recovery shape that
+  # `finalize_integration_merge_if_needed` already uses once a final PR
+  # is recorded in state: read `final_merge_pr`, fetch the PR once via
+  # the shared `_fetch_pr_json` helper, and only transition when
+  # `.state` + `.merged_at` confirm closed-and-merged.  One REST read
+  # per poll tick when a final PR is pinned; skipped entirely when
+  # `final_merge_pr` is unset (most projects pre-finalize),
+  # `final_merge_status` is already terminal, or the project is already
+  # on the dedicated `merge_conflict` finalize path.
   if [ "${PROJECT_STATUS}" != "complete" ] \
     && [ "${PROJECT_STATUS}" != "failed" ] \
-    && [ "${PROJECT_STATUS}" != "validation-failed" ]; then
+    && [ "${PROJECT_STATUS}" != "validation-failed" ] \
+    && [ "${PROJECT_STATUS}" != "merge_conflict" ]; then
     _orch_extfin_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
     _orch_extfin_status="$(jq -r '.final_merge_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo "pending")"
     if [ -n "${_orch_extfin_pr}" ] && [ "${_orch_extfin_pr}" != "null" ] \

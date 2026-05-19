@@ -2932,6 +2932,39 @@ def test_merge_conflict_state_completes_when_final_pr_already_merged_and_branch_
 	assert result["release_dispatches"] == []
 
 
+def test_external_finalize_detect_leaves_merge_conflict_validation_path_intact():
+	state = _base_state(status="merge_conflict")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_pr"] = 356
+	state["final_merge_status"] = "pending"
+	prs = [
+		{
+			"number": 356,
+			"state": "closed",
+			"merged": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": None,
+			"mergeable_state": "unknown",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["final_merge_pr"] == 356
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert result["latest_state"]["validation_completed_cycle"] == 1
+	assert "ai:validated" in result["tracking_labels"]
+	assert "ai:merged" not in result["tracking_labels"]
+
+
 def test_external_finalize_detect_skips_terminal_fallthrough():
 	state = _base_state(status="in_progress")
 	state["integration_branch"] = "orchestrator/project-192"
@@ -8071,15 +8104,15 @@ def test_external_finalize_detect_marks_project_complete_when_final_pr_already_m
 	# `TRACKING_LABELS` is fetched and BEFORE the
 	# `if [ "${PROJECT_STATUS}" = "merge_conflict" ]` switch in the
 	# orchestrator's per-tracking-issue loop: read `final_merge_pr` +
-	# `final_merge_status` from state, fetch the PR's `.state` +
-	# `.merged_at` via the same `gh_retry _safe_gh_jq` call shape as
-	# `finalize_integration_merge_if_needed`, and on confirmed
+	# `final_merge_status` from state, fetch the PR once via the shared
+	# `_fetch_pr_json` + `_jq_field` helper path, and on confirmed
 	# closed-and-merged, transition status to `complete` so the
 	# existing `[ "${PROJECT_STATUS}" = "complete" ]` early-skip kicks
-	# in on the same tick.  This test pins the placement, the gate
-	# condition (status pending + PR pinned), AND the state mutation
-	# shape (status=complete + final_merge_status=merged) so a future
-	# refactor cannot silently drop any of the three.
+	# in on the same tick while leaving `merge_conflict` projects on
+	# their dedicated finalize/validation path.  This test pins the
+	# placement, the gate condition, AND the state mutation shape
+	# (status=complete + final_merge_status=merged) so a future refactor
+	# cannot silently drop any of the three.
 	poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
 	# Anchor on the `TRACKING_LABELS=` fetch that precedes the
 	# external-finalize block.  Only one such assignment exists in the
@@ -8110,17 +8143,19 @@ def test_external_finalize_detect_marks_project_complete_when_final_pr_already_m
 		"the same poll tick's project-status switch."
 	)
 	window = poller_body[anchor_idx:merge_conflict_idx]
-	# Gate condition: only fire when state is non-terminal AND a final
-	# PR is pinned AND `final_merge_status` is still `pending`.  Each
-	# of these three protects a different failure mode (terminal states
-	# already handled, no PR pinned yet means orchestrator hasn't even
-	# created the integration PR, non-pending status means another
-	# code path already finalized).
+	# Gate condition: only fire when state is non-terminal, not already
+	# on the dedicated `merge_conflict` finalize path, a final PR is
+	# pinned, and `final_merge_status` is still `pending`.  Each guard
+	# protects a different failure mode (terminal states already
+	# handled, `merge_conflict` needs its own finalize/validation path,
+	# no PR pinned yet means orchestrator hasn't even created the
+	# integration PR, non-pending status means another code path already
+	# finalized).
 	for needle, why in (
 		('.final_merge_pr // empty', "external-finalize block no longer reads `.final_merge_pr` from state; without it the block has no PR to inspect."),
 		('.final_merge_status // "pending"', "external-finalize block no longer reads `.final_merge_status` from state; without it the block cannot tell pending from already-finalized projects and would re-finalize on every tick."),
+		('!= "merge_conflict"', "external-finalize block no longer excludes `merge_conflict`; without that guard the block steals work from the dedicated finalize/validation path and duplicates final-PR reads on every merge_conflict poll tick."),
 		('= "pending"', "external-finalize block no longer guards on `final_merge_status = pending`; without this guard the block would re-fire after the orchestrator's own finalize path already ran."),
-		('repos/${GITHUB_REPOSITORY}/pulls/', "external-finalize block no longer fetches the pinned PR's state via the gh REST `pulls/{number}` endpoint; without it the block has no way to detect an external merge."),
 		("'.state'", "external-finalize block no longer reads the pinned PR's `.state` field; without it the block cannot tell open from closed PRs."),
 		("'.merged_at != null'", "external-finalize block no longer reads the pinned PR's `.merged_at` field; without it the block would mis-treat a closed-without-merge PR as a successful finalize."),
 	):
@@ -8144,7 +8179,7 @@ def test_external_finalize_detect_marks_project_complete_when_final_pr_already_m
 	# and the wave-dispatch loop running.
 	for needle, why in (
 		('.status = "complete"', "external-finalize block no longer transitions project status to `complete`; without this the project stays in_progress and the wave-dispatch loop keeps firing on every tick."),
-		('.final_merge_status = "merged"', "external-finalize block no longer marks `final_merge_status = merged`; finalize_integration_merge_if_needed's early-return check at line 3917 would re-enter the merge flow on the next tick if it were ever called."),
+		('.final_merge_status = "merged"', "external-finalize block no longer marks `final_merge_status = merged`; finalize_integration_merge_if_needed's early-return check would re-enter the merge flow on the next tick if it were ever called."),
 	):
 		assert needle in window, (
 			f"external-finalize detect block no longer performs the state "
