@@ -395,7 +395,8 @@ PR_DIFF_TRUNCATED=false
 PR_DIFF_BYTES_TOTAL="$(printf '%s' "${PR_DIFF}" | wc -c | tr -cd '0-9' || true)"
 [ -n "${PR_DIFF_BYTES_TOTAL}" ] || PR_DIFF_BYTES_TOTAL=0
 if [ "${PR_DIFF_BYTES_TOTAL}" -gt "${RB_JUDGE_PR_DIFF_MAX_BYTES}" ]; then
-  PR_DIFF="$(printf '%s' "${PR_DIFF}" | PYTHONDONTWRITEBYTECODE=1 python3 -c '
+  PR_DIFF_TRUNCATED_CONTENT=""
+  if PR_DIFF_TRUNCATED_CONTENT="$(printf '%s' "${PR_DIFF}" | PYTHONDONTWRITEBYTECODE=1 python3 -c '
 import sys
 
 data = sys.stdin.buffer.read()
@@ -406,7 +407,17 @@ if cap > 0 and len(data) > cap:
         i -= 1
     data = data[:i]
 sys.stdout.buffer.write(data)
-' "${RB_JUDGE_PR_DIFF_MAX_BYTES}")"
+' "${RB_JUDGE_PR_DIFF_MAX_BYTES}" 2>/dev/null)"; then
+    PR_DIFF="${PR_DIFF_TRUNCATED_CONTENT}"
+  else
+    echo "::warning::python3 unavailable for UTF-8-safe PR diff truncation; falling back to a raw byte prefix. sanitize_codex_prompt_file will strip any invalid trailing bytes before codex reads the prompt."
+    PR_DIFF_FALLBACK_FILE="$(mktemp "${TMPDIR:-/tmp}/review-rb-judge-pr-diff.XXXXXX")"
+    printf '%s' "${PR_DIFF}" > "${PR_DIFF_FALLBACK_FILE}"
+    PR_DIFF="$(head -c "${RB_JUDGE_PR_DIFF_MAX_BYTES}" "${PR_DIFF_FALLBACK_FILE}")"
+    rm -f "${PR_DIFF_FALLBACK_FILE}" 2>/dev/null || true
+    unset PR_DIFF_FALLBACK_FILE
+  fi
+  unset PR_DIFF_TRUNCATED_CONTENT
   PR_DIFF_TRUNCATED=true
 fi
 PRELOADED_PR_META="$(jq -c '{
@@ -540,7 +551,7 @@ _init_prompt_budget "${RB_JUDGE_CONTEXT_BUDGET_BYTES}"
   # the model runs and every retry in the reasoning ladder fails
   # identically (see PR shubhodeep1/bitsafe.io#368, run 26092826715).
   if [ "${PR_DIFF_TRUNCATED}" = "true" ]; then
-    echo "[NOTE: PR diff is ${PR_DIFF_BYTES_TOTAL} bytes; truncated to a UTF-8-safe prefix within ${RB_JUDGE_PR_DIFF_MAX_BYTES} bytes to fit codex stdin (1 MB cap). Use exec-read on specific files for the elided tail if needed; the judge runs --sandbox read-only so file reads are available.]"
+    echo "[NOTE: PR diff is ${PR_DIFF_BYTES_TOTAL} bytes; truncated to a prefix within ${RB_JUDGE_PR_DIFF_MAX_BYTES} bytes to fit codex stdin (1 MB cap). Use exec-read on specific files for the elided tail if needed; the judge runs --sandbox read-only so file reads are available.]"
     echo
   fi
   printf '%s\n' "${PR_DIFF}"
