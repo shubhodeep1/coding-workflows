@@ -1570,10 +1570,10 @@ if args[0] == 'api':
 				'workflow_runs': workflow_runs,
 			}
 			p = subprocess.run(['jq', '-r', jq], input=json.dumps(body_obj), capture_output=True, text=True)
-			save()
 			if p.returncode != 0:
 				sys.stderr.write(p.stderr)
 				sys.exit(p.returncode)
+			save()
 			sys.stdout.write(p.stdout)
 			sys.exit(0)
 		status_text = 'OK' if status == 200 else 'Not Modified'
@@ -5705,8 +5705,8 @@ def test_retrigger_review_skips_empty_commit_when_review_run_inflight():
 	issue["status_since_ts"] = 1
 	issue["stall_recovery_count"] = 0
 	head_ref = "claude/retrigger-review-inflight-run"
-	# run_started_at is "now" (the poller's clock), so the run is well
-	# under the STALL_THRESHOLD_MINUTES zombie cutoff.
+	# run_started_at uses a far-future sentinel so the run is guaranteed
+	# to stay under the STALL_THRESHOLD_MINUTES zombie cutoff.
 	result = _run_poller(
 		state=state,
 		enable_validation="false",
