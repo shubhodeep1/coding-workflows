@@ -3979,6 +3979,14 @@ jobs:
           set -euo pipefail
 
           EDITOR_NOOP_SUSPICIOUS="false"
+          # Additive refusal-specific signal (per CLAUDE.md §6 — do NOT
+          # rename EDITOR_NOOP_SUSPICIOUS; add alongside). Set when the
+          # fallback summary contains the "model refused (safety filter)"
+          # sentinel that review_apply_fixes.sh writes after detecting an
+          # OpenAI-style refusal. Lets downstream consumers (Telegram
+          # alerts, operators) distinguish "model refused — re-run" from
+          # generic "no-op suspicious — manual review".
+          EDITOR_NOOP_REFUSAL="false"
 
           if [ ! -s "${EDITOR_SUMMARY_FILE:-}" ]; then
             echo "::warning::Editor summary file is missing or empty — editor never produced output."
@@ -3991,6 +3999,21 @@ jobs:
             if grep -qiE 'editor failed before producing|unavailable \(editor fallback\)' "${EDITOR_SUMMARY_FILE}"; then
               echo "::warning::Editor summary contains failure/fallback markers — editor never completed a validated review."
               EDITOR_NOOP_SUSPICIOUS="true"
+            fi
+
+            # ── Check 1b: Detect refusal-specific sentinel ──
+            # When the editor model returns a safety-policy refusal,
+            # review_apply_fixes.sh writes "Runtime failure path: -
+            # model refused (safety filter)" into the fallback summary
+            # alongside the existing failure markers. Check 1 above
+            # already set EDITOR_NOOP_SUSPICIOUS=true via the existing
+            # markers (which the refusal fallback preserves verbatim for
+            # lockstep — see probably_unnecessary_but_read_if_stuck.md
+            # §20.10). This additive check sets EDITOR_NOOP_REFUSAL=true
+            # so a more specific alert can be surfaced downstream.
+            if grep -qiE 'model refused \(safety filter\)' "${EDITOR_SUMMARY_FILE}"; then
+              echo "::notice::Editor returned a safety-policy refusal — re-run is likely to succeed once the provider-side cache expires."
+              EDITOR_NOOP_REFUSAL="true"
             fi
 
             # ── Check 2: Reviewer audit sanity ──
@@ -4043,6 +4066,7 @@ jobs:
           fi
 
           echo "EDITOR_NOOP_SUSPICIOUS=${EDITOR_NOOP_SUSPICIOUS}" >> "$GITHUB_ENV"
+          echo "EDITOR_NOOP_REFUSAL=${EDITOR_NOOP_REFUSAL}" >> "$GITHUB_ENV"
 
       - name: Detect merge conflicts
         # The pre-review gate above only short-circuits deterministic stale/
