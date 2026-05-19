@@ -154,14 +154,15 @@ env:
   # CI/lint failures are detected and fixed every run. See README and
   # agents.md for the contract.
   CHECK_RUNS_AUTOFIX_ENABLED: ${{ vars.CHECK_RUNS_AUTOFIX_ENABLED || 'true' }}
-  CHECK_RUNS_WAIT_TIMEOUT_SECS: ${{ vars.CHECK_RUNS_WAIT_TIMEOUT_SECS || '120' }}
-  CHECK_RUNS_POLL_INTERVAL_SECS: ${{ vars.CHECK_RUNS_POLL_INTERVAL_SECS || '30' }}
+  CHECK_RUNS_WAIT_TIMEOUT_SECS: ${{ vars.CHECK_RUNS_WAIT_TIMEOUT_SECS || '1200' }}
+  CHECK_RUNS_POLL_INTERVAL_SECS: ${{ vars.CHECK_RUNS_POLL_INTERVAL_SECS || '20' }}
   # Per-failed-check-run cap on the `failed[i].log_tail` snapshot field
   # written by the "Collect PR check-run failures" step. The writer pulls
   # the failing job's GitHub Actions log via `gh run view --log --job`
-  # (using the run/job IDs parsed from the already-captured details_url),
-  # then trims to the last CHECK_RUNS_LOG_TAIL_BYTES bytes followed by
-  # the last 200 lines — keeps actionable failure detail in reach when
+  # (using the run/job IDs parsed from the already-captured details_url)
+  # only when the Checks API summary is empty, then trims to the last
+  # CHECK_RUNS_LOG_TAIL_BYTES bytes followed by the last 200 lines —
+  # keeps actionable failure detail in reach when
   # consumer CI steps (bare `npm test`, `pytest`, `make test`) don't
   # emit `::error::` annotations and the Checks API output.summary is
   # empty. Fail-open: any fetch error writes an empty log_tail and the
@@ -1924,13 +1925,13 @@ jobs:
 
           # Clamp configurable values to safe ranges. Invalid values fall back
           # to defaults rather than failing the workflow.
-          _wait_timeout="${CHECK_RUNS_WAIT_TIMEOUT_SECS:-120}"
+          _wait_timeout="${CHECK_RUNS_WAIT_TIMEOUT_SECS:-1200}"
           if ! [[ "${_wait_timeout}" =~ ^[0-9]+$ ]] || [ "${_wait_timeout}" -gt 3600 ]; then
-            _wait_timeout=120
+            _wait_timeout=1200
           fi
-          _poll_interval="${CHECK_RUNS_POLL_INTERVAL_SECS:-30}"
+          _poll_interval="${CHECK_RUNS_POLL_INTERVAL_SECS:-20}"
           if ! [[ "${_poll_interval}" =~ ^[0-9]+$ ]] || [ "${_poll_interval}" -lt 5 ] || [ "${_poll_interval}" -gt 300 ]; then
-            _poll_interval=30
+            _poll_interval=20
           fi
 
           _raw_file="$(mktemp)"
@@ -2114,15 +2115,17 @@ jobs:
                   fh.write(f"failed[{i}].app: {short(app)}\n")
                   fh.write(f"failed[{i}].html_url: {short(r.get('html_url'))}\n")
                   fh.write(f"failed[{i}].details_url: {short(r.get('details_url'))}\n")
+                  summary = short(output.get('summary'), 1200)
                   fh.write(f"failed[{i}].title: {short(output.get('title'))}\n")
-                  fh.write(f"failed[{i}].summary: {short(output.get('summary'), 1200)}\n")
-                  # Pull the failing job's GitHub Actions log tail so the
-                  # editor has actionable failure detail (test name +
-                  # file:line + stack) even when the CI step doesn't emit
-                  # `::error::` annotations and `output.summary` is empty.
+                  fh.write(f"failed[{i}].summary: {summary}\n")
+                  # Pull the failing job's GitHub Actions log tail only when
+                  # the Checks API summary is empty; otherwise rely on the
+                  # summary to avoid extra API calls and prompt bloat.
                   # See CHECK_RUNS_LOG_TAIL_BYTES at the workflow env
                   # block for sizing / opt-out.
-                  log_tail = fetch_log_tail(r.get("details_url") or "")
+                  log_tail = ""
+                  if not summary.strip():
+                      log_tail = fetch_log_tail(r.get("details_url") or "")
                   fh.write(f"failed[{i}].log_tail ({len(log_tail)} chars):\n")
                   if log_tail:
                       fh.write(log_tail)
