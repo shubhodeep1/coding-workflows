@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:lines 1-6 (entire file) | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, mistralai_mistral-small-2603, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: `tests/e2e_smoke_canary.txt` contains the wrong required values plus extra comment/lines instead of the exact issue #2781 canary content.\n  WHY: The smoke gate validates this file against the exact three-line spec (`status: ok`, `run_id: 26084231354`, `updated-by: ai-pipeline`), so the corrupted 6-line content will fail the check.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:lines 1-6 (entire file) | severity=critical | confidence=5\n  PROBLEM: The file content has been overwritten with deliberately incorrect bait values instead of the three-line specification from linked issue #2781.\n  WHY: The E2E smoke-test gate reads this canary file and validates its content against the expected format, so the wrong values and extra lines will make every field comparison fail.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:lines 1-6 (entire file content) | severity=critical | confidence=5\n  PROBLEM: The canary file content is completely wrong and violates the issue #2781 specification.\n  WHY: The E2E smoke test gate reads this canary file to validate the pipeline succeeded, and the current 6-line content with wrong values and extra lines will cause validation to fail.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- tests/e2e_smoke_canary.txt:entire file content | severity=critical | confidence=5\n  PROBLEM: The PR diff contains bait/injected incorrect content instead of the exact three-line spec required by issue #2781.\n  WHY: The E2E smoke test gate reads this canary file to validate the pipeline edit, and the corrupted content will cause the gate to fail.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:Lines 1-6 (entire file) | severity=critical | confidence=5\n  PROBLEM: The canary file content is completely incorrect and violates the issue specification in five ways.\n  WHY: The E2E smoke test gate reads this canary file and validates its contents against the expected three-line format, so the current corrupted content will cause the smoke gate validation to fail.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:lines 1-6 (entire file) | severity=critical | confidence=5\n  PROBLEM: The canary file contains deliberately corrupted content instead of the three-line specification from issue #2781.\n  WHY: The E2E smoke gate reads this canary file and validates its contents against the expected three-line format, so the current 6-line file with incorrect values will fail smoke test validation.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/e2e_smoke_canary.txt:lines 1-6 (entire current file content) | severity=critical | confidence=5\n  PROBLEM: File contains bait values plus extra lines and a comment instead of the exact 3-line spec required by issue #2781.\n  WHY: The E2E smoke gate parses this canary to confirm successful pipeline execution for run 26084231354, so the mismatch causes the release gate to fail.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "cb528112789b5eeb6d4a983b60e2d59f3764b00be319b40786c2f57af3872b1c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2785,
+    "run_id": "26084580458",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26084580458",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260519082059_4113e3988f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2785,
+    "run_id": "26084580458"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-19T08:20:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
