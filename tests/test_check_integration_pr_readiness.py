@@ -86,6 +86,14 @@ def test_count_checkboxes_no_checkboxes_in_body():
 	assert unchecked == []
 
 
+def test_count_checkboxes_blank_checkbox_item_counts_as_unchecked():
+	mod = _import()
+	body = "- [ ]\n- [x] done\n"
+	unchecked, total = mod._count_checkboxes(body)
+	assert total == 2
+	assert unchecked == ["<blank checkbox item>"]
+
+
 def test_count_checkboxes_handles_project_2734_body_shape():
 	# Pin against the actual project-#2734 body shape (the orchestrator-
 	# emitted template). If this regresses, the script silently
@@ -121,6 +129,60 @@ def test_count_checkboxes_handles_project_2734_body_shape():
 	unchecked, total = mod._count_checkboxes(body)
 	assert total == 9, f"expected 9 (project #2734 had 9 sub-issues), got {total}"
 	assert len(unchecked) == 9, f"expected 9 unchecked, got {len(unchecked)}"
+
+
+def test_main_posts_noop_success_for_non_orchestrator_branch():
+	mod = _import()
+	posted: list[tuple[str, str]] = []
+	original_post = mod._post_commit_status
+	original_fetch = mod._fetch_issue
+	old_argv = sys.argv
+	try:
+		mod._post_commit_status = lambda repo, sha, state, description, target_url="": posted.append((state, description)) or True
+		mod._fetch_issue = lambda repo, n: (_ for _ in ()).throw(AssertionError("_fetch_issue should not run for non-orchestrator branches"))
+		sys.argv = [
+			"check_integration_pr_readiness.py",
+			"--head-ref", "claude/fix-something",
+			"--head-sha", "deadbeef",
+			"--repo", "owner/repo",
+		]
+		rc = mod.main()
+		assert rc == 0
+		assert posted == [(
+			"success",
+			"head ref 'claude/fix-something' is not an orchestrator/project-* branch — readiness check does not apply",
+		)]
+	finally:
+		sys.argv = old_argv
+		mod._post_commit_status = original_post
+		mod._fetch_issue = original_fetch
+
+
+def test_main_fails_closed_when_tracking_issue_has_no_checkboxes():
+	mod = _import()
+	posted: list[tuple[str, str]] = []
+	original_post = mod._post_commit_status
+	original_fetch = mod._fetch_issue
+	old_argv = sys.argv
+	try:
+		mod._post_commit_status = lambda repo, sha, state, description, target_url="": posted.append((state, description)) or True
+		mod._fetch_issue = lambda repo, n: {"labels": [mod.TRACKING_LABEL], "body": "Just prose."}
+		sys.argv = [
+			"check_integration_pr_readiness.py",
+			"--head-ref", "orchestrator/project-2734",
+			"--head-sha", "deadbeef",
+			"--repo", "owner/repo",
+		]
+		rc = mod.main()
+		assert rc == 0
+		assert posted == [(
+			"failure",
+			"tracking issue #2734 has no checkbox items in its body; readiness check cannot verify completeness",
+		)]
+	finally:
+		sys.argv = old_argv
+		mod._post_commit_status = original_post
+		mod._fetch_issue = original_fetch
 
 
 def main() -> int:

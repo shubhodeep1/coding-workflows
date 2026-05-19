@@ -136,6 +136,20 @@ def test_regex_does_not_match_substring_or_unrelated_words():
 		)
 
 
+def test_markdown_code_examples_in_pr_body_are_ignored():
+	mod = _import_lint_module()
+	text = (
+		"Historical example: `Fixes #2734` should not be linted.\n\n"
+		"```markdown\n"
+		"Closes #2734\n"
+		"```\n\n"
+		"Real directive: Closes #99\n"
+	)
+	matches = mod._scan_text("PR body", text, markdown=True)
+	assert len(matches) == 1, f"expected only the non-code-span directive to match, got {matches!r}"
+	assert matches[0][3] == 99
+
+
 def test_tracking_labeled_issue_produces_violation():
 	mod = _import_lint_module()
 	def fake_lookup(repo: str, issue: int) -> list[str]:

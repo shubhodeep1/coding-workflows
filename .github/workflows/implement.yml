@@ -3871,6 +3871,11 @@ jobs:
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
+          PR_BODY_FILE="${RUNTIME_DIR}/pr-body-lint/body.txt"
+          if [ ! -f "${PR_BODY_FILE}" ]; then
+            echo "::error::expected PR body file missing: ${PR_BODY_FILE}" >&2
+            exit 1
+          fi
 
           # Atomically apply force-review + e2e-smoke-test labels at PR
           # creation time when this is a smoke-test run. Applying them
@@ -3888,7 +3893,7 @@ jobs:
             --base "${PR_BASE_BRANCH}"
             --head "${TARGET_BRANCH}"
             --title "AI implementation for issue #${ISSUE_NUMBER}"
-            --body "Automated implementation. Closes ${ISSUE_URL}"
+            --body-file "${PR_BODY_FILE}"
           )
           if [ "${IS_SMOKE_TEST:-false}" = "true" ]; then
             PR_CREATE_ARGS+=(--label "force-review" --label "e2e-smoke-test")

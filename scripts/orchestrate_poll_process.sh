@@ -3391,23 +3391,33 @@ _refresh_integration_resolver_tooling() {
               skipped_count=$((skipped_count + 1))
               continue
             fi
-            git cat-file -p "${base_hash}" > "${merge_tmpdir}/base" 2>/dev/null || : > "${merge_tmpdir}/base"
-            git cat-file -p "${int_hash}"  > "${merge_tmpdir}/int"  2>/dev/null
-            git cat-file -p "${main_hash}" > "${merge_tmpdir}/main" 2>/dev/null
+            if ! git cat-file -p "${base_hash}" > "${merge_tmpdir}/base" 2>/dev/null \
+              || ! git cat-file -p "${int_hash}" > "${merge_tmpdir}/int" 2>/dev/null \
+              || ! git cat-file -p "${main_hash}" > "${merge_tmpdir}/main" 2>/dev/null; then
+              echo "::warning::${log_prefix} could not materialize one or more 3-way merge inputs for ${f}; skipping." >&2
+              skipped_count=$((skipped_count + 1))
+              rm -rf "${merge_tmpdir}" 2>/dev/null || true
+              continue
+            fi
             if git merge-file --quiet -L integration -L merge-base -L main \
                 "${merge_tmpdir}/int" "${merge_tmpdir}/base" "${merge_tmpdir}/main" 2>/dev/null; then
               # Clean merge (exit 0): integration + main edits combined
               # without conflict. Stage the merged content as the new
               # integration-branch version.
-              if cp "${merge_tmpdir}/int" "${f}" 2>/dev/null && git add -- "${f}" 2>/dev/null; then
-                refreshed_count=$((refreshed_count + 1))
-                refreshed_list+="${f} "
-                merged_3way_count=$((merged_3way_count + 1))
-                local _m_int_short="${int_hash:0:8}"
-                local _m_main_short="${main_hash:0:8}"
-                echo "  ${log_prefix} 3-way merged ${f} — combined integration (${_m_int_short}) and main (${_m_main_short}) edits since merge-base."
+              if cp "${merge_tmpdir}/int" "${f}" 2>/dev/null; then
+                if git add -- "${f}" 2>/dev/null; then
+                  refreshed_count=$((refreshed_count + 1))
+                  refreshed_list+="${f} "
+                  merged_3way_count=$((merged_3way_count + 1))
+                  local _m_int_short="${int_hash:0:8}"
+                  local _m_main_short="${main_hash:0:8}"
+                  echo "  ${log_prefix} 3-way merged ${f} — combined integration (${_m_int_short}) and main (${_m_main_short}) edits since merge-base."
+                else
+                  git checkout -- "${f}" 2>/dev/null || true
+                  echo "::warning::${log_prefix} git add failed after 3-way merge of ${f}; reverted worktree copy and excluded it from the refresh commit." >&2
+                fi
               else
-                echo "::warning::${log_prefix} 3-way merge of ${f} succeeded but staging failed; excluding from refresh commit." >&2
+                echo "::warning::${log_prefix} could not copy 3-way merge result for ${f}; excluding from refresh commit." >&2
               fi
             else
               # Non-zero exit: conflicts (1+) or merge-file error

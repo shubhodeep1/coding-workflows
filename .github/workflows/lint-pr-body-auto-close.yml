@@ -1,13 +1,16 @@
 ---
 # P1 from docs/postmortems/2026-05-18-project-2734-stall.md.
 #
-# Enforces CLAUDE.md §19 (and the mirror in unattended_system_instructions.md):
-# no `Fixes/Closes/Resolves #N` keyword may reference an
-# `ai:orchestrator-tracking` issue in a PR body, PR title, or commit message
-# that will land on the default branch. On squash-merge GitHub uses the PR
-# title + body for the squash commit message and auto-closes referenced
-# issues, which kills the orchestrator's wave-by-wave dispatch (poller
-# filters tracking issues by `--state open`).
+# Enforces CLAUDE.md §19 (and the mirror in unattended_system_instructions.md)
+# on the merge path this repo actually uses: squash merge. On squash-merge,
+# GitHub uses the PR title + body for the squash commit message and
+# auto-closes referenced issues, which kills the orchestrator's wave-by-wave
+# dispatch (poller filters tracking issues by `--state open`).
+#
+# The companion script still supports optional commit-message scanning for
+# callers that need it, but this workflow intentionally checks the PR body
+# only so already-pushed historical commit bodies do not require history
+# rewrites to merge a preventive-fix PR.
 #
 # This was the layer-3 failure mode in project #2734: PR #2760 used
 # `Fixes #2734` in its body → GitHub auto-closed #2734 → orchestrator
@@ -59,30 +62,13 @@ jobs:
           mkdir -p /tmp/pr-body-lint
           printf '%s' "${PR_BODY:-}" > /tmp/pr-body-lint/body.txt
 
-      - name: Fetch commit messages for this PR
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUM: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          # Stream the PR's commit messages via the GitHub API. Each commit
-          # message is written as a NUL-separated record so the lint script
-          # can recover record boundaries reliably (commit messages may
-          # contain newlines).
-          # CLAUDE.md §15: one paginated GraphQL/REST call covers up to 250
-          # commits per PR; well under any single-tick threshold.
-          gh api -X GET "repos/${REPO}/pulls/${PR_NUM}/commits" \
-            --paginate --jq '.[].commit.message' \
-            | awk 'BEGIN{first=1} {if(!first){printf "\0"} first=0; print}' \
-            > /tmp/pr-body-lint/commits.bin
-
       - name: Run auto-close keyword lint
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # This required check validates the PR body — the text that
+          # squash merge copies onto the default branch in this repo.
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/lint_pr_body_auto_close.py \
             --pr-body-file /tmp/pr-body-lint/body.txt \
-            --commit-messages-file /tmp/pr-body-lint/commits.bin \
             --repo "${GITHUB_REPOSITORY}"

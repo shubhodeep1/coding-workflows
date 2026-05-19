@@ -42,10 +42,11 @@ jobs:
   readiness:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # Only run on orchestrator integration PRs. Non-orchestrator PRs
-    # would otherwise emit a "no-op success" status, which clutters the
-    # required-checks UI. Match `orchestrator/project-*` head refs.
-    if: startsWith(github.event.pull_request.head.ref, 'orchestrator/project-')
+    # Run on every PR so the status context exists when branch
+    # protection marks it required. The script itself posts a no-op
+    # success on non-orchestrator branches, which keeps the trust
+    # boundary out of workflow expressions and avoids actionlint's
+    # untrusted-inline-script warning path.
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -66,10 +67,13 @@ jobs:
       - name: Check integration PR readiness and post status
         env:
           GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_integration_pr_readiness.py \
-            --head-ref "${{ github.event.pull_request.head.ref }}" \
-            --head-sha "${{ github.event.pull_request.head.sha }}" \
+            --head-ref "${HEAD_REF}" \
+            --head-sha "${HEAD_SHA}" \
             --pr-labels-file /tmp/integration-pr-readiness/labels.txt \
-            --repo "${GITHUB_REPOSITORY}"
+            --repo "${REPO}"

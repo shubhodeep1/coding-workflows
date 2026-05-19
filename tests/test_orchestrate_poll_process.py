@@ -8769,6 +8769,16 @@ def test_resolver_tooling_refresh_function_has_3way_merge_fallback():
 		"counter the post-refresh summary cannot distinguish 3-way merges from "
 		"deadlock-breaker checkouts."
 	)
+	assert ': > "${merge_tmpdir}/base"' not in fn_body, (
+		"_refresh_integration_resolver_tooling must not fabricate an empty 3-way "
+		"merge base on `git cat-file` failure. A zero-byte ancestor silently "
+		"degrades the merge and can lose the true merge-base context."
+	)
+	assert "could not materialize one or more 3-way merge inputs" in fn_body, (
+		"_refresh_integration_resolver_tooling must warn and skip when any 3-way "
+		"merge input blob cannot be materialized. Without this guard the function "
+		"can run `git merge-file` with missing or stale tmpfile inputs."
+	)
 	assert "git merge-file" in fn_body, (
 		"_refresh_integration_resolver_tooling must call `git merge-file` to do "
 		"the 3-way merge of integration + main edits when both sides changed "
@@ -8802,6 +8812,11 @@ def test_resolver_tooling_refresh_function_has_3way_merge_fallback():
 	assert "merged_3way_count=$((merged_3way_count + 1))" in fn_body, (
 		"successful 3-way merge must increment merged_3way_count so the "
 		"post-refresh summary and commit-message body can report it."
+	)
+	assert 'git checkout -- "${f}"' in fn_body, (
+		"the 3-way merge path must revert the worktree copy when `git add` fails. "
+		"Without the revert, a staging failure leaves the poller worktree dirty and "
+		"out of sync with the refresh commit."
 	)
 	# Conflict path must fall through to `skipped_count` (matching the
 	# existing skip semantics from PR #2760) — never stage a file with

@@ -30,6 +30,10 @@ Usage:
 Generator-side usage (P4 in docs/postmortems/2026-05-18-project-2734-stall.md):
   call this script BEFORE submitting an AI-authored PR body and refuse to
   create the PR if exit code != 0.
+
+Markdown note: PR bodies are scanned after masking fenced code blocks and
+inline code spans so historical examples like `` `Fixes #2734` `` do not
+false-positive. Commit messages remain plain-text scans.
 """
 
 from __future__ import annotations
@@ -80,6 +84,8 @@ AUTO_CLOSE_RE = re.compile(
 # against an issue with this label are forbidden because closing the
 # tracking issue stops wave dispatch.
 TRACKING_LABEL = "ai:orchestrator-tracking"
+FENCED_CODE_RE = re.compile(r"^\s*(```+|~~~+)")
+INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
 
 
 class LintViolation:
@@ -142,7 +148,7 @@ def _fetch_issue_labels_gh(repo: str, issue_number: int) -> list[str] | None:
 	return [str(label) for label in labels]
 
 
-def _scan_text(source: str, text: str) -> list[tuple[int, str, str, int]]:
+def _scan_text(source: str, text: str, *, markdown: bool = False) -> list[tuple[int, str, str, int]]:
 	"""Return a list of (line_no, line, keyword, issue_number) tuples for every
 	auto-close keyword match in `text`. line_no is 1-based.
 
@@ -152,7 +158,27 @@ def _scan_text(source: str, text: str) -> list[tuple[int, str, str, int]]:
 	match; we pick whichever fired.
 	"""
 	matches: list[tuple[int, str, str, int]] = []
-	for line_no, line in enumerate(text.splitlines(), start=1):
+	in_fenced_code = False
+	fence_char = ""
+	fence_len = 0
+	for line_no, raw_line in enumerate(text.splitlines(), start=1):
+		line = raw_line
+		if markdown:
+			stripped = raw_line.lstrip()
+			if in_fenced_code:
+				if stripped.startswith(fence_char * fence_len):
+					in_fenced_code = False
+					fence_char = ""
+					fence_len = 0
+				continue
+			fence_match = FENCED_CODE_RE.match(raw_line)
+			if fence_match:
+				fence_token = fence_match.group(1)
+				in_fenced_code = True
+				fence_char = fence_token[0]
+				fence_len = len(fence_token)
+				continue
+			line = INLINE_CODE_RE.sub("", raw_line)
 		for m in AUTO_CLOSE_RE.finditer(line):
 			issue_str = m.group("issue_short") or m.group("issue_url")
 			if not issue_str:
@@ -187,7 +213,7 @@ def lint(
 		label_lookup = _fetch_issue_labels_gh
 
 	candidate_matches: list[tuple[str, int, str, str, int]] = []
-	for line_no, line, keyword, issue in _scan_text("PR body", pr_body):
+	for line_no, line, keyword, issue in _scan_text("PR body", pr_body, markdown=True):
 		candidate_matches.append(("PR body", line_no, line, keyword, issue))
 	for rec_no, msg in commit_messages:
 		for line_no, line, keyword, issue in _scan_text(f"commit message #{rec_no}", msg):

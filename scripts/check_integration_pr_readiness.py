@@ -14,17 +14,20 @@ sub-issue checkboxes, and posts a commit status of:
   - success when 0 unchecked items, OR when an explicit override
     label `ai:override-incomplete-merge` is applied to the integration
     PR (auditable escape valve).
-  - failure when >0 unchecked items AND no override label.
+  - failure when >0 unchecked items, OR when the tracking issue body
+    contains no parseable checkbox items, AND no override label.
 
 The integration PR's head ref is the input — by convention orchestrator
 integration branches are `orchestrator/project-<N>`. The script derives
-the tracking issue number from the branch name.
+the tracking issue number from the branch name. Non-matching refs get a
+no-op success status so the required-check context exists on every PR
+targeting the protected branch.
 
 Exit codes:
-  0 — readiness check posted (success or pending or failure — the script
-      itself always succeeds; the commit status is what gates merge).
-  1 — could not derive tracking issue from branch name; could not fetch
-      tracking issue; or any other unrecoverable error.
+  0 — readiness check posted (success or failure), OR the head ref is
+	      outside `orchestrator/project-*` so the check does not apply.
+  1 — head ref matched `orchestrator/project-*` but the script could not
+	      fetch the tracking issue or hit another unrecoverable error.
   2 — usage error.
 
 Usage:
@@ -51,7 +54,7 @@ TRACKING_LABEL = "ai:orchestrator-tracking"
 OVERRIDE_LABEL = "ai:override-incomplete-merge"
 
 BRANCH_RE = re.compile(r"^orchestrator/project-(?P<n>\d+)$")
-CHECKBOX_RE = re.compile(r"^\s*-\s*\[(?P<state>[ xX])\]\s+(?P<text>.+)$")
+CHECKBOX_RE = re.compile(r"^\s*-\s*\[(?P<state>[ xX])\]\s*(?P<text>.*)$")
 
 
 def _derive_tracking_issue(head_ref: str) -> int | None:
@@ -88,7 +91,8 @@ def _count_checkboxes(body: str) -> tuple[list[str], int]:
 		if m:
 			total += 1
 			if m.group("state") == " ":
-				unchecked.append(m.group("text").strip())
+				text = (m.group("text") or "").strip()
+				unchecked.append(text or "<blank checkbox item>")
 	return unchecked, total
 
 
@@ -136,8 +140,9 @@ def main() -> int:
 	tracking_num = _derive_tracking_issue(args.head_ref)
 	if tracking_num is None:
 		# Not an orchestrator integration branch — no readiness check
-		# applies. Post a neutral success so the status appears but
-		# does not block merge.
+		# applies. Post a neutral success so the required-check context
+		# still exists on non-orchestrator PRs when branch protection
+		# marks this status required.
 		desc = f"head ref {args.head_ref!r} is not an orchestrator/project-* branch — readiness check does not apply"
 		print(f"::notice::{desc}")
 		if not args.dry_run:
@@ -180,13 +185,13 @@ def main() -> int:
 		return 0
 
 	if total == 0:
-		# Tracking issue body has no checkboxes at all — either an
-		# unusual project shape or a body that hasn't been initialised.
-		# Treat as neutral success but note it.
-		desc = f"tracking issue #{tracking_num} has no checkboxes in its body; readiness check has no signal to gate on"
-		print(f"::notice::{desc}")
+		# Fail closed when the tracking issue body has no parseable task
+		# list items. A vacuous success would let an incomplete
+		# integration PR merge with zero completeness signal.
+		desc = f"tracking issue #{tracking_num} has no checkbox items in its body; readiness check cannot verify completeness"
+		print(f"::error::[integration-pr-readiness] {desc}", file=sys.stderr)
 		if not args.dry_run:
-			_post_commit_status(args.repo, args.head_sha, "success", desc, tracking_url)
+			_post_commit_status(args.repo, args.head_sha, "failure", desc, tracking_url)
 		return 0
 
 	if not unchecked:
