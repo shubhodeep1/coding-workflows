@@ -3166,6 +3166,62 @@ def test_standalone_conflict_sweep_consumes_budget_after_override_cap():
 	assert len([d for d in result["review_dispatches"] if str(d.get("pr_number")) == "416"]) == 1
 
 
+def test_standalone_retrigger_review_skips_empty_commit_when_review_run_has_blank_head_branch_but_matching_sha():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:done",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	head_ref = "claude/issue-501"
+	head_sha = "a" * 40
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:done"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: 416},
+		mock_gh_issue_list_label_filter=True,
+		prs=[
+			{
+				"number": 416,
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": head_ref,
+				"headRefFromApi": head_ref,
+				"headSha": head_sha,
+				"mergeable": True,
+				"mergeable_state": "clean",
+			},
+		],
+		actions_runs_workflow_runs=[
+			{
+				"id": 26088864017,
+				"name": "Review Autofix",
+				"path": ".github/workflows/review_autofix.yml",
+				"status": "queued",
+				"head_branch": "",
+				"head_sha": head_sha,
+				"created_at": "2999-01-01T00:00:00Z",
+			},
+		],
+		mock_git_push_success=True,
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 0
+	assert result.get("git_push_calls", []) == [], (
+		f"expected no standalone empty-commit push when a blank-head_branch run matches "
+		f"the PR head_sha; got push calls {result.get('git_push_calls', [])}"
+	)
+
+
 def test_standalone_stall_recovery_skips_when_phase_attempts_exhausted():
 	state = _base_state(status="complete")
 	standalone_state_comment = (
@@ -3221,6 +3277,51 @@ def test_standalone_stall_recovery_honors_ai_done_phase_attempt_override():
 	assert standalone_state["stall_recovery_count"] == 1
 	assert standalone_state["phase_attempts"]["ai:done"] == 6
 	assert "ai:closed" not in result["issues"]["501"]["labels"]
+
+
+def test_standalone_retrigger_review_does_not_increment_when_empty_commit_checkout_fails():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:done",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	head_ref = "claude/issue-502"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 502: ["ai:done"]},
+		issue_comments={502: [standalone_state_comment]},
+		issue_linked_prs={502: 417},
+		mock_gh_issue_list_label_filter=True,
+		prs=[
+			{
+				"number": 417,
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": head_ref,
+				"headRefFromApi": head_ref,
+				"headSha": "sha417",
+				"mergeable": True,
+				"mergeable_state": "clean",
+			},
+		],
+		mock_git_push_success=True,
+		mock_git_checkout_fail=True,
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["502"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 0
+	assert result.get("git_push_calls", []) == [], (
+		f"expected checkout failure to skip the standalone empty-commit push; "
+		f"got push calls {result.get('git_push_calls', [])}"
+	)
 
 
 
