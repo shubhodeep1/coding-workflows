@@ -150,6 +150,26 @@ def test_archival_with_unticked_tracking_issue_but_descope_section_passes():
 	assert errors == []
 
 
+def test_archival_with_empty_descope_section_still_fails():
+	# The heading alone is not enough — the PR body must contain some
+	# acknowledgement content under the de-scope section.
+	mod = _import_lint()
+	def fetch(repo: str, n: int) -> dict | None:
+		if n == 2734:
+			return {"labels": ["ai:orchestrator-tracking"], "body": _PROJECT_2734_BODY}
+		return None
+	violations, errors = mod.lint(
+		pr_body="Refs #2734\n\n## De-scoped phases\n\n",
+		added_files=["docs/completed/integration-sync-resolver-self-heal-plan.md"],
+		repo="owner/repo",
+		fail_open_on_lookup_error=False,
+		issue_fetcher=fetch,
+	)
+	assert errors == []
+	assert len(violations) == 1
+	assert "non-empty explicit `## De-scoped phases` section" in violations[0]
+
+
 def test_archival_with_non_tracking_ref_is_silent_pass():
 	# The PR archives a plan, references a non-tracking issue. Lint
 	# doesn't fire — only tracking issues are in scope.

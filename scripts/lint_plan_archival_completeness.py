@@ -69,6 +69,7 @@ CHECKBOX_RE = re.compile(r"^\s*-\s*\[(?P<state>[ xX])\]\s+(?P<text>.+)$")
 # the literal phrase "De-scoped phases" — the comparison is case-
 # insensitive so a contributor doesn't have to memorise capitalisation.
 DESCOPE_HEADING_RE = re.compile(r"^\s{0,3}#{2,6}\s+de[- ]scoped\s+phases\b", re.IGNORECASE | re.MULTILINE)
+SECTION_HEADING_RE = re.compile(r"^\s{0,3}#{2,6}\s+\S")
 
 # Files under this directory trigger the check.
 ARCHIVED_PLAN_DIR = "docs/completed/"
@@ -121,6 +122,20 @@ def _enumerate_unchecked_boxes(issue_body: str) -> list[str]:
 	return unchecked
 
 
+def _has_descope_section_content(pr_body: str) -> bool:
+	"""Return True when the de-scope heading exists and is followed by at
+	least one non-empty line before the next markdown heading."""
+	match = DESCOPE_HEADING_RE.search(pr_body)
+	if match is None:
+		return False
+	for line in pr_body[match.end():].splitlines():
+		if SECTION_HEADING_RE.match(line):
+			break
+		if line.strip():
+			return True
+	return False
+
+
 def lint(
 	*,
 	pr_body: str,
@@ -155,7 +170,7 @@ def lint(
 			[],
 		)
 
-	has_descope_section = DESCOPE_HEADING_RE.search(pr_body) is not None
+	has_descope_section = _has_descope_section_content(pr_body)
 
 	violations: list[str] = []
 	lookup_errors: list[str] = []
@@ -178,7 +193,8 @@ def lint(
 		more = f"\n      … and {len(unchecked) - 10} more" if len(unchecked) > 10 else ""
 		violations.append(
 			f"Tracking issue #{issue_num} has {len(unchecked)} unchecked sub-issue "
-			f"checkbox(es), but PR archives plan to docs/completed/ without an "
+			f"checkbox(es), but PR archives plan to docs/completed/ without a "
+			f"non-empty "
 			f"explicit `## De-scoped phases` section in the body. Either tick the "
 			f"checkboxes on issue #{issue_num} before merging, or add a "
 			f"`## De-scoped phases` section to the PR body that lists every "
