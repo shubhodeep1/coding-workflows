@@ -5018,11 +5018,11 @@ jobs:
             else
               _orch_pattern_match_rc=$?
               if [ "${_orch_pattern_match_rc}" -gt 1 ]; then
-                echo "::warning::ORCH_INTEGRATION_BRANCH_PATTERN is not a valid POSIX ERE (grep exit ${_orch_pattern_match_rc}); falling back to canonical '^orchestrator/project-[0-9]+$' auto-merge suppressor for this run."
+                echo "::warning::ORCH_INTEGRATION_BRANCH_PATTERN is not a valid POSIX ERE (grep exit ${_orch_pattern_match_rc}); falling back to canonical '^orchestrator/project-([0-9]+)$' auto-merge suppressor for this run."
               fi
             fi
           else
-            echo "::warning::ORCH_INTEGRATION_BRANCH_PATTERN is empty; falling back to canonical '^orchestrator/project-[0-9]+$' auto-merge suppressor for this run."
+            echo "::warning::ORCH_INTEGRATION_BRANCH_PATTERN is empty; falling back to canonical '^orchestrator/project-([0-9]+)$' auto-merge suppressor for this run."
           fi
           if [ "${_orch_is_integration_pr}" != "true" ] && [[ "${_orch_pr_head_ref}" =~ ^orchestrator/project-([0-9]+)$ ]]; then
             _orch_is_integration_pr="true"

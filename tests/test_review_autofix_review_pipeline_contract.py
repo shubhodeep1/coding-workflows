@@ -374,6 +374,8 @@ def test_auto_merge_guard_honours_configured_orchestrator_branch_pattern() -> No
 	assert "ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}" in block
 	assert 'grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN}"' in block
 	assert "matches ORCH_INTEGRATION_BRANCH_PATTERN='${ORCH_INTEGRATION_BRANCH_PATTERN}'" in block
+	assert "falling back to canonical '^orchestrator/project-([0-9]+)$' auto-merge suppressor" in block
+	assert "falling back to canonical '^orchestrator/project-[0-9]+$' auto-merge suppressor" not in block
 
 
 def test_reviewer_prompt_output_rules_still_forbid_scripts() -> None:
