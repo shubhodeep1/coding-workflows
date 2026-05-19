@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:4988 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The fallback temp-file path uses a predictable `${PR_NUMBER}-$$` name.\n  WHY: The explicit create check reduces risk, but the sink path is still guessable in a shared runner environment.\n- .github/workflows/review_autofix.yml:5007-5018 | severity=medium | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: The PR-body issue-reference grep is case-sensitive, so lowercase keywords like `fixes`, `closes`, `resolves`, or `refs` are missed and the mismatch warning is suppressed.\n  WHY: GitHub treats those keywords case-insensitively; this only affects diagnostics, not the underlying auto-merge suppression, and the reviewers disagreed only on classification, not the root cause.\n- tests/test_orchestrate_integration_ahead_by_gate.py:506-574 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The tests assert on the resulting state JSON but do not explicitly verify that `post_state_comment` ran after the pin-clearing jq mutation.\n  WHY: A future control-flow change could reintroduce the stale-comment bug while keeping the current JSON contract and passing tests.\n- scripts/orchestrate_lib.py:2414-2421 | severity=medium | confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: `check-wave-status` now emits extra JSON keys that strict downstream consumers may not expect.\n  WHY: Behavioral compatibility via `project_complete` remains, but exact-schema validators or destructuring callers can break on the added fields.\n- scripts/orchestrate_poll_process.sh:9380-9418 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Every poll tick now precomputes `CWS_AHEAD_BY` and can issue an extra compare API call on the hot path.\n  WHY: This increases latency and rate-limit pressure unless the compare result is batched or cached.\n- scripts/orchestrate_lib.py:2579-2599 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Adding `--integration-ahead-by` and the related JSON fields changes the `check-wave-status` contract without a versioned shim or deprecation path.\n  WHY: Older pinned consumers with strict argument parsing or exact JSON validation can fail on the new interface.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/review_autofix.yml:4988 | severity=low | confidence=2\n  PROBLEM: The fallback temp-file path uses `${PR_NUMBER}-$$`, which is predictable.\n  WHY: Even with the creation check, a guessable path is still riskier in shared CI environments.\n- .github/workflows/review_autofix.yml:5007 | severity=medium | confidence=4\n  PROBLEM: The PR-body issue-reference grep is case-sensitive: `(Refs|Closes|Fixes|Resolves)[[:space:]]*#[0-9]+`.\n  WHY: Lowercase forms like `fixes #123` or `closes #456` are valid GitHub references but will not be detected, so the mismatch warning may never fire.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/review_autofix.yml:5014 (approx) | severity=medium | confidence=3\n  PROBLEM: The PR-body issue-reference grep is case-sensitive.\n  WHY: Lowercase keywords like `refs #123`, `fixes #123`, and `closes #123` will not be detected, so the diagnostic warning about mismatched tracking numbers can be suppressed.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_orchestrate_integration_ahead_by_gate.py:~lines 506-544, ~lines 546-574 | severity=medium | confidence=4\n  PROBLEM: The tests do not explicitly assert that `post_state_comment` was called after the pin-clearing jq mutation.\n  WHY: A future refactor could preserve the current JSON state while reintroducing the stale-comment bug these tests are meant to prevent.\n- .github/workflows/review_autofix.yml:5009-5018 | severity=medium | confidence=4\n  PROBLEM: `_orch_body_tracking_num` extraction uses case-sensitive grep for `(Refs|Closes|Fixes|Resolves)`.\n  WHY: Valid lowercase references in the PR body produce an empty extracted number, so the mismatch warning is lost even when the branch metadata is anomalous.\n- scripts/orchestrate_lib.py:2414-2421 | severity=medium | confidence=3\n  PROBLEM: `check-wave-status` now always emits two extra JSON keys.\n  WHY: Strict downstream consumers that validate exact output shape or destructure only known keys may break, even though `project_complete` compatibility is preserved.\n- scripts/orchestrate_poll_process.sh:9380-9418 | severity=medium | confidence=4\n  PROBLEM: `CWS_AHEAD_BY` is precomputed on every poll tick, which can add an extra GitHub compare API call in the hot path.\n  WHY: This adds latency and rate-limit pressure to each `*/5 * * * *` cycle on active orchestrator projects.\n- scripts/orchestrate_lib.py:2579-2599 | severity=medium | confidence=4\n  PROBLEM: Adding `--integration-ahead-by` plus the related JSON fields changes the `check-wave-status` contract without a compatibility shim.\n  WHY: Older pinned consumers with strict parsers or exact JSON validation can fail on the new flag or the new output fields.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "a9235971eaf129ffa7e0c04b2988ad2117cf0f8ede253502f9d232eb2cc5b673",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2778,
+    "run_id": "26087016712",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26087016712",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260519093355_b0cc1d1a52",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2778,
+    "run_id": "26087016712"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 6 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-19T09:33:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
