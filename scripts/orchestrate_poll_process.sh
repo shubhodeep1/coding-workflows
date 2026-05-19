@@ -5709,6 +5709,67 @@ STALL_EOF
           fi
         fi
         if [ -n "${head_ref}" ] && [ "${head_ref}" != "null" ]; then
+          # In-flight review guard.  An empty-commit push here flips the
+          # mid-run stale-base gate on any review_autofix run that is
+          # currently editing this branch: the orchestrator's commit
+          # subject does not match the [ai-autofix] / [ai-merge-resolve]
+          # prefixes in check_external_branch_advance.sh (line 151-160),
+          # so the gate prints ADVANCE=external, the pre-review
+          # (review_autofix.yml:2972-3009) and pre-editor
+          # (review_autofix.yml:3268-3309) steps set
+          # AUTOFIX_STALE_BASE_SKIP=true, and the editor commit / push /
+          # mark-ready-to-merge / re-trigger tail steps that are gated on
+          # AUTOFIX_STALE_BASE_SKIP != 'true' are all skipped — the
+          # editor's work is discarded and a brand-new review cycle
+          # starts from the empty commit.
+          #
+          # The active-workflow guard at line 7887 (build_active_issue_set
+          # consumed via issue_has_active_workflow) is the primary
+          # protection, but a single missed run in that 50-item blob
+          # (cache TTL, pagination edge, head_branch=null on
+          # workflow_dispatch) defeats every downstream stall check.
+          # This is a targeted defense-in-depth at the only push site
+          # that materially harms in-flight review_autofix runs.
+          #
+          # Reads from the per-tick _ACTIONS_RUNS_BLOB_CACHE populated
+          # by _load_actions_runs_cached so this adds zero API calls
+          # (§15).  Workflow filter mirrors cancel_zombie_runs_for_issue
+          # at line 5031-5038 — both .name and .path so consumer-repo
+          # caller workflows that rename the display name are still
+          # caught.  Zombie filter (STALL_THRESHOLD_MINUTES) mirrors
+          # build_active_issue_set at line 4944-4954 so a genuinely
+          # hung run does not block recovery indefinitely.  Fail-open
+          # on any jq/cache error: empty result falls through to the
+          # legacy empty-commit path.
+          local _rtr_inflight_blob _rtr_inflight_id _rtr_now_epoch _rtr_stall_secs
+          _rtr_inflight_blob="$(_load_actions_runs_cached 2>/dev/null || echo '{"workflow_runs":[]}')"
+          _rtr_now_epoch="$(date +%s)"
+          _rtr_stall_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))
+          _rtr_inflight_id="$(printf '%s' "${_rtr_inflight_blob}" | jq -r \
+            --arg br "${head_ref}" \
+            --argjson now "${_rtr_now_epoch}" \
+            --argjson threshold "${_rtr_stall_secs}" '
+            [.workflow_runs[]?
+             | select((.status // "") == "in_progress" or (.status // "") == "queued")
+             | select((.head_branch // "") == $br)
+             | select(
+                 (.name // "") == "AI Review"
+                 or (.name // "") == "Internal Review"
+                 or (.name // "") == "Review Autofix"
+                 or ((.path // "") | endswith("ai-review.yml"))
+                 or ((.path // "") | endswith("internal-review.yml"))
+                 or ((.path // "") | endswith("review_autofix.yml"))
+               )
+             | (.run_started_at // .created_at // "1970-01-01T00:00:00Z") as $ts
+             | ($ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) as $start_epoch
+             | select(($now - $start_epoch) < $threshold)
+            ] | (.[0].id // empty)
+          ' 2>/dev/null || echo "")"
+          if [ -n "${_rtr_inflight_id}" ]; then
+            echo "  Issue #${issue_num} PR #${pr_num} has in-flight review run #${_rtr_inflight_id} on ${head_ref} (fresh, <${STALL_THRESHOLD_MINUTES}m); skipping empty-commit push to avoid invalidating its stale-base gate."
+            STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
+            return 1
+          fi
           if git fetch origin "${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null && \
              git checkout "origin/${head_ref}" 2>/dev/null; then
             git config user.name "codex-bot"

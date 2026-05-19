@@ -1551,6 +1551,24 @@ if args[0] == 'api':
 
 		etag = store.get('actions_runs_etag', '"etag-initial"')
 		workflow_runs = list(store.get('actions_runs_workflow_runs', []))
+		# The script calls this endpoint in two distinct shapes:
+		#   1. gh api -i ... (no --jq)  -> caller (_load_actions_runs_cached's
+		#      primary in_progress fetch) needs the full HTTP response with
+		#      headers so it can parse ETag and detect 304.
+		#   2. gh api ... --jq '.workflow_runs' (no -i)  -> caller
+		#      (_safe_gh_jq for queued/completed) needs just the jq-filtered
+		#      body so its `--argjson` merge stays valid.
+		# Distinguish via the presence of `jq` (the second case sets it).
+		if jq:
+			body_obj = {
+				'total_count': len(workflow_runs),
+				'workflow_runs': workflow_runs,
+			}
+			import subprocess as _sp
+			p = _sp.run(['jq', '-r', jq], input=json.dumps(body_obj), capture_output=True, text=True)
+			save()
+			sys.stdout.write(p.stdout)
+			sys.exit(0)
 		status_text = 'OK' if status == 200 else 'Not Modified'
 		headers = [
 			f'HTTP/1.1 {status} {status_text}',
@@ -5661,6 +5679,168 @@ def test_retrigger_review_does_not_increment_when_redispatch_skipped():
 	)
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_entry["stall_recovery_count"] == 0
+
+
+def test_retrigger_review_skips_empty_commit_when_review_run_inflight():
+	# When a fresh review_autofix run is already in_progress on the PR's
+	# head branch, retrigger_review must NOT push an empty commit — that
+	# push would flip the in-flight run's stale-base gate
+	# (check_external_branch_advance.sh classifies the orchestrator's
+	# commit subject as ADVANCE=external because it doesn't match the
+	# [ai-autofix] / [ai-merge-resolve] prefixes), causing the editor
+	# commit and downstream push/mark-ready steps to be skipped, which
+	# is exactly the 6h cycle observed on shubhodeep1/tele-funtoken-msg-scoring#3057.
+	# Recovery counter must NOT be incremented (no work was done).
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	head_ref = "claude/retrigger-review-inflight-run"
+	# run_started_at is "now" (the poller's clock), so the run is well
+	# under the STALL_THRESHOLD_MINUTES zombie cutoff.
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 80},
+		prs=[
+			{
+				"number": 80,
+				"state": "open",
+				"mergeable": True,
+				"mergeable_state": "clean",
+				"headRefName": head_ref,
+				"headRefFromApi": head_ref,
+				"headSha": "sha80",
+				"baseRefName": "main",
+			},
+		],
+		actions_runs_workflow_runs=[
+			{
+				"id": 26088864015,
+				"name": "Review Autofix",
+				"path": ".github/workflows/review_autofix.yml",
+				"status": "in_progress",
+				"head_branch": head_ref,
+				"run_started_at": "2999-01-01T00:00:00Z",
+			},
+		],
+		mock_git_push_success=True,
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 0, (
+		f"expected stall_recovery_count to stay at 0 when an in-flight "
+		f"review_autofix run blocks the empty-commit push; "
+		f"got {issue_entry['stall_recovery_count']}"
+	)
+	dispatches_for_pr = [d for d in result.get("review_dispatches", []) if str(d.get("pr_number")) == "80"]
+	assert dispatches_for_pr == [], (
+		f"expected no redispatch when in-flight run blocks recovery; "
+		f"got: {dispatches_for_pr}"
+	)
+
+
+def test_retrigger_review_ignores_inflight_run_on_unrelated_branch():
+	# Defense-in-depth: an in-flight review run on a DIFFERENT branch
+	# must NOT block the empty-commit push for this PR.  Without the
+	# head_branch filter, the guard would deadlock recovery whenever
+	# any other PR has a live review.
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	head_ref = "claude/retrigger-review-this-branch"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 81},
+		prs=[
+			{
+				"number": 81,
+				"state": "open",
+				"mergeable": True,
+				"mergeable_state": "clean",
+				"headRefName": head_ref,
+				"headRefFromApi": head_ref,
+				"headSha": "sha81",
+				"baseRefName": "main",
+			},
+		],
+		actions_runs_workflow_runs=[
+			{
+				"id": 99999999,
+				"name": "Review Autofix",
+				"path": ".github/workflows/review_autofix.yml",
+				"status": "in_progress",
+				"head_branch": "claude/some-other-branch",
+				"run_started_at": "2999-01-01T00:00:00Z",
+			},
+		],
+		mock_git_push_success=True,
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 1, (
+		f"expected empty-commit push to proceed when in-flight run is on a "
+		f"different branch; got stall_recovery_count="
+		f"{issue_entry['stall_recovery_count']}"
+	)
+
+
+def test_retrigger_review_inflight_guard_treats_zombie_run_as_eligible():
+	# A run older than STALL_THRESHOLD_MINUTES is a zombie and must NOT
+	# block recovery — otherwise a stuck Actions runner could deadlock
+	# the autofix loop forever.  Mirrors the zombie cutoff in
+	# build_active_issue_set (line 4944-4954).
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	head_ref = "claude/retrigger-review-zombie-run"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 82},
+		prs=[
+			{
+				"number": 82,
+				"state": "open",
+				"mergeable": True,
+				"mergeable_state": "clean",
+				"headRefName": head_ref,
+				"headRefFromApi": head_ref,
+				"headSha": "sha82",
+				"baseRefName": "main",
+			},
+		],
+		actions_runs_workflow_runs=[
+			{
+				"id": 11111111,
+				"name": "Review Autofix",
+				"path": ".github/workflows/review_autofix.yml",
+				"status": "in_progress",
+				"head_branch": head_ref,
+				# Far in the past — past any reasonable STALL_THRESHOLD_MINUTES.
+				"run_started_at": "1970-01-02T00:00:00Z",
+			},
+		],
+		mock_git_push_success=True,
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 1, (
+		f"expected empty-commit push to proceed past zombie in-flight run; "
+		f"got stall_recovery_count={issue_entry['stall_recovery_count']}"
+	)
 
 
 def test_stall_judge_unknown_action_falls_back_to_declarative_recovery():
