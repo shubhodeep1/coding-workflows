@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""Tests for scripts/check_integration_pr_readiness.py (P3 from
+docs/postmortems/2026-05-18-project-2734-stall.md).
+
+Tests focus on the pure logic (branch derivation, checkbox counting,
+state decision tree). The commit-status POST is exercised separately
+via the workflow itself; we test the function shape rather than the
+HTTP call.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SCRIPT_PATH = REPO_ROOT / "scripts" / "check_integration_pr_readiness.py"
+
+
+def _import():
+	spec = importlib.util.spec_from_file_location("check_integration_pr_readiness", SCRIPT_PATH)
+	assert spec is not None and spec.loader is not None
+	mod = importlib.util.module_from_spec(spec)
+	sys.modules["check_integration_pr_readiness"] = mod
+	spec.loader.exec_module(mod)
+	return mod
+
+
+def test_derive_tracking_issue_from_canonical_branch():
+	mod = _import()
+	assert mod._derive_tracking_issue("orchestrator/project-2734") == 2734
+	assert mod._derive_tracking_issue("orchestrator/project-1") == 1
+	assert mod._derive_tracking_issue("orchestrator/project-999999") == 999999
+
+
+def test_derive_tracking_issue_rejects_non_orchestrator_branches():
+	mod = _import()
+	# Branches that aren't orchestrator integration branches must return
+	# None so the readiness check no-ops on them (a feature PR from
+	# claude/foo or main is not subject to this check).
+	for branch in (
+		"main",
+		"stable",
+		"claude/fix-something",
+		"feature/whatever",
+		"orchestrator/project-",        # missing number
+		"orchestrator/project-abc",     # non-numeric
+		"orchestrator/foo-100",         # wrong prefix
+		"orchestrator/project-2734-x",  # suffix
+	):
+		assert mod._derive_tracking_issue(branch) is None, f"expected None for {branch!r}"
+
+
+def test_count_checkboxes_canonical_body():
+	mod = _import()
+	body = """## Project: Some project
+
+### Wave 1
+- [ ] **issue-a**: First sub-issue
+- [x] **issue-b**: Second sub-issue (done)
+
+### Wave 2
+- [ ] **issue-c**: Third (priority 1)
+- [X] **issue-d**: Fourth (capital X also counts as checked)
+
+Some prose with `- [ ]` mid-line (not a real task list item).
+"""
+	unchecked, total = mod._count_checkboxes(body)
+	# 4 task list items at line start (`^\s*-\s*\[...]` matches);
+	# the in-backtick mid-line literal is correctly ignored because
+	# its dash is not at the line start.
+	assert total == 4, f"expected 4 total checkboxes, got {total}"
+	# 'issue-a' and 'issue-c' are unchecked; 'issue-b' (lowercase x)
+	# and 'issue-d' (capital X) are both checked.
+	assert len(unchecked) == 2, f"expected 2 unchecked, got {unchecked!r}"
+	assert any("issue-a" in t for t in unchecked)
+	assert any("issue-c" in t for t in unchecked)
+
+
+def test_count_checkboxes_no_checkboxes_in_body():
+	mod = _import()
+	body = "Just some prose.\n\nNo checkboxes at all."
+	unchecked, total = mod._count_checkboxes(body)
+	assert total == 0
+	assert unchecked == []
+
+
+def test_count_checkboxes_handles_project_2734_body_shape():
+	# Pin against the actual project-#2734 body shape (the orchestrator-
+	# emitted template). If this regresses, the script silently
+	# mis-counts on real tracking issues.
+	mod = _import()
+	body = """## Project: Implement the resolver self-heal plan
+
+**Total issues:** 9 | **Waves:** 7
+
+### Wave 1
+- [ ] **phase1-verifier-baseline-delta**: Phase 1A (priority 1)
+- [ ] **phase6-subissue-test-runs-spike**: Phase 6 spike (priority 4)
+
+### Wave 2
+- [ ] **phase1-resolver-bootstrap-wiring**: Phase 1B (priority 1)
+
+### Wave 3
+- [ ] **phase2-retry-state-escalation**: Phase 2 (priority 2)
+
+### Wave 4
+- [ ] **phase3-tiered-verification**: Phase 3 (priority 2)
+
+### Wave 5
+- [ ] **phase4-quarantine-core**: Phase 4A (priority 3)
+
+### Wave 6
+- [ ] **phase4-drift-audit-job**: Phase 4B (priority 4)
+- [ ] **phase5-branch-rebuild**: Phase 5 (priority 4)
+
+### Wave 7
+- [ ] **docs-closeout-and-plan-move**: Close out (priority 5)
+"""
+	unchecked, total = mod._count_checkboxes(body)
+	assert total == 9, f"expected 9 (project #2734 had 9 sub-issues), got {total}"
+	assert len(unchecked) == 9, f"expected 9 unchecked, got {len(unchecked)}"
+
+
+def main() -> int:
+	try:
+		import sys as _sys
+		_sys.stdout.reconfigure(line_buffering=True)
+	except Exception:
+		pass
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	passed = 0
+	failed = 0
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			func()
+			print(f"  PASS  {name}", flush=True)
+			passed += 1
+		except Exception as e:
+			print(f"  FAIL  {name}: {e}", flush=True)
+			failed += 1
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total", flush=True)
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
