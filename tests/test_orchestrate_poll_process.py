@@ -1561,8 +1561,11 @@ if args[0] == 'api':
 		#      body so its `--argjson` merge stays valid.
 		# Distinguish via the presence of `jq` (the second case sets it).
 		if jq:
+			# Persist request bookkeeping even when the caller's jq filter
+			# fails: the HTTP round-trip already happened, so later calls in
+			# the same mock session should observe the consumed status/counts.
+			save()
 			if status != 200:
-				save()
 				print(f'actions runs mock failed: HTTP {status}', file=sys.stderr)
 				sys.exit(1)
 			body_obj = {
@@ -1573,7 +1576,6 @@ if args[0] == 'api':
 			if p.returncode != 0:
 				sys.stderr.write(p.stderr)
 				sys.exit(p.returncode)
-			save()
 			sys.stdout.write(p.stdout)
 			sys.exit(0)
 		status_text = 'OK' if status == 200 else 'Not Modified'
