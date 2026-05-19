@@ -4892,6 +4892,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
+          ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
         run: |
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
@@ -4951,8 +4952,14 @@ jobs:
             exit 0
           fi
 
-          # Scoped opt-out for orchestrator integration PRs (head ref pattern
-          # `orchestrator/project-<N>` → default branch). The orchestrator's
+          # Scoped opt-out for orchestrator integration PRs (head ref matches
+          # ORCH_INTEGRATION_BRANCH_PATTERN; default `^orchestrator/project-`).
+          # The canonical `orchestrator/project-<N>` form still gets the
+          # tracking-number body cross-check below, but any configured
+          # integration-branch naming must suppress auto-merge too so the
+          # safeguard remains effective for customised repos.
+          #
+          # The orchestrator's
           # integration-conflict self-healing path dispatches review_autofix
           # on the eager final PR to resolve drift (see
           # scripts/orchestrate_poll_process.sh: _dispatch_review_for_conflicts);
@@ -5004,16 +5011,36 @@ jobs:
 
           _orch_pr_head_ref="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.head.ref // ""' 2>/dev/null || echo "")"
           _orch_pr_body="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.body // ""' 2>/dev/null || echo "")"
-          if [[ "${_orch_pr_head_ref}" =~ ^orchestrator/project-([0-9]+)$ ]]; then
-            _orch_ref_tracking_num="${BASH_REMATCH[1]}"
-            _orch_body_tracking_num="$(printf '%s' "${_orch_pr_body}" | grep -im1 -oE '^[[:space:]]*refs[[:space:]]*#[0-9]+' | grep -oE '[0-9]+' || echo "")"
-            if [ -z "${_orch_body_tracking_num}" ]; then
-              _orch_body_tracking_num="$(printf '%s' "${_orch_pr_body}" | grep -im1 -oE '^[[:space:]]*(closes|fixes|resolves)[[:space:]]*#[0-9]+' | grep -oE '[0-9]+' || echo "")"
-            fi
-            if [ -n "${_orch_body_tracking_num}" ] && [ "${_orch_body_tracking_num}" != "${_orch_ref_tracking_num}" ]; then
-              echo "::warning::PR #${PR_NUMBER} head ref '${_orch_pr_head_ref}' implies orchestrator tracking issue #${_orch_ref_tracking_num} but the PR body references #${_orch_body_tracking_num}. Suppressing auto-merge anyway — head-ref pattern matches an orchestrator integration PR; the orchestrator will land this via finalize_integration_merge_if_needed when the project is genuinely complete."
+          _orch_is_integration_pr="false"
+          if [ -n "${ORCH_INTEGRATION_BRANCH_PATTERN}" ]; then
+            if printf '%s\n' "${_orch_pr_head_ref}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN}"; then
+              _orch_is_integration_pr="true"
             else
-              echo "PR #${PR_NUMBER} is the orchestrator integration PR for tracking #${_orch_ref_tracking_num} (head ref '${_orch_pr_head_ref}') — auto-merge suppressed. finalize_integration_merge_if_needed handles the legitimate final merge synchronously once the project is complete and the integration tip is contained in the default branch."
+              _orch_pattern_match_rc=$?
+              if [ "${_orch_pattern_match_rc}" -gt 1 ]; then
+                echo "::warning::ORCH_INTEGRATION_BRANCH_PATTERN is not a valid POSIX ERE (grep exit ${_orch_pattern_match_rc}); falling back to canonical '^orchestrator/project-[0-9]+$' auto-merge suppressor for this run."
+              fi
+            fi
+          else
+            echo "::warning::ORCH_INTEGRATION_BRANCH_PATTERN is empty; falling back to canonical '^orchestrator/project-[0-9]+$' auto-merge suppressor for this run."
+          fi
+          if [ "${_orch_is_integration_pr}" != "true" ] && [[ "${_orch_pr_head_ref}" =~ ^orchestrator/project-([0-9]+)$ ]]; then
+            _orch_is_integration_pr="true"
+          fi
+          if [ "${_orch_is_integration_pr}" = "true" ]; then
+            if [[ "${_orch_pr_head_ref}" =~ ^orchestrator/project-([0-9]+)$ ]]; then
+              _orch_ref_tracking_num="${BASH_REMATCH[1]}"
+              _orch_body_tracking_num="$(printf '%s' "${_orch_pr_body}" | grep -im1 -oE '^[[:space:]]*refs[[:space:]]*#[0-9]+' | grep -oE '[0-9]+' || echo "")"
+              if [ -z "${_orch_body_tracking_num}" ]; then
+                _orch_body_tracking_num="$(printf '%s' "${_orch_pr_body}" | grep -im1 -oE '^[[:space:]]*(closes|fixes|resolves)[[:space:]]*#[0-9]+' | grep -oE '[0-9]+' || echo "")"
+              fi
+              if [ -n "${_orch_body_tracking_num}" ] && [ "${_orch_body_tracking_num}" != "${_orch_ref_tracking_num}" ]; then
+                echo "::warning::PR #${PR_NUMBER} head ref '${_orch_pr_head_ref}' implies orchestrator tracking issue #${_orch_ref_tracking_num} but the PR body references #${_orch_body_tracking_num}. Suppressing auto-merge anyway — head-ref pattern matches an orchestrator integration PR; the orchestrator will land this via finalize_integration_merge_if_needed when the project is genuinely complete."
+              else
+                echo "PR #${PR_NUMBER} is the orchestrator integration PR for tracking #${_orch_ref_tracking_num} (head ref '${_orch_pr_head_ref}') — auto-merge suppressed. finalize_integration_merge_if_needed handles the legitimate final merge synchronously once the project is complete and the integration tip is contained in the default branch."
+              fi
+            else
+              echo "PR #${PR_NUMBER} head ref '${_orch_pr_head_ref}' matches ORCH_INTEGRATION_BRANCH_PATTERN='${ORCH_INTEGRATION_BRANCH_PATTERN}' — auto-merge suppressed. finalize_integration_merge_if_needed handles the legitimate final merge synchronously once the project is complete and the integration tip is contained in the default branch."
             fi
             exit 0
           fi
