@@ -929,17 +929,16 @@ jobs:
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
+          # Always stage runtime support files out of tree so main-primary
+          # bootstrap helpers never overwrite the source-repo PR worktree
+          # before reviewer/editor snapshots are taken.
+          SUPPORT_ROOT_DIR="${RUNNER_TEMP}/coding-workflows-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          SUPPORT_SCRIPTS_DIR="${SUPPORT_ROOT_DIR}/scripts"
+          SUPPORT_PROMPTS_DIR="${SUPPORT_ROOT_DIR}/prompts"
+          SUPPORT_AI_MEMORY_DIR="${SUPPORT_ROOT_DIR}/ai-memory"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            SUPPORT_ROOT_DIR="$(pwd)"
-            SUPPORT_SCRIPTS_DIR="scripts"
-            SUPPORT_PROMPTS_DIR="prompts"
-            SUPPORT_AI_MEMORY_DIR="ai-memory"
             IS_WORKFLOW_SOURCE_REPO="true"
           else
-            SUPPORT_ROOT_DIR="${RUNNER_TEMP}/coding-workflows-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-            SUPPORT_SCRIPTS_DIR="${SUPPORT_ROOT_DIR}/scripts"
-            SUPPORT_PROMPTS_DIR="${SUPPORT_ROOT_DIR}/prompts"
-            SUPPORT_AI_MEMORY_DIR="${SUPPORT_ROOT_DIR}/ai-memory"
             IS_WORKFLOW_SOURCE_REPO="false"
           fi
           mkdir -p "${SUPPORT_SCRIPTS_DIR}" "${SUPPORT_PROMPTS_DIR}" "${SUPPORT_AI_MEMORY_DIR}/schemas"
@@ -955,21 +954,17 @@ jobs:
           } >> "$GITHUB_ENV"
 
           REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh"
+          # Main-primary bootstrap scripts: prefer the fresh main snapshot so
+          # wedged integration branches still pick up resolver safety fixes
+          # shipped on main. Missing from both refs remains fail-open so older
+          # consumer script_refs still bootstrap cleanly.
+          MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_conflict_resolve.sh review_conflict_prepare.sh"
           # Optional bootstrap scripts: allowed to be missing from both
           # refs.  The bootstrap emits a warning and continues — callers
           # that depend on these must themselves tolerate absence.  Keep
           # this list empty unless a genuinely optional helper is added;
           # the default should always be "required".
-          # Optional bootstrap entry for the integration-sync intent
-          # fingerprint verifier added by the #1057 auto-heal
-          # hardening work. Treated as optional so older script_refs
-          # (consumer repos still pinned to a stable channel that
-          # predates this script) bootstrap cleanly without erroring;
-          # the fingerprint verification step in the resolver is
-          # gated on the script's existence and falls open with a
-          # warning when missing.
-          OPTIONAL_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py"
-          OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} install_semble.sh build_semble_wrapper.sh semble_helpers.sh"
+          OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh"
           for f in ${REQUIRED_BOOTSTRAP_SCRIPTS}; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
@@ -978,6 +973,20 @@ jobs:
             if [ ! -f "${src}" ]; then
               echo "::error::Required bootstrap script '${f}' is missing from checked-out support sources (${SCRIPT_REF} and optional main snapshot) in ${wf_source}. This usually means review_autofix.yml references a file that was never committed (common cause: a hallucinated [ai-merge-resolve] commit added a new bootstrap entry without its corresponding script). Verify REQUIRED_BOOTSTRAP_SCRIPTS matches the current contents of scripts/."
               exit 1
+            fi
+            install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
+          done
+          for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do
+            src=".codex-workflow-src-main/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src/scripts/${f}" ]; then
+              src=".codex-workflow-src/scripts/${f}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::warning::Main-primary bootstrap script '${f}' not available in checked-out support sources; downstream features relying on this helper will be unavailable."
+              continue
+            fi
+            if [ "${src}" = ".codex-workflow-src-main/scripts/${f}" ] && [ -f ".codex-workflow-src/scripts/${f}" ]; then
+              echo "::notice::Bootstrapped ${f} from main snapshot (branch copy ignored)."
             fi
             install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
           done
@@ -4417,30 +4426,15 @@ jobs:
           CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'high' }}
         run: |
           set -euo pipefail
-          # Bootstrap guard for the workflow-source-repo case
-          # (IS_WORKFLOW_SOURCE_REPO=true): SUPPORT_SCRIPTS_DIR resolves
-          # to the in-tree "scripts" dir, so when the prior
-          # review_conflict_prepare.sh merge replay lists
-          # scripts/review_conflict_resolve.sh among its unmerged paths
-          # (forward-merge stable→main PRs that touch the resolver
-          # itself), the on-disk copy at SUPPORT_SCRIPTS_DIR contains
-          # raw `<<<<<<< HEAD` / `=======` / `>>>>>>>` markers and bash
-          # aborts with "syntax error near unexpected token '<<<'"
-          # before the resolver can even start — observed on PR #2451
-          # run 25637785576 (job 63633abc-d9f8-54e0-a184-111777ae010a)
-          # where line 625's `else` clause was misparsed as a here-string.
+          # Parse guard for the staged resolver helper. Runtime support
+          # files now stage out of tree even on the workflow source
+          # repo, so merge-replay markers in the PR worktree no longer
+          # poison SUPPORT_SCRIPTS_DIR. Keep the fallback below as
+          # defence in depth in case the staged resolver copy is ever
+          # truncated or otherwise unparsable.
           # The .codex-workflow-src/ checkout (pinned to SCRIPT_REF) is
-          # untouched by the merge replay because review_conflict_prepare.sh
-          # explicitly stashes and restores it around the merge, so it
-          # holds a clean, parseable copy of the resolver script. Fall
-          # back to that copy when the in-tree script fails `bash -n`.
-          # The Codex resolver invoked below still reads the conflicted
-          # in-tree path to see the markers it needs to resolve — only
-          # the bash interpreter loading the resolver script switches
-          # source. Consumer repos (SUPPORT_SCRIPTS_DIR points outside
-          # the working tree) are unaffected: their in-tree script is
-          # never overwritten, `bash -n` always passes, and this block
-          # is a no-op.
+          # untouched by merge replay, so it remains a clean fallback
+          # source when the staged script fails `bash -n`.
           RESOLVER_SCRIPT="${SUPPORT_SCRIPTS_DIR}/review_conflict_resolve.sh"
           # Capture bash -n stderr (instead of redirecting to /dev/null)
           # and surface a sanitized copy in every fallback annotation so
