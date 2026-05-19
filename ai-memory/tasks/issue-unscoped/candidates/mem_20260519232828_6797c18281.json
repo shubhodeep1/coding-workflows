@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:~5989-~6075 | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: `_rtr_head_sha` is not clearly declared/assigned in the managed `retrigger_review` path before it is used by the in-flight guard and head-advance check, so those checks can run with an empty SHA.\n  WHY: One reviewer says the variable is omitted from the local list and the later jq/head checks therefore receive an empty value; the other points to the same scope/assignment gap and says the guard is ineffective for workflow_dispatch runs.\n- scripts/orchestrate_poll_process.sh:~6075-~6076 | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: `${head_ref}` is interpolated directly in the checkout-failure echo line without quoting, which can produce malformed log output or shell word-splitting/globbing in pathological cases.\n  WHY: Both reviewers flagged the same log line and described the output as unsafe/brittle on unusual branch names.\n- scripts/orchestrate_poll_process.sh:6094-6102 | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: After a checkout failure, the managed `retrigger_review` path falls through to the generic failure block without setting the recovery telemetry flags, so managed and standalone recovery paths can report inconsistent state.\n  WHY: The reviewer says the code logs the checkout failure but then returns from the generic block without updating `STALL_RECOVERY_EFFECTIVE_ACTION` or ensuring `STALL_RECOVERY_SHOULD_INCREMENT` stays false.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_poll_process.sh:~5989, ~6026, ~6061-6064 | confidence=4\n  PROBLEM: The managed-path `retrigger_review` in-flight guard and head-advance check use `_rtr_head_sha`, but the visible local declaration/assignment path does not include it in scope, so the guard can receive an empty SHA.\n  WHY: The reviewer says the jq workflow_dispatch match and the head-advance regex both depend on `_rtr_head_sha`, and if it is unset the guard cannot detect in-flight runs.\n- scripts/orchestrate_poll_process.sh:~6075-6076 | confidence=2\n  PROBLEM: The `echo` line interpolates `${head_ref}` directly without quotes.\n  WHY: The reviewer says a pathological branch name could lead to malformed output or shell splitting/globbing in the log line.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/orchestrate_poll_process.sh:5989, 6026, 6059-6064, 6075 | confidence=5\n  PROBLEM: The managed-path `retrigger_review` block does not keep `_rtr_head_sha` in scope for the in-flight guard and head-advance check, so the guard can run with an empty SHA.\n  WHY: The reviewer says the earlier population path is only on the conflict branch, and without `_rtr_head_sha` the jq filter and regex checks do not protect workflow_dispatch runs with blank `head_branch`.\n- scripts/orchestrate_poll_process.sh:6075 | confidence=3\n  PROBLEM: The `echo` statement interpolates `${head_ref}` directly without quotes.\n  WHY: The reviewer says a pathological ref would produce split words or glob expansion in the log line and make the failure output brittle.\n- scripts/orchestrate_poll_process.sh:6094-6102 | confidence=4\n  PROBLEM: After a checkout failure, the managed `retrigger_review` path logs the diagnostic but still falls through to the generic failure block without setting the recovery telemetry flags, so telemetry and ledger state can become inconsistent across the managed and standalone paths.\n  WHY: The reviewer says the code returns from the generic block without setting `STALL_RECOVERY_EFFECTIVE_ACTION` or ensuring `STALL_RECOVERY_SHOULD_INCREMENT` remains false.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "3925decc5ce6da59bf112120ce98d48a732357e16689606a8e3315b9045fb1f5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2795,
+    "run_id": "26130369634",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26130369634",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260519232828_6797c18281",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2795,
+    "run_id": "26130369634"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-19T23:28:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
