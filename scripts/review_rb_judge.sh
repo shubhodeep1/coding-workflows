@@ -322,7 +322,7 @@ PR_DIFF_TRUNCATED=false
 PR_DIFF_BYTES_TOTAL="$(printf '%s' "${PR_DIFF}" | wc -c | tr -cd '0-9' || true)"
 [ -n "${PR_DIFF_BYTES_TOTAL}" ] || PR_DIFF_BYTES_TOTAL=0
 if [ "${PR_DIFF_BYTES_TOTAL}" -gt "${RB_JUDGE_PR_DIFF_MAX_BYTES}" ]; then
-  PR_DIFF="$(printf '%s' "${PR_DIFF}" | PYTHONDONTWRITEBYTECODE=1 python3 - "${RB_JUDGE_PR_DIFF_MAX_BYTES}" <<'PY'
+  PR_DIFF="$(printf '%s' "${PR_DIFF}" | PYTHONDONTWRITEBYTECODE=1 python3 -c '
 import sys
 
 data = sys.stdin.buffer.read()
@@ -333,8 +333,7 @@ if cap > 0 and len(data) > cap:
         i -= 1
     data = data[:i]
 sys.stdout.buffer.write(data)
-PY
-  )"
+' "${RB_JUDGE_PR_DIFF_MAX_BYTES}")"
   PR_DIFF_TRUNCATED=true
 fi
 PRELOADED_PR_META="$(jq -c '{
@@ -555,19 +554,14 @@ PY
 # -----------------------------------------------------------
 # Run the judge
 # -----------------------------------------------------------
-# Surface the rendered prompt size before invoking codex. The CLI's
-# `turn/start` envelope is a hard 1,048,576-character stdin cap; if
-# the prompt crosses it, every retry in the reasoning ladder fails
+# Surface the sanitized prompt size before the first codex exec. The
+# CLI's `turn/start` envelope is a hard 1,048,576-character stdin cap;
+# if the prompt crosses it, every retry in the reasoning ladder fails
 # identically with the same `turn/start: Input exceeds the maximum
 # length` error because the ladder only steps reasoning effort, not
-# input size. Logging here keeps the next regression visible at the
+# input size. Logging here keeps the next regression visible near the
 # top of the failing job instead of buried inside ~75k stderr lines.
-RB_JUDGE_PROMPT_BYTES="$(wc -c < "${RB_JUDGE_PROMPT}" 2>/dev/null | tr -cd '0-9' || true)"
-[ -n "${RB_JUDGE_PROMPT_BYTES}" ] || RB_JUDGE_PROMPT_BYTES=0
-echo "Review-blocked judge prompt size: ${RB_JUDGE_PROMPT_BYTES} bytes (codex stdin cap: 1048576)."
-if [ "${RB_JUDGE_PROMPT_BYTES:-0}" -gt 950000 ]; then
-  echo "::warning::Review-blocked judge prompt is ${RB_JUDGE_PROMPT_BYTES} bytes; close to or over codex 1 MB stdin cap. Expect turn/start failures unless RB_JUDGE_PR_DIFF_MAX_BYTES (current: ${RB_JUDGE_PR_DIFF_MAX_BYTES}) or upstream embed budgets are tightened."
-fi
+RB_JUDGE_PROMPT_SIZE_LOGGED=false
 JUDGE_SUCCESS=false
 JUDGE_STDERR_FILE="${RUNTIME_DIR}/rb_judge_stderr.txt"
 for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
@@ -578,6 +572,15 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
     sed -i "s/model_reasoning_effort = \".*\"/model_reasoning_effort = \"${level}\"/" "${HOME}/.codex/config.toml"
   fi
   sanitize_codex_prompt_file "${RB_JUDGE_PROMPT}"
+  if [ "${RB_JUDGE_PROMPT_SIZE_LOGGED}" != "true" ]; then
+    RB_JUDGE_PROMPT_BYTES="$(wc -c < "${RB_JUDGE_PROMPT}" 2>/dev/null | tr -cd '0-9' || true)"
+    [ -n "${RB_JUDGE_PROMPT_BYTES}" ] || RB_JUDGE_PROMPT_BYTES=0
+    echo "Review-blocked judge prompt size: ${RB_JUDGE_PROMPT_BYTES} bytes (codex stdin cap: 1048576)."
+    if [ "${RB_JUDGE_PROMPT_BYTES:-0}" -gt 950000 ]; then
+      echo "::warning::Review-blocked judge prompt is ${RB_JUDGE_PROMPT_BYTES} bytes; close to or over codex 1 MB stdin cap. Expect turn/start failures unless RB_JUDGE_PR_DIFF_MAX_BYTES (current: ${RB_JUDGE_PR_DIFF_MAX_BYTES}) or upstream embed budgets are tightened."
+    fi
+    RB_JUDGE_PROMPT_SIZE_LOGGED=true
+  fi
   if codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox read-only < "${RB_JUDGE_PROMPT}" > "${RB_JUDGE_OUTPUT}" 2>"${JUDGE_STDERR_FILE}"; then
     if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT}"; then
       JUDGE_EFFECTIVE_REASONING_EFFORT="${level}"
