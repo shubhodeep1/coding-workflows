@@ -670,6 +670,7 @@ def _run_poller(
 		gh_mock = r'''#!/usr/bin/env python3
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -1560,13 +1561,19 @@ if args[0] == 'api':
 		#      body so its `--argjson` merge stays valid.
 		# Distinguish via the presence of `jq` (the second case sets it).
 		if jq:
+			if status != 200:
+				save()
+				print(f'actions runs mock failed: HTTP {status}', file=sys.stderr)
+				sys.exit(1)
 			body_obj = {
 				'total_count': len(workflow_runs),
 				'workflow_runs': workflow_runs,
 			}
-			import subprocess as _sp
-			p = _sp.run(['jq', '-r', jq], input=json.dumps(body_obj), capture_output=True, text=True)
+			p = subprocess.run(['jq', '-r', jq], input=json.dumps(body_obj), capture_output=True, text=True)
 			save()
+			if p.returncode != 0:
+				sys.stderr.write(p.stderr)
+				sys.exit(p.returncode)
 			sys.stdout.write(p.stdout)
 			sys.exit(0)
 		status_text = 'OK' if status == 200 else 'Not Modified'

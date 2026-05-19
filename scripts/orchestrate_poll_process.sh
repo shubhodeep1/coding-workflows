@@ -5738,9 +5738,11 @@ STALL_EOF
           # caller workflows that rename the display name are still
           # caught.  Zombie filter (STALL_THRESHOLD_MINUTES) mirrors
           # build_active_issue_set at line 4944-4954 so a genuinely
-          # hung run does not block recovery indefinitely.  Fail-open
-          # on any jq/cache error: empty result falls through to the
-          # legacy empty-commit path.
+          # hung run does not block recovery indefinitely.  Malformed or
+          # blank timestamps on a same-branch review run are treated as
+          # fresh so we conservatively avoid invalidating a potentially
+          # live autofix pass.  Other jq/cache errors still fail open:
+          # empty result falls through to the legacy empty-commit path.
           local _rtr_inflight_blob _rtr_inflight_id _rtr_now_epoch _rtr_stall_secs
           _rtr_inflight_blob="$(_load_actions_runs_cached 2>/dev/null || echo '{"workflow_runs":[]}')"
           _rtr_now_epoch="$(date +%s)"
@@ -5760,8 +5762,12 @@ STALL_EOF
                  or ((.path // "") | endswith("internal-review.yml"))
                  or ((.path // "") | endswith("review_autofix.yml"))
                )
-             | (.run_started_at // .created_at // "1970-01-01T00:00:00Z") as $ts
-             | ($ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) as $start_epoch
+             | ([.run_started_at, .created_at]
+                | map(select(type == "string" and . != ""))[0] // "") as $ts
+             | (if $ts != ""
+                then (try ($ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch $now)
+                else $now
+                end) as $start_epoch
              | select(($now - $start_epoch) < $threshold)
             ] | (.[0].id // empty)
           ' 2>/dev/null || echo "")"
