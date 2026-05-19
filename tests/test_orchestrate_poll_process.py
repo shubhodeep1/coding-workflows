@@ -1522,6 +1522,25 @@ if args[0] == 'api':
 			print(json.dumps({'default_branch': store.get('default_branch', 'main')}))
 		sys.exit(0)
 
+	# Compare endpoint — added for the integration-ahead-by gate
+	# (shubhodeep1/binance-blessings#135). Tests can pin ahead_by via the
+	# 'compare_ahead_by' store key (default: 0 = default contains
+	# integration tip = no drift, which matches the legacy assumption of
+	# tests that predate the gate). Setting compare_ahead_by_force_error
+	# simulates the compare API failing so the fail-closed posture can be
+	# exercised explicitly.
+	m = re.search(r'^repos/[^/]+/[^/]+/compare/.+\.\.\..+$', path)
+	if m:
+		if store.get('compare_ahead_by_force_error'):
+			sys.stderr.write('simulated compare API error\n')
+			sys.exit(22)
+		ahead_by = int(store.get('compare_ahead_by', 0))
+		if jq == '.ahead_by':
+			print(ahead_by)
+		else:
+			print(json.dumps({'ahead_by': ahead_by, 'behind_by': 0}))
+		sys.exit(0)
+
 	m = re.search(r'/actions/runs(?:\?.*)?$', path)
 	if m:
 		query = path.split('?', 1)[1] if '?' in path else ''
