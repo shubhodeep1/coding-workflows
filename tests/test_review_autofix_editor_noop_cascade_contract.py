@@ -319,6 +319,14 @@ def test_review_apply_fixes_breaks_retry_loop_on_safety_refusal() -> None:
 		"so the fallback summary writer can emit the refusal-specific "
 		"Runtime failure path line."
 	)
+	refusal_touch = text.find('touch "${PREVIOUS_REVIEWS_DIR}/editor_refused.flag"')
+	refusal_block_end = text.find("\n  fi", refusal_touch)
+	assert refusal_block_end != -1, "Refusal short-circuit closing `fi` not found."
+	refusal_block = text[refusal_touch:refusal_block_end]
+	assert any(line.strip() == "break" for line in refusal_block.splitlines()), (
+		"Refusal short-circuit must include a `break` after touching the flag "
+		"so sticky refusals do not consume the remaining retry budget."
+	)
 
 
 def test_review_apply_fixes_fallback_distinguishes_refusal() -> None:
