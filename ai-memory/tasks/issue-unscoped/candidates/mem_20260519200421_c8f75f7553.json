@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:377-451 (full PR_DIFF truncation block after last_run_diff.patch hunk at lines 9-10) | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The block still materializes `${PR_DIFF}` twice in the in-memory fallback path, once for byte counting and once inside the `elif` pipeline.\n  WHY: On large forward-merge PRs this re-buffers the same payload on every retry ladder iteration, inflating memory/CPU and pushing the prompt size log >950kB warning.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/review_rb_judge.sh:377-451 (full PR_DIFF truncation block after last_run_diff.patch hunk at lines 9-10) | confidence=4\n  PROBLEM: The block still materializes `${PR_DIFF}` (full `gh api ...diff` payload) twice in the in-memory fallback path \u2014 once for byte counting via command substitution and once inside the `elif` pipeline \u2014 even after the prior autofix added the `{ printf ... || true; }` guard.\n  WHY: On large forward-merge PRs (this PR's conflicting `.github/workflows/review_autofix.yml` + test files produce multi-hundred-KB diffs) the judge re-fetches/re-buffers the same payload on every retry ladder iteration, inflating memory/CPU and pushing the prompt size log >950kB warning (visible in prior editor runs).\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "6edcfc83386645b684b790ccf1f5670060ce745ab6eca401a5a29e22cb7b07a5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2794,
+    "run_id": "26120581290",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26120581290",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260519200421_c8f75f7553",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2794,
+    "run_id": "26120581290"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-19T20:04:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
