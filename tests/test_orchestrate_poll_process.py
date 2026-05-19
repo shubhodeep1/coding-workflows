@@ -2932,6 +2932,208 @@ def test_merge_conflict_state_completes_when_final_pr_already_merged_and_branch_
 	assert result["release_dispatches"] == []
 
 
+def test_external_finalize_detect_leaves_merge_conflict_validation_path_intact():
+	state = _base_state(status="merge_conflict")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_pr"] = 356
+	state["final_merge_status"] = "pending"
+	prs = [
+		{
+			"number": 356,
+			"state": "closed",
+			"merged": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": None,
+			"mergeable_state": "unknown",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["final_merge_pr"] == 356
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert result["latest_state"]["validation_completed_cycle"] == 1
+	assert "ai:validated" in result["tracking_labels"]
+	assert "ai:merged" not in result["tracking_labels"]
+
+
+def test_external_finalize_detect_leaves_validation_completion_path_intact():
+	state = _base_state(status="validating")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["validation_cycle"] = 2
+	state["final_merge_pr"] = 357
+	state["final_merge_status"] = "pending"
+	prs = [
+		{
+			"number": 357,
+			"state": "closed",
+			"merged": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": None,
+			"mergeable_state": "unknown",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["final_merge_pr"] == 357
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert result["latest_state"]["validation_completed_cycle"] == 2
+	assert "ai:validated" in result["tracking_labels"]
+	assert "ai:merged" not in result["tracking_labels"]
+
+
+def test_validation_completion_preempts_sync_branch_missing_failure_when_final_pr_already_merged():
+	state = _base_state(status="validating")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["validation_cycle"] = 2
+	state["final_merge_pr"] = 359
+	state["final_merge_status"] = "pending"
+	prs = [
+		{
+			"number": 359,
+			"state": "closed",
+			"merged": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": None,
+			"mergeable_state": "unknown",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main"],
+	)
+	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["validation_completed_cycle"] == 2
+	assert result["latest_state"]["final_merge_pr"] == 359
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert "ai:validated" in result["tracking_labels"]
+	assert "ai:merged" not in result["tracking_labels"]
+	assert not any("Integration branch missing" in body for body in tracking_bodies)
+
+
+def test_validation_fixing_completion_preempts_sync_branch_missing_failure_when_final_pr_already_merged():
+	state = _base_state(status="validation-fixing")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["validation_cycle"] = 2
+	state["validation_active_fix_issues"] = []
+	state["final_merge_pr"] = 360
+	state["final_merge_status"] = "pending"
+	prs = [
+		{
+			"number": 360,
+			"state": "closed",
+			"merged": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": None,
+			"mergeable_state": "unknown",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main"],
+	)
+	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["validation_completed_cycle"] == 2
+	assert result["latest_state"]["final_merge_pr"] == 360
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert "ai:validated" in result["tracking_labels"]
+	assert "ai:merged" not in result["tracking_labels"]
+	assert not any("Integration branch missing" in body for body in tracking_bodies)
+
+
+def test_external_finalize_detect_skips_terminal_fallthrough():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_pr"] = 355
+	state["final_merge_status"] = "pending"
+	prs = [
+		{
+			"number": 355,
+			"state": "closed",
+			"merged": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": None,
+			"mergeable_state": "unknown",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["final_merge_pr"] == 355
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert "Project already complete, skipping." not in result["stdout"]
+
+
+def test_external_finalize_detect_preempts_sync_branch_missing_failure():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_pr"] = 358
+	state["final_merge_status"] = "pending"
+	prs = [
+		{
+			"number": 358,
+			"state": "closed",
+			"merged": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": None,
+			"mergeable_state": "unknown",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main"],
+	)
+	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["final_merge_pr"] == 358
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert "ai:merged" in result["tracking_labels"]
+	assert not any("Integration branch missing" in body for body in tracking_bodies)
+
+
 def test_standalone_conflict_sweep_skips_integration_base_prs():
 	state = _base_state(status="complete")
 	prs = [
@@ -8022,6 +8224,134 @@ def test_resolver_tooling_refresh_allowlist_includes_both_retry_preludes():
 		"signature; consumer-repo runs whose pinned script_ref includes "
 		"the new prelude file would still hit a missing-template "
 		"::warning:: at runtime."
+	)
+
+
+def test_external_finalize_detect_marks_project_complete_when_final_pr_already_merged():
+	# Regression guard for the orchestrator/project-2734 wave-2 dispatch
+	# loop (issue #2734): the orchestrator created the final integration
+	# PR (`final_merge_pr=2750`) eagerly via the self-healing pipeline,
+	# an operator squash-merged it at 2026-05-18T21:31:50Z, but
+	# `final_merge_status` stayed `pending` because
+	# `finalize_integration_merge_if_needed` is only invoked from the
+	# `merge_conflict` and judge-`complete` arms — never from the plain
+	# `in_progress` arm.  The poller kept cycling on the wave-dispatch
+	# gate (which fired Telegram `Wave 2 dispatch BLOCKED` alerts every
+	# ~30 min) and never noticed PR #2750 had merged.
+	#
+	# The fix is an external-finalize detect block placed AFTER
+	# `TRACKING_LABELS` is fetched and BEFORE
+	# `sync_default_into_integration_branch` in the orchestrator's
+	# per-tracking-issue loop: read `final_merge_pr` +
+	# `final_merge_status` from state, fetch the PR once via the shared
+	# `_fetch_pr_json` + `_jq_field` helper path, and on confirmed
+	# closed-and-merged, transition status to `complete` before the sync
+	# path can mark a deleted integration branch as failed. The dedicated
+	# `merge_conflict`, `validating`, and `validation-fixing` paths still
+	# own their validation/finalize bookkeeping. This test pins the
+	# placement, the gate condition, AND the state mutation shape
+	# (status=complete + final_merge_status=merged) so a future refactor
+	# cannot silently drop any of the three.
+	poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
+	sync_marker = '    if ! sync_default_into_integration_branch "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}"; then'
+	sync_idx = poller_body.find(sync_marker)
+	assert sync_idx != -1, (
+		"sync_default_into_integration_branch call is missing from the "
+		"per-tracking-issue loop; the external-finalize block must precede "
+		"that sync path so deleted integration branches cannot preempt the "
+		"merged-PR recovery."
+	)
+	# Anchor on the `TRACKING_LABELS=` fetch that precedes the
+	# external-finalize block. Several helpers reuse the same assignment,
+	# so search backward from the sync call and take the nearest preceding
+	# occurrence — that is the per-tracking-issue-loop landmark this
+	# regression is pinning.
+	anchor = '  TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"'
+	anchor_idx = poller_body.rfind(anchor, 0, sync_idx)
+	assert anchor_idx != -1, (
+		"TRACKING_LABELS=... fetch (the documented insertion landmark for "
+		"the external-finalize detect block) is missing or renamed in "
+		"scripts/orchestrate_poll_process.sh; update this test to match "
+		"the new landmark."
+	)
+	# Bound the search window to the block between the TRACKING_LABELS
+	# fetch and the sync call so the assertion enforces *placement*, not
+	# just "appears anywhere in the file" (which would false-positive if
+	# a refactor moved the block back below the sync path and reintroduced
+	# the deleted-branch failure).
+	merge_conflict_marker = 'if [ "${PROJECT_STATUS}" = "merge_conflict" ]; then'
+	merge_conflict_idx = poller_body.find(merge_conflict_marker, sync_idx)
+	assert merge_conflict_idx != -1, (
+		'merge_conflict switch `if [ "${PROJECT_STATUS}" = "merge_conflict" ]` '
+		"is missing from the per-tracking-issue loop; the sync block must "
+		"still flow into the later merge_conflict arm after the external-"
+		"finalize pre-check."
+	)
+	window = poller_body[anchor_idx:sync_idx]
+	# Gate condition: only fire when state is non-terminal, not already
+	# on the dedicated `merge_conflict` / validation-completion paths,
+	# a final PR is pinned, and `final_merge_status` is still `pending`.
+	# Each guard protects a different failure mode (terminal states
+	# already handled, `merge_conflict`/validated states need their own
+	# finalize path, no PR pinned yet means orchestrator hasn't even
+	# created the integration PR, non-pending status means another code
+	# path already finalized).
+	for needle, why in (
+		('.final_merge_pr // empty', "external-finalize block no longer reads `.final_merge_pr` from state; without it the block has no PR to inspect."),
+		('.final_merge_status // "pending"', "external-finalize block no longer reads `.final_merge_status` from state; without it the block cannot tell pending from already-finalized projects and would re-finalize on every tick."),
+		('!= "merge_conflict"', "external-finalize block no longer excludes `merge_conflict`; without that guard the block steals work from the dedicated finalize/validation path and duplicates final-PR reads on every merge_conflict poll tick."),
+		('!= "validating"', "external-finalize block no longer excludes `validating`; without that guard an externally merged final PR bypasses `mark_validation_complete` and drops `validation_completed_cycle` / `ai:validated` on the final validation-complete tick."),
+		('!= "validation-fixing"', "external-finalize block no longer excludes `validation-fixing`; without that guard the shortcut can bypass the validation-completion path that owns the final validated-state transition."),
+		('= "pending"', "external-finalize block no longer guards on `final_merge_status = pending`; without this guard the block would re-fire after the orchestrator's own finalize path already ran."),
+		("'.state'", "external-finalize block no longer reads the pinned PR's `.state` field; without it the block cannot tell open from closed PRs."),
+		("'.merged_at != null'", "external-finalize block no longer reads the pinned PR's `.merged_at` field; without it the block would mis-treat a closed-without-merge PR as a successful finalize."),
+	):
+		assert needle in window, (
+			f"external-finalize detect block in scripts/orchestrate_poll_process.sh "
+			f"no longer contains `{needle}` between the TRACKING_LABELS fetch and "
+			f"the sync_default_into_integration_branch call — {why}"
+		)
+	assert window.count('_fetch_pr_json "${_orch_extfin_pr}"') == 1, (
+		"external-finalize detect block no longer uses a single PR fetch before "
+		"the sync_default_into_integration_branch call; duplicate "
+		"PR fetches reintroduce avoidable API churn and a narrow "
+		"state/merged-at race."
+	)
+	# State mutation shape: must set BOTH status=complete AND
+	# final_merge_status=merged in the same jq pass.  Setting only one
+	# would leave the other path inconsistent: status=complete without
+	# final_merge_status=merged would re-trigger finalize on the next
+	# tick (wasting API budget); final_merge_status=merged without
+	# status=complete would leave the project stuck in `in_progress`
+	# and the wave-dispatch loop running.
+	for needle, why in (
+		('.status = "complete"', "external-finalize block no longer transitions project status to `complete`; without this the project stays in_progress and the wave-dispatch loop keeps firing on every tick."),
+		('.final_merge_status = "merged"', "external-finalize block no longer marks `final_merge_status = merged`; finalize_integration_merge_if_needed's early-return check would re-enter the merge flow on the next tick if it were ever called."),
+	):
+		assert needle in window, (
+			f"external-finalize detect block no longer performs the state "
+			f"mutation `{needle}` before the sync_default_into_integration_branch "
+			f"call — {why}"
+		)
+	# Side-effect surface: tracking comment + Telegram cleanup must
+	# both fire so the operator's open `Wave dispatch BLOCKED` alerts
+	# on the tracking issue + Telegram channel are explicitly
+	# superseded.  Without these the user sees stale BLOCKED comments
+	# at the top of the tracking issue indefinitely.
+	for needle, why in (
+		('post_tracking_comment', "external-finalize block no longer posts a tracking comment explaining the external-merge transition; operators would have to guess why the project suddenly went quiet."),
+		('tg_cleanup_msgs', "external-finalize block no longer calls tg_cleanup_msgs so prior `Wave dispatch BLOCKED` Telegram alerts stay pinned in the channel after the project completes — defeats half of the user-visible silence."),
+		('set_tracking_phase_label "ai:merged"', "external-finalize block no longer sets the `ai:merged` phase label, so downstream label-driven automation (release callbacks, label-repair sweeps) cannot detect that this project is done."),
+	):
+		assert needle in window, (
+			f"external-finalize detect block no longer triggers `{needle}` "
+			f"in its side-effect block — {why}"
+		)
+	assert re.search(r'PROJECT_STATUS="complete"\s+continue', window) is not None, (
+		"external-finalize detect block no longer short-circuits after setting "
+		"`PROJECT_STATUS=complete`; without the `continue`, the same tick falls "
+		"through to the terminal-state skip block and logs a misleading "
+		"`Project already complete, skipping.` line."
 	)
 
 

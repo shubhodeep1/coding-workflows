@@ -8443,13 +8443,100 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
 
   echo "${STATE_JSON}" > "${STATE_FILE}"
   PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
+  TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
 
+  # ---------------------------------------------------------------
+  # External-finalize detect: if the orchestrator previously recorded
+  # a final integration PR and an operator (or any other actor)
+  # squash-merged it outside the orchestrator's wave-by-wave flow,
+  # `finalize_integration_merge_if_needed` is never reached from the
+  # `in_progress` arm — it only fires from the `merge_conflict` branch
+  # and from the judge-`complete` verdict.  Without this hook, the
+  # poller keeps cycling on wave-dispatch indefinitely (e.g.
+  # orchestrator/project-2734: PR #2750 merged 2026-05-18T21:31:50Z
+  # but `final_merge_status` stayed `pending`, the wave-2 dispatch
+  # gate re-fired every ~30 min, and the Telegram channel collected
+  # several `Wave 2 dispatch BLOCKED` alerts per hour).
+  #
+  # This recovery must run BEFORE sync_default_into_integration_branch:
+  # external squash merges commonly delete the integration branch, and
+  # the sync path would otherwise mark the project failed before this
+  # block can observe the already-merged final PR.
+  #
+  # Mirror the same pinned-final-PR recovery shape that
+  # `finalize_integration_merge_if_needed` already uses once a final PR
+  # is recorded in state: read `final_merge_pr`, fetch the PR once via
+  # the shared `_fetch_pr_json` helper, and only transition when
+  # `.state` + `.merged_at` confirm closed-and-merged.  One REST read
+  # per poll tick when a final PR is pinned; skipped entirely when
+  # `final_merge_pr` is unset (most projects pre-finalize),
+  # `final_merge_status` is already terminal, or the project is already
+  # on the dedicated `merge_conflict` / validation-completion paths.
+  # Validated projects must keep flowing through
+  # `mark_validation_complete` so `validation_completed_cycle` and the
+  # `ai:validated` label stay aligned with the final merge result.
+  if [ "${PROJECT_STATUS}" != "complete" ] \
+    && [ "${PROJECT_STATUS}" != "failed" ] \
+    && [ "${PROJECT_STATUS}" != "validation-failed" ] \
+    && [ "${PROJECT_STATUS}" != "merge_conflict" ] \
+    && [ "${PROJECT_STATUS}" != "validating" ] \
+    && [ "${PROJECT_STATUS}" != "validation-fixing" ]; then
+    _orch_extfin_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
+    _orch_extfin_status="$(jq -r '.final_merge_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo "pending")"
+    if [ -n "${_orch_extfin_pr}" ] && [ "${_orch_extfin_pr}" != "null" ] \
+      && [ "${_orch_extfin_status}" = "pending" ]; then
+      if ! [[ "${_orch_extfin_pr}" =~ ^[0-9]+$ ]]; then
+        echo "::warning::[external-finalize] ignoring non-numeric final_merge_pr in state for issue #${TRACKING_NUM}: ${_orch_extfin_pr}"
+      else
+        _orch_extfin_pr_json="$(_fetch_pr_json "${_orch_extfin_pr}")"
+        _orch_extfin_pr_state="$(_jq_field "${_orch_extfin_pr_json}" '.state' 'open|closed|merged')"
+        _orch_extfin_pr_merged="$(_jq_field "${_orch_extfin_pr_json}" '.merged_at != null' 'true|false')"
+        if [ -z "${_orch_extfin_pr_state}" ] || [ -z "${_orch_extfin_pr_merged}" ]; then
+          echo "::warning::[external-finalize] unable to inspect PR #${_orch_extfin_pr}; leaving final_merge_status pending."
+        elif [ "${_orch_extfin_pr_state}" = "closed" ] && [ "${_orch_extfin_pr_merged}" = "true" ]; then
+          echo "  [external-finalize] PR #${_orch_extfin_pr} merged outside the wave-by-wave flow; transitioning project to complete."
+          if ! jq --argjson final_pr "${_orch_extfin_pr}" \
+            '.final_merge_pr = $final_pr
+             | .final_merge_status = "merged"
+             | .final_merge_error = ""
+             | .status = "complete"
+             | .judge_cycle = ((.judge_cycle // 0) + 1)' \
+            "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+            rm -f "${STATE_FILE}.tmp" || true
+            echo "::warning::[external-finalize] failed to persist merged state for PR #${_orch_extfin_pr}; leaving final_merge_status pending."
+            continue
+          fi
+          post_state_comment || true
+          handle_comprehensive_release_callback_if_needed "complete" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
+          set_tracking_phase_label "ai:merged"
+          post_tracking_comment "## ✅ Project complete — integration PR #${_orch_extfin_pr} merged externally
+
+The orchestrator detected that the integration PR was squash-merged outside the wave-by-wave dispatch flow (the typical pattern when an operator finalizes a project ahead of the planner). Transitioning status to \`complete\`; future poll ticks will skip this project and any open wave-dispatch alerts can be ignored."
+          tg_cleanup_msgs "${TRACKING_NUM}"
+          MSG="✅ Project #${TRACKING_NUM} completed (integration PR #${_orch_extfin_pr} merged externally)."
+          MSG+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
+          if [ -n "${GITHUB_RUN_ID:-}" ]; then
+            MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
+          fi
+          tg_send_msg "${MSG}" >/dev/null
+          PROJECT_STATUS="complete"
+          continue
+        fi
+      fi
+    fi
+  fi
+
+  # Validation-owned states must bypass sync so mark_validation_complete
+  # can own externally merged/deleted final-PR completion without the
+  # integration-branch missing/conflict path preempting it.
   DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
   INTEGRATION_BRANCH_TRACKING="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
   if [ -n "${INTEGRATION_BRANCH_TRACKING}" ] \
     && [ "${PROJECT_STATUS}" != "complete" ] \
     && [ "${PROJECT_STATUS}" != "failed" ] \
     && [ "${PROJECT_STATUS}" != "merge_conflict" ] \
+    && [ "${PROJECT_STATUS}" != "validating" ] \
+    && [ "${PROJECT_STATUS}" != "validation-fixing" ] \
     && [ "${PROJECT_STATUS}" != "validation-failed" ]; then
     if ! sync_default_into_integration_branch "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}"; then
       continue
@@ -8459,8 +8546,6 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
       continue
     fi
   fi
-
-  TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
 
   if [ "${PROJECT_STATUS}" = "merge_conflict" ]; then
     FINAL_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
