@@ -372,7 +372,11 @@ def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
 def test_auto_merge_guard_honours_configured_orchestrator_branch_pattern() -> None:
 	block = _step_block("Enable auto-merge on PR")
 	assert "ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}" in block
+	assert 'if [ -z "${_orch_pr_head_ref}" ]; then' in block
+	assert "empty/null .head.ref" in block
 	assert 'grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN}"' in block
+	assert "refs:?[[:space:]]*#[0-9]+" in block
+	assert "(closes|fixes|resolves):?[[:space:]]*#[0-9]+" in block
 	assert "matches ORCH_INTEGRATION_BRANCH_PATTERN='${ORCH_INTEGRATION_BRANCH_PATTERN}'" in block
 	assert "falling back to canonical '^orchestrator/project-([0-9]+)$' auto-merge suppressor" in block
 	assert "falling back to canonical '^orchestrator/project-[0-9]+$' auto-merge suppressor" not in block

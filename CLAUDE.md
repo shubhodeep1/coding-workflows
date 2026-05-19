@@ -598,6 +598,45 @@ applies, so renames require the §2 ask flow first.
 
 ---
 
+## §19. PR Body Auto-Close Keyword Discipline (MANDATORY)
+
+GitHub auto-closes issues referenced with keywords like `Fixes #N`,
+`Closes #N`, or `Resolves #N` in a PR body when the PR merges into the
+default branch. For orchestrator tracking issues — any issue carrying
+the `ai:orchestrator-tracking` label — this silently kills the
+orchestrator's state machine: once the tracking issue closes, the
+poller treats the project as done and stops dispatching the remaining
+waves.
+
+Rules:
+
+- **NEVER** use auto-close keywords (`close`, `closes`, `closed`, `fix`,
+  `fixes`, `fixed`, `resolve`, `resolves`, `resolved`, case-insensitive)
+  followed by a reference to an `ai:orchestrator-tracking` issue in a
+  PR body, PR title, commit message, or merge commit trailer. Use
+  `Refs #N` or `Related to #N` for semantic linkage instead.
+- A PR that fixes a **blocker bug surfaced by an orchestrator project**
+  is not a fix for the project itself — `Refs #N` is still the correct
+  linkage, not `Fixes #N`. The orchestrator project closes itself via
+  its own state machine when all waves complete.
+- Before drafting a PR body that references an orchestrator project's
+  tracking issue, verify the target's labels (`gh issue view <N> --json
+  labels` or `mcp__github__issue_read` with `method=get_labels`). If
+  `ai:orchestrator-tracking` is present, the auto-close keywords are
+  forbidden against that issue number.
+- This rule is not superseded by §12 (PR Review Mode) or any proactive-
+  fix scope. It applies to every AI-authored PR body in an interactive
+  session.
+
+Historical incident: PR #2760 used `Fixes #2734` in its body. `#2734`
+was an `ai:orchestrator-tracking` issue for the integration-sync
+resolver self-heal project. On merge, GitHub auto-closed `#2734` and
+the orchestrator stopped dispatching waves 2-7; the bulk of the
+project's planned phases never shipped (see
+`docs/completed/integration-sync-resolver-self-heal-plan.md`).
+
+---
+
 ## FINAL REMINDER
 
 If uncertainty exists: **ASK (multiple-choice). DO NOT EXECUTE.**

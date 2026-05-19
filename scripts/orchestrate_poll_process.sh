@@ -2336,7 +2336,6 @@ mark_integration_branch_missing_failed() {
 ${reason}"
   _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
   handle_comprehensive_release_callback_if_needed "failed" "${_tracking_labels}" "${COMMENTS:-[]}"
-  tg_cleanup_msgs "${TRACKING_NUM}"
   tg_notify "❌ Project #${TRACKING_NUM} failed: ${tg_reason}."
 }
 
@@ -3349,20 +3348,74 @@ _refresh_integration_resolver_tooling() {
       git config user.name "codex-bot"
       git config user.email "codex@users.noreply.github.com"
 
+      # Resolve the merge-base ONCE before the per-file loop so we can
+      # compare each file's integration-branch hash against the hash it
+      # had when the two branches last shared history.  When int_hash
+      # differs from the merge-base hash, the integration branch has
+      # its own committed changes to the file since the branches
+      # diverged (e.g. via a merged sub-issue's PR like #2738 landing
+      # Phase 1A baseline/delta verifier changes).  Force-refreshing
+      # from default_branch in that case silently reverts those
+      # merged sub-issue changes, which the post-resolve merged
+      # sub-issue fingerprint verifier
+      # (scripts/verify_integration_fingerprints.py) then flags as a
+      # contract violation, blocking wave dispatch on the project
+      # tracking issue (see issue #2734 for the original incident).
+      # Fail-open: if the merge-base cannot be resolved, fall through
+      # to the legacy hash-only comparison rather than aborting the
+      # deadlock-breaking refresh entirely.
+      local merge_base=""
+      merge_base="$(git merge-base \
+        "refs/remotes/origin/${integration_branch}" \
+        "refs/remotes/origin/${default_branch}" 2>/dev/null || echo "")"
+
+      if [ -z "${merge_base}" ]; then
+        echo "::warning::${log_prefix} merge-base unresolved for ${integration_branch} vs ${default_branch}; falling back to legacy hash-only comparison." >&2
+      fi
+
       local refreshed_count=0
       local refreshed_list=""
-      local f main_hash int_hash
+      local drifted_count=0
+      local skipped_count=0
+      local f main_hash int_hash base_hash
       for f in "${refresh_files[@]}"; do
         # Skip if file does not exist on default_branch — never delete
         # an integration-branch file just because main lacks it.
         if ! git cat-file -e "refs/remotes/origin/${default_branch}:${f}" 2>/dev/null; then
           continue
         fi
-        main_hash="$(git rev-parse "refs/remotes/origin/${default_branch}:${f}" 2>/dev/null || echo "")"
-        int_hash="$(git rev-parse "HEAD:${f}" 2>/dev/null || echo "")"
+        # Keep --verify/--quiet on these tree-path lookups: without
+        # them, a missing path writes the unresolved REV:PATH token to
+        # stdout, which makes absent files look like real hashes.
+        main_hash="$(git rev-parse --verify --quiet "refs/remotes/origin/${default_branch}:${f}" 2>/dev/null || echo "")"
+        int_hash="$(git rev-parse --verify --quiet "HEAD:${f}" 2>/dev/null || echo "")"
         [ -n "${main_hash}" ] || continue
         if [ "${main_hash}" = "${int_hash}" ]; then
           continue
+        fi
+        drifted_count=$((drifted_count + 1))
+        # Refuse to clobber a file the integration branch has its own
+        # committed changes to since the merge-base.  The deadlock-
+        # breaker is for files the integration branch has NOT touched
+        # but main has fixed — overwriting a file the integration
+        # branch HAS touched would silently revert merged sub-issue
+        # PR intent and trip the fingerprint verifier (issue #2734).
+        # Any legitimate main-side change to such a file must arrive
+        # via the normal main->integration sync (with 3-way merge),
+        # not via this refresh.  `[ -z "${base_hash}" ]` covers the
+        # "file did not exist at merge-base, integration added it"
+        # case the same way — never clobber an added file.
+        if [ -n "${merge_base}" ]; then
+          base_hash="$(git rev-parse --verify --quiet "${merge_base}:${f}" 2>/dev/null || echo "")"
+          if [ "${int_hash}" != "${base_hash}" ]; then
+            skipped_count=$((skipped_count + 1))
+            local _int_short="${int_hash:0:8}"
+            local _base_short="${base_hash:0:8}"
+            [ -n "${_base_short}" ] || _base_short="none"
+            [ -n "${_int_short}" ] || _int_short="none"
+            echo "  ${log_prefix} skip ${f} — integration branch has committed changes since merge-base (int=${_int_short}, base=${_base_short}); main version must arrive via normal sync, not refresh."
+            continue
+          fi
         fi
         if git checkout "refs/remotes/origin/${default_branch}" -- "${f}" 2>/dev/null; then
           # Only count the file as refreshed if `git add` succeeds, so
@@ -3379,7 +3432,13 @@ _refresh_integration_resolver_tooling() {
       done
 
       if [ "${refreshed_count}" -eq 0 ]; then
-        echo "  ${log_prefix} no resolver-toolchain drift; nothing to refresh."
+        if [ "${skipped_count}" -gt 0 ] && [ "${skipped_count}" -eq "${drifted_count}" ]; then
+          echo "  ${log_prefix} detected resolver-toolchain drift in ${drifted_count} file(s), but skipped refresh because integration-branch changes must land via normal sync."
+        elif [ "${drifted_count}" -gt 0 ]; then
+          echo "  ${log_prefix} detected resolver-toolchain drift in ${drifted_count} file(s), but nothing was refreshed."
+        else
+          echo "  ${log_prefix} no resolver-toolchain drift; nothing to refresh."
+        fi
         exit 0
       fi
 
@@ -3985,8 +4044,11 @@ finalize_integration_merge_if_needed() {
   # gave up on the integration branch) and is NOT re-evaluated here.
   if [ "${final_merge_status}" = "merged" ] && [ -n "${integration_branch}" ]; then
     local _fimin_ahead_by _fimin_ahead_rc
-    _fimin_ahead_by="$(_integration_branch_ahead_of_default "${integration_branch}" "${default_branch}")"
-    _fimin_ahead_rc=$?
+    if _fimin_ahead_by="$(_integration_branch_ahead_of_default "${integration_branch}" "${default_branch}")"; then
+      _fimin_ahead_rc=0
+    else
+      _fimin_ahead_rc=$?
+    fi
     if [ "${_fimin_ahead_rc}" -ne 0 ]; then
       echo "::warning::  [final-merge] State pinned final_merge_status=merged for #${TRACKING_NUM:-?} but the compare API failed during the ahead_by re-check; failing closed and clearing the pin so the next tick can reopen the final PR if integration has drifted."
       jq '.final_merge_status = "pending" | .final_merge_pr = null | .final_merge_error = "compare API error during ahead_by re-check (failed closed)"' \
@@ -4041,8 +4103,11 @@ finalize_integration_merge_if_needed() {
       # return, leaving the new diff stranded. See
       # shubhodeep1/binance-blessings#135.
       local _fimin_rd_ahead_by _fimin_rd_ahead_rc
-      _fimin_rd_ahead_by="$(_integration_branch_ahead_of_default "${integration_branch}" "${default_branch}")"
-      _fimin_rd_ahead_rc=$?
+      if _fimin_rd_ahead_by="$(_integration_branch_ahead_of_default "${integration_branch}" "${default_branch}")"; then
+        _fimin_rd_ahead_rc=0
+      else
+        _fimin_rd_ahead_rc=$?
+      fi
       if [ "${_fimin_rd_ahead_rc}" -ne 0 ]; then
         echo "::warning::  [final-merge] Recorded final PR #${final_pr} is closed+merged but the compare API failed during the ahead_by re-check; failing closed and clearing the recorded PR so the next code path can open a fresh one if integration has drifted."
         jq '.final_merge_pr = null | .final_merge_status = "pending" | .final_merge_error = "compare API error during ahead_by re-check after recorded final PR was already merged (failed closed)"' \
@@ -4570,7 +4635,6 @@ ${reason}
 
 Failure class \`${_deterministic_class}\` is environment-deterministic; retrying this workflow on the same runner image will not help. Skipping the recovery budget. Manual intervention required."
     tg_notify "Project #${TRACKING_NUM} validation failed deterministically (class=${_deterministic_class}). Manual intervention required." "CRITICAL"
-    tg_cleanup_msgs "${TRACKING_NUM}"
     return 0
   fi
 
@@ -4613,7 +4677,6 @@ ${reason}
 
 Validation recovery exhausted (${val_recovery_count}/${MAX_VALIDATION_RECOVERY_ATTEMPTS}). Manual intervention required."
   tg_notify "Project #${TRACKING_NUM} validation failed after ${val_recovery_count} recovery attempt(s). Manual intervention required." "CRITICAL"
-  tg_cleanup_msgs "${TRACKING_NUM}"
 }
 
 mark_validation_complete() {
@@ -4682,7 +4745,6 @@ Runtime validation passed, but the final squash merge of \`${integration_branch}
 - Last recorded error: ${_final_err:-No specific error recorded; check final PR for branch protection or required-check failures.}
 
 Manual intervention required: resolve the blocking condition on the final PR (merge conflicts, required checks, branch protections) and re-trigger the poller, or merge manually."
-    tg_cleanup_msgs "${TRACKING_NUM}"
     tg_notify "Project #${TRACKING_NUM} blocked: validation passed but integration→${default_branch} merge did not land after ${MAX_FINAL_MERGE_ATTEMPTS} attempts. Manual intervention required." "CRITICAL"
     return 0
   fi
@@ -8504,13 +8566,100 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
 
   echo "${STATE_JSON}" > "${STATE_FILE}"
   PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
+  TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
 
+  # ---------------------------------------------------------------
+  # External-finalize detect: if the orchestrator previously recorded
+  # a final integration PR and an operator (or any other actor)
+  # squash-merged it outside the orchestrator's wave-by-wave flow,
+  # `finalize_integration_merge_if_needed` is never reached from the
+  # `in_progress` arm — it only fires from the `merge_conflict` branch
+  # and from the judge-`complete` verdict.  Without this hook, the
+  # poller keeps cycling on wave-dispatch indefinitely (e.g.
+  # orchestrator/project-2734: PR #2750 merged 2026-05-18T21:31:50Z
+  # but `final_merge_status` stayed `pending`, the wave-2 dispatch
+  # gate re-fired every ~30 min, and the Telegram channel collected
+  # several `Wave 2 dispatch BLOCKED` alerts per hour).
+  #
+  # This recovery must run BEFORE sync_default_into_integration_branch:
+  # external squash merges commonly delete the integration branch, and
+  # the sync path would otherwise mark the project failed before this
+  # block can observe the already-merged final PR.
+  #
+  # Mirror the same pinned-final-PR recovery shape that
+  # `finalize_integration_merge_if_needed` already uses once a final PR
+  # is recorded in state: read `final_merge_pr`, fetch the PR once via
+  # the shared `_fetch_pr_json` helper, and only transition when
+  # `.state` + `.merged_at` confirm closed-and-merged.  One REST read
+  # per poll tick when a final PR is pinned; skipped entirely when
+  # `final_merge_pr` is unset (most projects pre-finalize),
+  # `final_merge_status` is already terminal, or the project is already
+  # on the dedicated `merge_conflict` / validation-completion paths.
+  # Validated projects must keep flowing through
+  # `mark_validation_complete` so `validation_completed_cycle` and the
+  # `ai:validated` label stay aligned with the final merge result.
+  if [ "${PROJECT_STATUS}" != "complete" ] \
+    && [ "${PROJECT_STATUS}" != "failed" ] \
+    && [ "${PROJECT_STATUS}" != "validation-failed" ] \
+    && [ "${PROJECT_STATUS}" != "merge_conflict" ] \
+    && [ "${PROJECT_STATUS}" != "validating" ] \
+    && [ "${PROJECT_STATUS}" != "validation-fixing" ]; then
+    _orch_extfin_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
+    _orch_extfin_status="$(jq -r '.final_merge_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo "pending")"
+    if [ -n "${_orch_extfin_pr}" ] && [ "${_orch_extfin_pr}" != "null" ] \
+      && [ "${_orch_extfin_status}" = "pending" ]; then
+      if ! [[ "${_orch_extfin_pr}" =~ ^[0-9]+$ ]]; then
+        echo "::warning::[external-finalize] ignoring non-numeric final_merge_pr in state for issue #${TRACKING_NUM}: ${_orch_extfin_pr}"
+      else
+        _orch_extfin_pr_json="$(_fetch_pr_json "${_orch_extfin_pr}")"
+        _orch_extfin_pr_state="$(_jq_field "${_orch_extfin_pr_json}" '.state' 'open|closed|merged')"
+        _orch_extfin_pr_merged="$(_jq_field "${_orch_extfin_pr_json}" '.merged_at != null' 'true|false')"
+        if [ -z "${_orch_extfin_pr_state}" ] || [ -z "${_orch_extfin_pr_merged}" ]; then
+          echo "::warning::[external-finalize] unable to inspect PR #${_orch_extfin_pr}; leaving final_merge_status pending."
+        elif [ "${_orch_extfin_pr_state}" = "closed" ] && [ "${_orch_extfin_pr_merged}" = "true" ]; then
+          echo "  [external-finalize] PR #${_orch_extfin_pr} merged outside the wave-by-wave flow; transitioning project to complete."
+          if ! jq --argjson final_pr "${_orch_extfin_pr}" \
+            '.final_merge_pr = $final_pr
+             | .final_merge_status = "merged"
+             | .final_merge_error = ""
+             | .status = "complete"
+             | .judge_cycle = ((.judge_cycle // 0) + 1)' \
+            "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+            rm -f "${STATE_FILE}.tmp" || true
+            echo "::warning::[external-finalize] failed to persist merged state for PR #${_orch_extfin_pr}; leaving final_merge_status pending."
+            continue
+          fi
+          post_state_comment || true
+          handle_comprehensive_release_callback_if_needed "complete" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
+          set_tracking_phase_label "ai:merged"
+          post_tracking_comment "## ✅ Project complete — integration PR #${_orch_extfin_pr} merged externally
+
+The orchestrator detected that the integration PR was squash-merged outside the wave-by-wave dispatch flow (the typical pattern when an operator finalizes a project ahead of the planner). Transitioning status to \`complete\`; future poll ticks will skip this project and any open wave-dispatch alerts can be ignored."
+          tg_cleanup_msgs "${TRACKING_NUM}"
+          MSG="✅ Project #${TRACKING_NUM} completed (integration PR #${_orch_extfin_pr} merged externally)."
+          MSG+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
+          if [ -n "${GITHUB_RUN_ID:-}" ]; then
+            MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
+          fi
+          tg_send_msg "${MSG}" >/dev/null
+          PROJECT_STATUS="complete"
+          continue
+        fi
+      fi
+    fi
+  fi
+
+  # Validation-owned states must bypass sync so mark_validation_complete
+  # can own externally merged/deleted final-PR completion without the
+  # integration-branch missing/conflict path preempting it.
   DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
   INTEGRATION_BRANCH_TRACKING="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
   if [ -n "${INTEGRATION_BRANCH_TRACKING}" ] \
     && [ "${PROJECT_STATUS}" != "complete" ] \
     && [ "${PROJECT_STATUS}" != "failed" ] \
     && [ "${PROJECT_STATUS}" != "merge_conflict" ] \
+    && [ "${PROJECT_STATUS}" != "validating" ] \
+    && [ "${PROJECT_STATUS}" != "validation-fixing" ] \
     && [ "${PROJECT_STATUS}" != "validation-failed" ]; then
     if ! sync_default_into_integration_branch "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}"; then
       continue
@@ -8520,8 +8669,6 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
       continue
     fi
   fi
-
-  TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
 
   if [ "${PROJECT_STATUS}" = "merge_conflict" ]; then
     FINAL_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
@@ -11597,7 +11744,6 @@ Judge has used ${JUDGE_STALL_CYCLES} stall cycle(s) (recovery/fix-ups) out of ${
 Clean wave advances do not count against this limit.
 Manual intervention required." >/dev/null
     tg_notify "Project #${TRACKING_NUM} FAILED: judge stall cycle limit (${JUDGE_STALL_CYCLES}/${MAX_JUDGE}) exceeded." "CRITICAL"
-    tg_cleanup_msgs "${TRACKING_NUM}"
     continue
   fi
 
@@ -12017,7 +12163,6 @@ The judge produced the same normalized failure fingerprint for ${JUDGE_FINGERPRI
 
 To avoid repeating the same recovery loop, the orchestrator is not creating additional fix-up issues or running another judge-driven auto-recovery cycle. Manual intervention is required."
 
-        tg_cleanup_msgs "${TRACKING_NUM}"
         tg_notify "Project #${TRACKING_NUM} blocked: repeated judge failure fingerprint exceeded JUDGE_REPEAT_FINGERPRINT_MAX=${JUDGE_REPEAT_FINGERPRINT_MAX}. Manual intervention required." "CRITICAL"
         continue
       fi
@@ -12040,7 +12185,6 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 **Assessment:** ${JUDGE_ASSESSMENT}" >/dev/null
 
         tg_notify "Project #${TRACKING_NUM} FAILED after ${RECOVERY_COUNT} recovery attempt(s). Manual intervention needed." "CRITICAL"
-        tg_cleanup_msgs "${TRACKING_NUM}"
         continue
       fi
 
