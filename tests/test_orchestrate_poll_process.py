@@ -8742,6 +8742,82 @@ def test_resolver_tooling_refresh_function_has_merge_base_divergence_guard():
 	)
 
 
+def test_resolver_tooling_refresh_function_has_3way_merge_fallback():
+	# Static contract for P5 (docs/postmortems/2026-05-18-project-2734-stall.md).
+	# When BOTH the integration branch and main have changed an
+	# allowlisted file since the merge-base, PR #2760's divergence
+	# guard skipped the refresh — preserving the sub-issue PR change
+	# but losing the main-side toolchain fix. P5 layers a 3-way merge
+	# fallback alongside the guard: if both sides changed but the
+	# changes don't conflict, combine them; only fall back to skip on
+	# real conflicts.
+	#
+	# This test pins:
+	#   - presence of the merged_3way_count counter,
+	#   - the `git merge-file` invocation,
+	#   - the conditional that distinguishes "main unchanged" (skip)
+	#     from "both changed" (try 3-way merge),
+	#   - that the 3-way path stages via `git add` (so it lands in the
+	#     refresh commit alongside the deadlock-breaker checkout path),
+	#   - the conflict fallback (skip on non-zero `git merge-file` exit).
+	poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
+	fn_body = _extract_refresh_function_body(poller_body)
+
+	assert "merged_3way_count=0" in fn_body, (
+		"_refresh_integration_resolver_tooling must initialize merged_3way_count "
+		"alongside refreshed_count / skipped_count / drifted_count. Without the "
+		"counter the post-refresh summary cannot distinguish 3-way merges from "
+		"deadlock-breaker checkouts."
+	)
+	assert "git merge-file" in fn_body, (
+		"_refresh_integration_resolver_tooling must call `git merge-file` to do "
+		"the 3-way merge of integration + main edits when both sides changed "
+		"since the merge-base. Without this the function falls back to PR #2760's "
+		"skip behavior and the toolchain fix never reaches the integration branch."
+	)
+	# The skip sub-case (main unchanged) must come BEFORE the 3-way
+	# merge sub-case so the cheap test runs first.
+	skip_subcase_re = re.compile(
+		r'if\s+\[\s+-z\s+"\$\{base_hash\}"\s+\]\s+\|\|\s+\[\s+"\$\{main_hash\}"\s+=\s+"\$\{base_hash\}"\s+\]\s*;\s*then'
+	)
+	assert skip_subcase_re.search(fn_body), (
+		"3-way merge logic must short-circuit when main is unchanged from "
+		"merge-base (no work to do) BEFORE attempting the merge. Without this "
+		"short-circuit, the function would 3-way merge an unchanged main into "
+		"the integration version, wasting work and adding noise to the refresh."
+	)
+	# The merge must use the standard base/int/main triple in the
+	# correct argument order: `git merge-file <current> <base> <other>`
+	# — `<current>` is the integration version, `<base>` the merge-base,
+	# `<other>` the main version. Swapping any of these would silently
+	# produce the wrong merge or pick the wrong side on conflict.
+	assert '"${merge_tmpdir}/int" "${merge_tmpdir}/base" "${merge_tmpdir}/main"' in fn_body, (
+		"git merge-file argument order must be `int base main` (current, base, "
+		"other). Swapping the order would silently corrupt the merge — the "
+		"integration version is the file we want to update in place, the "
+		"merge-base is the common ancestor, main is the new content to merge in."
+	)
+	# Successful 3-way merge must increment merged_3way_count AND stage
+	# the merged content via git add so it lands in the refresh commit.
+	assert "merged_3way_count=$((merged_3way_count + 1))" in fn_body, (
+		"successful 3-way merge must increment merged_3way_count so the "
+		"post-refresh summary and commit-message body can report it."
+	)
+	# Conflict path must fall through to `skipped_count` (matching the
+	# existing skip semantics from PR #2760) — never stage a file with
+	# conflict markers. The conflict path is reached when `git merge-file`
+	# returns non-zero (1+ for conflicts, 255 for binary/error).
+	skip_re = re.compile(
+		r'git\s+merge-file[\s\S]{0,1500}?\belse\b[\s\S]{0,500}?skipped_count=\$\(\(skipped_count\s*\+\s*1\)\)'
+	)
+	assert skip_re.search(fn_body), (
+		"3-way merge must fall back to `skipped_count += 1` when "
+		"`git merge-file` returns non-zero (conflict or binary file). "
+		"Without this fallback the function would either lose conflict "
+		"information silently or stage a file with conflict markers."
+	)
+
+
 def test_resolver_tooling_refresh_does_not_clobber_files_changed_on_integration_branch():
 	# Behavioural regression for issue #2734: run the real
 	# _refresh_integration_resolver_tooling function against a
@@ -8876,6 +8952,303 @@ def test_resolver_tooling_refresh_does_not_clobber_files_changed_on_integration_
 			"_refresh_integration_resolver_tooling did not log the "
 			"expected skip-on-divergence message for the protected file.\n"
 			f"stdout:\n{result.stdout}\n---\nstderr:\n{result.stderr}\n"
+		)
+	finally:
+		shutil.rmtree(tmp_root, ignore_errors=True)
+
+
+def test_resolver_tooling_refresh_3way_merges_disjoint_edits_from_both_branches():
+	# Behavioural test for P5 (docs/postmortems/2026-05-18-project-2734-stall.md).
+	# When BOTH the integration branch and main have edited an allowlisted
+	# file since the merge-base, AND the edits are in non-overlapping
+	# regions, the 3-way merge fallback must combine them so neither
+	# side's intent is lost.
+	#
+	# This is the case PR #2760's divergence guard could not handle:
+	# the guard correctly preserves the sub-issue PR change but loses
+	# the toolchain fix that main shipped to the same file. The P5
+	# layer fills the gap by trying `git merge-file` before skipping.
+	#
+	# Fixture layout:
+	#   bare.git           — origin
+	#   work/              — single clone with main + integration branches
+	#     scripts/check_resolver_diff.sh   — allowlisted, 5-line file
+	#
+	# Timeline:
+	#   1. main has 5 lines of content with `MAIN_LINE_1` at top.
+	#   2. orchestrator/project-99 branched off, edited only the LAST
+	#      line ("SUB_ISSUE_FOOTER").
+	#   3. main edited only the FIRST line ("MAIN_LINE_1_FIXED").
+	#   4. Run the real refresh function. The clean 3-way merge must
+	#      yield BOTH "MAIN_LINE_1_FIXED" at top AND "SUB_ISSUE_FOOTER"
+	#      at bottom on the integration branch.
+	tmp_root = Path(tempfile.mkdtemp(prefix="refresh-3way-"))
+	try:
+		bare = tmp_root / "bare.git"
+		work = tmp_root / "work"
+		subprocess.run(
+			["git", "init", "--bare", "--quiet", str(bare)],
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+		)
+		subprocess.run(
+			["git", "init", "--quiet", str(work)],
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+		)
+		for k, v in [
+			("user.name", "test"),
+			("user.email", "t@example.com"),
+			("commit.gpgsign", "false"),
+			("commit.gpgSign", "false"),
+		]:
+			subprocess.run(
+				["git", "-C", str(work), "config", k, v],
+				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			)
+		(work / "scripts").mkdir()
+		refresh_target = work / "scripts" / "check_resolver_diff.sh"
+		refresh_target.write_text(
+			"MAIN_LINE_1\n"
+			"MAIN_LINE_2\n"
+			"MAIN_LINE_3\n"
+			"MAIN_LINE_4\n"
+			"MAIN_LINE_5\n",
+			encoding="utf-8",
+		)
+
+		def _git(*args: str) -> None:
+			subprocess.run(
+				["git", "-C", str(work), *args],
+				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			)
+
+		_git("checkout", "-B", "main")
+		_git("add", "-A")
+		_git("commit", "-m", "initial main", "--quiet")
+		_git("remote", "add", "origin", str(bare))
+		_git("push", "-u", "origin", "main", "--quiet")
+
+		# Integration branches off main and edits only line 5 (the
+		# footer). This simulates a merged sub-issue PR adding a comment
+		# at the bottom of a toolchain script.
+		_git("checkout", "-B", "orchestrator/project-99")
+		refresh_target.write_text(
+			"MAIN_LINE_1\n"
+			"MAIN_LINE_2\n"
+			"MAIN_LINE_3\n"
+			"MAIN_LINE_4\n"
+			"SUB_ISSUE_FOOTER\n",
+			encoding="utf-8",
+		)
+		_git("add", "-A")
+		_git("commit", "-m", "merged sub-issue: add footer", "--quiet")
+		_git("push", "-u", "origin", "orchestrator/project-99", "--quiet")
+
+		# Main edits only line 1 (the header). Simulates the toolchain
+		# fix the orchestrator wants to propagate to the integration
+		# branch.
+		_git("checkout", "main")
+		refresh_target.write_text(
+			"MAIN_LINE_1_FIXED\n"
+			"MAIN_LINE_2\n"
+			"MAIN_LINE_3\n"
+			"MAIN_LINE_4\n"
+			"MAIN_LINE_5\n",
+			encoding="utf-8",
+		)
+		_git("add", "-A")
+		_git("commit", "-m", "toolchain fix", "--quiet")
+		_git("push", "origin", "main", "--quiet")
+
+		poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
+		fn_body = _extract_refresh_function_body(poller_body)
+
+		runtime_dir = tmp_root / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		runner = tmp_root / "run.sh"
+		runner.write_text(
+			"#!/usr/bin/env bash\n"
+			"set -uo pipefail\n"
+			f"{fn_body}\n"
+			f"cd {str(work)!r}\n"
+			f"export RUNTIME_DIR={str(runtime_dir)!r}\n"
+			"_refresh_integration_resolver_tooling orchestrator/project-99 main\n",
+			encoding="utf-8",
+		)
+		runner.chmod(0o755)
+		result = subprocess.run(
+			["bash", str(runner)],
+			capture_output=True, text=True, timeout=60,
+		)
+		assert result.returncode == 0, (
+			"_refresh_integration_resolver_tooling 3-way merge fixture run "
+			"failed before the merge-result assertions could validate.\n"
+			f"stdout:\n{result.stdout}\n---\nstderr:\n{result.stderr}\n"
+		)
+		subprocess.run(
+			["git", "-C", str(work), "fetch", "origin", "--quiet"],
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+		)
+		actual = subprocess.run(
+			["git", "-C", str(work), "show",
+			 "origin/orchestrator/project-99:scripts/check_resolver_diff.sh"],
+			capture_output=True, text=True, check=True,
+		).stdout
+		# After the 3-way merge, the integration branch's file must
+		# contain BOTH the main-side fix (line 1) AND the sub-issue
+		# footer (line 5). Losing either side defeats the whole point of
+		# the merge.
+		assert "MAIN_LINE_1_FIXED" in actual, (
+			"3-way merge lost the main-side toolchain fix.\n"
+			f"file contents:\n{actual}\n---\n"
+			f"refresh stdout:\n{result.stdout}\n"
+			f"---\nrefresh stderr:\n{result.stderr}\n"
+		)
+		assert "SUB_ISSUE_FOOTER" in actual, (
+			"3-way merge lost the sub-issue footer — the exact regression "
+			"PR #2760's divergence guard prevented and that P5 must "
+			"continue to prevent. If the 3-way merge ever clobbers the "
+			"integration-branch change, the project-#2734 failure mode "
+			"recurs.\n"
+			f"file contents:\n{actual}\n---\n"
+			f"refresh stdout:\n{result.stdout}\n"
+			f"---\nrefresh stderr:\n{result.stderr}\n"
+		)
+		# Conflict markers must not appear — those would mean the merge
+		# fell back to the skip path but staged the file anyway, which
+		# would trip the post-resolve verifier.
+		assert "<<<<<<<" not in actual and ">>>>>>>" not in actual, (
+			"3-way merge result contains conflict markers — the merge "
+			"must EITHER produce a clean result OR fall through to the "
+			"skip path. Staging a file with conflict markers would trip "
+			"the fingerprint verifier and reproduce the wave-dispatch "
+			"deadlock that P5 is meant to break.\n"
+			f"file contents:\n{actual}\n"
+		)
+		# The log line for 3-way merges must surface so an operator
+		# auditing the refresh commit can see this file was merged
+		# rather than clobbered.
+		assert "3-way merged scripts/check_resolver_diff.sh" in result.stdout, (
+			"_refresh_integration_resolver_tooling did not log the "
+			"expected `3-way merged` line for the merged file. Without "
+			"this log line, operators reviewing the orchestrator log "
+			"have no way to tell that this file came from a 3-way merge "
+			"vs the deadlock-breaker checkout path.\n"
+			f"stdout:\n{result.stdout}\n---\nstderr:\n{result.stderr}\n"
+		)
+	finally:
+		shutil.rmtree(tmp_root, ignore_errors=True)
+
+
+def test_resolver_tooling_refresh_3way_merge_falls_back_to_skip_on_conflict():
+	# Behavioural test for the P5 conflict fallback. When the 3-way
+	# merge would produce conflict markers (because main and the
+	# integration branch edited the SAME region of the file in
+	# incompatible ways), the function must NOT stage the conflict-
+	# markered file — it must fall back to the existing skip behavior
+	# so the normal main->integration sync can surface the conflict
+	# under operator review.
+	tmp_root = Path(tempfile.mkdtemp(prefix="refresh-3way-conflict-"))
+	try:
+		bare = tmp_root / "bare.git"
+		work = tmp_root / "work"
+		subprocess.run(
+			["git", "init", "--bare", "--quiet", str(bare)],
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+		)
+		subprocess.run(
+			["git", "init", "--quiet", str(work)],
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+		)
+		for k, v in [
+			("user.name", "test"),
+			("user.email", "t@example.com"),
+			("commit.gpgsign", "false"),
+			("commit.gpgSign", "false"),
+		]:
+			subprocess.run(
+				["git", "-C", str(work), "config", k, v],
+				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			)
+		(work / "scripts").mkdir()
+		refresh_target = work / "scripts" / "check_resolver_diff.sh"
+		refresh_target.write_text("LINE_1\nLINE_2\nLINE_3\n", encoding="utf-8")
+
+		def _git(*args: str) -> None:
+			subprocess.run(
+				["git", "-C", str(work), *args],
+				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			)
+
+		_git("checkout", "-B", "main")
+		_git("add", "-A")
+		_git("commit", "-m", "initial", "--quiet")
+		_git("remote", "add", "origin", str(bare))
+		_git("push", "-u", "origin", "main", "--quiet")
+
+		# Both branches edit the SAME line in incompatible ways — must
+		# produce a conflict that git merge-file cannot auto-resolve.
+		_git("checkout", "-B", "orchestrator/project-99")
+		refresh_target.write_text("LINE_1\nSUB_ISSUE_CHANGE\nLINE_3\n", encoding="utf-8")
+		_git("add", "-A")
+		_git("commit", "-m", "sub-issue edit on line 2", "--quiet")
+		_git("push", "-u", "origin", "orchestrator/project-99", "--quiet")
+
+		_git("checkout", "main")
+		refresh_target.write_text("LINE_1\nMAIN_CHANGE\nLINE_3\n", encoding="utf-8")
+		_git("add", "-A")
+		_git("commit", "-m", "main edit on line 2", "--quiet")
+		_git("push", "origin", "main", "--quiet")
+
+		poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
+		fn_body = _extract_refresh_function_body(poller_body)
+
+		runtime_dir = tmp_root / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		runner = tmp_root / "run.sh"
+		runner.write_text(
+			"#!/usr/bin/env bash\n"
+			"set -uo pipefail\n"
+			f"{fn_body}\n"
+			f"cd {str(work)!r}\n"
+			f"export RUNTIME_DIR={str(runtime_dir)!r}\n"
+			"_refresh_integration_resolver_tooling orchestrator/project-99 main\n",
+			encoding="utf-8",
+		)
+		runner.chmod(0o755)
+		result = subprocess.run(
+			["bash", str(runner)],
+			capture_output=True, text=True, timeout=60,
+		)
+		assert result.returncode == 0, (
+			f"refresh exited non-zero\nstdout:{result.stdout}\nstderr:{result.stderr}"
+		)
+		subprocess.run(
+			["git", "-C", str(work), "fetch", "origin", "--quiet"],
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+		)
+		actual = subprocess.run(
+			["git", "-C", str(work), "show",
+			 "origin/orchestrator/project-99:scripts/check_resolver_diff.sh"],
+			capture_output=True, text=True, check=True,
+		).stdout
+		# On conflict the function must SKIP — integration-branch content
+		# must be unchanged from the sub-issue version.
+		assert actual == "LINE_1\nSUB_ISSUE_CHANGE\nLINE_3\n", (
+			"3-way merge with conflict did NOT fall back to skip — the "
+			"integration branch was modified despite an unresolvable "
+			"merge. This is the exact failure mode P5's conflict-fallback "
+			"branch is meant to prevent: staging conflict markers (or "
+			"silently picking one side) would trip the fingerprint "
+			"verifier and re-introduce the wave-dispatch deadlock.\n"
+			f"file contents:\n{actual}\n---\n"
+			f"refresh stdout:\n{result.stdout}\n"
+			f"---\nrefresh stderr:\n{result.stderr}\n"
+		)
+		# The log line must surface the skip-on-conflict so operators
+		# know the file needs a manual resolve via normal sync.
+		assert "skip scripts/check_resolver_diff.sh" in result.stdout, (
+			"3-way merge conflict path did not log the expected skip line."
+			f"\nstdout:\n{result.stdout}\n---\nstderr:\n{result.stderr}\n"
 		)
 	finally:
 		shutil.rmtree(tmp_root, ignore_errors=True)
