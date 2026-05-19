@@ -8478,13 +8478,13 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   # Mirror the same blob-recovery shape that
   # `finalize_integration_merge_if_needed` lines 3940-3951 already
   # use so the two paths stay structurally identical: read
-  # `final_merge_pr` from state, fetch the PR's `.state` +
-  # `.merged_at` once, and only transition when both confirm
-  # closed-and-merged.  Two REST reads per poll tick when a final PR
-  # is pinned (matches CLAUDE.md §15: extends existing call shape,
-  # no new data shape).  Skipped entirely when `final_merge_pr` is
-  # unset (most projects pre-finalize) or `final_merge_status` is
-  # already terminal — making this a no-op on the happy path.
+  # `final_merge_pr` from state, fetch the PR once via the shared
+  # `_fetch_pr_json` helper, and only transition when `.state` +
+  # `.merged_at` confirm closed-and-merged.  One REST read per poll
+  # tick when a final PR is pinned; skipped entirely when
+  # `final_merge_pr` is unset (most projects pre-finalize) or
+  # `final_merge_status` is already terminal — making this a no-op on
+  # the happy path.
   if [ "${PROJECT_STATUS}" != "complete" ] \
     && [ "${PROJECT_STATUS}" != "failed" ] \
     && [ "${PROJECT_STATUS}" != "validation-failed" ]; then
@@ -8492,31 +8492,43 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     _orch_extfin_status="$(jq -r '.final_merge_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo "pending")"
     if [ -n "${_orch_extfin_pr}" ] && [ "${_orch_extfin_pr}" != "null" ] \
       && [ "${_orch_extfin_status}" = "pending" ]; then
-      _orch_extfin_pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${_orch_extfin_pr}" --jq '.state' 2>/dev/null || echo "")"
-      _orch_extfin_pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${_orch_extfin_pr}" --jq '.merged_at != null' 2>/dev/null || echo "")"
-      if [ "${_orch_extfin_pr_state}" = "closed" ] && [ "${_orch_extfin_pr_merged}" = "true" ]; then
-        echo "  [external-finalize] PR #${_orch_extfin_pr} merged outside the wave-by-wave flow; transitioning project to complete."
-        jq --argjson final_pr "${_orch_extfin_pr}" \
-          '.final_merge_pr = $final_pr
-           | .final_merge_status = "merged"
-           | .final_merge_error = ""
-           | .status = "complete"
-           | .judge_cycle = ((.judge_cycle // 0) + 1)' \
-          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
-        post_state_comment || true
-        handle_comprehensive_release_callback_if_needed "complete" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
-        set_tracking_phase_label "ai:merged"
-        post_tracking_comment "## ✅ Project complete — integration PR #${_orch_extfin_pr} merged externally
+      if ! [[ "${_orch_extfin_pr}" =~ ^[0-9]+$ ]]; then
+        echo "::warning::[external-finalize] ignoring non-numeric final_merge_pr in state for issue #${TRACKING_NUM}: ${_orch_extfin_pr}"
+      else
+        _orch_extfin_pr_json="$(_fetch_pr_json "${_orch_extfin_pr}")"
+        _orch_extfin_pr_state="$(_jq_field "${_orch_extfin_pr_json}" '.state' 'open|closed|merged')"
+        _orch_extfin_pr_merged="$(_jq_field "${_orch_extfin_pr_json}" '.merged_at != null' 'true|false')"
+        if [ -z "${_orch_extfin_pr_state}" ] || [ -z "${_orch_extfin_pr_merged}" ]; then
+          echo "::warning::[external-finalize] unable to inspect PR #${_orch_extfin_pr}; leaving final_merge_status pending."
+        elif [ "${_orch_extfin_pr_state}" = "closed" ] && [ "${_orch_extfin_pr_merged}" = "true" ]; then
+          echo "  [external-finalize] PR #${_orch_extfin_pr} merged outside the wave-by-wave flow; transitioning project to complete."
+          if ! jq --argjson final_pr "${_orch_extfin_pr}" \
+            '.final_merge_pr = $final_pr
+             | .final_merge_status = "merged"
+             | .final_merge_error = ""
+             | .status = "complete"
+             | .judge_cycle = ((.judge_cycle // 0) + 1)' \
+            "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+            rm -f "${STATE_FILE}.tmp" || true
+            echo "::warning::[external-finalize] failed to persist merged state for PR #${_orch_extfin_pr}; leaving final_merge_status pending."
+            continue
+          fi
+          post_state_comment || true
+          handle_comprehensive_release_callback_if_needed "complete" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
+          set_tracking_phase_label "ai:merged"
+          post_tracking_comment "## ✅ Project complete — integration PR #${_orch_extfin_pr} merged externally
 
 The orchestrator detected that the integration PR was squash-merged outside the wave-by-wave dispatch flow (the typical pattern when an operator finalizes a project ahead of the planner). Transitioning status to \`complete\`; future poll ticks will skip this project and any open wave-dispatch alerts can be ignored."
-        tg_cleanup_msgs "${TRACKING_NUM}"
-        MSG="✅ Project #${TRACKING_NUM} completed (integration PR #${_orch_extfin_pr} merged externally)."
-        MSG+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
-        if [ -n "${GITHUB_RUN_ID:-}" ]; then
-          MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
+          tg_cleanup_msgs "${TRACKING_NUM}"
+          MSG="✅ Project #${TRACKING_NUM} completed (integration PR #${_orch_extfin_pr} merged externally)."
+          MSG+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
+          if [ -n "${GITHUB_RUN_ID:-}" ]; then
+            MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
+          fi
+          tg_send_msg "${MSG}" >/dev/null
+          PROJECT_STATUS="complete"
+          continue
         fi
-        tg_send_msg "${MSG}" >/dev/null
-        PROJECT_STATUS="complete"
       fi
     fi
   fi

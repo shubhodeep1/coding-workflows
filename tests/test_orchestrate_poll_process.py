@@ -2932,6 +2932,36 @@ def test_merge_conflict_state_completes_when_final_pr_already_merged_and_branch_
 	assert result["release_dispatches"] == []
 
 
+def test_external_finalize_detect_skips_terminal_fallthrough():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_pr"] = 355
+	state["final_merge_status"] = "pending"
+	prs = [
+		{
+			"number": 355,
+			"state": "closed",
+			"merged": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": None,
+			"mergeable_state": "unknown",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["final_merge_pr"] == 355
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert "Project already complete, skipping." not in result["stdout"]
+
+
 def test_standalone_conflict_sweep_skips_integration_base_prs():
 	state = _base_state(status="complete")
 	prs = [
@@ -8099,6 +8129,12 @@ def test_external_finalize_detect_marks_project_complete_when_final_pr_already_m
 			f"no longer contains `{needle}` between the TRACKING_LABELS fetch and "
 			f"the merge_conflict switch — {why}"
 		)
+	assert window.count('_fetch_pr_json "${_orch_extfin_pr}"') == 1, (
+		"external-finalize detect block no longer uses a single PR fetch between "
+		"the TRACKING_LABELS fetch and the merge_conflict switch; duplicate "
+		"PR fetches reintroduce avoidable API churn and a narrow "
+		"state/merged-at race."
+	)
 	# State mutation shape: must set BOTH status=complete AND
 	# final_merge_status=merged in the same jq pass.  Setting only one
 	# would leave the other path inconsistent: status=complete without
@@ -8129,6 +8165,12 @@ def test_external_finalize_detect_marks_project_complete_when_final_pr_already_m
 			f"external-finalize detect block no longer triggers `{needle}` "
 			f"in its side-effect block — {why}"
 		)
+	assert re.search(r'PROJECT_STATUS="complete"\s+continue', window) is not None, (
+		"external-finalize detect block no longer short-circuits after setting "
+		"`PROJECT_STATUS=complete`; without the `continue`, the same tick falls "
+		"through to the terminal-state skip block and logs a misleading "
+		"`Project already complete, skipping.` line."
+	)
 
 
 def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
