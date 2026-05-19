@@ -295,7 +295,11 @@ if args and args[0] == "api":
 
     m = re.match(r"^repos/[^/]+/[^/]+/git/ref/heads/(.+)$", path or "")
     if m:
-        sys.stdout.write(json.dumps({{"ref": "refs/heads/" + m.group(1)}}))
+        branch_ref = m.group(1)
+        if branch_ref in (state.get("missing_branch", ""), state.get("missing_branch_uri", "")):
+            sys.stderr.write("gh: Not Found\\n")
+            sys.exit(1)
+        sys.stdout.write(json.dumps({{"ref": "refs/heads/" + branch_ref}}))
         sys.exit(0)
 
     sys.stderr.write("unhandled gh api path: %r\\n" % (path,))
@@ -442,15 +446,6 @@ def test_helper_returns_zero_when_branch_was_deleted(tmp_path):
 	state["missing_branch"] = "orchestrator/project-192"
 	state["missing_branch_uri"] = "orchestrator%2Fproject-192"
 	state_path.write_text(json.dumps(state))
-	gh_script = (tmp_path / "bin" / "gh").read_text()
-	patched = gh_script.replace(
-		'sys.stdout.write(json.dumps({"ref": "refs/heads/" + m.group(1)}))',
-		'if m.group(1) in (state.get("missing_branch", ""), state.get("missing_branch_uri", "")):\n'
-		'            sys.stderr.write("gh: Not Found\\n")\n'
-		'            sys.exit(1)\n'
-		'        sys.stdout.write(json.dumps({"ref": "refs/heads/" + m.group(1)}))',
-	)
-	(tmp_path / "bin" / "gh").write_text(patched)
 	result = _run_shell(
 		tmp_path,
 		'_integration_branch_ahead_of_default "orchestrator/project-192" "main"',

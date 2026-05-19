@@ -1529,7 +1529,7 @@ if args[0] == 'api':
 	# tests that predate the gate). Setting compare_ahead_by_force_error
 	# simulates the compare API failing so the fail-closed posture can be
 	# exercised explicitly.
-	m = re.search(r'^repos/[^/]+/[^/]+/compare/[^.]+\.\.\.[^.]+', path)
+	m = re.search(r'^repos/[^/]+/[^/]+/compare/.+\.\.\..+$', path)
 	if m:
 		if store.get('compare_ahead_by_force_error'):
 			sys.stderr.write('simulated compare API error\n')
