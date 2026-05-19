@@ -3134,6 +3134,106 @@ def test_external_finalize_detect_preempts_sync_branch_missing_failure():
 	assert not any("Integration branch missing" in body for body in tracking_bodies)
 
 
+def test_external_finalize_refuses_complete_when_subissues_never_created():
+	# Behavioural regression test for project #2734 (postmortem layer 6).
+	# State models the actual incident: a multi-wave project where Wave 1
+	# sub-issues were merged but Waves 2-7 were never dispatched — their
+	# entries are present in the state with status="not_created" and
+	# github_issue=null because the orchestrator never created them.  An
+	# operator (or self-heal pipeline) squash-merges the integration PR
+	# externally.  The external-finalize block sees a merged final PR and
+	# would, pre-fix, mark the project complete and broadcast "✅ Project
+	# complete" via Telegram while 7 of 9 sub-issues had shipped no code.
+	#
+	# Post-fix the gate must:
+	#   - leave status as in_progress (NOT transition to complete)
+	#   - leave final_merge_status as pending (NOT transition to merged)
+	#   - NOT apply the ai:merged label
+	#   - emit a [external-finalize-partial] warning to stdout/stderr
+	#   - persist external_finalize_partial_alert_sig on the state file
+	#     so the Telegram alert deduplicates on subsequent ticks
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_pr"] = 2750
+	state["final_merge_status"] = "pending"
+	# Replace the default 1-issue Wave 1 with a 2-wave project: Wave 1
+	# merged, Wave 2 never created (status="not_created", github_issue=null).
+	# This mirrors project #2734's actual `.waves[]` shape from comment #38.
+	state["total_issues"] = 2
+	state["total_waves"] = 2
+	state["waves"] = [
+		{
+			"wave": 1,
+			"issues": [
+				{"id": "phase1-verifier-baseline-delta", "github_issue": 10, "status": "merged"},
+			],
+		},
+		{
+			"wave": 2,
+			"issues": [
+				{"id": "phase1-resolver-bootstrap-wiring", "github_issue": None, "status": "not_created"},
+			],
+		},
+	]
+	state["issue_number_map"] = {"phase1-verifier-baseline-delta": 10}
+	prs = [
+		{
+			"number": 2750,
+			"state": "closed",
+			"merged": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": None,
+			"mergeable_state": "unknown",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	# The gate must refuse to transition state.
+	assert result["latest_state"]["status"] != "complete", (
+		"completeness gate failed: status transitioned to `complete` despite "
+		"Wave 2's sub-issue still being `not_created` — this is the exact "
+		"failure mode the gate is meant to prevent (project #2734 scenario)."
+	)
+	assert result["latest_state"]["final_merge_status"] != "merged", (
+		"completeness gate failed: final_merge_status transitioned to `merged` "
+		"despite incomplete sub-issues."
+	)
+	# The ai:merged label must NOT be applied while sub-issues remain
+	# uncreated; the label is the orchestrator's primary downstream signal
+	# for release callbacks and label-repair sweeps.
+	assert "ai:merged" not in result["tracking_labels"], (
+		"completeness gate failed: ai:merged label was applied to tracking "
+		"issue despite Wave 2 sub-issue never being created. Downstream "
+		"automation would treat this project as done and skip remediation."
+	)
+	# The warning marker must surface so log-analysis tooling can detect
+	# this failure mode in workflow runs.
+	combined_log = result.get("stdout", "") + "\n" + result.get("stderr", "")
+	assert "[external-finalize-partial]" in combined_log, (
+		"completeness gate failed: `[external-finalize-partial]` warning "
+		"marker missing from poller stdout/stderr — without it, log-analysis "
+		"tooling cannot detect this failure mode at scale."
+	)
+	# Note: the alert-dedup signature
+	# (`external_finalize_partial_alert_sig` on the state file) is verified
+	# by the companion static guard test
+	# `test_external_finalize_gates_on_subissue_completeness_before_marking_complete`,
+	# which pins both the persistence and the dedup condition.  This
+	# behavioural test does not re-verify it because `_run_poller` only
+	# exposes state via the comment trail, and the gate intentionally does
+	# NOT post_state_comment (the project is genuinely still in_progress
+	# from the orchestrator's POV — posting a state comment on every gate
+	# fire would re-introduce the alert-fatigue failure mode at the
+	# tracking-issue level).
+
+
 def test_standalone_conflict_sweep_skips_integration_base_prs():
 	state = _base_state(status="complete")
 	prs = [
@@ -8352,6 +8452,125 @@ def test_external_finalize_detect_marks_project_complete_when_final_pr_already_m
 		"`PROJECT_STATUS=complete`; without the `continue`, the same tick falls "
 		"through to the terminal-state skip block and logs a misleading "
 		"`Project already complete, skipping.` line."
+	)
+
+
+def test_external_finalize_gates_on_subissue_completeness_before_marking_complete():
+	# Regression guard for the project #2734 false-completion broadcast
+	# (docs/postmortems/2026-05-18-project-2734-stall.md, layer 6).  The
+	# external-finalize block added by PR #2777 transitioned status=complete
+	# whenever the pinned integration PR was closed+merged, without checking
+	# whether the sub-issues in `.waves[].issues[]` had actually shipped.
+	# Project #2734's integration PR (#2750) was squash-merged externally
+	# with only Wave 1 (2 of 9 sub-issues) merged; on the next poll tick
+	# the unconditional transition broadcast "✅ Project complete" with 7
+	# sub-issues never created.
+	#
+	# The fix: before mutating state, count sub-issues whose status is not
+	# in {merged, closed, skipped}. If any are non-terminal, emit a
+	# structured `[external-finalize-partial]` warning, fire one Telegram
+	# alert per distinct missing-issue set (dedup via sha256 of the
+	# missing set, persisted on the state file as
+	# `external_finalize_partial_alert_sig`), and `continue` to skip the
+	# rest of this tick's processing for this project.  No state mutation.
+	#
+	# This test pins the placement (inside the elif-closed-and-merged arm,
+	# BEFORE the jq state mutation), the gate condition (filter shape
+	# matching the established `status != merged/closed/skipped` pattern
+	# used elsewhere in the script), the dedup mechanism (sha256 signature
+	# of the missing set), the early-exit (`continue` before any state
+	# mutation runs), and the side-effect surface (the
+	# `[external-finalize-partial]` warning marker and the WARNING-level
+	# tg_notify so the operator can take action).
+	poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
+	# Anchor the window on the existing landmarks from
+	# test_external_finalize_detect_marks_project_complete_when_final_pr_already_merged
+	# so a refactor that moves the block also has to update both tests in
+	# lockstep — preventing one test from regressing silently.
+	elif_marker = (
+		'elif [ "${_orch_extfin_pr_state}" = "closed" ] && '
+		'[ "${_orch_extfin_pr_merged}" = "true" ]; then'
+	)
+	elif_idx = poller_body.find(elif_marker)
+	assert elif_idx != -1, (
+		"external-finalize elif (closed+merged) marker is missing from "
+		"scripts/orchestrate_poll_process.sh; the completeness gate must "
+		"live inside that arm, so the elif itself is required."
+	)
+	mutation_marker = "'.final_merge_pr = $final_pr"
+	mutation_idx = poller_body.find(mutation_marker, elif_idx)
+	assert mutation_idx != -1, (
+		"external-finalize state mutation (jq `.final_merge_pr = $final_pr` "
+		"line) is missing after the closed+merged elif; the completeness gate "
+		"must precede that mutation."
+	)
+	gate_window = poller_body[elif_idx:mutation_idx]
+	# Gate condition: must enumerate non-terminal sub-issues using the same
+	# filter shape the rest of the script already uses for terminal-success
+	# detection.  If a future refactor switches to a different filter shape
+	# (e.g. flips the negation or drops `skipped`), this assertion catches
+	# it before the gate starts mis-classifying skipped issues as missing.
+	for needle, why in (
+		(
+			'.waves[]?.issues[]?',
+			"completeness gate no longer iterates `.waves[]?.issues[]?`; without it the gate cannot inspect sub-issue states and would always treat the project as complete.",
+		),
+		(
+			'select(.status == "not_created")',
+			"completeness gate no longer filters on `status == \"not_created\"`; the gate must catch sub-issues that were never dispatched (the project #2734 failure mode) without false-positive-firing on sub-issues that have a github_issue and are merely behind the per-tick label reconciliation. Widening the filter without also reconciling sub-issue status from labels first would break the legitimate external-finalize tests that pass with a `pending` sub-issue whose linked PR is already merged.",
+		),
+		(
+			'_orch_extfin_incomplete_count',
+			"completeness gate no longer computes `_orch_extfin_incomplete_count`; without the count variable the `-gt 0` guard cannot fire and the partial-merge case is silently complete.",
+		),
+		(
+			'-gt 0',
+			"completeness gate no longer gates on `_orch_extfin_incomplete_count -gt 0`; without this guard either every project is treated as incomplete (false positive) or none are (false negative).",
+		),
+		(
+			'[external-finalize-partial]',
+			"completeness gate no longer emits the `[external-finalize-partial]` marker; downstream log-analysis tooling and the postmortem (docs/postmortems/2026-05-18-project-2734-stall.md) anchor on this exact marker.",
+		),
+		(
+			'external_finalize_partial_alert_sig',
+			"completeness gate no longer persists `external_finalize_partial_alert_sig` on the state file; without this dedup key the gate would fire a Telegram alert every poll tick (~12/hour) until the project is completed or de-scoped — alert fatigue is the exact failure mode the postmortem's layer 5 calls out.",
+		),
+		(
+			'tg_notify',
+			"completeness gate no longer fires `tg_notify` on first-detection of an incomplete external-finalize; without the alert the operator has no way to learn the project is stuck except by reading workflow logs.",
+		),
+		(
+			'"WARNING"',
+			"completeness gate no longer escalates the Telegram alert to WARNING level; without the WARNING tag the alert blends into INFO chatter and is easily missed.",
+		),
+		(
+			'continue',
+			"completeness gate no longer short-circuits with `continue` on incomplete detection; without it the gate would warn and then fall through to the state-mutation block, producing the exact false-completion broadcast the gate is meant to prevent.",
+		),
+	):
+		assert needle in gate_window, (
+			"external-finalize completeness gate in scripts/orchestrate_poll_process.sh "
+			f"no longer contains `{needle}` between the closed+merged elif and the "
+			f"state-mutation jq call — {why}"
+		)
+	# Hard requirement: no jq mutation that sets `.status = "complete"`
+	# may appear inside the gate window itself.  The gate's only mutation
+	# is the alert-dedup signature persist; any other state change would
+	# bypass the wave-by-wave finalize path that owns project-status
+	# transitions.
+	# A subtlety: jq operations on `.external_finalize_partial_alert_sig`
+	# are fine; what matters is that `.status = "complete"` (or
+	# `.final_merge_status = "merged"`) does not land before the
+	# `continue`.  Verify the gate window does NOT contain those terminal
+	# transitions.
+	assert '.status = "complete"' not in gate_window, (
+		"external-finalize completeness gate must NOT transition `.status` to `complete` "
+		"itself; that mutation belongs to the post-gate fall-through path which only "
+		"runs when every sub-issue is terminal-success."
+	)
+	assert '.final_merge_status = "merged"' not in gate_window, (
+		"external-finalize completeness gate must NOT mark `.final_merge_status = merged` "
+		"itself; that mutation belongs to the post-gate fall-through path."
 	)
 
 

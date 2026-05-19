@@ -8494,6 +8494,56 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
         if [ -z "${_orch_extfin_pr_state}" ] || [ -z "${_orch_extfin_pr_merged}" ]; then
           echo "::warning::[external-finalize] unable to inspect PR #${_orch_extfin_pr}; leaving final_merge_status pending."
         elif [ "${_orch_extfin_pr_state}" = "closed" ] && [ "${_orch_extfin_pr_merged}" = "true" ]; then
+          # Completeness gate (P2 from docs/postmortems/2026-05-18-project-2734-stall.md).
+          # An externally-merged integration PR is necessary but NOT sufficient
+          # evidence of project completion: a human (or another Claude session)
+          # can squash-merge the eager integration PR with only Wave 1 content
+          # while later waves remain undispatched (see project #2734, where 7
+          # of 9 sub-issues were never created). Without this gate the orchestrator
+          # would broadcast "✅ Project complete" while most of the planned work
+          # has shipped no code. Refuse to transition and alert the operator
+          # once per missing-issue-set; reviving some-but-not-all waves
+          # re-alerts because the set's signature changes.
+          #
+          # Filter is narrow on purpose: only `status == "not_created"`
+          # entries are caught. Sub-issues that were dispatched (have a
+          # github_issue number) and are merely in a transient
+          # `pending`/`active`/`in_progress` status while the orchestrator's
+          # own per-tick label reconciliation lags behind the GitHub merge
+          # event are NOT caught — those self-resolve on the next tick.
+          # The project #2734 incident specifically had Wave 2-7 sub-issues
+          # with `status == "not_created"` and `github_issue == null` for
+          # the entire 26-hour stall window, which is the case this gate
+          # exists to catch.
+          _orch_extfin_incomplete_json="$(jq -c \
+            '[.waves[]?.issues[]?
+              | select(.status == "not_created")
+              | {id: (.id // "<no-id>"), status: (.status // "unknown"), github_issue: (.github_issue // null)}]' \
+            "${STATE_FILE}" 2>/dev/null || echo "[]")"
+          _orch_extfin_incomplete_count="$(echo "${_orch_extfin_incomplete_json}" | jq 'length' 2>/dev/null || echo 0)"
+          if [ "${_orch_extfin_incomplete_count}" -gt 0 ]; then
+            _orch_extfin_missing_list="$(echo "${_orch_extfin_incomplete_json}" \
+              | jq -r '.[] | "  - " + .id + " [status=" + .status + "] github_issue=" + (.github_issue | tostring)')"
+            echo "::warning::[external-finalize-partial] PR #${_orch_extfin_pr} merged but ${_orch_extfin_incomplete_count} sub-issue(s) not in terminal-success state — refusing to transition project to complete."
+            echo "${_orch_extfin_missing_list}"
+            # Dedup the Telegram alert by hashing the missing-issue set.
+            _orch_extfin_missing_sig="$(echo "${_orch_extfin_incomplete_json}" | jq -S -c '.' 2>/dev/null | sha256sum | awk '{print $1}')"
+            _orch_extfin_prev_sig="$(jq -r '.external_finalize_partial_alert_sig // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+            if [ "${_orch_extfin_missing_sig}" != "${_orch_extfin_prev_sig}" ]; then
+              _orch_extfin_tg_msg="⚠️ Project #${TRACKING_NUM}: integration PR #${_orch_extfin_pr} merged externally, but ${_orch_extfin_incomplete_count} sub-issue(s) are still not terminal:"$'\n'"${_orch_extfin_missing_list}"$'\n'"Refusing to mark project complete. Either revive the missing waves or close them with rationale."
+              _orch_extfin_tg_msg+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
+              tg_notify "${_orch_extfin_tg_msg}" "WARNING" || true
+              if jq --arg sig "${_orch_extfin_missing_sig}" \
+                '.external_finalize_partial_alert_sig = $sig' \
+                "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+                :
+              else
+                rm -f "${STATE_FILE}.tmp" || true
+                echo "::warning::[external-finalize-partial] failed to persist alert-dedup signature; may re-alert on next tick."
+              fi
+            fi
+            continue
+          fi
           echo "  [external-finalize] PR #${_orch_extfin_pr} merged outside the wave-by-wave flow; transitioning project to complete."
           if ! jq --argjson final_pr "${_orch_extfin_pr}" \
             '.final_merge_pr = $final_pr
