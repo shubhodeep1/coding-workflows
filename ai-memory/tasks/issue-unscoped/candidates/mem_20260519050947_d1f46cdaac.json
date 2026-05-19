@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:8488-8493 | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The external-finalize guard still enters on the merge_conflict path, so it runs the final-PR checks and side effects even though that path already has its own merge-conflict handling.\n  WHY: The reviewer flagged that the status filter excludes only complete/failed/validation-failed, which leaves merge_conflict eligible and can duplicate work/notifications on each poll tick.\n\n- scripts/orchestrate_poll_process.sh:8519 | confidence=4\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: After setting PROJECT_STATUS=\"complete\", the external-finalize block does not exit the poll loop, so the later complete/failed/validation-failed skip branch runs the release callback again.\n  WHY: The reviewer observed handle_comprehensive_release_callback_if_needed being reached in both the new block and the later skip path on the same tick.\n\n- scripts/orchestrate_poll_process.sh:8491-8495 | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: _orch_extfin_pr is read from state and used directly in the GitHub pull-request URL without validating that it is a sane PR number.\n  WHY: A corrupted state file could feed an unexpected string into the API path and make the request invalid.\n\n- scripts/orchestrate_poll_process.sh:8495-8497 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The PR lookup results are trusted without validating that the response is actually a PR object with the expected fields.\n  WHY: Empty or malformed API responses collapse to empty strings, which can mask corrupted state or schema drift and mis-handle the transition logic.\n\n- scripts/orchestrate_poll_process.sh:8499-8505 | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The state update passes _orch_extfin_pr straight into jq --argjson and then overwrites STATE_FILE via a temp-file mv.\n  WHY: The reviewer flagged unvalidated content flowing into jq and noted the write is not protected against concurrent readers/writers.\n\n- scripts/orchestrate_poll_process.sh:8495-8496 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The block makes two separate gh_retry _safe_gh_jq calls to the same pull-request endpoint to read .state and .merged_at.\n  WHY: Both reviewers flagged the duplicated REST-read pattern as unnecessary API usage on every poll tick.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/orchestrate_poll_process.sh:8519 | confidence=4\n  PROBLEM: Missing `continue` statement after the external-finalize block transitions the project to complete. Unlike the merge_conflict path (line 8557) and judge-complete path (line 11933) which both have `continue` after setting `PROJECT_STATUS=\"complete\"`, the new block falls through to the early-skip at line 8973. This causes `handle_comprehensive_release_callback_if_needed` to be invoked twice: once at line 8507 in the new block, and again at line 8974 in the early-skip path.\n  WHY: The release callback handler may perform side effects (notifications, webhooks) that should only fire once. Double invocation could result in duplicate Telegram messages, duplicate release webhook calls, or other unintended side effects.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/orchestrate_poll_process.sh:8495-8496 | confidence=5\n  PROBLEM: Both calls reuse the same API endpoint and do not validate the response from the GitHub API.\n  WHY: The two REST calls target the same PR number but extract different fields, so the duplicated endpoint usage is inefficient and the fallback-to-empty behavior can hide invalid or unexpected responses.\n\n- scripts/orchestrate_poll_process.sh:8491-8495 | confidence=3\n  PROBLEM: The code fetches `_orch_extfin_pr` from state and checks if it's non-null and not \"null\", then uses it directly in the GitHub API URL (`repos/${GITHUB_REPOSITORY}/pulls/${_orch_extfin_pr}`).\n  WHY: If `_orch_extfin_pr` contains garbage or a non-numeric string (or if the state file is corrupted), this could cause the gh CLI to make an invalid API call or inject unexpected characters into the URL.\n\n- scripts/orchestrate_poll_process.sh:8495-8497 | confidence=4\n  PROBLEM: Both calls reuse the same API endpoint and do not validate the response from the GitHub API.\n  WHY: If the PR does not exist or the API returns malformed/unexpected JSON, the `|| echo \"\"` fallback turns that into an empty string and the transition logic can silently mis-handle the state.\n\n- scripts/orchestrate_poll_process.sh:8499-8505 | confidence=3\n  PROBLEM: The jq call uses `--argjson final_pr \"${_orch_extfin_pr}\"`, which means if `_orch_extfin_pr` contains untrusted or injected content, it could break the jq command or even execute arbitrary code if the shell passes it unsafely.\n  WHY: There is no validation that `_orch_extfin_pr` is a valid integer before being used in jq or passed to the API, and the mutation writes directly to `.state` via a temporary file over a file that may be used by other orchestration processes.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/orchestrate_poll_process.sh:8485-8493 | confidence=5\n  PROBLEM: The external-finalize block can execute when `PROJECT_STATUS=merge_conflict`, because the guard excludes only `complete`, `failed`, and `validation-failed`.\n  WHY: That lets the block perform duplicate final-PR reads and side effects on the merge-conflict path, which the reviewer said makes the later merge_conflict handling dead for this case.\n\n- scripts/orchestrate_poll_process.sh:8490-8491 | confidence=4\n  PROBLEM: The two unconditional `gh_retry _safe_gh_jq \"repos/${GITHUB_REPOSITORY}/pulls/${_orch_extfin_pr}\"` calls repeat the same REST endpoint every tick.\n  WHY: The reviewer said this inflates GitHub API usage and violates the repo\u2019s API-hygiene expectation.\n\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "db86d35f096754db2a9d80801b0b2db8cf9561046b009f57e26edbc8d1dcd7ab",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26076925798",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26076925798",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260519050947_d1f46cdaac",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26076925798"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 6 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-19T05:09:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
