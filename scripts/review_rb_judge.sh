@@ -431,7 +431,7 @@ PY
       echo "::warning::python3 unavailable for UTF-8-safe PR diff truncation; falling back to a raw byte prefix. sanitize_codex_prompt_file will strip any invalid trailing bytes before codex reads the prompt."
       PR_DIFF="$(head -c "${RB_JUDGE_PR_DIFF_MAX_BYTES}" "${PR_DIFF_TRUNCATE_FILE}")"
     fi
-  elif PR_DIFF_TRUNCATED_CONTENT="$(printf '%s' "${PR_DIFF}" | PYTHONDONTWRITEBYTECODE=1 python3 -c '
+  elif PR_DIFF_TRUNCATED_CONTENT="$({ printf '%s' "${PR_DIFF}" || true; } | PYTHONDONTWRITEBYTECODE=1 python3 -c '
 import sys
 
 cap = int(sys.argv[1])
