@@ -21,7 +21,10 @@ REQUIRED_RESOLVER_WORKFLOWS = {
 # orchestrator-managed issue execution paths.
 ALLOWLIST_EXCEPTIONS = {
 	"ci.yml": "PR CI validation has no orchestrator issue metadata.",
+	"integration-pr-readiness.yml": "Integration-PR readiness check runs on pull_request refs and posts commit status metadata, not orchestrator issue-phase checkout.",
 	"issue_pr_status.yml": "Issue/PR status utility workflow does not execute orchestrator issue phases.",
+	"lint-plan-archival.yml": "Plan-archival lint validates pull_request body/diff state rather than orchestrator issue-phase integration refs.",
+	"lint-pr-body-auto-close.yml": "PR-body auto-close lint validates pull_request metadata rather than orchestrator issue-phase checkout.",
 	"mark-stable.yml": "Release promotion workflow operates on repo refs, not tracking-issue metadata.",
 	"memory_maintenance.yml": "Maintenance workflow has no issue-comment or tracking-issue context.",
 	"orchestrate.yml": "Project bootstrap workflow has no integration-branch metadata at checkout time.",

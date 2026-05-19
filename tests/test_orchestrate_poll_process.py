@@ -3153,6 +3153,106 @@ def test_external_finalize_detect_preempts_sync_branch_missing_failure():
 	assert not any("Integration branch missing" in body for body in tracking_bodies)
 
 
+def test_external_finalize_refuses_complete_when_subissues_never_created():
+	# Behavioural regression test for project #2734 (postmortem layer 6).
+	# State models the actual incident: a multi-wave project where Wave 1
+	# sub-issues were merged but Waves 2-7 were never dispatched — their
+	# entries are present in the state with status="not_created" and
+	# github_issue=null because the orchestrator never created them.  An
+	# operator (or self-heal pipeline) squash-merges the integration PR
+	# externally.  The external-finalize block sees a merged final PR and
+	# would, pre-fix, mark the project complete and broadcast "✅ Project
+	# complete" via Telegram while 7 of 9 sub-issues had shipped no code.
+	#
+	# Post-fix the gate must:
+	#   - leave status as in_progress (NOT transition to complete)
+	#   - leave final_merge_status as pending (NOT transition to merged)
+	#   - NOT apply the ai:merged label
+	#   - emit a [external-finalize-partial] warning to stdout/stderr
+	#   - persist external_finalize_partial_alert_sig on the state file
+	#     so the Telegram alert deduplicates on subsequent ticks
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_pr"] = 2750
+	state["final_merge_status"] = "pending"
+	# Replace the default 1-issue Wave 1 with a 2-wave project: Wave 1
+	# merged, Wave 2 never created (status="not_created", github_issue=null).
+	# This mirrors project #2734's actual `.waves[]` shape from comment #38.
+	state["total_issues"] = 2
+	state["total_waves"] = 2
+	state["waves"] = [
+		{
+			"wave": 1,
+			"issues": [
+				{"id": "phase1-verifier-baseline-delta", "github_issue": 10, "status": "merged"},
+			],
+		},
+		{
+			"wave": 2,
+			"issues": [
+				{"id": "phase1-resolver-bootstrap-wiring", "github_issue": None, "status": "not_created"},
+			],
+		},
+	]
+	state["issue_number_map"] = {"phase1-verifier-baseline-delta": 10}
+	prs = [
+		{
+			"number": 2750,
+			"state": "closed",
+			"merged": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": None,
+			"mergeable_state": "unknown",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	# The gate must refuse to transition state.
+	assert result["latest_state"]["status"] != "complete", (
+		"completeness gate failed: status transitioned to `complete` despite "
+		"Wave 2's sub-issue still being `not_created` — this is the exact "
+		"failure mode the gate is meant to prevent (project #2734 scenario)."
+	)
+	assert result["latest_state"]["final_merge_status"] != "merged", (
+		"completeness gate failed: final_merge_status transitioned to `merged` "
+		"despite incomplete sub-issues."
+	)
+	# The ai:merged label must NOT be applied while sub-issues remain
+	# uncreated; the label is the orchestrator's primary downstream signal
+	# for release callbacks and label-repair sweeps.
+	assert "ai:merged" not in result["tracking_labels"], (
+		"completeness gate failed: ai:merged label was applied to tracking "
+		"issue despite Wave 2 sub-issue never being created. Downstream "
+		"automation would treat this project as done and skip remediation."
+	)
+	# The warning marker must surface so log-analysis tooling can detect
+	# this failure mode in workflow runs.
+	combined_log = result.get("stdout", "") + "\n" + result.get("stderr", "")
+	assert "[external-finalize-partial]" in combined_log, (
+		"completeness gate failed: `[external-finalize-partial]` warning "
+		"marker missing from poller stdout/stderr — without it, log-analysis "
+		"tooling cannot detect this failure mode at scale."
+	)
+	# Note: the alert-dedup signature
+	# (`external_finalize_partial_alert_sig` on the state file) is verified
+	# by the companion static guard test
+	# `test_external_finalize_gates_on_subissue_completeness_before_marking_complete`,
+	# which pins both the persistence and the dedup condition.  This
+	# behavioural test does not re-verify it because `_run_poller` only
+	# exposes state via the comment trail, and the gate intentionally does
+	# NOT post_state_comment (the project is genuinely still in_progress
+	# from the orchestrator's POV — posting a state comment on every gate
+	# fire would re-introduce the alert-fatigue failure mode at the
+	# tracking-issue level).
+
+
 def test_standalone_conflict_sweep_skips_integration_base_prs():
 	state = _base_state(status="complete")
 	prs = [
@@ -8374,6 +8474,125 @@ def test_external_finalize_detect_marks_project_complete_when_final_pr_already_m
 	)
 
 
+def test_external_finalize_gates_on_subissue_completeness_before_marking_complete():
+	# Regression guard for the project #2734 false-completion broadcast
+	# (docs/postmortems/2026-05-18-project-2734-stall.md, layer 6).  The
+	# external-finalize block added by PR #2777 transitioned status=complete
+	# whenever the pinned integration PR was closed+merged, without checking
+	# whether the sub-issues in `.waves[].issues[]` had actually shipped.
+	# Project #2734's integration PR (#2750) was squash-merged externally
+	# with only Wave 1 (2 of 9 sub-issues) merged; on the next poll tick
+	# the unconditional transition broadcast "✅ Project complete" with 7
+	# sub-issues never created.
+	#
+	# The fix: before mutating state, count sub-issues whose status is not
+	# in {merged, closed, skipped}. If any are non-terminal, emit a
+	# structured `[external-finalize-partial]` warning, fire one Telegram
+	# alert per distinct missing-issue set (dedup via sha256 of the
+	# missing set, persisted on the state file as
+	# `external_finalize_partial_alert_sig`), and `continue` to skip the
+	# rest of this tick's processing for this project.  No state mutation.
+	#
+	# This test pins the placement (inside the elif-closed-and-merged arm,
+	# BEFORE the jq state mutation), the gate condition (filter shape
+	# matching the established `status != merged/closed/skipped` pattern
+	# used elsewhere in the script), the dedup mechanism (sha256 signature
+	# of the missing set), the early-exit (`continue` before any state
+	# mutation runs), and the side-effect surface (the
+	# `[external-finalize-partial]` warning marker and the WARNING-level
+	# tg_notify so the operator can take action).
+	poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
+	# Anchor the window on the existing landmarks from
+	# test_external_finalize_detect_marks_project_complete_when_final_pr_already_merged
+	# so a refactor that moves the block also has to update both tests in
+	# lockstep — preventing one test from regressing silently.
+	elif_marker = (
+		'elif [ "${_orch_extfin_pr_state}" = "closed" ] && '
+		'[ "${_orch_extfin_pr_merged}" = "true" ]; then'
+	)
+	elif_idx = poller_body.find(elif_marker)
+	assert elif_idx != -1, (
+		"external-finalize elif (closed+merged) marker is missing from "
+		"scripts/orchestrate_poll_process.sh; the completeness gate must "
+		"live inside that arm, so the elif itself is required."
+	)
+	mutation_marker = "'.final_merge_pr = $final_pr"
+	mutation_idx = poller_body.find(mutation_marker, elif_idx)
+	assert mutation_idx != -1, (
+		"external-finalize state mutation (jq `.final_merge_pr = $final_pr` "
+		"line) is missing after the closed+merged elif; the completeness gate "
+		"must precede that mutation."
+	)
+	gate_window = poller_body[elif_idx:mutation_idx]
+	# Gate condition: must enumerate non-terminal sub-issues using the same
+	# filter shape the rest of the script already uses for terminal-success
+	# detection.  If a future refactor switches to a different filter shape
+	# (e.g. flips the negation or drops `skipped`), this assertion catches
+	# it before the gate starts mis-classifying skipped issues as missing.
+	for needle, why in (
+		(
+			'.waves[]?.issues[]?',
+			"completeness gate no longer iterates `.waves[]?.issues[]?`; without it the gate cannot inspect sub-issue states and would always treat the project as complete.",
+		),
+		(
+			'select(.status == "not_created")',
+			"completeness gate no longer filters on `status == \"not_created\"`; the gate must catch sub-issues that were never dispatched (the project #2734 failure mode) without false-positive-firing on sub-issues that have a github_issue and are merely behind the per-tick label reconciliation. Widening the filter without also reconciling sub-issue status from labels first would break the legitimate external-finalize tests that pass with a `pending` sub-issue whose linked PR is already merged.",
+		),
+		(
+			'_orch_extfin_incomplete_count',
+			"completeness gate no longer computes `_orch_extfin_incomplete_count`; without the count variable the `-gt 0` guard cannot fire and the partial-merge case is silently complete.",
+		),
+		(
+			'-gt 0',
+			"completeness gate no longer gates on `_orch_extfin_incomplete_count -gt 0`; without this guard either every project is treated as incomplete (false positive) or none are (false negative).",
+		),
+		(
+			'[external-finalize-partial]',
+			"completeness gate no longer emits the `[external-finalize-partial]` marker; downstream log-analysis tooling and the postmortem (docs/postmortems/2026-05-18-project-2734-stall.md) anchor on this exact marker.",
+		),
+		(
+			'external_finalize_partial_alert_sig',
+			"completeness gate no longer persists `external_finalize_partial_alert_sig` on the state file; without this dedup key the gate would fire a Telegram alert every poll tick (~12/hour) until the project is completed or de-scoped — alert fatigue is the exact failure mode the postmortem's layer 5 calls out.",
+		),
+		(
+			'tg_notify',
+			"completeness gate no longer fires `tg_notify` on first-detection of an incomplete external-finalize; without the alert the operator has no way to learn the project is stuck except by reading workflow logs.",
+		),
+		(
+			'"WARNING"',
+			"completeness gate no longer escalates the Telegram alert to WARNING level; without the WARNING tag the alert blends into INFO chatter and is easily missed.",
+		),
+		(
+			'continue',
+			"completeness gate no longer short-circuits with `continue` on incomplete detection; without it the gate would warn and then fall through to the state-mutation block, producing the exact false-completion broadcast the gate is meant to prevent.",
+		),
+	):
+		assert needle in gate_window, (
+			"external-finalize completeness gate in scripts/orchestrate_poll_process.sh "
+			f"no longer contains `{needle}` between the closed+merged elif and the "
+			f"state-mutation jq call — {why}"
+		)
+	# Hard requirement: no jq mutation that sets `.status = "complete"`
+	# may appear inside the gate window itself.  The gate's only mutation
+	# is the alert-dedup signature persist; any other state change would
+	# bypass the wave-by-wave finalize path that owns project-status
+	# transitions.
+	# A subtlety: jq operations on `.external_finalize_partial_alert_sig`
+	# are fine; what matters is that `.status = "complete"` (or
+	# `.final_merge_status = "merged"`) does not land before the
+	# `continue`.  Verify the gate window does NOT contain those terminal
+	# transitions.
+	assert '.status = "complete"' not in gate_window, (
+		"external-finalize completeness gate must NOT transition `.status` to `complete` "
+		"itself; that mutation belongs to the post-gate fall-through path which only "
+		"runs when every sub-issue is terminal-success."
+	)
+	assert '.final_merge_status = "merged"' not in gate_window, (
+		"external-finalize completeness gate must NOT mark `.final_merge_status = merged` "
+		"itself; that mutation belongs to the post-gate fall-through path."
+	)
+
+
 def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	# The resolver run: blocks were extracted into
 	# scripts/review_conflict_prepare.sh and
@@ -8542,6 +8761,105 @@ def test_resolver_tooling_refresh_function_has_merge_base_divergence_guard():
 	)
 
 
+def test_resolver_tooling_refresh_function_has_3way_merge_fallback():
+	# Static contract for P5 (docs/postmortems/2026-05-18-project-2734-stall.md).
+	# When BOTH the integration branch and main have changed an
+	# allowlisted file since the merge-base, PR #2760's divergence
+	# guard skipped the refresh — preserving the sub-issue PR change
+	# but losing the main-side toolchain fix. P5 layers a 3-way merge
+	# fallback alongside the guard: if both sides changed but the
+	# changes don't conflict, combine them; only fall back to skip on
+	# real conflicts.
+	#
+	# This test pins:
+	#   - presence of the merged_3way_count counter,
+	#   - the `git merge-file` invocation,
+	#   - the conditional that distinguishes "main unchanged" (skip)
+	#     from "both changed" (try 3-way merge),
+	#   - that the 3-way path stages via `git add` (so it lands in the
+	#     refresh commit alongside the deadlock-breaker checkout path),
+	#   - the conflict fallback (skip on non-zero `git merge-file` exit).
+	poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
+	fn_body = _extract_refresh_function_body(poller_body)
+
+	assert "merged_3way_count=0" in fn_body, (
+		"_refresh_integration_resolver_tooling must initialize merged_3way_count "
+		"alongside refreshed_count / skipped_count / drifted_count. Without the "
+		"counter the post-refresh summary cannot distinguish 3-way merges from "
+		"deadlock-breaker checkouts."
+	)
+	assert ': > "${merge_tmpdir}/base"' not in fn_body, (
+		"_refresh_integration_resolver_tooling must not fabricate an empty 3-way "
+		"merge base on `git cat-file` failure. A zero-byte ancestor silently "
+		"degrades the merge and can lose the true merge-base context."
+	)
+	assert "could not materialize one or more 3-way merge inputs" in fn_body, (
+		"_refresh_integration_resolver_tooling must warn and skip when any 3-way "
+		"merge input blob cannot be materialized. Without this guard the function "
+		"can run `git merge-file` with missing or stale tmpfile inputs."
+	)
+	assert "git merge-file" in fn_body, (
+		"_refresh_integration_resolver_tooling must call `git merge-file` to do "
+		"the 3-way merge of integration + main edits when both sides changed "
+		"since the merge-base. Without this the function falls back to PR #2760's "
+		"skip behavior and the toolchain fix never reaches the integration branch."
+	)
+	# The skip sub-case (main unchanged) must come BEFORE the 3-way
+	# merge sub-case so the cheap test runs first.
+	skip_subcase_re = re.compile(
+		r'if\s+\[\s+-z\s+"\$\{base_hash\}"\s+\]\s+\|\|\s+\[\s+"\$\{main_hash\}"\s+=\s+"\$\{base_hash\}"\s+\]\s*;\s*then'
+	)
+	assert skip_subcase_re.search(fn_body), (
+		"3-way merge logic must short-circuit when main is unchanged from "
+		"merge-base (no work to do) BEFORE attempting the merge. Without this "
+		"short-circuit, the function would 3-way merge an unchanged main into "
+		"the integration version, wasting work and adding noise to the refresh."
+	)
+	# The merge must use the standard base/int/main triple in the
+	# correct argument order: `git merge-file <current> <base> <other>`
+	# — `<current>` is the integration version, `<base>` the merge-base,
+	# `<other>` the main version. Swapping any of these would silently
+	# produce the wrong merge or pick the wrong side on conflict.
+	assert '"${merge_tmpdir}/int" "${merge_tmpdir}/base" "${merge_tmpdir}/main"' in fn_body, (
+		"git merge-file argument order must be `int base main` (current, base, "
+		"other). Swapping the order would silently corrupt the merge — the "
+		"integration version is the file we want to update in place, the "
+		"merge-base is the common ancestor, main is the new content to merge in."
+	)
+	# Successful 3-way merge must increment merged_3way_count AND stage
+	# the merged content via git add so it lands in the refresh commit.
+	assert "merged_3way_count=$((merged_3way_count + 1))" in fn_body, (
+		"successful 3-way merge must increment merged_3way_count so the "
+		"post-refresh summary and commit-message body can report it."
+	)
+	assert 'git checkout -- "${f}"' in fn_body, (
+		"the 3-way merge path must revert the worktree copy when `git add` fails. "
+		"Without the revert, a staging failure leaves the poller worktree dirty and "
+		"out of sync with the refresh commit."
+	)
+	cp_fail_re = re.compile(
+		r'if\s+cp\s+"\$\{merge_tmpdir\}/int"\s+"\$\{f\}"[\s\S]{0,800}?\belse\b[\s\S]{0,200}?git\s+checkout\s+--\s+"\$\{f\}"'
+	)
+	assert cp_fail_re.search(fn_body), (
+		"the 3-way merge path must revert the worktree copy when copying the merged "
+		"tmpfile back into `${f}` fails. Without the revert, a partial copy can leave "
+		"the poller worktree dirty even though the file was excluded from the refresh commit."
+	)
+	# Conflict path must fall through to `skipped_count` (matching the
+	# existing skip semantics from PR #2760) — never stage a file with
+	# conflict markers. The conflict path is reached when `git merge-file`
+	# returns non-zero (1+ for conflicts, 255 for binary/error).
+	skip_re = re.compile(
+		r'git\s+merge-file[\s\S]{0,1500}?\belse\b[\s\S]{0,500}?skipped_count=\$\(\(skipped_count\s*\+\s*1\)\)'
+	)
+	assert skip_re.search(fn_body), (
+		"3-way merge must fall back to `skipped_count += 1` when "
+		"`git merge-file` returns non-zero (conflict or binary file). "
+		"Without this fallback the function would either lose conflict "
+		"information silently or stage a file with conflict markers."
+	)
+
+
 def test_resolver_tooling_refresh_does_not_clobber_files_changed_on_integration_branch():
 	# Behavioural regression for issue #2734: run the real
 	# _refresh_integration_resolver_tooling function against a
@@ -8676,6 +8994,303 @@ def test_resolver_tooling_refresh_does_not_clobber_files_changed_on_integration_
 			"_refresh_integration_resolver_tooling did not log the "
 			"expected skip-on-divergence message for the protected file.\n"
 			f"stdout:\n{result.stdout}\n---\nstderr:\n{result.stderr}\n"
+		)
+	finally:
+		shutil.rmtree(tmp_root, ignore_errors=True)
+
+
+def test_resolver_tooling_refresh_3way_merges_disjoint_edits_from_both_branches():
+	# Behavioural test for P5 (docs/postmortems/2026-05-18-project-2734-stall.md).
+	# When BOTH the integration branch and main have edited an allowlisted
+	# file since the merge-base, AND the edits are in non-overlapping
+	# regions, the 3-way merge fallback must combine them so neither
+	# side's intent is lost.
+	#
+	# This is the case PR #2760's divergence guard could not handle:
+	# the guard correctly preserves the sub-issue PR change but loses
+	# the toolchain fix that main shipped to the same file. The P5
+	# layer fills the gap by trying `git merge-file` before skipping.
+	#
+	# Fixture layout:
+	#   bare.git           — origin
+	#   work/              — single clone with main + integration branches
+	#     scripts/check_resolver_diff.sh   — allowlisted, 5-line file
+	#
+	# Timeline:
+	#   1. main has 5 lines of content with `MAIN_LINE_1` at top.
+	#   2. orchestrator/project-99 branched off, edited only the LAST
+	#      line ("SUB_ISSUE_FOOTER").
+	#   3. main edited only the FIRST line ("MAIN_LINE_1_FIXED").
+	#   4. Run the real refresh function. The clean 3-way merge must
+	#      yield BOTH "MAIN_LINE_1_FIXED" at top AND "SUB_ISSUE_FOOTER"
+	#      at bottom on the integration branch.
+	tmp_root = Path(tempfile.mkdtemp(prefix="refresh-3way-"))
+	try:
+		bare = tmp_root / "bare.git"
+		work = tmp_root / "work"
+		subprocess.run(
+			["git", "init", "--bare", "--quiet", str(bare)],
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+		)
+		subprocess.run(
+			["git", "init", "--quiet", str(work)],
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+		)
+		for k, v in [
+			("user.name", "test"),
+			("user.email", "t@example.com"),
+			("commit.gpgsign", "false"),
+			("commit.gpgSign", "false"),
+		]:
+			subprocess.run(
+				["git", "-C", str(work), "config", k, v],
+				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			)
+		(work / "scripts").mkdir()
+		refresh_target = work / "scripts" / "check_resolver_diff.sh"
+		refresh_target.write_text(
+			"MAIN_LINE_1\n"
+			"MAIN_LINE_2\n"
+			"MAIN_LINE_3\n"
+			"MAIN_LINE_4\n"
+			"MAIN_LINE_5\n",
+			encoding="utf-8",
+		)
+
+		def _git(*args: str) -> None:
+			subprocess.run(
+				["git", "-C", str(work), *args],
+				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			)
+
+		_git("checkout", "-B", "main")
+		_git("add", "-A")
+		_git("commit", "-m", "initial main", "--quiet")
+		_git("remote", "add", "origin", str(bare))
+		_git("push", "-u", "origin", "main", "--quiet")
+
+		# Integration branches off main and edits only line 5 (the
+		# footer). This simulates a merged sub-issue PR adding a comment
+		# at the bottom of a toolchain script.
+		_git("checkout", "-B", "orchestrator/project-99")
+		refresh_target.write_text(
+			"MAIN_LINE_1\n"
+			"MAIN_LINE_2\n"
+			"MAIN_LINE_3\n"
+			"MAIN_LINE_4\n"
+			"SUB_ISSUE_FOOTER\n",
+			encoding="utf-8",
+		)
+		_git("add", "-A")
+		_git("commit", "-m", "merged sub-issue: add footer", "--quiet")
+		_git("push", "-u", "origin", "orchestrator/project-99", "--quiet")
+
+		# Main edits only line 1 (the header). Simulates the toolchain
+		# fix the orchestrator wants to propagate to the integration
+		# branch.
+		_git("checkout", "main")
+		refresh_target.write_text(
+			"MAIN_LINE_1_FIXED\n"
+			"MAIN_LINE_2\n"
+			"MAIN_LINE_3\n"
+			"MAIN_LINE_4\n"
+			"MAIN_LINE_5\n",
+			encoding="utf-8",
+		)
+		_git("add", "-A")
+		_git("commit", "-m", "toolchain fix", "--quiet")
+		_git("push", "origin", "main", "--quiet")
+
+		poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
+		fn_body = _extract_refresh_function_body(poller_body)
+
+		runtime_dir = tmp_root / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		runner = tmp_root / "run.sh"
+		runner.write_text(
+			"#!/usr/bin/env bash\n"
+			"set -uo pipefail\n"
+			f"{fn_body}\n"
+			f"cd {str(work)!r}\n"
+			f"export RUNTIME_DIR={str(runtime_dir)!r}\n"
+			"_refresh_integration_resolver_tooling orchestrator/project-99 main\n",
+			encoding="utf-8",
+		)
+		runner.chmod(0o755)
+		result = subprocess.run(
+			["bash", str(runner)],
+			capture_output=True, text=True, timeout=60,
+		)
+		assert result.returncode == 0, (
+			"_refresh_integration_resolver_tooling 3-way merge fixture run "
+			"failed before the merge-result assertions could validate.\n"
+			f"stdout:\n{result.stdout}\n---\nstderr:\n{result.stderr}\n"
+		)
+		subprocess.run(
+			["git", "-C", str(work), "fetch", "origin", "--quiet"],
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+		)
+		actual = subprocess.run(
+			["git", "-C", str(work), "show",
+			 "origin/orchestrator/project-99:scripts/check_resolver_diff.sh"],
+			capture_output=True, text=True, check=True,
+		).stdout
+		# After the 3-way merge, the integration branch's file must
+		# contain BOTH the main-side fix (line 1) AND the sub-issue
+		# footer (line 5). Losing either side defeats the whole point of
+		# the merge.
+		assert "MAIN_LINE_1_FIXED" in actual, (
+			"3-way merge lost the main-side toolchain fix.\n"
+			f"file contents:\n{actual}\n---\n"
+			f"refresh stdout:\n{result.stdout}\n"
+			f"---\nrefresh stderr:\n{result.stderr}\n"
+		)
+		assert "SUB_ISSUE_FOOTER" in actual, (
+			"3-way merge lost the sub-issue footer — the exact regression "
+			"PR #2760's divergence guard prevented and that P5 must "
+			"continue to prevent. If the 3-way merge ever clobbers the "
+			"integration-branch change, the project-#2734 failure mode "
+			"recurs.\n"
+			f"file contents:\n{actual}\n---\n"
+			f"refresh stdout:\n{result.stdout}\n"
+			f"---\nrefresh stderr:\n{result.stderr}\n"
+		)
+		# Conflict markers must not appear — those would mean the merge
+		# fell back to the skip path but staged the file anyway, which
+		# would trip the post-resolve verifier.
+		assert "<<<<<<<" not in actual and ">>>>>>>" not in actual, (
+			"3-way merge result contains conflict markers — the merge "
+			"must EITHER produce a clean result OR fall through to the "
+			"skip path. Staging a file with conflict markers would trip "
+			"the fingerprint verifier and reproduce the wave-dispatch "
+			"deadlock that P5 is meant to break.\n"
+			f"file contents:\n{actual}\n"
+		)
+		# The log line for 3-way merges must surface so an operator
+		# auditing the refresh commit can see this file was merged
+		# rather than clobbered.
+		assert "3-way merged scripts/check_resolver_diff.sh" in result.stdout, (
+			"_refresh_integration_resolver_tooling did not log the "
+			"expected `3-way merged` line for the merged file. Without "
+			"this log line, operators reviewing the orchestrator log "
+			"have no way to tell that this file came from a 3-way merge "
+			"vs the deadlock-breaker checkout path.\n"
+			f"stdout:\n{result.stdout}\n---\nstderr:\n{result.stderr}\n"
+		)
+	finally:
+		shutil.rmtree(tmp_root, ignore_errors=True)
+
+
+def test_resolver_tooling_refresh_3way_merge_falls_back_to_skip_on_conflict():
+	# Behavioural test for the P5 conflict fallback. When the 3-way
+	# merge would produce conflict markers (because main and the
+	# integration branch edited the SAME region of the file in
+	# incompatible ways), the function must NOT stage the conflict-
+	# markered file — it must fall back to the existing skip behavior
+	# so the normal main->integration sync can surface the conflict
+	# under operator review.
+	tmp_root = Path(tempfile.mkdtemp(prefix="refresh-3way-conflict-"))
+	try:
+		bare = tmp_root / "bare.git"
+		work = tmp_root / "work"
+		subprocess.run(
+			["git", "init", "--bare", "--quiet", str(bare)],
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+		)
+		subprocess.run(
+			["git", "init", "--quiet", str(work)],
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+		)
+		for k, v in [
+			("user.name", "test"),
+			("user.email", "t@example.com"),
+			("commit.gpgsign", "false"),
+			("commit.gpgSign", "false"),
+		]:
+			subprocess.run(
+				["git", "-C", str(work), "config", k, v],
+				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			)
+		(work / "scripts").mkdir()
+		refresh_target = work / "scripts" / "check_resolver_diff.sh"
+		refresh_target.write_text("LINE_1\nLINE_2\nLINE_3\n", encoding="utf-8")
+
+		def _git(*args: str) -> None:
+			subprocess.run(
+				["git", "-C", str(work), *args],
+				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			)
+
+		_git("checkout", "-B", "main")
+		_git("add", "-A")
+		_git("commit", "-m", "initial", "--quiet")
+		_git("remote", "add", "origin", str(bare))
+		_git("push", "-u", "origin", "main", "--quiet")
+
+		# Both branches edit the SAME line in incompatible ways — must
+		# produce a conflict that git merge-file cannot auto-resolve.
+		_git("checkout", "-B", "orchestrator/project-99")
+		refresh_target.write_text("LINE_1\nSUB_ISSUE_CHANGE\nLINE_3\n", encoding="utf-8")
+		_git("add", "-A")
+		_git("commit", "-m", "sub-issue edit on line 2", "--quiet")
+		_git("push", "-u", "origin", "orchestrator/project-99", "--quiet")
+
+		_git("checkout", "main")
+		refresh_target.write_text("LINE_1\nMAIN_CHANGE\nLINE_3\n", encoding="utf-8")
+		_git("add", "-A")
+		_git("commit", "-m", "main edit on line 2", "--quiet")
+		_git("push", "origin", "main", "--quiet")
+
+		poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
+		fn_body = _extract_refresh_function_body(poller_body)
+
+		runtime_dir = tmp_root / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		runner = tmp_root / "run.sh"
+		runner.write_text(
+			"#!/usr/bin/env bash\n"
+			"set -uo pipefail\n"
+			f"{fn_body}\n"
+			f"cd {str(work)!r}\n"
+			f"export RUNTIME_DIR={str(runtime_dir)!r}\n"
+			"_refresh_integration_resolver_tooling orchestrator/project-99 main\n",
+			encoding="utf-8",
+		)
+		runner.chmod(0o755)
+		result = subprocess.run(
+			["bash", str(runner)],
+			capture_output=True, text=True, timeout=60,
+		)
+		assert result.returncode == 0, (
+			f"refresh exited non-zero\nstdout:{result.stdout}\nstderr:{result.stderr}"
+		)
+		subprocess.run(
+			["git", "-C", str(work), "fetch", "origin", "--quiet"],
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+		)
+		actual = subprocess.run(
+			["git", "-C", str(work), "show",
+			 "origin/orchestrator/project-99:scripts/check_resolver_diff.sh"],
+			capture_output=True, text=True, check=True,
+		).stdout
+		# On conflict the function must SKIP — integration-branch content
+		# must be unchanged from the sub-issue version.
+		assert actual == "LINE_1\nSUB_ISSUE_CHANGE\nLINE_3\n", (
+			"3-way merge with conflict did NOT fall back to skip — the "
+			"integration branch was modified despite an unresolvable "
+			"merge. This is the exact failure mode P5's conflict-fallback "
+			"branch is meant to prevent: staging conflict markers (or "
+			"silently picking one side) would trip the fingerprint "
+			"verifier and re-introduce the wave-dispatch deadlock.\n"
+			f"file contents:\n{actual}\n---\n"
+			f"refresh stdout:\n{result.stdout}\n"
+			f"---\nrefresh stderr:\n{result.stderr}\n"
+		)
+		# The log line must surface the skip-on-conflict so operators
+		# know the file needs a manual resolve via normal sync.
+		assert "skip scripts/check_resolver_diff.sh" in result.stdout, (
+			"3-way merge conflict path did not log the expected skip line."
+			f"\nstdout:\n{result.stdout}\n---\nstderr:\n{result.stderr}\n"
 		)
 	finally:
 		shutil.rmtree(tmp_root, ignore_errors=True)
