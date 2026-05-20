@@ -1,8 +1,6 @@
 # Integration-Sync Resolver Self-Heal — Implementation Plan
 
-> Status: archived compatibility copy — the canonical completed-plan path is
-> `docs/completed/integration-sync-resolver-self-heal-plan.md`.
-> This retained copy stays in place only to preserve older links and references.
+
 
 > Source design: [`docs/integration-sync-resolver-self-heal.md`](../integration-sync-resolver-self-heal.md).
 > This plan converts that draft proposal into an executable, multi-phase rollout
