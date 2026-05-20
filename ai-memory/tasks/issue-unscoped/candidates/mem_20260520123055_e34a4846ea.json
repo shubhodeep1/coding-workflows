@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_lib.py:1613-1729 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: `_parse_iso8601_to_epoch` only catches `ValueError` and `TypeError`, so `datetime.timestamp()` failures like `OverflowError` or `OSError` can escape and crash stall detection instead of returning `None`.\n  WHY: This violates the function\u2019s documented fail-open \u201cnever raise\u201d contract; reviewers agreed on the bug, with confidence ranging from 3 to 5 and likelihood ranging from platform-specific to high-confidence runtime crash.\n- scripts/review_rb_judge.sh:45-80 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The UTF-8 sanitizer fallback can leave the original prompt file untouched when both rewrite paths fail, so invalid input can still reach Codex and be rejected.\n  WHY: The code only emits a warning in that path, and the added self-run exclusion test does not prove a later Codex invocation will succeed.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Automated forward-merge of stable into main failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on stable is also present on main.\"\n  expected_change_site: Full alignment of main with stable across .github/workflows/*.yml, README.md, probably_unnecessary_but_read_if_stuck.md, scripts/orchestrate_*.py/sh, and all listed test files.\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The LAST RUN DIFF only touches one test file (a trivial shell flag change + assertion); the PR DIFF and prior autofix runs show the forward-merge was incomplete for several cycles.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_lib.py:1631-1632 (2 related items) | severity=high | confidence=3\n  PROBLEM: `_parse_iso8601_to_epoch` does not fully satisfy its documented fail-open contract because `datetime.timestamp()` can raise exceptions that are not caught.\n  WHY: `OverflowError` and `OSError` can propagate past the narrow `except (ValueError, TypeError):` clause, which can crash `detect_stalls` instead of returning `None` as promised.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/orchestrate_lib.py:1632 | severity=high | confidence=4\n  PROBLEM: `_parse_iso8601_to_epoch` only catches `ValueError` and `TypeError`, but `datetime.timestamp()` can also raise `OverflowError` or `OSError`.\n  WHY: An extreme or malformed timestamp that reaches `timestamp()` can propagate an unhandled exception through `detect_stalls`, violating the documented \u201cnever raise\u201d behavior.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_lib.py:1613-1637 | severity=high | confidence=4\n  PROBLEM: `_parse_iso8601_to_epoch` documents a \u201cnever raise\u201d contract, but its `except (ValueError, TypeError):` block does not cover `OverflowError` or `OSError`.\n  WHY: A parseable but out-of-range timestamp can escape the handler, crash `detect_stalls`, and prevent the intended fallback to the legacy `status_since_ts` anchor.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/orchestrate_lib.py:1613-1632 | severity=high | confidence=5\n  PROBLEM: The helper\u2019s try/except block only catches `(ValueError, TypeError)`, but `datetime.timestamp()` can also raise `OverflowError` and `OSError`.\n  WHY: A malformed or extreme timestamp can produce an unhandled exception in `detect_stalls`, crashing the poll cycle instead of failing open to the legacy anchor as documented.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/orchestrate_lib.py:1613-1637 | severity=high | confidence=5\n  PROBLEM: The documented \u201cnever raise\u201d contract for untrusted GitHub GraphQL timestamps is violated because only `ValueError`/`TypeError` are caught while `fromisoformat()` plus `timestamp()` can raise `OverflowError` or `OSError`.\n  WHY: A malformed or extreme timestamp can crash the entire stall-detection pass instead of falling back to legacy `status_since_ts` anchoring.\n- scripts/review_rb_judge.sh:~lines 45-80 | severity=medium | confidence=4\n  PROBLEM: The local UTF-8 sanitizer fallback can leave the original file untouched when both rewrite paths fail and only emits a warning.\n  WHY: Invalid UTF-8 can still reach Codex in degraded harnesses, so the warning does not fully satisfy the intended best-effort sanitization behavior.\n- Requirement: \"Automated forward-merge of stable into main failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on stable is also present on main.\" (Conflicting files explicitly listed, including full forward-merge of the stall-reanchor, 50-minute fresh-push window, narrowed complete-verdict guard, sanitization hardening, and test coverage.)\n  Expected change site: Full alignment of main with stable across .github/workflows/*.yml, README.md, probably_unnecessary_but_read_if_stuck.md, scripts/orchestrate_*.py/sh, and all listed test files.\n  Evidence of absence: The LAST RUN DIFF only touches one test file (a trivial shell flag change + assertion). The PR DIFF and prior autofix runs show the forward-merge was incomplete for several cycles; this iteration still leaves residual gaps in workflow test ordering, doc sync, and the exact parse-exception handling that multiple reviewers flagged.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "c9d5bbb08502220095cab49c1b6805f16af52541d4d4f6afd088aa4b0a01e937",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2801,
+    "run_id": "26161447034",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26161447034",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260520123055_e34a4846ea",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2801,
+    "run_id": "26161447034"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-20T12:30:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
