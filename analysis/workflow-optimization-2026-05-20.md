@@ -515,3 +515,136 @@ No `TODO`, `FIXME`, or `HACK` markers were present under `.github/workflows/` or
 | Code modularization | 7-9 | Large |
 | Expression size reduction | 3-5 | Medium |
 | Medium/Low fixes | 4-6 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-20)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlap is proven locally and can be collapsed without changing retry/error/concurrency behavior. `NEEDS_VERIFICATION` means the overlap is real, but a human or follow-on analysis must confirm payload/fallback parity first. `RISKY_SKIP` means the redundancy is visible, but it sits in polling/retry/race-defense code (or another protected path) and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001
+- **Safety tag** — `NEEDS_VERIFICATION`
+- **File path and line ranges** — `scripts/review_rb_judge.sh:319-324,340-356` (top-level linked-issue resolution block)
+- **Current call count** — `1` GraphQL call + `1..N` REST issue fetches (`1` in the common case, more if earlier linked issues have empty bodies)
+- **Proposed call count** — `1`
+- **Endpoint(s)** — GraphQL `repository.pullRequest.closingIssuesReferences`; REST `GET /repos/{repo}/issues/{issue_number}`
+- **Evidence**
+  ```sh
+  ISSUE_NUMBERS="$(gh_retry gh api graphql \
+    ... closingIssuesReferences(first: 50) { nodes { number } } ...)"
+
+  ...
+
+  ISSUE_META_JSON="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" || echo '{}')"
+  BODY="$(printf '%s' "${ISSUE_META_JSON}" | jq -r '.body // ""' ...)"
+  FIRST_ISSUE_LABELS_JSON="$(printf '%s' "${ISSUE_META_JSON}" | jq -c '[(.labels // [])[]?.name]' ...)"
+  ```
+- **Proposed fix** — Extend the existing GraphQL query at `scripts/review_rb_judge.sh:319-324` to request `body` and `labels(first: 100) { nodes { name } }`, then populate `FIRST_ISSUE`, `FIRST_ISSUE_BODY`, and `FIRST_ISSUE_LABELS_JSON` from that one response. If batching is used, follow the existing aliased-GraphQL pattern documented in `scripts/orchestrate_poll_process.sh` (`_fetch_candidate_issue_details_graphql`, `_fetch_linked_pr_status_graphql`).
+- **Safety rationale** — `NEEDS_VERIFICATION` because this replaces per-issue REST reads with a richer GraphQL payload, so label/body parity and fail-open behavior must be checked before deleting the REST loop.
+- **Downstream signal** — Verify on at least one PR with multiple linked issues and one label-heavy first issue that the merged query reproduces today’s `FIRST_ISSUE`, `FIRST_ISSUE_BODY`, and `FIRST_ISSUE_LABELS_JSON` outputs before removing `repos/{repo}/issues/{issue_number}` fetches.
+
+#### MERGE-002
+- **Safety tag** — `RISKY_SKIP`
+- **File path and line ranges** — `.github/workflows/test-and-mark-stable.yml:2824-2834` (`Phase 7: Close PR and verify cancel_on_pr_close fires`)
+- **Current call count** — `2` per poll iteration
+- **Proposed call count** — `1` per poll iteration
+- **Endpoint(s)** — `GET /repos/{repo}/actions/runs/{run_id}`
+- **Evidence**
+  ```sh
+  while [ "${EXISTING_STATUS}" != "completed" ] && [ "$(date +%s)" -lt "${WAIT_DEADLINE}" ]; do
+    sleep 5
+    EXISTING_STATUS=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" \
+      --jq '.status // ""' 2>/dev/null || echo "")
+    EXISTING_CONCLUSION=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" \
+      --jq '.conclusion // ""' 2>/dev/null || echo "")
+  done
+  ```
+- **Proposed fix** — Poll `actions/runs/{id}` once per iteration into one JSON object (or `--jq '{status, conclusion}'`) and parse both fields locally.
+- **Safety rationale** — `RISKY_SKIP` because this is a live polling loop in the release-gate watcher path; changing it can alter poll timing, transient-failure handling, and observable log output.
+- **Downstream signal** — Do not auto-implement; manual review must preserve the existing 5s cadence, 600s deadline, empty-string fail-open behavior, and the exact status/conclusion diagnostics emitted by this watcher.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001
+- **Safety tag** — `SAFE_TO_MERGE`
+- **File path and line ranges** — `scripts/review_rb_judge.sh:294-311,326-329` (early PR guard + PR-body fallback in the same script body)
+- **Current call count** — `2` on the `ISSUE_NUMBERS`-empty path
+- **Proposed call count** — `1` on the normal path (`2` only if the retained fail-open fallback is needed)
+- **Endpoint(s)** — `GET /repos/{repo}/pulls/{pr_number}`
+- **Evidence**
+  ```sh
+  _pr_meta="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
+  ...
+  unset _pr_meta _pr_state _pr_merged
+
+  ...
+
+  PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
+  ```
+- **Proposed fix** — Before `unset _pr_meta`, derive and cache `PR_DATA` (or `PR_TITLE_BODY`) from that already-fetched JSON, then use it in the `ISSUE_NUMBERS` fallback. Keep the current `_safe_gh_jq` call only when `_pr_meta` is empty/invalid so error semantics stay fail-open.
+- **Safety rationale** — `SAFE_TO_MERGE` because this is the same PR endpoint in the same script body, there is no intervening mutation that changes PR title/body, and retaining the fallback preserves current error handling.
+- **Downstream signal** — Reuse the early `_pr_meta` payload for `PR_DATA`, but keep the later `pulls/{PR_NUMBER}` call as a fallback only when `_pr_meta` was empty or invalid.
+
+#### REUSE-002
+- **Safety tag** — `SAFE_TO_MERGE`
+- **File path and line ranges** — `.github/workflows/test-and-mark-stable.yml:443-449` (`Create E2E test issue`)
+- **Current call count** — `2`
+- **Proposed call count** — `1`
+- **Endpoint(s)** — `POST /repos/{repo}/issues`; `GET /repos/{repo}/issues/{issue_number}`
+- **Evidence**
+  ```sh
+  ISSUE_NUMBER=$(gh api "repos/${TEST_REPO}/issues" \
+    -f title="${TITLE}" \
+    -f body="${BODY}" \
+    --jq '.number')
+
+  ISSUE_URL=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" --jq '.html_url')
+  ```
+- **Proposed fix** — Capture the full `POST /issues` response once, then parse both `.number` and `.html_url` from that response locally instead of doing a follow-up GET.
+- **Safety rationale** — `SAFE_TO_MERGE` because the created-issue response already contains the URL being re-fetched, both reads happen in the same step, and no mutation occurs between them.
+- **Downstream signal** — Capture the `POST /issues` JSON once, extract `.number` and `.html_url`, and delete the follow-up `GET /issues/{ISSUE_NUMBER}`.
+
+### Dead Calls (DEAD-API-###)
+
+#### DEAD-API-001
+- **Safety tag** — `NEEDS_VERIFICATION`
+- **File path and line ranges** — `.github/workflows/review_autofix.yml:1549-1555` (`Collect PR metadata`, no-PR claude-branch path); supporting caller path `.github/workflows/internal-review.yml:78-82,101-118,123-134`
+- **Current call count** — `1` conditional GET site, but `0` reachable executions from current in-repo `force_claude_branch_review` callers
+- **Proposed call count** — `0`
+- **Endpoint(s)** — `GET /repos/{repo}` for `.default_branch`
+- **Evidence**
+  ```sh
+  # review_autofix.yml
+  BASE_REF_OVERRIDE="${BASE_REF_OVERRIDE_INPUT:-}"
+  if [ -z "${BASE_REF_OVERRIDE}" ]; then
+    BASE_REF_OVERRIDE="$(gh api "repos/${{ github.repository }}" --jq '.default_branch' 2>/dev/null || echo 'main')"
+  fi
+  ```
+
+  ```sh
+  # internal-review.yml
+  echo "base_ref=${base_ref}" >> "${GITHUB_OUTPUT}"
+  ...
+  base_ref_override: ${{ needs.resolve-claude-branch-pr.outputs.base_ref }}
+  ```
+- **Proposed fix** — Treat `base_ref_override` as required whenever `force_claude_branch_review=true` in this repo’s caller matrix, and replace the silent repo GET fallback with an assertion/log if it is unexpectedly empty.
+- **Safety rationale** — `NEEDS_VERIFICATION` because the call is dead for current in-repo wrappers, but the reusable workflow still advertises an “empty means default branch” contract that should be checked before tightening.
+- **Downstream signal** — Verify that no in-repo wrapper/test invokes `review_autofix.yml` with `force_claude_branch_review=true` and an empty `base_ref_override`; only then remove the fallback GET or turn it into an explicit assertion.
+
+### Cross-References to Deep Audit Section
+- `BATCH-001`: `RISKY_SKIP` — correct hotspot, but it is dispatch/poll helper consolidation inside watcher loops and must preserve retry/log semantics.
+- `API-001`: `SAFE_TO_MERGE` — the push event already carries `github.event.repository.default_branch`, so the extra repo GET is redundant in-step.
+- `API-002`: `NEEDS_VERIFICATION` — batching fallback label reads into GraphQL is directionally right, but it changes REST-vs-GraphQL shape and needs parity checks first.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 2 | REUSE-001, REUSE-002 |
+| NEEDS_VERIFICATION | 2 | MERGE-001, DEAD-API-001 |
+| RISKY_SKIP | 1 | MERGE-002 |
+
+### Implement-Stage Handoff
+- `REUSE-002`
+- `REUSE-001`
