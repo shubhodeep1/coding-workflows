@@ -26,6 +26,7 @@ the contract the code now upholds.
 
 from __future__ import annotations
 
+import inspect
 import io
 import json
 import os
@@ -588,3 +589,55 @@ def test_finalize_skips_recheck_when_superseded_by_main(tmp_path):
 	)
 	final_state = json.loads(json_line)
 	assert final_state["final_merge_status"] == "superseded-by-main"
+
+
+def _invoke_test(func) -> None:
+	params = list(inspect.signature(func).parameters.values())
+	if not params:
+		func()
+		return
+	if len(params) == 1:
+		with tempfile.TemporaryDirectory(prefix="integration-ahead-by-") as td:
+			func(Path(td))
+		return
+	raise TypeError(
+		f"{func.__name__} has unsupported signature for direct python runner: "
+		f"{inspect.signature(func)}"
+	)
+
+
+def main(argv: list[str] | None = None) -> int:
+	argv = list(sys.argv[1:] if argv is None else argv)
+	selected = set(argv)
+	try:
+		sys.stdout.reconfigure(line_buffering=True)
+	except Exception:
+		pass
+
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	if selected:
+		test_funcs = [func for func in test_funcs if func.__name__ in selected]
+		missing = sorted(selected - {func.__name__ for func in test_funcs})
+		for name in missing:
+			print(f"  FAIL  {name}: unknown test name", flush=True)
+		if missing:
+			return 1
+
+	passed = 0
+	failed = 0
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			_invoke_test(func)
+			print(f"  PASS  {name}", flush=True)
+			passed += 1
+		except Exception as e:
+			print(f"  FAIL  {name}: {e}", flush=True)
+			failed += 1
+
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total", flush=True)
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
