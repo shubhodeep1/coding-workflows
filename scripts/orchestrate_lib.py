@@ -1628,7 +1628,7 @@ def _parse_iso8601_to_epoch(iso_str: Any) -> int | None:
 		if dt.tzinfo is None:
 			dt = dt.replace(tzinfo=timezone.utc)
 		return int(dt.timestamp())
-	except (ValueError, TypeError):
+	except (ValueError, TypeError, OverflowError, OSError):
 		return None
 
 
