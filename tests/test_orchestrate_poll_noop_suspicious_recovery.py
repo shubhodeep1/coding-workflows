@@ -214,6 +214,21 @@ def test_force_merge_gate_distinguishes_warning_and_error_levels():
 	)
 
 
+def test_sweep_comment_refresh_failure_fails_closed():
+	"""A comments-refresh API failure must abort the force-merge path for
+	that cycle rather than evaluating Gate B on the stale pre-filter
+	snapshot. Force-merge is a safety-sensitive fallback, so refresh
+	failure is a closed gate, not a fail-open path."""
+	sweep = _sweep_block()
+	sweep_code = _strip_shell_comments(sweep)
+	assert "could not refresh comments snapshot for noop-suspicious Gate B; failing force-merge closed this cycle." in sweep
+	assert "could not refresh latest PR comments snapshot" in sweep
+	assert "using pre-filter snapshot" not in sweep_code, (
+		"Refresh failure must fail closed; executable sweep code should not "
+		"continue Gate B using the pre-filter snapshot."
+	)
+
+
 def test_force_merge_each_gate_has_distinct_failure_branch():
 	"""Gates A/B/C/D must each have an explicit failure branch that
 	calls `continue` (so a downstream gate cannot accidentally fire
