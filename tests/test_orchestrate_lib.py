@@ -805,7 +805,7 @@ def test_parse_iso8601_to_epoch_handles_common_shapes_and_failures():
 	assert orchestrate_lib._parse_iso8601_to_epoch("2023-11-14T21:43:20.500Z") == 1_699_998_200
 	# Explicit +00:00 offset
 	assert orchestrate_lib._parse_iso8601_to_epoch("2023-11-14T21:43:20+00:00") == 1_699_998_200
-	# Non-UTC offset: 21:43:20+02:00 = 19:43:20Z = epoch 1_699_990_000... let's compute
+	# Non-UTC offset: 21:43:20+02:00 = 19:43:20Z = epoch 1_699_991_000
 	# 1_699_998_200 - 2*3600 = 1_699_991_000
 	assert orchestrate_lib._parse_iso8601_to_epoch("2023-11-14T21:43:20+02:00") == 1_699_991_000
 	# Naive datetime (interpreted as UTC per GitHub contract)
@@ -825,8 +825,9 @@ def test_parse_iso8601_to_epoch_handles_common_shapes_and_failures():
 
 	class _FakeParsedDatetime:
 		tzinfo = _dt.timezone.utc
+		error_cls = OverflowError
 		def timestamp(self):
-			raise OverflowError("boom")
+			raise self.error_cls("boom")
 
 	class _FakeDatetimeModule:
 		@staticmethod
@@ -836,9 +837,12 @@ def test_parse_iso8601_to_epoch_handles_common_shapes_and_failures():
 	original_datetime = orchestrate_lib.datetime
 	orchestrate_lib.datetime = _FakeDatetimeModule
 	try:
-		assert orchestrate_lib._parse_iso8601_to_epoch("2023-11-14T21:43:20Z") is None
+		for exc_type in (OverflowError, OSError):
+			_FakeParsedDatetime.error_cls = exc_type
+			assert orchestrate_lib._parse_iso8601_to_epoch("2023-11-14T21:43:20Z") is None
 	finally:
 		orchestrate_lib.datetime = original_datetime
+		_FakeParsedDatetime.error_cls = OverflowError
 
 def test_cmd_check_stalls_parses_head_pushed_at_json_and_threads_it_through(tmp_path=None):
 	"""``cmd_check_stalls`` must accept ``--head-pushed-at-json`` and pass
