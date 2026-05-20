@@ -26,6 +26,7 @@ the contract the code now upholds.
 
 from __future__ import annotations
 
+import inspect
 import io
 import json
 import os
@@ -589,31 +590,54 @@ def test_finalize_skips_recheck_when_superseded_by_main(tmp_path):
 	final_state = json.loads(json_line)
 	assert final_state["final_merge_status"] == "superseded-by-main"
 
+def _invoke_test(func) -> None:
+	params = list(inspect.signature(func).parameters.values())
+	if not params:
+		func()
+		return
+	if len(params) == 1:
+		with tempfile.TemporaryDirectory(prefix="integration-ahead-by-") as td:
+			func(Path(td))
+		return
+	raise TypeError(
+		f"{func.__name__} has unsupported signature for direct python runner: "
+		f"{inspect.signature(func)}"
+	)
 
-def main() -> int:
+
+def main(argv: list[str] | None = None) -> int:
 	# Direct `python3 tests/<file>.py` entrypoint — CI and the stable-gate
 	# workflows run tests via explicit allowlists rather than pytest
 	# discovery, so without this block the file would import successfully and
 	# exit 0 without exercising the regression coverage.
+	argv = list(sys.argv[1:] if argv is None else argv)
+	selected = set(argv)
+	try:
+		sys.stdout.reconfigure(line_buffering=True)
+	except Exception:
+		pass
+
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	if selected:
+		test_funcs = [func for func in test_funcs if func.__name__ in selected]
+		missing = sorted(selected - {func.__name__ for func in test_funcs})
+		for name in missing:
+			print(f"  FAIL  {name}: unknown test name", flush=True)
+		if missing:
+			return 1
 	passed = 0
 	failed = 0
 	for func in test_funcs:
 		name = func.__name__
 		try:
-			if func.__code__.co_argcount == 0:
-				func()
-			elif func.__code__.co_argcount == 1:
-				with tempfile.TemporaryDirectory() as td:
-					func(Path(td))
-			else:
-				raise TypeError(f"unsupported test signature: {name}")
-			print(f"  PASS  {name}")
+			_invoke_test(func)
+			print(f"  PASS  {name}", flush=True)
 			passed += 1
 		except Exception as exc:
-			print(f"  FAIL  {name}: {exc}")
+			print(f"  FAIL  {name}: {exc}", flush=True)
 			failed += 1
-	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total", flush=True)
 	return 1 if failed > 0 else 0
 
 
