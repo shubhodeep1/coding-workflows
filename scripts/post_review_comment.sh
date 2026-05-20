@@ -98,11 +98,14 @@ if [ ! -s "${REVIEWER_CONSENSUS_FILE}" ]; then
 	exit 0
 fi
 
-# Treat the "empty ledger" sentinel emitted by summarize_reviewer_consensus.sh
-# as a no-op so we don't post a "(No reviewer outputs available)" comment for
-# every push that fails reviewer fan-out. The summariser already logs the
-# failure to the workflow run.
-if grep -Fq "(No reviewer outputs available for this pass.)" "${REVIEWER_CONSENSUS_FILE}"; then
+# Treat the legacy empty-pass sentinel and the new structured empty ledger
+# emitted by summarize_reviewer_consensus.sh as a no-op so we don't post a
+# review comment for every push that fails reviewer fan-out. The summariser
+# already logs the failure to the workflow run.
+if grep -Fq "(No reviewer outputs available for this pass.)" "${REVIEWER_CONSENSUS_FILE}" || \
+	{ grep -Fqx "(No findings reported.)" "${REVIEWER_CONSENSUS_FILE}" && \
+	  grep -Fqx "(No task gaps reported.)" "${REVIEWER_CONSENSUS_FILE}" && \
+	  ! grep -Fq "=== FINDINGS FROM " "${REVIEWER_CONSENSUS_FILE}"; }; then
 	echo "::warning::post_review_comment: ledger contains the empty-pass sentinel; skipping post."
 	exit 0
 fi

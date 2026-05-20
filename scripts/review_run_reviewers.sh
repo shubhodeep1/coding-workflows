@@ -1667,7 +1667,8 @@ run_reviewer_pass() {
 
 # Wrap a consolidated pass-1 ledger (produced by summarize_reviewer_consensus.sh)
 # with the cross-pollination header pass-2 reviewers see. The ledger already
-# carries its own === CONSENSUS FINDINGS === sentinels plus per-reviewer blocks.
+# carries its own === CONSENSUS FINDINGS === / === CONSENSUS TASK GAPS ===
+# sentinels plus per-reviewer blocks.
 build_cross_pollination_summary() {
   local ledger_file="$1"
   local summary_file="${RUNTIME_DIR}/cross_pollination_summary.txt"
@@ -1681,7 +1682,7 @@ build_cross_pollination_summary() {
     echo "- Provide your own independent assessment — do not blindly adopt pass 1 findings"
     echo ""
     echo "The consolidated ledger below was produced by ${XPOLL_SUMMARISER_MODEL:-openai/gpt-5.4-mini}"
-    echo "from all pass-1 reviewer outputs (CONSENSUS FINDINGS block + per-reviewer sections)."
+    echo "from all pass-1 reviewer outputs (CONSENSUS FINDINGS + CONSENSUS TASK GAPS blocks + per-reviewer sections)."
     echo "The raw per-reviewer outputs remain on disk at:"
     echo "  ${PREVIOUS_REVIEWS_DIR}/pass1_<safe_model_name>.txt"
     echo "Read a raw file only if a ledger entry is ambiguous or lacks detail."

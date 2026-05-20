@@ -110,8 +110,12 @@ if [ "${#reviewer_files[@]}" -eq 0 ]; then
 	mkdir -p "$(dirname "${OUTPUT}")"
 	{
 		echo "=== CONSENSUS FINDINGS ==="
-		echo "(No reviewer outputs available for this pass.)"
+		echo "(No findings reported.)"
 		echo "=== END CONSENSUS FINDINGS ==="
+		echo
+		echo "=== CONSENSUS TASK GAPS ==="
+		echo "(No task gaps reported.)"
+		echo "=== END CONSENSUS TASK GAPS ==="
 	} > "${OUTPUT}"
 	exit 0
 fi

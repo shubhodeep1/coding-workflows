@@ -3216,13 +3216,16 @@ jobs:
           source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
 
           # REVIEWER_CONSENSUS_FILE is now a ledger produced by
-          # summarize_reviewer_consensus.sh. The CONSENSUS FINDINGS block lists
-          # one entry per bullet starting "- "; each entry has a
-          # "flagged_by: [slug, slug, ...]" line. "Multi-reviewer" = >=2 slugs.
+          # summarize_reviewer_consensus.sh. The CONSENSUS FINDINGS and
+          # CONSENSUS TASK GAPS blocks each list one entry per bullet starting
+          # "- "; each entry has a "flagged_by: [slug, slug, ...]" line.
+          # "Multi-reviewer" = >=2 slugs.
           counts="$(awk '
             BEGIN { in_consensus = 0; total = 0; multi = 0 }
             /^=== CONSENSUS FINDINGS ===$/     { in_consensus = 1; next }
             /^=== END CONSENSUS FINDINGS ===$/ { in_consensus = 0; next }
+            /^=== CONSENSUS TASK GAPS ===$/    { in_consensus = 1; next }
+            /^=== END CONSENSUS TASK GAPS ===$/ { in_consensus = 0; next }
             in_consensus && /^- / { total++ }
             in_consensus && /^[[:space:]]*flagged_by:/ {
               n = gsub(/,/, ",", $0) + 1
@@ -3235,9 +3238,9 @@ jobs:
           total_consensus_count="${counts##* }"
 
           if [ "${high_confidence_count}" -gt 0 ]; then
-            summary="Reviewer consensus flagged ${high_confidence_count} multi-reviewer finding(s) across ${total_consensus_count} total consensus finding(s)"
+            summary="Reviewer consensus flagged ${high_confidence_count} multi-reviewer item(s) across ${total_consensus_count} total consensus item(s)"
           else
-            summary="Reviewer consensus produced ${total_consensus_count} finding(s); none flagged by multiple reviewers"
+            summary="Reviewer consensus produced ${total_consensus_count} consensus item(s); none flagged by multiple reviewers"
           fi
 
           details="$(head -c 12000 "${REVIEWER_CONSENSUS_FILE}")"
