@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- probably_unnecessary_but_read_if_stuck.md:89-95 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, mistralai_mistral-small-2603, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: The operator runbook still documents `_FRESH_PUSH_SUPPRESS_SECS` as 30 minutes/1800 seconds even though this PR changes it to 50 minutes/3000 seconds.\n  WHY: Operators consulting the runbook will see stale guidance for the fresh-push guard window, which can mislead stall-recovery diagnosis.\n- scripts/orchestrate_poll_process.sh:11574-11598 | severity=medium | confidence=4\n  flagged_by: [minimax_minimax-m2_5, mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The jq extraction suppresses stderr and falls back to `{}`, so failures can silently drop stall detection into legacy behavior.\n  WHY: This hides parse/command errors and makes stall handling less observable under transient malformed or failing inputs.\n- scripts/orchestrate_lib.py:1615-1634 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: `_parse_iso8601_to_epoch` and `test_parse_iso8601_to_epoch_handles_common_shapes_and_failures (tests/test_orchestrate_lib.py:1960-1990)` rely on fixed epoch expectations, so timezone or microsecond handling differences can make the test brittle and a real parse mismatch silently return `None`.\n  WHY: That can block CI or cause production to fall back to the legacy status anchor, defeating the re-anchor intent.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- probably_unnecessary_but_read_if_stuck.md:89 | severity=low | confidence=4\n  PROBLEM: The operator runbook still documents `_FRESH_PUSH_SUPPRESS_SECS` as 30 minutes and the hardcoded constant as `1800`, but this PR bumped both to 50 minutes and `3000`.\n  WHY: An operator diagnosing a stall-recovery incident who consults the runbook will see the wrong fresh-push guard window (30 min instead of 50 min).\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- probably_unnecessary_but_read_if_stuck.md:~91 | severity=low | confidence=4\n  PROBLEM: The operator runbook documentation still references the old value: \"_FRESH_PUSH_SUPPRESS_SECS=1800 (30 minutes)\" when the code was changed to 3000 (50 minutes) in this PR.\n  WHY: This is a documentation inconsistency that could mislead operators diagnosing stall-recovery behavior. They would expect the fresh-push guard to suppress within 30 minutes when the actual behavior is 50 minutes.\n- scripts/orchestrate_poll_process.sh:~11589 | severity=medium | confidence=3\n  PROBLEM: The jq extraction uses `2>/dev/null || echo '{}'` which suppresses all stderr output.\n  WHY: This makes debugging difficult when jq fails for reasons other than invalid JSON (e.g. memory issues, syntax errors in the jq expression itself), and a transient jq failure would silently fall back to legacy behavior.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/orchestrate_poll_process.sh:~11580-11595 | severity=medium | confidence=4\n  PROBLEM: The jq extraction with `2>/dev/null || echo '{\"ok\":false...}'` hides parse crashes or jq errors, making transient API or malformed-payload failures invisible.\n  WHY: Under transient GraphQL/API outages or malformed payloads, stall-detection behavior becomes non-deterministic and unobserved, increasing risk of false-negative stall masks or missed recovery actions.\n- probably_unnecessary_but_read_if_stuck.md:89-95 | severity=low | confidence=5\n  PROBLEM: The runbook still documents `_FRESH_PUSH_SUPPRESS_SECS` as 30 minutes (1800 seconds) even though this PR changed the constant to 50 minutes (3000 seconds).\n  WHY: Operators or reviewers consulting the runbook could misdiagnose stall-recovery due to referencing the wrong fresh-push guard window.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- probably_unnecessary_but_read_if_stuck.md:89 | severity=low | confidence=5\n  PROBLEM: Documentation inconsistency - the operator runbook documents `_FRESH_PUSH_SUPPRESS_SECS` as 30 minutes / 1800 seconds, but the PR changed the constant to 50 minutes / 3000 seconds.\n  WHY: No runtime failure, but operators diagnosing stall-recovery behavior may be misled by stale documentation referencing the wrong fresh-push guard window.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- probably_unnecessary_but_read_if_stuck.md:89 | severity=low | confidence=4\n  PROBLEM: The operator runbook still documents `_FRESH_PUSH_SUPPRESS_SECS` as \"30 minutes\" / `1800` seconds even though this PR changes the constant to 50 minutes / `3000` seconds in `scripts/orchestrate_poll_process.sh`.\n  WHY: Not a runtime failure, but an operator reading the runbook to diagnose stall-recovery behaviour will operate against the wrong window (30 min vs 50 min), potentially misidentifying a suppressed stall dispatch as a bug or vice versa.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/orchestrate_lib.py:1615-1634 | severity=medium | confidence=4\n  PROBLEM: The helper normalizes trailing \"Z\" to \"+00:00\" then calls datetime.fromisoformat + .timestamp(), but test assertions use fixed magic epoch numbers (e.g. 1699998200) computed for a specific instant.\n  WHY: The test strings are wall-clock values; a non-UTC runner, microsecond truncation, or fromisoformat TZ handling difference (Python 3.11+ vs older) produces a mismatched epoch. The re-anchor logic itself is correct, but the test is brittle.\n- scripts/orchestrate_poll_process.sh:11574-11598 | severity=medium | confidence=3\n  PROBLEM: jq extraction (with 2>/dev/null || echo '{}') + bash normalization can still produce non-dict output on transient GraphQL malformation; Python cmd_check_stalls catches only JSON decode errors before passing to detect_stalls, which treats missing head_pushed_at as None.\n  WHY: Real parse error becomes invisible legacy behavior (no stall logged, no fallback telemetry); stall detection is non-deterministic on transient API/jq failures, violating the documented fail-open contract and making diagnosis harder.\n- probably_unnecessary_but_read_if_stuck.md:~89 | severity=low | confidence=4\n  PROBLEM: Documentation still claims the fresh-push guard window is 30 min (1800s) and references the old Q2=B \"not configurable\" decision, while the shipped code sets _FRESH_PUSH_SUPPRESS_SECS=3000 (50 min) and updates the surrounding README section.\n  WHY: Operator diagnosing stall logs or fresh-push suppression will consult stale guidance, leading to incorrect conclusions about whether a 35-45 min autofix cycle should have been suppressed.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "0525a2765487f7801687effc1205e5e145fe080c9e0fbf3feb996f4c58089304",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2799,
+    "run_id": "26141828661",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26141828661",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260520052334_2e6e72c821",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2799,
+    "run_id": "26141828661"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-20T05:23:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
