@@ -1668,8 +1668,9 @@ def detect_stalls(
 	cycles) is not repeatedly flagged as stalled.  Missing, null, or
 	unparseable timestamps fall back to the legacy `status_since_ts`
 	anchor (fail-open).  Future-dated timestamps are clamped at
-	*now_ts* to defend against clock skew making an issue appear
-	perpetually fresh.
+	*now_ts*, so a skewed future timestamp is treated as fresh until
+	wall-clock time reaches that timestamp, after which stall detection
+	resumes.
 
 	Returns a list of dicts, each containing:
 		id, github_issue, phase, recovery_action,
@@ -2699,7 +2700,9 @@ def build_parser() -> argparse.ArgumentParser:
 			"(which leaves the phase label unchanged across cycles) is "
 			"not repeatedly flagged as stalled.  Missing, null, or "
 			"unparseable entries fail open to the legacy status_since_ts "
-			"anchor.  Future-dated timestamps are clamped at --now-ts."
+			"anchor.  Future-dated timestamps are clamped at --now-ts, "
+			"so a fixed future timestamp stays fresh only until wall-clock "
+			"time reaches it."
 		),
 	)
 	p_stalls.set_defaults(func=cmd_check_stalls)
