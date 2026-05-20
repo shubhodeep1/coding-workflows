@@ -405,7 +405,7 @@ if ! [[ "${RB_JUDGE_PR_DIFF_MAX_BYTES}" =~ ^[0-9]+$ ]] || [ "${RB_JUDGE_PR_DIFF_
 fi
 PR_DIFF_TRUNCATED=false
 PR_DIFF_BYTES_TOTAL="$(wc -c < "${RB_JUDGE_PR_DIFF_FILE}" 2>/dev/null | tr -cd '0-9' || true)"
-[ -n "${PR_DIFF_BYTES_TOTAL}" ] || PR_DIFF_BYTES_TOTAL=0
+[[ "${PR_DIFF_BYTES_TOTAL}" =~ ^[0-9]+$ ]] || PR_DIFF_BYTES_TOTAL=0
 if [ "${PR_DIFF_BYTES_TOTAL}" -gt "${RB_JUDGE_PR_DIFF_MAX_BYTES}" ]; then
   if PYTHONDONTWRITEBYTECODE=1 python3 - "${RB_JUDGE_PR_DIFF_FILE}" "${RB_JUDGE_PR_DIFF_MAX_BYTES}" > "${RB_JUDGE_PR_DIFF_TMP_FILE}" 2>/dev/null <<'PY'
 import sys
