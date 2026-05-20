@@ -13756,11 +13756,14 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 	# Refresh the comments snapshot on the threshold path so Gate B
 	# validates the latest editor summary when a new noop warning or
 	# summary comment lands mid-tick.
-	N_FRESH_COMMENTS_JSON="$(gh_retry gh api --paginate \
+	N_FRESH_COMMENTS_JSON=""
+	if N_FRESH_COMMENTS_JSON="$(gh_retry gh api --paginate \
 		"repos/${GITHUB_REPOSITORY}/issues/${N_PR}/comments?per_page=100" \
-		| jq -s 'add // []' 2>/dev/null || true)"
-	if [ -n "${N_FRESH_COMMENTS_JSON}" ]; then
+		| jq -s 'add // []' 2>/dev/null)"; then
+		[ -n "${N_FRESH_COMMENTS_JSON}" ] || N_FRESH_COMMENTS_JSON='[]'
 		N_COMMENTS_JSON="${N_FRESH_COMMENTS_JSON}"
+	else
+		echo "::warning::PR #${N_PR}: could not refresh comments snapshot for noop-suspicious Gate B; using pre-filter snapshot."
 	fi
 
 	# Gate B: reviewer audit health.  Validate against the latest
