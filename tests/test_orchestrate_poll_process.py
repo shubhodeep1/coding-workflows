@@ -2286,9 +2286,9 @@ def test_complete_verdict_enters_validation_and_finishes_after_integration_drift
 		"Validation-enabled drift must not trip the pending-wave override; "
 		f"got tracking comments: {first_tracking_comments!r}"
 	)
-	assert "Overriding to 'in_progress'" not in first["stdout"], (
+	assert "Overriding to 'in_progress'" not in (first["stdout"] + first["stderr"]), (
 		"Validation-enabled drift must reach the complete verdict handler; "
-		f"stdout=\n{first['stdout']}"
+		f"stdout=\n{first['stdout']}\nstderr=\n{first['stderr']}"
 	)
 
 	second = _run_poller(
@@ -2307,6 +2307,10 @@ def test_complete_verdict_enters_validation_and_finishes_after_integration_drift
 	assert second["latest_state"]["final_merge_pr"] == 350
 	assert second["latest_state"]["final_merge_status"] == "merged"
 	assert "ai:validated" in second["tracking_labels"]
+	assert "Overriding to 'in_progress'" not in (second["stdout"] + second["stderr"]), (
+		"Validation completion after drift must not re-trigger the pending-wave override; "
+		f"stdout=\n{second['stdout']}\nstderr=\n{second['stderr']}"
+	)
 
 
 def test_missing_integration_branch_marks_failed():
