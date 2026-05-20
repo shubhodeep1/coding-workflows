@@ -2189,8 +2189,9 @@ def test_complete_verdict_falls_through_to_finalize_on_integration_drift():
 
 	PR #2778 folded ``integration_contained_in_default`` into the
 	``project_complete`` flag computed by ``cmd_check_wave_status``. That
-	collided with the pre-existing "judge cannot declare complete while
-	waves remain" override at ``orchestrate_poll_process.sh:12090``, which
+	collided with the pre-existing ``Hard guard: judge cannot declare
+	"complete" while waves remain`` override in
+	``scripts/orchestrate_poll_process.sh``, which
 	consumed ``PROJECT_COMPLETE`` and so began overriding ``complete`` →
 	``in_progress`` whenever the integration branch had drifted ahead of
 	default (``ahead_by > 0``) — even when every wave issue was merged.

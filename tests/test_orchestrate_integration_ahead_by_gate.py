@@ -23,9 +23,9 @@ with a fake ``gh`` on the PATH.
 The end-to-end regression test that drives the full poll loop through
 ``judge=complete + wave_complete=true + ahead_by>0`` (the bitsafe.io#325
 deadlock — where PR #2778's ``project_complete`` gate collided with the
-pre-existing "judge cannot declare complete while waves remain" override
-at ``orchestrate_poll_process.sh:12090``) lives next to the other
-complete-verdict poller tests in
+pre-existing ``Hard guard: judge cannot declare "complete" while waves
+remain`` override in ``scripts/orchestrate_poll_process.sh``) lives next
+to the other complete-verdict poller tests in
 ``tests/test_orchestrate_poll_process.py::test_complete_verdict_falls_through_to_finalize_on_integration_drift``,
 which is where the full poller harness (``_run_poller``) is wired up.
 
