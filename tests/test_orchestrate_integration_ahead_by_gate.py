@@ -36,7 +36,6 @@ import tempfile
 import textwrap
 from contextlib import redirect_stdout
 from pathlib import Path
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
@@ -592,41 +591,48 @@ def test_finalize_skips_recheck_when_superseded_by_main(tmp_path):
 
 
 def _invoke_test(func) -> None:
-	params = list(inspect.signature(func).parameters.values())
+	params = list(inspect.signature(func).parameters)
 	if not params:
 		func()
 		return
-	if len(params) == 1:
-		with tempfile.TemporaryDirectory(prefix="integration-ahead-by-") as td:
+	if params == ["tmp_path"]:
+		with tempfile.TemporaryDirectory(prefix=f"{func.__name__}_") as td:
 			func(Path(td))
 		return
-	raise TypeError(
-		f"{func.__name__} has unsupported signature for direct python runner: "
-		f"{inspect.signature(func)}"
-	)
+	raise TypeError(f"unsupported direct-run parameters: {params}")
 
 
 def main(argv: list[str] | None = None) -> int:
-	argv = list(sys.argv[1:] if argv is None else argv)
-	selected = set(argv)
+	"""Direct ``python3 tests/<file>.py`` entrypoint.
+
+	The repo's CI/release allowlists execute tests via explicit
+	``python3 tests/test_*.py`` calls rather than pytest discovery, so this
+	module needs a small fixture shim for the ``tmp_path``-style tests.
+	"""
+	selected_names = list(sys.argv[1:] if argv is None else argv)
 	try:
 		sys.stdout.reconfigure(line_buffering=True)
 	except Exception:
 		pass
 
-	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
-	if selected:
-		test_funcs = [func for func in test_funcs if func.__name__ in selected]
-		missing = sorted(selected - {func.__name__ for func in test_funcs})
+	tests_by_name = {
+		name: func
+		for name, func in sorted(globals().items())
+		if name.startswith("test_") and callable(func)
+	}
+	if selected_names:
+		missing = [name for name in selected_names if name not in tests_by_name]
 		for name in missing:
 			print(f"  FAIL  {name}: unknown test name", flush=True)
 		if missing:
 			return 1
+		named_tests = [(name, tests_by_name[name]) for name in selected_names]
+	else:
+		named_tests = list(tests_by_name.items())
 
 	passed = 0
 	failed = 0
-	for func in test_funcs:
-		name = func.__name__
+	for name, func in named_tests:
 		try:
 			_invoke_test(func)
 			print(f"  PASS  {name}", flush=True)
