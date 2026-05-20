@@ -1200,6 +1200,11 @@ jobs:
           # filter so non-bait runs (no bait was injected this run) are
           # unaffected.
           BAIT_SHA: ${{ steps.inject-bait.outputs.bait_sha }}
+          # Promoted to env so the run: script body contains no ${{ }}
+          # interpolations. With even one inline expression, GitHub Actions
+          # treats the entire script as a single expression and enforces a
+          # 21,000-char limit; this script is ~25k chars and was tripping it.
+          ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
         run: |
           set -euo pipefail
           echo "Waiting for review workflow on PR #${PR_NUMBER}..."
@@ -1262,7 +1267,7 @@ jobs:
             IDLE=$((NOW - LAST_ACTIVITY))
 
             # Find the review workflow run for this PR's head branch
-            PR_BRANCH="ai/issue-${{ steps.create-issue.outputs.issue_number }}"
+            PR_BRANCH="ai/issue-${ISSUE_NUMBER}"
 
             # Look for workflow runs on this branch.
             # When BAIT_SHA is set the filter pins to head_sha == BAIT_SHA
@@ -1688,6 +1693,11 @@ jobs:
           PR_NUMBER: ${{ steps.wait-implement.outputs.pr_number }}
           ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
           BAIT_SHA: ${{ steps.inject-bait.outputs.bait_sha }}
+          # Promoted to env so the run: script body contains no ${{ }}
+          # interpolations. Same constraint as Phase 4 above: a single
+          # inline expression makes GitHub Actions treat the whole script
+          # as one expression, capped at 21,000 chars; this body is ~21.3k.
+          PRIOR_REVIEW_RUN: ${{ steps.wait-review.outputs.review_run_id }}
         run: |
           set -euo pipefail
           BRANCH="ai/issue-${ISSUE_NUMBER}"
@@ -1974,7 +1984,6 @@ jobs:
           # run ids are always positive) and could pick up the
           # original review run as the "retry run". Fail fast in that
           # case rather than silently misattribute.
-          PRIOR_REVIEW_RUN="${{ steps.wait-review.outputs.review_run_id }}"
           if ! [[ "${PRIOR_REVIEW_RUN}" =~ ^[0-9]+$ ]]; then
             echo "::error::wait-review.outputs.review_run_id is not a positive integer ('${PRIOR_REVIEW_RUN}'); refusing to enter retry poll loop with a no-op exclusion filter"
             echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
