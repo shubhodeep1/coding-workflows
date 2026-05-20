@@ -66,7 +66,7 @@ if ! command -v _embed_input_file >/dev/null 2>&1; then
     _used=0
     if [ -f "${_state}" ]; then
       _used="$(cat "${_state}" 2>/dev/null)"
-      [ -n "${_used}" ] || _used=0
+      [[ "${_used}" =~ ^[0-9]+$ ]] || _used=0
     fi
     _budget_remaining=$(( _PROMPT_BUDGET_TOTAL_BYTES - _used ))
     if [ "${_budget_remaining}" -le 0 ]; then
@@ -90,11 +90,12 @@ if ! command -v _embed_input_file >/dev/null 2>&1; then
       _emit_bytes="${_size}"
     else
       PYTHONDONTWRITEBYTECODE=1 python3 - "${_p}" "${_effective_cap}" 2>/dev/null <<'PY' || head -c "${_effective_cap}" "${_p}"
-from pathlib import Path
 import sys
 
-data = Path(sys.argv[1]).read_bytes()
 cap = int(sys.argv[2])
+read_cap = cap + 1 if cap > 0 else 0
+with open(sys.argv[1], 'rb') as fh:
+    data = fh.read(read_cap)
 if cap > 0 and len(data) > cap:
     i = cap
     while i > 0 and (data[i] & 0xC0) == 0x80:
@@ -403,11 +404,12 @@ PR_DIFF_BYTES_TOTAL="$(wc -c < "${RB_JUDGE_PR_DIFF_FILE}" 2>/dev/null | tr -cd '
 [ -n "${PR_DIFF_BYTES_TOTAL}" ] || PR_DIFF_BYTES_TOTAL=0
 if [ "${PR_DIFF_BYTES_TOTAL}" -gt "${RB_JUDGE_PR_DIFF_MAX_BYTES}" ]; then
   if PYTHONDONTWRITEBYTECODE=1 python3 - "${RB_JUDGE_PR_DIFF_FILE}" "${RB_JUDGE_PR_DIFF_MAX_BYTES}" > "${RB_JUDGE_PR_DIFF_TMP_FILE}" 2>/dev/null <<'PY'
-from pathlib import Path
 import sys
 
-data = Path(sys.argv[1]).read_bytes()
 cap = int(sys.argv[2])
+read_cap = cap + 1 if cap > 0 else 0
+with open(sys.argv[1], 'rb') as fh:
+    data = fh.read(read_cap)
 if cap > 0 and len(data) > cap:
     i = cap
     while i > 0 and (data[i] & 0xC0) == 0x80:
