@@ -79,6 +79,7 @@ def _rb_judge_local_sanitize_fallback_block() -> str:
 	start = src.index("if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then")
 	end = src.index("if ! command -v _init_prompt_budget >/dev/null 2>&1; then", start)
 	block = src[start:end]
+	assert block.count("if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then") == 1
 	assert "sanitize_codex_prompt_file() {" in block
 	assert "Local prompt sanitization fallback could not sanitize" in block
 	return block
