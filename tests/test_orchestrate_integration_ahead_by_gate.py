@@ -35,6 +35,7 @@ the contract the code now upholds.
 
 from __future__ import annotations
 
+import inspect
 import io
 import json
 import os
@@ -44,8 +45,6 @@ import tempfile
 import textwrap
 from contextlib import redirect_stdout
 from pathlib import Path
-
-import pytest
 
 import sys
 
@@ -601,3 +600,41 @@ def test_finalize_skips_recheck_when_superseded_by_main(tmp_path):
 	)
 	final_state = json.loads(json_line)
 	assert final_state["final_merge_status"] == "superseded-by-main"
+
+
+def main() -> int:
+	# CI runs repo tests via `python3 tests/<file>.py`, not pytest discovery.
+	test_funcs = [
+		(name, func)
+		for name, func in sorted(globals().items())
+		if name.startswith("test_") and callable(func)
+	]
+	passed = 0
+	failed = 0
+	for name, func in test_funcs:
+		tmpdir = None
+		kwargs = {}
+		try:
+			sig = inspect.signature(func)
+			params = list(sig.parameters)
+			if params == ["tmp_path"]:
+				tmpdir = tempfile.mkdtemp(prefix="test_orch_integration_ahead_by_gate_")
+				kwargs["tmp_path"] = Path(tmpdir)
+			elif params:
+				raise TypeError(f"unsupported test signature: {name}{sig}")
+			func(**kwargs)
+			print(f"  PASS  {name}")
+			passed += 1
+		except Exception as exc:
+			print(f"  FAIL  {name}: {exc}")
+			failed += 1
+		finally:
+			if tmpdir is not None:
+				shutil.rmtree(tmpdir, ignore_errors=True)
+
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
