@@ -78,7 +78,9 @@ def _rb_judge_local_sanitize_fallback_block() -> str:
 	src = _rb_judge_text()
 	start = src.index("if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then")
 	end = src.index("if ! command -v _init_prompt_budget >/dev/null 2>&1; then", start)
-	return src[start:end]
+	block = src[start:end]
+	assert "sanitize_codex_prompt_file() {" in block
+	return block
 
 
 # ---------------------------------------------------------------------------
@@ -165,7 +167,7 @@ def test_local_sanitize_fallback_warns_when_all_rewrite_paths_fail() -> None:
 		result = subprocess.run(
 			[
 				"bash",
-				"-lc",
+				"-c",
 				(
 					f"{_rb_judge_local_sanitize_fallback_block()}\n"
 					"iconv() { return 1; }\n"
