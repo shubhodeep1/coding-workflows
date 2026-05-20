@@ -139,7 +139,7 @@ dashboard without producing a fresh comment per tick.
 | Marker | Helper | Purpose |
 |---|---|---|
 | `<!-- ORCH_STATE_V2_… -->` (chunked chain) | `post_state_comment` / `_post_state_comment_v2_chunk` | Canonical machine-readable orchestrator state snapshot. Multi-chunk so it can carry state blobs >65 KiB. Reader: `extract_latest_valid_orchestrator_state`. Reader falls back to the legacy V1 marker `<!-- ORCHESTRATOR_STATE_V1 -->` for issues that have not yet been re-written. |
-| `<!-- orchestrator:completion-status -->` | `update_completion_status_comment` | Human-readable "what is blocking completion" summary. Second-line tag `<!-- status:<token> -->` exposes the canonical status token (`in-progress` \| `waiting` \| `ready` \| `validated` \| `failed`) for grep-friendly downstream parsing. Idempotent — skips the API call when the rendered body matches the previously written hash. |
+| `<!-- orchestrator:completion-status -->` | `update_completion_status_comment` | Human-readable "what is blocking completion" summary. Second-line tag `<!-- status:<token> -->` exposes the canonical status token (`in-progress` \| `waiting` \| `ready` \| `validated` \| `failed`) for grep-friendly downstream parsing. Idempotent — skips the API call when the rendered body already matches, and persists `.completion_status_comment_id` + `.completion_status_comment_body_hash` in the state file so edit-in-place fallback survives the next cron invocation. |
 
 The completion-status comment is updated from three call sites:
 
@@ -147,7 +147,9 @@ The completion-status comment is updated from three call sites:
    `in-progress` / `waiting` / `ready` / `failed` from the
    `check-wave-status` JSON, and fires a once-per-project `tg_notify`
    CRITICAL on the first `any_failed=true` observation, guarded by
-   `.completion_status_failure_alert_sent` in the state file).
+   `.completion_status_failure_alert_sent` in the state file; compare-API
+   failures surface as an explicit "integration status is unknown"
+   line instead of silently omitting the integration gate state).
 2. `mark_validation_complete` — final transition to `validated`.
 3. `mark_validation_failed` (both terminal branches: the deterministic-
    class short-circuit and the recovery-budget-exhausted path) — final

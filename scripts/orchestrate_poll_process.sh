@@ -1272,6 +1272,29 @@ _post_state_comment_v2_chunk() {
   return 0
 }
 
+persist_completion_status_comment_state() {
+  local comment_id="$1"
+  local body_hash="$2"
+  local state_tmp
+
+  [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ] || return 0
+  [[ "${comment_id}" =~ ^[0-9]+$ ]] || return 0
+  [ -n "${body_hash}" ] || return 0
+
+  state_tmp="${STATE_FILE}.tmp"
+  if jq --arg hash "${body_hash}" --argjson comment_id "${comment_id}" '
+      .completion_status_comment_body_hash = $hash
+      | .completion_status_comment_id = $comment_id' \
+      "${STATE_FILE}" > "${state_tmp}" && mv "${state_tmp}" "${STATE_FILE}"; then
+    COMPLETION_STATUS_STATE_CHANGED="true"
+    return 0
+  fi
+
+  rm -f "${state_tmp}" || true
+  echo "::warning::[completion-status] failed to persist comment metadata for issue #${TRACKING_NUM:-?}; cross-cycle idempotency may retry next tick." >&2
+  return 1
+}
+
 # update_completion_status_comment — maintain a single pinned "what is
 # blocking completion" comment on the tracking issue, edit-in-place.
 #
@@ -1291,8 +1314,9 @@ _post_state_comment_v2_chunk() {
 #        prepended by the helper)
 #
 # Idempotency: hashes the rendered body and skips the API call when the
-# hash matches the last successfully written value for this project.
-# Safe to call every poll cycle.
+# comment already matches. Successful writes persist the body hash +
+# comment ID into STATE_FILE so the edit-in-place fallback survives the
+# next cron invocation even though ${TMPDIR:-/tmp} does not.
 #
 # API hygiene (§15): when COMMENTS is set (paginated comments fetched
 # earlier in the same cycle), the existing-comment lookup is satisfied
@@ -1302,7 +1326,8 @@ update_completion_status_comment() {
   local status="$1"
   local body_markdown="$2"
   local marker="<!-- orchestrator:completion-status -->"
-  local full_body body_hash cache_file existing_id payload_file
+  local full_body body_hash existing_id existing_body payload_file response_file
+  local response_id state_hash state_comment_id existing_hash comments_fetch_ok
 
   if [ -z "${TRACKING_NUM:-}" ] || [ "${TRACKING_NUM}" = "0" ]; then
     return 0
@@ -1310,18 +1335,39 @@ update_completion_status_comment() {
 
   full_body="${marker}"$'\n'"<!-- status:${status} -->"$'\n'"${body_markdown}"
   body_hash="$(printf '%s' "${full_body}" | sha256sum | awk '{print $1}')"
-  cache_file="${TMPDIR:-/tmp}/orchestrate_completion_status_${TRACKING_NUM}.sha256"
+  state_hash=""
+  state_comment_id=""
+  comments_fetch_ok="${COMMENTS_FETCH_OK:-false}"
 
-  if [ -f "${cache_file}" ] && [ "$(cat "${cache_file}" 2>/dev/null)" = "${body_hash}" ]; then
-    return 0
+  if [ -f "${STATE_FILE:-/dev/null}" ]; then
+    state_hash="$(jq -r '.completion_status_comment_body_hash // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+    state_comment_id="$(jq -r '.completion_status_comment_id // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
   fi
 
   existing_id=""
-  if [ -n "${COMMENTS:-}" ] && [ "${COMMENTS}" != "[]" ]; then
+  existing_body=""
+  if [ "${comments_fetch_ok}" = "true" ] && [ -n "${COMMENTS:-}" ] && [ "${COMMENTS}" != "[]" ]; then
     existing_id="$(printf '%s' "${COMMENTS}" \
       | jq -r --arg marker "${marker}" '
           [.[] | select((.body // "") | contains($marker))]
           | first | .id // empty' 2>/dev/null || echo "")"
+    existing_body="$(printf '%s' "${COMMENTS}" \
+      | jq -r --arg marker "${marker}" '
+          [.[] | select((.body // "") | contains($marker))]
+          | first | .body // empty' 2>/dev/null || echo "")"
+    if [ -n "${existing_body}" ]; then
+      existing_hash="$(printf '%s' "${existing_body}" | sha256sum | awk '{print $1}')"
+      if [ "${existing_hash}" = "${body_hash}" ]; then
+        persist_completion_status_comment_state "${existing_id}" "${body_hash}" || true
+        return 0
+      fi
+    fi
+  elif [ "${comments_fetch_ok}" != "true" ] && [ -n "${state_hash}" ] && [ "${state_hash}" = "${body_hash}" ]; then
+    return 0
+  fi
+
+  if [ -z "${existing_id}" ] && [ "${comments_fetch_ok}" != "true" ] && [[ "${state_comment_id}" =~ ^[0-9]+$ ]]; then
+    existing_id="${state_comment_id}"
   fi
 
   payload_file="$(mktemp "${TMPDIR:-/tmp}/completion_status_payload.XXXXXX")"
@@ -1330,16 +1376,37 @@ update_completion_status_comment() {
     return 1
   fi
 
+  response_file="$(mktemp "${TMPDIR:-/tmp}/completion_status_response.XXXXXX")"
+
   if [ -n "${existing_id}" ] && [[ "${existing_id}" =~ ^[0-9]+$ ]]; then
-    gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${existing_id}" \
-      --method PATCH --input "${payload_file}" >/dev/null 2>&1 || true
+    if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${existing_id}" \
+      --method PATCH --input "${payload_file}" > "${response_file}" 2>&1; then
+      rm -f "${payload_file}"
+      echo "::warning::[completion-status] failed to PATCH comment ${existing_id} for issue #${TRACKING_NUM:-?}; will retry on a later cycle." >&2
+      head -c 4096 "${response_file}" >&2 || true
+      echo >&2
+      rm -f "${response_file}"
+      return 1
+    fi
   else
-    gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
-      --method POST --input "${payload_file}" >/dev/null 2>&1 || true
+    if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
+      --method POST --input "${payload_file}" > "${response_file}" 2>&1; then
+      rm -f "${payload_file}"
+      echo "::warning::[completion-status] failed to POST comment for issue #${TRACKING_NUM:-?}; will retry on a later cycle." >&2
+      head -c 4096 "${response_file}" >&2 || true
+      echo >&2
+      rm -f "${response_file}"
+      return 1
+    fi
   fi
   rm -f "${payload_file}"
 
-  printf '%s' "${body_hash}" > "${cache_file}" 2>/dev/null || true
+  response_id="$(jq -r '.id // empty' "${response_file}" 2>/dev/null || echo "")"
+  rm -f "${response_file}"
+  if [ -z "${response_id}" ]; then
+    response_id="${existing_id}"
+  fi
+  persist_completion_status_comment_state "${response_id}" "${body_hash}" || true
   return 0
 }
 
@@ -8824,6 +8891,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   # produce "Unfinished string at EOF" errors when the response is truncated
   # due to network interruptions.
   _comments_raw="$(mktemp "${TMPDIR:-/tmp}/comments_raw.XXXXXX")"
+  COMMENTS_FETCH_OK="false"
   COMMENTS='[]'
   if gh_retry_to_file "${_comments_raw}" gh api --paginate \
     "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments?per_page=100"; then
@@ -8831,6 +8899,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     if jq -s 'add // []' "${_comments_raw}" > "${_comments_merged}" 2>/dev/null \
       && jq -e 'type == "array"' "${_comments_merged}" >/dev/null 2>&1; then
       COMMENTS="$(cat "${_comments_merged}")"
+      COMMENTS_FETCH_OK="true"
     else
       echo "::warning::Comments JSON for issue #${TRACKING_NUM} failed validation; proceeding with empty list" >&2
       echo "::group::Raw comments response (first 50 lines)" >&2
@@ -9986,6 +10055,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   # call every tick. See update_completion_status_comment for the
   # marker contract and API hygiene notes.
   # ---------------------------------------------------------------
+  COMPLETION_STATUS_STATE_CHANGED="false"
   _completion_status_text="in-progress"
   if [ "${ANY_FAILED}" = "true" ]; then
     _completion_status_text="failed"
@@ -10004,7 +10074,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   _csc_current_wave="$(echo "${WAVE_STATUS}" | jq -r '.wave // 0')"
   _csc_pending_lines="$(echo "${WAVE_STATUS}" | jq -r '
     [.issues[]
-      | select(.status != "merged" and .status != "closed" and .status != "skipped")
+      | select(.status != "merged" and .status != "closed" and .status != "skipped" and .status != "implementation-failed")
       | "- #\(.github_issue // "?"): \(.status)"]
     | join("\n")')"
   _csc_failed_lines="$(echo "${WAVE_STATUS}" | jq -r '
@@ -10025,6 +10095,8 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     _csc_body+=$'\n'"Integration branch is contained in default — integration→default merge has landed."$'\n'
   elif [ -n "${_csc_integration_ahead_by}" ] && [ "${_csc_integration_ahead_by}" != "0" ]; then
     _csc_body+=$'\n'"Integration branch is ahead of default by **${_csc_integration_ahead_by}** commit(s). The integration→default merge has not landed yet (autofix may still be running on the integration PR)."$'\n'
+  else
+    _csc_body+=$'\n'"Integration status is unknown this cycle (compare API unavailable). Project completion remains gated until the next successful poll re-check."$'\n'
   fi
   if [ -n "${_csc_failed_lines}" ]; then
     _csc_body+=$'\n'"**Wave issues closed without merge / implementation-failed:**"$'\n'"${_csc_failed_lines}"$'\n'
@@ -10045,8 +10117,13 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     _csc_alert_sent="$(jq -r '.completion_status_failure_alert_sent // false' "${STATE_FILE}" 2>/dev/null || echo false)"
     if [ "${_csc_alert_sent}" != "true" ]; then
       tg_notify "Project #${TRACKING_NUM}: one or more wave PR(s) closed without merge — see the pinned 'Completion status' comment on the tracking issue for the full list. The project cannot complete until these are resolved." "CRITICAL"
-      jq '.completion_status_failure_alert_sent = true' "${STATE_FILE}" > "${STATE_FILE}.tmp" \
-        && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      if jq '.completion_status_failure_alert_sent = true' "${STATE_FILE}" > "${STATE_FILE}.tmp" \
+        && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+        :
+      else
+        rm -f "${STATE_FILE}.tmp" || true
+        echo "::warning::[completion-status] failed to persist completion_status_failure_alert_sent for issue #${TRACKING_NUM:-?}; the once-per-project alert may repeat on a later tick."
+      fi
     fi
     unset _csc_alert_sent
   fi
@@ -12117,7 +12194,7 @@ with open('${STATE_FILE}', 'w') as f:
       fi
     fi
 
-    if [ "${STALL_STATE_CHANGED}" = "true" ] || [ "${STALL_HEALING_CHANGED}" = "true" ] || [ "${TIMESTAMP_STATE_CHANGED}" = "true" ] || [ "${RECONCILE_STATE_CHANGED}" = "true" ] || [ "${RECONCILE_LABELS_CHANGED}" = "true" ]; then
+    if [ "${STALL_STATE_CHANGED}" = "true" ] || [ "${STALL_HEALING_CHANGED}" = "true" ] || [ "${TIMESTAMP_STATE_CHANGED}" = "true" ] || [ "${RECONCILE_STATE_CHANGED}" = "true" ] || [ "${RECONCILE_LABELS_CHANGED}" = "true" ] || [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
       post_state_comment || true
     fi
     if [ "${RECONCILE_LABELS_CHANGED}" = "true" ] || [ "${RECONCILE_STATE_CHANGED}" = "true" ] || [ "${STALL_HEALING_CHANGED}" = "true" ]; then
