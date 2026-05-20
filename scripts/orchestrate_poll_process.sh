@@ -6967,13 +6967,13 @@ _check_merged_pr_guard() {
 # The window is deliberately not configurable (per project decision
 # Q2=B on issue investigate-stall-recovery-dx7zm — a tunable knob
 # would invite consumers to widen it indefinitely and mask hung
-# autofix loops).  The 30-minute default originally chosen there
-# predated typical review_autofix cycle times of 35-45 minutes
+# autofix loops).  The earlier 30-minute default originally chosen
+# there predated typical review_autofix cycle times of 35-45 minutes
 # observed on busy consumer repos (e.g. tele-funtoken-msg-scoring
-# PRs #3057, #3062), so a single cycle outlasted the window and the
-# guard never fired between cycles.  Bumped to 50 minutes so one
-# full autofix cycle fits inside the window; longer windows would
-# start hiding genuinely hung loops.
+# PRs #3057, #3062), so a single cycle outlasted that old window and
+# the guard never fired between cycles.  The shipped 50-minute window
+# fits one full autofix cycle; longer windows would start hiding
+# genuinely hung loops.
 #
 # Fails open (returns 1 — guard does NOT fire) when:
 #   - phase is outside {ai:done, ai:ready-to-merge}
