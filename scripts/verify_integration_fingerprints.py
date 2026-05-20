@@ -798,8 +798,9 @@ def _issue_tier_violation_message(
 			f"{satisfied}/{eligible} matched after resolver."
 		)
 	else:
+		tier_name = tier or "count_only"
 		message = (
-			f"issue #{issue_num} (PR #{pr_num}): verification tier 'count_only' requires at least "
+			f"issue #{issue_num} (PR #{pr_num}): verification tier {tier_name!r} requires at least "
 			f"1 eligible must_contain pattern to match, but only {satisfied}/{eligible} matched after resolver."
 		)
 	if failing_states:
