@@ -31,13 +31,11 @@ import io
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import textwrap
 from contextlib import redirect_stdout
 from pathlib import Path
-
-import sys
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
@@ -588,8 +586,8 @@ def test_finalize_skips_recheck_when_superseded_by_main(tmp_path):
 	json_line = next(
 		line for line in reversed(stdout_lines) if line.startswith("{")
 	)
-	final_state = json.loads(json_line)
-	assert final_state["final_merge_status"] == "superseded-by-main"
+final_state = json.loads(json_line)
+assert final_state["final_merge_status"] == "superseded-by-main"
 
 
 def main(argv: list[str] | None = None) -> int:
