@@ -12808,8 +12808,9 @@ NOOP_MAX_RETRIES=3
 # Operator-facing opt-outs. `e2e-smoke-test` mirrors the workflow's
 # own auto-merge suppression so the smoke-test bait-removal race
 # stays sealed; `force-review` lets a human pin a stuck PR for manual
-# review without having to disable auto-merge separately.
-NOOP_FORCE_MERGE_SKIP_LABELS="e2e-smoke-test force-review"
+# review without having to disable auto-merge separately. Store the
+# list one label per line so labels with spaces stay intact.
+NOOP_FORCE_MERGE_SKIP_LABELS=$'e2e-smoke-test\nforce-review'
 
 # Source the shared audit helper once, outside the loop.
 if [ -f scripts/validate_editor_audit.sh ]; then
@@ -12870,8 +12871,10 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 		2>/dev/null || echo "")"
 
 	# Stale-warning check: if the latest noop warning predates the
-	# latest productive commit, the PR has already moved on. This is
-	# the equivalent of "reset on new head SHA" from the design spec.
+	# latest productive commit, the PR has already moved on. GitHub API
+	# timestamps are ISO 8601 UTC, so bash's lexical < comparison is
+	# chronology-safe here. This is the equivalent of "reset on new
+	# head SHA" from the design spec.
 	if [ -n "${N_LATEST_PROD_TS}" ] && [[ "${N_NOOP_LATEST_TS}" < "${N_LATEST_PROD_TS}" ]]; then
 		echo "  PR #${N_PR}: latest noop warning (${N_NOOP_LATEST_TS}) is older than latest productive commit (${N_LATEST_PROD_TS}); stale, skipping."
 		continue
@@ -12938,16 +12941,27 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 
 	N_LABELS_JSON="$(echo "${N_PR_JSON}" | jq -c '[.labels[]?.name // empty]' 2>/dev/null || echo '[]')"
 	_noop_skip_label=""
-	for _lbl in ${NOOP_FORCE_MERGE_SKIP_LABELS}; do
+	while IFS= read -r _lbl; do
+		[ -n "${_lbl}" ] || continue
 		if echo "${N_LABELS_JSON}" | jq -e --arg l "${_lbl}" 'any(.[]; . == $l)' >/dev/null 2>&1; then
 			_noop_skip_label="${_lbl}"
 			break
 		fi
-	done
+	done <<< "${NOOP_FORCE_MERGE_SKIP_LABELS}"
 	if [ -n "${_noop_skip_label}" ]; then
 		tg_send_msg "Noop-suspicious force-merge gate A failed for PR #${N_PR}: carries '${_noop_skip_label}' label (operator opt-out). Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")" "ERROR" >/dev/null 2>&1 || true
 		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
 		continue
+	fi
+
+	# Refresh the comments snapshot on the threshold path so Gate B
+	# validates the latest editor summary when a new noop warning or
+	# summary comment lands mid-tick.
+	N_FRESH_COMMENTS_JSON="$(gh_retry gh api --paginate \
+		"repos/${GITHUB_REPOSITORY}/issues/${N_PR}/comments?per_page=100" \
+		| jq -s 'add // []' 2>/dev/null || true)"
+	if [ -n "${N_FRESH_COMMENTS_JSON}" ]; then
+		N_COMMENTS_JSON="${N_FRESH_COMMENTS_JSON}"
 	fi
 
 	# Gate B: reviewer audit health.  Validate against the latest
@@ -12966,11 +12980,15 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 		continue
 	fi
 
-	_noop_tmp_summary="$(mktemp "${TMPDIR:-/tmp}/noop_audit.XXXXXX" 2>/dev/null || echo "/tmp/noop_audit_$$_${N_PR}")"
-	printf '%s' "${N_LATEST_EDITOR_SUMMARY}" > "${_noop_tmp_summary}"
-
 	_noop_audit_rc=0
-	if type validate_editor_audit_arithmetic >/dev/null 2>&1; then
+	_noop_tmp_summary="$(mktemp "${TMPDIR:-/tmp}/noop_audit.XXXXXX" 2>/dev/null || true)"
+	if [ -z "${_noop_tmp_summary}" ]; then
+		_noop_audit_rc=3
+		echo "::warning::PR #${N_PR}: could not allocate temp file for editor summary; failing force-merge gate B closed."
+	elif ! printf '%s' "${N_LATEST_EDITOR_SUMMARY}" > "${_noop_tmp_summary}"; then
+		_noop_audit_rc=3
+		echo "::warning::PR #${N_PR}: could not write editor summary to temp file; failing force-merge gate B closed."
+	elif type validate_editor_audit_arithmetic >/dev/null 2>&1; then
 		validate_editor_audit_arithmetic "${_noop_tmp_summary}" || _noop_audit_rc=$?
 	else
 		# Helper missing — fail closed.
@@ -13002,18 +13020,42 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 		continue
 	fi
 
-	N_CHECKS_JSON="$(gh_retry gh api --paginate \
+	N_CHECKS_JSON="$(gh_retry _safe_gh_jq --paginate --slurp \
 		"repos/${GITHUB_REPOSITORY}/commits/${N_HEAD_SHA}/check-runs?per_page=100" \
-		--jq '[.check_runs[]? | {name, conclusion, status}]' \
-		2>/dev/null | jq -s 'add // []' 2>/dev/null || echo '[]')"
-	[ -n "${N_CHECKS_JSON}" ] || N_CHECKS_JSON='[]'
+		2>/dev/null || echo '{}')"
 
-	_failing_check="$(echo "${N_CHECKS_JSON}" | jq -r '
-		[.[] | select(.status == "completed" and (
+	_failing_check_count="$(printf '%s' "${N_CHECKS_JSON}" | jq -r '
+		def _is_blocking: .status == "completed" and (
 			.conclusion == "failure" or .conclusion == "cancelled" or
 			.conclusion == "timed_out" or .conclusion == "action_required"
-		)) | .name] | .[0] // empty' \
-		2>/dev/null || echo "")"
+		);
+		if (type == "array") then
+			[.[]? | (.check_runs // [])[] | select(_is_blocking)] | length
+		elif (type == "object" and (.check_runs | type == "array")) then
+			[.check_runs[] | select(_is_blocking)] | length
+		else
+			empty
+		end
+	' 2>/dev/null | tail -n1)"
+	if ! [[ "${_failing_check_count}" =~ ^[0-9]+$ ]]; then
+		tg_send_msg "Noop-suspicious force-merge gate D failed for PR #${N_PR}: could not query check-runs for head SHA ${N_HEAD_SHA}. Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")" "ERROR" >/dev/null 2>&1 || true
+		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
+		continue
+	fi
+
+	_failing_check="$(printf '%s' "${N_CHECKS_JSON}" | jq -r '
+		def _is_blocking: .status == "completed" and (
+			.conclusion == "failure" or .conclusion == "cancelled" or
+			.conclusion == "timed_out" or .conclusion == "action_required"
+		);
+		if (type == "array") then
+			([.[]? | (.check_runs // [])[] | select(_is_blocking) | .name] | .[0]) // empty
+		elif (type == "object" and (.check_runs | type == "array")) then
+			([.check_runs[] | select(_is_blocking) | .name] | .[0]) // empty
+		else
+			empty
+		end
+	' 2>/dev/null | tail -n1)"
 
 	if [ -n "${_failing_check}" ]; then
 		tg_send_msg "Noop-suspicious force-merge gate D failed for PR #${N_PR}: check '${_failing_check}' is failing/cancelled. Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")" "ERROR" >/dev/null 2>&1 || true

@@ -46,8 +46,10 @@
 #       Audit healthy.
 #   1 — audit section is empty or contains only fallback text. The
 #       reviewer panel produced no usable audit.
-#   2 — at least one audit entry has an arithmetic mismatch. The editor
-#       claimed disposition counts that don't add up to the total.
+#   2 — at least one audit entry has an arithmetic mismatch OR is
+#       malformed/unparseable. The editor claimed disposition counts
+#       that don't add up to the total, or emitted a line that the
+#       validator cannot safely interpret.
 #   3 — usage error (missing/unreadable summary file).
 #
 # Warning lines emitted to stderr match the legacy inline block in
@@ -70,7 +72,7 @@ validate_editor_audit_arithmetic()
 	local audit_section
 	audit_section="$(awk '
 		/^[[:space:]]*Review file issue audit:/ { in_s=1; next }
-		in_s && /^[[:space:]]*[A-Za-z][A-Za-z ()-]*:[[:space:]]*$/ { exit }
+		in_s && /^[[:space:]]*PR comment audit:/ { exit }
 		in_s { print }
 	' "${summary_file}")"
 
@@ -87,7 +89,7 @@ validate_editor_audit_arithmetic()
 		# The poller path passes "" and gets a generic warning instead;
 		# both still grep-match "Editor audit section is empty or
 		# contains only fallback text" for operator searches.
-		if [ -n "${reviewers_successful}" ]; then
+		if [[ "${reviewers_successful}" =~ ^[0-9]+$ ]]; then
 			echo "::warning::${reviewers_successful} reviewer(s) succeeded but editor audit section is empty or contains only fallback text." >&2
 		else
 			echo "::warning::Editor audit section is empty or contains only fallback text." >&2
@@ -96,15 +98,20 @@ validate_editor_audit_arithmetic()
 	fi
 
 	local mismatch_found=false
-	local line t a aa ig sum
+	local line line_lower t a aa ig sum
 	while IFS= read -r line; do
 		[ -n "${line}" ] || continue
-		t="$(printf '%s' "${line}" | grep -ioP 'total issues listed[^0-9]*\K[0-9]+' || echo "")"
-		a="$(printf '%s' "${line}" | grep -ioP '(?<!already )issues applied[^0-9]*\K[0-9]+' || echo "")"
-		aa="$(printf '%s' "${line}" | grep -ioP 'issues already applied[^0-9]*\K[0-9]+' || echo "")"
-		ig="$(printf '%s' "${line}" | grep -ioP 'issues ignored[^0-9]*\K[0-9]+' || echo "")"
-
-		[ -n "${t}" ] || continue
+		line_lower="$(printf '%s' "${line}" | tr '[:upper:]' '[:lower:]')"
+		if [[ "${line_lower}" =~ ^[[:space:]]*-[[:space:]]*.*total[[:space:]]+issues[[:space:]]+listed[^0-9]*([0-9]+),[[:space:]]*issues[[:space:]]+applied[^0-9]*([0-9]+),[[:space:]]*issues[[:space:]]+already[[:space:]]+applied[^0-9]*([0-9]+),[[:space:]]*issues[[:space:]]+ignored[^0-9]*([0-9]+)[[:space:][:punct:]]*$ ]]; then
+			t="${BASH_REMATCH[1]}"
+			a="${BASH_REMATCH[2]}"
+			aa="${BASH_REMATCH[3]}"
+			ig="${BASH_REMATCH[4]}"
+		else
+			echo "::warning::Audit entry arithmetic mismatch: unparseable audit line: ${line}" >&2
+			mismatch_found=true
+			continue
+		fi
 
 		t="${t:-0}"; a="${a:-0}"; aa="${aa:-0}"; ig="${ig:-0}"
 		sum=$((a + aa + ig))

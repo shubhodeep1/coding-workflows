@@ -594,13 +594,22 @@ def test_workflow_no_longer_contains_inline_audit_arithmetic_regex() -> None:
 			f"scripts/validate_editor_audit.sh so the workflow and the "
 			f"poller cannot drift."
 		)
-	# And the helper must still own the regex.
+	# And the helper must still own the arithmetic parser. The
+	# implementation is allowed to evolve away from the original grep -P
+	# fragments as long as the parsing logic remains centralized there.
 	helper_text = (REPO_ROOT / "scripts" / "validate_editor_audit.sh").read_text(encoding="utf-8")
-	for needle in forbidden_in_workflow:
-		assert needle in helper_text, (
-			f"The shared helper must own the audit-arithmetic regex "
-			f"{needle!r}; if it moved elsewhere, the contract is broken."
-		)
+	assert (
+		"total issues listed[^0-9]*\\K" in helper_text
+		or "total[[:space:]]+issues[[:space:]]+listed" in helper_text
+	), (
+		"The shared helper must still own the audit-arithmetic parser; "
+		"if neither the legacy grep -P fragment nor the bash-regex "
+		"replacement is present, the parser likely moved elsewhere."
+	)
+	assert "Audit entry arithmetic mismatch" in helper_text, (
+		"The shared helper must still emit the arithmetic-mismatch warning; "
+		"if that literal moved elsewhere, the contract is broken."
+	)
 
 
 def test_workflow_warning_literals_preserved_in_helper() -> None:

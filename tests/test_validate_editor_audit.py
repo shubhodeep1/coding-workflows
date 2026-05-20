@@ -153,6 +153,22 @@ def test_poller_path_omits_reviewer_count_prefix(tmp_path):
 	assert "reviewer(s) succeeded" not in result.stderr
 
 
+def test_non_numeric_reviewer_count_falls_back_to_generic_warning(tmp_path):
+	"""A non-numeric reviewers_successful value must not leak into the
+	exact-string workflow warning literal. The helper should fall back to
+	the generic poller-style warning instead."""
+	summary = textwrap.dedent(
+		"""\
+		Review file issue audit:
+		- none
+		"""
+	)
+	result = _run(summary, "N/A", tmp_path=tmp_path)
+	assert result.returncode == 1
+	assert "::warning::Editor audit section is empty or contains only fallback text" in result.stderr
+	assert "N/A reviewer(s) succeeded" not in result.stderr
+
+
 def test_balanced_arithmetic_with_zero_totals_passes(tmp_path):
 	"""Entries with total=0 are skipped by the arithmetic check (they
 	cannot mismatch). A summary with only zero-total entries passes."""
@@ -189,11 +205,28 @@ def test_helper_is_sourceable_as_library(tmp_path):
 	assert "rc=1" in result.stdout, f"Function should return 1 for empty audit; got stdout={result.stdout!r}"
 
 
+def test_unparseable_audit_line_fails_closed(tmp_path):
+	"""A malformed audit line that cannot be fully parsed must return
+	rc=2 rather than being skipped as healthy."""
+	summary = textwrap.dedent(
+		"""\
+		Review file issue audit:
+		- review_a.md: total issues listed 2, issues applied 1
+
+		PR comment audit:
+		- none
+		"""
+	)
+	result = _run(summary, "1", tmp_path=tmp_path)
+	assert result.returncode == 2
+	assert "Audit entry arithmetic mismatch: unparseable audit line" in result.stderr
+
+
 def test_helper_handles_audit_section_followed_by_pr_comment_audit(tmp_path):
-	"""The awk extractor stops at the next top-level "Foo:" header. A
-	"Review file issue audit:" section followed immediately by "PR
-	comment audit:" must include only the audit entries, not the PR
-	comment section. Regression guard for the awk boundary regex."""
+	"""The extractor stops at the explicit `PR comment audit:` heading.
+	A `Review file issue audit:` section followed immediately by `PR
+	comment audit:` must include only the audit entries, not the PR
+	comment section."""
 	summary = textwrap.dedent(
 		"""\
 		Review file issue audit:
