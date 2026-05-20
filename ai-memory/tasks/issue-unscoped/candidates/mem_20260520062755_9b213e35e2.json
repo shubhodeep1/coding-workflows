@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:6974-6983 | severity=low | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The historical-rationale paragraph in the `_check_fresh_push_guard` comment block still describes the old 30-minute default, which no longer matches the shipped 3000s suppression window.\n  WHY: This is stale maintainer-facing prose, not runtime behavior, but it misleads readers about the current window even though `_FRESH_PUSH_SUPPRESS_SECS=3000` drives execution.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/orchestrate_poll_process.sh:6974-6983 | severity=low | confidence=5\n  PROBLEM: The comment still contains stale historical rationale about the 30-minute default even though the shipped window is now 3000s.\n  WHY: The behavior is controlled by `_FRESH_PUSH_SUPPRESS_SECS=3000`, so the prose is outdated maintainer-facing documentation rather than a runtime defect.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "2043cfb97782cce7b441597663f11816f22a904e0fbaf9f6dcdd75f3cecf7c3c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2799,
+    "run_id": "26144644880",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26144644880",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260520062755_9b213e35e2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2799,
+    "run_id": "26144644880"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-20T06:27:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
