@@ -7030,6 +7030,31 @@ sys.exit(1)
 # ============================================================
 
 
+def _resolver_retry_state_block_for_test(
+	*,
+	head_sha: str,
+	consecutive_failure_count: int,
+	escalated: bool = True,
+	failure_signature_sha256: str = "signature-1",
+) -> str:
+	payload = {
+		"schema_version": 1,
+		"head_sha": head_sha,
+		"failure_signature_sha256": failure_signature_sha256,
+		"last_failure_signature": failure_signature_sha256,
+		"consecutive_failure_count": consecutive_failure_count,
+		"threshold": 5,
+		"regressed_by_resolver_count": 1,
+		"pre_existing_drift_count": 0,
+		"last_regressed_by_resolver": [{"fp_key": ["scripts/example.py", "EXPECTED_LINE"], "path": "scripts/example.py", "kind": "must_contain", "issue": 1500, "pr": 2600}],
+		"last_pre_existing_drift": [],
+		"escalated": escalated,
+		"escalated_at": "2026-05-20T00:00:00Z" if escalated else "",
+		"updated_at": "2026-05-20T00:00:00Z",
+	}
+	return "<!-- AUTOFIX_RESOLVER_RETRY_STATE_V1\n" + json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n-->"
+
+
 def test_integration_sync_conflict_uses_sync_specific_retry_budget_default_one():
 	# With the new INTEGRATION_SYNC_CONFLICT_MAX_RETRIES=1 default, an
 	# orchestrator/project-* head ref should escalate to the integration
@@ -7108,6 +7133,86 @@ def test_integration_sync_conflict_existing_three_tick_test_still_escalates():
 	)
 	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
 	assert any("Integration judge invoked" in body for body in tracking_bodies)
+
+
+def test_integration_conflict_redispatch_stops_when_current_final_pr_head_is_resolver_escalated():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_conflict_unresolved_ticks"] = 2
+	state["integration_conflict_dispatch_count"] = 4
+	state["integration_conflict_dispatch_ts"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=[
+			{
+				"number": 353,
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "orchestrator/project-192",
+				"headSha": "escalatedsha353",
+				"mergeable": False,
+				"mergeable_state": "dirty",
+				"body": _resolver_retry_state_block_for_test(
+					head_sha="escalatedsha353",
+					consecutive_failure_count=5,
+				),
+			},
+		],
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_tree_conflict_paths=["scripts/example.py"],
+	)
+	dispatches_for_final = [d for d in result["review_dispatches"] if d.get("pr_number") == 353]
+	assert dispatches_for_final == [], (
+		"expected no resolver redispatch once AUTOFIX_RESOLVER_RETRY_STATE_V1 "
+		"marks the current final-PR head as escalated; got: "
+		+ str(dispatches_for_final)
+	)
+	latest_state = result["latest_state"]
+	assert latest_state["integration_sync_status"] == "escalated"
+	assert latest_state["integration_conflict_unresolved_ticks"] == 2
+	assert latest_state["integration_conflict_dispatch_count"] == 4
+
+
+def test_integration_conflict_redispatch_resumes_when_retry_state_head_sha_is_stale():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_conflict_unresolved_ticks"] = 2
+	state["integration_conflict_dispatch_count"] = 4
+	state["integration_conflict_dispatch_ts"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=[
+			{
+				"number": 354,
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "orchestrator/project-192",
+				"headSha": "freshsha354",
+				"mergeable": False,
+				"mergeable_state": "dirty",
+				"body": _resolver_retry_state_block_for_test(
+					head_sha="stalesha354",
+					consecutive_failure_count=5,
+				),
+			},
+		],
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_tree_conflict_paths=["scripts/example.py"],
+	)
+	dispatches_for_final = [d for d in result["review_dispatches"] if d.get("pr_number") == 354]
+	assert dispatches_for_final, (
+		"expected resolver redispatch to resume when the persisted retry-state "
+		"head SHA no longer matches the current final-PR head"
+	)
+	assert result["latest_state"]["integration_sync_status"] == "healing"
+	assert result["latest_state"]["integration_conflict_unresolved_ticks"] == 1
+	assert result["latest_state"]["integration_conflict_dispatch_count"] == 1
 
 
 def test_orchestrator_state_seeds_merged_issue_fingerprints_field():

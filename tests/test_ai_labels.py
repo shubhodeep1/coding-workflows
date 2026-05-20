@@ -32,6 +32,8 @@ FAILURE_LABELS = [
 	"ai:memory-maintenance-failed",
 ]
 
+RESOLVER_ESCALATED_LABEL = "ai:resolver-escalated"
+
 
 def _repair(issue_labels: str) -> dict[str, object]:
 	args = argparse.Namespace(contract_file=str(CONTRACT_PATH), issue_labels=issue_labels)
@@ -88,6 +90,13 @@ def test_contract_labels_match_helper_color_and_description_catalogs():
 	color_keys, desc_keys = _extract_helper_catalog()
 	assert color_keys == contract_labels
 	assert desc_keys == contract_labels
+
+
+def test_resolver_escalated_label_is_present_and_non_phase_additive():
+	contract = ai_labels.load_label_contract(CONTRACT_PATH)
+	assert RESOLVER_ESCALATED_LABEL in contract["labels"]
+	for group in contract["phase_groups"]:
+		assert RESOLVER_ESCALATED_LABEL not in group.get("members", [])
 
 
 def test_contract_validate_command_succeeds_with_failure_phase():

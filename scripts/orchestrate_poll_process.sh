@@ -2921,6 +2921,37 @@ ensure_integration_conflict_state_fields() {
       }' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 }
 
+extract_autofix_resolver_retry_state_from_pr_body() {
+  # Read the PR body before invoking `python3 - <<'PY'`: the heredoc
+  # consumes stdin for the script itself, so piping directly into
+  # python would otherwise drop the body and make the extractor fail
+  # closed on every call.
+  local retry_state_body=""
+  retry_state_body="$(cat)"
+
+  RETRY_STATE_BODY="${retry_state_body}" python3 - <<'PY'
+from __future__ import annotations
+
+import json
+import os
+import re
+import sys
+
+body = os.environ.get("RETRY_STATE_BODY", "").replace("\r\n", "\n").replace("\r", "\n")
+pattern = re.compile(r"<!-- AUTOFIX_RESOLVER_RETRY_STATE_V1\n(.*?)\n-->", re.S)
+matches = pattern.findall(body)
+for raw in reversed(matches):
+  try:
+    parsed = json.loads(raw)
+  except json.JSONDecodeError:
+    continue
+  if isinstance(parsed, dict):
+    sys.stdout.write(json.dumps(parsed, sort_keys=True, ensure_ascii=True))
+    raise SystemExit(0)
+raise SystemExit(0)
+PY
+}
+
 normalize_judge_justification_for_fingerprint() {
   local raw_text="${1-}"
   # Pass input via env var, not stdin: the GHA Ubuntu 24.04 runner's
@@ -3956,6 +3987,56 @@ heal_integration_branch_conflict() {
     fi
   fi
 
+  local final_pr_payload=""
+  local final_pr_head_sha=""
+  local final_pr_body=""
+  local final_pr_mergeable=""
+  # GitHub API hygiene audit: this function already re-reads
+  # `repos/.../pulls/${final_pr}` later for `.mergeable` during the
+  # lifetime-cap recovery branch. The resolver escape-valve gate also
+  # needs `.head.sha` + `.body` on every conflict tick, so fetch the full
+  # PR JSON once here and reuse `.mergeable` below instead of adding
+  # another per-field call.
+  if final_pr_payload="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}")"; then
+    if printf '%s' "${final_pr_payload}" | jq -e . >/dev/null 2>&1; then
+      final_pr_head_sha="$(printf '%s' "${final_pr_payload}" | jq -r '.head.sha // ""' 2>/dev/null || echo "")"
+      final_pr_body="$(printf '%s' "${final_pr_payload}" | jq -r '.body // ""' 2>/dev/null || echo "")"
+      final_pr_mergeable="$(printf '%s' "${final_pr_payload}" | jq -r '.mergeable // empty' 2>/dev/null || echo "")"
+    else
+      echo "::warning::[integration-heal] Final PR #${final_pr} metadata fetch returned non-JSON; skipping resolver escape-valve gate this tick."
+      final_pr_payload=""
+    fi
+  else
+    echo "::warning::[integration-heal] Could not load final PR #${final_pr} metadata; skipping resolver escape-valve gate this tick."
+  fi
+
+  if [ -n "${final_pr_body}" ] && [ -n "${final_pr_head_sha}" ]; then
+    local resolver_retry_state=""
+    local resolver_retry_head_sha=""
+    local resolver_retry_escalated="false"
+    resolver_retry_state="$(printf '%s' "${final_pr_body}" | extract_autofix_resolver_retry_state_from_pr_body || true)"
+    if [ -n "${resolver_retry_state}" ]; then
+      resolver_retry_head_sha="$(printf '%s' "${resolver_retry_state}" | jq -r '.head_sha // ""' 2>/dev/null || echo "")"
+      resolver_retry_escalated="$(printf '%s' "${resolver_retry_state}" | jq -r '.escalated // false' 2>/dev/null || echo false)"
+      if [ "${resolver_retry_escalated}" = "true" ] && [ "${resolver_retry_head_sha}" = "${final_pr_head_sha}" ]; then
+        echo "  [integration-heal] Resolver escape threshold already tripped for final PR #${final_pr} at head ${final_pr_head_sha}; skipping redispatch until the PR head changes."
+        jq --arg err "resolver escape threshold reached for final PR #${final_pr} at head ${final_pr_head_sha}" \
+          '.integration_sync_status = "escalated" |
+           .integration_sync_last_error = $err' \
+          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        post_state_comment || true
+        return 0
+      fi
+      if [ -n "${resolver_retry_head_sha}" ] && [ "${resolver_retry_head_sha}" != "${final_pr_head_sha}" ]; then
+        echo "  [integration-heal] Final PR #${final_pr} head advanced from ${resolver_retry_head_sha} to ${final_pr_head_sha} since the persisted resolver retry state; resetting per-head conflict counters."
+        jq '.integration_conflict_unresolved_ticks = 0 |
+            .integration_conflict_dispatch_count = 0 |
+            .integration_conflict_dispatch_ts = 0' \
+          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      fi
+    fi
+  fi
+
   local now_ts
   now_ts="$(date -u +%s)"
   local last_ts
@@ -3997,13 +4078,15 @@ heal_integration_branch_conflict() {
     # Both checks fail-open on API error (treat as "no recovery
     # signal" → fall through to existing terminalization), so a
     # GitHub outage cannot silently extend the cap indefinitely.
-    local _ihbc_pr_mergeable
-    _ihbc_pr_mergeable="$(gh_retry _safe_gh_jq \
-      "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" \
-      --jq '.mergeable // false' 2>/dev/null || {
-        echo "::warning::Unable to re-query mergeable status for PR #${final_pr}; treating it as no recovery signal during lifetime-cap handling." >&2
-        echo "false"
-      })"
+    local _ihbc_pr_mergeable="${final_pr_mergeable}"
+    if [ -z "${_ihbc_pr_mergeable}" ]; then
+      _ihbc_pr_mergeable="$(gh_retry _safe_gh_jq \
+        "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" \
+        --jq '.mergeable // false' 2>/dev/null || {
+          echo "::warning::Unable to re-query mergeable status for PR #${final_pr}; treating it as no recovery signal during lifetime-cap handling." >&2
+          echo "false"
+        })"
+    fi
     if [ "${_ihbc_pr_mergeable}" = "true" ]; then
       echo "  [integration-heal] Lifetime cap reached but PR #${final_pr} is now mergeable (late-finishing resolver dispatch landed); clearing conflict state instead of terminalizing."
       mark_integration_sync_clean "${default_branch}"
@@ -4092,6 +4175,7 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) hit t
          .integration_conflict_total_dispatches = $total |
          .integration_sync_last_error = ""' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      post_state_comment || true
       post_tracking_comment "## 🛠️ Integration judge invoked
 
 Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) did not become mergeable after ${effective_max_retries} automated resolver attempts. The judge has been invoked with full PR context to resolve conflicts. The poller will retry merge on the next tick."
@@ -4151,6 +4235,7 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) could
       '.integration_sync_status = "healing" |
        .integration_conflict_dispatch_ts = $ts' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment || true
     echo "  [integration-heal] Resolver already in flight for PR #${final_pr}; skipping dispatch this tick."
     return 0
   fi
@@ -4170,6 +4255,7 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) could
          .integration_conflict_dispatch_ts = $ts |
          .integration_conflict_total_dispatches = $total' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+      post_state_comment || true
       # Only post a user-facing comment on the FIRST dispatch of this
       # conflict episode to avoid the every-tick spam pattern seen on
       # #832. Subsequent dispatches log to the state comment instead.
@@ -13467,6 +13553,14 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 
 	if [ -z "${S_HEAD}" ] || [ "${S_HEAD}" = "null" ]; then
 		echo "::warning::Standalone PR #${S_PR} has no head ref. Skipping conflict sweep candidate."
+		continue
+	fi
+
+	# Integration final-merge PRs (head=orchestrator/project-*) already
+	# have a dedicated self-healing path in heal_integration_branch_conflict.
+	# Do not let the standalone sweep duplicate update-branch / review
+	# dispatches or overwrite that path's state transitions.
+	if [[ "${S_HEAD}" == orchestrator/project-* ]]; then
 		continue
 	fi
 
