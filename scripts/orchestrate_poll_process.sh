@@ -1275,11 +1275,29 @@ _post_state_comment_v2_chunk() {
 persist_completion_status_comment_state() {
   local comment_id="$1"
   local body_hash="$2"
-  local state_tmp
+  local state_tmp old_hash old_comment_id
 
-  [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ] || return 0
-  [[ "${comment_id}" =~ ^[0-9]+$ ]] || return 0
-  [ -n "${body_hash}" ] || return 0
+  if [ -z "${STATE_FILE:-}" ] || [ ! -f "${STATE_FILE}" ]; then
+    echo "::warning::[completion-status] cannot persist comment metadata for issue #${TRACKING_NUM:-?}: STATE_FILE is missing." >&2
+    return 1
+  fi
+  if ! [[ "${comment_id}" =~ ^[0-9]+$ ]]; then
+    echo "::warning::[completion-status] cannot persist comment metadata for issue #${TRACKING_NUM:-?}: invalid comment id '${comment_id:-<empty>}'" >&2
+    return 1
+  fi
+  if ! [[ "${body_hash}" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "::warning::[completion-status] cannot persist comment metadata for issue #${TRACKING_NUM:-?}: invalid body hash." >&2
+    return 1
+  fi
+
+  old_hash="$(jq -r '.completion_status_comment_body_hash // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+  [[ "${old_hash}" =~ ^[0-9a-f]{64}$ ]] || old_hash=""
+  old_comment_id="$(jq -r '.completion_status_comment_id // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+  [[ "${old_comment_id}" =~ ^[0-9]+$ ]] || old_comment_id=""
+
+  if [ "${old_hash}" = "${body_hash}" ] && [ "${old_comment_id}" = "${comment_id}" ]; then
+    return 0
+  fi
 
   state_tmp="${STATE_FILE}.tmp"
   if jq --arg hash "${body_hash}" --argjson comment_id "${comment_id}" '
@@ -1326,12 +1344,20 @@ update_completion_status_comment() {
   local status="$1"
   local body_markdown="$2"
   local marker="<!-- orchestrator:completion-status -->"
-  local full_body body_hash existing_id existing_body payload_file response_file
+  local full_body body_hash existing_id existing_body response_file
   local response_id state_hash state_comment_id existing_hash comments_fetch_ok
 
   if [ -z "${TRACKING_NUM:-}" ] || [ "${TRACKING_NUM}" = "0" ]; then
     return 0
   fi
+
+  case "${status}" in
+    in-progress|waiting|ready|validated|failed) ;;
+    *)
+      echo "::warning::[completion-status] invalid status token '${status}' for issue #${TRACKING_NUM:-?}; skipping comment update." >&2
+      return 1
+      ;;
+  esac
 
   full_body="${marker}"$'\n'"<!-- status:${status} -->"$'\n'"${body_markdown}"
   body_hash="$(printf '%s' "${full_body}" | sha256sum | awk '{print $1}')"
@@ -1342,6 +1368,8 @@ update_completion_status_comment() {
   if [ -f "${STATE_FILE:-/dev/null}" ]; then
     state_hash="$(jq -r '.completion_status_comment_body_hash // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
     state_comment_id="$(jq -r '.completion_status_comment_id // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+    [[ "${state_hash}" =~ ^[0-9a-f]{64}$ ]] || state_hash=""
+    [[ "${state_comment_id}" =~ ^[0-9]+$ ]] || state_comment_id=""
   fi
 
   existing_id=""
@@ -1358,8 +1386,8 @@ update_completion_status_comment() {
     if [ -n "${existing_body}" ]; then
       existing_hash="$(printf '%s' "${existing_body}" | sha256sum | awk '{print $1}')"
       if [ "${existing_hash}" = "${body_hash}" ]; then
-        persist_completion_status_comment_state "${existing_id}" "${body_hash}" || true
-        return 0
+        persist_completion_status_comment_state "${existing_id}" "${body_hash}"
+        return $?
       fi
     fi
   elif [ "${comments_fetch_ok}" != "true" ] && [ -n "${state_hash}" ] && [ "${state_hash}" = "${body_hash}" ]; then
@@ -1370,18 +1398,11 @@ update_completion_status_comment() {
     existing_id="${state_comment_id}"
   fi
 
-  payload_file="$(mktemp "${TMPDIR:-/tmp}/completion_status_payload.XXXXXX")"
-  if ! printf '%s' "${full_body}" | jq -Rs '{body: .}' > "${payload_file}" 2>/dev/null; then
-    rm -f "${payload_file}"
-    return 1
-  fi
-
   response_file="$(mktemp "${TMPDIR:-/tmp}/completion_status_response.XXXXXX")"
 
   if [ -n "${existing_id}" ] && [[ "${existing_id}" =~ ^[0-9]+$ ]]; then
     if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${existing_id}" \
-      --method PATCH --input "${payload_file}" > "${response_file}" 2>&1; then
-      rm -f "${payload_file}"
+      -X PATCH -f body="${full_body}" > "${response_file}" 2>&1; then
       echo "::warning::[completion-status] failed to PATCH comment ${existing_id} for issue #${TRACKING_NUM:-?}; will retry on a later cycle." >&2
       head -c 4096 "${response_file}" >&2 || true
       echo >&2
@@ -1390,8 +1411,7 @@ update_completion_status_comment() {
     fi
   else
     if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
-      --method POST --input "${payload_file}" > "${response_file}" 2>&1; then
-      rm -f "${payload_file}"
+      -X POST -f body="${full_body}" > "${response_file}" 2>&1; then
       echo "::warning::[completion-status] failed to POST comment for issue #${TRACKING_NUM:-?}; will retry on a later cycle." >&2
       head -c 4096 "${response_file}" >&2 || true
       echo >&2
@@ -1399,15 +1419,18 @@ update_completion_status_comment() {
       return 1
     fi
   fi
-  rm -f "${payload_file}"
 
   response_id="$(jq -r '.id // empty' "${response_file}" 2>/dev/null || echo "")"
   rm -f "${response_file}"
-  if [ -z "${response_id}" ]; then
-    response_id="${existing_id}"
+  if ! [[ "${response_id}" =~ ^[0-9]+$ ]]; then
+    if [ -n "${existing_id}" ] && [[ "${existing_id}" =~ ^[0-9]+$ ]]; then
+      response_id="${existing_id}"
+    else
+      echo "::warning::[completion-status] GitHub comment update succeeded but no numeric comment id was returned for issue #${TRACKING_NUM:-?}; will retry metadata persistence on a later cycle." >&2
+      return 1
+    fi
   fi
-  persist_completion_status_comment_state "${response_id}" "${body_hash}" || true
-  return 0
+  persist_completion_status_comment_state "${response_id}" "${body_hash}"
 }
 
 extract_orchestrator_state_payload() {
@@ -4878,9 +4901,13 @@ mark_validation_failed() {
 ${reason}
 
 Failure class \`${_deterministic_class}\` is environment-deterministic; retrying this workflow on the same runner image will not help. Skipping the recovery budget. Manual intervention required."
+    COMPLETION_STATUS_STATE_CHANGED="false"
     update_completion_status_comment "failed" \
       "## Completion status"$'\n\n'"**State:** \`failed\`"$'\n\n'"Runtime validation failed deterministically (class \`${_deterministic_class}\`). Manual intervention required. See the \"❌ Runtime validation failed (deterministic)\" comment for the diagnostic detail." \
       || true
+    if [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
+      post_state_comment || true
+    fi
     tg_notify "Project #${TRACKING_NUM} validation failed deterministically (class=${_deterministic_class}). Manual intervention required." "CRITICAL"
     return 0
   fi
@@ -4906,6 +4933,13 @@ Failure class \`${_deterministic_class}\` is environment-deterministic; retrying
 ${reason}
 
 Transitioning back to judge for re-evaluation."
+    COMPLETION_STATUS_STATE_CHANGED="false"
+    update_completion_status_comment "in-progress" \
+      "## Completion status"$'\n\n'"**State:** \`in-progress\`"$'\n\n'"Runtime validation failed and recovery attempt $((val_recovery_count + 1))/${MAX_VALIDATION_RECOVERY_ATTEMPTS} is in progress. Waiting for judge re-evaluation before validation can resume." \
+      || true
+    if [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
+      post_state_comment || true
+    fi
     tg_notify "Validation recovery ($((val_recovery_count + 1))/${MAX_VALIDATION_RECOVERY_ATTEMPTS}) for #${TRACKING_NUM}: transitioning back to judge." "WARNING"
     return 0
   fi
@@ -4923,9 +4957,13 @@ Transitioning back to judge for re-evaluation."
 ${reason}
 
 Validation recovery exhausted (${val_recovery_count}/${MAX_VALIDATION_RECOVERY_ATTEMPTS}). Manual intervention required."
+  COMPLETION_STATUS_STATE_CHANGED="false"
   update_completion_status_comment "failed" \
     "## Completion status"$'\n\n'"**State:** \`failed\`"$'\n\n'"Runtime validation failed after ${val_recovery_count}/${MAX_VALIDATION_RECOVERY_ATTEMPTS} recovery attempt(s). Manual intervention required. See the \"❌ Runtime validation failed\" comment for the diagnostic detail." \
     || true
+  if [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
+    post_state_comment || true
+  fi
   tg_notify "Project #${TRACKING_NUM} validation failed after ${val_recovery_count} recovery attempt(s). Manual intervention required." "CRITICAL"
 }
 
@@ -5012,9 +5050,13 @@ Manual intervention required: resolve the blocking condition on the final PR (me
   # Final transition for the pinned completion-status comment: project
   # is validated, all wave PRs are merged, and the integration squash
   # merge has landed in default.
+  COMPLETION_STATUS_STATE_CHANGED="false"
   update_completion_status_comment "validated" \
     "## Completion status"$'\n\n'"**State:** \`validated\`"$'\n\n'"All wave PRs merged. Integration branch squash-merged into default. Runtime validation passed (cycle ${validation_cycle}). Tracking issue kept open for manual review." \
     || true
+  if [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
+    post_state_comment || true
+  fi
   post_tracking_comment "Project completed successfully after runtime validation passed (cycle ${validation_cycle}). Issue kept open for manual review."
   tg_cleanup_msgs "${TRACKING_NUM}"
   MSG="Project #${TRACKING_NUM} completed after validation pass (cycle ${validation_cycle})."
@@ -8994,6 +9036,8 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   fi
 
   echo "${STATE_JSON}" > "${STATE_FILE}"
+  unset PROJECT_COMPLETE WAVE_COMPLETE ANY_FAILED
+  COMPLETION_STATUS_STATE_CHANGED="false"
   PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
   TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
 
@@ -10056,9 +10100,15 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   # marker contract and API hygiene notes.
   # ---------------------------------------------------------------
   COMPLETION_STATUS_STATE_CHANGED="false"
+  _csc_validation_recovery_count="$(jq -r '.validation_recovery_count // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
+  if ! [[ "${_csc_validation_recovery_count}" =~ ^[0-9]+$ ]]; then
+    _csc_validation_recovery_count=0
+  fi
   _completion_status_text="in-progress"
   if [ "${ANY_FAILED}" = "true" ]; then
     _completion_status_text="failed"
+  elif [ "${PROJECT_STATUS:-}" = "in_progress" ] && [ "${_csc_validation_recovery_count}" -gt 0 ]; then
+    _completion_status_text="in-progress"
   elif [ "${PROJECT_COMPLETE}" = "true" ]; then
     _completion_status_text="ready"
   elif [ "${WAVE_COMPLETE}" = "true" ]; then
@@ -10091,6 +10141,9 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   else
     _csc_body+=$'\n'"All wave issues in this wave have merged or are accounted for."$'\n'
   fi
+  if [ "${PROJECT_STATUS:-}" = "in_progress" ] && [ "${_csc_validation_recovery_count}" -gt 0 ]; then
+    _csc_body+=$'\n'"Runtime validation is in recovery attempt ${_csc_validation_recovery_count}/${MAX_VALIDATION_RECOVERY_ATTEMPTS}; waiting for judge re-evaluation before validation can resume."$'\n'
+  fi
   if [ "${_csc_integration_contained}" = "true" ]; then
     _csc_body+=$'\n'"Integration branch is contained in default — integration→default merge has landed."$'\n'
   elif [ -n "${_csc_integration_ahead_by}" ] && [ "${_csc_integration_ahead_by}" != "0" ]; then
@@ -10119,7 +10172,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       tg_notify "Project #${TRACKING_NUM}: one or more wave PR(s) closed without merge — see the pinned 'Completion status' comment on the tracking issue for the full list. The project cannot complete until these are resolved." "CRITICAL"
       if jq '.completion_status_failure_alert_sent = true' "${STATE_FILE}" > "${STATE_FILE}.tmp" \
         && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
-        :
+        COMPLETION_STATUS_STATE_CHANGED="true"
       else
         rm -f "${STATE_FILE}.tmp" || true
         echo "::warning::[completion-status] failed to persist completion_status_failure_alert_sent for issue #${TRACKING_NUM:-?}; the once-per-project alert may repeat on a later tick."
@@ -10129,7 +10182,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   fi
 
   unset _completion_status_text _csc_integration_ahead_by _csc_integration_contained
-  unset _csc_total_waves _csc_current_wave _csc_pending_lines _csc_failed_lines _csc_body
+  unset _csc_total_waves _csc_current_wave _csc_pending_lines _csc_failed_lines _csc_body _csc_validation_recovery_count
 
   # Persist reconciled status decisions every cycle (not only narrow branches).
   RECONCILE_STATE_CHANGED=false

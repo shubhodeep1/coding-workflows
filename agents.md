@@ -145,15 +145,17 @@ The completion-status comment is updated from three call sites:
 
 1. The cycle-level wave-status decision block (every poll tick — derives
    `in-progress` / `waiting` / `ready` / `failed` from the
-   `check-wave-status` JSON, and fires a once-per-project `tg_notify`
-   CRITICAL on the first `any_failed=true` observation, guarded by
+   `check-wave-status` JSON plus the live validation-recovery state,
+   and fires a once-per-project `tg_notify` CRITICAL on the first
+   `any_failed=true` observation, guarded by
    `.completion_status_failure_alert_sent` in the state file; compare-API
    failures surface as an explicit "integration status is unknown"
    line instead of silently omitting the integration gate state).
 2. `mark_validation_complete` — final transition to `validated`.
-3. `mark_validation_failed` (both terminal branches: the deterministic-
-   class short-circuit and the recovery-budget-exhausted path) — final
-   transition to `failed`.
+3. `mark_validation_failed` — transitions to `in-progress` during
+   validation recovery, and to `failed` on both terminal branches (the
+   deterministic-class short-circuit and the recovery-budget-exhausted
+   path).
 
 The same change also adds a defensive preflight inside
 `dispatch_validation_if_needed`: when `PROJECT_COMPLETE != "true"` at
