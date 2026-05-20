@@ -11884,6 +11884,12 @@ fi
         _head_pushed_at_json='{}'
       fi
       [ -n "${_head_pushed_at_json}" ] || _head_pushed_at_json='{}'
+      if [ "${_head_pushed_at_json}" = "{}" ]; then
+        _head_pushed_at_candidate_count="$(printf '%s' "${_current_wave_details_json}" | jq -r '[to_entries[] | select(.value.linked_pr != null and (.value.linked_pr | type == "object"))] | length' 2>/dev/null || printf '')"
+        if [[ "${_head_pushed_at_candidate_count}" =~ ^[0-9]+$ ]] && [ "${_head_pushed_at_candidate_count}" -gt 0 ]; then
+          echo "::warning::headPushedAt extraction produced an empty mapping for ${_head_pushed_at_candidate_count} linked PR candidate(s); using legacy stall-clock fallback." >&2
+        fi
+      fi
     fi
     _stall_check_args+=(--head-pushed-at-json "${_head_pushed_at_json}")
 
