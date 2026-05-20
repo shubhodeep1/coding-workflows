@@ -2244,9 +2244,9 @@ def test_complete_verdict_falls_through_to_finalize_on_integration_drift():
 		"Override guard must not fire when only integration drift remains; "
 		f"got override comment(s): {override_comments!r}"
 	)
-	assert "Overriding to 'in_progress'" not in result["stderr"], (
+	assert "Overriding to 'in_progress'" not in (result["stdout"] + result["stderr"]), (
 		"Override warning must not be logged when only integration drift "
-		f"remains; stderr=\n{result['stderr']}"
+		f"remains; stdout=\n{result['stdout']}\nstderr=\n{result['stderr']}"
 	)
 
 
