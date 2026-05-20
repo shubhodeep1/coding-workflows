@@ -28,7 +28,6 @@ at ``orchestrate_poll_process.sh:12090``) lives next to the other
 complete-verdict poller tests in
 ``tests/test_orchestrate_poll_process.py::test_complete_verdict_falls_through_to_finalize_on_integration_drift``,
 which is where the full poller harness (``_run_poller``) is wired up.
-
 Each test isolates one regression and reads naturally as a description of
 the contract the code now upholds.
 """
@@ -49,8 +48,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import orchestrate_lib  # noqa: E402  (path must be set above first)
-
-
 # ---------------------------------------------------------------------------
 # Helpers — Python (cmd_check_wave_status)
 # ---------------------------------------------------------------------------
