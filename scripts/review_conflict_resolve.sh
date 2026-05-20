@@ -1160,16 +1160,22 @@ _persist_resolver_retry_state_from_current_failure()
     echo "::warning::Resolver retry-state persistence skipped: INTEGRATION_FINGERPRINTS_FILE is missing."
     return 0
   fi
-  if [ ! -s "${RESOLVER_FP_BASELINE_STATE_FILE:-/nonexistent}" ]; then
-    echo "::warning::Resolver retry-state persistence skipped: baseline fingerprints state is unavailable (compare mode cannot classify pre-existing drift safely)."
-    return 0
+  local _retry_state_baseline_file="${RESOLVER_FP_BASELINE_STATE_FILE:-}"
+  if [ ! -s "${_retry_state_baseline_file:-/nonexistent}" ]; then
+    # Baseline capture can fail-open earlier in the resolver loop. In
+    # that case we still persist retry state so identical failure sets
+    # on the same head SHA count toward the escape threshold; the
+    # embedded helper treats the current failures as regressed when no
+    # baseline is available.
+    echo "::warning::Resolver retry-state persistence continuing without baseline fingerprints state; treating current failures as regressed for retry-state accounting."
+    _retry_state_baseline_file=""
   fi
   if [ ! -f "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" ]; then
     echo "::warning::Resolver retry-state persistence skipped: verify_integration_fingerprints.py unavailable."
     return 0
   fi
 
-  if ! _build_resolver_retry_state_artifact > "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}.tmp"; then
+  if ! RESOLVER_FP_BASELINE_STATE_FILE="${_retry_state_baseline_file}" _build_resolver_retry_state_artifact > "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}.tmp"; then
     echo "::warning::Resolver retry-state artifact builder failed; skipping retry-state persistence."
     rm -f "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}.tmp" 2>/dev/null || true
     return 0
@@ -1223,11 +1229,13 @@ _persist_resolver_retry_state_from_current_failure()
   _comment_file="$(mktemp)"
   jq -r '.summary_comment_body // ""' "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}" > "${_comment_file}"
   if [ -n "${_comment_id}" ] && [[ "${_comment_id}" =~ ^[0-9]+$ ]]; then
-    _comment_present=true
     _comment_payload="$(mktemp)"
     jq -n --rawfile body "${_comment_file}" '{body: $body}' > "${_comment_payload}"
-    gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${_comment_id}" --input "${_comment_payload}" >/dev/null 2>&1 \
-      || echo "::warning::Failed to refresh resolver escalation summary comment #${_comment_id} on PR #${PR_NUMBER}."
+    if gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${_comment_id}" --input "${_comment_payload}" >/dev/null 2>&1; then
+      _comment_present=true
+    else
+      echo "::warning::Failed to refresh resolver escalation summary comment #${_comment_id} on PR #${PR_NUMBER}."
+    fi
     rm -f "${_comment_payload}"
   elif [ -s "${_comment_file}" ]; then
     _comment_payload="$(mktemp)"

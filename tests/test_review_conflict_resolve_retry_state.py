@@ -17,9 +17,12 @@ that helper already posted the dedicated escalation summary.
 from __future__ import annotations
 
 import contextlib
+import inspect
 import json
 import os
 import re
+import sys
+import tempfile
 from pathlib import Path
 
 
@@ -259,6 +262,18 @@ def test_retry_state_escape_threshold_sets_escalated_and_summary(tmp_path: Path)
 	assert second["retry_state"]["escalated"] is True
 
 
+def test_retry_state_artifact_treats_missing_baseline_as_regressed(tmp_path: Path) -> None:
+	_seed_repo_files(tmp_path)
+	artifact = _build_artifact(
+		tmp_path=tmp_path,
+		pr_payload=_pr_payload(head_sha="head-no-baseline"),
+		baseline_state={"schema_version": 1, "fingerprints": {}},
+	)
+	assert artifact["ok"] is True
+	assert artifact["retry_state"]["regressed_by_resolver_count"] == 2
+	assert artifact["retry_state"]["pre_existing_drift_count"] == 0
+
+
 def test_review_autofix_wires_escape_threshold_and_failure_comment_suppression() -> None:
 	body = REVIEW_AUTOFIX.read_text(encoding="utf-8")
 	resolve_body = RESOLVE_SCRIPT.read_text(encoding="utf-8")
@@ -267,3 +282,61 @@ def test_review_autofix_wires_escape_threshold_and_failure_comment_suppression()
 	assert "vars.RESOLVER_ESCAPE_THRESHOLD_N || '5'" in body
 	assert 'ensure_label_exists "ai:resolver-escalated" "${{ github.repository }}"' in body
 	assert body.count("env.RESOLVER_ESCALATED != 'true'") >= 2
+
+
+def test_resolve_script_baseline_fallback_and_comment_gate_contract() -> None:
+	body = _resolve_script_text()
+	assert "Resolver retry-state persistence continuing without baseline fingerprints state" in body
+	assert re.search(
+		r'RESOLVER_FP_BASELINE_STATE_FILE="\$\{_retry_state_baseline_file\}"\s+_build_resolver_retry_state_artifact',
+		body,
+	), "retry-state builder should receive an empty baseline-file env override when capture is unavailable"
+	patch_branch_start = body.index('if [ -n "${_comment_id}" ] && [[ "${_comment_id}" =~ ^[0-9]+$ ]]; then')
+	patch_branch_end = body.index('elif [ -s "${_comment_file}" ]; then', patch_branch_start)
+	patch_branch = body[patch_branch_start:patch_branch_end]
+	patch_call = 'if gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${_comment_id}"'
+	assert patch_call in patch_branch
+	assert patch_branch.index("_comment_present=true") > patch_branch.index(patch_call)
+
+
+def main() -> int:
+	selected_names = list(sys.argv[1:])
+	tests_by_name = {
+		name: func
+		for name, func in sorted(globals().items())
+		if name.startswith("test_") and callable(func)
+	}
+	if selected_names:
+		missing = [name for name in selected_names if name not in tests_by_name]
+		for name in missing:
+			print(f"  FAIL  {name}: unknown test name", flush=True)
+		if missing:
+			return 1
+		test_funcs = [tests_by_name[name] for name in selected_names]
+	else:
+		test_funcs = list(tests_by_name.values())
+	passed = 0
+	failed = 0
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			params = list(inspect.signature(func).parameters)
+			if not params:
+				func()
+			elif params == ["tmp_path"]:
+				with tempfile.TemporaryDirectory(prefix="resolver-retry-state-") as td:
+					func(Path(td))
+			else:
+				raise TypeError(f"unsupported test signature for {name}: {params}")
+			print(f"  PASS  {name}", flush=True)
+			passed += 1
+		except Exception as e:
+			print(f"  FAIL  {name}: {e}", flush=True)
+			failed += 1
+
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total", flush=True)
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
