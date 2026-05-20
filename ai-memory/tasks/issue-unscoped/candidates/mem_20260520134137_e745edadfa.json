@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:55-95 | severity=medium | confidence=4\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_20]\n  PROBLEM: sanitize_codex_prompt_file can return success while leaving the original invalid UTF-8 prompt in place because failed replacement cleanup is silent and the caller proceeds without re-validating before Codex.\n  WHY: if `mv` fails or the fallback exhausts, the temp file is discarded, the original bytes stay unsanitized, and the judge later feeds invalid stdin to Codex, producing an opaque failure instead of an explicit sanitization error.\n- tests/test_review_rb_judge_self_run_exclusion.py:79-88 | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The fallback test slices the live shell script by markers but does not pin the mktemp-failure path with a unique anchor or exercise the full prompt-budget lifecycle.\n  WHY: a layout change can make the extracted block drift while the test still passes, weakening coverage of the sanitization contract.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Automated forward-merge of `stable` into `main` failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`.\"\n  expected_change_site: `.github/workflows/review_autofix.yml, README.md, scripts/orchestrate_poll_process.sh, scripts/review_apply_fixes.sh, scripts/review_rb_judge.sh, tests/test_orchestrate_integration_ahead_by_gate.py, tests/test_orchestrate_poll_process.py, tests/test_orchestrate_lib.py, tests/test_review_autofix_review_pipeline_contract.py, tests/test_review_autofix_editor_noop_cascade_contract.py, tests/test_review_rb_judge_self_run_exclusion.py`\n  confidence=5\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_20]\n  EVIDENCE: The PR changed-files list shows only 10 files, the LAST RUN DIFF touches only `scripts/review_rb_judge.sh` and `tests/test_review_rb_judge_self_run_exclusion.py`, and three files from the original conflict list (`.github/workflows/review_autofix.yml`, `README.md`, `tests/test_review_autofix_review_pipeline_contract.py`) are absent.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- File: scripts/review_rb_judge.sh\n  Line or code reference: lines 55 and 69\n  Problem: The `mv` command that replaces the original file with the sanitized temp file does not emit a warning when it fails.\n  Why it fails at runtime: If `mv` fails due to permission issues, disk full, or a race condition, the function returns success while the original file remains unchanged with invalid UTF-8 bytes, causing Codex to fail with an opaque UTF-8 read error.\n- Requirement: Automated forward-merge of stable into main failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on stable is also present on main.\n  Expected change site: Conflicting files were: .github/workflows/review_autofix.yml, README.md, scripts/orchestrate_poll_process.sh, scripts/review_apply_fixes.sh, scripts/review_rb_judge.sh, tests/test_orchestrate_integration_ahead_by_gate.py, tests/test_orchestrate_poll_process.py, tests/test_orchestrate_lib.py, tests/test_review_autofix_review_pipeline_contract.py, tests/test_review_autofix_editor_noop_cascade_contract.py, tests/test_review_rb_judge_self_run_exclusion.py\n  Evidence of absence: The PR changed files list shows only 10 files. Three files from the original conflict list (.github/workflows/review_autofix.yml, README.md, tests/test_review_autofix_review_pipeline_contract.py) are not in the PR diff, either because they had no actual conflict or were not addressed.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: scripts/review_rb_judge.sh\n  Line or code reference: sanitize_codex_prompt_file (lines 56-95, specifically the `mv` paths after iconv and python blocks)\n  Problem: Both `mv \"${_tmp}\" \"${_path}\" 2>/dev/null || rm -f \"${_tmp}\"` lines discard the `mv` exit status, so a failed move leaves the invalid UTF-8 bytes on disk.\n  Why it fails at runtime: The review-blocked judge later embeds the prompt file and passes it to Codex, which rejects invalid UTF-8 stdin and aborts without a clean sanitization sentinel.\n- File: tests/test_review_rb_judge_self_run_exclusion.py\n  Line or code reference: `_rb_judge_local_sanitize_fallback_block()` (lines ~79-88) and both `test_local_sanitize_fallback_*` functions\n  Problem: The helper only asserts that the extracted block contains the function name and does not exercise the full prompt-budget lifecycle.\n  Why it fails at runtime: A future layout change can cause the extracted block to drift while the test still passes, silently eroding coverage for the UTF-8 sanitization contract.\n- Requirement: \"Automated forward-merge of `stable` into `main` failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`.\"\n  Expected change site: All files shown in the ORIGINAL PR DIFF / stable\u2192main three-way merge set (most critically the stable-side orchestrator changes in `scripts/orchestrate_poll_process.sh`, `scripts/orchestrate_lib.py`, `tests/test_orchestrate_poll_process.py`, workflow test-ordering fixes, README updates, and the widened `_check_fresh_push_guard` + `headPushedAt` stall logic).\n  Evidence of absence: LAST RUN DIFF + LAST RUN CHANGED FILES touch only `scripts/review_rb_judge.sh` and its test; the current PR head still does not match a clean stable\u2192main merge.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "4bf72b3158267030fac742e019838c2d10547697e2ea405b7d270f686f21fab6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2801,
+    "run_id": "26164834142",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26164834142",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260520134137_e745edadfa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2801,
+    "run_id": "26164834142"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-20T13:41:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
