@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:11575-11610 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, mistralai_mistral-small-2603, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: The diagnostic reads `_ACTIONS_RUNS_BLOB_CACHE` from the parent shell, but `build_active_issue_set` populates it only inside command-substitution subshells, so the cache is always empty there and the log always takes the `parse_error=true` branch.\n  WHY: `$(build_active_issue_set)` and the nested `_load_actions_runs_cached` call both run in subshells, so assignments to the global do not propagate back to the parent shell.\n- scripts/orchestrate_poll_process.sh:11602-11606 | confidence=2\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: The diagnostic parses the same JSON blob three separate times with three independent `printf ... | jq` pipelines.\n  WHY: This is unnecessary CPU overhead in a cold-path diagnostic and could be collapsed into a single parse.\n- scripts/orchestrate_poll_process.sh:11602-11606 | confidence=1\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The jq probes are correctly guarded, so the previously suspected `.workflow_runs[]` edge-case failure does not occur.\n  WHY: The `type == \"array\"` guard makes the error path unreachable for empty or malformed input.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:11596 | confidence=5\n  PROBLEM: The last autofix replaced a working `_diag_blob=\"$(_load_actions_runs_cached 2>/dev/null || echo '{\"workflow_runs\":[]}')\"` with a direct read of the global `_ACTIONS_RUNS_BLOB_CACHE`, but that global is never populated in the parent shell.\n  WHY: `_load_actions_runs_cached` is only called inside command-substitution subshells, so `_ACTIONS_RUNS_BLOB_CACHE` remains the empty string from its `declare -g` initialization and the diagnostic always falls back to `parse_error=true`.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/orchestrate_poll_process.sh:11575 and 11596 | confidence=5\n  PROBLEM: The diagnostic reads `_ACTIONS_RUNS_BLOB_CACHE` from the parent shell, but the cache is populated inside `build_active_issue_set` which runs in a command substitution subshell.\n  WHY: Variables set inside a subshell do not propagate to the parent shell, so `_ACTIONS_RUNS_BLOB_CACHE` is always empty and the diagnostic always reports `parse_error=true`.\n- scripts/orchestrate_poll_process.sh:11602-11606 | confidence=2\n  PROBLEM: The diagnostic parses the same JSON blob three separate times with three independent `printf '%s' ... | jq` pipelines.\n  WHY: While not a runtime failure, this is unnecessary CPU overhead; the blob could be parsed once and the results cached in variables.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/orchestrate_poll_process.sh:11575-11596 | \n  PROBLEM: The diagnostic block is wrapped in a subshell, which isolates shell variable assignments and prevents `${_ACTIONS_RUNS_BLOB_CACHE}` set inside `build_active_issue_set` from being visible to the parent shell.\n  WHY: Because the code runs in command substitution, the cache appears empty in the parent scope and the diagnostic always hits the `parse_error=true` branch.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_poll_process.sh:11575-11596 | confidence=5\n  PROBLEM: The diagnostic code reads `_ACTIONS_RUNS_BLOB_CACHE` which was populated inside a command substitution subshell, so the parent shell sees an empty value.\n  WHY: When `build_active_issue_set` runs in `$(...)`, any variables it sets are only visible in that subshell, leaving the parent's `_ACTIONS_RUNS_BLOB_CACHE` empty and making the diagnostic always emit `parse_error=true`.\n- scripts/orchestrate_poll_process.sh:11602-11606 | confidence=2\n  PROBLEM: The same JSON blob is parsed three separate times with three independent `printf | jq` pipelines to extract total, in_progress, and queued counts.\n  WHY: On large Actions runs blobs, this triples the JSON parsing work; it is an unnecessary inefficiency in the diagnostic branch.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/orchestrate_poll_process.sh:11596 | confidence=5\n  PROBLEM: `_diag_blob=\"${_ACTIONS_RUNS_BLOB_CACHE}\"` reads an empty string because `_ACTIONS_RUNS_BLOB_CACHE` is never populated in the parent shell scope.\n  WHY: `build_active_issue_set` runs inside a command substitution at line 11575, and the nested `_load_actions_runs_cached` call also runs in a subshell, so both writes are discarded before the parent shell evaluates the diagnostic.\n- scripts/orchestrate_poll_process.sh:11602-11606 | confidence=2\n  PROBLEM: The diagnostic parses the same JSON blob with three separate `printf ... | jq` pipelines.\n  WHY: On large Actions runs payloads this triples the JSON parsing work, though it is only a cold-path diagnostic.\n- scripts/orchestrate_poll_process.sh:11602-11606 | confidence=1\n  PROBLEM: The jq probes are correctly guarded, so the previously suspected `.workflow_runs[]` edge-case failure does not occur.\n  WHY: The `type == \"array\"` guard and `error()`/`||` handling prevent runtime failure on empty or malformed input.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/orchestrate_poll_process.sh:11596-11610 | confidence=5\n  PROBLEM: `_diag_blob=\"${_ACTIONS_RUNS_BLOB_CACHE}\"` and the three subsequent jq pipelines always read the global that remains `''` because `build_active_issue_set` runs inside command substitution, so the diagnostic never observes the real blob.\n  WHY: The function and `_load_actions_runs_cached` only mutate `_ACTIONS_RUNS_BLOB_CACHE` inside that subshell, so the parent shell always takes the empty-blob branch and emits a misleading log line even on a real cache hit.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "2b86988447a7093dd1f7034b707e51c7fbf718dcfb3a01f8b833eeffefb0afdc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2797,
+    "run_id": "26143849577",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26143849577",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260520061808_6ef7532828",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2797,
+    "run_id": "26143849577"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-20T06:18:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
