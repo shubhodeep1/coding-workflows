@@ -1239,7 +1239,7 @@ For phase `ai:done` only, the effective stall anchor is `max(status_since_ts, he
 
 Scope is intentionally narrow — only `ai:done` is re-anchored. Other phases retain their existing `status_since_ts`-only semantics. The mapping is plumbed through the CLI as `--head-pushed-at-json` (a JSON object `{"<issue_num>": "<ISO 8601 timestamp>", ...}`).
 
-Fail-open: when `headPushedAt` is missing, null, the empty string, or unparseable, `detect_stalls` falls back to the legacy `status_since_ts`-only behaviour. Clock-skewed future timestamps are clamped at `now_ts` so a forward-drifting headPushedAt cannot make an issue appear perpetually fresh — the worst case is "treated as fresh this cycle, detected next cycle". The bash prefetch step fails open on any jq error and passes `{}`, so a GraphQL outage degrades cleanly to the legacy detector.
+Fail-open: when `headPushedAt` is missing, null, the empty string, or unparseable, `detect_stalls` falls back to the legacy `status_since_ts`-only behaviour. Clock-skewed future timestamps are clamped at `now_ts` so a forward-drifting headPushedAt cannot make an issue appear perpetually fresh — the worst case is treated as fresh until wall-clock time reaches the future timestamp, after which stall detection resumes. The bash prefetch step fails open on any jq error and passes `{}`, so a GraphQL outage degrades cleanly to the legacy detector.
 
 ### Stall recovery: merge-conflict pre-dispatch override
 

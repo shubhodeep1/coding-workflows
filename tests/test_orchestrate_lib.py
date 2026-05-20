@@ -711,9 +711,8 @@ def test_detect_stalls_reanchor_clamps_future_dated_head_push_to_now():
 	"""Clock-skew defence: a future-dated ``headPushedAt`` (clock skew or a
 	bogus value) must be clamped at ``now_ts`` rather than making the issue
 	look perpetually fresh.  The clamped anchor still moves the effective
-	elapsed to 0 — that is, the issue is treated as "fresh as of now" for
-	this cycle only and will be detected on a subsequent cycle once
-	``status_since_ts`` catches up.  Tests the clamp specifically by
+	elapsed to 0, so the issue is treated as fresh until wall-clock time
+	reaches the future timestamp.  Tests the clamp specifically by
 	asserting the issue drops out of the stalled set on this cycle.
 	"""
 	now_ts = 1_700_000_000
