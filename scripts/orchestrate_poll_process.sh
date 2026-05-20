@@ -11570,8 +11570,14 @@ fi
     if [ "${STALL_COUNT}" -gt 0 ]; then
       echo "Detected ${STALL_COUNT} stalled issue(s). Checking for active workflow runs..."
 
-      # Build the set of issues with active workflows (one API call batch,
-      # reused across all stalled issues to avoid per-issue API calls).
+      # Prime the shared actions-runs blob in the parent shell before the
+      # command-substitution call below; otherwise the loader's global cache
+      # assignments stay trapped in the subshell and the diagnostic branch
+      # cannot inspect the same payload.
+      _load_actions_runs_cached >/dev/null || true
+
+      # Build the set of issues with active workflows (reusing the one API
+      # call batch primed above to avoid per-issue API calls).
       ACTIVE_WORKFLOW_ISSUES="$(build_active_issue_set)"
       if [ -n "${ACTIVE_WORKFLOW_ISSUES}" ]; then
         echo "Issues with active workflow runs: $(echo "${ACTIVE_WORKFLOW_ISSUES}" | tr '\n' ' ')"
@@ -11583,7 +11589,7 @@ fi
         # cache hit on empty data, head_branch=null on workflow_dispatch
         # extraction, or API-failure fallback in _load_actions_runs_cached).
         # Reads directly from the per-tick memoised
-        # _ACTIONS_RUNS_BLOB_CACHE populated by the call above, so
+        # _ACTIONS_RUNS_BLOB_CACHE primed just above, so
         # this adds zero API calls (§15).  Fails open on jq errors:
         # counts fall back to "?" and the diagnostic still prints,
         # but parse_error=true keeps that path distinguishable from a
