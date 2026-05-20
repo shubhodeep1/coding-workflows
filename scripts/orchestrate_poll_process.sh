@@ -1368,8 +1368,8 @@ recover_completion_status_comment_id_from_live_comments() {
 #
 # API hygiene (§15): when COMMENTS is set (paginated comments fetched
 # earlier in the same cycle), the existing-comment lookup is satisfied
-# from that cache. The helper never issues a per-cycle list call on
-# its own.
+# from that cache. Only the malformed-response recovery path re-lists
+# comments, and only when the POST/PATCH response omitted a numeric id.
 update_completion_status_comment() {
   local status="$1"
   local body_markdown="$2"
@@ -1435,7 +1435,7 @@ update_completion_status_comment() {
 
   if [ -n "${existing_id}" ] && [[ "${existing_id}" =~ ^[0-9]+$ ]]; then
     if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${existing_id}" \
-      -X PATCH -f body="${full_body}" > "${response_file}" 2>&1; then
+      -X PATCH -f body="${full_body}" > "${response_file}"; then
       echo "::warning::[completion-status] failed to PATCH comment ${existing_id} for issue #${TRACKING_NUM:-?}; will retry on a later cycle." >&2
       head -c 4096 "${response_file}" >&2 || true
       echo >&2
@@ -1444,7 +1444,7 @@ update_completion_status_comment() {
     fi
   else
     if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
-      -X POST -f body="${full_body}" > "${response_file}" 2>&1; then
+      -X POST -f body="${full_body}" > "${response_file}"; then
       echo "::warning::[completion-status] failed to POST comment for issue #${TRACKING_NUM:-?}; will retry on a later cycle." >&2
       head -c 4096 "${response_file}" >&2 || true
       echo >&2
