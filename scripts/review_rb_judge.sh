@@ -82,6 +82,7 @@ if ! command -v _embed_input_file >/dev/null 2>&1; then
 
     _size="$(wc -c < "${_p}" 2>/dev/null | tr -d '[:space:]' || true)"
     if ! [[ "${_size}" =~ ^[0-9]+$ ]]; then
+      echo "::warning::_embed_input_file omitted ${_p}; could not determine file size for prompt budgeting." >&2
       printf '(omitted — could not determine file size for prompt budgeting)\n'
       return 0
     fi
@@ -380,6 +381,9 @@ fi
 # -----------------------------------------------------------
 RB_JUDGE_PR_DIFF_FILE="${RUNTIME_DIR}/rb_judge_pr.diff"
 RB_JUDGE_PR_DIFF_TMP_FILE="${RB_JUDGE_PR_DIFF_FILE}.tmp"
+# Install a narrow early cleanup trap immediately so failures before the
+# full prompt-build trap below do not strand transient PR-diff files.
+trap 'rm -f "${RB_JUDGE_PR_DIFF_FILE:-}" "${RB_JUDGE_PR_DIFF_TMP_FILE:-}"' EXIT
 if ! gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
   -H 'Accept: application/vnd.github.diff' > "${RB_JUDGE_PR_DIFF_FILE}" 2>/dev/null; then
   printf '%s' '(diff unavailable)' > "${RB_JUDGE_PR_DIFF_FILE}"
