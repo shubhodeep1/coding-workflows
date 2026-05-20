@@ -620,7 +620,8 @@ def main(argv: list[str] | None = None) -> int:
 		missing = sorted(selected - {func.__name__ for func in test_funcs})
 		for name in missing:
 			print(f"  FAIL  {name}: unknown test name", flush=True)
-		return 1 if missing else 0
+		if missing:
+			return 1
 
 	passed = 0
 	failed = 0
