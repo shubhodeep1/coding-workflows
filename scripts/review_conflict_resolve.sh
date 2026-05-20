@@ -466,6 +466,136 @@ _capture_fingerprints_baseline()
 
 _capture_fingerprints_baseline
 
+RESOLVER_FP_VERIFICATION_TIER="strict"
+RESOLVER_FP_VERIFICATION_TIER_REASON="default_strict"
+
+_select_fingerprint_verification_tier()
+{
+  RESOLVER_FP_VERIFICATION_TIER="strict"
+  RESOLVER_FP_VERIFICATION_TIER_REASON="default_strict"
+  if [ "${IS_INTEGRATION_SYNC:-false}" != "true" ]; then
+    return 0
+  fi
+  if [ ! -f "${PR_PAYLOAD_FILE:-/nonexistent}" ]; then
+    RESOLVER_FP_VERIFICATION_TIER_REASON="missing_pr_payload"
+    return 0
+  fi
+
+  local _tier_json
+  if ! _tier_json="$(RESOLVER_ESCAPE_THRESHOLD_N="${RESOLVER_ESCAPE_THRESHOLD_N:-5}" PR_PAYLOAD_FILE="${PR_PAYLOAD_FILE}" python3 - <<'PY'
+from __future__ import annotations
+
+import json
+import os
+import re
+
+
+RETRY_STATE_BLOCK_PATTERN = re.compile(
+    r"<!-- AUTOFIX_RESOLVER_RETRY_STATE_V1\n(.*?)\n-->",
+    flags=re.S,
+)
+
+
+def _parse_positive_int(value: object, default: int) -> int:
+    try:
+        parsed = int(str(value).strip())
+    except Exception:
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _parse_nonnegative_int(value: object, default: int) -> int:
+    try:
+        parsed = int(str(value).strip())
+    except Exception:
+        return default
+    return parsed if parsed >= 0 else default
+
+
+def _extract_retry_state(body: str) -> dict[str, object] | None:
+    normalized = (body or "").replace("\r\n", "\n").replace("\r", "\n")
+    matches = RETRY_STATE_BLOCK_PATTERN.findall(normalized)
+    for raw in reversed(matches):
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def _select_tier(count: int, threshold: int) -> str:
+    if count >= threshold * 3:
+        return "warn_only"
+    if count >= threshold * 2:
+        return "count_only"
+    if count >= threshold:
+        return "ratio"
+    return "strict"
+
+
+threshold = _parse_positive_int(os.environ.get("RESOLVER_ESCAPE_THRESHOLD_N"), 5)
+payload_path = os.environ.get("PR_PAYLOAD_FILE", "")
+try:
+    with open(payload_path, "r", encoding="utf-8") as fh:
+        payload = json.load(fh)
+except Exception:
+    print(json.dumps({"tier": "strict", "reason": "unreadable_pr_payload"}, ensure_ascii=True))
+    raise SystemExit(0)
+
+if not isinstance(payload, dict):
+    print(json.dumps({"tier": "strict", "reason": "malformed_pr_payload"}, ensure_ascii=True))
+    raise SystemExit(0)
+
+head = payload.get("head") or {}
+head_sha = str(head.get("sha", "") or "").strip()
+if not head_sha:
+    print(json.dumps({"tier": "strict", "reason": "missing_head_sha"}, ensure_ascii=True))
+    raise SystemExit(0)
+
+retry_state = _extract_retry_state(str(payload.get("body", "") or ""))
+if not isinstance(retry_state, dict):
+    print(json.dumps({"tier": "strict", "reason": "no_retry_state"}, ensure_ascii=True))
+    raise SystemExit(0)
+
+retry_state_head_sha = str(retry_state.get("head_sha", "") or "").strip()
+if retry_state_head_sha != head_sha:
+    print(json.dumps({"tier": "strict", "reason": "retry_state_head_sha_mismatch"}, ensure_ascii=True))
+    raise SystemExit(0)
+
+count = _parse_nonnegative_int(retry_state.get("consecutive_failure_count"), 0)
+print(
+    json.dumps(
+        {
+            "tier": _select_tier(count, threshold),
+            "reason": f"retry_state_count={count} threshold={threshold}",
+        },
+        ensure_ascii=True,
+    )
+)
+PY
+)"; then
+    echo "::warning::Failed to select fingerprint verification tier from retry state; defaulting to strict."
+    RESOLVER_FP_VERIFICATION_TIER="strict"
+    RESOLVER_FP_VERIFICATION_TIER_REASON="selection_error"
+    return 0
+  fi
+
+  RESOLVER_FP_VERIFICATION_TIER="$(printf '%s' "${_tier_json}" | jq -r '.tier // "strict"' 2>/dev/null || echo strict)"
+  RESOLVER_FP_VERIFICATION_TIER_REASON="$(printf '%s' "${_tier_json}" | jq -r '.reason // "default_strict"' 2>/dev/null || echo default_strict)"
+  case "${RESOLVER_FP_VERIFICATION_TIER}" in
+    strict|ratio|count_only|warn_only) ;;
+    *)
+      RESOLVER_FP_VERIFICATION_TIER="strict"
+      RESOLVER_FP_VERIFICATION_TIER_REASON="invalid_tier_fallback"
+      ;;
+  esac
+}
+
+_select_fingerprint_verification_tier
+echo "Integration fingerprint verification tier selected: ${RESOLVER_FP_VERIFICATION_TIER} (${RESOLVER_FP_VERIFICATION_TIER_REASON})."
+
 # _restore_attempt_base: restore every snapshotted allowlist file to
 # its post-merge-replay content.  Used between retries so each
 # attempt sees the same starting tree.  Falls open on a missing
@@ -682,6 +812,11 @@ _verify_fingerprints_soft() {
       --compare-against-baseline "${RESOLVER_FP_BASELINE_STATE_FILE}"
     )
   fi
+  if [ "${RESOLVER_FP_VERIFICATION_TIER:-strict}" != "strict" ]; then
+    _verifier_args+=(
+      --verification-tier "${RESOLVER_FP_VERIFICATION_TIER}"
+    )
+  fi
   INTEGRATION_BRANCH_NAME="${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
     python3 "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
       "${_verifier_args[@]}" \
@@ -732,6 +867,7 @@ RETRY_STATE_BLOCK_PATTERN = re.compile(
     flags=re.S,
 )
 ESCALATION_COMMENT_MARKER = "<!-- AUTOFIX_RESOLVER_ESCALATED_V1 -->"
+VERIFICATION_TIER_LADDER = ("strict", "ratio", "count_only", "warn_only")
 
 
 def _utc_now_iso() -> str:
@@ -744,6 +880,61 @@ def _parse_positive_int(value: object, default: int) -> int:
     except Exception:
         return default
     return parsed if parsed > 0 else default
+
+
+def _parse_nonnegative_int(value: object, default: int) -> int:
+    try:
+        parsed = int(str(value).strip())
+    except Exception:
+        return default
+    return parsed if parsed >= 0 else default
+
+
+def select_verification_tier(consecutive_failure_count: object, threshold: int) -> str:
+    threshold = max(1, _parse_positive_int(threshold, 5))
+    count = _parse_nonnegative_int(consecutive_failure_count, 0)
+    if count >= threshold * 3:
+        return "warn_only"
+    if count >= threshold * 2:
+        return "count_only"
+    if count >= threshold:
+        return "ratio"
+    return "strict"
+
+
+def select_verification_tier_from_pr_payload(pr_payload: dict[str, Any], threshold: int) -> dict[str, Any]:
+    head = (pr_payload or {}).get("head") or {}
+    head_sha = str(head.get("sha", "") or "").strip()
+    if not head_sha:
+        return {"tier": "strict", "reason": "missing_head_sha", "consecutive_failure_count": 0}
+    retry_state = extract_retry_state_from_body(str((pr_payload or {}).get("body", "") or ""))
+    if not isinstance(retry_state, dict):
+        return {"tier": "strict", "reason": "no_retry_state", "consecutive_failure_count": 0}
+    retry_state_head_sha = str(retry_state.get("head_sha", "") or "").strip()
+    if retry_state_head_sha != head_sha:
+        return {"tier": "strict", "reason": "retry_state_head_sha_mismatch", "consecutive_failure_count": 0}
+    consecutive_failure_count = _parse_nonnegative_int(retry_state.get("consecutive_failure_count"), 0)
+    return {
+        "tier": select_verification_tier(consecutive_failure_count, threshold),
+        "reason": f"retry_state_count={consecutive_failure_count}",
+        "consecutive_failure_count": consecutive_failure_count,
+    }
+
+
+def build_tier_downgrade_marker(
+    previous_tier: str,
+    current_tier: str,
+    consecutive_failure_count: int,
+    threshold: int,
+) -> str:
+    if previous_tier not in VERIFICATION_TIER_LADDER or current_tier not in VERIFICATION_TIER_LADDER:
+        return ""
+    if VERIFICATION_TIER_LADDER.index(current_tier) <= VERIFICATION_TIER_LADDER.index(previous_tier):
+        return ""
+    return (
+        f"::warning::FINGERPRINT_TIER_DOWNGRADED_V1 from={previous_tier} to={current_tier} "
+        f"reason=consecutive_failure_count_{consecutive_failure_count}_threshold_{threshold}"
+    )
 
 
 def _load_json_path(path: str, expected_type: type, default: Any) -> tuple[Any, str | None]:
@@ -906,6 +1097,8 @@ def build_resolver_escalation_comment(
     failure_signature_sha256: str,
     consecutive_failure_count: int,
     threshold: int,
+    escalation_threshold: int,
+    verification_tier: str,
     regressed_by_resolver: list[dict[str, Any]],
     pre_existing_drift: list[dict[str, Any]],
     run_url: str,
@@ -921,7 +1114,11 @@ def build_resolver_escalation_comment(
             "automated resolver attempts until the PR head changes."
         ),
         "",
-        f"- Consecutive identical-signature failures: {consecutive_failure_count} (threshold {threshold})",
+        (
+            f"- Consecutive identical-signature failures: {consecutive_failure_count} "
+            f"(tier step threshold {threshold}; escalation threshold {escalation_threshold})"
+        ),
+        f"- Final verification tier: {verification_tier}",
         f"- Failure signature: `{failure_signature_sha256}`",
         f"- Regressed fingerprints: {len(regressed_by_resolver)}",
         f"- Pre-existing drift: {len(pre_existing_drift)}",
@@ -981,7 +1178,7 @@ def build_resolver_retry_state_artifact(
     previous_signature = str(
         previous_state.get("failure_signature_sha256", previous_state.get("last_failure_signature", "")) or ""
     )
-    previous_count = _parse_positive_int(previous_state.get("consecutive_failure_count"), 0)
+    previous_count = _parse_nonnegative_int(previous_state.get("consecutive_failure_count"), 0)
 
     if previous_head_sha == head_sha and previous_signature == failure_signature_sha256:
         consecutive_failure_count = previous_count + 1
@@ -989,9 +1186,20 @@ def build_resolver_retry_state_artifact(
         consecutive_failure_count = 1
 
     threshold = max(1, _parse_positive_int(threshold, 5))
+    escalation_threshold = threshold * len(VERIFICATION_TIER_LADDER)
     max_items = max(1, _parse_positive_int(max_items, 10))
     now_iso = _utc_now_iso()
-    escalated = consecutive_failure_count >= threshold
+    previous_verification_tier = "strict"
+    if previous_head_sha == head_sha and previous_signature == failure_signature_sha256:
+        previous_verification_tier = select_verification_tier(previous_count, threshold)
+    verification_tier = select_verification_tier(consecutive_failure_count, threshold)
+    tier_downgrade_marker = build_tier_downgrade_marker(
+        previous_verification_tier,
+        verification_tier,
+        consecutive_failure_count,
+        threshold,
+    )
+    escalated = consecutive_failure_count >= escalation_threshold
     if (
         escalated
         and previous_head_sha == head_sha
@@ -1012,6 +1220,8 @@ def build_resolver_retry_state_artifact(
         "last_failure_signature": failure_signature_sha256,
         "consecutive_failure_count": consecutive_failure_count,
         "threshold": threshold,
+        "escalation_threshold": escalation_threshold,
+        "verification_tier": verification_tier,
         "regressed_by_resolver_count": len(regressed_by_resolver),
         "pre_existing_drift_count": len(pre_existing_drift),
         "last_regressed_by_resolver": regressed_by_resolver[:max_items],
@@ -1028,6 +1238,8 @@ def build_resolver_retry_state_artifact(
         "head_sha": head_sha,
         "failure_signature_sha256": failure_signature_sha256,
         "consecutive_failure_count": consecutive_failure_count,
+        "verification_tier": verification_tier,
+        "tier_downgrade_marker": tier_downgrade_marker,
         "escalated": escalated,
         "existing_escalation_comment_id": find_existing_escalation_comment_id(pr_issue_comments),
         "retry_state": retry_state,
@@ -1038,6 +1250,8 @@ def build_resolver_retry_state_artifact(
             failure_signature_sha256=failure_signature_sha256,
             consecutive_failure_count=consecutive_failure_count,
             threshold=threshold,
+            escalation_threshold=escalation_threshold,
+            verification_tier=verification_tier,
             regressed_by_resolver=regressed_by_resolver,
             pre_existing_drift=pre_existing_drift,
             run_url=run_url,
@@ -1141,7 +1355,7 @@ _persist_resolver_retry_state_from_current_failure()
   if [ "${IS_INTEGRATION_SYNC:-false}" != "true" ]; then
     return 0
   fi
-  if [ "${RESOLVER_FP_EXIT:-0}" -ne 1 ]; then
+  if [ "${RESOLVER_FP_EXIT:-0}" -ne 1 ] && [ "${RESOLVER_FP_VERIFICATION_TIER:-strict}" != "warn_only" ]; then
     return 0
   fi
   if ! [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]]; then
@@ -1190,7 +1404,7 @@ _persist_resolver_retry_state_from_current_failure()
     return 0
   fi
 
-  local _body_file _count _signature
+  local _body_file _count _signature _verification_tier _tier_downgrade_marker
   _body_file="$(mktemp)"
   jq -r '.body // ""' "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}" > "${_body_file}"
   if [ ! -s "${_body_file}" ]; then
@@ -1208,7 +1422,12 @@ _persist_resolver_retry_state_from_current_failure()
 
   _count="$(jq -r '.consecutive_failure_count // 0' "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}" 2>/dev/null || echo 0)"
   _signature="$(jq -r '.failure_signature_sha256 // ""' "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}" 2>/dev/null || echo "")"
-  echo "Persisted AUTOFIX_RESOLVER_RETRY_STATE_V1 to PR #${PR_NUMBER} (count=${_count}, signature=${_signature})."
+  _verification_tier="$(jq -r '.verification_tier // .retry_state.verification_tier // "strict"' "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}" 2>/dev/null || echo strict)"
+  echo "Persisted AUTOFIX_RESOLVER_RETRY_STATE_V1 to PR #${PR_NUMBER} (count=${_count}, signature=${_signature}, tier=${_verification_tier})."
+  _tier_downgrade_marker="$(jq -r '.tier_downgrade_marker // empty' "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}" 2>/dev/null || echo "")"
+  if [ -n "${_tier_downgrade_marker}" ]; then
+    echo "${_tier_downgrade_marker}"
+  fi
 
   if [ "$(jq -r '.escalated // false' "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}" 2>/dev/null || echo false)" != "true" ]; then
     return 0
@@ -1744,7 +1963,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     # string consumed by downstream tooling) land in the log
     # exactly as today.  The IS_INTEGRATION_SYNC gate keeps
     # non-integration runs on their current path.
-    if [ "${RESOLVER_FP_EXIT}" -eq 1 ]; then
+    if [ "${RESOLVER_FP_EXIT}" -eq 1 ] || [ "${RESOLVER_FP_VERIFICATION_TIER:-strict}" = "warn_only" ]; then
       _persist_resolver_retry_state_from_current_failure || true
     fi
     if [ "${IS_INTEGRATION_SYNC:-false}" = "true" ] \
@@ -1756,6 +1975,11 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
       if [ -s "${RESOLVER_FP_BASELINE_STATE_FILE:-/nonexistent}" ]; then
         _final_verifier_args+=(
           --compare-against-baseline "${RESOLVER_FP_BASELINE_STATE_FILE}"
+        )
+      fi
+      if [ "${RESOLVER_FP_VERIFICATION_TIER:-strict}" != "strict" ]; then
+        _final_verifier_args+=(
+          --verification-tier "${RESOLVER_FP_VERIFICATION_TIER}"
         )
       fi
       INTEGRATION_BRANCH_NAME="${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \

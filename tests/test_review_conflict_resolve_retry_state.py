@@ -212,6 +212,34 @@ def test_retry_state_resets_on_head_sha_change(tmp_path: Path) -> None:
 	assert second["retry_state"]["head_sha"] == "new-head"
 
 
+def test_retry_state_tier_selection_from_consecutive_failure_count() -> None:
+	ns = _retry_state_namespace()
+	select_tier = ns["select_verification_tier"]
+	assert select_tier(0, 2) == "strict"
+	assert select_tier(1, 2) == "strict"
+	assert select_tier(2, 2) == "ratio"
+	assert select_tier(4, 2) == "count_only"
+	assert select_tier(6, 2) == "warn_only"
+
+
+def test_retry_state_tier_selection_resets_to_strict_on_head_change() -> None:
+	ns = _retry_state_namespace()
+	body = ns["upsert_retry_state_block"](
+		"Initial PR body",
+		{
+			"schema_version": 1,
+			"head_sha": "old-head",
+			"consecutive_failure_count": 6,
+		},
+	)
+	selection = ns["select_verification_tier_from_pr_payload"](
+		_pr_payload(head_sha="new-head", body=body),
+		2,
+	)
+	assert selection["tier"] == "strict"
+	assert selection["reason"] == "retry_state_head_sha_mismatch"
+
+
 def test_retry_state_resets_on_signature_change(tmp_path: Path) -> None:
 	_seed_repo_files(tmp_path)
 	ns = _retry_state_namespace()
@@ -237,15 +265,67 @@ def test_retry_state_resets_on_signature_change(tmp_path: Path) -> None:
 	assert second["failure_signature_sha256"] != first["failure_signature_sha256"]
 
 
+def test_retry_state_downgrade_marker_emits_on_threshold_crossings(tmp_path: Path) -> None:
+	_seed_repo_files(tmp_path)
+	ns = _retry_state_namespace()
+	for previous_count, expected_from, expected_to in (
+		(1, "strict", "ratio"),
+		(3, "ratio", "count_only"),
+		(5, "count_only", "warn_only"),
+	):
+		first = _build_artifact(
+			tmp_path=tmp_path,
+			pr_payload=_pr_payload(head_sha=f"head-tier-{previous_count}"),
+			threshold=2,
+		)
+		previous_state = dict(first["retry_state"])
+		previous_state["consecutive_failure_count"] = previous_count
+		previous_state["verification_tier"] = expected_from
+		pr_payload = _pr_payload(
+			head_sha=f"head-tier-{previous_count}",
+			body=ns["upsert_retry_state_block"]("Initial PR body", previous_state),
+		)
+		second = _build_artifact(tmp_path=tmp_path, pr_payload=pr_payload, threshold=2)
+		assert second["verification_tier"] == expected_to
+		assert second["retry_state"]["verification_tier"] == expected_to
+		assert second["tier_downgrade_marker"] == (
+			f"::warning::FINGERPRINT_TIER_DOWNGRADED_V1 from={expected_from} to={expected_to} "
+			f"reason=consecutive_failure_count_{previous_count + 1}_threshold_2"
+		)
+
+
+def test_retry_state_first_tier_threshold_does_not_escalate(tmp_path: Path) -> None:
+	_seed_repo_files(tmp_path)
+	ns = _retry_state_namespace()
+	first = _build_artifact(
+		tmp_path=tmp_path,
+		pr_payload=_pr_payload(head_sha="head-ratio"),
+		threshold=2,
+	)
+	previous_state = dict(first["retry_state"])
+	previous_state["consecutive_failure_count"] = 1
+	pr_payload = _pr_payload(
+		head_sha="head-ratio",
+		body=ns["upsert_retry_state_block"]("Initial PR body", previous_state),
+	)
+	second = _build_artifact(tmp_path=tmp_path, pr_payload=pr_payload, threshold=2)
+	assert second["consecutive_failure_count"] == 2
+	assert second["verification_tier"] == "ratio"
+	assert second["escalated"] is False
+	assert second["retry_state"]["escalated"] is False
+
+
 def test_retry_state_escape_threshold_sets_escalated_and_summary(tmp_path: Path) -> None:
 	_seed_repo_files(tmp_path)
 	ns = _retry_state_namespace()
 	first = _build_artifact(
 		tmp_path=tmp_path,
 		pr_payload=_pr_payload(head_sha="head-threshold"),
+		threshold=2,
 	)
 	previous_state = dict(first["retry_state"])
-	previous_state["consecutive_failure_count"] = 4
+	previous_state["consecutive_failure_count"] = 7
+	previous_state["verification_tier"] = "warn_only"
 	pr_payload = _pr_payload(
 		head_sha="head-threshold",
 		body=ns["upsert_retry_state_block"]("Initial PR body", previous_state),
@@ -253,13 +333,17 @@ def test_retry_state_escape_threshold_sets_escalated_and_summary(tmp_path: Path)
 	second = _build_artifact(
 		tmp_path=tmp_path,
 		pr_payload=pr_payload,
+		threshold=2,
 		pr_issue_comments=[{"id": 77, "body": "<!-- AUTOFIX_RESOLVER_ESCALATED_V1 -->\nold"}],
 	)
-	assert second["consecutive_failure_count"] == 5
+	assert second["consecutive_failure_count"] == 8
+	assert second["verification_tier"] == "warn_only"
 	assert second["escalated"] is True
 	assert second["existing_escalation_comment_id"] == 77
 	assert "<!-- AUTOFIX_RESOLVER_ESCALATED_V1 -->" in second["summary_comment_body"]
+	assert "escalation threshold 8" in second["summary_comment_body"]
 	assert second["retry_state"]["escalated"] is True
+	assert second["retry_state"]["escalation_threshold"] == 8
 
 
 def test_retry_state_artifact_treats_missing_baseline_as_regressed(tmp_path: Path) -> None:
@@ -297,6 +381,16 @@ def test_resolve_script_baseline_fallback_and_comment_gate_contract() -> None:
 	patch_call = 'if gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${_comment_id}"'
 	assert patch_call in patch_branch
 	assert patch_branch.index("_comment_present=true") > patch_branch.index(patch_call)
+
+
+def test_resolve_script_wires_tier_selection_and_verifier_args() -> None:
+	body = _resolve_script_text()
+	assert "_select_fingerprint_verification_tier" in body
+	assert 'Integration fingerprint verification tier selected:' in body
+	assert body.count('--verification-tier "${RESOLVER_FP_VERIFICATION_TIER}"') >= 2
+	assert 'if [ "${RESOLVER_FP_EXIT}" -eq 1 ] || [ "${RESOLVER_FP_VERIFICATION_TIER:-strict}" = "warn_only" ]; then' in body
+	assert "select_verification_tier_from_pr_payload" in body
+	assert "FINGERPRINT_TIER_DOWNGRADED_V1" in body
 
 
 def main() -> int:

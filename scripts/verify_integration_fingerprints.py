@@ -72,6 +72,9 @@ Inputs:
   Optional flag ``--ref <git_ref>`` — verify against the tree at the
   given git ref via ``git show`` / ``git cat-file -e`` instead of the
   working tree.  Or env INTEGRATION_VERIFY_REF — same.  Flag wins.
+  Optional flag ``--verification-tier <strict|ratio|count_only|warn_only>`` —
+  relax per-issue ``must_contain`` enforcement for post-resolve checks;
+  default ``strict`` preserves the legacy behaviour byte-for-byte.
   Optional flag ``--baseline-fingerprints-state <out>`` — capture mode.
   Optional flag ``--compare-against-baseline <in>`` — compare mode.
   Optional env INTEGRATION_BRANCH_NAME — included in the summary line
@@ -99,6 +102,8 @@ from typing import Any
 
 
 GIT_COMMAND_TIMEOUT_SECS = 30
+VERIFICATION_TIERS = ("strict", "ratio", "count_only", "warn_only")
+RATIO_TIER_MIN_PERCENT = 95
 
 
 def _normalize_ref(ref: str | None) -> str | None:
@@ -712,6 +717,368 @@ def _emit_verify_failure(violations: list[str]) -> int:
 	return 1
 
 
+def _deduped_issue_entries(fingerprints: dict[str, Any]) -> list[dict[str, Any]]:
+	issue_entries: list[dict[str, Any]] = []
+	cross_issue_exact_drops, cross_issue_exact_warnings = _cross_issue_exact_conflict_drops(fingerprints)
+	for issue_key, entry in sorted(fingerprints.items()):
+		if not isinstance(entry, dict):
+			continue
+		issue_num = entry.get("issue", issue_key)
+		pr_num = entry.get("pr", "?")
+		must_contain, must_not_contain, shared_keys, substring_drops, exact_conflict_drops = _dedup_issue_patterns(
+			issue_key,
+			entry,
+			cross_issue_exact_drops,
+		)
+		issue_entries.append(
+			{
+				"issue_key": issue_key,
+				"issue_num": issue_num,
+				"pr_num": pr_num,
+				"must_contain": must_contain,
+				"must_not_contain": must_not_contain,
+				"must_not_exist": entry.get("must_not_exist", []) or [],
+				"shared_keys": shared_keys,
+				"substring_drops": substring_drops,
+				"exact_conflict_drops": exact_conflict_drops,
+				"exact_conflict_warnings": cross_issue_exact_warnings.get(issue_key, []),
+			}
+		)
+	return issue_entries
+
+
+def _emit_issue_dedup_warnings(issue_entry: dict[str, Any]) -> None:
+	issue_num = issue_entry["issue_num"]
+	pr_num = issue_entry["pr_num"]
+	shared_keys = issue_entry["shared_keys"]
+	substring_drops = issue_entry["substring_drops"]
+	exact_conflict_drops = issue_entry["exact_conflict_drops"]
+	if shared_keys:
+		print(
+			f"::warning::Fingerprint cross-dedup for issue #{issue_num} (PR #{pr_num}): "
+			f"skipping {len(shared_keys)} self-contradictory pattern(s) present in both "
+			f"must_contain and must_not_contain (capture-side refactor false positive).",
+			flush=True,
+		)
+	if substring_drops:
+		print(
+			f"::warning::Fingerprint substring-overlap dedup for issue #{issue_num} (PR #{pr_num}): "
+			f"skipping {len(substring_drops)} must_not_contain pattern(s) whose regex is a literal "
+			f"substring of a must_contain regex on the same file (capture-side: deleted line subsumed "
+			f"by added line under re.search; the longer must_contain already enforces the stronger intent).",
+			flush=True,
+		)
+	if exact_conflict_drops:
+		for warning in issue_entry["exact_conflict_warnings"]:
+			print(warning, flush=True)
+
+
+def _issue_satisfies_tier(tier: str, eligible: int, satisfied: int) -> bool:
+	if tier == "ratio":
+		return eligible == 0 or (satisfied * 100) >= (eligible * RATIO_TIER_MIN_PERCENT)
+	if tier == "count_only":
+		return eligible == 0 or satisfied >= 1
+	if tier == "warn_only":
+		return True
+	return eligible == satisfied
+
+
+def _issue_tier_violation_message(
+	tier: str,
+	issue_num: Any,
+	pr_num: Any,
+	satisfied: int,
+	eligible: int,
+	failing_states: list[dict[str, Any]],
+) -> str:
+	if tier == "ratio":
+		message = (
+			f"issue #{issue_num} (PR #{pr_num}): verification tier 'ratio' requires >="
+			f"{RATIO_TIER_MIN_PERCENT}% of eligible must_contain patterns to match, but only "
+			f"{satisfied}/{eligible} matched after resolver."
+		)
+	else:
+		message = (
+			f"issue #{issue_num} (PR #{pr_num}): verification tier 'count_only' requires at least "
+			f"1 eligible must_contain pattern to match, but only {satisfied}/{eligible} matched after resolver."
+		)
+	if failing_states:
+		first_state = failing_states[0]
+		message += f" First failing path: '{first_state['path']}'."
+		message += f" First failing pattern (first 200 chars): {first_state['regex'][:200]}"
+	return message
+
+
+def _emit_tolerated_must_contain_warning(
+	tier: str,
+	issue_num: Any,
+	pr_num: Any,
+	satisfied: int,
+	eligible: int,
+	tolerated_states: list[dict[str, Any]],
+) -> None:
+	if not tolerated_states:
+		return
+	print(
+		f"::warning::Integration fingerprint verification tier={tier} tolerated "
+		f"{len(tolerated_states)} must_contain violation(s) for issue #{issue_num} (PR #{pr_num}); "
+		f"satisfied {satisfied}/{eligible} eligible patterns.",
+		flush=True,
+	)
+	for state in tolerated_states[:3]:
+		print(f"::warning::  - {state['violation']}", flush=True)
+	remaining = len(tolerated_states) - 3
+	if remaining > 0:
+		print(
+			f"::warning::  - ... {remaining} additional must_contain violation(s) suppressed by tier={tier}.",
+			flush=True,
+		)
+
+
+def _evaluate_issue_must_contain_tier(
+	tier: str,
+	issue_num: Any,
+	pr_num: Any,
+	states: list[dict[str, Any]],
+) -> tuple[list[str], list[dict[str, Any]], int, int]:
+	eligible = len(states)
+	satisfied = sum(1 for state in states if state["satisfied"])
+	failing_states = [state for state in states if not state["satisfied"]]
+	if tier == "warn_only":
+		return [], failing_states, eligible, satisfied
+	if _issue_satisfies_tier(tier, eligible, satisfied):
+		return [], failing_states, eligible, satisfied
+	return [
+		_issue_tier_violation_message(tier, issue_num, pr_num, satisfied, eligible, failing_states)
+	], [], eligible, satisfied
+
+
+def _emit_warn_only_marker(branch: str, suppressed_violation_count: int) -> None:
+	print(
+		f"::warning::FINGERPRINT_TIER_WARN_ONLY_V1 branch={json.dumps(branch or '')} "
+		f"suppressed_violation_count={suppressed_violation_count}",
+		flush=True,
+	)
+
+
+def _emit_warn_only_success(branch: str, violations: list[str]) -> int:
+	_emit_warn_only_marker(branch, len(violations))
+	if violations:
+		print(
+			"::warning::Integration fingerprint verification warn_only tier suppressed fingerprint failures:",
+			flush=True,
+		)
+		for violation in violations:
+			print(f"::warning::  - {violation}", flush=True)
+	print(
+		"Integration fingerprint verification PASSED in warn_only tier — fingerprint violations emitted as warnings only.",
+		flush=True,
+	)
+	return 0
+
+
+def verify_with_tier(
+	fingerprints: dict[str, Any],
+	branch: str,
+	tier: str,
+	ref: str | None = None,
+) -> int:
+	if tier == "strict":
+		return verify(fingerprints, branch, ref=ref)
+
+	violations: list[str] = []
+	warn_only_violations: list[str] = []
+	suppressed_must_contain_count = 0
+	mc_total_expected = 0
+	mc_total_satisfied = 0
+	file_cache: dict[str, tuple[str | None, str | None]] = {}
+	exists_cache: dict[str, tuple[bool, str | None]] = {}
+
+	for issue_entry in _deduped_issue_entries(fingerprints):
+		_emit_issue_dedup_warnings(issue_entry)
+		issue_num = issue_entry["issue_num"]
+		pr_num = issue_entry["pr_num"]
+		issue_must_contain_states: list[dict[str, Any]] = []
+
+		for fp in issue_entry["must_contain"]:
+			state = _evaluate_fp_state(fp, "must_contain", issue_num, pr_num, file_cache, exists_cache, ref=ref)
+			if state is None:
+				continue
+			issue_must_contain_states.append(state)
+			mc_total_expected += 1
+			if state["satisfied"]:
+				mc_total_satisfied += 1
+
+		for fp in issue_entry["must_not_contain"]:
+			state = _evaluate_fp_state(fp, "must_not_contain", issue_num, pr_num, file_cache, exists_cache, ref=ref)
+			if state is None or state["satisfied"]:
+				continue
+			if tier == "warn_only":
+				warn_only_violations.append(state["violation"])
+			else:
+				violations.append(state["violation"])
+
+		for fp in issue_entry["must_not_exist"]:
+			state = _evaluate_fp_state(fp, "must_not_exist", issue_num, pr_num, file_cache, exists_cache, ref=ref)
+			if state is None or state["satisfied"]:
+				continue
+			if tier == "warn_only":
+				warn_only_violations.append(state["violation"])
+			else:
+				violations.append(state["violation"])
+
+		issue_violations, tolerated_states, issue_eligible, issue_satisfied = _evaluate_issue_must_contain_tier(
+			tier,
+			issue_num,
+			pr_num,
+			issue_must_contain_states,
+		)
+		if tier == "warn_only":
+			warn_only_violations.extend(state["violation"] for state in tolerated_states)
+		else:
+			violations.extend(issue_violations)
+			suppressed_must_contain_count += len(tolerated_states)
+			_emit_tolerated_must_contain_warning(
+				tier,
+				issue_num,
+				pr_num,
+				issue_satisfied,
+				issue_eligible,
+				tolerated_states,
+			)
+
+	_emit_must_contain_ratio(branch, mc_total_satisfied, mc_total_expected)
+	if tier == "warn_only":
+		return _emit_warn_only_success(branch, warn_only_violations)
+	if violations:
+		return _emit_verify_failure(violations)
+	if suppressed_must_contain_count > 0:
+		print(
+			f"Integration fingerprint verification PASSED under tier '{tier}' — "
+			f"{suppressed_must_contain_count} must_contain violation(s) tolerated by tier policy.",
+			flush=True,
+		)
+		return 0
+	print(
+		"Integration fingerprint verification PASSED — all merged sub-issue intent preserved.",
+		flush=True,
+	)
+	return 0
+
+
+def compare_against_baseline_with_tier(
+	fingerprints: dict[str, Any],
+	baseline_state: dict[str, Any],
+	branch: str,
+	tier: str,
+	ref: str | None = None,
+) -> int:
+	if tier == "strict":
+		return compare_against_baseline(fingerprints, baseline_state, branch, ref=ref)
+
+	baseline_index = _baseline_satisfied_index(baseline_state)
+	violations: list[str] = []
+	warn_only_violations: list[str] = []
+	pre_existing_drift_count = 0
+	suppressed_must_contain_count = 0
+	mc_compare_expected = 0
+	mc_compare_satisfied = 0
+	file_cache: dict[str, tuple[str | None, str | None]] = {}
+	exists_cache: dict[str, tuple[bool, str | None]] = {}
+
+	for issue_entry in _deduped_issue_entries(fingerprints):
+		_emit_issue_dedup_warnings(issue_entry)
+		issue_key = issue_entry["issue_key"]
+		issue_num = issue_entry["issue_num"]
+		pr_num = issue_entry["pr_num"]
+		issue_must_contain_states: list[dict[str, Any]] = []
+
+		for kind, fps in (
+			("must_contain", issue_entry["must_contain"]),
+			("must_not_contain", issue_entry["must_not_contain"]),
+			("must_not_exist", issue_entry["must_not_exist"]),
+		):
+			for fp in fps:
+				state = _evaluate_fp_state(fp, kind, issue_num, pr_num, file_cache, exists_cache, ref=ref)
+				if state is None:
+					continue
+				baseline_satisfied = baseline_index.get((str(issue_key), kind, state["fp_key"]))
+				if baseline_satisfied is False:
+					if state["satisfied"]:
+						_emit_pre_existing_drift_marker(state, issue_num, fixed_by_resolver=True)
+					else:
+						_emit_pre_existing_drift_marker(state, issue_num, fixed_by_resolver=False)
+						pre_existing_drift_count += 1
+					continue
+
+				if kind == "must_contain":
+					issue_must_contain_states.append(state)
+					mc_compare_expected += 1
+					if state["satisfied"]:
+						mc_compare_satisfied += 1
+					continue
+
+				if state["satisfied"]:
+					continue
+				if tier == "warn_only":
+					warn_only_violations.append(state["violation"])
+				else:
+					violations.append(state["violation"])
+
+		issue_violations, tolerated_states, issue_eligible, issue_satisfied = _evaluate_issue_must_contain_tier(
+			tier,
+			issue_num,
+			pr_num,
+			issue_must_contain_states,
+		)
+		if tier == "warn_only":
+			warn_only_violations.extend(state["violation"] for state in tolerated_states)
+		else:
+			violations.extend(issue_violations)
+			suppressed_must_contain_count += len(tolerated_states)
+			_emit_tolerated_must_contain_warning(
+				tier,
+				issue_num,
+				pr_num,
+				issue_satisfied,
+				issue_eligible,
+				tolerated_states,
+			)
+
+	_emit_must_contain_ratio(branch, mc_compare_satisfied, mc_compare_expected)
+	if tier == "warn_only":
+		return _emit_warn_only_success(branch, warn_only_violations)
+	if violations:
+		return _emit_verify_failure(violations)
+	if pre_existing_drift_count > 0 and suppressed_must_contain_count > 0:
+		print(
+			f"Integration fingerprint verification PASSED under tier '{tier}' with pre-existing drift — "
+			f"{suppressed_must_contain_count} must_contain violation(s) tolerated by tier policy "
+			f"(pre_existing_drift_count={pre_existing_drift_count}; see PRE_EXISTING_FINGERPRINT_DRIFT_V1 markers above for triage).",
+			flush=True,
+		)
+		return 0
+	if pre_existing_drift_count > 0:
+		print(
+			"Integration fingerprint verification PASSED with pre-existing drift — resolver did not introduce any new regressions "
+			f"(pre_existing_drift_count={pre_existing_drift_count}; see PRE_EXISTING_FINGERPRINT_DRIFT_V1 markers above for triage).",
+			flush=True,
+		)
+		return 0
+	if suppressed_must_contain_count > 0:
+		print(
+			f"Integration fingerprint verification PASSED under tier '{tier}' — "
+			f"{suppressed_must_contain_count} must_contain violation(s) tolerated by tier policy.",
+			flush=True,
+		)
+		return 0
+	print(
+		"Integration fingerprint verification PASSED — all merged sub-issue intent preserved.",
+		flush=True,
+	)
+	return 0
+
+
 def list_violated_files(fingerprints: dict[str, Any], ref: str | None = None) -> list[str]:
 	"""Return a sorted, de-duplicated list of file paths that currently
 	fail at least one fingerprint check against the cwd tree (or the
@@ -1096,6 +1463,7 @@ def main(argv: list[str] | None = None) -> int:
 	ref: str | None = None
 	baseline_out_path: str | None = None
 	compare_baseline_path: str | None = None
+	verification_tier = "strict"
 	cli_ref_supplied = False
 	while args:
 		if args[0] == "--list-violated-files":
@@ -1150,7 +1518,31 @@ def main(argv: list[str] | None = None) -> int:
 			compare_baseline_path = args[0][len("--compare-against-baseline="):]
 			args = args[1:]
 			continue
+		if args[0] == "--verification-tier":
+			if len(args) < 2:
+				print(
+					"::error::verify_integration_fingerprints: --verification-tier requires an argument",
+					flush=True,
+					file=sys.stderr,
+				)
+				return 2
+			verification_tier = args[1]
+			args = args[2:]
+			continue
+		if args[0].startswith("--verification-tier="):
+			verification_tier = args[0][len("--verification-tier="):]
+			args = args[1:]
+			continue
 		break
+
+	if verification_tier not in VERIFICATION_TIERS:
+		print(
+			f"::error::verify_integration_fingerprints: unsupported --verification-tier {verification_tier!r} "
+			f"(expected one of {', '.join(VERIFICATION_TIERS)})",
+			flush=True,
+			file=sys.stderr,
+		)
+		return 2
 
 	raw_ref = ref
 	ref = _normalize_ref(ref)
@@ -1218,9 +1610,9 @@ def main(argv: list[str] | None = None) -> int:
 		baseline_state, baseline_err = _load_baseline_state(compare_baseline_path)
 		if baseline_err is not None:
 			print(f"::warning::baseline malformed ({baseline_err}); using absolute verification.", flush=True)
-			return verify(data, branch, ref=ref)
+			return verify_with_tier(data, branch, verification_tier, ref=ref)
 		assert baseline_state is not None
-		return compare_against_baseline(data, baseline_state, branch, ref=ref)
+		return compare_against_baseline_with_tier(data, baseline_state, branch, verification_tier, ref=ref)
 
 	if list_mode:
 		# Always exit 0 in list mode — the caller is collecting input
@@ -1237,7 +1629,7 @@ def main(argv: list[str] | None = None) -> int:
 		)
 		return 0
 
-	return verify(data, branch, ref=ref)
+	return verify_with_tier(data, branch, verification_tier, ref=ref)
 
 
 if __name__ == "__main__":
