@@ -52,6 +52,7 @@ self-deadlock or the misleading fallback comment.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -64,6 +65,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RB_JUDGE_SCRIPT = REPO_ROOT / "scripts" / "review_rb_judge.sh"
 REVIEW_AUTOFIX_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
+TEST_SUBPROCESS_ENV = {
+	"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+	"PYTHONDONTWRITEBYTECODE": "1",
+}
 
 
 def _rb_judge_text() -> str:
@@ -178,6 +183,7 @@ def test_local_sanitize_fallback_warns_when_all_rewrite_paths_fail() -> None:
 				),
 			],
 			cwd=str(REPO_ROOT),
+			env=TEST_SUBPROCESS_ENV,
 			capture_output=True,
 			text=True,
 			check=True,
@@ -209,6 +215,7 @@ def test_local_sanitize_fallback_warns_when_tempfile_allocation_fails() -> None:
 				),
 			],
 			cwd=str(REPO_ROOT),
+			env=TEST_SUBPROCESS_ENV,
 			capture_output=True,
 			text=True,
 			check=True,
@@ -241,6 +248,7 @@ def test_local_sanitize_fallback_warns_when_replace_fails() -> None:
 				),
 			],
 			cwd=str(REPO_ROOT),
+			env=TEST_SUBPROCESS_ENV,
 			capture_output=True,
 			text=True,
 			check=True,
@@ -594,6 +602,7 @@ def test_local_sanitize_fallback_rewrites_all_invalid_utf8_like_shared_helper() 
 				),
 			],
 			cwd=str(REPO_ROOT),
+			env=TEST_SUBPROCESS_ENV,
 			capture_output=True,
 			text=True,
 			check=True,
