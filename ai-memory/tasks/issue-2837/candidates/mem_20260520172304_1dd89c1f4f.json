@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-2836` @ `2c1128a6801d0a1b2681de451e78189e56e108f0`\n\nClarification mapping: no `Q1`/`Q2` batch was issued; `/answer [auto-answered-by-orchestrator]` only confirms continuation, so there are no additional clarified requirements to incorporate.\n\nAutomation / wiring\n- Change type: extend existing workflow/scripts only; no new standalone script or supervisor.\n- Entry points:\n  - `.github/workflows/review_autofix.yml` (integration-sync conflict resolver path on PR runs / workflow_dispatch)\n  - `scripts/orchestrate_poll_process.sh` (orchestrator poller path that re-dispatches the resolver)\n- DB work: none.\n- Removal-registry updates: none.\n\nRepresentative patterns to follow\n- `.github/workflows/review_autofix.yml` PR metadata bootstrap (`PR_PAYLOAD_FILE`, `PR_META_FILE`, `PR_ISSUE_COMMENTS_FILE`) for reusing existing PR fetches instead of adding new reads.\n- `scripts/orchestrate_poll_process.sh::update_completion_status_comment` / standalone-state marker handling for \u201csingle in-place machine record, update not append\u201d behavior.\n\nAssumptions / conflicts\n- The issue says \u201cstay inside `files_touched`\u201d, but that whitelist is not present in the planning context; I\u2019m assuming the files below are within scope.\n- Current ref does **not** yet contain `AUTOFIX_RESOLVER_RETRY_STATE_V1`, `RESOLVER_ESCAPE_THRESHOLD_N`, or `ai:resolver-escalated`.\n- Current `review_autofix.yml` failure tail posts a generic PR failure comment on workflow failure; if left unchanged, that would conflict with the requirement to post exactly one human-readable escalation summary.\n\nFiles likely to change\n- `scripts/review_conflict_resolve.sh`\n- `.github/workflows/review_autofix.yml`\n- `scripts/orchestrate_poll_process.sh`\n- `.github/ai/label_contract.v1.json`\n- `scripts/label_helpers.sh`\n- `tests/test_orchestrate_poll_process.py`\n- `tests/test_ai_labels.py`\n- `tests/test_review_conflict_resolve_retry_state.py` (new focused test file)\n\nFunctions / modules to implement\n1. `scripts/review_conflict_resolve.sh`\n- Add resolver-retry-state helpers that:\n  - read the existing retry record from the already-fetched PR payload/body,\n  - compute a stable failure signature from sorted regressed fingerprint keys plus sorted unchanged pre-existing-drift keys,\n  - increment only on identical-signature failures for the same `head.sha`,\n  - reset on head-SHA change or signature change,\n  - write the updated `AUTOFIX_RESOLVER_RETRY_STATE_V1` record back in place.\n- On threshold trip:\n  - apply `ai:resolver-escalated` to the PR,\n  - post one dedicated escalation summary comment,\n  - export a sentinel (for example `RESOLVER_ESCALATED=true`) before exiting non-zero so the existing Telegram failure path still fires.\n\n2. `.github/workflows/review_autofix.yml`\n- Wire in `RESOLVER_ESCAPE_THRESHOLD_N` with default `5`.\n- Preserve the existing failure/Telegram path, but suppress the generic PR failure comment when the resolver already posted the escalation summary.\n\n3. `scripts/orchestrate_poll_process.sh`\n- Extend the existing final-PR metadata read in `heal_integration_branch_conflict` to inspect the persisted retry-state record for the current `head.sha`.\n- If the current head is already escalated, stop redispatching `_dispatch_review_for_conflicts` and avoid consuming unresolved/dispatch counters on that tick.\n- Keep `ai:resolver-escalated` additive only; do not treat it as a phase label.\n\nData structures affected\n- New machine-readable per-PR retry record, minimally carrying:\n  - `head_sha`\n  - `last_failure_signature`\n  - `consecutive_failure_count`\n  - normalized regressed/pre-existing fingerprint sets (or summaries derived from them)\n  - escalation flag/timestamp\n- New additive PR label: `ai:resolver-escalated`\n\nAPI / interface changes\n- New env/repo var: `RESOLVER_ESCAPE_THRESHOLD_N` (default `5`)\n- PR body gains a hidden `AUTOFIX_RESOLVER_RETRY_STATE_V1` block\n- No new scheduler/supervisor entry points\n\nPotential risks / edge cases\n- Head SHA changes must clear the stop gate even if the label remains; the poller should key off current-head state, not the label alone.\n- Only real fingerprint-based failures should count toward the threshold; verifier plumbing failures should fail open.\n- PR body updates must preserve existing body content and only replace the hidden block.\n- The escalation summary must be deduped so later failing runs/ticks do not post duplicates.\n- Current generic workflow-failure PR comment must be suppressed on escalated runs to satisfy the \u201cexactly one\u201d summary requirement.\n\nTesting considerations\n- `tests/test_review_conflict_resolve_retry_state.py`\n  - identical signature increments\n  - signature normalization is order-stable\n  - head-SHA change resets\n  - signature change resets\n- `tests/test_orchestrate_poll_process.py`\n  - escalated retry-state on the current final-PR head stops redispatch\n  - changed head SHA resumes normal dispatch\n- `tests/test_ai_labels.py`\n  - new label exists in both contract and helper catalogs\n- If the duplicate-comment suppression is implemented in workflow YAML, add a small static assertion so that regression is pinned.\n\nMissing-context note\n- I am assuming the allowed `files_touched` scope includes the files above, because the explicit whitelist was not included in the planning context.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "9f719bff4938efcd5a4393090591d64d5fc8e9da2f1f08b64af03dd9c39bcf7e",
+  "lineage": {
+    "issue_number": 2837,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26178010954",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26178010954",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2837"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260520172304_1dd89c1f4f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2837,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26178010954"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2837",
+  "timestamps": {
+    "created_at": "2026-05-20T17:23:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
