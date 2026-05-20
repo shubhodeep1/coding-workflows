@@ -575,6 +575,31 @@ def test_jq_filter_no_self_collision_on_non_actions_details_url() -> None:
 	assert _run_jq(payload, "12345") == "1"
 
 
+def test_local_sanitize_fallback_rewrites_all_invalid_utf8_like_shared_helper() -> None:
+	"""The degraded local fallback should mirror the shared helper's
+	best-effort contract for all-invalid input by leaving valid UTF-8 on
+	disk, even when every invalid byte is discarded."""
+	with tempfile.TemporaryDirectory(prefix="rb_judge_sanitize_") as td:
+		prompt_file = Path(td) / "invalid_prompt.txt"
+		prompt_file.write_bytes(b"\xff\xfe\xfa")
+		subprocess.run(
+			[
+				"bash",
+				"-c",
+				(
+					f"{_rb_judge_local_sanitize_fallback_block()}\n"
+					"iconv() { return 1; }\n"
+					f"sanitize_codex_prompt_file {shlex.quote(str(prompt_file))}\n"
+				),
+			],
+			cwd=str(REPO_ROOT),
+			capture_output=True,
+			text=True,
+			check=True,
+		)
+		assert prompt_file.read_bytes() == b""
+
+
 def main() -> int:
 	# Direct `python3 tests/<file>.py` entrypoint — sibling review-blocked
 	# regression modules use this harness, and allowlisted contract tests
