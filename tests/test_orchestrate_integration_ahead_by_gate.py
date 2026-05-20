@@ -42,10 +42,8 @@ import shutil
 import subprocess
 import tempfile
 import textwrap
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
-
-import pytest
 
 import sys
 
@@ -53,6 +51,18 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import orchestrate_lib  # noqa: E402  (path must be set above first)
+
+
+@contextmanager
+def _temp_path(tmp_path: Path | None, prefix: str):
+	if tmp_path is not None:
+		yield Path(tmp_path)
+		return
+	tmp_dir = Path(tempfile.mkdtemp(prefix=prefix))
+	try:
+		yield tmp_dir
+	finally:
+		shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -398,74 +408,78 @@ def _run_shell(
 # Tests — shell helper _integration_branch_ahead_of_default
 # ---------------------------------------------------------------------------
 
-def test_helper_returns_ahead_by_count_on_api_success(tmp_path):
-	_make_gh_stub(tmp_path, ahead_by_response="5")
-	result = _run_shell(
-		tmp_path,
-		'_integration_branch_ahead_of_default "orchestrator/project-192" "main"',
-	)
-	assert result.returncode == 0, result.stderr
-	assert result.stdout.strip() == "5"
+def test_helper_returns_ahead_by_count_on_api_success(tmp_path: Path | None = None):
+	with _temp_path(tmp_path, "integration-ahead-helper-") as tmp_path:
+		_make_gh_stub(tmp_path, ahead_by_response="5")
+		result = _run_shell(
+			tmp_path,
+			'_integration_branch_ahead_of_default "orchestrator/project-192" "main"',
+		)
+		assert result.returncode == 0, result.stderr
+		assert result.stdout.strip() == "5"
 
 
-def test_helper_returns_zero_when_branches_match(tmp_path):
-	# Same branch → trivially ahead_by=0, no API call.
-	_make_gh_stub(tmp_path, ahead_by_response=None)
-	result = _run_shell(
-		tmp_path,
-		'_integration_branch_ahead_of_default "main" "main"',
-	)
-	assert result.returncode == 0, result.stderr
-	assert result.stdout.strip() == "0"
-	# Crucially, no compare API call was issued for the same-branch case.
-	calls = _read_gh_calls(tmp_path)
-	assert not any(
-		any("/compare/" in tok for tok in c["argv"]) for c in calls
-	), calls
+def test_helper_returns_zero_when_branches_match(tmp_path: Path | None = None):
+	with _temp_path(tmp_path, "integration-ahead-branch-match-") as tmp_path:
+		# Same branch → trivially ahead_by=0, no API call.
+		_make_gh_stub(tmp_path, ahead_by_response=None)
+		result = _run_shell(
+			tmp_path,
+			'_integration_branch_ahead_of_default "main" "main"',
+		)
+		assert result.returncode == 0, result.stderr
+		assert result.stdout.strip() == "0"
+		# Crucially, no compare API call was issued for the same-branch case.
+		calls = _read_gh_calls(tmp_path)
+		assert not any(
+			any("/compare/" in tok for tok in c["argv"]) for c in calls
+		), calls
 
 
-def test_helper_fails_closed_on_api_error(tmp_path):
-	_make_gh_stub(tmp_path, ahead_by_response="error")
-	result = _run_shell(
-		tmp_path,
-		'_integration_branch_ahead_of_default "orchestrator/project-192" "main" '
-		'|| echo "FAIL-CLOSED rc=$?"',
-	)
-	assert result.returncode == 0, result.stderr
-	assert "FAIL-CLOSED" in result.stdout, result.stdout
+def test_helper_fails_closed_on_api_error(tmp_path: Path | None = None):
+	with _temp_path(tmp_path, "integration-ahead-api-error-") as tmp_path:
+		_make_gh_stub(tmp_path, ahead_by_response="error")
+		result = _run_shell(
+			tmp_path,
+			'_integration_branch_ahead_of_default "orchestrator/project-192" "main" '
+			'|| echo "FAIL-CLOSED rc=$?"',
+		)
+		assert result.returncode == 0, result.stderr
+		assert "FAIL-CLOSED" in result.stdout, result.stdout
 
 
-def test_helper_returns_zero_when_branch_was_deleted(tmp_path):
+def test_helper_returns_zero_when_branch_was_deleted(tmp_path: Path | None = None):
 	"""When the integration branch has been deleted (legitimate post-
 	merge state after `gh pr merge --delete-branch`), the helper must
 	return 0 without trying compare-API drift detection. Otherwise the
 	caller's pinned ``final_merge_status=merged`` state would be
 	cleared in steady-state after every successful finalize."""
-	# ahead_by_response="0" — but we set the branch existence probe to
-	# 404 first. The helper should short-circuit on the missing branch
-	# without ever hitting the compare endpoint.
-	_make_gh_stub(tmp_path, ahead_by_response="0")
-	# Override the branch existence probe to return 404 for the
-	# integration branch.
-	state_path = tmp_path / "gh_state.json"
-	state = json.loads(state_path.read_text())
-	# The branch name appears URL-percent-encoded in the git/ref/heads
-	# request, so we store the encoded form too — the integration_branch_
-	# exists helper uses jq's @uri filter.
-	state["missing_branch"] = "orchestrator/project-192"
-	state["missing_branch_uri"] = "orchestrator%2Fproject-192"
-	state_path.write_text(json.dumps(state))
-	result = _run_shell(
-		tmp_path,
-		'_integration_branch_ahead_of_default "orchestrator/project-192" "main"',
-	)
-	assert result.returncode == 0, result.stderr
-	assert result.stdout.strip() == "0"
-	# Verify no compare API call was issued — the short-circuit must
-	# precede compare.
-	calls = _read_gh_calls(tmp_path)
-	compare_calls = [c for c in calls if any("/compare/" in tok for tok in c["argv"])]
-	assert compare_calls == [], compare_calls
+	with _temp_path(tmp_path, "integration-ahead-branch-deleted-") as tmp_path:
+		# ahead_by_response="0" — but we set the branch existence probe to
+		# 404 first. The helper should short-circuit on the missing branch
+		# without ever hitting the compare endpoint.
+		_make_gh_stub(tmp_path, ahead_by_response="0")
+		# Override the branch existence probe to return 404 for the
+		# integration branch.
+		state_path = tmp_path / "gh_state.json"
+		state = json.loads(state_path.read_text())
+		# The branch name appears URL-percent-encoded in the git/ref/heads
+		# request, so we store the encoded form too — the integration_branch_
+		# exists helper uses jq's @uri filter.
+		state["missing_branch"] = "orchestrator/project-192"
+		state["missing_branch_uri"] = "orchestrator%2Fproject-192"
+		state_path.write_text(json.dumps(state))
+		result = _run_shell(
+			tmp_path,
+			'_integration_branch_ahead_of_default "orchestrator/project-192" "main"',
+		)
+		assert result.returncode == 0, result.stderr
+		assert result.stdout.strip() == "0"
+		# Verify no compare API call was issued — the short-circuit must
+		# precede compare.
+		calls = _read_gh_calls(tmp_path)
+		compare_calls = [c for c in calls if any("/compare/" in tok for tok in c["argv"])]
+		assert compare_calls == [], compare_calls
 
 
 # ---------------------------------------------------------------------------
@@ -483,31 +497,32 @@ def _finalize_state(*, final_merge_status: str, final_merge_pr: int | None) -> d
 	return state
 
 
-def test_finalize_returns_clean_when_pinned_merged_and_branch_contained(tmp_path):
+def test_finalize_returns_clean_when_pinned_merged_and_branch_contained(tmp_path: Path | None = None):
 	"""Baseline: state pinned to ``merged`` AND integration is fully
 	contained in default (ahead_by=0). Function returns 0 without
 	clearing the pin — the legitimate steady state once a project really
 	is done."""
-	_make_gh_stub(tmp_path, ahead_by_response="0")
-	state = _finalize_state(final_merge_status="merged", final_merge_pr=146)
-	result = _run_shell(
-		tmp_path,
-		'finalize_integration_merge_if_needed "orchestrator/project-192" "main" "Test project"; '
-		'echo "RC=$?"; jq -c . "${STATE_FILE}"',
-		state_blob=state,
-	)
-	assert result.returncode == 0, result.stderr
-	assert "RC=0" in result.stdout
-	stdout_lines = result.stdout.splitlines()
-	json_line = next(
-		line for line in reversed(stdout_lines) if line.startswith("{")
-	)
-	final_state = json.loads(json_line)
-	assert final_state["final_merge_status"] == "merged"
-	assert final_state["final_merge_pr"] == 146
+	with _temp_path(tmp_path, "integration-ahead-finalize-contained-") as tmp_path:
+		_make_gh_stub(tmp_path, ahead_by_response="0")
+		state = _finalize_state(final_merge_status="merged", final_merge_pr=146)
+		result = _run_shell(
+			tmp_path,
+			'finalize_integration_merge_if_needed "orchestrator/project-192" "main" "Test project"; '
+			'echo "RC=$?"; jq -c . "${STATE_FILE}"',
+			state_blob=state,
+		)
+		assert result.returncode == 0, result.stderr
+		assert "RC=0" in result.stdout
+		stdout_lines = result.stdout.splitlines()
+		json_line = next(
+			line for line in reversed(stdout_lines) if line.startswith("{")
+		)
+		final_state = json.loads(json_line)
+		assert final_state["final_merge_status"] == "merged"
+		assert final_state["final_merge_pr"] == 146
 
 
-def test_finalize_clears_pin_when_integration_ahead_of_default(tmp_path):
+def test_finalize_clears_pin_when_integration_ahead_of_default(tmp_path: Path | None = None):
 	"""Regression case from binance-blessings#135: state pinned to
 	``merged`` (because review_autofix's auto-merge fired early), but a
 	subsequent wave PR has since landed on the integration branch and
@@ -525,30 +540,31 @@ def test_finalize_clears_pin_when_integration_ahead_of_default(tmp_path):
 	Fix 3 contract: a pinned "merged" state with integration ahead of
 	default must NOT be treated as terminal.
 	"""
-	_make_gh_stub(tmp_path, ahead_by_response="2")
-	state = _finalize_state(final_merge_status="merged", final_merge_pr=146)
-	result = _run_shell(
-		tmp_path,
-		'finalize_integration_merge_if_needed "orchestrator/project-192" "main" "Test project" '
-		'|| echo "  (function returned non-zero; expected when the recreate path needs follow-up)"; '
-		'jq -c . "${STATE_FILE}"',
-		state_blob=state,
-	)
-	assert result.returncode == 0, result.stderr
-	stdout_lines = result.stdout.splitlines()
-	json_line = next(
-		line for line in reversed(stdout_lines) if line.startswith("{")
-	)
-	final_state = json.loads(json_line)
-	# Pin must NOT be terminal anymore — that is what makes the next
-	# tick reopen the final PR for the unmerged diff.
-	assert final_state["final_merge_status"] != "merged", final_state
-	# The stale recorded PR (146) must be gone so the recreate path can
-	# discover or open a fresh one.
-	assert final_state.get("final_merge_pr") != 146, final_state
+	with _temp_path(tmp_path, "integration-ahead-finalize-drift-") as tmp_path:
+		_make_gh_stub(tmp_path, ahead_by_response="2")
+		state = _finalize_state(final_merge_status="merged", final_merge_pr=146)
+		result = _run_shell(
+			tmp_path,
+			'finalize_integration_merge_if_needed "orchestrator/project-192" "main" "Test project" '
+			'|| echo "  (function returned non-zero; expected when the recreate path needs follow-up)"; '
+			'jq -c . "${STATE_FILE}"',
+			state_blob=state,
+		)
+		assert result.returncode == 0, result.stderr
+		stdout_lines = result.stdout.splitlines()
+		json_line = next(
+			line for line in reversed(stdout_lines) if line.startswith("{")
+		)
+		final_state = json.loads(json_line)
+		# Pin must NOT be terminal anymore — that is what makes the next
+		# tick reopen the final PR for the unmerged diff.
+		assert final_state["final_merge_status"] != "merged", final_state
+		# The stale recorded PR (146) must be gone so the recreate path can
+		# discover or open a fresh one.
+		assert final_state.get("final_merge_pr") != 146, final_state
 
 
-def test_finalize_clears_pin_fail_closed_on_compare_api_error(tmp_path):
+def test_finalize_clears_pin_fail_closed_on_compare_api_error(tmp_path: Path | None = None):
 	"""Fail-closed posture: when the compare API errors, the function
 	cannot prove that default contains the integration tip. Clear the
 	pin so the next tick can recreate the PR — better to do one extra
@@ -556,48 +572,65 @@ def test_finalize_clears_pin_fail_closed_on_compare_api_error(tmp_path):
 	ahead-of-default test above, we only assert the pin-clearing
 	contract since the function then falls through to the existing
 	recreate path which writes its own status / error messages."""
-	_make_gh_stub(tmp_path, ahead_by_response="error")
-	state = _finalize_state(final_merge_status="merged", final_merge_pr=146)
-	result = _run_shell(
-		tmp_path,
-		'finalize_integration_merge_if_needed "orchestrator/project-192" "main" "Test project" '
-		'|| echo "  (function returned non-zero when compare API errored — fail-closed clears the pin and forces a recreate path)"; '
-		'jq -c . "${STATE_FILE}"',
-		state_blob=state,
-	)
-	assert result.returncode == 0, result.stderr
-	stdout_lines = result.stdout.splitlines()
-	json_line = next(
-		line for line in reversed(stdout_lines) if line.startswith("{")
-	)
-	final_state = json.loads(json_line)
-	assert final_state["final_merge_status"] != "merged", final_state
-	assert final_state.get("final_merge_pr") != 146, final_state
+	with _temp_path(tmp_path, "integration-ahead-finalize-api-error-") as tmp_path:
+		_make_gh_stub(tmp_path, ahead_by_response="error")
+		state = _finalize_state(final_merge_status="merged", final_merge_pr=146)
+		result = _run_shell(
+			tmp_path,
+			'finalize_integration_merge_if_needed "orchestrator/project-192" "main" "Test project" '
+			'|| echo "  (function returned non-zero when compare API errored — fail-closed clears the pin and forces a recreate path)"; '
+			'jq -c . "${STATE_FILE}"',
+			state_blob=state,
+		)
+		assert result.returncode == 0, result.stderr
+		stdout_lines = result.stdout.splitlines()
+		json_line = next(
+			line for line in reversed(stdout_lines) if line.startswith("{")
+		)
+		final_state = json.loads(json_line)
+		assert final_state["final_merge_status"] != "merged", final_state
+		assert final_state.get("final_merge_pr") != 146, final_state
 
 
-def test_finalize_skips_recheck_when_superseded_by_main(tmp_path):
+def test_finalize_skips_recheck_when_superseded_by_main(tmp_path: Path | None = None):
 	"""``superseded-by-main`` is a deliberate terminal state — the
 	integration branch was abandoned because default moved ahead during
 	a sync. The re-check must NOT clear that pin."""
-	# Set ahead_by to a value that would normally clear a "merged" pin
-	# (5). If the function incorrectly re-checks for superseded-by-main
-	# too, this would mutate the state.
-	_make_gh_stub(tmp_path, ahead_by_response="5")
-	state = _finalize_state(
-		final_merge_status="superseded-by-main", final_merge_pr=None
-	)
-	state["sync"] = {"status": "superseded-by-main"}
-	result = _run_shell(
-		tmp_path,
-		'finalize_integration_merge_if_needed "orchestrator/project-192" "main" "Test project"; '
-		'echo "RC=$?"; jq -c . "${STATE_FILE}"',
-		state_blob=state,
-	)
-	assert result.returncode == 0, result.stderr
-	assert "RC=0" in result.stdout
-	stdout_lines = result.stdout.splitlines()
-	json_line = next(
-		line for line in reversed(stdout_lines) if line.startswith("{")
-	)
-	final_state = json.loads(json_line)
-	assert final_state["final_merge_status"] == "superseded-by-main"
+	with _temp_path(tmp_path, "integration-ahead-finalize-superseded-") as tmp_path:
+		# Set ahead_by to a value that would normally clear a "merged" pin
+		# (5). If the function incorrectly re-checks for superseded-by-main
+		# too, this would mutate the state.
+		_make_gh_stub(tmp_path, ahead_by_response="5")
+		state = _finalize_state(
+			final_merge_status="superseded-by-main", final_merge_pr=None
+		)
+		state["sync"] = {"status": "superseded-by-main"}
+		result = _run_shell(
+			tmp_path,
+			'finalize_integration_merge_if_needed "orchestrator/project-192" "main" "Test project"; '
+			'echo "RC=$?"; jq -c . "${STATE_FILE}"',
+			state_blob=state,
+		)
+		assert result.returncode == 0, result.stderr
+		assert "RC=0" in result.stdout
+		stdout_lines = result.stdout.splitlines()
+		json_line = next(
+			line for line in reversed(stdout_lines) if line.startswith("{")
+		)
+		final_state = json.loads(json_line)
+		assert final_state["final_merge_status"] == "superseded-by-main"
+
+
+def main() -> int:
+	for name in sorted(globals()):
+		if not name.startswith("test_"):
+			continue
+		obj = globals()[name]
+		if callable(obj):
+			obj()
+	print("OK: integration ahead-by gate regression tests passed")
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

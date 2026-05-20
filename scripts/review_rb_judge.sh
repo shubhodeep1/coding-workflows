@@ -66,7 +66,7 @@ if ! command -v _embed_input_file >/dev/null 2>&1; then
     _used=0
     if [ -f "${_state}" ]; then
       _used="$(cat "${_state}" 2>/dev/null)"
-      [ -n "${_used}" ] || _used=0
+      [[ "${_used}" =~ ^[0-9]+$ ]] || _used=0
     fi
     _budget_remaining=$(( _PROMPT_BUDGET_TOTAL_BYTES - _used ))
     if [ "${_budget_remaining}" -le 0 ]; then
@@ -81,7 +81,7 @@ if ! command -v _embed_input_file >/dev/null 2>&1; then
     fi
 
     _size="$(wc -c < "${_p}" 2>/dev/null | tr -d '[:space:]')"
-    [ -n "${_size}" ] || _size=0
+    [[ "${_size}" =~ ^[0-9]+$ ]] || _size=0
     if [ "${_size}" -le "${_effective_cap}" ]; then
       cat "${_p}"
       _emit_bytes="${_size}"
@@ -104,7 +104,7 @@ PY
       _emit_bytes="${_effective_cap}"
     fi
 
-    if [ -n "${_emit_bytes}" ] && [ "${_emit_bytes}" -gt 0 ] 2>/dev/null; then
+    if [[ "${_emit_bytes:-}" =~ ^[0-9]+$ ]] && [ "${_emit_bytes}" -gt 0 ]; then
       printf '%s\n' "$(( _used + _emit_bytes ))" > "${_state}" 2>/dev/null || true
     fi
   }
@@ -393,7 +393,7 @@ if ! [[ "${RB_JUDGE_PR_DIFF_MAX_BYTES}" =~ ^[0-9]+$ ]] || [ "${RB_JUDGE_PR_DIFF_
 fi
 PR_DIFF_TRUNCATED=false
 PR_DIFF_BYTES_TOTAL="$(printf '%s' "${PR_DIFF}" | wc -c | tr -cd '0-9' || true)"
-[ -n "${PR_DIFF_BYTES_TOTAL}" ] || PR_DIFF_BYTES_TOTAL=0
+[[ "${PR_DIFF_BYTES_TOTAL}" =~ ^[0-9]+$ ]] || PR_DIFF_BYTES_TOTAL=0
 if [ "${PR_DIFF_BYTES_TOTAL}" -gt "${RB_JUDGE_PR_DIFF_MAX_BYTES}" ]; then
   PR_DIFF_TRUNCATED_CONTENT=""
   if PR_DIFF_TRUNCATED_CONTENT="$(printf '%s' "${PR_DIFF}" | PYTHONDONTWRITEBYTECODE=1 python3 -c '
@@ -695,7 +695,7 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
   sanitize_codex_prompt_file "${RB_JUDGE_PROMPT}"
   if [ "${RB_JUDGE_PROMPT_SIZE_LOGGED}" != "true" ]; then
     RB_JUDGE_PROMPT_BYTES="$(wc -c < "${RB_JUDGE_PROMPT}" 2>/dev/null | tr -cd '0-9' || true)"
-    [ -n "${RB_JUDGE_PROMPT_BYTES}" ] || RB_JUDGE_PROMPT_BYTES=0
+    [[ "${RB_JUDGE_PROMPT_BYTES}" =~ ^[0-9]+$ ]] || RB_JUDGE_PROMPT_BYTES=0
     echo "Review-blocked judge prompt size: ${RB_JUDGE_PROMPT_BYTES} bytes (codex stdin cap: 1048576)."
     if [ "${RB_JUDGE_PROMPT_BYTES:-0}" -gt 950000 ]; then
       echo "::warning::Review-blocked judge prompt is ${RB_JUDGE_PROMPT_BYTES} bytes; close to or over codex 1 MB stdin cap. Expect turn/start failures unless RB_JUDGE_PR_DIFF_MAX_BYTES (current: ${RB_JUDGE_PR_DIFF_MAX_BYTES}) or upstream embed budgets are tightened."
