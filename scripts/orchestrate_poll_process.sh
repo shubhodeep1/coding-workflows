@@ -11566,6 +11566,34 @@ fi
     fi
     _stall_check_args+=(--max-recoveries-by-phase-json "$(printf '{\"ai:done\":%s}' "${MAX_STALL_RECOVERIES_DONE}")")
 
+    # Extract per-issue linked-PR headPushedAt from the per-tick wave
+    # details prefetch (_fetch_candidate_issue_details_graphql already
+    # ran upstream at line ~9471 — zero additional API calls per §15).
+    # check-stalls re-anchors the ai:done stall clock to
+    # max(status_since_ts, headPushedAt_epoch) so a multi-cycle
+    # review_autofix loop is not repeatedly flagged as stalled.  Other
+    # phases keep their legacy status_since_ts anchor.  Fail-open:
+    # missing or empty mapping leaves the legacy behaviour intact.
+    _head_pushed_at_json='{}'
+    if [ -n "${_current_wave_details_json:-}" ] && [ "${_current_wave_details_json}" != "{}" ]; then
+      _head_pushed_at_json="$(printf '%s' "${_current_wave_details_json}" | jq -c '
+        to_entries
+        | map(
+            select(
+              .value.linked_pr != null
+              and (.value.linked_pr | type == "object")
+              and .value.linked_pr.headPushedAt != null
+              and (.value.linked_pr.headPushedAt | type == "string")
+              and (.value.linked_pr.headPushedAt | length > 0)
+            )
+            | {key: .key, value: .value.linked_pr.headPushedAt}
+          )
+        | from_entries
+      ' 2>/dev/null || echo '{}')"
+      [ -n "${_head_pushed_at_json}" ] || _head_pushed_at_json='{}'
+    fi
+    _stall_check_args+=(--head-pushed-at-json "${_head_pushed_at_json}")
+
     STALLS_JSON="$(python3 scripts/orchestrate_lib.py check-stalls \
       "${_stall_check_args[@]}" 2>/dev/null || echo '{"ok":false,"stalls":[],"count":0}')"
 

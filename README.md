@@ -1231,6 +1231,16 @@ Fail-open: `_check_fresh_push_guard` returns "not fresh" (i.e. lets the existing
 
 Log prefix `STALL_SKIP issue=... reason=fresh_push pr=... pushed_age_secs=... phase=... action=...` is a public contract (CLAUDE.md §6 Naming Immutability) — downstream log analysis and dashboards pivot on it; renames require the alongside-old-name shim documented in §6.
 
+### Stall recovery: ai:done clock re-anchor
+
+`detect_stalls` (scripts/orchestrate_lib.py) normally measures stall duration as `now_ts - status_since_ts`, where `status_since_ts` only advances when the phase label changes. During a multi-cycle `review_autofix` loop the phase stays `ai:done` even though commits, editor pushes, and reviewer runs land every 35-45 minutes, so `status_since_ts`-only elapsed grows monotonically past `STALL_THRESHOLD_DONE_MINUTES` (120 min default) and the stall detector fires every cycle. The downstream guards (active-workflow guard, fresh-push guard, in-flight review guard at the empty-commit push site) catch the false-positive action, but the per-cycle detection still incurs guard-ladder work and log noise.
+
+For phase `ai:done` only, the effective stall anchor is `max(status_since_ts, headPushedAt_epoch)`. `headPushedAt` is the linked PR's last push time, already pulled into the per-tick `_current_wave_details_json` GraphQL prefetch via `_fetch_candidate_issue_details_graphql` (zero extra API calls per CLAUDE.md §15). When a fresh push landed within the stall threshold, the effective elapsed drops back below the threshold and the issue is no longer flagged as stalled, eliminating the per-cycle pseudo-stall while the autofix loop is converging.
+
+Scope is intentionally narrow — only `ai:done` is re-anchored. Other phases retain their existing `status_since_ts`-only semantics. The mapping is plumbed through the CLI as `--head-pushed-at-json` (a JSON object `{"<issue_num>": "<ISO 8601 timestamp>", ...}`).
+
+Fail-open: when `headPushedAt` is missing, null, the empty string, or unparseable, `detect_stalls` falls back to the legacy `status_since_ts`-only behaviour. Clock-skewed future timestamps are clamped at `now_ts` so a forward-drifting headPushedAt cannot make an issue appear perpetually fresh — the worst case is "treated as fresh this cycle, detected next cycle". The bash prefetch step fails open on any jq error and passes `{}`, so a GraphQL outage degrades cleanly to the legacy detector.
+
 ### Stall recovery: merge-conflict pre-dispatch override
 
 The standalone stall loop (`run_standalone_stall_recovery`) reroutes the `retrigger_review` recovery action to the conflict resolver (`_dispatch_review_for_conflicts`) whenever the latest linked PR is known to be in a merge-conflict state. Without this override, the retrigger path pushes an empty commit to the PR head branch to re-kick Review Autofix — but autofix operates on the branch as-is and cannot resolve a merge conflict with base, so the next stall cycle repeats the same no-op dispatch until `MAX_STALL_RECOVERIES_PER_ISSUE` is reached.

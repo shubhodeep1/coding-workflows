@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -1598,6 +1599,39 @@ def reconcile_wave_issue_status(
 	return "in_progress", "default_in_progress"
 
 
+# Phases whose stall clock is re-anchored to
+# `max(status_since_ts, headPushedAt_epoch)` when a linked-PR push
+# timestamp is available.  Currently only `ai:done` per Q2=A on the
+# review-consumer-repo-issue-7IQNj investigation: during a multi-cycle
+# review_autofix loop the phase stays `ai:done` while commits/reviewer
+# runs land every 35-45 min, so `status_since_ts`-only elapsed grows
+# monotonically past the 120-min threshold and the detector fires every
+# cycle.  Other phases keep the legacy `status_since_ts`-only anchor.
+_PHASES_WITH_PUSH_REANCHOR: frozenset[str] = frozenset({"ai:done"})
+
+
+def _parse_iso8601_to_epoch(iso_str: Any) -> int | None:
+	"""Parse an ISO 8601 timestamp into Unix epoch seconds.
+
+	Returns None on empty input, wrong type, or any parse error.
+	Tolerates the trailing 'Z' UTC suffix and microseconds (both are
+	emitted by GitHub's GraphQL `pushedDate` / `committedDate` fields).
+	Naive datetimes are interpreted as UTC, matching GitHub's contract.
+	"""
+	if not isinstance(iso_str, str) or not iso_str:
+		return None
+	try:
+		s = iso_str
+		if s.endswith("Z"):
+			s = s[:-1] + "+00:00"
+		dt = datetime.fromisoformat(s)
+		if dt.tzinfo is None:
+			dt = dt.replace(tzinfo=timezone.utc)
+		return int(dt.timestamp())
+	except (ValueError, TypeError):
+		return None
+
+
 def detect_stalls(
 	state: dict[str, Any],
 	issue_labels: dict[str, list[str]],
@@ -1609,6 +1643,7 @@ def detect_stalls(
 	enable_stall_judge: bool = True,
 	enable_stall_human_terminalization: bool = False,
 	max_recoveries_by_phase: dict[str, int] | None = None,
+	head_pushed_at: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
 	"""Detect stalled issues in the current wave.
 
@@ -1624,6 +1659,17 @@ def detect_stalls(
 	When *enable_stall_judge* is true and *stall_judge_trigger_count* is
 	reached (but still below *max_recoveries*), recovery action is
 	overridden to RUN_STALL_JUDGE_ACTION for non-dedicated phases.
+
+	*head_pushed_at* maps stringified GitHub issue numbers to the linked
+	PR's most recent head push timestamp (ISO 8601).  For phases listed
+	in `_PHASES_WITH_PUSH_REANCHOR` the stall clock is re-anchored to
+	`max(status_since_ts, head_pushed_at_epoch)` so an in-flight
+	review/autofix loop (which leaves the phase label unchanged across
+	cycles) is not repeatedly flagged as stalled.  Missing, null, or
+	unparseable timestamps fall back to the legacy `status_since_ts`
+	anchor (fail-open).  Future-dated timestamps are clamped at
+	*now_ts* to defend against clock skew making an issue appear
+	perpetually fresh.
 
 	Returns a list of dicts, each containing:
 		id, github_issue, phase, recovery_action,
@@ -1668,7 +1714,15 @@ def detect_stalls(
 		phase_threshold = effective_thresholds.get(phase, threshold_minutes)
 		threshold_secs = phase_threshold * 60
 
-		elapsed = now_ts - status_since
+		effective_anchor = status_since
+		if head_pushed_at and phase in _PHASES_WITH_PUSH_REANCHOR:
+			raw_pushed = head_pushed_at.get(str(gh_num))
+			pushed_epoch = _parse_iso8601_to_epoch(raw_pushed)
+			if pushed_epoch is not None:
+				pushed_epoch = min(pushed_epoch, now_ts)
+				effective_anchor = max(status_since, pushed_epoch)
+
+		elapsed = now_ts - effective_anchor
 		if elapsed < threshold_secs:
 			continue
 
@@ -2495,6 +2549,19 @@ def cmd_check_stalls(args: argparse.Namespace) -> int:
 			k: int(v) for k, v in json.loads(args.max_recoveries_by_phase_json).items()
 		}
 
+	head_pushed_at: dict[str, str] | None = None
+	if getattr(args, "head_pushed_at_json", None):
+		try:
+			raw = json.loads(args.head_pushed_at_json)
+		except (TypeError, ValueError, json.JSONDecodeError):
+			raw = None
+		if isinstance(raw, dict):
+			head_pushed_at = {
+				str(k): v
+				for k, v in raw.items()
+				if isinstance(v, str) and v
+			}
+
 	stalls = detect_stalls(
 		state, issue_labels, threshold, now_ts, max_recoveries,
 		phase_thresholds=phase_thresholds,
@@ -2502,6 +2569,7 @@ def cmd_check_stalls(args: argparse.Namespace) -> int:
 		enable_stall_judge=enable_stall_judge,
 		enable_stall_human_terminalization=enable_stall_human_terminalization,
 		max_recoveries_by_phase=max_recoveries_by_phase,
+		head_pushed_at=head_pushed_at,
 	)
 	_print_json({"ok": True, "stalls": stalls, "count": len(stalls)})
 	return 0
@@ -2619,6 +2687,21 @@ def build_parser() -> argparse.ArgumentParser:
 		help="Allow terminal escalate_human actions in the stall recovery ladder",
 	)
 	p_stalls.add_argument("--now-ts", default=None, help="Current epoch seconds (default: now)")
+	p_stalls.add_argument(
+		"--head-pushed-at-json",
+		default=None,
+		help=(
+			'Optional JSON: {"<issue_num>": "<ISO 8601 push timestamp>", ...} '
+			"mapping wave issues to the linked PR's most recent head push "
+			"time.  For phases that opt in (currently only ai:done), the "
+			"stall clock is re-anchored to max(status_since_ts, "
+			"headPushedAt_epoch), so a multi-cycle review_autofix loop "
+			"(which leaves the phase label unchanged across cycles) is "
+			"not repeatedly flagged as stalled.  Missing, null, or "
+			"unparseable entries fail open to the legacy status_since_ts "
+			"anchor.  Future-dated timestamps are clamped at --now-ts."
+		),
+	)
 	p_stalls.set_defaults(func=cmd_check_stalls)
 
 	p_ts = subparsers.add_parser("update-timestamps", help="Update issue phase timestamps in state")
