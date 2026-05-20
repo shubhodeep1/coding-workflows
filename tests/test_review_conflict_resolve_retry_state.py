@@ -261,7 +261,9 @@ def test_retry_state_escape_threshold_sets_escalated_and_summary(tmp_path: Path)
 
 def test_review_autofix_wires_escape_threshold_and_failure_comment_suppression() -> None:
 	body = REVIEW_AUTOFIX.read_text(encoding="utf-8")
+	resolve_body = RESOLVE_SCRIPT.read_text(encoding="utf-8")
+	assert 'SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"' in resolve_body
 	assert "RESOLVER_ESCAPE_THRESHOLD_N:" in body
 	assert "vars.RESOLVER_ESCAPE_THRESHOLD_N || '5'" in body
 	assert 'ensure_label_exists "ai:resolver-escalated" "${{ github.repository }}"' in body
-	assert "env.RESOLVER_ESCALATED != 'true'" in body
+	assert body.count("env.RESOLVER_ESCALATED != 'true'") >= 2

@@ -4001,7 +4001,7 @@ heal_integration_branch_conflict() {
     if printf '%s' "${final_pr_payload}" | jq -e . >/dev/null 2>&1; then
       final_pr_head_sha="$(printf '%s' "${final_pr_payload}" | jq -r '.head.sha // ""' 2>/dev/null || echo "")"
       final_pr_body="$(printf '%s' "${final_pr_payload}" | jq -r '.body // ""' 2>/dev/null || echo "")"
-      final_pr_mergeable="$(printf '%s' "${final_pr_payload}" | jq -r '.mergeable // empty' 2>/dev/null || echo "")"
+      final_pr_mergeable="$(printf '%s' "${final_pr_payload}" | jq -r 'if .mergeable != null then .mergeable else empty end' 2>/dev/null || echo "")"
     else
       echo "::warning::[integration-heal] Final PR #${final_pr} metadata fetch returned non-JSON; skipping resolver escape-valve gate this tick."
       final_pr_payload=""

@@ -7215,6 +7215,11 @@ def test_integration_conflict_redispatch_resumes_when_retry_state_head_sha_is_st
 	assert result["latest_state"]["integration_conflict_dispatch_count"] == 1
 
 
+def test_integration_conflict_mergeable_payload_reuse_preserves_false_values():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert "if .mergeable != null then .mergeable else empty end" in script
+
+
 def test_orchestrator_state_seeds_merged_issue_fingerprints_field():
 	# ensure_integration_conflict_state_fields must seed the new
 	# merged_issue_fingerprints field so downstream jq arithmetic and

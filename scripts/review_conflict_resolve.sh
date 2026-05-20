@@ -41,6 +41,8 @@
 
 set -euo pipefail
 
+SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"
+
 # Source gh_helpers.sh for sanitize_codex_prompt_file (and the broader
 # gh_retry / rate-limit helpers if they are needed later in this
 # script). Best-effort: a missing helpers file leaves the helper
