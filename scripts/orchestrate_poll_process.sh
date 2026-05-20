@@ -11576,7 +11576,7 @@ fi
     # missing or empty mapping leaves the legacy behaviour intact.
     _head_pushed_at_json='{}'
     if [ -n "${_current_wave_details_json:-}" ] && [ "${_current_wave_details_json}" != "{}" ]; then
-      _head_pushed_at_json="$(printf '%s' "${_current_wave_details_json}" | jq -c '
+      if ! _head_pushed_at_json="$(printf '%s' "${_current_wave_details_json}" | jq -c '
         to_entries
         | map(
             select(
@@ -11589,7 +11589,10 @@ fi
             | {key: .key, value: .value.linked_pr.headPushedAt}
           )
         | from_entries
-      ' 2>/dev/null || echo '{}')"
+      ' 2>/dev/null)"; then
+        echo "::warning::headPushedAt extraction failed during stall check; using empty fallback mapping." >&2
+        _head_pushed_at_json='{}'
+      fi
       [ -n "${_head_pushed_at_json}" ] || _head_pushed_at_json='{}'
     fi
     _stall_check_args+=(--head-pushed-at-json "${_head_pushed_at_json}")
