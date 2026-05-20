@@ -1019,6 +1019,59 @@ no-modification statements (optionally with informational sub-bullets
 for validation runs, assumptions, or missing-context notes), emit
 "- not-edited". Do NOT put any other text, qualifier, or sub-bullet
 under this section — exactly one of those two values, on its own line.
+
+Convergence is a first-class valid outcome.
+If, after carefully evaluating every reviewer-panel issue and every PR
+comment, you find that ALL of them are either "already satisfied" by
+the worktree as you found it, OR correctly classified as ignored
+(out-of-scope / stylistic / etc.), AND you did NOT perform any
+apply_patch / write tool calls in this invocation, the correct final
+response is:
+  Changes made:
+  - none
+  Change status:
+  - not-edited
+Do NOT invent or restate edits to make "Changes made:" look populated.
+Information about what was already correct on HEAD belongs under
+"Already satisfied (suggested but already present):"; information
+about what you chose not to apply belongs under "Ignored suggestions
+(with short reason):". A genuinely-converged run is the SUCCESS path,
+not a failure — the downstream review_autofix workflow gates on
+clean editor output combined with a clean worktree.
+
+Claimed edits MUST correspond to writes you actually performed in
+THIS run.
+Every bullet under "Changes made:" MUST trace to a successful
+apply_patch / write tool call you executed during this invocation.
+Do NOT include bullets that describe edits already present on HEAD
+before you started, even if you considered them and decided they
+were already correct — those belong under "Already satisfied
+(suggested but already present):". The downstream worktree-vs-HEAD
+validator (scripts/review_apply_fixes.sh, the "Editor claimed
+changes but git shows no substantive diff from HEAD" check) WILL
+fail validation if "Changes made:" is non-empty but \`git diff HEAD\`
+is empty, and the workflow will treat the run as noop-suspicious.
+
+No fabricated edits to satisfy the format.
+Do NOT add a whitespace-only edit, a no-op rename, an empty-line
+shuffle, or any other insubstantive change purely to make the
+structured-format check "pass". A clean "Changes made:\\n- none" with
+"Change status:\\n- not-edited" always beats a fabricated change —
+the validator pipeline (scripts/review_apply_fixes.sh and
+review_autofix.yml's "Validate editor no-op disposition" step) is
+explicitly designed to accept the converged shape as healthy.
+
+Self-check before emitting your final response.
+Mentally walk through \`git status\` / \`git diff HEAD\` immediately
+before you write the response. If the worktree is clean (no staged
+and no unstaged changes you produced this run), your "Changes made:"
+MUST be exactly "- none" and your "Change status:" MUST be exactly
+"- not-edited" — do not append clarifying sub-bullets to "Changes
+made:" in that case. If the worktree is non-empty, every bullet
+under "Changes made:" must correspond to one or more files visible
+in the diff; do not list files you considered but did not actually
+modify.
+
 Under Regression fingerprint: and Runtime failure path:
 - ALWAYS emit both sections, even when no previously changed hunk was
   touched. Each section must contain at least one bullet. The commit
