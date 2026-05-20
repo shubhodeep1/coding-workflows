@@ -20,6 +20,14 @@ shell-side recheck (``_integration_branch_ahead_of_default`` +
 ``finalize_integration_merge_if_needed``) via a sourced-function harness
 with a fake ``gh`` on the PATH.
 
+The end-to-end regression test that drives the full poll loop through
+``judge=complete + wave_complete=true + ahead_by>0`` (the bitsafe.io#325
+deadlock — where PR #2778's ``project_complete`` gate collided with the
+pre-existing "judge cannot declare complete while waves remain" override
+at ``orchestrate_poll_process.sh:12090``) lives next to the other
+complete-verdict poller tests in
+``tests/test_orchestrate_poll_process.py::test_complete_verdict_falls_through_to_finalize_on_integration_drift``,
+which is where the full poller harness (``_run_poller``) is wired up.
 Each test isolates one regression and reads naturally as a description of
 the contract the code now upholds.
 """
@@ -40,8 +48,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import orchestrate_lib  # noqa: E402  (path must be set above first)
-
-
 # ---------------------------------------------------------------------------
 # Helpers — Python (cmd_check_wave_status)
 # ---------------------------------------------------------------------------
