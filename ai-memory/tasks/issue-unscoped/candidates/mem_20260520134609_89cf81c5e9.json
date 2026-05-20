@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:405-411 | severity=low | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: A stale comment still reflects the old fallback pattern even though the numeric guard has already been updated.\n  WHY: The runtime path no longer fails, but the review flagged inconsistent documentation context around the guard.\n- scripts/review_rb_judge.sh:109-112 | severity=low | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: There is a separate numeric validation location for `_emit_bytes` / `RB_JUDGE_PROMPT_BYTES` that is less visible during review.\n  WHY: The guards themselves are correct, but the reviewer called out the duplicated defensive validation site as a maintainability concern.\n- .github/workflows/test-and-mark-stable.yml:3241 | severity=low | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_editor_noop_cascade_contract.py` is invoked twice in the Unit tests step.\n  WHY: The duplicate invocation reruns the same test unnecessarily, wasting CI time and producing duplicate output.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Automated forward-merge of stable into main that resolves merge conflicts in the listed files and preserves stable's commits via \"Create a merge commit\".\n  expected_change_site: The forward-merge PR itself + stable-gate test allowlist + regression tests for the integration-drift deadlock\n  confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: All core changes (numeric guards, pending-wave override narrowing, new test_complete_verdict_* regression tests, test harness extensions for `compare_ahead_by`, duplicate test removal) appear in the PR_DIFF and LAST_RUN_DIFF; PR comments confirm prior autofix iterations addressed stray-fi, numeric-validation, pytest-dependency, and duplicate workflow findings.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/review_rb_judge.sh:405-411 | ISSUE_CONFIDENCE: 5\n  Problem: While the numeric guard `[[ \"${PR_DIFF_BYTES_TOTAL}\" =~ ^[0-9]+$ ]] || PR_DIFF_BYTES_TOTAL=0` prevents crashes from non-numeric `wc -c` output, the guard is slightly out of sync with the main block: the guard is already applied in the main diff section, but a stale comment referencing the old fallback pattern remains.\n  Why it fails at runtime: No runtime failure\u2014the guard now correctly sets `PR_DIFF_BYTES_TOTAL=0` on non-numeric output before the `-gt` test. The finding is about stale documentation context only.\n- scripts/review_rb_judge.sh:109-112 | ISSUE_CONFIDENCE: 3\n  Problem: While numeric guards for `_emit_bytes` and `RB_JUDGE_PROMPT_BYTES` are hardened, there remains a separate numeric validation location at line 713 that is less visible during review.\n  Why it fails at runtime: The hardened guards prevent crashes; the secondary location is defensive and does not reduce correctness.\n- .github/workflows/test-and-mark-stable.yml:3241 | ISSUE_CONFIDENCE: 5\n  Problem: Duplicate invocation of `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_editor_noop_cascade_contract.py` in the Unit tests step causes redundant test execution and wastes CI runner time.\n  Why it fails at runtime: CI spends extra time running the same test twice, producing duplicate output and delaying other steps unnecessarily.\n- Requirement: Automated forward-merge of stable into main that resolves merge conflicts in the listed files and preserves stable's commits via \"Create a merge commit\".\n  Expected change site: The forward-merge PR itself + stable-gate test allowlist + regression tests for the integration-drift deadlock.\n  Evidence of absence: All core changes (numeric guards, pending-wave override narrowing, new test_complete_verdict_* regression tests, test harness extensions for `compare_ahead_by`, duplicate test removal) appear in the PR_DIFF and LAST_RUN_DIFF; PR comments confirm prior autofix iterations addressed stray-fi, numeric-validation, pytest-dependency, and duplicate workflow findings. No deliverables remain missing.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "84ba7bb793039013bc7187a8401ee3779a1d0e6aa038f400c16bb33a2a706604",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2817,
+    "run_id": "26165162682",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26165162682",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260520134609_89cf81c5e9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2817,
+    "run_id": "26165162682"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-20T13:46:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
