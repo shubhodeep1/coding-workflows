@@ -29,14 +29,11 @@ from __future__ import annotations
 import io
 import json
 import os
-import shutil
 import subprocess
 import tempfile
 import textwrap
 from contextlib import redirect_stdout
 from pathlib import Path
-
-import pytest
 
 import sys
 
@@ -592,3 +589,34 @@ def test_finalize_skips_recheck_when_superseded_by_main(tmp_path):
 	)
 	final_state = json.loads(json_line)
 	assert final_state["final_merge_status"] == "superseded-by-main"
+
+
+def main() -> int:
+	# Direct `python3 tests/<file>.py` entrypoint — CI and the stable-gate
+	# workflows run tests via explicit allowlists rather than pytest
+	# discovery, so without this block the file would import successfully and
+	# exit 0 without exercising the regression coverage.
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	passed = 0
+	failed = 0
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			if func.__code__.co_argcount == 0:
+				func()
+			elif func.__code__.co_argcount == 1:
+				with tempfile.TemporaryDirectory() as td:
+					func(Path(td))
+			else:
+				raise TypeError(f"unsupported test signature: {name}")
+			print(f"  PASS  {name}")
+			passed += 1
+		except Exception as exc:
+			print(f"  FAIL  {name}: {exc}")
+			failed += 1
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

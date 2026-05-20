@@ -37,6 +37,15 @@ fi
 if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   sanitize_codex_prompt_file() { :; }
 fi
+# Some harnesses stub only `_embed_input_file`; keep prompt-budget lifecycle
+# helpers safe in that degraded mode so prompt assembly / EXIT cleanup do not
+# fail when budgeting support is unavailable.
+if ! command -v _init_prompt_budget >/dev/null 2>&1; then
+  _init_prompt_budget() { :; }
+fi
+if ! command -v _cleanup_prompt_budget >/dev/null 2>&1; then
+  _cleanup_prompt_budget() { :; }
+fi
 if ! command -v _embed_input_file >/dev/null 2>&1; then
   : "${_PROMPT_BUDGET_TOTAL_BYTES:=800000}"
   _prompt_budget_state_file() {

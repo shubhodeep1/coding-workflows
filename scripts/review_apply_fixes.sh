@@ -1192,7 +1192,12 @@ _hb_tmpdir=""
 _hb_fifo=""
 trap '[ -n "${_hb_tmpdir:-}" ] && rm -rf "${_hb_tmpdir}" 2>/dev/null || true' EXIT
 
-_REFUSAL_REGEX="I'?m sorry,? but I (can ?not|can.?t) assist|I (can ?not|can.?t) help with that"
+# Match only standalone OpenAI-style refusal lines, not incidental prose in
+# an otherwise-valid structured summary (for example an Ignored suggestions
+# bullet explaining it can't help with one suggestion). The success-path
+# validator and the retry-loop short-circuit share this anchored pattern so
+# the two checks stay in lockstep without false-positive rejection.
+_REFUSAL_REGEX="(^I'?m sorry,? but I (can ?not|can.?t) assist( with that request)?\\.?$|^I (can ?not|can.?t) help with that( request)?\\.?$)"
 rm -f "${PREVIOUS_REVIEWS_DIR}/editor_refused.flag" 2>/dev/null || true
 
 attempt=1

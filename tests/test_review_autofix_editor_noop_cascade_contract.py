@@ -364,12 +364,21 @@ def test_review_apply_fixes_fallback_distinguishes_refusal() -> None:
 def test_review_apply_fixes_centralizes_refusal_regex() -> None:
 	"""The refusal regex should be defined once in the shell script and
 	reused for both the structured-output validator and the retry-loop
-	short-circuit so the two checks cannot drift."""
+	short-circuit so the two checks cannot drift. The pattern should stay
+	line-anchored so incidental prose inside a valid structured summary does
+	not look like a provider refusal."""
 	text = _review_apply_fixes_text()
-	expected_regex = "_REFUSAL_REGEX=\"I'?m sorry,? but I (can ?not|can.?t) assist|I (can ?not|can.?t) help with that\""
-	assert expected_regex in text, (
+	assert '_REFUSAL_REGEX="(' in text, (
 		"review_apply_fixes.sh must define `_REFUSAL_REGEX` exactly once so "
 		"the validator and short-circuit share the same refusal pattern."
+	)
+	assert "^I'?m sorry,? but I (can ?not|can.?t) assist" in text, (
+		"The refusal regex must still match OpenAI-style `I'm sorry, but I "
+		"cannot assist` lines."
+	)
+	assert "^I (can ?not|can.?t) help with that( request)?\\\\.?$" in text, (
+		"The refusal regex should stay line-anchored so incidental prose in a "
+		"valid editor summary does not trip the refusal path."
 	)
 	assert text.count('${_REFUSAL_REGEX}') == 2, (
 		"review_apply_fixes.sh must reuse `${_REFUSAL_REGEX}` in both refusal "
