@@ -6952,7 +6952,7 @@ _check_merged_pr_guard() {
 
 # _check_fresh_push_guard — Shared guard used by both stall recovery
 # paths.  Returns 0 when the linked PR's head commit was pushed within
-# the last _FRESH_PUSH_SUPPRESS_SECS (30 minutes, hardcoded) AND the
+# the last _FRESH_PUSH_SUPPRESS_SECS (50 minutes, hardcoded) AND the
 # phase is one where autofix-driven commits are expected
 # (ai:done, ai:ready-to-merge).  Returns 1 otherwise.
 #
@@ -6964,9 +6964,16 @@ _check_merged_pr_guard() {
 # and the follow-on dispatch is still in-flight).  A fresh pushedDate
 # is a more reliable "work landed recently" signal.
 #
-# The 30-minute window is deliberately not configurable (per project
-# decision Q2=B on issue investigate-stall-recovery-dx7zm).  A
-# longer window would risk hiding genuinely hung autofix loops.
+# The window is deliberately not configurable (per project decision
+# Q2=B on issue investigate-stall-recovery-dx7zm — a tunable knob
+# would invite consumers to widen it indefinitely and mask hung
+# autofix loops).  The earlier 30-minute default originally chosen
+# there predated typical review_autofix cycle times of 35-45 minutes
+# observed on busy consumer repos (e.g. tele-funtoken-msg-scoring
+# PRs #3057, #3062), so a single cycle outlasted that old window and
+# the guard never fired between cycles.  The shipped 50-minute window
+# fits one full autofix cycle; longer windows would start hiding
+# genuinely hung loops.
 #
 # Fails open (returns 1 — guard does NOT fire) when:
 #   - phase is outside {ai:done, ai:ready-to-merge}
@@ -6984,7 +6991,7 @@ _check_merged_pr_guard() {
 #   $1 — issue number (for logging only)
 #   $2 — linked_pr JSON entry ({number,state,merged,headPushedAt} or "null"/empty)
 #   $3 — phase label (e.g. "ai:done")
-_FRESH_PUSH_SUPPRESS_SECS=1800
+_FRESH_PUSH_SUPPRESS_SECS=3000
 _check_fresh_push_guard() {
   local issue_num="$1"
   local linked_json="$2"
@@ -11558,6 +11565,37 @@ fi
       _stall_check_args+=(--phase-thresholds-json "${PHASE_THRESHOLDS_JSON}")
     fi
     _stall_check_args+=(--max-recoveries-by-phase-json "$(printf '{\"ai:done\":%s}' "${MAX_STALL_RECOVERIES_DONE}")")
+
+    # Extract per-issue linked-PR headPushedAt from the per-tick wave
+    # details prefetch (_fetch_candidate_issue_details_graphql already
+    # ran upstream at line ~9471 — zero additional API calls per §15).
+    # check-stalls re-anchors the ai:done stall clock to
+    # max(status_since_ts, headPushedAt_epoch) so a multi-cycle
+    # review_autofix loop is not repeatedly flagged as stalled.  Other
+    # phases keep their legacy status_since_ts anchor.  Fail-open:
+    # missing or empty mapping leaves the legacy behaviour intact.
+    _head_pushed_at_json='{}'
+    if [ -n "${_current_wave_details_json:-}" ] && [ "${_current_wave_details_json}" != "{}" ]; then
+      if ! _head_pushed_at_json="$(printf '%s' "${_current_wave_details_json}" | jq -c '
+        to_entries
+        | map(
+            select(
+              .value.linked_pr != null
+              and (.value.linked_pr | type == "object")
+              and .value.linked_pr.headPushedAt != null
+              and (.value.linked_pr.headPushedAt | type == "string")
+              and (.value.linked_pr.headPushedAt | length > 0)
+            )
+            | {key: .key, value: .value.linked_pr.headPushedAt}
+          )
+        | from_entries
+      ' 2>/dev/null)"; then
+        echo "::warning::headPushedAt extraction failed during stall check; using empty fallback mapping." >&2
+        _head_pushed_at_json='{}'
+      fi
+      [ -n "${_head_pushed_at_json}" ] || _head_pushed_at_json='{}'
+    fi
+    _stall_check_args+=(--head-pushed-at-json "${_head_pushed_at_json}")
 
     STALLS_JSON="$(python3 scripts/orchestrate_lib.py check-stalls \
       "${_stall_check_args[@]}" 2>/dev/null || echo '{"ok":false,"stalls":[],"count":0}')"

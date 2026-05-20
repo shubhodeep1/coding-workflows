@@ -562,6 +562,318 @@ def test_detect_stalls_uses_ladder_when_stall_judge_disabled_for_implementing_ph
 	assert stalls[0]["recovery_action"] == orchestrate_lib.STALL_RECOVERY_ACTIONS["ai:implementing"][1]
 
 
+def _iso_z(epoch: int) -> str:
+	"""Render a Unix epoch as an ISO 8601 UTC string with the trailing Z suffix.
+
+	Mirrors GitHub's GraphQL ``pushedDate`` / ``committedDate`` shape so the
+	re-anchor tests below exercise the same parser path as production input.
+	"""
+	import datetime as _dt
+	return _dt.datetime.fromtimestamp(epoch, tz=_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _ai_done_state_past_threshold(now_ts: int) -> tuple[dict, dict]:
+	"""Build a wave with one ``ai:done`` issue whose ``status_since_ts`` sits
+	200 minutes in the past, comfortably past the 120-minute ``ai:done``
+	stall threshold so any failure to re-anchor still surfaces as a stall.
+	"""
+	state = _make_state()
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = now_ts - 200 * 60
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 0
+	labels = {"10": ["ai:done"], "11": ["ai:merged"]}
+	return state, labels
+
+
+def test_detect_stalls_ai_done_reanchors_to_fresh_head_pushed_at():
+	"""Q2=A: an ``ai:done`` issue whose linked PR was pushed inside the
+	stall window must NOT be flagged as stalled, even when
+	``status_since_ts`` alone would put it well past the threshold.
+	"""
+	now_ts = 1_700_000_000
+	state, labels = _ai_done_state_past_threshold(now_ts)
+
+	# Push happened 30 minutes ago — well inside the 120-min ai:done window,
+	# so the re-anchor must clamp the effective elapsed back below threshold.
+	head_pushed_at = {"10": _iso_z(now_ts - 30 * 60)}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=now_ts,
+		head_pushed_at=head_pushed_at,
+	)
+
+	assert stalls == [], (
+		f"Fresh head-push should re-anchor ai:done out of stalled set; got {stalls!r}"
+	)
+
+
+def test_detect_stalls_ai_done_still_stalled_when_head_push_is_also_stale():
+	"""Re-anchor must NOT mask a genuine stall: when ``headPushedAt`` itself
+	is older than the stall threshold, the issue must still be flagged.
+	"""
+	now_ts = 1_700_000_000
+	state, labels = _ai_done_state_past_threshold(now_ts)
+
+	# Push happened 180 minutes ago — still past the 120-min threshold.
+	head_pushed_at = {"10": _iso_z(now_ts - 180 * 60)}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=now_ts,
+		head_pushed_at=head_pushed_at,
+	)
+
+	assert len(stalls) == 1, stalls
+	assert stalls[0]["github_issue"] == 10
+	# stall_duration_minutes reflects the re-anchored elapsed (now - max(status_since, push))
+	assert stalls[0]["stall_duration_minutes"] == 180
+
+
+def test_detect_stalls_reanchor_scope_excludes_non_ai_done_phases():
+	"""Q2=A scopes the re-anchor to ``ai:done`` only.  Other phases keep
+	the legacy ``status_since_ts``-only anchor, so a fresh head push on an
+	``ai:implementing`` issue must NOT suppress the stall flag.
+	"""
+	now_ts = 1_700_000_000
+	state = _make_state()
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = now_ts - 200 * 60
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 0
+	# ai:implementing has the same 120-min default threshold as ai:done, so the
+	# only thing standing between "stalled" and "not stalled" is the re-anchor.
+	labels = {"10": ["ai:implementing"], "11": ["ai:merged"]}
+
+	head_pushed_at = {"10": _iso_z(now_ts - 30 * 60)}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=now_ts,
+		head_pushed_at=head_pushed_at,
+	)
+
+	assert len(stalls) == 1, (
+		f"Re-anchor must NOT apply to ai:implementing; got {stalls!r}"
+	)
+	assert stalls[0]["phase"] == "ai:implementing"
+
+
+def test_detect_stalls_reanchor_fails_open_on_missing_entry():
+	"""Fail-open: when the head-push mapping is provided but contains no
+	entry for a given issue, the legacy ``status_since_ts`` anchor is used.
+	"""
+	now_ts = 1_700_000_000
+	state, labels = _ai_done_state_past_threshold(now_ts)
+
+	# Mapping is non-empty but lacks an entry for issue 10.
+	head_pushed_at = {"99": _iso_z(now_ts - 30 * 60)}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=now_ts,
+		head_pushed_at=head_pushed_at,
+	)
+
+	assert len(stalls) == 1, stalls
+	assert stalls[0]["github_issue"] == 10
+
+
+def test_detect_stalls_reanchor_fails_open_on_unparseable_timestamp():
+	"""Fail-open: an unparseable ISO 8601 string must not crash detection
+	and must not suppress the stall — the legacy anchor remains in effect.
+	"""
+	now_ts = 1_700_000_000
+	state, labels = _ai_done_state_past_threshold(now_ts)
+
+	head_pushed_at = {"10": "not-an-iso-8601-string"}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=now_ts,
+		head_pushed_at=head_pushed_at,
+	)
+
+	assert len(stalls) == 1, stalls
+	assert stalls[0]["github_issue"] == 10
+
+
+def test_detect_stalls_reanchor_clamps_future_dated_head_push_to_now():
+	"""Clock-skew defence: a future-dated ``headPushedAt`` (clock skew or a
+	bogus value) must be clamped at ``now_ts`` rather than making the issue
+	look perpetually fresh.  The clamped anchor still moves the effective
+	elapsed to 0, so the issue is treated as fresh until wall-clock time
+	reaches the future timestamp.  Tests the clamp specifically by
+	asserting the issue drops out of the stalled set on this cycle.
+	"""
+	now_ts = 1_700_000_000
+	state, labels = _ai_done_state_past_threshold(now_ts)
+
+	# Timestamp three hours in the future — clamped at now_ts.
+	head_pushed_at = {"10": _iso_z(now_ts + 3 * 60 * 60)}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=now_ts,
+		head_pushed_at=head_pushed_at,
+	)
+
+	assert stalls == [], (
+		f"Future-dated head push must clamp at now_ts, not propagate; got {stalls!r}"
+	)
+
+
+def test_detect_stalls_reanchor_parses_iso_with_microseconds_and_z_suffix():
+	"""GitHub's GraphQL emits both ``2023-11-14T21:43:20Z`` and
+	``2023-11-14T21:43:20.123456Z`` shapes.  Both must parse cleanly.
+	"""
+	now_ts = 1_700_000_000
+	state, labels = _ai_done_state_past_threshold(now_ts)
+
+	import datetime as _dt
+	fresh_with_us = _dt.datetime.fromtimestamp(
+		now_ts - 30 * 60, tz=_dt.timezone.utc
+	).strftime("%Y-%m-%dT%H:%M:%S.123456Z")
+	head_pushed_at = {"10": fresh_with_us}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=now_ts,
+		head_pushed_at=head_pushed_at,
+	)
+
+	assert stalls == [], (
+		f"ISO 8601 with microseconds + Z suffix must parse; got {stalls!r}"
+	)
+
+
+def test_detect_stalls_reanchor_no_op_when_head_pushed_at_is_none():
+	"""Calling ``detect_stalls`` without the new kwarg must preserve every
+	pre-existing semantic exactly — the new logic is opt-in via the kwarg.
+	"""
+	now_ts = 1_700_000_000
+	state, labels = _ai_done_state_past_threshold(now_ts)
+
+	stalls_legacy = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=now_ts,
+	)
+	stalls_none = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=now_ts,
+		head_pushed_at=None,
+	)
+	stalls_empty = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=now_ts,
+		head_pushed_at={},
+	)
+
+	assert stalls_legacy == stalls_none == stalls_empty
+	assert len(stalls_legacy) == 1
+	assert stalls_legacy[0]["github_issue"] == 10
+
+
+def test_parse_iso8601_to_epoch_handles_common_shapes_and_failures():
+	"""Direct coverage of the parser helper used by the ai:done re-anchor.
+
+	The helper feeds untrusted strings from GitHub's GraphQL responses, so
+	the contract is "return a finite integer epoch or None — never raise".
+	"""
+	# Z suffix (the common GitHub shape)
+	assert orchestrate_lib._parse_iso8601_to_epoch("2023-11-14T21:43:20Z") == 1_699_998_200
+	# Z suffix with microseconds
+	assert orchestrate_lib._parse_iso8601_to_epoch("2023-11-14T21:43:20.500Z") == 1_699_998_200
+	# Explicit +00:00 offset
+	assert orchestrate_lib._parse_iso8601_to_epoch("2023-11-14T21:43:20+00:00") == 1_699_998_200
+	# Non-UTC offset: 21:43:20+02:00 = 19:43:20Z = epoch 1_699_990_000... let's compute
+	# 1_699_998_200 - 2*3600 = 1_699_991_000
+	assert orchestrate_lib._parse_iso8601_to_epoch("2023-11-14T21:43:20+02:00") == 1_699_991_000
+	# Naive datetime (interpreted as UTC per GitHub contract)
+	assert orchestrate_lib._parse_iso8601_to_epoch("2023-11-14T21:43:20") == 1_699_998_200
+
+	# Failure modes — must return None, must not raise.
+	assert orchestrate_lib._parse_iso8601_to_epoch("") is None
+	assert orchestrate_lib._parse_iso8601_to_epoch(None) is None
+	assert orchestrate_lib._parse_iso8601_to_epoch("not-a-date") is None
+	assert orchestrate_lib._parse_iso8601_to_epoch(12345) is None
+	assert orchestrate_lib._parse_iso8601_to_epoch([]) is None
+	assert orchestrate_lib._parse_iso8601_to_epoch("2023-99-99T99:99:99Z") is None
+
+
+def test_cmd_check_stalls_parses_head_pushed_at_json_and_threads_it_through(tmp_path=None):
+	"""``cmd_check_stalls`` must accept ``--head-pushed-at-json`` and pass
+	the parsed mapping into ``detect_stalls``.  Validates the CLI wiring
+	added alongside the re-anchor.
+	"""
+	# tmp_path arg is optional so this test runs under both pytest and the
+	# project's plain-python runner (which doesn't inject fixtures).
+	import pathlib
+	import shutil
+	import tempfile
+
+	td_owner = None
+	if tmp_path is None:
+		td_owner = tempfile.mkdtemp(prefix="stall_reanchor_cli_")
+		tmp_path = pathlib.Path(td_owner)
+	try:
+		now_ts = 1_700_000_000
+		state, _labels = _ai_done_state_past_threshold(now_ts)
+		state_path = tmp_path / "state.json"
+		state_path.write_text(json.dumps(state), encoding="utf-8")
+
+		captured: dict = {}
+		original = orchestrate_lib.detect_stalls
+
+		def _capturing_detect_stalls(*args, **kwargs):
+			captured["head_pushed_at"] = kwargs.get("head_pushed_at")
+			return original(*args, **kwargs)
+
+		orchestrate_lib.detect_stalls = _capturing_detect_stalls
+		try:
+			parser = orchestrate_lib.build_parser()
+			args = parser.parse_args([
+				"check-stalls",
+				"--state-file", str(state_path),
+				"--labels-json", json.dumps({"10": ["ai:done"], "11": ["ai:merged"]}),
+				"--threshold-minutes", "120",
+				"--now-ts", str(now_ts),
+				"--head-pushed-at-json", json.dumps({"10": _iso_z(now_ts - 30 * 60), "11": ""}),
+			])
+			rc = orchestrate_lib.cmd_check_stalls(args)
+		finally:
+			orchestrate_lib.detect_stalls = original
+
+		assert rc == 0
+		assert captured.get("head_pushed_at") is not None
+		# Empty-string entry for "11" must be filtered out by the CLI parser
+		# so detect_stalls never sees it.
+		assert "11" not in captured["head_pushed_at"]
+		assert "10" in captured["head_pushed_at"]
+	finally:
+		if td_owner is not None:
+			shutil.rmtree(td_owner, ignore_errors=True)
+
+
 def test_resolve_stall_recovery_action_allows_human_terminalization_when_enabled():
 	action = orchestrate_lib.resolve_stall_recovery_action(
 		"ai:implementing",
@@ -703,6 +1015,7 @@ def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_with_trigg
 		enable_stall_judge: bool = True,
 		enable_stall_human_terminalization: bool = False,
 		max_recoveries_by_phase: dict[str, int] | None = None,
+		head_pushed_at: dict[str, str] | None = None,
 	) -> list[dict[str, object]]:
 		captured["state"] = state
 		captured["issue_labels"] = issue_labels
@@ -883,6 +1196,7 @@ def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_when_expli
 		enable_stall_judge: bool = False,
 		enable_stall_human_terminalization: bool = False,
 		max_recoveries_by_phase: dict[str, int] | None = None,
+		head_pushed_at: dict[str, str] | None = None,
 	) -> list[dict[str, object]]:
 		captured["state"] = state
 		captured["issue_labels"] = issue_labels
@@ -938,6 +1252,7 @@ def test_cmd_check_stalls_forwards_human_terminalization_flag_to_detect_stalls()
 		enable_stall_judge: bool = False,
 		enable_stall_human_terminalization: bool = False,
 		max_recoveries_by_phase: dict[str, int] | None = None,
+		head_pushed_at: dict[str, str] | None = None,
 	) -> list[dict[str, object]]:
 		captured["max_recoveries_by_phase"] = max_recoveries_by_phase
 		captured["enable_stall_human_terminalization"] = enable_stall_human_terminalization
@@ -975,6 +1290,7 @@ def test_cmd_check_stalls_forwards_phase_specific_max_recoveries_to_detect_stall
 		enable_stall_judge: bool = False,
 		enable_stall_human_terminalization: bool = False,
 		max_recoveries_by_phase: dict[str, int] | None = None,
+		head_pushed_at: dict[str, str] | None = None,
 	) -> list[dict[str, object]]:
 		captured["max_recoveries_by_phase"] = max_recoveries_by_phase
 		return []
@@ -1009,6 +1325,7 @@ def test_cmd_check_stalls_forwards_phase_specific_recovery_caps_to_detect_stalls
 		enable_stall_judge: bool = False,
 		enable_stall_human_terminalization: bool = False,
 		max_recoveries_by_phase: dict[str, int] | None = None,
+		head_pushed_at: dict[str, str] | None = None,
 	) -> list[dict[str, object]]:
 		captured["max_recoveries_by_phase"] = max_recoveries_by_phase
 		return []
