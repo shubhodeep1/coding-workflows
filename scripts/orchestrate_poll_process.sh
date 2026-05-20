@@ -11582,18 +11582,32 @@ fi
         # back to cache state (304-reuse of empty cached_runs, fresh
         # cache hit on empty data, head_branch=null on workflow_dispatch
         # extraction, or API-failure fallback in _load_actions_runs_cached).
-        # Reads from the per-tick memoised cache populated by the call
-        # above, so this adds zero API calls (§15).  Fails open on jq
-        # errors: counts fall back to "?" and the diagnostic still
-        # prints.  The retrigger_review defense-in-depth guard at
+        # Reads directly from the per-tick memoised
+        # _ACTIONS_RUNS_BLOB_CACHE populated by the call above, so
+        # this adds zero API calls (§15).  Fails open on jq errors:
+        # counts fall back to "?" and the diagnostic still prints,
+        # but parse_error=true keeps that path distinguishable from a
+        # genuinely empty cache.  The retrigger_review defense-in-depth
+        # guard at
         # scripts/orchestrate_poll_process.sh:5829 still protects the
         # empty-commit push if the cache misses a live review run; this
         # logging just makes the cache state observable next time.
-        _diag_blob="$(_load_actions_runs_cached 2>/dev/null || echo '{"workflow_runs":[]}')"
-        _diag_total="$(printf '%s' "${_diag_blob}" | jq -r '.workflow_runs | length' 2>/dev/null || echo "?")"
-        _diag_in_progress="$(printf '%s' "${_diag_blob}" | jq -r '[.workflow_runs[]? | select((.status // "") == "in_progress")] | length' 2>/dev/null || echo "?")"
-        _diag_queued="$(printf '%s' "${_diag_blob}" | jq -r '[.workflow_runs[]? | select((.status // "") == "queued")] | length' 2>/dev/null || echo "?")"
-        echo "Active issue set is empty (cache: total=${_diag_total}, in_progress=${_diag_in_progress}, queued=${_diag_queued})."
+        (
+          _diag_blob="${_ACTIONS_RUNS_BLOB_CACHE}"
+          _diag_parse_error="false"
+          if [ -z "${_diag_blob}" ]; then
+            _diag_blob='{"workflow_runs":[]}'
+            _diag_parse_error="true"
+          fi
+          _diag_total="$(printf '%s' "${_diag_blob}" | jq -r 'if (.workflow_runs | type) == "array" then (.workflow_runs | length) else error("workflow_runs_missing_or_not_array") end' 2>/dev/null)" || { _diag_total="?"; _diag_parse_error="true"; }
+          _diag_in_progress="$(printf '%s' "${_diag_blob}" | jq -r 'if (.workflow_runs | type) == "array" then [.workflow_runs[] | select((.status // "") == "in_progress")] | length else error("workflow_runs_missing_or_not_array") end' 2>/dev/null)" || { _diag_in_progress="?"; _diag_parse_error="true"; }
+          _diag_queued="$(printf '%s' "${_diag_blob}" | jq -r 'if (.workflow_runs | type) == "array" then [.workflow_runs[] | select((.status // "") == "queued")] | length else error("workflow_runs_missing_or_not_array") end' 2>/dev/null)" || { _diag_queued="?"; _diag_parse_error="true"; }
+          if [ "${_diag_parse_error}" = "true" ]; then
+            echo "Active issue set is empty (cache: total=${_diag_total}, in_progress=${_diag_in_progress}, queued=${_diag_queued}, parse_error=true)."
+          else
+            echo "Active issue set is empty (cache: total=${_diag_total}, in_progress=${_diag_in_progress}, queued=${_diag_queued})."
+          fi
+        )
       fi
 
       # Prefetch linked-PR state for every stalled issue in batched
