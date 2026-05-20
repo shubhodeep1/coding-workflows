@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:~9570-9572 | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `elif CWS_AHEAD_BY=\"$(_integration_branch_ahead_of_default ...)\"` may take the warning branch incorrectly on shells where assignment exit status does not propagate.\n  WHY: If the compare helper fails, `CWS_AHEAD_BY` is empty and the `else` warning becomes dead code; the caller still fails closed, but the compare-API warning is lost.\n- scripts/review_rb_judge.sh:513 | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The prompt size log is emitted on every retry because `RB_JUDGE_PROMPT_SIZE_LOGGED` is never reset between attempts.\n  WHY: On a multi-attempt ladder this duplicates the warning line and adds log churn without changing behavior.\n- scripts/orchestrate_poll_process.sh:12090 (and test_orchestrate_poll_process.py:2166) | confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The new regression test does not exercise the full validation-complete path that performs the ahead-by recheck.\n  WHY: It hard-codes `enable_validation=\"false\"` and only asserts the finalize fallback, leaving the exact regression path untested.\n- scripts/review_apply_fixes.sh:1309-1320 | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: If the shell is interrupted after copying the prompt file but before appending the nonce trailer, the next retry can reuse a stale prompt file.\n  WHY: Cleanup only happens on the success/refusal paths, so an uncaught interrupt leaves a partial file that can defeat cache-busting.\n- scripts/review_rb_judge.sh:482-490 | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: A large PR diff can still push the effective judge prompt over Codex\u2019s 1 MiB stdin envelope even though the budget state thinks it is safe.\n  WHY: The requirement/metadata budget accounting does not include the later diff payload tightly enough, so `codex` can reject with `turn/start: Input exceeds the maximum length` on every retry.\n- scripts/orchestrate_poll_process.sh:2177-2183 | confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: A transient branch-ref probe failure can flip a pinned merged state back to pending.\n  WHY: The helper\u2019s fail-open branch-existence probe can oscillate on flaky GitHub API responses, causing repeated merge-state churn.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:~9570-9572 | confidence=2\n  PROBLEM: `elif CWS_AHEAD_BY=\"$(_integration_branch_ahead_of_default ...)\"` may take the warning branch incorrectly on shells where assignment exit status does not propagate.\n  WHY: If the compare helper fails, `CWS_AHEAD_BY` is empty and the `else` warning becomes dead code; the caller still fails closed, but the compare-API warning is lost.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/review_rb_judge.sh:513 | confidence=4\n  PROBLEM: The prompt size log is emitted on every retry because `RB_JUDGE_PROMPT_SIZE_LOGGED` is never reset between attempts.\n  WHY: On a multi-attempt ladder this duplicates the warning line and adds log churn without changing behavior.\n- scripts/orchestrate_poll_process.sh:12090 (and test_orchestrate_poll_process.py:2166) | confidence=3\n  PROBLEM: The new regression test does not exercise the full validation-complete path that performs the ahead-by recheck.\n  WHY: It hard-codes `enable_validation=\"false\"` and only asserts the finalize fallback, leaving the exact regression path untested.\n- scripts/review_apply_fixes.sh:1309-1320 | confidence=4\n  PROBLEM: If the shell is interrupted after copying the prompt file but before appending the nonce trailer, the next retry can reuse a stale prompt file.\n  WHY: Cleanup only happens on the success/refusal paths, so an uncaught interrupt leaves a partial file that can defeat cache-busting.\n- scripts/review_rb_judge.sh:482-490 | confidence=5\n  PROBLEM: A large PR diff can still push the effective judge prompt over Codex\u2019s 1 MiB stdin envelope even though the budget state thinks it is safe.\n  WHY: The requirement/metadata budget accounting does not include the later diff payload tightly enough, so `codex` can reject with `turn/start: Input exceeds the maximum length` on every retry.\n- scripts/orchestrate_poll_process.sh:2177-2183 | confidence=3\n  PROBLEM: A transient branch-ref probe failure can flip a pinned merged state back to pending.\n  WHY: The helper\u2019s fail-open branch-existence probe can oscillate on flaky GitHub API responses, causing repeated merge-state churn.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "81d60ddba6eb97d361d7fbd9b3fc9f9bf01053661618f73278011f43e753b7aa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26141478505",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26141478505",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260520051359_9605793b3f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26141478505"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-20T05:13:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
