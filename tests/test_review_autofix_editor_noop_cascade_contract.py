@@ -368,6 +368,10 @@ def test_review_apply_fixes_centralizes_refusal_regex() -> None:
 	line-anchored so incidental prose inside a valid structured summary does
 	not look like a provider refusal."""
 	text = _review_apply_fixes_text()
+	assert text.count('_REFUSAL_REGEX=') == 1, (
+		"review_apply_fixes.sh must define `_REFUSAL_REGEX` exactly once so "
+		"the validator and short-circuit share the same refusal pattern."
+	)
 	assert '_REFUSAL_REGEX="(' in text, (
 		"review_apply_fixes.sh must define `_REFUSAL_REGEX` exactly once so "
 		"the validator and short-circuit share the same refusal pattern."
