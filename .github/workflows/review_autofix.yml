@@ -954,7 +954,7 @@ jobs:
             echo "SUPPORT_AGENTS_FILE=${SUPPORT_ROOT_DIR}/agents.md"
           } >> "$GITHUB_ENV"
 
-          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh"
+          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh"
           # Optional bootstrap scripts: allowed to be missing from both
           # refs.  The bootstrap emits a warning and continues — callers
           # that depend on these must themselves tolerate absence.  Keep
@@ -4019,48 +4019,24 @@ jobs:
             # ── Check 2: Reviewer audit sanity ──
             # When reviewer execution succeeded (REVIEWERS_SUCCESSFUL > 0)
             # but the editor claims no changes, verify the audit section has
-            # real entries and the arithmetic adds up.
+            # real entries and the arithmetic adds up. The check itself
+            # lives in scripts/validate_editor_audit.sh so the orchestrator
+            # poll's noop-suspicious recovery sweep can call the exact
+            # same regex/arithmetic logic when deciding whether a
+            # force-merge fallback is safe — keeping the two paths in
+            # lockstep prevents drift between "what the workflow flagged
+            # as noop-suspicious" and "what the poller considers an
+            # audit-healthy fallback candidate".
             if [ "${EDITOR_NOOP_SUSPICIOUS}" = "false" ] && [ "${REVIEWERS_SUCCESSFUL:-0}" -gt 0 ]; then
-              audit_section="$(awk '
-                /^[[:space:]]*Review file issue audit:/ { in_s=1; next }
-                in_s && /^[[:space:]]*[A-Za-z][A-Za-z ()-]*:[[:space:]]*$/ { exit }
-                in_s { print }
-              ' "${EDITOR_SUMMARY_FILE}")"
-
-              real_audit="$(printf '%s\n' "${audit_section}" \
-                | grep -vE '^[[:space:]]*$' \
-                | grep -viE '^[[:space:]]*-[[:space:]]*none([[:space:][:punct:]]|$)' \
-                | grep -viE 'editor failed' \
-                || true)"
-
-              if [ -z "${real_audit}" ]; then
-                echo "::warning::${REVIEWERS_SUCCESSFUL:-0} reviewer(s) succeeded but editor audit section is empty or contains only fallback text."
+              # shellcheck disable=SC1091
+              source "${SUPPORT_SCRIPTS_DIR}/validate_editor_audit.sh"
+              _vea_rc=0
+              validate_editor_audit_arithmetic \
+                "${EDITOR_SUMMARY_FILE}" \
+                "${REVIEWERS_SUCCESSFUL:-0}" \
+                || _vea_rc=$?
+              if [ "${_vea_rc}" -ne 0 ]; then
                 EDITOR_NOOP_SUSPICIOUS="true"
-              else
-                # Parse each audit entry and verify total == applied + already_applied + ignored.
-                mismatch_found=false
-                while IFS= read -r line; do
-                  [ -n "${line}" ] || continue
-                  t="$(printf '%s' "${line}" | grep -ioP 'total issues listed[^0-9]*\K[0-9]+' || echo "")"
-                  a="$(printf '%s' "${line}" | grep -ioP '(?<!already )issues applied[^0-9]*\K[0-9]+' || echo "")"
-                  aa="$(printf '%s' "${line}" | grep -ioP 'issues already applied[^0-9]*\K[0-9]+' || echo "")"
-                  ig="$(printf '%s' "${line}" | grep -ioP 'issues ignored[^0-9]*\K[0-9]+' || echo "")"
-
-                  # Skip entries that don't have parseable counts (not audit lines)
-                  [ -n "${t}" ] || continue
-
-                  t="${t:-0}"; a="${a:-0}"; aa="${aa:-0}"; ig="${ig:-0}"
-                  sum=$((a + aa + ig))
-
-                  if [ "${t}" -gt 0 ] && [ "${sum}" -ne "${t}" ]; then
-                    echo "::warning::Audit entry arithmetic mismatch: total=${t} but applied(${a})+already_applied(${aa})+ignored(${ig})=${sum}"
-                    mismatch_found=true
-                  fi
-                done <<< "${real_audit}"
-
-                if [ "${mismatch_found}" = true ]; then
-                  EDITOR_NOOP_SUSPICIOUS="true"
-                fi
               fi
             fi
           fi

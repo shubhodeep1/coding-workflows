@@ -12809,3 +12809,370 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 done
 
 echo "Standalone conflict sweep complete. Fixed: ${CONFLICT_SWEEP_FIXED}."
+
+# ---------------------------------------------------------------
+# Standalone PR noop-suspicious recovery sweep
+# ---------------------------------------------------------------
+# When `.github/workflows/review_autofix.yml`'s "Validate editor no-op
+# disposition" step (the `EDITOR_NOOP_SUSPICIOUS=true` branch) decides
+# an editor run is noop-suspicious, the "Enable auto-merge" step is
+# gated off and the PR stalls forever. Issue-linked PRs may eventually
+# recover via the generic standalone-stall recovery path (around line
+# 5780), but PRs on `claude/**` branches without a linked issue never
+# do — they sit indefinitely until a human re-dispatches by hand. The
+# original incident was PR
+# `shubhodeep1/tele-funtoken-msg-scoring#3053`: 9 productive autofix
+# commits landed, the 10th converged, and the PR was stuck.
+#
+# This sweep closes that gap. For each open PR with one or more
+# `⚠️ **Editor no-op suspicious**` warning comments posted after the
+# PR's most recent [ai-autofix] / [judge-fix] commit:
+#   - If the warning has been emitted < NOOP_MAX_RETRIES times since
+#     the last productive commit: re-dispatch review_autofix.yml via
+#     workflow_dispatch (reuses _dispatch_review_for_conflicts, which
+#     carries the cycle-local _CONFLICT_DISPATCH_TRACKER guard, so a
+#     conflict-sweep dispatch already this tick will not be
+#     duplicated). Telegram WARNING.
+#   - If the count is >= NOOP_MAX_RETRIES: enter the force-merge
+#     fallback. Force-merge fails CLOSED — every precondition is
+#     audited individually, and any single gate failure aborts with an
+#     ERROR alert (the PR stays open for human review). Gates:
+#       A) PR is open, not draft, mergeable=true, mergeable_state is
+#          neither dirty nor unknown, and does NOT carry
+#          `e2e-smoke-test` or `force-review` labels (operator
+#          opt-out).
+#       B) The latest "AI autofix editor summary" PR comment passes
+#          the reviewer audit arithmetic check
+#          (`scripts/validate_editor_audit.sh` — same code
+#          review_autofix.yml uses, so the two paths cannot drift).
+#       C) At least one prior `[ai-autofix]` / `[judge-fix]` commit
+#          exists on the PR (a brand-new editor that has never
+#          produced work is not eligible for force-merge).
+#       D) All completed required checks on the head SHA are
+#          conclusion=success / neutral / skipped — any failure /
+#          cancelled / timed_out / action_required aborts the gate.
+#     If every gate passes: `gh pr merge --squash --auto`, Telegram
+#     WARNING, and one audit-trail comment posted to the PR so the
+#     decision is visible on the thread (not only in Telegram).
+#
+# Retry counter design. The count of noop-suspicious warning comments
+# newer than the latest [ai-autofix] / [judge-fix] commit IS the
+# retry counter — no new per-PR state JSON is introduced.
+#   - Reset on new head SHA: when a productive commit lands, the count
+#     of noop-warnings-after-that-commit drops to 0, satisfying the
+#     "new SHA invalidates prior noop history" requirement.
+#   - Works for both issue-linked AND linked-issue-less PRs uniformly.
+#     The standalone-state JSON helpers at line 5346 are keyed by
+#     issue number and cannot represent linked-issue-less PRs at all,
+#     so adding a counter field there would only solve half the gap.
+#   - Robust to poller restarts (state lives in GitHub, not on disk
+#     or in memory).
+#
+# API-call hygiene (§15). The sweep reuses `STANDALONE_PRS` from the
+# conflict sweep above — no second `gh pr list`. A pre-filter
+# Issues-comments call is needed per PR because no existing call in
+# the poll cycle returns PR conversation comments:
+#   - _fetch_candidate_issue_details_graphql fetches issue (not PR)
+#     comments, and only for issue-linked candidates.
+#   - The conflict sweep's `pulls/{n}` REST call returns PR metadata
+#     but not comments.
+# The common case (PR with no noop warnings) costs just 1 comments
+# call and exits. A noop-suspicious PR additionally costs 1 commits
+# call, 1 pulls call (force-merge gate), and 1 check-runs call (force-
+# merge gate D) — gated so they only fire when the retry threshold has
+# been reached.
+# ---------------------------------------------------------------
+echo ""
+echo "========================================"
+echo "Standalone PR noop-suspicious recovery sweep"
+echo "========================================"
+
+NOOP_WARNING_LITERAL="⚠️ **Editor no-op suspicious**"
+NOOP_RECOVERY_DISPATCHED=0
+NOOP_FORCE_MERGED=0
+NOOP_RECOVERY_BLOCKED=0
+NOOP_MAX_RETRIES=3
+# Operator-facing opt-outs. `e2e-smoke-test` mirrors the workflow's
+# own auto-merge suppression so the smoke-test bait-removal race
+# stays sealed; `force-review` lets a human pin a stuck PR for manual
+# review without having to disable auto-merge separately. Store the
+# list one label per line so labels with spaces stay intact.
+NOOP_FORCE_MERGE_SKIP_LABELS=$'e2e-smoke-test\nforce-review'
+
+# Source the shared audit helper once, outside the loop.
+if [ -f scripts/validate_editor_audit.sh ]; then
+	# shellcheck source=scripts/validate_editor_audit.sh disable=SC1091
+	source scripts/validate_editor_audit.sh
+fi
+
+for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
+	N_PR="$(echo "${STANDALONE_PRS}" | jq -r ".[${nidx}].number")"
+	N_HEAD="$(echo "${STANDALONE_PRS}" | jq -r ".[${nidx}].headRefName")"
+	N_BASE="$(echo "${STANDALONE_PRS}" | jq -r ".[${nidx}].baseRefName")"
+
+	if [ -z "${N_PR}" ] || [ "${N_PR}" = "null" ]; then
+		continue
+	fi
+	if [ -z "${N_HEAD}" ] || [ "${N_HEAD}" = "null" ]; then
+		continue
+	fi
+	# Skip integration / orchestrator-managed branches — those have
+	# their own merge cadence and should not be force-merged by this
+	# sweep.
+	if [[ "${N_BASE}" == orchestrator/project-* ]]; then
+		continue
+	fi
+
+	# ── Step 1: pre-filter via comments scan ──
+	# Fetch up to 100 most-recent comments. Noop-suspicious warnings
+	# are posted by the workflow itself so they always appear in the
+	# issue-comments stream for the PR.
+	N_COMMENTS_JSON="$(gh_retry gh api --paginate \
+		"repos/${GITHUB_REPOSITORY}/issues/${N_PR}/comments?per_page=100" \
+		| jq -s 'add // []' 2>/dev/null || echo '[]')"
+	[ -n "${N_COMMENTS_JSON}" ] || N_COMMENTS_JSON='[]'
+
+	N_NOOP_LATEST_TS="$(echo "${N_COMMENTS_JSON}" | jq -r \
+		--arg lit "${NOOP_WARNING_LITERAL}" \
+		'[.[] | select((.body // "") | contains($lit))] | max_by(.created_at // "") | .created_at // empty' \
+		2>/dev/null || echo "")"
+
+	if [ -z "${N_NOOP_LATEST_TS}" ]; then
+		# No noop-suspicious warning ever posted → not a candidate.
+		continue
+	fi
+
+	# ── Step 2: find latest productive commit timestamp ──
+	# Only [ai-autofix] / [judge-fix] commits count as "productive
+	# autofix output" — these are the prefixes review_autofix.yml /
+	# review_commit_changes.sh emit when the editor or judge writes
+	# real source-file changes. Manual commits, merge commits, and
+	# bot-housekeeping commits do NOT reset the noop counter.
+	N_COMMITS_JSON="$(gh_retry gh api --paginate \
+		"repos/${GITHUB_REPOSITORY}/pulls/${N_PR}/commits?per_page=100" \
+		| jq -s 'add // []' 2>/dev/null || echo '[]')"
+	[ -n "${N_COMMITS_JSON}" ] || N_COMMITS_JSON='[]'
+
+	N_LATEST_PROD_TS="$(echo "${N_COMMITS_JSON}" | jq -r \
+		'[.[] | select((.commit.message // "") | test("\\[ai-autofix\\]|\\[judge-fix\\]"))] | max_by(.commit.committer.date // "") | .commit.committer.date // empty' \
+		2>/dev/null || echo "")"
+
+	# Stale-warning check: if the latest noop warning predates the
+	# latest productive commit, the PR has already moved on. GitHub API
+	# timestamps are ISO 8601 UTC, so bash's lexical < comparison is
+	# chronology-safe here. This is the equivalent of "reset on new
+	# head SHA" from the design spec.
+	if [ -n "${N_LATEST_PROD_TS}" ] && [[ "${N_NOOP_LATEST_TS}" < "${N_LATEST_PROD_TS}" ]]; then
+		echo "  PR #${N_PR}: latest noop warning (${N_NOOP_LATEST_TS}) is older than latest productive commit (${N_LATEST_PROD_TS}); stale, skipping."
+		continue
+	fi
+
+	# Count noop warnings newer than the latest productive commit
+	# (or all noop warnings when there is no productive commit yet —
+	# treated as the worst case for the retry counter).
+	if [ -n "${N_LATEST_PROD_TS}" ]; then
+		N_NOOP_COUNT="$(echo "${N_COMMENTS_JSON}" | jq -r \
+			--arg lit "${NOOP_WARNING_LITERAL}" \
+			--arg since "${N_LATEST_PROD_TS}" \
+			'[.[] | select((.body // "") | contains($lit)) | select((.created_at // "") > $since)] | length' \
+			2>/dev/null || echo "0")"
+	else
+		N_NOOP_COUNT="$(echo "${N_COMMENTS_JSON}" | jq -r \
+			--arg lit "${NOOP_WARNING_LITERAL}" \
+			'[.[] | select((.body // "") | contains($lit))] | length' \
+			2>/dev/null || echo "0")"
+	fi
+	[[ "${N_NOOP_COUNT}" =~ ^[0-9]+$ ]] || N_NOOP_COUNT=0
+
+	echo "  PR #${N_PR} (${N_HEAD}) noop-suspicious count since last productive commit: ${N_NOOP_COUNT}/${NOOP_MAX_RETRIES}"
+
+	# ── Step 3a: under threshold → re-dispatch ──
+	if [ "${N_NOOP_COUNT}" -lt "${NOOP_MAX_RETRIES}" ]; then
+		_noop_dispatch_rc=0
+		_dispatch_review_for_conflicts "${N_PR}" "${N_HEAD}" || _noop_dispatch_rc=$?
+		if [ "${_noop_dispatch_rc}" -eq 0 ]; then
+			tg_send_msg "Noop-suspicious recovery: re-dispatched review_autofix for PR #${N_PR} (retry $((N_NOOP_COUNT + 1))/${NOOP_MAX_RETRIES})."$'\n'"PR: $(_gh_url "pull/${N_PR}")" "WARNING" >/dev/null 2>&1 || true
+			NOOP_RECOVERY_DISPATCHED=$((NOOP_RECOVERY_DISPATCHED + 1))
+		elif [ "${_noop_dispatch_rc}" -eq 2 ]; then
+			echo "  PR #${N_PR}: autofix already active / dispatched this cycle; skipping."
+		else
+			echo "::warning::PR #${N_PR}: noop-suspicious redispatch failed (rc=${_noop_dispatch_rc})."
+		fi
+		continue
+	fi
+
+	# ── Step 3b: at threshold → force-merge gate ──
+	echo "  PR #${N_PR} hit ${NOOP_MAX_RETRIES}-retry cap. Evaluating force-merge fallback..."
+
+	# Gate A: PR mergeability + opt-out labels.
+	N_PR_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${N_PR}" || echo '{}')"
+	[ -n "${N_PR_JSON}" ] || N_PR_JSON='{}'
+
+	N_STATE="$(echo "${N_PR_JSON}" | jq -r '.state // ""')"
+	N_DRAFT="$(echo "${N_PR_JSON}" | jq -r '.draft // false')"
+	N_MERGEABLE="$(echo "${N_PR_JSON}" | jq -r '.mergeable // null')"
+	N_MERGEABLE_STATE="$(echo "${N_PR_JSON}" | jq -r '.mergeable_state // ""')"
+	N_HEAD_SHA="$(echo "${N_PR_JSON}" | jq -r '.head.sha // ""')"
+
+	if [ "${N_STATE}" != "open" ] || [ "${N_DRAFT}" = "true" ]; then
+		tg_send_msg "Noop-suspicious force-merge gate A failed for PR #${N_PR}: state=${N_STATE} draft=${N_DRAFT}. Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")" "ERROR" >/dev/null 2>&1 || true
+		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
+		continue
+	fi
+
+	if [ "${N_MERGEABLE}" != "true" ] || [ "${N_MERGEABLE_STATE}" = "dirty" ] || [ "${N_MERGEABLE_STATE}" = "unknown" ] || [ -z "${N_MERGEABLE_STATE}" ]; then
+		tg_send_msg "Noop-suspicious force-merge gate A failed for PR #${N_PR}: mergeable=${N_MERGEABLE} mergeable_state=${N_MERGEABLE_STATE:-empty}. Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")" "ERROR" >/dev/null 2>&1 || true
+		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
+		continue
+	fi
+
+	N_LABELS_JSON="$(echo "${N_PR_JSON}" | jq -c '[.labels[]?.name // empty]' 2>/dev/null || echo '[]')"
+	_noop_skip_label=""
+	while IFS= read -r _lbl; do
+		[ -n "${_lbl}" ] || continue
+		if echo "${N_LABELS_JSON}" | jq -e --arg l "${_lbl}" 'any(.[]; . == $l)' >/dev/null 2>&1; then
+			_noop_skip_label="${_lbl}"
+			break
+		fi
+	done <<< "${NOOP_FORCE_MERGE_SKIP_LABELS}"
+	if [ -n "${_noop_skip_label}" ]; then
+		tg_send_msg "Noop-suspicious force-merge gate A failed for PR #${N_PR}: carries '${_noop_skip_label}' label (operator opt-out). Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")" "ERROR" >/dev/null 2>&1 || true
+		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
+		continue
+	fi
+
+	# Refresh the comments snapshot on the threshold path so Gate B
+	# validates the latest editor summary when a new noop warning or
+	# summary comment lands mid-tick.
+	N_FRESH_COMMENTS_JSON="$(gh_retry gh api --paginate \
+		"repos/${GITHUB_REPOSITORY}/issues/${N_PR}/comments?per_page=100" \
+		| jq -s 'add // []' 2>/dev/null || true)"
+	if [ -n "${N_FRESH_COMMENTS_JSON}" ]; then
+		N_COMMENTS_JSON="${N_FRESH_COMMENTS_JSON}"
+	fi
+
+	# Gate B: reviewer audit health.  Validate against the latest
+	# editor summary PR comment using the shared helper — this is the
+	# exact same regex/arithmetic logic that review_autofix.yml's
+	# "Validate editor no-op disposition" step uses, so a PR the
+	# workflow flagged as noop-suspicious-but-audit-healthy here will
+	# stay flagged-but-audit-healthy in the helper too.
+	N_LATEST_EDITOR_SUMMARY="$(echo "${N_COMMENTS_JSON}" | jq -r \
+		'[.[] | select((.body // "") | startswith("AI autofix editor summary"))] | max_by(.created_at // "") | .body // empty' \
+		2>/dev/null || echo "")"
+
+	if [ -z "${N_LATEST_EDITOR_SUMMARY}" ]; then
+		tg_send_msg "Noop-suspicious force-merge gate B failed for PR #${N_PR}: no editor summary comment found. Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")" "ERROR" >/dev/null 2>&1 || true
+		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
+		continue
+	fi
+
+	_noop_audit_rc=0
+	_noop_tmp_summary="$(mktemp "${TMPDIR:-/tmp}/noop_audit.XXXXXX" 2>/dev/null || true)"
+	if [ -z "${_noop_tmp_summary}" ]; then
+		_noop_audit_rc=3
+		echo "::warning::PR #${N_PR}: could not allocate temp file for editor summary; failing force-merge gate B closed."
+	elif ! printf '%s' "${N_LATEST_EDITOR_SUMMARY}" > "${_noop_tmp_summary}"; then
+		_noop_audit_rc=3
+		echo "::warning::PR #${N_PR}: could not write editor summary to temp file; failing force-merge gate B closed."
+	elif type validate_editor_audit_arithmetic >/dev/null 2>&1; then
+		validate_editor_audit_arithmetic "${_noop_tmp_summary}" || _noop_audit_rc=$?
+	else
+		# Helper missing — fail closed.
+		_noop_audit_rc=3
+		echo "::warning::PR #${N_PR}: validate_editor_audit_arithmetic helper not loaded; failing force-merge gate B closed."
+	fi
+	rm -f "${_noop_tmp_summary}" 2>/dev/null || true
+
+	if [ "${_noop_audit_rc}" -ne 0 ]; then
+		tg_send_msg "Noop-suspicious force-merge gate B failed for PR #${N_PR}: reviewer audit unhealthy (helper rc=${_noop_audit_rc}). Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")" "ERROR" >/dev/null 2>&1 || true
+		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
+		continue
+	fi
+
+	# Gate C: at least one [ai-autofix] / [judge-fix] commit must
+	# exist. This guards against an editor that was broken from the
+	# very first invocation (no productive work, nothing to validate
+	# against).
+	if [ -z "${N_LATEST_PROD_TS}" ]; then
+		tg_send_msg "Noop-suspicious force-merge gate C failed for PR #${N_PR}: no prior [ai-autofix] / [judge-fix] commit found. Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")" "ERROR" >/dev/null 2>&1 || true
+		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
+		continue
+	fi
+
+	# Gate D: required checks must not be failing.
+	if [ -z "${N_HEAD_SHA}" ]; then
+		tg_send_msg "Noop-suspicious force-merge gate D failed for PR #${N_PR}: head SHA missing. Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")" "ERROR" >/dev/null 2>&1 || true
+		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
+		continue
+	fi
+
+	N_CHECKS_JSON="$(gh_retry _safe_gh_jq --paginate --slurp \
+		"repos/${GITHUB_REPOSITORY}/commits/${N_HEAD_SHA}/check-runs?per_page=100" \
+		2>/dev/null || echo '{}')"
+
+	_failing_check_count="$(printf '%s' "${N_CHECKS_JSON}" | jq -r '
+		def _is_blocking: .status == "completed" and (
+			.conclusion == "failure" or .conclusion == "cancelled" or
+			.conclusion == "timed_out" or .conclusion == "action_required"
+		);
+		if (type == "array") then
+			[.[]? | (.check_runs // [])[] | select(_is_blocking)] | length
+		elif (type == "object" and (.check_runs | type == "array")) then
+			[.check_runs[] | select(_is_blocking)] | length
+		else
+			empty
+		end
+	' 2>/dev/null | tail -n1)"
+	if ! [[ "${_failing_check_count}" =~ ^[0-9]+$ ]]; then
+		tg_send_msg "Noop-suspicious force-merge gate D failed for PR #${N_PR}: could not query check-runs for head SHA ${N_HEAD_SHA}. Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")" "ERROR" >/dev/null 2>&1 || true
+		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
+		continue
+	fi
+
+	_failing_check="$(printf '%s' "${N_CHECKS_JSON}" | jq -r '
+		def _is_blocking: .status == "completed" and (
+			.conclusion == "failure" or .conclusion == "cancelled" or
+			.conclusion == "timed_out" or .conclusion == "action_required"
+		);
+		if (type == "array") then
+			([.[]? | (.check_runs // [])[] | select(_is_blocking) | .name] | .[0]) // empty
+		elif (type == "object" and (.check_runs | type == "array")) then
+			([.check_runs[] | select(_is_blocking) | .name] | .[0]) // empty
+		else
+			empty
+		end
+	' 2>/dev/null | tail -n1)"
+
+	if [ -n "${_failing_check}" ]; then
+		tg_send_msg "Noop-suspicious force-merge gate D failed for PR #${N_PR}: check '${_failing_check}' is failing/cancelled. Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")" "ERROR" >/dev/null 2>&1 || true
+		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
+		continue
+	fi
+
+	# All gates passed → force-merge.
+	echo "  PR #${N_PR}: all force-merge gates passed. Enabling auto-merge via 'gh pr merge --auto'..."
+	if gh_retry gh pr merge "${N_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto >/dev/null 2>&1; then
+		NOOP_FORCE_MERGED=$((NOOP_FORCE_MERGED + 1))
+		tg_send_msg "Force-merging PR #${N_PR} after ${NOOP_MAX_RETRIES} noop-suspicious retries; reviewer audit was healthy."$'\n'"PR: $(_gh_url "pull/${N_PR}")" "WARNING" >/dev/null 2>&1 || true
+
+		# Audit-trail PR comment.  One per force-merge decision so the
+		# rationale is on the PR thread (not only in Telegram).
+		_force_merge_body="🤖 **Auto-merge enabled after ${NOOP_MAX_RETRIES} noop-suspicious retries**
+
+The editor converged ${NOOP_MAX_RETRIES} times in a row (every reviewer suggestion was either already-applied or correctly ignored), but \`EDITOR_NOOP_SUSPICIOUS=true\` blocked the normal auto-merge step. The orchestrator-poll force-merge fallback engaged because:
+
+- Reviewer audit arithmetic balanced (validated via \`scripts/validate_editor_audit.sh\` against the latest editor summary).
+- No required checks are failing on \`${N_HEAD_SHA}\`.
+- ${N_NOOP_COUNT} noop-suspicious warning(s) since the latest \`[ai-autofix]\` / \`[judge-fix]\` commit.
+
+To pause this behavior for manual review, add the \`force-review\` label."
+		gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${N_PR}/comments" \
+			-f body="${_force_merge_body}" >/dev/null 2>&1 || true
+	else
+		echo "::warning::PR #${N_PR}: gh pr merge --auto failed; will retry next cycle."
+		tg_send_msg "Noop-suspicious force-merge attempted but 'gh pr merge --auto' failed for PR #${N_PR}. Will retry next cycle."$'\n'"PR: $(_gh_url "pull/${N_PR}")" "ERROR" >/dev/null 2>&1 || true
+	fi
+done
+
+echo "Noop-suspicious recovery complete. Dispatched: ${NOOP_RECOVERY_DISPATCHED}, force-merged: ${NOOP_FORCE_MERGED}, blocked: ${NOOP_RECOVERY_BLOCKED}."
