@@ -183,14 +183,14 @@ Deduplication rules for the CONSENSUS FINDINGS block:
    Do not suppress singletons.
 
 Deduplication rules for the CONSENSUS TASK GAPS block:
-3a. Two task gaps are duplicates when they describe the same missing deliverable
+A. Two task gaps are duplicates when they describe the same missing deliverable
     (same requirement intent — e.g. both "phone-format validator missing", not merely
     "something missing in user_importer.py") AND they name the same expected change
     site (same file OR same symbol). When in doubt, do NOT merge; emit separately.
-3b. When merging task gaps, union flagged_by. confidence = max across reviewers.
+B. When merging task gaps, union flagged_by. confidence = max across reviewers.
     Keep the clearest requirement phrasing and the most specific expected_change_site.
     Union the EVIDENCE lines into one comma-separated statement.
-3c. Singleton task gaps still appear in CONSENSUS TASK GAPS with flagged_by: [that_slug].
+C. Singleton task gaps still appear in CONSENSUS TASK GAPS with flagged_by: [that_slug].
     Do not suppress them just because only one reviewer surfaced the gap.
 
 Per-reviewer sections:
