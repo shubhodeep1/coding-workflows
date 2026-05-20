@@ -185,6 +185,34 @@ def test_balanced_arithmetic_with_zero_totals_passes(tmp_path):
 	assert result.returncode == 0
 
 
+def test_existing_colon_separated_fixture_format_passes(tmp_path):
+	"""Existing editor-summary fixtures use colon/space separators rather
+	than the comma-delimited shape from the helper's first draft. The
+	helper must continue accepting the historical fixture format so the
+	workflow and poller stay aligned with summaries already in-repo."""
+	summary = (REPO_ROOT / "tests" / "fixtures" / "editor_summaries" / "narrative_none_status_edited.txt").read_text(encoding="utf-8")
+	result = _run(summary, "1", tmp_path=tmp_path)
+	assert result.returncode == 0, result.stderr
+
+
+def test_trailing_annotation_after_ignored_count_passes(tmp_path):
+	"""The legacy per-field extractor tolerated extra prose after the
+	ignored-count field. Keep that behavior so convergence notes or other
+	harmless trailing annotations do not spuriously flip the audit to
+	unhealthy."""
+	summary = textwrap.dedent(
+		"""\
+		Review file issue audit:
+		- review_a.md: total issues listed: 3 issues applied: 0 issues already applied: 3 issues ignored: 0 (converged on current HEAD)
+
+		PR comment audit:
+		- none
+		"""
+	)
+	result = _run(summary, "1", tmp_path=tmp_path)
+	assert result.returncode == 0, result.stderr
+
+
 def test_helper_is_sourceable_as_library(tmp_path):
 	"""Sourcing the helper file defines `validate_editor_audit_arithmetic`
 	but performs no work — the workflow and poller both source it and

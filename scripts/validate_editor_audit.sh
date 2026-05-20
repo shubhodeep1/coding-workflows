@@ -98,22 +98,36 @@ validate_editor_audit_arithmetic()
 	fi
 
 	local mismatch_found=false
-	local line line_lower t a aa ig sum
+	local line line_lower line_without_already t a aa ig sum
 	while IFS= read -r line; do
 		[ -n "${line}" ] || continue
 		line_lower="$(printf '%s' "${line}" | tr '[:upper:]' '[:lower:]')"
-		if [[ "${line_lower}" =~ ^[[:space:]]*-[[:space:]]*.*total[[:space:]]+issues[[:space:]]+listed[^0-9]*([0-9]+),[[:space:]]*issues[[:space:]]+applied[^0-9]*([0-9]+),[[:space:]]*issues[[:space:]]+already[[:space:]]+applied[^0-9]*([0-9]+),[[:space:]]*issues[[:space:]]+ignored[^0-9]*([0-9]+)[[:space:][:punct:]]*$ ]]; then
+		t=""
+		a=""
+		aa=""
+		ig=""
+		line_without_already="${line_lower}"
+
+		if [[ "${line_lower}" =~ total[[:space:]]+issues[[:space:]]+listed[^0-9]*([0-9]+) ]]; then
 			t="${BASH_REMATCH[1]}"
-			a="${BASH_REMATCH[2]}"
-			aa="${BASH_REMATCH[3]}"
-			ig="${BASH_REMATCH[4]}"
-		else
+		fi
+		if [[ "${line_lower}" =~ issues[[:space:]]+already[[:space:]]+applied[^0-9]*([0-9]+) ]]; then
+			aa="${BASH_REMATCH[1]}"
+			line_without_already="${line_lower/${BASH_REMATCH[0]}/}"
+		fi
+		if [[ "${line_without_already}" =~ issues[[:space:]]+applied[^0-9]*([0-9]+) ]]; then
+			a="${BASH_REMATCH[1]}"
+		fi
+		if [[ "${line_lower}" =~ issues[[:space:]]+ignored[^0-9]*([0-9]+) ]]; then
+			ig="${BASH_REMATCH[1]}"
+		fi
+
+		if [ -z "${t}" ] || [ -z "${a}" ] || [ -z "${aa}" ] || [ -z "${ig}" ]; then
 			echo "::warning::Audit entry arithmetic mismatch: unparseable audit line: ${line}" >&2
 			mismatch_found=true
 			continue
 		fi
 
-		t="${t:-0}"; a="${a:-0}"; aa="${aa:-0}"; ig="${ig:-0}"
 		sum=$((a + aa + ig))
 
 		if [ "${t}" -gt 0 ] && [ "${sum}" -ne "${t}" ]; then
