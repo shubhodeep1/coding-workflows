@@ -1320,11 +1320,18 @@ persist_completion_status_comment_state() {
 recover_completion_status_comment_id_from_live_comments() {
   local full_body="$1"
   local marker="$2"
-  local comments_json recovered_id
+  local comments_json recovered_id comments_raw
 
-  if ! comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments?per_page=100" | jq -s 'add // []' 2>/dev/null)"; then
+  comments_raw="$(mktemp "${TMPDIR:-/tmp}/completion_status_comments.XXXXXX")" || return 1
+  if ! gh_retry_to_file "${comments_raw}" gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments?per_page=100"; then
+    rm -f "${comments_raw}"
     return 1
   fi
+  if ! comments_json="$(jq -s 'add // []' "${comments_raw}" 2>/dev/null)"; then
+    rm -f "${comments_raw}"
+    return 1
+  fi
+  rm -f "${comments_raw}"
 
   recovered_id="$(printf '%s' "${comments_json}" | jq -r --arg body "${full_body}" '
     [.[] | select((.body // "") == $body)]
@@ -1434,8 +1441,8 @@ update_completion_status_comment() {
   response_file="$(mktemp "${TMPDIR:-/tmp}/completion_status_response.XXXXXX")"
 
   if [ -n "${existing_id}" ] && [[ "${existing_id}" =~ ^[0-9]+$ ]]; then
-    if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${existing_id}" \
-      -X PATCH -f body="${full_body}" > "${response_file}"; then
+    if ! gh_retry_to_file "${response_file}" gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${existing_id}" \
+      -X PATCH -f body="${full_body}"; then
       echo "::warning::[completion-status] failed to PATCH comment ${existing_id} for issue #${TRACKING_NUM:-?}; will retry on a later cycle." >&2
       head -c 4096 "${response_file}" >&2 || true
       echo >&2
@@ -1443,8 +1450,8 @@ update_completion_status_comment() {
       return 1
     fi
   else
-    if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
-      -X POST -f body="${full_body}" > "${response_file}"; then
+    if ! gh_retry_to_file "${response_file}" gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
+      -X POST -f body="${full_body}"; then
       echo "::warning::[completion-status] failed to POST comment for issue #${TRACKING_NUM:-?}; will retry on a later cycle." >&2
       head -c 4096 "${response_file}" >&2 || true
       echo >&2
