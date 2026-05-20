@@ -39,15 +39,12 @@ import inspect
 import io
 import json
 import os
-import shutil
 import subprocess
+import sys
 import tempfile
 import textwrap
 from contextlib import redirect_stdout
 from pathlib import Path
-
-import sys
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
@@ -602,35 +599,58 @@ def test_finalize_skips_recheck_when_superseded_by_main(tmp_path):
 	assert final_state["final_merge_status"] == "superseded-by-main"
 
 
-def main() -> int:
-	# Direct `python3 tests/<file>.py` entrypoint — the repo's CI runs
-	# tests via that pattern rather than pytest discovery, so this file
-	# needs its own runner for the assertions to execute under CI.
-	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+def _invoke_test(func) -> None:
+	params = list(inspect.signature(func).parameters)
+	if not params:
+		func()
+		return
+	if params == ["tmp_path"]:
+		with tempfile.TemporaryDirectory(prefix=f"{func.__name__}_") as td:
+			func(Path(td))
+		return
+	raise TypeError(f"unsupported direct-run parameters: {params}")
+
+
+def main(argv: list[str] | None = None) -> int:
+	"""Direct ``python3 tests/<file>.py`` entrypoint.
+
+	The repo's CI/release allowlists execute tests via explicit
+	``python3 tests/test_*.py`` calls rather than pytest discovery, so this
+	module needs a small fixture shim for the ``tmp_path``-style tests.
+	"""
+	selected_names = list(sys.argv[1:] if argv is None else argv)
+	try:
+		sys.stdout.reconfigure(line_buffering=True)
+	except Exception:
+		pass
+
+	tests_by_name = {
+		name: func
+		for name, func in sorted(globals().items())
+		if name.startswith("test_") and callable(func)
+	}
+	if selected_names:
+		missing = [name for name in selected_names if name not in tests_by_name]
+		for name in missing:
+			print(f"  FAIL  {name}: unknown test name", flush=True)
+		if missing:
+			return 1
+		named_tests = [(name, tests_by_name[name]) for name in selected_names]
+	else:
+		named_tests = list(tests_by_name.items())
+
 	passed = 0
 	failed = 0
-
-	for func in test_funcs:
-		name = func.__name__
+	for name, func in named_tests:
 		try:
-			params = list(inspect.signature(func).parameters)
-			if not params:
-				func()
-			elif params == ["tmp_path"]:
-				with tempfile.TemporaryDirectory(prefix="orchestrate-integration-ahead-by-") as td:
-					func(Path(td))
-			else:
-				raise TypeError(f"unsupported test signature for {name}: {params}")
-			print(f"  PASS  {name}")
+			_invoke_test(func)
+			print(f"  PASS  {name}", flush=True)
 			passed += 1
-		except AssertionError as e:
-			print(f"  FAIL  {name}: {e}")
-			failed += 1
 		except Exception as e:
-			print(f"  ERROR {name}: {type(e).__name__}: {e}")
+			print(f"  FAIL  {name}: {e}", flush=True)
 			failed += 1
 
-	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total", flush=True)
 	return 1 if failed > 0 else 0
 
 

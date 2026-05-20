@@ -1272,6 +1272,269 @@ _post_state_comment_v2_chunk() {
   return 0
 }
 
+persist_completion_status_comment_state() {
+  local comment_id="$1"
+  local body_hash="$2"
+  local state_tmp old_hash old_comment_id
+
+  if [ -z "${STATE_FILE:-}" ] || [ ! -f "${STATE_FILE}" ]; then
+    echo "::warning::[completion-status] cannot persist comment metadata for issue #${TRACKING_NUM:-?}: STATE_FILE is missing." >&2
+    return 1
+  fi
+  if ! [[ "${comment_id}" =~ ^[0-9]+$ ]]; then
+    echo "::warning::[completion-status] cannot persist comment metadata for issue #${TRACKING_NUM:-?}: invalid comment id '${comment_id:-<empty>}'" >&2
+    return 1
+  fi
+  if ! [[ "${body_hash}" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "::warning::[completion-status] cannot persist comment metadata for issue #${TRACKING_NUM:-?}: invalid body hash." >&2
+    return 1
+  fi
+
+  old_hash="$(jq -r '.completion_status_comment_body_hash // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+  [[ "${old_hash}" =~ ^[0-9a-f]{64}$ ]] || old_hash=""
+  old_comment_id="$(jq -r '.completion_status_comment_id // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+  [[ "${old_comment_id}" =~ ^[0-9]+$ ]] || old_comment_id=""
+
+  if [ "${old_hash}" = "${body_hash}" ] && [ "${old_comment_id}" = "${comment_id}" ]; then
+    return 0
+  fi
+
+  state_tmp="${STATE_FILE}.tmp"
+  if jq --arg hash "${body_hash}" --argjson comment_id "${comment_id}" '
+      .completion_status_comment_body_hash = $hash
+      | .completion_status_comment_id = $comment_id' \
+      "${STATE_FILE}" > "${state_tmp}" && mv "${state_tmp}" "${STATE_FILE}"; then
+    COMPLETION_STATUS_STATE_CHANGED="true"
+    return 0
+  fi
+
+  rm -f "${state_tmp}" || true
+  echo "::warning::[completion-status] failed to persist comment metadata for issue #${TRACKING_NUM:-?}; cross-cycle idempotency may retry next tick." >&2
+  return 1
+}
+
+# recover_completion_status_comment_id_from_live_comments — rare-path repair
+# for GitHub comment updates that succeeded but returned a malformed body
+# without a numeric `.id`. The cycle-local COMMENTS cache predates a POST,
+# so only this recovery path is allowed to re-list comments.
+recover_completion_status_comment_id_from_live_comments() {
+  local full_body="$1"
+  local marker="$2"
+  local comments_json recovered_id comments_raw
+
+  comments_raw="$(mktemp "${TMPDIR:-/tmp}/completion_status_comments.XXXXXX")" || return 1
+  if ! gh_retry_to_file "${comments_raw}" gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments?per_page=100"; then
+    rm -f "${comments_raw}"
+    return 1
+  fi
+  if ! comments_json="$(jq -s 'add // []' "${comments_raw}" 2>/dev/null)"; then
+    rm -f "${comments_raw}"
+    return 1
+  fi
+  rm -f "${comments_raw}"
+
+  recovered_id="$(printf '%s' "${comments_json}" | jq -r --arg body "${full_body}" '
+    [.[] | select((.body // "") == $body)]
+    | max_by([(.created_at // ""), ((.id // 0) | tonumber? // 0)])
+    | .id // empty
+  ' 2>/dev/null || echo "")"
+  if ! [[ "${recovered_id}" =~ ^[0-9]+$ ]]; then
+    recovered_id="$(printf '%s' "${comments_json}" | jq -r --arg marker "${marker}" '
+      [.[] | select((.body // "") | contains($marker))]
+      | max_by([(.created_at // ""), ((.id // 0) | tonumber? // 0)])
+      | .id // empty
+    ' 2>/dev/null || echo "")"
+  fi
+
+  [[ "${recovered_id}" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "${recovered_id}"
+}
+
+# update_completion_status_comment — maintain a single pinned "what is
+# blocking completion" comment on the tracking issue, edit-in-place.
+#
+# The V2 state chain written by post_state_comment is the canonical
+# machine-readable state record. This comment is a separate, human-
+# facing summary keyed to a unique marker so it can be edited in place
+# every cycle as wave PRs land and the project converges on completion
+# — without producing a fresh comment per poll tick.
+#
+# Marker: <!-- orchestrator:completion-status -->
+# Status tag (grep-friendly second-line marker):
+#   <!-- status:in-progress|waiting|ready|validated|failed -->
+#
+# Args:
+#   $1 = status token (in-progress | waiting | ready | validated | failed)
+#   $2 = rendered markdown body (the marker and status-tag lines are
+#        prepended by the helper)
+#
+# Idempotency: hashes the rendered body and skips the API call when the
+# comment already matches. Successful writes persist the body hash +
+# comment ID into STATE_FILE so the edit-in-place fallback survives the
+# next cron invocation even though ${TMPDIR:-/tmp} does not.
+#
+# API hygiene (§15): when COMMENTS is set (paginated comments fetched
+# earlier in the same cycle), the existing-comment lookup is satisfied
+# from that cache. Only the malformed-response recovery path re-lists
+# comments, and only when the POST/PATCH response omitted a numeric id.
+update_completion_status_comment() {
+  local status="$1"
+  local body_markdown="$2"
+  local marker="<!-- orchestrator:completion-status -->"
+  local full_body body_hash existing_id existing_body response_file
+  local response_id state_hash state_comment_id existing_hash comments_fetch_ok
+
+  if [ -z "${TRACKING_NUM:-}" ] || [ "${TRACKING_NUM}" = "0" ]; then
+    return 0
+  fi
+
+  case "${status}" in
+    in-progress|waiting|ready|validated|failed) ;;
+    *)
+      echo "::warning::[completion-status] invalid status token '${status}' for issue #${TRACKING_NUM:-?}; skipping comment update." >&2
+      return 1
+      ;;
+  esac
+
+  full_body="${marker}"$'\n'"<!-- status:${status} -->"$'\n'"${body_markdown}"
+  body_hash="$(printf '%s' "${full_body}" | sha256sum | awk '{print $1}')"
+  state_hash=""
+  state_comment_id=""
+  comments_fetch_ok="${COMMENTS_FETCH_OK:-false}"
+
+  if [ -f "${STATE_FILE:-/dev/null}" ]; then
+    state_hash="$(jq -r '.completion_status_comment_body_hash // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+    state_comment_id="$(jq -r '.completion_status_comment_id // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+    [[ "${state_hash}" =~ ^[0-9a-f]{64}$ ]] || state_hash=""
+    [[ "${state_comment_id}" =~ ^[0-9]+$ ]] || state_comment_id=""
+  fi
+
+  existing_id=""
+  existing_body=""
+  if [ "${comments_fetch_ok}" = "true" ] && [ -n "${COMMENTS:-}" ] && [ "${COMMENTS}" != "[]" ]; then
+    existing_id="$(printf '%s' "${COMMENTS}" \
+      | jq -r --arg marker "${marker}" '
+          [.[] | select((.body // "") | contains($marker))]
+          | first | .id // empty' 2>/dev/null || echo "")"
+    existing_body="$(printf '%s' "${COMMENTS}" \
+      | jq -r --arg marker "${marker}" '
+          [.[] | select((.body // "") | contains($marker))]
+          | first | .body // empty' 2>/dev/null || echo "")"
+    if [ -n "${existing_body}" ]; then
+      existing_hash="$(printf '%s' "${existing_body}" | sha256sum | awk '{print $1}')"
+      if [ "${existing_hash}" = "${body_hash}" ]; then
+        if ! [[ "${existing_id}" =~ ^[0-9]+$ ]] && [[ "${state_comment_id}" =~ ^[0-9]+$ ]]; then
+          existing_id="${state_comment_id}"
+        fi
+        persist_completion_status_comment_state "${existing_id}" "${body_hash}"
+        return $?
+      fi
+    fi
+  elif [ "${comments_fetch_ok}" != "true" ] && [ -n "${state_hash}" ] && [ "${state_hash}" = "${body_hash}" ]; then
+    return 0
+  fi
+
+  if [ -z "${existing_id}" ] && [ "${comments_fetch_ok}" != "true" ] && [[ "${state_comment_id}" =~ ^[0-9]+$ ]]; then
+    existing_id="${state_comment_id}"
+  fi
+
+  response_file="$(mktemp "${TMPDIR:-/tmp}/completion_status_response.XXXXXX")"
+
+  if [ -n "${existing_id}" ] && [[ "${existing_id}" =~ ^[0-9]+$ ]]; then
+    if ! gh_retry_to_file "${response_file}" gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${existing_id}" \
+      -X PATCH -f body="${full_body}"; then
+      echo "::warning::[completion-status] failed to PATCH comment ${existing_id} for issue #${TRACKING_NUM:-?}; will retry on a later cycle." >&2
+      head -c 4096 "${response_file}" >&2 || true
+      echo >&2
+      rm -f "${response_file}"
+      return 1
+    fi
+  else
+    if ! gh_retry_to_file "${response_file}" gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
+      -X POST -f body="${full_body}"; then
+      echo "::warning::[completion-status] failed to POST comment for issue #${TRACKING_NUM:-?}; will retry on a later cycle." >&2
+      head -c 4096 "${response_file}" >&2 || true
+      echo >&2
+      rm -f "${response_file}"
+      return 1
+    fi
+  fi
+
+  response_id="$(jq -r '.id // empty' "${response_file}" 2>/dev/null || echo "")"
+  rm -f "${response_file}"
+  if ! [[ "${response_id}" =~ ^[0-9]+$ ]]; then
+    if [ -n "${existing_id}" ] && [[ "${existing_id}" =~ ^[0-9]+$ ]]; then
+      response_id="${existing_id}"
+    elif response_id="$(recover_completion_status_comment_id_from_live_comments "${full_body}" "${marker}" 2>/dev/null || echo "")" \
+      && [[ "${response_id}" =~ ^[0-9]+$ ]]; then
+      :
+    else
+      echo "::warning::[completion-status] GitHub comment update succeeded but no numeric comment id was returned for issue #${TRACKING_NUM:-?}; will retry metadata persistence on a later cycle." >&2
+      return 1
+    fi
+  fi
+  persist_completion_status_comment_state "${response_id}" "${body_hash}"
+}
+
+refresh_validation_dispatch_wave_gate() {
+  local wave_issue_nums_json candidate_details_json labels_json issue_states_json pr_states_json
+  local integration_branch default_branch ahead_by wave_status
+
+  wave_issue_nums_json="$(jq -c '[.waves[((.current_wave // 1) - 1)].issues[]?.github_issue | select(. != null) | tonumber?]' "${STATE_FILE}" 2>/dev/null || echo '[]')"
+  if ! printf '%s' "${wave_issue_nums_json}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    wave_issue_nums_json='[]'
+  fi
+
+  candidate_details_json="$(_fetch_candidate_issue_details_graphql "${wave_issue_nums_json}")"
+  if ! printf '%s' "${candidate_details_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    candidate_details_json='{}'
+  fi
+
+  labels_json="$(printf '%s' "${candidate_details_json}" | jq -c 'with_entries(.value = (.value.labels // []))' 2>/dev/null || echo '{}')"
+  issue_states_json="$(printf '%s' "${candidate_details_json}" | jq -c 'with_entries(.value = (((.value.state // "OPEN") | ascii_downcase) | if . == "closed" then "closed" else "open" end))' 2>/dev/null || echo '{}')"
+  pr_states_json="$(printf '%s' "${candidate_details_json}" | jq -c '
+    with_entries(.value = (
+      if (.value.linked_pr // null) == null then {state: "unknown", merged: false}
+      else {
+        state: (
+          if (.value.linked_pr.merged // false) == true then "closed"
+          else ((.value.linked_pr.state // "") | ascii_downcase | if . == "open" or . == "closed" then . else "unknown" end)
+          end
+        ),
+        merged: ((.value.linked_pr.merged // false) == true)
+      }
+      end
+    ))
+  ' 2>/dev/null || echo '{}')"
+
+  integration_branch="$(jq -r '.integration_branch // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+  [ "${integration_branch}" = "null" ] && integration_branch=""
+  if [ -n "${integration_branch}" ]; then
+    default_branch="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "")"
+    if [ -z "${default_branch}" ]; then
+      ahead_by=""
+    elif ahead_by="$(_integration_branch_ahead_of_default "${integration_branch}" "${default_branch}")"; then
+      :
+    else
+      ahead_by=""
+    fi
+  else
+    ahead_by="0"
+  fi
+
+  wave_status="$(python3 scripts/orchestrate_lib.py check-wave-status \
+    --state-file "${STATE_FILE}" \
+    --labels-json "${labels_json}" \
+    --issue-states-json "${issue_states_json}" \
+    --pr-states-json "${pr_states_json}" \
+    --integration-ahead-by "${ahead_by}" 2>/dev/null || echo '')"
+  [ -n "${wave_status}" ] || return 1
+
+  WAVE_COMPLETE="$(echo "${wave_status}" | jq -r '.wave_complete // false' 2>/dev/null || echo false)"
+  ANY_FAILED="$(echo "${wave_status}" | jq -r '.any_failed // false' 2>/dev/null || echo false)"
+  PROJECT_COMPLETE="$(echo "${wave_status}" | jq -r '.project_complete // false' 2>/dev/null || echo false)"
+}
+
 extract_orchestrator_state_payload() {
   local comment_body="$1"
   printf '%s' "${comment_body}" | sed -n '/^<!-- ORCHESTRATOR_STATE_V1$/,/^ORCHESTRATOR_STATE_V1 -->$/p' | sed '1d;$d'
@@ -2336,7 +2599,6 @@ mark_integration_branch_missing_failed() {
 ${reason}"
   _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
   handle_comprehensive_release_callback_if_needed "failed" "${_tracking_labels}" "${COMMENTS:-[]}"
-  tg_cleanup_msgs "${TRACKING_NUM}"
   tg_notify "❌ Project #${TRACKING_NUM} failed: ${tg_reason}."
 }
 
@@ -3349,20 +3611,148 @@ _refresh_integration_resolver_tooling() {
       git config user.name "codex-bot"
       git config user.email "codex@users.noreply.github.com"
 
+      # Resolve the merge-base ONCE before the per-file loop so we can
+      # compare each file's integration-branch hash against the hash it
+      # had when the two branches last shared history.  When int_hash
+      # differs from the merge-base hash, the integration branch has
+      # its own committed changes to the file since the branches
+      # diverged (e.g. via a merged sub-issue's PR like #2738 landing
+      # Phase 1A baseline/delta verifier changes).  Force-refreshing
+      # from default_branch in that case silently reverts those
+      # merged sub-issue changes, which the post-resolve merged
+      # sub-issue fingerprint verifier
+      # (scripts/verify_integration_fingerprints.py) then flags as a
+      # contract violation, blocking wave dispatch on the project
+      # tracking issue (see issue #2734 for the original incident).
+      # Fail-open: if the merge-base cannot be resolved, fall through
+      # to the legacy hash-only comparison rather than aborting the
+      # deadlock-breaking refresh entirely.
+      local merge_base=""
+      merge_base="$(git merge-base \
+        "refs/remotes/origin/${integration_branch}" \
+        "refs/remotes/origin/${default_branch}" 2>/dev/null || echo "")"
+
+      if [ -z "${merge_base}" ]; then
+        echo "::warning::${log_prefix} merge-base unresolved for ${integration_branch} vs ${default_branch}; falling back to legacy hash-only comparison." >&2
+      fi
+
       local refreshed_count=0
       local refreshed_list=""
-      local f main_hash int_hash
+      local drifted_count=0
+      local skipped_count=0
+      # Subset of refreshed_count: files that were staged via the 3-way
+      # merge fallback rather than the deadlock-breaker checkout. Tracked
+      # separately so the post-refresh summary + commit-message body can
+      # name them — operators reviewing the refresh commit should see at
+      # a glance which files came from a clean overwrite vs a merge.
+      local merged_3way_count=0
+      local f main_hash int_hash base_hash
       for f in "${refresh_files[@]}"; do
         # Skip if file does not exist on default_branch — never delete
         # an integration-branch file just because main lacks it.
         if ! git cat-file -e "refs/remotes/origin/${default_branch}:${f}" 2>/dev/null; then
           continue
         fi
-        main_hash="$(git rev-parse "refs/remotes/origin/${default_branch}:${f}" 2>/dev/null || echo "")"
-        int_hash="$(git rev-parse "HEAD:${f}" 2>/dev/null || echo "")"
+        # Keep --verify/--quiet on these tree-path lookups: without
+        # them, a missing path writes the unresolved REV:PATH token to
+        # stdout, which makes absent files look like real hashes.
+        main_hash="$(git rev-parse --verify --quiet "refs/remotes/origin/${default_branch}:${f}" 2>/dev/null || echo "")"
+        int_hash="$(git rev-parse --verify --quiet "HEAD:${f}" 2>/dev/null || echo "")"
         [ -n "${main_hash}" ] || continue
         if [ "${main_hash}" = "${int_hash}" ]; then
           continue
+        fi
+        drifted_count=$((drifted_count + 1))
+        # Refuse to clobber a file the integration branch has its own
+        # committed changes to since the merge-base.  The deadlock-
+        # breaker is for files the integration branch has NOT touched
+        # but main has fixed — overwriting a file the integration
+        # branch HAS touched would silently revert merged sub-issue
+        # PR intent and trip the fingerprint verifier (issue #2734).
+        # `[ -z "${base_hash}" ]` covers the "file did not exist at
+        # merge-base, integration added it" case the same way — never
+        # clobber an added file.
+        #
+        # P5 from docs/postmortems/2026-05-18-project-2734-stall.md:
+        # When BOTH main and integration have changed since the
+        # merge-base, try `git merge-file` (3-way merge) before
+        # skipping. This is the layered defense-in-depth that PR
+        # #2760's divergence guard left as future work: when both
+        # branches edited the same allowlisted toolchain file in
+        # non-overlapping ways, the merge cleanly combines them, the
+        # toolchain ships its update to integration without losing the
+        # sub-issue PR intent, AND the deadlock-breaker stays alive.
+        # Only when the 3-way merge produces conflicts do we fall back
+        # to the conservative skip (let the normal main->integration
+        # sync handle the conflict resolution under operator review).
+        if [ -n "${merge_base}" ]; then
+          base_hash="$(git rev-parse --verify --quiet "${merge_base}:${f}" 2>/dev/null || echo "")"
+          if [ "${int_hash}" != "${base_hash}" ]; then
+            # Sub-case (a): main is unchanged from the merge-base
+            # (only integration moved). Nothing to refresh from main.
+            # base_hash empty means "file added on integration" — still
+            # sub-case (a) because main has nothing to contribute.
+            if [ -z "${base_hash}" ] || [ "${main_hash}" = "${base_hash}" ]; then
+              skipped_count=$((skipped_count + 1))
+              local _int_short="${int_hash:0:8}"
+              local _base_short="${base_hash:0:8}"
+              [ -n "${_base_short}" ] || _base_short="none"
+              [ -n "${_int_short}" ] || _int_short="none"
+              echo "  ${log_prefix} skip ${f} — integration branch has committed changes since merge-base (int=${_int_short}, base=${_base_short}); main version must arrive via normal sync, not refresh."
+              continue
+            fi
+            # Sub-case (b): BOTH main and integration changed since
+            # the merge-base. Try a 3-way merge; on conflict, fall
+            # back to skip.
+            local merge_tmpdir
+            merge_tmpdir="$(mktemp -d 2>/dev/null || echo "")"
+            if [ -z "${merge_tmpdir}" ] || [ ! -d "${merge_tmpdir}" ]; then
+              echo "::warning::${log_prefix} could not create tmpdir for 3-way merge of ${f}; skipping." >&2
+              skipped_count=$((skipped_count + 1))
+              continue
+            fi
+            if ! git cat-file -p "${base_hash}" > "${merge_tmpdir}/base" 2>/dev/null \
+              || ! git cat-file -p "${int_hash}" > "${merge_tmpdir}/int" 2>/dev/null \
+              || ! git cat-file -p "${main_hash}" > "${merge_tmpdir}/main" 2>/dev/null; then
+              echo "::warning::${log_prefix} could not materialize one or more 3-way merge inputs for ${f}; skipping." >&2
+              skipped_count=$((skipped_count + 1))
+              rm -rf "${merge_tmpdir}" 2>/dev/null || true
+              continue
+            fi
+            if git merge-file --quiet -L integration -L merge-base -L main \
+                "${merge_tmpdir}/int" "${merge_tmpdir}/base" "${merge_tmpdir}/main" 2>/dev/null; then
+              # Clean merge (exit 0): integration + main edits combined
+              # without conflict. Stage the merged content as the new
+              # integration-branch version.
+              if cp "${merge_tmpdir}/int" "${f}" 2>/dev/null; then
+                if git add -- "${f}" 2>/dev/null; then
+                  refreshed_count=$((refreshed_count + 1))
+                  refreshed_list+="${f} "
+                  merged_3way_count=$((merged_3way_count + 1))
+                  local _m_int_short="${int_hash:0:8}"
+                  local _m_main_short="${main_hash:0:8}"
+                  echo "  ${log_prefix} 3-way merged ${f} — combined integration (${_m_int_short}) and main (${_m_main_short}) edits since merge-base."
+                else
+                  git checkout -- "${f}" 2>/dev/null || true
+                  echo "::warning::${log_prefix} git add failed after 3-way merge of ${f}; reverted worktree copy and excluded it from the refresh commit." >&2
+                fi
+              else
+                git checkout -- "${f}" 2>/dev/null || true
+                echo "::warning::${log_prefix} could not copy 3-way merge result for ${f}; reverted worktree copy and excluded it from the refresh commit." >&2
+              fi
+            else
+              # Non-zero exit: conflicts (1+) or merge-file error
+              # (e.g. binary file at 255). Fall back to skip — the
+              # normal main->integration sync will surface the
+              # conflict under operator review.
+              skipped_count=$((skipped_count + 1))
+              local _c_int_short="${int_hash:0:8}"
+              local _c_base_short="${base_hash:0:8}"
+              echo "  ${log_prefix} skip ${f} — 3-way merge produced conflicts (int=${_c_int_short}, base=${_c_base_short}); main version must arrive via normal sync."
+            fi
+            rm -rf "${merge_tmpdir}" 2>/dev/null || true
+            continue
+          fi
         fi
         if git checkout "refs/remotes/origin/${default_branch}" -- "${f}" 2>/dev/null; then
           # Only count the file as refreshed if `git add` succeeds, so
@@ -3379,8 +3769,21 @@ _refresh_integration_resolver_tooling() {
       done
 
       if [ "${refreshed_count}" -eq 0 ]; then
-        echo "  ${log_prefix} no resolver-toolchain drift; nothing to refresh."
+        if [ "${skipped_count}" -gt 0 ] && [ "${skipped_count}" -eq "${drifted_count}" ]; then
+          echo "  ${log_prefix} detected resolver-toolchain drift in ${drifted_count} file(s), but skipped refresh because integration-branch changes must land via normal sync."
+        elif [ "${drifted_count}" -gt 0 ]; then
+          echo "  ${log_prefix} detected resolver-toolchain drift in ${drifted_count} file(s), but nothing was refreshed."
+        else
+          echo "  ${log_prefix} no resolver-toolchain drift; nothing to refresh."
+        fi
         exit 0
+      fi
+
+      if [ "${merged_3way_count}" -gt 0 ]; then
+        # Surface the 3-way merges in the per-tick log so they're easy to
+        # find when an operator audits the refresh commit. The commit-
+        # message body further down also records the count.
+        echo "  ${log_prefix} ${merged_3way_count} file(s) refreshed via 3-way merge (combined integration + main edits)."
       fi
 
       if git diff --cached --quiet; then
@@ -3397,6 +3800,14 @@ _refresh_integration_resolver_tooling() {
       for _f in ${refreshed_list}; do
         body+=" - ${_f}"$'\n'
       done
+      if [ "${merged_3way_count}" -gt 0 ]; then
+        body+=$'\n'
+        body+="${merged_3way_count} file(s) refreshed via 3-way merge (combined integration"$'\n'
+        body+="and ${default_branch} edits since merge-base). The remaining $((refreshed_count - merged_3way_count))"$'\n'
+        body+="file(s) were refreshed by direct checkout of ${default_branch}'s version"$'\n'
+        body+="because the integration branch had not modified them since the"$'\n'
+        body+="merge-base."$'\n'
+      fi
       body+=$'\n'
       body+="Brings the integration branch's resolver toolchain up to date with"$'\n'
       body+="${default_branch} so any bug fixes shipped there take effect on the next"$'\n'
@@ -3985,8 +4396,11 @@ finalize_integration_merge_if_needed() {
   # gave up on the integration branch) and is NOT re-evaluated here.
   if [ "${final_merge_status}" = "merged" ] && [ -n "${integration_branch}" ]; then
     local _fimin_ahead_by _fimin_ahead_rc
-    _fimin_ahead_by="$(_integration_branch_ahead_of_default "${integration_branch}" "${default_branch}")"
-    _fimin_ahead_rc=$?
+    if _fimin_ahead_by="$(_integration_branch_ahead_of_default "${integration_branch}" "${default_branch}")"; then
+      _fimin_ahead_rc=0
+    else
+      _fimin_ahead_rc=$?
+    fi
     if [ "${_fimin_ahead_rc}" -ne 0 ]; then
       echo "::warning::  [final-merge] State pinned final_merge_status=merged for #${TRACKING_NUM:-?} but the compare API failed during the ahead_by re-check; failing closed and clearing the pin so the next tick can reopen the final PR if integration has drifted."
       jq '.final_merge_status = "pending" | .final_merge_pr = null | .final_merge_error = "compare API error during ahead_by re-check (failed closed)"' \
@@ -4041,8 +4455,11 @@ finalize_integration_merge_if_needed() {
       # return, leaving the new diff stranded. See
       # shubhodeep1/binance-blessings#135.
       local _fimin_rd_ahead_by _fimin_rd_ahead_rc
-      _fimin_rd_ahead_by="$(_integration_branch_ahead_of_default "${integration_branch}" "${default_branch}")"
-      _fimin_rd_ahead_rc=$?
+      if _fimin_rd_ahead_by="$(_integration_branch_ahead_of_default "${integration_branch}" "${default_branch}")"; then
+        _fimin_rd_ahead_rc=0
+      else
+        _fimin_rd_ahead_rc=$?
+      fi
       if [ "${_fimin_rd_ahead_rc}" -ne 0 ]; then
         echo "::warning::  [final-merge] Recorded final PR #${final_pr} is closed+merged but the compare API failed during the ahead_by re-check; failing closed and clearing the recorded PR so the next code path can open a fresh one if integration has drifted."
         jq '.final_merge_pr = null | .final_merge_status = "pending" | .final_merge_error = "compare API error during ahead_by re-check after recorded final PR was already merged (failed closed)"' \
@@ -4482,6 +4899,30 @@ dispatch_validation_if_needed() {
   local now_epoch
   local stale_threshold_secs=3600  # 1 hour: if no label appears after dispatch, allow redispatch
 
+  # Defensive preflight: refuse to dispatch validate while wave PRs are
+  # unmerged or the integration→default merge has not landed. The judge
+  # override at the JUDGE_STATUS=complete branch already gates the
+  # transition to status=validating on PROJECT_COMPLETE=true, so this
+  # branch is belt-and-suspenders against the rare case where a wave PR
+  # transitions from merged back to a non-terminal state between the
+  # judge call and the dispatch (e.g. a consumer-side revert or
+  # label-reconciliation race). When that happens we skip dispatch this
+  # cycle and let the next poll tick re-evaluate once wave PR state
+  # settles. The judge-complete path reaches this helper after the main
+  # wave-status block has already set PROJECT_COMPLETE; validating /
+  # revalidate paths hit it earlier in the loop, so recompute the live
+  # gate on demand there and fail closed if the probe itself cannot run.
+  if [ -z "${PROJECT_COMPLETE+set}" ]; then
+    if ! refresh_validation_dispatch_wave_gate; then
+      echo "::warning::[validation-dispatch] unable to recompute project completion for issue #${TRACKING_NUM:-?}; deferring validate dispatch this cycle." >&2
+      return 0
+    fi
+  fi
+  if [ "${PROJECT_COMPLETE}" != "true" ]; then
+    echo "Preflight: PROJECT_COMPLETE=${PROJECT_COMPLETE:-unset}; deferring validate dispatch this cycle (wave PRs unmerged or integration→default merge pending)."
+    return 0
+  fi
+
   last_dispatch_cycle="$(jq -r '.validation_last_dispatch_cycle // 0' "${STATE_FILE}")"
   if [ "${last_dispatch_cycle}" = "${validation_cycle}" ]; then
     # Check for staleness: if dispatched but no label change for >1h, allow redispatch
@@ -4569,8 +5010,14 @@ mark_validation_failed() {
 ${reason}
 
 Failure class \`${_deterministic_class}\` is environment-deterministic; retrying this workflow on the same runner image will not help. Skipping the recovery budget. Manual intervention required."
+    COMPLETION_STATUS_STATE_CHANGED="false"
+    update_completion_status_comment "failed" \
+      "## Completion status"$'\n\n'"**State:** \`failed\`"$'\n\n'"Runtime validation failed deterministically (class \`${_deterministic_class}\`). Manual intervention required. See the \"❌ Runtime validation failed (deterministic)\" comment for the diagnostic detail." \
+      || true
+    if [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
+      post_state_comment || true
+    fi
     tg_notify "Project #${TRACKING_NUM} validation failed deterministically (class=${_deterministic_class}). Manual intervention required." "CRITICAL"
-    tg_cleanup_msgs "${TRACKING_NUM}"
     return 0
   fi
 
@@ -4595,6 +5042,13 @@ Failure class \`${_deterministic_class}\` is environment-deterministic; retrying
 ${reason}
 
 Transitioning back to judge for re-evaluation."
+    COMPLETION_STATUS_STATE_CHANGED="false"
+    update_completion_status_comment "in-progress" \
+      "## Completion status"$'\n\n'"**State:** \`in-progress\`"$'\n\n'"Runtime validation failed and recovery attempt $((val_recovery_count + 1))/${MAX_VALIDATION_RECOVERY_ATTEMPTS} is in progress. Waiting for judge re-evaluation before validation can resume." \
+      || true
+    if [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
+      post_state_comment || true
+    fi
     tg_notify "Validation recovery ($((val_recovery_count + 1))/${MAX_VALIDATION_RECOVERY_ATTEMPTS}) for #${TRACKING_NUM}: transitioning back to judge." "WARNING"
     return 0
   fi
@@ -4612,8 +5066,14 @@ Transitioning back to judge for re-evaluation."
 ${reason}
 
 Validation recovery exhausted (${val_recovery_count}/${MAX_VALIDATION_RECOVERY_ATTEMPTS}). Manual intervention required."
+  COMPLETION_STATUS_STATE_CHANGED="false"
+  update_completion_status_comment "failed" \
+    "## Completion status"$'\n\n'"**State:** \`failed\`"$'\n\n'"Runtime validation failed after ${val_recovery_count}/${MAX_VALIDATION_RECOVERY_ATTEMPTS} recovery attempt(s). Manual intervention required. See the \"❌ Runtime validation failed\" comment for the diagnostic detail." \
+    || true
+  if [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
+    post_state_comment || true
+  fi
   tg_notify "Project #${TRACKING_NUM} validation failed after ${val_recovery_count} recovery attempt(s). Manual intervention required." "CRITICAL"
-  tg_cleanup_msgs "${TRACKING_NUM}"
 }
 
 mark_validation_complete() {
@@ -4682,7 +5142,6 @@ Runtime validation passed, but the final squash merge of \`${integration_branch}
 - Last recorded error: ${_final_err:-No specific error recorded; check final PR for branch protection or required-check failures.}
 
 Manual intervention required: resolve the blocking condition on the final PR (merge conflicts, required checks, branch protections) and re-trigger the poller, or merge manually."
-    tg_cleanup_msgs "${TRACKING_NUM}"
     tg_notify "Project #${TRACKING_NUM} blocked: validation passed but integration→${default_branch} merge did not land after ${MAX_FINAL_MERGE_ATTEMPTS} attempts. Manual intervention required." "CRITICAL"
     return 0
   fi
@@ -4697,6 +5156,16 @@ Manual intervention required: resolve the blocking condition on the final PR (me
   _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
   handle_comprehensive_release_callback_if_needed "complete" "${_tracking_labels}" "${COMMENTS:-[]}"
   set_tracking_phase_label "ai:validated"
+  # Final transition for the pinned completion-status comment: project
+  # is validated, all wave PRs are merged, and the integration squash
+  # merge has landed in default.
+  COMPLETION_STATUS_STATE_CHANGED="false"
+  update_completion_status_comment "validated" \
+    "## Completion status"$'\n\n'"**State:** \`validated\`"$'\n\n'"All wave PRs merged. Integration branch squash-merged into default. Runtime validation passed (cycle ${validation_cycle}). Tracking issue kept open for manual review." \
+    || true
+  if [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
+    post_state_comment || true
+  fi
   post_tracking_comment "Project completed successfully after runtime validation passed (cycle ${validation_cycle}). Issue kept open for manual review."
   tg_cleanup_msgs "${TRACKING_NUM}"
   MSG="Project #${TRACKING_NUM} completed after validation pass (cycle ${validation_cycle})."
@@ -5922,6 +6391,8 @@ STALL_EOF
                 _rtr_push_succeeded="true"
               fi
               git checkout --detach HEAD 2>/dev/null || true
+            else
+              echo "  Issue #${issue_num} PR #${pr_num} checkout origin/${head_ref} failed after fetch; skipping empty-commit push."
             fi
           fi
           if [ "${_rtr_push_succeeded}" != "true" ]; then
@@ -7762,6 +8233,8 @@ STALL_EOF
                   _std_rtr_push_succeeded="true"
                 fi
                 git checkout --detach HEAD 2>/dev/null || true
+              else
+                echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} checkout origin/${head_ref} failed after fetch; skipping empty-commit push."
               fi
             fi
           fi
@@ -8576,6 +9049,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   # produce "Unfinished string at EOF" errors when the response is truncated
   # due to network interruptions.
   _comments_raw="$(mktemp "${TMPDIR:-/tmp}/comments_raw.XXXXXX")"
+  COMMENTS_FETCH_OK="false"
   COMMENTS='[]'
   if gh_retry_to_file "${_comments_raw}" gh api --paginate \
     "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments?per_page=100"; then
@@ -8583,6 +9057,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     if jq -s 'add // []' "${_comments_raw}" > "${_comments_merged}" 2>/dev/null \
       && jq -e 'type == "array"' "${_comments_merged}" >/dev/null 2>&1; then
       COMMENTS="$(cat "${_comments_merged}")"
+      COMMENTS_FETCH_OK="true"
     else
       echo "::warning::Comments JSON for issue #${TRACKING_NUM} failed validation; proceeding with empty list" >&2
       echo "::group::Raw comments response (first 50 lines)" >&2
@@ -8677,14 +9152,153 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   fi
 
   echo "${STATE_JSON}" > "${STATE_FILE}"
+  unset PROJECT_COMPLETE WAVE_COMPLETE ANY_FAILED
+  COMPLETION_STATUS_STATE_CHANGED="false"
   PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
+  TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
 
+  # ---------------------------------------------------------------
+  # External-finalize detect: if the orchestrator previously recorded
+  # a final integration PR and an operator (or any other actor)
+  # squash-merged it outside the orchestrator's wave-by-wave flow,
+  # `finalize_integration_merge_if_needed` is never reached from the
+  # `in_progress` arm — it only fires from the `merge_conflict` branch
+  # and from the judge-`complete` verdict.  Without this hook, the
+  # poller keeps cycling on wave-dispatch indefinitely (e.g.
+  # orchestrator/project-2734: PR #2750 merged 2026-05-18T21:31:50Z
+  # but `final_merge_status` stayed `pending`, the wave-2 dispatch
+  # gate re-fired every ~30 min, and the Telegram channel collected
+  # several `Wave 2 dispatch BLOCKED` alerts per hour).
+  #
+  # This recovery must run BEFORE sync_default_into_integration_branch:
+  # external squash merges commonly delete the integration branch, and
+  # the sync path would otherwise mark the project failed before this
+  # block can observe the already-merged final PR.
+  #
+  # Mirror the same pinned-final-PR recovery shape that
+  # `finalize_integration_merge_if_needed` already uses once a final PR
+  # is recorded in state: read `final_merge_pr`, fetch the PR once via
+  # the shared `_fetch_pr_json` helper, and only transition when
+  # `.state` + `.merged_at` confirm closed-and-merged.  One REST read
+  # per poll tick when a final PR is pinned; skipped entirely when
+  # `final_merge_pr` is unset (most projects pre-finalize),
+  # `final_merge_status` is already terminal, or the project is already
+  # on the dedicated `merge_conflict` / validation-completion paths.
+  # Validated projects must keep flowing through
+  # `mark_validation_complete` so `validation_completed_cycle` and the
+  # `ai:validated` label stay aligned with the final merge result.
+  if [ "${PROJECT_STATUS}" != "complete" ] \
+    && [ "${PROJECT_STATUS}" != "failed" ] \
+    && [ "${PROJECT_STATUS}" != "validation-failed" ] \
+    && [ "${PROJECT_STATUS}" != "merge_conflict" ] \
+    && [ "${PROJECT_STATUS}" != "validating" ] \
+    && [ "${PROJECT_STATUS}" != "validation-fixing" ]; then
+    _orch_extfin_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
+    _orch_extfin_status="$(jq -r '.final_merge_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo "pending")"
+    if [ -n "${_orch_extfin_pr}" ] && [ "${_orch_extfin_pr}" != "null" ] \
+      && [ "${_orch_extfin_status}" = "pending" ]; then
+      if ! [[ "${_orch_extfin_pr}" =~ ^[0-9]+$ ]]; then
+        echo "::warning::[external-finalize] ignoring non-numeric final_merge_pr in state for issue #${TRACKING_NUM}: ${_orch_extfin_pr}"
+      else
+        _orch_extfin_pr_json="$(_fetch_pr_json "${_orch_extfin_pr}")"
+        _orch_extfin_pr_state="$(_jq_field "${_orch_extfin_pr_json}" '.state' 'open|closed|merged')"
+        _orch_extfin_pr_merged="$(_jq_field "${_orch_extfin_pr_json}" '.merged_at != null' 'true|false')"
+        if [ -z "${_orch_extfin_pr_state}" ] || [ -z "${_orch_extfin_pr_merged}" ]; then
+          echo "::warning::[external-finalize] unable to inspect PR #${_orch_extfin_pr}; leaving final_merge_status pending."
+        elif [ "${_orch_extfin_pr_state}" = "closed" ] && [ "${_orch_extfin_pr_merged}" = "true" ]; then
+          # Completeness gate (P2 from docs/postmortems/2026-05-18-project-2734-stall.md).
+          # An externally-merged integration PR is necessary but NOT sufficient
+          # evidence of project completion: a human (or another Claude session)
+          # can squash-merge the eager integration PR with only Wave 1 content
+          # while later waves remain undispatched (see project #2734, where 7
+          # of 9 sub-issues were never created). Without this gate the orchestrator
+          # would broadcast "✅ Project complete" while most of the planned work
+          # has shipped no code. Refuse to transition and alert the operator
+          # once per missing-issue-set; reviving some-but-not-all waves
+          # re-alerts because the set's signature changes.
+          #
+          # Filter is narrow on purpose: only `status == "not_created"`
+          # entries are caught. Sub-issues that were dispatched (have a
+          # github_issue number) and are merely in a transient
+          # `pending`/`active`/`in_progress` status while the orchestrator's
+          # own per-tick label reconciliation lags behind the GitHub merge
+          # event are NOT caught — those self-resolve on the next tick.
+          # The project #2734 incident specifically had Wave 2-7 sub-issues
+          # with `status == "not_created"` and `github_issue == null` for
+          # the entire 26-hour stall window, which is the case this gate
+          # exists to catch.
+          _orch_extfin_incomplete_json="$(jq -c \
+            '[.waves[]?.issues[]?
+              | select(.status == "not_created")
+              | {id: (.id // "<no-id>"), status: (.status // "unknown"), github_issue: (.github_issue // null)}]' \
+            "${STATE_FILE}" 2>/dev/null || echo "[]")"
+          _orch_extfin_incomplete_count="$(echo "${_orch_extfin_incomplete_json}" | jq 'length' 2>/dev/null || echo 0)"
+          if [ "${_orch_extfin_incomplete_count}" -gt 0 ]; then
+            _orch_extfin_missing_list="$(echo "${_orch_extfin_incomplete_json}" \
+              | jq -r '.[] | "  - " + .id + " [status=" + .status + "] github_issue=" + (.github_issue | tostring)')"
+            echo "::warning::[external-finalize-partial] PR #${_orch_extfin_pr} merged but ${_orch_extfin_incomplete_count} sub-issue(s) not in terminal-success state — refusing to transition project to complete."
+            echo "${_orch_extfin_missing_list}"
+            # Dedup the Telegram alert by hashing the missing-issue set.
+            _orch_extfin_missing_sig="$(echo "${_orch_extfin_incomplete_json}" | jq -S -c '.' 2>/dev/null | sha256sum | awk '{print $1}')"
+            _orch_extfin_prev_sig="$(jq -r '.external_finalize_partial_alert_sig // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+            if [ "${_orch_extfin_missing_sig}" != "${_orch_extfin_prev_sig}" ]; then
+              _orch_extfin_tg_msg="⚠️ Project #${TRACKING_NUM}: integration PR #${_orch_extfin_pr} merged externally, but ${_orch_extfin_incomplete_count} sub-issue(s) are still not terminal:"$'\n'"${_orch_extfin_missing_list}"$'\n'"Refusing to mark project complete. Either revive the missing waves or close them with rationale."
+              _orch_extfin_tg_msg+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
+              tg_notify "${_orch_extfin_tg_msg}" "WARNING" || true
+              if jq --arg sig "${_orch_extfin_missing_sig}" \
+                '.external_finalize_partial_alert_sig = $sig' \
+                "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+                :
+              else
+                rm -f "${STATE_FILE}.tmp" || true
+                echo "::warning::[external-finalize-partial] failed to persist alert-dedup signature; may re-alert on next tick."
+              fi
+            fi
+            continue
+          fi
+          echo "  [external-finalize] PR #${_orch_extfin_pr} merged outside the wave-by-wave flow; transitioning project to complete."
+          if ! jq --argjson final_pr "${_orch_extfin_pr}" \
+            '.final_merge_pr = $final_pr
+             | .final_merge_status = "merged"
+             | .final_merge_error = ""
+             | .status = "complete"
+             | .judge_cycle = ((.judge_cycle // 0) + 1)' \
+            "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+            rm -f "${STATE_FILE}.tmp" || true
+            echo "::warning::[external-finalize] failed to persist merged state for PR #${_orch_extfin_pr}; leaving final_merge_status pending."
+            continue
+          fi
+          post_state_comment || true
+          handle_comprehensive_release_callback_if_needed "complete" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
+          set_tracking_phase_label "ai:merged"
+          post_tracking_comment "## ✅ Project complete — integration PR #${_orch_extfin_pr} merged externally
+
+The orchestrator detected that the integration PR was squash-merged outside the wave-by-wave dispatch flow (the typical pattern when an operator finalizes a project ahead of the planner). Transitioning status to \`complete\`; future poll ticks will skip this project and any open wave-dispatch alerts can be ignored."
+          tg_cleanup_msgs "${TRACKING_NUM}"
+          MSG="✅ Project #${TRACKING_NUM} completed (integration PR #${_orch_extfin_pr} merged externally)."
+          MSG+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
+          if [ -n "${GITHUB_RUN_ID:-}" ]; then
+            MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
+          fi
+          tg_send_msg "${MSG}" >/dev/null
+          PROJECT_STATUS="complete"
+          continue
+        fi
+      fi
+    fi
+  fi
+
+  # Validation-owned states must bypass sync so mark_validation_complete
+  # can own externally merged/deleted final-PR completion without the
+  # integration-branch missing/conflict path preempting it.
   DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
   INTEGRATION_BRANCH_TRACKING="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
   if [ -n "${INTEGRATION_BRANCH_TRACKING}" ] \
     && [ "${PROJECT_STATUS}" != "complete" ] \
     && [ "${PROJECT_STATUS}" != "failed" ] \
     && [ "${PROJECT_STATUS}" != "merge_conflict" ] \
+    && [ "${PROJECT_STATUS}" != "validating" ] \
+    && [ "${PROJECT_STATUS}" != "validation-fixing" ] \
     && [ "${PROJECT_STATUS}" != "validation-failed" ]; then
     if ! sync_default_into_integration_branch "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}"; then
       continue
@@ -8694,8 +9308,6 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
       continue
     fi
   fi
-
-  TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
 
   if [ "${PROJECT_STATUS}" = "merge_conflict" ]; then
     FINAL_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
@@ -9592,6 +10204,110 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   WAVE_COMPLETE="$(echo "${WAVE_STATUS}" | jq -r '.wave_complete')"
   ANY_FAILED="$(echo "${WAVE_STATUS}" | jq -r '.any_failed')"
   PROJECT_COMPLETE="$(echo "${WAVE_STATUS}" | jq -r '.project_complete')"
+
+  # ---------------------------------------------------------------
+  # Maintain the pinned "completion status" comment on the tracking
+  # issue every cycle. The V2 state comment chain (post_state_comment)
+  # remains the canonical state record; this comment is a separate,
+  # human-readable summary the operator can read at a glance to see
+  # which wave PRs and integration→default merge are still blocking
+  # completion. Idempotent via body-hash cache so this is cheap to
+  # call every tick. See update_completion_status_comment for the
+  # marker contract and API hygiene notes.
+  # ---------------------------------------------------------------
+  COMPLETION_STATUS_STATE_CHANGED="false"
+  _csc_validation_recovery_count="$(jq -r '.validation_recovery_count // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
+  if ! [[ "${_csc_validation_recovery_count}" =~ ^[0-9]+$ ]]; then
+    _csc_validation_recovery_count=0
+  fi
+  _completion_status_text="in-progress"
+  if [ "${ANY_FAILED}" = "true" ]; then
+    _completion_status_text="failed"
+  elif [ "${PROJECT_STATUS:-}" = "in_progress" ] && [ "${_csc_validation_recovery_count}" -gt 0 ]; then
+    _completion_status_text="in-progress"
+  elif [ "${PROJECT_COMPLETE}" = "true" ]; then
+    _completion_status_text="ready"
+  elif [ "${WAVE_COMPLETE}" = "true" ]; then
+    # Final-wave PRs merged into the integration branch but the
+    # integration→default squash merge has not landed yet (autofix may
+    # still be running on the integration PR).
+    _completion_status_text="waiting"
+  fi
+
+  _csc_integration_ahead_by="$(echo "${WAVE_STATUS}" | jq -r '.integration_ahead_by // ""')"
+  _csc_integration_contained="$(echo "${WAVE_STATUS}" | jq -r '.integration_contained_in_default // false')"
+  _csc_total_waves="$(jq -r '.total_waves // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
+  _csc_current_wave="$(echo "${WAVE_STATUS}" | jq -r '.wave // 0')"
+  _csc_skipped_lines="$(echo "${WAVE_STATUS}" | jq -r '
+    [.issues[]
+      | select(.status == "skipped")
+      | "- #\(.github_issue // "?"): \(.status) (\(.decision_source // "unknown"))"]
+    | join("\n")')"
+  _csc_pending_lines="$(echo "${WAVE_STATUS}" | jq -r '
+    [.issues[]
+      | select(.status != "merged" and .status != "closed" and .status != "skipped" and .status != "implementation-failed")
+      | "- #\(.github_issue // "?"): \(.status)"]
+    | join("\n")')"
+  _csc_failed_lines="$(echo "${WAVE_STATUS}" | jq -r '
+    [.issues[]
+      | select(.status == "closed" or .status == "implementation-failed")
+      | "- #\(.github_issue // "?"): \(.status) (\(.decision_source // "unknown"))"]
+    | join("\n")')"
+
+  _csc_body="## Completion status"$'\n\n'
+  _csc_body+="**State:** \`${_completion_status_text}\`"$'\n'
+  _csc_body+="**Wave:** ${_csc_current_wave}/${_csc_total_waves}"$'\n'
+  if [ -n "${_csc_pending_lines}" ]; then
+    _csc_body+=$'\n'"**Wave issues still pending merge:**"$'\n'"${_csc_pending_lines}"$'\n'
+  else
+    _csc_body+=$'\n'"All wave issues in this wave have merged or are accounted for."$'\n'
+  fi
+  if [ "${PROJECT_STATUS:-}" = "in_progress" ] && [ "${_csc_validation_recovery_count}" -gt 0 ]; then
+    _csc_body+=$'\n'"Runtime validation is in recovery attempt ${_csc_validation_recovery_count}/${MAX_VALIDATION_RECOVERY_ATTEMPTS}; waiting for judge re-evaluation before validation can resume."$'\n'
+  fi
+  if [ "${_csc_integration_contained}" = "true" ]; then
+    _csc_body+=$'\n'"Integration branch is contained in default — integration→default merge has landed."$'\n'
+  elif [ -n "${_csc_integration_ahead_by}" ] && [ "${_csc_integration_ahead_by}" != "0" ]; then
+    _csc_body+=$'\n'"Integration branch is ahead of default by **${_csc_integration_ahead_by}** commit(s). The integration→default merge has not landed yet (autofix may still be running on the integration PR)."$'\n'
+  else
+    _csc_body+=$'\n'"Integration status is unknown this cycle (compare API unavailable). Project completion remains gated until the next successful poll re-check."$'\n'
+  fi
+  if [ -n "${_csc_failed_lines}" ]; then
+    _csc_body+=$'\n'"**Wave issues closed without merge / implementation-failed:**"$'\n'"${_csc_failed_lines}"$'\n'
+    _csc_body+=$'\n'"Project cannot complete until these are resolved (re-open, re-merge, or skip)."$'\n'
+  fi
+  if [ -n "${_csc_skipped_lines}" ]; then
+    _csc_body+=$'\n'"**Wave issues skipped:**"$'\n'"${_csc_skipped_lines}"$'\n'
+    _csc_body+=$'\n'"Skipped issues are already accounted for and do not block completion."$'\n'
+  fi
+  _csc_body+=$'\n'"_The orchestrator poller updates this comment every cycle (~5 min) until the project completes. Marker: \`<!-- orchestrator:completion-status -->\`._"
+
+  update_completion_status_comment "${_completion_status_text}" "${_csc_body}" || true
+
+  # Once-per-project Telegram escalation when a wave PR has been closed
+  # without merging (or implementation-failed). The stall/review-blocked
+  # paths further down also surface their own alerts on specific
+  # failures, but this is the earliest deterministic signal — fire here
+  # so the operator sees the alert as soon as ANY_FAILED first goes
+  # true. Guarded by a state-file flag so we never alert more than once
+  # per project for the same condition.
+  if [ "${ANY_FAILED}" = "true" ]; then
+    _csc_alert_sent="$(jq -r '.completion_status_failure_alert_sent // false' "${STATE_FILE}" 2>/dev/null || echo false)"
+    if [ "${_csc_alert_sent}" != "true" ]; then
+      tg_notify "Project #${TRACKING_NUM}: one or more wave PR(s) closed without merge — see the pinned 'Completion status' comment on the tracking issue for the full list. The project cannot complete until these are resolved." "CRITICAL"
+      if jq '.completion_status_failure_alert_sent = true' "${STATE_FILE}" > "${STATE_FILE}.tmp" \
+        && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+        COMPLETION_STATUS_STATE_CHANGED="true"
+      else
+        rm -f "${STATE_FILE}.tmp" || true
+        echo "::warning::[completion-status] failed to persist completion_status_failure_alert_sent for issue #${TRACKING_NUM:-?}; the once-per-project alert may repeat on a later tick."
+      fi
+    fi
+    unset _csc_alert_sent
+  fi
+
+  unset _completion_status_text _csc_integration_ahead_by _csc_integration_contained
+  unset _csc_total_waves _csc_current_wave _csc_pending_lines _csc_failed_lines _csc_skipped_lines _csc_body _csc_validation_recovery_count
 
   # Persist reconciled status decisions every cycle (not only narrow branches).
   RECONCILE_STATE_CHANGED=false
@@ -11631,9 +12347,8 @@ fi
         # this adds zero API calls (§15).  Fails open on jq errors:
         # counts fall back to "?" and the diagnostic still prints,
         # but parse_error=true keeps that path distinguishable from a
-        # genuinely empty cache.  The retrigger_review defense-in-depth
-        # guard at
-        # scripts/orchestrate_poll_process.sh:5829 still protects the
+        # genuinely empty cache.  The execute_stall_recovery_action(
+        # retrigger_review) in-flight review guard still protects the
         # empty-commit push if the cache misses a live review run; this
         # logging just makes the cache state observable next time.
         (
@@ -11726,7 +12441,7 @@ with open('${STATE_FILE}', 'w') as f:
       fi
     fi
 
-    if [ "${STALL_STATE_CHANGED}" = "true" ] || [ "${STALL_HEALING_CHANGED}" = "true" ] || [ "${TIMESTAMP_STATE_CHANGED}" = "true" ] || [ "${RECONCILE_STATE_CHANGED}" = "true" ] || [ "${RECONCILE_LABELS_CHANGED}" = "true" ]; then
+    if [ "${STALL_STATE_CHANGED}" = "true" ] || [ "${STALL_HEALING_CHANGED}" = "true" ] || [ "${TIMESTAMP_STATE_CHANGED}" = "true" ] || [ "${RECONCILE_STATE_CHANGED}" = "true" ] || [ "${RECONCILE_LABELS_CHANGED}" = "true" ] || [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
       post_state_comment || true
     fi
     if [ "${RECONCILE_LABELS_CHANGED}" = "true" ] || [ "${RECONCILE_STATE_CHANGED}" = "true" ] || [ "${STALL_HEALING_CHANGED}" = "true" ]; then
@@ -11841,7 +12556,6 @@ Judge has used ${JUDGE_STALL_CYCLES} stall cycle(s) (recovery/fix-ups) out of ${
 Clean wave advances do not count against this limit.
 Manual intervention required." >/dev/null
     tg_notify "Project #${TRACKING_NUM} FAILED: judge stall cycle limit (${JUDGE_STALL_CYCLES}/${MAX_JUDGE}) exceeded." "CRITICAL"
-    tg_cleanup_msgs "${TRACKING_NUM}"
     continue
   fi
 
@@ -12271,7 +12985,6 @@ The judge produced the same normalized failure fingerprint for ${JUDGE_FINGERPRI
 
 To avoid repeating the same recovery loop, the orchestrator is not creating additional fix-up issues or running another judge-driven auto-recovery cycle. Manual intervention is required."
 
-        tg_cleanup_msgs "${TRACKING_NUM}"
         tg_notify "Project #${TRACKING_NUM} blocked: repeated judge failure fingerprint exceeded JUDGE_REPEAT_FINGERPRINT_MAX=${JUDGE_REPEAT_FINGERPRINT_MAX}. Manual intervention required." "CRITICAL"
         continue
       fi
@@ -12294,7 +13007,6 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 **Assessment:** ${JUDGE_ASSESSMENT}" >/dev/null
 
         tg_notify "Project #${TRACKING_NUM} FAILED after ${RECOVERY_COUNT} recovery attempt(s). Manual intervention needed." "CRITICAL"
-        tg_cleanup_msgs "${TRACKING_NUM}"
         continue
       fi
 
