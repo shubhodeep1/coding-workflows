@@ -590,6 +590,18 @@ def test_finalize_skips_recheck_when_superseded_by_main(tmp_path):
 	assert final_state["final_merge_status"] == "superseded-by-main"
 
 
+def _invoke_test(func) -> None:
+	params = list(inspect.signature(func).parameters)
+	if not params:
+		func()
+		return
+	if params == ["tmp_path"]:
+		with tempfile.TemporaryDirectory(prefix=f"{func.__name__}_") as td:
+			func(Path(td))
+		return
+	raise TypeError(f"unsupported direct-run parameters: {params}")
+
+
 def main(argv: list[str] | None = None) -> int:
 	"""Direct ``python3 tests/<file>.py`` entrypoint.
 
@@ -598,6 +610,11 @@ def main(argv: list[str] | None = None) -> int:
 	module needs a small fixture shim for the ``tmp_path``-style tests.
 	"""
 	selected_names = list(sys.argv[1:] if argv is None else argv)
+	try:
+		sys.stdout.reconfigure(line_buffering=True)
+	except Exception:
+		pass
+
 	tests_by_name = {
 		name: func
 		for name, func in sorted(globals().items())
@@ -605,9 +622,10 @@ def main(argv: list[str] | None = None) -> int:
 	}
 	if selected_names:
 		missing = [name for name in selected_names if name not in tests_by_name]
+		for name in missing:
+			print(f"  FAIL  {name}: unknown test name", flush=True)
 		if missing:
-			print(f"Unknown test name(s): {', '.join(missing)}")
-			return 2
+			return 1
 		named_tests = [(name, tests_by_name[name]) for name in selected_names]
 	else:
 		named_tests = list(tests_by_name.items())
@@ -616,21 +634,14 @@ def main(argv: list[str] | None = None) -> int:
 	failed = 0
 	for name, func in named_tests:
 		try:
-			params = list(inspect.signature(func).parameters)
-			if not params:
-				func()
-			elif params == ["tmp_path"]:
-				with tempfile.TemporaryDirectory(prefix=f"{name}_") as td:
-					func(Path(td))
-			else:
-				raise TypeError(f"unsupported direct-run parameters: {params}")
-			print(f"  PASS  {name}")
+			_invoke_test(func)
+			print(f"  PASS  {name}", flush=True)
 			passed += 1
-		except Exception as exc:
-			print(f"  FAIL  {name}: {exc}")
+		except Exception as e:
+			print(f"  FAIL  {name}: {e}", flush=True)
 			failed += 1
 
-	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total", flush=True)
 	return 1 if failed > 0 else 0
 
 
