@@ -172,8 +172,8 @@ def test_non_numeric_reviewer_count_falls_back_to_generic_warning(tmp_path):
 
 
 def test_balanced_arithmetic_with_zero_totals_passes(tmp_path):
-	"""Entries with total=0 are skipped by the arithmetic check (they
-	cannot mismatch). A summary with only zero-total entries passes."""
+	"""Entries with total=0 still pass when their summed counts are also
+	zero."""
 	summary = textwrap.dedent(
 		"""\
 		Review file issue audit:
@@ -183,6 +183,19 @@ def test_balanced_arithmetic_with_zero_totals_passes(tmp_path):
 	)
 	result = _run(summary, "2", tmp_path=tmp_path)
 	assert result.returncode == 0
+
+
+def test_zero_total_with_non_zero_sum_fails_closed(tmp_path):
+	"""Zero-total entries must still balance; non-zero applied counts are malformed."""
+	summary = textwrap.dedent(
+		"""\
+		Review file issue audit:
+		- review_bad.md: total issues listed 0, issues applied 1, issues already applied 0, issues ignored 0
+		"""
+	)
+	result = _run(summary, "1", tmp_path=tmp_path)
+	assert result.returncode == 2
+	assert "Audit entry arithmetic mismatch: total=0 but applied(1)+already_applied(0)+ignored(0)=1" in result.stderr
 
 
 def test_existing_colon_separated_fixture_format_passes(tmp_path):

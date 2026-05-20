@@ -130,7 +130,7 @@ validate_editor_audit_arithmetic()
 
 		sum=$((a + aa + ig))
 
-		if [ "${t}" -gt 0 ] && [ "${sum}" -ne "${t}" ]; then
+		if [ "${sum}" -ne "${t}" ]; then
 			echo "::warning::Audit entry arithmetic mismatch: total=${t} but applied(${a})+already_applied(${aa})+ignored(${ig})=${sum}" >&2
 			mismatch_found=true
 		fi
