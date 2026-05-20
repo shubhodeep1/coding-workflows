@@ -123,8 +123,12 @@ if ! command -v _embed_input_file >/dev/null 2>&1; then
       _effective_cap="${_budget_remaining}"
     fi
 
-    _size="$(wc -c < "${_p}" 2>/dev/null | tr -d '[:space:]')"
-    [[ "${_size}" =~ ^[0-9]+$ ]] || _size=0
+    _size="$(wc -c < "${_p}" 2>/dev/null | tr -d '[:space:]' || true)"
+    if ! [[ "${_size}" =~ ^[0-9]+$ ]]; then
+      echo "::warning::_embed_input_file omitted ${_p}; could not determine file size for prompt budgeting." >&2
+      printf '(omitted — could not determine file size for prompt budgeting)\n'
+      return 0
+    fi
     if [ "${_size}" -le "${_effective_cap}" ]; then
       cat "${_p}"
       _emit_bytes="${_size}"
@@ -418,9 +422,16 @@ fi
 # -----------------------------------------------------------
 # Collect PR context for judge
 # -----------------------------------------------------------
-PR_DIFF="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
-  -H 'Accept: application/vnd.github.diff' 2>/dev/null || echo "(diff unavailable)")"
-[ -n "${PR_DIFF}" ] || PR_DIFF="(diff unavailable)"
+RB_JUDGE_PR_DIFF_FILE="${RUNTIME_DIR}/rb_judge_pr.diff"
+RB_JUDGE_PR_DIFF_TMP_FILE="${RB_JUDGE_PR_DIFF_FILE}.tmp"
+# Install a narrow early cleanup trap immediately so failures before the
+# full prompt-build trap below do not strand transient PR-diff files.
+trap 'rm -f "${RB_JUDGE_PR_DIFF_FILE:-}" "${RB_JUDGE_PR_DIFF_TMP_FILE:-}"' EXIT
+if ! gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
+  -H 'Accept: application/vnd.github.diff' > "${RB_JUDGE_PR_DIFF_FILE}" 2>/dev/null; then
+  printf '%s' '(diff unavailable)' > "${RB_JUDGE_PR_DIFF_FILE}"
+fi
+[ -s "${RB_JUDGE_PR_DIFF_FILE}" ] || printf '%s' '(diff unavailable)' > "${RB_JUDGE_PR_DIFF_FILE}"
 # Cap the diff embedded in the judge prompt so codex's `turn/start`
 # stdin envelope (1,048,576 chars) is never breached. The reviewer
 # script uses the same pattern (scripts/review_run_reviewers.sh:447 —
@@ -436,25 +447,10 @@ if ! [[ "${RB_JUDGE_PR_DIFF_MAX_BYTES}" =~ ^[0-9]+$ ]] || [ "${RB_JUDGE_PR_DIFF_
   RB_JUDGE_PR_DIFF_MAX_BYTES=400000
 fi
 PR_DIFF_TRUNCATED=false
-PR_DIFF_TRUNCATE_FILE="$(mktemp "${TMPDIR:-/tmp}/review-rb-judge-pr-diff.XXXXXX" 2>/dev/null || printf '')"
-if [ -n "${PR_DIFF_TRUNCATE_FILE}" ] && [ -f "${PR_DIFF_TRUNCATE_FILE}" ] && \
-  printf '%s' "${PR_DIFF}" > "${PR_DIFF_TRUNCATE_FILE}"; then
-  PR_DIFF_BYTES_TOTAL="$(wc -c < "${PR_DIFF_TRUNCATE_FILE}" | tr -cd '0-9' || true)"
-else
-  if [ -n "${PR_DIFF_TRUNCATE_FILE}" ]; then
-    echo "::warning::Failed to populate PR diff temp file for truncation; falling back to in-memory truncation."
-  else
-    echo "::warning::Failed to create PR diff temp file for truncation; falling back to in-memory truncation."
-  fi
-  rm -f "${PR_DIFF_TRUNCATE_FILE:-}" 2>/dev/null || true
-  unset PR_DIFF_TRUNCATE_FILE
-  PR_DIFF_BYTES_TOTAL="$(printf '%s' "${PR_DIFF}" | wc -c | tr -cd '0-9' || true)"
-fi
+PR_DIFF_BYTES_TOTAL="$(wc -c < "${RB_JUDGE_PR_DIFF_FILE}" 2>/dev/null | tr -cd '0-9' || true)"
 [ -n "${PR_DIFF_BYTES_TOTAL}" ] || PR_DIFF_BYTES_TOTAL=0
 if [ "${PR_DIFF_BYTES_TOTAL}" -gt "${RB_JUDGE_PR_DIFF_MAX_BYTES}" ]; then
-  PR_DIFF_TRUNCATED_CONTENT=""
-  if [ -n "${PR_DIFF_TRUNCATE_FILE:-}" ] && [ -f "${PR_DIFF_TRUNCATE_FILE}" ]; then
-    if PR_DIFF_TRUNCATED_CONTENT="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${PR_DIFF_TRUNCATE_FILE}" "${RB_JUDGE_PR_DIFF_MAX_BYTES}" 2>/dev/null <<'PY'
+  if PYTHONDONTWRITEBYTECODE=1 python3 - "${RB_JUDGE_PR_DIFF_FILE}" "${RB_JUDGE_PR_DIFF_MAX_BYTES}" > "${RB_JUDGE_PR_DIFF_TMP_FILE}" 2>/dev/null <<'PY'
 import sys
 
 cap = int(sys.argv[2])
@@ -468,35 +464,20 @@ if cap > 0 and len(data) > cap:
     data = data[:i]
 sys.stdout.buffer.write(data)
 PY
-)"; then
-      PR_DIFF="${PR_DIFF_TRUNCATED_CONTENT}"
-    else
-      echo "::warning::python3 unavailable for UTF-8-safe PR diff truncation; falling back to a raw byte prefix. sanitize_codex_prompt_file will strip any invalid trailing bytes before codex reads the prompt."
-      PR_DIFF="$(head -c "${RB_JUDGE_PR_DIFF_MAX_BYTES}" "${PR_DIFF_TRUNCATE_FILE}")"
-    fi
-  elif PR_DIFF_TRUNCATED_CONTENT="$({ printf '%s' "${PR_DIFF}" || true; } | PYTHONDONTWRITEBYTECODE=1 python3 -c '
-import sys
-
-cap = int(sys.argv[1])
-read_cap = cap + 1 if cap > 0 else 0
-data = sys.stdin.buffer.read(read_cap)
-if cap > 0 and len(data) > cap:
-    i = cap
-    while i > 0 and (data[i] & 0xC0) == 0x80:
-        i -= 1
-    data = data[:i]
-sys.stdout.buffer.write(data)
-' "${RB_JUDGE_PR_DIFF_MAX_BYTES}" 2>/dev/null)"; then
-    PR_DIFF="${PR_DIFF_TRUNCATED_CONTENT}"
+  then
+    mv -f "${RB_JUDGE_PR_DIFF_TMP_FILE}" "${RB_JUDGE_PR_DIFF_FILE}"
   else
     echo "::warning::python3 unavailable for UTF-8-safe PR diff truncation; falling back to a raw byte prefix. sanitize_codex_prompt_file will strip any invalid trailing bytes before codex reads the prompt."
-    PR_DIFF="$(printf '%s' "${PR_DIFF}" | head -c "${RB_JUDGE_PR_DIFF_MAX_BYTES}" || true)"
+    if head -c "${RB_JUDGE_PR_DIFF_MAX_BYTES}" "${RB_JUDGE_PR_DIFF_FILE}" > "${RB_JUDGE_PR_DIFF_TMP_FILE}" 2>/dev/null; then
+      mv -f "${RB_JUDGE_PR_DIFF_TMP_FILE}" "${RB_JUDGE_PR_DIFF_FILE}"
+    else
+      printf '%s' '(diff unavailable)' > "${RB_JUDGE_PR_DIFF_FILE}"
+    fi
   fi
-  unset PR_DIFF_TRUNCATED_CONTENT
   PR_DIFF_TRUNCATED=true
 fi
-rm -f "${PR_DIFF_TRUNCATE_FILE:-}" 2>/dev/null || true
-unset PR_DIFF_TRUNCATE_FILE
+PR_DIFF="$(cat "${RB_JUDGE_PR_DIFF_FILE}")"
+[ -n "${PR_DIFF}" ] || PR_DIFF="(diff unavailable)"
 PRELOADED_PR_META="$(jq -c '{
   title: (.title // ""),
   body: (.body // ""),
@@ -532,7 +513,7 @@ RB_JUDGE_PR_META_RENDER_FILE="${RUNTIME_DIR}/rb_judge_pr_meta.json"
 RB_JUDGE_PR_COMMENTS_RENDER_FILE="${RUNTIME_DIR}/rb_judge_pr_comments.json"
 RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE="${RUNTIME_DIR}/rb_judge_pr_review_comments.json"
 RB_JUDGE_SEMBLE_PREFETCH=""
-trap '_cleanup_prompt_budget; rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE:-}" "${RB_JUDGE_REQUIREMENT_FILE:-}" "${RB_JUDGE_PR_META_RENDER_FILE:-}" "${RB_JUDGE_PR_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE:-}"' EXIT
+trap '_cleanup_prompt_budget; rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE:-}" "${RB_JUDGE_REQUIREMENT_FILE:-}" "${RB_JUDGE_PR_META_RENDER_FILE:-}" "${RB_JUDGE_PR_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PR_DIFF_FILE:-}" "${RB_JUDGE_PR_DIFF_TMP_FILE:-}"' EXIT
 
 {
   printf '%s\n' 'Review-blocked judge context.'

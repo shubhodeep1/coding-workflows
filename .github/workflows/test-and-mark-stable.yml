@@ -3238,6 +3238,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_targeted_file_context.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_detect_editor_changes_lost.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_review_pipeline_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_editor_noop_cascade_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_reject_verify.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_stall_recovery_pr_lookup.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_stall_loop_and_churn_fixes.py
