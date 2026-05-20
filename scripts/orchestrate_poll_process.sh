@@ -1313,6 +1313,36 @@ persist_completion_status_comment_state() {
   return 1
 }
 
+# recover_completion_status_comment_id_from_live_comments — rare-path repair
+# for GitHub comment updates that succeeded but returned a malformed body
+# without a numeric `.id`. The cycle-local COMMENTS cache predates a POST,
+# so only this recovery path is allowed to re-list comments.
+recover_completion_status_comment_id_from_live_comments() {
+  local full_body="$1"
+  local marker="$2"
+  local comments_json recovered_id
+
+  if ! comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments?per_page=100" | jq -s 'add // []' 2>/dev/null)"; then
+    return 1
+  fi
+
+  recovered_id="$(printf '%s' "${comments_json}" | jq -r --arg body "${full_body}" '
+    [.[] | select((.body // "") == $body)]
+    | max_by([(.created_at // ""), ((.id // 0) | tonumber? // 0)])
+    | .id // empty
+  ' 2>/dev/null || echo "")"
+  if ! [[ "${recovered_id}" =~ ^[0-9]+$ ]]; then
+    recovered_id="$(printf '%s' "${comments_json}" | jq -r --arg marker "${marker}" '
+      [.[] | select((.body // "") | contains($marker))]
+      | max_by([(.created_at // ""), ((.id // 0) | tonumber? // 0)])
+      | .id // empty
+    ' 2>/dev/null || echo "")"
+  fi
+
+  [[ "${recovered_id}" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "${recovered_id}"
+}
+
 # update_completion_status_comment — maintain a single pinned "what is
 # blocking completion" comment on the tracking issue, edit-in-place.
 #
@@ -1386,6 +1416,9 @@ update_completion_status_comment() {
     if [ -n "${existing_body}" ]; then
       existing_hash="$(printf '%s' "${existing_body}" | sha256sum | awk '{print $1}')"
       if [ "${existing_hash}" = "${body_hash}" ]; then
+        if ! [[ "${existing_id}" =~ ^[0-9]+$ ]] && [[ "${state_comment_id}" =~ ^[0-9]+$ ]]; then
+          existing_id="${state_comment_id}"
+        fi
         persist_completion_status_comment_state "${existing_id}" "${body_hash}"
         return $?
       fi
@@ -1425,12 +1458,74 @@ update_completion_status_comment() {
   if ! [[ "${response_id}" =~ ^[0-9]+$ ]]; then
     if [ -n "${existing_id}" ] && [[ "${existing_id}" =~ ^[0-9]+$ ]]; then
       response_id="${existing_id}"
+    elif response_id="$(recover_completion_status_comment_id_from_live_comments "${full_body}" "${marker}" 2>/dev/null || echo "")" \
+      && [[ "${response_id}" =~ ^[0-9]+$ ]]; then
+      :
     else
       echo "::warning::[completion-status] GitHub comment update succeeded but no numeric comment id was returned for issue #${TRACKING_NUM:-?}; will retry metadata persistence on a later cycle." >&2
       return 1
     fi
   fi
   persist_completion_status_comment_state "${response_id}" "${body_hash}"
+}
+
+refresh_validation_dispatch_wave_gate() {
+  local wave_issue_nums_json candidate_details_json labels_json issue_states_json pr_states_json
+  local integration_branch default_branch ahead_by wave_status
+
+  wave_issue_nums_json="$(jq -c '[.waves[((.current_wave // 1) - 1)].issues[]?.github_issue | select(. != null) | tonumber?]' "${STATE_FILE}" 2>/dev/null || echo '[]')"
+  if ! printf '%s' "${wave_issue_nums_json}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    wave_issue_nums_json='[]'
+  fi
+
+  candidate_details_json="$(_fetch_candidate_issue_details_graphql "${wave_issue_nums_json}")"
+  if ! printf '%s' "${candidate_details_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    candidate_details_json='{}'
+  fi
+
+  labels_json="$(printf '%s' "${candidate_details_json}" | jq -c 'with_entries(.value = (.value.labels // []))' 2>/dev/null || echo '{}')"
+  issue_states_json="$(printf '%s' "${candidate_details_json}" | jq -c 'with_entries(.value = (((.value.state // "OPEN") | ascii_downcase) | if . == "closed" then "closed" else "open" end))' 2>/dev/null || echo '{}')"
+  pr_states_json="$(printf '%s' "${candidate_details_json}" | jq -c '
+    with_entries(.value = (
+      if (.value.linked_pr // null) == null then {state: "unknown", merged: false}
+      else {
+        state: (
+          if (.value.linked_pr.merged // false) == true then "closed"
+          else ((.value.linked_pr.state // "") | ascii_downcase | if . == "open" or . == "closed" then . else "unknown" end)
+          end
+        ),
+        merged: ((.value.linked_pr.merged // false) == true)
+      }
+      end
+    ))
+  ' 2>/dev/null || echo '{}')"
+
+  integration_branch="$(jq -r '.integration_branch // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+  [ "${integration_branch}" = "null" ] && integration_branch=""
+  if [ -n "${integration_branch}" ]; then
+    default_branch="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "")"
+    if [ -z "${default_branch}" ]; then
+      ahead_by=""
+    elif ahead_by="$(_integration_branch_ahead_of_default "${integration_branch}" "${default_branch}")"; then
+      :
+    else
+      ahead_by=""
+    fi
+  else
+    ahead_by="0"
+  fi
+
+  wave_status="$(python3 scripts/orchestrate_lib.py check-wave-status \
+    --state-file "${STATE_FILE}" \
+    --labels-json "${labels_json}" \
+    --issue-states-json "${issue_states_json}" \
+    --pr-states-json "${pr_states_json}" \
+    --integration-ahead-by "${ahead_by}" 2>/dev/null || echo '')"
+  [ -n "${wave_status}" ] || return 1
+
+  WAVE_COMPLETE="$(echo "${wave_status}" | jq -r '.wave_complete // false' 2>/dev/null || echo false)"
+  ANY_FAILED="$(echo "${wave_status}" | jq -r '.any_failed // false' 2>/dev/null || echo false)"
+  PROJECT_COMPLETE="$(echo "${wave_status}" | jq -r '.project_complete // false' 2>/dev/null || echo false)"
 }
 
 extract_orchestrator_state_payload() {
@@ -4806,10 +4901,17 @@ dispatch_validation_if_needed() {
   # judge call and the dispatch (e.g. a consumer-side revert or
   # label-reconciliation race). When that happens we skip dispatch this
   # cycle and let the next poll tick re-evaluate once wave PR state
-  # settles. PROJECT_COMPLETE is set in the wave-status decision block
-  # above; an unset value (poller started mid-flow) is treated as "not
-  # gated" so we never block dispatch on absent state.
-  if [ -n "${PROJECT_COMPLETE+set}" ] && [ "${PROJECT_COMPLETE}" != "true" ]; then
+  # settles. The judge-complete path reaches this helper after the main
+  # wave-status block has already set PROJECT_COMPLETE; validating /
+  # revalidate paths hit it earlier in the loop, so recompute the live
+  # gate on demand there and fail closed if the probe itself cannot run.
+  if [ -z "${PROJECT_COMPLETE+set}" ]; then
+    if ! refresh_validation_dispatch_wave_gate; then
+      echo "::warning::[validation-dispatch] unable to recompute project completion for issue #${TRACKING_NUM:-?}; deferring validate dispatch this cycle." >&2
+      return 0
+    fi
+  fi
+  if [ "${PROJECT_COMPLETE}" != "true" ]; then
     echo "Preflight: PROJECT_COMPLETE=${PROJECT_COMPLETE:-unset}; deferring validate dispatch this cycle (wave PRs unmerged or integration→default merge pending)."
     return 0
   fi
@@ -10122,6 +10224,11 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   _csc_integration_contained="$(echo "${WAVE_STATUS}" | jq -r '.integration_contained_in_default // false')"
   _csc_total_waves="$(jq -r '.total_waves // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
   _csc_current_wave="$(echo "${WAVE_STATUS}" | jq -r '.wave // 0')"
+  _csc_skipped_lines="$(echo "${WAVE_STATUS}" | jq -r '
+    [.issues[]
+      | select(.status == "skipped")
+      | "- #\(.github_issue // "?"): \(.status) (\(.decision_source // "unknown"))"]
+    | join("\n")')"
   _csc_pending_lines="$(echo "${WAVE_STATUS}" | jq -r '
     [.issues[]
       | select(.status != "merged" and .status != "closed" and .status != "skipped" and .status != "implementation-failed")
@@ -10155,6 +10262,10 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     _csc_body+=$'\n'"**Wave issues closed without merge / implementation-failed:**"$'\n'"${_csc_failed_lines}"$'\n'
     _csc_body+=$'\n'"Project cannot complete until these are resolved (re-open, re-merge, or skip)."$'\n'
   fi
+  if [ -n "${_csc_skipped_lines}" ]; then
+    _csc_body+=$'\n'"**Wave issues skipped:**"$'\n'"${_csc_skipped_lines}"$'\n'
+    _csc_body+=$'\n'"Skipped issues are already accounted for and do not block completion."$'\n'
+  fi
   _csc_body+=$'\n'"_The orchestrator poller updates this comment every cycle (~5 min) until the project completes. Marker: \`<!-- orchestrator:completion-status -->\`._"
 
   update_completion_status_comment "${_completion_status_text}" "${_csc_body}" || true
@@ -10182,7 +10293,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   fi
 
   unset _completion_status_text _csc_integration_ahead_by _csc_integration_contained
-  unset _csc_total_waves _csc_current_wave _csc_pending_lines _csc_failed_lines _csc_body _csc_validation_recovery_count
+  unset _csc_total_waves _csc_current_wave _csc_pending_lines _csc_failed_lines _csc_skipped_lines _csc_body _csc_validation_recovery_count
 
   # Persist reconciled status decisions every cycle (not only narrow branches).
   RECONCILE_STATE_CHANGED=false

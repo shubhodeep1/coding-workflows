@@ -132,7 +132,7 @@ Cycle-local caches that must not be re-fetched per iteration:
 ## Orchestrator tracking-issue comment markers
 
 The orchestrator poller (`scripts/orchestrate_poll_process.sh`) maintains
-two distinct pinned-comment families on each tracking issue. Both edit
+two distinct marker-keyed comment families on each tracking issue. Both edit
 in place every poll cycle so the tracking issue stays a live status
 dashboard without producing a fresh comment per tick.
 
@@ -164,7 +164,11 @@ that transitioned back from merged), the dispatch is skipped this
 cycle so the runtime-validation workflow is not burned on a state
 that cannot pass. The judge-side override at the `JUDGE_STATUS=complete`
 branch remains the primary gate; the dispatch-side check is belt and
-suspenders. Re-entry on the next 5-minute poll tick converges the
+suspenders. When the validating / `/revalidate` paths reach the helper
+before the loop's main wave-status block has populated the scratch
+`PROJECT_COMPLETE` variable, the helper recomputes live wave status
+first and still fails closed on `project_complete=false`. Re-entry on
+the next 5-minute poll tick converges the
 project once wave PRs and the integration→default merge land.
 
 ---
