@@ -2144,6 +2144,45 @@ def test_complete_verdict_keeps_open_when_validation_disabled():
 	assert result["release_dispatches"] == []
 
 
+def test_complete_verdict_override_reports_pending_wave_not_final_wave():
+	state = _base_state(status="in_progress")
+	state["total_issues"] = 2
+	state["total_waves"] = 2
+	state["waves"].append(
+		{
+			"wave": 2,
+			"issues": [
+				{"id": "issue-2", "github_issue": 11, "status": "pending"},
+			],
+		}
+	)
+	state["issue_number_map"]["issue-2"] = 11
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		issue_labels={10: ["ai:merged"], 11: []},
+	)
+	assert result["latest_state"]["status"] == "in_progress"
+	assert result["latest_state"]["current_wave"] == 2
+	tracking_comments = [
+		str((c or {}).get("body", ""))
+		for c in result["issues"][str(192)]["comments"]
+	]
+	override_comments = [
+		body for body in tracking_comments
+		if "Judge verdict overridden" in body
+	]
+	assert override_comments, "Expected override comment when future wave work remains."
+	assert "pending wave state" in override_comments[-1]
+	assert "wave_complete=true" in override_comments[-1]
+	assert "wave=1/2" in override_comments[-1]
+	assert "not the final wave" not in override_comments[-1]
+	assert "project still has pending wave state" in result["stdout"]
+	assert "not the final wave" not in result["stdout"]
+
+
 def test_complete_verdict_falls_through_to_finalize_on_integration_drift():
 	"""Regression for the deadlock surfaced by ``shubhodeep1/bitsafe.io#325``.
 
