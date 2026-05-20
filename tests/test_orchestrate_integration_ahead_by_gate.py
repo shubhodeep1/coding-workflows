@@ -27,6 +27,7 @@ the contract the code now upholds.
 from __future__ import annotations
 
 import io
+import inspect
 import json
 import os
 import shutil
@@ -35,8 +36,6 @@ import tempfile
 import textwrap
 from contextlib import redirect_stdout
 from pathlib import Path
-
-import pytest
 
 import sys
 
@@ -592,3 +591,34 @@ def test_finalize_skips_recheck_when_superseded_by_main(tmp_path):
 	)
 	final_state = json.loads(json_line)
 	assert final_state["final_merge_status"] == "superseded-by-main"
+
+
+def main() -> int:
+	# Direct `python3 tests/<file>.py` entrypoint — CI and release-gate
+	# workflows run an explicit allowlist of scripts rather than pytest
+	# discovery. Keep the tmp_path-based tests runnable in both modes.
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	passed = 0
+	failed = 0
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			params = inspect.signature(func).parameters
+			if not params:
+				func()
+			elif list(params) == ["tmp_path"]:
+				with tempfile.TemporaryDirectory(prefix="integration_ahead_by_") as td:
+					func(Path(td))
+			else:
+				raise TypeError(f"unsupported test parameters: {', '.join(params)}")
+			print(f"  PASS  {name}")
+			passed += 1
+		except Exception as exc:
+			print(f"  FAIL  {name}: {exc}")
+			failed += 1
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

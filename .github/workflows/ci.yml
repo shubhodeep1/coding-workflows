@@ -129,6 +129,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_lib.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_integration_ahead_by_gate.py
 
       - name: Orchestrate poll process unit tests
         run: |
@@ -206,6 +207,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_review_pipeline_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_editor_noop_cascade_contract.py
 
       - name: Review consolidator reject-verifier contract test
         run: |
