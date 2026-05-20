@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:3240-3242 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, mistralai_mistral-small-2603, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: `tests/test_review_autofix_editor_noop_cascade_contract.py` is listed twice in the Unit tests step, so the same test runs twice per CI invocation.\n  WHY: All reviewers identified the same duplicated workflow entry; the concrete impact is wasted CI time/compute and duplicate output, with one reviewer noting possible spurious failure if the test has side effects.\n- scripts/review_rb_judge.sh:407-408 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: `PR_DIFF_BYTES_TOTAL` still uses `[ -n \"${PR_DIFF_BYTES_TOTAL}\" ]` instead of the regex-based numeric validation used elsewhere in the file.\n  WHY: Reviewers disagreed on impact: one characterized it as mainly an inconsistency with low practical risk, while others said malformed `wc -c` output can make the later integer comparison fail with `integer expression expected` and abort the script.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/test-and-mark-stable.yml:3240-3242 | confidence=5\n  PROBLEM: `test_review_autofix_editor_noop_cascade_contract.py` appears twice in the Unit tests step within a single `set -euo pipefail` block.\n  WHY: The test executes twice per CI invocation, wasting runner time and compute with zero additional coverage and duplicating test-name output.\n- scripts/review_rb_judge.sh:407-408 | confidence=3\n  PROBLEM: `PR_DIFF_BYTES_TOTAL` still uses the old `[ -n \"${PR_DIFF_BYTES_TOTAL}\" ] || PR_DIFF_BYTES_TOTAL=0` guard instead of numeric validation.\n  WHY: The shell pipeline on the previous line strips non-digits, so the practical risk is low, but this guard is the only one in the file not hardened like the others and was lost in merge resolution.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/test-and-mark-stable.yml:3240-3242 | confidence=5\n  PROBLEM: `tests/test_review_autofix_editor_noop_cascade_contract.py` is listed twice in the Unit tests step, causing it to run twice per CI invocation.\n  WHY: This wastes CI runner time and compute resources with no additional coverage benefit.\n- scripts/review_rb_judge.sh:407-408 | confidence=4\n  PROBLEM: `PR_DIFF_BYTES_TOTAL` is validated with `[ -n \"${PR_DIFF_BYTES_TOTAL}\" ]`, which checks only non-empty strings rather than numeric validity.\n  WHY: If `wc -c` returns a non-numeric error message, the later integer comparison will fail with `integer expression expected` and abort the script; other numeric guards in the file already use regex validation.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- .github/workflows/test-and-mark-stable.yml:3240-3242 | confidence=5\n  PROBLEM: Duplicate test executable entry `tests/test_review_autofix_editor_noop_cascade_contract.py` in the Unit tests step.\n  WHY: The CI pipeline executes the same test twice, consuming duplicate runner time and compute and producing ambiguous test output.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/test-and-mark-stable.yml:3240-3242 | confidence=5\n  PROBLEM: Duplicate entry for `test_review_autofix_editor_noop_cascade_contract.py` in the Unit tests step.\n  WHY: The same test runs twice, wasting CI runner time and compute resources without adding coverage.\n- scripts/review_rb_judge.sh:408 | confidence=4\n  PROBLEM: `PR_DIFF_BYTES_TOTAL` validation only checks for non-empty string (`[ -n \"${PR_DIFF_BYTES_TOTAL}\" ]`) rather than validating numeric format.\n  WHY: If `wc -c` fails and outputs a non-numeric error message, the subsequent integer comparison can fail with `integer expression expected` and abort the script.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/test-and-mark-stable.yml:3240-3242 | confidence=5\n  PROBLEM: `tests/test_review_autofix_editor_noop_cascade_contract.py` is listed twice in the Unit tests step.\n  WHY: The shell `set -euo pipefail` block executes both entries, running the same pytest suite back-to-back and wasting CI time with duplicate output.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/test-and-mark-stable.yml:3240-3242\n  PROBLEM: The test `tests/test_review_autofix_editor_noop_cascade_contract.py` is listed twice inside the same `set -euo pipefail` block.\n  WHY: The test executes twice per stable-gate run, wasting CI runner time/compute with no added coverage and creating duplicate output; the second invocation can also trigger spurious failure if the test has non-idempotent side effects.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "5b0f1b3a93af5d414329763f9cdf0d8284f265a1a14ccc17b822b5f254252b6c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2817,
+    "run_id": "26162971217",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26162971217",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260520131340_3be7a34df2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2817,
+    "run_id": "26162971217"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-20T13:13:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
