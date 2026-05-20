@@ -586,8 +586,8 @@ def test_finalize_skips_recheck_when_superseded_by_main(tmp_path):
 	json_line = next(
 		line for line in reversed(stdout_lines) if line.startswith("{")
 	)
-final_state = json.loads(json_line)
-assert final_state["final_merge_status"] == "superseded-by-main"
+	final_state = json.loads(json_line)
+	assert final_state["final_merge_status"] == "superseded-by-main"
 
 
 def main(argv: list[str] | None = None) -> int:
