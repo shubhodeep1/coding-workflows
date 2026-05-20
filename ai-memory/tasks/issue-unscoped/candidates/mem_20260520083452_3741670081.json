@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_integration_ahead_by_gate.py:610-622 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: When valid test names are supplied on the CLI, the runner returns success before calling `_invoke_test(func)` or executing any test bodies.\n  WHY: The `return 1 if missing else 0` / early-return control flow exits before the test loop, so selected tests are silently skipped.\n- tests/test_orchestrate_integration_ahead_by_gate.py:589-602 | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: `_invoke_test` only creates a temp dir for tests taking exactly one parameter, so tests expecting a `tmp_path` fixture may not receive what they need.\n  WHY: The direct-runner path can raise `TypeError` or fail inside test bodies, and the broad `except Exception` in `main()` hides the root cause; deepseek/minimax disputed this as a false positive because `_invoke_test` passes `Path(td)`.\n- tests/test_orchestrate_integration_ahead_by_gate.py:630-636 | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The runner prints only `FAIL  <name>: <e>` for unexpected exceptions, so non-assertion failures lose traceback context.\n  WHY: This makes debugging harder even though the exit code still correctly becomes 1 when `failed > 0`.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_orchestrate_integration_ahead_by_gate.py:630-636 | confidence=2\n  PROBLEM: The test runner prints `FAIL  <name>: <e>` for any exception, but when a test's assertion fails it raises `AssertionError` which carries the assertion message.\n  WHY: An unanticipated exception in a test body would print only the exception string without file/line context, making it harder to debug; however, this is a cosmetic concern in a direct-runner test harness, not a correctness issue.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_orchestrate_integration_ahead_by_gate.py:623-624 | confidence=5\n  PROBLEM: The cross-pollination finding claimed the tmp_path fixture is not provided to tests.\n  WHY: This is incorrect because line 601 shows `func(Path(td))`, which converts the temporary directory string to a Path object before passing it to the test function; the observed failures were due to sandbox environment restrictions blocking temp directory creation, not a fixture bug.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- tests/test_orchestrate_integration_ahead_by_gate.py:620-622 | confidence=5\n  PROBLEM: The runner incorrectly returns exit code 0 before invoking any of the CLI-selected tests when all supplied names are valid (missing is empty).\n  WHY: The `return 1 if missing else 0` statement exits with 0 after printing \"unknown test name\" messages but before executing `_invoke_test(func)`, causing selected tests to be silently skipped.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_orchestrate_integration_ahead_by_gate.py:620-622\n  PROBLEM: The original `return 1 if missing else 0` control flow would exit before running selected tests when all supplied names were valid.\n  WHY: The fix correctly changes this to `if missing: return 1`, so the runner falls through to the test-execution loop instead of exiting early.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_orchestrate_integration_ahead_by_gate.py:620-622\n  PROBLEM: The previous `return 1 if missing else 0` control flow exited early with code 0 when all CLI-selected test names were valid, so `_invoke_test()` never ran.\n  WHY: The fix correctly changes this to only `return 1` when `missing` is non-empty, falling through to the test-execution loop otherwise.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_orchestrate_integration_ahead_by_gate.py:610-622 | confidence=5\n  PROBLEM: When valid test names are supplied on the CLI, the function returns success immediately without ever calling `_invoke_test()` or executing any test bodies.\n  WHY: The early return short-circuits before the `passed`/`failed` counter loop and `_invoke_test(func)`, so CI steps now \"pass\" without running tests.\n- tests/test_orchestrate_integration_ahead_by_gate.py:589-602 | confidence=4\n  PROBLEM: `_invoke_test` only creates a temp dir for tests taking exactly one parameter, but several test functions expect a `tmp_path: Path` fixture and call `_make_gh_stub(tmp_path)`.\n  WHY: The direct-runner path used by CI will raise `TypeError` or cause `FileNotFoundError` inside test bodies that receive no argument, and the broad `except Exception` in main() turns real failures into opaque \"FAIL ...\" lines.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "de91a065da0f5b5f478026a5fa4f0cd4f40a29c43ed53e52ea357c91ee05fd29",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2812,
+    "run_id": "26149961198",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26149961198",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260520083452_3741670081",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2812,
+    "run_id": "26149961198"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-20T08:34:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
