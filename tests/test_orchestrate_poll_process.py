@@ -535,6 +535,8 @@ def _run_poller(
 	enable_clean_wave_judge_skip: str = "true",
 	judge_repeat_fingerprint_max: str = "2",
 	mock_gh_issue_list_label_filter: bool = False,
+	compare_ahead_by: int = 0,
+	compare_ahead_by_force_error: bool = False,
 ) -> dict:
 	tracking_num = 192
 	tracking_labels = tracking_labels or []
@@ -660,6 +662,8 @@ def _run_poller(
 			"actions_runs_status": int(actions_runs_status),
 			"actions_runs_status_sequence": list(actions_runs_status_sequence),
 			"mock_gh_issue_list_label_filter": bool(mock_gh_issue_list_label_filter),
+			"compare_ahead_by": int(compare_ahead_by),
+			"compare_ahead_by_force_error": bool(compare_ahead_by_force_error),
 		}
 		store_file.write_text(json.dumps(store), encoding="utf-8")
 
@@ -2138,6 +2142,72 @@ def test_complete_verdict_keeps_open_when_validation_disabled():
 	assert result["latest_state"]["final_merge_pr"] == 350
 	assert result["latest_state"]["final_merge_status"] == "merged"
 	assert result["release_dispatches"] == []
+
+
+def test_complete_verdict_falls_through_to_finalize_on_integration_drift():
+	"""Regression for the deadlock surfaced by ``shubhodeep1/bitsafe.io#325``.
+
+	PR #2778 folded ``integration_contained_in_default`` into the
+	``project_complete`` flag computed by ``cmd_check_wave_status``. That
+	collided with the pre-existing "judge cannot declare complete while
+	waves remain" override at ``orchestrate_poll_process.sh:12090``, which
+	consumed ``PROJECT_COMPLETE`` and so began overriding ``complete`` →
+	``in_progress`` whenever the integration branch had drifted ahead of
+	default (``ahead_by > 0``) — even when every wave issue was merged.
+	The override blocked the only per-tick caller of
+	``finalize_integration_merge_if_needed`` (the ``complete)`` arm at
+	L12101), which is the function PR #2778 itself extended (L3986-4006)
+	to clear the stale ``merged`` pin and reopen a fresh final PR. The
+	two mechanisms gated each other and the orchestrator looped forever.
+
+	This test pins ``compare_ahead_by=5`` (integration drift) with every
+	wave issue merged. The fix narrows the override to fire only when
+	waves themselves are pending, so the ``complete)`` arm reaches
+	``finalize_integration_merge_if_needed`` and merges the final PR."""
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 350,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+	)
+	assert result["latest_state"]["status"] == "complete", (
+		"complete) arm must run despite integration drift; got status="
+		f"{result['latest_state'].get('status')!r}, stderr=\n{result['stderr']}"
+	)
+	assert result["latest_state"]["final_merge_pr"] == 350
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert "ai:merged" in result["tracking_labels"]
+	tracking_comments = [
+		str((c or {}).get("body", ""))
+		for c in result["issues"][str(192)]["comments"]
+	]
+	override_comments = [
+		body for body in tracking_comments
+		if "Judge verdict overridden" in body
+	]
+	assert not override_comments, (
+		"Override guard must not fire when only integration drift remains; "
+		f"got override comment(s): {override_comments!r}"
+	)
+	assert "Overriding to 'in_progress'" not in result["stderr"], (
+		"Override warning must not be logged when only integration drift "
+		f"remains; stderr=\n{result['stderr']}"
+	)
 
 
 def test_missing_integration_branch_marks_failed():
