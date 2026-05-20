@@ -13077,7 +13077,7 @@ The editor converged ${NOOP_MAX_RETRIES} times in a row (every reviewer suggesti
 
 - Reviewer audit arithmetic balanced (validated via \`scripts/validate_editor_audit.sh\` against the latest editor summary).
 - No required checks are failing on \`${N_HEAD_SHA}\`.
-- ${N_NOOP_COUNT} noop-suspicious warning(s) post the latest \`[ai-autofix]\` / \`[judge-fix]\` commit.
+- ${N_NOOP_COUNT} noop-suspicious warning(s) since the latest \`[ai-autofix]\` / \`[judge-fix]\` commit.
 
 To pause this behavior for manual review, add the \`force-review\` label."
 		gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${N_PR}/comments" \

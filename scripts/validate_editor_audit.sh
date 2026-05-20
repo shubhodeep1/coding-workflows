@@ -80,7 +80,7 @@ validate_editor_audit_arithmetic()
 	real_audit="$(printf '%s\n' "${audit_section}" \
 		| grep -vE '^[[:space:]]*$' \
 		| grep -viE '^[[:space:]]*-[[:space:]]*none([[:space:][:punct:]]|$)' \
-		| grep -viE 'editor failed' \
+		| grep -viE '^[[:space:]]*-[[:space:]]*editor failed([[:space:][:punct:]]|$)' \
 		|| true)"
 
 	if [ -z "${real_audit}" ]; then

@@ -22,7 +22,9 @@ poller in test-and-mark-stable.yml) keep passing.
 
 from __future__ import annotations
 
+import inspect
 import subprocess
+import tempfile
 import textwrap
 from pathlib import Path
 
@@ -35,7 +37,7 @@ def _run(summary_text: str, reviewers_successful: str | None = None, tmp_path: P
 	"""Write `summary_text` to a tempfile and invoke the helper against
 	it. Returns the completed process so callers can inspect rc + stderr.
 	"""
-	assert tmp_path is not None, "Caller must pass pytest's tmp_path fixture"
+	assert tmp_path is not None, "Caller must pass a temporary Path"
 	summary = tmp_path / "summary.txt"
 	summary.write_text(summary_text, encoding="utf-8")
 	cmd = ["bash", str(HELPER), str(summary)]
@@ -222,6 +224,23 @@ def test_unparseable_audit_line_fails_closed(tmp_path):
 	assert "Audit entry arithmetic mismatch: unparseable audit line" in result.stderr
 
 
+def test_legitimate_audit_line_containing_editor_failed_phrase_is_not_filtered(tmp_path):
+	"""The helper must strip only the fallback bullet shape, not any
+	otherwise-valid audit line whose filename/prose happens to contain
+	`editor failed`. Regression guard for the anchored grep filter."""
+	summary = textwrap.dedent(
+		"""\
+		Review file issue audit:
+		- review editor failed case.md: total issues listed 1, issues applied 1, issues already applied 0, issues ignored 0
+
+		PR comment audit:
+		- none
+		"""
+	)
+	result = _run(summary, "1", tmp_path=tmp_path)
+	assert result.returncode == 0, result.stderr
+
+
 def test_helper_handles_audit_section_followed_by_pr_comment_audit(tmp_path):
 	"""The extractor stops at the explicit `PR comment audit:` heading.
 	A `Review file issue audit:` section followed immediately by `PR
@@ -240,3 +259,39 @@ def test_helper_handles_audit_section_followed_by_pr_comment_audit(tmp_path):
 	result = _run(summary, "1", tmp_path=tmp_path)
 	# review_a.md's arithmetic balances (1 == 1 + 0 + 0), so rc=0.
 	assert result.returncode == 0
+
+
+def main() -> int:
+	# Direct `python3 tests/<file>.py` entrypoint — the repo's CI runs
+	# tests via that pattern rather than pytest discovery, so this file
+	# needs its own runner for the assertions to execute under CI.
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+	passed = 0
+	failed = 0
+
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			params = list(inspect.signature(func).parameters)
+			if not params:
+				func()
+			elif params == ["tmp_path"]:
+				with tempfile.TemporaryDirectory(prefix="validate-editor-audit-") as td:
+					func(Path(td))
+			else:
+				raise TypeError(f"unsupported test signature for {name}: {params}")
+			print(f"  PASS  {name}")
+			passed += 1
+		except AssertionError as e:
+			print(f"  FAIL  {name}: {e}")
+			failed += 1
+		except Exception as e:
+			print(f"  ERROR {name}: {type(e).__name__}: {e}")
+			failed += 1
+
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
