@@ -3985,8 +3985,11 @@ finalize_integration_merge_if_needed() {
   # gave up on the integration branch) and is NOT re-evaluated here.
   if [ "${final_merge_status}" = "merged" ] && [ -n "${integration_branch}" ]; then
     local _fimin_ahead_by _fimin_ahead_rc
-    _fimin_ahead_by="$(_integration_branch_ahead_of_default "${integration_branch}" "${default_branch}")"
-    _fimin_ahead_rc=$?
+    if _fimin_ahead_by="$(_integration_branch_ahead_of_default "${integration_branch}" "${default_branch}")"; then
+      _fimin_ahead_rc=0
+    else
+      _fimin_ahead_rc=$?
+    fi
     if [ "${_fimin_ahead_rc}" -ne 0 ]; then
       echo "::warning::  [final-merge] State pinned final_merge_status=merged for #${TRACKING_NUM:-?} but the compare API failed during the ahead_by re-check; failing closed and clearing the pin so the next tick can reopen the final PR if integration has drifted."
       jq '.final_merge_status = "pending" | .final_merge_pr = null | .final_merge_error = "compare API error during ahead_by re-check (failed closed)"' \
@@ -4041,8 +4044,11 @@ finalize_integration_merge_if_needed() {
       # return, leaving the new diff stranded. See
       # shubhodeep1/binance-blessings#135.
       local _fimin_rd_ahead_by _fimin_rd_ahead_rc
-      _fimin_rd_ahead_by="$(_integration_branch_ahead_of_default "${integration_branch}" "${default_branch}")"
-      _fimin_rd_ahead_rc=$?
+      if _fimin_rd_ahead_by="$(_integration_branch_ahead_of_default "${integration_branch}" "${default_branch}")"; then
+        _fimin_rd_ahead_rc=0
+      else
+        _fimin_rd_ahead_rc=$?
+      fi
       if [ "${_fimin_rd_ahead_rc}" -ne 0 ]; then
         echo "::warning::  [final-merge] Recorded final PR #${final_pr} is closed+merged but the compare API failed during the ahead_by re-check; failing closed and clearing the recorded PR so the next code path can open a fresh one if integration has drifted."
         jq '.final_merge_pr = null | .final_merge_status = "pending" | .final_merge_error = "compare API error during ahead_by re-check after recorded final PR was already merged (failed closed)"' \
