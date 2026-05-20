@@ -4901,6 +4901,29 @@ def test_standalone_close_and_reissue_keeps_clarification_only_label():
 	assert '--label "ai:orchestrator-managed"' not in window
 
 
+def test_fresh_push_suppress_window_pinned_to_50_minutes():
+	"""Lock the ``_FRESH_PUSH_SUPPRESS_SECS`` window at 50 minutes (3000s).
+
+	The window was bumped from 30 min (1800s) to 50 min (3000s) because
+	typical review_autofix cycles run 35-45 minutes end-to-end on busy
+	consumer repos, so a single cycle outlasted the original window and
+	the guard never fired between cycles (observed on
+	tele-funtoken-msg-scoring PRs #3057 and #3062). The window is
+	deliberately not configurable (per original
+	investigate-stall-recovery-dx7zm Q2=B decision); this test pins the
+	value so any future bump-or-shrink is an intentional, reviewed
+	change rather than a silent regression.
+	"""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert "_FRESH_PUSH_SUPPRESS_SECS=3000" in script, (
+		"_FRESH_PUSH_SUPPRESS_SECS must equal 3000 (50 min); see "
+		"scripts/orchestrate_poll_process.sh _check_fresh_push_guard"
+	)
+	assert "_FRESH_PUSH_SUPPRESS_SECS=1800" not in script, (
+		"obsolete 1800s (30 min) fresh-push window literal still present"
+	)
+
+
 def test_close_linked_pr_uses_multi_source_lookup_and_iterates():
 	"""Gap 1 regression guard: ``close_linked_pr`` MUST enumerate every
 	linked PR (cross-ref + branch-name + body-parse) and iterate, not
