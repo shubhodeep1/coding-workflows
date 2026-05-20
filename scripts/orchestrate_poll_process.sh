@@ -7105,7 +7105,7 @@ _check_merged_pr_guard() {
 
 # _check_fresh_push_guard — Shared guard used by both stall recovery
 # paths.  Returns 0 when the linked PR's head commit was pushed within
-# the last _FRESH_PUSH_SUPPRESS_SECS (30 minutes, hardcoded) AND the
+# the last _FRESH_PUSH_SUPPRESS_SECS (50 minutes, hardcoded) AND the
 # phase is one where autofix-driven commits are expected
 # (ai:done, ai:ready-to-merge).  Returns 1 otherwise.
 #
@@ -7117,9 +7117,16 @@ _check_merged_pr_guard() {
 # and the follow-on dispatch is still in-flight).  A fresh pushedDate
 # is a more reliable "work landed recently" signal.
 #
-# The 30-minute window is deliberately not configurable (per project
-# decision Q2=B on issue investigate-stall-recovery-dx7zm).  A
-# longer window would risk hiding genuinely hung autofix loops.
+# The window is deliberately not configurable (per project decision
+# Q2=B on issue investigate-stall-recovery-dx7zm — a tunable knob
+# would invite consumers to widen it indefinitely and mask hung
+# autofix loops).  The earlier 30-minute default originally chosen
+# there predated typical review_autofix cycle times of 35-45 minutes
+# observed on busy consumer repos (e.g. tele-funtoken-msg-scoring
+# PRs #3057, #3062), so a single cycle outlasted that old window and
+# the guard never fired between cycles.  The shipped 50-minute window
+# fits one full autofix cycle; longer windows would start hiding
+# genuinely hung loops.
 #
 # Fails open (returns 1 — guard does NOT fire) when:
 #   - phase is outside {ai:done, ai:ready-to-merge}
@@ -7137,7 +7144,7 @@ _check_merged_pr_guard() {
 #   $1 — issue number (for logging only)
 #   $2 — linked_pr JSON entry ({number,state,merged,headPushedAt} or "null"/empty)
 #   $3 — phase label (e.g. "ai:done")
-_FRESH_PUSH_SUPPRESS_SECS=1800
+_FRESH_PUSH_SUPPRESS_SECS=3000
 _check_fresh_push_guard() {
   local issue_num="$1"
   local linked_json="$2"
@@ -11849,6 +11856,37 @@ fi
     fi
     _stall_check_args+=(--max-recoveries-by-phase-json "$(printf '{\"ai:done\":%s}' "${MAX_STALL_RECOVERIES_DONE}")")
 
+    # Extract per-issue linked-PR headPushedAt from the per-tick wave
+    # details prefetch (_fetch_candidate_issue_details_graphql already
+    # ran upstream at line ~9471 — zero additional API calls per §15).
+    # check-stalls re-anchors the ai:done stall clock to
+    # max(status_since_ts, headPushedAt_epoch) so a multi-cycle
+    # review_autofix loop is not repeatedly flagged as stalled.  Other
+    # phases keep their legacy status_since_ts anchor.  Fail-open:
+    # missing or empty mapping leaves the legacy behaviour intact.
+    _head_pushed_at_json='{}'
+    if [ -n "${_current_wave_details_json:-}" ] && [ "${_current_wave_details_json}" != "{}" ]; then
+      if ! _head_pushed_at_json="$(printf '%s' "${_current_wave_details_json}" | jq -c '
+        to_entries
+        | map(
+            select(
+              .value.linked_pr != null
+              and (.value.linked_pr | type == "object")
+              and .value.linked_pr.headPushedAt != null
+              and (.value.linked_pr.headPushedAt | type == "string")
+              and (.value.linked_pr.headPushedAt | length > 0)
+            )
+            | {key: .key, value: .value.linked_pr.headPushedAt}
+          )
+        | from_entries
+      ' 2>/dev/null)"; then
+        echo "::warning::headPushedAt extraction failed during stall check; using empty fallback mapping." >&2
+        _head_pushed_at_json='{}'
+      fi
+      [ -n "${_head_pushed_at_json}" ] || _head_pushed_at_json='{}'
+    fi
+    _stall_check_args+=(--head-pushed-at-json "${_head_pushed_at_json}")
+
     STALLS_JSON="$(python3 scripts/orchestrate_lib.py check-stalls \
       "${_stall_check_args[@]}" 2>/dev/null || echo '{"ok":false,"stalls":[],"count":0}')"
 
@@ -11860,11 +11898,50 @@ fi
     if [ "${STALL_COUNT}" -gt 0 ]; then
       echo "Detected ${STALL_COUNT} stalled issue(s). Checking for active workflow runs..."
 
-      # Build the set of issues with active workflows (one API call batch,
-      # reused across all stalled issues to avoid per-issue API calls).
+      # Prime the shared actions-runs blob in the parent shell before the
+      # command-substitution call below; otherwise the loader's global cache
+      # assignments stay trapped in the subshell and the diagnostic branch
+      # cannot inspect the same payload.
+      _load_actions_runs_cached >/dev/null || true
+
+      # Build the set of issues with active workflows (reusing the one API
+      # call batch primed above to avoid per-issue API calls).
       ACTIVE_WORKFLOW_ISSUES="$(build_active_issue_set)"
       if [ -n "${ACTIVE_WORKFLOW_ISSUES}" ]; then
         echo "Issues with active workflow runs: $(echo "${ACTIVE_WORKFLOW_ISSUES}" | tr '\n' ' ')"
+      else
+        # Diagnostic: when one or more issues stalled but the active set
+        # came back empty, emit cache provenance so a stall recovery
+        # that fires over an actually in_progress workflow can be traced
+        # back to cache state (304-reuse of empty cached_runs, fresh
+        # cache hit on empty data, head_branch=null on workflow_dispatch
+        # extraction, or API-failure fallback in _load_actions_runs_cached).
+        # Reads directly from the per-tick memoised
+        # _ACTIONS_RUNS_BLOB_CACHE primed just above, so
+        # this adds zero API calls (§15).  Fails open on jq errors:
+        # counts fall back to "?" and the diagnostic still prints,
+        # but parse_error=true keeps that path distinguishable from a
+        # genuinely empty cache.  The retrigger_review defense-in-depth
+        # guard at
+        # scripts/orchestrate_poll_process.sh:5829 still protects the
+        # empty-commit push if the cache misses a live review run; this
+        # logging just makes the cache state observable next time.
+        (
+          _diag_blob="${_ACTIONS_RUNS_BLOB_CACHE}"
+          _diag_parse_error="false"
+          if [ -z "${_diag_blob}" ]; then
+            _diag_blob='{"workflow_runs":[]}'
+            _diag_parse_error="true"
+          fi
+          _diag_total="$(printf '%s' "${_diag_blob}" | jq -r 'if (.workflow_runs | type) == "array" then (.workflow_runs | length) else error("workflow_runs_missing_or_not_array") end' 2>/dev/null)" || { _diag_total="?"; _diag_parse_error="true"; }
+          _diag_in_progress="$(printf '%s' "${_diag_blob}" | jq -r 'if (.workflow_runs | type) == "array" then [.workflow_runs[] | select((.status // "") == "in_progress")] | length else error("workflow_runs_missing_or_not_array") end' 2>/dev/null)" || { _diag_in_progress="?"; _diag_parse_error="true"; }
+          _diag_queued="$(printf '%s' "${_diag_blob}" | jq -r 'if (.workflow_runs | type) == "array" then [.workflow_runs[] | select((.status // "") == "queued")] | length else error("workflow_runs_missing_or_not_array") end' 2>/dev/null)" || { _diag_queued="?"; _diag_parse_error="true"; }
+          if [ "${_diag_parse_error}" = "true" ]; then
+            echo "Active issue set is empty (cache: total=${_diag_total}, in_progress=${_diag_in_progress}, queued=${_diag_queued}, parse_error=true)."
+          else
+            echo "Active issue set is empty (cache: total=${_diag_total}, in_progress=${_diag_in_progress}, queued=${_diag_queued})."
+          fi
+        )
       fi
 
       # Prefetch linked-PR state for every stalled issue in batched
@@ -12375,12 +12452,22 @@ PRs to revert: ${REVERT_COUNT}"
 
   # ---------------------------------------------------------------
   # Hard guard: judge cannot declare "complete" while waves remain
-  # ---------------------------------------------------------------
-  if [ "${JUDGE_STATUS}" = "complete" ] && [ "${PROJECT_COMPLETE}" != "true" ]; then
-    echo "::warning::Judge returned 'complete' but project_complete=${PROJECT_COMPLETE} (wave ${CURRENT_WAVE}/${TOTAL_WAVES}). Overriding to 'in_progress'."
+  # pending. Integration drift (last wave merged but the integration
+  # branch is ahead of default) is intentionally NOT covered here —
+  # the complete) arm below calls finalize_integration_merge_if_needed,
+  # whose ahead_by re-check is the designed recovery path for that
+  # case. Folding
+  # integration_contained_in_default into this guard (via the
+  # PROJECT_COMPLETE flag added in PR #2778) creates a deadlock: the
+  # override flips the verdict before the complete) arm can run, so
+  # the drift never gets resolved, so the override fires again on the
+  # next poll. See bitsafe.io#325 for the regression.
+  if [ "${JUDGE_STATUS}" = "complete" ] \
+     && { [ "${WAVE_COMPLETE}" != "true" ] || [ "${CURRENT_WAVE}" -lt "${TOTAL_WAVES}" ]; }; then
+    echo "::warning::Judge returned 'complete' but project still has pending wave state (wave_complete=${WAVE_COMPLETE}; wave=${CURRENT_WAVE}/${TOTAL_WAVES}; project_complete=${PROJECT_COMPLETE} logged for context). Overriding to 'in_progress'."
     JUDGE_STATUS="in_progress"
     gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
-      -f body="⚠️ Judge verdict overridden: \`complete\` → \`in_progress\` because wave ${CURRENT_WAVE}/${TOTAL_WAVES} is not the final wave. Advancing to next wave." >/dev/null
+      -f body="⚠️ Judge verdict overridden: \`complete\` → \`in_progress\` because the project still has pending wave state (wave_complete=${WAVE_COMPLETE}, wave=${CURRENT_WAVE}/${TOTAL_WAVES}). Waiting for remaining wave work before allowing project completion." >/dev/null
   fi
   fi
 
