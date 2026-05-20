@@ -463,67 +463,6 @@ sys.stdout.buffer.write(data)
 fi
 rm -f "${PR_DIFF_TRUNCATE_FILE:-}" 2>/dev/null || true
 unset PR_DIFF_TRUNCATE_FILE
-PR_DIFF_TRUNCATE_FILE="$(mktemp "${TMPDIR:-/tmp}/review-rb-judge-pr-diff.XXXXXX" 2>/dev/null || printf '')"
-if [ -n "${PR_DIFF_TRUNCATE_FILE}" ] && [ -f "${PR_DIFF_TRUNCATE_FILE}" ] && \
-  printf '%s' "${PR_DIFF}" > "${PR_DIFF_TRUNCATE_FILE}"; then
-  PR_DIFF_BYTES_TOTAL="$(wc -c < "${PR_DIFF_TRUNCATE_FILE}" | tr -cd '0-9' || true)"
-else
-  if [ -n "${PR_DIFF_TRUNCATE_FILE}" ]; then
-    echo "::warning::Failed to populate PR diff temp file for truncation; falling back to in-memory truncation."
-  else
-    echo "::warning::Failed to create PR diff temp file for truncation; falling back to in-memory truncation."
-  fi
-  rm -f "${PR_DIFF_TRUNCATE_FILE:-}" 2>/dev/null || true
-  unset PR_DIFF_TRUNCATE_FILE
-  PR_DIFF_BYTES_TOTAL="$(printf '%s' "${PR_DIFF}" | wc -c | tr -cd '0-9' || true)"
-fi
-[ -n "${PR_DIFF_BYTES_TOTAL}" ] || PR_DIFF_BYTES_TOTAL=0
-if [ "${PR_DIFF_BYTES_TOTAL}" -gt "${RB_JUDGE_PR_DIFF_MAX_BYTES}" ]; then
-  PR_DIFF_TRUNCATED_CONTENT=""
-  if [ -n "${PR_DIFF_TRUNCATE_FILE:-}" ] && [ -f "${PR_DIFF_TRUNCATE_FILE}" ]; then
-    if PR_DIFF_TRUNCATED_CONTENT="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${PR_DIFF_TRUNCATE_FILE}" "${RB_JUDGE_PR_DIFF_MAX_BYTES}" 2>/dev/null <<'PY'
-import sys
-
-cap = int(sys.argv[2])
-read_cap = cap + 1 if cap > 0 else 0
-with open(sys.argv[1], 'rb') as fh:
-    data = fh.read(read_cap)
-if cap > 0 and len(data) > cap:
-    i = cap
-    while i > 0 and (data[i] & 0xC0) == 0x80:
-        i -= 1
-    data = data[:i]
-sys.stdout.buffer.write(data)
-PY
-)"; then
-      PR_DIFF="${PR_DIFF_TRUNCATED_CONTENT}"
-    else
-      echo "::warning::python3 unavailable for UTF-8-safe PR diff truncation; falling back to a raw byte prefix. sanitize_codex_prompt_file will strip any invalid trailing bytes before codex reads the prompt."
-      PR_DIFF="$(head -c "${RB_JUDGE_PR_DIFF_MAX_BYTES}" "${PR_DIFF_TRUNCATE_FILE}")"
-    fi
-  elif PR_DIFF_TRUNCATED_CONTENT="$({ printf '%s' "${PR_DIFF}" || true; } | PYTHONDONTWRITEBYTECODE=1 python3 -c '
-import sys
-
-cap = int(sys.argv[1])
-read_cap = cap + 1 if cap > 0 else 0
-data = sys.stdin.buffer.read(read_cap)
-if cap > 0 and len(data) > cap:
-    i = cap
-    while i > 0 and (data[i] & 0xC0) == 0x80:
-        i -= 1
-    data = data[:i]
-sys.stdout.buffer.write(data)
-' "${RB_JUDGE_PR_DIFF_MAX_BYTES}" 2>/dev/null)"; then
-    PR_DIFF="${PR_DIFF_TRUNCATED_CONTENT}"
-  else
-    echo "::warning::python3 unavailable for UTF-8-safe PR diff truncation; falling back to a raw byte prefix. sanitize_codex_prompt_file will strip any invalid trailing bytes before codex reads the prompt."
-    PR_DIFF="$(printf '%s' "${PR_DIFF}" | head -c "${RB_JUDGE_PR_DIFF_MAX_BYTES}" || true)"
-  fi
-  unset PR_DIFF_TRUNCATED_CONTENT
-  PR_DIFF_TRUNCATED=true
-fi
-rm -f "${PR_DIFF_TRUNCATE_FILE:-}" 2>/dev/null || true
-unset PR_DIFF_TRUNCATE_FILE
 PRELOADED_PR_META="$(jq -c '{
   title: (.title // ""),
   body: (.body // ""),
