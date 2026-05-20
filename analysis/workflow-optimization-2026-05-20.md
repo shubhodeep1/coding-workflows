@@ -366,3 +366,152 @@ No operational `SERENA_FALLBACK` or `SERENA_PROBE` lines were observed, so there
 | Serena | all | 0 | 0 | 0 | no `SERENA_PROBE` lines; recent `review_autofix` runs logged `SERENA_ENABLED: false` |
 
 **Other MCP servers observed:** none outside generated-analysis text.
+
+## Deep Audit — Workflows & Scripts (2026-05-20)
+
+### Section 1: Bug & Correctness Sweep
+
+No new high-confidence secret-leak or shell-injection path stood out in the current revision. The strongest correctness gap I found is the orchestrator-managed predicate drift below.
+
+- **ID** — BUG-001
+  - **File path** — `.github/workflows/plan.yml:1216-1221,1680-1695; .github/workflows/issue_pr_status.yml:264-316,501-512`
+  - **Severity** — Medium
+  - **Category tag** — bug
+  - **Description** — Both workflows establish the authoritative “orchestrator-managed” test as **label OR body marker** (`ai:orchestrator-managed` or `Managed by: AI Orchestrator`), then later notification paths re-check only the body marker with `grep -qF`. In `plan.yml`, that flips alert routing from `tg_send_tracked` to `tg_send_phase_tracked`; in `issue_pr_status.yml`, it can emit a merged alert the poller is supposed to own. If the body marker is absent but the canonical label remains, the later behavior is wrong.
+  - **Recommended fix** — Compute `IS_ORCHESTRATOR_MANAGED` once from the existing label-or-body predicate and export it via `$GITHUB_ENV`/step output. Reuse that value in downstream alert/comment steps instead of re-parsing only the issue body.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+- **ID** — BATCH-001
+  - **File path** — `.github/workflows/test-and-mark-stable.yml:3399-3471,3575-3615,3633-3680,3698-3738,3787-3849,4047-4089`
+  - **Severity** — High
+  - **Category tag** — api-batching
+  - **Description** — This is the code-level source of the current report’s `test_and_mark_stable` API hotspot: six steps hand-roll the same `PRE -> gh workflow run -> poll actions/workflows/.../runs -> poll actions/runs/{id}` sequence. Even on the best-case path, that is **3 logical GH API calls per watcher** and **18 minimum calls total** before retry polling starts.
+  - **Current call count** — Minimum **18** logical calls across the six watcher blocks.
+  - **Proposed call count after fix** — Minimum **12** logical calls if a shared helper uses dispatch-start filtering instead of a separate `PRE=` probe and caches each poll payload.
+  - **Existing batching pattern to extend** — `scripts/gh_helpers.sh`’s `gh_retry_to_file` / `gh_api_json_to_file`.
+  - **Recommended fix** — Extract a shared `scripts/dispatch_and_watch_workflow.sh` helper with inputs like `--repo`, `--workflow-file`, `--deadline-secs`, `--accept-conclusion`, `--field key=value...`. Have it cache registration/status payloads once per poll iteration and remove the duplicated `PRE`/`NEW_ID`/`STATUS` logic from all six blocks.
+
+- **ID** — API-001
+  - **File path** — `.github/workflows/internal-review.yml:84-102`
+  - **Severity** — Medium
+  - **Category tag** — api-redundancy
+  - **Description** — `Resolve PR for head branch` makes **2 GH API calls** on every `claude/**` push: one for the open PR lookup and one for `repos/${REPOSITORY}` just to read `.default_branch`. The second call is redundant because the event payload already has `github.event.repository.default_branch`; on failure it also silently falls back to `'main'`, which is incorrect for non-`main` repos.
+  - **Current call count** — **2** calls per run of this step.
+  - **Proposed call count after fix** — **1** call.
+  - **Existing batching pattern to extend** — None; use the workflow event payload instead of a GitHub API helper.
+  - **Recommended fix** — Replace `gh api "repos/${REPOSITORY}" --jq '.default_branch'` with `${{ github.event.repository.default_branch || 'main' }}` and keep only the PR lookup call.
+
+- **ID** — API-002
+  - **File path** — `.github/workflows/review_autofix.yml:526-553`
+  - **Severity** — Medium
+  - **Category tag** — api-batching
+  - **Description** — In the fallback path where `closingIssuesReferences` is empty, the step fetches PR title/body once and then does `gh issue view ... --json labels` inside the loop for every parsed issue number whose labels are unknown. That path is currently **2 + N** calls: 1 GraphQL PR lookup, 1 PR body/title REST lookup, then **N** per-issue label lookups.
+  - **Current call count** — **2 + N** on the fallback path.
+  - **Proposed call count after fix** — **3** total on the fallback path.
+  - **Existing batching pattern to extend** — The alias-based GraphQL issue batch in `.github/workflows/issue_pr_status.yml:280-317`, or `scripts/orchestrate_poll_process.sh`’s `_fetch_candidate_issue_details_graphql`.
+  - **Recommended fix** — After parsing `issue_numbers`, batch-fetch their labels in one aliased GraphQL query and build a label map before entering the loop. That removes the per-issue `gh issue view` calls.
+
+`BUG-001` also has an API-cost angle in `issue_pr_status.yml:501-512` (per-issue body refetch after earlier batched classification), but I did not assign a second ID to avoid double-counting the same defect.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **ID** — DUP-001
+  - **File path** — `.github/workflows/clarify.yml:215-285; .github/workflows/plan.yml:265-335; .github/workflows/orchestrate.yml:339-424; .github/workflows/review_autofix.yml:929-1205; .github/workflows/validate.yml:210-583`
+  - **Severity** — Medium
+  - **Category tag** — duplication
+  - **Description** — This is broader than the current report’s support-source fallback churn note: the support-source staging implementation itself is hand-copied across reusable workflows. Each block resolves `SCRIPT_REF`, prefers repo-self checkout, falls back to `main`, copies scripts/prompts/schemas, and writes `scripts/.gitignore`; the required-file lists are already diverging.
+  - **Proposed shared module** — A new composite action (preferred) or script such as `.github/actions/stage-workflow-support` / `scripts/stage_workflow_support.sh` with inputs/signature like: `script_ref`, `required_scripts_csv`, `required_prompts_csv`, `required_ai_files_csv`, `stage_root`, `write_gitignore`.
+  - **Recommended fix** — Move the copy/fallback logic into the shared module and update clarify, plan, orchestrate, review_autofix, validate, implement, and orchestrate_clarify_respond to call it with small per-workflow manifests.
+
+- **ID** — DUP-002
+  - **File path** — `scripts/setup_serena.sh:23-149; scripts/install_semble.sh:10-112`
+  - **Severity** — Low
+  - **Category tag** — duplication
+  - **Description** — The Serena and Semble bootstrappers duplicate the same plumbing: `log`, `write_github_env`, `append_github_path`, pinned-version checks, and availability flag handling. They already diverge in small ways (for example, Serena dedupes `GITHUB_PATH` appends while Semble does not), so future fixes will have to be carried twice.
+  - **Proposed shared module** — `scripts/tool_install_helpers.sh` with helpers like `write_github_env key value`, `append_github_path dir`, `binary_version_matches actual expected`, `mark_tool_available tool bool`.
+  - **Recommended fix** — Keep only tool-specific discovery/install logic in `setup_serena.sh` and `install_semble.sh`; move the common GitHub Actions env/path/version helpers into the shared module.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+No workflow exceeded the 800 KB file-size threshold. The largest workflow is `review_autofix.yml` at 360,085 chars. The longest `if:` expression I found was only 115 chars, so the current risk is concentrated in large interpolated `run:` blocks, not `if:` conditions.
+
+- **ID** — EXPR-001
+  - **File path** — `.github/workflows/review_autofix.yml:1497-1886`
+  - **Severity** — Medium
+  - **Category tag** — expression-limit
+  - **Description** — `Collect PR metadata` is still a very large interpolated `run:` block: inline retry helper, metadata fetches, diff capture, and env export logic are all in YAML.
+  - **Estimated current character count** — ~17,408 chars
+  - **Headroom remaining** — ~3,592 chars to the 21,000-char limit
+  - **Recommended fix** — Extract the block to `scripts/review_collect_pr_metadata.sh` and pass only small env vars from YAML.
+
+- **ID** — EXPR-002
+  - **File path** — `.github/workflows/validate.yml:210-583`
+  - **Severity** — Medium
+  - **Category tag** — expression-limit
+  - **Description** — `Fetch workflow support files` is another large interpolated `run:` block with clone/fallback/copy helpers and multiple `${{ }}` insertions. Routine support-file additions can push it over the limit.
+  - **Estimated current character count** — ~17,416 chars
+  - **Headroom remaining** — ~3,584 chars
+  - **Recommended fix** — Move the support-fetch logic into the shared support-staging module from `DUP-001`, or split the block into smaller steps.
+
+- **ID** — EXPR-003
+  - **File path** — `.github/workflows/review_autofix.yml:929-1205`
+  - **Severity** — Medium
+  - **Category tag** — expression-limit
+  - **Description** — `Stage workflow support files` in `review_autofix.yml` is already over the 15k medium-risk threshold and is one of the fastest-growing blocks in the repo.
+  - **Estimated current character count** — ~15,454 chars
+  - **Headroom remaining** — ~5,546 chars
+  - **Recommended fix** — Route this staging step through the same shared support-staging module, or split prompts/scripts/schema staging into separate steps.
+
+### Section 5: Cross-Cutting Concerns
+
+No `TODO`, `FIXME`, or `HACK` markers were present under `.github/workflows/` or `scripts/` at audit time.
+
+- **ID** — CONSIST-001
+  - **File path** — `.github/workflows/cancel_on_pr_close.yml:26-53; .github/workflows/mark-stable.yml:333-360; .github/workflows/orchestrate_poll.yml:79-113`
+  - **Severity** — Medium
+  - **Category tag** — consistency
+  - **Description** — These workflows embed local `_rl_wait`/`_gh_retry` implementations instead of using the repo’s canonical helpers. The copies already differ in temp-file naming, breaker-file behavior, and logging, so rate-limit and retry behavior can drift away from `scripts/gh_helpers.sh`.
+  - **Recommended fix** — Introduce a tiny pre-checkout bootstrap helper/composite action that exports the canonical `gh_retry`, `gh_retry_to_file`, and `gh_api_json_to_file` functions early, then delete the inline copies.
+
+- **ID** — SHELL-001
+  - **File path** — `scripts/validate_changed_files_syntax.sh:70-73`
+  - **Severity** — Low
+  - **Category tag** — shellcheck
+  - **Description** — In `case "${file},${basename_lc}"`, the `*.env*` alternation already matches the later `*,*.envrc|*,.env*` cases, so those trailing branches never fire. This is exactly the SC2221/SC2222 warning pair.
+  - **Recommended fix** — Collapse the redundant alternates or split path-based and basename-based checks into separate `case` blocks so the intended precedence is explicit.
+
+- **ID** — DEAD-001
+  - **File path** — `.github/workflows/orchestrate_poll.yml:7-20`
+  - **Severity** — Low
+  - **Category tag** — dead-code
+  - **Description** — The reusable poller still exposes a `caller_workflow` input even though the description explicitly says the value is ignored and the self-retrigger path was removed. That leaves a dead public input in the callable interface.
+  - **Recommended fix** — Once wrapper inventories show no required consumers, remove the dead input and the matching wrapper plumbing. If compatibility must remain for now, emit a notice when a non-default value is supplied so stale callers can be found.
+
+- **ID** — DEBT-001
+  - **File path** — `.github/workflows/memory_maintenance.yml:39-55`
+  - **Severity** — Low
+  - **Category tag** — tech-debt
+  - **Description** — `BATCH_API_DISABLED`, `BATCH_API_PROVIDER`, and `BATCH_API_POLL_TIMEOUT_HOURS` are still threaded into the workflow only to be echoed in a `batch_noop` log line; the workflow then immediately asserts it has `"no_llm_path"` / `"no_codex_execution_path"`. They are compatibility scaffolding, not live behavior.
+  - **Recommended fix** — Retire the vars once downstream log scrapers are migrated, or move the compatibility echo into a narrower telemetry shim so the reusable workflow surface stops advertising dead knobs.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 1 | BATCH-001 |
+| Medium | 8 | BUG-001, API-001, API-002, DUP-001, EXPR-001, EXPR-002, EXPR-003, CONSIST-001 |
+| Low | 4 | DUP-002, SHELL-001, DEAD-001, DEBT-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 2-3 | Medium |
+| API call optimization | 3-4 | Medium |
+| Code modularization | 7-9 | Large |
+| Expression size reduction | 3-5 | Medium |
+| Medium/Low fixes | 4-6 | Small |
