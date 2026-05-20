@@ -33,6 +33,7 @@ prompt copies, and success-path cleanup of the per-attempt prompt file.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -410,6 +411,262 @@ def test_refusal_contract_literals_stay_in_lockstep_across_files() -> None:
 		)
 
 
+# ---------------------------------------------------------------
+# Editor-prompt false-claim-convergence guards (Fix C of the noop-
+# suspicious recovery PR).
+#
+# The prompt was tightened to teach the editor model that convergence
+# (every reviewer comment is already-satisfied or correctly ignored) is
+# a first-class valid outcome. Without this language the model emits a
+# "Changes made: …" narrative on every attempt even when the worktree
+# is clean, which the downstream validator at
+# `scripts/review_apply_fixes.sh:1453` then rejects — triggering the
+# very EDITOR_NOOP_SUSPICIOUS path Fix B exists to recover from.
+#
+# The grep-based contracts below pin the four pieces of language the
+# task spec mandates, plus a regression guard that the existing
+# section headings the validators downstream depend on were NOT
+# renamed (CLAUDE.md §6: naming immutability).
+# ---------------------------------------------------------------
+
+
+EDITOR_PROMPT_HEREDOC_OPEN = "cat <<__EDITOR_PROMPT__"
+EDITOR_PROMPT_HEREDOC_CLOSE = "__EDITOR_PROMPT__"
+
+# Existing heading literals downstream tools grep for. Renaming any of
+# these is forbidden by CLAUDE.md §6 (naming immutability) — both
+# scripts/review_apply_fixes.sh (validator block at ~1390-1480) and
+# scripts/review_commit_changes.sh grep for these exact strings.
+PROTECTED_PROMPT_HEADINGS = (
+	"Changes made:",
+	"Change status:",
+	"Already satisfied (suggested but already present):",
+	"Ignored suggestions (with short reason):",
+	"Reviewer files processed:",
+	"Review file issue audit:",
+	"PR comment audit:",
+	"Regression fingerprint:",
+	"Runtime failure path:",
+)
+
+
+def _editor_prompt_heredoc() -> str:
+	"""Extract the slice of review_apply_fixes.sh between the editor
+	prompt's `cat <<__EDITOR_PROMPT__` opener and its closer. Pinning
+	the contract tests to this slice prevents accidental cross-talk
+	with unrelated code (e.g. the validator block that also mentions
+	these heading literals)."""
+	text = REVIEW_APPLY_FIXES.read_text(encoding="utf-8")
+	open_idx = text.find(EDITOR_PROMPT_HEREDOC_OPEN)
+	assert open_idx != -1, f"Editor prompt heredoc opener {EDITOR_PROMPT_HEREDOC_OPEN!r} not found"
+	# The closer is the literal line `__EDITOR_PROMPT__` AFTER the opener.
+	close_idx = text.find("\n" + EDITOR_PROMPT_HEREDOC_CLOSE, open_idx + len(EDITOR_PROMPT_HEREDOC_OPEN))
+	assert close_idx != -1, f"Editor prompt heredoc closer not found after opener"
+	return text[open_idx:close_idx]
+
+
+def test_editor_prompt_documents_convergence_outcome() -> None:
+	"""The prompt must explicitly tell the model that a converged
+	run (every reviewer comment is already-satisfied / ignored, no
+	apply_patch calls performed) is a valid SUCCESS outcome with the
+	`- none` / `- not-edited` shape — not a failure to be papered
+	over with a fabricated narrative."""
+	prompt = _editor_prompt_heredoc()
+	assert "Convergence is a first-class valid outcome" in prompt, (
+		"Prompt must contain the convergence-is-valid header line so "
+		"the model recognizes the converged path as a SUCCESS shape."
+	)
+	# Must reference the exact two-bullet contract the validator
+	# accepts.
+	assert "- none" in prompt
+	assert "- not-edited" in prompt
+
+
+def test_editor_prompt_requires_changes_match_this_run_writes() -> None:
+	"""Each bullet under `Changes made:` must correspond to an
+	apply_patch / write the model actually performed THIS run — not
+	to edits already on HEAD that the model considered."""
+	prompt = _editor_prompt_heredoc()
+	assert "Claimed edits MUST correspond to writes you actually performed in" in prompt
+	assert "THIS run" in prompt
+	# The hard rule must reference apply_patch (the editor's primary
+	# write tool) so the model can't argue it via a different
+	# write-tool reading.
+	assert "apply_patch" in prompt
+	# The downstream validator citation makes the failure mode
+	# concrete: the model can't talk itself out of the rule.
+	assert "git diff HEAD" in prompt
+
+
+def test_editor_prompt_forbids_fabricated_edits() -> None:
+	"""The prompt must explicitly forbid whitespace-only / no-op
+	edits added purely to make the structured-format check pass —
+	the failure mode the validator catches via the "no substantive
+	diff from HEAD" branch."""
+	prompt = _editor_prompt_heredoc()
+	assert "No fabricated edits to satisfy the format" in prompt
+	# Concrete forbidden examples — whitespace-only, no-op rename,
+	# empty-line shuffle — make the rule unmistakable.
+	assert "whitespace-only" in prompt
+
+
+def test_editor_prompt_requires_self_check_before_emitting() -> None:
+	"""Before emitting the final response, the model must mentally
+	walk through git status / git diff HEAD and reconcile its
+	"Changes made:" bullets against the actual diff. A clean worktree
+	must emit the two-bullet converged shape; a non-empty worktree
+	must list only files visible in the diff."""
+	prompt = _editor_prompt_heredoc()
+	assert "Self-check before emitting" in prompt
+	# Both git tools the self-check inspects must be named — the
+	# model is more likely to actually perform the check when the
+	# commands are explicit.
+	assert "git status" in prompt
+	assert "git diff HEAD" in prompt
+
+
+def test_editor_prompt_section_headings_unchanged() -> None:
+	"""CLAUDE.md §6 (naming immutability): the existing section
+	heading literals MUST appear in the prompt exactly as before.
+	scripts/review_apply_fixes.sh's validator block at lines
+	1390-1480 and scripts/review_commit_changes.sh grep for these
+	literals — any rename here silently breaks both."""
+	prompt = _editor_prompt_heredoc()
+	for heading in PROTECTED_PROMPT_HEADINGS:
+		assert heading in prompt, (
+			f"Protected prompt heading {heading!r} is no longer present "
+			f"in the editor prompt heredoc. Renames here are forbidden "
+			f"by CLAUDE.md §6 and silently break the downstream "
+			f"validators that grep for the literal."
+		)
+
+
+# ---------------------------------------------------------------
+# Shared audit-helper integration (Fix B of the same PR).
+#
+# The "Reviewer audit sanity" arithmetic check (Check 2 of the
+# "Validate editor no-op disposition" step) was extracted from
+# `.github/workflows/review_autofix.yml` into
+# `scripts/validate_editor_audit.sh` so the orchestrator-poll
+# noop-suspicious recovery sweep can call the exact same logic when
+# deciding whether a force-merge fallback is safe. Drift between the
+# two callers is precisely the bug we are avoiding — these tests pin
+# the integration so the inline block can never be re-introduced.
+# ---------------------------------------------------------------
+
+
+def test_workflow_sources_shared_audit_helper() -> None:
+	"""The validator step must `source` scripts/validate_editor_audit.sh
+	and call validate_editor_audit_arithmetic — never re-implement the
+	arithmetic check inline."""
+	text = _review_autofix_text()
+	disposition = _step_block(text, "Validate editor no-op disposition")
+	assert "validate_editor_audit.sh" in disposition, (
+		"Validate editor no-op disposition step must source the shared "
+		"audit helper."
+	)
+	assert "validate_editor_audit_arithmetic" in disposition, (
+		"Workflow must call validate_editor_audit_arithmetic (the "
+		"shared function) — never re-implement the check inline."
+	)
+
+
+def test_workflow_no_longer_contains_inline_audit_arithmetic_regex() -> None:
+	"""The inline `total issues listed` / `issues applied` / `issues
+	already applied` / `issues ignored` regex block must have moved
+	OUT of the workflow and INTO the shared helper. Catches a
+	regression where someone re-inlines the block under the same
+	step but forgets to delete the helper-source call."""
+	text = _review_autofix_text()
+	disposition = _step_block(text, "Validate editor no-op disposition")
+	# The unique-to-the-arithmetic-block regex fragments must NOT
+	# appear inside the workflow step any more.
+	forbidden_in_workflow = [
+		"total issues listed[^0-9]*\\K",
+		"(?<!already )issues applied[^0-9]*\\K",
+		"issues already applied[^0-9]*\\K",
+		"issues ignored[^0-9]*\\K",
+	]
+	for needle in forbidden_in_workflow:
+		assert needle not in disposition, (
+			f"Inline audit-arithmetic regex {needle!r} re-appeared in "
+			f"the workflow step. It must live ONLY in "
+			f"scripts/validate_editor_audit.sh so the workflow and the "
+			f"poller cannot drift."
+		)
+	# And the helper must still own the regex.
+	helper_text = (REPO_ROOT / "scripts" / "validate_editor_audit.sh").read_text(encoding="utf-8")
+	for needle in forbidden_in_workflow:
+		assert needle in helper_text, (
+			f"The shared helper must own the audit-arithmetic regex "
+			f"{needle!r}; if it moved elsewhere, the contract is broken."
+		)
+
+
+def test_workflow_warning_literals_preserved_in_helper() -> None:
+	"""The validator step previously emitted two distinctive
+	`::warning::` literals that downstream operator searches and the
+	e2e poller grep contracts depend on. The shared helper MUST emit
+	the same literals."""
+	helper_text = (REPO_ROOT / "scripts" / "validate_editor_audit.sh").read_text(encoding="utf-8")
+	# The empty-audit warning has the form
+	# "::warning::N reviewer(s) succeeded but editor audit section is empty or contains only fallback text."
+	# (lowercase `editor` because it appears mid-sentence). The poller
+	# path also emits a sentence-start variant that starts uppercase.
+	assert "reviewer(s) succeeded but editor audit section is empty or contains only fallback text" in helper_text
+	# Per-line arithmetic mismatch literal stays byte-for-byte:
+	assert "Audit entry arithmetic mismatch: total=" in helper_text
+
+
+def test_required_bootstrap_scripts_includes_audit_helper() -> None:
+	"""For consumer repos, the workflow stages scripts into
+	${SUPPORT_SCRIPTS_DIR} via REQUIRED_BOOTSTRAP_SCRIPTS. The new
+	helper MUST appear in that list or `source
+	${SUPPORT_SCRIPTS_DIR}/validate_editor_audit.sh` will fail with
+	"No such file" on every consumer-repo run."""
+	text = _review_autofix_text()
+	# Find the REQUIRED_BOOTSTRAP_SCRIPTS assignment.
+	bootstrap_match = re.search(r'REQUIRED_BOOTSTRAP_SCRIPTS="([^"]+)"', text)
+	assert bootstrap_match is not None, (
+		"REQUIRED_BOOTSTRAP_SCRIPTS list not found — workflow bootstrap "
+		"shape changed without test update."
+	)
+	bootstrap_list = bootstrap_match.group(1)
+	assert "validate_editor_audit.sh" in bootstrap_list, (
+		"validate_editor_audit.sh must be listed in "
+		"REQUIRED_BOOTSTRAP_SCRIPTS or consumer-repo runs will fail "
+		"to find the helper at ${SUPPORT_SCRIPTS_DIR}."
+	)
+
+
+# ---------------------------------------------------------------
+# Cross-file: the noop-suspicious warning literal that the workflow
+# emits and the poller greps for must stay in lockstep — drift here
+# is the exact bug Fix B's recovery sweep was added to avoid.
+# ---------------------------------------------------------------
+
+
+NOOP_WARNING_LITERAL = "⚠️ **Editor no-op suspicious**"
+
+
+def test_noop_warning_literal_present_in_workflow() -> None:
+	text = _review_autofix_text()
+	assert NOOP_WARNING_LITERAL in text, (
+		"review_autofix.yml must still post a body comment containing "
+		"the noop-suspicious warning literal — the orchestrator-poll "
+		"sweep greps for this exact substring."
+	)
+
+
+def test_noop_warning_literal_present_in_poller() -> None:
+	poller = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	assert NOOP_WARNING_LITERAL in poller, (
+		"scripts/orchestrate_poll_process.sh must reference the exact "
+		"same noop-suspicious warning literal — otherwise the recovery "
+		"sweep will fail to detect any noop-suspicious PRs."
+	)
+
+
 if __name__ == "__main__":
 	test_merge_conflict_chain_gates_on_editor_noop_suspicious()
 	test_validator_emits_exact_grep_literal()
@@ -426,4 +683,15 @@ if __name__ == "__main__":
 	test_review_apply_fixes_fallback_distinguishes_refusal()
 	test_review_apply_fixes_centralizes_refusal_regex()
 	test_refusal_contract_literals_stay_in_lockstep_across_files()
+	test_editor_prompt_documents_convergence_outcome()
+	test_editor_prompt_requires_changes_match_this_run_writes()
+	test_editor_prompt_forbids_fabricated_edits()
+	test_editor_prompt_requires_self_check_before_emitting()
+	test_editor_prompt_section_headings_unchanged()
+	test_workflow_sources_shared_audit_helper()
+	test_workflow_no_longer_contains_inline_audit_arithmetic_regex()
+	test_workflow_warning_literals_preserved_in_helper()
+	test_required_bootstrap_scripts_includes_audit_helper()
+	test_noop_warning_literal_present_in_workflow()
+	test_noop_warning_literal_present_in_poller()
 	print("All EDITOR_NOOP_SUSPICIOUS cascade-guard contract tests passed.")
