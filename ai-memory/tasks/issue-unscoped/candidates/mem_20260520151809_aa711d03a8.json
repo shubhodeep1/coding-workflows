@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validate_editor_audit.sh:68-80 | severity=medium | confidence=3\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The audit-line parser can misclassify legitimate mixed-case \u201cissues already applied\u201d lines as unparseable.\n  WHY: Both reviewers identified the same fragility in the lower-casing/substitution path; this can return `rc=2` and block the recovery flow even for valid editor summaries.\n- scripts/orchestrate_poll_process.sh:12311-12322 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: Gratuitous extra indentation was introduced in the `_head_pushed_at_json` handling block.\n  WHY: Both reviewers reported the same merge-resolution style regression; runtime behavior is unchanged, but the diff is noisier and violates the repo\u2019s style/forward-merge intent.\n- tests/test_orchestrate_poll_noop_suspicious_recovery.py:~240-260 | severity=medium | confidence=3\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The fail-closed contract test greps source instead of exercising the real `gh_retry` comments-refresh failure path.\n  WHY: Both reviewers flagged that the runtime API-failure path is not directly validated, so a regression there could still slip through while the grep-based contract test passes.\n- scripts/orchestrate_lib.py:1634 | severity=low | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The `except` block\u2019s `return None` is indented with an extra level.\n  WHY: This is a merge-resolution style regression only; Python still executes it, but it adds noise and conflicts with the intended clean forward-merge.\n- .github/workflows/review_autofix.yml (and the three test workflows):REQUIRED_BOOTSTRAP_SCRIPTS line ~956 | severity=medium | confidence=2\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The bootstrap-list update is only asserted in one workflow snapshot and is not verified across all consumer-facing workflow snapshots.\n  WHY: The reviewer warned that older pinned workflows may still miss `validate_editor_audit.sh`, causing sourcing failures and blocking the noop-suspicious recovery path.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cResolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`.\u201d\n  expected_change_site: scripts/orchestrate_lib.py and scripts/orchestrate_poll_process.sh\n  confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The shipped PR diff still contains gratuitous extra indentation in `scripts/orchestrate_lib.py:1634` and `scripts/orchestrate_poll_process.sh:12311-12322`, which the reviewer says were not cleaned up by the forward-merge.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/validate_editor_audit.sh:68-80 | confidence=3\n  PROBLEM: The regex extraction for \u201cissues already applied\u201d and subsequent substitutions only run on lower-cased lines, making the parser fragile to mixed-case audit lines.\n  WHY: An audit line like \u201cIssues Already Applied: 2\u201d can be classified as unparseable, causing `rc=2` and blocking the noop-suspicious recovery sweep from force-merging a clean convergence.\n- scripts/orchestrate_poll_process.sh:12311-12322 | confidence=4\n  PROBLEM: Gratuitous extra indentation was introduced during merge conflict resolution.\n  WHY: Bash treats this as semantically harmless but it violates the repo's style contract and makes code review noisy.\n- tests/test_orchestrate_poll_noop_suspicious_recovery.py:~240-260 | confidence=3\n  PROBLEM: The test only greps source code and does not exercise the actual `gh_retry` API failure path.\n  WHY: The runtime error path cannot be validated, meaning API failures could still cause stale snapshots to be used in production.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/orchestrate_lib.py:1634 | confidence=4\n  PROBLEM: The `except` block contains an extraneous extra level of indentation on `return None`.\n  WHY: Python ignores the extra whitespace inside the suite, but it violates the repo's style contract and adds noise to the forward-merge diff.\n- scripts/orchestrate_poll_process.sh:12311-12322 | confidence=4\n  PROBLEM: Gratuitous extra indentation was introduced on several lines during merge conflict resolution.\n  WHY: Bash ignores the extra whitespace, but the hunk is unnecessarily noisy and violates the style contract.\n- scripts/validate_editor_audit.sh:68-80 | confidence=3\n  PROBLEM: The lower-casing plus substitution path for \u201cissues already applied\u201d can fail to parse legitimate title-case variants.\n  WHY: A valid editor summary can be classified as \u201cunparseable\u201d, causing `rc=2` and defeating the shared audit-helper contract.\n- tests/test_orchestrate_poll_noop_suspicious_recovery.py:~240-260 | confidence=3\n  PROBLEM: The tests only perform source greps and do not simulate the actual `gh_retry` failure path for the comments-refresh call in Gate B.\n  WHY: The contract test can pass while the real runtime error path still regresses.\n- .github/workflows/review_autofix.yml (and the three test workflows):REQUIRED_BOOTSTRAP_SCRIPTS line ~956 | confidence=2\n  PROBLEM: The bootstrap list update is fragile because the contract tests only check for the string presence in one list.\n  WHY: Older pinned workflow snapshots may not stage the helper before sourcing it, leading to `No such file` and blocking force-merge.\n- Requirement: \u201cResolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`.\u201d\n  Expected change site: A clean forward-merge (no extraneous whitespace/indentation changes in scripts that were not part of the original stable diff).\n  Evidence of absence: The shipped PR diff (and the last-run diff) still contains gratuitous extra indentation in `scripts/orchestrate_lib.py:1634`, `scripts/orchestrate_poll_process.sh:12311-12322`, and surrounding comment blocks that did not exist on `stable`.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "04f7f7b91a87e015522c8967af876556f2c71bfb95d11ce2b52e8afb1bac9217",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2828,
+    "run_id": "26170442659",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26170442659",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260520151809_aa711d03a8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2828,
+    "run_id": "26170442659"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 6 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-20T15:18:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
