@@ -11883,9 +11883,8 @@ fi
         # this adds zero API calls (§15).  Fails open on jq errors:
         # counts fall back to "?" and the diagnostic still prints,
         # but parse_error=true keeps that path distinguishable from a
-        # genuinely empty cache.  The retrigger_review defense-in-depth
-        # guard at
-        # scripts/orchestrate_poll_process.sh:5829 still protects the
+        # genuinely empty cache.  The execute_stall_recovery_action(
+        # retrigger_review) in-flight review guard still protects the
         # empty-commit push if the cache misses a live review run; this
         # logging just makes the cache state observable next time.
         (
