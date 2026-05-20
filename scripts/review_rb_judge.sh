@@ -404,8 +404,11 @@ if ! [[ "${RB_JUDGE_PR_DIFF_MAX_BYTES}" =~ ^[0-9]+$ ]] || [ "${RB_JUDGE_PR_DIFF_
   RB_JUDGE_PR_DIFF_MAX_BYTES=400000
 fi
 PR_DIFF_TRUNCATED=false
-PR_DIFF_BYTES_TOTAL="$(wc -c < "${RB_JUDGE_PR_DIFF_FILE}" 2>/dev/null | tr -cd '0-9' || true)"
-[[ "${PR_DIFF_BYTES_TOTAL}" =~ ^[0-9]+$ ]] || PR_DIFF_BYTES_TOTAL=0
+PR_DIFF_BYTES_TOTAL="$(wc -c < "${RB_JUDGE_PR_DIFF_FILE}" 2>/dev/null | tr -d '[:space:]' || true)"
+if ! [[ "${PR_DIFF_BYTES_TOTAL}" =~ ^[0-9]+$ ]]; then
+  echo "::warning::Could not determine PR diff size for review-blocked judge truncation; treating diff size as 0 bytes."
+  PR_DIFF_BYTES_TOTAL=0
+fi
 if [ "${PR_DIFF_BYTES_TOTAL}" -gt "${RB_JUDGE_PR_DIFF_MAX_BYTES}" ]; then
   if PYTHONDONTWRITEBYTECODE=1 python3 - "${RB_JUDGE_PR_DIFF_FILE}" "${RB_JUDGE_PR_DIFF_MAX_BYTES}" > "${RB_JUDGE_PR_DIFF_TMP_FILE}" 2>/dev/null <<'PY'
 import sys
