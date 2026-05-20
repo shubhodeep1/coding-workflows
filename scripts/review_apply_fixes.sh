@@ -1667,7 +1667,8 @@ else
   else
     _runtime_failure_path_line="- unavailable (editor fallback)"
   fi
-  cat > "${EDITOR_SUMMARY_FILE}" <<__EDITOR_SUMMARY__
+  {
+    cat <<'__EDITOR_SUMMARY__'
 Changes made:
 - none (editor failed before producing a validated summary)
 
@@ -1690,8 +1691,9 @@ Regression fingerprint:
 - unavailable (editor fallback)
 
 Runtime failure path:
-${_runtime_failure_path_line}
 __EDITOR_SUMMARY__
+    printf '%s\n' "${_runtime_failure_path_line}"
+  } > "${EDITOR_SUMMARY_FILE}"
   unset _runtime_failure_path_line
   echo "Editor failed after retries; continuing with fallback summary."
 fi
