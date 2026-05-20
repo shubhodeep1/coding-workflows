@@ -189,6 +189,37 @@ def test_local_sanitize_fallback_warns_when_all_rewrite_paths_fail() -> None:
 		)
 
 
+def test_local_sanitize_fallback_warns_when_tempfile_allocation_fails() -> None:
+	"""Tempfile allocation failure also leaves the original prompt bytes in
+	place, so degraded harnesses need the same warning instead of a silent
+	fall-through to the later Codex read failure."""
+	with tempfile.TemporaryDirectory(prefix="rb_judge_sanitize_") as td:
+		prompt_file = Path(td) / "invalid_prompt.txt"
+		prompt_file.write_bytes(b"\xff\xfe\xfa")
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				(
+					f"{_rb_judge_local_sanitize_fallback_block()}\n"
+					"mktemp() { return 1; }\n"
+					f"sanitize_codex_prompt_file {shlex.quote(str(prompt_file))}\n"
+				),
+			],
+			cwd=str(REPO_ROOT),
+			capture_output=True,
+			text=True,
+			check=True,
+		)
+
+		assert prompt_file.read_bytes() == b"\xff\xfe\xfa"
+		assert "Local prompt sanitization fallback could not sanitize" in result.stderr, (
+			"scripts/review_rb_judge.sh must warn when the degraded local prompt "
+			"sanitizer cannot even allocate its temp file and has to leave the "
+			"original bytes in place."
+		)
+
+
 # ---------------------------------------------------------------------------
 # Script-side: reason emission for every merge_with_followup refusal path.
 # ---------------------------------------------------------------------------

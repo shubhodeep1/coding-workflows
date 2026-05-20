@@ -45,7 +45,10 @@ if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
     local _path="${1:-}"
     local _tmp=""
     [ -n "${_path}" ] && [ -f "${_path}" ] || return 0
-    _tmp="$(mktemp "${_path}.utf8XXXXXX" 2>/dev/null)" || return 0
+    _tmp="$(mktemp "${_path}.utf8XXXXXX" 2>/dev/null)" || {
+      echo "::warning::Local prompt sanitization fallback could not sanitize '${_path}'; proceeding with original bytes." >&2
+      return 0
+    }
     if command -v iconv >/dev/null 2>&1; then
       iconv -f UTF-8 -t UTF-8//IGNORE < "${_path}" > "${_tmp}" 2>/dev/null || true
       if [ -s "${_tmp}" ] || [ ! -s "${_path}" ]; then
