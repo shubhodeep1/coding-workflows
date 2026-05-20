@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:12093-12101 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603, moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: The warning message logs `project_complete=${PROJECT_COMPLETE}` even though the guard no longer uses `PROJECT_COMPLETE` to decide whether to override.\n  WHY: This can mislead operators and log-grep tooling because the emitted context no longer matches the actual condition that triggered the override.\n- tests/test_orchestrate_poll_process.py:2247-2249 | severity=low | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The override-absence assertion in the sibling integration-drift test is tied too closely to stdout/stderr emission details.\n  WHY: If the warning\u2019s diagnostic stream changes, this regression contract could be satisfied without actually exercising the intended path.\n- tests/test_orchestrate_poll_process.py:2289 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5]\n  PROBLEM: The first poll in `test_complete_verdict_enters_validation_and_finishes_after_integration_drift` only checks `stdout` for the absence of the override warning.\n  WHY: If the warning moves to `stderr`, the test could pass while the override still fires on the validation-enabled drift path.\n- tests/test_orchestrate_poll_process.py:2297 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The validation-enabled integration-drift test only checks `first[\"stdout\"]` for the override warning.\n  WHY: If the warning moves to `stderr`, this test would miss the regression and pass incorrectly.\n- tests/test_orchestrate_poll_process.py:2304-2311 | severity=medium | confidence=4\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The second poll in `test_complete_verdict_enters_validation_and_finishes_after_integration_drift` does not verify that the override warning is absent.\n  WHY: A future change could reintroduce the override on the second poll and the test would still pass because it only checks the final state.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_orchestrate_poll_process.py:2289\n  PROBLEM: The first poll in `test_complete_verdict_enters_validation_and_finishes_after_integration_drift` asserts `\"Overriding to 'in_progress'\" not in first[\"stdout\"]`, checking only stdout for the absence of the override warning.\n  WHY: If the warning is redirected to stderr or otherwise changes streams, the validation-enabled test would silently pass and miss the same deadlock regression the sibling test was fixed to catch.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_orchestrate_poll_process.py:2304-2311\n  PROBLEM: The second poll assertion in `test_complete_verdict_enters_validation_and_finishes_after_integration_drift` does not verify the override warning is absent.\n  WHY: A future refactor could re-broaden the override to fire on the second poll, and the test would still pass because it only checks the final state.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/orchestrate_poll_process.sh:12093\n  PROBLEM: Warning message logs `project_complete=${PROJECT_COMPLETE}` but new guard no longer uses PROJECT_COMPLETE for decision making.\n  WHY: The logged context doesn't match the actual condition being guarded, which can mislead operators or log-grep automation.\n- tests/test_orchestrate_poll_process.py:2247-2249\n  PROBLEM: Combined output assertion ties test too closely to stdout emission detail.\n  WHY: If warning diagnostics ever move streams, the test could pass without exercising the intended regression contract.\n- tests/test_orchestrate_poll_process.py:2297\n  PROBLEM: Second poll in `test_complete_verdict_enters_validation_and_finishes_after_integration_drift` only checks stdout.\n  WHY: If override warning ever moves to stderr, the test would miss it and pass incorrectly.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_orchestrate_poll_process.py:2289\n  PROBLEM: The first poll assertion in `test_complete_verdict_enters_validation_and_finishes_after_integration_drift` only checks stdout for the override warning.\n  WHY: If the shell script's echo statement is redirected to stderr or similar, the test would not catch the override warning and could pass incorrectly.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_orchestrate_poll_process.py:2247-2251,2297\n  PROBLEM: The override-absence assertion checks `stdout + stderr` in the updated sibling test, but the validation-enabled test only checks `first[\"stdout\"]`.\n  WHY: A future move of the diagnostic stream, or a capture change in `_run_poller`, would let one test accept a regression while the override still fires on the drift+validation path.\n- scripts/orchestrate_poll_process.sh:12093\n  PROBLEM: Warning still logs `project_complete=${PROJECT_COMPLETE}` as context after the guard was narrowed to `WAVE_COMPLETE` and `CURRENT_WAVE`.\n  WHY: Log greps or operator tracing can see a stale/irrelevant value that no longer matches the exact condition that triggered the override.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "6e2bde467b9824d8bceed8d079d6cf3e1a7dae2ef09342a60d5c8e41957f87be",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2798,
+    "run_id": "26147746049",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26147746049",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260520074638_a9f2f1ed8f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2798,
+    "run_id": "26147746049"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-20T07:46:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
