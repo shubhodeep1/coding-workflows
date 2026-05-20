@@ -1272,6 +1272,77 @@ _post_state_comment_v2_chunk() {
   return 0
 }
 
+# update_completion_status_comment — maintain a single pinned "what is
+# blocking completion" comment on the tracking issue, edit-in-place.
+#
+# The V2 state chain written by post_state_comment is the canonical
+# machine-readable state record. This comment is a separate, human-
+# facing summary keyed to a unique marker so it can be edited in place
+# every cycle as wave PRs land and the project converges on completion
+# — without producing a fresh comment per poll tick.
+#
+# Marker: <!-- orchestrator:completion-status -->
+# Status tag (grep-friendly second-line marker):
+#   <!-- status:in-progress|waiting|ready|validated|failed -->
+#
+# Args:
+#   $1 = status token (in-progress | waiting | ready | validated | failed)
+#   $2 = rendered markdown body (the marker and status-tag lines are
+#        prepended by the helper)
+#
+# Idempotency: hashes the rendered body and skips the API call when the
+# hash matches the last successfully written value for this project.
+# Safe to call every poll cycle.
+#
+# API hygiene (§15): when COMMENTS is set (paginated comments fetched
+# earlier in the same cycle), the existing-comment lookup is satisfied
+# from that cache. The helper never issues a per-cycle list call on
+# its own.
+update_completion_status_comment() {
+  local status="$1"
+  local body_markdown="$2"
+  local marker="<!-- orchestrator:completion-status -->"
+  local full_body body_hash cache_file existing_id payload_file
+
+  if [ -z "${TRACKING_NUM:-}" ] || [ "${TRACKING_NUM}" = "0" ]; then
+    return 0
+  fi
+
+  full_body="${marker}"$'\n'"<!-- status:${status} -->"$'\n'"${body_markdown}"
+  body_hash="$(printf '%s' "${full_body}" | sha256sum | awk '{print $1}')"
+  cache_file="${TMPDIR:-/tmp}/orchestrate_completion_status_${TRACKING_NUM}.sha256"
+
+  if [ -f "${cache_file}" ] && [ "$(cat "${cache_file}" 2>/dev/null)" = "${body_hash}" ]; then
+    return 0
+  fi
+
+  existing_id=""
+  if [ -n "${COMMENTS:-}" ] && [ "${COMMENTS}" != "[]" ]; then
+    existing_id="$(printf '%s' "${COMMENTS}" \
+      | jq -r --arg marker "${marker}" '
+          [.[] | select((.body // "") | contains($marker))]
+          | first | .id // empty' 2>/dev/null || echo "")"
+  fi
+
+  payload_file="$(mktemp "${TMPDIR:-/tmp}/completion_status_payload.XXXXXX")"
+  if ! printf '%s' "${full_body}" | jq -Rs '{body: .}' > "${payload_file}" 2>/dev/null; then
+    rm -f "${payload_file}"
+    return 1
+  fi
+
+  if [ -n "${existing_id}" ] && [[ "${existing_id}" =~ ^[0-9]+$ ]]; then
+    gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${existing_id}" \
+      --method PATCH --input "${payload_file}" >/dev/null 2>&1 || true
+  else
+    gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
+      --method POST --input "${payload_file}" >/dev/null 2>&1 || true
+  fi
+  rm -f "${payload_file}"
+
+  printf '%s' "${body_hash}" > "${cache_file}" 2>/dev/null || true
+  return 0
+}
+
 extract_orchestrator_state_payload() {
   local comment_body="$1"
   printf '%s' "${comment_body}" | sed -n '/^<!-- ORCHESTRATOR_STATE_V1$/,/^ORCHESTRATOR_STATE_V1 -->$/p' | sed '1d;$d'
@@ -4636,6 +4707,23 @@ dispatch_validation_if_needed() {
   local now_epoch
   local stale_threshold_secs=3600  # 1 hour: if no label appears after dispatch, allow redispatch
 
+  # Defensive preflight: refuse to dispatch validate while wave PRs are
+  # unmerged or the integration→default merge has not landed. The judge
+  # override at the JUDGE_STATUS=complete branch already gates the
+  # transition to status=validating on PROJECT_COMPLETE=true, so this
+  # branch is belt-and-suspenders against the rare case where a wave PR
+  # transitions from merged back to a non-terminal state between the
+  # judge call and the dispatch (e.g. a consumer-side revert or
+  # label-reconciliation race). When that happens we skip dispatch this
+  # cycle and let the next poll tick re-evaluate once wave PR state
+  # settles. PROJECT_COMPLETE is set in the wave-status decision block
+  # above; an unset value (poller started mid-flow) is treated as "not
+  # gated" so we never block dispatch on absent state.
+  if [ -n "${PROJECT_COMPLETE+set}" ] && [ "${PROJECT_COMPLETE}" != "true" ]; then
+    echo "Preflight: PROJECT_COMPLETE=${PROJECT_COMPLETE:-unset}; deferring validate dispatch this cycle (wave PRs unmerged or integration→default merge pending)."
+    return 0
+  fi
+
   last_dispatch_cycle="$(jq -r '.validation_last_dispatch_cycle // 0' "${STATE_FILE}")"
   if [ "${last_dispatch_cycle}" = "${validation_cycle}" ]; then
     # Check for staleness: if dispatched but no label change for >1h, allow redispatch
@@ -4723,6 +4811,9 @@ mark_validation_failed() {
 ${reason}
 
 Failure class \`${_deterministic_class}\` is environment-deterministic; retrying this workflow on the same runner image will not help. Skipping the recovery budget. Manual intervention required."
+    update_completion_status_comment "failed" \
+      "## Completion status"$'\n\n'"**State:** \`failed\`"$'\n\n'"Runtime validation failed deterministically (class \`${_deterministic_class}\`). Manual intervention required. See the \"❌ Runtime validation failed (deterministic)\" comment for the diagnostic detail." \
+      || true
     tg_notify "Project #${TRACKING_NUM} validation failed deterministically (class=${_deterministic_class}). Manual intervention required." "CRITICAL"
     return 0
   fi
@@ -4765,6 +4856,9 @@ Transitioning back to judge for re-evaluation."
 ${reason}
 
 Validation recovery exhausted (${val_recovery_count}/${MAX_VALIDATION_RECOVERY_ATTEMPTS}). Manual intervention required."
+  update_completion_status_comment "failed" \
+    "## Completion status"$'\n\n'"**State:** \`failed\`"$'\n\n'"Runtime validation failed after ${val_recovery_count}/${MAX_VALIDATION_RECOVERY_ATTEMPTS} recovery attempt(s). Manual intervention required. See the \"❌ Runtime validation failed\" comment for the diagnostic detail." \
+    || true
   tg_notify "Project #${TRACKING_NUM} validation failed after ${val_recovery_count} recovery attempt(s). Manual intervention required." "CRITICAL"
 }
 
@@ -4848,6 +4942,12 @@ Manual intervention required: resolve the blocking condition on the final PR (me
   _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
   handle_comprehensive_release_callback_if_needed "complete" "${_tracking_labels}" "${COMMENTS:-[]}"
   set_tracking_phase_label "ai:validated"
+  # Final transition for the pinned completion-status comment: project
+  # is validated, all wave PRs are merged, and the integration squash
+  # merge has landed in default.
+  update_completion_status_comment "validated" \
+    "## Completion status"$'\n\n'"**State:** \`validated\`"$'\n\n'"All wave PRs merged. Integration branch squash-merged into default. Runtime validation passed (cycle ${validation_cycle}). Tracking issue kept open for manual review." \
+    || true
   post_tracking_comment "Project completed successfully after runtime validation passed (cycle ${validation_cycle}). Issue kept open for manual review."
   tg_cleanup_msgs "${TRACKING_NUM}"
   MSG="Project #${TRACKING_NUM} completed after validation pass (cycle ${validation_cycle})."
@@ -9875,6 +9975,84 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   WAVE_COMPLETE="$(echo "${WAVE_STATUS}" | jq -r '.wave_complete')"
   ANY_FAILED="$(echo "${WAVE_STATUS}" | jq -r '.any_failed')"
   PROJECT_COMPLETE="$(echo "${WAVE_STATUS}" | jq -r '.project_complete')"
+
+  # ---------------------------------------------------------------
+  # Maintain the pinned "completion status" comment on the tracking
+  # issue every cycle. The V2 state comment chain (post_state_comment)
+  # remains the canonical state record; this comment is a separate,
+  # human-readable summary the operator can read at a glance to see
+  # which wave PRs and integration→default merge are still blocking
+  # completion. Idempotent via body-hash cache so this is cheap to
+  # call every tick. See update_completion_status_comment for the
+  # marker contract and API hygiene notes.
+  # ---------------------------------------------------------------
+  _completion_status_text="in-progress"
+  if [ "${ANY_FAILED}" = "true" ]; then
+    _completion_status_text="failed"
+  elif [ "${PROJECT_COMPLETE}" = "true" ]; then
+    _completion_status_text="ready"
+  elif [ "${WAVE_COMPLETE}" = "true" ]; then
+    # Final-wave PRs merged into the integration branch but the
+    # integration→default squash merge has not landed yet (autofix may
+    # still be running on the integration PR).
+    _completion_status_text="waiting"
+  fi
+
+  _csc_integration_ahead_by="$(echo "${WAVE_STATUS}" | jq -r '.integration_ahead_by // ""')"
+  _csc_integration_contained="$(echo "${WAVE_STATUS}" | jq -r '.integration_contained_in_default // false')"
+  _csc_total_waves="$(jq -r '.total_waves // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
+  _csc_current_wave="$(echo "${WAVE_STATUS}" | jq -r '.wave // 0')"
+  _csc_pending_lines="$(echo "${WAVE_STATUS}" | jq -r '
+    [.issues[]
+      | select(.status != "merged" and .status != "closed" and .status != "skipped")
+      | "- #\(.github_issue // "?"): \(.status)"]
+    | join("\n")')"
+  _csc_failed_lines="$(echo "${WAVE_STATUS}" | jq -r '
+    [.issues[]
+      | select(.status == "closed" or .status == "implementation-failed")
+      | "- #\(.github_issue // "?"): \(.status) (\(.decision_source // "unknown"))"]
+    | join("\n")')"
+
+  _csc_body="## Completion status"$'\n\n'
+  _csc_body+="**State:** \`${_completion_status_text}\`"$'\n'
+  _csc_body+="**Wave:** ${_csc_current_wave}/${_csc_total_waves}"$'\n'
+  if [ -n "${_csc_pending_lines}" ]; then
+    _csc_body+=$'\n'"**Wave issues still pending merge:**"$'\n'"${_csc_pending_lines}"$'\n'
+  else
+    _csc_body+=$'\n'"All wave issues in this wave have merged or are accounted for."$'\n'
+  fi
+  if [ "${_csc_integration_contained}" = "true" ]; then
+    _csc_body+=$'\n'"Integration branch is contained in default — integration→default merge has landed."$'\n'
+  elif [ -n "${_csc_integration_ahead_by}" ] && [ "${_csc_integration_ahead_by}" != "0" ]; then
+    _csc_body+=$'\n'"Integration branch is ahead of default by **${_csc_integration_ahead_by}** commit(s). The integration→default merge has not landed yet (autofix may still be running on the integration PR)."$'\n'
+  fi
+  if [ -n "${_csc_failed_lines}" ]; then
+    _csc_body+=$'\n'"**Wave issues closed without merge / implementation-failed:**"$'\n'"${_csc_failed_lines}"$'\n'
+    _csc_body+=$'\n'"Project cannot complete until these are resolved (re-open, re-merge, or skip)."$'\n'
+  fi
+  _csc_body+=$'\n'"_The orchestrator poller updates this comment every cycle (~5 min) until the project completes. Marker: \`<!-- orchestrator:completion-status -->\`._"
+
+  update_completion_status_comment "${_completion_status_text}" "${_csc_body}" || true
+
+  # Once-per-project Telegram escalation when a wave PR has been closed
+  # without merging (or implementation-failed). The stall/review-blocked
+  # paths further down also surface their own alerts on specific
+  # failures, but this is the earliest deterministic signal — fire here
+  # so the operator sees the alert as soon as ANY_FAILED first goes
+  # true. Guarded by a state-file flag so we never alert more than once
+  # per project for the same condition.
+  if [ "${ANY_FAILED}" = "true" ]; then
+    _csc_alert_sent="$(jq -r '.completion_status_failure_alert_sent // false' "${STATE_FILE}" 2>/dev/null || echo false)"
+    if [ "${_csc_alert_sent}" != "true" ]; then
+      tg_notify "Project #${TRACKING_NUM}: one or more wave PR(s) closed without merge — see the pinned 'Completion status' comment on the tracking issue for the full list. The project cannot complete until these are resolved." "CRITICAL"
+      jq '.completion_status_failure_alert_sent = true' "${STATE_FILE}" > "${STATE_FILE}.tmp" \
+        && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    fi
+    unset _csc_alert_sent
+  fi
+
+  unset _completion_status_text _csc_integration_ahead_by _csc_integration_contained
+  unset _csc_total_waves _csc_current_wave _csc_pending_lines _csc_failed_lines _csc_body
 
   # Persist reconciled status decisions every cycle (not only narrow branches).
   RECONCILE_STATE_CHANGED=false
