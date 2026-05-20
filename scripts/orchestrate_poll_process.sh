@@ -12308,10 +12308,16 @@ fi
       ' 2>/dev/null)"; then
         echo "::warning::headPushedAt extraction failed during stall check; using empty fallback mapping." >&2
         _head_pushed_at_json='{}'
-      fi
-      [ -n "${_head_pushed_at_json}" ] || _head_pushed_at_json='{}'
-    fi
-    _stall_check_args+=(--head-pushed-at-json "${_head_pushed_at_json}")
+	      fi
+	      [ -n "${_head_pushed_at_json}" ] || _head_pushed_at_json='{}'
+	      if [ "${_head_pushed_at_json}" = "{}" ]; then
+	        _head_pushed_at_candidate_count="$(printf '%s' "${_current_wave_details_json}" | jq -r '[to_entries[] | select(.value.linked_pr != null and (.value.linked_pr | type == "object"))] | length' 2>/dev/null || printf '')"
+	        if [[ "${_head_pushed_at_candidate_count}" =~ ^[0-9]+$ ]] && [ "${_head_pushed_at_candidate_count}" -gt 0 ]; then
+	          echo "::warning::headPushedAt extraction produced an empty mapping for ${_head_pushed_at_candidate_count} linked PR candidate(s); using legacy stall-clock fallback." >&2
+	        fi
+	      fi
+	    fi
+	    _stall_check_args+=(--head-pushed-at-json "${_head_pushed_at_json}")
 
     STALLS_JSON="$(python3 scripts/orchestrate_lib.py check-stalls \
       "${_stall_check_args[@]}" 2>/dev/null || echo '{"ok":false,"stalls":[],"count":0}')"
@@ -12348,7 +12354,8 @@ fi
         # counts fall back to "?" and the diagnostic still prints,
         # but parse_error=true keeps that path distinguishable from a
         # genuinely empty cache.  The execute_stall_recovery_action(
-        # retrigger_review) in-flight review guard still protects the
+        # retrigger_review) defense-in-depth in-flight review guard still
+        # protects the
         # empty-commit push if the cache misses a live review run; this
         # logging just makes the cache state observable next time.
         (
