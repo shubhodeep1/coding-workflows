@@ -12163,12 +12163,22 @@ PRs to revert: ${REVERT_COUNT}"
 
   # ---------------------------------------------------------------
   # Hard guard: judge cannot declare "complete" while waves remain
-  # ---------------------------------------------------------------
-  if [ "${JUDGE_STATUS}" = "complete" ] && [ "${PROJECT_COMPLETE}" != "true" ]; then
-    echo "::warning::Judge returned 'complete' but project_complete=${PROJECT_COMPLETE} (wave ${CURRENT_WAVE}/${TOTAL_WAVES}). Overriding to 'in_progress'."
+  # pending. Integration drift (last wave merged but the integration
+  # branch is ahead of default) is intentionally NOT covered here —
+  # the complete) arm below calls finalize_integration_merge_if_needed,
+  # whose ahead_by re-check is the designed recovery path for that
+  # case. Folding
+  # integration_contained_in_default into this guard (via the
+  # PROJECT_COMPLETE flag added in PR #2778) creates a deadlock: the
+  # override flips the verdict before the complete) arm can run, so
+  # the drift never gets resolved, so the override fires again on the
+  # next poll. See bitsafe.io#325 for the regression.
+  if [ "${JUDGE_STATUS}" = "complete" ] \
+     && { [ "${WAVE_COMPLETE}" != "true" ] || [ "${CURRENT_WAVE}" -lt "${TOTAL_WAVES}" ]; }; then
+    echo "::warning::Judge returned 'complete' but project still has pending wave state (wave_complete=${WAVE_COMPLETE}; wave=${CURRENT_WAVE}/${TOTAL_WAVES}; project_complete=${PROJECT_COMPLETE} logged for context). Overriding to 'in_progress'."
     JUDGE_STATUS="in_progress"
     gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/comments" \
-      -f body="⚠️ Judge verdict overridden: \`complete\` → \`in_progress\` because wave ${CURRENT_WAVE}/${TOTAL_WAVES} is not the final wave. Advancing to next wave." >/dev/null
+      -f body="⚠️ Judge verdict overridden: \`complete\` → \`in_progress\` because the project still has pending wave state (wave_complete=${WAVE_COMPLETE}, wave=${CURRENT_WAVE}/${TOTAL_WAVES}). Waiting for remaining wave work before allowing project completion." >/dev/null
   fi
   fi
 
