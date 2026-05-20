@@ -12,6 +12,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -10083,12 +10084,25 @@ def main() -> int:
 	# (which, under a pipe on GitHub Actions, hides all progress until the
 	# process exits and can make a running suite look like a silent hang).
 	try:
-		import sys
 		sys.stdout.reconfigure(line_buffering=True)
 	except Exception:
 		pass
 
-	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	selected_names = list(sys.argv[1:])
+	tests_by_name = {
+		name: func
+		for name, func in sorted(globals().items())
+		if name.startswith("test_") and callable(func)
+	}
+	if selected_names:
+		missing = [name for name in selected_names if name not in tests_by_name]
+		for name in missing:
+			print(f"  FAIL  {name}: unknown test name", flush=True)
+		if missing:
+			return 1
+		test_funcs = [tests_by_name[name] for name in selected_names]
+	else:
+		test_funcs = list(tests_by_name.values())
 	passed = 0
 	failed = 0
 	for func in test_funcs:

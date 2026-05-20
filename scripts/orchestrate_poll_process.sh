@@ -12323,6 +12323,7 @@ fi
       "${_stall_check_args[@]}" 2>/dev/null || echo '{"ok":false,"stalls":[],"count":0}')"
 
     STALL_COUNT="$(echo "${STALLS_JSON}" | jq -r '.count')"
+    [[ "${STALL_COUNT}" =~ ^[0-9]+$ ]] || STALL_COUNT=0
 
     STALL_STATE_CHANGED=false
     STALL_HEALING_CHANGED=false

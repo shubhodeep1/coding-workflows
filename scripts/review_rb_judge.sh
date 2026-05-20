@@ -109,7 +109,7 @@ PY
       _emit_bytes="${_effective_cap}"
     fi
 
-    if [ -n "${_emit_bytes}" ] && [ "${_emit_bytes}" -gt 0 ] 2>/dev/null; then
+    if [[ "${_emit_bytes:-}" =~ ^[0-9]+$ ]] && [ "${_emit_bytes}" -gt 0 ]; then
       printf '%s\n' "$(( _used + _emit_bytes ))" > "${_state}" 2>/dev/null || true
     fi
   }
