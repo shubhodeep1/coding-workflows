@@ -53,8 +53,10 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import subprocess
 import shutil
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -70,6 +72,13 @@ def _rb_judge_text() -> str:
 
 def _review_autofix_text() -> str:
 	return REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
+
+
+def _rb_judge_local_sanitize_fallback_block() -> str:
+	src = _rb_judge_text()
+	start = src.index("if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then")
+	end = src.index("if ! command -v _init_prompt_budget >/dev/null 2>&1; then", start)
+	return src[start:end]
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +153,38 @@ def test_script_excludes_self_in_both_jq_branches() -> None:
 		f"object). Found {occurrences} occurrence(s) of "
 		f"`{expected}`; expected at least 2."
 	)
+
+
+def test_local_sanitize_fallback_warns_when_all_rewrite_paths_fail() -> None:
+	"""The local sanitize fallback keeps the shared helper's best-effort
+	contract, but degraded harnesses still need a warning when every rewrite
+	path fails so a later codex stdin error is diagnosable."""
+	with tempfile.TemporaryDirectory(prefix="rb_judge_sanitize_") as td:
+		prompt_file = Path(td) / "invalid_prompt.txt"
+		prompt_file.write_bytes(b"\xff\xfe\xfa")
+		result = subprocess.run(
+			[
+				"bash",
+				"-lc",
+				(
+					f"{_rb_judge_local_sanitize_fallback_block()}\n"
+					"iconv() { return 1; }\n"
+					"python3() { return 1; }\n"
+					f"sanitize_codex_prompt_file {shlex.quote(str(prompt_file))}\n"
+				),
+			],
+			cwd=str(REPO_ROOT),
+			capture_output=True,
+			text=True,
+			check=True,
+		)
+
+		assert prompt_file.read_bytes() == b"\xff\xfe\xfa"
+		assert "Local prompt sanitization fallback could not sanitize" in result.stderr, (
+			"scripts/review_rb_judge.sh must warn when the degraded local prompt "
+			"sanitizer exhausts both rewrite paths and has to leave the original "
+			"bytes in place."
+		)
 
 
 # ---------------------------------------------------------------------------

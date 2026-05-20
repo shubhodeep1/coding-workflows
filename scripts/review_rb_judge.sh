@@ -38,7 +38,9 @@ if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   # Keep prompt sanitization available even when gh_helpers.sh was not
   # sourced. Large-diff truncation can still fall back to a raw byte prefix,
   # and a no-op here would leave degraded harnesses vulnerable to invalid
-  # UTF-8 prompt files that codex rejects before the judge runs.
+  # UTF-8 prompt files that codex rejects before the judge runs. Keep the
+  # best-effort contract, but warn when every local rewrite path fails so a
+  # later codex stdin error is not opaque.
   sanitize_codex_prompt_file() {
     local _path="${1:-}"
     local _tmp=""
@@ -65,6 +67,8 @@ PY
       return 0
     fi
     rm -f "${_tmp}"
+    echo "::warning::Local prompt sanitization fallback could not sanitize '${_path}'; proceeding with original bytes." >&2
+    return 0
   }
 fi
 # Some harnesses stub only `_embed_input_file`; keep prompt-budget lifecycle
