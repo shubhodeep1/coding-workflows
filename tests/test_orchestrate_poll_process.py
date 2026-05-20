@@ -2249,6 +2249,61 @@ def test_complete_verdict_falls_through_to_finalize_on_integration_drift():
 	)
 
 
+def test_complete_verdict_enters_validation_and_finishes_after_integration_drift():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 350,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	first = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+	)
+	assert first["latest_state"]["status"] == "validating"
+	assert first["latest_state"]["validation_cycle"] == 1
+	assert "ai:validating" in first["tracking_labels"]
+	first_tracking_comments = [
+		str((c or {}).get("body", ""))
+		for c in first["issues"][str(192)]["comments"]
+	]
+	assert not any("Judge verdict overridden" in body for body in first_tracking_comments), (
+		"Validation-enabled drift must not trip the pending-wave override; "
+		f"got tracking comments: {first_tracking_comments!r}"
+	)
+	assert "Overriding to 'in_progress'" not in first["stdout"], (
+		"Validation-enabled drift must reach the complete verdict handler; "
+		f"stdout=\n{first['stdout']}"
+	)
+
+	second = _run_poller(
+		state=first["latest_state"],
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+	)
+	assert second["latest_state"]["status"] == "complete"
+	assert second["latest_state"]["validation_completed_cycle"] == 1
+	assert second["latest_state"]["final_merge_pr"] == 350
+	assert second["latest_state"]["final_merge_status"] == "merged"
+	assert "ai:validated" in second["tracking_labels"]
+
+
 def test_missing_integration_branch_marks_failed():
 	state = _base_state(status="in_progress")
 	state["integration_branch"] = "orchestrator/project-192"
