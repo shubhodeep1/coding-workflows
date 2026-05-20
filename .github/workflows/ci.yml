@@ -301,6 +301,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_rb_judge_label_propagation.py
 
+      - name: Review-blocked judge self-run exclusion regression tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_rb_judge_self_run_exclusion.py
+
       - name: Summariser sandbox-mode pin contract test
         run: |
           set -euo pipefail

@@ -844,6 +844,38 @@ def test_parse_iso8601_to_epoch_handles_common_shapes_and_failures():
 		orchestrate_lib.datetime = original_datetime
 		_FakeParsedDatetime.error_cls = OverflowError
 
+def test_parse_iso8601_to_epoch_fails_open_on_timestamp_conversion_errors():
+	"""``datetime.timestamp()`` can raise platform-specific conversion errors.
+
+	The helper's fail-open contract must treat those the same as parse errors.
+	"""
+	original_datetime = orchestrate_lib.datetime
+
+	def _fake_datetime_module(exc_type):
+		class _FakeDatetimeModule:
+			@staticmethod
+			def fromisoformat(_s):
+				class _FakeDT:
+					tzinfo = object()
+
+					def replace(self, **_kwargs):
+						return self
+
+					def timestamp(self):
+						raise exc_type("boom")
+
+				return _FakeDT()
+
+		return _FakeDatetimeModule
+
+	try:
+		for exc_type in (OverflowError, OSError):
+			orchestrate_lib.datetime = _fake_datetime_module(exc_type)
+			assert orchestrate_lib._parse_iso8601_to_epoch("2023-11-14T21:43:20Z") is None
+	finally:
+		orchestrate_lib.datetime = original_datetime
+
+
 def test_cmd_check_stalls_parses_head_pushed_at_json_and_threads_it_through(tmp_path=None):
 	"""``cmd_check_stalls`` must accept ``--head-pushed-at-json`` and pass
 	the parsed mapping into ``detect_stalls``.  Validates the CLI wiring

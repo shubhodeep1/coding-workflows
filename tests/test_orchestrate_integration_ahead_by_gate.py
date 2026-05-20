@@ -596,7 +596,6 @@ def test_finalize_skips_recheck_when_superseded_by_main(tmp_path):
 	final_state = json.loads(json_line)
 	assert final_state["final_merge_status"] == "superseded-by-main"
 
-
 def _invoke_test(func) -> None:
 	params = list(inspect.signature(func).parameters)
 	if not params:
@@ -643,8 +642,8 @@ def main(argv: list[str] | None = None) -> int:
 			_invoke_test(func)
 			print(f"  PASS  {name}", flush=True)
 			passed += 1
-		except Exception as e:
-			print(f"  FAIL  {name}: {e}", flush=True)
+		except Exception as exc:
+			print(f"  FAIL  {name}: {exc}", flush=True)
 			failed += 1
 
 	print(f"\n{passed} passed, {failed} failed, {passed + failed} total", flush=True)

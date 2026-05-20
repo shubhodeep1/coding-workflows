@@ -1250,7 +1250,12 @@ _hb_tmpdir=""
 _hb_fifo=""
 trap '[ -n "${_hb_tmpdir:-}" ] && rm -rf "${_hb_tmpdir}" 2>/dev/null || true' EXIT
 
-_REFUSAL_REGEX="I'?m sorry,? but I (can ?not|can.?t) assist|I (can ?not|can.?t) help with that"
+# Match only standalone OpenAI-style refusal lines, not incidental prose in
+# an otherwise-valid structured summary (for example an Ignored suggestions
+# bullet explaining it can't help with one suggestion). The success-path
+# validator and the retry-loop short-circuit share this anchored pattern so
+# the two checks stay in lockstep without false-positive rejection.
+_REFUSAL_REGEX="(^I'?m sorry,? but I (can ?not|can.?t) assist( with that request)?\\.?$|^I (can ?not|can.?t) help with that( request)?\\.?$)"
 rm -f "${PREVIOUS_REVIEWS_DIR}/editor_refused.flag" 2>/dev/null || true
 
 attempt=1
@@ -1725,8 +1730,7 @@ else
   else
     _runtime_failure_path_line="- unavailable (editor fallback)"
   fi
-  {
-    cat <<'__EDITOR_SUMMARY__'
+  cat > "${EDITOR_SUMMARY_FILE}" <<__EDITOR_SUMMARY__
 Changes made:
 - none (editor failed before producing a validated summary)
 
@@ -1749,9 +1753,8 @@ Regression fingerprint:
 - unavailable (editor fallback)
 
 Runtime failure path:
+${_runtime_failure_path_line}
 __EDITOR_SUMMARY__
-    printf '%s\n' "${_runtime_failure_path_line}"
-  } > "${EDITOR_SUMMARY_FILE}"
   unset _runtime_failure_path_line
   echo "Editor failed after retries; continuing with fallback summary."
 fi

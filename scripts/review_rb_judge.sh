@@ -35,7 +35,62 @@ if ! command -v gh_retry >/dev/null 2>&1; then
   gh_retry() { "$@"; }
 fi
 if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
-  sanitize_codex_prompt_file() { :; }
+  # Keep prompt sanitization available even when gh_helpers.sh was not
+  # sourced. Large-diff truncation can still fall back to a raw byte prefix,
+  # and a no-op here would leave degraded harnesses vulnerable to invalid
+  # UTF-8 prompt files that codex rejects before the judge runs. Keep the
+  # best-effort contract, but warn whenever the fallback cannot leave
+  # sanitized bytes on disk so a later codex stdin error is not opaque.
+  sanitize_codex_prompt_file() {
+    local _path="${1:-}"
+    local _tmp=""
+    local _sanitize_warn="::warning::Local prompt sanitization fallback could not sanitize '${_path}'; proceeding with original bytes."
+    [ -n "${_path}" ] && [ -f "${_path}" ] || return 0
+    _tmp="$(mktemp "${_path}.utf8XXXXXX" 2>/dev/null)" || {
+      echo "${_sanitize_warn}" >&2
+      return 0
+    }
+    if command -v iconv >/dev/null 2>&1; then
+      iconv -f UTF-8 -t UTF-8//IGNORE < "${_path}" > "${_tmp}" 2>/dev/null || true
+      if [ -s "${_tmp}" ] || [ ! -s "${_path}" ]; then
+        mv "${_tmp}" "${_path}" 2>/dev/null || {
+          rm -f "${_tmp}"
+          echo "${_sanitize_warn}" >&2
+          return 0
+        }
+        return 0
+      fi
+      : > "${_tmp}" 2>/dev/null || { rm -f "${_tmp}"; echo "${_sanitize_warn}" >&2; return 0; }
+    fi
+    if command -v python3 >/dev/null 2>&1 && python3 - "${_path}" "${_tmp}" <<'PY' 2>/dev/null
+from pathlib import Path
+import sys
+
+src = Path(sys.argv[1])
+dst = Path(sys.argv[2])
+dst.write_bytes(src.read_bytes().decode("utf-8", "ignore").encode("utf-8"))
+PY
+    then
+      mv "${_tmp}" "${_path}" 2>/dev/null || {
+        rm -f "${_tmp}"
+        echo "${_sanitize_warn}" >&2
+        return 0
+      }
+      return 0
+    fi
+    rm -f "${_tmp}"
+    echo "${_sanitize_warn}" >&2
+    return 0
+  }
+fi
+# Some harnesses stub only `_embed_input_file`; keep prompt-budget lifecycle
+# helpers safe in that degraded mode so prompt assembly / EXIT cleanup do not
+# fail when budgeting support is unavailable.
+if ! command -v _init_prompt_budget >/dev/null 2>&1; then
+  _init_prompt_budget() { :; }
+fi
+if ! command -v _cleanup_prompt_budget >/dev/null 2>&1; then
+  _cleanup_prompt_budget() { :; }
 fi
 if ! command -v _embed_input_file >/dev/null 2>&1; then
   : "${_PROMPT_BUDGET_TOTAL_BYTES:=800000}"

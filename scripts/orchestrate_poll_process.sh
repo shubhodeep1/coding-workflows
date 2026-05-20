@@ -12355,8 +12355,8 @@ fi
         # counts fall back to "?" and the diagnostic still prints,
         # but parse_error=true keeps that path distinguishable from a
         # genuinely empty cache.  The execute_stall_recovery_action(
-        # retrigger_review) defense-in-depth in-flight review guard still
-        # protects the
+        # retrigger_review) defense-in-depth in-flight review guard
+        # still protects the
         # empty-commit push if the cache misses a live review run; this
         # logging just makes the cache state observable next time.
         (
