@@ -254,13 +254,14 @@ with open(ledger_path, "r", encoding="utf-8", errors="replace") as fh:
 
 def is_safe_split(line: str, prev_line: str) -> bool:
 	# Safe split points (start of the upcoming line creates a new chunk):
-	#  1. New finding bullet inside the CONSENSUS block. Each finding
-	#     bullet has the canonical form
+	#  1. New finding bullet inside the CONSENSUS or CONSENSUS TASK GAPS block.
+	#     Each finding bullet has the canonical form
 	#       "- {file}:{line_range} | severity=... | confidence=..."
-	#     so we additionally require ':' on the line — this rejects
-	#     prose sub-lists like "- this is a nested bullet" that a model
-	#     might emit inside PROBLEM: or WHY: text and which would
-	#     otherwise cause a false split mid-finding.
+	#     and each task-gap bullet starts "- requirement:", so we additionally
+	#     require ':' on the line — this rejects prose sub-lists like
+	#     "- this is a nested bullet" that a model might emit inside PROBLEM:,
+	#     WHY:, or EVIDENCE: text and which would otherwise cause a false split
+	#     mid-finding.
 	#  2. New per-reviewer section start.
 	#  3. Per-reviewer section closing sentinel, so the closer can move
 	#     to the next chunk when a reviewer block straddles a boundary
@@ -268,6 +269,9 @@ def is_safe_split(line: str, prev_line: str) -> bool:
 	#     "=== END FINDINGS FROM <slug> ===" line and force a false
 	#     oversize error).
 	#  4. The consensus block's closing sentinel, same reasoning.
+	#  5. The task-gaps consensus block's opening and closing sentinels,
+	#     same reasoning as #4 — a very large TASK GAPS block must not
+	#     overflow a chunk on its bare sentinel lines.
 	if line.startswith("- ") and ":" in line:
 		return True
 	if line.startswith("=== FINDINGS FROM "):
@@ -275,6 +279,10 @@ def is_safe_split(line: str, prev_line: str) -> bool:
 	if line.startswith("=== END FINDINGS FROM "):
 		return True
 	if line.startswith("=== END CONSENSUS FINDINGS ==="):
+		return True
+	if line.startswith("=== CONSENSUS TASK GAPS ==="):
+		return True
+	if line.startswith("=== END CONSENSUS TASK GAPS ==="):
 		return True
 	return False
 

@@ -145,6 +145,15 @@ OUTPUT FORMAT (sentinel-delimited, in this exact order, nothing before or after)
 - ...
 === END CONSENSUS FINDINGS ===
 
+=== CONSENSUS TASK GAPS ===
+- requirement: <verbatim quote or close paraphrase from the LINKED ISSUE / PR DESCRIPTION>
+  expected_change_site: <file or symbol where the missing implementation belongs>
+  confidence=[1-5]
+  flagged_by: [<reviewer_slug>, <reviewer_slug>, ...]
+  EVIDENCE: which file(s) / symbol(s) / hunk(s) should contain the implementation but do not
+- ...
+=== END CONSENSUS TASK GAPS ===
+
 === FINDINGS FROM <reviewer_slug_1> ===
 - {file}:{line_range} | severity=... | confidence=...
   PROBLEM: ...
@@ -153,7 +162,12 @@ OUTPUT FORMAT (sentinel-delimited, in this exact order, nothing before or after)
 
 (one per-reviewer section per input block, in input order)
 
-Deduplication rules for the consensus block:
+How to bucket reviewer entries:
+- Entries that follow the standard reviewer issue shape (File:/Line or code reference:/Problem:/Why it fails at runtime:/ISSUE_CONFIDENCE:) belong in CONSENSUS FINDINGS.
+- Entries emitted under a reviewer's "TASK COMPLETENESS / INTENT GAPS" checklist heading, or that follow the TASK_GAP shape (Requirement:/Expected change site:/Evidence of absence:/ISSUE_CONFIDENCE:), belong in CONSENSUS TASK GAPS. Do NOT shoehorn a TASK_GAP into CONSENSUS FINDINGS just because it lacks a file:line.
+- Always emit BOTH blocks even when one is empty; the empty body is the single line "(No findings reported.)" or "(No task gaps reported.)".
+
+Deduplication rules for the CONSENSUS FINDINGS block:
 1. Two findings are duplicates when they refer to the same file AND their line
    ranges overlap OR abut within 5 lines AND they describe the same root cause
    (same class of bug — e.g. both "null-deref on req.user", not merely "bug on
@@ -164,10 +178,22 @@ Deduplication rules for the consensus block:
 3. Findings from ONE reviewer still appear in CONSENSUS with flagged_by: [that_slug].
    Do not suppress singletons.
 
+Deduplication rules for the CONSENSUS TASK GAPS block:
+3a. Two task gaps are duplicates when they describe the same missing deliverable
+    (same requirement intent — e.g. both "phone-format validator missing", not merely
+    "something missing in user_importer.py") AND they name the same expected change
+    site (same file OR same symbol). When in doubt, do NOT merge; emit separately.
+3b. When merging task gaps, union flagged_by. confidence = max across reviewers.
+    Keep the clearest requirement phrasing and the most specific expected_change_site.
+    Union the EVIDENCE lines into one comma-separated statement.
+3c. Singleton task gaps still appear in CONSENSUS TASK GAPS with flagged_by: [that_slug].
+    Do not suppress them just because only one reviewer surfaced the gap.
+
 Per-reviewer sections:
-4. Preserve EVERY distinct finding from each input block. If space is tight,
-   prefer high-severity / high-confidence first; NEVER drop silently — collapse
-   related items into a single bullet suffixed "(N related items)".
+4. Preserve EVERY distinct finding from each input block, including TASK_GAP entries
+   in their original TASK_GAP shape. If space is tight, prefer high-severity /
+   high-confidence first; NEVER drop silently — collapse related items into a
+   single bullet suffixed "(N related items)".
 5. Keep file paths and line numbers verbatim. Do not guess.
 6. Do not invent severity or confidence. Omit the field if the source did not
    state one.
@@ -177,7 +203,7 @@ Per-reviewer sections:
 Global constraints:
 8. No prose. No preambles. No markdown headers other than the === sentinels.
 9. Target total length <= ${target_lines} lines. Count before replying; compress
-   per-reviewer sections further (never the CONSENSUS block) if over.
+   per-reviewer sections further (never the CONSENSUS or CONSENSUS TASK GAPS blocks) if over.
 10. Emit nothing after the final === END FINDINGS FROM <last_slug> === line.
 
 --- BEGIN INPUTS ---
