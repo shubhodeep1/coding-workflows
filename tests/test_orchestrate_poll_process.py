@@ -2194,9 +2194,10 @@ def test_complete_verdict_falls_through_to_finalize_on_integration_drift():
 	``in_progress`` whenever the integration branch had drifted ahead of
 	default (``ahead_by > 0``) — even when every wave issue was merged.
 	The override blocked the only per-tick caller of
-	``finalize_integration_merge_if_needed`` (the ``complete)`` arm at
-	L12101), which is the function PR #2778 itself extended (L3986-4006)
-	to clear the stale ``merged`` pin and reopen a fresh final PR. The
+	``finalize_integration_merge_if_needed`` (the ``complete)`` arm in the
+	main judge-verdict handler), while PR #2778 had extended
+	``finalize_integration_merge_if_needed`` itself to clear the stale
+	``merged`` pin and reopen a fresh final PR. The
 	two mechanisms gated each other and the orchestrator looped forever.
 
 	This test pins ``compare_ahead_by=5`` (integration drift) with every
@@ -2252,6 +2253,7 @@ def test_complete_verdict_falls_through_to_finalize_on_integration_drift():
 def test_complete_verdict_enters_validation_and_finishes_after_integration_drift():
 	state = _base_state(status="in_progress")
 	state["integration_branch"] = "orchestrator/project-192"
+	state["validation_cycle"] = 2
 	prs = [
 		{
 			"number": 350,
@@ -2272,7 +2274,9 @@ def test_complete_verdict_enters_validation_and_finishes_after_integration_drift
 		compare_ahead_by=5,
 	)
 	assert first["latest_state"]["status"] == "validating"
-	assert first["latest_state"]["validation_cycle"] == 1
+	assert first["latest_state"]["validation_cycle"] == 2
+	assert first["latest_state"]["final_merge_status"] == "pending"
+	assert first["latest_state"].get("validation_completed_cycle") is None
 	assert "ai:validating" in first["tracking_labels"]
 	first_tracking_comments = [
 		str((c or {}).get("body", ""))
@@ -2298,7 +2302,8 @@ def test_complete_verdict_enters_validation_and_finishes_after_integration_drift
 		compare_ahead_by=5,
 	)
 	assert second["latest_state"]["status"] == "complete"
-	assert second["latest_state"]["validation_completed_cycle"] == 1
+	assert second["latest_state"]["validation_cycle"] == 2
+	assert second["latest_state"]["validation_completed_cycle"] == 2
 	assert second["latest_state"]["final_merge_pr"] == 350
 	assert second["latest_state"]["final_merge_status"] == "merged"
 	assert "ai:validated" in second["tracking_labels"]
