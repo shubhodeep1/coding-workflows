@@ -791,8 +791,13 @@ The reviewer consensus content (already inlined above as ${REVIEWER_CONSENSUS_FI
 - a "=== CONSENSUS FINDINGS ===" block with cross-reviewer-deduplicated findings
   (each entry lists "flagged_by: [reviewer_slug, ...]" — >=2 slugs ⇒ higher
   confidence; a single slug ⇒ one reviewer only, potentially speculative),
+- a "=== CONSENSUS TASK GAPS ===" block listing unmet deliverables from the
+  LINKED ISSUE / PR DESCRIPTION that the PR diff does not implement (each entry
+  carries "requirement", "expected_change_site", "confidence", "flagged_by",
+  and "EVIDENCE" fields; the defect IS absence of code at the expected site),
 - per-reviewer "=== FINDINGS FROM <slug> ===" sections for traceability.
 Prioritize addressing findings flagged by multiple reviewers first.
+Treat CONSENSUS TASK GAPS entries as first-class WILL_FIX work alongside CONSENSUS FINDINGS: the LINKED ISSUE describes what the PR is supposed to deliver, so an unmet requirement is a real defect — implement the missing change at the named expected_change_site (or cite the LINKED ISSUE's own deferral if the requirement is explicitly tracked elsewhere). If a gap genuinely cannot be implemented in this iteration (e.g. it requires schema changes that conflict with §10 contracts), record it under "Ignored suggestions (with short reason):" with the prefix "TASK_GAP_DEFERRED:" so the next iteration sees the rationale.
 
 PR DISCUSSION COMMENT SIGNAL
 The PR discussion content is already inlined above as ${PR_ALL_COMMENTS_CONTEXT_FILE}.
@@ -1667,7 +1672,8 @@ else
   else
     _runtime_failure_path_line="- unavailable (editor fallback)"
   fi
-  cat > "${EDITOR_SUMMARY_FILE}" <<__EDITOR_SUMMARY__
+  {
+    cat <<'__EDITOR_SUMMARY__'
 Changes made:
 - none (editor failed before producing a validated summary)
 
@@ -1690,8 +1696,9 @@ Regression fingerprint:
 - unavailable (editor fallback)
 
 Runtime failure path:
-${_runtime_failure_path_line}
 __EDITOR_SUMMARY__
+    printf '%s\n' "${_runtime_failure_path_line}"
+  } > "${EDITOR_SUMMARY_FILE}"
   unset _runtime_failure_path_line
   echo "Editor failed after retries; continuing with fallback summary."
 fi

@@ -343,6 +343,7 @@ RESOLVER_MARKER_VIOLATIONS_FILE="${RUNTIME_DIR}/resolver_marker_violations.txt"
 RESOLVER_FP_VIOLATIONS_FILE="${RUNTIME_DIR}/resolver_fp_violations.txt"
 RESOLVER_FP_VIOLATIONS_PREV_FILE="${RUNTIME_DIR}/resolver_fp_violations_prev.txt"
 RESOLVER_FP_VERIFIER_OUTPUT_FILE="${RUNTIME_DIR}/resolver_fp_verifier_output.txt"
+RESOLVER_FP_BASELINE_STATE_FILE="${RUNTIME_DIR}/resolver_fp_baseline_state.json"
 
 # Snapshot every in-scope file (the resolver's allowlist, which
 # prepare step populated with git-marked unmerged paths plus the
@@ -427,6 +428,39 @@ if [ -f "${RESOLVER_ALLOWLIST_FILE}" ] && [ -s "${RESOLVER_ALLOWLIST_FILE}" ]; t
   _snap_missing_count="$(wc -l < "${RESOLVER_ATTEMPT_BASE_MISSING_FILE}" | tr -d '[:space:]')"
   echo "Resolver retry-base snapshot captured: ${_snap_count} file(s), ${_snap_missing_count} allowlist path(s) absent at snapshot time (delete/rename conflicts — will be re-deleted on restore)."
 fi
+
+_capture_fingerprints_baseline()
+{
+  rm -f "${RESOLVER_FP_BASELINE_STATE_FILE}" 2>/dev/null || true
+  if [ "${IS_INTEGRATION_SYNC:-false}" != "true" ]; then
+    return 0
+  fi
+  if [ -z "${INTEGRATION_FINGERPRINTS_FILE:-}" ] || [ ! -f "${INTEGRATION_FINGERPRINTS_FILE}" ]; then
+    return 0
+  fi
+  if [ ! -f "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" ]; then
+    return 0
+  fi
+  _fp_size="$(wc -c < "${INTEGRATION_FINGERPRINTS_FILE}" 2>/dev/null || echo 0)"
+  if [ "${_fp_size}" -le 2 ]; then
+    return 0
+  fi
+  local _baseline_capture_exit=0
+  INTEGRATION_BRANCH_NAME="${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
+    python3 "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
+      --baseline-fingerprints-state "${RESOLVER_FP_BASELINE_STATE_FILE}" \
+      "${INTEGRATION_FINGERPRINTS_FILE}" || _baseline_capture_exit=$?
+  if [ "${_baseline_capture_exit}" -ne 0 ] || [ ! -s "${RESOLVER_FP_BASELINE_STATE_FILE}" ]; then
+    rm -f "${RESOLVER_FP_BASELINE_STATE_FILE}" 2>/dev/null || true
+    if [ "${_baseline_capture_exit}" -ne 0 ]; then
+      echo "::warning::baseline capture failed (exit ${_baseline_capture_exit}); falling back to absolute fingerprint verification."
+    else
+      echo "::warning::baseline capture unavailable; falling back to absolute fingerprint verification."
+    fi
+  fi
+}
+
+_capture_fingerprints_baseline
 
 # _restore_attempt_base: restore every snapshotted allowlist file to
 # its post-merge-replay content.  Used between retries so each
@@ -638,8 +672,15 @@ _verify_fingerprints_soft() {
   if [ ! -f "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" ]; then
     return 0
   fi
+  local _verifier_args=()
+  if [ -s "${RESOLVER_FP_BASELINE_STATE_FILE:-/nonexistent}" ]; then
+    _verifier_args+=(
+      --compare-against-baseline "${RESOLVER_FP_BASELINE_STATE_FILE}"
+    )
+  fi
   INTEGRATION_BRANCH_NAME="${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
     python3 "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
+      "${_verifier_args[@]}" \
       "${INTEGRATION_FINGERPRINTS_FILE}" \
       > "${RESOLVER_FP_VERIFIER_OUTPUT_FILE}" 2>&1 || RESOLVER_FP_EXIT=$?
   # Extract per-violation lines and strip the annotation prefix so
@@ -1155,8 +1196,15 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
        && [ -f "${INTEGRATION_FINGERPRINTS_FILE}" ] \
        && [ -f "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" ]; then
       _final_fp_exit=0
+      _final_verifier_args=()
+      if [ -s "${RESOLVER_FP_BASELINE_STATE_FILE:-/nonexistent}" ]; then
+        _final_verifier_args+=(
+          --compare-against-baseline "${RESOLVER_FP_BASELINE_STATE_FILE}"
+        )
+      fi
       INTEGRATION_BRANCH_NAME="${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
         python3 "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
+          "${_final_verifier_args[@]}" \
           "${INTEGRATION_FINGERPRINTS_FILE}" || _final_fp_exit=$?
       if [ "${_final_fp_exit}" -eq 1 ]; then
         echo "::error::Aborting [ai-merge-resolve] commit: integration fingerprint verification rejected the resolver output."

@@ -39,15 +39,12 @@ import inspect
 import io
 import json
 import os
-import shutil
 import subprocess
+import sys
 import tempfile
 import textwrap
 from contextlib import redirect_stdout
 from pathlib import Path
-
-import sys
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
@@ -602,37 +599,58 @@ def test_finalize_skips_recheck_when_superseded_by_main(tmp_path):
 	assert final_state["final_merge_status"] == "superseded-by-main"
 
 
-def main() -> int:
-	# CI runs repo tests via `python3 tests/<file>.py`, not pytest discovery.
-	test_funcs = [
-		(name, func)
+def _invoke_test(func) -> None:
+	params = list(inspect.signature(func).parameters)
+	if not params:
+		func()
+		return
+	if params == ["tmp_path"]:
+		with tempfile.TemporaryDirectory(prefix=f"{func.__name__}_") as td:
+			func(Path(td))
+		return
+	raise TypeError(f"unsupported direct-run parameters: {params}")
+
+
+def main(argv: list[str] | None = None) -> int:
+	"""Direct ``python3 tests/<file>.py`` entrypoint.
+
+	The repo's CI/release allowlists execute tests via explicit
+	``python3 tests/test_*.py`` calls rather than pytest discovery, so this
+	module needs a small fixture shim for the ``tmp_path``-style tests.
+	"""
+	selected_names = list(sys.argv[1:] if argv is None else argv)
+	try:
+		sys.stdout.reconfigure(line_buffering=True)
+	except Exception:
+		pass
+
+	tests_by_name = {
+		name: func
 		for name, func in sorted(globals().items())
 		if name.startswith("test_") and callable(func)
-	]
+	}
+	if selected_names:
+		missing = [name for name in selected_names if name not in tests_by_name]
+		for name in missing:
+			print(f"  FAIL  {name}: unknown test name", flush=True)
+		if missing:
+			return 1
+		named_tests = [(name, tests_by_name[name]) for name in selected_names]
+	else:
+		named_tests = list(tests_by_name.items())
+
 	passed = 0
 	failed = 0
-	for name, func in test_funcs:
-		tmpdir = None
-		kwargs = {}
+	for name, func in named_tests:
 		try:
-			sig = inspect.signature(func)
-			params = list(sig.parameters)
-			if params == ["tmp_path"]:
-				tmpdir = tempfile.mkdtemp(prefix="test_orch_integration_ahead_by_gate_")
-				kwargs["tmp_path"] = Path(tmpdir)
-			elif params:
-				raise TypeError(f"unsupported test signature: {name}{sig}")
-			func(**kwargs)
-			print(f"  PASS  {name}")
+			_invoke_test(func)
+			print(f"  PASS  {name}", flush=True)
 			passed += 1
-		except Exception as exc:
-			print(f"  FAIL  {name}: {exc}")
+		except Exception as e:
+			print(f"  FAIL  {name}: {e}", flush=True)
 			failed += 1
-		finally:
-			if tmpdir is not None:
-				shutil.rmtree(tmpdir, ignore_errors=True)
 
-	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total", flush=True)
 	return 1 if failed > 0 else 0
 
 
