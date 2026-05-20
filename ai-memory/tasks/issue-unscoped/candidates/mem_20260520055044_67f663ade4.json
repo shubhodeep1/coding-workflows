@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:12103-12106 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The judge-complete guard ends with an extra `fi`.\n  WHY: Both reviewers identified a duplicated closing `fi` in the same shell block; one said bash accepts it, while the other warned some shells or analyzers may treat it as a syntax/control-flow error.\n- scripts/orchestrate_poll_process.sh:12093-12103 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The inline comment still points to obsolete `L3986-4006` references.\n  WHY: Both reviewers saw stale line-number references in the script comment; one said the reference was already removed elsewhere, but the comment itself remains misleading.\n- tests/test_orchestrate_poll_process.py:2150-2225 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The regression test only exercises `enable_validation=\"false\"` and leaves the validation-complete drift path untested.\n  WHY: Both reviewers said the test covers the fallback path rather than the original validation-enabled trigger, so a future refactor could reintroduce the deadlock without failing this test.\n- scripts/orchestrate_poll_process.sh:12093-12094 | confidence=1\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The comment line wrap splits a sentence awkwardly.\n  WHY: The reviewer described it as cosmetic with no runtime impact.\n- tests/test_orchestrate_poll_process.py:2147-2186 | confidence=2\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The new 2-wave test depends on `_base_state` implicitly producing a merged wave-1 issue instead of asserting that precondition.\n  WHY: The reviewer said the setup is brittle if `_base_state` changes because the test relies on hidden base-state behavior.\n- scripts/orchestrate_poll_process.sh:12098-12103 | confidence=1\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The warning log and the GitHub comment body use different separators for the same variables.\n  WHY: The reviewer said this is only a cosmetic/log-parsing inconsistency because both outputs are functionally correct.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:12093-12094 | confidence=1\n  PROBLEM: The comment line wrap splits a sentence awkwardly.\n  WHY: It is purely cosmetic and has no runtime effect.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/orchestrate_poll_process.sh:12103-12103 | confidence=4\n  PROBLEM: The narrowed override guard ends with two `fi`s, which the reviewer says could be parsed as an imbalance in some shells.\n  WHY: The reviewer warned that although POSIX/bash-like shells often accept it, edge environments or static analysis may treat the extra `fi` as a syntax/control-flow error.\n- scripts/orchestrate_poll_process.sh:12098-12103 | confidence=5\n  PROBLEM: The inline rationale still mentions obsolete `L3986-4006` line numbers.\n  WHY: The reviewer said those references no longer match the refactored code and mislead maintainers debugging drift issues.\n- tests/test_orchestrate_poll_process.py:2150-2157 | confidence=4\n  PROBLEM: The regression test hard-codes `enable_validation=\"false\"` and does not execute the validation-complete path that triggered the original deadlock.\n  WHY: The reviewer said this leaves the exact original path untested, so future changes to validation logic could regress without a failing test.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_orchestrate_poll_process.py:2147-2186 | confidence=2\n  PROBLEM: The new 2-wave test depends on `_base_state` implicitly producing a merged wave-1 issue instead of asserting that precondition.\n  WHY: The reviewer said the setup is brittle if `_base_state` changes because the test relies on hidden base-state behavior.\n- scripts/orchestrate_poll_process.sh:12098-12103 | confidence=1\n  PROBLEM: The warning log and the GitHub comment body use different separators for the same variables.\n  WHY: The reviewer said this is only a cosmetic/log-parsing inconsistency because both outputs are functionally correct.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/orchestrate_poll_process.sh:12106-12106 | confidence=5\n  PROBLEM: The judge-complete guard ends with an extra `fi`.\n  WHY: The reviewer said the duplicated closing `fi` can produce syntax/control-flow errors in some shells or environments.\n- tests/test_orchestrate_poll_process.py:~2166-2210 | confidence=4\n  PROBLEM: The regression test hard-codes `enable_validation=\"false\"` and does not exercise the validation-complete drift path that originally deadlocked.\n  WHY: The reviewer said the exact original path remains untested, so a future refactor could reintroduce the bug without tripping this regression.\n- scripts/orchestrate_poll_process.sh:12093-12096 | confidence=4\n  PROBLEM: The inline comment still points to stale `L3986-4006` / PR #2778 internals.\n  WHY: The reviewer said the outdated reference misleads operators and delays debugging of future drift issues.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "1a631f4d2956d81b5036a21c24278e55daec0674c2e06723b040d8f4bb9fb7bb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2798,
+    "run_id": "26143031259",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26143031259",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260520055044_67f663ade4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2798,
+    "run_id": "26143031259"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 6 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-20T05:50:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
