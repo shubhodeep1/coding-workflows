@@ -425,3 +425,85 @@ No `TODO` / `FIXME` / `HACK` markers were found under `.github/workflows` or `sc
 | Code modularization | 8 | Large |
 | Expression size reduction | 0 | Small |
 | Medium/Low fixes | 10 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-20)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlap is proven local enough to collapse without changing scope, filters, retries, or caller behavior; `NEEDS_VERIFICATION` means the overlap is real but a human must confirm semantics before changing it; `RISKY_SKIP` means the redundancy is visible but sits in a loop/race/poller path that this pass is not authorized to auto-implement.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001 — NEEDS_VERIFICATION
+- **File path and line ranges:** `.github/workflows/test-and-mark-stable.yml:443-449`
+- **Current call count:** `2`
+- **Proposed call count:** `1`
+- **Endpoint(s):** `POST /repos/{repo}/issues`; `GET /repos/{repo}/issues/{issue_number}`
+- **Evidence:** The `"Create E2E test issue"` step creates the issue, extracts only `.number`, then immediately re-reads the created issue just to get `.html_url`.
+  ```bash
+  ISSUE_NUMBER=$(gh api "repos/${TEST_REPO}/issues" \
+    -f title="${TITLE}" \
+    -f body="${BODY}" \
+    --jq '.number')
+
+  ISSUE_URL=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" --jq '.html_url')
+  ```
+- **Proposed fix:** In the `"Create E2E test issue"` step, capture the create response once (for example `ISSUE_JSON="$(gh api ...)"`), then extract both `.number` and `.html_url` from that payload.
+- **Safety rationale:** Same step, same created resource, and no intervening mutation, but collapsing POST+GET into one POST changes the step’s failure surface, so it is not `SAFE_TO_MERGE` without verification.
+- **Downstream signal:** Verify on the repo’s installed `gh` version that `POST /repos/{repo}/issues` always returns both `.number` and `.html_url`, and confirm no gate/cleanup logic relies on the current follow-up GET failure mode before removing it.
+
+#### MERGE-002 — RISKY_SKIP
+- **File path and line ranges:** `.github/workflows/test-and-mark-stable.yml:2810-2835`
+- **Current call count:** `1` initial workflow-runs lookup plus `2` `GET /actions/runs/{run_id}` calls per poll iteration (up to `240` over the 600s wait budget)
+- **Proposed call count:** `1` initial workflow-runs lookup plus `1` `GET /actions/runs/{run_id}` call per poll iteration (up to `120`)
+- **Endpoint(s):** `GET /repos/{repo}/actions/workflows/internal-cancel-on-pr-close.yml/runs`; `GET /repos/{repo}/actions/runs/{run_id}`
+- **Evidence:** In `"Phase 7: Close PR and verify cancel_on_pr_close fires"`, the closed-PR wait loop re-reads the same run resource twice each pass.
+  ```bash
+  EXISTING_STATUS=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" \
+    --jq '.status // ""' 2>/dev/null || echo "")
+  EXISTING_CONCLUSION=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" \
+    --jq '.conclusion // ""' 2>/dev/null || echo "")
+  ```
+- **Proposed fix:** Replace the paired reads with one `EXISTING_RUN_JSON` fetch per iteration and extract both `status` and `conclusion` from that snapshot.
+- **Safety rationale:** This call sits inside a poll/backoff loop in a release-gate workflow, which forces a `RISKY_SKIP` tag under the audit rules.
+- **Downstream signal:** Do not auto-implement; manually test the Phase 7 timeout/backoff path with slow and failed `cancel_on_pr_close` runs before collapsing the two per-iteration reads into one.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001 — SAFE_TO_MERGE
+- **File path and line ranges:** `scripts/review_rb_judge.sh:353-370` and `scripts/review_rb_judge.sh:385-388`
+- **Current call count:** `2` `GET /pulls/{pr}` calls on the `ISSUE_NUMBERS=""` fallback path
+- **Proposed call count:** `1` in the normal fallback path (`2` only if the preserved fail-open fallback is kept for an unusable `_pr_meta`)
+- **Endpoint(s):** `GET /repos/{repo}/pulls/{pull_number}`
+- **Evidence:** The script already fetches full PR JSON into `_pr_meta`, parses state/merged, then unsets it; if GraphQL yields no linked issues, it re-fetches the same PR only to join title/body.
+  ```bash
+  _pr_meta="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
+  _pr_state="$(printf '%s\n' "${_pr_meta}" | jq -r '.state // ""')"
+  _pr_merged="$(printf '%s\n' "${_pr_meta}" | jq -r '(.merged_at != null) or (.merged == true)')"
+  ...
+  unset _pr_meta _pr_state _pr_merged
+  ...
+  if [ -z "${ISSUE_NUMBERS}" ]; then
+    PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
+  fi
+  ```
+- **Proposed fix:** Keep `_pr_meta` until after the linked-issue fallback and derive `PR_DATA` from it first; only retain the current `_safe_gh_jq` call when `_pr_meta` is empty/invalid so fail-open behavior stays unchanged.
+- **Safety rationale:** Same script, same endpoint, no intervening PR mutation before the fallback, and retaining the second-call fallback on parse failure preserves current error-handling semantics.
+- **Downstream signal:** Keep `_pr_meta` alive through the `ISSUE_NUMBERS` fallback and extract `PR_DATA` from it before issuing another `/pulls/${PR_NUMBER}` GET.
+
+### Dead Calls (DEAD-API-###)
+No findings.
+
+### Cross-References to Deep Audit Section
+- `BATCH-001`: RISKY_SKIP — valid consolidation target, but it lives in `scripts/orchestrate_poll_process.sh`, which this pass must not auto-implement without manual race-path review.
+- `BATCH-002`: NEEDS_VERIFICATION — the GraphQL expansion is sound in principle, but a human must confirm it preserves the current “first linked issue with usable body/labels” fallback semantics.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 1 | REUSE-001 |
+| NEEDS_VERIFICATION | 1 | MERGE-001 |
+| RISKY_SKIP | 1 | MERGE-002 |
+
+### Implement-Stage Handoff
+- `REUSE-001`
