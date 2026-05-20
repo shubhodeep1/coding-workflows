@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:11570-11620 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The diagnostic else branch was reported to create invalid nested shell control flow and a syntax error.\n  WHY: mistralai flagged a bash syntax failure, while deepseek/minimax/moonshotai/qwen reported the structure is a valid `if/then/else/fi` and `bash -n` passes.\n- scripts/orchestrate_poll_process.sh:11577-11593 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603, minimax_minimax-m2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: The stall-recovery path calls `_load_actions_runs_cached` in the parent shell and again via `build_active_issue_set`, which reviewers described as redundant / misleading relative to the \u201czero API calls\u201d comment.\n  WHY: reviewers disagreed on impact: mistralai and x-ai called it redundant API/load behavior, while minimax and qwen said the second call is cache-hit only and does not make another API call.\n- scripts/orchestrate_poll_process.sh:11599-11610 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The three jq probes on `_ACTIONS_RUNS_BLOB_CACHE` were reported to re-trigger parse-error handling on malformed cache content, producing repeated `parse_error=true` diagnostics.\n  WHY: mistralai and x-ai both said corrupted/non-JSON cache blobs make the fallback path noisy, while deepseek/minimax/moonshotai/qwen said the independent probes are intentional and do not constitute a correctness bug.\n- scripts/orchestrate_poll_process.sh:11593-11618 | confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The diagnostic else branch was reported to collapse distinct failure modes by falling back to synthetic empty JSON when the parent-shell cache is empty or unset.\n  WHY: x-ai said this masks whether `build_active_issue_set` saw live runs, though other reviewers did not report this as a bug.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/orchestrate_poll_process.sh:11577 | confidence=2\n  PROBLEM: The priming call `_load_actions_runs_cached >/dev/null` is followed by `build_active_issue_set`, which internally calls `_load_actions_runs_cached` again.\n  WHY: The second call is a cache hit and does not make another API call, so this is a minor cold-path inefficiency rather than a correctness bug.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/orchestrate_poll_process.sh:11570-11620 | confidence=5\n  PROBLEM: Bash does not allow nested else branches like this; the diagnostic else block duplicates the main control-flow structure around the cached actions-runs logic.\n  WHY: The reviewer said the script would exit with a syntax error and break the stalled-issue loop.\n- scripts/orchestrate_poll_process.sh:11589-11593 | confidence=5\n  PROBLEM: `build_active_issue_set` is called again after the priming call, causing the cache loader to run twice unnecessarily when only a single shared fetch is intended.\n  WHY: The reviewer said this adds redundant API calls on stalled ticks and contradicts the zero-extra-call intent stated in comments.\n- scripts/orchestrate_poll_process.sh:11599-11608 | confidence=5\n  PROBLEM: If the cache is corrupted or non-JSON, the fallback logic loops within the same tick context and prints repeated `parse_error=true` lines, flooding logs and reducing observability.\n  WHY: The reviewer said diagnostic output becomes noisy and indistinguishable from genuine failure, preventing useful troubleshooting of stalled recoveries.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/orchestrate_poll_process.sh:11577 and 11581 | confidence=1\n  PROBLEM: The stall-recovery path was described as calling `_load_actions_runs_cached` twice, making the \u201czero API calls\u201d comment misleading.\n  WHY: qwen noted the second call is still a cache hit and does not fail at runtime, so this is not a correctness bug.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/orchestrate_poll_process.sh:11582-11585 | confidence=4\n  PROBLEM: The priming `_load_actions_runs_cached >/dev/null || true` happens in the parent shell, but `build_active_issue_set` (called via command substitution) also invokes the loader internally.\n  WHY: x-ai said this makes the diagnostic comment about \u201czero API calls\u201d inaccurate on stalled ticks and adds unnecessary GitHub API load/latency.\n- scripts/orchestrate_poll_process.sh:11599-11610 | confidence=4\n  PROBLEM: The jq filters only guard on `.workflow_runs | type == \"array\"` but do not handle the case where `_ACTIONS_RUNS_BLOB_CACHE` contains non-JSON or completely malformed content from a prior failure.\n  WHY: x-ai said repeated bad cache blobs cause the diagnostic to spam `parse_error=true` lines without distinguishing transient vs persistent cache corruption.\n- scripts/orchestrate_poll_process.sh:11593-11618 | confidence=3\n  PROBLEM: The subshell diagnostic path falls back to synthetic `{\"workflow_runs\":[]}` when `_ACTIONS_RUNS_BLOB_CACHE` is empty or unset, which was reported to mask whether `build_active_issue_set` actually saw live runs.\n  WHY: x-ai said the current diagnostic path still collapses distinct failure modes even though the parent-shell scoping issue was fixed.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "9900b3e908cd3e2c666e81ce3fcaca3dbb37ace6a4574f5cac7e9b31bd311524",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2797,
+    "run_id": "26145606431",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26145606431",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260520065923_eb2623e4fe",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2797,
+    "run_id": "26145606431"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-20T06:59:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
