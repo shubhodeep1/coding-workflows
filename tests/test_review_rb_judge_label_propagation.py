@@ -1613,6 +1613,18 @@ def test_review_rb_judge_validates_pr_number_before_pr_lookups() -> None:
 	)
 
 
+def test_prompt_budget_helpers_fail_closed_on_non_numeric_counters() -> None:
+	rb_src = _rb_judge_text()
+	gh_src = (REPO_ROOT / "scripts" / "gh_helpers.sh").read_text(encoding="utf-8")
+	for src, label in ((rb_src, "review_rb_judge.sh fallback"), (gh_src, "gh_helpers.sh primary")):
+		assert '[[ "${_used}" =~ ^[0-9]+$ ]] || _used=0' in src, (
+			f"{label} must coerce non-numeric _used values to 0 before arithmetic in _embed_input_file()."
+		)
+		assert '[[ "${_size}" =~ ^[0-9]+$ ]] || _size=0' in src, (
+			f"{label} must coerce non-numeric _size values to 0 before integer comparisons in _embed_input_file()."
+		)
+
+
 def main() -> int:
 	# Direct `python3 tests/<file>.py` entrypoint — the repo's CI runs
 	# tests via that pattern (see ci.yml) rather than pytest discovery,

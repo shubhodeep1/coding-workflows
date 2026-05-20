@@ -66,7 +66,7 @@ if ! command -v _embed_input_file >/dev/null 2>&1; then
     _used=0
     if [ -f "${_state}" ]; then
       _used="$(cat "${_state}" 2>/dev/null)"
-      [ -n "${_used}" ] || _used=0
+      [[ "${_used}" =~ ^[0-9]+$ ]] || _used=0
     fi
     _budget_remaining=$(( _PROMPT_BUDGET_TOTAL_BYTES - _used ))
     if [ "${_budget_remaining}" -le 0 ]; then
@@ -81,7 +81,7 @@ if ! command -v _embed_input_file >/dev/null 2>&1; then
     fi
 
     _size="$(wc -c < "${_p}" 2>/dev/null | tr -d '[:space:]')"
-    [ -n "${_size}" ] || _size=0
+    [[ "${_size}" =~ ^[0-9]+$ ]] || _size=0
     if [ "${_size}" -le "${_effective_cap}" ]; then
       cat "${_p}"
       _emit_bytes="${_size}"

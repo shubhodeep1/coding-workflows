@@ -26,17 +26,15 @@ the contract the code now upholds.
 
 from __future__ import annotations
 
+import inspect
 import io
 import json
 import os
-import shutil
 import subprocess
 import tempfile
 import textwrap
 from contextlib import redirect_stdout
 from pathlib import Path
-
-import pytest
 
 import sys
 
@@ -592,3 +590,51 @@ def test_finalize_skips_recheck_when_superseded_by_main(tmp_path):
 	)
 	final_state = json.loads(json_line)
 	assert final_state["final_merge_status"] == "superseded-by-main"
+
+
+def main(argv: list[str] | None = None) -> int:
+	"""Direct ``python3 tests/<file>.py`` entrypoint.
+
+	The repo's CI/release allowlists execute tests via explicit
+	``python3 tests/test_*.py`` calls rather than pytest discovery, so this
+	module needs a small fixture shim for the ``tmp_path``-style tests.
+	"""
+	selected_names = list(sys.argv[1:] if argv is None else argv)
+	tests_by_name = {
+		name: func
+		for name, func in sorted(globals().items())
+		if name.startswith("test_") and callable(func)
+	}
+	if selected_names:
+		missing = [name for name in selected_names if name not in tests_by_name]
+		if missing:
+			print(f"Unknown test name(s): {', '.join(missing)}")
+			return 2
+		named_tests = [(name, tests_by_name[name]) for name in selected_names]
+	else:
+		named_tests = list(tests_by_name.items())
+
+	passed = 0
+	failed = 0
+	for name, func in named_tests:
+		try:
+			params = list(inspect.signature(func).parameters)
+			if not params:
+				func()
+			elif params == ["tmp_path"]:
+				with tempfile.TemporaryDirectory(prefix=f"{name}_") as td:
+					func(Path(td))
+			else:
+				raise TypeError(f"unsupported direct-run parameters: {params}")
+			print(f"  PASS  {name}")
+			passed += 1
+		except Exception as exc:
+			print(f"  FAIL  {name}: {exc}")
+			failed += 1
+
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
