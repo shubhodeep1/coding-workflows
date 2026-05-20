@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":2837,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/2837\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/2838\",\"pr_number\":2838,\"branch\":\"ai/issue-2837\",\"run_id\":\"26178646738\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/26178646738\",\"changed_files\":[\".github/ai/label_contract.v1.json\",\".github/workflows/review_autofix.yml\",\"scripts/label_helpers.sh\",\"scripts/orchestrate_poll_process.sh\",\"scripts/review_conflict_resolve.sh\",\"tests/test_ai_label_precreation_contract.py\",\"tests/test_ai_labels.py\",\"tests/test_orchestrate_poll_process.py\",\"tests/test_review_conflict_resolve_retry_state.py\"]}",
+  "fingerprint": "9feef5fc006e58d8184d328a87668da318562974f0fc23f16183bbb1b0620f1d",
+  "lineage": {
+    "issue_number": 2837,
+    "parent_ids": [],
+    "pr_number": 2838,
+    "run_id": "26178646738",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26178646738",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/2838"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260520175118_1552549475",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2837,
+    "level": "run",
+    "pr_number": 2838,
+    "run_id": "26178646738"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #2837: https://github.com/shubhodeep1/coding-workflows/pull/2838",
+  "timestamps": {
+    "created_at": "2026-05-20T17:51:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
