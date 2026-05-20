@@ -311,3 +311,117 @@ Exact dollar estimates are not possible from this window because no operational 
 | Retrieves with `fail_open=true` | 0 | None observed |
 | Push retry outliers | 1 | Run `26170059805` completion event had `push_attempts=2` |
 | Serialization quality issue | Present | 10 runs emitted unlabeled raw JSON companion lines; 4 slow review runs emitted unparseable candidate payloads (`26146174572`, `26154599231`, `26170059805`, `26146860961`) |
+
+## Deep Audit — Workflows & Scripts (2026-05-20)
+
+### Section 1: Bug & Correctness Sweep
+
+#### CONSIST-001
+- **File path:** `.github/workflows/review_autofix.yml:533-536,546-578,4640-4649,4655-4659,4762-4781,5689-5707; scripts/review_rb_judge.sh:378-388; .github/workflows/issue_pr_status.yml:195-210`
+- **Severity:** Medium
+- **Category tag:** `consistency`
+- **Description:** `issue_pr_status.yml` explicitly narrowed its PR-body fallback to closing keywords/full repo-scoped links only because bare prose like `issue #N` and `issues/N` caused incorrect orchestrator-tracking transitions (`issue_pr_status.yml:196-204`). `review_autofix.yml` and `review_rb_judge.sh` still use the older, broader regex that matches those bare references. In `review_autofix.yml`, that fallback drives real mutations: standalone validation dispatch plus removal of `ai:orchestrator-validate-required` (`546-578`), `ai:ready-to-merge` application (`4655-4659`), and `ai:review-blocked` application (`4762-4781`, `5689-5707`). The same PR text can therefore be interpreted strictly in `issue_pr_status.yml` but broadly in review/autofix paths, which can mutate unrelated issues.
+- **Recommended fix:** Extract one shared helper, e.g. `extract_linked_issue_numbers_from_pr_text <repo> <text> <mode>`, with a strict `closing-only` mode for any path that changes issue labels or lifecycle state. Replace the inline regex copies in `review_autofix.yml` and `review_rb_judge.sh` with the strict policy already documented in `issue_pr_status.yml`.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### BATCH-001
+- **File path:** `scripts/orchestrate_poll_process.sh:13445-13480,13724-13750`
+- **Severity:** Medium
+- **Category tag:** `api-batching`
+- **Description:** The standalone PR conflict sweep first does `gh pr list --json number,headRefName,baseRefName` (`13448-13452`) and then re-fetches each open PR via `GET /pulls/{n}` to read mergeability/state (`13460-13480`). Later, the noop-suspicious force-merge gate does another `GET /pulls/{n}` per threshold-hit PR to read state, mergeability, head SHA, and labels (`13727-13750`). These two paths consume the same PR metadata shape but fetch it one PR at a time.
+- **Current call count:** `1 + N + M`, where `N` is the number of open PRs scanned by the conflict sweep and `M` is the number of noop-threshold PRs evaluated by Gate A.
+- **Proposed call count after fix:** `1` cached GraphQL snapshot for PR metadata per orchestrator cycle, reused by both paths (targeted downstream comment/check-run calls unchanged).
+- **Batching pattern to extend:** The alias-batched GraphQL style already used by `_fetch_candidate_issue_details_graphql()` and `_fetch_linked_pr_status_graphql()` in `scripts/orchestrate_poll_process.sh:7142-7259,7261-7279`.
+- **Recommended fix:** Add a batched helper such as `_fetch_open_pr_metadata_graphql <state> <limit>` that returns `number`, `headRefName`, `baseRefName`, `isDraft`, `mergeable`, `mergeStateStatus`, `headRefOid`, and `labels`, cache it once, and feed both the conflict sweep and noop Gate A from that snapshot.
+
+#### BATCH-002
+- **File path:** `scripts/review_rb_judge.sh:378-405`
+- **Severity:** Medium
+- **Category tag:** `api-batching`
+- **Description:** `review_rb_judge.sh` already uses GraphQL to fetch `closingIssuesReferences`, but it asks only for issue numbers (`378-383`). It then loops over those linked issues and does per-issue REST fetches to read body and labels (`399-405`) until it finds a usable parent issue body. That is avoidable because the needed fields are available from the initial GraphQL response.
+- **Current call count:** `1 + up to N`, where `N` is the linked-issue count; the loop can stop early once it finds a non-empty body, but still scales per issue.
+- **Proposed call count after fix:** `1`.
+- **Batching pattern to extend:** `scripts/orchestrate_poll_process.sh:_fetch_candidate_issue_details_graphql`.
+- **Recommended fix:** Expand the existing GraphQL query in `review_rb_judge.sh` to request `number`, `body`, and `labels { nodes { name } }` inside `closingIssuesReferences.nodes`, then derive `FIRST_ISSUE`, `FIRST_ISSUE_BODY`, and `FIRST_ISSUE_LABELS_JSON` from that single payload.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001
+- **File path:** `scripts/label_helpers.sh:102-195; .github/workflows/review_autofix.yml:4601-4635,4725-4756,5665-5681; .github/workflows/issue_pr_status.yml:241-248; scripts/review_rb_judge.sh:252-305; scripts/validate_process.sh:919-953; scripts/orchestrate_poll_process.sh:1631-1680`
+- **Severity:** Medium
+- **Category tag:** `duplication`
+- **Description:** The repo already has canonical label helpers in `scripts/label_helpers.sh`, but label creation/phase-swap logic is still duplicated across workflows and scripts. The copies have drifted: the canonical helper reads `.github/ai/label_contract.v1.json` and phase-swaps via GET+PUT to remove old AI phase labels (`160-195`), while several fallbacks in `review_autofix.yml` and `issue_pr_status.yml` only POST-add the new label, `review_rb_judge.sh` carries its own `_resilient_phase_swap`, `validate_process.sh` reimplements creation and always returns `0` on failure, and `orchestrate_poll_process.sh` embeds a private cache. That drift can leave contradictory phase labels or inconsistent label metadata when fallback paths execute.
+- **Recommended fix:** Make `scripts/label_helpers.sh` the single owner. Standardize on `ensure_label_exists <label_name> [repo]` and `set_issue_phase_label_resilient <issue_number> <target_label> [repo]`, add any needed caching inside that module, and update callers in `review_autofix.yml`, `issue_pr_status.yml`, `review_rb_judge.sh`, `validate_process.sh`, and `orchestrate_poll_process.sh` to source it instead of carrying local copies.
+
+#### DUP-002
+- **File path:** `.github/workflows/implement.yml:3528-3568; scripts/orchestrate_poll_process.sh:5761-5813`
+- **Severity:** Low
+- **Category tag:** `duplication`
+- **Description:** The ancestor-chain no-op counter is implemented twice with near-identical logic. Both versions walk `Re-issued from #N`, both key off the same `"produced no repository changes"` marker, and both spend up to two GitHub calls per hop. Any future change to the marker text, max-depth semantics, or fail-open behavior now has to land in two critical paths.
+- **Recommended fix:** Extract a shared helper into a small module such as `scripts/noop_helpers.sh` with signature `count_noop_ancestors <repo> <issue_num> [max_depth]`, then source it from both `.github/workflows/implement.yml` and `scripts/orchestrate_poll_process.sh`.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+No new expression-limit findings.
+
+A static source scan found:
+- largest workflow file: `.github/workflows/review_autofix.yml` at ~359,044 characters,
+- next largest: `.github/workflows/test-and-mark-stable.yml` at ~278,319 and `.github/workflows/implement.yml` at ~242,379,
+- no workflow above the 800 KB warning threshold,
+- no raw `${{ }}` body above 229 characters, far below the 15,000 / 18,000 risk thresholds.
+
+The previously documented historical expression-limit regressions appear to have already been mitigated by moving large logic into scripts/files.
+
+### Section 5: Cross-Cutting Concerns
+
+#### CONSIST-002
+- **File path:** `scripts/check_integration_pr_readiness.py:67-82,99-141; .github/workflows/integration-pr-readiness.yml:20-22,67-79; scripts/gh_helpers.sh:391-445`
+- **Severity:** Low
+- **Category tag:** `consistency`
+- **Description:** `integration-pr-readiness.yml` documents `orchestrator/integration-pr-not-ready` as a branch-protection/required-status gate (`20-22`), but `check_integration_pr_readiness.py` performs one-shot `gh issue view` and `gh api -X POST` subprocess calls with no retry/backoff. On any transient GitHub/API failure, `_fetch_issue()` returns `None` or `_post_commit_status_or_error()` returns `False`, and the workflow exits non-zero, leaving a required status path blocked until manual rerun. That is inconsistent with the repo-wide `gh_retry` pattern in `gh_helpers.sh`.
+- **Recommended fix:** Add a small Python retry helper that mirrors `gh_retry` semantics (retry transient failures, fail fast on 404/422/permission errors), or wrap the gh calls through a tiny shell shim that sources `scripts/gh_helpers.sh`.
+
+#### DEBT-001
+- **File path:** `.github/workflows/workflow-log-analysis.yml:16-20,525-526; scripts/analyze_workflow_logs.py:107-113; .github/workflows/comprehensive-test-and-release.yml:151-159`
+- **Severity:** Low
+- **Category tag:** `tech-debt`
+- **Description:** `codex_mode` / `--codex-mode` are explicitly documented as deprecated no-ops, but the workflow still exposes the input, still passes `--codex-mode` to the analyzer, and `comprehensive-test-and-release.yml` still dispatches the workflow with `-f codex_mode=true`. That preserves a fake operator control surface even though behavior never changes.
+- **Recommended fix:** Remove the workflow input and analyzer flag once callers are cleaned up, or keep only one compatibility shim and emit a deprecation warning from that layer.
+
+#### DEBT-002
+- **File path:** `scripts/validation_refresh_runner.py:125-140,390-398; .github/workflows/validation-refresh.yml:93-96`
+- **Severity:** Low
+- **Category tag:** `tech-debt`
+- **Description:** `ValidationRefreshRunner` still accepts and stores `commit_message` and `pr_title`, and the CLI still advertises `--commit-message` and `--pr-title` as deprecated no-ops, even though the runner “never pushes” and the workflow caller does not pass either flag. This leaves obsolete PR-era surface area in a non-PR runner.
+- **Recommended fix:** Remove the constructor fields and CLI options after any remaining tests/wrappers are updated, or fail fast with a deprecation error if a caller still supplies them.
+
+#### DEBT-003
+- **File path:** `.github/workflows/memory_maintenance.yml:37-55`
+- **Severity:** Low
+- **Category tag:** `tech-debt`
+- **Description:** `memory_maintenance.yml` still wires `BATCH_API_DISABLED`, `BATCH_API_PROVIDER`, and `BATCH_API_POLL_TIMEOUT_HOURS` into the job environment, but the step immediately logs `event":"batch_noop","reason":"no_llm_path"` and states that the workflow has “no Codex execution path.” The variables do not affect behavior; they only preserve compatibility plumbing.
+- **Recommended fix:** Remove the three env vars once downstream telemetry consumers stop depending on them, or collapse them into a single explicit compatibility flag so operators do not mistake them for live controls.
+
+No `TODO` / `FIXME` / `HACK` markers were found under `.github/workflows` or `scripts` in this audit scope.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 0 | — |
+| Medium | 4 | CONSIST-001, BATCH-001, BATCH-002, DUP-001 |
+| Low | 5 | DUP-002, CONSIST-002, DEBT-001, DEBT-002, DEBT-003 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 0 | Small |
+| API call optimization | 2 | Medium |
+| Code modularization | 8 | Large |
+| Expression size reduction | 0 | Small |
+| Medium/Low fixes | 10 | Medium |
