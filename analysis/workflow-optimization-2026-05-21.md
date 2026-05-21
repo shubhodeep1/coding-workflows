@@ -429,3 +429,133 @@ No `TODO` / `FIXME` / `HACK` markers were present under `.github/workflows` or `
 | Code modularization | 5 workflows + 1-2 helper scripts | Large |
 | Expression size reduction | 2 workflows + 2 helper scripts | Medium |
 | Medium/Low fixes | 4 scripts + 1 library module | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-21)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlap is statically proven safe to collapse without changing retry/error/concurrency behavior; `NEEDS_VERIFICATION` means the overlap is real but a human must confirm semantics before changing it; `RISKY_SKIP` means the duplication is in a retry/poll/race-defense path and must not be auto-implemented even if it looks mergeable.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001 — RISKY_SKIP
+- **Files** — `.github/workflows/test-and-mark-stable.yml:2869-2878`
+- **Current / proposed call count** — `2 -> 1` per poll iteration in the pre-existing `cancel-on-close` run wait loop.
+- **Endpoint(s)** — `GET /repos/{repo}/actions/runs/{run_id}`
+- **Evidence**
+```bash
+while [ "${EXISTING_STATUS}" != "completed" ] && [ "$(date +%s)" -lt "${WAIT_DEADLINE}" ]; do
+  sleep 5
+  EXISTING_STATUS=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" \
+    --jq '.status // ""' 2>/dev/null || echo "")
+  EXISTING_CONCLUSION=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" \
+    --jq '.conclusion // ""' 2>/dev/null || echo "")
+done
+```
+- **Proposed fix** — In `verify-cancel-on-close`, fetch the run JSON once per loop iteration, then derive both `.status` and `.conclusion` locally with `jq`.
+- **Safety rationale** — This sits inside a bounded poll loop that defends against event-propagation races, so it matches the audit’s `RISKY_SKIP` trigger even though the endpoint overlap is obvious.
+- **Downstream signal** — Do not auto-implement; manually test both `verify-cancel-on-close` branches (already-closed PR and close-during-test PR) and diff timeout/progress logging before changing the polling shape.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001 — NEEDS_VERIFICATION
+- **Files** — `.github/workflows/internal-review.yml:98-101`
+- **Current / proposed call count** — `2 -> 1` on the `push`-only `resolve-claude-branch-pr` step.
+- **Endpoint(s)** — `GET /repos/{repo}/pulls?state=open&head={owner}:{ref}`; `GET /repos/{repo}`
+- **Evidence**
+```bash
+existing_pr="$(gh api \
+  "repos/${REPOSITORY}/pulls?state=open&head=${REPOSITORY%/*}:${HEAD_REF}" \
+  --jq '[.[] | .number] | first // empty' 2>/dev/null || echo "")"
+base_ref="$(gh api "repos/${REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo 'main')"
+```
+This step is gated to `push` at `.github/workflows/internal-review.yml:76-76`.
+- **Proposed fix** — Drop the `GET /repos/{repo}` call and source `base_ref` from the push payload (`github.event.repository.default_branch`, with the same `'main'` fallback).
+- **Safety rationale** — The reuse is local and non-concurrent, but it replaces a live repo read with event payload data, so payload availability/freshness needs one verification pass first.
+- **Downstream signal** — On a real `claude/**` push, log both `github.event.repository.default_branch` and `gh api "repos/${REPOSITORY}" --jq '.default_branch'`; only remove the API call if they match and the step remains `push`-only.
+
+#### REUSE-002 — NEEDS_VERIFICATION
+- **Files** — `.github/workflows/implement.yml:72-82`, `.github/workflows/implement.yml:340-406`, `.github/workflows/implement.yml:1046-1057`
+- **Current / proposed call count** — Happy path: `2 -> 1` mandatory `GET /repos/{repo}/issues/{issue_number}` calls; line `1056` is already a cache-miss fallback and can stay fallback-only.
+- **Endpoint(s)** — `GET /repos/{repo}/issues/{issue_number}`
+- **Evidence**
+```bash
+ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" \
+  --jq '{state: (.state // "open"), labels: [.labels[].name]}')"
+```
+
+```bash
+if ! issue_meta_json="$(gh_api_with_retry gh api \
+  "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"; then
+  ...
+fi
+printf '%s\n' "${issue_meta_json}" > "${ISSUE_META_FILE}"
+```
+
+```bash
+if [ ! -s "${ISSUE_META_FILE}" ]; then
+  gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
+fi
+```
+- **Proposed fix** — Stage the first issue fetch into a temp/runtime JSON file, parse state/labels from that same payload in `Guard against closed or already-implementing issue`, and let `Resolve checkout ref` plus `Fetch issue metadata` reuse it.
+- **Safety rationale** — The overlap is real, but the later checkout step has bespoke retry/fail-open behavior, so collapsing to a shared cache needs verification that fallback semantics stay identical.
+- **Downstream signal** — Validate both a normal open-issue run and a forced `Resolve checkout ref` API/JSON-parse failure; confirm the checkout step still falls back to `${{ github.event.repository.default_branch }}` and `Fetch issue metadata` still re-fetches on cache miss.
+
+#### REUSE-003 — NEEDS_VERIFICATION
+- **Files** — `.github/workflows/orchestrate_clarify_respond.yml:62-88`, `.github/workflows/orchestrate_clarify_respond.yml:394-425`
+- **Current / proposed call count** — On the orchestrator-managed path: `2 -> 1` child-issue GETs, plus `0-2 -> 0-1` tracking-issue GETs depending on whether `TRACKING_NUM` is present.
+- **Endpoint(s)** — `GET /repos/{repo}/issues/{ISSUE_NUMBER}`; `GET /repos/{repo}/issues/{TRACKING_NUM}`
+- **Evidence**
+```bash
+ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+...
+TRACKING_TITLE="$(gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" \
+  --jq '.title // ""' 2>/dev/null || echo "")"
+```
+
+```bash
+ISSUE_META="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+...
+TRACKING_BODY="$(gh_retry gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" \
+  --jq '.body // ""')"
+```
+- **Proposed fix** — Cache the child-issue payload (and, when present, the tracking-issue payload) from `Check orchestrator metadata` into `$RUNNER_TEMP` or an equivalent per-job file, then have `Fetch issue and tracking context` consume the cached JSON instead of re-fetching both issues.
+- **Safety rationale** — This spans steps and transports full issue bodies, so output/file-size assumptions and “fresh enough after trigger” behavior need verification before collapsing the calls.
+- **Downstream signal** — Verify on a real orchestrator-managed comment event that the chosen cache transport survives across steps, handles large issue bodies, and still behaves acceptably if the issue body is edited after queueing but before the job runs.
+
+#### REUSE-004 — NEEDS_VERIFICATION
+- **Files** — `scripts/review_rb_judge.sh:353-370`, `scripts/review_rb_judge.sh:378-389`
+- **Current / proposed call count** — `2 -> 1` on the `closingIssuesReferences`-empty fallback path.
+- **Endpoint(s)** — `GET /repos/{repo}/pulls/{pr_number}`; `GraphQL repository.pullRequest(number){ closingIssuesReferences }`
+- **Evidence**
+```bash
+_pr_meta="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
+  2>/dev/null || echo '{}')"
+...
+unset _pr_meta _pr_state _pr_merged
+...
+if [ -z "${ISSUE_NUMBERS}" ]; then
+  PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
+    --jq '.title + " " + (.body // "")' || echo "")"
+fi
+```
+- **Proposed fix** — Retain `_pr_meta` (or derive `PR_DATA` from it before `unset`) and reuse that cached title/body for the grep fallback; only issue a second `GET /pulls/{n}` if the first fetch failed.
+- **Safety rationale** — The duplicate GETs are adjacent and unmutated, but the first call is retried and the second is single-attempt, so merging them changes second-chance semantics unless the failure path is preserved explicitly.
+- **Downstream signal** — Test two cases with `closingIssuesReferences` empty: initial PR GET succeeds, and initial PR GET fails; confirm the merged-PR guard, issue-number fallback, and log output stay equivalent before removing the second GET.
+
+### Dead Calls (DEAD-API-###)
+No findings.
+
+### Cross-References to Deep Audit Section
+- API-001: NEEDS_VERIFICATION — agreed; the later Telegram alert path should reuse the earlier issue classification, but exporting that state across steps still needs fail-open verification.
+- API-002: RISKY_SKIP — agreed; those watcher loops are explicit dispatch-race defenses, so consolidation must stay manual-only.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 4 | REUSE-001, REUSE-002, REUSE-003, REUSE-004 |
+| RISKY_SKIP | 1 | MERGE-001 |
+
+### Implement-Stage Handoff
+No SAFE_TO_MERGE findings in this pass.
