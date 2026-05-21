@@ -522,6 +522,57 @@ def test_drift_audit_closes_existing_issue_after_fixed_by_resolver_markers() -> 
 	assert "fixed_by_resolver" in _flag_value(final_state["issue_close_args"][0], "--comment")
 
 
+def test_drift_audit_keeps_quarantined_cluster_open_when_fixed_and_quarantined_markers_mix() -> None:
+	state = {
+		"run_list_responses": {
+			"review_autofix.yml": [
+				{"databaseId": 551, "createdAt": _iso(1), "status": "completed", "conclusion": "success", "url": "https://example.test/runs/551"},
+			],
+			"internal-review.yml": [
+				{"databaseId": 552, "createdAt": _iso(2), "status": "completed", "conclusion": "success", "url": "https://example.test/runs/552"},
+			],
+		},
+		"run_logs": {
+			"551": FIXED_BY_RESOLVER_MARKER + "\n",
+			"552": QUARANTINED_MARKER + "\n",
+		},
+		"issue_list_response": [
+			{
+				"number": 9100,
+				"title": "tracker",
+				"body": _cluster_marker(FP_KEY) + "\nopen\n",
+				"url": "https://example.test/issues/9100",
+			},
+		],
+	}
+	proc, final_state = _run_drift_audit(state)
+	assert proc.returncode == 0, proc.stderr
+	assert final_state.get("issue_create_args", []) == []
+	assert len(final_state.get("issue_edit_args", [])) == 1
+	assert final_state.get("issue_close_args", []) == []
+	assert "recheck inconclusive" in _flag_value(final_state["issue_edit_args"][0], "--body")
+
+
+def test_drift_audit_skips_incomplete_runs_when_fetching_logs() -> None:
+	state = {
+		"run_list_responses": {
+			"review_autofix.yml": [
+				{"databaseId": 601, "createdAt": _iso(1), "status": "completed", "conclusion": "success", "url": "https://example.test/runs/601"},
+				{"databaseId": 602, "createdAt": _iso(1), "status": "in_progress", "conclusion": "", "url": "https://example.test/runs/602"},
+			],
+			"internal-review.yml": [],
+		},
+		"run_logs": {
+			"601": PRE_EXISTING_MARKER + "\n",
+		},
+		"issue_list_response": [],
+	}
+	proc, final_state = _run_drift_audit(state)
+	assert proc.returncode == 0, proc.stderr
+	run_view_args = final_state.get("run_view_args", [])
+	assert [args[2] for args in run_view_args] == ["601"]
+
+
 def main() -> int:
 	test_drift_audit_gate_disabled_skips_without_gh_calls()
 	test_drift_audit_dedups_runs_into_one_tracker_issue()
@@ -531,6 +582,8 @@ def main() -> int:
 	test_drift_audit_batches_multiple_issue_queries_inside_repository_scope()
 	test_drift_audit_matches_anchored_patterns_against_patch_content()
 	test_drift_audit_closes_existing_issue_after_fixed_by_resolver_markers()
+	test_drift_audit_keeps_quarantined_cluster_open_when_fixed_and_quarantined_markers_mix()
+	test_drift_audit_skips_incomplete_runs_when_fetching_logs()
 	return 0
 
 

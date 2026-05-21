@@ -293,6 +293,8 @@ def _is_persistent_cluster(cluster: dict[str, Any]) -> bool:
 
 
 def _cluster_has_only_fixed_markers(cluster: dict[str, Any]) -> bool:
+	if "FINGERPRINT_QUARANTINED_V1" in cluster.get("marker_types", []):
+		return False
 	statuses = set(cluster.get("pre_existing_statuses") or [])
 	return "fixed_by_resolver" in statuses and "unchanged" not in statuses
 
@@ -322,6 +324,8 @@ def _list_recent_runs(repo: str, workflow_file: str, cutoff: datetime) -> list[d
 			continue
 		run_id = run.get("databaseId")
 		if run_id is None:
+			continue
+		if str(run.get("status") or "") != "completed":
 			continue
 		created_at = run.get("createdAt")
 		created_dt = _parse_dt(created_at)
