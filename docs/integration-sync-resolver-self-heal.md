@@ -1,6 +1,6 @@
 # Integration-Sync Resolver Self-Heal — Pre/Post-Resolve Delta Verification + Main-Snapshot Bootstrap of Safety Scripts
 
-> Status: **DRAFT — proposal only, no code changes yet.**
+> Status: **Phase 1 shipped on this branch; later phases remain follow-up work.**
 > Owner: orchestrator (implementation will be driven by the AI orchestrator pipeline).
 > Scope: targeted "safest, partial" fix for the integration-sync resolver loop wedge. Bigger structural options (adaptive fingerprint quarantine, graduated verification tiers, branch rebuild) are deferred to §10 Future Work.
 

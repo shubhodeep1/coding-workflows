@@ -3985,8 +3985,11 @@ finalize_integration_merge_if_needed() {
   # gave up on the integration branch) and is NOT re-evaluated here.
   if [ "${final_merge_status}" = "merged" ] && [ -n "${integration_branch}" ]; then
     local _fimin_ahead_by _fimin_ahead_rc
-    _fimin_ahead_by="$(_integration_branch_ahead_of_default "${integration_branch}" "${default_branch}")"
-    _fimin_ahead_rc=$?
+    if _fimin_ahead_by="$(_integration_branch_ahead_of_default "${integration_branch}" "${default_branch}")"; then
+      _fimin_ahead_rc=0
+    else
+      _fimin_ahead_rc=$?
+    fi
     if [ "${_fimin_ahead_rc}" -ne 0 ]; then
       echo "::warning::  [final-merge] State pinned final_merge_status=merged for #${TRACKING_NUM:-?} but the compare API failed during the ahead_by re-check; failing closed and clearing the pin so the next tick can reopen the final PR if integration has drifted."
       jq '.final_merge_status = "pending" | .final_merge_pr = null | .final_merge_error = "compare API error during ahead_by re-check (failed closed)"' \
@@ -4041,8 +4044,11 @@ finalize_integration_merge_if_needed() {
       # return, leaving the new diff stranded. See
       # shubhodeep1/binance-blessings#135.
       local _fimin_rd_ahead_by _fimin_rd_ahead_rc
-      _fimin_rd_ahead_by="$(_integration_branch_ahead_of_default "${integration_branch}" "${default_branch}")"
-      _fimin_rd_ahead_rc=$?
+      if _fimin_rd_ahead_by="$(_integration_branch_ahead_of_default "${integration_branch}" "${default_branch}")"; then
+        _fimin_rd_ahead_rc=0
+      else
+        _fimin_rd_ahead_rc=$?
+      fi
       if [ "${_fimin_rd_ahead_rc}" -ne 0 ]; then
         echo "::warning::  [final-merge] Recorded final PR #${final_pr} is closed+merged but the compare API failed during the ahead_by re-check; failing closed and clearing the recorded PR so the next code path can open a fresh one if integration has drifted."
         jq '.final_merge_pr = null | .final_merge_status = "pending" | .final_merge_error = "compare API error during ahead_by re-check after recorded final PR was already merged (failed closed)"' \
@@ -5922,6 +5928,8 @@ STALL_EOF
                 _rtr_push_succeeded="true"
               fi
               git checkout --detach HEAD 2>/dev/null || true
+            else
+              echo "  Issue #${issue_num} PR #${pr_num} checkout origin/${head_ref} failed after fetch; skipping empty-commit push."
             fi
           fi
           if [ "${_rtr_push_succeeded}" != "true" ]; then
@@ -7754,17 +7762,19 @@ STALL_EOF
               if [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] && [[ "${_std_rtr_origin_head_sha}" =~ ^[0-9a-f]{40}$ ]] && \
                  [ "${_std_rtr_origin_head_sha}" != "${head_sha}" ]; then
                 echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} head advanced from ${head_sha} to ${_std_rtr_origin_head_sha} after the PR-state snapshot; skipping empty-commit push to avoid racing newer review work."
-              elif git checkout "origin/${head_ref}" 2>/dev/null; then
-                git config user.name "codex-bot"
-                git config user.email "codex@users.noreply.github.com"
-                git commit --allow-empty -m "[standalone] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
-                if git push origin "HEAD:${head_ref}" 2>/dev/null; then
-                  _std_rtr_push_succeeded="true"
-                fi
-                git checkout --detach HEAD 2>/dev/null || true
-              fi
-            fi
-          fi
+	              elif git checkout "origin/${head_ref}" 2>/dev/null; then
+	                git config user.name "codex-bot"
+	                git config user.email "codex@users.noreply.github.com"
+	                git commit --allow-empty -m "[standalone] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
+	                if git push origin "HEAD:${head_ref}" 2>/dev/null; then
+	                  _std_rtr_push_succeeded="true"
+	                fi
+	                git checkout --detach HEAD 2>/dev/null || true
+	              else
+	                echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} checkout origin/${head_ref} failed after fetch; skipping empty-commit push."
+	              fi
+	            fi
+	          fi
           if [ "${_std_rtr_push_succeeded}" = "true" ]; then
             tg_notify_issue "${issue_num}" "Standalone stall recovery: re-triggered review flow (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "WARNING"
             STALL_RECOVERY_SHOULD_INCREMENT="true"
@@ -11594,6 +11604,12 @@ fi
         _head_pushed_at_json='{}'
       fi
       [ -n "${_head_pushed_at_json}" ] || _head_pushed_at_json='{}'
+      if [ "${_head_pushed_at_json}" = "{}" ]; then
+        _head_pushed_at_candidate_count="$(printf '%s' "${_current_wave_details_json}" | jq -r '[to_entries[] | select(.value.linked_pr != null and (.value.linked_pr | type == "object"))] | length' 2>/dev/null || printf '')"
+        if [[ "${_head_pushed_at_candidate_count}" =~ ^[0-9]+$ ]] && [ "${_head_pushed_at_candidate_count}" -gt 0 ]; then
+          echo "::warning::headPushedAt extraction produced an empty mapping for ${_head_pushed_at_candidate_count} linked PR candidate(s); using legacy stall-clock fallback." >&2
+        fi
+      fi
     fi
     _stall_check_args+=(--head-pushed-at-json "${_head_pushed_at_json}")
 
@@ -11631,9 +11647,9 @@ fi
         # this adds zero API calls (§15).  Fails open on jq errors:
         # counts fall back to "?" and the diagnostic still prints,
         # but parse_error=true keeps that path distinguishable from a
-        # genuinely empty cache.  The retrigger_review defense-in-depth
-        # guard at
-        # scripts/orchestrate_poll_process.sh:5829 still protects the
+        # genuinely empty cache.  The execute_stall_recovery_action(
+        # retrigger_review) defense-in-depth in-flight review guard
+        # still protects the
         # empty-commit push if the cache misses a live review run; this
         # logging just makes the cache state observable next time.
         (
@@ -13044,15 +13060,23 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 		continue
 	fi
 
-	# Refresh the comments snapshot on the threshold path so Gate B
-	# validates the latest editor summary when a new noop warning or
-	# summary comment lands mid-tick.
-	N_FRESH_COMMENTS_JSON="$(gh_retry gh api --paginate \
-		"repos/${GITHUB_REPOSITORY}/issues/${N_PR}/comments?per_page=100" \
-		| jq -s 'add // []' 2>/dev/null || true)"
-	if [ -n "${N_FRESH_COMMENTS_JSON}" ]; then
-		N_COMMENTS_JSON="${N_FRESH_COMMENTS_JSON}"
-	fi
+		# Refresh the comments snapshot on the threshold path so Gate B
+		# validates the latest editor summary when a new noop warning or
+		# summary comment lands mid-tick. Force-merge is safety-sensitive,
+		# so a refresh failure fails closed for this cycle rather than
+		# evaluating Gate B on a stale pre-filter snapshot.
+		N_FRESH_COMMENTS_JSON=""
+		if N_FRESH_COMMENTS_JSON="$(gh_retry gh api --paginate \
+			"repos/${GITHUB_REPOSITORY}/issues/${N_PR}/comments?per_page=100" \
+			| jq -s 'add // []' 2>/dev/null)"; then
+			[ -n "${N_FRESH_COMMENTS_JSON}" ] || N_FRESH_COMMENTS_JSON='[]'
+			N_COMMENTS_JSON="${N_FRESH_COMMENTS_JSON}"
+		else
+			echo "::warning::PR #${N_PR}: could not refresh comments snapshot for noop-suspicious Gate B; failing force-merge closed this cycle."
+			tg_send_msg "Noop-suspicious force-merge gate B failed for PR #${N_PR}: could not refresh latest PR comments snapshot. Leaving PR open for a later retry."$'\n'"PR: $(_gh_url "pull/${N_PR}")" "ERROR" >/dev/null 2>&1 || true
+			NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
+			continue
+		fi
 
 	# Gate B: reviewer audit health.  Validate against the latest
 	# editor summary PR comment using the shared helper — this is the

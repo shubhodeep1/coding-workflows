@@ -129,6 +129,50 @@ Cycle-local caches that must not be re-fetched per iteration:
 
 ---
 
+## Orchestrator tracking-issue comment markers
+
+The orchestrator poller (`scripts/orchestrate_poll_process.sh`) maintains
+two distinct marker-keyed comment families on each tracking issue. Both edit
+in place every poll cycle so the tracking issue stays a live status
+dashboard without producing a fresh comment per tick.
+
+| Marker | Helper | Purpose |
+|---|---|---|
+| `<!-- ORCHESTRATOR_STATE_V2 part=N/N manifest=<sha> -->` … `<!-- ORCHESTRATOR_STATE_V2 -->` | `post_state_comment` / `_post_state_comment_v2_chunk` | Canonical machine-readable orchestrator state snapshot. Multi-chunk so it can carry state blobs >65 KiB. Reader: `extract_latest_valid_orchestrator_state`. Reader falls back to the legacy V1 marker `<!-- ORCHESTRATOR_STATE_V1 -->` for issues that have not yet been re-written. |
+| `<!-- orchestrator:completion-status -->` | `update_completion_status_comment` | Human-readable "what is blocking completion" summary. Second-line tag `<!-- status:<token> -->` exposes the canonical status token (`in-progress` \| `waiting` \| `ready` \| `validated` \| `failed`) for grep-friendly downstream parsing. Idempotent — skips the API call when the rendered body already matches, and persists `.completion_status_comment_id` + `.completion_status_comment_body_hash` in the state file so edit-in-place fallback survives the next cron invocation. |
+
+The completion-status comment is updated from three call sites:
+
+1. The cycle-level wave-status decision block (every poll tick — derives
+   `in-progress` / `waiting` / `ready` / `failed` from the
+   `check-wave-status` JSON plus the live validation-recovery state,
+   and fires a once-per-project `tg_notify` CRITICAL on the first
+   `any_failed=true` observation, guarded by
+   `.completion_status_failure_alert_sent` in the state file; compare-API
+   failures surface as an explicit "integration status is unknown"
+   line instead of silently omitting the integration gate state).
+2. `mark_validation_complete` — final transition to `validated`.
+3. `mark_validation_failed` — transitions to `in-progress` during
+   validation recovery, and to `failed` on both terminal branches (the
+   deterministic-class short-circuit and the recovery-budget-exhausted
+   path).
+
+The same change also adds a defensive preflight inside
+`dispatch_validation_if_needed`: when `PROJECT_COMPLETE != "true"` at
+dispatch time (rare race against label-reconciliation, or a wave PR
+that transitioned back from merged), the dispatch is skipped this
+cycle so the runtime-validation workflow is not burned on a state
+that cannot pass. The judge-side override at the `JUDGE_STATUS=complete`
+branch remains the primary gate; the dispatch-side check is belt and
+suspenders. When the validating / `/revalidate` paths reach the helper
+before the loop's main wave-status block has populated the scratch
+`PROJECT_COMPLETE` variable, the helper recomputes live wave status
+first and still fails closed on `project_complete=false`. Re-entry on
+the next 5-minute poll tick converges the
+project once wave PRs and the integration→default merge land.
+
+---
+
 ## Stable log prefixes (contractual)
 
 Workflow-log-analysis and API-hygiene reporting depend on these stable log
@@ -151,6 +195,7 @@ and shipped:
 - `REISSUE_BASELINE_PRESERVED`
 - `REISSUE_BASELINE_DISCARDED`
 - `REISSUE_MODE`
+- `FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1`
 - `SEMBLE_QUERY`
 - `SEMBLE_FALLBACK`
 - `SERENA_QUERY`
@@ -204,3 +249,8 @@ it is intentionally large.
 | `REVIEW_LEDGER_PATH` | `.ai/review_issue_ledger/pr-${PR_NUMBER}.txt` | Default per-PR ledger path. |
 | `REVIEW_REVIEWER_CHECKLIST_ENABLED` | `1` | Append the reviewer checklist block when the prompt template is available. |
 | `REVIEW_REVIEWER_ITERATION_SCOPING` | `1` | Scope later reviewer passes from last-run changed files plus actionable ledger rows; first pass stays full-diff. |
+
+## Integration-sync verifier + bootstrap contract
+
+- `scripts/verify_integration_fingerprints.py` supports `--baseline-fingerprints-state <out>` / `--compare-against-baseline <in>` alongside `--ref`; capture mode records ref-accurate `head_sha` metadata, compare mode emits `PRE_EXISTING_FINGERPRINT_DRIFT_V1` markers for pre-existing drift that should not block the resolver commit, and the verifier-side partial-removal defense emits `FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1` when it suppresses a legacy capture-side false positive.
+- `.github/workflows/review_autofix.yml` stages `verify_integration_fingerprints.py`, `review_conflict_prepare.sh`, and `review_conflict_resolve.sh` through `MAIN_PRIMARY_BOOTSTRAP_SCRIPTS` (main snapshot first, branch fallback). `OPTIONAL_BOOTSTRAP_SCRIPTS` is reserved for genuinely optional helpers only.
