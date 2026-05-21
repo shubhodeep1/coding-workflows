@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Test file `tests/test_test_and_mark_stable_plan_polling_guard.py` should assert that the invalid-JSON retry branch in `wait-plan` contains `sleep \"$POLL_INTERVAL\"` before `continue`, so the retry path does not hot-spin on API errors and respects GitHub rate limits.\n  expected_change_site: tests/test_test_and_mark_stable_plan_polling_guard.py within test_plan_runs_payload_is_shape_validated_before_counting()\n  confidence=[3]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: `test_plan_runs_payload_is_shape_validated_before_counting()` asserts ordering among guard message sleep and `continue` via `sleep_idx` and `continue_idx`, but its final assertion already checked `sleep_stmt` appears between `retry_message_idx` and `continue_idx`. No additional assertion is needed and none was added by the last autofix run. This is outside the PR's intent scope (PR explicitly scopes hardening to Phase 2 Plan-run selection and does not mandate new assertions for retry path structure).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- requirement: Test file `tests/test_test_and_mark_stable_plan_polling_guard.py` should assert that the invalid-JSON retry branch in `wait-plan` contains `sleep \"$POLL_INTERVAL\"` before `continue`, so the retry path does not hot-spin on API errors and respects GitHub rate limits.\n  expected_change_site: tests/test_test_and_mark_stable_plan_polling_guard.py within test_plan_runs_payload_is_shape_validated_before_counting()\n  confidence=[3]\n  EVIDENCE: `test_plan_runs_payload_is_shape_validated_before_counting()` asserts ordering among guard message sleep and `continue` via `sleep_idx` and `continue_idx`, but its final assertion already checked `sleep_stmt` appears between `retry_message_idx` and `continue_idx`. No additional assertion is needed and none was added by the last autofix run. This is outside the PR's intent scope (PR explicitly scopes hardening to Phase 2 Plan-run selection and does not mandate new assertions for retry path structure).\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "01b119e61c503b12ebb38a5e1e1ffde6400cf0c30e5b41f1802a80fc1544c869",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2841,
+    "run_id": "26205019445",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26205019445",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260521043932_efb2f2e879",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2841,
+    "run_id": "26205019445"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-21T04:39:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
