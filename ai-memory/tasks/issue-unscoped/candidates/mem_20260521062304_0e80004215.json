@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/write-plan.md:159 | severity=low | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The new rule \"Unattended implementation \u2014 phased, independently mergeable, production-direct\" is grammatically inconsistent and unclear\n  WHY: No runtime failure - editorial/semantic issue\n- workflow-templates/.claude/commands/write-plan.md:159 | severity=low | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The new rule \"Unattended implementation \u2014 phased, independently mergeable, production-direct\" is grammatically inconsistent and unclear\n  WHY: No runtime failure - editorial/semantic issue\n- .claude/commands/write-plan.md:12-18 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The phrase \"how is the work split into independently-mergeable phases\" should maintain parallel phrasing with the rest of the sentence\n  WHY: No runtime failure - editorial issue affecting user comprehension\n- workflow-templates/.claude/commands/write-plan.md:12-18 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The phrase \"how is the work split into independently-mergeable phases\" should maintain parallel phrasing with the rest of the sentence\n  WHY: No runtime failure - editorial issue affecting user comprehension\n- .claude/commands/write-plan.md:38-44 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The new item \"Phase breakdown \u2014 propose how the work splits...\" uses inconsistent phrasing (\"propose how\") vs other items which are statements\n  WHY: No runtime failure - editorial/style issue\n- workflow-templates/.claude/commands/write-plan.md:38-44 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The new item \"Phase breakdown \u2014 propose how the work splits...\" uses inconsistent phrasing (\"propose how\") vs other items which are statements\n  WHY: No runtime failure - editorial/style issue\n- .claude/commands/write-plan.md:156-162 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The new mandatory \"Unattended implementation \u2014 phased, independently mergeable, production-direct\" rule and associated template additions are only enforced inside the `/write-plan` command itself.\n  WHY: There is no corresponding enforcement, reviewer checklist item, or judge/validation gate that would catch a plan that violates the new contract, so a non-compliant plan could merge directly into production and leave inter-phase dependencies unresolved.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- .claude/commands/write-plan.md:159 | severity=low | confidence=3\n  PROBLEM: The new rule \"Unattended implementation \u2014 phased, independently mergeable, production-direct\" is grammatically inconsistent and unclear\n  WHY: No runtime failure - editorial/semantic issue\n- workflow-templates/.claude/commands/write-plan.md:159 | severity=low | confidence=3\n  PROBLEM: The new rule \"Unattended implementation \u2014 phased, independently mergeable, production-direct\" is grammatically inconsistent and unclear\n  WHY: No runtime failure - editorial/semantic issue\n- .claude/commands/write-plan.md:12-18 | severity=low | confidence=4\n  PROBLEM: The phrase \"how is the work split into independently-mergeable phases\" should maintain parallel phrasing with the rest of the sentence\n  WHY: No runtime failure - editorial issue affecting user comprehension\n- workflow-templates/.claude/commands/write-plan.md:12-18 | severity=low | confidence=4\n  PROBLEM: The phrase \"how is the work split into independently-mergeable phases\" should maintain parallel phrasing with the rest of the sentence\n  WHY: No runtime failure - editorial issue affecting user comprehension\n- .claude/commands/write-plan.md:38-44 | severity=low | confidence=4\n  PROBLEM: The new item \"Phase breakdown \u2014 propose how the work splits...\" uses inconsistent phrasing (\"propose how\") vs other items which are statements\n  WHY: No runtime failure - editorial/style issue\n- workflow-templates/.claude/commands/write-plan.md:38-44 | severity=low | confidence=4\n  PROBLEM: The new item \"Phase breakdown \u2014 propose how the work splits...\" uses inconsistent phrasing (\"propose how\") vs other items which are statements\n  WHY: No runtime failure - editorial/style issue\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .claude/commands/write-plan.md:156-162 | severity=medium | confidence=4\n  PROBLEM: The new mandatory \"Unattended implementation \u2014 phased, independently mergeable, production-direct\" rule and associated template additions are only enforced inside the `/write-plan` command itself.\n  WHY: There is no corresponding enforcement, reviewer checklist item, or judge/validation gate that would catch a plan that violates the new contract, so a non-compliant plan could merge directly into production and leave inter-phase dependencies unresolved.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "64d568fc89d6cdf65ee8032f2aeb00ebf59dfeddc429cac45ca079be08a9568b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26208484827",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26208484827",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260521062304_0e80004215",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26208484827"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 7 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-21T06:23:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
