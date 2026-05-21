@@ -601,6 +601,12 @@ jobs:
           PREV_STATE=""
           RATE_LIMIT_BACKOFF=0
 
+          if [ -z "${ISSUE_TITLE}" ]; then
+            echo "::error::Missing issue title for Plan run scoping"
+            echo "status=plan_failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
           gh_api_safe() {
             local output
             output=$(gh api "$@" 2>/tmp/gh_api_err) && { RATE_LIMIT_BACKOFF=0; echo "$output"; return 0; }
@@ -615,6 +621,20 @@ jobs:
             echo ""; return 1
           }
 
+          fetch_plan_runs_json() {
+            gh_api_safe "repos/${TEST_REPO}/actions/runs?per_page=100&created=>${{ steps.create-issue.outputs.created_after }}"
+          }
+
+          latest_scoped_run_field() {
+            local name_re="$1"
+            local field="$2"
+            local runs_json=""
+            runs_json=$(fetch_plan_runs_json || echo "")
+            [ -n "$runs_json" ] || return 1
+            printf '%s' "$runs_json" \
+              | jq -r --arg name_re "$name_re" --arg title "$ISSUE_TITLE" --arg field "$field" '[.workflow_runs[] | select(.name | test($name_re; "i")) | select(.display_title == $title) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .[$field] // empty' 2>/dev/null
+          }
+
           # Robust workflow run-ID capture — retries on empty results to ride out
           # the brief race window where the matching run isn't yet indexed by the
           # API, and widens pagination to per_page=100 in case of high concurrent
@@ -627,8 +647,7 @@ jobs:
             local result=""
             local _attempt
             for _attempt in 1 2 3 4 5; do
-              result=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?per_page=100&created=>${{ steps.create-issue.outputs.created_after }}" \
-                --jq "[.workflow_runs[] | select(.name | test(\"${name_re}\"; \"i\")) | select(.display_title == \"${ISSUE_TITLE}\") | select(.conclusion != \"skipped\")] | sort_by(.created_at) | last | .id // empty" || echo "")
+              result=$(latest_scoped_run_field "$name_re" "id" || echo "")
               if [ -n "$result" ] && [ "$result" != "null" ]; then
                 printf '%s' "$result"
                 return 0
@@ -664,8 +683,10 @@ jobs:
             # high workflow-run volume; v1.13.5's smoke test broke when our
             # Plan run fell to position 51 in the unfiltered list and was
             # truncated off the per_page=50 response.
-            PLAN_RUN_STATUS=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?per_page=100&created=>${{ steps.create-issue.outputs.created_after }}" \
-              --jq "[.workflow_runs[] | select(.name | test(\"Plan\"; \"i\")) | select(.display_title == \"${ISSUE_TITLE}\") | select(.conclusion != \"skipped\")] | sort_by(.created_at) | last | .status // \"unknown\"" || echo "unknown")
+            PLAN_RUN_STATUS=$(latest_scoped_run_field "Plan" "status" || echo "")
+            if [ -z "$PLAN_RUN_STATUS" ] || [ "$PLAN_RUN_STATUS" = "null" ]; then
+              PLAN_RUN_STATUS="unknown"
+            fi
 
             CUR_STATE="labels=${LABELS};comments=${COMMENT_COUNT};comment_updated=${LATEST_COMMENT_UPDATED};plan_run=${PLAN_RUN_STATUS}"
 
@@ -719,13 +740,10 @@ jobs:
                   | jq -se 'length == 1 and (.[0] | type == "object" and (.workflow_runs | type == "array"))' \
                   >/dev/null 2>&1
               }
-              PLAN_RUNS_JSON='{"workflow_runs":[]}'
-              if _PLAN_RUNS_OUT=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=100&created=>${{ steps.create-issue.outputs.created_after }}" 2>/dev/null); then
-                PLAN_RUNS_JSON="$_PLAN_RUNS_OUT"
-              fi
-              unset _PLAN_RUNS_OUT
+              PLAN_RUNS_JSON=$(fetch_plan_runs_json || echo "")
               if ! _plan_runs_json_valid "$PLAN_RUNS_JSON"; then
-                PLAN_RUNS_JSON='{"workflow_runs":[]}'
+                echo "  ⏳ Unable to confirm concurrent Plan runs yet — retrying"
+                continue
               fi
               OTHER_ACTIVE_PLAN_RUNS=0
               if _OTHER_ACTIVE_PLAN_RUNS=$(printf '%s' "$PLAN_RUNS_JSON" \
