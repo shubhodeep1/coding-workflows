@@ -4548,8 +4548,14 @@ def test_judge_repeat_fingerprint_breaker_escalates_after_limit():
 	assert len(third.get("created_issues", [])) == 0
 	assert "ai:blocked" in third["tracking_labels"]
 	tracking_bodies = [c.get("body", "") for c in third["issues"]["192"]["comments"]]
+	completion_comment = next(body for body in tracking_bodies if "<!-- orchestrator:completion-status -->" in body)
+	assert "<!-- status:failed -->" in completion_comment
+	assert "Judge repeat-fingerprint breaker triggered" in completion_comment
 	assert any("Judge repeat-fingerprint breaker triggered" in body for body in tracking_bodies)
-	breaker_comment = next(body for body in tracking_bodies if "Judge repeat-fingerprint breaker triggered" in body)
+	breaker_comment = next(
+		body for body in tracking_bodies
+		if body.startswith("## ❌ Judge repeat-fingerprint breaker triggered")
+	)
 	assert "scripts/lint.sh" in breaker_comment
 	assert ":987" not in breaker_comment
 	assert "2026-01-01T12:39:56Z" not in breaker_comment
@@ -5780,16 +5786,28 @@ def test_revalidate_ignored_when_no_comment():
 	"""Without a /revalidate comment, a validation-failed project stays skipped."""
 	state = _base_state(status="failed")
 	state["validation_failure_reason"] = "Some failure"
+	stale_completion_comment = (
+		"<!-- orchestrator:completion-status -->\n"
+		"<!-- status:in-progress -->\n"
+		"## Completion status\n\n"
+		"**State:** `in-progress`\n\n"
+		"Waiting on wave merges.\n"
+	)
 	result = _run_poller(
 		state=state,
 		enable_validation="true",
 		max_validate_cycles="3",
 		tracking_labels=["ai:validation-failed"],
+		tracking_comments=[stale_completion_comment],
 	)
 	ls = result["latest_state"]
 	assert ls["status"] == "failed", f"Expected status=failed, got {ls['status']}"
 	assert "ai:validation-failed" in result["tracking_labels"]
 	assert result["validation_dispatches"] == []
+	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	completion_comment = next(body for body in tracking_bodies if "<!-- orchestrator:completion-status -->" in body)
+	assert "<!-- status:failed -->" in completion_comment
+	assert "terminal `failed` state" in completion_comment
 
 
 def test_revalidate_with_extra_text_after_command():
