@@ -3056,8 +3056,9 @@ capture_intent_fingerprints_for_merged_subissue() {
   # orchestrator detects the sub-issue PR has merged onto the integration
   # branch, so a successful fetch's FETCH_HEAD already reflects the
   # post-merge state. Fail-open: if the branch name is invalid, origin is
-  # unavailable, or the fetch fails, the heredoc skips the post-merge
-  # filter rather than reading a potentially stale local ref (the existing
+  # unavailable, the timeout wrapper is missing, or the fetch fails, the
+  # heredoc skips the post-merge filter rather than reading a potentially
+  # stale local ref (the existing
   # net-change / substring-overlap filters still apply, and the verifier-
   # side partial-removal defense catches the remaining false positives).
   local integration_branch_for_capture integration_ref_for_capture="" integration_fetch_timeout_secs="${GIT_COMMAND_TIMEOUT_SECS:-30}"
@@ -3069,7 +3070,9 @@ capture_intent_fingerprints_for_merged_subissue() {
   fi
   integration_branch_for_capture="$(jq -r '.integration_branch // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
   if [ -n "${integration_branch_for_capture}" ] && [ "${integration_branch_for_capture}" != "null" ]; then
-    if git check-ref-format "refs/heads/${integration_branch_for_capture}" >/dev/null 2>&1 \
+    if ! command -v timeout >/dev/null 2>&1; then
+      echo "::notice::capture_intent_fingerprints_for_merged_subissue: skipping post-merge presence filter for '${integration_branch_for_capture}' because 'timeout' is not available on this runner." >&2
+    elif git check-ref-format "refs/heads/${integration_branch_for_capture}" >/dev/null 2>&1 \
       && git remote get-url origin >/dev/null 2>&1 \
       && env GIT_TERMINAL_PROMPT=0 timeout "${integration_fetch_timeout_secs}s" \
         git fetch --no-tags --quiet origin "${integration_branch_for_capture}" >/dev/null 2>&1; then

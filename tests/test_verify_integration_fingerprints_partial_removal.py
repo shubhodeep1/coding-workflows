@@ -371,6 +371,28 @@ def test_verifier_main_skips_must_not_contain_false_positive_with_marker():
 	assert "Integration fingerprint verification FAILED" not in out
 
 
+def test_verifier_list_mode_skips_must_not_contain_false_positive():
+	mod = _verifier_module()
+	with _sandbox_repo() as repo:
+		_clear_verifier_caches(mod)
+		_seed_repo_with_partial_removal_merge(repo, pr_num=2840)
+		fingerprints = _fingerprint_state_for_issue(
+			issue=2839, pr=2840, regex_src=re.escape(_RECURRING_LINE),
+		)
+		fp_path = repo / "fingerprints.json"
+		fp_path.write_text(json.dumps(fingerprints), encoding="utf-8")
+		rc, out, err = _run_verifier(mod, ["--list-violated-files", str(fp_path)], repo)
+	assert rc == 0, f"expected list mode to stay soft-success (rc=0); got rc={rc}, stdout=\n{out}"
+	assert out.strip() == "", (
+		"list mode should not report a file path for a partial-removal false positive; "
+		f"stdout was:\n{out}"
+	)
+	assert "FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1" in err, (
+		"list mode must still run the partial-removal defense when a numeric PR number is "
+		"present in the fingerprint entry; stderr was:\n" + err
+	)
+
+
 def test_verifier_main_still_fails_on_genuine_regression_after_clean_merge():
 	mod = _verifier_module()
 	with _sandbox_repo() as repo:

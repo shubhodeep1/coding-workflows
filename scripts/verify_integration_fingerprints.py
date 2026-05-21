@@ -927,6 +927,8 @@ def list_violated_files(fingerprints: dict[str, Any], ref: str | None = None) ->
 	for issue_key, entry in fingerprints.items():
 		if not isinstance(entry, dict):
 			continue
+		issue_num = entry.get("issue", issue_key)
+		pr_num = entry.get("pr", "?")
 		# Cross-dedup: stay silent in list-violated-files mode — the stdout
 		# contract is "file paths ONLY" and the verify path already emits the
 		# operator-visible warnings.
@@ -938,7 +940,7 @@ def list_violated_files(fingerprints: dict[str, Any], ref: str | None = None) ->
 		must_not_exist = entry.get("must_not_exist", []) or []
 
 		for fp in must_contain:
-			state = _evaluate_fp_state(fp, "must_contain", issue_num="?", pr_num="?", file_cache=file_cache, exists_cache=exists_cache, ref=ref)
+			state = _evaluate_fp_state(fp, "must_contain", issue_num=issue_num, pr_num=pr_num, file_cache=file_cache, exists_cache=exists_cache, ref=ref)
 			if state is None:
 				continue
 			if state["check_error"] is not None:
@@ -947,7 +949,7 @@ def list_violated_files(fingerprints: dict[str, Any], ref: str | None = None) ->
 				violated.add(state["path"])
 
 		for fp in must_not_contain:
-			state = _evaluate_fp_state(fp, "must_not_contain", issue_num="?", pr_num="?", file_cache=file_cache, exists_cache=exists_cache, ref=ref)
+			state = _evaluate_fp_state(fp, "must_not_contain", issue_num=issue_num, pr_num=pr_num, file_cache=file_cache, exists_cache=exists_cache, ref=ref)
 			if state is None:
 				continue
 			if state["check_error"] is not None:
@@ -956,7 +958,7 @@ def list_violated_files(fingerprints: dict[str, Any], ref: str | None = None) ->
 				violated.add(state["path"])
 
 		for fp in must_not_exist:
-			state = _evaluate_fp_state(fp, "must_not_exist", issue_num="?", pr_num="?", file_cache=file_cache, exists_cache=exists_cache, ref=ref)
+			state = _evaluate_fp_state(fp, "must_not_exist", issue_num=issue_num, pr_num=pr_num, file_cache=file_cache, exists_cache=exists_cache, ref=ref)
 			if state is None:
 				continue
 			if state["check_error"] is not None:
