@@ -5,13 +5,29 @@
   "entry_id": "processed_command_2863_4509216413_approved",
   "issue_number": 2863,
   "metadata": {
+    "branch": "ai/issue-2863",
+    "changed_files": [
+      "README.md",
+      "agents.md",
+      "docs/completed/integration-sync-resolver-self-heal-plan.md",
+      "docs/integration-sync-resolver-self-heal.md",
+      "docs/plans/integration-sync-resolver-self-heal-plan.md",
+      "scripts/ai_memory.py",
+      "scripts/ai_memory_lib.py",
+      "scripts/label_helpers.sh"
+    ],
+    "issue_number": 2863,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/2863",
+    "pr_number": 2864,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/2864",
+    "run_attempt": "1",
+    "run_id": "26232160779",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/26232160779"
   },
   "run_attempt": 1,
   "run_id": "26232160779",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-05-21T14:26:24Z",
+  "status": "completed",
+  "timestamp": "2026-05-21T14:34:27Z",
   "workflow": "implement"
 }
