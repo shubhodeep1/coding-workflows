@@ -5,13 +5,29 @@
   "entry_id": "processed_command_2857_4505489359_approved",
   "issue_number": 2857,
   "metadata": {
+    "branch": "ai/issue-2857",
+    "changed_files": [
+      ".github/workflows/review_autofix.yml",
+      "ai-memory/schemas/fingerprint_quarantine.v1.json",
+      "scripts/ai_memory.py",
+      "scripts/ai_memory_lib.py",
+      "scripts/label_helpers.sh",
+      "scripts/verify_integration_fingerprints.py",
+      "tests/test_fingerprint_quarantine.py",
+      "tests/test_verify_integration_fingerprints_baseline.py"
+    ],
+    "issue_number": 2857,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/2857",
+    "pr_number": 2858,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/2858",
+    "run_attempt": "1",
+    "run_id": "26210159210",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/26210159210"
   },
   "run_attempt": 1,
   "run_id": "26210159210",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-05-21T06:47:14Z",
+  "status": "completed",
+  "timestamp": "2026-05-21T07:04:30Z",
   "workflow": "implement"
 }
