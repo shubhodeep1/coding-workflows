@@ -3085,6 +3085,7 @@ capture_intent_fingerprints_for_merged_subissue() {
   local fp_json
   fp_json="$(FINGERPRINT_PER_FILE_CAP="${FINGERPRINT_PER_FILE_CAP}" \
     FINGERPRINT_MIN_PATTERN_CHARS="${FINGERPRINT_MIN_PATTERN_CHARS}" \
+    GIT_COMMAND_TIMEOUT_SECS="${integration_fetch_timeout_secs}" \
     FINGERPRINT_POST_MERGE_REF="${integration_ref_for_capture}" \
     python3 - "${diff_file}" <<'PY' 2>/dev/null || true
 import json, os, re, subprocess, sys
