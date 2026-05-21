@@ -1,19 +1,28 @@
 # Integration-Sync Resolver Self-Heal — Implementation Plan
 
-> Status: Phase 1 shipped / archived reference copy.
-> This is the canonical completed-plan location for the shipped Phase 1 rollout;
-> later phases documented below remain follow-up work.
+> Status: archived completed-plan copy.
+> This is the canonical completed-plan source for the full closeout: Phases 1-5 shipped; Phase 6 landed as a discovery-only NO-GO (see [`docs/plans/sub-issue-test-runs-spike.md`](../plans/sub-issue-test-runs-spike.md)).
 
 > Source design: [`docs/integration-sync-resolver-self-heal.md`](../integration-sync-resolver-self-heal.md).
-> This plan converts that draft proposal into an executable, multi-phase rollout
-> covering everything in §5 (v1) and all seven items in §10 (future work). Phase 1
-> ships in one PR (five commits, as confirmed in the clarification round); Phases
-> 2-6 each ship as their own follow-up PR so reviewers can land them incrementally
-> without breaking the v1 surface.
+> This archived plan originally converted that draft proposal into an executable,
+> multi-phase rollout covering everything in §5 (v1) and all seven items in §10.
+> The codebase now reflects Phases 1-5 across follow-up PRs; Phase 6 closed with
+> the discovery-only NO-GO report linked above.
 
 ---
 
-## Summary
+## Closeout summary
+
+- Phase 1A shipped the baseline/delta verifier flow.
+- Phase 1B shipped `MAIN_PRIMARY_BOOTSTRAP_SCRIPTS` for the resolver safety perimeter.
+- Phases 2-5 later shipped the resolver escape valve, tier ladder, adaptive quarantine + drift audit, and last-resort branch rebuild.
+- Phase 6 ended as discovery-only / NO-GO; fingerprints were **not** replaced with sub-issue test runs.
+- `docs/completed/integration-sync-resolver-self-heal-plan.md` is the canonical full archive; `docs/plans/integration-sync-resolver-self-heal-plan.md` is retained only as a short pointer for link stability.
+- The remaining sections below preserve the original rollout plan text for archival context; use the shipped code plus `README.md` / `agents.md` for exact final semantics where implementation details diverged.
+
+---
+
+## Original rollout summary
 
 Ship pre/post-resolve delta verification + main-snapshot bootstrap of safety
 scripts (v1) to unwedge integration-sync resolver loops where the root cause is
