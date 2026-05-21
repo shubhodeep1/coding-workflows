@@ -1473,7 +1473,46 @@ update_completion_status_comment() {
       return 1
     fi
   fi
+  if [ "${COMMENTS_FETCH_OK:-false}" = "true" ] && [ -n "${COMMENTS:-}" ]; then
+    COMMENTS="$(printf '%s' "${COMMENTS}" | jq -c --arg marker "${marker}" --arg body "${full_body}" --argjson id "${response_id}" '
+      (if type == "array" then . else [] end)
+      | map(select(((.body // "") | contains($marker)) | not))
+      | . + [{id: $id, body: $body}]
+    ' 2>/dev/null || printf '%s' "${COMMENTS}")"
+  fi
   persist_completion_status_comment_state "${response_id}" "${body_hash}"
+}
+
+# completion_status_comment_failed_state_observation — return-code contract:
+#   0 => live comments show the completion-status marker with status=failed
+#   1 => live comments were fetched and the marker is missing or not failed
+#   2 => live comments are unavailable this cycle (fail open)
+completion_status_comment_failed_state_observation() {
+  local marker="<!-- orchestrator:completion-status -->"
+
+  if [ "${COMMENTS_FETCH_OK:-false}" != "true" ] || [ -z "${COMMENTS:-}" ] || [ "${COMMENTS}" = "[]" ]; then
+    return 2
+  fi
+
+  if printf '%s' "${COMMENTS}" | jq -e --arg marker "${marker}" '
+    any(.[]; ((.body // "") | contains($marker)) and ((.body // "") | contains("<!-- status:failed -->")))
+  ' >/dev/null 2>&1; then
+    return 0
+  fi
+
+  return 1
+}
+
+set_failed_completion_status_comment() {
+  local detail="$1"
+
+  COMPLETION_STATUS_STATE_CHANGED="false"
+  update_completion_status_comment "failed" \
+    "## Completion status"$'\n\n'"**State:** \`failed\`"$'\n\n'"${detail}" \
+    || true
+  if [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
+    post_state_comment || true
+  fi
 }
 
 refresh_validation_dispatch_wave_gate() {
@@ -1485,7 +1524,11 @@ refresh_validation_dispatch_wave_gate() {
     wave_issue_nums_json='[]'
   fi
 
-  candidate_details_json="$(_fetch_candidate_issue_details_graphql "${wave_issue_nums_json}")"
+  if [ "${wave_issue_nums_json}" = '[]' ]; then
+    candidate_details_json='{}'
+  else
+    candidate_details_json="$(_fetch_candidate_issue_details_graphql "${wave_issue_nums_json}")"
+  fi
   if ! printf '%s' "${candidate_details_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
     candidate_details_json='{}'
   fi
@@ -2599,6 +2642,9 @@ mark_integration_branch_missing_failed() {
 ${reason}"
   _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
   handle_comprehensive_release_callback_if_needed "failed" "${_tracking_labels}" "${COMMENTS:-[]}"
+  set_failed_completion_status_comment \
+    "${reason} See the \"❌ Integration branch missing\" comment for the diagnostic detail."
+  tg_cleanup_msgs "${TRACKING_NUM}"
   tg_notify "❌ Project #${TRACKING_NUM} failed: ${tg_reason}."
 }
 
@@ -4107,6 +4153,8 @@ heal_integration_branch_conflict() {
     post_tracking_comment "## ❌ Integration self-healing capped
 
 Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) hit the lifetime dispatch cap of ${INTEGRATION_CONFLICT_LIFETIME_MAX} resolver+judge attempts. Manual intervention required."
+    set_failed_completion_status_comment \
+      "Integration self-healing hit the lifetime dispatch cap of ${INTEGRATION_CONFLICT_LIFETIME_MAX} resolver+judge attempt(s) for final PR #${final_pr}. Manual intervention required. See the \"❌ Integration self-healing capped\" comment for the diagnostic detail."
     tg_notify "❌ Integration self-healing capped at ${INTEGRATION_CONFLICT_LIFETIME_MAX} dispatches for #${TRACKING_NUM} (PR #${final_pr}). Manual intervention required."
     return 1
   fi
@@ -4191,6 +4239,8 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) did n
     post_tracking_comment "## ❌ Integration self-healing exhausted
 
 Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) could not be made mergeable after ${effective_max_retries} automated attempts AND a judge escalation that itself failed. Manual intervention required."
+    set_failed_completion_status_comment \
+      "Integration self-healing could not make final PR #${final_pr} mergeable after ${effective_max_retries} automated attempt(s), and judge escalation failed. Manual intervention required. See the \"❌ Integration self-healing exhausted\" comment for the diagnostic detail."
     tg_notify "❌ Integration self-healing exhausted for #${TRACKING_NUM} (PR #${final_pr}). Manual intervention required."
     return 1
   fi
@@ -5101,6 +5151,7 @@ Failure class \`${_deterministic_class}\` is environment-deterministic; retrying
     if [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
       post_state_comment || true
     fi
+    tg_cleanup_msgs "${TRACKING_NUM}"
     tg_notify "Project #${TRACKING_NUM} validation failed deterministically (class=${_deterministic_class}). Manual intervention required." "CRITICAL"
     return 0
   fi
@@ -5157,6 +5208,7 @@ Validation recovery exhausted (${val_recovery_count}/${MAX_VALIDATION_RECOVERY_A
   if [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
     post_state_comment || true
   fi
+  tg_cleanup_msgs "${TRACKING_NUM}"
   tg_notify "Project #${TRACKING_NUM} validation failed after ${val_recovery_count} recovery attempt(s). Manual intervention required." "CRITICAL"
 }
 
@@ -5226,6 +5278,9 @@ Runtime validation passed, but the final squash merge of \`${integration_branch}
 - Last recorded error: ${_final_err:-No specific error recorded; check final PR for branch protection or required-check failures.}
 
 Manual intervention required: resolve the blocking condition on the final PR (merge conflicts, required checks, branch protections) and re-trigger the poller, or merge manually."
+    set_failed_completion_status_comment \
+      "Runtime validation passed, but the final squash merge of \`${integration_branch}\` into \`${default_branch}\` did not land after ${merge_attempt_count}/${MAX_FINAL_MERGE_ATTEMPTS} attempt(s). Manual intervention required. See the \"❌ Final integration merge could not complete\" comment for the diagnostic detail."
+    tg_cleanup_msgs "${TRACKING_NUM}"
     tg_notify "Project #${TRACKING_NUM} blocked: validation passed but integration→${default_branch} merge did not land after ${MAX_FINAL_MERGE_ATTEMPTS} attempts. Manual intervention required." "CRITICAL"
     return 0
   fi
@@ -9844,6 +9899,17 @@ The poller will resume processing on the next cycle."
 
   if [ "${PROJECT_STATUS}" = "complete" ] || [ "${PROJECT_STATUS}" = "failed" ] || [ "${PROJECT_STATUS}" = "validation-failed" ]; then
     handle_comprehensive_release_callback_if_needed "${PROJECT_STATUS}" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
+    if [ "${PROJECT_STATUS}" = "failed" ] || [ "${PROJECT_STATUS}" = "validation-failed" ]; then
+      if completion_status_comment_failed_state_observation; then
+        _completion_status_failed_observation_rc=0
+      else
+        _completion_status_failed_observation_rc=$?
+      fi
+      if [ "${_completion_status_failed_observation_rc}" -eq 1 ]; then
+        set_failed_completion_status_comment \
+          "Project is in a terminal \`failed\` state. Manual intervention required. See the latest failure comment on this tracking issue for the diagnostic detail."
+      fi
+    fi
     echo "Project already ${PROJECT_STATUS}, skipping."
     continue
   fi
@@ -12647,7 +12713,10 @@ with open('${STATE_FILE}', 'w') as f:
 Judge has used ${JUDGE_STALL_CYCLES} stall cycle(s) (recovery/fix-ups) out of ${MAX_JUDGE} allowed (total judge evaluations: ${JUDGE_CYCLE}).
 Clean wave advances do not count against this limit.
 Manual intervention required." >/dev/null
+    set_failed_completion_status_comment \
+      "Judge stall cycle limit exceeded (${JUDGE_STALL_CYCLES}/${MAX_JUDGE}). Manual intervention required. See the \"Project Failed — Judge stall cycle limit exceeded\" comment for the diagnostic detail."
     tg_notify "Project #${TRACKING_NUM} FAILED: judge stall cycle limit (${JUDGE_STALL_CYCLES}/${MAX_JUDGE}) exceeded." "CRITICAL"
+    tg_cleanup_msgs "${TRACKING_NUM}"
     continue
   fi
 
@@ -13077,6 +13146,9 @@ The judge produced the same normalized failure fingerprint for ${JUDGE_FINGERPRI
 
 To avoid repeating the same recovery loop, the orchestrator is not creating additional fix-up issues or running another judge-driven auto-recovery cycle. Manual intervention is required."
 
+        set_failed_completion_status_comment \
+          "The judge repeated the same normalized failure fingerprint ${JUDGE_FINGERPRINT_REPEAT_COUNT} time(s), exceeding JUDGE_REPEAT_FINGERPRINT_MAX=${JUDGE_REPEAT_FINGERPRINT_MAX}. Manual intervention required. See the \"❌ Judge repeat-fingerprint breaker triggered\" comment for the diagnostic detail."
+        tg_cleanup_msgs "${TRACKING_NUM}"
         tg_notify "Project #${TRACKING_NUM} blocked: repeated judge failure fingerprint exceeded JUDGE_REPEAT_FINGERPRINT_MAX=${JUDGE_REPEAT_FINGERPRINT_MAX}. Manual intervention required." "CRITICAL"
         continue
       fi
@@ -13098,7 +13170,10 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
 
 **Assessment:** ${JUDGE_ASSESSMENT}" >/dev/null
 
+        set_failed_completion_status_comment \
+          "Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}), but the judge still reports failure. Manual intervention required. See the latest \"## Project Failed\" tracking comment for the diagnostic detail."
         tg_notify "Project #${TRACKING_NUM} FAILED after ${RECOVERY_COUNT} recovery attempt(s). Manual intervention needed." "CRITICAL"
+        tg_cleanup_msgs "${TRACKING_NUM}"
         continue
       fi
 
@@ -13722,8 +13797,11 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 	fi
 	# Skip integration / orchestrator-managed branches — those have
 	# their own merge cadence and should not be force-merged by this
-	# sweep.
-	if [[ "${N_BASE}" == orchestrator/project-* ]]; then
+	# sweep. The final integration PR targets the default branch
+	# (base=main) while its head is `orchestrator/project-*`, so check
+	# both sides: base catches sub-issue PRs targeting the integration
+	# branch; head catches the integration→default final PR.
+	if [[ "${N_BASE}" == orchestrator/project-* ]] || [[ "${N_HEAD}" == orchestrator/project-* ]]; then
 		continue
 	fi
 
@@ -13845,23 +13923,23 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 		continue
 	fi
 
-	# Refresh the comments snapshot on the threshold path so Gate B
-	# validates the latest editor summary when a new noop warning or
-	# summary comment lands mid-tick. Force-merge is safety-sensitive,
-	# so a refresh failure fails closed for this cycle rather than
-	# evaluating Gate B on a stale pre-filter snapshot.
-	N_FRESH_COMMENTS_JSON=""
-	if N_FRESH_COMMENTS_JSON="$(gh_retry gh api --paginate \
-		"repos/${GITHUB_REPOSITORY}/issues/${N_PR}/comments?per_page=100" \
-		| jq -s 'add // []' 2>/dev/null)"; then
-		[ -n "${N_FRESH_COMMENTS_JSON}" ] || N_FRESH_COMMENTS_JSON='[]'
-		N_COMMENTS_JSON="${N_FRESH_COMMENTS_JSON}"
-	else
-		echo "::warning::PR #${N_PR}: could not refresh comments snapshot for noop-suspicious Gate B; failing force-merge closed this cycle."
-		tg_send_msg "Noop-suspicious force-merge gate B failed for PR #${N_PR}: could not refresh latest PR comments snapshot. Leaving PR open for a later retry."$'\n'"PR: $(_gh_url "pull/${N_PR}")" "ERROR" >/dev/null 2>&1 || true
-		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
-		continue
-	fi
+		# Refresh the comments snapshot on the threshold path so Gate B
+		# validates the latest editor summary when a new noop warning or
+		# summary comment lands mid-tick. Force-merge is safety-sensitive,
+		# so a refresh failure fails closed for this cycle rather than
+		# evaluating Gate B on a stale pre-filter snapshot.
+		N_FRESH_COMMENTS_JSON=""
+		if N_FRESH_COMMENTS_JSON="$(gh_retry gh api --paginate \
+			"repos/${GITHUB_REPOSITORY}/issues/${N_PR}/comments?per_page=100" \
+			| jq -s 'add // []' 2>/dev/null)"; then
+			[ -n "${N_FRESH_COMMENTS_JSON}" ] || N_FRESH_COMMENTS_JSON='[]'
+			N_COMMENTS_JSON="${N_FRESH_COMMENTS_JSON}"
+		else
+			echo "::warning::PR #${N_PR}: could not refresh comments snapshot for noop-suspicious Gate B; failing force-merge closed this cycle."
+			tg_send_msg "Noop-suspicious force-merge gate B failed for PR #${N_PR}: could not refresh latest PR comments snapshot. Leaving PR open for a later retry."$'\n'"PR: $(_gh_url "pull/${N_PR}")" "ERROR" >/dev/null 2>&1 || true
+			NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
+			continue
+		fi
 
 	# Gate B: reviewer audit health.  Validate against the latest
 	# editor summary PR comment using the shared helper — this is the
