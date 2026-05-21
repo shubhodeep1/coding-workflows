@@ -371,7 +371,7 @@ def _tracker_issue_lookup(repo: str) -> dict[str, dict[str, Any]]:
 	lookup: dict[str, dict[str, Any]] = {}
 	if not isinstance(issues, list):
 		return lookup
-	pattern = re.compile(r"<!--\s+" + re.escape(TRACKER_MARKER_PREFIX) + r"([0-9a-f]{64})\s+-->")
+	pattern = re.compile(r"<!--\s*" + re.escape(TRACKER_MARKER_PREFIX) + r"([0-9a-f]{64})\s*-->")
 	for issue in issues:
 		if not isinstance(issue, dict):
 			continue
@@ -527,12 +527,6 @@ def _recheck_cluster(
 			"applicable": False,
 			"resolved": True,
 			"reason": "recent review/autofix runs only reported fixed_by_resolver for this fingerprint",
-		}
-	if "FINGERPRINT_QUARANTINED_V1" not in cluster["marker_types"]:
-		return {
-			"applicable": False,
-			"resolved": False,
-			"reason": "No quarantined marker was observed in the current scan window.",
 		}
 	inconclusive_notes: list[str] = []
 	for issue_number in cluster["issue_numbers"]:
@@ -698,15 +692,15 @@ def main() -> int:
 		_log("no drift clusters requiring action found.")
 		return 0
 
-	quarantined_issue_numbers = sorted(
+	recheck_issue_numbers = sorted(
 		{
 			issue_number
 			for cluster in clusters
-			if "FINGERPRINT_QUARANTINED_V1" in cluster["marker_types"]
+			if not _cluster_has_only_fixed_markers(cluster)
 			for issue_number in cluster["issue_numbers"]
 		}
 	)
-	issue_to_pr = _fetch_latest_merged_linked_prs(repo, quarantined_issue_numbers)
+	issue_to_pr = _fetch_latest_merged_linked_prs(repo, recheck_issue_numbers)
 	pr_files_cache: dict[int, list[dict[str, Any]] | None] = {}
 	created = 0
 	edited = 0

@@ -630,7 +630,7 @@ def _load_quarantine_runtime() -> dict[str, Any]:
 		return runtime
 	try:
 		result = _ai_memory_load_quarantine_list(repo_root=Path.cwd())
-	except Exception as exc:  # noqa: BLE001 — quarantine integration must stay fail-open
+	except Exception:  # noqa: BLE001 — quarantine integration must stay fail-open
 		return runtime
 	if not isinstance(result, dict):
 		return runtime
@@ -716,7 +716,7 @@ def _persist_quarantine_runtime(
 	}
 	try:
 		result = _ai_memory_persist_quarantine_list(payload=payload, repo_root=Path.cwd())
-	except Exception as exc:  # noqa: BLE001 — quarantine persistence must stay fail-open
+	except Exception:  # noqa: BLE001 — quarantine persistence must stay fail-open
 		return
 	if not isinstance(result, dict):
 		return
@@ -1513,20 +1513,15 @@ def compare_against_baseline_with_tier(
 			)
 
 	_emit_must_contain_ratio(branch, mc_compare_satisfied, mc_compare_expected)
-	if tier == "warn_only":
-		_persist_quarantine_runtime(
-			quarantine_runtime,
-			observed_keys=quarantine_observed_keys,
-			unchanged_keys=quarantine_unchanged_keys,
-		)
-		return _emit_warn_only_success(branch, warn_only_violations)
-	if violations:
-		return _emit_verify_failure(violations)
 	_persist_quarantine_runtime(
 		quarantine_runtime,
 		observed_keys=quarantine_observed_keys,
 		unchanged_keys=quarantine_unchanged_keys,
 	)
+	if tier == "warn_only":
+		return _emit_warn_only_success(branch, warn_only_violations)
+	if violations:
+		return _emit_verify_failure(violations)
 	if pre_existing_drift_count > 0 and suppressed_must_contain_count > 0:
 		print(
 			f"Integration fingerprint verification PASSED under tier '{tier}' with pre-existing drift — "
@@ -1954,13 +1949,13 @@ def compare_against_baseline(
 				pre_existing_drift_count += 1
 
 	_emit_must_contain_ratio(branch, mc_compare_satisfied, mc_compare_expected)
-	if violations:
-		return _emit_verify_failure(violations)
 	_persist_quarantine_runtime(
 		quarantine_runtime,
 		observed_keys=quarantine_observed_keys,
 		unchanged_keys=quarantine_unchanged_keys,
 	)
+	if violations:
+		return _emit_verify_failure(violations)
 	if pre_existing_drift_count > 0:
 		print(
 			"Integration fingerprint verification PASSED with pre-existing drift — resolver did not introduce any new regressions "

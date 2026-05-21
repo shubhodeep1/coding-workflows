@@ -531,6 +531,7 @@ def _run_poller(
 	mock_branch_rebuild_audit_put_json: dict | None = None,
 	branch_protected_branches: dict[str, bool] | None = None,
 	branch_ref_shas: dict[str, str] | None = None,
+	mock_git_fetch_fail_after: dict[str, int] | None = None,
 	branch_rebuild_enabled: str = "false",
 	branch_rebuild_threshold_hours: str = "24",
 	branch_rebuild_cooldown_hours: str = "48",
@@ -582,6 +583,7 @@ def _run_poller(
 	mock_branch_rebuild_audit_put_json = mock_branch_rebuild_audit_put_json or {}
 	branch_protected_branches = branch_protected_branches or {}
 	branch_ref_shas = branch_ref_shas or {}
+	mock_git_fetch_fail_after = mock_git_fetch_fail_after or {}
 	codex_json = codex_json or {
 		"status": "complete",
 		"justification": "done",
@@ -673,6 +675,7 @@ def _run_poller(
 			"mock_branch_rebuild_audit_put_json": mock_branch_rebuild_audit_put_json,
 			"branch_protected_branches": {str(k): bool(v) for k, v in branch_protected_branches.items()},
 			"branch_ref_shas": {str(k): str(v) for k, v in branch_ref_shas.items()},
+			"mock_git_fetch_fail_after": {str(k): int(v) for k, v in mock_git_fetch_fail_after.items()},
 			"actions_runs_fetch_count": 0,
 			"actions_runs_if_none_match_count": 0,
 			"actions_runs_etag": actions_runs_etag,
@@ -1781,6 +1784,13 @@ if args and args[0] == 'fetch':
 		refspec = args[3]
 	elif len(args) == 3 and args[1] == 'origin':
 		refspec = args[2]
+	if refspec:
+		calls = store.setdefault('git_fetch_calls', {})
+		calls[refspec] = int(calls.get(refspec, 0)) + 1
+		fail_after = store.get('mock_git_fetch_fail_after', {}).get(refspec)
+		store_path.write_text(json.dumps(store), encoding='utf-8')
+		if fail_after is not None and calls[refspec] > int(fail_after):
+			sys.exit(1)
 	if refspec and ':' in refspec:
 		src_ref, dst_ref = refspec.split(':', 1)
 		src_prefix = 'refs/heads/'
@@ -7578,6 +7588,75 @@ def test_integration_conflict_branch_rebuild_replay_failure_marks_terminal_failu
 	)
 	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
 	assert any("Integration branch rebuild failed" in body for body in tracking_bodies), tracking_bodies
+
+
+def test_integration_conflict_branch_rebuild_fetch_retry_stays_escalated_and_ignores_skipped_preflight_cooldown():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	state["integration_conflict_unresolved_ticks"] = 2
+	state["integration_conflict_dispatch_count"] = 4
+	state["integration_conflict_dispatch_ts"] = 0
+	branch_refspec = "refs/heads/orchestrator/project-192:refs/remotes/origin/orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: 902},
+		prs=[
+			{
+				"number": 359,
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "orchestrator/project-192",
+				"headSha": "escalatedsha359",
+				"mergeable": False,
+				"mergeable_state": "dirty",
+				"body": _resolver_retry_state_block_for_test(
+					head_sha="escalatedsha359",
+					consecutive_failure_count=5,
+				),
+			},
+			{
+				"number": 902,
+				"state": "closed",
+				"merged": True,
+				"merged_at": "2026-05-19T12:00:00Z",
+				"merge_commit_sha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+				"baseRefName": "orchestrator/project-192",
+				"headRefName": "ai/issue-10",
+				"headRefFromApi": "ai/issue-10",
+				"headSha": "childprsha902",
+				"mergeable": True,
+				"mergeable_state": "clean",
+			},
+		],
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_tree_conflict_paths=["scripts/example.py"],
+		branch_rebuild_enabled="true",
+		branch_rebuild_threshold_hours="1",
+		branch_rebuild_cooldown_hours="999999",
+		mock_branch_rebuild_audit_payload={
+			"last_rebuild_at": "2999-01-01T00:00:00Z",
+			"outcome": "skipped_preflight",
+		},
+		branch_ref_shas={
+			"main": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"orchestrator/project-192": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		},
+		mock_git_fetch_fail_after={branch_refspec: 1},
+	)
+	assert result["latest_state"]["status"] == "in_progress"
+	assert result["latest_state"]["integration_sync_status"] == "escalated"
+	assert result.get("mock_branch_rebuild_audit_put_calls", 0) >= 2, result
+	latest_audit = result.get("mock_branch_rebuild_audit_payload") or {}
+	assert latest_audit.get("outcome") == "skipped_preflight", latest_audit
+	assert "could not fetch the new remote branch ref locally" in str(latest_audit.get("failure_detail", "")), latest_audit
+	assert any("/git/refs/heads/orchestrator%2Fproject-192" in path for path in result["api_calls"]), result["api_calls"]
+	assert any(path.endswith("/git/refs") for path in result["api_calls"]), result["api_calls"]
+	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert not any("Integration branch rebuild failed" in body for body in tracking_bodies), tracking_bodies
 
 
 def test_branch_rebuild_replay_configures_git_identity():

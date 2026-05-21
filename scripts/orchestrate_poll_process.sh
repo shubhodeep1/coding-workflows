@@ -4247,6 +4247,7 @@ _check_branch_rebuild_threshold() {
   local audit_response
   local audit_hit
   local last_rebuild_at
+  local last_outcome
   local last_rebuild_ts
   local cooldown_secs
   audit_response="$(_branch_rebuild_audit_get "${integration_branch}" || echo "")"
@@ -4259,6 +4260,7 @@ _check_branch_rebuild_threshold() {
   audit_hit="$(printf '%s' "${audit_response}" | jq -r 'if .ok == true and .hit == true and (.audit | type == "object") then "true" else "false" end' 2>/dev/null || echo "false")"
   if [ "${audit_hit}" = "true" ]; then
     last_rebuild_at="$(printf '%s' "${audit_response}" | jq -r '.audit.last_rebuild_at // ""' 2>/dev/null || echo "")"
+    last_outcome="$(printf '%s' "${audit_response}" | jq -r '.audit.outcome // ""' 2>/dev/null || echo "")"
     if [ -n "${last_rebuild_at}" ]; then
       last_rebuild_ts="$(_iso8601_to_epoch "${last_rebuild_at}" || echo "")"
       if ! [[ "${last_rebuild_ts}" =~ ^[0-9]+$ ]]; then
@@ -4269,7 +4271,7 @@ _check_branch_rebuild_threshold() {
 
       cooldown_secs=$(( BRANCH_REBUILD_COOLDOWN_HOURS * 3600 ))
       BRANCH_REBUILD_LAST_REBUILD_AT="${last_rebuild_at}"
-      if [ $(( now_ts - last_rebuild_ts )) -lt "${cooldown_secs}" ]; then
+      if [ "${last_outcome}" != "skipped_preflight" ] && [ $(( now_ts - last_rebuild_ts )) -lt "${cooldown_secs}" ]; then
         BRANCH_REBUILD_SKIP_REASON="cooldown_active"
         return 1
       fi
@@ -4506,13 +4508,11 @@ _attempt_branch_rebuild_after_escalation() {
 
   if ! git fetch --no-tags origin "refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
     completed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-    final_audit_json="$(_build_branch_rebuild_audit_json "${integration_branch}" "${default_branch}" "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_escalated_at}" "${rebuild_started_at}" "${default_branch_head_sha}" "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" "failed" "false" "Recreated '${integration_branch}' but could not fetch the new remote branch ref locally." "${completed_at}")"
+    BRANCH_REBUILD_ESCALATED_ERROR="Branch rebuild for '${integration_branch}' recreated the remote ref but could not fetch it locally; leaving the project escalated for retry."
+    final_audit_json="$(_build_branch_rebuild_audit_json "${integration_branch}" "${default_branch}" "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_escalated_at}" "${rebuild_started_at}" "${default_branch_head_sha}" "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" "skipped_preflight" "false" "Recreated '${integration_branch}' but could not fetch the new remote branch ref locally; leaving the project escalated for retry." "${completed_at}")"
     _branch_rebuild_audit_put "${integration_branch}" "${final_audit_json}" >/dev/null 2>&1 || true
     rm -rf "${worktree_dir}" >/dev/null 2>&1 || true
     rm -f "${replay_log}" >/dev/null 2>&1 || true
-    _mark_branch_rebuild_failed "${integration_branch}" "${default_branch}" "${final_pr}" "Recreated '${integration_branch}' but could not fetch the new remote branch ref locally."
-    BRANCH_REBUILD_HANDLED="true"
-    BRANCH_REBUILD_TERMINAL_FAILURE="true"
     return 0
   fi
 

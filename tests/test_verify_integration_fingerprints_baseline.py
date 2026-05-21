@@ -561,7 +561,7 @@ def test_verify_integration_fingerprints_quarantine_load_failure_fails_open() ->
 		assert err == ""
 
 
-def test_verify_integration_fingerprints_compare_failure_does_not_persist_quarantine_state() -> None:
+def test_verify_integration_fingerprints_compare_failure_persists_quarantine_state() -> None:
 	mod = _verifier_module()
 	files = {
 		"scripts/example.py": "STABLE_LINE\n",
@@ -586,7 +586,10 @@ def test_verify_integration_fingerprints_compare_failure_does_not_persist_quaran
 		)
 		assert rc == 0
 		(sandbox / "scripts" / "example.py").write_text("BROKEN_LINE\n", encoding="utf-8")
-		with _stub_quarantine_store(mod) as get_store:
+		with _stub_quarantine_store(mod) as get_store, _set_env(
+			FINGERPRINT_QUARANTINE_RUNS_M="2",
+			GITHUB_RUN_ID="compare-failure-run-1",
+		):
 			rc, out, err = _run_verifier(
 				mod,
 				["--compare-against-baseline", str(baseline_path), str(fp_path)],
@@ -595,11 +598,19 @@ def test_verify_integration_fingerprints_compare_failure_does_not_persist_quaran
 		assert rc == 1
 		assert "PRE_EXISTING_FINGERPRINT_DRIFT_V1 unchanged" in out
 		assert "Integration fingerprint verification FAILED" in out
-		assert get_store()["entries"] == []
+		assert get_store()["entries"] == [
+			{
+				"fp_key": ["scripts/example.py", "LEGACY_LINE"],
+				"issue_key": "1500",
+				"first_seen_run_id": "compare-failure-run-1",
+				"last_seen_run_id": "compare-failure-run-1",
+				"consecutive_unchanged_runs": 1,
+			}
+		]
 		assert err == ""
 
 
-def test_verify_integration_fingerprints_ratio_failure_does_not_persist_quarantine_state() -> None:
+def test_verify_integration_fingerprints_ratio_failure_persists_quarantine_state() -> None:
 	mod = _verifier_module()
 	files = {
 		"scripts/example.py": "STABLE_LINE\n",
@@ -624,7 +635,10 @@ def test_verify_integration_fingerprints_ratio_failure_does_not_persist_quaranti
 		)
 		assert rc == 0
 		(sandbox / "scripts" / "example.py").write_text("BROKEN_LINE\n", encoding="utf-8")
-		with _stub_quarantine_store(mod) as get_store:
+		with _stub_quarantine_store(mod) as get_store, _set_env(
+			FINGERPRINT_QUARANTINE_RUNS_M="2",
+			GITHUB_RUN_ID="ratio-failure-run-1",
+		):
 			rc, out, err = _run_verifier(
 				mod,
 				[
@@ -639,7 +653,15 @@ def test_verify_integration_fingerprints_ratio_failure_does_not_persist_quaranti
 		assert rc == 1
 		assert "PRE_EXISTING_FINGERPRINT_DRIFT_V1 unchanged" in out
 		assert "Integration fingerprint verification FAILED" in out
-		assert get_store()["entries"] == []
+		assert get_store()["entries"] == [
+			{
+				"fp_key": ["scripts/example.py", "LEGACY_LINE"],
+				"issue_key": "1500",
+				"first_seen_run_id": "ratio-failure-run-1",
+				"last_seen_run_id": "ratio-failure-run-1",
+				"consecutive_unchanged_runs": 1,
+			}
+		]
 		assert err == ""
 
 
