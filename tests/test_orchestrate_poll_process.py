@@ -7140,6 +7140,9 @@ def test_capture_intent_fingerprints_helper_is_defined_and_idempotent():
 	assert "capture_intent_fingerprints_for_merged_subissue()" in script
 	assert "FINGERPRINT_PER_FILE_CAP" in script
 	assert "FINGERPRINT_MIN_PATTERN_CHARS" in script
+	assert "FINGERPRINT_POST_MERGE_REF" in script
+	assert "git rev-parse --verify FETCH_HEAD" in script
+	assert 'elif git rev-parse --verify --quiet "refs/remotes/origin/${integration_branch_for_capture}"' not in script
 	# Idempotency guard — must short-circuit when fingerprints are
 	# already recorded for that issue.
 	assert ".merged_issue_fingerprints[$k]" in script

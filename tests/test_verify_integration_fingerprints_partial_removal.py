@@ -326,6 +326,27 @@ def test_partial_removal_helper_fails_open_when_merge_commit_not_found():
 	assert result is None
 
 
+def test_find_pr_merge_commit_ignores_later_same_path_followup_mentions():
+	mod = _verifier_module()
+	with _sandbox_repo() as repo:
+		_clear_verifier_caches(mod)
+		merge_sha = _seed_repo_with_partial_removal_merge(repo, pr_num=2840)
+		target = repo / _TARGET_PATH
+		target.write_text(_POST_PR_FILE_CONTENT + "# later follow-up\n", encoding="utf-8")
+		_run_git(repo, "add", _TARGET_PATH)
+		_run_git(repo, "commit", "--quiet", "-m", "follow-up for #2840")
+		prev_cwd = os.getcwd()
+		try:
+			os.chdir(repo)
+			result = mod._find_pr_merge_commit_for_path(None, 2840, _TARGET_PATH)
+		finally:
+			os.chdir(prev_cwd)
+	assert result == merge_sha, (
+		"merge-commit lookup must ignore later same-path commits that merely mention "
+		f"the PR number; got {result!r}, expected original merge {merge_sha!r}"
+	)
+
+
 def test_verifier_main_skips_must_not_contain_false_positive_with_marker():
 	mod = _verifier_module()
 	with _sandbox_repo() as repo:

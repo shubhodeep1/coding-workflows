@@ -195,6 +195,7 @@ and shipped:
 - `REISSUE_BASELINE_PRESERVED`
 - `REISSUE_BASELINE_DISCARDED`
 - `REISSUE_MODE`
+- `FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1`
 - `SEMBLE_QUERY`
 - `SEMBLE_FALLBACK`
 - `SERENA_QUERY`
@@ -251,5 +252,5 @@ it is intentionally large.
 
 ## Integration-sync verifier + bootstrap contract
 
-- `scripts/verify_integration_fingerprints.py` supports `--baseline-fingerprints-state <out>` / `--compare-against-baseline <in>` alongside `--ref`; capture mode records ref-accurate `head_sha` metadata, and compare mode emits `PRE_EXISTING_FINGERPRINT_DRIFT_V1` markers for pre-existing drift that should not block the resolver commit.
+- `scripts/verify_integration_fingerprints.py` supports `--baseline-fingerprints-state <out>` / `--compare-against-baseline <in>` alongside `--ref`; capture mode records ref-accurate `head_sha` metadata, compare mode emits `PRE_EXISTING_FINGERPRINT_DRIFT_V1` markers for pre-existing drift that should not block the resolver commit, and the partial-removal guard emits `FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1` when it excises a legacy capture-side false positive.
 - `.github/workflows/review_autofix.yml` stages `verify_integration_fingerprints.py`, `review_conflict_prepare.sh`, and `review_conflict_resolve.sh` through `MAIN_PRIMARY_BOOTSTRAP_SCRIPTS` (main snapshot first, branch fallback). `OPTIONAL_BOOTSTRAP_SCRIPTS` is reserved for genuinely optional helpers only.

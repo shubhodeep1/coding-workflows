@@ -304,10 +304,11 @@ def _find_pr_merge_commit_for_path(ref: str | None, pr_num: Any, path: str) -> s
 
 	Used by the must_not_contain partial-removal false-positive defense
 	to look up the file's post-merge state at the captured PR's merge
-	commit. Walks the integration branch history with
-	``git log -n 1 --format=%H --grep="#<pr_num>" <ref> -- <path>``
-	(default GitHub squash-merge commit subjects include the PR number
-	in the form ``(#1234)``, which is what this grep targets).
+	commit. Walks the integration branch history oldest-first and picks
+	the first commit whose *subject* ends with the GitHub squash-merge
+	marker ``(#<pr_num>)``. This avoids selecting a later follow-up
+	commit that merely mentions the PR number while touching the same
+	path.
 
 	Args:
 		ref: git ref to walk; if None, falls back to ``HEAD``.
@@ -339,8 +340,8 @@ def _find_pr_merge_commit_for_path(ref: str | None, pr_num: Any, path: str) -> s
 		git_result = subprocess.run(
 			[
 				"git", "log",
-				"-n", "1",
-				"--format=%H",
+				"--reverse",
+				"--format=%H%x00%s",
 				f"--grep=#{pr_str}\\b",
 				"-E",
 				effective_ref,
@@ -357,8 +358,15 @@ def _find_pr_merge_commit_for_path(ref: str | None, pr_num: Any, path: str) -> s
 	if git_result.returncode != 0:
 		_PR_MERGE_COMMIT_CACHE[cache_key] = None
 		return None
-	sha = git_result.stdout.decode("utf-8", errors="replace").strip()
-	resolved = sha if sha else None
+	merge_suffix = f"(#{pr_str})"
+	resolved = None
+	for raw_line in git_result.stdout.decode("utf-8", errors="replace").splitlines():
+		sha, _sep, subject = raw_line.partition("\x00")
+		if not sha or not subject:
+			continue
+		if subject.rstrip().endswith(merge_suffix):
+			resolved = sha.strip() or None
+			break
 	_PR_MERGE_COMMIT_CACHE[cache_key] = resolved
 	return resolved
 

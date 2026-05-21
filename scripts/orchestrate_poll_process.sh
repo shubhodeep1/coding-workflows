@@ -3051,24 +3051,22 @@ capture_intent_fingerprints_for_merged_subissue() {
     return 0
   fi
 
-  # Resolve the integration branch ref so the post-merge presence filter
-  # inside the python heredoc can read the post-merge file content via
-  # ``git show``. Fingerprint capture runs after the orchestrator detects
-  # the sub-issue PR has merged onto the integration branch, so the
-  # remote tip already reflects the post-merge state. Best-effort fetch
-  # — fail-open: if the fetch fails or the branch is unknown, the python
-  # heredoc skips the post-merge filter (the existing net-change /
-  # substring-overlap filters still apply, and the verifier-side
-  # partial-removal defense catches the remaining false positives).
+  # Resolve a fresh integration-branch commit for the post-merge presence
+  # filter inside the python heredoc. Fingerprint capture runs after the
+  # orchestrator detects the sub-issue PR has merged onto the integration
+  # branch, so a successful fetch's FETCH_HEAD already reflects the
+  # post-merge state. Fail-open: if the branch name is invalid, origin is
+  # unavailable, or the fetch fails, the heredoc skips the post-merge
+  # filter rather than reading a potentially stale local ref (the existing
+  # net-change / substring-overlap filters still apply, and the verifier-
+  # side partial-removal defense catches the remaining false positives).
   local integration_branch_for_capture integration_ref_for_capture=""
   integration_branch_for_capture="$(jq -r '.integration_branch // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
   if [ -n "${integration_branch_for_capture}" ] && [ "${integration_branch_for_capture}" != "null" ]; then
-    if git fetch --no-tags --quiet origin \
-        "refs/heads/${integration_branch_for_capture}:refs/remotes/origin/${integration_branch_for_capture}" \
-        2>/dev/null; then
-      integration_ref_for_capture="refs/remotes/origin/${integration_branch_for_capture}"
-    elif git rev-parse --verify --quiet "refs/remotes/origin/${integration_branch_for_capture}" >/dev/null 2>&1; then
-      integration_ref_for_capture="refs/remotes/origin/${integration_branch_for_capture}"
+    if git check-ref-format "refs/heads/${integration_branch_for_capture}" >/dev/null 2>&1 \
+      && git remote get-url origin >/dev/null 2>&1 \
+      && git fetch --no-tags --quiet origin "${integration_branch_for_capture}" >/dev/null 2>&1; then
+      integration_ref_for_capture="$(git rev-parse --verify FETCH_HEAD 2>/dev/null || echo "")"
     fi
   fi
 
@@ -3082,6 +3080,7 @@ from collections import Counter
 
 cap = int(os.environ.get("FINGERPRINT_PER_FILE_CAP", "12"))
 minlen = int(os.environ.get("FINGERPRINT_MIN_PATTERN_CHARS", "12"))
+git_timeout_secs = int(os.environ.get("GIT_COMMAND_TIMEOUT_SECS", "30"))
 
 ALLOWED_PREFIXES = (
     ".github/", "scripts/", "prompts/", "ai-memory/",
@@ -3296,7 +3295,7 @@ if post_merge_ref and per_file_removed:
                 ["git", "show", f"{post_merge_ref}:{path}"],
                 capture_output=True,
                 check=False,
-                timeout=15,
+                timeout=git_timeout_secs,
             )
         except Exception:
             continue
