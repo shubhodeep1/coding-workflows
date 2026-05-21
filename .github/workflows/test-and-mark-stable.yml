@@ -391,6 +391,13 @@ jobs:
           echo "created_after=${TIMESTAMP}" >> "$GITHUB_OUTPUT"
 
           TITLE="[E2E Smoke Test] Update smoke-test canary (run ${RUN_ID})"
+          # Expose TITLE as a step output so Phase 2's plan-poller can scope its
+          # workflow_runs query to this specific issue (via display_title — which
+          # equals the issue title for issue_comment events). Without this scoping,
+          # the poller picks "the latest non-skipped Plan run globally" and is
+          # vulnerable to API per_page truncation when many parallel test workflows
+          # generate >100 workflow runs in the same window.
+          echo "title=${TITLE}" >> "$GITHUB_OUTPUT"
 
           # Single source of truth for the canary spec lives in
           # tests/e2e_smoke_canary_spec.txt with `__RUN_ID__` as the
@@ -581,6 +588,10 @@ jobs:
         id: wait-plan
         env:
           ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
+          # ISSUE_TITLE scopes the workflow_runs query to OUR Plan run via
+          # display_title (which equals the issue title for issue_comment events).
+          # See create-issue step for rationale.
+          ISSUE_TITLE: ${{ steps.create-issue.outputs.title }}
         run: |
           set -euo pipefail
           echo "Waiting for plan to finish on issue #${ISSUE_NUMBER}..."
@@ -589,6 +600,12 @@ jobs:
           LAST_ACTIVITY=$(date +%s)
           PREV_STATE=""
           RATE_LIMIT_BACKOFF=0
+
+          if [ -z "${ISSUE_TITLE}" ]; then
+            echo "::error::Missing issue title for Plan run scoping"
+            echo "status=plan_failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
 
           gh_api_safe() {
             local output
@@ -604,18 +621,33 @@ jobs:
             echo ""; return 1
           }
 
+          fetch_plan_runs_json() {
+            gh_api_safe "repos/${TEST_REPO}/actions/runs?per_page=100&created=>${{ steps.create-issue.outputs.created_after }}"
+          }
+
+          latest_scoped_run_field() {
+            local name_re="$1"
+            local field="$2"
+            local runs_json=""
+            runs_json=$(fetch_plan_runs_json || echo "")
+            [ -n "$runs_json" ] || return 1
+            printf '%s' "$runs_json" \
+              | jq -r --arg name_re "$name_re" --arg title "$ISSUE_TITLE" --arg field "$field" '[.workflow_runs[] | select(.name | test($name_re; "i")) | select(.display_title == $title) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .[$field] // empty' 2>/dev/null
+          }
+
           # Robust workflow run-ID capture — retries on empty results to ride out
           # the brief race window where the matching run isn't yet indexed by the
           # API, and widens pagination to per_page=100 in case of high concurrent
-          # workflow run volume on the target repo. Returns the run id on stdout
+          # workflow run volume on the target repo. Filters by display_title so we
+          # only pick up the Plan run that fired for OUR issue (display_title for
+          # issue_comment events is the issue title). Returns the run id on stdout
           # (empty string if all attempts fail).
           capture_run_id() {
             local name_re="$1"
             local result=""
             local _attempt
             for _attempt in 1 2 3 4 5; do
-              result=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?per_page=100&created=>${{ steps.create-issue.outputs.created_after }}" \
-                --jq "[.workflow_runs[] | select(.name | test(\"${name_re}\"; \"i\")) | select(.conclusion != \"skipped\")] | sort_by(.created_at) | last | .id // empty" || echo "")
+              result=$(latest_scoped_run_field "$name_re" "id" || echo "")
               if [ -n "$result" ] && [ "$result" != "null" ]; then
                 printf '%s' "$result"
                 return 0
@@ -643,9 +675,18 @@ jobs:
             # Track latest comment updated_at so progress comment edits reset the timer
             LATEST_COMMENT_UPDATED=$(echo "${COMMENTS_JSON}" | jq -r '[.[].updated_at] | sort | last // ""' 2>/dev/null || echo "")
 
-            # Also check the plan workflow run status as an activity signal
-            PLAN_RUN_STATUS=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?per_page=50&created=>${{ steps.create-issue.outputs.created_after }}" \
-              --jq '[.workflow_runs[] | select(.name | test("Plan"; "i")) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .status // "unknown"' || echo "unknown")
+            # Also check the plan workflow run status as an activity signal.
+            # Filter by display_title (== issue title for issue_comment events)
+            # so we pick OUR issue's Plan run, not any concurrent Plan run from
+            # a parallel test job. Bumped per_page from 50 to 100 (the API max)
+            # so the query still surfaces our run when the release window has
+            # high workflow-run volume; v1.13.5's smoke test broke when our
+            # Plan run fell to position 51 in the unfiltered list and was
+            # truncated off the per_page=50 response.
+            PLAN_RUN_STATUS=$(latest_scoped_run_field "Plan" "status" || echo "")
+            if [ -z "$PLAN_RUN_STATUS" ] || [ "$PLAN_RUN_STATUS" = "null" ]; then
+              PLAN_RUN_STATUS="unknown"
+            fi
 
             CUR_STATE="labels=${LABELS};comments=${COMMENT_COUNT};comment_updated=${LATEST_COMMENT_UPDATED};plan_run=${PLAN_RUN_STATUS}"
 
@@ -686,26 +727,28 @@ jobs:
               if echo "$LABELS_RECHECK" | grep -qE 'ai:awaiting-approval|ai:implementing'; then
                 continue
               fi
-              # Check if other Plan runs are still queued or in-progress.
-              # The "completed" run may be a spurious trigger (e.g. non-/answer
-              # comment that caused the job to be skipped) while the real Plan
-              # run is still working.
+              # Check if other Plan runs for OUR issue are still queued or
+              # in-progress. The "completed" run may be a spurious trigger
+              # (e.g. a non-/answer comment that caused the job to be
+              # skipped while the real Plan run is still working). Filter by
+              # display_title (== issue title for issue_comment events) so we
+              # only count Plan runs for OUR issue, and use per_page=100
+              # (the API max) so high concurrent workflow-run volume in the
+              # release window doesn't truncate our run off the response.
               _plan_runs_json_valid() {
                 printf '%s' "$1" \
                   | jq -se 'length == 1 and (.[0] | type == "object" and (.workflow_runs | type == "array"))' \
                   >/dev/null 2>&1
               }
-              PLAN_RUNS_JSON='{"workflow_runs":[]}'
-              if _PLAN_RUNS_OUT=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=50&created=>${{ steps.create-issue.outputs.created_after }}" 2>/dev/null); then
-                PLAN_RUNS_JSON="$_PLAN_RUNS_OUT"
-              fi
-              unset _PLAN_RUNS_OUT
+              PLAN_RUNS_JSON=$(fetch_plan_runs_json || echo "")
               if ! _plan_runs_json_valid "$PLAN_RUNS_JSON"; then
-                PLAN_RUNS_JSON='{"workflow_runs":[]}'
+                echo "  ⏳ Unable to confirm concurrent Plan runs yet — retrying"
+                sleep "$POLL_INTERVAL"
+                continue
               fi
               OTHER_ACTIVE_PLAN_RUNS=0
               if _OTHER_ACTIVE_PLAN_RUNS=$(printf '%s' "$PLAN_RUNS_JSON" \
-                | jq -r '[.workflow_runs[] | select(.name | test("Plan"; "i")) | select(.status == "in_progress" or .status == "queued")] | length' 2>/dev/null); then
+                | jq -r --arg title "${ISSUE_TITLE}" '[.workflow_runs[] | select(.name | test("Plan"; "i")) | select(.display_title == $title) | select(.status == "in_progress" or .status == "queued")] | length' 2>/dev/null); then
                 OTHER_ACTIVE_PLAN_RUNS="$_OTHER_ACTIVE_PLAN_RUNS"
               fi
               unset _OTHER_ACTIVE_PLAN_RUNS
