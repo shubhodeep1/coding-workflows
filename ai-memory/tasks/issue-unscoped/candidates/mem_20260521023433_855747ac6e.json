@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:628-634 | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: `capture_run_id` interpolates `${ISSUE_TITLE}` directly into the jq filter string, so a future title containing jq-special characters could break the query and return an empty run id.\n  WHY: Multiple reviewers noted the shell-expanded jq string is fragile; the `--arg` pattern used elsewhere avoids parse failures.\n- .github/workflows/test-and-mark-stable.yml:668\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5]\n  PROBLEM: The PLAN_RUN_STATUS jq query also interpolates `${ISSUE_TITLE}` directly, so a title with jq-special characters would make the query fail and fall back to \"unknown.\"\n  WHY: This is the same shell-to-jq fragility at a second query site; reviewers noted the safe `--arg` pattern is already used elsewhere.\n- .github/workflows/test-and-mark-stable.yml:722-723 | confidence=1\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The OTHER_ACTIVE_PLAN_RUNS fetch uses bare `gh api` instead of the existing safe wrapper, so rate-limit failures collapse to the default empty run list.\n  WHY: The reviewer noted this makes the poller treat an unknown API failure as \"no active runs,\" which is fail-safe but can hide transient errors.\n- .github/workflows/test-and-mark-stable.yml:881\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: IMPL_RUNS_JSON still uses per_page=50, so high workflow-run volume can truncate the relevant Implement run and stale the activity signal.\n  WHY: The reviewer noted this can lead to a spurious inactivity timeout; the change to 100 was not applied here.\n- .github/workflows/test-and-mark-stable.yml:618-634, 656-671, 706-735 | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The later implement-phase `capture_run_id` call is not updated to the new `display_title` scoping, so a wrong Plan run ID can still be selected under high concurrency.\n  WHY: The reviewer says the earlier polling sites were updated, but the later call still uses the older unfiltered behavior.\n- .github/workflows/test-and-mark-stable.yml:391-403, 588-597 | confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The TITLE output is propagated as `ISSUE_TITLE`, but the surrounding comment and propagation make the fix look broader than it is; it only protects this smoke-test path.\n  WHY: The reviewer flagged misleading comments and partial propagation that could mislead maintainers about the scope of the fix.\n- .github/workflows/test-and-mark-stable.yml:615-628, 729-735 | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: When the jq filter produces no match, capture_run_id and the active-runs check fall back to empty/0 without warning or fallback, so the test can proceed without a detected Plan run.\n  WHY: The reviewer says this can trigger the later label-based failure path silently instead of surfacing the missing match.\n- .github/workflows/test-and-mark-stable.yml:618-634, 656-671 | confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The new `ISSUE_TITLE`/`display_title` filter has no fallback for older GitHub API responses that omit `display_title` or for event types that don't set issue titles identically.\n  WHY: The reviewer noted this could break backward compatibility with the previous global heuristic under older API behavior.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/test-and-mark-stable.yml:631 | direct interpolation of `${ISSUE_TITLE}` into the jq filter string can break `capture_run_id` if the title ever contains jq-special characters.\n- .github/workflows/test-and-mark-stable.yml:668 | direct interpolation of `${ISSUE_TITLE}` into the PLAN_RUN_STATUS jq query can make it fall back to `\"unknown\"` on jq parse failure.\n- .github/workflows/test-and-mark-stable.yml:722-723 | bare `gh api` for OTHER_ACTIVE_PLAN_RUNS can silently treat rate-limit failures as zero active runs.\n- .github/workflows/test-and-mark-stable.yml:881 | IMPL_RUNS_JSON still uses per_page=50, which can truncate the relevant Implement run under high volume and stale the activity signal.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/test-and-mark-stable.yml:631 and 668 | inconsistent jq variable passing: these sites interpolate `${ISSUE_TITLE}` directly instead of using the safer `--arg` pattern used elsewhere.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/test-and-mark-stable.yml:628-634 | direct interpolation of `${ISSUE_TITLE}` into the capture_run_id jq filter can parse-fail if the title ever contains jq-special characters.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/test-and-mark-stable.yml:618-634, 656-671, 706-735 | the later implement-phase `capture_run_id` call is not updated to the new `display_title` scoping, so a wrong Plan run ID can still be selected under high concurrency.\n- .github/workflows/test-and-mark-stable.yml:391-403, 588-597 | the TITLE output propagation/commentary makes the fix look broader than it is; it only protects this smoke-test path.\n- .github/workflows/test-and-mark-stable.yml:615-628, 729-735 | when the jq filter produces no match, capture_run_id and the active-runs check fall back to empty/0 without warning or fallback, so the test can proceed without a detected Plan run.\n- .github/workflows/test-and-mark-stable.yml:618-634, 656-671 | the new `ISSUE_TITLE`/`display_title` filter has no fallback for older GitHub API responses that omit `display_title` or for event types that don't set issue titles identically.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "0fc91714101180984f89ee19e32f2077228a546de3135ec985999d9d9ea5ac63",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26201109337",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26201109337",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260521023433_855747ac6e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26201109337"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 8 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-21T02:34:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
