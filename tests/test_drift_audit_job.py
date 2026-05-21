@@ -20,6 +20,10 @@ PRE_EXISTING_MARKER = (
 	"::warning::PRE_EXISTING_FINGERPRINT_DRIFT_V1 unchanged "
 	f"fp_key={FP_KEY} issue=#1500 path=\"scripts/example.py\" pattern=\"EXPECTED_LINE\" kind=must_contain"
 )
+FIXED_BY_RESOLVER_MARKER = (
+	"::notice::PRE_EXISTING_FINGERPRINT_DRIFT_V1 fixed_by_resolver "
+	f"fp_key={FP_KEY} issue=#1500 path=\"scripts/example.py\""
+)
 QUARANTINED_MARKER = f"::warning::FINGERPRINT_QUARANTINED_V1 fp_key={FP_KEY} issue=#1500"
 
 
@@ -400,12 +404,41 @@ def test_drift_audit_fail_open_when_pr_diff_is_unavailable() -> None:
 	assert "synthetic PR diff failure" in proc.stdout
 
 
+def test_drift_audit_closes_existing_issue_after_fixed_by_resolver_markers() -> None:
+	state = {
+		"run_list_responses": {
+			"review_autofix.yml": [
+				{"databaseId": 501, "createdAt": _iso(1), "status": "completed", "conclusion": "success", "url": "https://example.test/runs/501"},
+			],
+			"internal-review.yml": [],
+		},
+		"run_logs": {
+			"501": FIXED_BY_RESOLVER_MARKER + "\n",
+		},
+		"issue_list_response": [
+			{
+				"number": 9100,
+				"title": "tracker",
+				"body": _cluster_marker(FP_KEY) + "\nopen\n",
+				"url": "https://example.test/issues/9100",
+			},
+		],
+	}
+	proc, final_state = _run_drift_audit(state)
+	assert proc.returncode == 0, proc.stderr
+	assert final_state.get("issue_create_args", []) == []
+	assert final_state.get("issue_edit_args", []) == []
+	assert len(final_state.get("issue_close_args", [])) == 1
+	assert "fixed_by_resolver" in _flag_value(final_state["issue_close_args"][0], "--comment")
+
+
 def main() -> int:
 	test_drift_audit_gate_disabled_skips_without_gh_calls()
 	test_drift_audit_dedups_runs_into_one_tracker_issue()
 	test_drift_audit_edits_existing_issue_instead_of_recreating()
 	test_drift_audit_closes_resolved_quarantined_cluster()
 	test_drift_audit_fail_open_when_pr_diff_is_unavailable()
+	test_drift_audit_closes_existing_issue_after_fixed_by_resolver_markers()
 	return 0
 
 

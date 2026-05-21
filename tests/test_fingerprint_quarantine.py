@@ -91,6 +91,11 @@ def test_load_quarantine_runtime_fails_open_to_default_payload() -> None:
 	assert runtime["run_id"] == "quarantine-load-fail-open"
 
 
+def test_verifier_imports_ai_memory_quarantine_helpers() -> None:
+	assert verifier._ai_memory_load_quarantine_list is not None
+	assert verifier._ai_memory_persist_quarantine_list is not None
+
+
 def test_persist_quarantine_runtime_round_trip_sorts_entries() -> None:
 	with _stub_quarantine_store(verifier) as get_store, _set_env(
 		FINGERPRINT_QUARANTINE_RUNS_M="2",
@@ -179,6 +184,7 @@ def test_quarantine_skip_and_suppress_threshold_semantics() -> None:
 
 def main() -> int:
 	test_load_quarantine_runtime_fails_open_to_default_payload()
+	test_verifier_imports_ai_memory_quarantine_helpers()
 	test_persist_quarantine_runtime_round_trip_sorts_entries()
 	test_quarantine_skip_and_suppress_threshold_semantics()
 	return 0

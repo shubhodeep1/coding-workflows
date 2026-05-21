@@ -130,8 +130,12 @@ def _consume_json_string(text: str, start: int, prefix: str) -> tuple[str | None
 
 
 def _parse_pre_existing_marker(line: str, run: dict[str, Any]) -> dict[str, Any] | None:
-	if "PRE_EXISTING_FINGERPRINT_DRIFT_V1" not in line or " unchanged " not in line:
+	if "PRE_EXISTING_FINGERPRINT_DRIFT_V1" not in line:
 		return None
+	status_match = re.search(r"\bPRE_EXISTING_FINGERPRINT_DRIFT_V1\s+(?P<status>unchanged|fixed_by_resolver)\b", line)
+	if not status_match:
+		return None
+	status = status_match.group("status")
 	fp_start = line.find("fp_key=")
 	if fp_start == -1:
 		return None
@@ -149,8 +153,10 @@ def _parse_pre_existing_marker(line: str, run: dict[str, Any]) -> dict[str, Any]
 	pattern, pattern_end = _consume_json_string(line, position, " pattern=")
 	if pattern is not None:
 		position = pattern_end
-	kind_match = re.match(r"\s+kind=(?P<kind>\S+)", line[position:])
-	kind = kind_match.group("kind") if kind_match else None
+	kind = None
+	if status == "unchanged":
+		kind_match = re.match(r"\s+kind=(?P<kind>\S+)", line[position:])
+		kind = kind_match.group("kind") if kind_match else None
 	return {
 		"run_id": str(run["run_id"]),
 		"workflow_file": run["workflow_file"],
@@ -160,6 +166,7 @@ def _parse_pre_existing_marker(line: str, run: dict[str, Any]) -> dict[str, Any]
 		"fp_key": fp_key,
 		"fp_key_parts": list(fp_value),
 		"marker_type": "PRE_EXISTING_FINGERPRINT_DRIFT_V1",
+		"pre_existing_status": status,
 		"path": path,
 		"pattern": pattern,
 		"kind": kind,
@@ -188,6 +195,7 @@ def _parse_quarantined_marker(line: str, run: dict[str, Any]) -> dict[str, Any] 
 		"fp_key": fp_key,
 		"fp_key_parts": list(fp_value),
 		"marker_type": "FINGERPRINT_QUARANTINED_V1",
+		"pre_existing_status": None,
 		"path": None,
 		"pattern": None,
 		"kind": None,
@@ -235,6 +243,7 @@ def _build_clusters(occurrences: list[dict[str, Any]]) -> list[dict[str, Any]]:
 				"path": None,
 				"pattern": None,
 				"kind": None,
+				"pre_existing_statuses": set(),
 				"issue_numbers": set(),
 				"run_ids": set(),
 				"marker_types": set(),
@@ -256,6 +265,8 @@ def _build_clusters(occurrences: list[dict[str, Any]]) -> list[dict[str, Any]]:
 			cluster["pattern"] = occurrence["pattern"]
 		if cluster["kind"] is None and occurrence.get("kind"):
 			cluster["kind"] = occurrence["kind"]
+		if occurrence.get("pre_existing_status"):
+			cluster["pre_existing_statuses"].add(occurrence["pre_existing_status"])
 
 	for cluster in clusters.values():
 		parts = cluster.get("fp_key_parts") or []
@@ -263,6 +274,7 @@ def _build_clusters(occurrences: list[dict[str, Any]]) -> list[dict[str, Any]]:
 			cluster["path"] = parts[0]
 		if cluster["pattern"] is None and len(parts) > 1:
 			cluster["pattern"] = parts[1]
+		cluster["pre_existing_statuses"] = sorted(cluster["pre_existing_statuses"])
 		cluster["issue_numbers"] = sorted(cluster["issue_numbers"])
 		cluster["run_ids"] = sorted(cluster["run_ids"])
 		cluster["marker_types"] = sorted(cluster["marker_types"])
@@ -277,6 +289,11 @@ def _build_clusters(occurrences: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _is_persistent_cluster(cluster: dict[str, Any]) -> bool:
 	return "FINGERPRINT_QUARANTINED_V1" in cluster["marker_types"] or len(cluster["run_ids"]) >= PERSISTENT_RUN_THRESHOLD
+
+
+def _cluster_has_only_fixed_markers(cluster: dict[str, Any]) -> bool:
+	statuses = set(cluster.get("pre_existing_statuses") or [])
+	return "fixed_by_resolver" in statuses and "unchanged" not in statuses
 
 
 def _list_recent_runs(repo: str, workflow_file: str, cutoff: datetime) -> list[dict[str, Any]]:
@@ -500,6 +517,12 @@ def _recheck_cluster(
 	pr_files_cache: dict[int, list[dict[str, Any]] | None],
 	repo: str,
 ) -> dict[str, Any]:
+	if _cluster_has_only_fixed_markers(cluster):
+		return {
+			"applicable": False,
+			"resolved": True,
+			"reason": "recent review/autofix runs only reported fixed_by_resolver for this fingerprint",
+		}
 	if "FINGERPRINT_QUARANTINED_V1" not in cluster["marker_types"]:
 		return {
 			"applicable": False,
@@ -660,12 +683,16 @@ def main() -> int:
 		_log("no drift markers found in recent runs.")
 		return 0
 
-	clusters = [cluster for cluster in _build_clusters(occurrences) if _is_persistent_cluster(cluster)]
+	tracker_issues = _tracker_issue_lookup(repo)
+	clusters = []
+	for cluster in _build_clusters(occurrences):
+		marker_hash = _cluster_marker_hash(cluster["fp_key"])
+		if _is_persistent_cluster(cluster) or (marker_hash in tracker_issues and _cluster_has_only_fixed_markers(cluster)):
+			clusters.append(cluster)
 	if not clusters:
-		_log("no persistent drift clusters found.")
+		_log("no drift clusters requiring action found.")
 		return 0
 
-	tracker_issues = _tracker_issue_lookup(repo)
 	quarantined_issue_numbers = sorted(
 		{
 			issue_number
