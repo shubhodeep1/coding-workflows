@@ -3051,11 +3051,33 @@ capture_intent_fingerprints_for_merged_subissue() {
     return 0
   fi
 
+  # Resolve the integration branch ref so the post-merge presence filter
+  # inside the python heredoc can read the post-merge file content via
+  # ``git show``. Fingerprint capture runs after the orchestrator detects
+  # the sub-issue PR has merged onto the integration branch, so the
+  # remote tip already reflects the post-merge state. Best-effort fetch
+  # — fail-open: if the fetch fails or the branch is unknown, the python
+  # heredoc skips the post-merge filter (the existing net-change /
+  # substring-overlap filters still apply, and the verifier-side
+  # partial-removal defense catches the remaining false positives).
+  local integration_branch_for_capture integration_ref_for_capture=""
+  integration_branch_for_capture="$(jq -r '.integration_branch // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+  if [ -n "${integration_branch_for_capture}" ] && [ "${integration_branch_for_capture}" != "null" ]; then
+    if git fetch --no-tags --quiet origin \
+        "refs/heads/${integration_branch_for_capture}:refs/remotes/origin/${integration_branch_for_capture}" \
+        2>/dev/null; then
+      integration_ref_for_capture="refs/remotes/origin/${integration_branch_for_capture}"
+    elif git rev-parse --verify --quiet "refs/remotes/origin/${integration_branch_for_capture}" >/dev/null 2>&1; then
+      integration_ref_for_capture="refs/remotes/origin/${integration_branch_for_capture}"
+    fi
+  fi
+
   local fp_json
   fp_json="$(FINGERPRINT_PER_FILE_CAP="${FINGERPRINT_PER_FILE_CAP}" \
     FINGERPRINT_MIN_PATTERN_CHARS="${FINGERPRINT_MIN_PATTERN_CHARS}" \
+    FINGERPRINT_POST_MERGE_REF="${integration_ref_for_capture}" \
     python3 - "${diff_file}" <<'PY' 2>/dev/null || true
-import json, os, re, sys
+import json, os, re, subprocess, sys
 from collections import Counter
 
 cap = int(os.environ.get("FINGERPRINT_PER_FILE_CAP", "12"))
@@ -3249,6 +3271,56 @@ for p in removed_paths:
         continue
     seen_removed_paths.add(p)
     removed_paths_unique.append(p)
+
+# Post-merge presence filter: drop any removed line whose stripped
+# text still appears in the post-merge file content. This catches
+# the multi-occurrence partial-removal case: a PR that removes line
+# X from one position while leaving X at other positions in the same
+# file. The unified-diff parser only sees the per-position removal,
+# so X ends up in must_not_contain even though it survives in the
+# post-merge tree. Without this filter the verifier later re-detects
+# X (because re.search hits an unchanged occurrence) and reports a
+# fake regression. The post-merge ref is the integration branch tip
+# at capture time — capture runs after the orchestrator observes the
+# sub-issue PR as merged, so the integration branch already reflects
+# the merge. Fail-open: any git failure (no ref, file absent, decode
+# error) leaves the candidate line in place; the verifier-side
+# partial-removal defense in scripts/verify_integration_fingerprints.py
+# provides the second line of defense for those leftover false
+# positives.
+post_merge_ref = (os.environ.get("FINGERPRINT_POST_MERGE_REF") or "").strip()
+if post_merge_ref and per_file_removed:
+    for path in list(per_file_removed.keys()):
+        try:
+            git_result = subprocess.run(
+                ["git", "show", f"{post_merge_ref}:{path}"],
+                capture_output=True,
+                check=False,
+                timeout=15,
+            )
+        except Exception:
+            continue
+        if git_result.returncode != 0:
+            continue
+        try:
+            post_merge_content = git_result.stdout.decode("utf-8", errors="replace")
+        except Exception:
+            continue
+        kept_lines: list[str] = []
+        for raw in per_file_removed[path]:
+            stripped = raw.strip()
+            if not stripped:
+                continue
+            try:
+                if re.search(re.escape(stripped), post_merge_content):
+                    continue
+            except re.error:
+                pass
+            kept_lines.append(raw)
+        if kept_lines:
+            per_file_removed[path] = kept_lines
+        else:
+            del per_file_removed[path]
 
 result = {
     "must_contain": to_patterns(per_file_added),
