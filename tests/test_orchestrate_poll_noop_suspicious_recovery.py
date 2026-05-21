@@ -285,8 +285,9 @@ def test_sweep_skips_orchestrator_project_branches():
 	"""Integration / orchestrator-managed branches have their own
 	merge cadence; this sweep must NOT touch them."""
 	sweep = _sweep_block()
-	assert "orchestrator/project-" in sweep, (
-		"Sweep must explicitly skip PRs targeting orchestrator/project-* base branches."
+	assert '[[ "${N_BASE}" == orchestrator/project-* ]] || [[ "${N_HEAD}" == orchestrator/project-* ]]' in sweep, (
+		"Sweep must explicitly skip both PRs targeting orchestrator/project-* base branches "
+		"and final integration PRs whose head branch is orchestrator/project-*."
 	)
 
 
