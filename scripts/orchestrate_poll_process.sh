@@ -4171,6 +4171,7 @@ _check_branch_rebuild_threshold() {
 
   if [ -z "${resolver_retry_escalated_at}" ]; then
     BRANCH_REBUILD_SKIP_REASON="missing_escalated_at"
+    BRANCH_REBUILD_ESCALATED_ERROR="Branch rebuild threshold check could not find the resolver escalation timestamp in the final PR retry state."
     return 1
   fi
 
@@ -4178,9 +4179,16 @@ _check_branch_rebuild_threshold() {
   local escalated_ts
   local threshold_secs
   now_ts="$(date -u +%s)"
+  if ! [[ "${now_ts}" =~ ^[0-9]+$ ]]; then
+    echo "::warning::[branch-rebuild] date -u +%s returned a non-numeric current time during threshold evaluation." >&2
+    BRANCH_REBUILD_SKIP_REASON="invalid_current_time"
+    BRANCH_REBUILD_ESCALATED_ERROR="Branch rebuild threshold check could not read the current UTC epoch time."
+    return 1
+  fi
   escalated_ts="$(_iso8601_to_epoch "${resolver_retry_escalated_at}" || echo "")"
   if ! [[ "${escalated_ts}" =~ ^[0-9]+$ ]]; then
     BRANCH_REBUILD_SKIP_REASON="invalid_escalated_at"
+    BRANCH_REBUILD_ESCALATED_ERROR="Branch rebuild threshold check could not parse the resolver escalation timestamp from the final PR retry state."
     return 1
   fi
 
@@ -4476,7 +4484,7 @@ _attempt_branch_rebuild_after_escalation() {
 
   # Replay exit codes: 20=worktree inaccessible, 21=missing/invalid
   # merge SHA, 22=missing commit object, 23=cherry-pick failed,
-  # 24=push failed.
+  # 24=push failed, 25=invalid parent-count parse.
   (
     set +e
     cd "${worktree_dir}" || exit 20
@@ -4496,6 +4504,10 @@ _attempt_branch_rebuild_after_escalation() {
       fi
 
       parent_count="$(printf '%s\n' "${parent_line}" | awk '{print NF - 1}')"
+      if ! [[ "${parent_count}" =~ ^[0-9]+$ ]]; then
+        echo "invalid parent count for ${merge_commit_sha}: ${parent_count}" >> "${replay_log}"
+        exit 25
+      fi
       if [ "${parent_count}" -gt 1 ]; then
         git cherry-pick -m 1 --allow-empty "${merge_commit_sha}" >>"${replay_log}" 2>&1 || exit 23
       else
@@ -4517,6 +4529,7 @@ _attempt_branch_rebuild_after_escalation() {
       22) replay_failure_context="replay commit object was not available in the local clone" ;;
       23) replay_failure_context="git cherry-pick failed while replaying merged sub-PR commits" ;;
       24) replay_failure_context="git push failed after replaying merged sub-PR commits" ;;
+      25) replay_failure_context="replay parent-count parsing failed before cherry-pick mode selection" ;;
       *) replay_failure_context="branch rebuild replay failed" ;;
     esac
     failure_detail="$(tail -n 20 "${replay_log}" 2>/dev/null | tr '\r\n' '  ' | sed 's/[[:space:]]\+/ /g' | cut -c1-2000)"
@@ -7833,10 +7846,15 @@ _fetch_standalone_marker_issues_graphql() {
 #   { "123": {"state": "open|closed",
 #             "labels": ["ai:clarification"],
 #             "comments": [{"id":N,"body":"...","created_at":"..."},...],
-#             "linked_pr": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool,"head_sha":"<oid>"|null,"headPushedAt":"ISO8601"|null} | null },
+#             "linked_pr": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool,
+#                           "merged_at":"ISO8601"|null,"merge_commit_sha":"<oid>"|null,
+#                           "head_ref":"branch"|null,"head_sha":"<oid>"|null,
+#                           "mergeable":"<enum>"|null,"merge_state_status":"<enum>"|null,
+#                           "headPushedAt":"ISO8601"|null} | null },
 #     ... }
 # `headPushedAt` is the linked PR's head commit pushedDate (coalesced
 # to committedDate when pushedDate is null, e.g. for squashed commits).
+# `mergeable` and `merge_state_status` mirror GitHub's GraphQL enum strings.
 # Consumed by the fresh-push stall-recovery guard (see
 # _check_fresh_push_guard) to suppress recovery dispatches while
 # autofix-driven activity is still landing on the PR.
