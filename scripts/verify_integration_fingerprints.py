@@ -291,6 +291,173 @@ def _path_exists(path: str, exists_cache: dict[str, tuple[bool, str | None]], re
 	return exists
 
 
+# Cache for _find_pr_merge_commit_for_path keyed on (ref, pr_num, normalized_path).
+# Populated lazily during verify; bounded by the number of distinct
+# (issue, path) pairs in the fingerprint state, which is small.
+_PR_MERGE_COMMIT_CACHE: dict[tuple[str, str, str], str | None] = {}
+
+# Cache for file content at a specific ref/path used by the partial-removal
+# false-positive defense. Distinct from _read_file_result's cache because
+# the defense reads at the PR's merge commit (a different ref than the
+# verifier's current ref) and we want to avoid re-shelling out git show
+# for the same (merge_commit, path) pair across issues / patterns.
+_PARTIAL_REMOVAL_POST_MERGE_CACHE: dict[tuple[str, str], str | None] = {}
+
+
+def _find_pr_merge_commit_for_path(ref: str | None, pr_num: Any, path: str) -> str | None:
+	"""Find the commit on ``ref`` (or HEAD) that merged PR #pr_num and touched ``path``.
+
+	Used by the must_not_contain partial-removal false-positive defense
+	to look up the file's post-merge state at the captured PR's merge
+	commit. Walks the integration branch history oldest-first and picks
+	the first commit whose *subject* ends with the GitHub squash-merge
+	marker ``(#<pr_num>)``. This avoids selecting a later follow-up
+	commit that merely mentions the PR number while touching the same
+	path.
+
+	Args:
+		ref: git ref to walk; if None, falls back to ``HEAD``.
+		pr_num: the PR number captured in the fingerprint entry.
+		path: the file path the fingerprint pattern targets.
+
+	Returns:
+		The merge commit SHA on success; None when the PR can't be
+		identified, the git plumbing fails, or the inputs are invalid.
+		Callers MUST treat None as "defense check inconclusive" and
+		fall through to the original violation.
+
+	API call count: zero (uses ``git`` locally). Cached per
+	(ref, pr_num, normalized_path) so repeated fingerprint patterns
+	on the same file share a single ``git log`` invocation. Fail-open
+	on any subprocess / encoding error.
+	"""
+	pr_str = str(pr_num).strip() if pr_num is not None else ""
+	if not pr_str.isdigit():
+		return None
+	normalized_path, path_error = _normalize_repo_path(path)
+	if path_error is not None or normalized_path is None:
+		return None
+	effective_ref = _normalize_ref(ref) or "HEAD"
+	merge_suffix = f"(#{pr_str})"
+	cache_key = (effective_ref, pr_str, normalized_path)
+	if cache_key in _PR_MERGE_COMMIT_CACHE:
+		return _PR_MERGE_COMMIT_CACHE[cache_key]
+	try:
+		git_result = subprocess.run(
+			[
+				"git", "log",
+				"--reverse",
+				"--format=%H%x00%s",
+				f"--grep={merge_suffix}",
+				effective_ref,
+				"--",
+				normalized_path,
+			],
+			capture_output=True,
+			check=False,
+			timeout=GIT_COMMAND_TIMEOUT_SECS,
+		)
+	except Exception:  # noqa: BLE001 — defense check must stay fail-open
+		_PR_MERGE_COMMIT_CACHE[cache_key] = None
+		return None
+	if git_result.returncode != 0:
+		_PR_MERGE_COMMIT_CACHE[cache_key] = None
+		return None
+	resolved = None
+	for raw_line in git_result.stdout.decode("utf-8", errors="replace").splitlines():
+		sha, _sep, subject = raw_line.partition("\x00")
+		if not sha or not subject:
+			continue
+		if subject.rstrip().endswith(merge_suffix):
+			resolved = sha.strip() or None
+			break
+	_PR_MERGE_COMMIT_CACHE[cache_key] = resolved
+	return resolved
+
+
+def _read_file_at_merge_commit(merge_commit: str, path: str) -> str | None:
+	"""Read file content from a specific git commit.
+
+	Used by the must_not_contain partial-removal false-positive defense
+	to inspect the file's state at the captured PR's merge commit.
+	Cached per (merge_commit, normalized_path) so repeated lookups
+	don't re-shell out.
+
+	Returns None on any failure (file absent at that commit, git error,
+	encoding error). Callers MUST treat None as "defense check
+	inconclusive".
+	"""
+	if not merge_commit:
+		return None
+	normalized_path, path_error = _normalize_repo_path(path)
+	if path_error is not None or normalized_path is None:
+		return None
+	cache_key = (merge_commit, normalized_path)
+	if cache_key in _PARTIAL_REMOVAL_POST_MERGE_CACHE:
+		return _PARTIAL_REMOVAL_POST_MERGE_CACHE[cache_key]
+	try:
+		git_result = subprocess.run(
+			["git", "show", f"{merge_commit}:{normalized_path}"],
+			capture_output=True,
+			check=False,
+			timeout=GIT_COMMAND_TIMEOUT_SECS,
+		)
+	except Exception:  # noqa: BLE001 — defense check must stay fail-open
+		_PARTIAL_REMOVAL_POST_MERGE_CACHE[cache_key] = None
+		return None
+	if git_result.returncode != 0:
+		_PARTIAL_REMOVAL_POST_MERGE_CACHE[cache_key] = None
+		return None
+	try:
+		content = git_result.stdout.decode("utf-8", errors="replace")
+	except Exception:  # noqa: BLE001 — defense check must stay fail-open
+		_PARTIAL_REMOVAL_POST_MERGE_CACHE[cache_key] = None
+		return None
+	_PARTIAL_REMOVAL_POST_MERGE_CACHE[cache_key] = content
+	return content
+
+
+def _is_must_not_contain_partial_removal_false_positive(
+	ref: str | None,
+	pr_num: Any,
+	path: str,
+	pattern: "re.Pattern[str]",
+) -> str | None:
+	"""Detect must_not_contain capture false positives (multi-occurrence partial removal).
+
+	Capture emits a must_not_contain pattern for every PR-removed line
+	that survives the existing net-change / substring-overlap filters
+	in ``capture_intent_fingerprints_for_merged_subissue``. Neither
+	filter catches the case where a line existed at N>1 distinct
+	positions in the file pre-PR and the PR only removed K<N of them:
+	the line still exists in the post-merge file, but capture records
+	a must_not_contain anyway and verify later trips on the unchanged
+	occurrences as a fake "reappeared" violation.
+
+	This defense detects the case by re-reading the file at the
+	captured PR's merge commit: if the pattern still matches there,
+	then the PR did not fully delete the line and the captured
+	must_not_contain entry is a false positive that should be skipped
+	(with a warning marker so the bug is observable).
+
+	Returns the merge commit SHA when the pattern is confirmed as a
+	false positive (caller should skip the violation); None otherwise
+	(caller should surface the original violation). Fail-open on any
+	plumbing error so genuine regressions still fail the gate.
+	"""
+	merge_commit = _find_pr_merge_commit_for_path(ref, pr_num, path)
+	if not merge_commit:
+		return None
+	post_merge_content = _read_file_at_merge_commit(merge_commit, path)
+	if post_merge_content is None:
+		return None
+	try:
+		matched = bool(pattern.search(post_merge_content))
+	except Exception:  # noqa: BLE001 — defense check must stay fail-open
+		return None
+	return merge_commit if matched else None
+
+
 def _fp_key(fp: Any) -> tuple[str, str] | None:
 	if not isinstance(fp, dict):
 		return None
@@ -659,6 +826,36 @@ def _evaluate_fp_state(
 			"violation": None,
 		}
 	if pattern.search(content):
+		false_positive_merge_commit = _is_must_not_contain_partial_removal_false_positive(
+			ref, pr_num, path, pattern,
+		)
+		if false_positive_merge_commit:
+			print(
+				f"::warning::FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1 "
+				f"issue=#{issue_num} pr=#{pr_num} file={path} "
+				f"merge_commit={false_positive_merge_commit[:12]} "
+				f"reason=must_not_contain_pattern_still_present_at_pr_merge_commit",
+				flush=True,
+				file=sys.stderr,
+			)
+			print(
+				f"::warning::issue #{issue_num} (PR #{pr_num}): must_not_contain pattern in '{path}' "
+				"classified as capture-side false positive (line was already present in the "
+				"file at the captured PR's merge commit — capture should have dropped the "
+				"pattern under the multi-occurrence partial-removal filter). "
+				f"Skipping violation. Pattern (first 200 chars): {regex_src[:200]}",
+				flush=True,
+				file=sys.stderr,
+			)
+			return {
+				"kind": kind,
+				"path": path,
+				"regex": regex_src,
+				"fp_key": fp_key,
+				"satisfied": True,
+				"check_error": None,
+				"violation": None,
+			}
 		return {
 			"kind": kind,
 			"path": path,
@@ -1098,6 +1295,8 @@ def list_violated_files(fingerprints: dict[str, Any], ref: str | None = None) ->
 	for issue_key, entry in fingerprints.items():
 		if not isinstance(entry, dict):
 			continue
+		issue_num = entry.get("issue", issue_key)
+		pr_num = entry.get("pr", "?")
 		# Cross-dedup: stay silent in list-violated-files mode — the stdout
 		# contract is "file paths ONLY" and the verify path already emits the
 		# operator-visible warnings.
@@ -1109,7 +1308,7 @@ def list_violated_files(fingerprints: dict[str, Any], ref: str | None = None) ->
 		must_not_exist = entry.get("must_not_exist", []) or []
 
 		for fp in must_contain:
-			state = _evaluate_fp_state(fp, "must_contain", issue_num="?", pr_num="?", file_cache=file_cache, exists_cache=exists_cache, ref=ref)
+			state = _evaluate_fp_state(fp, "must_contain", issue_num=issue_num, pr_num=pr_num, file_cache=file_cache, exists_cache=exists_cache, ref=ref)
 			if state is None:
 				continue
 			if state["check_error"] is not None:
@@ -1118,7 +1317,7 @@ def list_violated_files(fingerprints: dict[str, Any], ref: str | None = None) ->
 				violated.add(state["path"])
 
 		for fp in must_not_contain:
-			state = _evaluate_fp_state(fp, "must_not_contain", issue_num="?", pr_num="?", file_cache=file_cache, exists_cache=exists_cache, ref=ref)
+			state = _evaluate_fp_state(fp, "must_not_contain", issue_num=issue_num, pr_num=pr_num, file_cache=file_cache, exists_cache=exists_cache, ref=ref)
 			if state is None:
 				continue
 			if state["check_error"] is not None:
@@ -1127,7 +1326,7 @@ def list_violated_files(fingerprints: dict[str, Any], ref: str | None = None) ->
 				violated.add(state["path"])
 
 		for fp in must_not_exist:
-			state = _evaluate_fp_state(fp, "must_not_exist", issue_num="?", pr_num="?", file_cache=file_cache, exists_cache=exists_cache, ref=ref)
+			state = _evaluate_fp_state(fp, "must_not_exist", issue_num=issue_num, pr_num=pr_num, file_cache=file_cache, exists_cache=exists_cache, ref=ref)
 			if state is None:
 				continue
 			if state["check_error"] is not None:
