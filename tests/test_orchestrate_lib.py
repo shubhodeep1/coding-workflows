@@ -875,7 +875,6 @@ def test_parse_iso8601_to_epoch_fails_open_on_timestamp_conversion_errors():
 	finally:
 		orchestrate_lib.datetime = original_datetime
 
-
 def test_cmd_check_stalls_parses_head_pushed_at_json_and_threads_it_through(tmp_path=None):
 	"""``cmd_check_stalls`` must accept ``--head-pushed-at-json`` and pass
 	the parsed mapping into ``detect_stalls``.  Validates the CLI wiring
