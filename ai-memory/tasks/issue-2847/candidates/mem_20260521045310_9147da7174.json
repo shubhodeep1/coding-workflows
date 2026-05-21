@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1\nWhich exact part of this repo should change?\nChoices:\nA. A specific workflow or prompt file \u2014 reply with the exact path or workflow name (for example: `.github/workflows/ai-clarify.yml` or `prompts/mode-clarify.txt`) (RECOMMENDED)\nB. A shared script/helper under `scripts/` \u2014 reply with the exact path or function name\nC. Documentation / README / workflow template files \u2014 reply with the exact file path(s)\nD. I only know the pipeline phase so far \u2014 reply with which one (`clarify`, `plan`, `implement`, `review_autofix`, `orchestrate`, or `validate`)\nQ2\nWhat kind of improvement do you want?\nChoices:\nA. Fix a specific bug/regression \u2014 describe the current behavior and the expected behavior (RECOMMENDED)\nB. Add or change automation behavior \u2014 describe the exact new behavior wanted\nC. Reduce noise, runtime, flakiness, or cost \u2014 name the symptom or metric to improve\nD. Improve docs/onboarding/operator guidance \u2014 say what is confusing or missing\nQ3\nWhat concrete evidence or acceptance signal should planning use?\nChoices:\nA. Link one issue, PR, workflow run, or log snippet that shows the problem (RECOMMENDED)\nB. Give a short before/after example of the desired behavior\nC. Name the exact files, outputs, labels, comments, or workflow results that should change\nD. I do not have a link/example, but I can provide the acceptance criteria in free text",
+  "fingerprint": "ab94c734772c5b6fee89f2baf329d4f773d71b92b1bf251e88769949c77781cb",
+  "lineage": {
+    "issue_number": 2847,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26206126927",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26206126927",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260521045310_9147da7174",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2847,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26206126927"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #2847 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-21T04:53:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
