@@ -7140,6 +7140,13 @@ def test_capture_intent_fingerprints_helper_is_defined_and_idempotent():
 	assert "capture_intent_fingerprints_for_merged_subissue()" in script
 	assert "FINGERPRINT_PER_FILE_CAP" in script
 	assert "FINGERPRINT_MIN_PATTERN_CHARS" in script
+	assert "FINGERPRINT_POST_MERGE_REF" in script
+	assert "git rev-parse --verify FETCH_HEAD" in script
+	assert "command -v timeout >/dev/null 2>&1" in script
+	assert 'GIT_COMMAND_TIMEOUT_SECS="${integration_fetch_timeout_secs}"' in script
+	assert 'GIT_TERMINAL_PROMPT=0 timeout "${integration_fetch_timeout_secs}s"' in script
+	assert "skipping post-merge presence filter" in script
+	assert 'elif git rev-parse --verify --quiet "refs/remotes/origin/${integration_branch_for_capture}"' not in script
 	# Idempotency guard — must short-circuit when fingerprints are
 	# already recorded for that issue.
 	assert ".merged_issue_fingerprints[$k]" in script
@@ -7213,6 +7220,24 @@ def test_verify_integration_fingerprints_baseline_regressions():
 	spec = importlib.util.spec_from_file_location(
 		"test_verify_integration_fingerprints_baseline",
 		REPO_ROOT / "tests" / "test_verify_integration_fingerprints_baseline.py",
+	)
+	assert spec is not None and spec.loader is not None
+	mod = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(mod)
+	for name, value in sorted(vars(mod).items()):
+		if name.startswith("test_") and callable(value):
+			value()
+
+
+def test_verify_integration_fingerprints_partial_removal_regressions():
+	# CI/release workflows run explicit `python3 tests/<file>.py` allowlists,
+	# so execute the dedicated partial-removal verifier suite from this
+	# already-allowlisted harness too.
+	import importlib.util
+
+	spec = importlib.util.spec_from_file_location(
+		"test_verify_integration_fingerprints_partial_removal",
+		REPO_ROOT / "tests" / "test_verify_integration_fingerprints_partial_removal.py",
 	)
 	assert spec is not None and spec.loader is not None
 	mod = importlib.util.module_from_spec(spec)
