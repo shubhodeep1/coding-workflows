@@ -1446,6 +1446,8 @@ def compare_against_baseline_with_tier(
 					int(quarantine_runtime["threshold"]),
 					str(quarantine_runtime["run_id"]),
 				):
+					quarantine_observed_keys.add(quarantine_key)
+					quarantine_unchanged_keys.add(quarantine_key)
 					_emit_quarantine_marker(issue_key, issue_num, fp_key, quarantine_runtime)
 					continue
 				state = _evaluate_fp_state(fp, kind, issue_num, pr_num, file_cache, exists_cache, ref=ref)
@@ -1505,16 +1507,21 @@ def compare_against_baseline_with_tier(
 				tolerated_states,
 			)
 
+	_emit_must_contain_ratio(branch, mc_compare_satisfied, mc_compare_expected)
+	if tier == "warn_only":
+		_persist_quarantine_runtime(
+			quarantine_runtime,
+			observed_keys=quarantine_observed_keys,
+			unchanged_keys=quarantine_unchanged_keys,
+		)
+		return _emit_warn_only_success(branch, warn_only_violations)
+	if violations:
+		return _emit_verify_failure(violations)
 	_persist_quarantine_runtime(
 		quarantine_runtime,
 		observed_keys=quarantine_observed_keys,
 		unchanged_keys=quarantine_unchanged_keys,
 	)
-	_emit_must_contain_ratio(branch, mc_compare_satisfied, mc_compare_expected)
-	if tier == "warn_only":
-		return _emit_warn_only_success(branch, warn_only_violations)
-	if violations:
-		return _emit_verify_failure(violations)
 	if pre_existing_drift_count > 0 and suppressed_must_contain_count > 0:
 		print(
 			f"Integration fingerprint verification PASSED under tier '{tier}' with pre-existing drift — "
@@ -1895,6 +1902,8 @@ def compare_against_baseline(
 					int(quarantine_runtime["threshold"]),
 					str(quarantine_runtime["run_id"]),
 				):
+					quarantine_observed_keys.add(quarantine_key)
+					quarantine_unchanged_keys.add(quarantine_key)
 					_emit_quarantine_marker(issue_key, issue_num, fp_key, quarantine_runtime)
 					continue
 				state = _evaluate_fp_state(fp, kind, issue_num, pr_num, file_cache, exists_cache, ref=ref)
@@ -1939,14 +1948,14 @@ def compare_against_baseline(
 				_emit_pre_existing_drift_marker(state, issue_num, fixed_by_resolver=False)
 				pre_existing_drift_count += 1
 
+	_emit_must_contain_ratio(branch, mc_compare_satisfied, mc_compare_expected)
+	if violations:
+		return _emit_verify_failure(violations)
 	_persist_quarantine_runtime(
 		quarantine_runtime,
 		observed_keys=quarantine_observed_keys,
 		unchanged_keys=quarantine_unchanged_keys,
 	)
-	_emit_must_contain_ratio(branch, mc_compare_satisfied, mc_compare_expected)
-	if violations:
-		return _emit_verify_failure(violations)
 	if pre_existing_drift_count > 0:
 		print(
 			"Integration fingerprint verification PASSED with pre-existing drift — resolver did not introduce any new regressions "

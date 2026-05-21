@@ -376,6 +376,7 @@ def _load_quarantine_list(
             "error": error_text,
         }
     except (MemoryValidationError, json.JSONDecodeError, OSError, ValueError) as exc:
+        _emit_fingerprint_quarantine_fallback(mode="get", reason="load_failed")
         return {
             "ok": True,
             "enabled": True,
@@ -428,7 +429,16 @@ def _persist_quarantine_list(
             operation=_op,
         )
         return {"ok": True, "enabled": True, **result}
-    except (MemoryValidationError, json.JSONDecodeError, OSError, ValueError, MemoryGitError) as exc:
+    except MemoryGitError as exc:
+        return {
+            "ok": True,
+            "enabled": True,
+            "stored": False,
+            "quarantine": None,
+            "warning": _sanitize_git_error(str(exc)),
+        }
+    except (MemoryValidationError, json.JSONDecodeError, OSError, ValueError) as exc:
+        _emit_fingerprint_quarantine_fallback(mode="put", reason="persist_failed")
         return {
             "ok": True,
             "enabled": True,

@@ -437,7 +437,7 @@ def test_verify_integration_fingerprints_quarantine_promotes_then_skips_next_run
 			assert rc == 0
 			assert '::warning::FINGERPRINT_QUARANTINED_V1 fp_key=["scripts/example.py","EXPECTED_LINE"] issue=#1500' in out_run3
 			assert "PRE_EXISTING_FINGERPRINT_DRIFT_V1 unchanged" not in out_run3
-			assert get_store()["entries"][0]["consecutive_unchanged_runs"] == 2
+			assert get_store()["entries"][0]["consecutive_unchanged_runs"] == 3
 			assert err_run3 == ""
 
 			with _set_env(FINGERPRINT_QUARANTINE_RUNS_M="2", GITHUB_RUN_ID="quarantine-promote-run-3"):
@@ -449,7 +449,7 @@ def test_verify_integration_fingerprints_quarantine_promotes_then_skips_next_run
 			assert rc == 0
 			assert "FINGERPRINT_QUARANTINED_V1" not in out_run3_repeat
 			assert "PRE_EXISTING_FINGERPRINT_DRIFT_V1 unchanged" not in out_run3_repeat
-			assert get_store()["entries"][0]["consecutive_unchanged_runs"] == 2
+			assert get_store()["entries"][0]["consecutive_unchanged_runs"] == 3
 			assert err_run3_repeat == ""
 
 
@@ -558,6 +558,88 @@ def test_verify_integration_fingerprints_quarantine_load_failure_fails_open() ->
 		assert rc == 0
 		assert "PRE_EXISTING_FINGERPRINT_DRIFT_V1 unchanged" in out
 		assert "FINGERPRINT_QUARANTINED_V1" not in out
+		assert err == ""
+
+
+def test_verify_integration_fingerprints_compare_failure_does_not_persist_quarantine_state() -> None:
+	mod = _verifier_module()
+	files = {
+		"scripts/example.py": "STABLE_LINE\n",
+	}
+	fingerprints = {
+		"1500": {
+			"issue": 1500,
+			"pr": 1501,
+			"must_contain": [
+				{"file": "scripts/example.py", "regex": r"LEGACY_LINE"},
+				{"file": "scripts/example.py", "regex": r"STABLE_LINE"},
+			],
+			"must_not_contain": [],
+		}
+	}
+	with _sandbox(files, fingerprints) as (sandbox, fp_path):
+		baseline_path = sandbox / "baseline.json"
+		rc, _out, _err = _run_verifier(
+			mod,
+			["--baseline-fingerprints-state", str(baseline_path), str(fp_path)],
+			sandbox,
+		)
+		assert rc == 0
+		(sandbox / "scripts" / "example.py").write_text("BROKEN_LINE\n", encoding="utf-8")
+		with _stub_quarantine_store(mod) as get_store:
+			rc, out, err = _run_verifier(
+				mod,
+				["--compare-against-baseline", str(baseline_path), str(fp_path)],
+				sandbox,
+			)
+		assert rc == 1
+		assert "PRE_EXISTING_FINGERPRINT_DRIFT_V1 unchanged" in out
+		assert "Integration fingerprint verification FAILED" in out
+		assert get_store()["entries"] == []
+		assert err == ""
+
+
+def test_verify_integration_fingerprints_ratio_failure_does_not_persist_quarantine_state() -> None:
+	mod = _verifier_module()
+	files = {
+		"scripts/example.py": "STABLE_LINE\n",
+	}
+	fingerprints = {
+		"1500": {
+			"issue": 1500,
+			"pr": 1501,
+			"must_contain": [
+				{"file": "scripts/example.py", "regex": r"LEGACY_LINE"},
+				{"file": "scripts/example.py", "regex": r"STABLE_LINE"},
+			],
+			"must_not_contain": [],
+		}
+	}
+	with _sandbox(files, fingerprints) as (sandbox, fp_path):
+		baseline_path = sandbox / "baseline.json"
+		rc, _out, _err = _run_verifier(
+			mod,
+			["--baseline-fingerprints-state", str(baseline_path), str(fp_path)],
+			sandbox,
+		)
+		assert rc == 0
+		(sandbox / "scripts" / "example.py").write_text("BROKEN_LINE\n", encoding="utf-8")
+		with _stub_quarantine_store(mod) as get_store:
+			rc, out, err = _run_verifier(
+				mod,
+				[
+					"--compare-against-baseline",
+					str(baseline_path),
+					"--verification-tier",
+					"ratio",
+					str(fp_path),
+				],
+				sandbox,
+			)
+		assert rc == 1
+		assert "PRE_EXISTING_FINGERPRINT_DRIFT_V1 unchanged" in out
+		assert "Integration fingerprint verification FAILED" in out
+		assert get_store()["entries"] == []
 		assert err == ""
 
 
