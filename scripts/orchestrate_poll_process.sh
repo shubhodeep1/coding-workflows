@@ -12918,8 +12918,11 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 	fi
 	# Skip integration / orchestrator-managed branches — those have
 	# their own merge cadence and should not be force-merged by this
-	# sweep.
-	if [[ "${N_BASE}" == orchestrator/project-* ]]; then
+	# sweep. The final integration PR targets the default branch
+	# (base=main) while its head is `orchestrator/project-*`, so check
+	# both sides: base catches sub-issue PRs targeting the integration
+	# branch; head catches the integration→default final PR.
+	if [[ "${N_BASE}" == orchestrator/project-* ]] || [[ "${N_HEAD}" == orchestrator/project-* ]]; then
 		continue
 	fi
 
