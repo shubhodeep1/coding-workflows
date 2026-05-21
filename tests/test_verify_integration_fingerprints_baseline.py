@@ -66,6 +66,64 @@ def _write_json(path: Path, data: dict) -> None:
 	path.write_text(json.dumps(data), encoding="utf-8")
 
 
+@contextlib.contextmanager
+def _set_env(**updates: str | None):
+	original = {key: os.environ.get(key) for key in updates}
+	try:
+		for key, value in updates.items():
+			if value is None:
+				os.environ.pop(key, None)
+			else:
+				os.environ[key] = value
+		yield
+	finally:
+		for key, value in original.items():
+			if value is None:
+				os.environ.pop(key, None)
+			else:
+				os.environ[key] = value
+
+
+def _empty_quarantine_payload() -> dict:
+	return {"schema_version": "v1", "entries": []}
+
+
+@contextlib.contextmanager
+def _stub_quarantine_store(mod, initial_payload: dict | None = None, *, fail_load: bool = False, fail_persist: bool = False):
+	store = json.loads(json.dumps(initial_payload or _empty_quarantine_payload()))
+	original_load = getattr(mod, "_ai_memory_load_quarantine_list", None)
+	original_persist = getattr(mod, "_ai_memory_persist_quarantine_list", None)
+
+	def _load_quarantine_list(**_kwargs):
+		if fail_load:
+			raise RuntimeError("synthetic quarantine load failure")
+		return {
+			"ok": True,
+			"enabled": True,
+			"quarantine": json.loads(json.dumps(store)),
+		}
+
+	def _persist_quarantine_list(*, payload, **_kwargs):
+		nonlocal store
+		if fail_persist:
+			raise RuntimeError("synthetic quarantine persist failure")
+		store = json.loads(json.dumps(payload))
+		return {
+			"ok": True,
+			"enabled": True,
+			"stored": True,
+			"quarantine": json.loads(json.dumps(store)),
+		}
+
+	mod._ai_memory_load_quarantine_list = _load_quarantine_list
+	mod._ai_memory_persist_quarantine_list = _persist_quarantine_list
+	try:
+		yield lambda: json.loads(json.dumps(store))
+	finally:
+		mod._ai_memory_load_quarantine_list = original_load
+		mod._ai_memory_persist_quarantine_list = original_persist
+
+
 def test_verify_integration_fingerprints_baseline_capture_writes_schema_v1_json():
 	mod = _verifier_module()
 	files = {
@@ -250,6 +308,360 @@ def test_verify_integration_fingerprints_compare_mode_passes_on_pre_existing_dri
 			"(pre_existing_drift_count=1; see PRE_EXISTING_FINGERPRINT_DRIFT_V1 markers above for triage)."
 		) in out
 		assert "Silent-regression detector" not in out
+		assert err == ""
+
+
+def test_verify_integration_fingerprints_capture_mode_skips_quarantined_fingerprint() -> None:
+	mod = _verifier_module()
+	files = {
+		"scripts/example.py": "EXPECTED_LINE\n",
+	}
+	fingerprints = {
+		"1500": {
+			"issue": 1500,
+			"pr": 1501,
+			"must_contain": [
+				{"file": "scripts/example.py", "regex": r"EXPECTED_LINE"},
+			],
+			"must_not_contain": [],
+		}
+	}
+	initial_quarantine = {
+		"schema_version": "v1",
+		"entries": [
+			{
+				"fp_key": ["scripts/example.py", "EXPECTED_LINE"],
+				"issue_key": "1500",
+				"first_seen_run_id": "run-100",
+				"last_seen_run_id": "run-101",
+				"consecutive_unchanged_runs": 2,
+			}
+		],
+	}
+	with _sandbox(files, fingerprints) as (sandbox, fp_path):
+		baseline_path = sandbox / "baseline.json"
+		with _stub_quarantine_store(mod, initial_quarantine), _set_env(
+			FINGERPRINT_QUARANTINE_RUNS_M="2",
+			GITHUB_RUN_ID="capture-skip-test-1",
+		):
+			rc, out, err = _run_verifier(
+				mod,
+				["--baseline-fingerprints-state", str(baseline_path), str(fp_path)],
+				sandbox,
+			)
+		assert rc == 0
+		assert '::warning::FINGERPRINT_QUARANTINED_V1 fp_key=["scripts/example.py","EXPECTED_LINE"] issue=#1500' in out
+		state = json.loads(baseline_path.read_text(encoding="utf-8"))
+		assert state["fingerprints"]["1500"]["must_contain"] == []
+		assert err == ""
+
+
+def test_verify_integration_fingerprints_quarantine_promotes_then_skips_next_run() -> None:
+	mod = _verifier_module()
+	files = {
+		"scripts/example.py": "CURRENT_BRANCH_ONLY\n",
+	}
+	fingerprints = {
+		"1500": {
+			"issue": 1500,
+			"pr": 1501,
+			"must_contain": [
+				{"file": "scripts/example.py", "regex": r"EXPECTED_LINE"},
+			],
+			"must_not_contain": [],
+		}
+	}
+	with _sandbox(files, fingerprints) as (sandbox, fp_path):
+		baseline_path = sandbox / "baseline.json"
+		with _stub_quarantine_store(mod) as get_store:
+			rc, _out, _err = _run_verifier(
+				mod,
+				["--baseline-fingerprints-state", str(baseline_path), str(fp_path)],
+				sandbox,
+			)
+			assert rc == 0
+
+			with _set_env(FINGERPRINT_QUARANTINE_RUNS_M="2", GITHUB_RUN_ID="quarantine-promote-run-1"):
+				rc, out_run1, err_run1 = _run_verifier(
+					mod,
+					["--compare-against-baseline", str(baseline_path), str(fp_path)],
+					sandbox,
+				)
+			assert rc == 0
+			assert "PRE_EXISTING_FINGERPRINT_DRIFT_V1 unchanged" in out_run1
+			assert "FINGERPRINT_QUARANTINED_V1" not in out_run1
+			assert get_store()["entries"][0]["consecutive_unchanged_runs"] == 1
+			assert err_run1 == ""
+
+			with _set_env(FINGERPRINT_QUARANTINE_RUNS_M="2", GITHUB_RUN_ID="quarantine-promote-run-1"):
+				rc, out_run1_repeat, err_run1_repeat = _run_verifier(
+					mod,
+					["--compare-against-baseline", str(baseline_path), str(fp_path)],
+					sandbox,
+				)
+			assert rc == 0
+			assert "FINGERPRINT_QUARANTINED_V1" not in out_run1_repeat
+			assert get_store()["entries"][0]["consecutive_unchanged_runs"] == 1
+			assert err_run1_repeat == ""
+
+			with _set_env(FINGERPRINT_QUARANTINE_RUNS_M="2", GITHUB_RUN_ID="quarantine-promote-run-2"):
+				rc, out_run2, err_run2 = _run_verifier(
+					mod,
+					["--compare-against-baseline", str(baseline_path), str(fp_path)],
+					sandbox,
+				)
+			assert rc == 0
+			assert "PRE_EXISTING_FINGERPRINT_DRIFT_V1 unchanged" in out_run2
+			assert "FINGERPRINT_QUARANTINED_V1" not in out_run2
+			assert get_store()["entries"][0]["consecutive_unchanged_runs"] == 2
+			assert err_run2 == ""
+
+			with _set_env(FINGERPRINT_QUARANTINE_RUNS_M="2", GITHUB_RUN_ID="quarantine-promote-run-2"):
+				rc, out_run2_repeat, err_run2_repeat = _run_verifier(
+					mod,
+					["--compare-against-baseline", str(baseline_path), str(fp_path)],
+					sandbox,
+				)
+			assert rc == 0
+			assert "PRE_EXISTING_FINGERPRINT_DRIFT_V1 unchanged" not in out_run2_repeat
+			assert "FINGERPRINT_QUARANTINED_V1" not in out_run2_repeat
+			assert get_store()["entries"][0]["consecutive_unchanged_runs"] == 2
+			assert err_run2_repeat == ""
+
+			with _set_env(FINGERPRINT_QUARANTINE_RUNS_M="2", GITHUB_RUN_ID="quarantine-promote-run-3"):
+				rc, out_run3, err_run3 = _run_verifier(
+					mod,
+					["--compare-against-baseline", str(baseline_path), str(fp_path)],
+					sandbox,
+				)
+			assert rc == 0
+			assert '::warning::FINGERPRINT_QUARANTINED_V1 fp_key=["scripts/example.py","EXPECTED_LINE"] issue=#1500' in out_run3
+			assert "PRE_EXISTING_FINGERPRINT_DRIFT_V1 unchanged" not in out_run3
+			assert get_store()["entries"][0]["consecutive_unchanged_runs"] == 3
+			assert err_run3 == ""
+
+			with _set_env(FINGERPRINT_QUARANTINE_RUNS_M="2", GITHUB_RUN_ID="quarantine-promote-run-3"):
+				rc, out_run3_repeat, err_run3_repeat = _run_verifier(
+					mod,
+					["--compare-against-baseline", str(baseline_path), str(fp_path)],
+					sandbox,
+				)
+			assert rc == 0
+			assert "FINGERPRINT_QUARANTINED_V1" not in out_run3_repeat
+			assert "PRE_EXISTING_FINGERPRINT_DRIFT_V1 unchanged" not in out_run3_repeat
+			assert get_store()["entries"][0]["consecutive_unchanged_runs"] == 3
+			assert err_run3_repeat == ""
+
+
+def test_verify_integration_fingerprints_same_run_fix_clears_pending_quarantine() -> None:
+	mod = _verifier_module()
+	files = {
+		"scripts/example.py": "CURRENT_BRANCH_ONLY\n",
+	}
+	fingerprints = {
+		"1500": {
+			"issue": 1500,
+			"pr": 1501,
+			"must_contain": [
+				{"file": "scripts/example.py", "regex": r"EXPECTED_LINE"},
+			],
+			"must_not_contain": [],
+		}
+	}
+	with _sandbox(files, fingerprints) as (sandbox, fp_path):
+		baseline_path = sandbox / "baseline.json"
+		with _stub_quarantine_store(mod) as get_store:
+			rc, _out, _err = _run_verifier(
+				mod,
+				["--baseline-fingerprints-state", str(baseline_path), str(fp_path)],
+				sandbox,
+			)
+			assert rc == 0
+
+			with _set_env(FINGERPRINT_QUARANTINE_RUNS_M="2", GITHUB_RUN_ID="quarantine-fix-run-1"):
+				rc, _out, _err = _run_verifier(
+					mod,
+					["--compare-against-baseline", str(baseline_path), str(fp_path)],
+					sandbox,
+				)
+			assert rc == 0
+			assert get_store()["entries"][0]["consecutive_unchanged_runs"] == 1
+
+			with _set_env(FINGERPRINT_QUARANTINE_RUNS_M="2", GITHUB_RUN_ID="quarantine-fix-run-2"):
+				rc, out_run2, err_run2 = _run_verifier(
+					mod,
+					["--compare-against-baseline", str(baseline_path), str(fp_path)],
+					sandbox,
+				)
+			assert rc == 0
+			assert "PRE_EXISTING_FINGERPRINT_DRIFT_V1 unchanged" in out_run2
+			assert get_store()["entries"][0]["consecutive_unchanged_runs"] == 2
+			assert err_run2 == ""
+
+			(sandbox / "scripts" / "example.py").write_text("EXPECTED_LINE\n", encoding="utf-8")
+			with _set_env(FINGERPRINT_QUARANTINE_RUNS_M="2", GITHUB_RUN_ID="quarantine-fix-run-2"):
+				rc, out_fixed, err_fixed = _run_verifier(
+					mod,
+					["--compare-against-baseline", str(baseline_path), str(fp_path)],
+					sandbox,
+				)
+			assert rc == 0
+			assert "FINGERPRINT_QUARANTINED_V1" not in out_fixed
+			assert "PRE_EXISTING_FINGERPRINT_DRIFT_V1 unchanged" not in out_fixed
+			assert get_store()["entries"] == []
+			assert err_fixed == ""
+
+			with _set_env(FINGERPRINT_QUARANTINE_RUNS_M="2", GITHUB_RUN_ID="quarantine-fix-run-3"):
+				rc, out_run3, err_run3 = _run_verifier(
+					mod,
+					["--compare-against-baseline", str(baseline_path), str(fp_path)],
+					sandbox,
+				)
+			assert rc == 0
+			assert "FINGERPRINT_QUARANTINED_V1" not in out_run3
+			assert "PRE_EXISTING_FINGERPRINT_DRIFT_V1 fixed_by_resolver" in out_run3
+			assert err_run3 == ""
+
+
+def test_verify_integration_fingerprints_quarantine_load_failure_fails_open() -> None:
+	mod = _verifier_module()
+	files = {
+		"scripts/example.py": "CURRENT_BRANCH_ONLY\n",
+	}
+	fingerprints = {
+		"1500": {
+			"issue": 1500,
+			"pr": 1501,
+			"must_contain": [
+				{"file": "scripts/example.py", "regex": r"EXPECTED_LINE"},
+			],
+			"must_not_contain": [],
+		}
+	}
+	with _sandbox(files, fingerprints) as (sandbox, fp_path):
+		baseline_path = sandbox / "baseline.json"
+		rc, _out, _err = _run_verifier(
+			mod,
+			["--baseline-fingerprints-state", str(baseline_path), str(fp_path)],
+			sandbox,
+		)
+		assert rc == 0
+		with _stub_quarantine_store(mod, fail_load=True), _set_env(
+			FINGERPRINT_QUARANTINE_RUNS_M="2",
+			GITHUB_RUN_ID="quarantine-fail-open-1",
+		):
+			rc, out, err = _run_verifier(
+				mod,
+				["--compare-against-baseline", str(baseline_path), str(fp_path)],
+				sandbox,
+			)
+		assert rc == 0
+		assert "PRE_EXISTING_FINGERPRINT_DRIFT_V1 unchanged" in out
+		assert "FINGERPRINT_QUARANTINED_V1" not in out
+		assert err == ""
+
+
+def test_verify_integration_fingerprints_compare_failure_persists_quarantine_state() -> None:
+	mod = _verifier_module()
+	files = {
+		"scripts/example.py": "STABLE_LINE\n",
+	}
+	fingerprints = {
+		"1500": {
+			"issue": 1500,
+			"pr": 1501,
+			"must_contain": [
+				{"file": "scripts/example.py", "regex": r"LEGACY_LINE"},
+				{"file": "scripts/example.py", "regex": r"STABLE_LINE"},
+			],
+			"must_not_contain": [],
+		}
+	}
+	with _sandbox(files, fingerprints) as (sandbox, fp_path):
+		baseline_path = sandbox / "baseline.json"
+		rc, _out, _err = _run_verifier(
+			mod,
+			["--baseline-fingerprints-state", str(baseline_path), str(fp_path)],
+			sandbox,
+		)
+		assert rc == 0
+		(sandbox / "scripts" / "example.py").write_text("BROKEN_LINE\n", encoding="utf-8")
+		with _stub_quarantine_store(mod) as get_store, _set_env(
+			FINGERPRINT_QUARANTINE_RUNS_M="2",
+			GITHUB_RUN_ID="compare-failure-run-1",
+		):
+			rc, out, err = _run_verifier(
+				mod,
+				["--compare-against-baseline", str(baseline_path), str(fp_path)],
+				sandbox,
+			)
+		assert rc == 1
+		assert "PRE_EXISTING_FINGERPRINT_DRIFT_V1 unchanged" in out
+		assert "Integration fingerprint verification FAILED" in out
+		assert get_store()["entries"] == [
+			{
+				"fp_key": ["scripts/example.py", "LEGACY_LINE"],
+				"issue_key": "1500",
+				"first_seen_run_id": "compare-failure-run-1",
+				"last_seen_run_id": "compare-failure-run-1",
+				"consecutive_unchanged_runs": 1,
+			}
+		]
+		assert err == ""
+
+
+def test_verify_integration_fingerprints_ratio_failure_persists_quarantine_state() -> None:
+	mod = _verifier_module()
+	files = {
+		"scripts/example.py": "STABLE_LINE\n",
+	}
+	fingerprints = {
+		"1500": {
+			"issue": 1500,
+			"pr": 1501,
+			"must_contain": [
+				{"file": "scripts/example.py", "regex": r"LEGACY_LINE"},
+				{"file": "scripts/example.py", "regex": r"STABLE_LINE"},
+			],
+			"must_not_contain": [],
+		}
+	}
+	with _sandbox(files, fingerprints) as (sandbox, fp_path):
+		baseline_path = sandbox / "baseline.json"
+		rc, _out, _err = _run_verifier(
+			mod,
+			["--baseline-fingerprints-state", str(baseline_path), str(fp_path)],
+			sandbox,
+		)
+		assert rc == 0
+		(sandbox / "scripts" / "example.py").write_text("BROKEN_LINE\n", encoding="utf-8")
+		with _stub_quarantine_store(mod) as get_store, _set_env(
+			FINGERPRINT_QUARANTINE_RUNS_M="2",
+			GITHUB_RUN_ID="ratio-failure-run-1",
+		):
+			rc, out, err = _run_verifier(
+				mod,
+				[
+					"--compare-against-baseline",
+					str(baseline_path),
+					"--verification-tier",
+					"ratio",
+					str(fp_path),
+				],
+				sandbox,
+			)
+		assert rc == 1
+		assert "PRE_EXISTING_FINGERPRINT_DRIFT_V1 unchanged" in out
+		assert "Integration fingerprint verification FAILED" in out
+		assert get_store()["entries"] == [
+			{
+				"fp_key": ["scripts/example.py", "LEGACY_LINE"],
+				"issue_key": "1500",
+				"first_seen_run_id": "ratio-failure-run-1",
+				"last_seen_run_id": "ratio-failure-run-1",
+				"consecutive_unchanged_runs": 1,
+			}
+		]
 		assert err == ""
 
 

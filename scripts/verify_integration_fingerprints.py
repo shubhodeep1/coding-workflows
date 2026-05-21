@@ -72,6 +72,9 @@ Inputs:
   Optional flag ``--ref <git_ref>`` — verify against the tree at the
   given git ref via ``git show`` / ``git cat-file -e`` instead of the
   working tree.  Or env INTEGRATION_VERIFY_REF — same.  Flag wins.
+  Optional flag ``--verification-tier <strict|ratio|count_only|warn_only>`` —
+  relax per-issue ``must_contain`` enforcement for post-resolve checks;
+  default ``strict`` preserves the legacy behaviour byte-for-byte.
   Optional flag ``--baseline-fingerprints-state <out>`` — capture mode.
   Optional flag ``--compare-against-baseline <in>`` — compare mode.
   Optional env INTEGRATION_BRANCH_NAME — included in the summary line
@@ -94,11 +97,31 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
+import hashlib
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+	sys.path.insert(0, str(_SCRIPT_DIR))
+
+try:
+	from ai_memory import _load_quarantine_list as _ai_memory_load_quarantine_list
+	from ai_memory import _persist_quarantine_list as _ai_memory_persist_quarantine_list
+except Exception:  # noqa: BLE001 — quarantine helpers must stay fail-open
+	_ai_memory_load_quarantine_list = None
+	_ai_memory_persist_quarantine_list = None
+
+
 GIT_COMMAND_TIMEOUT_SECS = 30
+VERIFICATION_TIERS = ("strict", "ratio", "count_only", "warn_only")
+RATIO_TIER_MIN_PERCENT = 95
+FINGERPRINT_QUARANTINE_SCHEMA_VERSION = "v1"
+FINGERPRINT_QUARANTINE_RUNS_DEFAULT = 3
+_QUARANTINE_MARKER_CACHE: dict[str, set[str]] = {}
 
 
 def _normalize_ref(ref: str | None) -> str | None:
@@ -476,6 +499,229 @@ def _baseline_fp_key(kind: str, fp: Any) -> tuple[str, ...] | None:
 
 def _format_fp_key(fp_key: tuple[str, ...]) -> str:
 	return json.dumps(list(fp_key), separators=(",", ":"))
+
+
+def _quarantine_default_payload() -> dict[str, Any]:
+	return {
+		"schema_version": FINGERPRINT_QUARANTINE_SCHEMA_VERSION,
+		"entries": [],
+	}
+
+
+def _quarantine_run_id() -> str:
+	raw_run_id = os.environ.get("GITHUB_RUN_ID", "").strip()
+	if not raw_run_id:
+		return "run-local"
+	sanitized = re.sub(r"[^A-Za-z0-9_.:-]+", "_", raw_run_id).strip("._")
+	return sanitized or "run-local"
+
+
+def _quarantine_threshold() -> int:
+	raw_threshold = os.environ.get("FINGERPRINT_QUARANTINE_RUNS_M", str(FINGERPRINT_QUARANTINE_RUNS_DEFAULT)).strip()
+	try:
+		threshold = int(raw_threshold)
+	except ValueError:
+		print(
+			f"::warning::verify_integration_fingerprints: invalid FINGERPRINT_QUARANTINE_RUNS_M={raw_threshold!r}; using default {FINGERPRINT_QUARANTINE_RUNS_DEFAULT}.",
+			flush=True,
+			file=sys.stderr,
+		)
+		return FINGERPRINT_QUARANTINE_RUNS_DEFAULT
+	if threshold < 1:
+		print(
+			f"::warning::verify_integration_fingerprints: FINGERPRINT_QUARANTINE_RUNS_M must be >= 1; using default {FINGERPRINT_QUARANTINE_RUNS_DEFAULT}.",
+			flush=True,
+			file=sys.stderr,
+		)
+		return FINGERPRINT_QUARANTINE_RUNS_DEFAULT
+	return threshold
+
+
+def _quarantine_marker_path(run_id: str) -> str:
+	temp_root = os.environ.get("RUNNER_TEMP", "").strip() or tempfile.gettempdir()
+	cwd_hash = hashlib.sha256(os.path.abspath(os.getcwd()).encode("utf-8")).hexdigest()[:16]
+	return os.path.join(temp_root, f"fingerprint-quarantine-{cwd_hash}-{run_id}.markers")
+
+
+def _quarantine_marker_key(issue_key: str, fp_key: tuple[str, ...]) -> str:
+	return f"{issue_key}\t{_format_fp_key(fp_key)}"
+
+
+def _quarantine_mark_emitted_once(run_id: str, issue_key: str, fp_key: tuple[str, ...]) -> bool:
+	marker_path = _quarantine_marker_path(run_id)
+	marker_key = _quarantine_marker_key(issue_key, fp_key)
+	try:
+		seen_keys = _QUARANTINE_MARKER_CACHE.get(marker_path)
+		if seen_keys is None:
+			seen_keys = set()
+			if os.path.exists(marker_path):
+				with open(marker_path, "r", encoding="utf-8") as fh:
+					seen_keys = {line.rstrip("\n") for line in fh if line.strip()}
+			_QUARANTINE_MARKER_CACHE[marker_path] = seen_keys
+		if marker_key in seen_keys:
+			return False
+		parent = os.path.dirname(marker_path)
+		if parent:
+			os.makedirs(parent, exist_ok=True)
+		with open(marker_path, "a", encoding="utf-8") as fh:
+			fh.write(marker_key + "\n")
+		seen_keys.add(marker_key)
+		return True
+	except Exception:  # noqa: BLE001 — duplicate markers are lower risk than hard-failing verification
+		return True
+
+
+def _quarantine_entry_key(issue_key: Any, fp_key: tuple[str, ...]) -> tuple[str, tuple[str, ...]]:
+	return str(issue_key), tuple(fp_key)
+
+
+def _quarantine_index(payload: dict[str, Any]) -> dict[tuple[str, tuple[str, ...]], dict[str, Any]]:
+	index: dict[tuple[str, tuple[str, ...]], dict[str, Any]] = {}
+	if not isinstance(payload, dict):
+		return index
+	for entry in payload.get("entries") or []:
+		if not isinstance(entry, dict):
+			continue
+		issue_key = entry.get("issue_key")
+		raw_fp_key = entry.get("fp_key")
+		first_seen_run_id = entry.get("first_seen_run_id")
+		last_seen_run_id = entry.get("last_seen_run_id")
+		consecutive_runs = entry.get("consecutive_unchanged_runs")
+		if not isinstance(issue_key, str) or not issue_key:
+			continue
+		if not isinstance(raw_fp_key, list) or not raw_fp_key or not all(isinstance(part, str) and part for part in raw_fp_key):
+			continue
+		if not isinstance(first_seen_run_id, str) or not first_seen_run_id:
+			continue
+		if not isinstance(last_seen_run_id, str) or not last_seen_run_id:
+			continue
+		if not isinstance(consecutive_runs, int) or consecutive_runs < 1:
+			continue
+		index[(issue_key, tuple(raw_fp_key))] = {
+			"issue_key": issue_key,
+			"fp_key": list(raw_fp_key),
+			"first_seen_run_id": first_seen_run_id,
+			"last_seen_run_id": last_seen_run_id,
+			"consecutive_unchanged_runs": consecutive_runs,
+		}
+	return index
+
+
+def _quarantine_entry_is_skipped(entry: dict[str, Any] | None, threshold: int, run_id: str) -> bool:
+	if not entry:
+		return False
+	return int(entry.get("consecutive_unchanged_runs") or 0) >= threshold and str(entry.get("last_seen_run_id") or "") != run_id
+
+
+def _quarantine_entry_is_suppressed(entry: dict[str, Any] | None, threshold: int, run_id: str) -> bool:
+	if not entry:
+		return False
+	return int(entry.get("consecutive_unchanged_runs") or 0) >= threshold and str(entry.get("last_seen_run_id") or "") == run_id
+
+
+def _load_quarantine_runtime() -> dict[str, Any]:
+	runtime = {
+		"payload": _quarantine_default_payload(),
+		"index": {},
+		"threshold": _quarantine_threshold(),
+		"run_id": _quarantine_run_id(),
+	}
+	if _ai_memory_load_quarantine_list is None:
+		return runtime
+	try:
+		result = _ai_memory_load_quarantine_list(repo_root=Path.cwd())
+	except Exception:  # noqa: BLE001 — quarantine integration must stay fail-open
+		return runtime
+	if not isinstance(result, dict):
+		return runtime
+	if result.get("error"):
+		return runtime
+	if result.get("warning") and result.get("enabled", True):
+		return runtime
+	payload = result.get("quarantine")
+	if isinstance(payload, dict):
+		runtime["payload"] = payload
+		runtime["index"] = _quarantine_index(payload)
+	return runtime
+
+
+def _emit_quarantine_marker(issue_key: Any, issue_num: Any, fp_key: tuple[str, ...], runtime: dict[str, Any]) -> None:
+	issue_key_text = str(issue_key)
+	if not _quarantine_mark_emitted_once(runtime["run_id"], issue_key_text, fp_key):
+		return
+	print(
+		f"::warning::FINGERPRINT_QUARANTINED_V1 fp_key={_format_fp_key(fp_key)} issue=#{issue_num}",
+		flush=True,
+	)
+
+
+def _persist_quarantine_runtime(
+	runtime: dict[str, Any],
+	*,
+	observed_keys: set[tuple[str, tuple[str, ...]]],
+	unchanged_keys: set[tuple[str, tuple[str, ...]]],
+) -> None:
+	if _ai_memory_persist_quarantine_list is None:
+		return
+	quarantine_index = {
+		key: {
+			"issue_key": value["issue_key"],
+			"fp_key": list(value["fp_key"]),
+			"first_seen_run_id": value["first_seen_run_id"],
+			"last_seen_run_id": value["last_seen_run_id"],
+			"consecutive_unchanged_runs": int(value["consecutive_unchanged_runs"]),
+		}
+		for key, value in runtime["index"].items()
+	}
+	changed = False
+	run_id = str(runtime["run_id"])
+	for key in observed_keys:
+		if key in unchanged_keys:
+			continue
+		if key in quarantine_index:
+			del quarantine_index[key]
+			changed = True
+	for key in unchanged_keys:
+		entry = quarantine_index.get(key)
+		if entry is None:
+			issue_key, fp_key = key
+			quarantine_index[key] = {
+				"issue_key": issue_key,
+				"fp_key": list(fp_key),
+				"first_seen_run_id": run_id,
+				"last_seen_run_id": run_id,
+				"consecutive_unchanged_runs": 1,
+			}
+			changed = True
+			continue
+		if str(entry.get("last_seen_run_id") or "") == run_id:
+			continue
+		entry["last_seen_run_id"] = run_id
+		entry["consecutive_unchanged_runs"] = int(entry.get("consecutive_unchanged_runs") or 0) + 1
+		changed = True
+	if not changed:
+		return
+	payload = {
+		"schema_version": FINGERPRINT_QUARANTINE_SCHEMA_VERSION,
+		"entries": [
+			{
+				"fp_key": list(key[1]),
+				"issue_key": value["issue_key"],
+				"first_seen_run_id": value["first_seen_run_id"],
+				"last_seen_run_id": value["last_seen_run_id"],
+				"consecutive_unchanged_runs": int(value["consecutive_unchanged_runs"]),
+			}
+			for key, value in sorted(quarantine_index.items(), key=lambda item: (item[0][0], item[0][1]))
+		],
+	}
+	try:
+		result = _ai_memory_persist_quarantine_list(payload=payload, repo_root=Path.cwd())
+	except Exception:  # noqa: BLE001 — quarantine persistence must stay fail-open
+		return
+	if not isinstance(result, dict):
+		return
+	if result.get("error") or result.get("warning"):
+		return
 
 
 def _looks_like_re_escape_output(pattern: str) -> bool:
@@ -909,6 +1155,402 @@ def _emit_verify_failure(violations: list[str]) -> int:
 	return 1
 
 
+def _deduped_issue_entries(fingerprints: dict[str, Any]) -> list[dict[str, Any]]:
+	issue_entries: list[dict[str, Any]] = []
+	cross_issue_exact_drops, cross_issue_exact_warnings = _cross_issue_exact_conflict_drops(fingerprints)
+	for issue_key, entry in sorted(fingerprints.items()):
+		if not isinstance(entry, dict):
+			continue
+		issue_num = entry.get("issue", issue_key)
+		pr_num = entry.get("pr", "?")
+		must_contain, must_not_contain, shared_keys, substring_drops, exact_conflict_drops = _dedup_issue_patterns(
+			issue_key,
+			entry,
+			cross_issue_exact_drops,
+		)
+		issue_entries.append(
+			{
+				"issue_key": issue_key,
+				"issue_num": issue_num,
+				"pr_num": pr_num,
+				"must_contain": must_contain,
+				"must_not_contain": must_not_contain,
+				"must_not_exist": entry.get("must_not_exist", []) or [],
+				"shared_keys": shared_keys,
+				"substring_drops": substring_drops,
+				"exact_conflict_drops": exact_conflict_drops,
+				"exact_conflict_warnings": cross_issue_exact_warnings.get(issue_key, []),
+			}
+		)
+	return issue_entries
+
+
+def _emit_issue_dedup_warnings(issue_entry: dict[str, Any]) -> None:
+	issue_num = issue_entry["issue_num"]
+	pr_num = issue_entry["pr_num"]
+	shared_keys = issue_entry["shared_keys"]
+	substring_drops = issue_entry["substring_drops"]
+	exact_conflict_drops = issue_entry["exact_conflict_drops"]
+	if shared_keys:
+		print(
+			f"::warning::Fingerprint cross-dedup for issue #{issue_num} (PR #{pr_num}): "
+			f"skipping {len(shared_keys)} self-contradictory pattern(s) present in both "
+			f"must_contain and must_not_contain (capture-side refactor false positive).",
+			flush=True,
+		)
+	if substring_drops:
+		print(
+			f"::warning::Fingerprint substring-overlap dedup for issue #{issue_num} (PR #{pr_num}): "
+			f"skipping {len(substring_drops)} must_not_contain pattern(s) whose regex is a literal "
+			f"substring of a must_contain regex on the same file (capture-side: deleted line subsumed "
+			f"by added line under re.search; the longer must_contain already enforces the stronger intent).",
+			flush=True,
+		)
+	if exact_conflict_drops:
+		for warning in issue_entry["exact_conflict_warnings"]:
+			print(warning, flush=True)
+
+
+def _issue_satisfies_tier(tier: str, eligible: int, satisfied: int) -> bool:
+	if tier == "ratio":
+		return eligible == 0 or (satisfied * 100) >= (eligible * RATIO_TIER_MIN_PERCENT)
+	if tier == "count_only":
+		return eligible == 0 or satisfied >= 1
+	if tier == "warn_only":
+		return True
+	return eligible == satisfied
+
+
+def _issue_tier_violation_message(
+	tier: str,
+	issue_num: Any,
+	pr_num: Any,
+	satisfied: int,
+	eligible: int,
+	failing_states: list[dict[str, Any]],
+) -> str:
+	if tier == "ratio":
+		message = (
+			f"issue #{issue_num} (PR #{pr_num}): verification tier 'ratio' requires >="
+			f"{RATIO_TIER_MIN_PERCENT}% of eligible must_contain patterns to match, but only "
+			f"{satisfied}/{eligible} matched after resolver."
+		)
+	else:
+		tier_name = tier or "count_only"
+		message = (
+			f"issue #{issue_num} (PR #{pr_num}): verification tier {tier_name!r} requires at least "
+			f"1 eligible must_contain pattern to match, but only {satisfied}/{eligible} matched after resolver."
+		)
+	if failing_states:
+		first_state = failing_states[0]
+		message += f" First failing path: '{first_state['path']}'."
+		message += f" First failing pattern (first 200 chars): {first_state['regex'][:200]}"
+	return message
+
+
+def _emit_tolerated_must_contain_warning(
+	tier: str,
+	issue_num: Any,
+	pr_num: Any,
+	satisfied: int,
+	eligible: int,
+	tolerated_states: list[dict[str, Any]],
+) -> None:
+	if not tolerated_states:
+		return
+	print(
+		f"::warning::Integration fingerprint verification tier={tier} tolerated "
+		f"{len(tolerated_states)} must_contain violation(s) for issue #{issue_num} (PR #{pr_num}); "
+		f"satisfied {satisfied}/{eligible} eligible patterns.",
+		flush=True,
+	)
+	for state in tolerated_states[:3]:
+		print(f"::warning::  - {state['violation']}", flush=True)
+	remaining = len(tolerated_states) - 3
+	if remaining > 0:
+		print(
+			f"::warning::  - ... {remaining} additional must_contain violation(s) suppressed by tier={tier}.",
+			flush=True,
+		)
+
+
+def _evaluate_issue_must_contain_tier(
+	tier: str,
+	issue_num: Any,
+	pr_num: Any,
+	states: list[dict[str, Any]],
+) -> tuple[list[str], list[dict[str, Any]], int, int]:
+	eligible = len(states)
+	satisfied = sum(1 for state in states if state["satisfied"])
+	failing_states = [state for state in states if not state["satisfied"]]
+	if tier == "warn_only":
+		return [], failing_states, eligible, satisfied
+	if _issue_satisfies_tier(tier, eligible, satisfied):
+		return [], failing_states, eligible, satisfied
+	return [
+		_issue_tier_violation_message(tier, issue_num, pr_num, satisfied, eligible, failing_states)
+	], [], eligible, satisfied
+
+
+def _emit_warn_only_marker(branch: str, suppressed_violation_count: int) -> None:
+	print(
+		f"::warning::FINGERPRINT_TIER_WARN_ONLY_V1 branch={json.dumps(branch or '')} "
+		f"suppressed_violation_count={suppressed_violation_count}",
+		flush=True,
+	)
+
+
+def _emit_warn_only_success(branch: str, violations: list[str]) -> int:
+	_emit_warn_only_marker(branch, len(violations))
+	if violations:
+		print(
+			"::warning::Integration fingerprint verification warn_only tier suppressed fingerprint failures:",
+			flush=True,
+		)
+		for violation in violations:
+			print(f"::warning::  - {violation}", flush=True)
+	print(
+		"Integration fingerprint verification PASSED in warn_only tier — fingerprint violations emitted as warnings only.",
+		flush=True,
+	)
+	return 0
+
+
+def verify_with_tier(
+	fingerprints: dict[str, Any],
+	branch: str,
+	tier: str,
+	ref: str | None = None,
+) -> int:
+	if tier == "strict":
+		return verify(fingerprints, branch, ref=ref)
+
+	violations: list[str] = []
+	warn_only_violations: list[str] = []
+	suppressed_must_contain_count = 0
+	mc_total_expected = 0
+	mc_total_satisfied = 0
+	file_cache: dict[str, tuple[str | None, str | None]] = {}
+	exists_cache: dict[str, tuple[bool, str | None]] = {}
+
+	for issue_entry in _deduped_issue_entries(fingerprints):
+		_emit_issue_dedup_warnings(issue_entry)
+		issue_num = issue_entry["issue_num"]
+		pr_num = issue_entry["pr_num"]
+		issue_must_contain_states: list[dict[str, Any]] = []
+
+		for fp in issue_entry["must_contain"]:
+			state = _evaluate_fp_state(fp, "must_contain", issue_num, pr_num, file_cache, exists_cache, ref=ref)
+			if state is None:
+				continue
+			issue_must_contain_states.append(state)
+			mc_total_expected += 1
+			if state["satisfied"]:
+				mc_total_satisfied += 1
+
+		for fp in issue_entry["must_not_contain"]:
+			state = _evaluate_fp_state(fp, "must_not_contain", issue_num, pr_num, file_cache, exists_cache, ref=ref)
+			if state is None or state["satisfied"]:
+				continue
+			if tier == "warn_only":
+				warn_only_violations.append(state["violation"])
+			else:
+				violations.append(state["violation"])
+
+		for fp in issue_entry["must_not_exist"]:
+			state = _evaluate_fp_state(fp, "must_not_exist", issue_num, pr_num, file_cache, exists_cache, ref=ref)
+			if state is None or state["satisfied"]:
+				continue
+			if tier == "warn_only":
+				warn_only_violations.append(state["violation"])
+			else:
+				violations.append(state["violation"])
+
+		issue_violations, tolerated_states, issue_eligible, issue_satisfied = _evaluate_issue_must_contain_tier(
+			tier,
+			issue_num,
+			pr_num,
+			issue_must_contain_states,
+		)
+		if tier == "warn_only":
+			warn_only_violations.extend(state["violation"] for state in tolerated_states)
+		else:
+			violations.extend(issue_violations)
+			suppressed_must_contain_count += len(tolerated_states)
+			_emit_tolerated_must_contain_warning(
+				tier,
+				issue_num,
+				pr_num,
+				issue_satisfied,
+				issue_eligible,
+				tolerated_states,
+			)
+
+	_emit_must_contain_ratio(branch, mc_total_satisfied, mc_total_expected)
+	if tier == "warn_only":
+		return _emit_warn_only_success(branch, warn_only_violations)
+	if violations:
+		return _emit_verify_failure(violations)
+	if suppressed_must_contain_count > 0:
+		print(
+			f"Integration fingerprint verification PASSED under tier '{tier}' — "
+			f"{suppressed_must_contain_count} must_contain violation(s) tolerated by tier policy.",
+			flush=True,
+		)
+		return 0
+	print(
+		"Integration fingerprint verification PASSED — all merged sub-issue intent preserved.",
+		flush=True,
+	)
+	return 0
+
+
+def compare_against_baseline_with_tier(
+	fingerprints: dict[str, Any],
+	baseline_state: dict[str, Any],
+	branch: str,
+	tier: str,
+	ref: str | None = None,
+) -> int:
+	if tier == "strict":
+		return compare_against_baseline(fingerprints, baseline_state, branch, ref=ref)
+
+	baseline_index = _baseline_satisfied_index(baseline_state)
+	violations: list[str] = []
+	warn_only_violations: list[str] = []
+	pre_existing_drift_count = 0
+	suppressed_must_contain_count = 0
+	mc_compare_expected = 0
+	mc_compare_satisfied = 0
+	file_cache: dict[str, tuple[str | None, str | None]] = {}
+	exists_cache: dict[str, tuple[bool, str | None]] = {}
+	quarantine_runtime = _load_quarantine_runtime()
+	quarantine_observed_keys: set[tuple[str, tuple[str, ...]]] = set()
+	quarantine_unchanged_keys: set[tuple[str, tuple[str, ...]]] = set()
+
+	for issue_entry in _deduped_issue_entries(fingerprints):
+		_emit_issue_dedup_warnings(issue_entry)
+		issue_key = issue_entry["issue_key"]
+		issue_num = issue_entry["issue_num"]
+		pr_num = issue_entry["pr_num"]
+		issue_must_contain_states: list[dict[str, Any]] = []
+
+		for kind, fps in (
+			("must_contain", issue_entry["must_contain"]),
+			("must_not_contain", issue_entry["must_not_contain"]),
+			("must_not_exist", issue_entry["must_not_exist"]),
+		):
+			for fp in fps:
+				fp_key = _baseline_fp_key(kind, fp)
+				if fp_key is None:
+					continue
+				quarantine_key = _quarantine_entry_key(issue_key, fp_key)
+				quarantine_entry = quarantine_runtime["index"].get(quarantine_key)
+				if _quarantine_entry_is_skipped(
+					quarantine_entry,
+					int(quarantine_runtime["threshold"]),
+					str(quarantine_runtime["run_id"]),
+				):
+					quarantine_observed_keys.add(quarantine_key)
+					quarantine_unchanged_keys.add(quarantine_key)
+					_emit_quarantine_marker(issue_key, issue_num, fp_key, quarantine_runtime)
+					continue
+				state = _evaluate_fp_state(fp, kind, issue_num, pr_num, file_cache, exists_cache, ref=ref)
+				if state is None:
+					continue
+				baseline_satisfied = baseline_index.get((str(issue_key), kind, state["fp_key"]))
+				if quarantine_entry is not None:
+					quarantine_observed_keys.add(quarantine_key)
+				if baseline_satisfied is False and _quarantine_entry_is_suppressed(
+					quarantine_entry,
+					int(quarantine_runtime["threshold"]),
+					str(quarantine_runtime["run_id"]),
+				):
+					if state["check_error"] is not None or not state["satisfied"]:
+						quarantine_unchanged_keys.add(quarantine_key)
+					continue
+				if baseline_satisfied is False:
+					if state["satisfied"]:
+						_emit_pre_existing_drift_marker(state, issue_num, fixed_by_resolver=True)
+					else:
+						quarantine_unchanged_keys.add(quarantine_key)
+						_emit_pre_existing_drift_marker(state, issue_num, fixed_by_resolver=False)
+						pre_existing_drift_count += 1
+					continue
+
+				if kind == "must_contain":
+					issue_must_contain_states.append(state)
+					mc_compare_expected += 1
+					if state["satisfied"]:
+						mc_compare_satisfied += 1
+					continue
+
+				if state["satisfied"]:
+					continue
+				if tier == "warn_only":
+					warn_only_violations.append(state["violation"])
+				else:
+					violations.append(state["violation"])
+
+		issue_violations, tolerated_states, issue_eligible, issue_satisfied = _evaluate_issue_must_contain_tier(
+			tier,
+			issue_num,
+			pr_num,
+			issue_must_contain_states,
+		)
+		if tier == "warn_only":
+			warn_only_violations.extend(state["violation"] for state in tolerated_states)
+		else:
+			violations.extend(issue_violations)
+			suppressed_must_contain_count += len(tolerated_states)
+			_emit_tolerated_must_contain_warning(
+				tier,
+				issue_num,
+				pr_num,
+				issue_satisfied,
+				issue_eligible,
+				tolerated_states,
+			)
+
+	_emit_must_contain_ratio(branch, mc_compare_satisfied, mc_compare_expected)
+	_persist_quarantine_runtime(
+		quarantine_runtime,
+		observed_keys=quarantine_observed_keys,
+		unchanged_keys=quarantine_unchanged_keys,
+	)
+	if tier == "warn_only":
+		return _emit_warn_only_success(branch, warn_only_violations)
+	if violations:
+		return _emit_verify_failure(violations)
+	if pre_existing_drift_count > 0 and suppressed_must_contain_count > 0:
+		print(
+			f"Integration fingerprint verification PASSED under tier '{tier}' with pre-existing drift — "
+			f"{suppressed_must_contain_count} must_contain violation(s) tolerated by tier policy "
+			f"(pre_existing_drift_count={pre_existing_drift_count}; see PRE_EXISTING_FINGERPRINT_DRIFT_V1 markers above for triage).",
+			flush=True,
+		)
+		return 0
+	if pre_existing_drift_count > 0:
+		print(
+			"Integration fingerprint verification PASSED with pre-existing drift — resolver did not introduce any new regressions "
+			f"(pre_existing_drift_count={pre_existing_drift_count}; see PRE_EXISTING_FINGERPRINT_DRIFT_V1 markers above for triage).",
+			flush=True,
+		)
+		return 0
+	if suppressed_must_contain_count > 0:
+		print(
+			f"Integration fingerprint verification PASSED under tier '{tier}' — "
+			f"{suppressed_must_contain_count} must_contain violation(s) tolerated by tier policy.",
+			flush=True,
+		)
+		return 0
+	print(
+		"Integration fingerprint verification PASSED — all merged sub-issue intent preserved.",
+		flush=True,
+	)
+	return 0
+
+
 def list_violated_files(fingerprints: dict[str, Any], ref: str | None = None) -> list[str]:
 	"""Return a sorted, de-duplicated list of file paths that currently
 	fail at least one fingerprint check against the cwd tree (or the
@@ -1087,6 +1729,7 @@ def capture_baseline_state(
 	file_cache: dict[str, tuple[str | None, str | None]] = {}
 	exists_cache: dict[str, tuple[bool, str | None]] = {}
 	cross_issue_exact_drops, _cross_issue_exact_warnings = _cross_issue_exact_conflict_drops(fingerprints)
+	quarantine_runtime = _load_quarantine_runtime()
 	state_doc: dict[str, Any] = {
 		"schema_version": 1,
 		"captured_at": _utc_now_iso(),
@@ -1118,6 +1761,17 @@ def capture_baseline_state(
 			("must_not_exist", must_not_exist),
 		):
 			for fp in fps:
+				fp_key = _baseline_fp_key(kind, fp)
+				if fp_key is None:
+					continue
+				quarantine_entry = quarantine_runtime["index"].get(_quarantine_entry_key(issue_key, fp_key))
+				if _quarantine_entry_is_skipped(
+					quarantine_entry,
+					int(quarantine_runtime["threshold"]),
+					str(quarantine_runtime["run_id"]),
+				):
+					_emit_quarantine_marker(issue_key, issue_num, fp_key, quarantine_runtime)
+					continue
 				state = _evaluate_fp_state(fp, kind, issue_num, pr_num, file_cache, exists_cache, ref=ref)
 				if state is None:
 					continue
@@ -1198,6 +1852,9 @@ def compare_against_baseline(
 	file_cache: dict[str, tuple[str | None, str | None]] = {}
 	exists_cache: dict[str, tuple[bool, str | None]] = {}
 	cross_issue_exact_drops, cross_issue_exact_warnings = _cross_issue_exact_conflict_drops(fingerprints)
+	quarantine_runtime = _load_quarantine_runtime()
+	quarantine_observed_keys: set[tuple[str, tuple[str, ...]]] = set()
+	quarantine_unchanged_keys: set[tuple[str, tuple[str, ...]]] = set()
 
 	for issue_key, entry in sorted(fingerprints.items()):
 		if not isinstance(entry, dict):
@@ -1235,12 +1892,37 @@ def compare_against_baseline(
 			("must_not_exist", must_not_exist),
 		):
 			for fp in fps:
+				fp_key = _baseline_fp_key(kind, fp)
+				if fp_key is None:
+					continue
+				quarantine_key = _quarantine_entry_key(issue_key, fp_key)
+				quarantine_entry = quarantine_runtime["index"].get(quarantine_key)
+				if _quarantine_entry_is_skipped(
+					quarantine_entry,
+					int(quarantine_runtime["threshold"]),
+					str(quarantine_runtime["run_id"]),
+				):
+					quarantine_observed_keys.add(quarantine_key)
+					quarantine_unchanged_keys.add(quarantine_key)
+					_emit_quarantine_marker(issue_key, issue_num, fp_key, quarantine_runtime)
+					continue
 				state = _evaluate_fp_state(fp, kind, issue_num, pr_num, file_cache, exists_cache, ref=ref)
 				if state is None:
 					continue
 				baseline_satisfied = baseline_index.get((str(issue_key), kind, state["fp_key"]))
+				if quarantine_entry is not None:
+					quarantine_observed_keys.add(quarantine_key)
+				if baseline_satisfied is False and _quarantine_entry_is_suppressed(
+					quarantine_entry,
+					int(quarantine_runtime["threshold"]),
+					str(quarantine_runtime["run_id"]),
+				):
+					if state["check_error"] is not None or not state["satisfied"]:
+						quarantine_unchanged_keys.add(quarantine_key)
+					continue
 				if state["check_error"] is not None:
 					if baseline_satisfied is False:
+						quarantine_unchanged_keys.add(quarantine_key)
 						_emit_pre_existing_drift_marker(state, issue_num, fixed_by_resolver=False)
 						pre_existing_drift_count += 1
 					else:
@@ -1262,10 +1944,16 @@ def compare_against_baseline(
 				if state["satisfied"]:
 					_emit_pre_existing_drift_marker(state, issue_num, fixed_by_resolver=True)
 					continue
+				quarantine_unchanged_keys.add(quarantine_key)
 				_emit_pre_existing_drift_marker(state, issue_num, fixed_by_resolver=False)
 				pre_existing_drift_count += 1
 
 	_emit_must_contain_ratio(branch, mc_compare_satisfied, mc_compare_expected)
+	_persist_quarantine_runtime(
+		quarantine_runtime,
+		observed_keys=quarantine_observed_keys,
+		unchanged_keys=quarantine_unchanged_keys,
+	)
 	if violations:
 		return _emit_verify_failure(violations)
 	if pre_existing_drift_count > 0:
@@ -1295,6 +1983,7 @@ def main(argv: list[str] | None = None) -> int:
 	ref: str | None = None
 	baseline_out_path: str | None = None
 	compare_baseline_path: str | None = None
+	verification_tier = "strict"
 	cli_ref_supplied = False
 	while args:
 		if args[0] == "--list-violated-files":
@@ -1349,7 +2038,31 @@ def main(argv: list[str] | None = None) -> int:
 			compare_baseline_path = args[0][len("--compare-against-baseline="):]
 			args = args[1:]
 			continue
+		if args[0] == "--verification-tier":
+			if len(args) < 2:
+				print(
+					"::error::verify_integration_fingerprints: --verification-tier requires an argument",
+					flush=True,
+					file=sys.stderr,
+				)
+				return 2
+			verification_tier = args[1]
+			args = args[2:]
+			continue
+		if args[0].startswith("--verification-tier="):
+			verification_tier = args[0][len("--verification-tier="):]
+			args = args[1:]
+			continue
 		break
+
+	if verification_tier not in VERIFICATION_TIERS:
+		print(
+			f"::error::verify_integration_fingerprints: unsupported --verification-tier {verification_tier!r} "
+			f"(expected one of {', '.join(VERIFICATION_TIERS)})",
+			flush=True,
+			file=sys.stderr,
+		)
+		return 2
 
 	raw_ref = ref
 	ref = _normalize_ref(ref)
@@ -1417,9 +2130,9 @@ def main(argv: list[str] | None = None) -> int:
 		baseline_state, baseline_err = _load_baseline_state(compare_baseline_path)
 		if baseline_err is not None:
 			print(f"::warning::baseline malformed ({baseline_err}); using absolute verification.", flush=True)
-			return verify(data, branch, ref=ref)
+			return verify_with_tier(data, branch, verification_tier, ref=ref)
 		assert baseline_state is not None
-		return compare_against_baseline(data, baseline_state, branch, ref=ref)
+		return compare_against_baseline_with_tier(data, baseline_state, branch, verification_tier, ref=ref)
 
 	if list_mode:
 		# Always exit 0 in list mode — the caller is collecting input
@@ -1436,7 +2149,7 @@ def main(argv: list[str] | None = None) -> int:
 		)
 		return 0
 
-	return verify(data, branch, ref=ref)
+	return verify_with_tier(data, branch, verification_tier, ref=ref)
 
 
 if __name__ == "__main__":
