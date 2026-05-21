@@ -315,3 +315,117 @@ _Deduped across `errors/slow/recent`, excluding `workflow_log_analysis` self-ana
 | Server / target | probe_ok | probe_failed | probe_skipped | Explicit disabled runs | Notes |
 |---|---:|---:|---:|---:|---|
 | Serena / `review-autofix-editor` | 0 | 0 | 0 | 8 | No `SERENA_PROBE` telemetry emitted; 8 sampled slow `review_autofix` runs logged `SERENA_ENABLED:false`, 7 also logged `SERENA_AVAILABLE:false` |
+
+## Deep Audit — Workflows & Scripts (2026-05-21)
+
+### Section 1: Bug & Correctness Sweep
+
+- **BUG-001**
+  - **File path** — `.github/workflows/test-and-mark-stable.yml:875-905,3486-3493,3501-3516,3635-3662,3696-3727,3759-3786,3871-3895,4108-4139`
+  - **Severity** — High
+  - **Category tag** — `bug`
+  - **Description** — The release gate still discovers dispatched runs by “latest run with `id > PRE`” and, in the implement waiter, by only the first 50 global runs (`actions/runs?per_page=50` at lines 899-905). The orphan-workflow/orchestrate watchers are even narrower (`per_page=10`) and do not apply any smoke-specific discriminator before accepting `NEW_ID`. That leaves two correctness holes: high run volume can push the intended run out of the page window, and a different run of the same workflow that starts after `PRE` can be mis-associated with the smoke test. The same file already contains a safer scoped pattern in Phase 2 (`fetch_plan_runs_json` / `latest_scoped_run_field` at lines 624-636), but the later watchers do not reuse it.
+  - **Recommended fix** — Factor the Phase 2 scoped watcher into a reusable helper and use it for implement + dispatch waits. Query `per_page=100`, constrain by `event=workflow_dispatch` where possible, and add a smoke-only discriminator (reuse an existing unique input like `branch_name`, or add a `dispatch_nonce` input surfaced in the callee workflow `run-name`) before declaring `dispatch did not register` or consuming a run id.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+- **API-001**
+  - **File path** — `.github/workflows/issue_pr_status.yml:188-349,503-512`
+  - **Severity** — Medium
+  - **Category tag** — `api-redundancy`
+  - **Description** — The label-sync step already classifies linked issues into `TRACKING_ISSUES` and `MANAGED_ISSUES` with one aliased GraphQL bundle, then the Telegram-alert step re-fetches each linked issue body one-by-one just to rediscover whether any linked issue is orchestrator-managed. **Current call count:** `1` GraphQL classification call + `N` extra `GET /repos/{repo}/issues/{n}` calls for `N` linked issues. **Proposed call count:** `1` GraphQL call + `0` extra issue GETs by exporting the classification result to later steps. **Pattern to extend:** the existing aliased GraphQL bundle here already matches the batching style used by `_fetch_candidate_issue_details_graphql` in `scripts/orchestrate_poll_process.sh`.
+  - **Recommended fix** — After computing `TRACKING_ISSUES` / `MANAGED_ISSUES`, write a boolean like `HAS_ORCHESTRATED_LINKED_ISSUE=true` (or persist the lists) into `$GITHUB_ENV`, and have the alert step read that instead of looping over `_safe_gh_jq`.
+
+- **API-002**
+  - **File path** — `.github/workflows/test-and-mark-stable.yml:3453-3516,3629-3662,3692-3727,3751-3786,3863-3895,4099-4139`
+  - **Severity** — Medium
+  - **Category tag** — `api-redundancy`
+  - **Description** — Each dispatch watcher first polls `GET /actions/workflows/{wf}/runs` until a new run appears, then switches to `GET /actions/runs/{id}` to read `status` and `conclusion`, even though the workflow-runs list payload already contains those fields. **Current call count per watcher:** `1 + R + P` (`1` baseline `per_page=1` lookup, `R` registration polls, `P` status polls). **Proposed call count per watcher:** `1 + max(R, P)` by reusing one cached `actions/workflows/{wf}/runs?per_page=100` payload for both discovery and status tracking. Across the six watchers here, that is `6 + Σ(R+P)` today versus `6 + Σmax(R,P)` after consolidation. **Pattern to extend:** `_load_actions_runs_cached` in `scripts/orchestrate_poll_process.sh`, or a new cached Actions-run helper in `scripts/gh_helpers.sh`.
+  - **Recommended fix** — Add a shared `watch_workflow_dispatch_run` helper that caches one workflow-runs response per poll cycle, extracts `NEW_ID`, `status`, and `conclusion` from the same JSON, and returns once the matched run completes.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **DUP-001**
+  - **File path** — `.github/workflows/test-and-mark-stable.yml:475-489,610-622,829-841,1284-1303,1799-1819,2458-2469; .github/workflows/comprehensive-test-and-release.yml:72-98,315-341`
+  - **Severity** — Medium
+  - **Category tag** — `duplication`
+  - **Description** — The release workflows carry seven inline variants of the same GitHub-API retry/backoff helper (`gh_api_safe` / `gh_api_with_retry`). The copies have already drifted: some print stderr on non-rate-limit failures, some silently return empty output, and only one version does bounded multi-attempt retries for 5xx/429 errors. That makes release-gate behavior step-dependent and raises maintenance cost whenever rate-limit handling changes.
+  - **Recommended fix** — Move this logic into a shared module, preferably `scripts/gh_helpers.sh`, with a signature like `gh_api_safe_backoff <endpoint> [gh api args...]` plus `watch_workflow_run <workflow_file> <selector> <deadline_secs>`. Update callers in `test-and-mark-stable.yml` and `comprehensive-test-and-release.yml` to source the shared helper instead of redefining local wrappers.
+
+- **DUP-002**
+  - **File path** — `.github/workflows/issue_pr_status.yml:47-130; .github/workflows/validation-improvements-intake.yml:54-134; .github/workflows/validate.yml:223-304`
+  - **Severity** — Medium
+  - **Category tag** — `duplication`
+  - **Description** — Three workflows re-implement near-identical support-checkout helpers (`checkout_support_ref` plus `fetch_from_ref_or_local` / `copy_from_ref_or_local`) for staging scripts from `shubhodeep1/coding-workflows`. The bodies differ mostly in manifests and temp-root names, so fallback-policy fixes or copy-semantic changes have to be repeated manually. This duplication also feeds directly into the large interpolated `run:` blocks in `validate.yml`.
+  - **Recommended fix** — Extract the checkout/copy logic into a shared script such as `scripts/bootstrap_support_files.sh` with a narrow interface like `bootstrap_support_files.sh --source-repo <owner/repo> --ref <ref> --dest-root <dir> --manifest <manifest.json> [--require-remote] [--allow-main-fallback]`. Update `issue_pr_status.yml`, `validation-improvements-intake.yml`, and `validate.yml` first; `review_autofix.yml` can adopt the same helper later with a richer manifest.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+- **EXPR-001**
+  - **File path** — `.github/workflows/review_autofix.yml:928-1205`
+  - **Severity** — Medium
+  - **Category tag** — `expression-limit`
+  - **Description** — `Stage workflow support files` is approximately **15,479** characters in its interpolated `run:` body, leaving only **5,521** characters of headroom before GitHub’s 21,000-character expression ceiling. This step is already above the 15,000-character warning threshold and continues to grow as new scripts/prompts are staged.
+  - **Recommended fix** — Extract the entire staging step to an external script such as `scripts/stage_review_support_files.sh`, or split script/prompt/schema staging into separate steps driven by environment variables.
+
+- **EXPR-002**
+  - **File path** — `.github/workflows/review_autofix.yml:1497-1886`
+  - **Severity** — Medium
+  - **Category tag** — `expression-limit`
+  - **Description** — `Collect PR metadata` is approximately **17,408** characters, leaving only **3,592** characters of headroom. It combines retry helpers, GraphQL fallback logic, linked-issue context assembly, comment collation, and diff collection in one interpolated block, so even a small future addition can cross the hard limit.
+  - **Recommended fix** — Extract this step into `scripts/collect_review_pr_metadata.sh`, or split it into separate steps for PR payload/comments, linked-issue context, and diff/check-run collection.
+
+- **EXPR-003**
+  - **File path** — `.github/workflows/validate.yml:210-583`
+  - **Severity** — Medium
+  - **Category tag** — `expression-limit`
+  - **Description** — `Fetch workflow support files` is approximately **17,416** characters, leaving only **3,584** characters of headroom. It is both large and frequently edited, making it one of the likeliest places to re-hit the 21,000-character ceiling during future support-asset rollouts.
+  - **Recommended fix** — Move the bootstrap logic into a shared script (`scripts/bootstrap_support_files.sh`) and keep the workflow step to environment setup plus a single script invocation.
+
+No workflow file exceeded the 800 KB pre-warning threshold in this pass; the largest is `review_autofix.yml` at **359,044** bytes. No `if:` expression was large enough to flag.
+
+### Section 5: Cross-Cutting Concerns
+
+- **DEAD-001**
+  - **File path** — `scripts/orchestrate_lib.py:1096-1369`
+  - **Severity** — Low
+  - **Category tag** — `dead-code`
+  - **Description** — `evaluate_phase_failure_resume()` and `resolve_label_repair_evidence()` implement a contradiction-evidence path that a repo-wide search does not find any workflow/script caller for, and the current branch docs explicitly describe that path as “not yet wired” (`README.md:1137`, `agents.md:211-212`). This leaves a sizable decision stack inactive and at risk of drifting from the live reconciliation code in `scripts/orchestrate_poll_process.sh`.
+  - **Recommended fix** — Either wire these helpers into the poller’s active label-repair / phase-failure reconciliation path and add regression tests around the real caller, or remove the reserved implementation until rollout resumes.
+
+- **SHELL-001**
+  - **File path** — `scripts/validate_changed_files_syntax.sh:70-75`
+  - **Severity** — Low
+  - **Category tag** — `shellcheck`
+  - **Description** — The denylist case arm ends with `*,*.envrc|*,.env*`, but `*.env*` already appears earlier in the same alternation. ShellCheck flags this as SC2221/SC2222 because the later patterns can never match. Runtime behavior is currently benign, but the unreachable arms make the redaction policy harder to review.
+  - **Recommended fix** — Remove the redundant `*,*.envrc|*,.env*` suffixes, or narrow the earlier `*.env*` pattern if `.envrc` genuinely needs special handling.
+
+- **SHELL-002**
+  - **File path** — `scripts/review_commit_changes.sh:489-489; scripts/review_conflict_resolve.sh:1522-1523`
+  - **Severity** — Low
+  - **Category tag** — `shellcheck`
+  - **Description** — Both helper scripts pass a token-bearing remote URL to `git remote set-url` without quoting `${GH_PAT}` / `${GITHUB_REPOSITORY}`. ShellCheck flags SC2086 here. Today’s token/repo formats make breakage unlikely, but quoting is the safer contract for secret-bearing command arguments and avoids accidental shell expansion if the token alphabet changes.
+  - **Recommended fix** — Quote the full URL (or each expansion) in both helpers, e.g. `git remote set-url origin "https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}"`.
+
+No `TODO` / `FIXME` / `HACK` markers were present under `.github/workflows` or `scripts` in this pass.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 1 | BUG-001 |
+| Medium | 7 | API-001, API-002, DUP-001, DUP-002, EXPR-001, EXPR-002, EXPR-003 |
+| Low | 3 | DEAD-001, SHELL-001, SHELL-002 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 1-7 workflows | Medium |
+| API call optimization | 2 workflows + 1 helper module | Medium |
+| Code modularization | 5 workflows + 1-2 helper scripts | Large |
+| Expression size reduction | 2 workflows + 2 helper scripts | Medium |
+| Medium/Low fixes | 4 scripts + 1 library module | Small |
