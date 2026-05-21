@@ -1,7 +1,7 @@
 {
-  "consecutive_green_runs": 4,
+  "consecutive_green_runs": 7,
   "latest_run": {
-    "generated_at": "2026-05-18T03:27:11Z",
+    "generated_at": "2026-05-21T03:25:04Z",
     "overall_status": "pass",
     "summary_schema_version": "1",
     "totals": {

@@ -1,0 +1,79 @@
+---
+# P3 from docs/postmortems/2026-05-18-project-2734-stall.md.
+#
+# Orchestrator integration PRs (head ref `orchestrator/project-<N>`) are
+# opened eagerly by the self-healing pipeline so main <-> integration
+# drift can be resolved continuously rather than only at finalize time.
+# Without a readiness gate, any human or another Claude session can
+# manually squash-merge a partially-complete integration PR — exactly
+# what happened with PR #2750 (only Wave 1 shipped; Waves 2-7 had
+# `status=not_created` and `github_issue=null` at merge time).
+#
+# This workflow posts a commit status `orchestrator/integration-pr-not-ready`
+# on every change to such a PR. The status is failure while any sub-issue
+# checkbox in the tracking issue body is unchecked, and success when all
+# are ticked. An auditable escape valve — applying the
+# `ai:override-incomplete-merge` label to the PR — flips the status to
+# success without ticking the boxes, for the rare case where the operator
+# explicitly chooses to merge with de-scoped phases.
+#
+# Configure this status as a required check in repository branch
+# protection settings so the PR cannot be merged while the status is
+# failing.
+name: Integration PR readiness check
+
+"on":
+  pull_request:
+    # `labeled` and `unlabeled` so applying/removing the override label
+    # immediately re-evaluates. `edited` for tracking-issue body changes
+    # would be ideal but pull_request edited fires on PR body edits, not
+    # on referenced-issue body edits — the next push/sync to the PR will
+    # re-run the check anyway.
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+    branches: [main, stable]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  statuses: write
+
+jobs:
+  readiness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Run on every PR so the status context exists when branch
+    # protection marks it required. The script itself posts a no-op
+    # success on non-orchestrator branches, which keeps the trust
+    # boundary out of workflow expressions and avoids actionlint's
+    # untrusted-inline-script warning path.
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Write PR labels to file
+        env:
+          PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels) }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/integration-pr-readiness
+          # Extract label names from the event payload; one per line.
+          printf '%s' "${PR_LABELS_JSON}" \
+            | python3 -c "import json,sys; print('\n'.join(l['name'] for l in json.load(sys.stdin)))" \
+            > /tmp/integration-pr-readiness/labels.txt
+
+      - name: Check integration PR readiness and post status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_integration_pr_readiness.py \
+            --head-ref "${HEAD_REF}" \
+            --head-sha "${HEAD_SHA}" \
+            --pr-labels-file /tmp/integration-pr-readiness/labels.txt \
+            --repo "${REPO}"

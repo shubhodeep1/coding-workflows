@@ -135,7 +135,37 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_noop_suspicious_recovery.py
+
+      - name: Integration-ahead-by gate regression tests
+        run: |
+          set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_integration_ahead_by_gate.py
+
+      - name: PR body auto-close lint unit tests
+        # P1 from docs/postmortems/2026-05-18-project-2734-stall.md.
+        # Pins the keyword list, regex, label-lookup contract, and exit
+        # codes of scripts/lint_pr_body_auto_close.py so the §19
+        # enforcement workflow cannot regress silently.
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_pr_body_auto_close.py
+
+      - name: Plan-archival completeness lint unit tests
+        # P6 from docs/postmortems/2026-05-18-project-2734-stall.md.
+        # Pins the docs/completed/ archival check that requires either
+        # all tracking-issue checkboxes ticked or an explicit
+        # `## De-scoped phases` section in the PR body.
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_plan_archival_completeness.py
+
+      - name: Integration PR readiness check unit tests
+        # P3 from docs/postmortems/2026-05-18-project-2734-stall.md.
+        # Pins the branch-name derivation + checkbox-counting logic
+        # for the integration PR readiness commit status.
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_integration_pr_readiness.py
 
       - name: Merge probe unit tests
         run: |
@@ -270,6 +300,11 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_rb_judge_label_propagation.py
+
+      - name: Review-blocked judge self-run exclusion regression tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_rb_judge_self_run_exclusion.py
 
       - name: Summariser sandbox-mode pin contract test
         run: |
