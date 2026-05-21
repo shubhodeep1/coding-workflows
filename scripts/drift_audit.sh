@@ -484,18 +484,29 @@ def _fetch_pr_files(repo: str, pr_number: int) -> list[dict[str, Any]] | None:
 	return None
 
 
-def _pattern_matches_patch(pattern: str, patch: str) -> bool:
-	normalized_patch = re.sub(r"^[ +-]", "", patch, flags=re.MULTILINE)
+def _pattern_matches_patch(pattern: str, patch: str, *, line_prefixes: tuple[str, ...]) -> bool:
+	selected_lines: list[str] = []
+	for line in patch.splitlines():
+		if not line:
+			continue
+		if line.startswith(("@@", "\\ No newline", "+++", "---")):
+			continue
+		if not line.startswith(line_prefixes):
+			continue
+		selected_lines.append(line[1:])
+	if not selected_lines:
+		return False
+	selected_patch = "\n".join(selected_lines)
 	try:
-		return re.search(pattern, normalized_patch, re.MULTILINE) is not None
+		return re.search(pattern, selected_patch, re.MULTILINE) is not None
 	except re.error:
-		return pattern in normalized_patch
+		return pattern in selected_patch
 
 
 def _cluster_resolved_by_pr_files(cluster: dict[str, Any], files: list[dict[str, Any]]) -> bool:
 	path = cluster.get("path")
 	pattern = cluster.get("pattern")
-	kind = cluster.get("kind")
+	kind = str(cluster.get("kind") or "")
 	if not path:
 		return False
 	for file_entry in files:
@@ -505,14 +516,21 @@ def _cluster_resolved_by_pr_files(cluster: dict[str, Any], files: list[dict[str,
 		if filename != path and previous_filename != path:
 			continue
 		if status == "removed":
-			return True
+			return kind in {"must_not_contain", "must_not_exist"}
 		if status == "renamed" and previous_filename == path and filename != path:
-			return True
+			return kind in {"must_not_contain", "must_not_exist"}
 		if kind == "must_not_exist" and previous_filename == path and filename != path:
 			return True
 		patch = file_entry.get("patch")
-		if isinstance(patch, str) and pattern and _pattern_matches_patch(pattern, patch):
-			return True
+		if not isinstance(patch, str) or not pattern:
+			continue
+		if kind == "must_contain":
+			if _pattern_matches_patch(pattern, patch, line_prefixes=("+",)):
+				return True
+			continue
+		if kind == "must_not_contain":
+			if _pattern_matches_patch(pattern, patch, line_prefixes=("-",)) and not _pattern_matches_patch(pattern, patch, line_prefixes=("+",)):
+				return True
 	return False
 
 

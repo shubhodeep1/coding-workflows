@@ -494,6 +494,190 @@ def test_drift_audit_matches_anchored_patterns_against_patch_content() -> None:
 	assert "PR #79" in _flag_value(final_state["issue_close_args"][0], "--comment")
 
 
+def test_drift_audit_keeps_must_contain_cluster_open_when_patch_only_removes_pattern() -> None:
+	state = {
+		"run_list_responses": {
+			"review_autofix.yml": [
+				{"databaseId": 471, "createdAt": _iso(1), "status": "completed", "conclusion": "success", "url": "https://example.test/runs/471"},
+			],
+			"internal-review.yml": [
+				{"databaseId": 472, "createdAt": _iso(2), "status": "completed", "conclusion": "success", "url": "https://example.test/runs/472"},
+			],
+		},
+		"run_logs": {
+			"471": PRE_EXISTING_MARKER + "\n",
+			"472": QUARANTINED_MARKER + "\n",
+		},
+		"issue_list_response": [
+			{
+				"number": 9100,
+				"title": "tracker",
+				"body": _cluster_marker(FP_KEY) + "\nopen\n",
+				"url": "https://example.test/issues/9100",
+			},
+		],
+		"graphql_response": {
+			"data": {
+				"repository": {
+					"i0": {
+						"number": 1500,
+						"timelineItems": {
+							"nodes": [
+								{
+									"source": {
+										"__typename": "PullRequest",
+										"number": 80,
+										"merged": True,
+										"mergedAt": _iso(3),
+									},
+								}
+							],
+						},
+					},
+				},
+			},
+		},
+		"api_responses": {
+			"repos/owner/repo/pulls/80/files?per_page=100&page=1": [
+				{"filename": "scripts/example.py", "status": "modified", "patch": "-EXPECTED_LINE\n"},
+			],
+		},
+	}
+	proc, final_state = _run_drift_audit(state)
+	assert proc.returncode == 0, proc.stderr
+	assert final_state.get("issue_create_args", []) == []
+	assert len(final_state.get("issue_edit_args", [])) == 1
+	assert final_state.get("issue_close_args", []) == []
+	assert "keep open" in _flag_value(final_state["issue_edit_args"][0], "--body")
+
+
+def test_drift_audit_keeps_must_contain_cluster_open_when_file_is_removed() -> None:
+	state = {
+		"run_list_responses": {
+			"review_autofix.yml": [
+				{"databaseId": 481, "createdAt": _iso(1), "status": "completed", "conclusion": "success", "url": "https://example.test/runs/481"},
+			],
+			"internal-review.yml": [
+				{"databaseId": 482, "createdAt": _iso(2), "status": "completed", "conclusion": "success", "url": "https://example.test/runs/482"},
+			],
+		},
+		"run_logs": {
+			"481": PRE_EXISTING_MARKER + "\n",
+			"482": QUARANTINED_MARKER + "\n",
+		},
+		"issue_list_response": [
+			{
+				"number": 9100,
+				"title": "tracker",
+				"body": _cluster_marker(FP_KEY) + "\nopen\n",
+				"url": "https://example.test/issues/9100",
+			},
+		],
+		"graphql_response": {
+			"data": {
+				"repository": {
+					"i0": {
+						"number": 1500,
+						"timelineItems": {
+							"nodes": [
+								{
+									"source": {
+										"__typename": "PullRequest",
+										"number": 81,
+										"merged": True,
+										"mergedAt": _iso(3),
+									},
+								}
+							],
+						},
+					},
+				},
+			},
+		},
+		"api_responses": {
+			"repos/owner/repo/pulls/81/files?per_page=100&page=1": [
+				{"filename": "scripts/example.py", "status": "removed"},
+			],
+		},
+	}
+	proc, final_state = _run_drift_audit(state)
+	assert proc.returncode == 0, proc.stderr
+	assert final_state.get("issue_create_args", []) == []
+	assert len(final_state.get("issue_edit_args", [])) == 1
+	assert final_state.get("issue_close_args", []) == []
+	assert "keep open" in _flag_value(final_state["issue_edit_args"][0], "--body")
+
+
+def test_drift_audit_closes_must_not_contain_cluster_only_after_removal_direction() -> None:
+	for pr_number, patch, expected_closed in (
+		(82, "+FORBIDDEN_LINE\n", False),
+		(83, "-FORBIDDEN_LINE\n", True),
+	):
+		must_not_contain_fp_key = '["scripts/example.py","FORBIDDEN_LINE"]'
+		must_not_contain_marker = (
+			"::warning::PRE_EXISTING_FINGERPRINT_DRIFT_V1 unchanged "
+			f"fp_key={must_not_contain_fp_key} issue=#1500 path=\"scripts/example.py\" pattern=\"FORBIDDEN_LINE\" kind=must_not_contain"
+		)
+		state = {
+			"run_list_responses": {
+				"review_autofix.yml": [
+					{"databaseId": 490 + pr_number, "createdAt": _iso(1), "status": "completed", "conclusion": "success", "url": f"https://example.test/runs/{490 + pr_number}"},
+				],
+				"internal-review.yml": [
+					{"databaseId": 590 + pr_number, "createdAt": _iso(2), "status": "completed", "conclusion": "success", "url": f"https://example.test/runs/{590 + pr_number}"},
+				],
+			},
+			"run_logs": {
+				str(490 + pr_number): must_not_contain_marker + "\n",
+				str(590 + pr_number): f"::warning::FINGERPRINT_QUARANTINED_V1 fp_key={must_not_contain_fp_key} issue=#1500\n",
+			},
+			"issue_list_response": [
+				{
+					"number": 9100,
+					"title": "tracker",
+					"body": _cluster_marker(must_not_contain_fp_key) + "\nopen\n",
+					"url": "https://example.test/issues/9100",
+				},
+			],
+			"graphql_response": {
+				"data": {
+					"repository": {
+						"i0": {
+							"number": 1500,
+							"timelineItems": {
+								"nodes": [
+									{
+										"source": {
+											"__typename": "PullRequest",
+											"number": pr_number,
+											"merged": True,
+											"mergedAt": _iso(3),
+										},
+									}
+								],
+							},
+						},
+					},
+				},
+			},
+			"api_responses": {
+				f"repos/owner/repo/pulls/{pr_number}/files?per_page=100&page=1": [
+					{"filename": "scripts/example.py", "status": "modified", "patch": patch},
+				],
+			},
+		}
+		proc, final_state = _run_drift_audit(state)
+		assert proc.returncode == 0, proc.stderr
+		if expected_closed:
+			assert final_state.get("issue_edit_args", []) == []
+			assert len(final_state.get("issue_close_args", [])) == 1
+			assert f"PR #{pr_number}" in _flag_value(final_state["issue_close_args"][0], "--comment")
+		else:
+			assert len(final_state.get("issue_edit_args", [])) == 1
+			assert final_state.get("issue_close_args", []) == []
+			assert "keep open" in _flag_value(final_state["issue_edit_args"][0], "--body")
+
+
 def test_drift_audit_closes_existing_issue_after_fixed_by_resolver_markers() -> None:
 	state = {
 		"run_list_responses": {
@@ -581,6 +765,9 @@ def main() -> int:
 	test_drift_audit_fail_open_when_pr_diff_is_unavailable()
 	test_drift_audit_batches_multiple_issue_queries_inside_repository_scope()
 	test_drift_audit_matches_anchored_patterns_against_patch_content()
+	test_drift_audit_keeps_must_contain_cluster_open_when_patch_only_removes_pattern()
+	test_drift_audit_keeps_must_contain_cluster_open_when_file_is_removed()
+	test_drift_audit_closes_must_not_contain_cluster_only_after_removal_direction()
 	test_drift_audit_closes_existing_issue_after_fixed_by_resolver_markers()
 	test_drift_audit_keeps_quarantined_cluster_open_when_fixed_and_quarantined_markers_mix()
 	test_drift_audit_skips_incomplete_runs_when_fetching_logs()

@@ -364,6 +364,7 @@ def test_review_autofix_wires_escape_threshold_and_failure_comment_suppression()
 	assert 'SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"' in resolve_body
 	assert "RESOLVER_ESCAPE_THRESHOLD_N:" in body
 	assert "vars.RESOLVER_ESCAPE_THRESHOLD_N || '5'" in body
+	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in body
 	assert 'ensure_label_exists "ai:resolver-escalated" "${{ github.repository }}"' in body
 	assert body.count("env.RESOLVER_ESCALATED != 'true'") >= 2
 

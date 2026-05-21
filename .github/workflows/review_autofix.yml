@@ -4394,6 +4394,7 @@ jobs:
         timeout-minutes: 170
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
           RESOLVER_ESCAPE_THRESHOLD_N: ${{ vars.RESOLVER_ESCAPE_THRESHOLD_N || '5' }}
           # Decoupled from EDITOR_REASONING_EFFORT: the smoke-test override
           # ("Detect smoke test PR" step) sets editor reasoning to "none" so
