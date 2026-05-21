@@ -68,6 +68,7 @@ def _run_gh(args: list[str]) -> tuple[int, str, str]:
 		capture_output=True,
 		text=True,
 		encoding="utf-8",
+		errors="replace",
 	)
 	return proc.returncode, proc.stdout, proc.stderr
 
@@ -419,7 +420,6 @@ def _fetch_latest_merged_linked_prs(repo: str, issue_numbers: list[int]) -> dict
 				"\t\t\t\t}\n"
 				"\t\t\t}\n"
 				"\t\t}\n"
-				"\t}"
 			)
 		query = f'''query {{\n\trepository(owner: "{owner}", name: "{name}") {{{"".join(fragment)}\n\t}}\n}}'''
 		response = _gh_json(
@@ -481,10 +481,11 @@ def _fetch_pr_files(repo: str, pr_number: int) -> list[dict[str, Any]] | None:
 
 
 def _pattern_matches_patch(pattern: str, patch: str) -> bool:
+	normalized_patch = re.sub(r"^[ +-]", "", patch, flags=re.MULTILINE)
 	try:
-		return re.search(pattern, patch, re.MULTILINE) is not None
+		return re.search(pattern, normalized_patch, re.MULTILINE) is not None
 	except re.error:
-		return pattern in patch
+		return pattern in normalized_patch
 
 
 def _cluster_resolved_by_pr_files(cluster: dict[str, Any], files: list[dict[str, Any]]) -> bool:

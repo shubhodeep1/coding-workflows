@@ -404,6 +404,96 @@ def test_drift_audit_fail_open_when_pr_diff_is_unavailable() -> None:
 	assert "synthetic PR diff failure" in proc.stdout
 
 
+def test_drift_audit_batches_multiple_issue_queries_inside_repository_scope() -> None:
+	state = {
+		"run_list_responses": {
+			"review_autofix.yml": [
+				{"databaseId": 451, "createdAt": _iso(1), "status": "completed", "conclusion": "success", "url": "https://example.test/runs/451"},
+			],
+			"internal-review.yml": [
+				{"databaseId": 452, "createdAt": _iso(2), "status": "completed", "conclusion": "success", "url": "https://example.test/runs/452"},
+			],
+		},
+		"run_logs": {
+			"451": PRE_EXISTING_MARKER + "\n",
+			"452": QUARANTINED_MARKER + "\n" + f"::warning::FINGERPRINT_QUARANTINED_V1 fp_key={FP_KEY} issue=#1501\n",
+		},
+		"issue_list_response": [],
+	}
+	proc, final_state = _run_drift_audit(state)
+	assert proc.returncode == 0, proc.stderr
+	assert len(final_state.get("graphql_args", [])) == 1
+	query_form = _flag_value(final_state["graphql_args"][0], "-f")
+	assert query_form.startswith("query=")
+	query = query_form[len("query=") :]
+	assert "i0: issue(number: 1500)" in query
+	assert "i1: issue(number: 1501)" in query
+	assert query.count("{") == query.count("}")
+
+
+def test_drift_audit_matches_anchored_patterns_against_patch_content() -> None:
+	anchored_fp_key = '["scripts/example.py","^EXPECTED_LINE$"]'
+	anchored_pre_existing_marker = (
+		"::warning::PRE_EXISTING_FINGERPRINT_DRIFT_V1 unchanged "
+		f"fp_key={anchored_fp_key} issue=#1500 path=\"scripts/example.py\" pattern=\"^EXPECTED_LINE$\" kind=must_contain"
+	)
+	anchored_quarantined_marker = f"::warning::FINGERPRINT_QUARANTINED_V1 fp_key={anchored_fp_key} issue=#1500"
+	state = {
+		"run_list_responses": {
+			"review_autofix.yml": [
+				{"databaseId": 461, "createdAt": _iso(1), "status": "completed", "conclusion": "success", "url": "https://example.test/runs/461"},
+			],
+			"internal-review.yml": [
+				{"databaseId": 462, "createdAt": _iso(2), "status": "completed", "conclusion": "success", "url": "https://example.test/runs/462"},
+			],
+		},
+		"run_logs": {
+			"461": anchored_pre_existing_marker + "\n",
+			"462": anchored_quarantined_marker + "\n",
+		},
+		"issue_list_response": [
+			{
+				"number": 9100,
+				"title": "tracker",
+				"body": _cluster_marker(anchored_fp_key) + "\nopen\n",
+				"url": "https://example.test/issues/9100",
+			},
+		],
+		"graphql_response": {
+			"data": {
+				"repository": {
+					"i0": {
+						"number": 1500,
+						"timelineItems": {
+							"nodes": [
+								{
+									"source": {
+										"__typename": "PullRequest",
+										"number": 79,
+										"merged": True,
+										"mergedAt": _iso(3),
+									},
+								}
+							],
+						},
+					},
+				},
+			},
+		},
+		"api_responses": {
+			"repos/owner/repo/pulls/79/files?per_page=100&page=1": [
+				{"filename": "scripts/example.py", "status": "modified", "patch": "+EXPECTED_LINE\n"},
+			],
+		},
+	}
+	proc, final_state = _run_drift_audit(state)
+	assert proc.returncode == 0, proc.stderr
+	assert final_state.get("issue_create_args", []) == []
+	assert final_state.get("issue_edit_args", []) == []
+	assert len(final_state.get("issue_close_args", [])) == 1
+	assert "PR #79" in _flag_value(final_state["issue_close_args"][0], "--comment")
+
+
 def test_drift_audit_closes_existing_issue_after_fixed_by_resolver_markers() -> None:
 	state = {
 		"run_list_responses": {
@@ -438,6 +528,8 @@ def main() -> int:
 	test_drift_audit_edits_existing_issue_instead_of_recreating()
 	test_drift_audit_closes_resolved_quarantined_cluster()
 	test_drift_audit_fail_open_when_pr_diff_is_unavailable()
+	test_drift_audit_batches_multiple_issue_queries_inside_repository_scope()
+	test_drift_audit_matches_anchored_patterns_against_patch_content()
 	test_drift_audit_closes_existing_issue_after_fixed_by_resolver_markers()
 	return 0
 
