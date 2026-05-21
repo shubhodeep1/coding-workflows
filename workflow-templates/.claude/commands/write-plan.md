@@ -8,9 +8,9 @@ $ARGUMENTS
 
 2. **Read project context.** Always read `README.md`, `agents.md`, and `CLAUDE.md` at the repo root before drafting. If the task plausibly touches a MongoDB collection, also read every relevant `/db/contracts/*.yml` (per CLAUDE.md §10). If references in `$ARGUMENTS` point at issues / PRs / files / prior plans, fetch and read them in full — use `mcp__github__*` tools or the `gh` CLI for GitHub reads (see [Tool Access](#tool-access)), the `Read` tool for local files, and `Grep` / `Glob` to locate related code. Do not guess at code, env vars, or workflow inputs — read the source.
 
-3. **Clarify.** Identify every ambiguity the task introduces — scope, behavior, edge cases, interfaces, data model, operational concerns, success criteria, propagation / consumer impact, rollout. Batch every blocking question in a single round using the [Clarification Format](#clarification-format) below. **Always include a question proposing the slug** (used for the filename and the branch name). Wait for the user's answers. If answers introduce new ambiguity, ask a follow-up batch — but never silently default. The whole point of this command is to converge on a plan with zero hidden assumptions.
+3. **Clarify until zero items remain open.** Identify every ambiguity the task introduces — scope, behavior, edge cases, interfaces, data model, operational concerns, success criteria, propagation / consumer impact, rollout. Batch every blocking question in a single round using the [Clarification Format](#clarification-format) below. **Always include a question proposing the slug** (used for the filename and the branch name). Wait for the user's answers. **If any answer introduces new ambiguity, ask a follow-up batch — keep looping until every clarification item is resolved.** Do not proceed to step 4 while any question is still open: this command's contract is to ship a plan with zero open questions. Items that genuinely cannot be answered before drafting (e.g. an env value that only exists in prod, an integration result that depends on staging) are NOT recorded as open questions — surface them in the clarification round as proposed `## Risks & Mitigations` entries with `ACCEPTED — pending <discovery>` wording and have the user accept them explicitly before drafting.
 
-4. **Draft the plan.** Write a markdown plan to `docs/plans/<slug>-plan.md` following the structure in [Plan Structure](#plan-structure) below. Cite project constraints by section number where relevant (e.g. "§6 — renames are breaking unless the old name is preserved as an alias"). Surface every assumption you made, every open question that wasn't resolved during clarification, and every risk you spotted. Create the `docs/plans/` directory if it does not yet exist.
+4. **Draft the plan.** Write a markdown plan to `docs/plans/<slug>-plan.md` following the structure in [Plan Structure](#plan-structure) below. Cite project constraints by section number where relevant (e.g. "§6 — renames are breaking unless the old name is preserved as an alias"). Surface every assumption you made and every risk you spotted. By the time you reach this step, there are no open questions left — step 3's loop must have resolved every one. Create the `docs/plans/` directory if it does not yet exist.
 
 5. **Sanity check.** Re-read the plan as if you were the reviewer. Does it answer: what is changing, why, how, what could break, what is verified, what is rolled out? If any of those is hand-wavy, fix it before pushing. No commit-and-iterate cycle on the plan itself.
 
@@ -20,7 +20,7 @@ $ARGUMENTS
    - **Body:** the [PR Body Template](#pr-body-template) below.
    - **Draft:** `false` (ready for review).
 
-7. **Report.** Emit the [Output Format](#output-format) in chat — short summary, file path, branch, PR URL, top open questions.
+7. **Report.** Emit the [Output Format](#output-format) in chat — short summary, file path, branch, PR URL.
 
 ## Clarification Format
 
@@ -92,13 +92,10 @@ Only if applicable. Per §10: name every collection touched, every index added /
 What new tests; what existing tests need updating; how the plan is verified end-to-end. Distinguish unit / integration / e2e / manual.
 
 ## Risks & Mitigations
-Bulleted. Each risk gets a one-line mitigation or `ACCEPTED — <why>`.
+Bulleted. Each risk gets a one-line mitigation or `ACCEPTED — <why>`. Items that depend on future discovery (ops checks, prod-only values, staging integration results) are recorded here as `ACCEPTED — pending <discovery>` and MUST have been explicitly accepted by the user during step 3's clarification round — they are NOT open questions.
 
 ## Rollout
 Feature flag? Dark launch? Migration order? Rollback procedure? Consumer-repo propagation timing if §14 applies?
-
-## Open Questions
-Anything that survived the clarification loop unresolved. Each entry is a question the reviewer must answer before implementation starts. `None.` is a valid value.
 
 ## References
 Links to related issues, PRs, prior plans, external docs, RFCs.
@@ -112,9 +109,6 @@ Links to related issues, PRs, prior plans, external docs, RFCs.
 
 ## What this plan covers
 - <one bullet per major section: Goals, Approach, Implementation Steps, Tests, Rollout>
-
-## Open questions
-- <one bullet per unresolved item; `None.` if all closed during clarification>
 
 ## Plan file
 [`docs/plans/<slug>-plan.md`](./docs/plans/<slug>-plan.md)
@@ -133,13 +127,9 @@ Branch: claude/write-plan-<slug>
 PR: <url>
 
 Summary: <1–2 lines from the plan's Summary section>
-
-Open questions:
-- <q1>
-- <q2>
 ```
 
-Omit `Open questions` if none. No prose padding. A bare "Plan written, see PR #X" is not acceptable — the user wants summary + file + branch + PR + open questions in chat.
+No prose padding. A bare "Plan written, see PR #X" is not acceptable — the user wants summary + file + branch + PR in chat. Do NOT add an "Open questions" block — by step 3's contract every clarification item is resolved before the plan is drafted (items that depend on future discovery are captured as `ACCEPTED — pending <discovery>` entries under `## Risks & Mitigations` in the plan itself, not as open questions in chat).
 
 ## Tool Access
 
@@ -161,6 +151,7 @@ Local file reads use `Read`. Local code search uses `Grep` / `Glob`. Git operati
 - **Honor §14 (consumer repos).** If the planned change reaches workflow templates or `.claude/` assets that propagate to consumer repos, the plan MUST state which consumers are affected and reference `.github/ai/consumer_repos.json`.
 - **Honor §15 (GitHub API hygiene).** Plans that add `gh api` / MCP calls MUST justify the new call surface and explain how it batches / reuses existing calls.
 - **Clarify aggressively; never default silently.** Per §0 + §2 — when in doubt, ask. If the answers to the first batch open new ambiguities, ask a follow-up batch. The user provided "ask clarifying questions until its completely clear" as the contract — honor that.
+- **Zero open questions in the final plan.** Step 3 MUST loop until every clarification item is resolved before step 4 runs. The `## Open Questions` section has been removed from Plan Structure, PR Body Template, and Output Format — there is no slot to record unresolved items. Items that depend on future discovery are recorded as `ACCEPTED — pending <discovery>` entries under `## Risks & Mitigations`, and only after explicit user acceptance during the clarification round — they are not open questions.
 - **Slug rules.** Lowercase ASCII alphanumeric + hyphens, ≤ 60 chars, derived from the task topic. Always confirm the slug in the clarification batch — never auto-pick.
 - **Branch collision.** If `claude/write-plan-<slug>` already exists on the remote (check via `mcp__github__list_branches` or `git ls-remote --heads origin claude/write-plan-<slug>`), append `-2`, `-3`, … to the slug. Never force-push.
 - **Default branch.** Resolve dynamically via `gh repo view --json defaultBranchRef -q .defaultBranchRef.name -R <owner>/<repo>`. Do not hardcode `main` — some consumer repos use a different default branch.
