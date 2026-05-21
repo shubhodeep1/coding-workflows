@@ -32,6 +32,7 @@ ALLOWLIST_EXCEPTIONS = {
 	"review_autofix.yml": "PR review/autofix operates on PR refs rather than orchestrator integration metadata.",
 	"test-and-mark-stable.yml": "Release test workflow checks specific refs/tags and is outside orchestrator phase execution.",
 	"comprehensive-test-and-release.yml": "Comprehensive release conductor dispatches downstream workflows and does not execute tracking-issue integration-ref checkout.",
+	"drift-audit.yml": "Scheduled maintenance workflow audits review-autofix logs and is not an orchestrator issue-phase checkout path.",
 	"update_workflows.yml": "Workflow-template sync job is repository maintenance, not issue-phase execution.",
 	"validation-improvements-intake.yml": "Validation prompt intake workflow is repository_dispatch PR automation.",
 	"validation-refresh.yml": "Validation refresh workflow iterates consumer repos and is not an orchestrator issue-phase checkout path.",
