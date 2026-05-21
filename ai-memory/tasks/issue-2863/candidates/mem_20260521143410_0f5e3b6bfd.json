@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":2863,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/2863\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/2864\",\"pr_number\":2864,\"branch\":\"ai/issue-2863\",\"run_id\":\"26232160779\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/26232160779\",\"changed_files\":[\"README.md\",\"agents.md\",\"docs/completed/integration-sync-resolver-self-heal-plan.md\",\"docs/integration-sync-resolver-self-heal.md\",\"docs/plans/integration-sync-resolver-self-heal-plan.md\",\"scripts/ai_memory.py\",\"scripts/ai_memory_lib.py\",\"scripts/label_helpers.sh\"]}",
+  "fingerprint": "0f20430098860e8d8d71fc13ca3a3ba43f87a927d7a468050ae35769816330f5",
+  "lineage": {
+    "issue_number": 2863,
+    "parent_ids": [],
+    "pr_number": 2864,
+    "run_id": "26232160779",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26232160779",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/2864"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260521143410_0f5e3b6bfd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2863,
+    "level": "run",
+    "pr_number": 2864,
+    "run_id": "26232160779"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #2863: https://github.com/shubhodeep1/coding-workflows/pull/2864",
+  "timestamps": {
+    "created_at": "2026-05-21T14:34:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
