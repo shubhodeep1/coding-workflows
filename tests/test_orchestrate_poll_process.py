@@ -7502,6 +7502,7 @@ def test_integration_conflict_branch_rebuild_replay_failure_marks_terminal_failu
 	assert result.get("mock_branch_rebuild_audit_put_calls", 0) >= 2, result
 	latest_audit = result.get("mock_branch_rebuild_audit_payload") or {}
 	assert latest_audit.get("outcome") == "failed", latest_audit
+	assert latest_audit.get("pre_rebuild_branch_head_sha") == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", latest_audit
 	assert "deadbeef" in str(latest_audit.get("failure_detail", "")) or "missing commit object" in str(latest_audit.get("failure_detail", "")), latest_audit
 	assert any("/git/refs/heads/orchestrator%2Fproject-192" in path for path in result["api_calls"]), (
 		"expected delete-ref API call during rebuild attempt"
@@ -7646,6 +7647,24 @@ def test_verify_integration_fingerprints_partial_removal_regressions():
 	spec = importlib.util.spec_from_file_location(
 		"test_verify_integration_fingerprints_partial_removal",
 		REPO_ROOT / "tests" / "test_verify_integration_fingerprints_partial_removal.py",
+	)
+	assert spec is not None and spec.loader is not None
+	mod = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(mod)
+	for name, value in sorted(vars(mod).items()):
+		if name.startswith("test_") and callable(value):
+			value()
+
+
+def test_branch_rebuild_audit_regressions():
+	# CI/release workflows run explicit `python3 tests/<file>.py` allowlists,
+	# so execute the dedicated branch-rebuild audit suite from this already-
+	# allowlisted harness too.
+	import importlib.util
+
+	spec = importlib.util.spec_from_file_location(
+		"test_branch_rebuild",
+		REPO_ROOT / "tests" / "test_branch_rebuild.py",
 	)
 	assert spec is not None and spec.loader is not None
 	mod = importlib.util.module_from_spec(spec)

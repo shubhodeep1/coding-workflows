@@ -4096,6 +4096,11 @@ _build_branch_rebuild_audit_json() {
   local branch_protected="${10:-}"
   local failure_detail="${11:-}"
   local completed_at="${12:-}"
+  # _attempt_branch_rebuild_after_escalation populates this once the
+  # integration branch ref has been resolved. Earlier audit writes (before the
+  # branch ref is loaded) intentionally fall back to null instead of
+  # misreporting the final PR head as the pre-rebuild branch head.
+  local pre_rebuild_branch_head_sha="${branch_rebuild_pre_delete_sha:-}"
 
   [ -n "${replay_commits_json}" ] || replay_commits_json='[]'
 
@@ -4109,7 +4114,7 @@ _build_branch_rebuild_audit_json() {
     --arg resolver_escalated_at "${resolver_retry_escalated_at}" \
     --arg final_pr "${final_pr}" \
     --arg final_pr_head_sha "${final_pr_head_sha}" \
-    --arg pre_rebuild_branch_head_sha "${final_pr_head_sha}" \
+    --arg pre_rebuild_branch_head_sha "${pre_rebuild_branch_head_sha}" \
     --arg default_branch_head_sha "${default_branch_head_sha}" \
     --argjson replay_commits "${replay_commits_json}" \
     --arg outcome "${outcome}" \
@@ -4337,6 +4342,7 @@ _attempt_branch_rebuild_after_escalation() {
   local integration_branch_uri=""
   local branch_payload=""
   local branch_protected="false"
+  local branch_rebuild_pre_delete_sha=""
   local audit_json=""
   local final_audit_json=""
   local completed_at=""
@@ -4373,6 +4379,10 @@ _attempt_branch_rebuild_after_escalation() {
   fi
 
   branch_protected="$(printf '%s' "${branch_payload}" | jq -r '.protected // false' 2>/dev/null || echo false)"
+  branch_rebuild_pre_delete_sha="$(printf '%s' "${branch_payload}" | jq -r '.commit.sha // ""' 2>/dev/null || echo "")"
+  if ! [[ "${branch_rebuild_pre_delete_sha}" =~ ^[0-9A-Fa-f]{7,64}$ ]]; then
+    branch_rebuild_pre_delete_sha=""
+  fi
   if [ "${branch_protected}" = "true" ]; then
     BRANCH_REBUILD_ESCALATED_ERROR="Branch rebuild for '${integration_branch}' is blocked because the branch is protected."
     final_audit_json="$(_build_branch_rebuild_audit_json "${integration_branch}" "${default_branch}" "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_escalated_at}" "${rebuild_started_at}" "${default_branch_head_sha}" "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" "skipped_protected" "true" "Branch is protected; refusing delete/recreate rebuild flow." "${rebuild_started_at}")"
