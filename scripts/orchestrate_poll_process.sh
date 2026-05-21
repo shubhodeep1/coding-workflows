@@ -3060,13 +3060,22 @@ capture_intent_fingerprints_for_merged_subissue() {
   # filter rather than reading a potentially stale local ref (the existing
   # net-change / substring-overlap filters still apply, and the verifier-
   # side partial-removal defense catches the remaining false positives).
-  local integration_branch_for_capture integration_ref_for_capture=""
+  local integration_branch_for_capture integration_ref_for_capture="" integration_fetch_timeout_secs="${GIT_COMMAND_TIMEOUT_SECS:-30}"
+  case "${integration_fetch_timeout_secs}" in
+    ''|*[!0-9]*) integration_fetch_timeout_secs=30 ;;
+  esac
+  if [ "${integration_fetch_timeout_secs}" -le 0 ]; then
+    integration_fetch_timeout_secs=30
+  fi
   integration_branch_for_capture="$(jq -r '.integration_branch // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
   if [ -n "${integration_branch_for_capture}" ] && [ "${integration_branch_for_capture}" != "null" ]; then
     if git check-ref-format "refs/heads/${integration_branch_for_capture}" >/dev/null 2>&1 \
       && git remote get-url origin >/dev/null 2>&1 \
-      && git fetch --no-tags --quiet origin "${integration_branch_for_capture}" >/dev/null 2>&1; then
+      && env GIT_TERMINAL_PROMPT=0 timeout "${integration_fetch_timeout_secs}s" \
+        git fetch --no-tags --quiet origin "${integration_branch_for_capture}" >/dev/null 2>&1; then
       integration_ref_for_capture="$(git rev-parse --verify FETCH_HEAD 2>/dev/null || echo "")"
+    else
+      echo "::notice::capture_intent_fingerprints_for_merged_subissue: skipping post-merge presence filter for '${integration_branch_for_capture}' because integration ref refresh failed or timed out after ${integration_fetch_timeout_secs}s." >&2
     fi
   fi
 
