@@ -4193,7 +4193,7 @@ _check_branch_rebuild_threshold() {
   audit_response="$(_branch_rebuild_audit_get "${integration_branch}" || echo "")"
   if [ -z "${audit_response}" ]; then
     BRANCH_REBUILD_SKIP_REASON="audit_unavailable"
-    BRANCH_REBUILD_ESCALATED_ERROR="Branch rebuild is enabled but ai-memory audit storage is unavailable; refusing rebuild for '${integration_branch}'."
+    BRANCH_REBUILD_ESCALATED_ERROR="Branch rebuild is enabled but ai-memory audit storage is unavailable or disabled; refusing rebuild for '${integration_branch}'."
     return 1
   fi
 
@@ -4464,6 +4464,9 @@ _attempt_branch_rebuild_after_escalation() {
     return 0
   fi
 
+  # Replay exit codes: 20=worktree inaccessible, 21=missing/invalid
+  # merge SHA, 22=missing commit object, 23=cherry-pick failed,
+  # 24=push failed.
   (
     set +e
     cd "${worktree_dir}" || exit 20
@@ -4471,6 +4474,10 @@ _attempt_branch_rebuild_after_escalation() {
       [ -n "${replay_item}" ] || continue
       merge_commit_sha="$(printf '%s' "${replay_item}" | jq -r '.merge_commit_sha // ""' 2>/dev/null || echo "")"
       [ -n "${merge_commit_sha}" ] || exit 21
+      if ! [[ "${merge_commit_sha}" =~ ^[0-9A-Fa-f]{7,64}$ ]]; then
+        echo "invalid merge_commit_sha ${merge_commit_sha}" >> "${replay_log}"
+        exit 21
+      fi
 
       parent_line="$(git rev-list --parents -n 1 "${merge_commit_sha}" 2>>"${replay_log}" || true)"
       if [ -z "${parent_line}" ]; then
@@ -4492,9 +4499,22 @@ _attempt_branch_rebuild_after_escalation() {
   replay_rc=$?
 
   if [ "${replay_rc}" -ne 0 ]; then
+    local replay_failure_context=""
     git -C "${worktree_dir}" cherry-pick --abort >/dev/null 2>&1 || true
+    case "${replay_rc}" in
+      20) replay_failure_context="temporary worktree became inaccessible" ;;
+      21) replay_failure_context="replay plan entry was missing or had an invalid merge commit SHA" ;;
+      22) replay_failure_context="replay commit object was not available in the local clone" ;;
+      23) replay_failure_context="git cherry-pick failed while replaying merged sub-PR commits" ;;
+      24) replay_failure_context="git push failed after replaying merged sub-PR commits" ;;
+      *) replay_failure_context="branch rebuild replay failed" ;;
+    esac
     failure_detail="$(tail -n 20 "${replay_log}" 2>/dev/null | tr '\r\n' '  ' | sed 's/[[:space:]]\+/ /g' | cut -c1-2000)"
-    [ -n "${failure_detail}" ] || failure_detail="Cherry-pick or push failed while replaying merged sub-PR commits onto '${integration_branch}'."
+    if [ -n "${failure_detail}" ]; then
+      failure_detail="${replay_failure_context}: ${failure_detail}"
+    else
+      failure_detail="${replay_failure_context}."
+    fi
     completed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
     final_audit_json="$(_build_branch_rebuild_audit_json "${integration_branch}" "${default_branch}" "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_escalated_at}" "${rebuild_started_at}" "${default_branch_head_sha}" "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" "failed" "false" "${failure_detail}" "${completed_at}")"
     _branch_rebuild_audit_put "${integration_branch}" "${final_audit_json}" >/dev/null 2>&1 || true
