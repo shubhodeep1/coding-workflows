@@ -26,8 +26,10 @@ def test_plan_runs_payload_is_shape_validated_before_counting() -> None:
 
 	assert "_plan_runs_json_valid()" in wf
 	assert "jq -se 'length == 1 and (.[0] | type == \"object\" and (.workflow_runs | type == \"array\"))'" in wf
-	assert "PLAN_RUNS_JSON='{\"workflow_runs\":[]}'" in wf
+	assert "PLAN_RUNS_JSON=$(fetch_plan_runs_json || echo \"\")" in wf
+	assert "PLAN_RUNS_JSON='{\"workflow_runs\":[]}'" not in wf
 	assert "if ! _plan_runs_json_valid \"$PLAN_RUNS_JSON\"; then" in wf
+	assert 'echo "  ⏳ Unable to confirm concurrent Plan runs yet — retrying"\n                continue' in wf
 	assert "if _OTHER_ACTIVE_PLAN_RUNS=$(printf '%s' \"$PLAN_RUNS_JSON\"" in wf
 
 
