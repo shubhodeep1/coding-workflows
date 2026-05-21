@@ -1433,6 +1433,8 @@ _persist_resolver_retry_state_from_current_failure()
     return 0
   fi
 
+  echo "RESOLVER_ESCALATED=true" >> "$GITHUB_ENV"
+
   if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/label_helpers.sh" ]; then
     # shellcheck source=/dev/null
     source "${SUPPORT_SCRIPTS_DIR:-scripts}/label_helpers.sh" 2>/dev/null || true
