@@ -743,6 +743,7 @@ jobs:
               PLAN_RUNS_JSON=$(fetch_plan_runs_json || echo "")
               if ! _plan_runs_json_valid "$PLAN_RUNS_JSON"; then
                 echo "  ⏳ Unable to confirm concurrent Plan runs yet — retrying"
+                sleep "$POLL_INTERVAL"
                 continue
               fi
               OTHER_ACTIVE_PLAN_RUNS=0
