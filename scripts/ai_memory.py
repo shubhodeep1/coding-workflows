@@ -23,13 +23,15 @@ from ai_memory_lib import (
     evaluate_clarify_loop_guard,
     finalize_task_lineage,
     get_actions_runs_cache,
+    get_branch_rebuild_audit,
     get_fingerprint_quarantine,
     get_processed_command_entry,
     list_processed_command_entries,
     parse_bool,
     persist_memory_operation,
-    put_fingerprint_quarantine,
     put_actions_runs_cache,
+    put_branch_rebuild_audit,
+    put_fingerprint_quarantine,
     promote_candidates,
     read_memory_root_from_branch,
     record_candidate,
@@ -449,6 +451,17 @@ def _persist_quarantine_list(
         }
 
 
+def _emit_branch_rebuild_audit_fallback(
+    *, mode: str, reason: str, tracking_issue: int, integration_branch: str
+) -> None:
+    print(
+        "::warning::branch_rebuild_audit_fallback "
+        f"helper=branch_rebuild_audit mode={mode} reason={reason} "
+        f"tracking_issue={tracking_issue} integration_branch={integration_branch}",
+        file=sys.stderr,
+    )
+
+
 def _read_runs_file(path_text: str) -> list[dict[str, Any]]:
     path = Path(_require_nonempty(path_text, "runs_file"))
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -461,6 +474,14 @@ def _read_runs_file(path_text: str) -> list[dict[str, Any]]:
     if not all(isinstance(item, dict) for item in runs):
         raise MemoryValidationError("runs_file entries must be JSON objects")
     return runs
+
+
+def _read_json_object_file(path_text: str, field_name: str) -> dict[str, Any]:
+    path = Path(_require_nonempty(path_text, field_name))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise MemoryValidationError(f"{field_name} must contain a JSON object")
+    return payload
 
 
 def cmd_record_candidate(args: argparse.Namespace) -> int:
@@ -811,6 +832,123 @@ def cmd_actions_runs_cache_put(args: argparse.Namespace) -> int:
                 "enabled": True,
                 "stored": False,
                 "cache": None,
+                "warning": str(exc),
+            }
+        )
+        return 0
+
+
+def cmd_branch_rebuild_audit_get(args: argparse.Namespace) -> int:
+    args = _read_env_defaults(args)
+    repository = _require_nonempty(args.repo, "repo")
+    tracking_issue = _require_positive_int(args.tracking_issue, "tracking_issue")
+    integration_branch = _require_nonempty(args.integration_branch, "integration_branch")
+    if not args.enabled:
+        _print_json({"ok": True, "enabled": False, "hit": False, "audit": None})
+        return 0
+
+    repo_root = _resolve_repo_root(args.repo_root)
+    branch_dir = None
+    try:
+        branch_dir = read_memory_root_from_branch(
+            repo_root,
+            memory_branch=args.memory_branch,
+            memory_root_relative=args.memory_root,
+        )
+        memory_root = _resolve_memory_root(branch_dir, args.memory_root)
+        try:
+            audit = get_branch_rebuild_audit(
+                memory_root,
+                repository=repository,
+                tracking_issue_number=tracking_issue,
+                integration_branch=integration_branch,
+            )
+        except (MemoryValidationError, json.JSONDecodeError, OSError, ValueError) as exc:
+            _emit_branch_rebuild_audit_fallback(
+                mode="get",
+                reason="audit_corrupt",
+                tracking_issue=tracking_issue,
+                integration_branch=integration_branch,
+            )
+            _print_json(
+                {
+                    "ok": True,
+                    "enabled": True,
+                    "hit": False,
+                    "audit": None,
+                    "warning": str(exc),
+                }
+            )
+            return 0
+        _print_json(
+            {
+                "ok": True,
+                "enabled": True,
+                "hit": bool(audit),
+                "audit": audit,
+            }
+        )
+        return 0
+    except MemoryGitError as exc:
+        error_text = _sanitize_git_error(str(exc))
+        if _is_missing_memory_branch_error(error_text):
+            _print_json({"ok": True, "enabled": False, "hit": False, "audit": None, "warning": error_text})
+            return 0
+        print(f"AI_MEMORY_ERROR: {error_text}", file=sys.stderr)
+        _print_json({"ok": False, "enabled": True, "hit": False, "audit": None, "error": error_text})
+        return 2
+    finally:
+        if branch_dir:
+            shutil.rmtree(branch_dir, ignore_errors=True)
+
+
+def cmd_branch_rebuild_audit_put(args: argparse.Namespace) -> int:
+    args = _read_env_defaults(args)
+    repository = _require_nonempty(args.repo, "repo")
+    tracking_issue = _require_positive_int(args.tracking_issue, "tracking_issue")
+    integration_branch = _require_nonempty(args.integration_branch, "integration_branch")
+    if not args.enabled:
+        _print_json({"ok": True, "enabled": False, "stored": False, "audit": None})
+        return 0
+
+    repo_root = _resolve_repo_root(args.repo_root)
+
+    def _op(clone_dir: Path) -> dict[str, Any]:
+        memory_root = _resolve_memory_root(clone_dir, args.memory_root)
+        audit = _read_json_object_file(args.audit_file, "audit_file")
+        stored_audit = put_branch_rebuild_audit(
+            memory_root,
+            repository=repository,
+            tracking_issue_number=tracking_issue,
+            integration_branch=integration_branch,
+            audit=audit,
+        )
+        return {"audit": stored_audit, "stored": True}
+
+    try:
+        result = persist_memory_operation(
+            repo_root,
+            memory_branch=args.memory_branch,
+            memory_root_relative=args.memory_root,
+            push_retries=int(args.push_retries),
+            commit_message=f"ai-memory: branch rebuild audit [{integration_branch}]",
+            operation=_op,
+        )
+        _print_json({"ok": True, **result})
+        return 0
+    except (MemoryValidationError, json.JSONDecodeError, OSError, ValueError, MemoryGitError) as exc:
+        _emit_branch_rebuild_audit_fallback(
+            mode="put",
+            reason="audit_write_failed",
+            tracking_issue=tracking_issue,
+            integration_branch=integration_branch,
+        )
+        _print_json(
+            {
+                "ok": True,
+                "enabled": True,
+                "stored": False,
+                "audit": None,
                 "warning": str(exc),
             }
         )
@@ -1269,6 +1407,26 @@ def build_parser() -> argparse.ArgumentParser:
     actions_runs_cache_put.add_argument("--ttl-seconds", default="60")
     actions_runs_cache_put.add_argument("--fetched-at", default="")
     actions_runs_cache_put.set_defaults(func=cmd_actions_runs_cache_put)
+
+    branch_rebuild_audit = subparsers.add_parser("branch-rebuild-audit", help="Read/write branch rebuild audit")
+    branch_rebuild_audit_subparsers = branch_rebuild_audit.add_subparsers(
+        dest="branch_rebuild_audit_command", required=True
+    )
+
+    branch_rebuild_audit_get = branch_rebuild_audit_subparsers.add_parser("get", help="Read branch rebuild audit")
+    _add_shared_args(branch_rebuild_audit_get)
+    branch_rebuild_audit_get.add_argument("--repo", required=True)
+    branch_rebuild_audit_get.add_argument("--tracking-issue", required=True)
+    branch_rebuild_audit_get.add_argument("--integration-branch", required=True)
+    branch_rebuild_audit_get.set_defaults(func=cmd_branch_rebuild_audit_get)
+
+    branch_rebuild_audit_put = branch_rebuild_audit_subparsers.add_parser("put", help="Write branch rebuild audit")
+    _add_shared_args(branch_rebuild_audit_put)
+    branch_rebuild_audit_put.add_argument("--repo", required=True)
+    branch_rebuild_audit_put.add_argument("--tracking-issue", required=True)
+    branch_rebuild_audit_put.add_argument("--integration-branch", required=True)
+    branch_rebuild_audit_put.add_argument("--audit-file", required=True)
+    branch_rebuild_audit_put.set_defaults(func=cmd_branch_rebuild_audit_put)
 
     processed_check = subparsers.add_parser("processed-command-check", help="Check processed command entry")
     _add_shared_args(processed_check)

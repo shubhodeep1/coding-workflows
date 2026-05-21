@@ -1093,6 +1093,25 @@ if ! [[ "${INTEGRATION_CONFLICT_LIFETIME_MAX}" =~ ^[0-9]+$ ]] || [ "${INTEGRATIO
   INTEGRATION_CONFLICT_LIFETIME_MAX="10"
 fi
 
+BRANCH_REBUILD_ENABLED="${BRANCH_REBUILD_ENABLED:-false}"
+if is_truthy "${BRANCH_REBUILD_ENABLED}"; then
+  BRANCH_REBUILD_ENABLED="true"
+else
+  BRANCH_REBUILD_ENABLED="false"
+fi
+
+BRANCH_REBUILD_THRESHOLD_HOURS="${BRANCH_REBUILD_THRESHOLD_HOURS:-24}"
+if ! [[ "${BRANCH_REBUILD_THRESHOLD_HOURS}" =~ ^[0-9]+$ ]] || [ "${BRANCH_REBUILD_THRESHOLD_HOURS}" -lt 1 ]; then
+  echo "::warning::BRANCH_REBUILD_THRESHOLD_HOURS must be a positive integer; defaulting to 24"
+  BRANCH_REBUILD_THRESHOLD_HOURS="24"
+fi
+
+BRANCH_REBUILD_COOLDOWN_HOURS="${BRANCH_REBUILD_COOLDOWN_HOURS:-48}"
+if ! [[ "${BRANCH_REBUILD_COOLDOWN_HOURS}" =~ ^[0-9]+$ ]] || [ "${BRANCH_REBUILD_COOLDOWN_HOURS}" -lt 1 ]; then
+  echo "::warning::BRANCH_REBUILD_COOLDOWN_HOURS must be a positive integer; defaulting to 48"
+  BRANCH_REBUILD_COOLDOWN_HOURS="48"
+fi
+
 # MAX_BUDGET_NEUTRAL_OVERRIDES caps how many times the retrigger_review
 # stall recovery action may be rerouted to resolve_merge_conflict for a
 # given PR head_sha without consuming a stall-recovery attempt. The
@@ -4063,6 +4082,548 @@ _list_integration_conflict_files() {
   return 0
 }
 
+_iso8601_to_epoch() {
+  local ts="$1"
+  [ -n "${ts}" ] || return 1
+  local epoch
+  epoch="$(jq -nr --arg ts "${ts}" 'try ($ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch empty' 2>/dev/null || echo "")"
+  [[ "${epoch}" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "${epoch}"
+}
+
+_branch_rebuild_audit_get() {
+  local integration_branch="$1"
+  if ! type _memory_enabled >/dev/null 2>&1 || ! _memory_enabled || [ ! -f "scripts/ai_memory.py" ]; then
+    return 1
+  fi
+
+  local audit_json
+  audit_json="$(python3 scripts/ai_memory.py branch-rebuild-audit get \
+    --repo "${GITHUB_REPOSITORY}" \
+    --tracking-issue "${TRACKING_NUM}" \
+    --integration-branch "${integration_branch}" 2>/dev/null || echo "")"
+  if [ -z "${audit_json}" ] || ! printf '%s' "${audit_json}" | jq -e '.ok == true and .enabled == true and .hit != null and ((.warning? // "") == "")' >/dev/null 2>&1; then
+    return 1
+  fi
+  printf '%s' "${audit_json}"
+}
+
+_branch_rebuild_audit_put() {
+  local integration_branch="$1"
+  local audit_json="$2"
+  if ! type _memory_enabled >/dev/null 2>&1 || ! _memory_enabled || [ ! -f "scripts/ai_memory.py" ]; then
+    return 1
+  fi
+
+  local audit_file=""
+  local result_json=""
+  audit_file="$(mktemp "${TMPDIR:-/tmp}/branch-rebuild-audit.XXXXXX" 2>/dev/null || true)"
+  [ -n "${audit_file}" ] || return 1
+  printf '%s\n' "${audit_json}" > "${audit_file}"
+  result_json="$(python3 scripts/ai_memory.py branch-rebuild-audit put \
+    --repo "${GITHUB_REPOSITORY}" \
+    --tracking-issue "${TRACKING_NUM}" \
+    --integration-branch "${integration_branch}" \
+    --audit-file "${audit_file}" 2>/dev/null || echo "")"
+  rm -f "${audit_file}"
+  printf '%s' "${result_json}" | jq -e '.ok == true and .enabled == true and .stored == true' >/dev/null 2>&1
+}
+
+_build_branch_rebuild_audit_json() {
+  local integration_branch="$1"
+  local default_branch="$2"
+  local final_pr="$3"
+  local final_pr_head_sha="$4"
+  local resolver_retry_escalated_at="$5"
+  local rebuild_at="$6"
+  local default_branch_head_sha="$7"
+  local replay_commits_json="$8"
+  local outcome="$9"
+  local branch_protected="${10:-}"
+  local failure_detail="${11:-}"
+  local completed_at="${12:-}"
+  # _attempt_branch_rebuild_after_escalation populates this once the
+  # integration branch ref has been resolved. Earlier audit writes (before the
+  # branch ref is loaded) intentionally fall back to null instead of
+  # misreporting the final PR head as the pre-rebuild branch head.
+  local pre_rebuild_branch_head_sha="${branch_rebuild_pre_delete_sha:-}"
+
+  [ -n "${replay_commits_json}" ] || replay_commits_json='[]'
+
+  jq -cn \
+    --arg repo "${GITHUB_REPOSITORY}" \
+    --argjson tracking_issue "${TRACKING_NUM}" \
+    --arg integration_branch "${integration_branch}" \
+    --arg default_branch "${default_branch}" \
+    --arg last_rebuild_at "${rebuild_at}" \
+    --arg trigger_reason "resolver_escalated_threshold" \
+    --arg resolver_escalated_at "${resolver_retry_escalated_at}" \
+    --arg final_pr "${final_pr}" \
+    --arg final_pr_head_sha "${final_pr_head_sha}" \
+    --arg pre_rebuild_branch_head_sha "${pre_rebuild_branch_head_sha}" \
+    --arg default_branch_head_sha "${default_branch_head_sha}" \
+    --argjson replay_commits "${replay_commits_json}" \
+    --arg outcome "${outcome}" \
+    --arg branch_protected "${branch_protected}" \
+    --arg failure_detail "${failure_detail}" \
+    --arg completed_at "${completed_at}" '
+      {
+        schema_version: "v1",
+        repository: $repo,
+        tracking_issue_number: $tracking_issue,
+        integration_branch: $integration_branch,
+        default_branch: $default_branch,
+        last_rebuild_at: $last_rebuild_at,
+        trigger_reason: $trigger_reason,
+        resolver_escalated_at: (if $resolver_escalated_at == "" then null else $resolver_escalated_at end),
+        final_pr_number: (if $final_pr == "" then null else ($final_pr | tonumber) end),
+        final_pr_head_sha: (if $final_pr_head_sha == "" then null else $final_pr_head_sha end),
+        pre_rebuild_branch_head_sha: (if $pre_rebuild_branch_head_sha == "" then null else $pre_rebuild_branch_head_sha end),
+        default_branch_head_sha: (if $default_branch_head_sha == "" then null else $default_branch_head_sha end),
+        replay_commits: $replay_commits,
+        outcome: $outcome,
+        branch_protected: (
+          if $branch_protected == "true" then true
+          elif $branch_protected == "false" then false
+          else null end
+        ),
+        failure_detail: (if $failure_detail == "" then null else $failure_detail end),
+        completed_at: (if $completed_at == "" then null else $completed_at end)
+      }
+    '
+}
+
+_check_branch_rebuild_threshold() {
+  local integration_branch="$1"
+  local resolver_retry_escalated_at="$2"
+
+  BRANCH_REBUILD_SKIP_REASON=""
+  BRANCH_REBUILD_LAST_REBUILD_AT=""
+  BRANCH_REBUILD_ESCALATED_ERROR=""
+
+  if [ "${BRANCH_REBUILD_ENABLED}" != "true" ]; then
+    BRANCH_REBUILD_SKIP_REASON="disabled"
+    return 1
+  fi
+
+  case "${integration_branch}" in
+    orchestrator/project-*)
+      ;;
+    *)
+      BRANCH_REBUILD_SKIP_REASON="unsupported_branch"
+      return 1
+      ;;
+  esac
+
+  if [ -z "${resolver_retry_escalated_at}" ]; then
+    BRANCH_REBUILD_SKIP_REASON="missing_escalated_at"
+    BRANCH_REBUILD_ESCALATED_ERROR="Branch rebuild threshold check could not find the resolver escalation timestamp in the final PR retry state."
+    return 1
+  fi
+
+  local now_ts
+  local escalated_ts
+  local threshold_secs
+  now_ts="$(date -u +%s)"
+  if ! [[ "${now_ts}" =~ ^[0-9]+$ ]]; then
+    echo "::warning::[branch-rebuild] date -u +%s returned a non-numeric current time during threshold evaluation." >&2
+    BRANCH_REBUILD_SKIP_REASON="invalid_current_time"
+    BRANCH_REBUILD_ESCALATED_ERROR="Branch rebuild threshold check could not read the current UTC epoch time."
+    return 1
+  fi
+  escalated_ts="$(_iso8601_to_epoch "${resolver_retry_escalated_at}" || echo "")"
+  if ! [[ "${escalated_ts}" =~ ^[0-9]+$ ]]; then
+    BRANCH_REBUILD_SKIP_REASON="invalid_escalated_at"
+    BRANCH_REBUILD_ESCALATED_ERROR="Branch rebuild threshold check could not parse the resolver escalation timestamp from the final PR retry state."
+    return 1
+  fi
+
+  threshold_secs=$(( BRANCH_REBUILD_THRESHOLD_HOURS * 3600 ))
+  if [ $(( now_ts - escalated_ts )) -lt "${threshold_secs}" ]; then
+    BRANCH_REBUILD_SKIP_REASON="threshold_not_met"
+    return 1
+  fi
+
+  local audit_response
+  local audit_hit
+  local last_rebuild_at
+  local last_rebuild_ts
+  local cooldown_secs
+  audit_response="$(_branch_rebuild_audit_get "${integration_branch}" || echo "")"
+  if [ -z "${audit_response}" ]; then
+    BRANCH_REBUILD_SKIP_REASON="audit_unavailable"
+    BRANCH_REBUILD_ESCALATED_ERROR="Branch rebuild is enabled but ai-memory audit storage is unavailable, disabled, or warning-bearing; refusing rebuild for '${integration_branch}'."
+    return 1
+  fi
+
+  audit_hit="$(printf '%s' "${audit_response}" | jq -r 'if .ok == true and .hit == true and (.audit | type == "object") then "true" else "false" end' 2>/dev/null || echo "false")"
+  if [ "${audit_hit}" = "true" ]; then
+    last_rebuild_at="$(printf '%s' "${audit_response}" | jq -r '.audit.last_rebuild_at // ""' 2>/dev/null || echo "")"
+    if [ -n "${last_rebuild_at}" ]; then
+      last_rebuild_ts="$(_iso8601_to_epoch "${last_rebuild_at}" || echo "")"
+      if ! [[ "${last_rebuild_ts}" =~ ^[0-9]+$ ]]; then
+        BRANCH_REBUILD_SKIP_REASON="invalid_audit_timestamp"
+        BRANCH_REBUILD_ESCALATED_ERROR="Branch rebuild audit for '${integration_branch}' has an invalid last_rebuild_at timestamp; refusing rebuild."
+        return 1
+      fi
+
+      cooldown_secs=$(( BRANCH_REBUILD_COOLDOWN_HOURS * 3600 ))
+      BRANCH_REBUILD_LAST_REBUILD_AT="${last_rebuild_at}"
+      if [ $(( now_ts - last_rebuild_ts )) -lt "${cooldown_secs}" ]; then
+        BRANCH_REBUILD_SKIP_REASON="cooldown_active"
+        return 1
+      fi
+    fi
+  fi
+
+  return 0
+}
+
+_derive_branch_rebuild_replay_commits() {
+  BRANCH_REBUILD_REPLAY_COMMITS_JSON='[]'
+  BRANCH_REBUILD_REPLAY_FAILURE_DETAIL=""
+
+  local merged_issue_nums_json
+  merged_issue_nums_json="$(jq -c '[.waves[]?.issues[]? | select(((.status // "") | ascii_downcase) == "merged" and (.github_issue != null)) | (.github_issue | tonumber?)] | map(select(. != null)) | unique' "${STATE_FILE}" 2>/dev/null || echo '[]')"
+  if ! printf '%s' "${merged_issue_nums_json}" | jq -e 'type == "array" and length > 0' >/dev/null 2>&1; then
+    BRANCH_REBUILD_REPLAY_FAILURE_DETAIL="No merged wave issues with GitHub issue numbers were available to replay."
+    return 1
+  fi
+
+  local candidate_details_json
+  candidate_details_json="$(_fetch_candidate_issue_details_graphql "${merged_issue_nums_json}")"
+  if ! printf '%s' "${candidate_details_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    BRANCH_REBUILD_REPLAY_FAILURE_DETAIL="Unable to batch-fetch linked PR metadata for merged issues."
+    return 1
+  fi
+
+  local replay_plan_json
+  replay_plan_json="$(jq -cn --argjson issues "${merged_issue_nums_json}" --argjson details "${candidate_details_json}" '
+    def missing($issue; $reason; $pr_number):
+      {issue_number: $issue, error: $reason}
+      + (if $pr_number == null then {} else {pr_number: $pr_number} end);
+    def entry($issue):
+      ($details[$issue|tostring] // null) as $detail
+      | if $detail == null then
+          missing($issue; "missing_issue_details"; null)
+        else
+          ($detail.linked_pr // null) as $pr
+          | if $pr == null then
+              missing($issue; "missing_linked_pr"; null)
+            elif (($pr.merged // false) != true) then
+              missing($issue; "linked_pr_not_merged"; ($pr.number // null))
+            elif ((($pr.merge_commit_sha // "") | test("^[0-9A-Fa-f]{7,64}$")) | not) then
+              missing($issue; "missing_merge_commit_sha"; ($pr.number // null))
+            elif (($pr.merged_at // "") | length) == 0 then
+              missing($issue; "missing_merged_at"; ($pr.number // null))
+            else
+              {
+                issue_number: $issue,
+                pr_number: ($pr.number | tonumber),
+                merge_commit_sha: $pr.merge_commit_sha,
+                merged_at: $pr.merged_at
+              }
+            end
+        end;
+    [($issues[] | tonumber)] | unique as $ordered
+    | ($ordered | map(entry(.))) as $items
+    | {
+        ok: (all($items[]; (has("error") | not))),
+        items: (if all($items[]; (has("error") | not)) then ($items | sort_by(.merged_at, .pr_number)) else [] end),
+        missing: [ $items[] | select(has("error")) ]
+      }
+  ' 2>/dev/null || echo '')"
+  if [ -z "${replay_plan_json}" ]; then
+    BRANCH_REBUILD_REPLAY_FAILURE_DETAIL="Unable to transform merged-issue PR metadata into a replay plan."
+    return 1
+  fi
+
+  if ! printf '%s' "${replay_plan_json}" | jq -e '.ok == true' >/dev/null 2>&1; then
+    BRANCH_REBUILD_REPLAY_FAILURE_DETAIL="$(printf '%s' "${replay_plan_json}" | jq -r '[.missing[]? | "issue #\(.issue_number): \(.error)\(if .pr_number then " (PR #\(.pr_number))" else "" end)"] | if length > 0 then join("; ") else "missing replay metadata" end' 2>/dev/null || echo 'missing replay metadata')"
+    return 1
+  fi
+
+  BRANCH_REBUILD_REPLAY_COMMITS_JSON="$(printf '%s' "${replay_plan_json}" | jq -c '.items // []' 2>/dev/null || echo '[]')"
+  return 0
+}
+
+_mark_branch_rebuild_failed() {
+  local integration_branch="$1"
+  local default_branch="$2"
+  local final_pr="$3"
+  local reason="$4"
+  local runbook_url=""
+
+  jq --arg reason "${reason}" \
+    '.status = "failed" |
+     .final_merge_status = "failed" |
+     .final_merge_error = $reason |
+     .integration_sync_status = "branch_rebuild_failed" |
+     .integration_sync_last_error = $reason' \
+    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  post_state_comment || true
+  runbook_url="$(sync_rebuild_runbook_url "${default_branch}")"
+  post_tracking_comment "## ❌ Integration branch rebuild failed
+
+Last-resort rebuild of \`${integration_branch}\` failed while recovering final PR #${final_pr} into \`${default_branch}\`.
+
+Reason: ${reason}
+
+Runbook: [Rebuild integration branch](${runbook_url})"
+  tg_notify "❌ Integration branch rebuild failed for #${TRACKING_NUM} (PR #${final_pr}, branch '${integration_branch}'): ${reason}" "CRITICAL"
+}
+
+_attempt_branch_rebuild_after_escalation() {
+  local integration_branch="$1"
+  local default_branch="$2"
+  local final_pr="$3"
+  local final_pr_head_sha="$4"
+  local resolver_retry_state="$5"
+
+  BRANCH_REBUILD_HANDLED="false"
+  BRANCH_REBUILD_TERMINAL_FAILURE="false"
+  BRANCH_REBUILD_ESCALATED_ERROR=""
+
+  local resolver_retry_escalated_at=""
+  resolver_retry_escalated_at="$(printf '%s' "${resolver_retry_state}" | jq -r '.escalated_at // ""' 2>/dev/null || echo "")"
+  if ! _check_branch_rebuild_threshold "${integration_branch}" "${resolver_retry_escalated_at}"; then
+    return 0
+  fi
+
+  local rebuild_started_at=""
+  local default_branch_ref_uri=""
+  local default_branch_head_sha=""
+  local integration_branch_uri=""
+  local branch_payload=""
+  local branch_protected="false"
+  local branch_rebuild_pre_delete_sha=""
+  local audit_json=""
+  local final_audit_json=""
+  local completed_at=""
+  local failure_detail=""
+
+  rebuild_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+  if ! _derive_branch_rebuild_replay_commits; then
+    BRANCH_REBUILD_ESCALATED_ERROR="Branch rebuild for '${integration_branch}' was skipped because replay metadata is incomplete: ${BRANCH_REBUILD_REPLAY_FAILURE_DETAIL}"
+    final_audit_json="$(_build_branch_rebuild_audit_json "${integration_branch}" "${default_branch}" "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_escalated_at}" "${rebuild_started_at}" "" "[]" "skipped_missing_replay" "false" "${BRANCH_REBUILD_REPLAY_FAILURE_DETAIL}" "${rebuild_started_at}")"
+    _branch_rebuild_audit_put "${integration_branch}" "${final_audit_json}" >/dev/null 2>&1 || true
+    return 0
+  fi
+
+  default_branch_ref_uri="$(printf '%s' "${default_branch}" | jq -sRr '@uri')"
+  default_branch_head_sha="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/git/ref/heads/${default_branch_ref_uri}" --jq '.object.sha // ""' 2>/dev/null || echo "")"
+  if ! [[ "${default_branch_head_sha}" =~ ^[0-9A-Fa-f]{7,64}$ ]]; then
+    BRANCH_REBUILD_ESCALATED_ERROR="Branch rebuild for '${integration_branch}' was skipped because the current '${default_branch}' head SHA could not be resolved."
+    final_audit_json="$(_build_branch_rebuild_audit_json "${integration_branch}" "${default_branch}" "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_escalated_at}" "${rebuild_started_at}" "" "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" "skipped_preflight" "false" "Unable to resolve the current ${default_branch} head SHA before rebuild." "${rebuild_started_at}")"
+    _branch_rebuild_audit_put "${integration_branch}" "${final_audit_json}" >/dev/null 2>&1 || true
+    return 0
+  fi
+
+  integration_branch_uri="$(printf '%s' "${integration_branch}" | jq -sRr '@uri')"
+  # Existing final-PR fetch already supplies head SHA/body/mergeable. The
+  # branch endpoint is the smallest extra API shape that adds branch-protection
+  # state without a second git/ref + protection probe pair.
+  branch_payload="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/branches/${integration_branch_uri}" 2>/dev/null || echo "")"
+  if ! printf '%s' "${branch_payload}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    BRANCH_REBUILD_ESCALATED_ERROR="Branch rebuild for '${integration_branch}' was skipped because branch protection metadata could not be loaded."
+    final_audit_json="$(_build_branch_rebuild_audit_json "${integration_branch}" "${default_branch}" "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_escalated_at}" "${rebuild_started_at}" "${default_branch_head_sha}" "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" "skipped_preflight" "false" "Unable to load branch protection metadata before rebuild." "${rebuild_started_at}")"
+    _branch_rebuild_audit_put "${integration_branch}" "${final_audit_json}" >/dev/null 2>&1 || true
+    return 0
+  fi
+
+  branch_protected="$(printf '%s' "${branch_payload}" | jq -r '.protected // false' 2>/dev/null || echo false)"
+  branch_rebuild_pre_delete_sha="$(printf '%s' "${branch_payload}" | jq -r '.commit.sha // ""' 2>/dev/null || echo "")"
+  if ! [[ "${branch_rebuild_pre_delete_sha}" =~ ^[0-9A-Fa-f]{7,64}$ ]]; then
+    branch_rebuild_pre_delete_sha=""
+  fi
+  if [ "${branch_protected}" = "true" ]; then
+    BRANCH_REBUILD_ESCALATED_ERROR="Branch rebuild for '${integration_branch}' is blocked because the branch is protected."
+    final_audit_json="$(_build_branch_rebuild_audit_json "${integration_branch}" "${default_branch}" "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_escalated_at}" "${rebuild_started_at}" "${default_branch_head_sha}" "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" "skipped_protected" "true" "Branch is protected; refusing delete/recreate rebuild flow." "${rebuild_started_at}")"
+    _branch_rebuild_audit_put "${integration_branch}" "${final_audit_json}" >/dev/null 2>&1 || true
+    tg_notify "⚠️ Branch rebuild for #${TRACKING_NUM} is blocked because '${integration_branch}' is protected. Leaving the project escalated for manual follow-up." "WARNING"
+    return 0
+  fi
+
+  if ! git fetch --no-tags origin "refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" >/dev/null 2>&1 \
+    || ! git fetch --no-tags origin "refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
+    BRANCH_REBUILD_ESCALATED_ERROR="Branch rebuild for '${integration_branch}' was skipped because the local pre-rebuild fetch failed."
+    final_audit_json="$(_build_branch_rebuild_audit_json "${integration_branch}" "${default_branch}" "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_escalated_at}" "${rebuild_started_at}" "${default_branch_head_sha}" "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" "skipped_preflight" "false" "Unable to fetch ${default_branch} and ${integration_branch} refs locally before rebuild." "${rebuild_started_at}")"
+    _branch_rebuild_audit_put "${integration_branch}" "${final_audit_json}" >/dev/null 2>&1 || true
+    return 0
+  fi
+
+  audit_json="$(_build_branch_rebuild_audit_json "${integration_branch}" "${default_branch}" "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_escalated_at}" "${rebuild_started_at}" "${default_branch_head_sha}" "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" "started" "false" "" "")"
+  if [ -z "${audit_json}" ] || ! _branch_rebuild_audit_put "${integration_branch}" "${audit_json}" >/dev/null 2>&1; then
+    BRANCH_REBUILD_ESCALATED_ERROR="Branch rebuild for '${integration_branch}' was skipped because the pre-delete audit snapshot could not be persisted."
+    echo "::warning::[branch-rebuild] Refusing destructive rebuild for ${integration_branch} because the pre-delete audit snapshot could not be persisted." >&2
+    return 0
+  fi
+
+  local delete_err=""
+  if ! delete_err="$(gh_retry gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${integration_branch_uri}" 2>&1 >/dev/null)"; then
+    if printf '%s' "${delete_err}" | grep -Eqi 'protected|protected branch|refusing to delete'; then
+      BRANCH_REBUILD_ESCALATED_ERROR="Branch rebuild for '${integration_branch}' is blocked because the branch could not be deleted (protected or ref-locked)."
+      final_audit_json="$(_build_branch_rebuild_audit_json "${integration_branch}" "${default_branch}" "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_escalated_at}" "${rebuild_started_at}" "${default_branch_head_sha}" "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" "skipped_protected" "true" "${delete_err}" "${rebuild_started_at}")"
+      _branch_rebuild_audit_put "${integration_branch}" "${final_audit_json}" >/dev/null 2>&1 || true
+      tg_notify "⚠️ Branch rebuild for #${TRACKING_NUM} could not delete '${integration_branch}' because GitHub reported it protected or ref-locked. Leaving the project escalated for manual follow-up." "WARNING"
+      return 0
+    fi
+
+    BRANCH_REBUILD_ESCALATED_ERROR="Branch rebuild for '${integration_branch}' was skipped because the branch ref could not be deleted."
+    final_audit_json="$(_build_branch_rebuild_audit_json "${integration_branch}" "${default_branch}" "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_escalated_at}" "${rebuild_started_at}" "${default_branch_head_sha}" "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" "skipped_preflight" "false" "${delete_err}" "${rebuild_started_at}")"
+    _branch_rebuild_audit_put "${integration_branch}" "${final_audit_json}" >/dev/null 2>&1 || true
+    return 0
+  fi
+
+  local create_err=""
+  if ! create_err="$(gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="refs/heads/${integration_branch}" -f sha="${default_branch_head_sha}" 2>&1 >/dev/null)"; then
+    completed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    final_audit_json="$(_build_branch_rebuild_audit_json "${integration_branch}" "${default_branch}" "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_escalated_at}" "${rebuild_started_at}" "${default_branch_head_sha}" "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" "failed" "false" "Deleted branch ref but failed to recreate '${integration_branch}' from ${default_branch}@${default_branch_head_sha}: ${create_err}" "${completed_at}")"
+    _branch_rebuild_audit_put "${integration_branch}" "${final_audit_json}" >/dev/null 2>&1 || true
+    _mark_branch_rebuild_failed "${integration_branch}" "${default_branch}" "${final_pr}" "Failed to recreate '${integration_branch}' from ${default_branch}@${default_branch_head_sha}: ${create_err}"
+    BRANCH_REBUILD_HANDLED="true"
+    BRANCH_REBUILD_TERMINAL_FAILURE="true"
+    return 0
+  fi
+
+  local worktree_dir=""
+  local replay_log=""
+  local replay_rc=0
+  worktree_dir="$(mktemp -d "${TMPDIR:-/tmp}/branch-rebuild-wt.XXXXXX" 2>/dev/null || true)"
+  replay_log="$(mktemp "${TMPDIR:-/tmp}/branch-rebuild-log.XXXXXX" 2>/dev/null || true)"
+  if [ -z "${worktree_dir}" ] || [ -z "${replay_log}" ]; then
+    [ -n "${worktree_dir}" ] && rm -rf "${worktree_dir}" >/dev/null 2>&1 || true
+    [ -n "${replay_log}" ] && rm -f "${replay_log}" >/dev/null 2>&1 || true
+    completed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    final_audit_json="$(_build_branch_rebuild_audit_json "${integration_branch}" "${default_branch}" "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_escalated_at}" "${rebuild_started_at}" "${default_branch_head_sha}" "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" "failed" "false" "Recreated '${integration_branch}' but could not allocate a temporary worktree or replay log." "${completed_at}")"
+    _branch_rebuild_audit_put "${integration_branch}" "${final_audit_json}" >/dev/null 2>&1 || true
+    _mark_branch_rebuild_failed "${integration_branch}" "${default_branch}" "${final_pr}" "Recreated '${integration_branch}' but could not allocate a temporary worktree or replay log."
+    BRANCH_REBUILD_HANDLED="true"
+    BRANCH_REBUILD_TERMINAL_FAILURE="true"
+    return 0
+  fi
+
+  if ! git fetch --no-tags origin "refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
+    completed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    final_audit_json="$(_build_branch_rebuild_audit_json "${integration_branch}" "${default_branch}" "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_escalated_at}" "${rebuild_started_at}" "${default_branch_head_sha}" "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" "failed" "false" "Recreated '${integration_branch}' but could not fetch the new remote branch ref locally." "${completed_at}")"
+    _branch_rebuild_audit_put "${integration_branch}" "${final_audit_json}" >/dev/null 2>&1 || true
+    rm -rf "${worktree_dir}" >/dev/null 2>&1 || true
+    rm -f "${replay_log}" >/dev/null 2>&1 || true
+    _mark_branch_rebuild_failed "${integration_branch}" "${default_branch}" "${final_pr}" "Recreated '${integration_branch}' but could not fetch the new remote branch ref locally."
+    BRANCH_REBUILD_HANDLED="true"
+    BRANCH_REBUILD_TERMINAL_FAILURE="true"
+    return 0
+  fi
+
+  if ! git worktree add --detach "${worktree_dir}" "refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
+    completed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    final_audit_json="$(_build_branch_rebuild_audit_json "${integration_branch}" "${default_branch}" "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_escalated_at}" "${rebuild_started_at}" "${default_branch_head_sha}" "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" "failed" "false" "Recreated '${integration_branch}' but could not check out the rebuilt branch in a temporary worktree." "${completed_at}")"
+    _branch_rebuild_audit_put "${integration_branch}" "${final_audit_json}" >/dev/null 2>&1 || true
+    rm -rf "${worktree_dir}" >/dev/null 2>&1 || true
+    rm -f "${replay_log}" >/dev/null 2>&1 || true
+    _mark_branch_rebuild_failed "${integration_branch}" "${default_branch}" "${final_pr}" "Recreated '${integration_branch}' but could not check out the rebuilt branch in a temporary worktree."
+    BRANCH_REBUILD_HANDLED="true"
+    BRANCH_REBUILD_TERMINAL_FAILURE="true"
+    return 0
+  fi
+
+  # Replay exit codes: 20=worktree inaccessible, 21=missing/invalid
+  # merge SHA, 22=missing commit object, 23=cherry-pick failed,
+  # 24=push failed, 25=invalid parent-count parse,
+  # 26=git identity config failed.
+  (
+    set +e
+    cd "${worktree_dir}" || exit 20
+    git config user.name "codex-bot" >>"${replay_log}" 2>&1 || exit 26
+    git config user.email "codex@users.noreply.github.com" >>"${replay_log}" 2>&1 || exit 26
+    while IFS= read -r replay_item; do
+      [ -n "${replay_item}" ] || continue
+      merge_commit_sha="$(printf '%s' "${replay_item}" | jq -r '.merge_commit_sha // ""' 2>/dev/null || echo "")"
+      [ -n "${merge_commit_sha}" ] || exit 21
+      if ! [[ "${merge_commit_sha}" =~ ^[0-9A-Fa-f]{7,64}$ ]]; then
+        echo "invalid merge_commit_sha ${merge_commit_sha}" >> "${replay_log}"
+        exit 21
+      fi
+
+      parent_line="$(git rev-list --parents -n 1 "${merge_commit_sha}" 2>>"${replay_log}" || true)"
+      if [ -z "${parent_line}" ]; then
+        echo "missing commit object ${merge_commit_sha}" >> "${replay_log}"
+        exit 22
+      fi
+
+      parent_count="$(printf '%s\n' "${parent_line}" | awk '{print NF - 1}')"
+      if ! [[ "${parent_count}" =~ ^[0-9]+$ ]]; then
+        echo "invalid parent count for ${merge_commit_sha}: ${parent_count}" >> "${replay_log}"
+        exit 25
+      fi
+      if [ "${parent_count}" -gt 1 ]; then
+        git cherry-pick -m 1 --allow-empty "${merge_commit_sha}" >>"${replay_log}" 2>&1 || exit 23
+      else
+        git cherry-pick --allow-empty "${merge_commit_sha}" >>"${replay_log}" 2>&1 || exit 23
+      fi
+    done < <(printf '%s' "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" | jq -c '.[]' 2>/dev/null)
+
+    git push origin "HEAD:refs/heads/${integration_branch}" >>"${replay_log}" 2>&1 || exit 24
+    exit 0
+  )
+  replay_rc=$?
+
+  if [ "${replay_rc}" -ne 0 ]; then
+    local replay_failure_context=""
+    git -C "${worktree_dir}" cherry-pick --abort >/dev/null 2>&1 || true
+    case "${replay_rc}" in
+      20) replay_failure_context="temporary worktree became inaccessible" ;;
+      21) replay_failure_context="replay plan entry was missing or had an invalid merge commit SHA" ;;
+      22) replay_failure_context="replay commit object was not available in the local clone" ;;
+      23) replay_failure_context="git cherry-pick failed while replaying merged sub-PR commits" ;;
+      24) replay_failure_context="git push failed after replaying merged sub-PR commits" ;;
+      25) replay_failure_context="replay parent-count parsing failed before cherry-pick mode selection" ;;
+      26) replay_failure_context="git identity configuration failed before replay cherry-picks" ;;
+      *) replay_failure_context="branch rebuild replay failed" ;;
+    esac
+    failure_detail="$(tail -n 20 "${replay_log}" 2>/dev/null | tr '\r\n' '  ' | sed 's/[[:space:]]\+/ /g' | cut -c1-2000)"
+    if [ -n "${failure_detail}" ]; then
+      failure_detail="${replay_failure_context}: ${failure_detail}"
+    else
+      failure_detail="${replay_failure_context}."
+    fi
+    completed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    final_audit_json="$(_build_branch_rebuild_audit_json "${integration_branch}" "${default_branch}" "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_escalated_at}" "${rebuild_started_at}" "${default_branch_head_sha}" "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" "failed" "false" "${failure_detail}" "${completed_at}")"
+    _branch_rebuild_audit_put "${integration_branch}" "${final_audit_json}" >/dev/null 2>&1 || true
+    git worktree remove --force "${worktree_dir}" >/dev/null 2>&1 || rm -rf "${worktree_dir}"
+    rm -f "${replay_log}" >/dev/null 2>&1 || true
+    _mark_branch_rebuild_failed "${integration_branch}" "${default_branch}" "${final_pr}" "${failure_detail}"
+    BRANCH_REBUILD_HANDLED="true"
+    BRANCH_REBUILD_TERMINAL_FAILURE="true"
+    return 0
+  fi
+
+  git worktree remove --force "${worktree_dir}" >/dev/null 2>&1 || rm -rf "${worktree_dir}"
+  rm -f "${replay_log}" >/dev/null 2>&1 || true
+
+  completed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  final_audit_json="$(_build_branch_rebuild_audit_json "${integration_branch}" "${default_branch}" "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_escalated_at}" "${rebuild_started_at}" "${default_branch_head_sha}" "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" "success" "false" "" "${completed_at}")"
+  _branch_rebuild_audit_put "${integration_branch}" "${final_audit_json}" >/dev/null 2>&1 || true
+
+  local replay_count
+  replay_count="$(printf '%s' "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" | jq -r 'length' 2>/dev/null || echo 0)"
+  jq '.integration_sync_status = "healing" |
+      .integration_sync_last_error = "" |
+      .integration_conflict_unresolved_ticks = 0 |
+      .integration_conflict_dispatch_count = 0 |
+      .integration_conflict_dispatch_ts = 0 |
+      .integration_conflict_total_dispatches = 0' \
+    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  post_state_comment || true
+  post_tracking_comment "## 🔁 Integration branch rebuilt
+
+Recreated \`${integration_branch}\` from \`${default_branch}\` and replayed ${replay_count} merged sub-PR commit(s) after resolver escalation persisted past ${BRANCH_REBUILD_THRESHOLD_HOURS}h. Waiting for GitHub to recompute mergeability on final PR #${final_pr}."
+  BRANCH_REBUILD_HANDLED="true"
+  BRANCH_REBUILD_TERMINAL_FAILURE="false"
+  return 0
+}
+
 heal_integration_branch_conflict() {
   local integration_branch="$1"
   local default_branch="$2"
@@ -4149,8 +4710,18 @@ heal_integration_branch_conflict() {
       resolver_retry_head_sha="$(printf '%s' "${resolver_retry_state}" | jq -r '.head_sha // ""' 2>/dev/null || echo "")"
       resolver_retry_escalated="$(printf '%s' "${resolver_retry_state}" | jq -r '.escalated // false' 2>/dev/null || echo false)"
       if [ "${resolver_retry_escalated}" = "true" ] && [ "${resolver_retry_head_sha}" = "${final_pr_head_sha}" ]; then
+        _attempt_branch_rebuild_after_escalation "${integration_branch}" "${default_branch}" "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_state}"
+        if [ "${BRANCH_REBUILD_HANDLED:-false}" = "true" ]; then
+          if [ "${BRANCH_REBUILD_TERMINAL_FAILURE:-false}" = "true" ]; then
+            return 1
+          fi
+          return 0
+        fi
+        if [ -n "${BRANCH_REBUILD_ESCALATED_ERROR:-}" ]; then
+          echo "  [integration-heal] ${BRANCH_REBUILD_ESCALATED_ERROR}" >&2
+        fi
         echo "  [integration-heal] Resolver escape threshold already tripped for final PR #${final_pr} at head ${final_pr_head_sha}; skipping redispatch until the PR head changes."
-        jq --arg err "resolver escape threshold reached for final PR #${final_pr} at head ${final_pr_head_sha}" \
+        jq --arg err "${BRANCH_REBUILD_ESCALATED_ERROR:-resolver escape threshold reached for final PR #${final_pr} at head ${final_pr_head_sha}}" \
           '.integration_sync_status = "escalated" |
            .integration_sync_last_error = $err' \
           "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
@@ -7334,10 +7905,15 @@ _fetch_standalone_marker_issues_graphql() {
 #   { "123": {"state": "open|closed",
 #             "labels": ["ai:clarification"],
 #             "comments": [{"id":N,"body":"...","created_at":"..."},...],
-#             "linked_pr": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool,"head_sha":"<oid>"|null,"headPushedAt":"ISO8601"|null} | null },
+#             "linked_pr": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool,
+#                           "merged_at":"ISO8601"|null,"merge_commit_sha":"<oid>"|null,
+#                           "head_ref":"branch"|null,"head_sha":"<oid>"|null,
+#                           "mergeable":"<enum>"|null,"merge_state_status":"<enum>"|null,
+#                           "headPushedAt":"ISO8601"|null} | null },
 #     ... }
 # `headPushedAt` is the linked PR's head commit pushedDate (coalesced
 # to committedDate when pushedDate is null, e.g. for squashed commits).
+# `mergeable` and `merge_state_status` mirror GitHub's GraphQL enum strings.
 # Consumed by the fresh-push stall-recovery guard (see
 # _check_fresh_push_guard) to suppress recovery dispatches while
 # autofix-driven activity is still landing on the PR.
@@ -7406,10 +7982,12 @@ _fetch_candidate_issue_details_graphql() {
                   __typename
                   ... on PullRequest {
                     number state merged
+                    mergedAt
                     headRefName
                     headRefOid
                     mergeable
                     mergeStateStatus
+                    mergeCommit { oid }
                     commits(last: 1) { nodes { commit { pushedDate committedDate } } }
                   }
                 }
@@ -7454,15 +8032,17 @@ _fetch_candidate_issue_details_graphql() {
                 (.value.timelineItems.nodes // [])[]?
                 | (.source // null)
                 | select(. != null and .__typename == "PullRequest")
-                | {
-                    number: .number,
-                    state: .state,
-                    merged: (.merged // false),
-                    head_ref: (.headRefName // null),
-                    head_sha: (.headRefOid // null),
-                    mergeable: (.mergeable // null),
-                    merge_state_status: (.mergeStateStatus // null),
-                    headPushedAt: (
+                  | {
+                      number: .number,
+                      state: .state,
+                      merged: (.merged // false),
+                      merged_at: (.mergedAt // null),
+                      merge_commit_sha: (.mergeCommit.oid // null),
+                      head_ref: (.headRefName // null),
+                      head_sha: (.headRefOid // null),
+                      mergeable: (.mergeable // null),
+                      merge_state_status: (.mergeStateStatus // null),
+                      headPushedAt: (
                       ((.commits.nodes // [])[0].commit.pushedDate)
                       // ((.commits.nodes // [])[0].commit.committedDate)
                       // null

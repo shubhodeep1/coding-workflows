@@ -41,6 +41,7 @@ PROCESSED_COMMAND_SCHEMA_VERSION = "processed_command_entry.v1"
 RETRIEVAL_PROFILE_SCHEMA_VERSION = "retrieval_profiles.v1"
 ACTIONS_RUNS_CACHE_SCHEMA_VERSION = "v1"
 FINGERPRINT_QUARANTINE_SCHEMA_VERSION = "v1"
+BRANCH_REBUILD_AUDIT_SCHEMA_VERSION = "v1"
 MAX_MEMORY_DETAILS_LENGTH = 12000
 LEGACY_MEMORY_ROOT_RELATIVE = ".github/ai-memory"
 CANONICAL_MEMORY_ROOT_RELATIVE = "ai-memory"
@@ -559,12 +560,53 @@ def _validate_repository_name(repository: str) -> str:
     return normalized
 
 
+def _validate_positive_int_field(value: int | str, field_name: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise MemoryValidationError(f"{field_name} must be a positive integer") from exc
+    if parsed < 1:
+        raise MemoryValidationError(f"{field_name} must be a positive integer")
+    return parsed
+
+
+def _validate_integration_branch_name(integration_branch: str) -> str:
+    normalized = (integration_branch or "").strip()
+    if not normalized:
+        raise MemoryValidationError("integration_branch is required")
+    if len(normalized) > 255:
+        raise MemoryValidationError("integration_branch must be 255 characters or fewer")
+    return normalized
+
+
 def _actions_runs_cache_path(memory_root: Path, repository: str) -> Path:
     normalized_repo = _validate_repository_name(repository)
     owner, repo = normalized_repo.split("/", 1)
     owner_key = sanitize_segment(owner.lower(), "owner")
     repo_key = sanitize_segment(repo.lower(), "repo")
     return memory_root / "orchestrator" / "actions_runs_cache" / f"{owner_key}__{repo_key}.json"
+
+
+def _branch_rebuild_audit_path(
+    memory_root: Path,
+    repository: str,
+    tracking_issue_number: int,
+    integration_branch: str,
+) -> Path:
+    normalized_repo = _validate_repository_name(repository)
+    tracking_issue = _validate_positive_int_field(tracking_issue_number, "tracking_issue_number")
+    normalized_branch = _validate_integration_branch_name(integration_branch)
+    owner, repo = normalized_repo.split("/", 1)
+    owner_key = sanitize_segment(owner.lower(), "owner")
+    repo_key = sanitize_segment(repo.lower(), "repo")
+    branch_key = sanitize_segment(normalized_branch.lower(), "branch")
+    return (
+        memory_root
+        / "orchestrator"
+        / "branch_rebuild_audits"
+        / f"{owner_key}__{repo_key}"
+        / f"issue-{tracking_issue}__{branch_key}.json"
+    )
 
 
 def validate_actions_runs_cache_payload(payload: dict[str, Any], memory_root: Path) -> None:
@@ -630,6 +672,10 @@ def put_fingerprint_quarantine(memory_root: Path, payload: dict[str, Any]) -> di
     return normalized
 
 
+def validate_branch_rebuild_audit_payload(payload: dict[str, Any], memory_root: Path) -> None:
+    _validate_with_schema_file(payload, _schema_file(memory_root, "branch_rebuild_audit.v1.json"))
+
+
 def get_actions_runs_cache(memory_root: Path, repository: str) -> dict[str, Any] | None:
     ensure_memory_layout(memory_root)
     cache_path = _actions_runs_cache_path(memory_root, repository)
@@ -660,6 +706,49 @@ def put_actions_runs_cache(
     }
     validate_actions_runs_cache_payload(payload, memory_root)
     _atomic_write_json(_actions_runs_cache_path(memory_root, repository), payload)
+    return payload
+
+
+def get_branch_rebuild_audit(
+    memory_root: Path,
+    *,
+    repository: str,
+    tracking_issue_number: int,
+    integration_branch: str,
+) -> dict[str, Any] | None:
+    ensure_memory_layout(memory_root)
+    audit_path = _branch_rebuild_audit_path(memory_root, repository, tracking_issue_number, integration_branch)
+    if not audit_path.exists():
+        return None
+    payload = _load_json(audit_path)
+    validate_branch_rebuild_audit_payload(payload, memory_root)
+    return payload
+
+
+def put_branch_rebuild_audit(
+    memory_root: Path,
+    *,
+    repository: str,
+    tracking_issue_number: int,
+    integration_branch: str,
+    audit: dict[str, Any],
+) -> dict[str, Any]:
+    ensure_memory_layout(memory_root)
+    if not isinstance(audit, dict):
+        raise MemoryValidationError("branch rebuild audit must be a JSON object")
+    normalized_repo = _validate_repository_name(repository)
+    normalized_tracking_issue = _validate_positive_int_field(tracking_issue_number, "tracking_issue_number")
+    normalized_branch = _validate_integration_branch_name(integration_branch)
+    payload = dict(audit)
+    payload["schema_version"] = BRANCH_REBUILD_AUDIT_SCHEMA_VERSION
+    payload["repository"] = normalized_repo
+    payload["tracking_issue_number"] = normalized_tracking_issue
+    payload["integration_branch"] = normalized_branch
+    validate_branch_rebuild_audit_payload(payload, memory_root)
+    _atomic_write_json(
+        _branch_rebuild_audit_path(memory_root, normalized_repo, normalized_tracking_issue, normalized_branch),
+        payload,
+    )
     return payload
 
 
