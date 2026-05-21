@@ -12,7 +12,7 @@ $ARGUMENTS
 
 4. **Draft the plan.** Write a markdown plan to `docs/plans/<slug>-plan.md` following the structure in [Plan Structure](#plan-structure) below. Cite project constraints by section number where relevant (e.g. "§6 — renames are breaking unless the old name is preserved as an alias"). Surface every assumption you made and every risk you spotted. By the time you reach this step, there are no open questions left — step 3's loop must have resolved every one. Create the `docs/plans/` directory if it does not yet exist.
 
-5. **Sanity check.** Re-read the plan as if you were the reviewer. Does it answer: what is changing, why, how, what could break, what is verified, what is rolled out? If any of those is hand-wavy, fix it before pushing. No commit-and-iterate cycle on the plan itself.
+5. **Sanity check.** Re-read the plan as if you were the reviewer. Does it answer: what is changing, why, how, what could break, what is verified, how is the work split into independently-mergeable phases (each production-safe and complete on its own per [Phases & Merge Strategy](#phases--merge-strategy)), what is rolled out? If any of those is hand-wavy, fix it before pushing. No commit-and-iterate cycle on the plan itself.
 
 6. **Branch, commit, push, open PR.** Create a new branch `claude/write-plan-<slug>` (append `-2`, `-3`, … if a branch with that exact name already exists on the remote). Commit the new plan file with message `docs: plan for <topic>`. Push with `git push -u origin <branch>` (retry up to 4 times with exponential backoff on transient network errors per the project's git policy). Open a PR via `mcp__github__create_pull_request`:
    - **Base:** the repo's default branch, resolved with `gh repo view --json defaultBranchRef -q .defaultBranchRef.name -R <owner>/<repo>`. Do NOT hardcode `main`.
@@ -38,6 +38,7 @@ Common questions to consider in the first batch (skip any already unambiguously 
 - **Out-of-scope explicitly** — what is NOT being planned here.
 - **Propagation** — if the change must reach consumer repos per `.github/ai/consumer_repos.json` (CLAUDE.md §14), how.
 - **GitHub API hygiene** — if the plan adds new `gh api` / MCP calls, how they batch / reuse existing calls per §15.
+- **Phase breakdown** — propose how the work splits into independently-mergeable phases (count + one-line scope per phase). The plan is implemented by the AI orchestrator (unattended pipeline), and every merge lands in production directly, so each phase MUST be production-safe at merge time, independently mergeable, and complete on its own (see [Phases & Merge Strategy](#phases--merge-strategy)). If the task genuinely cannot be split, surface that as its own Q and have the user accept a single-phase plan explicitly.
 
 Add task-specific questions as needed. Skip empty rounds — if `$ARGUMENTS` is already exhaustive, ask only for slug confirmation and proceed.
 
@@ -79,8 +80,19 @@ Project rules that bind this work: §6 naming immutability, §10 MongoDB rules, 
 ## Approach
 The chosen design at a high level. If multiple designs were considered, briefly note the alternatives and why this one won.
 
+## Phases & Merge Strategy
+The plan is executed by the AI orchestrator (unattended pipeline), not by a human iterating in a terminal. Every merge lands directly in production — there is no staging branch and no human-driven cherry-pick — and the orchestrator ships each phase as its own PR.
+
+Split the work into phases — one PR per phase — with each phase satisfying ALL of:
+
+- **Independently mergeable** — no required ordering with other phases; reviewers can merge phases in any order without breakage. No phase may assume another phase has already merged.
+- **Complete on its own** — at the moment of merge the system is in a working, shippable state. Feature flags default-off are fine; half-wired functionality that requires the next phase to compile / run / pass tests is not.
+- **Production-safe at merge** — the PR ships to prod on merge. Each phase must be safe to deploy as-is, with its own rollback path.
+
+List the phases (numbered). For each phase give: one-line scope, files / modules touched, "done" condition that proves the phase is independently shippable, and rollback path (how to revert just this phase without disturbing others). If the task genuinely cannot be split into independently-mergeable phases, this section MUST state that explicitly and cite the user's accepted clarification answer authorising a single-phase plan.
+
 ## Implementation Steps
-Numbered. Each step lists the files touched (with line ranges if known), the change in one sentence, and any preconditions / ordering constraints. Steps should be small enough to land as individual commits.
+Numbered, grouped by phase (per [Phases & Merge Strategy](#phases--merge-strategy)). Each step lists the files touched (with line ranges if known), the change in one sentence, and any preconditions / ordering constraints. Steps should be small enough to land as individual commits within a phase's PR, and no step may straddle a phase boundary.
 
 ## Files & Modules
 Bulleted list of every file the implementation will create, edit, or delete. Mark new files with `[new]`, deletions with `[del]`.
@@ -108,7 +120,7 @@ Links to related issues, PRs, prior plans, external docs, RFCs.
 <1–2 sentences — same wording as the plan's Summary section.>
 
 ## What this plan covers
-- <one bullet per major section: Goals, Approach, Implementation Steps, Tests, Rollout>
+- <one bullet per major section: Goals, Approach, Phases & Merge Strategy, Implementation Steps, Tests, Rollout>
 
 ## Plan file
 [`docs/plans/<slug>-plan.md`](./docs/plans/<slug>-plan.md)
@@ -144,6 +156,7 @@ Local file reads use `Read`. Local code search uses `Grep` / `Glob`. Git operati
 ## Rules
 
 - **No code changes — plan only.** This command produces a markdown plan and a PR containing only that plan file. Do not edit source files, configs, workflows, scripts, schemas, or contracts during a `/write-plan` invocation. Implementation comes later, via `/investigate-issue` or direct work.
+- **Unattended implementation — phased, independently mergeable, production-direct.** Plans authored by this command are executed by the AI orchestrator (unattended pipelines), not by a human iterating in a terminal — so steps MUST be unambiguous and machine-actionable, and the plan MUST split the work into phases per [Phases & Merge Strategy](#phases--merge-strategy). Every merge lands directly in production (no staging branch), and the orchestrator ships each phase as its own PR. Each phase MUST be (i) independently mergeable — no inter-phase merge ordering required, (ii) complete on its own — the system stays working and shippable after each phase merges, (iii) production-safe at merge time. If the task genuinely cannot be split into independently-mergeable phases, surface that as a clarification question per §2 and get explicit user acceptance of a single-phase plan before drafting — do not paper over it with a single mega-phase.
 - **Always open the PR.** Do not stop at "plan committed locally." The deliverable is a reviewable plan-PR, not a local file.
 - **Mandatory pre-task reads.** Per CLAUDE.md, read `README.md`, `agents.md`, and `CLAUDE.md` before drafting. For MongoDB-touching tasks, also read every relevant `/db/contracts/*.yml`. Missing or unclear context is a hard stop — surface it as a clarification question, do not paper over it.
 - **Honor §6 (naming immutability).** If the planned work renames or removes any identifier (variable, function, class, module, CLI flag, env var, URL path, JSON/DB field, index/event/metric name, log key), the plan MUST explicitly flag this as a breaking change and propose an alias / backward-compat path.
