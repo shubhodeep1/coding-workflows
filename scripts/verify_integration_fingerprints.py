@@ -121,6 +121,7 @@ VERIFICATION_TIERS = ("strict", "ratio", "count_only", "warn_only")
 RATIO_TIER_MIN_PERCENT = 95
 FINGERPRINT_QUARANTINE_SCHEMA_VERSION = "v1"
 FINGERPRINT_QUARANTINE_RUNS_DEFAULT = 3
+_QUARANTINE_MARKER_CACHE: dict[str, set[str]] = {}
 
 
 def _normalize_ref(ref: str | None) -> str | None:
@@ -550,10 +551,13 @@ def _quarantine_mark_emitted_once(run_id: str, issue_key: str, fp_key: tuple[str
 	marker_path = _quarantine_marker_path(run_id)
 	marker_key = _quarantine_marker_key(issue_key, fp_key)
 	try:
-		seen_keys: set[str] = set()
-		if os.path.exists(marker_path):
-			with open(marker_path, "r", encoding="utf-8") as fh:
-				seen_keys = {line.rstrip("\n") for line in fh if line.strip()}
+		seen_keys = _QUARANTINE_MARKER_CACHE.get(marker_path)
+		if seen_keys is None:
+			seen_keys = set()
+			if os.path.exists(marker_path):
+				with open(marker_path, "r", encoding="utf-8") as fh:
+					seen_keys = {line.rstrip("\n") for line in fh if line.strip()}
+			_QUARANTINE_MARKER_CACHE[marker_path] = seen_keys
 		if marker_key in seen_keys:
 			return False
 		parent = os.path.dirname(marker_path)
@@ -561,6 +565,7 @@ def _quarantine_mark_emitted_once(run_id: str, issue_key: str, fp_key: tuple[str
 			os.makedirs(parent, exist_ok=True)
 		with open(marker_path, "a", encoding="utf-8") as fh:
 			fh.write(marker_key + "\n")
+		seen_keys.add(marker_key)
 		return True
 	except Exception:  # noqa: BLE001 — duplicate markers are lower risk than hard-failing verification
 		return True

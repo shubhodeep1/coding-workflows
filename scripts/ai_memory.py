@@ -281,7 +281,7 @@ def _emit_actions_runs_cache_fallback(*, mode: str, reason: str, repo: str) -> N
 
 def _emit_fingerprint_quarantine_fallback(*, mode: str, reason: str) -> None:
     print(
-        "::warning::rate_limit_audit_fallback "
+        "::warning::fingerprint_quarantine_fallback "
         f"helper=fingerprint_quarantine mode={mode} reason={reason}",
         file=sys.stderr,
     )
@@ -294,6 +294,7 @@ def _is_missing_memory_branch_error(error_text: str) -> bool:
         or "could not find remote ref" in lowered
         or "couldn't find remote ref" in lowered
         or "remote ref does not exist" in lowered
+        or "did not match any file(s) known to git" in lowered
     )
 
 

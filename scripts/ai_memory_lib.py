@@ -597,7 +597,7 @@ def _normalize_fingerprint_quarantine_payload(payload: dict[str, Any]) -> dict[s
                 "issue_key": entry.get("issue_key"),
                 "first_seen_run_id": entry.get("first_seen_run_id"),
                 "last_seen_run_id": entry.get("last_seen_run_id"),
-                "consecutive_unchanged_runs": int(entry.get("consecutive_unchanged_runs") or 0),
+                "consecutive_unchanged_runs": int(entry.get("consecutive_unchanged_runs") or 1),
             }
         )
     entries.sort(key=lambda item: (str(item.get("issue_key") or ""), tuple(item.get("fp_key") or [])))
