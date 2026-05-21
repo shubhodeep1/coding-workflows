@@ -333,6 +333,7 @@ def _find_pr_merge_commit_for_path(ref: str | None, pr_num: Any, path: str) -> s
 	if path_error is not None or normalized_path is None:
 		return None
 	effective_ref = _normalize_ref(ref) or "HEAD"
+	merge_suffix = f"(#{pr_str})"
 	cache_key = (effective_ref, pr_str, normalized_path)
 	if cache_key in _PR_MERGE_COMMIT_CACHE:
 		return _PR_MERGE_COMMIT_CACHE[cache_key]
@@ -342,8 +343,7 @@ def _find_pr_merge_commit_for_path(ref: str | None, pr_num: Any, path: str) -> s
 				"git", "log",
 				"--reverse",
 				"--format=%H%x00%s",
-				f"--grep=#{pr_str}\\b",
-				"-E",
+				f"--grep={merge_suffix}",
 				effective_ref,
 				"--",
 				normalized_path,
@@ -358,7 +358,6 @@ def _find_pr_merge_commit_for_path(ref: str | None, pr_num: Any, path: str) -> s
 	if git_result.returncode != 0:
 		_PR_MERGE_COMMIT_CACHE[cache_key] = None
 		return None
-	merge_suffix = f"(#{pr_str})"
 	resolved = None
 	for raw_line in git_result.stdout.decode("utf-8", errors="replace").splitlines():
 		sha, _sep, subject = raw_line.partition("\x00")
@@ -832,6 +831,7 @@ def _evaluate_fp_state(
 				f"merge_commit={false_positive_merge_commit[:12]} "
 				f"reason=must_not_contain_pattern_still_present_at_pr_merge_commit",
 				flush=True,
+				file=sys.stderr,
 			)
 			print(
 				f"::warning::issue #{issue_num} (PR #{pr_num}): must_not_contain pattern in '{path}' "
@@ -840,6 +840,7 @@ def _evaluate_fp_state(
 				"pattern under the multi-occurrence partial-removal filter). "
 				f"Skipping violation. Pattern (first 200 chars): {regex_src[:200]}",
 				flush=True,
+				file=sys.stderr,
 			)
 			return {
 				"kind": kind,

@@ -7225,6 +7225,24 @@ def test_verify_integration_fingerprints_baseline_regressions():
 			value()
 
 
+def test_verify_integration_fingerprints_partial_removal_regressions():
+	# CI/release workflows run explicit `python3 tests/<file>.py` allowlists,
+	# so execute the dedicated partial-removal verifier suite from this
+	# already-allowlisted harness too.
+	import importlib.util
+
+	spec = importlib.util.spec_from_file_location(
+		"test_verify_integration_fingerprints_partial_removal",
+		REPO_ROOT / "tests" / "test_verify_integration_fingerprints_partial_removal.py",
+	)
+	assert spec is not None and spec.loader is not None
+	mod = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(mod)
+	for name, value in sorted(vars(mod).items()):
+		if name.startswith("test_") and callable(value):
+			value()
+
+
 def test_verify_integration_fingerprints_passes_when_intent_preserved():
 	mod = _verifier_module()
 	files = {

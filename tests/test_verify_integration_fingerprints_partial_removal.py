@@ -357,17 +357,17 @@ def test_verifier_main_skips_must_not_contain_false_positive_with_marker():
 		)
 		fp_path = repo / "fingerprints.json"
 		fp_path.write_text(json.dumps(fingerprints), encoding="utf-8")
-		rc, out, _err = _run_verifier(mod, [str(fp_path)], repo)
+		rc, out, err = _run_verifier(mod, [str(fp_path)], repo)
 	# False positive — verify must succeed (exit 0) and emit the
 	# machine-readable marker so the operator audit can find it.
 	assert rc == 0, f"expected verifier to skip the false positive (exit 0); got rc={rc}, stdout=\n{out}"
-	assert "FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1" in out, (
+	assert "FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1" in err, (
 		"verifier must emit the FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1 "
 		"marker when it skips a partial-removal false positive so the "
-		"capture-side bug stays observable in CI logs; stdout was:\n" + out
+		"capture-side bug stays observable in CI logs; stderr was:\n" + err
 	)
-	assert "issue=#2839" in out and "pr=#2840" in out and f"file={_TARGET_PATH}" in out
-	assert "classified as capture-side false positive" in out
+	assert "issue=#2839" in err and "pr=#2840" in err and f"file={_TARGET_PATH}" in err
+	assert "classified as capture-side false positive" in err
 	assert "Integration fingerprint verification FAILED" not in out
 
 
