@@ -23,6 +23,7 @@ def test_other_active_plan_runs_avoids_inline_fallback_substitution() -> None:
 
 def test_plan_runs_payload_is_shape_validated_before_counting() -> None:
 	wf = _read_workflow()
+	wf_lines = wf.splitlines()
 	retry_guard = 'if ! _plan_runs_json_valid "$PLAN_RUNS_JSON"; then'
 	retry_message = 'echo "  ⏳ Unable to confirm concurrent Plan runs yet — retrying"'
 	sleep_stmt = 'sleep "$POLL_INTERVAL"'
@@ -32,10 +33,10 @@ def test_plan_runs_payload_is_shape_validated_before_counting() -> None:
 	assert "PLAN_RUNS_JSON=$(fetch_plan_runs_json || echo \"\")" in wf
 	assert "PLAN_RUNS_JSON='{\"workflow_runs\":[]}'" not in wf
 	assert retry_guard in wf
-	retry_guard_idx = wf.index(retry_guard)
-	retry_message_idx = wf.index(retry_message, retry_guard_idx)
-	sleep_idx = wf.index(sleep_stmt, retry_message_idx)
-	continue_idx = wf.index("continue", sleep_idx)
+	retry_guard_idx = next(i for i, line in enumerate(wf_lines) if retry_guard in line)
+	retry_message_idx = next(i for i, line in enumerate(wf_lines) if i > retry_guard_idx and retry_message in line)
+	sleep_idx = next(i for i, line in enumerate(wf_lines) if i > retry_message_idx and sleep_stmt in line)
+	continue_idx = next(i for i, line in enumerate(wf_lines) if i > sleep_idx and line.strip() == "continue")
 	assert retry_guard_idx < retry_message_idx < sleep_idx < continue_idx
 	assert "if _OTHER_ACTIVE_PLAN_RUNS=$(printf '%s' \"$PLAN_RUNS_JSON\"" in wf
 
