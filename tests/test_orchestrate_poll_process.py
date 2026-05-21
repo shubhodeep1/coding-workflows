@@ -7445,6 +7445,54 @@ def test_integration_conflict_branch_rebuild_respects_cooldown():
 	)
 
 
+def test_integration_conflict_branch_rebuild_refuses_audit_warnings():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_conflict_unresolved_ticks"] = 2
+	state["integration_conflict_dispatch_count"] = 4
+	state["integration_conflict_dispatch_ts"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=[
+			{
+				"number": 358,
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "orchestrator/project-192",
+				"headSha": "escalatedsha358",
+				"mergeable": False,
+				"mergeable_state": "dirty",
+				"body": _resolver_retry_state_block_for_test(
+					head_sha="escalatedsha358",
+					consecutive_failure_count=5,
+				),
+			},
+		],
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_tree_conflict_paths=["scripts/example.py"],
+		branch_rebuild_enabled="true",
+		branch_rebuild_threshold_hours="1",
+		branch_rebuild_cooldown_hours="1",
+		mock_branch_rebuild_audit_get_json={
+			"warning": "audit_corrupt",
+			"hit": False,
+			"audit": None,
+		},
+	)
+	assert result["latest_state"]["integration_sync_status"] == "escalated"
+	assert "audit storage is unavailable, disabled, or warning-bearing" in result["stderr"]
+	assert result.get("mock_branch_rebuild_audit_put_calls", 0) == 0
+	assert not any("/git/refs/heads/orchestrator%2Fproject-192" in path for path in result["api_calls"]), (
+		"branch rebuild audit warnings should block delete API calls"
+	)
+	assert not any(path.endswith("/git/refs") for path in result["api_calls"]), (
+		"branch rebuild audit warnings should block recreate API calls"
+	)
+
+
 def test_integration_conflict_branch_rebuild_replay_failure_marks_terminal_failure():
 	state = _base_state(status="in_progress")
 	state["integration_branch"] = "orchestrator/project-192"
@@ -7512,6 +7560,14 @@ def test_integration_conflict_branch_rebuild_replay_failure_marks_terminal_failu
 	)
 	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
 	assert any("Integration branch rebuild failed" in body for body in tracking_bodies), tracking_bodies
+
+
+def test_branch_rebuild_replay_configures_git_identity():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert re.search(
+		r'cd "\$\{worktree_dir\}" \|\| exit 20\s+git config user.name "codex-bot" >>"\$\{replay_log\}" 2>&1 \|\| exit 26\s+git config user.email "codex@users\.noreply\.github\.com" >>"\$\{replay_log\}" 2>&1 \|\| exit 26\s+while IFS= read -r replay_item; do',
+		script,
+	), "expected branch rebuild replay subshell to configure git identity before cherry-pick"
 
 
 def test_integration_conflict_mergeable_payload_reuse_preserves_false_values():

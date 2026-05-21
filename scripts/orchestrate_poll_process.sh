@@ -4056,7 +4056,7 @@ _branch_rebuild_audit_get() {
     --repo "${GITHUB_REPOSITORY}" \
     --tracking-issue "${TRACKING_NUM}" \
     --integration-branch "${integration_branch}" 2>/dev/null || echo "")"
-  if [ -z "${audit_json}" ] || ! printf '%s' "${audit_json}" | jq -e '.ok == true and .enabled == true and .hit != null' >/dev/null 2>&1; then
+  if [ -z "${audit_json}" ] || ! printf '%s' "${audit_json}" | jq -e '.ok == true and .enabled == true and .hit != null and ((.warning? // "") == "")' >/dev/null 2>&1; then
     return 1
   fi
   printf '%s' "${audit_json}"
@@ -4206,7 +4206,7 @@ _check_branch_rebuild_threshold() {
   audit_response="$(_branch_rebuild_audit_get "${integration_branch}" || echo "")"
   if [ -z "${audit_response}" ]; then
     BRANCH_REBUILD_SKIP_REASON="audit_unavailable"
-    BRANCH_REBUILD_ESCALATED_ERROR="Branch rebuild is enabled but ai-memory audit storage is unavailable or disabled; refusing rebuild for '${integration_branch}'."
+    BRANCH_REBUILD_ESCALATED_ERROR="Branch rebuild is enabled but ai-memory audit storage is unavailable, disabled, or warning-bearing; refusing rebuild for '${integration_branch}'."
     return 1
   fi
 
@@ -4484,10 +4484,13 @@ _attempt_branch_rebuild_after_escalation() {
 
   # Replay exit codes: 20=worktree inaccessible, 21=missing/invalid
   # merge SHA, 22=missing commit object, 23=cherry-pick failed,
-  # 24=push failed, 25=invalid parent-count parse.
+  # 24=push failed, 25=invalid parent-count parse,
+  # 26=git identity config failed.
   (
     set +e
     cd "${worktree_dir}" || exit 20
+    git config user.name "codex-bot" >>"${replay_log}" 2>&1 || exit 26
+    git config user.email "codex@users.noreply.github.com" >>"${replay_log}" 2>&1 || exit 26
     while IFS= read -r replay_item; do
       [ -n "${replay_item}" ] || continue
       merge_commit_sha="$(printf '%s' "${replay_item}" | jq -r '.merge_commit_sha // ""' 2>/dev/null || echo "")"
@@ -4530,6 +4533,7 @@ _attempt_branch_rebuild_after_escalation() {
       23) replay_failure_context="git cherry-pick failed while replaying merged sub-PR commits" ;;
       24) replay_failure_context="git push failed after replaying merged sub-PR commits" ;;
       25) replay_failure_context="replay parent-count parsing failed before cherry-pick mode selection" ;;
+      26) replay_failure_context="git identity configuration failed before replay cherry-picks" ;;
       *) replay_failure_context="branch rebuild replay failed" ;;
     esac
     failure_detail="$(tail -n 20 "${replay_log}" 2>/dev/null | tr '\r\n' '  ' | sed 's/[[:space:]]\+/ /g' | cut -c1-2000)"
