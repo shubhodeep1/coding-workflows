@@ -1,0 +1,35 @@
+name: Drift Audit
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: drift-audit-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  drift-audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Run drift audit
+        env:
+          DRIFT_AUDIT_ENABLED: ${{ vars.DRIFT_AUDIT_ENABLED || 'false' }}
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -euo pipefail
+          bash scripts/drift_audit.sh

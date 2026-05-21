@@ -40,7 +40,6 @@ TASK_LINEAGE_SCHEMA_VERSION = "task_lineage.v1"
 PROCESSED_COMMAND_SCHEMA_VERSION = "processed_command_entry.v1"
 RETRIEVAL_PROFILE_SCHEMA_VERSION = "retrieval_profiles.v1"
 ACTIONS_RUNS_CACHE_SCHEMA_VERSION = "v1"
-FINGERPRINT_QUARANTINE_SCHEMA_VERSION = "v1"
 MAX_MEMORY_DETAILS_LENGTH = 12000
 LEGACY_MEMORY_ROOT_RELATIVE = ".github/ai-memory"
 CANONICAL_MEMORY_ROOT_RELATIVE = "ai-memory"
@@ -569,65 +568,6 @@ def _actions_runs_cache_path(memory_root: Path, repository: str) -> Path:
 
 def validate_actions_runs_cache_payload(payload: dict[str, Any], memory_root: Path) -> None:
     _validate_with_schema_file(payload, _schema_file(memory_root, "actions_runs_cache.v1.json"))
-
-
-def _default_fingerprint_quarantine_payload() -> dict[str, Any]:
-    return {
-        "schema_version": FINGERPRINT_QUARANTINE_SCHEMA_VERSION,
-        "entries": [],
-    }
-
-
-def _fingerprint_quarantine_path(memory_root: Path) -> Path:
-    return memory_root / "orchestrator" / "fingerprint_quarantine.v1.json"
-
-
-def validate_fingerprint_quarantine_payload(payload: dict[str, Any], memory_root: Path) -> None:
-    _validate_with_schema_file(payload, _schema_file(memory_root, "fingerprint_quarantine.v1.json"))
-
-
-def _normalize_fingerprint_quarantine_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    entries: list[dict[str, Any]] = []
-    for entry in payload.get("entries") or []:
-        if not isinstance(entry, dict):
-            continue
-        entries.append(
-            {
-                "fp_key": list(entry.get("fp_key") or []),
-                "issue_key": entry.get("issue_key"),
-                "first_seen_run_id": entry.get("first_seen_run_id"),
-                "last_seen_run_id": entry.get("last_seen_run_id"),
-                "consecutive_unchanged_runs": int(entry.get("consecutive_unchanged_runs") or 1),
-            }
-        )
-    entries.sort(key=lambda item: (str(item.get("issue_key") or ""), tuple(item.get("fp_key") or [])))
-    return {
-        "schema_version": payload.get("schema_version"),
-        "entries": entries,
-    }
-
-
-def get_fingerprint_quarantine(memory_root: Path) -> dict[str, Any]:
-    ensure_memory_layout(memory_root)
-    quarantine_path = _fingerprint_quarantine_path(memory_root)
-    if not quarantine_path.exists():
-        return _default_fingerprint_quarantine_payload()
-    payload = _load_json(quarantine_path)
-    if not isinstance(payload, dict):
-        raise MemoryValidationError("fingerprint_quarantine payload must be a JSON object")
-    validate_fingerprint_quarantine_payload(payload, memory_root)
-    return _normalize_fingerprint_quarantine_payload(payload)
-
-
-def put_fingerprint_quarantine(memory_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
-    ensure_memory_layout(memory_root)
-    if not isinstance(payload, dict):
-        raise MemoryValidationError("fingerprint_quarantine payload must be an object")
-    validate_fingerprint_quarantine_payload(payload, memory_root)
-    normalized = _normalize_fingerprint_quarantine_payload(payload)
-    validate_fingerprint_quarantine_payload(normalized, memory_root)
-    _atomic_write_json(_fingerprint_quarantine_path(memory_root), normalized)
-    return normalized
 
 
 def get_actions_runs_cache(memory_root: Path, repository: str) -> dict[str, Any] | None:
