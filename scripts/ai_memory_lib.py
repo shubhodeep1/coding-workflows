@@ -1839,10 +1839,11 @@ def _push_retry_backoff_seconds(attempt: int) -> float:
     """
     if attempt < 1:
         attempt = 1
-    ceiling = min(
-        _PUSH_RETRY_BACKOFF_CAP_SECONDS,
-        _PUSH_RETRY_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)),
-    )
+    ceiling = min(_PUSH_RETRY_BACKOFF_BASE_SECONDS, _PUSH_RETRY_BACKOFF_CAP_SECONDS)
+    for _ in range(1, attempt):
+        if ceiling >= _PUSH_RETRY_BACKOFF_CAP_SECONDS:
+            break
+        ceiling = min(_PUSH_RETRY_BACKOFF_CAP_SECONDS, ceiling * 2.0)
     return random.uniform(0.0, ceiling)
 
 
@@ -1922,7 +1923,12 @@ def persist_memory_operation(
                 if _run_git(clone_dir, ["show-ref", "--verify", f"refs/remotes/origin/{memory_branch}"], check=False).returncode == 0:
                     rebase = _run_git(clone_dir, ["rebase", f"refs/remotes/origin/{memory_branch}"], check=False)
                     if rebase.returncode != 0:
-                        _run_git(clone_dir, ["rebase", "--abort"], check=False)
+                        rebase_abort = _run_git(clone_dir, ["rebase", "--abort"], check=False)
+                        if rebase_abort.returncode != 0:
+                            raise MemoryGitError(
+                                "Memory branch rebase failed while retrying push: "
+                                f"{rebase.stderr.strip()} (rebase --abort also failed: {rebase_abort.stderr.strip()})"
+                            )
                         raise MemoryGitError(
                             f"Memory branch rebase failed while retrying push: {rebase.stderr.strip()}"
                         )

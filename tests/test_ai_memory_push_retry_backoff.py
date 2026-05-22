@@ -71,8 +71,40 @@ def test_backoff_clamps_nonpositive_attempt() -> None:
 def test_backoff_is_randomized() -> None:
 	# Jitter must actually vary — a constant delay would not decorrelate
 	# concurrent pushers, which is the whole point of the backoff.
-	samples = {ai_memory_lib._push_retry_backoff_seconds(5) for _ in range(64)}
-	assert len(samples) > 1, "backoff delay is not randomized"
+	calls: list[tuple[float, float]] = []
+	returned_delays = iter([0.25, 0.75])
+	original_uniform = ai_memory_lib.random.uniform
+
+	def fake_uniform(low: float, high: float) -> float:
+		calls.append((low, high))
+		return next(returned_delays)
+
+	ai_memory_lib.random.uniform = fake_uniform
+	try:
+		delays = [ai_memory_lib._push_retry_backoff_seconds(5) for _ in range(2)]
+	finally:
+		ai_memory_lib.random.uniform = original_uniform
+
+	assert delays == [0.25, 0.75]
+	assert calls == [(0.0, ai_memory_lib._PUSH_RETRY_BACKOFF_CAP_SECONDS)] * 2
+
+
+def test_backoff_large_attempt_clamps_before_overflow() -> None:
+	calls: list[tuple[float, float]] = []
+	original_uniform = ai_memory_lib.random.uniform
+
+	def fake_uniform(low: float, high: float) -> float:
+		calls.append((low, high))
+		return high
+
+	ai_memory_lib.random.uniform = fake_uniform
+	try:
+		delay = ai_memory_lib._push_retry_backoff_seconds(10_000)
+	finally:
+		ai_memory_lib.random.uniform = original_uniform
+
+	assert delay == ai_memory_lib._PUSH_RETRY_BACKOFF_CAP_SECONDS
+	assert calls == [(0.0, ai_memory_lib._PUSH_RETRY_BACKOFF_CAP_SECONDS)]
 
 
 def _scripted_run_git(
@@ -81,6 +113,7 @@ def _scripted_run_git(
 	fetch_codes: list[int] | None = None,
 	show_ref_codes: list[int] | None = None,
 	rebase_codes: list[int] | None = None,
+	rebase_abort_codes: list[int] | None = None,
 	call_log: list[tuple[str, tuple[str, ...]]] | None = None,
 ):
 	"""Build a fake _run_git with scripted failure points in the retry loop."""
@@ -89,6 +122,7 @@ def _scripted_run_git(
 	fetch_results = iter(fetch_codes or [])
 	show_ref_results = iter(show_ref_codes or [])
 	rebase_results = iter(rebase_codes or [])
+	rebase_abort_results = iter(rebase_abort_codes or [])
 
 	def fake_run_git(cwd, args, check: bool = True):  # noqa: ANN001 - test stub
 		op = args[0] if args else ""
@@ -108,7 +142,8 @@ def _scripted_run_git(
 			return _FakeProc(returncode=rc, stderr="" if rc == 0 else "show-ref missing")
 		if op == "rebase":
 			if len(args) > 1 and args[1] == "--abort":
-				return _FakeProc(returncode=0)
+				rc = next(rebase_abort_results, 0)
+				return _FakeProc(returncode=rc, stderr="" if rc == 0 else "rebase abort failed")
 			rc = next(rebase_results, 0)
 			return _FakeProc(returncode=rc, stderr="" if rc == 0 else "rebase conflict")
 		if op == "push":
@@ -129,6 +164,7 @@ def _run_persist(
 	fetch_codes: list[int] | None = None,
 	show_ref_codes: list[int] | None = None,
 	rebase_codes: list[int] | None = None,
+	rebase_abort_codes: list[int] | None = None,
 ):
 	"""Drive persist_memory_operation; return (result, backoff_attempts, call_log, exc).
 
@@ -154,6 +190,7 @@ def _run_persist(
 		fetch_codes=fetch_codes,
 		show_ref_codes=show_ref_codes,
 		rebase_codes=rebase_codes,
+		rebase_abort_codes=rebase_abort_codes,
 		call_log=call_log,
 	)
 	ai_memory_lib._push_retry_backoff_seconds = fake_backoff
@@ -226,6 +263,21 @@ def test_persist_memory_operation_aborts_rebase_before_raising() -> None:
 	assert result is None
 	assert isinstance(exc, ai_memory_lib.MemoryGitError), exc
 	assert "Memory branch rebase failed while retrying push: rebase conflict" in str(exc)
+	assert backoff_attempts == [1], backoff_attempts
+	assert any(args == ("rebase", "--abort") for _op, args in call_log), call_log
+
+
+def test_persist_memory_operation_surfaces_rebase_abort_failure() -> None:
+	result, backoff_attempts, call_log, exc = _run_persist(
+		[1],
+		push_retries=2,
+		rebase_codes=[1],
+		rebase_abort_codes=[1],
+	)
+	assert result is None
+	assert isinstance(exc, ai_memory_lib.MemoryGitError), exc
+	assert "Memory branch rebase failed while retrying push: rebase conflict" in str(exc)
+	assert "rebase --abort also failed: rebase abort failed" in str(exc)
 	assert backoff_attempts == [1], backoff_attempts
 	assert any(args == ("rebase", "--abort") for _op, args in call_log), call_log
 
