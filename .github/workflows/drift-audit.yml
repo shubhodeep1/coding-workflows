@@ -30,6 +30,9 @@ jobs:
           DRIFT_AUDIT_ENABLED: ${{ vars.DRIFT_AUDIT_ENABLED || 'false' }}
           GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
           set -euo pipefail
