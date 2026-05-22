@@ -14675,7 +14675,7 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 
 	N_CHECKS_JSON="$(gh_retry _safe_gh_jq --paginate --slurp \
 		"repos/${GITHUB_REPOSITORY}/commits/${N_HEAD_SHA}/check-runs?per_page=100" \
-		2>/dev/null || echo '{}')"
+		|| echo '{}')"
 
 	_failing_check_count="$(printf '%s' "${N_CHECKS_JSON}" | jq -r '
 		def _is_blocking: .status == "completed" and (
