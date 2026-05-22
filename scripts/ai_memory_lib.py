@@ -14,11 +14,13 @@ import json
 import logging
 import math
 import os
+import random
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 import urllib.error
 import uuid
@@ -1728,6 +1730,10 @@ def persist_memory_operation(
                     raise MemoryGitError(
                         f"Failed to push memory branch after {push_retries} attempts: {push.stderr.strip()}"
                     )
+
+                # Jittered backoff so concurrent memory writers don't retry in lockstep.
+                backoff = min(2 ** (attempt - 1), 16) * (0.5 + random.random())
+                time.sleep(backoff)
 
                 _run_git(
                     clone_dir,
