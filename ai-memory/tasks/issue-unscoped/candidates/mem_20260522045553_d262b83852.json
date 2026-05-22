@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Reuse the existing _pr_meta payload for fallback title/body extraction when it is valid. Keep a fail-open secondary fetch only when the cached JSON is missing, malformed, or does not contain the required fields. Update tests/test_review_rb_judge_label_propagation.py to cover the reuse path and the fail-open fallback behavior.\"\n  expected_change_site: scripts/review_rb_judge.sh (fallback block after GraphQL) and tests/test_review_rb_judge_label_propagation.py (_extract_issue_number_fallback_block, _run_issue_number_fallback harness + two new test functions)\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: LAST_RUN_DIFF and the full PR diff both contain exactly these changes (script now guards `_pr_meta` with `jq -e` predicate before reuse, adds dedicated `_run_issue_number_fallback` test helper that asserts zero secondary `pulls/42` calls on valid cache and exactly one on unusable cache, plus two new test cases exercising both paths). The implementation constraints (\"stay inside files_touched list\", \"keep change local to metadata reuse\", \"avoid reformatting unrelated shell code\") are also satisfied.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- requirement: \"Reuse the existing _pr_meta payload for fallback title/body extraction when it is valid. Keep a fail-open secondary fetch only when the cached JSON is missing, malformed, or does not contain the required fields. Update tests/test_review_rb_judge_label_propagation.py to cover the reuse path and the fail-open fallback behavior.\"\n  expected_change_site: scripts/review_rb_judge.sh (fallback block after GraphQL) and tests/test_review_rb_judge_label_propagation.py (_extract_issue_number_fallback_block, _run_issue_number_fallback harness + two new test functions)\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: LAST_RUN_DIFF and the full PR diff both contain exactly these changes (script now guards `_pr_meta` with `jq -e` predicate before reuse, adds dedicated `_run_issue_number_fallback` test helper that asserts zero secondary `pulls/42` calls on valid cache and exactly one on unusable cache, plus two new test cases exercising both paths). The implementation constraints (\"stay inside files_touched list\", \"keep change local to metadata reuse\", \"avoid reformatting unrelated shell code\") are also satisfied.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "5dec8bcd80608ca5b61c2cc76e0d1b390a293976906a9690f6fdaf93047752c5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2883,
+    "run_id": "26268701547",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26268701547",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260522045553_d262b83852",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2883,
+    "run_id": "26268701547"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-22T04:55:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
