@@ -1,0 +1,1 @@
+{"actor": "shubhodeep1", "entry_id": "run_event_20260522042518_70e571ea2b", "event_type": "phase_failed", "issue_number": 2872, "message": "Planning failed for issue #2872", "metadata": {}, "pr_number": null, "run_id": "26268304639", "schema_version": "run_ledger_entry.v1", "status": "error", "timestamp": "2026-05-22T04:25:18Z", "workflow": "plan"}
