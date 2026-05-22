@@ -133,6 +133,37 @@ def _extract_body_fetch_loop() -> str:
 	return match.group("loop")
 
 
+def _extract_issue_number_fallback_block() -> str:
+	"""Pull the linked-issue regex fallback block out of the real script.
+
+	Anchored on the top-level `if [ -z "${ISSUE_NUMBERS}" ]` block through
+	the cleanup line immediately before `FIRST_ISSUE=""` so tests execute
+	the same cached-metadata reuse / fail-open refetch logic the script
+	runs in production.
+	"""
+	lines = _rb_judge_text().splitlines()
+	start = None
+	for idx, line in enumerate(lines):
+		if line == 'if [ -z "${ISSUE_NUMBERS}" ]; then':
+			start = idx
+			break
+	if start is None:
+		raise AssertionError(
+			"could not locate ISSUE_NUMBERS fallback block in review_rb_judge.sh"
+		)
+
+	end = None
+	for idx in range(start + 1, len(lines)):
+		if lines[idx] == 'FIRST_ISSUE=""':
+			end = idx
+			break
+	if end is None or end <= start:
+		raise AssertionError(
+			"could not locate the end of the ISSUE_NUMBERS fallback block in review_rb_judge.sh"
+		)
+	return "\n".join(lines[start:end]).rstrip()
+
+
 def test_loop_captures_first_issue_labels_json() -> None:
 	"""The body-fetch loop must populate FIRST_ISSUE_LABELS_JSON from
 	the parent issue's labels.  Static check: a future refactor that
@@ -287,6 +318,8 @@ if args[:1] == ["api"]:
 			# JSON so a future test can extend behaviour as needed.
 			if jq_filter == ".body // \"\"" or jq_filter == ".body":
 				print(matched.get("body", ""))
+			elif jq_filter == '.title + " " + (.body // "")':
+				print(f"{matched.get('title', '') or ''} {matched.get('body', '') or ''}")
 			elif jq_filter == ".state":
 				print(matched.get("state", ""))
 			else:
@@ -839,6 +872,94 @@ ISSUE_NUMBERS="${{ISSUE_NUMBERS_INPUT}}"
 		return captured
 
 
+def _run_issue_number_fallback(*, pr_meta: str, fallback_pr_response: dict | None = None) -> dict:
+	"""Run the real linked-issue regex fallback block against mocked `gh`.
+
+	``pr_meta`` seeds the early `_pr_meta` cache captured before the
+	linked-issue lookup.  ``fallback_pr_response`` is the mocked
+	`pulls/{pr}` response returned only when the block falls back to a
+	secondary `_safe_gh_jq` fetch.
+	"""
+	block = _extract_issue_number_fallback_block()
+
+	with tempfile.TemporaryDirectory(prefix="test_rb_judge_issue_fallback_") as td:
+		tmp_path = Path(td)
+		runtime_dir = tmp_path / "runtime"
+		bin_dir = tmp_path / "bin"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		bin_dir.mkdir(parents=True, exist_ok=True)
+
+		gh_state_file = runtime_dir / "gh_state.json"
+		_install_mock_gh(bin_dir, gh_state_file)
+		mock_state: dict[str, object] = {}
+		if fallback_pr_response is not None:
+			mock_state["api_responses"] = {"pulls/42": fallback_pr_response}
+		gh_state_file.write_text(json.dumps(mock_state), encoding="utf-8")
+
+		capture_file = runtime_dir / "captured.env"
+		harness = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+gh_retry() {{ "$@"; }}
+_safe_gh_jq() {{ gh api "$@"; }}
+
+REPOSITORY="owner/repo"
+PR_NUMBER="42"
+ISSUE_NUMBERS=""
+_pr_meta="${{PR_META_INPUT}}"
+
+{block}
+
+{{
+  printf 'ISSUE_NUMBERS=%s\\n' "${{ISSUE_NUMBERS}}"
+}} > "${{CAPTURE_FILE}}"
+"""
+		script_path = runtime_dir / "issue_fallback_harness.sh"
+		script_path.write_text(harness, encoding="utf-8")
+		script_path.chmod(0o755)
+
+		env = {
+			"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+			"MOCK_GH_STATE_FILE": str(gh_state_file),
+			"PR_META_INPUT": pr_meta,
+			"CAPTURE_FILE": str(capture_file),
+		}
+		run_env = os.environ.copy()
+		run_env.update(env)
+
+		proc = subprocess.run(
+			["bash", str(script_path)],
+			cwd=str(tmp_path),
+			env=run_env,
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+		assert proc.returncode == 0, (
+			f"issue fallback harness exited {proc.returncode}\n"
+			f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		)
+
+		captured = {}
+		for raw in capture_file.read_text(encoding="utf-8").splitlines():
+			if "=" in raw:
+				k, _, v = raw.partition("=")
+				captured[k] = v
+
+		state = json.loads(gh_state_file.read_text(encoding="utf-8"))
+		state["_captured"] = captured
+		state["_stdout"] = proc.stdout
+		state["_stderr"] = proc.stderr
+		return state
+
+
+def _matching_api_calls(state: dict, path_fragment: str) -> list[list[str]]:
+	return [
+		call for call in state.get("api_calls", [])
+		if any(path_fragment in arg for arg in call)
+	]
+
+
 def test_loop_jq_filter_extracts_orchestrator_managed_from_realistic_payload() -> None:
 	"""End-to-end runtime test: feed the real body-fetch loop a
 	GitHub-shape issue JSON via mocked `gh api` and assert the actual
@@ -944,6 +1065,46 @@ def test_loop_pins_labels_to_first_issue_even_when_body_comes_from_later_issue()
 	assert labels == ["ai:orchestrator-managed"], (
 		f"FIRST_ISSUE_LABELS_JSON must follow FIRST_ISSUE (#41), not the "
 		f"body-source (#42); got {labels}"
+	)
+
+
+def test_issue_number_fallback_reuses_cached_pr_metadata_without_refetch() -> None:
+	state = _run_issue_number_fallback(
+		pr_meta=json.dumps({
+			"title": "Linked issue #41",
+			"body": "Fallback grep should reuse cached PR metadata.",
+		}),
+	)
+
+	assert state["_captured"].get("ISSUE_NUMBERS") == "41", (
+		"linked-issue fallback must still extract issue numbers from cached PR title/body"
+	)
+	pull_calls = _matching_api_calls(state, "pulls/42")
+	assert pull_calls == [], (
+		"when cached _pr_meta already contains reusable title/body text, the fallback "
+		"must not re-fetch pulls/42"
+	)
+
+
+def test_issue_number_fallback_refetches_when_cached_metadata_is_unusable() -> None:
+	state = _run_issue_number_fallback(
+		pr_meta="{}",
+		fallback_pr_response={
+			"title": "Linked issue #52",
+			"body": "Fallback GET should preserve regex extraction behaviour.",
+		},
+	)
+
+	assert state["_captured"].get("ISSUE_NUMBERS") == "52", (
+		"when cached _pr_meta is unusable, the fallback must still extract issue numbers "
+		"from the secondary pulls/{pr} fetch"
+	)
+	pull_calls = _matching_api_calls(state, "pulls/42")
+	assert len(pull_calls) == 1, (
+		"unusable cached _pr_meta must fall open to exactly one secondary pulls/{pr} fetch"
+	)
+	assert "--jq" in pull_calls[0] and '.title + " " + (.body // "")' in pull_calls[0], (
+		"the secondary pulls/{pr} fetch must preserve the existing title/body jq projection"
 	)
 
 
