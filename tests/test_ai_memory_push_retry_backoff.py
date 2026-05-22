@@ -180,8 +180,7 @@ def _run_persist(
 		try:
 			work = Path(tempfile.mkdtemp(prefix="ai-memory-retry-test-"))
 		except FileNotFoundError:
-			scratch_root = REPO_ROOT / ".tmp-ai-memory-tests"
-			scratch_root.mkdir(parents=True, exist_ok=True)
+			scratch_root = Path(tempfile.mkdtemp(prefix=".tmp-ai-memory-tests-", dir=REPO_ROOT))
 			tempfile.tempdir = str(scratch_root)
 			work = Path(tempfile.mkdtemp(prefix="ai-memory-retry-test-"))
 		repo_root = work / "repo"
