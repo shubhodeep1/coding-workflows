@@ -1211,6 +1211,7 @@ if args[0] == 'api':
 					if pr_state == 'MERGED':
 						pr_state = 'CLOSED'
 					timeline_nodes.append({
+						'willCloseTarget': bool(pr.get('willCloseTarget', True)),
 						'source': {
 							'__typename': 'PullRequest',
 							'number': int(pr.get('number', linked_pr_num)),
@@ -3927,6 +3928,43 @@ def test_standalone_stall_recovery_honors_ai_done_phase_attempt_override():
 	assert standalone_state["stall_recovery_count"] == 1
 	assert standalone_state["phase_attempts"]["ai:done"] == 6
 	assert "ai:closed" not in result["issues"]["501"]["labels"]
+
+
+def test_standalone_merged_guard_ignores_refs_only_cross_reference():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:planning",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:planning"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: 416},
+		mock_gh_issue_list_label_filter=True,
+		prs=[
+			{
+				"number": 416,
+				"state": "closed",
+				"merged": True,
+				"merged_at": "2026-04-15T00:00:00Z",
+				"body": "Refs #501",
+				"willCloseTarget": False,
+			},
+		],
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 1
+	assert "ai:merged" not in result["issues"]["501"]["labels"]
 
 
 def test_standalone_retrigger_review_does_not_increment_when_empty_commit_checkout_fails():
@@ -6916,6 +6954,36 @@ def test_no_labels_with_open_linked_pr_skips_retrigger_pipeline():
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	# Counter must NOT increment when the guard skips the action.
 	assert issue_entry["stall_recovery_count"] == 0
+	assert issue_entry["status"] == "in_progress"
+
+
+def test_no_labels_with_refs_only_linked_pr_still_retriggers_pipeline():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["last_seen_phase"] = "no_labels"
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: []},
+		issue_linked_prs={10: 931},
+		prs=[{
+			"number": 931,
+			"state": "open",
+			"body": "Refs #10",
+			"willCloseTarget": False,
+			"baseRefName": "main",
+			"headRefName": "infra/fix-931",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		}],
+	)
+	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
+	assert any("/reclarify" in body for body in issue_comments)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 1
 	assert issue_entry["status"] == "in_progress"
 
 

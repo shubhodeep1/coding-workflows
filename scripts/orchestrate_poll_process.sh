@@ -7922,12 +7922,12 @@ _fetch_standalone_marker_issues_graphql() {
 # keep working unchanged.
 #
 # `linked_pr` is derived from the most recent CrossReferencedEvent
-# whose source is a pull request (equivalent to the REST
-# `[.[] | select(.event=="cross-referenced" and .source.issue.pull_request != null)] | last`
-# walk used by the existing open-PR guard).  It is consumed by the
-# merged-PR stall-recovery guard (ENABLE_STALL_MERGED_PR_GUARD) to
-# avoid firing /reclarify (and friends) on issues whose work has
-# already been merged.
+# whose source is a pull request AND whose `willCloseTarget` flag is
+# true, so reference-only links (`Refs #N`) do not populate the
+# stall-recovery/cache state.  It is consumed by the merged-PR
+# stall-recovery guard (ENABLE_STALL_MERGED_PR_GUARD) to avoid firing
+# /reclarify (and friends) on issues whose work has already been
+# merged.
 #
 # Trade-off: we fetch `comments(last: 100)` which covers only the 100
 # newest comments rather than the full pagination walk the REST path
@@ -7978,6 +7978,7 @@ _fetch_candidate_issue_details_graphql() {
           timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT]) {
             nodes {
               ... on CrossReferencedEvent {
+                willCloseTarget
                 source {
                   __typename
                   ... on PullRequest {
@@ -8030,8 +8031,9 @@ _fetch_candidate_issue_details_graphql() {
             linked_pr: (
               [
                 (.value.timelineItems.nodes // [])[]?
-                | (.source // null)
-                | select(. != null and .__typename == "PullRequest")
+                | select(.willCloseTarget == true and (.source // null) != null)
+                | .source
+                | select(.__typename == "PullRequest")
                   | {
                       number: .number,
                       state: .state,
@@ -8179,6 +8181,59 @@ _fetch_linked_pr_status_graphql() {
   done
 
   echo "${merged}"
+}
+
+# _single_issue_linked_pr_status_graphql — convenience wrapper around
+# _fetch_linked_pr_status_graphql for cache-miss paths.  Returns the
+# same per-issue JSON entry ({number,state,merged,headPushedAt} or
+# null) while keeping the common path batched.
+_single_issue_linked_pr_status_graphql() {
+  local issue_num="$1"
+  if ! [[ "${issue_num}" =~ ^[0-9]+$ ]]; then
+    echo "null"
+    return
+  fi
+
+  local _single_resp
+  _single_resp="$(_fetch_linked_pr_status_graphql "[$issue_num]")"
+  printf '%s' "${_single_resp}" | jq -c --arg n "${issue_num}" '.[$n] // null' 2>/dev/null || echo "null"
+}
+
+# _pr_json_closes_issue — conservative closing-keyword check used only
+# after the authoritative GraphQL linked-PR lookups missed.  Return
+# codes: 0=yes, 1=no, 2=unknown/error.  Unknown preserves the candidate
+# PR so guards fail closed on transient payload/parse problems.
+_pr_json_closes_issue() {
+  local issue_num="$1"
+  local pr_json="$2"
+
+  if ! [[ "${issue_num}" =~ ^[0-9]+$ ]]; then
+    return 2
+  fi
+  if [ -z "${pr_json}" ] || [ "${pr_json}" = "{}" ]; then
+    return 2
+  fi
+
+  local _rc=0
+  printf '%s' "${pr_json}" | jq -e --arg n "${issue_num}" '
+    if type != "object" then
+      false
+    else
+      (.body // "") as $body
+      | ($body | test("(?i)(close[sd]?|fix(es|ed)?|resolve[sd]?):?[[:space:]]+#" + $n + "\\b"))
+        or
+        ($body | test("(?i)(close[sd]?|fix(es|ed)?|resolve[sd]?):?[[:space:]]+https?://github\\.com/[^[:space:]]+/[^[:space:]]+/issues/" + $n + "\\b"))
+    end
+  ' >/dev/null 2>&1
+  _rc=$?
+  if [ "${_rc}" -eq 0 ]; then
+    return 0
+  fi
+
+  if [ "${_rc}" -eq 1 ]; then
+    return 1
+  fi
+  return 2
 }
 
 # _check_merged_pr_guard — Shared guard used by both the standalone and
@@ -8626,6 +8681,11 @@ PY
     # before fresh-push suppression can short-circuit this issue for the cycle.
     local _std_linked_json
     _std_linked_json="$(printf '%s' "${_candidate_details_json}" | jq -c --arg n "${issue_num}" '.[$n].linked_pr // null' 2>/dev/null || echo "null")"
+    if [ -z "${_std_linked_json}" ] || [ "${_std_linked_json}" = "null" ] || [ "${_std_linked_json}" = "{}" ]; then
+      # Cache miss — retry a narrow single-issue GraphQL lookup before
+      # falling back to the legacy timeline/body heuristics.
+      _std_linked_json="$(_single_issue_linked_pr_status_graphql "${issue_num}")"
+    fi
     if _check_merged_pr_guard "${issue_num}" "${_std_linked_json}"; then
       echo "  [standalone-stall] Issue #${issue_num} linked PR #${STALL_MERGED_PR_NUM} is MERGED — skipping '${action}' and tagging ai:merged."
       _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}"
@@ -8660,17 +8720,25 @@ PY
     # are empty — the stall action then runs as before.
     case "${action}" in
       retrigger_pipeline|auto_respond_clarify|retrigger_plan|auto_approve|retrigger_implement)
-        # Cache miss — REST fallback (timeline → PR payload → merged_at).
-        # Two extra API calls per cache-miss issue, bounded by the
-        # rarity of prefetch failures.  Gated on the guard flag so
+        # True cache miss — the batched lookup AND the single-issue
+        # GraphQL retry both missed, so fall back to the legacy
+        # timeline → PR-payload path.  Gated on the guard flag so
         # disabling it still gives full opt-out.
         if { [ -z "${_std_linked_json}" ] || [ "${_std_linked_json}" = "null" ]; } && [ "${ENABLE_STALL_MERGED_PR_GUARD}" = "true" ]; then
-          local _std_lpr_num _std_lpr_json _std_lpr_merged
+          local _std_lpr_num _std_lpr_json _std_lpr_merged _std_body_check_rc
           _std_lpr_num="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
           if [[ "${_std_lpr_num}" =~ ^[0-9]+$ ]]; then
             _std_lpr_json="$(_fetch_pr_json "${_std_lpr_num}")"
+            if _pr_json_closes_issue "${issue_num}" "${_std_lpr_json}"; then
+              _std_body_check_rc=0
+            else
+              _std_body_check_rc=$?
+            fi
+            if [ "${_std_body_check_rc}" -eq 1 ]; then
+              _std_lpr_num=""
+            fi
             _std_lpr_merged="$(_jq_field "${_std_lpr_json}" '.merged_at != null' 'true|false')"
-            if [ "${_std_lpr_merged}" = "true" ]; then
+            if [ -n "${_std_lpr_num}" ] && [ "${_std_lpr_merged}" = "true" ]; then
               # Synthesise the same shape the cache would have produced
               # so _check_merged_pr_guard can consume it uniformly.
               _std_linked_json="$(jq -cn --argjson n "${_std_lpr_num}" '{number: $n, state: "MERGED", merged: true}' 2>/dev/null || echo "null")"
@@ -9525,7 +9593,18 @@ recover_stalled_issue() {
         return 1  # Signal: no action taken (caller should not increment counter)
       fi
 
-      # --- Open-PR sub-guard (uses cache first, falls back to per-issue REST) ---
+      if [ -z "${_lpr_cache_entry}" ] || [ "${_lpr_cache_entry}" = "null" ] || [ "${_lpr_cache_entry}" = "{}" ]; then
+        _lpr_cache_entry="$(_single_issue_linked_pr_status_graphql "${issue_num}")"
+        if _check_merged_pr_guard "${issue_num}" "${_lpr_cache_entry}"; then
+          echo "STALL_SKIP issue=${issue_num} reason=merged_linked_pr pr=${STALL_MERGED_PR_NUM} phase=${phase} action=${action} source=single_issue_graphql"
+          _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}"
+          STALL_HEALING_CHANGED=true
+          return 1  # Signal: no action taken (caller should not increment counter)
+        fi
+      fi
+
+      # --- Open-PR sub-guard (uses cache first, then single-issue GraphQL,
+      #     then falls back to per-issue REST) ---
       local _lpr_num=""
       local _lpr_state=""
       if [ -n "${_lpr_cache_entry}" ] && [ "${_lpr_cache_entry}" != "null" ]; then
@@ -9539,22 +9618,21 @@ recover_stalled_issue() {
         if [[ "${_lpr_num}" =~ ^[0-9]+$ ]]; then
           local _lpr_json=""
           local _lpr_merged=""
-          local _lpr_body=""
+          local _lpr_body_check_rc=""
           _lpr_json="$(_fetch_pr_json "${_lpr_num}")"
           _lpr_state="$(_jq_field "${_lpr_json}" '.state' 'open|closed')"
           _lpr_merged="$(_jq_field "${_lpr_json}" '.merged_at != null' 'true|false')"
-          # Skip reference-only PRs ("Refs #N") — only implementation PRs
-          # that will auto-close the issue must trigger the merged/open guards.
-          # A "Refs #N" cross-reference (e.g. an infrastructure-fix PR that
-          # merely mentions the issue) must not block stall recovery or
-          # cause _reconcile_merged_pr_issue to tag the issue ai:merged.
-          # The GraphQL cache already filters by willCloseTarget; this REST
-          # fallback check mirrors that for the cache-miss path.
-          _lpr_body="$(printf '%s' "${_lpr_json}" | jq -r '.body // ""' 2>/dev/null || echo "")"
-          if ! { printf '%s' "${_lpr_body}" \
-              | grep -qiE "(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]:]+#${issue_num}\b" 2>/dev/null \
-              || printf '%s' "${_lpr_body}" \
-              | grep -qiE "(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]:]+(https?://github\.com/[^[:space:]]*/issues/${issue_num}([^0-9]|\$))" 2>/dev/null; }; then
+          # Skip reference-only PRs ("Refs #N") only after the batched
+          # cache and single-issue GraphQL retry both missed.  At that
+          # point the PR body is the best available signal; when even the
+          # body parse is indeterminate, preserve the candidate PR so the
+          # guard fails closed on transient API/payload errors.
+          if _pr_json_closes_issue "${issue_num}" "${_lpr_json}"; then
+            _lpr_body_check_rc=0
+          else
+            _lpr_body_check_rc=$?
+          fi
+          if [ "${_lpr_body_check_rc}" -eq 1 ]; then
             _lpr_num=""
           else
             # REST-fallback merged-PR sub-guard: catches merged PRs that
