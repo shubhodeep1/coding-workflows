@@ -23,9 +23,9 @@ with a fake ``gh`` on the PATH.
 The end-to-end regression test that drives the full poll loop through
 ``judge=complete + wave_complete=true + ahead_by>0`` (the bitsafe.io#325
 deadlock — where PR #2778's ``project_complete`` gate collided with the
-pre-existing "judge cannot declare complete while waves remain" override
-at ``orchestrate_poll_process.sh:12090``) lives next to the other
-complete-verdict poller tests in
+pre-existing ``Hard guard: judge cannot declare "complete" while waves
+remain`` override in ``scripts/orchestrate_poll_process.sh``) lives next
+to the other complete-verdict poller tests in
 ``tests/test_orchestrate_poll_process.py::test_complete_verdict_falls_through_to_finalize_on_integration_drift``,
 which is where the full poller harness (``_run_poller``) is wired up.
 
@@ -39,20 +39,17 @@ import inspect
 import io
 import json
 import os
-import shutil
 import subprocess
+import sys
 import tempfile
 import textwrap
 from contextlib import redirect_stdout
 from pathlib import Path
 
-import sys
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import orchestrate_lib  # noqa: E402  (path must be set above first)
-
 
 # ---------------------------------------------------------------------------
 # Helpers — Python (cmd_check_wave_status)
@@ -601,39 +598,57 @@ def test_finalize_skips_recheck_when_superseded_by_main(tmp_path):
 	final_state = json.loads(json_line)
 	assert final_state["final_merge_status"] == "superseded-by-main"
 
+def _invoke_test(func) -> None:
+	params = list(inspect.signature(func).parameters)
+	if not params:
+		func()
+		return
+	if params == ["tmp_path"]:
+		with tempfile.TemporaryDirectory(prefix=f"{func.__name__}_") as td:
+			func(Path(td))
+		return
+	raise TypeError(f"unsupported direct-run parameters: {params}")
 
-def main() -> int:
-	# Direct `python3 tests/<file>.py` entrypoint — the repo's CI runs
-	# tests via that pattern rather than pytest discovery, so this file
-	# needs its own runner for the assertions to execute under CI.
-	test_funcs = [
-		v for k, v in sorted(globals().items())
-		if k.startswith("test_") and callable(v)
-	]
+
+def main(argv: list[str] | None = None) -> int:
+	"""Direct ``python3 tests/<file>.py`` entrypoint.
+
+	The repo's CI/release allowlists execute tests via explicit
+	``python3 tests/test_*.py`` calls rather than pytest discovery, so this
+	module needs a small fixture shim for the ``tmp_path``-style tests.
+	"""
+	selected_names = list(sys.argv[1:] if argv is None else argv)
+	try:
+		sys.stdout.reconfigure(line_buffering=True)
+	except Exception:
+		pass
+
+	tests_by_name = {
+		name: func
+		for name, func in sorted(globals().items())
+		if name.startswith("test_") and callable(func)
+	}
+	if selected_names:
+		missing = [name for name in selected_names if name not in tests_by_name]
+		for name in missing:
+			print(f"  FAIL  {name}: unknown test name", flush=True)
+		if missing:
+			return 1
+		named_tests = [(name, tests_by_name[name]) for name in selected_names]
+	else:
+		named_tests = list(tests_by_name.items())
 	passed = 0
 	failed = 0
-
-	for func in test_funcs:
-		name = func.__name__
+	for name, func in named_tests:
 		try:
-			params = list(inspect.signature(func).parameters)
-			if not params:
-				func()
-			elif params == ["tmp_path"]:
-				with tempfile.TemporaryDirectory(prefix="integration-ahead-by-") as td:
-					func(Path(td))
-			else:
-				raise TypeError(f"unsupported test signature for {name}: {params}")
-			print(f"  PASS  {name}")
+			_invoke_test(func)
+			print(f"  PASS  {name}", flush=True)
 			passed += 1
-		except AssertionError as e:
-			print(f"  FAIL  {name}: {e}")
-			failed += 1
-		except Exception as e:
-			print(f"  ERROR {name}: {type(e).__name__}: {e}")
+		except Exception as exc:
+			print(f"  FAIL  {name}: {exc}", flush=True)
 			failed += 1
 
-	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total", flush=True)
 	return 1 if failed > 0 else 0
 
 

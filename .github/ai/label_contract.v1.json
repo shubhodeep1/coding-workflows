@@ -97,6 +97,10 @@
       "color": "e11d48",
       "description": "PR review/autofix could not resolve all issues — needs human intervention"
     },
+    "ai:resolver-escalated": {
+      "color": "b60205",
+      "description": "Integration conflict resolver hit the escape threshold; orchestrator redispatch is paused until PR head changes"
+    },
     "ai:implementation-failed": {
       "color": "e11d48",
       "description": "Implementation produced no changes despite an approved plan — will be re-issued"
