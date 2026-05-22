@@ -208,6 +208,8 @@ def _run_drift_audit(
 			target.parent.mkdir(parents=True, exist_ok=True)
 			target.write_text("", encoding="utf-8")
 
+		step_summary_file = tmp_path / "step-summary.md"
+
 		env = os.environ.copy()
 		env.update(
 			{
@@ -215,6 +217,7 @@ def _run_drift_audit(
 				"GH_TOKEN": "test-token",
 				"GITHUB_REPOSITORY": "owner/repo",
 				"GITHUB_WORKSPACE": str(workspace),
+				"GITHUB_STEP_SUMMARY": str(step_summary_file),
 				"MOCK_GH_STATE_FILE": str(state_file),
 				"PATH": f"{bin_dir}:{env.get('PATH', '')}",
 				"PYTHONDONTWRITEBYTECODE": "1",
@@ -229,6 +232,12 @@ def _run_drift_audit(
 			encoding="utf-8",
 		)
 		final_state = json.loads(state_file.read_text(encoding="utf-8"))
+		if isinstance(final_state, dict):
+			final_state["_drift_audit_step_summary"] = (
+				step_summary_file.read_text(encoding="utf-8")
+				if step_summary_file.exists()
+				else ""
+			)
 		return proc, final_state
 
 
@@ -797,6 +806,22 @@ def test_drift_audit_skips_cluster_when_repo_path_is_absent() -> None:
 	assert "is not a file in the repository" in proc.stdout
 
 
+def test_drift_audit_writes_run_summary_to_step_summary() -> None:
+	state = {
+		"run_list_responses": {
+			"review_autofix.yml": [],
+			"internal-review.yml": [],
+		},
+		"issue_list_response": [],
+	}
+	proc, final_state = _run_drift_audit(state)
+	assert proc.returncode == 0, proc.stderr
+	summary = final_state.get("_drift_audit_step_summary", "")
+	assert "## Drift audit" in summary
+	assert "Status:" in summary
+	assert "Runs scanned:" in summary
+
+
 def main() -> int:
 	test_drift_audit_gate_disabled_skips_without_gh_calls()
 	test_drift_audit_dedups_runs_into_one_tracker_issue()
@@ -812,6 +837,7 @@ def main() -> int:
 	test_drift_audit_keeps_quarantined_cluster_open_when_fixed_and_quarantined_markers_mix()
 	test_drift_audit_skips_incomplete_runs_when_fetching_logs()
 	test_drift_audit_skips_cluster_when_repo_path_is_absent()
+	test_drift_audit_writes_run_summary_to_step_summary()
 	return 0
 
 

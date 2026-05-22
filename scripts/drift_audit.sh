@@ -29,6 +29,11 @@ command -v python3 >/dev/null 2>&1 || {
 }
 export PYTHONDONTWRITEBYTECODE="${PYTHONDONTWRITEBYTECODE:-1}"
 
+DRIFT_AUDIT_SUMMARY_FILE="$(mktemp "${TMPDIR:-/tmp}/drift-audit-summary.XXXXXX" 2>/dev/null || true)"
+export DRIFT_AUDIT_SUMMARY_FILE
+trap '[ -n "${DRIFT_AUDIT_SUMMARY_FILE:-}" ] && rm -f "${DRIFT_AUDIT_SUMMARY_FILE}" 2>/dev/null || true' EXIT
+
+set +e
 python3 - <<'PY'
 from __future__ import annotations
 
@@ -66,6 +71,33 @@ def _warn(message: str) -> None:
 
 def _notice(message: str) -> None:
 	print(f"::notice::drift-audit: {message}", flush=True)
+
+
+# Machine-readable run summary. Populated by main() and flushed by
+# _write_summary() to DRIFT_AUDIT_SUMMARY_FILE so the shell wrapper can
+# build the per-run Telegram alert and GitHub Actions job summary.
+_RESULT: dict[str, Any] = {
+	"status": "unknown",
+	"processed_runs": 0,
+	"marker_occurrences": 0,
+	"persistent_clusters": 0,
+	"skipped_absent_path": 0,
+	"created": 0,
+	"edited": 0,
+	"closed": 0,
+	"suppressed": 0,
+}
+
+
+def _write_summary() -> None:
+	path = os.environ.get("DRIFT_AUDIT_SUMMARY_FILE")
+	if not path:
+		return
+	try:
+		with open(path, "w", encoding="utf-8") as handle:
+			json.dump(_RESULT, handle, separators=(",", ":"))
+	except OSError as exc:
+		_warn(f"could not write run summary to {path}: {exc}")
 
 
 def _run_gh(args: list[str]) -> tuple[int, str, str]:
@@ -706,7 +738,9 @@ def main() -> int:
 				continue
 			seen_run_ids.add(run["run_id"])
 			runs.append(run)
+	_RESULT["processed_runs"] = len(runs)
 	if not runs:
+		_RESULT["status"] = "no_runs"
 		_log("no recent review/autofix runs found; nothing to audit.")
 		return 0
 
@@ -716,7 +750,9 @@ def main() -> int:
 		if log_text is None:
 			continue
 		occurrences.extend(_parse_run_markers(run, log_text))
+	_RESULT["marker_occurrences"] = len(occurrences)
 	if not occurrences:
+		_RESULT["status"] = "no_markers"
 		_log("no drift markers found in recent runs.")
 		return 0
 
@@ -735,9 +771,12 @@ def main() -> int:
 		marker_hash = _cluster_marker_hash(cluster["fp_key"])
 		if _is_persistent_cluster(cluster) or (marker_hash in tracker_issues and _cluster_has_only_fixed_markers(cluster)):
 			clusters.append(cluster)
+	_RESULT["skipped_absent_path"] = skipped_absent_path
+	_RESULT["persistent_clusters"] = len(clusters)
 	if skipped_absent_path:
 		_log(f"skipped {skipped_absent_path} cluster(s) whose fingerprint path is absent from the repository.")
 	if not clusters:
+		_RESULT["status"] = "no_clusters"
 		_log("no drift clusters requiring action found.")
 		return 0
 
@@ -788,6 +827,11 @@ def main() -> int:
 			created += 1
 			_notice(f"created tracker issue for {cluster['fp_key']}")
 
+	_RESULT["created"] = created
+	_RESULT["edited"] = edited
+	_RESULT["closed"] = closed
+	_RESULT["suppressed"] = suppressed
+	_RESULT["status"] = "completed"
 	_log(
 		f"processed_runs={len(runs)} marker_occurrences={len(occurrences)} persistent_clusters={len(clusters)} "
 		f"created={created} edited={edited} closed={closed} suppressed={suppressed}"
@@ -795,5 +839,111 @@ def main() -> int:
 	return 0
 
 
-raise SystemExit(main())
+_exit_code = 1
+try:
+	_exit_code = main()
+finally:
+	_write_summary()
+raise SystemExit(_exit_code)
 PY
+audit_rc=$?
+
+# ---------------------------------------------------------------
+# Per-run Telegram alert + GitHub Actions job summary.
+# Best-effort: a notification failure must never change audit_rc.
+# ---------------------------------------------------------------
+da_status="unknown"
+da_processed_runs=0
+da_marker_occurrences=0
+da_persistent_clusters=0
+da_skipped_absent_path=0
+da_created=0
+da_edited=0
+da_closed=0
+da_suppressed=0
+if [ -n "${DRIFT_AUDIT_SUMMARY_FILE:-}" ] && [ -s "${DRIFT_AUDIT_SUMMARY_FILE}" ]; then
+	da_status="$(jq -r '.status // "unknown"' "${DRIFT_AUDIT_SUMMARY_FILE}" 2>/dev/null || echo unknown)"
+	da_processed_runs="$(jq -r '.processed_runs // 0' "${DRIFT_AUDIT_SUMMARY_FILE}" 2>/dev/null || echo 0)"
+	da_marker_occurrences="$(jq -r '.marker_occurrences // 0' "${DRIFT_AUDIT_SUMMARY_FILE}" 2>/dev/null || echo 0)"
+	da_persistent_clusters="$(jq -r '.persistent_clusters // 0' "${DRIFT_AUDIT_SUMMARY_FILE}" 2>/dev/null || echo 0)"
+	da_skipped_absent_path="$(jq -r '.skipped_absent_path // 0' "${DRIFT_AUDIT_SUMMARY_FILE}" 2>/dev/null || echo 0)"
+	da_created="$(jq -r '.created // 0' "${DRIFT_AUDIT_SUMMARY_FILE}" 2>/dev/null || echo 0)"
+	da_edited="$(jq -r '.edited // 0' "${DRIFT_AUDIT_SUMMARY_FILE}" 2>/dev/null || echo 0)"
+	da_closed="$(jq -r '.closed // 0' "${DRIFT_AUDIT_SUMMARY_FILE}" 2>/dev/null || echo 0)"
+	da_suppressed="$(jq -r '.suppressed // 0' "${DRIFT_AUDIT_SUMMARY_FILE}" 2>/dev/null || echo 0)"
+fi
+if [ "${audit_rc}" -ne 0 ]; then
+	da_status="error"
+fi
+
+case "${da_status}" in
+	completed)
+		da_detail="Scanned ${da_processed_runs} run(s); ${da_persistent_clusters} persistent cluster(s) -> created ${da_created}, updated ${da_edited}, closed ${da_closed}, suppressed ${da_suppressed} tracker issue(s)."
+		;;
+	no_runs)
+		da_detail="No recent review/autofix runs to scan."
+		;;
+	no_markers)
+		da_detail="Scanned ${da_processed_runs} run(s); no fingerprint-drift markers found."
+		;;
+	no_clusters)
+		da_detail="Scanned ${da_processed_runs} run(s), ${da_marker_occurrences} marker(s); no persistent drift clusters needed a tracker."
+		;;
+	error)
+		da_detail="Run did not complete cleanly (exit ${audit_rc}); see the run log."
+		;;
+	*)
+		da_detail="Completed with status '${da_status}'; see the run log."
+		;;
+esac
+if [ "${da_skipped_absent_path}" -gt 0 ] 2>/dev/null; then
+	da_detail="${da_detail} Skipped ${da_skipped_absent_path} cluster(s) for paths absent from the repo."
+fi
+
+da_report_url=""
+if [ -n "${GITHUB_SERVER_URL:-}" ] && [ -n "${GITHUB_REPOSITORY:-}" ] && [ -n "${GITHUB_RUN_ID:-}" ]; then
+	da_report_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+fi
+
+# GitHub Actions job summary — the rendered run report the alert links to.
+if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+	{
+		echo "## Drift audit"
+		echo
+		echo "- **Status:** ${da_status}"
+		echo "- **Runs scanned:** ${da_processed_runs}"
+		echo "- **Marker occurrences:** ${da_marker_occurrences}"
+		echo "- **Persistent clusters:** ${da_persistent_clusters}"
+		echo "- **Clusters skipped (path absent from repo):** ${da_skipped_absent_path}"
+		echo "- **Tracker issues:** created ${da_created} / updated ${da_edited} / closed ${da_closed} / suppressed ${da_suppressed}"
+	} >> "${GITHUB_STEP_SUMMARY}" 2>/dev/null || true
+fi
+
+# Telegram alert — fires after every audit run.
+da_level="DEBUG"
+if [ "${da_status}" = "error" ]; then
+	da_level="ERROR"
+elif [ "${da_status}" = "completed" ] && [ "$(( da_created + da_edited + da_closed ))" -gt 0 ]; then
+	da_level="WARNING"
+fi
+da_message="Drift audit - ${GITHUB_REPOSITORY:-unknown repo}
+${da_detail}"
+if [ -n "${da_report_url}" ]; then
+	da_message="${da_message}
+Report: ${da_report_url}"
+fi
+da_tg_helpers="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)/tg_helpers.sh"
+if [ -f "${da_tg_helpers}" ]; then
+	# shellcheck source=tg_helpers.sh disable=SC1090,SC1091
+	source "${da_tg_helpers}"
+	if type tg_send_msg >/dev/null 2>&1; then
+		tg_send_msg "${da_message}" "${da_level}" >/dev/null 2>&1 \
+			|| echo "::warning::drift-audit: Telegram notification failed." >&2
+	else
+		echo "::warning::drift-audit: tg_send_msg unavailable; skipping Telegram notification." >&2
+	fi
+else
+	echo "::warning::drift-audit: tg_helpers.sh not found; skipping Telegram notification." >&2
+fi
+
+exit "${audit_rc}"
