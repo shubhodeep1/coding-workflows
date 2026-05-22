@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref\n- HEAD: `0a239a05c94899b4ad77e67778f82fce427b1825`\n- Checked-out branch: `orchestrator/project-2867`\n- Integration metadata branch: `orchestrator/project-2867`\n- Branch mismatch: none\n\nClarification interpretation\n- No Q1/Q2/etc. were asked in clarify.\n- `/answer [auto-answered-by-orchestrator]` means proceed with the issue exactly as written; there are no extra constraints beyond the issue body.\n\nAutomation / wiring\n- Change type: modify existing script + existing tests only.\n- Existing automated entry point remains the orchestrator poll path: `scripts/orchestrate_poll_process.sh`, reached from `.github/workflows/orchestrate_poll.yml` / consumer `internal-orchestrate-poll.yml` on the existing poll schedule (`*/5 * * * *`) and related dispatches.\n- New supervisor: none.\n- DB work / gate pattern: N/A.\n- `docs/scripts-pending-removal.md`: no update needed.\n- Estimated implementation size: small, ~20\u201330 minutes.\n\nImplementation plan\n\n1. Files likely to change\n- `scripts/orchestrate_poll_process.sh` (the `dispatch_comprehensive_release_workflow()` helper around line 5506)\n- `tests/test_orchestrate_poll_process.py` (the fake `gh workflow run` handler around line 935 and the comprehensive-release tests around lines 2487\u20132613)\n\n2. Functions / modules to update\n- `dispatch_comprehensive_release_workflow()`\n  - Add a constant `--ref stable` to the base `run_args` for `gh workflow run test-and-mark-stable.yml`.\n  - Keep `-f dry_run=false` unchanged.\n  - Keep optional `version_tag` and `test_repo` forwarding unchanged.\n  - Preserve the current `_dispatch_err` temp-file capture, `COMPREHENSIVE_RELEASE_DISPATCH_ERROR` population, and return behavior unchanged.\n- Test stub in `tests/test_orchestrate_poll_process.py`\n  - Extend the `if wf == 'test-and-mark-stable.yml':` parser to capture `--ref`, mirroring the nearby review-dispatch parser that already stores `ref`.\n- Existing comprehensive-release tests\n  - Update:\n    - `test_comprehensive_pending_complete_dispatches_release_with_metadata`\n    - `test_comprehensive_pending_complete_dispatches_release_without_optional_metadata`\n    - `test_comprehensive_pending_already_complete_dispatches_release`\n  - Add assertions that the recorded dispatch includes `ref == \"stable\"` while keeping current assertions for `dry_run`, `version_tag`, and `test_repo`.\n\n3. Data structures affected\n- Bash `run_args` array gains one fixed pair: `--ref stable`.\n- Test `dispatch` dict in `release_dispatches` gains a `ref` field.\n- No state-file schema, label set, or workflow input schema changes.\n\n4. API / interface changes\n- Internal CLI contract only: the `gh workflow run test-and-mark-stable.yml` call now always targets the `stable` branch explicitly.\n- No user-facing interface changes.\n- No log key or failure-mode changes.\n\n5. Risks / edge cases\n- The planning ref is an integration branch, so the fix must explicitly target `stable` without altering any surrounding branch logic.\n- `scripts/orchestrate_poll_process.sh` is a hot file; keep the edit to the base `run_args` only and avoid adjacent cleanup.\n- The current release-dispatch test stub does not record `--ref`; coverage will not lock the contract unless that parser is updated first.\n- Do not disturb failure behavior: dispatch failures must still be retryable and must continue surfacing stderr via `COMPREHENSIVE_RELEASE_DISPATCH_ERROR`.\n\n6. Testing considerations\n- Run targeted pytest coverage for the comprehensive-release block in `tests/test_orchestrate_poll_process.py`.\n- Success-path tests should prove both:\n  - `dispatch[\"ref\"] == \"stable\"`\n  - existing `dry_run`, `version_tag`, and `test_repo` behavior is unchanged.\n- Keep the existing retryable-failure test as a guard that no failure-path behavior regressed.\n\nConflicts / codebase notes\n- No factual conflict with the issue: the code currently omits `--ref`, and `.github/workflows/test-and-mark-stable.yml` explicitly rejects non-`stable` refs.\n- Codebase note: the test harness already captures `--ref` for review workflow dispatches, but not for release workflow dispatches; that is the test gap to close.\n\nAssumptions\n- The intended `files_touched` scope is the two issue-named files above; this plan stays within that scope.\n- No workflow-file edit is needed because the stable-only guard already exists in `.github/workflows/test-and-mark-stable.yml`.\n\nMissing context\n- None.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "c8ccb5edb9b9c67768ac8aa1a8dc8a4537472fd7249972a87813c37c0af16c29",
+  "lineage": {
+    "issue_number": 2870,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26268306638",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26268306638",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2870"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260522042811_6f1054a434",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2870,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26268306638"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2870",
+  "timestamps": {
+    "created_at": "2026-05-22T04:28:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
