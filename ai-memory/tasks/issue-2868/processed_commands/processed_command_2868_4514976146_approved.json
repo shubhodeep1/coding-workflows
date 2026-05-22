@@ -5,13 +5,23 @@
   "entry_id": "processed_command_2868_4514976146_approved",
   "issue_number": 2868,
   "metadata": {
+    "branch": "ai/issue-2868",
+    "changed_files": [
+      ".github/workflows/review_autofix.yml",
+      "tests/test_review_autofix_reasoning_schedule.py"
+    ],
+    "issue_number": 2868,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/2868",
+    "pr_number": 2877,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/2877",
+    "run_attempt": "1",
+    "run_id": "26268502307",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/26268502307"
   },
   "run_attempt": 1,
   "run_id": "26268502307",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-05-22T04:32:02Z",
+  "status": "completed",
+  "timestamp": "2026-05-22T04:35:44Z",
   "workflow": "implement"
 }
