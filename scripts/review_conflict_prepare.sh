@@ -118,6 +118,8 @@ git clean -ffdx -e .codex-workflow-src -e .codex-workflow-src-main 2>/dev/null |
 #              happens we must surface it instead of silently
 #              running Codex against an empty conflict set.
 _merge_exit=0
+_merge_promisor_fetch_failure_seen=false
+_merge_promisor_initial_stderr=""
 # Capture stderr so the hard-fail annotation below can surface git's
 # real complaint (e.g. "refusing to merge unrelated histories") instead
 # of a generic "investigate" message.
@@ -126,6 +128,11 @@ trap 'rm -f "${_merge_stderr_file}"' EXIT INT TERM
 git merge --no-commit --no-ff "origin/${BASE_BRANCH}" 2> "${_merge_stderr_file}" || _merge_exit=$?
 if [ -s "${_merge_stderr_file}" ]; then
   sed 's/^/git merge stderr: /' "${_merge_stderr_file}"
+fi
+if grep -qiE 'promisor remote|not our ref|could not fetch|fetch-pack|remote error: upload-pack' "${_merge_stderr_file}" 2>/dev/null; then
+  _merge_promisor_fetch_failure_seen=true
+  _merge_promisor_initial_stderr="$(tr '\n' ' ' < "${_merge_stderr_file}" 2>/dev/null | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
+  _merge_promisor_initial_stderr="${_merge_promisor_initial_stderr:-<git merge produced no stderr>}"
 fi
 
 # Blobless partial clone recovery (review_autofix.yml's checkout uses
@@ -139,7 +146,7 @@ fi
 # "nothing to resolve" / a hard merge-replay failure, leaving the PR's
 # real conflicts unresolved.
 if [ "${_merge_exit}" -ne 0 ] && [ ! -f "$(git rev-parse --git-dir)/MERGE_HEAD" ] \
-  && grep -qiE 'promisor remote|not our ref|could not fetch|fetch-pack|remote error: upload-pack' "${_merge_stderr_file}" 2>/dev/null; then
+  && [ "${_merge_promisor_fetch_failure_seen}" = "true" ]; then
   echo "::warning::Merge replay hit a partial-clone promisor fetch failure; backfilling blobs and retrying the merge once."
   git reset --hard HEAD >/dev/null 2>&1 || true
   git config --unset-all remote.origin.partialclonefilter 2>/dev/null || true
@@ -147,8 +154,12 @@ if [ "${_merge_exit}" -ne 0 ] && [ ! -f "$(git rev-parse --git-dir)/MERGE_HEAD" 
   if [ -n "${TARGET_BRANCH:-}" ]; then
     _backfill_refspecs+=("refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}")
   fi
-  if ! git fetch --no-tags --prune --refetch origin "${_backfill_refspecs[@]}" 2>/dev/null; then
-    echo "::warning::blob-backfill refetch failed during merge replay; retrying the merge anyway."
+  _refetch_rc=0
+  _refetch_stderr="$(git fetch --no-tags --prune --refetch origin "${_backfill_refspecs[@]}" 2>&1 >/dev/null)" || _refetch_rc=$?
+  if [ "${_refetch_rc}" -ne 0 ]; then
+    _refetch_stderr="$(printf '%s' "${_refetch_stderr}" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
+    _refetch_stderr="${_refetch_stderr:-<git fetch produced no stderr>}"
+    echo "::warning::blob-backfill refetch failed during merge replay; retrying the merge anyway. git fetch stderr: ${_refetch_stderr}"
   fi
   _merge_exit=0
   : > "${_merge_stderr_file}"
@@ -224,6 +235,10 @@ if [ "${_resolver_allowlist_count}" -eq 0 ]; then
   # without re-reading the raw log.
   _merge_stderr_oneline="$(tr '\n' ' ' < "${_merge_stderr_file}" 2>/dev/null | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
   _merge_stderr_oneline="${_merge_stderr_oneline:-<git merge produced no stderr>}"
+  if [ "${_merge_promisor_fetch_failure_seen}" = "true" ] && [ -n "${_merge_promisor_initial_stderr}" ] \
+    && [ "${_merge_promisor_initial_stderr}" != "${_merge_stderr_oneline}" ]; then
+    _merge_stderr_oneline="${_merge_stderr_oneline} | initial promisor stderr: ${_merge_promisor_initial_stderr}"
+  fi
   _merge_stderr_oneline="$(printf '%s' "${_merge_stderr_oneline}" | sed 's/%/%25/g; s/\r/%0D/g')"
   if grep -qi 'refusing to merge unrelated histories' "${_merge_stderr_file}" 2>/dev/null; then
     _head_sha="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
