@@ -244,6 +244,14 @@ jobs:
           # branch name — without it, the second `git push origin
           # <branch>` would fail (non-fast-forward or already-exists)
           # and abort before the PR is opened.
+          resolve_existing_pr_number() {
+            # `gh pr create` only returns a machine-readable URL on the success
+            # path. The benign "already exists" branch still needs the open PR
+            # number for the follow-up review dispatch, so look it up by head/base.
+            gh pr list --head "${BRANCH}" --base main --state open \
+              --json number --jq '.[0].number // empty' 2>/dev/null || true
+          }
+
           BRANCH="auto/forward-merge-stable-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
           # The merge-strategy warning is identical on both paths and
@@ -330,6 +338,12 @@ jobs:
             # already alerted, and a re-run shouldn't spam TG.
             echo "::warning::PR already exists for ${BRANCH} — treating as benign"
             echo "${PR_OUTPUT}"
+            PR_NUMBER="$(resolve_existing_pr_number)"
+            if [ -n "${PR_NUMBER}" ]; then
+              echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+            else
+              echo "::warning::Could not resolve the existing fallback PR number for ${BRANCH}; skipping immediate review dispatch."
+            fi
           else
             echo "::error::Failed to create fallback PR for ${BRANCH} (rc=${PR_RC})"
             echo "${PR_OUTPUT}" >&2
@@ -386,10 +400,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           PR_NUMBER: ${{ steps.fallback.outputs.pr_number }}
+          ALLOW_WORKFLOW_EDITS: ${{ contains(' 1 true yes on ', format(' {0} ', vars.ALLOW_WORKFLOW_EDITS || 'true')) && 'true' || 'false' }}
         shell: bash
         run: |
           set -euo pipefail
-          if gh workflow run internal-review.yml -f "pr_number=${PR_NUMBER}"; then
+          if gh workflow run internal-review.yml \
+            -f "pr_number=${PR_NUMBER}" \
+            -f "allow_workflow_edits=${ALLOW_WORKFLOW_EDITS}"; then
             echo "Dispatched internal-review.yml for PR #${PR_NUMBER}"
           else
             echo "::warning::Failed to dispatch internal-review.yml for PR #${PR_NUMBER}; the orchestrator poller will pick the PR up on its next cycle."
