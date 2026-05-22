@@ -3135,15 +3135,56 @@ jobs:
           echo "========================================"
 
           merge_exit=0
+          merge_promisor_fetch_failure_seen=false
+          merge_promisor_initial_stderr=""
           git merge --no-commit --no-ff "origin/${BASE_BRANCH}" 2> "${MERGE_STDERR_FILE}" || merge_exit=$?
           if [ -s "${MERGE_STDERR_FILE}" ]; then
             sed 's/^/git merge stderr: /' "${MERGE_STDERR_FILE}"
+          fi
+          if grep -qiE 'promisor remote|not our ref|could not fetch|fetch-pack|remote error: upload-pack' "${MERGE_STDERR_FILE}" 2>/dev/null; then
+            merge_promisor_fetch_failure_seen=true
+            merge_promisor_initial_stderr="$(tr '\n' ' ' < "${MERGE_STDERR_FILE}" 2>/dev/null | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
+            merge_promisor_initial_stderr="${merge_promisor_initial_stderr:-<git merge produced no stderr>}"
+          fi
+
+          # Blobless partial clone recovery (the codex-agent checkout uses
+          # `filter: blob:none`): the 3-way merge lazy-fetches blob content
+          # from the promisor remote, and that batched on-demand fetch fails
+          # hard (exit 128) when any single OID in the batch is unreachable
+          # server-side ("not our ref" / "could not fetch ... from promisor
+          # remote") — even though the merge itself is well-formed. On that
+          # signature, drop the partial filter, refetch the merge inputs so
+          # every blob is materialised locally, and retry the merge once.
+          # Without this the gate misreads a transient/infra fetch failure as
+          # a deterministic stale base and skips the conflict resolver.
+          if [ "${merge_exit}" -ne 0 ] && [ ! -f "$(git rev-parse --git-dir)/MERGE_HEAD" ] \
+             && [ "${merge_promisor_fetch_failure_seen}" = "true" ]; then
+            echo "::warning::Pre-review merge probe hit a partial-clone promisor fetch failure; backfilling blobs and retrying the merge once."
+            git reset --hard HEAD >/dev/null 2>&1 || true
+            git config --unset-all remote.origin.partialclonefilter 2>/dev/null || true
+            _refetch_rc=0
+            _refetch_stderr="$(git fetch --no-tags --prune --refetch origin "${_merge_refspecs[@]}" 2>&1 >/dev/null)" || _refetch_rc=$?
+            if [ "${_refetch_rc}" -ne 0 ]; then
+              _refetch_stderr="$(printf '%s' "${_refetch_stderr}" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
+              _refetch_stderr="${_refetch_stderr:-<git fetch produced no stderr>}"
+              echo "::warning::blob-backfill refetch failed during pre-review merge gate; retrying the merge anyway. git fetch stderr: ${_refetch_stderr}"
+            fi
+            merge_exit=0
+            : > "${MERGE_STDERR_FILE}"
+            git merge --no-commit --no-ff "origin/${BASE_BRANCH}" 2> "${MERGE_STDERR_FILE}" || merge_exit=$?
+            if [ -s "${MERGE_STDERR_FILE}" ]; then
+              sed 's/^/git merge stderr (after blob backfill): /' "${MERGE_STDERR_FILE}"
+            fi
           fi
 
           if [ -z "$(git ls-files --unmerged)" ]; then
             if [ "${merge_exit}" -ne 0 ] && [ ! -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
               _merge_stderr_oneline="$(tr '\n' ' ' < "${MERGE_STDERR_FILE}" 2>/dev/null | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
               _merge_stderr_oneline="${_merge_stderr_oneline:-<git merge produced no stderr>}"
+              if [ "${merge_promisor_fetch_failure_seen}" = "true" ] && [ -n "${merge_promisor_initial_stderr}" ] \
+                 && [ "${merge_promisor_initial_stderr}" != "${_merge_stderr_oneline}" ]; then
+                _merge_stderr_oneline="${_merge_stderr_oneline} | initial promisor stderr: ${merge_promisor_initial_stderr}"
+              fi
               _merge_stderr_oneline="$(printf '%s' "${_merge_stderr_oneline}" | sed 's/%/%25/g; s/\r/%0D/g')"
               if grep -qi 'refusing to merge unrelated histories' "${MERGE_STDERR_FILE}" 2>/dev/null; then
                 if [ "${merge_probe_ambiguous}" = "true" ]; then
@@ -3158,10 +3199,21 @@ jobs:
                   exit 0
                 fi
               elif [ "${merge_exit}" -eq 128 ]; then
-                echo "::error::Pre-review merge topology gate failed (exit 128): git merge aborted before entering merge state. Skipping reviewer/editor spend. See pre-review diagnostics above. git stderr: ${_merge_stderr_oneline}"
-                echo "AUTOFIX_PRE_REVIEW_MERGE_TOPOLOGY pr=${PR_NUMBER} base_branch=${BASE_BRANCH} local_sha=${LOCAL_HEAD_SHA} result=merge_precheck_failed_exit_128 action=soft_exit"
-                echo "AUTOFIX_STALE_BASE_SKIP=true" >> "$GITHUB_ENV"
-                exit 0
+                if [ "${merge_promisor_fetch_failure_seen}" = "true" ] \
+                   || grep -qiE 'promisor remote|not our ref|could not fetch|fetch-pack|remote error: upload-pack' "${MERGE_STDERR_FILE}" 2>/dev/null; then
+                  # A partial-clone promisor fetch failure that survived the
+                  # blob-backfill retry above is an infrastructure error, not
+                  # a deterministic stale base. Fail OPEN so the reviewer +
+                  # conflict-resolver path still runs (the resolver runs its
+                  # own merge with its own backfill) rather than skipping it.
+                  echo "::warning::Pre-review merge topology gate: exit 128 from a partial-clone promisor fetch failure that survived the blob-backfill retry. Failing open to the reviewer/resolver path. git stderr: ${_merge_stderr_oneline}"
+                  echo "AUTOFIX_PRE_REVIEW_MERGE_TOPOLOGY pr=${PR_NUMBER} base_branch=${BASE_BRANCH} local_sha=${LOCAL_HEAD_SHA} result=merge_precheck_promisor_fetch_failed action=fail_open"
+                else
+                  echo "::error::Pre-review merge topology gate failed (exit 128): git merge aborted before entering merge state. Skipping reviewer/editor spend. See pre-review diagnostics above. git stderr: ${_merge_stderr_oneline}"
+                  echo "AUTOFIX_PRE_REVIEW_MERGE_TOPOLOGY pr=${PR_NUMBER} base_branch=${BASE_BRANCH} local_sha=${LOCAL_HEAD_SHA} result=merge_precheck_failed_exit_128 action=soft_exit"
+                  echo "AUTOFIX_STALE_BASE_SKIP=true" >> "$GITHUB_ENV"
+                  exit 0
+                fi
               else
                 echo "::warning::Pre-review merge topology gate hit an inconclusive merge failure (exit ${merge_exit}); continuing to reviewers. git stderr: ${_merge_stderr_oneline}"
                 echo "AUTOFIX_PRE_REVIEW_MERGE_TOPOLOGY pr=${PR_NUMBER} base_branch=${BASE_BRANCH} local_sha=${LOCAL_HEAD_SHA} result=merge_failure_inconclusive_exit_${merge_exit} action=fail_open"

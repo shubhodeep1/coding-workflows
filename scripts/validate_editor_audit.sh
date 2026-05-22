@@ -72,6 +72,7 @@ validate_editor_audit_arithmetic()
 	local audit_section
 	audit_section="$(awk '
 		/^[[:space:]]*Review file issue audit:/ { in_s=1; next }
+		in_s && /^[[:space:]]*PR comment audit:/ { exit }
 		in_s && /^[[:space:]]*[A-Za-z][A-Za-z ()-]*:[[:space:]]*$/ { exit }
 		in_s { print }
 	' "${summary_file}")"
