@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ai_memory_push_retry_backoff.py:89-149 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The retry-loop tests over-mock git/sleep/random behavior, so they never exercise the real rebase-failure or jitter timing paths.\n  WHY: The scripted helper always succeeds or forces 0.0 sleep, which means regressions in failure handling or actual jittered delays would escape coverage.\n- scripts/ai_memory_lib.py:~1913-1918 | severity=medium | confidence=3\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: `time.sleep(_push_retry_backoff_seconds(attempt))` has no exception handling, so an interrupted sleep can propagate uncaught.\n  WHY: Workflow timeouts or signals can interrupt the backoff delay, masking the termination reason or interfering with cleanup.\n- scripts/ai_memory_lib.py:1907-1922 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The retry loop can reach the backoff sleep/rebase block in a control flow where `attempt` is not safely defined for the call to `_push_retry_backoff_seconds(attempt)`.\n  WHY: The reviewer says the sleep runs after the failure check and can raise `NameError` or behave incorrectly on the final success path.\n- scripts/ai_memory_lib.py:1836-1860 | severity=medium | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The exponential-backoff ceiling calculation lacks validation and may become numerically unstable for extreme base/cap values.\n  WHY: `min(cap, base * (2 ** (attempt - 1)))` can misbehave if the constants are changed to pathological values.\n- scripts/ai_memory_lib.py:1831-1834 | severity=low | confidence=2\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The backoff constants are plain floats with no explicit unit annotation or validation.\n  WHY: Future maintenance could accidentally swap or misuse them, making the backoff behavior confusing.\n- scripts/ai_memory_lib.py:1890-1920 | severity=medium | confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The retry loop reapplies fetch/rebase after every push failure, even when the failure is not a ref-lock race.\n  WHY: Unconditionally rebasing on network, permission, or other non-fast-forward failures can leave the clone in a bad state or produce duplicated history.\n- scripts/ai_memory_lib.py:1917 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: On rebase failure, the code aborts and raises without a final backoff or robust cleanup path.\n  WHY: The temporary clone can remain dirty if cleanup fails, and the exception path discards the original push stderr in the rebase-failure case.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: tests/test_ai_memory_push_retry_backoff.py\n  Location: _scripted_run_git function, lines ~89-103\n  Issue: The _scripted_run_git stub always returns success for rebase and show-ref, so the test never exercises the rebase-failure path in the retry loop.\n  Suggested minimal fix: Add a test that passes a push_codes list where rebase fails between retries and asserts that MemoryGitError is raised with a rebase-failure message. Requires extending _scripted_run_git to accept an optional rebase_returncode parameter (defaulting to 0 for backward compatibility). Alternatively, accept a dict mapping git subcommands to return codes.\n  Estimated lines changed: 8-10\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/ai_memory_lib.py:~1913-1918 | severity=medium | confidence=3\n  PROBLEM: `time.sleep(_push_retry_backoff_seconds(attempt))` has no exception handling, so an interrupted sleep can propagate uncaught.\n  WHY: Workflow timeouts or signals can interrupt the backoff delay, masking the termination reason or interfering with cleanup.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/ai_memory_lib.py:1907-1922 | severity=high | confidence=5\n  PROBLEM: The backoff sleep is executed in a control flow where `attempt` may be undefined or otherwise unsafe for `_push_retry_backoff_seconds(attempt)`.\n  WHY: The review notes that the sleep runs after the failure check and could raise `NameError` or behave incorrectly on the final success path.\n- scripts/ai_memory_lib.py:1836-1860 | severity=medium | confidence=3\n  PROBLEM: The exponential-backoff ceiling calculation lacks validation and may become numerically unstable for extreme base/cap values.\n  WHY: `min(cap, base * (2 ** (attempt - 1)))` can misbehave if the constants are changed to pathological values.\n- scripts/ai_memory_lib.py:1831-1834 | severity=low | confidence=2\n  PROBLEM: The backoff constants are plain floats with no explicit unit annotation or validation.\n  WHY: Future maintenance could accidentally swap or misuse them, making the backoff behavior confusing.\n- tests/test_ai_memory_push_retry_backoff.py:106-149 | severity=low | confidence=1\n  PROBLEM: The function stubs both `_run_git` and `_push_retry_backoff_seconds` for the entire retry loop period.\n  WHY: Real git commands and real sleeps are not executed, so the test can mask issues in the retry loop\u2019s timing and structure.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_ai_memory_push_retry_backoff.py:106-149 | severity=low | confidence=4\n  PROBLEM: The unit tests mock `_run_git` and `_push_retry_backoff_seconds` across the whole retry loop, so they don\u2019t exercise the real random jitter or sleep behavior.\n  WHY: This hides the production code path that combines real `random.uniform` with `time.sleep`, reducing coverage of timing and retry mechanics.\n- scripts/ai_memory_lib.py:1890-1920 | severity=medium | confidence=3\n  PROBLEM: The retry loop reapplies fetch/rebase after every push failure, even when the failure is not a ref-lock race.\n  WHY: Unconditionally rebasing on network, permission, or other non-fast-forward failures can leave the clone in a bad state or produce duplicated history.\n- scripts/ai_memory_lib.py:1917 | severity=medium | confidence=4\n  PROBLEM: On rebase failure, the code aborts and raises without a final backoff or robust cleanup path.\n  WHY: The temporary clone can remain dirty if cleanup fails, and the exception path discards the original push stderr in the rebase-failure case.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "46f0fd9b11b36ae3d83d800498260cda8b66e59afbadd8189ddb34c8ed7af7ad",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26268941767",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26268941767",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260522051829_535d6cbff1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26268941767"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 7 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-22T05:18:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
