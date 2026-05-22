@@ -173,47 +173,62 @@ def _run_persist(
 	the raised MemoryGitError, alongside the recorded backoff attempt numbers.
 	"""
 
-	work = Path(tempfile.mkdtemp(prefix="ai-memory-retry-test-"))
-	repo_root = work / "repo"
-	repo_root.mkdir(parents=True, exist_ok=True)
-	backoff_attempts: list[int] = []
-	call_log: list[tuple[str, tuple[str, ...]]] = []
-
-	def fake_backoff(attempt: int) -> float:
-		backoff_attempts.append(attempt)
-		return 0.0
-
-	original_run_git = ai_memory_lib._run_git
-	original_backoff = ai_memory_lib._push_retry_backoff_seconds
-	ai_memory_lib._run_git = _scripted_run_git(
-		push_codes,
-		fetch_codes=fetch_codes,
-		show_ref_codes=show_ref_codes,
-		rebase_codes=rebase_codes,
-		rebase_abort_codes=rebase_abort_codes,
-		call_log=call_log,
-	)
-	ai_memory_lib._push_retry_backoff_seconds = fake_backoff
-
-	def _op(_clone_dir: Path) -> dict:
-		return {"claimed": True}
-
+	work_tempdir = tempfile.tempdir
+	scratch_root: Path | None = None
+	work: Path | None = None
 	try:
-		result = ai_memory_lib.persist_memory_operation(
-			repo_root,
-			memory_branch="ai-memory",
-			memory_root_relative="ai-memory",
-			push_retries=push_retries,
-			commit_message="ai-memory: test claim",
-			operation=_op,
+		try:
+			work = Path(tempfile.mkdtemp(prefix="ai-memory-retry-test-"))
+		except FileNotFoundError:
+			scratch_root = REPO_ROOT / ".tmp-ai-memory-tests"
+			scratch_root.mkdir(parents=True, exist_ok=True)
+			tempfile.tempdir = str(scratch_root)
+			work = Path(tempfile.mkdtemp(prefix="ai-memory-retry-test-"))
+		repo_root = work / "repo"
+		repo_root.mkdir(parents=True, exist_ok=True)
+		backoff_attempts: list[int] = []
+		call_log: list[tuple[str, tuple[str, ...]]] = []
+
+		def fake_backoff(attempt: int) -> float:
+			backoff_attempts.append(attempt)
+			return 0.0
+
+		original_run_git = ai_memory_lib._run_git
+		original_backoff = ai_memory_lib._push_retry_backoff_seconds
+		ai_memory_lib._run_git = _scripted_run_git(
+			push_codes,
+			fetch_codes=fetch_codes,
+			show_ref_codes=show_ref_codes,
+			rebase_codes=rebase_codes,
+			rebase_abort_codes=rebase_abort_codes,
+			call_log=call_log,
 		)
-		return result, backoff_attempts, call_log, None
-	except ai_memory_lib.MemoryGitError as exc:
-		return None, backoff_attempts, call_log, exc
+		ai_memory_lib._push_retry_backoff_seconds = fake_backoff
+
+		def _op(_clone_dir: Path) -> dict:
+			return {"claimed": True}
+
+		try:
+			result = ai_memory_lib.persist_memory_operation(
+				repo_root,
+				memory_branch="ai-memory",
+				memory_root_relative="ai-memory",
+				push_retries=push_retries,
+				commit_message="ai-memory: test claim",
+				operation=_op,
+			)
+			return result, backoff_attempts, call_log, None
+		except ai_memory_lib.MemoryGitError as exc:
+			return None, backoff_attempts, call_log, exc
+		finally:
+			ai_memory_lib._run_git = original_run_git
+			ai_memory_lib._push_retry_backoff_seconds = original_backoff
 	finally:
-		ai_memory_lib._run_git = original_run_git
-		ai_memory_lib._push_retry_backoff_seconds = original_backoff
-		shutil.rmtree(work, ignore_errors=True)
+		tempfile.tempdir = work_tempdir
+		if work is not None:
+			shutil.rmtree(work, ignore_errors=True)
+		if scratch_root is not None:
+			shutil.rmtree(scratch_root, ignore_errors=True)
 
 
 def test_persist_memory_operation_backs_off_then_succeeds_on_retry() -> None:
