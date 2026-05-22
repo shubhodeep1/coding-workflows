@@ -8116,6 +8116,7 @@ _fetch_linked_pr_status_graphql() {
           timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT]) {
             nodes {
               ... on CrossReferencedEvent {
+                willCloseTarget
                 source {
                   __typename
                   ... on PullRequest {
@@ -8153,8 +8154,9 @@ _fetch_linked_pr_status_graphql() {
           value: (
             [
               (.value.timelineItems.nodes // [])[]?
-              | (.source // null)
-              | select(. != null and .__typename == "PullRequest")
+              | select(.willCloseTarget == true and (.source // null) != null)
+              | .source
+              | select(.__typename == "PullRequest")
               | {
                   number: .number,
                   state: .state,
@@ -9537,26 +9539,42 @@ recover_stalled_issue() {
         if [[ "${_lpr_num}" =~ ^[0-9]+$ ]]; then
           local _lpr_json=""
           local _lpr_merged=""
+          local _lpr_body=""
           _lpr_json="$(_fetch_pr_json "${_lpr_num}")"
           _lpr_state="$(_jq_field "${_lpr_json}" '.state' 'open|closed')"
           _lpr_merged="$(_jq_field "${_lpr_json}" '.merged_at != null' 'true|false')"
-          # REST-fallback merged-PR sub-guard: catches merged PRs that
-          # the batched GraphQL prefetch missed or failed to fetch
-          # (transient network error, partial batch, issue number that
-          # wasn't in the stalls list, etc.).  Without this, the
-          # merged-PR short-circuit silently regresses on any cache
-          # miss and the /reclarify loop from GH issue #1074 could
-          # recur.  Uses the same _reconcile_merged_pr_issue helper
-          # as the cache-hit path at the top of this guard, and
-          # respects ENABLE_STALL_MERGED_PR_GUARD so disabling the
-          # flag still gives full opt-out.  No extra API calls — the
-          # REST fallback has already fetched the PR payload on the
-          # preceding line.
-          if [ "${ENABLE_STALL_MERGED_PR_GUARD}" = "true" ] && [ "${_lpr_merged}" = "true" ]; then
-            echo "STALL_SKIP issue=${issue_num} reason=merged_linked_pr pr=${_lpr_num} phase=${phase} action=${action} source=rest_fallback"
-            _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${_lpr_num}"
-            STALL_HEALING_CHANGED=true
-            return 1  # Signal: no action taken (caller should not increment counter)
+          # Skip reference-only PRs ("Refs #N") — only implementation PRs
+          # that will auto-close the issue must trigger the merged/open guards.
+          # A "Refs #N" cross-reference (e.g. an infrastructure-fix PR that
+          # merely mentions the issue) must not block stall recovery or
+          # cause _reconcile_merged_pr_issue to tag the issue ai:merged.
+          # The GraphQL cache already filters by willCloseTarget; this REST
+          # fallback check mirrors that for the cache-miss path.
+          _lpr_body="$(printf '%s' "${_lpr_json}" | jq -r '.body // ""' 2>/dev/null || echo "")"
+          if ! { printf '%s' "${_lpr_body}" \
+              | grep -qiE "(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]:]+#${issue_num}\b" 2>/dev/null \
+              || printf '%s' "${_lpr_body}" \
+              | grep -qiE "(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]:]+(https?://github\.com/[^[:space:]]*/issues/${issue_num}([^0-9]|\$))" 2>/dev/null; }; then
+            _lpr_num=""
+          else
+            # REST-fallback merged-PR sub-guard: catches merged PRs that
+            # the batched GraphQL prefetch missed or failed to fetch
+            # (transient network error, partial batch, issue number that
+            # wasn't in the stalls list, etc.).  Without this, the
+            # merged-PR short-circuit silently regresses on any cache
+            # miss and the /reclarify loop from GH issue #1074 could
+            # recur.  Uses the same _reconcile_merged_pr_issue helper
+            # as the cache-hit path at the top of this guard, and
+            # respects ENABLE_STALL_MERGED_PR_GUARD so disabling the
+            # flag still gives full opt-out.  No extra API calls — the
+            # REST fallback has already fetched the PR payload on the
+            # preceding line.
+            if [ "${ENABLE_STALL_MERGED_PR_GUARD}" = "true" ] && [ "${_lpr_merged}" = "true" ]; then
+              echo "STALL_SKIP issue=${issue_num} reason=merged_linked_pr pr=${_lpr_num} phase=${phase} action=${action} source=rest_fallback"
+              _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${_lpr_num}"
+              STALL_HEALING_CHANGED=true
+              return 1  # Signal: no action taken (caller should not increment counter)
+            fi
           fi
         fi
       fi
