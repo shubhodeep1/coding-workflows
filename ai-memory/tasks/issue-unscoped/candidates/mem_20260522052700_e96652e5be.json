@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/issue_pr_status.yml:~200-212 | severity=low | confidence=[3]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: When MANAGED_ISSUES/TRACKING_ISSUES are empty, this writes a heredoc containing only a newline.\n  WHY: Some downstream `-n \"${VAR:-}\"` tests or consumers may treat the newline-only value as truthy, breaking the \"no managed issues \u2192 do not suppress alert\" path; the Actions runner parser appears tolerant, but this is fragile and not explicitly round-trip tested.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The workflow must mark ORCHESTRATOR_CLASSIFICATION_COMPLETE=\"false\" whenever a per-issue REST fallback lookup fails during the classification loop, so that the merged-alert step always knows the classifier is incomplete and can safely fall back to per-issue lookups.\n  expected_change_site: .github/workflows/issue_pr_status.yml around line 335\u2013357 (inside the classification loop\u2019s fallback when _safe_gh_jq \"repos/${REPOSITORY}/issues/${issue_number}\" fails)\n  confidence=[4]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: No assignment sets ORCHESTRATOR_CLASSIFICATION_COMPLETE=\"false\" in that failure path; the flag is only set earlier at line ~354 when the GraphQL metadata fetch fails.\n- requirement: \"Update `tests/test_issue_pr_status_payload_fallback_contract.py` to cover the reused classification contract.\"\n  expected_change_site: tests/test_issue_pr_status_payload_fallback_contract.py\n  confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: Existing `test_orchestrator_classification_is_exported_for_downstream_reuse()` only greps for the string `\"false\"` somewhere in the step; no test forces `_safe_gh_jq` failure in the per-issue loop, exports the incomplete flag, then verifies the merged-alert step falls back to full lookup.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- TASK_GAP\n  Requirement: The workflow must mark ORCHESTRATOR_CLASSIFICATION_COMPLETE=\"false\" whenever a per-issue REST fallback lookup fails during the classification loop, so that the merged-alert step always knows the classifier is incomplete and can safely fall back to per-issue lookups.\n  Expected change site: .github/workflows/issue_pr_status.yml around line 335\u2013357 (inside the classification loop\u2019s fallback when _safe_gh_jq \"repos/${REPOSITORY}/issues/${issue_number}\" fails)\n  Evidence of absence: No assignment sets ORCHESTRATOR_CLASSIFICATION_COMPLETE=\"false\" in that failure path; the flag is only set earlier at line ~354 when the GraphQL metadata fetch fails.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/issue_pr_status.yml:~200-212 | severity=low | confidence=[3]\n  PROBLEM: When MANAGED_ISSUES/TRACKING_ISSUES are empty, this writes a heredoc containing only a newline.\n  WHY: Some downstream `-n \"${VAR:-}\"` tests or consumers may treat the newline-only value as truthy, breaking the \"no managed issues \u2192 do not suppress alert\" path; the Actions runner parser appears tolerant, but this is fragile and not explicitly round-trip tested.\n- TASK_GAP\n  Requirement: \"Update `tests/test_issue_pr_status_payload_fallback_contract.py` to cover the reused classification contract.\"\n  Expected change site: tests/test_issue_pr_status_payload_fallback_contract.py\n  Evidence of absence: Existing `test_orchestrator_classification_is_exported_for_downstream_reuse()` only greps for the string `\"false\"` somewhere in the step; no test forces `_safe_gh_jq` failure in the per-issue loop, exports the incomplete flag, then verifies the merged-alert step falls back to full lookup.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "e5db98472cee71b76a2f3be030dcaef9cb4740725ca27247cea85cc9cbfb7937",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2878,
+    "run_id": "26269696103",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26269696103",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260522052700_e96652e5be",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2878,
+    "run_id": "26269696103"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-22T05:27:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
