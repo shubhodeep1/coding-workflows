@@ -128,6 +128,36 @@ if [ -s "${_merge_stderr_file}" ]; then
   sed 's/^/git merge stderr: /' "${_merge_stderr_file}"
 fi
 
+# Blobless partial clone recovery (review_autofix.yml's checkout uses
+# `filter: blob:none`): the 3-way merge lazy-fetches blob content from the
+# promisor remote, and that batched on-demand fetch fails hard (exit 128)
+# when any single OID in the batch is unreachable server-side ("not our
+# ref" / "could not fetch ... from promisor remote"). On that signature,
+# drop the partial filter, refetch the merge inputs so every blob is
+# materialised locally, and retry the merge once — otherwise the merge
+# replay produces an empty conflict set and this step aborts with
+# "nothing to resolve" / a hard merge-replay failure, leaving the PR's
+# real conflicts unresolved.
+if [ "${_merge_exit}" -ne 0 ] && [ ! -f "$(git rev-parse --git-dir)/MERGE_HEAD" ] \
+  && grep -qiE 'promisor remote|not our ref|could not fetch|fetch-pack|remote error: upload-pack' "${_merge_stderr_file}" 2>/dev/null; then
+  echo "::warning::Merge replay hit a partial-clone promisor fetch failure; backfilling blobs and retrying the merge once."
+  git reset --hard HEAD >/dev/null 2>&1 || true
+  git config --unset-all remote.origin.partialclonefilter 2>/dev/null || true
+  _backfill_refspecs=("refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}")
+  if [ -n "${TARGET_BRANCH:-}" ]; then
+    _backfill_refspecs+=("refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}")
+  fi
+  if ! git fetch --no-tags --prune --refetch origin "${_backfill_refspecs[@]}" 2>/dev/null; then
+    echo "::warning::blob-backfill refetch failed during merge replay; retrying the merge anyway."
+  fi
+  _merge_exit=0
+  : > "${_merge_stderr_file}"
+  git merge --no-commit --no-ff "origin/${BASE_BRANCH}" 2> "${_merge_stderr_file}" || _merge_exit=$?
+  if [ -s "${_merge_stderr_file}" ]; then
+    sed 's/^/git merge stderr (after blob backfill): /' "${_merge_stderr_file}"
+  fi
+fi
+
 # Capture the set of actually-unmerged paths produced by this
 # merge replay.  This is the authoritative allowlist the Codex
 # resolver is permitted to modify: the resolver prompt
