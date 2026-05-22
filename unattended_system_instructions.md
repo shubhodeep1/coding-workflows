@@ -494,3 +494,45 @@ trail.
 If a script is renamed or extended, update its entry (path, trigger,
 preflight checks) in the same PR — §10 (naming immutability) still
 applies in this file's numbering.
+
+---
+
+## §21. PR Body Auto-Close Keyword Discipline
+
+GitHub auto-closes issues referenced with `Fixes #N`, `Closes #N`, or
+`Resolves #N` (case-insensitive) in a PR body, PR title, or commit
+message when the PR merges into the default branch. For orchestrator
+tracking issues — any issue carrying the `ai:orchestrator-tracking`
+label — this silently kills the orchestrator's state machine: once the
+tracking issue closes, the poller treats the project as done and stops
+dispatching the remaining waves.
+
+Rules for every PR body, title, and commit message composed by an
+unattended pipeline (implement, implement-repair, review autofix,
+conflict resolver, validate, judge, orchestrate):
+
+- **NEVER** use auto-close keywords (`close`, `closes`, `closed`, `fix`,
+  `fixes`, `fixed`, `resolve`, `resolves`, `resolved`, case-insensitive)
+  followed by a reference to an `ai:orchestrator-tracking` issue.
+- Use `Refs #N` or `Related to #N` for semantic linkage to tracking
+  issues instead.
+- Auto-close keywords against **sub-issues** (issues carrying
+  `ai:orchestrator-managed` but NOT `ai:orchestrator-tracking`) remain
+  the correct convention — those issues are supposed to close on the
+  sub-issue PR's merge.
+- Before any phase invokes `gh pr create --body` (or its equivalent),
+  it MUST run `scripts/lint_pr_body_auto_close.py` against the
+  composed body. The lint exits non-zero (and surfaces a structured
+  `::error::[lint_pr_body_auto_close]` line) when any keyword
+  reference resolves to a tracking-labeled issue. Treat a non-zero
+  exit as `BLOCKED:` per §16 — do not submit the PR.
+
+Historical incident: PR #2760 used `Fixes #2734` in its body.  `#2734`
+was an `ai:orchestrator-tracking` issue for the integration-sync
+resolver self-heal project. On merge, GitHub auto-closed `#2734` and
+the orchestrator stopped dispatching waves 2-7; the bulk of the
+project's planned phases never shipped (see
+`docs/postmortems/2026-05-18-project-2734-stall.md`). The §19 entry in
+CLAUDE.md and this §21 entry both exist to forbid this pattern; the
+script `scripts/lint_pr_body_auto_close.py` is the executable
+enforcement vehicle for both.

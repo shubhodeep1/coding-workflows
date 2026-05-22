@@ -1,0 +1,76 @@
+---
+# P1 from docs/postmortems/2026-05-18-project-2734-stall.md.
+#
+# Enforces CLAUDE.md §19 (and the mirror in unattended_system_instructions.md)
+# on the merge path this repo actually uses: squash merge. On squash-merge,
+# GitHub uses the PR title + body for the squash commit message and
+# auto-closes referenced issues, which kills the orchestrator's wave-by-wave
+# dispatch (poller filters tracking issues by `--state open`).
+#
+# The companion script still supports optional commit-message scanning for
+# callers that need it, but this workflow intentionally checks the squash-
+# merge artifact (PR title + body) only so already-pushed historical
+# commit bodies do not require history rewrites to merge a preventive-fix
+# PR.
+#
+# This was the layer-3 failure mode in project #2734: PR #2760 used
+# `Fixes #2734` in its body → GitHub auto-closed #2734 → orchestrator
+# stopped dispatching Waves 2-7 → 7 of 9 sub-issues never shipped code.
+# §19 was added (PR #2776) as a prose reaction to this incident; this
+# workflow turns the prose into an enforced check.
+name: Lint PR body for auto-close keywords against orchestrator-tracking issues
+
+"on":
+  pull_request:
+    # `edited` catches PR title/body changes after creation;
+    # `synchronize` catches new commits pushed to the PR head; `reopened` and
+    # `ready_for_review` ensure the check re-runs when a draft PR
+    # transitions to ready-for-review (which is when the merge button
+    # becomes available).
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+    branches: [main, stable]
+
+permissions:
+  # Read-only on issues so the lint can resolve labels of referenced
+  # issues. No write permissions needed — the lint only fails the check.
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          # Only need the lint script + the commit range for this PR. The
+          # workflow does not run any tooling that needs full history.
+          # Fetch enough history to enumerate commits between base and head
+          # via the GH API below (no local git log needed).
+          fetch-depth: 1
+
+      - name: Write PR title and body to file
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          # Squash merge uses the PR title + body as the merge-commit
+          # message. Write the exact merge artifact shape (title, blank
+          # line, body) to disk so the lint script validates the same
+          # text GitHub will evaluate for auto-close keywords.
+          mkdir -p /tmp/pr-body-lint
+          printf '%s\n\n%s' "${PR_TITLE:-}" "${PR_BODY:-}" > /tmp/pr-body-lint/body.txt
+
+      - name: Run auto-close keyword lint
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # This required check validates the squash-merge artifact
+          # (PR title + body) that lands on the default branch.
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/lint_pr_body_auto_close.py \
+            --pr-body-file /tmp/pr-body-lint/body.txt \
+            --repo "${GITHUB_REPOSITORY}"
