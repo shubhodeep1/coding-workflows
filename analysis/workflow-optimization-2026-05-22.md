@@ -551,3 +551,130 @@ _Repository-wide sweep note: no verified dead-code candidate survived spot-check
 | Code modularization | 8-10 | Large |
 | Expression size reduction | 3-5 | Medium |
 | Medium/Low fixes | 6-8 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-22)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the consolidation is statically proven to preserve scope, filters, retries, and cache semantics; `NEEDS_VERIFICATION` means the overlap is real but step-boundary freshness or error-handling still needs explicit validation; `RISKY_SKIP` means the duplication sits in a polling/retry/race-defense/paginated path and must not be auto-implemented without manual review.
+
+### Consolidation Candidates (MERGE-###)
+
+- **ID:** `MERGE-001`  
+  **Safety tag:** `NEEDS_VERIFICATION`  
+  **Files / lines:** `.github/workflows/implement.yml:69-92` and `.github/workflows/implement.yml:389-405`  
+  **Current call count:** 2 logical GETs on the active non-skip path.  
+  **Proposed call count:** 1 logical GET.  
+  **Endpoint(s):** `GET /repos/{repo}/issues/{issue_number}`  
+  **Evidence:** the job fetches the same issue twice before any visible issue mutation.
+  ```sh
+  # .github/workflows/implement.yml:80
+  ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '{state: (.state // "open"), labels: [.labels[].name]}')"
+  ```
+  ```sh
+  # .github/workflows/implement.yml:391-405
+  if ! issue_meta_json="$(gh_api_with_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"; then
+    ...
+  fi
+  printf '%s\n' "${issue_meta_json}" > "${ISSUE_META_FILE}"
+  ```
+  A static scan of `.github/workflows/implement.yml:69-391` found no issue-comment/label/body mutation before the second fetch.  
+  **Proposed fix:** extend `Precheck approval phase label` to fetch full issue JSON once, write it to `${ISSUE_META_FILE}`, derive `ISSUE_STATE` and `ISSUE_LABELS_JSON` locally, and let the later checkout-context step reuse that file with the current `gh_api_with_retry` path retained only for cache-miss / parse-failure fallback.  
+  **Safety rationale:** same endpoint and scope are evident, but the consolidation crosses workflow steps and replaces a later retry-backed fetch with earlier cached data, so the error-handling contract is not fully proven from static reading.  
+  **Downstream signal:** Verify that no step before `.github/workflows/implement.yml:389-405` mutates the issue body/state, then run one injected transient-API-failure test to confirm the precheck skip gate and checkout-ref fallback behave identically after caching.
+
+- **ID:** `MERGE-002`  
+  **Safety tag:** `RISKY_SKIP`  
+  **Files / lines:** `.github/workflows/test-and-mark-stable.yml:2868-2878`  
+  **Current call count:** 2 logical GETs per 5-second poll iteration after the initial run lookup.  
+  **Proposed call count:** 1 logical GET per poll iteration.  
+  **Endpoint(s):** `GET /repos/{repo}/actions/runs/{run_id}`  
+  **Evidence:** the poll loop re-reads the same run twice each iteration, once for `.status` and once for `.conclusion`.
+  ```sh
+  EXISTING_STATUS=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" \
+    --jq '.status // ""' 2>/dev/null || echo "")
+  EXISTING_CONCLUSION=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" \
+    --jq '.conclusion // ""' 2>/dev/null || echo "")
+  ```
+  **Proposed fix:** replace the paired per-iteration calls with one `gh api ... --jq '{status, conclusion}'` fetch and parse both fields locally.  
+  **Safety rationale:** this sits inside a 600-second polling loop, so it hits the explicit `RISKY_SKIP` trigger for polling/backoff paths.  
+  **Downstream signal:** Do not auto-implement; manual review must confirm the single-call version preserves the exact 5-second cadence, timeout behavior, and per-iteration log output for `status`/`conclusion`.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID:** `REUSE-001`  
+  **Safety tag:** `NEEDS_VERIFICATION`  
+  **Files / lines:** `.github/workflows/orchestrate_clarify_respond.yml:62-83` and `.github/workflows/orchestrate_clarify_respond.yml:408-420`  
+  **Current call count:** 4 logical GETs on the common orchestrator-managed path with a parsed tracking issue (`issues/{ISSUE_NUMBER}` twice, `issues/{TRACKING_NUM}` twice).  
+  **Proposed call count:** 2 logical GETs.  
+  **Endpoint(s):** `GET /repos/{repo}/issues/{issue_number}`  
+  **Evidence:** the first step already fetches full child-issue JSON, and conditionally fetches tracking-issue title; the later prompt-context step re-fetches both issue objects.
+  ```sh
+  # .github/workflows/orchestrate_clarify_respond.yml:68-83
+  ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ...
+  TRACKING_TITLE="$(gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.title // ""' 2>/dev/null || echo "")"
+  ```
+  ```sh
+  # .github/workflows/orchestrate_clarify_respond.yml:409-420
+  ISSUE_META="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ...
+  TRACKING_BODY="$(gh_retry gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.body // ""')"
+  ```
+  A static scan found no issue/tracking mutation before the second fetch block.  
+  **Proposed fix:** have `Check orchestrator metadata` persist full child/tracking issue payloads into `${RUNTIME_DIR}` (or `$GITHUB_ENV` for compact JSON), and have the later prompt-context step reuse those payloads, falling back to the current `gh_retry` calls only when the cached JSON is missing or unparsable.  
+  **Safety rationale:** the data overlap is direct, but the reuse crosses step boundaries and would replace a later `gh_retry`-backed fetch with earlier cached data.  
+  **Downstream signal:** Verify that no step before `.github/workflows/orchestrate_clarify_respond.yml:408-420` mutates the child or tracking issue, and confirm the cache-miss fallback preserves current failure behavior on consumer repos.
+
+- **ID:** `REUSE-002`  
+  **Safety tag:** `NEEDS_VERIFICATION`  
+  **Files / lines:** `.github/workflows/review_autofix.yml:1583-1597` and `.github/workflows/review_autofix.yml:4994-5022`  
+  **Current call count:** 2 logical `pulls/{PR}` GETs across the same review run on the normal PR path.  
+  **Proposed call count:** 1 common-path GET, with the later fetch retained only as a cache-miss / freshness fallback.  
+  **Endpoint(s):** `GET /repos/{repo}/pulls/{pull_number}`  
+  **Evidence:** early PR hydration already materializes `body` and `headRefName` into `PR_META_FILE`, but the auto-merge suppression step later fetches the same PR again to read `.head.ref` and `.body`.
+  ```sh
+  # .github/workflows/review_autofix.yml:1583-1597
+  gh_retry "${PR_PAYLOAD_FILE}" api repos/${{ github.repository }}/pulls/"${PR_NUMBER}"
+  jq '{
+    title: (.title // ""),
+    body: (.body // ""),
+    baseRefName: (.base.ref // ""),
+    headRefName: (.head.ref // ""),
+    headRepoFullName: (.head.repo.full_name // "")
+  }' "${PR_PAYLOAD_FILE}" > "${PR_META_FILE}"
+  ```
+  ```sh
+  # .github/workflows/review_autofix.yml:5008-5022
+  if ! _ORCH_PR_META_JSON="$(gh_retry gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" 2>"${_orch_pr_meta_err_file}")"; then
+    ...
+  fi
+  _orch_pr_head_ref="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.head.ref // ""' ...)"
+  _orch_pr_body="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.body // ""' ...)"
+  ```
+  `PR_META_FILE` is already an established cache contract later in the job (`.github/workflows/review_autofix.yml:4649,4771,5698`).  
+  **Proposed fix:** in `Enable auto-merge on PR`, read `headRefName` and `body` from `${PR_META_FILE}` first; only fall back to the current live `gh_retry gh api` path when the file is missing/unparseable, or when verification shows PR body freshness is required after later resolver/editor steps.  
+  **Safety rationale:** there is already a cycle-local cache, but this path is fail-closed and later scripts may mutate PR body text, so body freshness and stderr/error semantics still need validation.  
+  **Downstream signal:** Verify whether any step or invoked script between `.github/workflows/review_autofix.yml:1597` and `:4994-5022` can edit PR body or otherwise invalidate `PR_META_FILE`; if only body is mutable, reuse cached `headRefName` first and keep the live body fetch only on the mismatch-warning branch.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- `BATCH-001`: `RISKY_SKIP` — consolidates paginated PR comments/reviews/review-comments hydration in a critical review step, so page-boundary and failure-semantics changes need manual review.
+- `API-001`: `RISKY_SKIP` — the duplicate `pulls/{PR}` reads live inside reviewer watchdog polling, which is explicitly excluded from auto-merge treatment.
+- `BATCH-002`: `RISKY_SKIP` — the fallback helper mixes paginated timeline reads with per-PR enrichment, so batching changes fallback/page semantics.
+- `API-002`: `RISKY_SKIP` — both timeline calls are paginated and one sits in the `gh pr create` race-recovery branch.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 3 | `MERGE-001`, `REUSE-001`, `REUSE-002` |
+| RISKY_SKIP | 1 | `MERGE-002` |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
