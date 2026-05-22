@@ -6960,6 +6960,39 @@ def test_no_labels_with_open_linked_pr_skips_retrigger_pipeline():
 	assert issue_entry["status"] == "in_progress"
 
 
+def test_no_labels_with_cross_repo_linked_pr_still_retriggers_pipeline():
+	# Same-repo linked-PR filtering must ignore cross-repo timeline refs so a
+	# foreign PR cannot suppress repo-local early-phase recovery.
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["last_seen_phase"] = "no_labels"
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: []},
+		issue_linked_prs={10: 936},
+		prs=[{
+			"number": 936,
+			"state": "open",
+			"repository": "other-owner/other-repo",
+			"baseRefName": "main",
+			"headRefName": "ai/issue-10",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		}],
+	)
+	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
+	assert any("/reclarify" in body for body in issue_comments)
+	assert not any("/answer" in body for body in issue_comments)
+	assert "STALL_SKIP issue=10 reason=open_linked_pr pr=936" not in result["stdout"]
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 1
+	assert issue_entry["status"] == "in_progress"
+
+
 def test_no_labels_with_rest_fallback_closing_linked_pr_skips_retrigger_pipeline():
 	state = _base_state(status="in_progress")
 	state["waves"][0]["issues"][0]["status"] = "in_progress"
