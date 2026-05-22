@@ -184,7 +184,12 @@ sys.exit(1)
 	state_file.write_text("{}", encoding="utf-8")
 
 
-def _run_drift_audit(state: dict, *, enabled: bool = True) -> tuple[subprocess.CompletedProcess[str], dict]:
+def _run_drift_audit(
+	state: dict,
+	*,
+	enabled: bool = True,
+	present_paths: tuple[str, ...] = ("scripts/example.py",),
+) -> tuple[subprocess.CompletedProcess[str], dict]:
 	with tempfile.TemporaryDirectory(prefix="drift-audit-test-") as td:
 		tmp_path = Path(td)
 		bin_dir = tmp_path / "bin"
@@ -193,12 +198,28 @@ def _run_drift_audit(state: dict, *, enabled: bool = True) -> tuple[subprocess.C
 		_install_mock_gh(bin_dir, state_file)
 		state_file.write_text(json.dumps(state), encoding="utf-8")
 
+		# Synthetic checkout: the audit only opens a tracker when a
+		# fingerprint path exists in the repository, so materialise exactly
+		# the paths a given test wants to look like real repo files.
+		workspace = tmp_path / "workspace"
+		workspace.mkdir(parents=True, exist_ok=True)
+		for rel_path in present_paths:
+			target = workspace / rel_path
+			target.parent.mkdir(parents=True, exist_ok=True)
+			target.write_text("", encoding="utf-8")
+
+		step_summary_file = tmp_path / "step-summary.md"
+
 		env = os.environ.copy()
 		env.update(
 			{
 				"DRIFT_AUDIT_ENABLED": "true" if enabled else "false",
 				"GH_TOKEN": "test-token",
 				"GITHUB_REPOSITORY": "owner/repo",
+				"GITHUB_RUN_ID": "123456789",
+				"GITHUB_SERVER_URL": "https://github.com",
+				"GITHUB_WORKSPACE": str(workspace),
+				"GITHUB_STEP_SUMMARY": str(step_summary_file),
 				"MOCK_GH_STATE_FILE": str(state_file),
 				"PATH": f"{bin_dir}:{env.get('PATH', '')}",
 				"PYTHONDONTWRITEBYTECODE": "1",
@@ -213,6 +234,12 @@ def _run_drift_audit(state: dict, *, enabled: bool = True) -> tuple[subprocess.C
 			encoding="utf-8",
 		)
 		final_state = json.loads(state_file.read_text(encoding="utf-8"))
+		if isinstance(final_state, dict):
+			final_state["_drift_audit_step_summary"] = (
+				step_summary_file.read_text(encoding="utf-8")
+				if step_summary_file.exists()
+				else ""
+			)
 		return proc, final_state
 
 
@@ -757,6 +784,48 @@ def test_drift_audit_skips_incomplete_runs_when_fetching_logs() -> None:
 	assert [args[2] for args in run_view_args] == ["601"]
 
 
+def test_drift_audit_skips_cluster_when_repo_path_is_absent() -> None:
+	state = {
+		"run_list_responses": {
+			"review_autofix.yml": [
+				{"databaseId": 701, "createdAt": _iso(1), "status": "completed", "conclusion": "success", "url": "https://example.test/runs/701"},
+			],
+			"internal-review.yml": [
+				{"databaseId": 702, "createdAt": _iso(2), "status": "completed", "conclusion": "success", "url": "https://example.test/runs/702"},
+			],
+		},
+		"run_logs": {
+			"701": PRE_EXISTING_MARKER + "\n",
+			"702": QUARANTINED_MARKER + "\n",
+		},
+		"issue_list_response": [],
+	}
+	proc, final_state = _run_drift_audit(state, present_paths=())
+	assert proc.returncode == 0, proc.stderr
+	assert final_state.get("issue_create_args", []) == []
+	assert final_state.get("issue_edit_args", []) == []
+	assert final_state.get("issue_close_args", []) == []
+	assert "is not a file in the repository" in proc.stdout
+	assert "Clusters skipped (path absent from repo):** 1" in final_state.get("_drift_audit_step_summary", "")
+
+
+def test_drift_audit_writes_run_summary_to_step_summary() -> None:
+	state = {
+		"run_list_responses": {
+			"review_autofix.yml": [],
+			"internal-review.yml": [],
+		},
+		"issue_list_response": [],
+	}
+	proc, final_state = _run_drift_audit(state)
+	assert proc.returncode == 0, proc.stderr
+	summary = final_state.get("_drift_audit_step_summary", "")
+	assert "## Drift audit" in summary
+	assert "Status:" in summary
+	assert "Runs scanned:" in summary
+	assert "[workflow run](https://github.com/owner/repo/actions/runs/123456789)" in summary
+
+
 def main() -> int:
 	test_drift_audit_gate_disabled_skips_without_gh_calls()
 	test_drift_audit_dedups_runs_into_one_tracker_issue()
@@ -771,6 +840,8 @@ def main() -> int:
 	test_drift_audit_closes_existing_issue_after_fixed_by_resolver_markers()
 	test_drift_audit_keeps_quarantined_cluster_open_when_fixed_and_quarantined_markers_mix()
 	test_drift_audit_skips_incomplete_runs_when_fetching_logs()
+	test_drift_audit_skips_cluster_when_repo_path_is_absent()
+	test_drift_audit_writes_run_summary_to_step_summary()
 	return 0
 
 
