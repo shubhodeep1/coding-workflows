@@ -2128,7 +2128,7 @@ _subissue_closing_pr_number()
 		printf '%s' "${pr_json}" | jq -e '(.merged_at // null) != null' >/dev/null 2>&1 || continue
 		pr_body="$(printf '%s' "${pr_json}" | jq -r '.body // ""' 2>/dev/null || echo "")"
 		if printf '%s' "${pr_body}" | grep -qiE \
-			"(close[sd]?|fix(es|ed)?|resolve[sd]?):?[[:space:]]+(#${issue_num}|[^[:space:]]*/issues/${issue_num})([^0-9]|\$)"; then
+			"(^|[^[:alnum:]_])(close[sd]?|fix(es|ed)?|resolve[sd]?):?[[:space:]]+(#${issue_num}|[^[:space:]]*/issues/${issue_num})([^0-9]|$)"; then
 			printf '%s\n' "${pr}"
 			return 0
 		fi
@@ -10764,7 +10764,11 @@ The poller will resume processing on the next cycle."
               PRIOR_WAVE_REMEDIATED="true"
               _bws_integ="$(jq -r '.integration_branch // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
               if [ -n "${_bws_integ}" ]; then
-                capture_intent_fingerprints_for_merged_subissue "${pw_inum}" "${PW_PR}" || true
+                _bws_pr="$(_subissue_closing_pr_number "${pw_inum}" || echo "")"
+                if [[ "${_bws_pr}" =~ ^[0-9]+$ ]]; then
+                  capture_intent_fingerprints_for_merged_subissue "${pw_inum}" "${_bws_pr}" || true
+                fi
+                unset _bws_pr
               fi
               unset _bws_integ
             elif [ "${PW_PR_STATE}" = "open" ] && [ "${PW_PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${PW_PR}" "${_pw_head_sha}"; then

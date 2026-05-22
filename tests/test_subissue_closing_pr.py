@@ -221,6 +221,18 @@ def test_refs_keyword_alone_is_not_a_closing_keyword():
 	assert out == "", out
 
 
+def test_embedded_keyword_suffix_is_not_treated_as_closing():
+	"""Embedded suffixes like `autofixes #N` must not satisfy the
+	closing-keyword matcher."""
+	out = _resolve(
+		500,
+		head_prs=[],
+		xref_prs=[3101],
+		pr_json={3101: {"merged_at": "2026-05-01T00:00:00Z", "body": "Telemetry autofixes #500"}},
+	)
+	assert out == "", out
+
+
 # ---------------------------------------------------------------------------
 # Tier 2 — closing-keyword body match across merged cross-referenced PRs
 # ---------------------------------------------------------------------------
