@@ -1215,6 +1215,9 @@ if args[0] == 'api':
 						'source': {
 							'__typename': 'PullRequest',
 							'number': int(pr.get('number', linked_pr_num)),
+							'repository': {
+								'nameWithOwner': str(pr.get('repository', 'owner/repo')),
+							},
 							'state': pr_state,
 							'merged': bool(pr.get('merged', False)),
 							'mergedAt': pr.get('merged_at', None),
