@@ -5506,7 +5506,7 @@ extract_comprehensive_release_metadata() {
 dispatch_comprehensive_release_workflow() {
   local version_tag="${1:-}"
   local test_repo="${2:-}"
-  local run_args=("test-and-mark-stable.yml" "--repo" "${GITHUB_REPOSITORY}" "-f" "dry_run=false")
+  local run_args=("test-and-mark-stable.yml" "--repo" "${GITHUB_REPOSITORY}" "--ref" "stable" "-f" "dry_run=false")
 
   if [ -n "${version_tag}" ]; then
     run_args+=("-f" "version_tag=${version_tag}")

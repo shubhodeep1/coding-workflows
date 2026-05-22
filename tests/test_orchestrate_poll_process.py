@@ -938,6 +938,8 @@ if args[0] == 'workflow' and len(args) >= 3 and args[1] == 'run':
 			sys.exit(1)
 		dispatch = {'workflow': wf}
 		for i, arg in enumerate(args):
+			if arg == '--ref' and i + 1 < len(args):
+				dispatch['ref'] = args[i + 1]
 			if arg == '-f' and i + 1 < len(args):
 				field = args[i + 1]
 				if '=' in field:
@@ -2514,6 +2516,7 @@ def test_comprehensive_pending_complete_dispatches_release_with_metadata():
 	assert len(result["release_dispatches"]) == 1
 	dispatch = result["release_dispatches"][0]
 	assert dispatch["workflow"] == "test-and-mark-stable.yml"
+	assert dispatch["ref"] == "stable"
 	assert dispatch["dry_run"] == "false"
 	assert dispatch["version_tag"] == "v9.9.9"
 	assert dispatch["test_repo"] == "owner/release-tests"
@@ -2546,6 +2549,7 @@ def test_comprehensive_pending_complete_dispatches_release_without_optional_meta
 	assert len(result["release_dispatches"]) == 1
 	dispatch = result["release_dispatches"][0]
 	assert dispatch["workflow"] == "test-and-mark-stable.yml"
+	assert dispatch["ref"] == "stable"
 	assert dispatch["dry_run"] == "false"
 	assert "version_tag" not in dispatch
 	assert "test_repo" not in dispatch
@@ -2578,6 +2582,7 @@ def test_comprehensive_pending_already_complete_dispatches_release():
 	assert len(result["release_dispatches"]) == 1
 	dispatch = result["release_dispatches"][0]
 	assert dispatch["workflow"] == "test-and-mark-stable.yml"
+	assert dispatch["ref"] == "stable"
 	assert dispatch["dry_run"] == "false"
 	assert "ai:comprehensive-test-pending" not in result["tracking_labels"]
 
