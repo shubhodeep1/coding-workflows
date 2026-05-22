@@ -439,7 +439,7 @@ if [ -n "${_pr_state}" ] && [ "${_pr_state}" != "open" ] && [ "${_pr_merged}" !=
   fi
   exit 0
 fi
-unset _pr_meta _pr_state _pr_merged
+unset _pr_state _pr_merged
 
 ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
 ensure_label_exists "ai:closed" "${REPOSITORY}"
@@ -455,10 +455,17 @@ ISSUE_NUMBERS="$(gh_retry gh api graphql \
   --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].number' || true)"
 
 if [ -z "${ISSUE_NUMBERS}" ]; then
-  PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
+  PR_DATA=""
+  if [ -n "${_pr_meta:-}" ] && printf '%s\n' "${_pr_meta}" | jq -e 'type == "object" and ((has("title") and (.title | type == "string")) or (has("body") and ((.body == null) or (.body | type == "string"))))' >/dev/null 2>&1; then
+    PR_DATA="$(printf '%s\n' "${_pr_meta}" | jq -r '(.title // "") + " " + (.body // "")' 2>/dev/null || echo "")"
+  fi
+  if [ -z "${PR_DATA}" ]; then
+    PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
+  fi
   REPOSITORY_ESCAPED="${REPOSITORY//./\\.}"
   ISSUE_NUMBERS="$(echo "${PR_DATA}" | grep -oiE "(github\\.com/${REPOSITORY_ESCAPED}/issues/[0-9]+|${REPOSITORY_ESCAPED}/issues/[0-9]+|(^|[^[:alnum:]_/-])issues/[0-9]+|issue[[:space:]]*#[[:space:]]*[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)" | grep -oE '[0-9]+$' | sort -un || true)"
 fi
+unset _pr_meta
 
 FIRST_ISSUE=""
 FIRST_ISSUE_BODY=""
