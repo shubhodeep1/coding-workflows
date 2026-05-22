@@ -180,6 +180,15 @@ def test_tier1_picks_most_recently_merged_when_multiple():
 	assert out == "2878", out
 
 
+def test_tier1_ignores_entries_without_merged_at():
+	"""Tier 1 must ignore malformed merged-PR rows with empty mergedAt."""
+	out = _resolve(
+		2873,
+		head_prs=[{"number": 2800, "mergedAt": None}],
+	)
+	assert out == "", out
+
+
 # ---------------------------------------------------------------------------
 # Regression — project #2867 / issue #2872: Refs-only cross-references
 # ---------------------------------------------------------------------------
@@ -231,6 +240,31 @@ def test_embedded_keyword_suffix_is_not_treated_as_closing():
 		pr_json={3101: {"merged_at": "2026-05-01T00:00:00Z", "body": "Telemetry autofixes #500"}},
 	)
 	assert out == "", out
+
+
+def test_hyphen_prefixed_keyword_is_not_treated_as_closing():
+	"""Hyphen-prefixed forms like `pre-fixes #N` must not qualify."""
+	out = _resolve(
+		500,
+		head_prs=[],
+		xref_prs=[3102],
+		pr_json={3102: {"merged_at": "2026-05-01T00:00:00Z", "body": "Telemetry pre-fixes #500"}},
+	)
+	assert out == "", out
+
+
+def test_alphanumeric_issue_suffix_is_not_treated_as_closing():
+	"""`#500abc` and `/issues/500abc` must not satisfy issue #500."""
+	assert _resolve(
+		500,
+		xref_prs=[3103],
+		pr_json={3103: {"merged_at": "2026-05-01T00:00:00Z", "body": "Closes #500abc"}},
+	) == ""
+	assert _resolve(
+		500,
+		xref_prs=[3104],
+		pr_json={3104: {"merged_at": "2026-05-01T00:00:00Z", "body": "Closes https://github.com/owner/repo/issues/500abc"}},
+	) == ""
 
 
 # ---------------------------------------------------------------------------
@@ -306,6 +340,17 @@ def test_tier2_picks_newest_when_multiple_closing_prs():
 		},
 	)
 	assert out == "7050", out
+
+
+def test_tier2_api_miss_on_newest_candidate_fails_open():
+	"""A fetch miss on the newest candidate must not fall through to older PRs."""
+	out = _resolve(
+		800,
+		head_prs=[],
+		xref_prs=[7001, 7050],
+		pr_json={7001: {"merged_at": "2026-05-01T00:00:00Z", "body": "Closes #800"}},
+	)
+	assert out == "", out
 
 
 def test_word_boundary_rejects_superstring_issue_number():

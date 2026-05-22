@@ -2108,7 +2108,7 @@ _subissue_closing_pr_number()
 	branch_pr="$(gh_retry gh pr list --repo "${GITHUB_REPOSITORY}" \
 		--head "ai/issue-${issue_num}" --state merged \
 		--json number,mergedAt \
-		--jq 'sort_by(.mergedAt // "") | last | .number // empty' 2>/dev/null || true)"
+		--jq 'map(select((.mergedAt // "") != "")) | sort_by(.mergedAt) | .[-1].number // empty' 2>/dev/null || true)"
 	if [[ "${branch_pr}" =~ ^[0-9]+$ ]]; then
 		printf '%s\n' "${branch_pr}"
 		return 0
@@ -2124,11 +2124,12 @@ _subissue_closing_pr_number()
 	local pr pr_json pr_body
 	while IFS= read -r pr; do
 		[[ "${pr}" =~ ^[0-9]+$ ]] || continue
-		pr_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr}" 2>/dev/null || echo "")"
+		pr_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr}" 2>/dev/null)" || return 0
+		[ -n "${pr_json}" ] || return 0
 		printf '%s' "${pr_json}" | jq -e '(.merged_at // null) != null' >/dev/null 2>&1 || continue
 		pr_body="$(printf '%s' "${pr_json}" | jq -r '.body // ""' 2>/dev/null || echo "")"
 		if printf '%s' "${pr_body}" | grep -qiE \
-			"(^|[^[:alnum:]_])(close[sd]?|fix(es|ed)?|resolve[sd]?):?[[:space:]]+(#${issue_num}|[^[:space:]]*/issues/${issue_num})([^0-9]|$)"; then
+			"(^|[^[:alnum:]_/-])(close[sd]?|fix(es|ed)?|resolve[sd]?):?[[:space:]]+(#${issue_num}|[^[:space:]]*/issues/${issue_num})([^[:alnum:]_/-]|$)"; then
 			printf '%s\n' "${pr}"
 			return 0
 		fi
@@ -10731,7 +10732,13 @@ The poller will resume processing on the next cycle."
           PRIOR_WAVE_REMEDIATED="true"
         elif echo "${PW_LABELS}" | jq -e 'index("ai:ready-to-merge")' >/dev/null 2>&1; then
           echo "  [backward-scan] #${pw_inum} is ai:ready-to-merge. Attempting auto-merge..."
-          PW_PR="$(_issue_cross_ref_pr_number_last "${pw_inum}" 2>/dev/null || echo "")"
+          PW_PR="$(_linked_prs_by_branch_name "${pw_inum}" 2>/dev/null | sort -rn | head -n1 || true)"
+          if ! [[ "${PW_PR}" =~ ^[0-9]+$ ]]; then
+            PW_PR="$(_linked_prs_by_body_reference "${pw_inum}" 2>/dev/null | sort -rn | head -n1 || true)"
+          fi
+          if ! [[ "${PW_PR}" =~ ^[0-9]+$ ]]; then
+            PW_PR="$(_subissue_closing_pr_number "${pw_inum}" || echo "")"
+          fi
           if [[ "${PW_PR}" =~ ^[0-9]+$ ]]; then
             _pw_pr_json="$(_fetch_pr_json "${PW_PR}")"
             PW_PR_STATE="$(_jq_field "${_pw_pr_json}" '.state' 'open|closed|merged')"
