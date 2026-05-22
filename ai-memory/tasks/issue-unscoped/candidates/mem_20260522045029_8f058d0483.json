@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:2320 | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: When REVIEWER_MODELS is empty or unset, the no-PR lightweight-profile step can leave a previously populated REVIEWER_MODELS value in place.\n  WHY: The empty-array guard skips the GITHUB_ENV export, so a prior step\u2019s full reviewer panel can be inherited instead of being cleared for the no-PR path.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Reduce the default `CHECK_RUNS_WAIT_TIMEOUT_SECS` conservatively while preserving the existing operator override contract.\"\n  expected_change_site: README.md table row for CHECK_RUNS_WAIT_TIMEOUT_SECS (line 66) and probably_unnecessary_but_read_if_stuck.md collection-step contract (line 520)\n  confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  EVIDENCE: README.md line 66 still shows Default column as `1200` and the description text still says \"invalid or out-of-range values clamp to `1200`\". probably_unnecessary_but_read_if_stuck.md line 520 still says \"CHECK_RUNS_WAIT_TIMEOUT_SECS (default `1200`)\". README.md (line 66 in the variables table) still documents the Default column as `1200` and the description text still says \"invalid or out-of-range values clamp to `1200`\". probably_unnecessary_but_read_if_stuck.md (line 520 in the collection-step contract section) still references \"CHECK_RUNS_WAIT_TIMEOUT_SECS (default `1200`)\".\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/review_autofix.yml:2320 | confidence=3\n  PROBLEM: When REVIEWER_MODELS is empty or unset, the no-PR lightweight-profile step can leave a previously populated REVIEWER_MODELS value in place.\n  WHY: The empty-array guard skips the GITHUB_ENV export, so a prior step\u2019s full reviewer panel can be inherited instead of being cleared for the no-PR path.\n- Requirement: \"Reduce the default `CHECK_RUNS_WAIT_TIMEOUT_SECS` conservatively while preserving the existing operator override contract.\"\n  Expected change site: README.md table row for CHECK_RUNS_WAIT_TIMEOUT_SECS (line 66) and probably_unnecessary_but_read_if_stuck.md collection-step contract (line 520)\n  Evidence of absence: README.md line 66 still shows Default column as `1200` and the description text still says \"invalid or out-of-range values clamp to `1200`\". probably_unnecessary_but_read_if_stuck.md line 520 still says \"CHECK_RUNS_WAIT_TIMEOUT_SECS (default `1200`)\". The code default is now `900` with a `900` clamp. However, the linked issue's implementation constraint states \"Stay inside the `files_touched` list\" \u2014 the plan's files_touched included only `.github/workflows/review_autofix.yml` and `tests/test_review_autofix_reasoning_schedule.py`. Neither README.md nor probably_unnecessary_but_read_if_stuck.md were in scope for this sub-issue. The documentation discrepancy is a real follow-up concern but was intentionally scoped out of this PR.\n  ISSUE_CONFIDENCE: 3 (real gap, but constrained by files_touched \u2014 documented as follow-up material)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n- Requirement: \"Reduce the default `CHECK_RUNS_WAIT_TIMEOUT_SECS` conservatively while preserving the existing operator override contract.\"\n  Expected change site: README.md (line ~66) and probably_unnecessary_but_read_if_stuck.md (line ~520) - documentation of the default value\n  Evidence of absence: The implementation correctly changed the default from 1200 to 900 in three places in review_autofix.yml (env default, bash fallback, and clamp fallback). However, README.md still documents the default as `1200` in the table row for CHECK_RUNS_WAIT_TIMEOUT_SECS, and probably_unnecessary_but_read_if_stuck.md line 520 still says \"CHECK_RUNS_WAIT_TIMEOUT_SECS (default `1200`)\". These are canonical operator-facing references for the variable contract; operators reading them will be misled about the actual runtime default.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n- Requirement: \"Reduce the default `CHECK_RUNS_WAIT_TIMEOUT_SECS` conservatively while preserving the existing operator override contract.\"\n  Expected change site: README.md table row for CHECK_RUNS_WAIT_TIMEOUT_SECS and probably_unnecessary_but_read_if_stuck.md documentation\n  Evidence of absence: The runtime default was correctly lowered from 1200 to 900 in three locations within review_autofix.yml (env block, bash fallback, clamp fallback), all preserving the vars.CHECK_RUNS_WAIT_TIMEOUT_SECS override. However, README.md (line 66 in the variables table) still documents the Default column as `1200` and the description text still says \"invalid or out-of-range values clamp to `1200`\". The probably_unnecessary_but_read_if_stuck.md file (line 520 in the collection-step contract section) still references \"CHECK_RUNS_WAIT_TIMEOUT_SECS (default `1200`)\". Operators reading these canonical references will be misled about the actual runtime default. The issue's scope constraint (\"Stay inside the `files_touched` list\") does not explicitly list these docs, making this a borderline gap vs. intentional deferral; raising here for the editor/aggregator to judge.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "dda7109265f0d8cedf0625db44232a9a3a4d19a58f43ce5dfb947f629aff3bf5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2877,
+    "run_id": "26268631323",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26268631323",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260522045029_8f058d0483",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2877,
+    "run_id": "26268631323"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-22T04:50:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
