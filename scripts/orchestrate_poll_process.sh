@@ -6844,6 +6844,7 @@ _fetch_linked_pr_status_graphql() {
                   __typename
                   ... on PullRequest {
                     number state merged
+                    repository { nameWithOwner }
                     commits(last: 1) { nodes { commit { pushedDate committedDate } } }
                   }
                 }
@@ -6870,7 +6871,7 @@ _fetch_linked_pr_status_graphql() {
       continue
     fi
 
-    batch_transformed="$(printf '%s' "${batch_resp}" | jq -c '
+    batch_transformed="$(printf '%s' "${batch_resp}" | jq -c --arg repo "${owner}/${name}" '
       (.data.repository // {}) | to_entries | map(
         select(.value != null and (.value.number? != null)) | {
           key: (.value.number | tostring),
@@ -6879,6 +6880,7 @@ _fetch_linked_pr_status_graphql() {
               (.value.timelineItems.nodes // [])[]?
               | (.source // null)
               | select(. != null and .__typename == "PullRequest")
+              | select((.repository.nameWithOwner // "") == $repo)
               | {
                   number: .number,
                   state: .state,
