@@ -14577,7 +14577,7 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 		continue
 	fi
 	if [ -z "${N_HEAD}" ] || [ "${N_HEAD}" = "null" ]; then
-	continue
+		continue
 	fi
 	# Skip integration / orchestrator-managed branches — those have
 	# their own merge cadence and should not be force-merged by this
