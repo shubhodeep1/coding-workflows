@@ -1207,6 +1207,12 @@ if args[0] == 'api':
 							'mergeable': True,
 							'mergeable_state': 'clean',
 						}
+					pr_repository = pr.get('repository', {'nameWithOwner': 'owner/repo'})
+					if isinstance(pr_repository, dict):
+						pr_repository = dict(pr_repository)
+						pr_repository['nameWithOwner'] = str(pr_repository.get('nameWithOwner', 'owner/repo'))
+					else:
+						pr_repository = {'nameWithOwner': str(pr_repository)}
 					pr_state = str(pr.get('state', 'open')).upper()
 					if pr_state == 'MERGED':
 						pr_state = 'CLOSED'
@@ -1215,12 +1221,9 @@ if args[0] == 'api':
 						'source': {
 							'__typename': 'PullRequest',
 							'number': int(pr.get('number', linked_pr_num)),
-							'repository': {
-								'nameWithOwner': str(pr.get('repository', 'owner/repo')),
-							},
+							'repository': pr_repository,
 							'state': pr_state,
 							'merged': bool(pr.get('merged', False)),
-							'repository': pr.get('repository', {'nameWithOwner': 'owner/repo'}),
 							'mergedAt': pr.get('merged_at', None),
 							'headRefName': pr.get('headRefName', ''),
 							'headRefOid': pr.get('headRefOid', pr.get('headSha', f'mocksha{linked_pr_num}')),
