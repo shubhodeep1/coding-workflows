@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1. What exactly should be improved in this repository?\nChoices:\nA. A workflow/job/step \u2014 name the workflow file and the undesired behavior (RECOMMENDED)\nB. A script/helper/module \u2014 name the file or function and the problem to fix (RECOMMENDED)\nC. Documentation/onboarding \u2014 name the file/section and what is missing or confusing (RECOMMENDED)\nD. Something else \u2014 name the exact file/path and desired change (RECOMMENDED)\nQ2. What kind of improvement do you want?\nChoices:\nA. Fix a bug/regression \u2014 describe current behavior and expected behavior (RECOMMENDED)\nB. Improve reliability/flakiness \u2014 name the failing workflow/job/step and symptom (RECOMMENDED)\nC. Improve performance/cost \u2014 state what is too slow/expensive and the target improvement\nD. Improve usability/docs \u2014 state what is hard to use and the desired outcome\nQ3. What should count as done?\nChoices:\nA. A named workflow/job or repro case passes after the change (RECOMMENDED)\nB. A specific file/output/behavior changes in a described way (RECOMMENDED)\nC. A doc/README section is updated with specific missing content\nD. Another concrete acceptance criterion \u2014 state it explicitly (RECOMMENDED)",
+  "fingerprint": "60ca79a23d2ad730fc89b843239f63eebbbdb7b4d5e1049bc8b4449bc1e85476",
+  "lineage": {
+    "issue_number": 2897,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26276016006",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26276016006",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260522080504_d6681047d4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2897,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26276016006"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #2897 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-22T08:05:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
