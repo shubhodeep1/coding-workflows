@@ -525,8 +525,14 @@ jobs:
             echo "::warning::Reused orchestrator classification is incomplete; falling back to per-issue body lookup for PR merged alert suppression."
             while IFS= read -r issue_number; do
               [ -n "${issue_number}" ] || continue
-              BODY="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' || echo "")"
-              if printf '%s' "${BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
+              ISSUE_IS_MANAGED="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '
+                ((.labels // []) | map(.name) | index("ai:orchestrator-tracking")) == null
+                and (
+                  ((.labels // []) | map(.name) | index("ai:orchestrator-managed")) != null
+                  or ((.body // "") | contains("Managed by: AI Orchestrator"))
+                )
+              ' || echo "")"
+              if [ "${ISSUE_IS_MANAGED}" = "true" ]; then
                 IS_ORCHESTRATED="true"
                 break
               fi
