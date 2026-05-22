@@ -2061,6 +2061,82 @@ _timeline_jq()
 	printf '%s' "${timeline_json}" | jq -r "${jq_filter}" 2>/dev/null
 }
 
+# _subissue_closing_pr_number — Resolve the PR that actually implemented
+# and merged a sub-issue, for orchestrator intent-fingerprint capture.
+#
+# Intent-fingerprint capture (capture_intent_fingerprints_for_merged_subissue)
+# must read the diff of the PR that *implemented* the sub-issue — not an
+# unrelated PR that merely carries a `Refs #N` cross-reference in its
+# body.  GitHub records a `cross-referenced` timeline event for both
+# kinds, so the earlier selection (`... | .source.issue.number | last`
+# — the most-recent cross-reference) latched onto whichever PR
+# referenced the issue last.  When that was a `Refs #N` infrastructure
+# PR, capture fingerprinted THAT PR's diff lines as the sub-issue's
+# must_contain patterns and the wave-dispatch fingerprint gate then
+# wedged because those lines were never merged onto the integration
+# branch.
+#
+# Selection (strongest signal first; every step fails open to empty):
+#   1. The most-recently-merged PR on the orchestrator's conventional
+#      `ai/issue-<n>` head branch — the deterministic implementation-PR
+#      naming.  A `Refs #N` PR is never on that branch.
+#   2. Otherwise, the newest merged cross-referenced PR whose body
+#      carries a GitHub closing keyword (close/fix/resolve and
+#      inflections) targeting THIS issue, in either the `#N` form or the
+#      `.../issues/N` URL form emitted by the implement workflow.
+#      GraphQL `willCloseTarget` is deliberately NOT used: sub-issue
+#      implementation PRs target the integration branch, not the default
+#      branch, so GitHub never sets willCloseTarget on them.
+#
+# Output: a single PR number on stdout, or empty when no implementing
+#         PR can be identified — the caller then skips capture, which is
+#         correct for a sub-issue that was never actually implemented
+#         (e.g. one falsely marked merged by a `Refs #N` cross-reference).
+# API calls: 1 `gh pr list --head` (tier 1); on a tier-1 miss, 1 timeline
+#         fetch (via _issue_cross_ref_pr_numbers_unique) plus up to one
+#         `gh api pulls/<n>` per cross-referenced PR.  Capture is
+#         idempotent and runs at most once per sub-issue, so this is not
+#         a hot path.
+# Fail-open: any lookup error yields empty; capture is then skipped.
+_subissue_closing_pr_number()
+{
+	local issue_num="$1"
+	[[ "${issue_num}" =~ ^[0-9]+$ ]] || return 0
+
+	# Tier 1 — the orchestrator's conventional implementation branch.
+	local branch_pr=""
+	branch_pr="$(gh_retry gh pr list --repo "${GITHUB_REPOSITORY}" \
+		--head "ai/issue-${issue_num}" --state merged \
+		--json number,mergedAt \
+		--jq 'sort_by(.mergedAt // "") | last | .number // empty' 2>/dev/null || true)"
+	if [[ "${branch_pr}" =~ ^[0-9]+$ ]]; then
+		printf '%s\n' "${branch_pr}"
+		return 0
+	fi
+
+	# Tier 2 — closing-keyword body match across cross-referenced PRs,
+	# newest first.  Only a merged PR can have contributed its diff to
+	# the integration branch, so an open `Refs #N` PR is filtered out.
+	local xref_prs=""
+	xref_prs="$(_issue_cross_ref_pr_numbers_unique "${issue_num}" 2>/dev/null || true)"
+	[ -n "${xref_prs}" ] || return 0
+
+	local pr pr_json pr_body
+	while IFS= read -r pr; do
+		[[ "${pr}" =~ ^[0-9]+$ ]] || continue
+		pr_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr}" 2>/dev/null || echo "")"
+		printf '%s' "${pr_json}" | jq -e '(.merged_at // null) != null' >/dev/null 2>&1 || continue
+		pr_body="$(printf '%s' "${pr_json}" | jq -r '.body // ""' 2>/dev/null || echo "")"
+		if printf '%s' "${pr_body}" | grep -qiE \
+			"(close[sd]?|fix(es|ed)?|resolve[sd]?):?[[:space:]]+(#${issue_num}|[^[:space:]]*/issues/${issue_num})([^0-9]|\$)"; then
+			printf '%s\n' "${pr}"
+			return 0
+		fi
+	done <<< "$(printf '%s\n' "${xref_prs}" | sort -rn -u)"
+
+	return 0
+}
+
 has_label() {
   local labels_json="$1"
   local label="$2"
@@ -10640,9 +10716,7 @@ The poller will resume processing on the next cycle."
           # sub-issue (going-forward only — see capture helper docs).
           _bws_integ="$(jq -r '.integration_branch // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
           if [ -n "${_bws_integ}" ]; then
-            _bws_pr="$(_timeline_jq "${pw_inum}" \
-              '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
-              || echo "")"
+            _bws_pr="$(_subissue_closing_pr_number "${pw_inum}" || echo "")"
             if [[ "${_bws_pr}" =~ ^[0-9]+$ ]]; then
               capture_intent_fingerprints_for_merged_subissue "${pw_inum}" "${_bws_pr}" || true
             fi
@@ -11149,9 +11223,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       if [ "${_ws_status}" = "merged" ] && [[ "${_ws_gh}" =~ ^[0-9]+$ ]]; then
         _intent_integ="$(jq -r '.integration_branch // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
         if [ -n "${_intent_integ}" ]; then
-          _intent_pr="$(_timeline_jq "${_ws_gh}" \
-            '[.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last' \
-            || echo "")"
+          _intent_pr="$(_subissue_closing_pr_number "${_ws_gh}" || echo "")"
           if [[ "${_intent_pr}" =~ ^[0-9]+$ ]]; then
             capture_intent_fingerprints_for_merged_subissue "${_ws_gh}" "${_intent_pr}" || true
           fi
