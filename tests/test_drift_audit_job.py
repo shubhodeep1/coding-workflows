@@ -804,6 +804,7 @@ def test_drift_audit_skips_cluster_when_repo_path_is_absent() -> None:
 	assert final_state.get("issue_edit_args", []) == []
 	assert final_state.get("issue_close_args", []) == []
 	assert "is not a file in the repository" in proc.stdout
+	assert "Clusters skipped (path absent from repo):** 1" in final_state.get("_drift_audit_step_summary", "")
 
 
 def test_drift_audit_writes_run_summary_to_step_summary() -> None:

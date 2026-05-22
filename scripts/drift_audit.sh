@@ -29,7 +29,10 @@ command -v python3 >/dev/null 2>&1 || {
 }
 export PYTHONDONTWRITEBYTECODE="${PYTHONDONTWRITEBYTECODE:-1}"
 
-DRIFT_AUDIT_SUMMARY_FILE="$(mktemp "${TMPDIR:-/tmp}/drift-audit-summary.XXXXXX" 2>/dev/null || true)"
+DRIFT_AUDIT_SUMMARY_FILE=""
+if ! DRIFT_AUDIT_SUMMARY_FILE="$(mktemp "${TMPDIR:-/tmp}/drift-audit-summary.XXXXXX" 2>/dev/null)"; then
+	echo "::warning::drift-audit: could not create temp summary file; notifications will omit run counts." >&2
+fi
 export DRIFT_AUDIT_SUMMARY_FILE
 trap '[ -n "${DRIFT_AUDIT_SUMMARY_FILE:-}" ] && rm -f "${DRIFT_AUDIT_SUMMARY_FILE}" 2>/dev/null || true' EXIT
 
@@ -59,6 +62,7 @@ JSON_DECODER = json.JSONDecoder()
 # harvested from test fixtures or echoed PR diffs from opening issues.
 # GitHub Actions sets GITHUB_WORKSPACE to the checkout directory.
 _REPO_ROOT = os.environ.get("GITHUB_WORKSPACE") or os.getcwd()
+_REPO_ROOT_REAL = os.path.realpath(_REPO_ROOT)
 
 
 def _log(message: str) -> None:
@@ -346,9 +350,13 @@ def _cluster_path_in_repo(cluster: dict[str, Any]) -> bool:
 	path = cluster.get("path")
 	if not isinstance(path, str) or not path:
 		return False
-	if os.path.isabs(path) or ".." in path.split("/"):
+	if os.path.isabs(path):
 		return False
-	return os.path.isfile(os.path.join(_REPO_ROOT, path))
+	candidate = os.path.realpath(os.path.join(_REPO_ROOT_REAL, path))
+	try:
+		return os.path.commonpath([_REPO_ROOT_REAL, candidate]) == _REPO_ROOT_REAL and os.path.isfile(candidate)
+	except ValueError:
+		return False
 
 
 def _list_recent_runs(repo: str, workflow_file: str, cutoff: datetime) -> list[dict[str, Any]]:
@@ -847,6 +855,7 @@ finally:
 raise SystemExit(_exit_code)
 PY
 audit_rc=$?
+set -e
 
 # ---------------------------------------------------------------
 # Per-run Telegram alert + GitHub Actions job summary.
@@ -861,19 +870,34 @@ da_created=0
 da_edited=0
 da_closed=0
 da_suppressed=0
+da_summary_loaded="false"
 if [ -n "${DRIFT_AUDIT_SUMMARY_FILE:-}" ] && [ -s "${DRIFT_AUDIT_SUMMARY_FILE}" ]; then
-	da_status="$(jq -r '.status // "unknown"' "${DRIFT_AUDIT_SUMMARY_FILE}" 2>/dev/null || echo unknown)"
-	da_processed_runs="$(jq -r '.processed_runs // 0' "${DRIFT_AUDIT_SUMMARY_FILE}" 2>/dev/null || echo 0)"
-	da_marker_occurrences="$(jq -r '.marker_occurrences // 0' "${DRIFT_AUDIT_SUMMARY_FILE}" 2>/dev/null || echo 0)"
-	da_persistent_clusters="$(jq -r '.persistent_clusters // 0' "${DRIFT_AUDIT_SUMMARY_FILE}" 2>/dev/null || echo 0)"
-	da_skipped_absent_path="$(jq -r '.skipped_absent_path // 0' "${DRIFT_AUDIT_SUMMARY_FILE}" 2>/dev/null || echo 0)"
-	da_created="$(jq -r '.created // 0' "${DRIFT_AUDIT_SUMMARY_FILE}" 2>/dev/null || echo 0)"
-	da_edited="$(jq -r '.edited // 0' "${DRIFT_AUDIT_SUMMARY_FILE}" 2>/dev/null || echo 0)"
-	da_closed="$(jq -r '.closed // 0' "${DRIFT_AUDIT_SUMMARY_FILE}" 2>/dev/null || echo 0)"
-	da_suppressed="$(jq -r '.suppressed // 0' "${DRIFT_AUDIT_SUMMARY_FILE}" 2>/dev/null || echo 0)"
+	if da_summary_tsv="$(jq -r '
+		def n: if type == "number" and . >= 0 then tostring else "0" end;
+		[
+			(.status // "unknown" | tostring),
+			(.processed_runs // 0 | n),
+			(.marker_occurrences // 0 | n),
+			(.persistent_clusters // 0 | n),
+			(.skipped_absent_path // 0 | n),
+			(.created // 0 | n),
+			(.edited // 0 | n),
+			(.closed // 0 | n),
+			(.suppressed // 0 | n)
+		] | @tsv
+	' "${DRIFT_AUDIT_SUMMARY_FILE}" 2>/dev/null)"; then
+		IFS=$'\t' read -r da_status da_processed_runs da_marker_occurrences da_persistent_clusters da_skipped_absent_path da_created da_edited da_closed da_suppressed <<<"${da_summary_tsv}"
+		da_summary_loaded="true"
+	else
+		echo "::warning::drift-audit: could not parse run summary file; notifications will omit run counts." >&2
+	fi
+elif [ -n "${DRIFT_AUDIT_SUMMARY_FILE:-}" ]; then
+	echo "::warning::drift-audit: run summary file is empty; notifications will omit run counts." >&2
 fi
 if [ "${audit_rc}" -ne 0 ]; then
 	da_status="error"
+elif [ "${da_summary_loaded}" != "true" ]; then
+	da_status="summary_unavailable"
 fi
 
 case "${da_status}" in
@@ -888,6 +912,9 @@ case "${da_status}" in
 		;;
 	no_clusters)
 		da_detail="Scanned ${da_processed_runs} run(s), ${da_marker_occurrences} marker(s); no persistent drift clusters needed a tracker."
+		;;
+	summary_unavailable)
+		da_detail="Audit completed, but run metrics were unavailable; see the run log."
 		;;
 	error)
 		da_detail="Run did not complete cleanly (exit ${audit_rc}); see the run log."
@@ -916,6 +943,9 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
 		echo "- **Persistent clusters:** ${da_persistent_clusters}"
 		echo "- **Clusters skipped (path absent from repo):** ${da_skipped_absent_path}"
 		echo "- **Tracker issues:** created ${da_created} / updated ${da_edited} / closed ${da_closed} / suppressed ${da_suppressed}"
+		if [ "${da_summary_loaded}" != "true" ]; then
+			echo "- **Summary metrics:** unavailable (temp summary file missing or unreadable)"
+		fi
 	} >> "${GITHUB_STEP_SUMMARY}" 2>/dev/null || true
 fi
 
@@ -935,12 +965,15 @@ fi
 da_tg_helpers="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)/tg_helpers.sh"
 if [ -f "${da_tg_helpers}" ]; then
 	# shellcheck source=tg_helpers.sh disable=SC1090,SC1091
-	source "${da_tg_helpers}"
-	if type tg_send_msg >/dev/null 2>&1; then
-		tg_send_msg "${da_message}" "${da_level}" >/dev/null 2>&1 \
-			|| echo "::warning::drift-audit: Telegram notification failed." >&2
+	if source "${da_tg_helpers}"; then
+		if type tg_send_msg >/dev/null 2>&1; then
+			tg_send_msg "${da_message}" "${da_level}" >/dev/null 2>&1 \
+				|| echo "::warning::drift-audit: Telegram notification failed." >&2
+		else
+			echo "::warning::drift-audit: tg_send_msg unavailable; skipping Telegram notification." >&2
+		fi
 	else
-		echo "::warning::drift-audit: tg_send_msg unavailable; skipping Telegram notification." >&2
+		echo "::warning::drift-audit: failed to source tg_helpers.sh; skipping Telegram notification." >&2
 	fi
 else
 	echo "::warning::drift-audit: tg_helpers.sh not found; skipping Telegram notification." >&2

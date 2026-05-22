@@ -201,6 +201,7 @@ and shipped:
 - `SERENA_QUERY`
 - `SERENA_FALLBACK`
 - `SERENA_PROBE`
+- `drift-audit:`
 
 ---
 
