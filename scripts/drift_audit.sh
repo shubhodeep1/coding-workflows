@@ -49,6 +49,12 @@ PERSISTENT_RUN_THRESHOLD = 2
 TRACKER_MARKER_PREFIX = "drift-audit:cluster-key="
 JSON_DECODER = json.JSONDecoder()
 
+# Repository checkout root. The audit only files a tracker when a
+# fingerprint names a file that actually exists here, which keeps markers
+# harvested from test fixtures or echoed PR diffs from opening issues.
+# GitHub Actions sets GITHUB_WORKSPACE to the checkout directory.
+_REPO_ROOT = os.environ.get("GITHUB_WORKSPACE") or os.getcwd()
+
 
 def _log(message: str) -> None:
 	print(f"drift-audit: {message}", flush=True)
@@ -297,6 +303,20 @@ def _cluster_has_only_fixed_markers(cluster: dict[str, Any]) -> bool:
 		return False
 	statuses = set(cluster.get("pre_existing_statuses") or [])
 	return "fixed_by_resolver" in statuses and "unchanged" not in statuses
+
+
+def _cluster_path_in_repo(cluster: dict[str, Any]) -> bool:
+	# A genuine fingerprint always names a file tracked in the repository.
+	# Markers harvested from test fixtures or echoed PR diffs reference
+	# synthetic paths (e.g. scripts/example.py) that are absent from the
+	# checkout, so "path is not a file in the repo" is the signal that the
+	# cluster is not actionable drift and must not open a tracker issue.
+	path = cluster.get("path")
+	if not isinstance(path, str) or not path:
+		return False
+	if os.path.isabs(path) or ".." in path.split("/"):
+		return False
+	return os.path.isfile(os.path.join(_REPO_ROOT, path))
 
 
 def _list_recent_runs(repo: str, workflow_file: str, cutoff: datetime) -> list[dict[str, Any]]:
@@ -702,10 +722,21 @@ def main() -> int:
 
 	tracker_issues = _tracker_issue_lookup(repo)
 	clusters = []
+	skipped_absent_path = 0
 	for cluster in _build_clusters(occurrences):
+		if not _cluster_path_in_repo(cluster):
+			skipped_absent_path += 1
+			_notice(
+				f"skipping cluster {cluster['fp_key']}: path "
+				f"{cluster.get('path')!r} is not a file in the repository "
+				"(synthetic test-fixture or stale marker, not actionable drift)."
+			)
+			continue
 		marker_hash = _cluster_marker_hash(cluster["fp_key"])
 		if _is_persistent_cluster(cluster) or (marker_hash in tracker_issues and _cluster_has_only_fixed_markers(cluster)):
 			clusters.append(cluster)
+	if skipped_absent_path:
+		_log(f"skipped {skipped_absent_path} cluster(s) whose fingerprint path is absent from the repository.")
 	if not clusters:
 		_log("no drift clusters requiring action found.")
 		return 0
