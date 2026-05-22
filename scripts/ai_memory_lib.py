@@ -1912,11 +1912,13 @@ def persist_memory_operation(
                 # ref-lock race against the shared memory branch in lockstep.
                 time.sleep(_push_retry_backoff_seconds(attempt))
 
-                _run_git(
+                fetch = _run_git(
                     clone_dir,
                     ["fetch", "--no-tags", "origin", f"refs/heads/{memory_branch}:refs/remotes/origin/{memory_branch}"],
                     check=False,
                 )
+                if fetch.returncode != 0:
+                    raise MemoryGitError(f"Memory branch fetch failed while retrying push: {fetch.stderr.strip()}")
                 if _run_git(clone_dir, ["show-ref", "--verify", f"refs/remotes/origin/{memory_branch}"], check=False).returncode == 0:
                     rebase = _run_git(clone_dir, ["rebase", f"refs/remotes/origin/{memory_branch}"], check=False)
                     if rebase.returncode != 0:
@@ -1924,8 +1926,6 @@ def persist_memory_operation(
                         raise MemoryGitError(
                             f"Memory branch rebase failed while retrying push: {rebase.stderr.strip()}"
                         )
-
-            raise MemoryGitError("Unexpected push retry flow")
         finally:
             shutil.rmtree(clone_dir, ignore_errors=True)
 

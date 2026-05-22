@@ -75,23 +75,42 @@ def test_backoff_is_randomized() -> None:
 	assert len(samples) > 1, "backoff delay is not randomized"
 
 
-def _scripted_run_git(push_codes: list[int]):
-	"""Build a fake _run_git that yields scripted push return codes.
-
-	Every git op other than `push` succeeds; `diff --cached` reports staged
-	changes so the commit/push path is exercised.
-	"""
+def _scripted_run_git(
+	push_codes: list[int],
+	*,
+	fetch_codes: list[int] | None = None,
+	show_ref_codes: list[int] | None = None,
+	rebase_codes: list[int] | None = None,
+	call_log: list[tuple[str, tuple[str, ...]]] | None = None,
+):
+	"""Build a fake _run_git with scripted failure points in the retry loop."""
 
 	push_results = iter(push_codes)
+	fetch_results = iter(fetch_codes or [])
+	show_ref_results = iter(show_ref_codes or [])
+	rebase_results = iter(rebase_codes or [])
 
 	def fake_run_git(cwd, args, check: bool = True):  # noqa: ANN001 - test stub
 		op = args[0] if args else ""
+		if call_log is not None:
+			call_log.append((op, tuple(args)))
 		if op == "ls-remote":
 			return _FakeProc(returncode=0, stdout="")
 		if op == "diff":
 			return _FakeProc(returncode=1)  # staged changes present
 		if op == "rev-parse":
 			return _FakeProc(returncode=0, stdout="0123456789abcdef\n")
+		if op == "fetch":
+			rc = next(fetch_results, 0)
+			return _FakeProc(returncode=rc, stderr="" if rc == 0 else "fetch failed")
+		if op == "show-ref":
+			rc = next(show_ref_results, 0)
+			return _FakeProc(returncode=rc, stderr="" if rc == 0 else "show-ref missing")
+		if op == "rebase":
+			if len(args) > 1 and args[1] == "--abort":
+				return _FakeProc(returncode=0)
+			rc = next(rebase_results, 0)
+			return _FakeProc(returncode=rc, stderr="" if rc == 0 else "rebase conflict")
 		if op == "push":
 			rc = next(push_results)
 			return _FakeProc(
@@ -103,8 +122,15 @@ def _scripted_run_git(push_codes: list[int]):
 	return fake_run_git
 
 
-def _run_persist(push_codes: list[int], push_retries: int):
-	"""Drive persist_memory_operation with scripted pushes; return (result, backoff_attempts).
+def _run_persist(
+	push_codes: list[int],
+	push_retries: int,
+	*,
+	fetch_codes: list[int] | None = None,
+	show_ref_codes: list[int] | None = None,
+	rebase_codes: list[int] | None = None,
+):
+	"""Drive persist_memory_operation; return (result, backoff_attempts, call_log, exc).
 
 	`_run_git` and `_push_retry_backoff_seconds` are stubbed so the retry loop
 	runs without real git or real sleeps.  Either returns the result dict, or
@@ -115,6 +141,7 @@ def _run_persist(push_codes: list[int], push_retries: int):
 	repo_root = work / "repo"
 	repo_root.mkdir(parents=True, exist_ok=True)
 	backoff_attempts: list[int] = []
+	call_log: list[tuple[str, tuple[str, ...]]] = []
 
 	def fake_backoff(attempt: int) -> float:
 		backoff_attempts.append(attempt)
@@ -122,7 +149,13 @@ def _run_persist(push_codes: list[int], push_retries: int):
 
 	original_run_git = ai_memory_lib._run_git
 	original_backoff = ai_memory_lib._push_retry_backoff_seconds
-	ai_memory_lib._run_git = _scripted_run_git(push_codes)
+	ai_memory_lib._run_git = _scripted_run_git(
+		push_codes,
+		fetch_codes=fetch_codes,
+		show_ref_codes=show_ref_codes,
+		rebase_codes=rebase_codes,
+		call_log=call_log,
+	)
 	ai_memory_lib._push_retry_backoff_seconds = fake_backoff
 
 	def _op(_clone_dir: Path) -> dict:
@@ -137,9 +170,9 @@ def _run_persist(push_codes: list[int], push_retries: int):
 			commit_message="ai-memory: test claim",
 			operation=_op,
 		)
-		return result, backoff_attempts, None
+		return result, backoff_attempts, call_log, None
 	except ai_memory_lib.MemoryGitError as exc:
-		return None, backoff_attempts, exc
+		return None, backoff_attempts, call_log, exc
 	finally:
 		ai_memory_lib._run_git = original_run_git
 		ai_memory_lib._push_retry_backoff_seconds = original_backoff
@@ -149,7 +182,7 @@ def _run_persist(push_codes: list[int], push_retries: int):
 def test_persist_memory_operation_backs_off_then_succeeds_on_retry() -> None:
 	# Two rejected pushes (concurrent ref-lock race) then success: the backoff
 	# must fire once per failed attempt and the push must still land.
-	result, backoff_attempts, exc = _run_persist([1, 1, 0], push_retries=5)
+	result, backoff_attempts, _call_log, exc = _run_persist([1, 1, 0], push_retries=5)
 	assert exc is None, exc
 	assert result is not None
 	assert result["did_push"] is True, result
@@ -161,11 +194,40 @@ def test_persist_memory_operation_backs_off_then_succeeds_on_retry() -> None:
 def test_persist_memory_operation_backs_off_every_attempt_before_raising() -> None:
 	# All pushes rejected: backoff fires after every non-final attempt and the
 	# loop still raises — claiming is mutual exclusion and is not fail-open.
-	result, backoff_attempts, exc = _run_persist([1, 1, 1, 1], push_retries=4)
+	result, backoff_attempts, _call_log, exc = _run_persist([1, 1, 1, 1], push_retries=4)
 	assert result is None
 	assert isinstance(exc, ai_memory_lib.MemoryGitError), exc
+	assert "Failed to push memory branch after 4 attempts" in str(exc)
 	# 4 attempts -> backoff after attempts 1, 2, 3 (not after the final one).
 	assert backoff_attempts == [1, 2, 3], backoff_attempts
+
+
+def test_persist_memory_operation_raises_on_fetch_failure_before_rebase() -> None:
+	result, backoff_attempts, call_log, exc = _run_persist([1], push_retries=2, fetch_codes=[1])
+	assert result is None
+	assert isinstance(exc, ai_memory_lib.MemoryGitError), exc
+	assert "Memory branch fetch failed while retrying push: fetch failed" in str(exc)
+	assert backoff_attempts == [1], backoff_attempts
+	assert not any(op == "show-ref" for op, _args in call_log), call_log
+	assert not any(op == "rebase" for op, _args in call_log), call_log
+
+
+def test_persist_memory_operation_skips_rebase_when_remote_ref_is_missing() -> None:
+	result, backoff_attempts, call_log, exc = _run_persist([1, 0], push_retries=3, show_ref_codes=[1])
+	assert exc is None, exc
+	assert result is not None
+	assert result["did_push"] is True, result
+	assert backoff_attempts == [1], backoff_attempts
+	assert not any(args == ("rebase", "refs/remotes/origin/ai-memory") for _op, args in call_log), call_log
+
+
+def test_persist_memory_operation_aborts_rebase_before_raising() -> None:
+	result, backoff_attempts, call_log, exc = _run_persist([1], push_retries=2, rebase_codes=[1])
+	assert result is None
+	assert isinstance(exc, ai_memory_lib.MemoryGitError), exc
+	assert "Memory branch rebase failed while retrying push: rebase conflict" in str(exc)
+	assert backoff_attempts == [1], backoff_attempts
+	assert any(args == ("rebase", "--abort") for _op, args in call_log), call_log
 
 
 def main() -> int:
