@@ -982,26 +982,39 @@ if args[0] == 'run' and len(args) >= 2 and args[1] == 'list':
 if args[0] == 'pr' and len(args) >= 2 and args[1] == 'list':
 	base = None
 	head = None
+	state = None
+	search = None
 	jq_query = None
 	for i, arg in enumerate(args):
 		if arg == '--base' and i + 1 < len(args):
 			base = args[i + 1]
 		if arg == '--head' and i + 1 < len(args):
 			head = args[i + 1]
+		if arg == '--state' and i + 1 < len(args):
+			state = args[i + 1]
+		if arg == '--search' and i + 1 < len(args):
+			search = args[i + 1]
 		if arg == '--jq' and i + 1 < len(args):
 			jq_query = args[i + 1]
 	prs = []
 	for pr in store.get('prs', []):
+		merged = bool(pr.get('merged', False) or pr.get('merged_at') is not None)
+		if state == 'merged' and not merged:
+			continue
 		if base and pr.get('baseRefName') != base:
 			continue
 		if head and pr.get('headRefName') != head:
 			continue
-		prs.append(pr)
-	if jq_query == '.[0].number // empty':
-		if prs:
-			print(prs[0].get('number'))
-		else:
-			print('')
+		if search:
+			m = re.search(r'#(\d+)\s+in:body', search)
+			if m and f"#{m.group(1)}" not in str(pr.get('body', '')):
+				continue
+		payload = dict(pr)
+		payload.setdefault('mergedAt', pr.get('merged_at'))
+		prs.append(payload)
+	if jq_query:
+		p = subprocess.run(['jq', '-r', jq_query], input=json.dumps(prs), capture_output=True, text=True)
+		print(p.stdout.rstrip() if p.returncode == 0 else '')
 	else:
 		print(json.dumps(prs))
 	sys.exit(0)
