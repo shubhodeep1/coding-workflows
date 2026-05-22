@@ -6957,6 +6957,97 @@ def test_no_labels_with_open_linked_pr_skips_retrigger_pipeline():
 	assert issue_entry["status"] == "in_progress"
 
 
+def test_no_labels_with_rest_fallback_closing_linked_pr_skips_retrigger_pipeline():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["last_seen_phase"] = "no_labels"
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		gql_mode="error",
+		issue_labels={10: []},
+		issue_linked_prs={10: 932},
+		prs=[{
+			"number": 932,
+			"state": "open",
+			"body": "Fixes #10",
+			"baseRefName": "main",
+			"headRefName": "ai/issue-10",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		}],
+	)
+	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
+	assert not any("/reclarify" in body for body in issue_comments)
+	assert not any("/answer" in body for body in issue_comments)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 0
+	assert issue_entry["status"] == "in_progress"
+
+
+def test_no_labels_with_rest_fallback_keyword_substring_still_retriggers_pipeline():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["last_seen_phase"] = "no_labels"
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		gql_mode="error",
+		issue_labels={10: []},
+		issue_linked_prs={10: 933},
+		prs=[{
+			"number": 933,
+			"state": "open",
+			"body": "We need to prefix #10 before rollout",
+			"baseRefName": "main",
+			"headRefName": "infra/fix-933",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		}],
+	)
+	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
+	assert any("/reclarify" in body for body in issue_comments)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 1
+	assert issue_entry["status"] == "in_progress"
+
+
+def test_no_labels_with_rest_fallback_colon_form_still_retriggers_pipeline():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["last_seen_phase"] = "no_labels"
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		gql_mode="error",
+		issue_labels={10: []},
+		issue_linked_prs={10: 934},
+		prs=[{
+			"number": 934,
+			"state": "open",
+			"body": "Closes: #10",
+			"baseRefName": "main",
+			"headRefName": "infra/fix-934",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		}],
+	)
+	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
+	assert any("/reclarify" in body for body in issue_comments)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 1
+	assert issue_entry["status"] == "in_progress"
+
+
 def test_no_labels_with_refs_only_linked_pr_still_retriggers_pipeline():
 	state = _base_state(status="in_progress")
 	state["waves"][0]["issues"][0]["status"] = "in_progress"

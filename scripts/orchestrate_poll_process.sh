@@ -8220,9 +8220,21 @@ _pr_json_closes_issue() {
       false
     else
       (.body // "") as $body
-      | ($body | test("(?i)(close[sd]?|fix(es|ed)?|resolve[sd]?):?[[:space:]]+#" + $n + "\\b"))
-        or
-        ($body | test("(?i)(close[sd]?|fix(es|ed)?|resolve[sd]?):?[[:space:]]+https?://github\\.com/[^[:space:]]+/[^[:space:]]+/issues/" + $n + "\\b"))
+      # Keep this conservative REST fallback aligned with
+      # scripts/lint_pr_body_auto_close.py: no colon forms, no keyword
+      # substrings inside larger words, and support short + URL refs.
+      | ($body | test(
+          "(?i)(^|[^[:alnum:]_-])"
+          + "(close[sd]?|fix(es|ed)?|resolve[sd]?)"
+          + "[[:space:]]+"
+          + "(#"
+          + $n
+          + "|[[:alnum:]_.-]+/[[:alnum:]_.-]+#"
+          + $n
+          + "|https?://github\\.com/[[:alnum:]_.-]+/[[:alnum:]_.-]+/issues/"
+          + $n
+          + ")([^[:alnum:]_-]|$)"
+        ))
     end
   ' >/dev/null 2>&1
   _rc=$?
