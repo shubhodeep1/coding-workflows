@@ -27,6 +27,12 @@ command -v python3 >/dev/null 2>&1 || {
 	echo "python3 is required but not installed" >&2
 	exit 1
 }
+DRIFT_AUDIT_HAVE_JQ="false"
+if command -v jq >/dev/null 2>&1; then
+	DRIFT_AUDIT_HAVE_JQ="true"
+else
+	echo "::warning::drift-audit: jq not found; notifications will omit run counts." >&2
+fi
 export PYTHONDONTWRITEBYTECODE="${PYTHONDONTWRITEBYTECODE:-1}"
 
 DRIFT_AUDIT_SUMMARY_FILE=""
@@ -871,7 +877,7 @@ da_edited=0
 da_closed=0
 da_suppressed=0
 da_summary_loaded="false"
-if [ -n "${DRIFT_AUDIT_SUMMARY_FILE:-}" ] && [ -s "${DRIFT_AUDIT_SUMMARY_FILE}" ]; then
+if [ "${DRIFT_AUDIT_HAVE_JQ}" = "true" ] && [ -n "${DRIFT_AUDIT_SUMMARY_FILE:-}" ] && [ -s "${DRIFT_AUDIT_SUMMARY_FILE}" ]; then
 	if da_summary_tsv="$(jq -r '
 		def n: if type == "number" and . >= 0 then tostring else "0" end;
 		[
@@ -891,7 +897,7 @@ if [ -n "${DRIFT_AUDIT_SUMMARY_FILE:-}" ] && [ -s "${DRIFT_AUDIT_SUMMARY_FILE}" 
 	else
 		echo "::warning::drift-audit: could not parse run summary file; notifications will omit run counts." >&2
 	fi
-elif [ -n "${DRIFT_AUDIT_SUMMARY_FILE:-}" ]; then
+elif [ "${DRIFT_AUDIT_HAVE_JQ}" = "true" ] && [ -n "${DRIFT_AUDIT_SUMMARY_FILE:-}" ]; then
 	echo "::warning::drift-audit: run summary file is empty; notifications will omit run counts." >&2
 fi
 if [ "${audit_rc}" -ne 0 ]; then
@@ -943,8 +949,11 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
 		echo "- **Persistent clusters:** ${da_persistent_clusters}"
 		echo "- **Clusters skipped (path absent from repo):** ${da_skipped_absent_path}"
 		echo "- **Tracker issues:** created ${da_created} / updated ${da_edited} / closed ${da_closed} / suppressed ${da_suppressed}"
+		if [ -n "${da_report_url}" ]; then
+			echo "- **Run:** [workflow run](${da_report_url})"
+		fi
 		if [ "${da_summary_loaded}" != "true" ]; then
-			echo "- **Summary metrics:** unavailable (temp summary file missing or unreadable)"
+			echo "- **Summary metrics:** unavailable (jq missing, or temp summary file missing or unreadable)"
 		fi
 	} >> "${GITHUB_STEP_SUMMARY}" 2>/dev/null || true
 fi

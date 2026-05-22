@@ -216,6 +216,8 @@ def _run_drift_audit(
 				"DRIFT_AUDIT_ENABLED": "true" if enabled else "false",
 				"GH_TOKEN": "test-token",
 				"GITHUB_REPOSITORY": "owner/repo",
+				"GITHUB_RUN_ID": "123456789",
+				"GITHUB_SERVER_URL": "https://github.com",
 				"GITHUB_WORKSPACE": str(workspace),
 				"GITHUB_STEP_SUMMARY": str(step_summary_file),
 				"MOCK_GH_STATE_FILE": str(state_file),
@@ -821,6 +823,7 @@ def test_drift_audit_writes_run_summary_to_step_summary() -> None:
 	assert "## Drift audit" in summary
 	assert "Status:" in summary
 	assert "Runs scanned:" in summary
+	assert "[workflow run](https://github.com/owner/repo/actions/runs/123456789)" in summary
 
 
 def main() -> int:
