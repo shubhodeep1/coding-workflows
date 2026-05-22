@@ -14,11 +14,13 @@ import json
 import logging
 import math
 import os
+import random
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 import urllib.error
 import uuid
@@ -1817,6 +1819,34 @@ def _clone_for_memory_branch(repo_root: Path, memory_branch: str) -> Path:
     return temp_dir
 
 
+# Memory-branch push retries all contend on the single shared `ai-memory`
+# ref: every concurrent workflow run pushes there.  Without a randomized
+# delay between attempts the contenders retry in lockstep and keep losing
+# the same server-side ref-lock race ("cannot lock ref ... is at X but
+# expected Y"), exhausting the retry budget.  Full-jitter exponential
+# backoff decorrelates them so a push lands within the budget.
+_PUSH_RETRY_BACKOFF_BASE_SECONDS = 0.5
+_PUSH_RETRY_BACKOFF_CAP_SECONDS = 8.0
+
+
+def _push_retry_backoff_seconds(attempt: int) -> float:
+    """Return a randomized delay (seconds) to wait before the next push retry.
+
+    ``attempt`` is the 1-based number of the push attempt that just failed.
+    Full-jitter exponential backoff: the delay is drawn uniformly from
+    ``[0, min(cap, base * 2 ** (attempt - 1))]`` so concurrent pushers
+    spread across the retry window instead of colliding in lockstep.
+    """
+    if attempt < 1:
+        attempt = 1
+    ceiling = min(_PUSH_RETRY_BACKOFF_BASE_SECONDS, _PUSH_RETRY_BACKOFF_CAP_SECONDS)
+    for _ in range(1, attempt):
+        if ceiling >= _PUSH_RETRY_BACKOFF_CAP_SECONDS:
+            break
+        ceiling = min(_PUSH_RETRY_BACKOFF_CAP_SECONDS, ceiling * 2.0)
+    return random.uniform(0.0, ceiling)
+
+
 def persist_memory_operation(
     repo_root: Path,
     *,
@@ -1878,20 +1908,30 @@ def persist_memory_operation(
                         f"Failed to push memory branch after {push_retries} attempts: {push.stderr.strip()}"
                     )
 
-                _run_git(
+                # Wait a jittered, exponentially growing interval before
+                # re-syncing and retrying so concurrent runs stop losing the
+                # ref-lock race against the shared memory branch in lockstep.
+                time.sleep(_push_retry_backoff_seconds(attempt))
+
+                fetch = _run_git(
                     clone_dir,
                     ["fetch", "--no-tags", "origin", f"refs/heads/{memory_branch}:refs/remotes/origin/{memory_branch}"],
                     check=False,
                 )
+                if fetch.returncode != 0:
+                    raise MemoryGitError(f"Memory branch fetch failed while retrying push: {fetch.stderr.strip()}")
                 if _run_git(clone_dir, ["show-ref", "--verify", f"refs/remotes/origin/{memory_branch}"], check=False).returncode == 0:
                     rebase = _run_git(clone_dir, ["rebase", f"refs/remotes/origin/{memory_branch}"], check=False)
                     if rebase.returncode != 0:
-                        _run_git(clone_dir, ["rebase", "--abort"], check=False)
+                        rebase_abort = _run_git(clone_dir, ["rebase", "--abort"], check=False)
+                        if rebase_abort.returncode != 0:
+                            raise MemoryGitError(
+                                "Memory branch rebase failed while retrying push: "
+                                f"{rebase.stderr.strip()} (rebase --abort also failed: {rebase_abort.stderr.strip()})"
+                            )
                         raise MemoryGitError(
                             f"Memory branch rebase failed while retrying push: {rebase.stderr.strip()}"
                         )
-
-            raise MemoryGitError("Unexpected push retry flow")
         finally:
             shutil.rmtree(clone_dir, ignore_errors=True)
 
