@@ -354,3 +354,306 @@
 | `CACHE_PROBE_OK` lines | 0 | probe path exists in code but was not exercised |
 | Existing cache probe support | yes | `scripts/review_run_reviewers.sh:121-165` |
 
+
+## Deep Audit — Workflows & Scripts (2026-05-22)
+
+### Section 1: Bug & Correctness Sweep
+
+- **ID:** BUG-001  
+  **File path:** `.github/workflows/orchestrate.yml:966-980`  
+  **Severity:** Medium  
+  **Category:** `bug`  
+  **Description:** The fallback `_safe_gh_jq() { gh api "$@"; }` at line 969 is not equivalent to the canonical helper in `scripts/gh_helpers.sh:532-545`. The canonical version suppresses stdout on failure because `gh api --jq` can emit raw error JSON instead of filtered output. This step feeds `_safe_gh_jq` directly into `DEFAULT_BRANCH` and `BASE_SHA` command substitutions at lines 971 and 979, so if `scripts/gh_helpers.sh` fails to source, transient API failures can contaminate ref variables with error payloads and break integration-branch creation.  
+  **Recommended fix:** Remove the fallback or replace it with the canonical temp-file implementation already used in `scripts/gh_helpers.sh:532-545` and `.github/workflows/implement.yml:4303-4312`.
+
+- **ID:** BUG-002  
+  **File path:** `scripts/run_validation_repo_checks.sh:14-22`  
+  **Severity:** Low  
+  **Category:** `bug`  
+  **Description:** The override path turns each positional argument into a full shell program (`CHECK_COMMANDS=("$@")`) and then executes each entry via `/bin/sh -c`. A normal argv-style call such as `scripts/run_validation_repo_checks.sh python3 tests/test_x.py` therefore runs `python3` and `tests/test_x.py` as two separate checks, and any shell metacharacters in an override are evaluated rather than passed literally. That makes the override contract easy to misuse and broader than a normal CLI contract. [NEEDS VERIFICATION]  
+  **Recommended fix:** Make the interface explicit: either accept repeated `--command '<shell snippet>'` flags and document that they are shell-evaluated, or accept command + argv and execute them directly with arrays/`timeout` without `/bin/sh -c`.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+- **ID:** API-001  
+  **File path:** `scripts/review_rb_judge.sh:450-488`  
+  **Severity:** Medium  
+  **Category:** `api-batching`  
+  **Description:** The judge already does one GraphQL fetch for `closingIssuesReferences` at lines 450-455, then falls back to per-issue REST hydration inside the loop at lines 471-488 to recover issue body and labels. Worst-case, the path costs one GraphQL call plus one REST `repos/.../issues/{n}` call per linked issue until a non-empty body is found.  
+  **Current call count:** `1 GraphQL + up to N REST`  
+  **Proposed call count:** `1 GraphQL`  
+  **Pattern to extend:** `.github/workflows/review_autofix.yml:1600-1618` or `scripts/orchestrate_poll_process.sh:7943-8064`  
+  **Recommended fix:** Extend the initial GraphQL selection to request `body` and `labels(first: 100)` and read the first usable node locally.
+
+- **ID:** API-002  
+  **File path:** `scripts/orchestrate_poll_process.sh:7850-7898,8459-8466`  
+  **Severity:** Medium  
+  **Category:** `api-batching`  
+  **Description:** `run_standalone_stall_recovery` still performs one `gh issue list --label ...` call per pipeline label at lines 8462-8466, even though the same file already contains an aliased GraphQL search helper for marker discovery at lines 7850-7898. The label list is fixed at seven values, so every standalone recovery cycle pays seven REST list calls before candidate processing even starts.  
+  **Current call count:** `7 REST list calls`  
+  **Proposed call count:** `1 GraphQL aliased search call`  
+  **Pattern to extend:** `scripts/orchestrate_poll_process.sh:_fetch_standalone_marker_issues_graphql`  
+  **Recommended fix:** Add a batched helper for pipeline-label searches (for example `_fetch_pipeline_label_issues_graphql <labels_json>`) and have `run_standalone_stall_recovery` consume that merged result instead of looping over `gh issue list`.
+
+- **ID:** API-003  
+  **File path:** `.github/workflows/review_autofix.yml:1641-1699`  
+  **Severity:** Medium  
+  **Category:** `api-batching`  
+  **Description:** When `closingIssuesReferences` is empty, the linked-issue context fallback parses issue numbers from the PR body and then hydrates each issue one-by-one with `gh api repos/.../issues/{n}` at lines 1684-1698. The fallback is capped at 20 issues, but it is still a per-item REST loop on the review path.  
+  **Current call count:** `1 GraphQL + up to 20 REST`  
+  **Proposed call count:** `2 GraphQL calls total`  
+  **Pattern to extend:** `scripts/orchestrate_poll_process.sh:_fetch_candidate_issue_details_graphql`  
+  **Recommended fix:** Keep the existing body parser, but batch `_fallback_numbers` into one aliased GraphQL query that returns `{number,title,body}` for all parsed issues.
+
+- **ID:** API-004  
+  **File path:** `.github/workflows/review_autofix.yml:527-579`  
+  **Severity:** Medium  
+  **Category:** `api-batching`  
+  **Description:** In the post-merge validate dispatch path, the workflow first fetches linked issues with GraphQL at lines 527-532, then falls back to PR-body parsing at lines 534-545, and finally re-fetches labels one issue at a time with `gh issue view` inside the loop at lines 552-559 when `labels_known != true`. That makes fallback-linked issues cost one extra API call each.  
+  **Current call count:** `1 GraphQL + 1 PR fetch + up to N issue-view calls`  
+  **Proposed call count:** `1 GraphQL + 1 PR fetch + 1 batched GraphQL labels call`  
+  **Pattern to extend:** the label shape already used at `.github/workflows/review_autofix.yml:531-532`, or `scripts/orchestrate_poll_process.sh:_fetch_candidate_issue_details_graphql`  
+  **Recommended fix:** After fallback number extraction, batch-hydrate labels once before the loop and keep the loop purely local.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **ID:** DUP-001  
+  **File path:** `.github/workflows/clarify.yml:214-286; .github/workflows/plan.yml:265-336; .github/workflows/orchestrate.yml:339-425; .github/workflows/orchestrate_poll.yml:287-397; .github/workflows/orchestrate_clarify_respond.yml:257-348; .github/workflows/implement.yml:809-998; .github/workflows/review_autofix.yml:929-1206; .github/workflows/validate.yml:207-583`  
+  **Severity:** Medium  
+  **Category:** `duplication`  
+  **Description:** Eight workflows hand-roll near-identical support-file staging blocks: create support directories, prefer `.codex-workflow-src` then `.codex-workflow-src-main`, install scripts, copy ai-memory schemas, optionally write `scripts/.gitignore`, and stage prompts/JSON assets. The copies have already diverged in meaningful ways (`review_autofix` stages out-of-tree, `validate` clones refs manually, others stage in-tree), so every support-asset change now requires multi-file edits.  
+  **Shared module:** `scripts/stage_workflow_support.sh`  
+  **Signature:** `stage_workflow_support --workflow <name> --script-ref <ref> --dest-root <dir> --required-script <file>... --optional-script <file>... --prompt <file>... --schema <file>... [--out-of-tree]`  
+  **Callers:** `clarify.yml`, `plan.yml`, `orchestrate.yml`, `orchestrate_poll.yml`, `orchestrate_clarify_respond.yml`, `implement.yml`, `review_autofix.yml`, `validate.yml`  
+  **Recommended fix:** Extract the shared fetch/install logic into the module above and leave only workflow-specific asset lists and env exports inline.
+
+- **ID:** DUP-002  
+  **File path:** `scripts/gh_helpers.sh:391-545; .github/workflows/orchestrate.yml:968-969; .github/workflows/orchestrate_poll.yml:96-113; .github/workflows/mark-stable.yml:356-369,505-518; .github/workflows/cancel_on_pr_close.yml:40-53; .github/workflows/review_autofix.yml:615-624,1518-1539; scripts/label_helpers.sh:18-20; scripts/review_run_reviewers.sh:13-15; scripts/orchestrate_poll_process.sh:122-124; scripts/validate_process.sh:244-246; scripts/review_apply_fixes.sh:16-18; scripts/review_rb_judge.sh:34-36`  
+  **Severity:** Medium  
+  **Category:** `duplication`  
+  **Description:** The canonical `gh_retry`/`_safe_gh_jq` implementations live in `scripts/gh_helpers.sh`, but multiple workflows and scripts still redefine one-line fallbacks or custom retry wrappers. That duplication has already drifted into a correctness bug: `orchestrate.yml`’s local `_safe_gh_jq` fallback is weaker than the canonical helper (BUG-001).  
+  **Shared module:** `scripts/gh_bootstrap.sh`  
+  **Signature:** `bootstrap_gh_helpers [<support_scripts_dir>]`  
+  **Callers:** the workflows/scripts above that currently inline `gh_retry` or `_safe_gh_jq` fallbacks  
+  **Recommended fix:** Add a tiny bootstrap helper that sources `gh_helpers.sh` when present and installs the canonical fallbacks otherwise; replace inline wrapper definitions with one bootstrap call.
+
+- **ID:** DUP-003  
+  **File path:** `.github/workflows/review_autofix.yml:534-545,1641-1705,4647-4660,4769-4782,5696-5709; scripts/review_rb_judge.sh:457-488`  
+  **Severity:** Medium  
+  **Category:** `duplication`  
+  **Description:** Linked-issue fallback parsing and hydration logic is copied several times: PR-body regex extraction in multiple `review_autofix` branches, linked-issue context hydration in `review_autofix`, and a near-identical fallback in `review_rb_judge.sh`. Any change to closing-keyword parsing, repo escaping, or issue-detail batching has to be patched in several places.  
+  **Shared module:** `scripts/linked_issue_helpers.sh`  
+  **Signature:** `get_linked_issue_numbers <repo> <pr_meta_file>` and `fetch_linked_issue_details_graphql <repo> <numbers_json> [--include-body] [--include-labels]`  
+  **Callers:** `review_autofix.yml`, `scripts/review_rb_judge.sh`  
+  **Recommended fix:** Centralize both the regex extraction and the batched hydration helpers, then have each workflow branch call the shared helpers instead of repeating the regex and per-issue fetch logic.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+No workflow exceeded the 800 KB watch threshold; the largest was `.github/workflows/review_autofix.yml` at 359,610 characters. I did not find any `if:` expression near the 15,000-character watch threshold. The only `run:` blocks with `${{ }}` interpolation above 15,000 characters were the three below.
+
+- **ID:** EXPR-001  
+  **File path:** `.github/workflows/review_autofix.yml:1498-1887`  
+  **Severity:** Medium  
+  **Category:** `expression-limit`  
+  **Description:** The `Collect PR metadata` step embeds a large interpolated shell block. Estimated current size is about `17,408` characters, leaving roughly `3,592` characters of headroom before GitHub’s 21,000-character template-expression limit. The block already mixes PR fetches, linked-issue context building, body-text fallback parsing, and env export.  
+  **Recommended fix:** Extract the step body to `scripts/review_collect_pr_metadata.sh` or split it into smaller steps such as `Fetch PR JSON`, `Build linked issue context`, and `Export metadata`.
+
+- **ID:** EXPR-002  
+  **File path:** `.github/workflows/review_autofix.yml:930-1206`  
+  **Severity:** Medium  
+  **Category:** `expression-limit`  
+  **Description:** The `Stage workflow support files` step is also a large interpolated shell block. Estimated current size is about `15,510` characters, leaving roughly `5,490` characters of headroom. Because this block grows whenever support assets are added, it has steady upward pressure.  
+  **Recommended fix:** Move the staging logic into a shared script such as `scripts/stage_workflow_support.sh` and keep only minimal env/setup in YAML.
+
+- **ID:** EXPR-003  
+  **File path:** `.github/workflows/validate.yml:210-583`  
+  **Severity:** Medium  
+  **Category:** `expression-limit`  
+  **Description:** The `Fetch workflow support files` step in `validate.yml` is estimated at about `17,416` characters, leaving roughly `3,584` characters of headroom. It inlines clone helpers, ref fallback logic, asset copying, and consumer/self-repo branching in one interpolated block.  
+  **Recommended fix:** Extract the support-bootstrap logic to `scripts/stage_workflow_support.sh` or split it into separate steps for checkout, copy, and output emission.
+
+### Section 5: Cross-Cutting Concerns
+
+I did not find any `TODO`, `FIXME`, or `HACK` markers under `.github/workflows/*.yml` or `scripts/*.{sh,py}`.
+
+- **ID:** DEAD-001  
+  **File path:** `scripts/orchestrate_poll_process.sh:4200-4275,12238-12268,12679-12735; scripts/review_conflict_resolve.sh:342-350`  
+  **Severity:** Low  
+  **Category:** `dead-code`  
+  **Description:** Several variables are assigned but never read. Repo-wide search found no subsequent reads of `BRANCH_REBUILD_SKIP_REASON`, `BRANCH_REBUILD_LAST_REBUILD_AT`, `RB_FOLLOWUP_REFUSED`, `IF_BLOCKERS_SOURCE`, or `RESOLVER_ESCALATION_COMMENT_MARKER`. These writes currently do not affect control flow or emitted telemetry, so they behave as inert state.  
+  **Recommended fix:** Either wire these values into logs/outputs/telemetry where callers can consume them, or remove the assignments/constants to reduce misleading state.
+
+- **ID:** SHELL-001  
+  **File path:** `scripts/validate_process.sh:230-238`  
+  **Severity:** Low  
+  **Category:** `shellcheck`  
+  **Description:** `local msg="$1$(_tg_link_suffix)"` triggers ShellCheck SC2155. If `_tg_link_suffix` fails, the failure is masked by the declaration/assignment, so the function can continue with a truncated Telegram message instead of surfacing the helper failure.  
+  **Recommended fix:** Split the declaration and assignment: declare `msg` first, then assign `msg="$1$(_tg_link_suffix)"`.
+
+- **ID:** SHELL-002  
+  **File path:** `scripts/validate_changed_files_syntax.sh:70-74`  
+  **Severity:** Low  
+  **Category:** `shellcheck`  
+  **Description:** The case arm `*.env*` on line 71 already matches both `*.envrc` and `.env*`, so the later patterns on line 73 are unreachable (ShellCheck SC2221/SC2222). That makes the redaction rule harder to reason about and easier to accidentally drift from the comment above it.  
+  **Recommended fix:** Remove the unreachable alternatives or tighten the earlier pattern and document the intended precedence if the overlap is deliberate.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 0 | — |
+| Medium | 11 | BUG-001, API-001, API-002, API-003, API-004, DUP-001, DUP-002, DUP-003, EXPR-001, EXPR-002, EXPR-003 |
+| Low | 4 | BUG-002, DEAD-001, SHELL-001, SHELL-002 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 0 | Small |
+| API call optimization | 3 files | Medium |
+| Code modularization | 8 workflows + 2 scripts | Large |
+| Expression size reduction | 2 workflows + 1 shared script | Medium |
+| Medium/Low fixes | 5 files | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-22)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the consolidation is provably same-scope/same-semantics and can be implemented directly; `NEEDS_VERIFICATION` means the overlap is real but at least one safety precondition is not fully proven from static reading; `RISKY_SKIP` means the duplication sits in retry/race-sensitive control flow (especially `scripts/orchestrate_poll_process.sh`) and must not be auto-implemented without manual review.
+
+### Consolidation Candidates (MERGE-###)
+
+- **ID:** `MERGE-001`  
+  **Safety tag:** `RISKY_SKIP`  
+  **File path and line ranges:** `scripts/orchestrate_poll_process.sh:785-789`, `scripts/orchestrate_poll_process.sh:5235-5241`, `scripts/orchestrate_poll_process.sh:5320-5327`, `scripts/orchestrate_poll_process.sh:5374-5378` (`finalize_integration_merge_if_needed()`).  
+  **Current call count:** `8` max in one full pass (`2 + 3 + 3`).  
+  **Proposed call count:** `3` max (`1` snapshot fetch at each of the three sites).  
+  **Endpoint(s):** REST `GET /repos/{owner}/{repo}/pulls/{pull_number}`.  
+  **Evidence:**
+  ```bash
+  _fetch_pr_json()
+  {
+  	local pr_number="$1"
+  	gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" || echo '{}'
+  }
+
+  existing_pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
+  existing_pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+
+  pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
+  pr_mergeable="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.mergeable' || echo "")"
+  pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+  ```
+  **Proposed fix:** Reuse the existing `_fetch_pr_json` + `_jq_field` helper pair at each snapshot point in `finalize_integration_merge_if_needed()`, but keep the three snapshot sites separate across the `gh pr merge` mutation boundary.  
+  **Safety rationale:** `RISKY_SKIP` because this is inside `scripts/orchestrate_poll_process.sh` and specifically in final-merge race-handling logic that intentionally rechecks live PR state before and after merge attempts.  
+  **Downstream signal:** Do not auto-implement; manual review must prove the consolidated snapshot preserves fail-closed `final_merge_status` transitions, retry timing, and existing log keys for `open/closed/merged/unknown` cases.
+
+- **ID:** `MERGE-002`  
+  **Safety tag:** `RISKY_SKIP`  
+  **File path and line ranges:** `scripts/orchestrate_poll_process.sh:7253-7255`, `scripts/orchestrate_poll_process.sh:9143-9144`, `scripts/orchestrate_poll_process.sh:12940-12942`.  
+  **Current call count:** `6` total across the three sites (`2` per site).  
+  **Proposed call count:** `3` total across the three sites (`1` per site).  
+  **Endpoint(s):** REST `GET /repos/{owner}/{repo}/issues/{issue_number}`.  
+  **Evidence:**
+  ```bash
+  orig_title="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.title // ""' || echo "")"
+  orig_body="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.body // ""' || echo "")"
+
+  orig_title="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.title' || echo "")"
+  orig_body="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.body // ""' || echo "")"
+
+  IF_TITLE="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.title' || echo "")"
+  IF_BODY="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.body' || echo "")"
+  ```
+  **Proposed fix:** Add a local `_fetch_issue_json` helper mirroring `_fetch_pr_json`, then parse `.title` and `.body` locally at each site instead of issuing two GETs per branch.  
+  **Safety rationale:** `RISKY_SKIP` because all three sites live in `scripts/orchestrate_poll_process.sh` reissue/recovery flows, where stale reads or altered fail-open behavior can change recovery outcomes.  
+  **Downstream signal:** Do not auto-implement; manual review must confirm the reissue/close flows still fail open on lookup errors, preserve comment/label ordering, and do not reuse stale issue bodies across recovery attempts.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID:** `REUSE-001`  
+  **Safety tag:** `NEEDS_VERIFICATION`  
+  **File path and line ranges:** `scripts/review_rb_judge.sh:425-427`, `scripts/review_rb_judge.sh:442-460`.  
+  **Current call count:** `2` on the `closingIssuesReferences`-empty fallback path.  
+  **Proposed call count:** `1`.  
+  **Endpoint(s):** REST `GET /repos/{owner}/{repo}/pulls/{pull_number}`.  
+  **Evidence:**
+  ```bash
+  _pr_meta="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
+  _pr_state="$(printf '%s\n' "${_pr_meta}" | jq -r '.state // ""')"
+  _pr_merged="$(printf '%s\n' "${_pr_meta}" | jq -r '(.merged_at != null) or (.merged == true)')"
+  ...
+  unset _pr_meta _pr_state _pr_merged
+  ...
+  PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
+  ```
+  **Proposed fix:** Derive a cached `PR_TITLE_BODY` string from `_pr_meta` before the `unset`, or postpone the `unset` until after fallback issue-number extraction; keep the current `_safe_gh_jq` call only as a cache-miss fallback if needed.  
+  **Safety rationale:** `NEEDS_VERIFICATION` because the first fetch is `gh_retry _safe_gh_jq` while the fallback fetch is plain `_safe_gh_jq`, so naive reuse changes retry/failure semantics.  
+  **Downstream signal:** Verify with (a) normal GraphQL-linked PRs, (b) empty `closingIssuesReferences`, and (c) transient `GET /pulls/{n}` failure injection that fallback parsing, skip behavior, and stderr/log output match current behavior.
+
+- **ID:** `REUSE-002`  
+  **Safety tag:** `NEEDS_VERIFICATION`  
+  **File path and line ranges:** `.github/workflows/issue_pr_status.yml:291-330`, `.github/workflows/issue_pr_status.yml:384-386`, `.github/workflows/issue_pr_status.yml:503-512`.  
+  **Current call count:** `1` batched GraphQL classification call plus `up to N` fallback REST issue fetches, **plus** `up to N` later REST `GET /issues/{n}` calls in the Telegram-alert step.  
+  **Proposed call count:** same classification cost, **plus 0** later REST `GET /issues/{n}` calls in the Telegram-alert step.  
+  **Endpoint(s):** GraphQL `repository { issue(number) { labels body } }`; REST `GET /repos/{owner}/{repo}/issues/{issue_number}`.  
+  **Evidence:**
+  ```bash
+  ORCH_ALIAS_FRAGMENT+=" i${ORCH_IDX}: issue(number: ${_orch_num}) { number labels(first: 50) { nodes { name } } body }"
+  ...
+  select(
+    ((.labels.nodes // []) | map(.name) | index("ai:orchestrator-managed")) != null
+    or
+    ((.body // "") | contains("Managed by: AI Orchestrator"))
+  ) | .number
+  ...
+  echo "LINKED_ISSUE_NUMBERS<<EOF" >> "$GITHUB_ENV"
+  ...
+  BODY="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' || echo "")"
+  if printf '%s' "${BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
+  ```
+  **Proposed fix:** In `Update linked issue labels when PR closes`, derive and export a dedicated boolean such as `HAS_LINKED_ORCH_BODY_MARKER=true|false` from the already-fetched GraphQL/REST issue bodies; have `Send PR merged Telegram alert` read that boolean before falling back to the current per-issue body loop.  
+  **Safety rationale:** `NEEDS_VERIFICATION` because reuse crosses workflow steps, and the exported flag must preserve the alert step’s current body-marker semantics rather than broadening suppression unintentionally.  
+  **Downstream signal:** Verify on merged-PR fixtures for (1) standalone issues, (2) orchestrator-managed child issues, and (3) tracking-issue references that alert suppression matches today’s body-marker behavior and that the exported flag survives GitHub Actions env serialization.
+
+- **ID:** `REUSE-003`  
+  **Safety tag:** `NEEDS_VERIFICATION`  
+  **File path and line ranges:** `.github/workflows/orchestrate_clarify_respond.yml:62-70`, `.github/workflows/orchestrate_clarify_respond.yml:408-412`.  
+  **Current call count:** `2` child-issue fetches per job run.  
+  **Proposed call count:** `1`.  
+  **Endpoint(s):** REST `GET /repos/{owner}/{repo}/issues/{issue_number}`.  
+  **Evidence:**
+  ```bash
+  ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ISSUE_BODY="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.body // ""')"
+  ISSUE_TITLE="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.title // ""')"
+  ...
+  ISSUE_META="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ISSUE_BODY="$(printf '%s' "${ISSUE_META}" | jq -r '.body // ""')"
+  ISSUE_TITLE="$(printf '%s' "${ISSUE_META}" | jq -r '.title // ""')"
+  ```
+  **Proposed fix:** Persist `ISSUE_PAYLOAD` from `Check orchestrator metadata` into `$RUNNER_TEMP` (or a multiline env/output value) and let the later prompt-assembly step parse that cached JSON; keep the current `gh_retry gh api` call as a cache-miss fallback.  
+  **Safety rationale:** `NEEDS_VERIFICATION` because this reuse crosses workflow steps and the later step currently relies on `gh_retry` semantics that the early gate step does not.  
+  **Downstream signal:** Verify that the cached issue payload survives all intervening steps, that cache-miss fallback still works, and that a mid-run issue edit would not materially change clarify-respond behavior.
+
+### Dead Calls (DEAD-API-###)
+No findings.
+
+### Cross-References to Deep Audit Section
+- `API-001`: `NEEDS_VERIFICATION` — sound batching target, but the replacement must preserve `FIRST_ISSUE_LABELS_JSON` capture and the current “stop after first non-empty body” behavior in `scripts/review_rb_judge.sh`.
+- `API-002`: `RISKY_SKIP` — the proposed batch search sits in `scripts/orchestrate_poll_process.sh` standalone-recovery logic, so manual review is required to preserve fail-open marker discovery and cache contracts.
+- `API-003`: `NEEDS_VERIFICATION` — batching the fallback issue hydration is directionally correct, but it must preserve the current 20-issue cap, warning behavior, and per-issue skip semantics in `review_autofix.yml`.
+- `API-004`: `NEEDS_VERIFICATION` — batch label hydration is plausible, but it must preserve the existing `labels_known` short-circuit and fail-open validate-dispatch behavior.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 3 | REUSE-001, REUSE-002, REUSE-003 |
+| RISKY_SKIP | 2 | MERGE-001, MERGE-002 |
+
+### Implement-Stage Handoff
+No SAFE_TO_MERGE findings in this pass.
