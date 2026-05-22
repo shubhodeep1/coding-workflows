@@ -320,7 +320,6 @@ def test_helper_stops_at_generic_future_section_heading(tmp_path):
 	result = _run(summary, "1", tmp_path=tmp_path)
 	assert result.returncode == 0, result.stderr
 
-
 def main() -> int:
 	# Direct `python3 tests/<file>.py` entrypoint — the repo's CI runs
 	# tests via that pattern rather than pytest discovery, so this file

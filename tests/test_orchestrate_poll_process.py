@@ -1217,6 +1217,7 @@ if args[0] == 'api':
 							'number': int(pr.get('number', linked_pr_num)),
 							'state': pr_state,
 							'merged': bool(pr.get('merged', False)),
+							'repository': pr.get('repository', {'nameWithOwner': 'owner/repo'}),
 							'mergedAt': pr.get('merged_at', None),
 							'headRefName': pr.get('headRefName', ''),
 							'headRefOid': pr.get('headRefOid', pr.get('headSha', f'mocksha{linked_pr_num}')),

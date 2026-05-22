@@ -422,7 +422,6 @@ def test_refusal_contract_literals_stay_in_lockstep_across_files() -> None:
 			f"{path_label} must contain {REFUSAL_POLLER_WARNING!r} so the "
 			"refusal-specific operator warning stays in lockstep."
 		)
-
 # ---------------------------------------------------------------
 # Editor-prompt false-claim-convergence guards (Fix C of the noop-
 # suspicious recovery PR).
