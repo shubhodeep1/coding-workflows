@@ -9,10 +9,7 @@ APP_SERVICE="${APP_SERVICE:-app}"
 CANARY_TOOLS="${CANARY_TOOLS:-{{ slots.canary_tools | join(' ') }}}"
 
 read -r -a TOOL_LIST <<< "${CANARY_TOOLS}"
-tool_count=0
-for _tool in "${TOOL_LIST[@]}"; do
-	tool_count=$((tool_count + 1))
-done
+{% raw %}tool_count=${#TOOL_LIST[@]}{% endraw %}
 
 if [ "${tool_count}" -eq 0 ]; then
 	echo "1..1"

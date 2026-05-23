@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -215,6 +216,67 @@ def test_node_runtime_example_manifest_is_schema_valid_and_renderable() -> None:
 
 		lint_result = _run_validation_lint(output_root)
 		assert lint_result.returncode == 0, f"lint failed: {lint_result.stdout}\n{lint_result.stderr}"
+
+
+def test_node_runtime_tap_report_rejects_invalid_runtime_override_with_tap_header() -> None:
+	with tempfile.TemporaryDirectory(prefix="render-validation-node-runtime-") as td:
+		temp_root = Path(td)
+		manifest_path = temp_root / "validate.yml"
+		output_root = temp_root / "out"
+		_write_yaml(manifest_path, _manifest_payload())
+
+		result = _run_renderer(manifest_path, output_root)
+		assert result.returncode == 0, result.stderr
+
+		proc = subprocess.run(
+			["bash", str(output_root / "tests" / "90_tap_report.sh")],
+			text=True,
+			capture_output=True,
+			env={**os.environ, "TAP_PLAN": "five", "PYTHONDONTWRITEBYTECODE": "1"},
+		)
+		assert proc.returncode != 0
+		stdout_lines = proc.stdout.splitlines()
+		assert stdout_lines[:2] == [
+			"1..1",
+			"not ok 1 - tap plan is a positive integer",
+		]
+		assert "# invalid TAP_PLAN: five" in proc.stdout
+
+
+def test_node_runtime_graceful_shutdown_skips_without_python3_before_docker_calls() -> None:
+	with tempfile.TemporaryDirectory(prefix="render-validation-node-runtime-") as td:
+		temp_root = Path(td)
+		manifest_path = temp_root / "validate.yml"
+		output_root = temp_root / "out"
+		bin_dir = temp_root / "bin"
+		_write_yaml(manifest_path, _manifest_payload())
+
+		result = _run_renderer(manifest_path, output_root)
+		assert result.returncode == 0, result.stderr
+
+		graceful_shutdown_text = (output_root / "tests" / "30_graceful_shutdown.sh").read_text(encoding="utf-8")
+		assert "nohup sleep 300" in graceful_shutdown_text
+		assert 'kill -0 ${probe_pid}' in graceful_shutdown_text
+
+		bin_dir.mkdir()
+		bash_path = shutil.which("bash")
+		dirname_path = shutil.which("dirname")
+		assert bash_path is not None
+		assert dirname_path is not None
+		(bin_dir / "dirname").symlink_to(dirname_path)
+
+		proc = subprocess.run(
+			[bash_path, str(output_root / "tests" / "30_graceful_shutdown.sh")],
+			text=True,
+			capture_output=True,
+			env={"PATH": str(bin_dir), "PYTHONDONTWRITEBYTECODE": "1"},
+		)
+		assert proc.returncode == 0, proc.stderr
+		stdout_lines = proc.stdout.splitlines()
+		assert stdout_lines[:2] == [
+			"1..1",
+			"ok 1 - graceful shutdown helper can terminate in-container process # SKIP python3 not available",
+		]
 
 
 def main() -> int:

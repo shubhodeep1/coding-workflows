@@ -6,6 +6,13 @@ source "${SCRIPT_DIR}/../_lib/tap_helpers.sh"
 
 TAP_PLAN="${TAP_PLAN:-{{ slots.get('tap_plan', 5) }}}"
 
+if ! [[ "${TAP_PLAN}" =~ ^[0-9]+$ ]] || [ "${TAP_PLAN}" -lt 1 ]; then
+	echo "1..1"
+	tap_not_ok 1 "tap plan is a positive integer"
+	echo "# invalid TAP_PLAN: ${TAP_PLAN}"
+	exit 1
+fi
+
 echo "1..${TAP_PLAN}"
 
 current=1

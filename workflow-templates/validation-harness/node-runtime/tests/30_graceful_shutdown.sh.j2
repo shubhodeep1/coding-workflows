@@ -12,12 +12,22 @@ GRACEFUL_SHUTDOWN_LOG_TAIL_LINES="${GRACEFUL_SHUTDOWN_LOG_TAIL_LINES:-40}"
 
 echo "1..1"
 
+if ! command -v python3 >/dev/null 2>&1; then
+	tap_ok 1 "graceful shutdown helper can terminate in-container process # SKIP python3 not available"
+	exit 0
+fi
+
 set +e
-probe_pid="$(docker compose -f "${COMPOSE_FILE}" exec -T "${APP_SERVICE}" /bin/sh -c 'sleep 300 >/tmp/repo-check-sleep.log 2>&1 & echo $!')"
+probe_pid="$(docker compose -f "${COMPOSE_FILE}" exec -T "${APP_SERVICE}" /bin/sh -c 'nohup sleep 300 >/tmp/repo-check-sleep.log 2>&1 & echo $!')"
 spawn_rc=$?
+probe_running_rc=1
+if [ "${spawn_rc}" -eq 0 ] && printf '%s' "${probe_pid}" | grep -Eq '^[0-9]+$'; then
+	docker compose -f "${COMPOSE_FILE}" exec -T "${APP_SERVICE}" /bin/sh -c "kill -0 ${probe_pid}" >/dev/null 2>&1
+	probe_running_rc=$?
+fi
 set -e
 
-if [ "${spawn_rc}" -ne 0 ] || ! printf '%s' "${probe_pid}" | grep -Eq '^[0-9]+$'; then
+if [ "${spawn_rc}" -ne 0 ] || ! printf '%s' "${probe_pid}" | grep -Eq '^[0-9]+$' || [ "${probe_running_rc}" -ne 0 ]; then
 	tap_not_ok 1 "graceful shutdown helper can terminate in-container process"
 	echo "# unable to spawn probe process in app container"
 	exit 1

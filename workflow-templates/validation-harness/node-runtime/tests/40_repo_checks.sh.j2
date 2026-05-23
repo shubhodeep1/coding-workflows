@@ -101,10 +101,7 @@ if [ -s "${TEST_FILE}" ]; then
 	mapfile -d '' -t TEST_LIST < "${TEST_FILE}"
 fi
 
-test_count=0
-for _test_cmd in "${TEST_LIST[@]}"; do
-	test_count=$((test_count + 1))
-done
+{% raw %}test_count=${#TEST_LIST[@]}{% endraw %}
 
 if [ "${test_count}" -eq 0 ]; then
 	tap_not_ok 1 "custom tests parsed"
