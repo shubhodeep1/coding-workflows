@@ -2138,6 +2138,91 @@ _subissue_closing_pr_number()
 	return 0
 }
 
+# _purge_stale_fingerprint_entries_on_integration_branch — Self-heal
+# stale `merged_issue_fingerprints` entries the wave-dispatch gate
+# cannot reasonably satisfy.  Capture is idempotent (the early-return
+# at the top of `capture_intent_fingerprints_for_merged_subissue`),
+# so a single bad capture writes an entry that no later poll tick
+# overwrites — the gate then hard-fails forever on the stale state.
+#
+# Two stale shapes are observable from local git plumbing alone (zero
+# GitHub API calls):
+#
+#   1. The recorded PR has no commit referencing `(#<pr>)` on the
+#      integration branch at all.  The captured diff cannot be on the
+#      branch.  Original (pre-PR-#2907) symptom: capture latched onto
+#      an open `Refs #N` cross-reference that never merged anywhere.
+#
+#   2. The recorded PR DOES have a merge commit on the integration
+#      branch (subject ending `(#<pr>)`), but the entry's
+#      `captured_at` predates that commit's committer date.  Capture
+#      ran against an open-PR snapshot whose content was iterated
+#      before the squash-merge landed (observed on project #2867 /
+#      issue #2872: fingerprints captured 2026-05-22T09:04:12Z,
+#      PR #2894's merge committed 2026-05-22T10:59:08Z with the
+#      REST-fallback half rewritten in between, so the captured
+#      patterns no longer reflect what is actually on the branch).
+#
+# Healthy entries — capture ran AFTER the merge via the orchestrator's
+# normal merge-detection flow — have `captured_at` > merge committer
+# date and are kept untouched, so a genuine post-merge resolver
+# regression still hard-fails the gate as designed.
+#
+# Inputs:  <state_file_path> <integration_branch_git_ref>
+# Output:  one `<issue_num>\t<pr_num>\t<reason>` line per purged entry
+#          on stdout.
+# API calls: zero (uses local `git log` and `date -u -d` only).
+# Side effect: mutates the state file in place via `jq | mv` atomically.
+# Fail-open per entry: any git/jq/date error keeps the entry untouched.
+_purge_stale_fingerprint_entries_on_integration_branch()
+{
+	local state_file="$1"
+	local gate_ref="$2"
+	[ -f "${state_file}" ] || return 0
+	[ -n "${gate_ref}" ] || return 0
+
+	local issue pr captured_at sfx log_out _sha _ct _subj merge_unix captured_unix any_ref reason
+	while IFS=$'\t' read -r issue pr captured_at; do
+		[ -n "${issue}" ] || continue
+		[[ "${pr}" =~ ^[0-9]+$ ]] || continue
+		sfx="(#${pr})"
+		if ! log_out="$(git log --format='%H%x09%ct%x09%s' --grep="${sfx}" "${gate_ref}" 2>/dev/null)"; then
+			continue  # git plumbing failure — fail-safe, keep entry
+		fi
+		any_ref=0
+		merge_unix=""
+		while IFS=$'\t' read -r _sha _ct _subj; do
+			[ -n "${_sha}" ] || continue
+			any_ref=1
+			# First (oldest under default --grep ordering) commit
+			# whose subject ENDS with the (#PR) suffix is the merge.
+			if [ -z "${merge_unix}" ] && [ "${_subj: -${#sfx}}" = "${sfx}" ]; then
+				merge_unix="${_ct}"
+			fi
+		done <<< "${log_out}"
+		reason=""
+		if [ "${any_ref}" -eq 0 ]; then
+			reason="pr_not_referenced_on_integration_branch"
+		elif [ -n "${merge_unix}" ] && [ -n "${captured_at}" ]; then
+			captured_unix="$(date -u -d "${captured_at}" +%s 2>/dev/null || echo "")"
+			if [[ "${captured_unix}" =~ ^[0-9]+$ ]] && [ "${merge_unix}" -gt "${captured_unix}" ]; then
+				reason="captured_before_pr_merged_into_integration_branch"
+			fi
+		fi
+		if [ -n "${reason}" ]; then
+			if jq --arg k "${issue}" 'del(.merged_issue_fingerprints[$k])' \
+				"${state_file}" > "${state_file}.tmp" \
+				&& mv "${state_file}.tmp" "${state_file}"; then
+				printf '%s\t%s\t%s\n' "${issue}" "${pr}" "${reason}"
+			else
+				rm -f "${state_file}.tmp" 2>/dev/null || true
+			fi
+		fi
+	done < <(jq -r '(.merged_issue_fingerprints // {}) | to_entries | .[] | "\(.key)\t\(.value.pr // "")\t\(.value.captured_at // "")"' "${state_file}" 2>/dev/null || true)
+
+	return 0
+}
+
 has_label() {
   local labels_json="$1"
   local label="$2"
@@ -14275,6 +14360,54 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
             fi
           fi
           if [ -n "${_gate_ref}" ] && git rev-parse --verify "${_gate_ref}" >/dev/null 2>&1; then
+            # -----------------------------------------------------------
+            # Self-heal: purge `merged_issue_fingerprints` entries the
+            # gate cannot reasonably satisfy.  Two stale shapes are
+            # caught (see
+            # `_purge_stale_fingerprint_entries_on_integration_branch`
+            # for the predicates): (1) PR not referenced anywhere on the
+            # integration branch; (2) capture predates the PR's merge
+            # commit on the branch (pre-merge open-PR snapshot — the
+            # original symptom of project #2867 / issue #2872, where
+            # capture ran while PR #2894 was open and the REST-fallback
+            # half was rewritten before the squash-merge landed).
+            # Capture is idempotent and cannot self-correct, so the heal
+            # lands here right before the verifier reads the state.
+            # PR #2907's `_subissue_closing_pr_number` prevents new bad
+            # captures from being written; this pass cleans up any
+            # already-persisted ones so the gate stops hard-failing on
+            # phantom regressions.  Healthy entries (capture ran after
+            # the merge) keep `captured_at` > merge committer date and
+            # are NOT touched, so a real post-merge resolver regression
+            # still hard-fails the gate as designed.
+            # -----------------------------------------------------------
+            _gate_purged_lines=""
+            _gate_purged_count=0
+            while IFS=$'\t' read -r _heal_issue _heal_pr _heal_reason; do
+              [ -n "${_heal_issue}" ] || continue
+              echo "::warning::FINGERPRINT_STATE_SELFHEAL_V1 issue=#${_heal_issue} pr=#${_heal_pr} reason=${_heal_reason} ref=${_gate_ref}"
+              _gate_purged_lines="${_gate_purged_lines}- issue #${_heal_issue} (PR #${_heal_pr}): ${_heal_reason}"$'\n'
+              _gate_purged_count=$(( _gate_purged_count + 1 ))
+            done < <(_purge_stale_fingerprint_entries_on_integration_branch "${STATE_FILE}" "${_gate_ref}")
+            if [ "${_gate_purged_count}" -gt 0 ]; then
+              _gate_fp_count="$(jq -r '(.merged_issue_fingerprints // {}) | length' "${STATE_FILE}" 2>/dev/null || echo 0)"
+              _gate_heal_plural="entries"
+              [ "${_gate_purged_count}" -eq 1 ] && _gate_heal_plural="entry"
+              _gate_heal_comment="## 🩹 Integration fingerprint state self-heal — ${_gate_purged_count} stale ${_gate_heal_plural} purged
+
+The wave-dispatch gate found \`merged_issue_fingerprints\` ${_gate_heal_plural} that cannot reasonably be satisfied against \`${_gate_integration_branch}\`. Capture is idempotent, so these entries can only have been written by an earlier capture pass that either selected a \`Refs #N\` cross-reference instead of an actual implementation PR (pre-PR-#2907 capture bug) or captured a pre-merge snapshot of a PR that was iterated before squash-merging.
+
+Purged ${_gate_heal_plural}:
+
+\`\`\`
+${_gate_purged_lines}\`\`\`
+
+The next poll tick will re-run the gate against the cleaned state. If an underlying sub-issue was never actually implemented (rather than misattributed), it will surface separately via the completion-status check."
+              post_tracking_comment "${_gate_heal_comment}" || true
+              tg_notify "Project #${TRACKING_NUM}: integration fingerprint state self-heal purged ${_gate_purged_count} stale ${_gate_heal_plural}; see tracking comment." "INFO" || true
+            fi
+            unset _gate_purged_lines _gate_purged_count _heal_issue _heal_pr _heal_reason _gate_heal_plural _gate_heal_comment
+
             _gate_fp_file=""
             _gate_log_file=""
             trap 'rm -f "${_gate_fp_file:-}" "${_gate_log_file:-}" 2>/dev/null || true' EXIT
