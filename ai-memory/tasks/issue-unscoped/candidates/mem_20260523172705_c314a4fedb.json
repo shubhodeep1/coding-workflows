@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/validation-harness/node-runtime/tests/40_repo_checks.sh.j2:104-111 | severity=medium | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Zero-count failure branch now emits valid TAP plan header `echo \"1..1\"` then immediately calls `tap_not_ok 1 \"custom tests parsed\"` and `exit 1`.\n  WHY: This causes an intentional empty `custom_tests` array to result in a hard failure of the validation harness, which the review says is unintended behavior for a list that is permitted to be empty according to the schema and example manifest.\n- workflow-templates/validation-harness/node-runtime/tests/40_repo_checks.sh.j2:130-134 | severity=medium | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: When all parsed tests were explicitly skipped (`plan_count == 0`), the script emits the plan `echo \"1..1\"` even though no assertions were executed.\n  WHY: TAP consumers typically expect the plan count to match assertions emitted; the review says emitting `1..1` without any subsequent test lines is malformed TAP and should be `1..0` if zero tests ran.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- workflow-templates/validation-harness/node-runtime/tests/40_repo_checks.sh.j2:104-111 | severity=medium | confidence=5\n  PROBLEM: Zero-count failure branch now emits valid TAP plan header `echo \"1..1\"` then immediately calls `tap_not_ok 1 \"custom tests parsed\"` and `exit 1`.\n  WHY: This causes an intentional empty `custom_tests` array to result in a hard failure of the validation harness (~127 runtime), which is likely unintended behavior for a list that is permitted to be empty according to the schema and example manifest.\n- workflow-templates/validation-harness/node-runtime/tests/40_repo_checks.sh.j2:130-134 | severity=medium | confidence=5\n  PROBLEM: When all parsed tests were explicitly skipped (`plan_count == 0`), the script emits the plan `echo \"1..1\"` even though no assertions were executed.\n  WHY: TAP consumers typically expect the plan count to match assertions emitted; emitting `1..1` without any subsequent test lines is malformed TAP (`# Ran 0 tests` is not valid TAP). Alternatively, if a plan line is emitted when zero tests were run, it should be `1..0`, not `1..1`.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "4688e0ee87d3e5e37be2b409bc1e5311ef99d522820aaf3de3a41312a53c2e42",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2941,
+    "run_id": "26338735232",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26338735232",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260523172705_c314a4fedb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2941,
+    "run_id": "26338735232"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-23T17:27:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
