@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ai_memory_lib.py:941-1065 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The three append helpers read the existing artifact under the per-artifact lock and then overwrite it with a stale in-memory payload, so concurrent appends for the same key can silently drop an entry.\n  WHY: A same-host race on the same repository/SHA or repository/issue/SHA tuple can cause deterministic memory records to be lost instead of merged.\n- scripts/ai_memory.py:1129-1301 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The GET subcommands treat corrupt-memory cases as fail-open warnings but still let `MemoryGitError` fall through to `AI_MEMORY_ERROR` and exit code 2, which breaks graceful degradation.\n  WHY: Callers that expect fail-open behavior still observe a hard failure path for repository/branch setup errors rather than a warning-only response.\n- scripts/ai_memory_lib.py:568-615 | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: `_validate_positive_int_field` / `_normalize_optional_positive_int` accept JSON booleans because `int(True) == 1` and `int(False) == 0`, silently coercing invalid types into numeric fields.\n  WHY: Boolean payloads can pass validation and corrupt the deterministic artifacts with unintended integer values instead of being rejected.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/ai_memory_lib.py:941-1065 | confidence=4\n  PROBLEM: The helpers perform read+mutate+write under a lock, but the stale read inside the lock can still clobber a concurrent append for the same keyed artifact.\n  WHY: Deterministic records can be lost on concurrent appends targeting the same repository/SHA or repository/issue/SHA key.\n- scripts/ai_memory.py:1129-1301 | confidence=5\n  PROBLEM: The GET subcommands convert corruption into a warning path but still emit a hard `AI_MEMORY_ERROR` and exit 2 on `MemoryGitError`, violating the expected fail-open behavior.\n  WHY: Callers that rely on graceful degradation receive a failing exit code instead of a warning-only result.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/ai_memory_lib.py:568-615 | confidence=4\n  PROBLEM: Boolean values are silently accepted and coerced to integers because `int(True) == 1`, so malformed JSON like `\"run_id\": true` passes validation.\n  WHY: The schema expects actual integers, and silent coercion can corrupt deterministic artifacts with wrong numeric data.\n- scripts/ai_memory.py:1135-1217, 1197-1337 | confidence=3\n  PROBLEM: `--tracking-issue` is validated inside the `_op` closure after `persist_memory_operation` has already started git/worktree work.\n  WHY: Invalid input wastes git operations before the validation error is raised, unlike the analogous upfront validation elsewhere in the CLI.\n- File: scripts/ai_memory_lib.py\n  Location: _normalize_optional_positive_int function (line 612)\n  Issue: Boolean values are accepted due to Python's int() coercion\n  Suggested minimal fix: Add explicit type check to reject booleans before the int() conversion: `if isinstance(value, bool): raise MemoryValidationError(f\"{field_name} must be a positive integer\")`\n  Estimated lines changed: 2\n  HARDENING_RISK_SCORE: 3\n- File: scripts/ai_memory.py\n  Location: cmd_operator_bypass_audit_append (line 1135) and cmd_revalidate_events_append (line 1197)\n  Issue: Delayed validation of tracking_issue wastes git operations on invalid input\n  Suggested minimal fix: Move `tracking_issue = _require_positive_int(args.tracking_issue, \"tracking_issue\")` to execute before the `_op` function definition, similar to cmd_branch_rebuild_audit_put\n  Estimated lines changed: 2\n  HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/ai_memory_lib.py:612-615 | confidence=5\n  PROBLEM: `_normalize_optional_positive_int` accepts JSON booleans as valid positive integers because `int(True)==1` and `int(False)==0`.\n  WHY: Boolean input silently coerces into numeric fields and corrupts the deterministic artifact instead of being rejected.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "229955bcdb4754430efd590e7928724be01b1875fb92e1c9e9cd804632ffd4b5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2940,
+    "run_id": "26339286750",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26339286750",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260523175243_306e4dadbc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2940,
+    "run_id": "26339286750"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-23T17:52:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
