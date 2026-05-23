@@ -7,11 +7,13 @@ import contextlib
 import importlib.util
 import io
 import json
+import multiprocessing
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -154,6 +156,42 @@ def _run_ai_memory_cli(argv: list[str]) -> tuple[int, str, str]:
 	with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
 		exit_code = ai_memory.main(argv)
 	return exit_code, stdout.getvalue(), stderr.getvalue()
+
+
+def _append_validation_history_entry_with_stale_read(
+	memory_root_text: str,
+	order_counter,
+	*,
+	outcome: str,
+	recorded_at: str,
+	run_id: int,
+	cycle: int,
+) -> None:
+	original_get = ai_memory_lib.get_validation_history
+
+	def _slow_get(memory_root, repository, integration_sha):
+		payload = original_get(memory_root, repository, integration_sha)
+		with order_counter.get_lock():
+			order_counter.value += 1
+			order = order_counter.value
+		time.sleep(1.0 if order == 1 else 0.2)
+		return payload
+
+	ai_memory_lib.get_validation_history = _slow_get
+	try:
+		ai_memory_lib.append_validation_history_entry(
+			Path(memory_root_text),
+			repository="Owner/Repo",
+			integration_sha="ABCDEF1234",
+			entry=_validation_entry(
+				outcome=outcome,
+				recorded_at=recorded_at,
+				run_id=run_id,
+				cycle=cycle,
+			),
+		)
+	finally:
+		ai_memory_lib.get_validation_history = original_get
 
 
 def _assert_append_cli_memory_git_error_fails_open(
@@ -364,6 +402,96 @@ def test_validation_history_library_preserves_append_order_for_equal_timestamps(
 			cycle=2,
 		),
 	)
+	assert [entry["outcome"] for entry in loaded["entries"]] == ["failed", "passed"]
+
+
+def test_append_helpers_take_artifact_lock() -> None:
+	memory_root = _memory_root_with_repo_schemas()
+	lock_names: list[str] = []
+
+	@contextlib.contextmanager
+	def _recording_file_lock(lock_name: str):
+		lock_names.append(lock_name)
+		yield
+
+	with _patched_module_attrs(ai_memory_lib, _file_lock=_recording_file_lock):
+		ai_memory_lib.append_validation_history_entry(
+			memory_root,
+			repository="Owner/Repo",
+			integration_sha="ABCDEF1234",
+			entry=_validation_entry(
+				outcome="passed",
+				recorded_at="2026-05-23T16:12:00Z",
+				run_id=2101,
+				cycle=1,
+			),
+		)
+		ai_memory_lib.append_operator_bypass_audit_entry(
+			memory_root,
+			repository="Owner/Repo",
+			tracking_issue_number=2934,
+			integration_sha="ABCDEF1234",
+			entry=_operator_bypass_entry(
+				actor="octocat",
+				timestamp_utc="2026-05-23T16:12:00Z",
+				bypass_kind="force-merge",
+			),
+		)
+		ai_memory_lib.append_revalidate_event(
+			memory_root,
+			repository="Owner/Repo",
+			tracking_issue_number=2934,
+			integration_sha="ABCDEF1234",
+			entry=_revalidate_event_entry(
+				actor="octocat",
+				timestamp_utc="2026-05-23T16:12:00Z",
+				prior_outcome="failed",
+			),
+		)
+
+	assert lock_names == [
+		"validation-history:owner/repo:abcdef1234",
+		"operator-bypass-audit:owner/repo:2934:abcdef1234",
+		"revalidate-events:owner/repo:2934:abcdef1234",
+	]
+
+
+def test_validation_history_library_concurrent_appends_keep_all_entries() -> None:
+	if os.name != "posix":
+		return
+	memory_root = _memory_root_with_repo_schemas()
+	ctx = multiprocessing.get_context("fork")
+	order_counter = ctx.Value("i", 0)
+	processes = [
+		ctx.Process(
+			target=_append_validation_history_entry_with_stale_read,
+			args=(str(memory_root), order_counter),
+			kwargs={
+				"outcome": "failed",
+				"recorded_at": "2026-05-23T16:10:00Z",
+				"run_id": 2201,
+				"cycle": 1,
+			},
+		),
+		ctx.Process(
+			target=_append_validation_history_entry_with_stale_read,
+			args=(str(memory_root), order_counter),
+			kwargs={
+				"outcome": "passed",
+				"recorded_at": "2026-05-23T16:11:00Z",
+				"run_id": 2202,
+				"cycle": 2,
+			},
+		),
+	]
+	for process in processes:
+		process.start()
+	for process in processes:
+		process.join(10)
+		assert process.exitcode == 0
+
+	loaded = ai_memory_lib.get_validation_history(memory_root, "owner/repo", "abcdef1234")
+	assert loaded is not None
 	assert [entry["outcome"] for entry in loaded["entries"]] == ["failed", "passed"]
 
 

@@ -950,14 +950,15 @@ def append_validation_history_entry(
         raise MemoryValidationError("validation history entry must be a JSON object")
     normalized_repo = _normalize_repository_name(repository)
     normalized_sha = _validate_integration_sha(integration_sha)
-    payload = get_validation_history(memory_root, normalized_repo, normalized_sha)
-    if payload is None:
-        payload = _default_validation_history_payload(normalized_repo, normalized_sha)
-    payload["entries"] = [*(payload.get("entries") or []), _normalize_validation_history_entry(entry)]
-    normalized = _normalize_validation_history_payload(payload)
-    validate_validation_history_payload(normalized, memory_root)
-    _atomic_write_json(_validation_history_path(memory_root, normalized_repo, normalized_sha), normalized)
-    return normalized
+    with _file_lock(f"validation-history:{normalized_repo}:{normalized_sha}"):
+        payload = get_validation_history(memory_root, normalized_repo, normalized_sha)
+        if payload is None:
+            payload = _default_validation_history_payload(normalized_repo, normalized_sha)
+        payload["entries"] = [*(payload.get("entries") or []), _normalize_validation_history_entry(entry)]
+        normalized = _normalize_validation_history_payload(payload)
+        validate_validation_history_payload(normalized, memory_root)
+        _atomic_write_json(_validation_history_path(memory_root, normalized_repo, normalized_sha), normalized)
+        return normalized
 
 
 def get_operator_bypass_audit(
@@ -994,22 +995,23 @@ def append_operator_bypass_audit_entry(
     normalized_repo = _normalize_repository_name(repository)
     normalized_tracking_issue = _validate_positive_int_field(tracking_issue_number, "tracking_issue_number")
     normalized_sha = _validate_integration_sha(integration_sha)
-    payload = get_operator_bypass_audit(
-        memory_root,
-        repository=normalized_repo,
-        tracking_issue_number=normalized_tracking_issue,
-        integration_sha=normalized_sha,
-    )
-    if payload is None:
-        payload = _default_operator_bypass_audit_payload(normalized_repo, normalized_tracking_issue, normalized_sha)
-    payload["entries"] = [*(payload.get("entries") or []), _normalize_operator_bypass_audit_entry(entry)]
-    normalized = _normalize_operator_bypass_audit_payload(payload)
-    validate_operator_bypass_audit_payload(normalized, memory_root)
-    _atomic_write_json(
-        _operator_bypass_audit_path(memory_root, normalized_repo, normalized_tracking_issue, normalized_sha),
-        normalized,
-    )
-    return normalized
+    with _file_lock(f"operator-bypass-audit:{normalized_repo}:{normalized_tracking_issue}:{normalized_sha}"):
+        payload = get_operator_bypass_audit(
+            memory_root,
+            repository=normalized_repo,
+            tracking_issue_number=normalized_tracking_issue,
+            integration_sha=normalized_sha,
+        )
+        if payload is None:
+            payload = _default_operator_bypass_audit_payload(normalized_repo, normalized_tracking_issue, normalized_sha)
+        payload["entries"] = [*(payload.get("entries") or []), _normalize_operator_bypass_audit_entry(entry)]
+        normalized = _normalize_operator_bypass_audit_payload(payload)
+        validate_operator_bypass_audit_payload(normalized, memory_root)
+        _atomic_write_json(
+            _operator_bypass_audit_path(memory_root, normalized_repo, normalized_tracking_issue, normalized_sha),
+            normalized,
+        )
+        return normalized
 
 
 def get_revalidate_events(
@@ -1046,22 +1048,23 @@ def append_revalidate_event(
     normalized_repo = _normalize_repository_name(repository)
     normalized_tracking_issue = _validate_positive_int_field(tracking_issue_number, "tracking_issue_number")
     normalized_sha = _validate_integration_sha(integration_sha)
-    payload = get_revalidate_events(
-        memory_root,
-        repository=normalized_repo,
-        tracking_issue_number=normalized_tracking_issue,
-        integration_sha=normalized_sha,
-    )
-    if payload is None:
-        payload = _default_revalidate_events_payload(normalized_repo, normalized_tracking_issue, normalized_sha)
-    payload["entries"] = [*(payload.get("entries") or []), _normalize_revalidate_event_entry(entry)]
-    normalized = _normalize_revalidate_events_payload(payload)
-    validate_revalidate_events_payload(normalized, memory_root)
-    _atomic_write_json(
-        _revalidate_events_path(memory_root, normalized_repo, normalized_tracking_issue, normalized_sha),
-        normalized,
-    )
-    return normalized
+    with _file_lock(f"revalidate-events:{normalized_repo}:{normalized_tracking_issue}:{normalized_sha}"):
+        payload = get_revalidate_events(
+            memory_root,
+            repository=normalized_repo,
+            tracking_issue_number=normalized_tracking_issue,
+            integration_sha=normalized_sha,
+        )
+        if payload is None:
+            payload = _default_revalidate_events_payload(normalized_repo, normalized_tracking_issue, normalized_sha)
+        payload["entries"] = [*(payload.get("entries") or []), _normalize_revalidate_event_entry(entry)]
+        normalized = _normalize_revalidate_events_payload(payload)
+        validate_revalidate_events_payload(normalized, memory_root)
+        _atomic_write_json(
+            _revalidate_events_path(memory_root, normalized_repo, normalized_tracking_issue, normalized_sha),
+            normalized,
+        )
+        return normalized
 
 
 def get_actions_runs_cache(memory_root: Path, repository: str) -> dict[str, Any] | None:
