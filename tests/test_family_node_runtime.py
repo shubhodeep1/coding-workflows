@@ -119,6 +119,9 @@ def test_node_runtime_scaffold_has_no_hardhat_assets_and_wires_custom_tests() ->
 		dockerfile_text = (output_root / "Dockerfile.app").read_text(encoding="utf-8")
 		assert dockerfile_text.startswith("FROM node:"), dockerfile_text
 
+		family_marker_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
+		assert "node-runtime family for demo-project" in family_marker_text
+
 		env_values = _read_env_values(output_root / "validate.env")
 		assert json.loads(env_values["CUSTOM_TESTS_JSON"]) == payload["custom_tests"]
 		assert json.loads(env_values["SKIP_TESTS_JSON"]) == payload["skip_tests"]
