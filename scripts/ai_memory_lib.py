@@ -814,23 +814,17 @@ def _normalize_revalidate_event_entry(entry: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _stable_sort_entries_by_field(entries: list[dict[str, Any]], *, field_name: str) -> list[dict[str, Any]]:
+    indexed_entries = list(enumerate(entries))
+    indexed_entries.sort(key=lambda item: (str(item[1].get(field_name) or ""), item[0]))
+    return [entry for _, entry in indexed_entries]
+
+
 def _normalize_validation_history_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise MemoryValidationError("validation_history payload must be a JSON object")
     entries = [_normalize_validation_history_entry(entry) for entry in payload.get("entries") or []]
-    entries.sort(
-        key=lambda item: (
-            str(item.get("recorded_at") or ""),
-            int(item.get("run_id") or 0),
-            int(item.get("run_attempt") or 0),
-            str(item.get("outcome") or ""),
-            str(item.get("raw_status") or ""),
-            str(item.get("raw_conclusion") or ""),
-            str(item.get("context") or ""),
-            str(item.get("source") or ""),
-            str(item.get("run_url") or ""),
-        )
-    )
+    entries = _stable_sort_entries_by_field(entries, field_name="recorded_at")
     return {
         "schema_version": VALIDATION_HISTORY_SCHEMA_VERSION,
         "repository": _normalize_repository_name(str(payload.get("repository") or "")),
@@ -843,17 +837,7 @@ def _normalize_operator_bypass_audit_payload(payload: dict[str, Any]) -> dict[st
     if not isinstance(payload, dict):
         raise MemoryValidationError("operator_bypass_audit payload must be a JSON object")
     entries = [_normalize_operator_bypass_audit_entry(entry) for entry in payload.get("entries") or []]
-    entries.sort(
-        key=lambda item: (
-            str(item.get("timestamp_utc") or ""),
-            str(item.get("actor") or ""),
-            str(item.get("bypass_kind") or ""),
-            str(item.get("reason") or ""),
-            str(item.get("validation_context") or ""),
-            int(item.get("source_comment_id") or 0),
-            str(item.get("source_comment_url") or ""),
-        )
-    )
+    entries = _stable_sort_entries_by_field(entries, field_name="timestamp_utc")
     return {
         "schema_version": OPERATOR_BYPASS_AUDIT_SCHEMA_VERSION,
         "repository": _normalize_repository_name(str(payload.get("repository") or "")),
@@ -867,17 +851,7 @@ def _normalize_revalidate_events_payload(payload: dict[str, Any]) -> dict[str, A
     if not isinstance(payload, dict):
         raise MemoryValidationError("revalidate_events payload must be a JSON object")
     entries = [_normalize_revalidate_event_entry(entry) for entry in payload.get("entries") or []]
-    entries.sort(
-        key=lambda item: (
-            str(item.get("timestamp_utc") or ""),
-            str(item.get("actor") or ""),
-            str(item.get("prior_outcome") or ""),
-            str(item.get("prior_context") or ""),
-            str(item.get("reason") or ""),
-            int(item.get("source_comment_id") or 0),
-            str(item.get("source_comment_url") or ""),
-        )
-    )
+    entries = _stable_sort_entries_by_field(entries, field_name="timestamp_utc")
     return {
         "schema_version": REVALIDATE_EVENTS_SCHEMA_VERSION,
         "repository": _normalize_repository_name(str(payload.get("repository") or "")),

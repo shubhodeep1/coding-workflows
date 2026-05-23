@@ -156,6 +156,26 @@ def _run_ai_memory_cli(argv: list[str]) -> tuple[int, str, str]:
 	return exit_code, stdout.getvalue(), stderr.getvalue()
 
 
+def _assert_append_cli_memory_git_error_fails_open(
+	subcommand: str,
+	*,
+	argv: list[str],
+	payload_key: str,
+	warning_prefix: str,
+) -> None:
+	def _fake_persist_memory_operation(*_args, **_kwargs):
+		raise ai_memory.MemoryGitError("simulated git failure")
+
+	with _patched_module_attrs(ai_memory, persist_memory_operation=_fake_persist_memory_operation):
+		exit_code, stdout, stderr = _run_ai_memory_cli([subcommand, "append", *argv])
+	assert exit_code == 0
+	payload = json.loads(stdout)
+	assert payload["stored"] is False
+	assert payload[payload_key] is None
+	assert "simulated git failure" in payload["warning"]
+	assert warning_prefix in stderr
+
+
 @contextlib.contextmanager
 def _stub_ai_memory_cli_branch():
 	store_root = Path(tempfile.mkdtemp(prefix="ai-memory-cli-store-"))
@@ -320,6 +340,33 @@ def test_validation_history_library_round_trip_sorts_entries() -> None:
 	assert (memory_root / "orchestrator" / "validation_history" / "owner__repo" / "ab" / "abcdef1234.json").exists()
 
 
+def test_validation_history_library_preserves_append_order_for_equal_timestamps() -> None:
+	memory_root = _memory_root_with_repo_schemas()
+	ai_memory_lib.append_validation_history_entry(
+		memory_root,
+		repository="Owner/Repo",
+		integration_sha="ABCDEF1234",
+		entry=_validation_entry(
+			outcome="failed",
+			recorded_at="2026-05-23T16:11:00Z",
+			run_id=2001,
+			cycle=1,
+		),
+	)
+	loaded = ai_memory_lib.append_validation_history_entry(
+		memory_root,
+		repository="Owner/Repo",
+		integration_sha="ABCDEF1234",
+		entry=_validation_entry(
+			outcome="passed",
+			recorded_at="2026-05-23T16:11:00Z",
+			run_id=2002,
+			cycle=2,
+		),
+	)
+	assert [entry["outcome"] for entry in loaded["entries"]] == ["failed", "passed"]
+
+
 def test_operator_bypass_audit_library_round_trip_normalizes_keys() -> None:
 	memory_root = _memory_root_with_repo_schemas()
 	written = ai_memory_lib.append_operator_bypass_audit_entry(
@@ -346,6 +393,33 @@ def test_operator_bypass_audit_library_round_trip_normalizes_keys() -> None:
 	assert (memory_root / "orchestrator" / "operator_bypass_audits" / "owner__repo" / "issue-2934" / "abcdef1234.json").exists()
 
 
+def test_operator_bypass_audit_library_preserves_append_order_for_equal_timestamps() -> None:
+	memory_root = _memory_root_with_repo_schemas()
+	ai_memory_lib.append_operator_bypass_audit_entry(
+		memory_root,
+		repository="Owner/Repo",
+		tracking_issue_number=2934,
+		integration_sha="ABCDEF1234",
+		entry=_operator_bypass_entry(
+			actor="octocat",
+			timestamp_utc="2026-05-23T16:12:00Z",
+			bypass_kind="force-merge",
+		),
+	)
+	loaded = ai_memory_lib.append_operator_bypass_audit_entry(
+		memory_root,
+		repository="Owner/Repo",
+		tracking_issue_number=2934,
+		integration_sha="ABCDEF1234",
+		entry=_operator_bypass_entry(
+			actor="octocat",
+			timestamp_utc="2026-05-23T16:12:00Z",
+			bypass_kind="force-close",
+		),
+	)
+	assert [entry["bypass_kind"] for entry in loaded["entries"]] == ["force-merge", "force-close"]
+
+
 def test_revalidate_events_library_round_trip_normalizes_keys() -> None:
 	memory_root = _memory_root_with_repo_schemas()
 	written = ai_memory_lib.append_revalidate_event(
@@ -370,6 +444,33 @@ def test_revalidate_events_library_round_trip_normalizes_keys() -> None:
 	assert loaded["repository"] == "owner/repo"
 	assert loaded["tracking_issue_number"] == 2934
 	assert (memory_root / "orchestrator" / "revalidate_events" / "owner__repo" / "issue-2934" / "abcdef1234.json").exists()
+
+
+def test_revalidate_events_library_preserves_append_order_for_equal_timestamps() -> None:
+	memory_root = _memory_root_with_repo_schemas()
+	ai_memory_lib.append_revalidate_event(
+		memory_root,
+		repository="Owner/Repo",
+		tracking_issue_number=2934,
+		integration_sha="ABCDEF1234",
+		entry=_revalidate_event_entry(
+			actor="octocat",
+			timestamp_utc="2026-05-23T16:13:00Z",
+			prior_outcome="failed",
+		),
+	)
+	loaded = ai_memory_lib.append_revalidate_event(
+		memory_root,
+		repository="Owner/Repo",
+		tracking_issue_number=2934,
+		integration_sha="ABCDEF1234",
+		entry=_revalidate_event_entry(
+			actor="octocat",
+			timestamp_utc="2026-05-23T16:13:00Z",
+			prior_outcome="passed",
+		),
+	)
+	assert [entry["prior_outcome"] for entry in loaded["entries"]] == ["failed", "passed"]
 
 
 def test_validation_history_library_get_rejects_corrupt_payload() -> None:
@@ -584,8 +685,73 @@ def test_validation_history_cli_get_fails_open_on_corrupt_payload() -> None:
 	payload = json.loads(stdout)
 	assert payload["hit"] is False
 	assert payload["validation_history"] is None
+	assert payload["warning_code"] == "history_corrupt"
 	assert "schema_version" in payload["warning"]
 	assert "::warning::validation_history_fallback" in stderr
+
+
+def test_validation_history_cli_append_fails_open_on_memory_git_error() -> None:
+	_assert_append_cli_memory_git_error_fails_open(
+		"validation-history",
+		argv=[
+			"--memory-branch",
+			"ai-memory",
+			"--memory-root",
+			"ai-memory",
+			"--repo",
+			"owner/repo",
+			"--integration-sha",
+			"abcdef1234",
+			"--entry-file",
+			"/tmp/does-not-matter.json",
+		],
+		payload_key="validation_history",
+		warning_prefix="::warning::validation_history_fallback",
+	)
+
+
+def test_operator_bypass_audit_cli_append_fails_open_on_memory_git_error() -> None:
+	_assert_append_cli_memory_git_error_fails_open(
+		"operator-bypass-audit",
+		argv=[
+			"--memory-branch",
+			"ai-memory",
+			"--memory-root",
+			"ai-memory",
+			"--repo",
+			"owner/repo",
+			"--tracking-issue",
+			"2934",
+			"--integration-sha",
+			"abcdef1234",
+			"--entry-file",
+			"/tmp/does-not-matter.json",
+		],
+		payload_key="audit",
+		warning_prefix="::warning::operator_bypass_audit_fallback",
+	)
+
+
+def test_revalidate_events_cli_append_fails_open_on_memory_git_error() -> None:
+	_assert_append_cli_memory_git_error_fails_open(
+		"revalidate-events",
+		argv=[
+			"--memory-branch",
+			"ai-memory",
+			"--memory-root",
+			"ai-memory",
+			"--repo",
+			"owner/repo",
+			"--tracking-issue",
+			"2934",
+			"--integration-sha",
+			"abcdef1234",
+			"--entry-file",
+			"/tmp/does-not-matter.json",
+		],
+		payload_key="events",
+		warning_prefix="::warning::revalidate_events_fallback",
+	)
 
 
 def test_operator_bypass_audit_cli_append_fails_open_on_invalid_entry() -> None:

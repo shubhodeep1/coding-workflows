@@ -1023,6 +1023,7 @@ def cmd_validation_history_get(args: argparse.Namespace) -> int:
                     "enabled": True,
                     "hit": False,
                     "validation_history": None,
+                    "warning_code": "history_corrupt",
                     "warning": _sanitize_git_error(str(exc)),
                 }
             )
@@ -1106,7 +1107,7 @@ def cmd_validation_history_append(args: argparse.Namespace) -> int:
             }
         )
         return 0
-    except (MemoryValidationError, json.JSONDecodeError, OSError, ValueError) as exc:
+    except (MemoryValidationError, json.JSONDecodeError, OSError, ValueError, MemoryGitError) as exc:
         _emit_validation_history_fallback(
             mode="append",
             reason="history_write_failed",
@@ -1123,19 +1124,6 @@ def cmd_validation_history_append(args: argparse.Namespace) -> int:
             }
         )
         return 0
-    except MemoryGitError as exc:
-        error_text = _sanitize_git_error(str(exc))
-        print(f"AI_MEMORY_ERROR: {error_text}", file=sys.stderr)
-        _print_json(
-            {
-                "ok": False,
-                "enabled": True,
-                "stored": False,
-                "validation_history": None,
-                "error": error_text,
-            }
-        )
-        return 2
 
 
 def cmd_operator_bypass_audit_get(args: argparse.Namespace) -> int:
@@ -1176,6 +1164,7 @@ def cmd_operator_bypass_audit_get(args: argparse.Namespace) -> int:
                     "enabled": True,
                     "hit": False,
                     "audit": None,
+                    "warning_code": "audit_corrupt",
                     "warning": _sanitize_git_error(str(exc)),
                 }
             )
@@ -1238,7 +1227,7 @@ def cmd_operator_bypass_audit_append(args: argparse.Namespace) -> int:
             }
         )
         return 0
-    except (MemoryValidationError, json.JSONDecodeError, OSError, ValueError) as exc:
+    except (MemoryValidationError, json.JSONDecodeError, OSError, ValueError, MemoryGitError) as exc:
         _emit_operator_bypass_audit_fallback(
             mode="append",
             reason="audit_write_failed",
@@ -1255,11 +1244,6 @@ def cmd_operator_bypass_audit_append(args: argparse.Namespace) -> int:
             }
         )
         return 0
-    except MemoryGitError as exc:
-        error_text = _sanitize_git_error(str(exc))
-        print(f"AI_MEMORY_ERROR: {error_text}", file=sys.stderr)
-        _print_json({"ok": False, "enabled": True, "stored": False, "audit": None, "error": error_text})
-        return 2
 
 
 def cmd_revalidate_events_get(args: argparse.Namespace) -> int:
@@ -1300,6 +1284,7 @@ def cmd_revalidate_events_get(args: argparse.Namespace) -> int:
                     "enabled": True,
                     "hit": False,
                     "events": None,
+                    "warning_code": "events_corrupt",
                     "warning": _sanitize_git_error(str(exc)),
                 }
             )
@@ -1362,7 +1347,7 @@ def cmd_revalidate_events_append(args: argparse.Namespace) -> int:
             }
         )
         return 0
-    except (MemoryValidationError, json.JSONDecodeError, OSError, ValueError) as exc:
+    except (MemoryValidationError, json.JSONDecodeError, OSError, ValueError, MemoryGitError) as exc:
         _emit_revalidate_events_fallback(
             mode="append",
             reason="events_write_failed",
@@ -1379,11 +1364,6 @@ def cmd_revalidate_events_append(args: argparse.Namespace) -> int:
             }
         )
         return 0
-    except MemoryGitError as exc:
-        error_text = _sanitize_git_error(str(exc))
-        print(f"AI_MEMORY_ERROR: {error_text}", file=sys.stderr)
-        _print_json({"ok": False, "enabled": True, "stored": False, "events": None, "error": error_text})
-        return 2
 
 
 def cmd_processed_command_check(args: argparse.Namespace) -> int:
