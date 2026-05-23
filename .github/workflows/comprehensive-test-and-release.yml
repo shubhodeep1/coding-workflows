@@ -245,8 +245,11 @@ jobs:
 
           REPORT_FILE="$(find analysis -maxdepth 1 -type f -name 'workflow-optimization-*.md' | LC_ALL=C sort -V | tail -n1 || true)"
           REPORT_FILE="${REPORT_FILE#./}"
+          if [ -z "${REPORT_FILE}" ] && [ -f "analysis/recommendation-processing-report.md" ]; then
+            REPORT_FILE="analysis/recommendation-processing-report.md"
+          fi
           if [ -z "${REPORT_FILE}" ]; then
-            echo "::error::No workflow analysis report found under analysis/."
+            echo "::error::No workflow analysis report found under analysis/ (expected a dated workflow-optimization report or analysis/recommendation-processing-report.md)."
             exit 1
           fi
 
