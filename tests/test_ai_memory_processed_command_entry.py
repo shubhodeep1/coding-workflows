@@ -953,6 +953,150 @@ def test_memory_revalidate_events_append_wrapper_fails_open() -> None:
 	assert "AI_MEMORY_TELEMETRY" in result.stderr
 
 
+def test_positive_int_helpers_reject_boolean_values() -> None:
+	for func, field_name in (
+		(ai_memory_lib._validate_positive_int_field, "tracking_issue_number"),
+		(ai_memory_lib._normalize_optional_positive_int, "run_id"),
+	):
+		try:
+			func(True, field_name)
+		except ai_memory_lib.MemoryValidationError as exc:
+			assert field_name in str(exc)
+			continue
+		assert False, f"Expected boolean {field_name} to be rejected"
+
+
+def test_new_get_cli_fails_open_on_memory_git_error() -> None:
+	def _raise_memory_git_error(*_args, **_kwargs):
+		raise ai_memory.MemoryGitError("simulated git failure")
+
+	with _patched_module_attrs(ai_memory, read_memory_root_from_branch=_raise_memory_git_error):
+		for subcommand, payload_key, argv, warning_prefix, warning_code in (
+			(
+				"validation-history",
+				"validation_history",
+				["--repo", "owner/repo", "--integration-sha", "abcdef1234"],
+				"::warning::validation_history_fallback",
+				"history_read_failed",
+			),
+			(
+				"operator-bypass-audit",
+				"audit",
+				[
+					"--repo",
+					"owner/repo",
+					"--tracking-issue",
+					"2934",
+					"--integration-sha",
+					"abcdef1234",
+				],
+				"::warning::operator_bypass_audit_fallback",
+				"audit_read_failed",
+			),
+			(
+				"revalidate-events",
+				"events",
+				[
+					"--repo",
+					"owner/repo",
+					"--tracking-issue",
+					"2934",
+					"--integration-sha",
+					"abcdef1234",
+				],
+				"::warning::revalidate_events_fallback",
+				"events_read_failed",
+			),
+		):
+			exit_code, stdout, stderr = _run_ai_memory_cli(
+				[subcommand, "get", "--memory-branch", "ai-memory", "--memory-root", "ai-memory", *argv]
+			)
+			assert exit_code == 0
+			payload = json.loads(stdout)
+			assert payload["hit"] is False
+			assert payload[payload_key] is None
+			assert payload["warning_code"] == warning_code
+			assert "simulated git failure" in payload["warning"]
+			assert warning_prefix in stderr
+
+
+def test_tracking_issue_cli_validation_happens_before_memory_io() -> None:
+	def _unexpected_memory_io(*_args, **_kwargs):
+		raise AssertionError("memory io should not run for invalid tracking_issue")
+
+	with _patched_module_attrs(
+		ai_memory,
+		read_memory_root_from_branch=_unexpected_memory_io,
+		persist_memory_operation=_unexpected_memory_io,
+	):
+		for argv in (
+			[
+				"operator-bypass-audit",
+				"get",
+				"--memory-branch",
+				"ai-memory",
+				"--memory-root",
+				"ai-memory",
+				"--repo",
+				"owner/repo",
+				"--tracking-issue",
+				"invalid",
+				"--integration-sha",
+				"abcdef1234",
+			],
+			[
+				"operator-bypass-audit",
+				"append",
+				"--memory-branch",
+				"ai-memory",
+				"--memory-root",
+				"ai-memory",
+				"--repo",
+				"owner/repo",
+				"--tracking-issue",
+				"invalid",
+				"--integration-sha",
+				"abcdef1234",
+				"--entry-file",
+				"/tmp/does-not-matter.json",
+			],
+			[
+				"revalidate-events",
+				"get",
+				"--memory-branch",
+				"ai-memory",
+				"--memory-root",
+				"ai-memory",
+				"--repo",
+				"owner/repo",
+				"--tracking-issue",
+				"invalid",
+				"--integration-sha",
+				"abcdef1234",
+			],
+			[
+				"revalidate-events",
+				"append",
+				"--memory-branch",
+				"ai-memory",
+				"--memory-root",
+				"ai-memory",
+				"--repo",
+				"owner/repo",
+				"--tracking-issue",
+				"invalid",
+				"--integration-sha",
+				"abcdef1234",
+				"--entry-file",
+				"/tmp/does-not-matter.json",
+			],
+		):
+			exit_code, stdout, stderr = _run_ai_memory_cli(argv)
+			assert exit_code == 2
+			assert stdout == ""
+			assert "tracking_issue must be a positive integer" in stderr
+
+
 def main() -> int:
 	test_cleanup_paths = globals().setdefault("_TEST_CLEANUP_PATHS", [])
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

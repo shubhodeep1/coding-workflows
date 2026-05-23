@@ -83,7 +83,10 @@ def _resolve_memory_root(memory_dir: Path, memory_root_relative: str) -> Path:
 
 
 def _require_positive_int(value: str | None, field_name: str) -> int:
-    parsed = _safe_int(value)
+    try:
+        parsed = _safe_int(value)
+    except ValueError as exc:
+        raise MemoryValidationError(f"{field_name} must be a positive integer") from exc
     if parsed is None or parsed < 1:
         raise MemoryValidationError(f"{field_name} must be a positive integer")
     return parsed
@@ -1050,17 +1053,23 @@ def cmd_validation_history_get(args: argparse.Namespace) -> int:
                 }
             )
             return 0
-        print(f"AI_MEMORY_ERROR: {error_text}", file=sys.stderr)
+        _emit_validation_history_fallback(
+            mode="get",
+            reason="history_read_failed",
+            repo=repository,
+            integration_sha=integration_sha,
+        )
         _print_json(
             {
-                "ok": False,
+                "ok": True,
                 "enabled": True,
                 "hit": False,
                 "validation_history": None,
-                "error": error_text,
+                "warning_code": "history_read_failed",
+                "warning": error_text,
             }
         )
-        return 2
+        return 0
     finally:
         if branch_dir:
             shutil.rmtree(branch_dir, ignore_errors=True)
@@ -1130,7 +1139,7 @@ def cmd_operator_bypass_audit_get(args: argparse.Namespace) -> int:
     args = _read_env_defaults(args)
     repository = _require_nonempty(args.repo, "repo")
     integration_sha = _require_nonempty(args.integration_sha, "integration_sha")
-    tracking_issue = args.tracking_issue
+    tracking_issue = _require_positive_int(args.tracking_issue, "tracking_issue")
     if not args.enabled:
         _print_json({"ok": True, "enabled": False, "hit": False, "audit": None})
         return 0
@@ -1148,7 +1157,7 @@ def cmd_operator_bypass_audit_get(args: argparse.Namespace) -> int:
             audit = get_operator_bypass_audit(
                 memory_root,
                 repository=repository,
-                tracking_issue_number=_require_positive_int(tracking_issue, "tracking_issue"),
+                tracking_issue_number=tracking_issue,
                 integration_sha=integration_sha,
             )
         except (MemoryValidationError, json.JSONDecodeError, OSError, ValueError) as exc:
@@ -1176,9 +1185,23 @@ def cmd_operator_bypass_audit_get(args: argparse.Namespace) -> int:
         if _is_missing_memory_branch_error(error_text):
             _print_json({"ok": True, "enabled": False, "hit": False, "audit": None, "warning": error_text})
             return 0
-        print(f"AI_MEMORY_ERROR: {error_text}", file=sys.stderr)
-        _print_json({"ok": False, "enabled": True, "hit": False, "audit": None, "error": error_text})
-        return 2
+        _emit_operator_bypass_audit_fallback(
+            mode="get",
+            reason="audit_read_failed",
+            tracking_issue=tracking_issue,
+            integration_sha=integration_sha,
+        )
+        _print_json(
+            {
+                "ok": True,
+                "enabled": True,
+                "hit": False,
+                "audit": None,
+                "warning_code": "audit_read_failed",
+                "warning": error_text,
+            }
+        )
+        return 0
     finally:
         if branch_dir:
             shutil.rmtree(branch_dir, ignore_errors=True)
@@ -1188,7 +1211,7 @@ def cmd_operator_bypass_audit_append(args: argparse.Namespace) -> int:
     args = _read_env_defaults(args)
     repository = _require_nonempty(args.repo, "repo")
     integration_sha = _require_nonempty(args.integration_sha, "integration_sha")
-    tracking_issue = args.tracking_issue
+    tracking_issue = _require_positive_int(args.tracking_issue, "tracking_issue")
     if not args.enabled:
         _print_json({"ok": True, "enabled": False, "stored": False, "audit": None})
         return 0
@@ -1201,7 +1224,7 @@ def cmd_operator_bypass_audit_append(args: argparse.Namespace) -> int:
         audit = append_operator_bypass_audit_entry(
             memory_root,
             repository=repository,
-            tracking_issue_number=_require_positive_int(tracking_issue, "tracking_issue"),
+            tracking_issue_number=tracking_issue,
             integration_sha=integration_sha,
             entry=entry,
         )
@@ -1250,7 +1273,7 @@ def cmd_revalidate_events_get(args: argparse.Namespace) -> int:
     args = _read_env_defaults(args)
     repository = _require_nonempty(args.repo, "repo")
     integration_sha = _require_nonempty(args.integration_sha, "integration_sha")
-    tracking_issue = args.tracking_issue
+    tracking_issue = _require_positive_int(args.tracking_issue, "tracking_issue")
     if not args.enabled:
         _print_json({"ok": True, "enabled": False, "hit": False, "events": None})
         return 0
@@ -1268,7 +1291,7 @@ def cmd_revalidate_events_get(args: argparse.Namespace) -> int:
             events = get_revalidate_events(
                 memory_root,
                 repository=repository,
-                tracking_issue_number=_require_positive_int(tracking_issue, "tracking_issue"),
+                tracking_issue_number=tracking_issue,
                 integration_sha=integration_sha,
             )
         except (MemoryValidationError, json.JSONDecodeError, OSError, ValueError) as exc:
@@ -1296,9 +1319,23 @@ def cmd_revalidate_events_get(args: argparse.Namespace) -> int:
         if _is_missing_memory_branch_error(error_text):
             _print_json({"ok": True, "enabled": False, "hit": False, "events": None, "warning": error_text})
             return 0
-        print(f"AI_MEMORY_ERROR: {error_text}", file=sys.stderr)
-        _print_json({"ok": False, "enabled": True, "hit": False, "events": None, "error": error_text})
-        return 2
+        _emit_revalidate_events_fallback(
+            mode="get",
+            reason="events_read_failed",
+            tracking_issue=tracking_issue,
+            integration_sha=integration_sha,
+        )
+        _print_json(
+            {
+                "ok": True,
+                "enabled": True,
+                "hit": False,
+                "events": None,
+                "warning_code": "events_read_failed",
+                "warning": error_text,
+            }
+        )
+        return 0
     finally:
         if branch_dir:
             shutil.rmtree(branch_dir, ignore_errors=True)
@@ -1308,7 +1345,7 @@ def cmd_revalidate_events_append(args: argparse.Namespace) -> int:
     args = _read_env_defaults(args)
     repository = _require_nonempty(args.repo, "repo")
     integration_sha = _require_nonempty(args.integration_sha, "integration_sha")
-    tracking_issue = args.tracking_issue
+    tracking_issue = _require_positive_int(args.tracking_issue, "tracking_issue")
     if not args.enabled:
         _print_json({"ok": True, "enabled": False, "stored": False, "events": None})
         return 0
@@ -1321,7 +1358,7 @@ def cmd_revalidate_events_append(args: argparse.Namespace) -> int:
         events = append_revalidate_event(
             memory_root,
             repository=repository,
-            tracking_issue_number=_require_positive_int(tracking_issue, "tracking_issue"),
+            tracking_issue_number=tracking_issue,
             integration_sha=integration_sha,
             entry=entry,
         )

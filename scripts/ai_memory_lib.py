@@ -566,6 +566,8 @@ def _validate_repository_name(repository: str) -> str:
 
 
 def _validate_positive_int_field(value: int | str, field_name: str) -> int:
+    if isinstance(value, bool):
+        raise MemoryValidationError(f"{field_name} must be a positive integer")
     try:
         parsed = int(value)
     except (TypeError, ValueError) as exc:
