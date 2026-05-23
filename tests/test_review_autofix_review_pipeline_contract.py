@@ -382,6 +382,92 @@ def test_auto_merge_guard_honours_configured_orchestrator_branch_pattern() -> No
 	assert "falling back to canonical '^orchestrator/project-[0-9]+$' auto-merge suppressor" not in block
 
 
+def test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_codex_agent_path() -> None:
+	# forward-merge-stable-to-main.yml opens fallback PRs with head ref
+	# `auto/forward-merge-stable-<run-id>-<attempt>`. These MUST be merged
+	# via "Create a merge commit" so stable's tip stays in main's ancestry —
+	# the workflow's own auto-merge call `gh pr merge --squash --auto` would
+	# strip that ancestry and break the next promote-main-to-stable.yml run.
+	# Verify the codex-agent "Enable auto-merge on PR" step short-circuits
+	# on this head-ref pattern BEFORE reaching the squash-auto call.
+	block = _step_block("Enable auto-merge on PR")
+	assert "Scoped opt-out for forward-merge fallback PRs" in block, (
+		"Forward-merge fallback suppressor comment is missing"
+	)
+	assert "grep -Eq '^auto/forward-merge-stable-'" in block, (
+		"Forward-merge fallback head-ref regex is missing or has drifted"
+	)
+	assert "matches forward-merge fallback pattern '^auto/forward-merge-stable-'" in block, (
+		"Forward-merge suppressor log line is missing the canonical phrasing"
+	)
+	assert "promote-main-to-stable.yml" in block, (
+		"Suppressor must explain WHY (ancestry / promote-main-to-stable) for operator debuggability"
+	)
+	# The forward-merge suppressor must run BEFORE the orchestrator pattern
+	# block — otherwise a forward-merge head ref that someone retrofitted
+	# to also look orchestrator-shaped (or any future suppressor that
+	# moves on) would be evaluated in the wrong order. Concretely: the
+	# suppressor must appear above the first reference to the configured
+	# ORCH_INTEGRATION_BRANCH_PATTERN match attempt.
+	idx_forward = block.find("matches forward-merge fallback pattern")
+	idx_orch_match = block.find('grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN}"')
+	assert idx_forward != -1
+	assert idx_orch_match != -1
+	assert idx_forward < idx_orch_match, (
+		"Forward-merge suppressor must short-circuit before the orchestrator-pattern match attempt"
+	)
+
+
+def test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_deterministic_skip_path() -> None:
+	# Defense in depth: a small/doc-only forward-merge fallback PR would
+	# otherwise short-circuit through deterministic-skip-merge's auto-merge
+	# call before the codex-agent path's suppressor ran. The
+	# deterministic-skip job must apply the same head-ref guard, sourced
+	# from the gate job's existing /pulls/{n} fetch (§15 API hygiene — no
+	# duplicate API call).
+	block = _step_block("Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge")
+	assert "PR_HEAD_REF" in block, (
+		"deterministic-skip-merge must read the gate's head_ref output"
+	)
+	assert "grep -Eq '^auto/forward-merge-stable-'" in block, (
+		"Forward-merge fallback head-ref regex is missing from deterministic-skip-merge"
+	)
+	assert "auto-merge suppressed on the deterministic-skip path" in block, (
+		"Deterministic-skip suppressor log line is missing the canonical phrasing"
+	)
+	# The check must run BEFORE the `gh pr merge --squash --auto` call.
+	idx_guard = block.find("grep -Eq '^auto/forward-merge-stable-'")
+	idx_merge = block.find("gh pr merge")
+	assert idx_guard != -1
+	assert idx_merge != -1
+	assert idx_guard < idx_merge, (
+		"Forward-merge suppressor must short-circuit before the gh pr merge --squash --auto call"
+	)
+	assert 'auto_merge_summary="SUPPRESSED (forward-merge fallback head ref' in block, (
+		"deterministic-skip-merge must track suppressed auto-merge state for the step summary"
+	)
+	assert 'echo "- **Auto-merge:** ${auto_merge_summary}"' in block, (
+		"Deterministic-skip summary must report the actual auto-merge outcome"
+	)
+
+
+def test_gate_emits_head_ref_output_for_forward_merge_suppressor_reuse() -> None:
+	# The deterministic-skip-merge suppressor sources head ref from the
+	# gate's /pulls/{n} fetch (§15: don't repeat an API call). Verify the
+	# gate exposes head_ref as an output and the deterministic-skip-merge
+	# job reads it via needs.gate.outputs.head_ref.
+	wf = _workflow_text()
+	assert "head_ref: ${{ steps.evaluate.outputs.head_ref }}" in wf, (
+		"Gate job must expose head_ref output for downstream forward-merge suppressors"
+	)
+	assert 'echo "head_ref=${pr_head_ref}"' in wf, (
+		"Gate evaluate step must emit head_ref to GITHUB_OUTPUT"
+	)
+	assert "PR_HEAD_REF: ${{ needs.gate.outputs.head_ref }}" in wf, (
+		"deterministic-skip-merge must consume head_ref from gate outputs"
+	)
+
+
 def test_reviewer_prompt_output_rules_still_forbid_scripts() -> None:
 	reviewers = _reviewers_text()
 	assert "OUTPUT RULES" in reviewers
@@ -601,8 +687,12 @@ def test_reviewer_iteration_scope_prepare_path_reports_missing_targeted_context_
 
 def main() -> int:
 	test_review_pipeline_knobs_are_wired_into_codex_agent_env()
+	test_reject_verifier_bootstrap_and_stage_order_contract()
 	test_review_pipeline_summary_step_is_local_only_and_grep_friendly()
 	test_auto_merge_guard_honours_configured_orchestrator_branch_pattern()
+	test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_codex_agent_path()
+	test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_deterministic_skip_path()
+	test_gate_emits_head_ref_output_for_forward_merge_suppressor_reuse()
 	test_reviewer_prompt_output_rules_still_forbid_scripts()
 	test_reviewer_iteration_scope_first_iteration_keeps_full_diff_context()
 	test_reviewer_iteration_scope_valid_artifacts_narrow_to_last_run_and_actionable_ledger_files()
