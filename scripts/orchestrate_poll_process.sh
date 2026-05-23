@@ -12929,7 +12929,7 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 	# Fetch up to 100 most-recent comments. Noop-suspicious warnings
 	# are posted by the workflow itself so they always appear in the
 	# issue-comments stream for the PR.
-	N_COMMENTS_JSON="$(gh_retry gh api --paginate \
+	N_COMMENTS_JSON="$(gh_retry _safe_gh_jq --paginate \
 		"repos/${GITHUB_REPOSITORY}/issues/${N_PR}/comments?per_page=100" \
 		| jq -s 'add // []' 2>/dev/null || echo '[]')"
 	[ -n "${N_COMMENTS_JSON}" ] || N_COMMENTS_JSON='[]'
@@ -12950,7 +12950,7 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 	# review_commit_changes.sh emit when the editor or judge writes
 	# real source-file changes. Manual commits, merge commits, and
 	# bot-housekeeping commits do NOT reset the noop counter.
-	N_COMMITS_JSON="$(gh_retry gh api --paginate \
+	N_COMMITS_JSON="$(gh_retry _safe_gh_jq --paginate \
 		"repos/${GITHUB_REPOSITORY}/pulls/${N_PR}/commits?per_page=100" \
 		| jq -s 'add // []' 2>/dev/null || echo '[]')"
 	[ -n "${N_COMMITS_JSON}" ] || N_COMMITS_JSON='[]'
@@ -13046,7 +13046,7 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 	# Refresh the comments snapshot on the threshold path so Gate B
 	# validates the latest editor summary when a new noop warning or
 	# summary comment lands mid-tick.
-	N_FRESH_COMMENTS_JSON="$(gh_retry gh api --paginate \
+	N_FRESH_COMMENTS_JSON="$(gh_retry _safe_gh_jq --paginate \
 		"repos/${GITHUB_REPOSITORY}/issues/${N_PR}/comments?per_page=100" \
 		| jq -s 'add // []' 2>/dev/null || true)"
 	if [ -n "${N_FRESH_COMMENTS_JSON}" ]; then
