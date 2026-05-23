@@ -33,6 +33,12 @@ FAILURE_LABELS = [
 ]
 
 RESOLVER_ESCALATED_LABEL = "ai:resolver-escalated"
+ADDITIVE_LABELS = [
+	RESOLVER_ESCALATED_LABEL,
+	"ai:harness-broken",
+	"ai:force-merge",
+	"ai:integration-backpressure",
+]
 
 
 def _repair(issue_labels: str) -> dict[str, object]:
@@ -49,15 +55,15 @@ def _repair(issue_labels: str) -> dict[str, object]:
 	return json.loads(output_lines[0])
 
 
-def _extract_helper_catalog() -> tuple[set[str], set[str]]:
+def _extract_helper_catalog() -> tuple[dict[str, str], dict[str, str]]:
 	helper_body = HELPER_PATH.read_text(encoding="utf-8")
 	colors_block_match = re.search(r"declare -A _AI_LABEL_COLORS=\((.*?)\n\)", helper_body, flags=re.S)
 	descs_block_match = re.search(r"declare -A _AI_LABEL_DESCS=\((.*?)\n\)", helper_body, flags=re.S)
 	assert colors_block_match, "Could not parse _AI_LABEL_COLORS from label_helpers.sh"
 	assert descs_block_match, "Could not parse _AI_LABEL_DESCS from label_helpers.sh"
-	colors_keys = set(re.findall(r'\["([^"]+)"\]=', colors_block_match.group(1)))
-	descs_keys = set(re.findall(r'\["([^"]+)"\]=', descs_block_match.group(1)))
-	return colors_keys, descs_keys
+	colors = dict(re.findall(r'\["([^"]+)"\]="([^"]+)"', colors_block_match.group(1)))
+	descs = dict(re.findall(r'\["([^"]+)"\]="([^"]+)"', descs_block_match.group(1)))
+	return colors, descs
 
 
 def test_contract_includes_failure_phase_group_and_members():
@@ -86,17 +92,28 @@ def test_repair_labels_does_not_add_failure_phase_when_absent():
 
 def test_contract_labels_match_helper_color_and_description_catalogs():
 	contract = ai_labels.load_label_contract(CONTRACT_PATH)
-	contract_labels = set(contract["labels"].keys())
-	color_keys, desc_keys = _extract_helper_catalog()
-	assert color_keys == contract_labels
-	assert desc_keys == contract_labels
+	contract_labels = contract["labels"]
+	helper_colors, helper_descs = _extract_helper_catalog()
+	assert set(helper_colors) == set(contract_labels)
+	assert set(helper_descs) == set(contract_labels)
+	assert helper_colors == {name: metadata["color"] for name, metadata in contract_labels.items()}
+	assert helper_descs == {name: metadata["description"] for name, metadata in contract_labels.items()}
 
 
-def test_resolver_escalated_label_is_present_and_non_phase_additive():
+def test_additive_labels_are_present_and_non_phase():
 	contract = ai_labels.load_label_contract(CONTRACT_PATH)
-	assert RESOLVER_ESCALATED_LABEL in contract["labels"]
-	for group in contract["phase_groups"]:
-		assert RESOLVER_ESCALATED_LABEL not in group.get("members", [])
+	for label in ADDITIVE_LABELS:
+		assert label in contract["labels"]
+		for group in contract["phase_groups"]:
+			assert label not in group.get("members", [])
+			assert label != group.get("fallback")
+
+
+def test_additive_labels_survive_repair_alongside_phase_label():
+	for label in ADDITIVE_LABELS:
+		payload = _repair(f"ai:planning,{label}")
+		assert payload["add"] == []
+		assert payload["remove"] == []
 
 
 def test_contract_validate_command_succeeds_with_failure_phase():
