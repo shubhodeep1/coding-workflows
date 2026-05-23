@@ -548,6 +548,7 @@ def _run_poller(
 	compare_ahead_by: int = 0,
 	compare_ahead_by_force_error: bool = False,
 	mock_revalidate_events_payload: dict | None = None,
+	mock_pr_create_race_pr: dict | None = None,
 ) -> dict:
 	tracking_num = 192
 	tracking_labels = tracking_labels or []
@@ -586,6 +587,7 @@ def _run_poller(
 	branch_ref_shas = branch_ref_shas or {}
 	mock_git_fetch_fail_after = mock_git_fetch_fail_after or {}
 	mock_revalidate_events_payload = dict(mock_revalidate_events_payload or {})
+	mock_pr_create_race_pr = dict(mock_pr_create_race_pr or {})
 	codex_json = codex_json or {
 		"status": "complete",
 		"justification": "done",
@@ -709,6 +711,7 @@ def _run_poller(
 			"compare_ahead_by": int(compare_ahead_by),
 			"compare_ahead_by_force_error": bool(compare_ahead_by_force_error),
 			"mock_revalidate_events_payload": mock_revalidate_events_payload,
+			"mock_pr_create_race_pr": mock_pr_create_race_pr,
 		}
 		store_file.write_text(json.dumps(store), encoding="utf-8")
 
@@ -1094,6 +1097,31 @@ if args[0] == 'pr' and len(args) >= 2 and args[1] == 'create':
 			i += 2
 			continue
 		i += 1
+	race_pr = store.get('mock_pr_create_race_pr')
+	if isinstance(race_pr, dict) and race_pr.get('baseRefName') == base and race_pr.get('headRefName') == head:
+		existing = None
+		for item in store.get('prs', []):
+			if item.get('state', 'open') == 'open' and item.get('baseRefName') == base and item.get('headRefName') == head:
+				existing = item
+				break
+		if existing is None:
+			next_num = store.get('next_pr_number', 300)
+			store['next_pr_number'] = next_num + 1
+			existing = {
+				'number': next_num,
+				'state': 'open',
+				'draft': bool(race_pr.get('draft', draft)),
+				'baseRefName': base,
+				'headRefName': head,
+				'mergeable': race_pr.get('mergeable', True),
+				'mergeable_state': race_pr.get('mergeable_state', 'clean'),
+				'title': race_pr.get('title', title),
+				'body': race_pr.get('body', body),
+			}
+			store.setdefault('prs', []).append(existing)
+			save()
+		print('a pull request already exists for this branch pair', file=sys.stderr)
+		sys.exit(1)
 	next_num = store.get('next_pr_number', 300)
 	store['next_pr_number'] = next_num + 1
 	pr = {
@@ -2704,6 +2732,34 @@ def test_integration_ahead_creates_and_reuses_eager_draft_pr_before_validation_c
 	assert second["prs"][0].get("draft") is True
 	assert second["pr_ready_calls"] == []
 	assert second["pr_body_update_calls"] == []
+
+
+def test_integration_ahead_recovers_when_eager_pr_create_races_existing_open_pr():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		mock_pr_create_race_pr={
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"draft": True,
+		},
+	)
+	assert result["latest_state"]["status"] == "validating"
+	assert result["latest_state"]["final_merge_status"] == "pending"
+	assert len(result["prs"]) == 1
+	pr = result["prs"][0]
+	assert result["latest_state"]["final_merge_pr"] == pr["number"]
+	assert pr["headRefName"] == "orchestrator/project-192"
+	assert pr["baseRefName"] == "main"
+	assert pr.get("draft") is True
+	assert "<!-- VALIDATION_STATUS_V1 -->" in pr.get("body", "")
+	assert result["pr_body_update_calls"] == [pr["number"]]
 
 
 def test_missing_integration_branch_marks_failed():

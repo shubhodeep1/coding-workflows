@@ -3714,6 +3714,17 @@ Refs #${TRACKING_NUM}" 2>/dev/null || true)"
     discovered="$(printf '%s\n' "${pr_url}" | grep -oE '/pull/[0-9]+' | tail -n1 | cut -d/ -f3 || true)"
     if [[ "${discovered}" =~ ^[0-9]+$ ]]; then
       echo "EAGER_DRAFT_PR_CREATED pr=${discovered} integration_branch=${integration_branch} tracking_issue=${TRACKING_NUM}" >&2
+    else
+      # A concurrent poll tick may have created the PR after our initial
+      # list probe but before gh pr create returned. Re-list once so the
+      # caller can still reuse that PR instead of failing this cycle.
+      discovered="$(gh_retry gh pr list \
+        --repo "${GITHUB_REPOSITORY}" \
+        --state open \
+        --base "${default_branch}" \
+        --head "${integration_branch}" \
+        --json number \
+        --jq '.[0].number // empty' 2>/dev/null || true)"
     fi
   fi
 
