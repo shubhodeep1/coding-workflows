@@ -687,7 +687,6 @@ def test_noop_warning_literal_present_in_poller() -> None:
 		"same noop-suspicious warning literal — otherwise the recovery "
 		"sweep will fail to detect any noop-suspicious PRs."
 	)
-
 if __name__ == "__main__":
 	test_merge_conflict_chain_gates_on_editor_noop_suspicious()
 	test_validator_emits_exact_grep_literal()

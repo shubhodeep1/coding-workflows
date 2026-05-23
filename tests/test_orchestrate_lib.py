@@ -819,31 +819,6 @@ def test_parse_iso8601_to_epoch_handles_common_shapes_and_failures():
 	assert orchestrate_lib._parse_iso8601_to_epoch([]) is None
 	assert orchestrate_lib._parse_iso8601_to_epoch("2023-99-99T99:99:99Z") is None
 
-	# timestamp() itself can fail on some platforms / malformed parsed values;
-	# the helper must still fail open rather than raising out of detect_stalls.
-	import datetime as _dt
-
-	class _FakeParsedDatetime:
-		tzinfo = _dt.timezone.utc
-		error_cls = OverflowError
-		def timestamp(self):
-			raise self.error_cls("boom")
-
-	class _FakeDatetimeModule:
-		@staticmethod
-		def fromisoformat(_s: str) -> _FakeParsedDatetime:
-			return _FakeParsedDatetime()
-
-	original_datetime = orchestrate_lib.datetime
-	orchestrate_lib.datetime = _FakeDatetimeModule
-	try:
-		for exc_type in (OverflowError, OSError):
-			_FakeParsedDatetime.error_cls = exc_type
-			assert orchestrate_lib._parse_iso8601_to_epoch("2023-11-14T21:43:20Z") is None
-	finally:
-		orchestrate_lib.datetime = original_datetime
-		_FakeParsedDatetime.error_cls = OverflowError
-
 def test_parse_iso8601_to_epoch_fails_open_on_timestamp_conversion_errors():
 	"""``datetime.timestamp()`` can raise platform-specific conversion errors.
 

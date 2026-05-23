@@ -3635,9 +3635,27 @@ jobs:
           PRE=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo 0)
           # Use a per-run smoke branch name so production validation-refresh
           # branches are never collided with.
-          gh workflow run "${WF_FILE}" --repo "${TEST_REPO}" \
-            --field branch_name="${BRANCH_NAME}" \
-            --field alert_msg_level=SILENT
+          # Retry the dispatch on transient GitHub API failures (HTTP 5xx,
+          # network blips) with exponential backoff (2s, 4s, 8s, 16s). A
+          # single HTTP 500 from /dispatches blocked release v1.13.8
+          # (run #26328466709 — update_workflows dispatch). The dispatch
+          # call itself is idempotent here because the post-dispatch poll
+          # filters runs by id > PRE, so a duplicate dispatch (if a 500
+          # response masked a successful create) is harmless — the poll
+          # picks up whichever run id was registered.
+          dispatch_attempt=1
+          until gh workflow run "${WF_FILE}" --repo "${TEST_REPO}" \
+              --field branch_name="${BRANCH_NAME}" \
+              --field alert_msg_level=SILENT; do
+            if [ "${dispatch_attempt}" -ge 5 ]; then
+              echo "::error::gh workflow run ${WF_FILE} failed after 5 attempts"
+              exit 1
+            fi
+            backoff=$(( 2 ** dispatch_attempt ))
+            echo "::warning::gh workflow run ${WF_FILE} failed (attempt ${dispatch_attempt}/5), retrying in ${backoff}s..."
+            sleep "${backoff}"
+            dispatch_attempt=$((dispatch_attempt + 1))
+          done
           DEADLINE=$(( $(date +%s) + 2400 ))
           NEW_ID=""
           while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
@@ -3696,9 +3714,22 @@ jobs:
           # destructive feedback loop during a release rehearsal.
           WF_FILE="update_workflows.yml"
           PRE=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo 0)
-          gh workflow run "${WF_FILE}" --repo "${TEST_REPO}" \
-            --field allow_workflow_edits=false \
-            --field alert_msg_level=SILENT
+          # Retry transient GitHub API failures — see the validation-refresh
+          # dispatch above for context (release v1.13.8 was blocked here by
+          # a single HTTP 500 from /dispatches in run #26328466709).
+          dispatch_attempt=1
+          until gh workflow run "${WF_FILE}" --repo "${TEST_REPO}" \
+              --field allow_workflow_edits=false \
+              --field alert_msg_level=SILENT; do
+            if [ "${dispatch_attempt}" -ge 5 ]; then
+              echo "::error::gh workflow run ${WF_FILE} failed after 5 attempts"
+              exit 1
+            fi
+            backoff=$(( 2 ** dispatch_attempt ))
+            echo "::warning::gh workflow run ${WF_FILE} failed (attempt ${dispatch_attempt}/5), retrying in ${backoff}s..."
+            sleep "${backoff}"
+            dispatch_attempt=$((dispatch_attempt + 1))
+          done
           DEADLINE=$(( $(date +%s) + 600 ))
           NEW_ID=""
           while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
@@ -3761,7 +3792,20 @@ jobs:
           # alerts (per Copilot review on PR #1742), so there is no
           # `alert_msg_level` input to pass — the smoke gate dispatch
           # already produces no per-phase pings here.
-          gh workflow run "${WF_FILE}" --repo "${TEST_REPO}"
+          # Retry transient GitHub API failures — see the validation-refresh
+          # dispatch above for context (release v1.13.8 was blocked by a
+          # single HTTP 500 from /dispatches in run #26328466709).
+          dispatch_attempt=1
+          until gh workflow run "${WF_FILE}" --repo "${TEST_REPO}"; do
+            if [ "${dispatch_attempt}" -ge 5 ]; then
+              echo "::error::gh workflow run ${WF_FILE} failed after 5 attempts"
+              exit 1
+            fi
+            backoff=$(( 2 ** dispatch_attempt ))
+            echo "::warning::gh workflow run ${WF_FILE} failed (attempt ${dispatch_attempt}/5), retrying in ${backoff}s..."
+            sleep "${backoff}"
+            dispatch_attempt=$((dispatch_attempt + 1))
+          done
           DEADLINE=$(( $(date +%s) + 900 ))
           NEW_ID=""
           while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
