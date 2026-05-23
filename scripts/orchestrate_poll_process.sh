@@ -5823,11 +5823,15 @@ has_active_validation_run() {
   return 1
 }
 
-# Return the conclusion of the most recent *completed* validation workflow run
-# that was created on or after the last dispatch timestamp recorded in state.
-# Used as a fallback when the ai:validated / ai:validation-failed label is
-# missing despite the workflow having completed successfully.
-get_last_validation_run_conclusion() {
+# Return a JSON object describing the most recent *completed* validation
+# workflow run that was created on or after the last dispatch timestamp
+# recorded in state. Fields: run_id, run_attempt, conclusion, raw_status.
+#
+# `raw_status` is sourced from `gh run view --json jobs,conclusion,outputs`
+# when the selected run exposes an id. The workflow-run list endpoint is still
+# the source of truth for freshness filtering so the poller does not read a
+# stale validation result from an earlier cycle.
+get_last_validation_run_info() {
   local wf_name="${VALIDATE_WORKFLOW_NAME:-ai-validate.yml}"
   local last_dispatch_ts
   last_dispatch_ts="$(jq -r '.validation_last_dispatch_ts // 0' "${STATE_FILE}")"
@@ -5851,13 +5855,87 @@ get_last_validation_run_conclusion() {
   fi
 
   # Select the most recent run created after our last dispatch timestamp
-  local conclusion
-  conclusion="$(echo "${runs_json}" | jq -r --argjson ts "${last_dispatch_ts}" '
-    [.[] | select((.created_at | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) >= $ts)] |
-    sort_by(.created_at) | last | .conclusion // ""
-  ' 2>/dev/null || echo '')"
+  local selected_run
+  selected_run="$(echo "${runs_json}" | jq -c --argjson ts "${last_dispatch_ts}" '
+    [.[]
+      | . + {
+          _created_ts: (((.created_at // "") | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601?) // 0)
+        }
+      | select(._created_ts >= $ts)
+    ]
+    | sort_by(.created_at // "")
+    | last // {}
+  ' 2>/dev/null || echo '{}')"
+  if [ -z "${selected_run}" ] || [ "${selected_run}" = "null" ] || [ "${selected_run}" = "{}" ]; then
+    echo '{"run_id":"","run_attempt":0,"conclusion":"","raw_status":""}'
+    return 0
+  fi
 
-  echo "${conclusion}"
+  local run_id
+  local run_attempt
+  local conclusion
+  local raw_status=""
+  local run_view_json='{}'
+  run_id="$(printf '%s' "${selected_run}" | jq -r '(.id // .databaseId // "") | tostring' 2>/dev/null || echo '')"
+  run_attempt="$(printf '%s' "${selected_run}" | jq -r '(.run_attempt // 0) | tonumber? // 0' 2>/dev/null || echo '0')"
+  conclusion="$(printf '%s' "${selected_run}" | jq -r '.conclusion // ""' 2>/dev/null || echo '')"
+
+  if [[ "${run_id}" =~ ^[0-9]+$ ]]; then
+    run_view_json="$(gh_retry gh run view "${run_id}" --repo "${GITHUB_REPOSITORY}" --json jobs,conclusion,outputs 2>/dev/null || echo '{}')"
+    if [ -n "${run_view_json}" ] && [ "${run_view_json}" != "null" ]; then
+      conclusion="$(printf '%s' "${run_view_json}" | jq -r '.conclusion // empty' 2>/dev/null || echo "${conclusion}")"
+      raw_status="$(printf '%s' "${run_view_json}" | jq -r '((.outputs // {}) | .raw_status // .["raw_status"] // "")' 2>/dev/null || echo '')"
+    fi
+  fi
+
+  printf '%s' "${selected_run}" | jq -c \
+    --arg run_id "${run_id}" \
+    --argjson run_attempt "${run_attempt}" \
+    --arg conclusion "${conclusion}" \
+    --arg raw_status "${raw_status}" '
+      {
+        run_id: $run_id,
+        run_attempt: $run_attempt,
+        conclusion: (if $conclusion == "" then (.conclusion // "") else $conclusion end),
+        raw_status: $raw_status
+      }
+    ' 2>/dev/null || echo '{"run_id":"","run_attempt":0,"conclusion":"","raw_status":""}'
+}
+
+# Return the conclusion of the most recent *completed* validation workflow run
+# that was created on or after the last dispatch timestamp recorded in state.
+# Used as a fallback when the ai:validated / ai:validation-failed label is
+# missing despite the workflow having completed successfully.
+get_last_validation_run_conclusion() {
+  local run_info
+  run_info="$(get_last_validation_run_info)"
+  printf '%s' "${run_info}" | jq -r '.conclusion // ""' 2>/dev/null || echo ""
+}
+
+infer_validation_raw_status() {
+  local reason="$1"
+
+  if [ -n "${LAST_VAL_RAW_STATUS:-}" ] && [ "${LAST_VAL_RAW_STATUS}" != "null" ]; then
+    echo "${LAST_VAL_RAW_STATUS}"
+    return 0
+  fi
+
+  if printf '%s' "${reason}" | grep -qiE 'raw_status[=:[:space:]]*harness_error|Runtime validation harness error|Validation failed due to harness error|harness pre-flight error'; then
+    echo "harness_error"
+    return 0
+  fi
+
+  if printf '%s' "${reason}" | grep -qi 'Runtime validation found fixable issues'; then
+    echo "needs_fixes"
+    return 0
+  fi
+
+  echo ""
+}
+
+validation_reason_one_line() {
+  local reason="$1"
+  printf '%s' "${reason}" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g' | cut -c1-200
 }
 
 dispatch_validation_if_needed() {
@@ -5942,12 +6020,54 @@ dispatch_validation_if_needed() {
 mark_validation_failed() {
   local reason="$1"
   local _tracking_labels
+  local validation_raw_status
+  local harness_reason_one_line
 
   # Check validation recovery budget before going terminal
   local val_recovery_count
   val_recovery_count="$(jq -r '.validation_recovery_count // 0' "${STATE_FILE}")"
   if ! [[ "${val_recovery_count}" =~ ^[0-9]+$ ]]; then
     val_recovery_count="0"
+  fi
+
+  validation_raw_status="$(infer_validation_raw_status "${reason}")"
+  if [ "${validation_raw_status}" = "harness_error" ]; then
+    harness_reason_one_line="$(validation_reason_one_line "${reason}")"
+    echo "HARNESS_ERROR_DETECTED reason=${harness_reason_one_line}"
+
+    jq --arg reason "${reason}" --arg raw_status "${validation_raw_status}" '
+      .status = "failed" |
+      .validation_failure_reason = $reason |
+      .validation_failure_class = null |
+      .validation_last_raw_status = $raw_status |
+      .validation_active_fix_issues = [] |
+      .validation_fix_issues_batch_cycles = 0 |
+      .validation_completed_cycle = null |
+      .judge_last_fingerprint = "" |
+      .judge_fingerprint_repeat_count = 0
+    ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment || true
+    _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
+    handle_comprehensive_release_callback_if_needed "failed" "${_tracking_labels}" "${COMMENTS:-[]}"
+    set_tracking_phase_label "ai:validation-failed"
+    gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:validate-failed" >/dev/null || true
+    ensure_label_exists "ai:harness-broken" >/dev/null 2>&1 || true
+    gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:harness-broken" >/dev/null 2>&1 || true
+    post_tracking_comment "## ❌ Runtime validation harness error
+
+${reason}
+
+The latest validation run reported \`raw_status=harness_error\`, so the orchestrator is classifying this as a harness/infrastructure defect instead of consuming \`MAX_VALIDATION_RECOVERY_ATTEMPTS\`, \`MAX_VALIDATE_CYCLES\`, or judge repeat-fingerprint budget. Repair the harness, then run \`/revalidate\` to resume runtime validation."
+    COMPLETION_STATUS_STATE_CHANGED="false"
+    update_completion_status_comment "failed" \
+      "## Completion status"$'\n\n'"**State:** \`failed\`"$'\n\n'"Runtime validation is blocked by a harness/infrastructure defect (\`raw_status=harness_error\`). Recovery counters were left unchanged. Repair the harness, then use \`/revalidate\` to resume validation. See the \"❌ Runtime validation harness error\" comment for the diagnostic detail." \
+      || true
+    if [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
+      post_state_comment || true
+    fi
+    tg_cleanup_msgs "${TRACKING_NUM}"
+    tg_notify "Project #${TRACKING_NUM} validation harness is broken (raw_status=harness_error). Recovery counters unchanged; manual repair plus /revalidate required." "CRITICAL"
+    return 0
   fi
 
   # Deterministic-failure short-circuit: validate_process.sh embeds
@@ -5963,18 +6083,21 @@ mark_validation_failed() {
       | head -n 1 \
       | sed 's/^AI_VALIDATION_FAILURE_CLASS://')"
     echo "Validation failed deterministically (class=${_deterministic_class}); skipping recovery budget (current=${val_recovery_count}/${MAX_VALIDATION_RECOVERY_ATTEMPTS})."
-    jq --arg reason "${reason}" --arg dclass "${_deterministic_class}" \
+    jq --arg reason "${reason}" --arg dclass "${_deterministic_class}" --arg raw_status "${validation_raw_status}" \
       '.status = "failed" |
        .validation_failure_reason = $reason |
        .validation_failure_class = $dclass |
+       .validation_last_raw_status = (if $raw_status == "" then null else $raw_status end) |
        .validation_active_fix_issues = [] |
-       .validation_fix_issues_batch_cycles = 0' \
+       .validation_fix_issues_batch_cycles = 0 |
+       .validation_completed_cycle = null' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment || true
     _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
     handle_comprehensive_release_callback_if_needed "failed" "${_tracking_labels}" "${COMMENTS:-[]}"
     set_tracking_phase_label "ai:validation-failed"
     gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:validate-failed" >/dev/null || true
+    gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:harness-broken" >/dev/null 2>&1 || true
     post_tracking_comment "## ❌ Runtime validation failed (deterministic)
 
 ${reason}
@@ -5994,11 +6117,12 @@ Failure class \`${_deterministic_class}\` is environment-deterministic; retrying
 
   if [ "${val_recovery_count}" -lt "${MAX_VALIDATION_RECOVERY_ATTEMPTS}" ]; then
     echo "Validation failed but recovery budget remains ($((val_recovery_count + 1))/${MAX_VALIDATION_RECOVERY_ATTEMPTS}). Transitioning back to judge."
-    jq --arg reason "${reason}" --argjson count "$((val_recovery_count + 1))" \
+    jq --arg reason "${reason}" --argjson count "$((val_recovery_count + 1))" --arg raw_status "${validation_raw_status}" \
       '.status = "in_progress" |
        .validation_recovery_count = $count |
        .validation_failure_reason = $reason |
-       del(.validation_failure_class) |
+       .validation_failure_class = null |
+       .validation_last_raw_status = (if $raw_status == "" then null else $raw_status end) |
        .validation_active_fix_issues = [] |
        .validation_fix_issues_batch_cycles = 0 |
        .validation_cycle = 1 |
@@ -6008,6 +6132,7 @@ Failure class \`${_deterministic_class}\` is environment-deterministic; retrying
     post_state_comment || true
     set_tracking_phase_label "ai:validation-recovery"
     gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:validate-failed" >/dev/null || true
+    gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:harness-broken" >/dev/null 2>&1 || true
     post_tracking_comment "## 🔄 Validation failed — recovery attempt $((val_recovery_count + 1))/${MAX_VALIDATION_RECOVERY_ATTEMPTS}
 
 ${reason}
@@ -6025,13 +6150,14 @@ Transitioning back to judge for re-evaluation."
   fi
 
   # Recovery budget exhausted — terminal failure
-  jq --arg reason "${reason}" '.status = "failed" | .validation_failure_reason = $reason | del(.validation_failure_class) | .validation_active_fix_issues = [] | .validation_fix_issues_batch_cycles = 0' \
+  jq --arg reason "${reason}" --arg raw_status "${validation_raw_status}" '.status = "failed" | .validation_failure_reason = $reason | .validation_failure_class = null | .validation_last_raw_status = (if $raw_status == "" then null else $raw_status end) | .validation_active_fix_issues = [] | .validation_fix_issues_batch_cycles = 0 | .validation_completed_cycle = null' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_state_comment || true
   _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
   handle_comprehensive_release_callback_if_needed "failed" "${_tracking_labels}" "${COMMENTS:-[]}"
   set_tracking_phase_label "ai:validation-failed"
   gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:validate-failed" >/dev/null || true
+  gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:harness-broken" >/dev/null 2>&1 || true
   post_tracking_comment "## ❌ Runtime validation failed
 
 ${reason}
@@ -6125,12 +6251,16 @@ Manual intervention required: resolve the blocking condition on the final PR (me
   jq --argjson cycle "${validation_cycle}" \
     '.status = "complete"
      | .validation_completed_cycle = $cycle
+     | .validation_failure_reason = null
+     | .validation_failure_class = null
+     | .validation_last_raw_status = "pass"
      | .final_merge_attempt_count = 0' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_state_comment || true
   _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
   handle_comprehensive_release_callback_if_needed "complete" "${_tracking_labels}" "${COMMENTS:-[]}"
   set_tracking_phase_label "ai:validated"
+  gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:harness-broken" >/dev/null 2>&1 || true
   # Final transition for the pinned completion-status comment: project
   # is validated, all wave PRs are merged, and the integration squash
   # merge has landed in default.
@@ -6284,6 +6414,9 @@ sync_validation_fix_issues_from_comments() {
     jq --argjson comment_id "${fix_comment_id}" --argjson active_fix_issues "${new_fix_issues_json}" \
       '.status = "validation-fixing" |
        .validation_last_fix_comment_id = $comment_id |
+       .validation_failure_reason = null |
+       .validation_failure_class = null |
+       .validation_last_raw_status = "needs_fixes" |
        .validation_active_fix_issues = $active_fix_issues |
        .validation_fix_issues_batch_cycles = 0 |
        .validation_seen_fix_issues = ((.validation_seen_fix_issues // []) + $active_fix_issues | unique)' \
@@ -6295,6 +6428,7 @@ sync_validation_fix_issues_from_comments() {
   fi
 
   set_tracking_phase_label "ai:validation-fixing"
+  gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:harness-broken" >/dev/null 2>&1 || true
   post_state_comment || true
 }
 
@@ -10468,6 +10602,15 @@ The orchestrator detected that the integration PR was squash-merged outside the 
       VALIDATION_CYCLE="1"
     fi
 
+    LAST_VAL_RUN_INFO='{}'
+    LAST_VAL_CONCLUSION=''
+    LAST_VAL_RAW_STATUS=''
+    if [ "${PROJECT_STATUS}" = "validating" ]; then
+      LAST_VAL_RUN_INFO="$(get_last_validation_run_info)"
+      LAST_VAL_CONCLUSION="$(printf '%s' "${LAST_VAL_RUN_INFO}" | jq -r '.conclusion // ""' 2>/dev/null || echo '')"
+      LAST_VAL_RAW_STATUS="$(printf '%s' "${LAST_VAL_RUN_INFO}" | jq -r '.raw_status // ""' 2>/dev/null || echo '')"
+    fi
+
     if has_label "${TRACKING_LABELS}" "ai:validation-failed" || has_label "${TRACKING_LABELS}" "ai:validate-failed"; then
       # Extract the detailed failure diagnosis from the most recent validation
       # comment posted by validate_process.sh (matches headings like
@@ -10495,7 +10638,6 @@ The orchestrator detected that the integration PR was squash-merged outside the 
     # This handles the case where validate_process.sh completed but the
     # ai:validated label was lost or never persisted (silent gh API failure).
     if [ "${PROJECT_STATUS}" = "validating" ]; then
-      LAST_VAL_CONCLUSION="$(get_last_validation_run_conclusion)"
       if [ "${LAST_VAL_CONCLUSION}" = "success" ]; then
         echo "Fallback: last validation run concluded success without ai:validated label. Applying label and marking complete."
         set_tracking_phase_label "ai:validated"
@@ -10756,7 +10898,8 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
          .validation_last_dispatch_cycle = 0 |
          .validation_completed_cycle = null |
          del(.validation_failure_reason) |
-         del(.validation_failure_class)' \
+         del(.validation_failure_class) |
+         del(.validation_last_raw_status)' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       post_state_comment || true
       gh_retry gh issue edit "${TRACKING_NUM}" \
@@ -10765,6 +10908,9 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
       gh_retry gh issue edit "${TRACKING_NUM}" \
         --repo "${GITHUB_REPOSITORY}" \
         --remove-label "ai:validate-failed" >/dev/null || true
+      gh_retry gh issue edit "${TRACKING_NUM}" \
+        --repo "${GITHUB_REPOSITORY}" \
+        --remove-label "ai:harness-broken" >/dev/null 2>&1 || true
       set_tracking_phase_label "ai:validating"
       post_tracking_comment "## 🔁 Validation reset via /revalidate
 
@@ -13774,6 +13920,16 @@ ${PR_DIFF}
     PROJECT_BODY="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}" --jq '.body' || echo "")"
   fi
 
+  JUDGE_VALIDATION_RAW_STATUS="$(jq -r '.validation_last_raw_status // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+  JUDGE_VALIDATION_FAILURE_CLASS="$(jq -r '.validation_failure_class // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+  JUDGE_VALIDATION_FAILURE_REASON="$(jq -r '.validation_failure_reason // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+  JUDGE_VALIDATION_REASON_SUMMARY="$(validation_reason_one_line "${JUDGE_VALIDATION_FAILURE_REASON}")"
+  if has_label "${TRACKING_LABELS}" "ai:harness-broken"; then
+    JUDGE_HARNESS_BROKEN_PRESENT="true"
+  else
+    JUDGE_HARNESS_BROKEN_PRESENT="false"
+  fi
+
   JUDGE_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/judge_semble_query.txt"
   JUDGE_SEMBLE_PREFETCH=""
   {
@@ -13847,6 +14003,15 @@ ${PR_DIFF}
     echo "Current wave just completed: ${CURRENT_WAVE} of ${TOTAL_WAVES}"
     echo "Project complete (all waves dispatched and merged): ${PROJECT_COMPLETE}"
     echo "Recovery count: ${RECOVERY_COUNT}/${MAX_RECOVERY_ATTEMPTS}"
+    echo "Latest validation raw status: ${JUDGE_VALIDATION_RAW_STATUS:-unknown}"
+    echo "Latest validation failure class: ${JUDGE_VALIDATION_FAILURE_CLASS:-none}"
+    echo "Harness-broken label present: ${JUDGE_HARNESS_BROKEN_PRESENT}"
+    if [ -n "${JUDGE_VALIDATION_REASON_SUMMARY}" ]; then
+      echo "Latest validation summary: ${JUDGE_VALIDATION_REASON_SUMMARY}"
+    fi
+    if [ "${JUDGE_VALIDATION_RAW_STATUS}" = "harness_error" ] || [ "${JUDGE_HARNESS_BROKEN_PRESENT}" = "true" ]; then
+      echo "Judge note: the latest validation failure is classified as a harness/infrastructure defect unless repository evidence proves merged product code caused it."
+    fi
     PENDING_DEFS_COUNT="$(jq '.pending_issue_defs | length' "${STATE_FILE}")"
     echo "Pending issue definitions (not yet created): ${PENDING_DEFS_COUNT}"
     if [ "${PENDING_DEFS_COUNT}" -gt 0 ]; then
@@ -13965,7 +14130,11 @@ sys.exit(1)
   if ! [[ "${PREV_JUDGE_FINGERPRINT_REPEAT_COUNT}" =~ ^[0-9]+$ ]]; then
     PREV_JUDGE_FINGERPRINT_REPEAT_COUNT="0"
   fi
-  if [ -z "${JUDGE_FINGERPRINT}" ]; then
+  LAST_VALIDATION_RAW_STATUS_FOR_JUDGE="$(jq -r '.validation_last_raw_status // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+  if [ "${LAST_VALIDATION_RAW_STATUS_FOR_JUDGE}" = "harness_error" ]; then
+    JUDGE_FINGERPRINT=""
+    JUDGE_FINGERPRINT_REPEAT_COUNT=0
+  elif [ -z "${JUDGE_FINGERPRINT}" ]; then
     JUDGE_FINGERPRINT_REPEAT_COUNT=0
   elif [ "${JUDGE_FINGERPRINT}" = "${PREV_JUDGE_FINGERPRINT}" ]; then
     JUDGE_FINGERPRINT_REPEAT_COUNT=$(( PREV_JUDGE_FINGERPRINT_REPEAT_COUNT + 1 ))
@@ -14077,6 +14246,7 @@ All waves have merged and the judge is satisfied. Transitioning to runtime valid
          .validation_last_dispatch_cycle = 0 |
          .validation_failure_reason = null |
          .validation_failure_class = null |
+         .validation_last_raw_status = null |
          .validation_completed_cycle = null' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       post_state_comment || true

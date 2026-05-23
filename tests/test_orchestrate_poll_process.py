@@ -979,6 +979,23 @@ if args[0] == 'run' and len(args) >= 2 and args[1] == 'list':
 		print(json.dumps(runs))
 	sys.exit(0)
 
+if args[0] == 'run' and len(args) >= 3 and args[1] == 'view':
+	run_id = str(args[2])
+	payload = None
+	for run in store.get('validation_workflow_runs', []):
+		if str((run or {}).get('id', '')) == run_id:
+			payload = {
+				'jobs': list((run or {}).get('jobs', [])),
+				'conclusion': (run or {}).get('conclusion', ''),
+				'outputs': dict((run or {}).get('outputs', {})),
+			}
+			break
+	if payload is None:
+		print(f'run not found: {run_id}', file=sys.stderr)
+		sys.exit(1)
+	print(json.dumps(payload))
+	sys.exit(0)
+
 if args[0] == 'pr' and len(args) >= 2 and args[1] == 'list':
 	base = None
 	head = None
@@ -2132,6 +2149,8 @@ sys.exit(proc.returncode)
 		result["release_dispatches"] = result.get("release_dispatches", [])
 		result["stdout"] = proc.stdout
 		result["stderr"] = proc.stderr
+		judge_prompt_path = runtime_dir / "judge_prompt.txt"
+		result["judge_prompt"] = judge_prompt_path.read_text(encoding="utf-8") if judge_prompt_path.exists() else ""
 		result["actions_runs_fetch_count"] = int(result.get("actions_runs_fetch_count", 0))
 		result["actions_runs_if_none_match_count"] = int(result.get("actions_runs_if_none_match_count", 0))
 		return result
@@ -4290,6 +4309,38 @@ def test_validation_dispatch_failure_marks_failed():
 	assert "ai:validation-failed" in result["tracking_labels"]
 
 
+def test_validation_harness_error_raw_status_preserves_budget_and_sets_additive_label():
+	state = _base_state(status="validating")
+	state["validation_cycle"] = 2
+	state["validation_recovery_count"] = 2
+	state["validation_last_dispatch_cycle"] = 2
+	state["judge_last_fingerprint"] = "fingerprint-before-harness-error"
+	state["judge_fingerprint_repeat_count"] = 3
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed"],
+		validation_workflow_runs=[{
+			"id": 7001,
+			"run_attempt": 1,
+			"status": "completed",
+			"conclusion": "failure",
+			"created_at": "2026-01-01T00:00:00Z",
+			"outputs": {"raw_status": "harness_error"},
+		}],
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "failed"
+	assert ls["validation_cycle"] == 2
+	assert ls["validation_recovery_count"] == 2
+	assert ls["validation_last_raw_status"] == "harness_error"
+	assert (ls["judge_last_fingerprint"], ls["judge_fingerprint_repeat_count"]) == ("", 0)
+	assert "ai:validation-failed" in result["tracking_labels"]
+	assert "ai:harness-broken" in result["tracking_labels"]
+	assert "HARNESS_ERROR_DETECTED" in (result["stdout"] + result["stderr"])
+
+
 
 
 def test_validation_fixing_label_collects_active_fix_issue_ids_from_comment():
@@ -4380,6 +4431,23 @@ def test_validated_label_marks_complete_and_keeps_open():
 	assert result["latest_state"]["validation_completed_cycle"] == 2
 	assert result["tracking_closed"] is False
 	assert "ai:validated" in result["tracking_labels"]
+	assert "ai:harness-broken" not in result["tracking_labels"]
+
+
+def test_validated_clears_harness_broken_label_and_records_pass_raw_status():
+	state = _base_state(status="validating")
+	state["validation_cycle"] = 2
+	state["validation_last_raw_status"] = "harness_error"
+	state["validation_failure_reason"] = "## ❌ Runtime validation harness error\n\nHarness failed"
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated", "ai:harness-broken"],
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["validation_last_raw_status"] == "pass"
+	assert "ai:harness-broken" not in result["tracking_labels"]
 
 
 def test_validated_removes_stale_validating_and_validation_fixing_labels():
@@ -4828,6 +4896,60 @@ def test_judge_repeat_fingerprint_empty_justification_fail_open():
 	assert (ls["judge_last_fingerprint"], ls["judge_fingerprint_repeat_count"]) == ("", 0)
 	assert ls["status"] == "in_progress"
 	assert ls["recovery_count"] == 1
+	assert "ai:blocked" not in result["tracking_labels"]
+
+
+def test_judge_prompt_includes_harness_validation_context():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	state["validation_last_raw_status"] = "harness_error"
+	state["validation_failure_reason"] = "## ❌ Runtime validation harness error\n\nHarness timed out"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		tracking_labels=["ai:harness-broken"],
+		issue_labels={10: ["ai:merged"]},
+		codex_json={
+			"status": "in_progress",
+			"justification": "harness issue still under investigation",
+			"assessment": "waiting for harness repair",
+			"new_issues": [],
+			"issues_to_revert": [],
+		},
+	)
+	prompt = result["judge_prompt"]
+	assert "Latest validation raw status: harness_error" in prompt
+	assert "Harness-broken label present: true" in prompt
+	assert "Judge note: the latest validation failure is classified as a harness/infrastructure defect" in prompt
+
+
+def test_judge_repeat_fingerprint_penalty_is_suppressed_after_harness_error():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	state["validation_last_raw_status"] = "harness_error"
+	state["judge_last_fingerprint"] = "existing-fingerprint"
+	state["judge_fingerprint_repeat_count"] = 2
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		judge_repeat_fingerprint_max="2",
+		tracking_labels=["ai:harness-broken"],
+		issue_labels={10: ["ai:merged"]},
+		codex_json={
+			"status": "failed",
+			"justification": "same harness issue again",
+			"assessment": "still waiting on validation harness repair",
+			"new_issues": [],
+			"issues_to_revert": [],
+		},
+	)
+	ls = result["latest_state"]
+	assert (ls["judge_last_fingerprint"], ls["judge_fingerprint_repeat_count"]) == ("", 0)
+	assert ls["status"] == "in_progress"
 	assert "ai:blocked" not in result["tracking_labels"]
 
 
@@ -5851,7 +5973,7 @@ def test_revalidate_resets_validation_failed_and_dispatches():
 		state=state,
 		enable_validation="true",
 		max_validate_cycles="3",
-		tracking_labels=["ai:validation-failed"],
+		tracking_labels=["ai:validation-failed", "ai:harness-broken"],
 		tracking_comments=["/revalidate"],
 	)
 	ls = result["latest_state"]
@@ -5863,6 +5985,7 @@ def test_revalidate_resets_validation_failed_and_dispatches():
 	assert "validation_failure_reason" not in ls, f"Expected validation_failure_reason to be removed, got {ls.get('validation_failure_reason')}"
 	assert "ai:validating" in result["tracking_labels"]
 	assert "ai:validation-failed" not in result["tracking_labels"]
+	assert "ai:harness-broken" not in result["tracking_labels"]
 	assert len(result["validation_dispatches"]) == 1
 
 
