@@ -14939,23 +14939,23 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 		continue
 	fi
 
-		# Refresh the comments snapshot on the threshold path so Gate B
-		# validates the latest editor summary when a new noop warning or
-		# summary comment lands mid-tick. Force-merge is safety-sensitive,
-		# so a refresh failure fails closed for this cycle rather than
-		# evaluating Gate B on a stale pre-filter snapshot.
-		N_FRESH_COMMENTS_JSON=""
-		if N_FRESH_COMMENTS_JSON="$(gh_retry _safe_gh_jq --paginate \
-			"repos/${GITHUB_REPOSITORY}/issues/${N_PR}/comments?per_page=100" \
-			| jq -s 'add // []' 2>/dev/null)"; then
-			[ -n "${N_FRESH_COMMENTS_JSON}" ] || N_FRESH_COMMENTS_JSON='[]'
-			N_COMMENTS_JSON="${N_FRESH_COMMENTS_JSON}"
-		else
-			echo "::warning::PR #${N_PR}: could not refresh comments snapshot for noop-suspicious Gate B; failing force-merge closed this cycle."
-			tg_send_msg "Noop-suspicious force-merge gate B failed for PR #${N_PR}: could not refresh latest PR comments snapshot. Leaving PR open for a later retry."$'\n'"PR: $(_gh_url "pull/${N_PR}")" "ERROR" >/dev/null 2>&1 || true
-			NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
-			continue
-		fi
+	# Refresh the comments snapshot on the threshold path so Gate B
+	# validates the latest editor summary when a new noop warning or
+	# summary comment lands mid-tick. Force-merge is safety-sensitive,
+	# so a refresh failure fails closed for this cycle rather than
+	# evaluating Gate B on a stale pre-filter snapshot.
+	N_FRESH_COMMENTS_JSON=""
+	if N_FRESH_COMMENTS_JSON="$(gh_retry _safe_gh_jq --paginate \
+		"repos/${GITHUB_REPOSITORY}/issues/${N_PR}/comments?per_page=100" \
+		| jq -s 'add // []' 2>/dev/null)"; then
+		[ -n "${N_FRESH_COMMENTS_JSON}" ] || N_FRESH_COMMENTS_JSON='[]'
+		N_COMMENTS_JSON="${N_FRESH_COMMENTS_JSON}"
+	else
+		echo "::warning::PR #${N_PR}: could not refresh comments snapshot for noop-suspicious Gate B; failing force-merge closed this cycle."
+		tg_send_msg "Noop-suspicious force-merge gate B failed for PR #${N_PR}: could not refresh latest PR comments snapshot. Leaving PR open for a later retry."$'\n'"PR: $(_gh_url "pull/${N_PR}")" "ERROR" >/dev/null 2>&1 || true
+		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
+		continue
+	fi
 
 	# Gate B: reviewer audit health.  Validate against the latest
 	# editor summary PR comment using the shared helper — this is the

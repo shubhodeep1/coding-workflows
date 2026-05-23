@@ -182,6 +182,7 @@ jobs:
       deterministic_skip: ${{ steps.evaluate.outputs.deterministic_skip }}
       det_skip_reason: ${{ steps.evaluate.outputs.det_skip_reason }}
       claude_branch_review: ${{ steps.evaluate.outputs.claude_branch_review }}
+      head_ref: ${{ steps.evaluate.outputs.head_ref }}
     steps:
       - name: Evaluate review gate
         id: evaluate
@@ -500,6 +501,13 @@ jobs:
           echo "deterministic_skip=${DETERMINISTIC_SKIP}" >> "${GITHUB_OUTPUT}"
           echo "det_skip_reason=${DET_SKIP_REASON}" >> "${GITHUB_OUTPUT}"
           echo "claude_branch_review=${CLAUDE_BRANCH_REVIEW}" >> "${GITHUB_OUTPUT}"
+          # Propagate head ref so downstream jobs (deterministic-skip-merge)
+          # can apply the same head-ref-keyed auto-merge suppressors without
+          # repeating the /pulls/{n} fetch above (§15 API hygiene). May be
+          # empty on the invalid-PR-number branch; consumers must treat an
+          # empty value as "unknown" and fall through (the empty string
+          # never matches any suppressor regex, so auto-merge runs as before).
+          echo "head_ref=${pr_head_ref}" >> "${GITHUB_OUTPUT}"
 
   post-merge-validate-dispatch:
     needs: gate
@@ -599,6 +607,12 @@ jobs:
       PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
       DET_SKIP_REASON: ${{ needs.gate.outputs.det_skip_reason }}
       ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
+      # Reused from the gate job's existing /pulls/{n} fetch (§15 API hygiene) —
+      # consumed by the forward-merge-fallback suppressor in the auto-merge
+      # step below. May be empty when the gate could not resolve the PR
+      # (invalid PR number); the suppressor treats empty as "unknown" and
+      # falls through to the regular auto-merge call.
+      PR_HEAD_REF: ${{ needs.gate.outputs.head_ref }}
     steps:
       - name: Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge
         run: |
@@ -677,13 +691,29 @@ jobs:
           fi
 
           # 3) Auto-merge (mirrors codex-agent's "Enable auto-merge on PR" step)
+          auto_merge_summary="disabled by ENABLE_AUTO_MERGE"
           if [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
             echo "Auto-merge disabled (ENABLE_AUTO_MERGE != true) — leaving PR for manual merge."
+          elif [ -n "${PR_HEAD_REF}" ] && printf '%s\n' "${PR_HEAD_REF}" | grep -Eq '^auto/forward-merge-stable-'; then
+            # Mirror of the forward-merge-fallback suppressor in the
+            # codex-agent "Enable auto-merge on PR" step. Defense in depth:
+            # a tiny forward-merge fallback PR (e.g. one that just happens
+            # to fall under AUTOFIX_SKIP_MAX_ADDITIONS / _DELETIONS) would
+            # otherwise short-circuit through this deterministic-skip-merge
+            # path and squash-merge before the codex-agent path's suppressor
+            # ever runs. See the longer comment block on this exact regex
+            # in the "Enable auto-merge on PR" step for the full rationale
+            # (promote-main-to-stable.yml ancestry check, "Create a merge
+            # commit" requirement, etc.).
+            auto_merge_summary="SUPPRESSED (forward-merge fallback head ref '${PR_HEAD_REF}')"
+            echo "PR #${PR_NUMBER} head ref '${PR_HEAD_REF}' matches forward-merge fallback pattern '^auto/forward-merge-stable-' — auto-merge suppressed on the deterministic-skip path. forward-merge fallback PRs must be merged manually via 'Create a merge commit' (NOT squash/rebase) so stable's commits remain in main's ancestry; promote-main-to-stable.yml's pre-flight 'git merge-base --is-ancestor HEAD origin/main' check refuses otherwise."
           else
             echo "Enabling auto-merge (squash) on PR #${PR_NUMBER}..."
             if gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto; then
+              auto_merge_summary="ENABLED (squash)"
               echo "Auto-merge enabled. PR will merge once all required checks pass."
             else
+              auto_merge_summary="FAILED to enable (see warnings above)"
               echo "::warning::Could not enable auto-merge on PR #${PR_NUMBER}. Check that 'Allow auto-merge' is enabled in repo settings and branch protection is configured."
             fi
           fi
@@ -695,11 +725,7 @@ jobs:
             echo "- **PR:** #${PR_NUMBER}"
             echo "- **Skip reason:** \`${DET_SKIP_REASON}\`"
             echo "- **Reviewer panel + editor cycle:** SKIPPED"
-            if [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
-              echo "- **Auto-merge:** ENABLED (squash)"
-            else
-              echo "- **Auto-merge:** disabled by ENABLE_AUTO_MERGE"
-            fi
+            echo "- **Auto-merge:** ${auto_merge_summary}"
             echo ""
             echo "To force a full review on a future run, add the \`force-review\` label to the PR or include \`[force-review]\` in the title, then re-trigger the workflow."
           } >> "${GITHUB_STEP_SUMMARY}"
@@ -5079,6 +5105,30 @@ jobs:
             echo "::warning::Could not determine PR head ref for #${PR_NUMBER} from fetched metadata (empty/null .head.ref). Failing closed: skipping auto-merge enablement so an orchestrator integration PR cannot be inadvertently shipped when PR metadata is incomplete or the head branch was deleted. Next sync event will re-run review_autofix and retry."
             exit 0
           fi
+
+          # Scoped opt-out for forward-merge fallback PRs opened by
+          # forward-merge-stable-to-main.yml. Head ref is hard-coded as
+          # `auto/forward-merge-stable-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}`
+          # at forward-merge-stable-to-main.yml:255. These PRs MUST be merged
+          # via "Create a merge commit" so the 2-parent merge keeps stable's
+          # tip reachable from main; auto-merge here would call
+          # `gh pr merge --squash --auto` (this step's tail and the
+          # deterministic-skip-merge sibling), which silently strips
+          # stable's commits from main's ancestry. promote-main-to-stable.yml's
+          # pre-flight `git merge-base --is-ancestor HEAD origin/main` then
+          # refuses to fast-forward stable on the next promote run, with the
+          # exact "squash/rebase strips ancestry" error at
+          # promote-main-to-stable.yml:122. Suppressing auto-merge leaves
+          # the PR for manual "Create a merge commit" — the CAUTION banner
+          # in the PR body (forward-merge-stable-to-main.yml:265-270) and
+          # this log line both call that out. Hard-coded pattern, not a
+          # configurable env var, because the branch prefix is owned by
+          # forward-merge-stable-to-main.yml and never varies per repo.
+          if printf '%s\n' "${_orch_pr_head_ref}" | grep -Eq '^auto/forward-merge-stable-'; then
+            echo "PR #${PR_NUMBER} head ref '${_orch_pr_head_ref}' matches forward-merge fallback pattern '^auto/forward-merge-stable-' — auto-merge suppressed. forward-merge fallback PRs must be merged manually via 'Create a merge commit' (NOT squash/rebase) so stable's commits remain in main's ancestry; promote-main-to-stable.yml's pre-flight 'git merge-base --is-ancestor HEAD origin/main' check refuses otherwise (see promote-main-to-stable.yml:115-126 and the CAUTION banner in the PR body)."
+            exit 0
+          fi
+
           _orch_pr_body="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.body // ""' 2>/dev/null || echo "")"
           _orch_is_integration_pr="false"
           if [ -n "${ORCH_INTEGRATION_BRANCH_PATTERN}" ]; then
