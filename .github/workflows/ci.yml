@@ -216,6 +216,11 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_subissue_closing_pr.py
+
+      - name: Fingerprint state self-heal unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fingerprint_state_selfheal.py
       - name: Stall-loop and churn fixes unit tests
         run: |
           set -euo pipefail
