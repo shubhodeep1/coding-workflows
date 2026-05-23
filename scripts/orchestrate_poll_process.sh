@@ -5880,11 +5880,17 @@ get_last_validation_run_info() {
   run_attempt="$(printf '%s' "${selected_run}" | jq -r '(.run_attempt // 0) | tonumber? // 0' 2>/dev/null || echo '0')"
   conclusion="$(printf '%s' "${selected_run}" | jq -r '.conclusion // ""' 2>/dev/null || echo '')"
 
-  if [[ "${run_id}" =~ ^[0-9]+$ ]]; then
-    run_view_json="$(gh_retry gh run view "${run_id}" --repo "${GITHUB_REPOSITORY}" --json jobs,conclusion,outputs 2>/dev/null || echo '{}')"
-    if [ -n "${run_view_json}" ] && [ "${run_view_json}" != "null" ]; then
-      conclusion="$(printf '%s' "${run_view_json}" | jq -r '.conclusion // empty' 2>/dev/null || echo "${conclusion}")"
-      raw_status="$(printf '%s' "${run_view_json}" | jq -r '((.outputs // {}) | .raw_status // .["raw_status"] // "")' 2>/dev/null || echo '')"
+  if [[ "${run_id}" =~ ^[0-9]+$ ]] && [ "${conclusion}" != "success" ]; then
+    if run_view_json="$(gh_retry gh run view "${run_id}" --repo "${GITHUB_REPOSITORY}" --json jobs,conclusion,outputs 2>/dev/null)"; then
+      if [ -n "${run_view_json}" ] && [ "${run_view_json}" != "null" ]; then
+        conclusion="$(printf '%s' "${run_view_json}" | jq -r '.conclusion // empty' 2>/dev/null || echo "${conclusion}")"
+        raw_status="$(printf '%s' "${run_view_json}" | jq -r '((.outputs // {}) | .raw_status // .["raw_status"] // "")' 2>/dev/null || echo '')"
+      fi
+      if [ "${conclusion}" != "success" ] && [ -z "${raw_status}" ]; then
+        echo "::warning::validation_raw_status_fallback helper=get_last_validation_run_info reason=missing_outputs run_id=${run_id} conclusion=${conclusion}" >&2
+      fi
+    else
+      echo "::warning::validation_raw_status_fallback helper=get_last_validation_run_info reason=run_view_failed run_id=${run_id} conclusion=${conclusion}" >&2
     fi
   fi
 
@@ -5920,7 +5926,7 @@ infer_validation_raw_status() {
     return 0
   fi
 
-  if printf '%s' "${reason}" | grep -qiE 'raw_status[=:[:space:]]*harness_error|Runtime validation harness error|Validation failed due to harness error|harness pre-flight error'; then
+  if printf '%s' "${reason}" | grep -qiE 'raw_status["=:[:space:]]*harness_error|Runtime validation harness error|Validation failed due to harness error|Validation harness generation failed|Validation harness tracking violation|Runtime validation harness (generation|pre-flight|tracking)[[:space:]-]*(failed|violation)|harness pre-flight error'; then
     echo "harness_error"
     return 0
   fi

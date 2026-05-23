@@ -4342,6 +4342,38 @@ def test_validation_harness_error_raw_status_preserves_budget_and_sets_additive_
 
 
 
+def test_validation_harness_error_comment_fallback_preserves_budget_when_outputs_missing():
+	state = _base_state(status="validating")
+	state["validation_cycle"] = 2
+	state["validation_recovery_count"] = 2
+	state["validation_last_dispatch_cycle"] = 2
+	state["judge_last_fingerprint"] = "fingerprint-before-harness-error"
+	state["judge_fingerprint_repeat_count"] = 3
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed"],
+		tracking_comments=["## ⚠️ Runtime validation harness generation failed\n\nTemplate renderer failed while generating validation assets."],
+		validation_workflow_runs=[{
+			"id": 7002,
+			"run_attempt": 1,
+			"status": "completed",
+			"conclusion": "failure",
+			"created_at": "2026-01-01T00:00:00Z",
+		}],
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "failed"
+	assert ls["validation_cycle"] == 2
+	assert ls["validation_recovery_count"] == 2
+	assert ls["validation_last_raw_status"] == "harness_error"
+	assert (ls["judge_last_fingerprint"], ls["judge_fingerprint_repeat_count"]) == ("", 0)
+	assert "ai:harness-broken" in result["tracking_labels"]
+	assert "validation_raw_status_fallback" in (result["stdout"] + result["stderr"])
+
+
+
 
 def test_validation_fixing_label_collects_active_fix_issue_ids_from_comment():
 	state = _base_state(status="validating")
