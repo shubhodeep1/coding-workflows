@@ -160,6 +160,9 @@ def test_node_runtime_repo_check_runner_uses_node_for_json_parsing_and_bounded_t
 		assert "python3 - <<\"PY\"" not in repo_checks_text
 		assert 'tail -n "${TAIL_LINES}"' in repo_checks_text
 		assert '-e REPO_CHECK_CMD' in repo_checks_text
+		zero_count_branch = repo_checks_text.split('if [ "${test_count}" -eq 0 ]; then', 1)[1].split('fi', 1)[0]
+		assert 'echo "1..1"' in zero_count_branch
+		assert 'tap_not_ok 1 "custom tests parsed"' in zero_count_branch
 
 
 def test_node_runtime_env_overrides_flow_into_validate_env_and_compose() -> None:

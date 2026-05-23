@@ -104,6 +104,7 @@ fi
 {% raw %}test_count=${#TEST_LIST[@]}{% endraw %}
 
 if [ "${test_count}" -eq 0 ]; then
+	echo "1..1"
 	tap_not_ok 1 "custom tests parsed"
 	echo "# CUSTOM_TESTS_JSON did not yield executable commands"
 	exit 1
