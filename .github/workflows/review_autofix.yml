@@ -691,6 +691,7 @@ jobs:
           fi
 
           # 3) Auto-merge (mirrors codex-agent's "Enable auto-merge on PR" step)
+          auto_merge_summary="disabled by ENABLE_AUTO_MERGE"
           if [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
             echo "Auto-merge disabled (ENABLE_AUTO_MERGE != true) — leaving PR for manual merge."
           elif [ -n "${PR_HEAD_REF}" ] && printf '%s\n' "${PR_HEAD_REF}" | grep -Eq '^auto/forward-merge-stable-'; then
@@ -704,12 +705,15 @@ jobs:
             # in the "Enable auto-merge on PR" step for the full rationale
             # (promote-main-to-stable.yml ancestry check, "Create a merge
             # commit" requirement, etc.).
+            auto_merge_summary="SUPPRESSED (forward-merge fallback head ref '${PR_HEAD_REF}')"
             echo "PR #${PR_NUMBER} head ref '${PR_HEAD_REF}' matches forward-merge fallback pattern '^auto/forward-merge-stable-' — auto-merge suppressed on the deterministic-skip path. forward-merge fallback PRs must be merged manually via 'Create a merge commit' (NOT squash/rebase) so stable's commits remain in main's ancestry; promote-main-to-stable.yml's pre-flight 'git merge-base --is-ancestor HEAD origin/main' check refuses otherwise."
           else
             echo "Enabling auto-merge (squash) on PR #${PR_NUMBER}..."
             if gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto; then
+              auto_merge_summary="ENABLED (squash)"
               echo "Auto-merge enabled. PR will merge once all required checks pass."
             else
+              auto_merge_summary="FAILED to enable (see warnings above)"
               echo "::warning::Could not enable auto-merge on PR #${PR_NUMBER}. Check that 'Allow auto-merge' is enabled in repo settings and branch protection is configured."
             fi
           fi
@@ -721,11 +725,7 @@ jobs:
             echo "- **PR:** #${PR_NUMBER}"
             echo "- **Skip reason:** \`${DET_SKIP_REASON}\`"
             echo "- **Reviewer panel + editor cycle:** SKIPPED"
-            if [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
-              echo "- **Auto-merge:** ENABLED (squash)"
-            else
-              echo "- **Auto-merge:** disabled by ENABLE_AUTO_MERGE"
-            fi
+            echo "- **Auto-merge:** ${auto_merge_summary}"
             echo ""
             echo "To force a full review on a future run, add the \`force-review\` label to the PR or include \`[force-review]\` in the title, then re-trigger the workflow."
           } >> "${GITHUB_STEP_SUMMARY}"

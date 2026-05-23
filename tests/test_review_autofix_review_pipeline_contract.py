@@ -443,6 +443,12 @@ def test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_deterministic_
 	assert idx_guard < idx_merge, (
 		"Forward-merge suppressor must short-circuit before the gh pr merge --squash --auto call"
 	)
+	assert 'auto_merge_summary="SUPPRESSED (forward-merge fallback head ref' in block, (
+		"deterministic-skip-merge must track suppressed auto-merge state for the step summary"
+	)
+	assert 'echo "- **Auto-merge:** ${auto_merge_summary}"' in block, (
+		"Deterministic-skip summary must report the actual auto-merge outcome"
+	)
 
 
 def test_gate_emits_head_ref_output_for_forward_merge_suppressor_reuse() -> None:
@@ -681,8 +687,12 @@ def test_reviewer_iteration_scope_prepare_path_reports_missing_targeted_context_
 
 def main() -> int:
 	test_review_pipeline_knobs_are_wired_into_codex_agent_env()
+	test_reject_verifier_bootstrap_and_stage_order_contract()
 	test_review_pipeline_summary_step_is_local_only_and_grep_friendly()
 	test_auto_merge_guard_honours_configured_orchestrator_branch_pattern()
+	test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_codex_agent_path()
+	test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_deterministic_skip_path()
+	test_gate_emits_head_ref_output_for_forward_merge_suppressor_reuse()
 	test_reviewer_prompt_output_rules_still_forbid_scripts()
 	test_reviewer_iteration_scope_first_iteration_keeps_full_diff_context()
 	test_reviewer_iteration_scope_valid_artifacts_narrow_to_last_run_and_actionable_ledger_files()
