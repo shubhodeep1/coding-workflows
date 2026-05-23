@@ -635,7 +635,7 @@ def main(argv: list[str] | None = None) -> int:
 			return 1
 		named_tests = [(name, tests_by_name[name]) for name in selected_names]
 	else:
-			named_tests = list(tests_by_name.items())
+		named_tests = list(tests_by_name.items())
 	passed = 0
 	failed = 0
 	for name, func in named_tests:
