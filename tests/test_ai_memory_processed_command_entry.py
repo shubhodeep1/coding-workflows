@@ -158,6 +158,60 @@ def _run_ai_memory_cli(argv: list[str]) -> tuple[int, str, str]:
 	return exit_code, stdout.getvalue(), stderr.getvalue()
 
 
+def _create_memory_helper_repo() -> Path:
+	tmp_root = Path(tempfile.mkdtemp(prefix="ai-memory-wrapper-repo-"))
+	test_cleanup_paths = globals().setdefault("_TEST_CLEANUP_PATHS", [])
+	test_cleanup_paths.append(tmp_root)
+	bare = tmp_root / "bare.git"
+	work = tmp_root / "work"
+	subprocess.run(
+		["git", "init", "--bare", "--quiet", str(bare)],
+		check=True,
+		stdout=subprocess.DEVNULL,
+		stderr=subprocess.DEVNULL,
+	)
+	subprocess.run(
+		["git", "init", "--quiet", str(work)],
+		check=True,
+		stdout=subprocess.DEVNULL,
+		stderr=subprocess.DEVNULL,
+	)
+	for key, value in (("user.name", "test"), ("user.email", "t@example.com")):
+		subprocess.run(
+			["git", "-C", str(work), "config", key, value],
+			check=True,
+			stdout=subprocess.DEVNULL,
+			stderr=subprocess.DEVNULL,
+		)
+	shutil.copytree(REPO_ROOT / "ai-memory", work / "ai-memory")
+
+	def _git(*args: str) -> None:
+		subprocess.run(
+			["git", "-C", str(work), *args],
+			check=True,
+			stdout=subprocess.DEVNULL,
+			stderr=subprocess.DEVNULL,
+		)
+
+	_git("checkout", "-B", "main")
+	_git("add", "-A")
+	_git("commit", "-m", "seed ai-memory refs", "--quiet")
+	_git("remote", "add", "origin", str(bare))
+	_git("push", "-u", "origin", "main", "--quiet")
+	return work
+
+
+def _run_memory_helper(command: str, *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+	return subprocess.run(
+		["bash", "-lc", f"source scripts/memory_helpers.sh; {command}"],
+		cwd=REPO_ROOT,
+		text=True,
+		capture_output=True,
+		check=False,
+		env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", **(env or {})},
+	)
+
+
 def _append_validation_history_entry_with_stale_read(
 	memory_root_text: str,
 	order_counter,
@@ -933,6 +987,40 @@ def test_memory_validation_history_get_wrapper_disabled_stdout_stderr_hygiene() 
 	assert "validation-history-get" in result.stderr
 
 
+def test_memory_validation_history_wrapper_round_trip() -> None:
+	repo_root = _create_memory_helper_repo()
+	entry_file = _write_json_file(
+		_validation_entry(
+			outcome="passed",
+			recorded_at="2026-05-23T16:18:00Z",
+			run_id=3101,
+			cycle=1,
+		),
+		prefix="validation-history-wrapper-entry-",
+	)
+	env = {
+		"TEST_MEMORY_REPO_ROOT": str(repo_root),
+		"TEST_ENTRY_FILE": entry_file,
+	}
+	append = _run_memory_helper(
+		'memory_validation_history_append --repo-root "$TEST_MEMORY_REPO_ROOT" --memory-branch ai-memory --memory-root ai-memory --repo Owner/Repo --integration-sha ABCDEF1234 --entry-file "$TEST_ENTRY_FILE"',
+		env=env,
+	)
+	assert append.returncode == 0
+	append_payload = json.loads(append.stdout.strip())
+	assert append_payload["stored"] is True
+	assert append_payload["validation_history"]["entries"][0]["outcome"] == "passed"
+
+	get = _run_memory_helper(
+		'memory_validation_history_get --repo-root "$TEST_MEMORY_REPO_ROOT" --memory-branch ai-memory --memory-root ai-memory --repo owner/repo --integration-sha abcdef1234',
+		env=env,
+	)
+	assert get.returncode == 0
+	get_payload = json.loads(get.stdout.strip())
+	assert get_payload["hit"] is True
+	assert get_payload["validation_history"]["entries"][0]["run_id"] == 3101
+
+
 def test_memory_revalidate_events_append_wrapper_fails_open() -> None:
 	result = subprocess.run(
 		[
@@ -951,6 +1039,72 @@ def test_memory_revalidate_events_append_wrapper_fails_open() -> None:
 	assert payload == {"ok": True, "enabled": True, "stored": False, "events": None}
 	assert "::warning::memory revalidate-events-append failed (fail-open)" in result.stderr
 	assert "AI_MEMORY_TELEMETRY" in result.stderr
+
+
+def test_memory_operator_bypass_audit_wrapper_round_trip() -> None:
+	repo_root = _create_memory_helper_repo()
+	entry_file = _write_json_file(
+		_operator_bypass_entry(
+			actor="octocat",
+			timestamp_utc="2026-05-23T16:19:00Z",
+			bypass_kind="force-merge",
+		),
+		prefix="operator-bypass-wrapper-entry-",
+	)
+	env = {
+		"TEST_MEMORY_REPO_ROOT": str(repo_root),
+		"TEST_ENTRY_FILE": entry_file,
+	}
+	append = _run_memory_helper(
+		'memory_operator_bypass_audit_append --repo-root "$TEST_MEMORY_REPO_ROOT" --memory-branch ai-memory --memory-root ai-memory --repo Owner/Repo --tracking-issue 2934 --integration-sha ABCDEF1234 --entry-file "$TEST_ENTRY_FILE"',
+		env=env,
+	)
+	assert append.returncode == 0
+	append_payload = json.loads(append.stdout.strip())
+	assert append_payload["stored"] is True
+	assert append_payload["audit"]["entries"][0]["bypass_kind"] == "force-merge"
+
+	get = _run_memory_helper(
+		'memory_operator_bypass_audit_get --repo-root "$TEST_MEMORY_REPO_ROOT" --memory-branch ai-memory --memory-root ai-memory --repo owner/repo --tracking-issue 2934 --integration-sha abcdef1234',
+		env=env,
+	)
+	assert get.returncode == 0
+	get_payload = json.loads(get.stdout.strip())
+	assert get_payload["hit"] is True
+	assert get_payload["audit"]["entries"][0]["actor"] == "octocat"
+
+
+def test_memory_revalidate_events_wrapper_round_trip() -> None:
+	repo_root = _create_memory_helper_repo()
+	entry_file = _write_json_file(
+		_revalidate_event_entry(
+			actor="octocat",
+			timestamp_utc="2026-05-23T16:20:00Z",
+			prior_outcome="failed",
+		),
+		prefix="revalidate-wrapper-entry-",
+	)
+	env = {
+		"TEST_MEMORY_REPO_ROOT": str(repo_root),
+		"TEST_ENTRY_FILE": entry_file,
+	}
+	append = _run_memory_helper(
+		'memory_revalidate_events_append --repo-root "$TEST_MEMORY_REPO_ROOT" --memory-branch ai-memory --memory-root ai-memory --repo Owner/Repo --tracking-issue 2934 --integration-sha ABCDEF1234 --entry-file "$TEST_ENTRY_FILE"',
+		env=env,
+	)
+	assert append.returncode == 0
+	append_payload = json.loads(append.stdout.strip())
+	assert append_payload["stored"] is True
+	assert append_payload["events"]["entries"][0]["prior_outcome"] == "failed"
+
+	get = _run_memory_helper(
+		'memory_revalidate_events_get --repo-root "$TEST_MEMORY_REPO_ROOT" --memory-branch ai-memory --memory-root ai-memory --repo owner/repo --tracking-issue 2934 --integration-sha abcdef1234',
+		env=env,
+	)
+	assert get.returncode == 0
+	get_payload = json.loads(get.stdout.strip())
+	assert get_payload["hit"] is True
+	assert get_payload["events"]["entries"][0]["reason"] == "operator requested rerun"
 
 
 def test_positive_int_helpers_reject_boolean_values() -> None:
