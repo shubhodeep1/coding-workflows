@@ -1600,7 +1600,10 @@ self-heal patches cannot be merged without explicit human action.
 
 - Validation renders a manifest-driven harness under `validation/` from `.ai/validate.yml` via `scripts/render_validation_templates.py` + `workflow-templates/validation-harness/`.
 - `VALIDATION_USE_TEMPLATES` now defaults to `true`; setting `VALIDATION_USE_TEMPLATES=false` is a terminal guard that returns `raw_status=harness_error` because freehand generation/fix paths were removed.
-- Renderer-supported template families are currently `python-mongo-flask`, `node-hardhat-solidity`, `python-repo-checks`, and `python-mongo-repo-checks`.
+- Renderer-supported template families are currently `python-mongo-flask`, `node-hardhat-solidity`, `node-runtime`, `python-repo-checks`, and `python-mongo-repo-checks`.
+- Use `node-runtime` for generic Node/npm repositories that should run repo-local checks inside a single app container; use `node-hardhat-solidity` only when validation needs Hardhat/Foundry/Anvil/RPC-specific probes and shutdown helpers.
+- `.ai/validate.yml` must set `type` explicitly. The renderer does not auto-detect a family from `entry`, `package.json`, or repository contents.
+- For `node-runtime`, `custom_tests` and `skip_tests` are array fields of shell-command strings in `.ai/validate.yml`; they render into `CUSTOM_TESTS_JSON` / `SKIP_TESTS_JSON` for the repo-check runner.
 - Use `python-repo-checks` for workflow/script repositories that do not expose a long-running app entrypoint; set `entry` to a repo-local command/script (for example `scripts/run_validation_repo_checks.sh`) so validation executes meaningful local checks instead of forcing web-service startup. If this entry path was auto-seeded by validation refresh onboarding, replace the placeholder script and manifest values with repo-specific checks before relying on the harness as a release gate.
 - Freehand hint examples such as `type: http-server` in `examples/ai-validate-hints.yml` are diagnosis hints, not template-renderer family IDs.
 - `validation/validate.sh` is generated as a thin wrapper that delegates to checked-in `scripts/validate_driver.sh`.
