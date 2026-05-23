@@ -34,7 +34,7 @@ FAILURE_LABELS = [
 
 RESOLVER_ESCALATED_LABEL = "ai:resolver-escalated"
 ADDITIVE_LABELS = [
-	"ai:resolver-escalated",
+	RESOLVER_ESCALATED_LABEL,
 	"ai:harness-broken",
 	"ai:force-merge",
 	"ai:integration-backpressure",
@@ -106,6 +106,7 @@ def test_additive_labels_are_present_and_non_phase():
 		assert label in contract["labels"]
 		for group in contract["phase_groups"]:
 			assert label not in group.get("members", [])
+			assert label != group.get("fallback")
 
 
 def test_additive_labels_survive_repair_alongside_phase_label():
