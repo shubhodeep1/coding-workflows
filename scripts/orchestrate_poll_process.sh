@@ -5645,6 +5645,7 @@ Unable to create or locate the final integration PR from \`${integration_branch}
   local pr_mergeable
   local pr_merged
   local pr_draft
+  local ready_gate_reason=""
   pr_json="$(_fetch_pr_json "${final_pr}")"
   pr_state="$(_jq_field "${pr_json}" '.state' 'open|closed|merged')"
   pr_mergeable="$(_jq_field "${pr_json}" '.mergeable' 'true|false')"
@@ -5660,22 +5661,26 @@ Unable to create or locate the final integration PR from \`${integration_branch}
     return 0
   fi
 
-  if [ "${pr_state}" = "open" ] && [ "${pr_draft}" = "true" ]; then
-    local ready_gate_reason=""
-    if has_label "${TRACKING_LABELS:-[]}" "ai:ready-to-merge"; then
-      ready_gate_reason="tracking-ready-to-merge"
-    elif has_label "${TRACKING_LABELS:-[]}" "ai:validated"; then
-      ready_gate_reason="tracking-validated-legacy"
-    elif [ "${ENABLE_VALIDATION}" != "true" ]; then
-      ready_gate_reason="validation-disabled-legacy"
-    fi
+  if has_label "${TRACKING_LABELS:-[]}" "ai:ready-to-merge"; then
+    ready_gate_reason="tracking-ready-to-merge"
+  elif has_label "${TRACKING_LABELS:-[]}" "ai:validated"; then
+    ready_gate_reason="tracking-validated-legacy"
+  elif [ "${ENABLE_VALIDATION}" != "true" ]; then
+    ready_gate_reason="validation-disabled-legacy"
+  fi
 
-    if [ -z "${ready_gate_reason}" ]; then
-      FINAL_MERGE_BUDGET_ELIGIBLE="0"
+  if [ "${pr_state}" = "open" ] && [ -z "${ready_gate_reason}" ]; then
+    FINAL_MERGE_BUDGET_ELIGIBLE="0"
+    if [ "${pr_draft}" = "true" ]; then
       echo "  [final-merge] PR #${final_pr} is still draft; waiting for the tracking issue readiness gate."
-      update_eager_pr_validation_status_section "${final_pr}" || true
-      return 1
+    else
+      echo "  [final-merge] PR #${final_pr} is open but not yet allowed to merge; waiting for the tracking issue readiness gate."
     fi
+    update_eager_pr_validation_status_section "${final_pr}" || true
+    return 1
+  fi
+
+  if [ "${pr_state}" = "open" ] && [ "${pr_draft}" = "true" ]; then
 
     if ! gh_retry gh pr ready "${final_pr}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
       FINAL_MERGE_BUDGET_ELIGIBLE="0"

@@ -3537,10 +3537,44 @@ def test_final_merge_promotes_eager_draft_pr_when_tracking_issue_ready_to_merge(
 	assert "EAGER_DRAFT_PR_PROMOTED pr=361 gate=tracking-ready-to-merge" in (result["stdout"] + result["stderr"])
 
 
+def test_final_merge_keeps_legacy_open_non_draft_pr_behind_readiness_gate():
+	state = _base_state(status="merge_conflict")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_status"] = "pending"
+	prs = [
+		{
+			"number": 362,
+			"state": "open",
+			"draft": False,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+			"body": "Squash merge of orchestrator project #192.\n\nRefs #192",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert result["latest_state"]["status"] == "merge_conflict"
+	assert result["latest_state"]["final_merge_pr"] == 362
+	assert result["latest_state"]["final_merge_status"] == "pending"
+	assert result.get("merged_prs", []) == []
+	assert result["pr_ready_calls"] == []
+	assert "<!-- VALIDATION_STATUS_V1 -->" in result["prs"][0].get("body", "")
+	assert "waiting for the tracking issue readiness gate" in (result["stdout"] + result["stderr"])
+
+
 def test_final_merge_treats_closed_merged_pr_as_success():
 	state = _base_state(status="in_progress")
 	state["integration_branch"] = "orchestrator/project-192"
 	state["final_merge_status"] = "conflict"
+	state["final_merge_pr"] = 353
 	prs = [
 		{
 			"number": 353,
