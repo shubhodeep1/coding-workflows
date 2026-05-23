@@ -60,6 +60,7 @@ def _run_renderer(manifest_path: Path, output_root: Path) -> subprocess.Complete
 		],
 		text=True,
 		capture_output=True,
+		timeout=300,
 		env=env,
 	)
 
@@ -69,6 +70,7 @@ def _run_validation_lint(output_root: Path) -> subprocess.CompletedProcess[str]:
 		["python3", str(REPO_ROOT / "scripts" / "validation_lint.py"), str(output_root)],
 		text=True,
 		capture_output=True,
+		timeout=300,
 		env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
 	)
 
