@@ -1,9 +1,9 @@
 # Integration-Sync Resolver Self-Heal — Implementation Plan
 
 > Status: archived completed-plan copy.
-> This is the canonical completed-plan source for the full closeout: Phases 1-5 shipped; Phase 6 landed as a discovery-only NO-GO (see [`docs/plans/sub-issue-test-runs-spike.md`](../plans/sub-issue-test-runs-spike.md)).
+> This is the canonical completed-plan source for the full closeout: Phases 1-5 shipped; Phase 6 landed as a discovery-only NO-GO (see [`sub-issue-test-runs-spike.md`](sub-issue-test-runs-spike.md)).
 
-> Source design: [`docs/integration-sync-resolver-self-heal.md`](../integration-sync-resolver-self-heal.md).
+> Source design: [`integration-sync-resolver-self-heal.md`](integration-sync-resolver-self-heal.md).
 > This archived plan originally converted that draft proposal into an executable,
 > multi-phase rollout covering everything in §5 (v1) and all seven items in §10.
 > The codebase now reflects Phases 1-5 across follow-up PRs; Phase 6 closed with
@@ -630,7 +630,7 @@ phase begins. Each is in the same Q-ID format as CLAUDE.md §2.
 
 ## References
 
-- Source design: [`docs/integration-sync-resolver-self-heal.md`](../integration-sync-resolver-self-heal.md)
+- Source design: [`integration-sync-resolver-self-heal.md`](integration-sync-resolver-self-heal.md)
 - Related plan: [`docs/plans/orchestrator-validation-resilience-plan.md`](../plans/orchestrator-validation-resilience-plan.md) — overlapping orchestrator-state and tracking-issue patterns.
 - Related plan: [`docs/completed/judge-loop-and-reissue-plan.md`](./judge-loop-and-reissue-plan.md) — judge-loop terminology referenced in Phase 2's escape valve.
 - Existing related script: [`scripts/orchestrate_poll_process.sh:3373`](../../scripts/orchestrate_poll_process.sh) (`heal_integration_branch_conflict`).

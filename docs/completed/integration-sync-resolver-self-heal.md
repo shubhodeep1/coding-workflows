@@ -2,7 +2,7 @@
 
 > Status: **Phases 1-5 shipped; Phase 6 closed as a discovery-only NO-GO.**
 > Owner: orchestrator (implementation will be driven by the AI orchestrator pipeline).
-> Scope: archival design doc for the integration-sync resolver self-heal rollout. The baseline/main-snapshot fix plus the follow-up escape-valve, tiering, quarantine/audit, and branch-rebuild work are now shipped on this branch; the proposed fingerprint replacement with sub-issue test runs was investigated and closed as NO-GO in [`docs/plans/sub-issue-test-runs-spike.md`](plans/sub-issue-test-runs-spike.md).
+> Scope: archival design doc for the integration-sync resolver self-heal rollout. The baseline/main-snapshot fix plus the follow-up escape-valve, tiering, quarantine/audit, and branch-rebuild work are now shipped on this branch; the proposed fingerprint replacement with sub-issue test runs was investigated and closed as NO-GO in [`sub-issue-test-runs-spike.md`](sub-issue-test-runs-spike.md).
 
 ---
 
@@ -338,7 +338,7 @@ At drafting time the items below were deferred. On the current branch their stat
 4. **Adaptive fingerprint quarantine.** Shipped; `FINGERPRINT_QUARANTINE_RUNS_M` drives ai-memory quarantine state and `FINGERPRINT_QUARANTINED_V1` markers.
 5. **Drift audit job.** Shipped; `.github/workflows/drift-audit.yml` / `scripts/drift_audit.sh` scan `PRE_EXISTING_FINGERPRINT_DRIFT_V1` and `FINGERPRINT_QUARANTINED_V1` markers, cluster by `fp_key`, and create or refresh tracker issues when `DRIFT_AUDIT_ENABLED=true`.
 6. **Last-resort branch rebuild.** Shipped; `BRANCH_REBUILD_ENABLED`, `BRANCH_REBUILD_THRESHOLD_HOURS`, and `BRANCH_REBUILD_COOLDOWN_HOURS` gate the delete/recreate + replay flow, with audit persisted as `BranchRebuildAuditV1` (`ai-memory/schemas/branch_rebuild_audit.v1.json`).
-7. **Replace fingerprints with sub-issue test runs.** Discovery completed as **NO-GO**. See [`docs/plans/sub-issue-test-runs-spike.md`](plans/sub-issue-test-runs-spike.md); if revisited later it should be a hybrid/additive path, not a replacement gate.
+7. **Replace fingerprints with sub-issue test runs.** Discovery completed as **NO-GO**. See [`sub-issue-test-runs-spike.md`](sub-issue-test-runs-spike.md); if revisited later it should be a hybrid/additive path, not a replacement gate.
 
 ---
 
@@ -347,4 +347,4 @@ At drafting time the items below were deferred. On the current branch their stat
 - **2026-04-24** — Q1=A (split sync from resolve / verifier-fix-propagation, refined to "delta verification + main-snapshot bootstrap" after confirming clean-sync is already decoupled at `scripts/orchestrate_poll_process.sh:2724-2727`).
 - **2026-04-24** — Q2=A (full plan-of-record matching `docs/resilient-codex-failure-plan.md` shape).
 - **2026-04-24** — Filename `docs/integration-sync-resolver-self-heal.md` chosen.
-- **Resolved** — the follow-up rollout landed with defaults `N=5`, `M=3`, `M-hours=24`, and `REBUILD_COOLDOWN_HOURS=48`; the sub-issue test-run replacement idea concluded with the NO-GO spike at `docs/plans/sub-issue-test-runs-spike.md`.
+- **Resolved** — the follow-up rollout landed with defaults `N=5`, `M=3`, `M-hours=24`, and `REBUILD_COOLDOWN_HOURS=48`; the sub-issue test-run replacement idea concluded with the NO-GO spike at `docs/completed/sub-issue-test-runs-spike.md`.

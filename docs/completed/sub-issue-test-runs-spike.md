@@ -25,7 +25,7 @@
    because the capture allowlist excludes `CHANGELOG.md` and `.gitignore`. Outside
    the sample, fingerprints also have a documented operational false-positive mode
    (the PR #1569 / issue #1519 wedge described in
-   `docs/integration-sync-resolver-self-heal.md`).
+   `docs/completed/integration-sync-resolver-self-heal.md`).
 4. **What is the recommendation?**
    **No-go on replacement.** If this idea is revived later, it should be
    re-scoped as an **additive, opt-in hybrid** layered beside fingerprints, not a
@@ -269,7 +269,7 @@ execution: all 12 runnable targets passed on the current checkout.
 
 However, the repo already has a documented fingerprint false-positive class: the
 PR #1569 / issue #1519 wedge described in
-`docs/integration-sync-resolver-self-heal.md`, where contradictory capture and
+`docs/completed/integration-sync-resolver-self-heal.md`, where contradictory capture and
 whole-tree absolute verification created a resolver loop.
 
 That does **not** make replacement attractive on its own, because the test-run
