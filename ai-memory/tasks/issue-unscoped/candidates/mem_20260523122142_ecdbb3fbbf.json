@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Update `analysis/recommendation-processing-report.md` so it records outcomes for every currently-present dated workflow-optimization doc: which recommendations were implemented by the sibling issues in this project, which were already satisfied, and which were intentionally deferred with a concrete reason.\"\n  expected_change_site: `analysis/recommendation-processing-report.md` (the new \"Outcome ledger for the 2026-05-15 through 2026-05-21 backlog docs\" section)\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The ledger exists and is comprehensive (15 source docs -> 17 implemented, 10 satisfied, 49 deferred entries with per-rec IDs, concrete reasons, and \"Implemented by sibling work\", \"Already satisfied on this ref\", \"Intentionally deferred\" headings). The upstream dated reports are deleted in the same PR.\n- requirement: \"Adjust `.github/workflows/comprehensive-test-and-release.yml` so report discovery works with the cleaned `analysis/` layout and does not require a remaining dated `workflow-optimization-*.md` file.\"\n  expected_change_site: `.github/workflows/comprehensive-test-and-release.yml:245-255`\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The change is present (adds explicit fallback `if [ -z \"${REPORT_FILE}\" ] && [ -f \"analysis/recommendation-processing-report.md\" ]; then REPORT_FILE=...` and updates the error message). The workflow now succeeds when only the consolidated report remains.\n- requirement: \"After the report is updated and the selected sibling issues are merged, delete the processed dated docs listed in `files_touched`.\"\n  expected_change_site: The 15 dated `analysis/workflow-optimization-*.md` files\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: All 15 files are deleted in the PR diff (commit removes ~9k LOC of processed backlog reports). `validation-selftest-status.json` and `last_collection_timestamp.txt` are untouched as required.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- requirement: \"Update `analysis/recommendation-processing-report.md` so it records outcomes for every currently-present dated workflow-optimization doc: which recommendations were implemented by the sibling issues in this project, which were already satisfied, and which were intentionally deferred with a concrete reason.\"\n  expected_change_site: `analysis/recommendation-processing-report.md` (the new \"Outcome ledger for the 2026-05-15 through 2026-05-21 backlog docs\" section)\n  EVIDENCE: The ledger exists and is comprehensive (15 source docs -> 17 implemented, 10 satisfied, 49 deferred entries with per-rec IDs, concrete reasons, and \"Implemented by sibling work\", \"Already satisfied on this ref\", \"Intentionally deferred\" headings). The upstream dated reports are deleted in the same PR.\n- requirement: \"Adjust `.github/workflows/comprehensive-test-and-release.yml` so report discovery works with the cleaned `analysis/` layout and does not require a remaining dated `workflow-optimization-*.md` file.\"\n  expected_change_site: `.github/workflows/comprehensive-test-and-release.yml:245-255`\n  EVIDENCE: The change is present (adds explicit fallback `if [ -z \"${REPORT_FILE}\" ] && [ -f \"analysis/recommendation-processing-report.md\" ]; then REPORT_FILE=...` and updates the error message). The workflow now succeeds when only the consolidated report remains.\n- requirement: \"After the report is updated and the selected sibling issues are merged, delete the processed dated docs listed in `files_touched`.\"\n  expected_change_site: The 15 dated `analysis/workflow-optimization-*.md` files\n  EVIDENCE: All 15 files are deleted in the PR diff (commit removes ~9k LOC of processed backlog reports). `validation-selftest-status.json` and `last_collection_timestamp.txt` are untouched as required.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "9a7eb2d78c16d32ccb635487966c294cbb793cee7141b038f88bba899aaee837",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2920,
+    "run_id": "26332250500",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26332250500",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260523122142_ecdbb3fbbf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2920,
+    "run_id": "26332250500"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-23T12:21:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
