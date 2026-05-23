@@ -301,6 +301,45 @@ def test_helper_handles_audit_section_followed_by_pr_comment_audit(tmp_path):
 	# review_a.md's arithmetic balances (1 == 1 + 0 + 0), so rc=0.
 	assert result.returncode == 0
 
+def test_helper_stops_at_next_heading_when_pr_comment_audit_missing(tmp_path):
+	"""If `PR comment audit:` is missing, the extractor must still stop at
+	the next heading so later sections (Regression fingerprint / Runtime
+	failure path) are not treated as audit lines."""
+	summary = textwrap.dedent(
+		"""\
+		Review file issue audit:
+		- review_a.md: total issues listed 1, issues applied 1, issues already applied 0, issues ignored 0
+
+		Regression fingerprint:
+		- file:symbol
+		Runtime failure path:
+		- unit-test
+		"""
+	)
+	result = _run(summary, None, tmp_path=tmp_path)
+	assert result.returncode == 0, result.stderr
+
+
+def test_helper_stops_at_generic_future_section_heading(tmp_path):
+	"""Future summary-format changes can insert a new generic section
+	heading between `Review file issue audit:` and `PR comment audit:`.
+	The helper must stop at that heading instead of treating it as an
+	unparseable audit line."""
+	summary = textwrap.dedent(
+		"""\
+		Review file issue audit:
+		- review_a.md: total issues listed 1, issues applied 1, issues already applied 0, issues ignored 0
+
+		Additional notes:
+		- this section is not part of the audit
+
+		PR comment audit:
+		- none
+		"""
+	)
+	result = _run(summary, "1", tmp_path=tmp_path)
+	assert result.returncode == 0, result.stderr
+
 
 def main() -> int:
 	# Direct `python3 tests/<file>.py` entrypoint — the repo's CI runs

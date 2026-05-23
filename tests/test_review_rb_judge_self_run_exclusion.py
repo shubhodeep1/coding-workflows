@@ -52,9 +52,12 @@ self-deadlock or the misleading fallback comment.
 from __future__ import annotations
 
 import json
+import os
 import re
+import shlex
 import subprocess
 import shutil
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -62,6 +65,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RB_JUDGE_SCRIPT = REPO_ROOT / "scripts" / "review_rb_judge.sh"
 REVIEW_AUTOFIX_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
+TEST_SUBPROCESS_ENV = {
+	"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+	"PYTHONDONTWRITEBYTECODE": "1",
+}
 
 
 def _rb_judge_text() -> str:
@@ -70,6 +77,17 @@ def _rb_judge_text() -> str:
 
 def _review_autofix_text() -> str:
 	return REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
+
+
+def _rb_judge_local_sanitize_fallback_block() -> str:
+	src = _rb_judge_text()
+	start = src.index("if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then")
+	end = src.index("if ! command -v _init_prompt_budget >/dev/null 2>&1; then", start)
+	block = src[start:end]
+	assert block.count("if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then") == 1
+	assert "sanitize_codex_prompt_file() {" in block
+	assert "Local prompt sanitization fallback could not sanitize" in block
+	return block
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +162,104 @@ def test_script_excludes_self_in_both_jq_branches() -> None:
 		f"object). Found {occurrences} occurrence(s) of "
 		f"`{expected}`; expected at least 2."
 	)
+
+
+def test_local_sanitize_fallback_warns_when_all_rewrite_paths_fail() -> None:
+	"""The local sanitize fallback keeps the shared helper's best-effort
+	contract, but degraded harnesses still need a warning when every rewrite
+	path fails so a later codex stdin error is diagnosable."""
+	with tempfile.TemporaryDirectory(prefix="rb_judge_sanitize_") as td:
+		prompt_file = Path(td) / "invalid_prompt.txt"
+		prompt_file.write_bytes(b"\xff\xfe\xfa")
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				(
+					f"{_rb_judge_local_sanitize_fallback_block()}\n"
+					"iconv() { return 1; }\n"
+					"python3() { return 1; }\n"
+					f"sanitize_codex_prompt_file {shlex.quote(str(prompt_file))}\n"
+				),
+			],
+			cwd=str(REPO_ROOT),
+			env=TEST_SUBPROCESS_ENV,
+			capture_output=True,
+			text=True,
+			check=True,
+		)
+
+		assert prompt_file.read_bytes() == b"\xff\xfe\xfa"
+		assert "Local prompt sanitization fallback could not sanitize" in result.stderr, (
+			"scripts/review_rb_judge.sh must warn when the degraded local prompt "
+			"sanitizer exhausts both rewrite paths and has to leave the original "
+			"bytes in place."
+		)
+
+
+def test_local_sanitize_fallback_warns_when_tempfile_allocation_fails() -> None:
+	"""Tempfile allocation failure also leaves the original prompt bytes in
+	place, so degraded harnesses need the same warning instead of a silent
+	fall-through to the later Codex read failure."""
+	with tempfile.TemporaryDirectory(prefix="rb_judge_sanitize_") as td:
+		prompt_file = Path(td) / "invalid_prompt.txt"
+		prompt_file.write_bytes(b"\xff\xfe\xfa")
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				(
+					f"{_rb_judge_local_sanitize_fallback_block()}\n"
+					"mktemp() { return 1; }\n"
+					f"sanitize_codex_prompt_file {shlex.quote(str(prompt_file))}\n"
+				),
+			],
+			cwd=str(REPO_ROOT),
+			env=TEST_SUBPROCESS_ENV,
+			capture_output=True,
+			text=True,
+			check=True,
+		)
+
+		assert prompt_file.read_bytes() == b"\xff\xfe\xfa"
+		assert "Local prompt sanitization fallback could not sanitize" in result.stderr, (
+			"scripts/review_rb_judge.sh must warn when the degraded local prompt "
+			"sanitizer cannot even allocate its temp file and has to leave the "
+			"original bytes in place."
+		)
+
+
+def test_local_sanitize_fallback_warns_when_replace_fails() -> None:
+	"""A failed in-place replace also leaves the original prompt bytes in
+	place, so degraded harnesses need the same warning instead of a silent
+	fall-through to the later Codex read failure."""
+	with tempfile.TemporaryDirectory(prefix="rb_judge_sanitize_") as td:
+		prompt_file = Path(td) / "invalid_prompt.txt"
+		prompt_file.write_bytes(b"\xff\xfe\xfa")
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				(
+					f"{_rb_judge_local_sanitize_fallback_block()}\n"
+					"iconv() { printf sanitized; }\n"
+					"mv() { return 1; }\n"
+					f"sanitize_codex_prompt_file {shlex.quote(str(prompt_file))}\n"
+				),
+			],
+			cwd=str(REPO_ROOT),
+			env=TEST_SUBPROCESS_ENV,
+			capture_output=True,
+			text=True,
+			check=True,
+		)
+
+		assert prompt_file.read_bytes() == b"\xff\xfe\xfa"
+		assert "Local prompt sanitization fallback could not sanitize" in result.stderr, (
+			"scripts/review_rb_judge.sh must warn when the degraded local prompt "
+			"sanitizer cannot replace the original file and has to leave the "
+			"original bytes in place."
+		)
 
 
 # ---------------------------------------------------------------------------
@@ -466,6 +582,32 @@ def test_jq_filter_no_self_collision_on_non_actions_details_url() -> None:
 		}
 	]
 	assert _run_jq(payload, "12345") == "1"
+
+
+def test_local_sanitize_fallback_rewrites_all_invalid_utf8_like_shared_helper() -> None:
+	"""The degraded local fallback should mirror the shared helper's
+	best-effort contract for all-invalid input by leaving valid UTF-8 on
+	disk, even when every invalid byte is discarded."""
+	with tempfile.TemporaryDirectory(prefix="rb_judge_sanitize_") as td:
+		prompt_file = Path(td) / "invalid_prompt.txt"
+		prompt_file.write_bytes(b"\xff\xfe\xfa")
+		subprocess.run(
+			[
+				"bash",
+				"-c",
+				(
+					f"{_rb_judge_local_sanitize_fallback_block()}\n"
+					"iconv() { return 1; }\n"
+					f"sanitize_codex_prompt_file {shlex.quote(str(prompt_file))}\n"
+				),
+			],
+			cwd=str(REPO_ROOT),
+			env=TEST_SUBPROCESS_ENV,
+			capture_output=True,
+			text=True,
+			check=True,
+		)
+		assert prompt_file.read_bytes() == b""
 
 
 def main() -> int:

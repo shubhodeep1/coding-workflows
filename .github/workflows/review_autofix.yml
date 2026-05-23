@@ -154,7 +154,7 @@ env:
   # CI/lint failures are detected and fixed every run. See README and
   # agents.md for the contract.
   CHECK_RUNS_AUTOFIX_ENABLED: ${{ vars.CHECK_RUNS_AUTOFIX_ENABLED || 'true' }}
-  CHECK_RUNS_WAIT_TIMEOUT_SECS: ${{ vars.CHECK_RUNS_WAIT_TIMEOUT_SECS || '1200' }}
+  CHECK_RUNS_WAIT_TIMEOUT_SECS: ${{ vars.CHECK_RUNS_WAIT_TIMEOUT_SECS || '900' }}
   CHECK_RUNS_POLL_INTERVAL_SECS: ${{ vars.CHECK_RUNS_POLL_INTERVAL_SECS || '20' }}
   # Per-failed-check-run cap on the `failed[i].log_tail` snapshot field
   # written by the "Collect PR check-run failures" step. The writer resolves
@@ -168,6 +168,7 @@ env:
   # pipeline continues. Set to `0` to disable log_tail capture; values
   # above `131072` clamp to `131072` so the snapshot stays bounded.
   CHECK_RUNS_LOG_TAIL_BYTES: ${{ vars.CHECK_RUNS_LOG_TAIL_BYTES || '16384' }}
+  FINGERPRINT_QUARANTINE_RUNS_M: ${{ vars.FINGERPRINT_QUARANTINE_RUNS_M || '3' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
   SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}
 
@@ -929,17 +930,16 @@ jobs:
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
+          # Always stage runtime support files out of tree so main-primary
+          # bootstrap helpers never overwrite the source-repo PR worktree
+          # before reviewer/editor snapshots are taken.
+          SUPPORT_ROOT_DIR="${RUNNER_TEMP}/coding-workflows-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          SUPPORT_SCRIPTS_DIR="${SUPPORT_ROOT_DIR}/scripts"
+          SUPPORT_PROMPTS_DIR="${SUPPORT_ROOT_DIR}/prompts"
+          SUPPORT_AI_MEMORY_DIR="${SUPPORT_ROOT_DIR}/ai-memory"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            SUPPORT_ROOT_DIR="$(pwd)"
-            SUPPORT_SCRIPTS_DIR="scripts"
-            SUPPORT_PROMPTS_DIR="prompts"
-            SUPPORT_AI_MEMORY_DIR="ai-memory"
             IS_WORKFLOW_SOURCE_REPO="true"
           else
-            SUPPORT_ROOT_DIR="${RUNNER_TEMP}/coding-workflows-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-            SUPPORT_SCRIPTS_DIR="${SUPPORT_ROOT_DIR}/scripts"
-            SUPPORT_PROMPTS_DIR="${SUPPORT_ROOT_DIR}/prompts"
-            SUPPORT_AI_MEMORY_DIR="${SUPPORT_ROOT_DIR}/ai-memory"
             IS_WORKFLOW_SOURCE_REPO="false"
           fi
           mkdir -p "${SUPPORT_SCRIPTS_DIR}" "${SUPPORT_PROMPTS_DIR}" "${SUPPORT_AI_MEMORY_DIR}/schemas"
@@ -955,21 +955,17 @@ jobs:
           } >> "$GITHUB_ENV"
 
           REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh"
+          # Main-primary bootstrap scripts: prefer the fresh main snapshot so
+          # wedged integration branches still pick up resolver safety fixes
+          # shipped on main. Missing from both refs remains fail-open so older
+          # consumer script_refs still bootstrap cleanly.
+          MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_conflict_resolve.sh review_conflict_prepare.sh"
           # Optional bootstrap scripts: allowed to be missing from both
           # refs.  The bootstrap emits a warning and continues — callers
           # that depend on these must themselves tolerate absence.  Keep
           # this list empty unless a genuinely optional helper is added;
           # the default should always be "required".
-          # Optional bootstrap entry for the integration-sync intent
-          # fingerprint verifier added by the #1057 auto-heal
-          # hardening work. Treated as optional so older script_refs
-          # (consumer repos still pinned to a stable channel that
-          # predates this script) bootstrap cleanly without erroring;
-          # the fingerprint verification step in the resolver is
-          # gated on the script's existence and falls open with a
-          # warning when missing.
-          OPTIONAL_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py"
-          OPTIONAL_BOOTSTRAP_SCRIPTS="${OPTIONAL_BOOTSTRAP_SCRIPTS} install_semble.sh build_semble_wrapper.sh semble_helpers.sh"
+          OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh"
           for f in ${REQUIRED_BOOTSTRAP_SCRIPTS}; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
@@ -978,6 +974,20 @@ jobs:
             if [ ! -f "${src}" ]; then
               echo "::error::Required bootstrap script '${f}' is missing from checked-out support sources (${SCRIPT_REF} and optional main snapshot) in ${wf_source}. This usually means review_autofix.yml references a file that was never committed (common cause: a hallucinated [ai-merge-resolve] commit added a new bootstrap entry without its corresponding script). Verify REQUIRED_BOOTSTRAP_SCRIPTS matches the current contents of scripts/."
               exit 1
+            fi
+            install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
+          done
+          for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do
+            src=".codex-workflow-src-main/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src/scripts/${f}" ]; then
+              src=".codex-workflow-src/scripts/${f}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::warning::Main-primary bootstrap script '${f}' not available in checked-out support sources; downstream features relying on this helper will be unavailable."
+              continue
+            fi
+            if [ "${src}" = ".codex-workflow-src-main/scripts/${f}" ] && [ -f ".codex-workflow-src/scripts/${f}" ]; then
+              echo "::notice::Bootstrapped ${f} from main snapshot (branch copy ignored)."
             fi
             install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
           done
@@ -1016,7 +1026,7 @@ jobs:
             install -m 0644 "${serena_template_src}" "${SUPPORT_SCRIPTS_DIR}/templates/serena_project.yml.j2"
           fi
 
-          for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json actions_runs_cache.v1.json workflow_log_analysis_cache.v1.json; do
+          for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json actions_runs_cache.v1.json workflow_log_analysis_cache.v1.json fingerprint_quarantine.v1.json; do
             src=".codex-workflow-src/ai-memory/schemas/${sf}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/ai-memory/schemas/${sf}" ]; then
               src=".codex-workflow-src-main/ai-memory/schemas/${sf}"
@@ -1925,9 +1935,9 @@ jobs:
 
           # Clamp configurable values to safe ranges. Invalid values fall back
           # to defaults rather than failing the workflow.
-          _wait_timeout="${CHECK_RUNS_WAIT_TIMEOUT_SECS:-1200}"
+          _wait_timeout="${CHECK_RUNS_WAIT_TIMEOUT_SECS:-900}"
           if ! [[ "${_wait_timeout}" =~ ^[0-9]+$ ]] || [ "${_wait_timeout}" -gt 3600 ]; then
-            _wait_timeout=1200
+            _wait_timeout=900
           fi
           _poll_interval="${CHECK_RUNS_POLL_INTERVAL_SECS:-20}"
           if ! [[ "${_poll_interval}" =~ ^[0-9]+$ ]] || [ "${_poll_interval}" -lt 5 ] || [ "${_poll_interval}" -gt 300 ]; then
@@ -2307,12 +2317,20 @@ jobs:
           set -euo pipefail
           echo "ENABLE_REVIEWER_TWO_PASS=false" >> "$GITHUB_ENV"
           echo "REVIEWER_REASONING_EFFORT=low" >> "$GITHUB_ENV"
+          mapfile -t reviewer_models < <(printf '%s\n' "${REVIEWER_MODELS:-}" | sed '/^$/d' | head -n 3)
+          if [ "${#reviewer_models[@]}" -gt 0 ]; then
+            {
+              echo 'REVIEWER_MODELS<<__NO_PR_REVIEWER_MODELS__'
+              printf '%s\n' "${reviewer_models[@]}"
+              echo '__NO_PR_REVIEWER_MODELS__'
+            } >> "$GITHUB_ENV"
+          fi
           # Override the reviewer config written earlier by Create Codex
           # config. This step intentionally runs after the smoke-test
           # tuning block so no-PR claude/** comment-only reviews always use
           # the lightweight single-pass reviewer profile.
           sed -i 's/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*".*"/model_reasoning_effort = "low"/' ~/.codex/config.toml
-          echo "CLAUDE_BRANCH_REVIEW_LIGHT_PROFILE mode=no_pr reviewer_reasoning=low reviewer_two_pass=false"
+          echo "CLAUDE_BRANCH_REVIEW_LIGHT_PROFILE mode=no_pr reviewer_reasoning=low reviewer_two_pass=false reviewer_count=${#reviewer_models[@]}"
 
       - name: Checkout PR head branch
         run: |
@@ -3125,15 +3143,56 @@ jobs:
           echo "========================================"
 
           merge_exit=0
+          merge_promisor_fetch_failure_seen=false
+          merge_promisor_initial_stderr=""
           git merge --no-commit --no-ff "origin/${BASE_BRANCH}" 2> "${MERGE_STDERR_FILE}" || merge_exit=$?
           if [ -s "${MERGE_STDERR_FILE}" ]; then
             sed 's/^/git merge stderr: /' "${MERGE_STDERR_FILE}"
+          fi
+          if grep -qiE 'promisor remote|not our ref|could not fetch|fetch-pack|remote error: upload-pack' "${MERGE_STDERR_FILE}" 2>/dev/null; then
+            merge_promisor_fetch_failure_seen=true
+            merge_promisor_initial_stderr="$(tr '\n' ' ' < "${MERGE_STDERR_FILE}" 2>/dev/null | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
+            merge_promisor_initial_stderr="${merge_promisor_initial_stderr:-<git merge produced no stderr>}"
+          fi
+
+          # Blobless partial clone recovery (the codex-agent checkout uses
+          # `filter: blob:none`): the 3-way merge lazy-fetches blob content
+          # from the promisor remote, and that batched on-demand fetch fails
+          # hard (exit 128) when any single OID in the batch is unreachable
+          # server-side ("not our ref" / "could not fetch ... from promisor
+          # remote") — even though the merge itself is well-formed. On that
+          # signature, drop the partial filter, refetch the merge inputs so
+          # every blob is materialised locally, and retry the merge once.
+          # Without this the gate misreads a transient/infra fetch failure as
+          # a deterministic stale base and skips the conflict resolver.
+          if [ "${merge_exit}" -ne 0 ] && [ ! -f "$(git rev-parse --git-dir)/MERGE_HEAD" ] \
+             && [ "${merge_promisor_fetch_failure_seen}" = "true" ]; then
+            echo "::warning::Pre-review merge probe hit a partial-clone promisor fetch failure; backfilling blobs and retrying the merge once."
+            git reset --hard HEAD >/dev/null 2>&1 || true
+            git config --unset-all remote.origin.partialclonefilter 2>/dev/null || true
+            _refetch_rc=0
+            _refetch_stderr="$(git fetch --no-tags --prune --refetch origin "${_merge_refspecs[@]}" 2>&1 >/dev/null)" || _refetch_rc=$?
+            if [ "${_refetch_rc}" -ne 0 ]; then
+              _refetch_stderr="$(printf '%s' "${_refetch_stderr}" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
+              _refetch_stderr="${_refetch_stderr:-<git fetch produced no stderr>}"
+              echo "::warning::blob-backfill refetch failed during pre-review merge gate; retrying the merge anyway. git fetch stderr: ${_refetch_stderr}"
+            fi
+            merge_exit=0
+            : > "${MERGE_STDERR_FILE}"
+            git merge --no-commit --no-ff "origin/${BASE_BRANCH}" 2> "${MERGE_STDERR_FILE}" || merge_exit=$?
+            if [ -s "${MERGE_STDERR_FILE}" ]; then
+              sed 's/^/git merge stderr (after blob backfill): /' "${MERGE_STDERR_FILE}"
+            fi
           fi
 
           if [ -z "$(git ls-files --unmerged)" ]; then
             if [ "${merge_exit}" -ne 0 ] && [ ! -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
               _merge_stderr_oneline="$(tr '\n' ' ' < "${MERGE_STDERR_FILE}" 2>/dev/null | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
               _merge_stderr_oneline="${_merge_stderr_oneline:-<git merge produced no stderr>}"
+              if [ "${merge_promisor_fetch_failure_seen}" = "true" ] && [ -n "${merge_promisor_initial_stderr}" ] \
+                 && [ "${merge_promisor_initial_stderr}" != "${_merge_stderr_oneline}" ]; then
+                _merge_stderr_oneline="${_merge_stderr_oneline} | initial promisor stderr: ${merge_promisor_initial_stderr}"
+              fi
               _merge_stderr_oneline="$(printf '%s' "${_merge_stderr_oneline}" | sed 's/%/%25/g; s/\r/%0D/g')"
               if grep -qi 'refusing to merge unrelated histories' "${MERGE_STDERR_FILE}" 2>/dev/null; then
                 if [ "${merge_probe_ambiguous}" = "true" ]; then
@@ -3148,10 +3207,21 @@ jobs:
                   exit 0
                 fi
               elif [ "${merge_exit}" -eq 128 ]; then
-                echo "::error::Pre-review merge topology gate failed (exit 128): git merge aborted before entering merge state. Skipping reviewer/editor spend. See pre-review diagnostics above. git stderr: ${_merge_stderr_oneline}"
-                echo "AUTOFIX_PRE_REVIEW_MERGE_TOPOLOGY pr=${PR_NUMBER} base_branch=${BASE_BRANCH} local_sha=${LOCAL_HEAD_SHA} result=merge_precheck_failed_exit_128 action=soft_exit"
-                echo "AUTOFIX_STALE_BASE_SKIP=true" >> "$GITHUB_ENV"
-                exit 0
+                if [ "${merge_promisor_fetch_failure_seen}" = "true" ] \
+                   || grep -qiE 'promisor remote|not our ref|could not fetch|fetch-pack|remote error: upload-pack' "${MERGE_STDERR_FILE}" 2>/dev/null; then
+                  # A partial-clone promisor fetch failure that survived the
+                  # blob-backfill retry above is an infrastructure error, not
+                  # a deterministic stale base. Fail OPEN so the reviewer +
+                  # conflict-resolver path still runs (the resolver runs its
+                  # own merge with its own backfill) rather than skipping it.
+                  echo "::warning::Pre-review merge topology gate: exit 128 from a partial-clone promisor fetch failure that survived the blob-backfill retry. Failing open to the reviewer/resolver path. git stderr: ${_merge_stderr_oneline}"
+                  echo "AUTOFIX_PRE_REVIEW_MERGE_TOPOLOGY pr=${PR_NUMBER} base_branch=${BASE_BRANCH} local_sha=${LOCAL_HEAD_SHA} result=merge_precheck_promisor_fetch_failed action=fail_open"
+                else
+                  echo "::error::Pre-review merge topology gate failed (exit 128): git merge aborted before entering merge state. Skipping reviewer/editor spend. See pre-review diagnostics above. git stderr: ${_merge_stderr_oneline}"
+                  echo "AUTOFIX_PRE_REVIEW_MERGE_TOPOLOGY pr=${PR_NUMBER} base_branch=${BASE_BRANCH} local_sha=${LOCAL_HEAD_SHA} result=merge_precheck_failed_exit_128 action=soft_exit"
+                  echo "AUTOFIX_STALE_BASE_SKIP=true" >> "$GITHUB_ENV"
+                  exit 0
+                fi
               else
                 echo "::warning::Pre-review merge topology gate hit an inconclusive merge failure (exit ${merge_exit}); continuing to reviewers. git stderr: ${_merge_stderr_oneline}"
                 echo "AUTOFIX_PRE_REVIEW_MERGE_TOPOLOGY pr=${PR_NUMBER} base_branch=${BASE_BRANCH} local_sha=${LOCAL_HEAD_SHA} result=merge_failure_inconclusive_exit_${merge_exit} action=fail_open"
@@ -3207,13 +3277,16 @@ jobs:
           source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
 
           # REVIEWER_CONSENSUS_FILE is now a ledger produced by
-          # summarize_reviewer_consensus.sh. The CONSENSUS FINDINGS block lists
-          # one entry per bullet starting "- "; each entry has a
-          # "flagged_by: [slug, slug, ...]" line. "Multi-reviewer" = >=2 slugs.
+          # summarize_reviewer_consensus.sh. The CONSENSUS FINDINGS and
+          # CONSENSUS TASK GAPS blocks each list one entry per bullet starting
+          # "- "; each entry has a "flagged_by: [slug, slug, ...]" line.
+          # "Multi-reviewer" = >=2 slugs.
           counts="$(awk '
             BEGIN { in_consensus = 0; total = 0; multi = 0 }
             /^=== CONSENSUS FINDINGS ===$/     { in_consensus = 1; next }
             /^=== END CONSENSUS FINDINGS ===$/ { in_consensus = 0; next }
+            /^=== CONSENSUS TASK GAPS ===$/    { in_consensus = 1; next }
+            /^=== END CONSENSUS TASK GAPS ===$/ { in_consensus = 0; next }
             in_consensus && /^- / { total++ }
             in_consensus && /^[[:space:]]*flagged_by:/ {
               n = gsub(/,/, ",", $0) + 1
@@ -3226,9 +3299,9 @@ jobs:
           total_consensus_count="${counts##* }"
 
           if [ "${high_confidence_count}" -gt 0 ]; then
-            summary="Reviewer consensus flagged ${high_confidence_count} multi-reviewer finding(s) across ${total_consensus_count} total consensus finding(s)"
+            summary="Reviewer consensus flagged ${high_confidence_count} multi-reviewer item(s) across ${total_consensus_count} total consensus item(s)"
           else
-            summary="Reviewer consensus produced ${total_consensus_count} finding(s); none flagged by multiple reviewers"
+            summary="Reviewer consensus produced ${total_consensus_count} consensus item(s); none flagged by multiple reviewers"
           fi
 
           details="$(head -c 12000 "${REVIEWER_CONSENSUS_FILE}")"
@@ -4381,6 +4454,8 @@ jobs:
         timeout-minutes: 170
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          RESOLVER_ESCAPE_THRESHOLD_N: ${{ vars.RESOLVER_ESCAPE_THRESHOLD_N || '5' }}
           # Decoupled from EDITOR_REASONING_EFFORT: the smoke-test override
           # ("Detect smoke test PR" step) sets editor reasoning to "none" so
           # the single-line bait removal completes deterministically. That
@@ -4417,30 +4492,19 @@ jobs:
           CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'high' }}
         run: |
           set -euo pipefail
-          # Bootstrap guard for the workflow-source-repo case
-          # (IS_WORKFLOW_SOURCE_REPO=true): SUPPORT_SCRIPTS_DIR resolves
-          # to the in-tree "scripts" dir, so when the prior
-          # review_conflict_prepare.sh merge replay lists
-          # scripts/review_conflict_resolve.sh among its unmerged paths
-          # (forward-merge stable→main PRs that touch the resolver
-          # itself), the on-disk copy at SUPPORT_SCRIPTS_DIR contains
-          # raw `<<<<<<< HEAD` / `=======` / `>>>>>>>` markers and bash
-          # aborts with "syntax error near unexpected token '<<<'"
-          # before the resolver can even start — observed on PR #2451
-          # run 25637785576 (job 63633abc-d9f8-54e0-a184-111777ae010a)
-          # where line 625's `else` clause was misparsed as a here-string.
+          if [ -f "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ]; then
+            source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null || true
+            ensure_label_exists "ai:resolver-escalated" "${{ github.repository }}" || true
+          fi
+          # Parse guard for the staged resolver helper. Runtime support
+          # files now stage out of tree even on the workflow source
+          # repo, so merge-replay markers in the PR worktree no longer
+          # poison SUPPORT_SCRIPTS_DIR. Keep the fallback below as
+          # defence in depth in case the staged resolver copy is ever
+          # truncated or otherwise unparsable.
           # The .codex-workflow-src/ checkout (pinned to SCRIPT_REF) is
-          # untouched by the merge replay because review_conflict_prepare.sh
-          # explicitly stashes and restores it around the merge, so it
-          # holds a clean, parseable copy of the resolver script. Fall
-          # back to that copy when the in-tree script fails `bash -n`.
-          # The Codex resolver invoked below still reads the conflicted
-          # in-tree path to see the markers it needs to resolve — only
-          # the bash interpreter loading the resolver script switches
-          # source. Consumer repos (SUPPORT_SCRIPTS_DIR points outside
-          # the working tree) are unaffected: their in-tree script is
-          # never overwritten, `bash -n` always passes, and this block
-          # is a no-op.
+          # untouched by merge replay, so it remains a clean fallback
+          # source when the staged script fails `bash -n`.
           RESOLVER_SCRIPT="${SUPPORT_SCRIPTS_DIR}/review_conflict_resolve.sh"
           # Capture bash -n stderr (instead of redirecting to /dev/null)
           # and surface a sanitized copy in every fallback annotation so
@@ -4974,9 +5038,10 @@ jobs:
           # regression case.
           #
           # PR body cross-check (defense in depth): when the head-ref regex
-          # matches we first look for the canonical standalone `Refs #<N>`
+          # matches we first look for a standalone `Refs #<N>` / `Refs: #<N>`
           # line in the PR body and then fall back to a standalone
-          # `Closes/Fixes/Resolves #<N>` line before logging a mismatch
+          # `Closes/Fixes/Resolves #<N>` / `Closes/Fixes/Resolves: #<N>` line
+          # before logging a mismatch
           # warning if the tracking number disagrees with the head ref — an
           # operational signal that something unexpected created an
           # orchestrator-shaped head ref. Auto-merge is still suppressed
@@ -5010,6 +5075,10 @@ jobs:
           fi
 
           _orch_pr_head_ref="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.head.ref // ""' 2>/dev/null || echo "")"
+          if [ -z "${_orch_pr_head_ref}" ]; then
+            echo "::warning::Could not determine PR head ref for #${PR_NUMBER} from fetched metadata (empty/null .head.ref). Failing closed: skipping auto-merge enablement so an orchestrator integration PR cannot be inadvertently shipped when PR metadata is incomplete or the head branch was deleted. Next sync event will re-run review_autofix and retry."
+            exit 0
+          fi
           _orch_pr_body="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.body // ""' 2>/dev/null || echo "")"
           _orch_is_integration_pr="false"
           if [ -n "${ORCH_INTEGRATION_BRANCH_PATTERN}" ]; then
@@ -5030,9 +5099,9 @@ jobs:
           if [ "${_orch_is_integration_pr}" = "true" ]; then
             if [[ "${_orch_pr_head_ref}" =~ ^orchestrator/project-([0-9]+)$ ]]; then
               _orch_ref_tracking_num="${BASH_REMATCH[1]}"
-              _orch_body_tracking_num="$(printf '%s' "${_orch_pr_body}" | grep -im1 -oE '^[[:space:]]*refs[[:space:]]*#[0-9]+' | grep -oE '[0-9]+' || echo "")"
+              _orch_body_tracking_num="$(printf '%s' "${_orch_pr_body}" | grep -im1 -oE '^[[:space:]]*refs:?[[:space:]]*#[0-9]+' | grep -oE '[0-9]+' || echo "")"
               if [ -z "${_orch_body_tracking_num}" ]; then
-                _orch_body_tracking_num="$(printf '%s' "${_orch_pr_body}" | grep -im1 -oE '^[[:space:]]*(closes|fixes|resolves)[[:space:]]*#[0-9]+' | grep -oE '[0-9]+' || echo "")"
+                _orch_body_tracking_num="$(printf '%s' "${_orch_pr_body}" | grep -im1 -oE '^[[:space:]]*(closes|fixes|resolves):?[[:space:]]*#[0-9]+' | grep -oE '[0-9]+' || echo "")"
               fi
               if [ -n "${_orch_body_tracking_num}" ] && [ "${_orch_body_tracking_num}" != "${_orch_ref_tracking_num}" ]; then
                 echo "::warning::PR #${PR_NUMBER} head ref '${_orch_pr_head_ref}' implies orchestrator tracking issue #${_orch_ref_tracking_num} but the PR body references #${_orch_body_tracking_num}. Suppressing auto-merge anyway — head-ref pattern matches an orchestrator integration PR; the orchestrator will land this via finalize_integration_merge_if_needed when the project is genuinely complete."
@@ -5648,7 +5717,7 @@ jobs:
           fi
 
       - name: Mark linked issues review-blocked (workflow failure)
-        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
@@ -5706,7 +5775,7 @@ jobs:
           done <<< "${ISSUE_NUMBERS}"
 
       - name: Post review-blocked comment on PR (workflow failure)
-        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
