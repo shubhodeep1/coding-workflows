@@ -2171,7 +2171,7 @@ _subissue_closing_pr_number()
 # Inputs:  <state_file_path> <integration_branch_git_ref>
 # Output:  one `<issue_num>\t<pr_num>\t<reason>` line per purged entry
 #          on stdout.
-# API calls: zero (uses local `git log` and `date -u -d` only).
+# API calls: zero (uses local `git log`, `jq`, and `date -u -d` only).
 # Side effect: mutates the state file in place via `jq | mv` atomically.
 # Fail-open per entry: any git/jq/date error keeps the entry untouched.
 _purge_stale_fingerprint_entries_on_integration_branch()
@@ -2181,12 +2181,16 @@ _purge_stale_fingerprint_entries_on_integration_branch()
 	[ -f "${state_file}" ] || return 0
 	[ -n "${gate_ref}" ] || return 0
 
-	local issue pr captured_at sfx log_out _sha _ct _subj merge_unix captured_unix any_ref reason
+	local issue pr captured_at sfx log_out _sha _ct _subj merge_unix captured_unix any_ref reason fingerprint_rows
+	if ! fingerprint_rows="$(jq -r '(.merged_issue_fingerprints // {}) | to_entries | .[] | "\(.key)\t\(.value.pr // "")\t\(.value.captured_at // "")"' "${state_file}" 2>/dev/null)"; then
+		echo "Fingerprint-state self-heal: could not parse '${state_file}'; keeping existing fingerprint state." >&2
+		return 0
+	fi
 	while IFS=$'\t' read -r issue pr captured_at; do
 		[ -n "${issue}" ] || continue
 		[[ "${pr}" =~ ^[0-9]+$ ]] || continue
 		sfx="(#${pr})"
-		if ! log_out="$(git log --format='%H%x09%ct%x09%s' --grep="${sfx}" "${gate_ref}" 2>/dev/null)"; then
+		if ! log_out="$(git log --reverse --format='%H%x09%ct%x09%s' --grep="${sfx}" "${gate_ref}" 2>/dev/null)"; then
 			continue  # git plumbing failure — fail-safe, keep entry
 		fi
 		any_ref=0
@@ -2194,8 +2198,8 @@ _purge_stale_fingerprint_entries_on_integration_branch()
 		while IFS=$'\t' read -r _sha _ct _subj; do
 			[ -n "${_sha}" ] || continue
 			any_ref=1
-			# First (oldest under default --grep ordering) commit
-			# whose subject ENDS with the (#PR) suffix is the merge.
+			# Under `git log --reverse`, the first subject-ending
+			# match is the oldest and therefore the squash-merge.
 			if [ -z "${merge_unix}" ] && [ "${_subj: -${#sfx}}" = "${sfx}" ]; then
 				merge_unix="${_ct}"
 			fi
@@ -2204,9 +2208,13 @@ _purge_stale_fingerprint_entries_on_integration_branch()
 		if [ "${any_ref}" -eq 0 ]; then
 			reason="pr_not_referenced_on_integration_branch"
 		elif [ -n "${merge_unix}" ] && [ -n "${captured_at}" ]; then
-			captured_unix="$(date -u -d "${captured_at}" +%s 2>/dev/null || echo "")"
-			if [[ "${captured_unix}" =~ ^[0-9]+$ ]] && [ "${merge_unix}" -gt "${captured_unix}" ]; then
-				reason="captured_before_pr_merged_into_integration_branch"
+			captured_unix="$(date -u -d "${captured_at}" +%s 2>/dev/null || true)"
+			if [[ "${captured_unix}" =~ ^[0-9]+$ ]]; then
+				if [ "${merge_unix}" -gt "${captured_unix}" ]; then
+					reason="captured_before_pr_merged_into_integration_branch"
+				fi
+			else
+				echo "Fingerprint-state self-heal: issue #${issue} kept because captured_at '${captured_at}' is not parseable." >&2
 			fi
 		fi
 		if [ -n "${reason}" ]; then
@@ -2218,7 +2226,7 @@ _purge_stale_fingerprint_entries_on_integration_branch()
 				rm -f "${state_file}.tmp" 2>/dev/null || true
 			fi
 		fi
-	done < <(jq -r '(.merged_issue_fingerprints // {}) | to_entries | .[] | "\(.key)\t\(.value.pr // "")\t\(.value.captured_at // "")"' "${state_file}" 2>/dev/null || true)
+	done <<< "${fingerprint_rows}"
 
 	return 0
 }

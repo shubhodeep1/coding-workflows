@@ -34,6 +34,7 @@ interfering with `git commit`.
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import subprocess
@@ -141,23 +142,6 @@ def _write_state(state_path: Path, entries: dict[str, dict]) -> None:
 	)
 
 
-def _run_heal(tmp: Path, state_path: Path, ref: str) -> tuple[str, dict]:
-	"""Invoke the helper against state_path+ref. Returns (stdout, post-state-dict)."""
-	r = _run_bash(
-		textwrap.dedent(
-			f"""
-			set -uo pipefail
-			source helpers.sh
-			_purge_stale_fingerprint_entries_on_integration_branch {state_path} {ref}
-			"""
-		),
-		cwd=tmp,
-	)
-	assert r.returncode == 0, f"helper exited {r.returncode}: {r.stderr}"
-	post = json.loads(state_path.read_text(encoding="utf-8"))
-	return r.stdout, post
-
-
 def _purged(stdout: str) -> dict[str, tuple[str, str]]:
 	"""Parse helper stdout into {issue: (pr, reason)}."""
 	out = {}
@@ -171,7 +155,6 @@ def _purged(stdout: str) -> dict[str, tuple[str, str]]:
 
 # ISO-8601 UTC string from a unix timestamp the harness controls.
 def _iso(unix_ts: int) -> str:
-	import datetime
 	return datetime.datetime.fromtimestamp(unix_ts, tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
@@ -268,6 +251,32 @@ def test_keeps_entry_when_capture_followed_pr_merge_commit():
 		)
 		assert r.returncode == 0, r.stderr
 		assert r.stdout.strip() == "", f"healthy entry should not be purged; got: {r.stdout!r}"
+		assert "2873" in json.loads(state.read_text())["merged_issue_fingerprints"]
+
+
+def test_keeps_entry_when_later_duplicate_suffix_exists_after_capture():
+	"""Use the oldest subject-ending `(#<pr>)` commit as the merge.
+	A later duplicate suffix (for example a replay or cherry-pick)
+	must not retroactively make a healthy entry look stale."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		_bootstrap(tmp)
+		repo = tmp / "repo"
+		empty = _init_repo(repo)
+		c1 = _make_commit(repo, empty, subject="AI implementation for issue #2873 (#2878)", committer_unix=1000)
+		c2 = _make_commit(repo, empty, parent=c1, subject="Replay AI implementation for issue #2873 (#2878)", committer_unix=2000)
+		_set_branch(repo, "integ", c2)
+		state = repo / "state.json"
+		_write_state(state, {
+			"2873": {"issue": 2873, "pr": 2878, "captured_at": _iso(1500), "must_contain": []},
+		})
+		r = _run_bash(
+			f"set -uo pipefail; source {tmp}/helpers.sh; "
+			f"_purge_stale_fingerprint_entries_on_integration_branch state.json integ",
+			cwd=repo,
+		)
+		assert r.returncode == 0, r.stderr
+		assert r.stdout.strip() == "", f"oldest merge commit should win; got: {r.stdout!r}"
 		assert "2873" in json.loads(state.read_text())["merged_issue_fingerprints"]
 
 
