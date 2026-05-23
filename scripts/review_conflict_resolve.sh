@@ -41,6 +41,8 @@
 
 set -euo pipefail
 
+SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"
+
 # Source gh_helpers.sh for sanitize_codex_prompt_file (and the broader
 # gh_retry / rate-limit helpers if they are needed later in this
 # script). Best-effort: a missing helpers file leaves the helper
@@ -343,6 +345,9 @@ RESOLVER_MARKER_VIOLATIONS_FILE="${RUNTIME_DIR}/resolver_marker_violations.txt"
 RESOLVER_FP_VIOLATIONS_FILE="${RUNTIME_DIR}/resolver_fp_violations.txt"
 RESOLVER_FP_VIOLATIONS_PREV_FILE="${RUNTIME_DIR}/resolver_fp_violations_prev.txt"
 RESOLVER_FP_VERIFIER_OUTPUT_FILE="${RUNTIME_DIR}/resolver_fp_verifier_output.txt"
+RESOLVER_FP_BASELINE_STATE_FILE="${RUNTIME_DIR}/resolver_fp_baseline_state.json"
+RESOLVER_RETRY_STATE_ARTIFACT_FILE="${RUNTIME_DIR}/resolver_retry_state_artifact.json"
+RESOLVER_ESCALATION_COMMENT_MARKER="<!-- AUTOFIX_RESOLVER_ESCALATED_V1 -->"
 
 # Snapshot every in-scope file (the resolver's allowlist, which
 # prepare step populated with git-marked unmerged paths plus the
@@ -427,6 +432,169 @@ if [ -f "${RESOLVER_ALLOWLIST_FILE}" ] && [ -s "${RESOLVER_ALLOWLIST_FILE}" ]; t
   _snap_missing_count="$(wc -l < "${RESOLVER_ATTEMPT_BASE_MISSING_FILE}" | tr -d '[:space:]')"
   echo "Resolver retry-base snapshot captured: ${_snap_count} file(s), ${_snap_missing_count} allowlist path(s) absent at snapshot time (delete/rename conflicts — will be re-deleted on restore)."
 fi
+
+_capture_fingerprints_baseline()
+{
+  rm -f "${RESOLVER_FP_BASELINE_STATE_FILE}" 2>/dev/null || true
+  if [ "${IS_INTEGRATION_SYNC:-false}" != "true" ]; then
+    return 0
+  fi
+  if [ -z "${INTEGRATION_FINGERPRINTS_FILE:-}" ] || [ ! -f "${INTEGRATION_FINGERPRINTS_FILE}" ]; then
+    return 0
+  fi
+  if [ ! -f "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" ]; then
+    return 0
+  fi
+  _fp_size="$(wc -c < "${INTEGRATION_FINGERPRINTS_FILE}" 2>/dev/null || echo 0)"
+  if [ "${_fp_size}" -le 2 ]; then
+    return 0
+  fi
+  local _baseline_capture_exit=0
+  INTEGRATION_BRANCH_NAME="${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
+    python3 "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
+      --baseline-fingerprints-state "${RESOLVER_FP_BASELINE_STATE_FILE}" \
+      "${INTEGRATION_FINGERPRINTS_FILE}" || _baseline_capture_exit=$?
+  if [ "${_baseline_capture_exit}" -ne 0 ] || [ ! -s "${RESOLVER_FP_BASELINE_STATE_FILE}" ]; then
+    rm -f "${RESOLVER_FP_BASELINE_STATE_FILE}" 2>/dev/null || true
+    if [ "${_baseline_capture_exit}" -ne 0 ]; then
+      echo "::warning::baseline capture failed (exit ${_baseline_capture_exit}); falling back to absolute fingerprint verification."
+    else
+      echo "::warning::baseline capture unavailable; falling back to absolute fingerprint verification."
+    fi
+  fi
+}
+
+_capture_fingerprints_baseline
+
+RESOLVER_FP_VERIFICATION_TIER="strict"
+RESOLVER_FP_VERIFICATION_TIER_REASON="default_strict"
+
+_select_fingerprint_verification_tier()
+{
+  RESOLVER_FP_VERIFICATION_TIER="strict"
+  RESOLVER_FP_VERIFICATION_TIER_REASON="default_strict"
+  if [ "${IS_INTEGRATION_SYNC:-false}" != "true" ]; then
+    return 0
+  fi
+  if [ ! -f "${PR_PAYLOAD_FILE:-/nonexistent}" ]; then
+    RESOLVER_FP_VERIFICATION_TIER_REASON="missing_pr_payload"
+    return 0
+  fi
+
+  local _tier_json
+  if ! _tier_json="$(RESOLVER_ESCAPE_THRESHOLD_N="${RESOLVER_ESCAPE_THRESHOLD_N:-5}" PR_PAYLOAD_FILE="${PR_PAYLOAD_FILE}" python3 - <<'PY'
+from __future__ import annotations
+
+import json
+import os
+import re
+
+
+RETRY_STATE_BLOCK_PATTERN = re.compile(
+    r"<!-- AUTOFIX_RESOLVER_RETRY_STATE_V1\n(.*?)\n-->",
+    flags=re.S,
+)
+
+
+def _parse_positive_int(value: object, default: int) -> int:
+    try:
+        parsed = int(str(value).strip())
+    except Exception:
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _parse_nonnegative_int(value: object, default: int) -> int:
+    try:
+        parsed = int(str(value).strip())
+    except Exception:
+        return default
+    return parsed if parsed >= 0 else default
+
+
+def _extract_retry_state(body: str) -> dict[str, object] | None:
+    normalized = (body or "").replace("\r\n", "\n").replace("\r", "\n")
+    matches = RETRY_STATE_BLOCK_PATTERN.findall(normalized)
+    for raw in reversed(matches):
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def _select_tier(count: int, threshold: int) -> str:
+    if count >= threshold * 3:
+        return "warn_only"
+    if count >= threshold * 2:
+        return "count_only"
+    if count >= threshold:
+        return "ratio"
+    return "strict"
+
+
+threshold = _parse_positive_int(os.environ.get("RESOLVER_ESCAPE_THRESHOLD_N"), 5)
+payload_path = os.environ.get("PR_PAYLOAD_FILE", "")
+try:
+    with open(payload_path, "r", encoding="utf-8") as fh:
+        payload = json.load(fh)
+except Exception:
+    print(json.dumps({"tier": "strict", "reason": "unreadable_pr_payload"}, ensure_ascii=True))
+    raise SystemExit(0)
+
+if not isinstance(payload, dict):
+    print(json.dumps({"tier": "strict", "reason": "malformed_pr_payload"}, ensure_ascii=True))
+    raise SystemExit(0)
+
+head = payload.get("head") or {}
+head_sha = str(head.get("sha", "") or "").strip()
+if not head_sha:
+    print(json.dumps({"tier": "strict", "reason": "missing_head_sha"}, ensure_ascii=True))
+    raise SystemExit(0)
+
+retry_state = _extract_retry_state(str(payload.get("body", "") or ""))
+if not isinstance(retry_state, dict):
+    print(json.dumps({"tier": "strict", "reason": "no_retry_state"}, ensure_ascii=True))
+    raise SystemExit(0)
+
+retry_state_head_sha = str(retry_state.get("head_sha", "") or "").strip()
+if retry_state_head_sha != head_sha:
+    print(json.dumps({"tier": "strict", "reason": "retry_state_head_sha_mismatch"}, ensure_ascii=True))
+    raise SystemExit(0)
+
+count = _parse_nonnegative_int(retry_state.get("consecutive_failure_count"), 0)
+print(
+    json.dumps(
+        {
+            "tier": _select_tier(count, threshold),
+            "reason": f"retry_state_count={count} threshold={threshold}",
+        },
+        ensure_ascii=True,
+    )
+)
+PY
+)"; then
+    echo "::warning::Failed to select fingerprint verification tier from retry state; defaulting to strict."
+    RESOLVER_FP_VERIFICATION_TIER="strict"
+    RESOLVER_FP_VERIFICATION_TIER_REASON="selection_error"
+    return 0
+  fi
+
+  RESOLVER_FP_VERIFICATION_TIER="$(printf '%s' "${_tier_json}" | jq -r '.tier // "strict"' 2>/dev/null || echo strict)"
+  RESOLVER_FP_VERIFICATION_TIER_REASON="$(printf '%s' "${_tier_json}" | jq -r '.reason // "default_strict"' 2>/dev/null || echo default_strict)"
+  case "${RESOLVER_FP_VERIFICATION_TIER}" in
+    strict|ratio|count_only|warn_only) ;;
+    *)
+      RESOLVER_FP_VERIFICATION_TIER="strict"
+      RESOLVER_FP_VERIFICATION_TIER_REASON="invalid_tier_fallback"
+      ;;
+  esac
+}
+
+_select_fingerprint_verification_tier
+echo "Integration fingerprint verification tier selected: ${RESOLVER_FP_VERIFICATION_TIER} (${RESOLVER_FP_VERIFICATION_TIER_REASON})."
 
 # _restore_attempt_base: restore every snapshotted allowlist file to
 # its post-merge-replay content.  Used between retries so each
@@ -638,8 +806,20 @@ _verify_fingerprints_soft() {
   if [ ! -f "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" ]; then
     return 0
   fi
+  local _verifier_args=()
+  if [ -s "${RESOLVER_FP_BASELINE_STATE_FILE:-/nonexistent}" ]; then
+    _verifier_args+=(
+      --compare-against-baseline "${RESOLVER_FP_BASELINE_STATE_FILE}"
+    )
+  fi
+  if [ "${RESOLVER_FP_VERIFICATION_TIER:-strict}" != "strict" ]; then
+    _verifier_args+=(
+      --verification-tier "${RESOLVER_FP_VERIFICATION_TIER}"
+    )
+  fi
   INTEGRATION_BRANCH_NAME="${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
     python3 "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
+      "${_verifier_args[@]}" \
       "${INTEGRATION_FINGERPRINTS_FILE}" \
       > "${RESOLVER_FP_VERIFIER_OUTPUT_FILE}" 2>&1 || RESOLVER_FP_EXIT=$?
   # Extract per-violation lines and strip the annotation prefix so
@@ -657,6 +837,641 @@ _verify_fingerprints_soft() {
       > "${RESOLVER_FP_VIOLATIONS_FILE}" || true
   elif [ "${RESOLVER_FP_EXIT}" -eq 2 ]; then
     echo "::warning::Integration fingerprint verification could not run (exit 2 — plumbing failure); continuing without intent guard for this commit. See ${RESOLVER_FP_VERIFIER_OUTPUT_FILE} for details."
+  fi
+}
+
+# _build_resolver_retry_state_artifact: emit a machine-readable JSON
+# payload describing the current fingerprint failure set plus the
+# updated AUTOFIX_RESOLVER_RETRY_STATE_V1 PR-body block.  The helper
+# deliberately reuses the verifier module's baseline/dedup logic so the
+# state block is keyed off the same normalized fp_key set that
+# compare-mode verification actually enforced.
+_build_resolver_retry_state_artifact()
+{
+  python3 - <<'PY'
+# AUTOFIX_RESOLVER_RETRY_STATE_PY_BEGIN
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import json
+import os
+import re
+import sys
+from datetime import datetime, timezone
+from typing import Any
+
+
+RETRY_STATE_BLOCK_PATTERN = re.compile(
+    r"<!-- AUTOFIX_RESOLVER_RETRY_STATE_V1\n(.*?)\n-->",
+    flags=re.S,
+)
+ESCALATION_COMMENT_MARKER = "<!-- AUTOFIX_RESOLVER_ESCALATED_V1 -->"
+VERIFICATION_TIER_LADDER = ("strict", "ratio", "count_only", "warn_only")
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _parse_positive_int(value: object, default: int) -> int:
+    try:
+        parsed = int(str(value).strip())
+    except Exception:
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _parse_nonnegative_int(value: object, default: int) -> int:
+    try:
+        parsed = int(str(value).strip())
+    except Exception:
+        return default
+    return parsed if parsed >= 0 else default
+
+
+def select_verification_tier(consecutive_failure_count: object, threshold: int) -> str:
+    threshold = max(1, _parse_positive_int(threshold, 5))
+    count = _parse_nonnegative_int(consecutive_failure_count, 0)
+    if count >= threshold * 3:
+        return "warn_only"
+    if count >= threshold * 2:
+        return "count_only"
+    if count >= threshold:
+        return "ratio"
+    return "strict"
+
+
+def select_verification_tier_from_pr_payload(pr_payload: dict[str, Any], threshold: int) -> dict[str, Any]:
+    head = (pr_payload or {}).get("head") or {}
+    head_sha = str(head.get("sha", "") or "").strip()
+    if not head_sha:
+        return {"tier": "strict", "reason": "missing_head_sha", "consecutive_failure_count": 0}
+    retry_state = extract_retry_state_from_body(str((pr_payload or {}).get("body", "") or ""))
+    if not isinstance(retry_state, dict):
+        return {"tier": "strict", "reason": "no_retry_state", "consecutive_failure_count": 0}
+    retry_state_head_sha = str(retry_state.get("head_sha", "") or "").strip()
+    if retry_state_head_sha != head_sha:
+        return {"tier": "strict", "reason": "retry_state_head_sha_mismatch", "consecutive_failure_count": 0}
+    consecutive_failure_count = _parse_nonnegative_int(retry_state.get("consecutive_failure_count"), 0)
+    return {
+        "tier": select_verification_tier(consecutive_failure_count, threshold),
+        "reason": f"retry_state_count={consecutive_failure_count}",
+        "consecutive_failure_count": consecutive_failure_count,
+    }
+
+
+def build_tier_downgrade_marker(
+    previous_tier: str,
+    current_tier: str,
+    consecutive_failure_count: int,
+    threshold: int,
+) -> str:
+    if previous_tier not in VERIFICATION_TIER_LADDER or current_tier not in VERIFICATION_TIER_LADDER:
+        return ""
+    if VERIFICATION_TIER_LADDER.index(current_tier) <= VERIFICATION_TIER_LADDER.index(previous_tier):
+        return ""
+    return (
+        f"::warning::FINGERPRINT_TIER_DOWNGRADED_V1 from={previous_tier} to={current_tier} "
+        f"reason=consecutive_failure_count_{consecutive_failure_count}_threshold_{threshold}"
+    )
+
+
+def _load_json_path(path: str, expected_type: type, default: Any) -> tuple[Any, str | None]:
+    if not path:
+        return default, None
+    if not os.path.isfile(path):
+        return default, f"JSON file missing: {path}"
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception as exc:  # noqa: BLE001 - fail-open for state write path
+        return default, f"JSON file unreadable ({path}): {exc}"
+    if not isinstance(data, expected_type):
+        return default, f"JSON file at {path} had unexpected type {type(data).__name__}; expected {expected_type.__name__}"
+    return data, None
+
+
+def load_verifier_module(support_scripts_dir: str):
+    script_path = os.path.join(support_scripts_dir or "scripts", "verify_integration_fingerprints.py")
+    if not os.path.isfile(script_path):
+        raise FileNotFoundError(script_path)
+    spec = importlib.util.spec_from_file_location(
+        "resolver_retry_state_verify_integration_fingerprints",
+        script_path,
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"could not load module spec for {script_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def extract_retry_state_from_body(body: str) -> dict[str, Any] | None:
+    if not isinstance(body, str) or not body:
+        return None
+    normalized = body.replace("\r\n", "\n").replace("\r", "\n")
+    matches = RETRY_STATE_BLOCK_PATTERN.findall(normalized)
+    for raw in reversed(matches):
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def render_retry_state_block(state: dict[str, Any]) -> str:
+    return (
+        "<!-- AUTOFIX_RESOLVER_RETRY_STATE_V1\n"
+        + json.dumps(state, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        + "\n-->"
+    )
+
+
+def upsert_retry_state_block(body: str, state: dict[str, Any]) -> str:
+    normalized = (body or "").replace("\r\n", "\n").replace("\r", "\n")
+    cleaned = RETRY_STATE_BLOCK_PATTERN.sub("", normalized)
+    block = render_retry_state_block(state)
+    if cleaned.strip():
+        return cleaned.rstrip() + "\n\n" + block + "\n"
+    return block + "\n"
+
+
+def _fp_key_json(fp_key: list[str]) -> str:
+    return json.dumps(fp_key, separators=(",", ":"), ensure_ascii=True)
+
+
+def _sorted_failure_entries(entries_by_key: dict[tuple[str, ...], dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(
+        entries_by_key.values(),
+        key=lambda item: (
+            tuple(item.get("fp_key", [])),
+            str(item.get("kind", "")),
+            str(item.get("path", "")),
+            str(item.get("issue", "")),
+        ),
+    )
+
+
+def compute_failure_sets(
+    fingerprints: dict[str, Any],
+    baseline_state: dict[str, Any],
+    verifier_module: Any,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    baseline_index = verifier_module._baseline_satisfied_index(baseline_state)
+    cross_issue_exact_drops, _cross_issue_exact_warnings = verifier_module._cross_issue_exact_conflict_drops(fingerprints)
+    file_cache: dict[str, tuple[str | None, str | None]] = {}
+    exists_cache: dict[str, tuple[bool, str | None]] = {}
+    regressed_by_key: dict[tuple[str, ...], dict[str, Any]] = {}
+    pre_existing_by_key: dict[tuple[str, ...], dict[str, Any]] = {}
+
+    for issue_key, entry in sorted(fingerprints.items()):
+        if not isinstance(entry, dict):
+            continue
+        issue_num = entry.get("issue", issue_key)
+        pr_num = entry.get("pr", "?")
+        must_contain, must_not_contain, _shared_keys, _substring_drops, _exact_conflict_drops = verifier_module._dedup_issue_patterns(
+            issue_key,
+            entry,
+            cross_issue_exact_drops,
+        )
+        must_not_exist = entry.get("must_not_exist", []) or []
+        for kind, fps in (
+            ("must_contain", must_contain),
+            ("must_not_contain", must_not_contain),
+            ("must_not_exist", must_not_exist),
+        ):
+            for fp in fps:
+                state = verifier_module._evaluate_fp_state(
+                    fp,
+                    kind,
+                    issue_num,
+                    pr_num,
+                    file_cache,
+                    exists_cache,
+                    ref=None,
+                )
+                if state is None or state.get("satisfied"):
+                    continue
+                fp_key = tuple(state.get("fp_key") or ())
+                if not fp_key:
+                    continue
+                item = {
+                    "issue": issue_num,
+                    "pr": pr_num,
+                    "kind": kind,
+                    "path": state.get("path", ""),
+                    "fp_key": list(fp_key),
+                }
+                baseline_satisfied = baseline_index.get((str(issue_key), kind, fp_key))
+                if baseline_satisfied is False:
+                    pre_existing_by_key.setdefault(fp_key, item)
+                else:
+                    regressed_by_key.setdefault(fp_key, item)
+
+    return _sorted_failure_entries(regressed_by_key), _sorted_failure_entries(pre_existing_by_key)
+
+
+def find_existing_escalation_comment_id(pr_issue_comments: list[dict[str, Any]]) -> int | None:
+    latest_id: int | None = None
+    for comment in pr_issue_comments or []:
+        if not isinstance(comment, dict):
+            continue
+        if ESCALATION_COMMENT_MARKER not in str(comment.get("body", "")):
+            continue
+        try:
+            comment_id = int(comment.get("id"))
+        except Exception:
+            continue
+        if latest_id is None or comment_id > latest_id:
+            latest_id = comment_id
+    return latest_id
+
+
+def build_resolver_escalation_comment(
+    *,
+    pr_number: str,
+    head_sha: str,
+    failure_signature_sha256: str,
+    consecutive_failure_count: int,
+    threshold: int,
+    escalation_threshold: int,
+    verification_tier: str,
+    regressed_by_resolver: list[dict[str, Any]],
+    pre_existing_drift: list[dict[str, Any]],
+    run_url: str,
+    max_items: int,
+) -> str:
+    lines = [
+        ESCALATION_COMMENT_MARKER,
+        "## ⚠️ Integration resolver escalated",
+        "",
+        (
+            f"The integration-sync conflict resolver hit the escape threshold on PR #{pr_number} "
+            f"for head `{head_sha[:12]}`. The orchestrator poller will stop re-dispatching "
+            "automated resolver attempts until the PR head changes."
+        ),
+        "",
+        (
+            f"- Consecutive identical-signature failures: {consecutive_failure_count} "
+            f"(tier step threshold {threshold}; escalation threshold {escalation_threshold})"
+        ),
+        f"- Final verification tier: {verification_tier}",
+        f"- Failure signature: `{failure_signature_sha256}`",
+        f"- Regressed fingerprints: {len(regressed_by_resolver)}",
+        f"- Pre-existing drift: {len(pre_existing_drift)}",
+    ]
+    if regressed_by_resolver:
+        lines.extend(["", "Sample regressed fp_keys:"])
+        for item in regressed_by_resolver[:max_items]:
+            lines.append(f"- `{_fp_key_json(item['fp_key'])}`")
+    if pre_existing_drift:
+        lines.extend(["", "Sample pre-existing drift fp_keys:"])
+        for item in pre_existing_drift[:max_items]:
+            lines.append(f"- `{_fp_key_json(item['fp_key'])}`")
+    if run_url:
+        lines.extend(["", f"Run: {run_url}"])
+    return "\n".join(lines)
+
+
+def build_resolver_retry_state_artifact(
+    *,
+    pr_payload: dict[str, Any],
+    pr_issue_comments: list[dict[str, Any]],
+    fingerprints: dict[str, Any],
+    baseline_state: dict[str, Any],
+    threshold: int,
+    repository: str,
+    pr_number: str,
+    run_url: str,
+    verifier_module: Any,
+    max_items: int = 10,
+) -> dict[str, Any]:
+    body = str(pr_payload.get("body", "") or "")
+    head = pr_payload.get("head") or {}
+    head_sha = str(head.get("sha", "") or "").strip()
+    if not head_sha:
+        return {"ok": False, "reason": "missing PR head SHA in PR_PAYLOAD_FILE"}
+
+    regressed_by_resolver, pre_existing_drift = compute_failure_sets(
+        fingerprints,
+        baseline_state,
+        verifier_module,
+    )
+    if not regressed_by_resolver and not pre_existing_drift:
+        return {"ok": False, "reason": "no fingerprint failures detected for retry-state persistence"}
+
+    signature_members = sorted(
+        {
+            _fp_key_json(item["fp_key"])
+            for item in regressed_by_resolver + pre_existing_drift
+        }
+    )
+    failure_signature_sha256 = hashlib.sha256(
+        json.dumps(signature_members, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    ).hexdigest()
+
+    previous_state = extract_retry_state_from_body(body) or {}
+    previous_head_sha = str(previous_state.get("head_sha", "") or "")
+    previous_signature = str(
+        previous_state.get("failure_signature_sha256", previous_state.get("last_failure_signature", "")) or ""
+    )
+    previous_count = _parse_nonnegative_int(previous_state.get("consecutive_failure_count"), 0)
+
+    if previous_head_sha == head_sha and previous_signature == failure_signature_sha256:
+        consecutive_failure_count = previous_count + 1
+    else:
+        consecutive_failure_count = 1
+
+    threshold = max(1, _parse_positive_int(threshold, 5))
+    escalation_threshold = threshold * len(VERIFICATION_TIER_LADDER)
+    max_items = max(1, _parse_positive_int(max_items, 10))
+    now_iso = _utc_now_iso()
+    previous_verification_tier = "strict"
+    if previous_head_sha == head_sha and previous_signature == failure_signature_sha256:
+        previous_verification_tier = select_verification_tier(previous_count, threshold)
+    verification_tier = select_verification_tier(consecutive_failure_count, threshold)
+    tier_downgrade_marker = build_tier_downgrade_marker(
+        previous_verification_tier,
+        verification_tier,
+        consecutive_failure_count,
+        threshold,
+    )
+    escalated = consecutive_failure_count >= escalation_threshold
+    if (
+        escalated
+        and previous_head_sha == head_sha
+        and previous_signature == failure_signature_sha256
+        and bool(previous_state.get("escalated"))
+        and str(previous_state.get("escalated_at", "") or "")
+    ):
+        escalated_at = str(previous_state.get("escalated_at"))
+    elif escalated:
+        escalated_at = now_iso
+    else:
+        escalated_at = ""
+
+    retry_state = {
+        "schema_version": 1,
+        "head_sha": head_sha,
+        "failure_signature_sha256": failure_signature_sha256,
+        "last_failure_signature": failure_signature_sha256,
+        "consecutive_failure_count": consecutive_failure_count,
+        "threshold": threshold,
+        "escalation_threshold": escalation_threshold,
+        "verification_tier": verification_tier,
+        "regressed_by_resolver_count": len(regressed_by_resolver),
+        "pre_existing_drift_count": len(pre_existing_drift),
+        "last_regressed_by_resolver": regressed_by_resolver[:max_items],
+        "last_pre_existing_drift": pre_existing_drift[:max_items],
+        "escalated": escalated,
+        "escalated_at": escalated_at,
+        "updated_at": now_iso,
+    }
+
+    return {
+        "ok": True,
+        "repository": repository,
+        "pr_number": pr_number,
+        "head_sha": head_sha,
+        "failure_signature_sha256": failure_signature_sha256,
+        "consecutive_failure_count": consecutive_failure_count,
+        "verification_tier": verification_tier,
+        "tier_downgrade_marker": tier_downgrade_marker,
+        "escalated": escalated,
+        "existing_escalation_comment_id": find_existing_escalation_comment_id(pr_issue_comments),
+        "retry_state": retry_state,
+        "body": upsert_retry_state_block(body, retry_state),
+        "summary_comment_body": build_resolver_escalation_comment(
+            pr_number=pr_number,
+            head_sha=head_sha,
+            failure_signature_sha256=failure_signature_sha256,
+            consecutive_failure_count=consecutive_failure_count,
+            threshold=threshold,
+            escalation_threshold=escalation_threshold,
+            verification_tier=verification_tier,
+            regressed_by_resolver=regressed_by_resolver,
+            pre_existing_drift=pre_existing_drift,
+            run_url=run_url,
+            max_items=max_items,
+        ) if escalated else "",
+    }
+
+
+def main() -> int:
+    support_scripts_dir = os.environ.get("SUPPORT_SCRIPTS_DIR", "scripts")
+    verifier_module = None
+    try:
+        verifier_module = load_verifier_module(support_scripts_dir)
+    except Exception as exc:  # noqa: BLE001 - fail-open in shell caller
+        print(json.dumps({"ok": False, "reason": f"failed to load verifier module: {exc}"}, ensure_ascii=True))
+        return 0
+
+    pr_payload, pr_payload_err = _load_json_path(
+        os.environ.get("PR_PAYLOAD_FILE", ""),
+        dict,
+        {},
+    )
+    if pr_payload_err is not None:
+        print(json.dumps({"ok": False, "reason": pr_payload_err}, ensure_ascii=True))
+        return 0
+
+    pr_issue_comments, pr_issue_comments_err = _load_json_path(
+        os.environ.get("PR_ISSUE_COMMENTS_FILE", ""),
+        list,
+        [],
+    )
+    if pr_issue_comments_err is not None and os.environ.get("PR_ISSUE_COMMENTS_FILE", ""):
+        print(json.dumps({"ok": False, "reason": pr_issue_comments_err}, ensure_ascii=True))
+        return 0
+
+    fingerprints, fingerprints_err = _load_json_path(
+        os.environ.get("INTEGRATION_FINGERPRINTS_FILE", ""),
+        dict,
+        {},
+    )
+    if fingerprints_err is not None:
+        print(json.dumps({"ok": False, "reason": fingerprints_err}, ensure_ascii=True))
+        return 0
+
+    baseline_state, baseline_err = _load_json_path(
+        os.environ.get("RESOLVER_FP_BASELINE_STATE_FILE", ""),
+        dict,
+        {},
+    )
+    if baseline_err is not None:
+        print(json.dumps({"ok": False, "reason": baseline_err}, ensure_ascii=True))
+        return 0
+
+    run_url = ""
+    repository = os.environ.get("GITHUB_REPOSITORY", "")
+    server_url = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
+    run_id = os.environ.get("GITHUB_RUN_ID", "")
+    if repository and run_id:
+        run_url = f"{server_url}/{repository}/actions/runs/{run_id}"
+
+    result = build_resolver_retry_state_artifact(
+        pr_payload=pr_payload,
+        pr_issue_comments=pr_issue_comments,
+        fingerprints=fingerprints,
+        baseline_state=baseline_state,
+        threshold=_parse_positive_int(os.environ.get("RESOLVER_ESCAPE_THRESHOLD_N"), 5),
+        repository=repository,
+        pr_number=os.environ.get("PR_NUMBER", ""),
+        run_url=run_url,
+        verifier_module=verifier_module,
+        max_items=_parse_positive_int(os.environ.get("RESOLVER_RETRY_STATE_MAX_ITEMS"), 10),
+    )
+    print(json.dumps(result, sort_keys=True, ensure_ascii=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+# AUTOFIX_RESOLVER_RETRY_STATE_PY_END
+PY
+}
+
+_sync_local_pr_body_from_file()
+{
+  local _body_file="${1:?body file required}"
+  local _tmp
+  if [ -f "${PR_PAYLOAD_FILE:-/nonexistent}" ]; then
+    _tmp="${PR_PAYLOAD_FILE}.tmp"
+    jq --rawfile body "${_body_file}" '.body = $body' "${PR_PAYLOAD_FILE}" > "${_tmp}" \
+      && mv "${_tmp}" "${PR_PAYLOAD_FILE}" || true
+  fi
+  if [ -f "${PR_META_FILE:-/nonexistent}" ]; then
+    _tmp="${PR_META_FILE}.tmp"
+    jq --rawfile body "${_body_file}" '.body = $body' "${PR_META_FILE}" > "${_tmp}" \
+      && mv "${_tmp}" "${PR_META_FILE}" || true
+  fi
+}
+
+_persist_resolver_retry_state_from_current_failure()
+{
+  if [ "${IS_INTEGRATION_SYNC:-false}" != "true" ]; then
+    return 0
+  fi
+  if [ "${RESOLVER_FP_EXIT:-0}" -ne 1 ] && [ "${RESOLVER_FP_VERIFICATION_TIER:-strict}" != "warn_only" ]; then
+    return 0
+  fi
+  if ! [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]]; then
+    echo "::warning::Resolver retry-state persistence skipped: PR_NUMBER is missing or non-numeric."
+    return 0
+  fi
+  if [ -z "${GITHUB_REPOSITORY:-}" ]; then
+    echo "::warning::Resolver retry-state persistence skipped: GITHUB_REPOSITORY is unset."
+    return 0
+  fi
+  if [ ! -f "${PR_PAYLOAD_FILE:-/nonexistent}" ]; then
+    echo "::warning::Resolver retry-state persistence skipped: PR_PAYLOAD_FILE is missing."
+    return 0
+  fi
+  if [ ! -f "${INTEGRATION_FINGERPRINTS_FILE:-/nonexistent}" ]; then
+    echo "::warning::Resolver retry-state persistence skipped: INTEGRATION_FINGERPRINTS_FILE is missing."
+    return 0
+  fi
+  local _retry_state_baseline_file="${RESOLVER_FP_BASELINE_STATE_FILE:-}"
+  if [ ! -s "${_retry_state_baseline_file:-/nonexistent}" ]; then
+    # Baseline capture can fail-open earlier in the resolver loop. In
+    # that case we still persist retry state so identical failure sets
+    # on the same head SHA count toward the escape threshold; the
+    # embedded helper treats the current failures as regressed when no
+    # baseline is available.
+    echo "::warning::Resolver retry-state persistence continuing without baseline fingerprints state; treating current failures as regressed for retry-state accounting."
+    _retry_state_baseline_file=""
+  fi
+  if [ ! -f "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" ]; then
+    echo "::warning::Resolver retry-state persistence skipped: verify_integration_fingerprints.py unavailable."
+    return 0
+  fi
+
+  if ! RESOLVER_FP_BASELINE_STATE_FILE="${_retry_state_baseline_file}" _build_resolver_retry_state_artifact > "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}.tmp"; then
+    echo "::warning::Resolver retry-state artifact builder failed; skipping retry-state persistence."
+    rm -f "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}.tmp" 2>/dev/null || true
+    return 0
+  fi
+  mv "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}.tmp" "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}"
+
+  local _artifact_ok _artifact_reason
+  _artifact_ok="$(jq -r '.ok // false' "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}" 2>/dev/null || echo false)"
+  if [ "${_artifact_ok}" != "true" ]; then
+    _artifact_reason="$(jq -r '.reason // "unknown"' "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}" 2>/dev/null || echo unknown)"
+    echo "::warning::Resolver retry-state artifact unavailable; skipping persistence (${_artifact_reason})."
+    return 0
+  fi
+
+  local _body_file _count _signature _verification_tier _tier_downgrade_marker
+  _body_file="$(mktemp)"
+  jq -r '.body // ""' "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}" > "${_body_file}"
+  if [ ! -s "${_body_file}" ]; then
+    echo "::warning::Resolver retry-state artifact produced an empty PR body; skipping persistence."
+    rm -f "${_body_file}"
+    return 0
+  fi
+  if ! gh_retry gh pr edit "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --body-file "${_body_file}" >/dev/null; then
+    echo "::warning::Failed to persist AUTOFIX_RESOLVER_RETRY_STATE_V1 to PR #${PR_NUMBER}; skipping escalation side effects so poller state does not drift from GitHub."
+    rm -f "${_body_file}"
+    return 0
+  fi
+  _sync_local_pr_body_from_file "${_body_file}"
+  rm -f "${_body_file}"
+
+  _count="$(jq -r '.consecutive_failure_count // 0' "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}" 2>/dev/null || echo 0)"
+  _signature="$(jq -r '.failure_signature_sha256 // ""' "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}" 2>/dev/null || echo "")"
+  _verification_tier="$(jq -r '.verification_tier // .retry_state.verification_tier // "strict"' "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}" 2>/dev/null || echo strict)"
+  echo "Persisted AUTOFIX_RESOLVER_RETRY_STATE_V1 to PR #${PR_NUMBER} (count=${_count}, signature=${_signature}, tier=${_verification_tier})."
+  _tier_downgrade_marker="$(jq -r '.tier_downgrade_marker // empty' "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}" 2>/dev/null || echo "")"
+  if [ -n "${_tier_downgrade_marker}" ]; then
+    echo "${_tier_downgrade_marker}"
+  fi
+
+  if [ "$(jq -r '.escalated // false' "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}" 2>/dev/null || echo false)" != "true" ]; then
+    return 0
+  fi
+
+  echo "RESOLVER_ESCALATED=true" >> "$GITHUB_ENV"
+
+  if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/label_helpers.sh" ]; then
+    # shellcheck source=/dev/null
+    source "${SUPPORT_SCRIPTS_DIR:-scripts}/label_helpers.sh" 2>/dev/null || true
+  fi
+  if type ensure_label_exists >/dev/null 2>&1; then
+    ensure_label_exists "ai:resolver-escalated" "${GITHUB_REPOSITORY}" || true
+  fi
+  gh_retry gh issue edit "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:resolver-escalated" >/dev/null 2>&1 \
+    || echo "::warning::Failed to apply ai:resolver-escalated to PR #${PR_NUMBER}."
+
+  local _comment_id _comment_file _comment_payload _comment_present=false
+  _comment_id="$(jq -r '.existing_escalation_comment_id // empty' "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}" 2>/dev/null || echo "")"
+  _comment_file="$(mktemp)"
+  jq -r '.summary_comment_body // ""' "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}" > "${_comment_file}"
+  if [ -n "${_comment_id}" ] && [[ "${_comment_id}" =~ ^[0-9]+$ ]]; then
+    _comment_payload="$(mktemp)"
+    jq -n --rawfile body "${_comment_file}" '{body: $body}' > "${_comment_payload}"
+    if gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${_comment_id}" --input "${_comment_payload}" >/dev/null 2>&1; then
+      _comment_present=true
+    else
+      echo "::warning::Failed to refresh resolver escalation summary comment #${_comment_id} on PR #${PR_NUMBER}."
+    fi
+    rm -f "${_comment_payload}"
+  elif [ -s "${_comment_file}" ]; then
+    _comment_payload="$(mktemp)"
+    jq -n --rawfile body "${_comment_file}" '{body: $body}' > "${_comment_payload}"
+    if gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --input "${_comment_payload}" >/dev/null 2>&1; then
+      _comment_present=true
+    else
+      echo "::warning::Failed to post resolver escalation summary comment on PR #${PR_NUMBER}."
+    fi
+    rm -f "${_comment_payload}"
+  fi
+  rm -f "${_comment_file}"
+
+  if [ "${_comment_present}" = "true" ]; then
+    echo "RESOLVER_ESCALATED=true" >> "$GITHUB_ENV"
   fi
 }
 
@@ -1150,13 +1965,28 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     # string consumed by downstream tooling) land in the log
     # exactly as today.  The IS_INTEGRATION_SYNC gate keeps
     # non-integration runs on their current path.
+    if [ "${RESOLVER_FP_EXIT}" -eq 1 ] || [ "${RESOLVER_FP_VERIFICATION_TIER:-strict}" = "warn_only" ]; then
+      _persist_resolver_retry_state_from_current_failure || true
+    fi
     if [ "${IS_INTEGRATION_SYNC:-false}" = "true" ] \
        && [ -n "${INTEGRATION_FINGERPRINTS_FILE:-}" ] \
        && [ -f "${INTEGRATION_FINGERPRINTS_FILE}" ] \
        && [ -f "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" ]; then
       _final_fp_exit=0
+      _final_verifier_args=()
+      if [ -s "${RESOLVER_FP_BASELINE_STATE_FILE:-/nonexistent}" ]; then
+        _final_verifier_args+=(
+          --compare-against-baseline "${RESOLVER_FP_BASELINE_STATE_FILE}"
+        )
+      fi
+      if [ "${RESOLVER_FP_VERIFICATION_TIER:-strict}" != "strict" ]; then
+        _final_verifier_args+=(
+          --verification-tier "${RESOLVER_FP_VERIFICATION_TIER}"
+        )
+      fi
       INTEGRATION_BRANCH_NAME="${INTEGRATION_BRANCH_NAME:-${TARGET_BRANCH:-}}" \
         python3 "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
+          "${_final_verifier_args[@]}" \
           "${INTEGRATION_FINGERPRINTS_FILE}" || _final_fp_exit=$?
       if [ "${_final_fp_exit}" -eq 1 ]; then
         echo "::error::Aborting [ai-merge-resolve] commit: integration fingerprint verification rejected the resolver output."

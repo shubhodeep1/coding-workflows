@@ -601,6 +601,12 @@ jobs:
           PREV_STATE=""
           RATE_LIMIT_BACKOFF=0
 
+          if [ -z "${ISSUE_TITLE}" ]; then
+            echo "::error::Missing issue title for Plan run scoping"
+            echo "status=plan_failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
           gh_api_safe() {
             local output
             output=$(gh api "$@" 2>/tmp/gh_api_err) && { RATE_LIMIT_BACKOFF=0; echo "$output"; return 0; }
@@ -615,6 +621,20 @@ jobs:
             echo ""; return 1
           }
 
+          fetch_plan_runs_json() {
+            gh_api_safe "repos/${TEST_REPO}/actions/runs?per_page=100&created=>${{ steps.create-issue.outputs.created_after }}"
+          }
+
+          latest_scoped_run_field() {
+            local name_re="$1"
+            local field="$2"
+            local runs_json=""
+            runs_json=$(fetch_plan_runs_json || echo "")
+            [ -n "$runs_json" ] || return 1
+            printf '%s' "$runs_json" \
+              | jq -r --arg name_re "$name_re" --arg title "$ISSUE_TITLE" --arg field "$field" '[.workflow_runs[] | select(.name | test($name_re; "i")) | select(.display_title == $title) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .[$field] // empty' 2>/dev/null
+          }
+
           # Robust workflow run-ID capture — retries on empty results to ride out
           # the brief race window where the matching run isn't yet indexed by the
           # API, and widens pagination to per_page=100 in case of high concurrent
@@ -627,8 +647,7 @@ jobs:
             local result=""
             local _attempt
             for _attempt in 1 2 3 4 5; do
-              result=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?per_page=100&created=>${{ steps.create-issue.outputs.created_after }}" \
-                --jq "[.workflow_runs[] | select(.name | test(\"${name_re}\"; \"i\")) | select(.display_title == \"${ISSUE_TITLE}\") | select(.conclusion != \"skipped\")] | sort_by(.created_at) | last | .id // empty" || echo "")
+              result=$(latest_scoped_run_field "$name_re" "id" || echo "")
               if [ -n "$result" ] && [ "$result" != "null" ]; then
                 printf '%s' "$result"
                 return 0
@@ -664,8 +683,10 @@ jobs:
             # high workflow-run volume; v1.13.5's smoke test broke when our
             # Plan run fell to position 51 in the unfiltered list and was
             # truncated off the per_page=50 response.
-            PLAN_RUN_STATUS=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?per_page=100&created=>${{ steps.create-issue.outputs.created_after }}" \
-              --jq "[.workflow_runs[] | select(.name | test(\"Plan\"; \"i\")) | select(.display_title == \"${ISSUE_TITLE}\") | select(.conclusion != \"skipped\")] | sort_by(.created_at) | last | .status // \"unknown\"" || echo "unknown")
+            PLAN_RUN_STATUS=$(latest_scoped_run_field "Plan" "status" || echo "")
+            if [ -z "$PLAN_RUN_STATUS" ] || [ "$PLAN_RUN_STATUS" = "null" ]; then
+              PLAN_RUN_STATUS="unknown"
+            fi
 
             CUR_STATE="labels=${LABELS};comments=${COMMENT_COUNT};comment_updated=${LATEST_COMMENT_UPDATED};plan_run=${PLAN_RUN_STATUS}"
 
@@ -719,13 +740,11 @@ jobs:
                   | jq -se 'length == 1 and (.[0] | type == "object" and (.workflow_runs | type == "array"))' \
                   >/dev/null 2>&1
               }
-              PLAN_RUNS_JSON='{"workflow_runs":[]}'
-              if _PLAN_RUNS_OUT=$(gh api "repos/${TEST_REPO}/actions/runs?per_page=100&created=>${{ steps.create-issue.outputs.created_after }}" 2>/dev/null); then
-                PLAN_RUNS_JSON="$_PLAN_RUNS_OUT"
-              fi
-              unset _PLAN_RUNS_OUT
+              PLAN_RUNS_JSON=$(fetch_plan_runs_json || echo "")
               if ! _plan_runs_json_valid "$PLAN_RUNS_JSON"; then
-                PLAN_RUNS_JSON='{"workflow_runs":[]}'
+                echo "  ⏳ Unable to confirm concurrent Plan runs yet — retrying"
+                sleep "$POLL_INTERVAL"
+                continue
               fi
               OTHER_ACTIVE_PLAN_RUNS=0
               if _OTHER_ACTIVE_PLAN_RUNS=$(printf '%s' "$PLAN_RUNS_JSON" \
@@ -2142,6 +2161,7 @@ jobs:
           # 5a: Python unit tests
           echo "── Unit tests ──"
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_lib.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_integration_ahead_by_gate.py
 
           # 5b: CLI integration — validate a synthetic decomposition
           echo ""
@@ -3253,17 +3273,23 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_lib.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_integration_ahead_by_gate.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_noop_suspicious_recovery.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_pr_body_auto_close.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_plan_archival_completeness.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_integration_pr_readiness.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mark_stable_release_tag_refspec_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_targeted_file_context.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_detect_editor_changes_lost.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_review_pipeline_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_editor_noop_cascade_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_rb_judge_self_run_exclusion.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_editor_audit.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_reject_verify.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_stall_recovery_pr_lookup.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_subissue_closing_pr.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fingerprint_state_selfheal.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_stall_loop_and_churn_fixes.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_smoke_deterministic.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_retry_prelude_render.py
@@ -3280,6 +3306,10 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_serena_stats_emit.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_process_template_mode.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_semble_workflow_parity_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_drift_audit_job.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fingerprint_quarantine.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_retry_state.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_tiers.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_reasoning_step_down.py
 
       - name: Prompt files integrity

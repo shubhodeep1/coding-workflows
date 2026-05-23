@@ -35,7 +35,139 @@ if ! command -v gh_retry >/dev/null 2>&1; then
   gh_retry() { "$@"; }
 fi
 if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
-  sanitize_codex_prompt_file() { :; }
+  # Keep prompt sanitization available even when gh_helpers.sh was not
+  # sourced. Large-diff truncation can still fall back to a raw byte prefix,
+  # and a no-op here would leave degraded harnesses vulnerable to invalid
+  # UTF-8 prompt files that codex rejects before the judge runs. Keep the
+  # best-effort contract, but warn whenever the fallback cannot leave
+  # sanitized bytes on disk so a later codex stdin error is not opaque.
+  sanitize_codex_prompt_file() {
+    local _path="${1:-}"
+    local _tmp=""
+    local _sanitize_warn="::warning::Local prompt sanitization fallback could not sanitize '${_path}'; proceeding with original bytes."
+    [ -n "${_path}" ] && [ -f "${_path}" ] || return 0
+    _tmp="$(mktemp "${_path}.utf8XXXXXX" 2>/dev/null)" || {
+      echo "${_sanitize_warn}" >&2
+      return 0
+    }
+    if command -v iconv >/dev/null 2>&1; then
+      iconv -f UTF-8 -t UTF-8//IGNORE < "${_path}" > "${_tmp}" 2>/dev/null || true
+      if [ -s "${_tmp}" ] || [ ! -s "${_path}" ]; then
+        mv "${_tmp}" "${_path}" 2>/dev/null || {
+          rm -f "${_tmp}"
+          echo "${_sanitize_warn}" >&2
+          return 0
+        }
+        return 0
+      fi
+      : > "${_tmp}" 2>/dev/null || { rm -f "${_tmp}"; echo "${_sanitize_warn}" >&2; return 0; }
+    fi
+    if command -v python3 >/dev/null 2>&1 && python3 - "${_path}" "${_tmp}" <<'PY' 2>/dev/null
+from pathlib import Path
+import sys
+
+src = Path(sys.argv[1])
+dst = Path(sys.argv[2])
+dst.write_bytes(src.read_bytes().decode("utf-8", "ignore").encode("utf-8"))
+PY
+    then
+      mv "${_tmp}" "${_path}" 2>/dev/null || {
+        rm -f "${_tmp}"
+        echo "${_sanitize_warn}" >&2
+        return 0
+      }
+      return 0
+    fi
+    rm -f "${_tmp}"
+    echo "${_sanitize_warn}" >&2
+    return 0
+  }
+fi
+# Some harnesses stub only `_embed_input_file`; keep prompt-budget lifecycle
+# helpers safe in that degraded mode so prompt assembly / EXIT cleanup do not
+# fail when budgeting support is unavailable.
+if ! command -v _init_prompt_budget >/dev/null 2>&1; then
+  _init_prompt_budget() { :; }
+fi
+if ! command -v _cleanup_prompt_budget >/dev/null 2>&1; then
+  _cleanup_prompt_budget() { :; }
+fi
+if ! command -v _embed_input_file >/dev/null 2>&1; then
+  : "${_PROMPT_BUDGET_TOTAL_BYTES:=800000}"
+  _prompt_budget_state_file() {
+    printf '%s/_prompt_input_budget_state.%s\n' "${TMPDIR:-/tmp}" "$$"
+  }
+  _init_prompt_budget() {
+    local _cap="${1:-${_PROMPT_BUDGET_TOTAL_BYTES}}"
+    local _state
+    _state="$(_prompt_budget_state_file)"
+    export _PROMPT_BUDGET_TOTAL_BYTES="${_cap}"
+    printf '0\n' > "${_state}" 2>/dev/null || true
+  }
+  _cleanup_prompt_budget() {
+    local _state
+    _state="$(_prompt_budget_state_file)"
+    rm -f "${_state}" 2>/dev/null || true
+  }
+  _embed_input_file() {
+    local _p="${1:-}"
+    local _cap="${2:-100000}"
+    local _mode="${3:-head}"
+    local _state _used _budget_remaining _effective_cap _size _emit_bytes
+    if [ -z "${_p}" ] || [ ! -e "${_p}" ]; then printf '(missing)\n'; return 0; fi
+    if [ ! -s "${_p}" ]; then printf '(empty)\n'; return 0; fi
+
+    _state="$(_prompt_budget_state_file)"
+    _used=0
+    if [ -f "${_state}" ]; then
+      _used="$(cat "${_state}" 2>/dev/null)"
+      [[ "${_used}" =~ ^[0-9]+$ ]] || _used=0
+    fi
+    _budget_remaining=$(( _PROMPT_BUDGET_TOTAL_BYTES - _used ))
+    if [ "${_budget_remaining}" -le 0 ]; then
+      printf '(omitted — total prompt input budget %d bytes exhausted; %d bytes already inlined)\n' \
+        "${_PROMPT_BUDGET_TOTAL_BYTES}" "${_used}"
+      return 0
+    fi
+
+    _effective_cap="${_cap}"
+    if [ "${_budget_remaining}" -lt "${_effective_cap}" ]; then
+      _effective_cap="${_budget_remaining}"
+    fi
+
+    _size="$(wc -c < "${_p}" 2>/dev/null | tr -d '[:space:]' || true)"
+    if ! [[ "${_size}" =~ ^[0-9]+$ ]]; then
+      echo "::warning::_embed_input_file omitted ${_p}; could not determine file size for prompt budgeting." >&2
+      printf '(omitted — could not determine file size for prompt budgeting)\n'
+      return 0
+    fi
+    if [ "${_size}" -le "${_effective_cap}" ]; then
+      cat "${_p}"
+      _emit_bytes="${_size}"
+    else
+      PYTHONDONTWRITEBYTECODE=1 python3 - "${_p}" "${_effective_cap}" 2>/dev/null <<'PY' || head -c "${_effective_cap}" "${_p}"
+import sys
+
+cap = int(sys.argv[2])
+read_cap = cap + 1 if cap > 0 else 0
+with open(sys.argv[1], 'rb') as fh:
+    data = fh.read(read_cap)
+if cap > 0 and len(data) > cap:
+    i = cap
+    while i > 0 and (data[i] & 0xC0) == 0x80:
+        i -= 1
+    data = data[:i]
+sys.stdout.buffer.write(data)
+PY
+      printf '\n[... TRUNCATED — file is %s bytes; first %s bytes shown above (mode=%s, per-file cap=%s, budget remaining was %s; fallback embedder) ...]\n' \
+        "${_size}" "${_effective_cap}" "${_mode}" "${_cap}" "${_budget_remaining}"
+      _emit_bytes="${_effective_cap}"
+    fi
+
+    if [[ "${_emit_bytes:-}" =~ ^[0-9]+$ ]] && [ "${_emit_bytes}" -gt 0 ]; then
+      printf '%s\n' "$(( _used + _emit_bytes ))" > "${_state}" 2>/dev/null || true
+    fi
+  }
 fi
 if ! command -v _embed_input_file >/dev/null 2>&1; then
   : "${_PROMPT_BUDGET_TOTAL_BYTES:=800000}"
@@ -374,9 +506,16 @@ fi
 # -----------------------------------------------------------
 # Collect PR context for judge
 # -----------------------------------------------------------
-PR_DIFF="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
-  -H 'Accept: application/vnd.github.diff' 2>/dev/null || echo "(diff unavailable)")"
-[ -n "${PR_DIFF}" ] || PR_DIFF="(diff unavailable)"
+RB_JUDGE_PR_DIFF_FILE="${RUNTIME_DIR}/rb_judge_pr.diff"
+RB_JUDGE_PR_DIFF_TMP_FILE="${RB_JUDGE_PR_DIFF_FILE}.tmp"
+# Install a narrow early cleanup trap immediately so failures before the
+# full prompt-build trap below do not strand transient PR-diff files.
+trap 'rm -f "${RB_JUDGE_PR_DIFF_FILE:-}" "${RB_JUDGE_PR_DIFF_TMP_FILE:-}"' EXIT
+if ! gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
+  -H 'Accept: application/vnd.github.diff' > "${RB_JUDGE_PR_DIFF_FILE}" 2>/dev/null; then
+  printf '%s' '(diff unavailable)' > "${RB_JUDGE_PR_DIFF_FILE}"
+fi
+[ -s "${RB_JUDGE_PR_DIFF_FILE}" ] || printf '%s' '(diff unavailable)' > "${RB_JUDGE_PR_DIFF_FILE}"
 # Cap the diff embedded in the judge prompt so codex's `turn/start`
 # stdin envelope (1,048,576 chars) is never breached. The reviewer
 # script uses the same pattern (scripts/review_run_reviewers.sh:447 —
@@ -392,34 +531,40 @@ if ! [[ "${RB_JUDGE_PR_DIFF_MAX_BYTES}" =~ ^[0-9]+$ ]] || [ "${RB_JUDGE_PR_DIFF_
   RB_JUDGE_PR_DIFF_MAX_BYTES=400000
 fi
 PR_DIFF_TRUNCATED=false
-PR_DIFF_BYTES_TOTAL="$(printf '%s' "${PR_DIFF}" | wc -c | tr -cd '0-9' || true)"
-[ -n "${PR_DIFF_BYTES_TOTAL}" ] || PR_DIFF_BYTES_TOTAL=0
+PR_DIFF_BYTES_TOTAL="$(wc -c < "${RB_JUDGE_PR_DIFF_FILE}" 2>/dev/null | tr -d '[:space:]' || true)"
+if ! [[ "${PR_DIFF_BYTES_TOTAL}" =~ ^[0-9]+$ ]]; then
+  echo "::warning::Could not determine PR diff size for review-blocked judge truncation; treating diff size as 0 bytes."
+  PR_DIFF_BYTES_TOTAL=0
+fi
 if [ "${PR_DIFF_BYTES_TOTAL}" -gt "${RB_JUDGE_PR_DIFF_MAX_BYTES}" ]; then
-  PR_DIFF_TRUNCATED_CONTENT=""
-  if PR_DIFF_TRUNCATED_CONTENT="$(printf '%s' "${PR_DIFF}" | PYTHONDONTWRITEBYTECODE=1 python3 -c '
+  if PYTHONDONTWRITEBYTECODE=1 python3 - "${RB_JUDGE_PR_DIFF_FILE}" "${RB_JUDGE_PR_DIFF_MAX_BYTES}" > "${RB_JUDGE_PR_DIFF_TMP_FILE}" 2>/dev/null <<'PY'
 import sys
 
-data = sys.stdin.buffer.read()
-cap = int(sys.argv[1])
+cap = int(sys.argv[2])
+read_cap = cap + 1 if cap > 0 else 0
+with open(sys.argv[1], 'rb') as fh:
+    data = fh.read(read_cap)
 if cap > 0 and len(data) > cap:
     i = cap
     while i > 0 and (data[i] & 0xC0) == 0x80:
         i -= 1
     data = data[:i]
 sys.stdout.buffer.write(data)
-' "${RB_JUDGE_PR_DIFF_MAX_BYTES}" 2>/dev/null)"; then
-    PR_DIFF="${PR_DIFF_TRUNCATED_CONTENT}"
+PY
+  then
+    mv -f "${RB_JUDGE_PR_DIFF_TMP_FILE}" "${RB_JUDGE_PR_DIFF_FILE}"
   else
     echo "::warning::python3 unavailable for UTF-8-safe PR diff truncation; falling back to a raw byte prefix. sanitize_codex_prompt_file will strip any invalid trailing bytes before codex reads the prompt."
-    PR_DIFF_FALLBACK_FILE="$(mktemp "${TMPDIR:-/tmp}/review-rb-judge-pr-diff.XXXXXX")"
-    printf '%s' "${PR_DIFF}" > "${PR_DIFF_FALLBACK_FILE}"
-    PR_DIFF="$(head -c "${RB_JUDGE_PR_DIFF_MAX_BYTES}" "${PR_DIFF_FALLBACK_FILE}")"
-    rm -f "${PR_DIFF_FALLBACK_FILE}" 2>/dev/null || true
-    unset PR_DIFF_FALLBACK_FILE
+    if head -c "${RB_JUDGE_PR_DIFF_MAX_BYTES}" "${RB_JUDGE_PR_DIFF_FILE}" > "${RB_JUDGE_PR_DIFF_TMP_FILE}" 2>/dev/null; then
+      mv -f "${RB_JUDGE_PR_DIFF_TMP_FILE}" "${RB_JUDGE_PR_DIFF_FILE}"
+    else
+      printf '%s' '(diff unavailable)' > "${RB_JUDGE_PR_DIFF_FILE}"
+    fi
   fi
-  unset PR_DIFF_TRUNCATED_CONTENT
   PR_DIFF_TRUNCATED=true
 fi
+PR_DIFF="$(cat "${RB_JUDGE_PR_DIFF_FILE}")"
+[ -n "${PR_DIFF}" ] || PR_DIFF="(diff unavailable)"
 PRELOADED_PR_META="$(jq -c '{
   title: (.title // ""),
   body: (.body // ""),
@@ -455,7 +600,7 @@ RB_JUDGE_PR_META_RENDER_FILE="${RUNTIME_DIR}/rb_judge_pr_meta.json"
 RB_JUDGE_PR_COMMENTS_RENDER_FILE="${RUNTIME_DIR}/rb_judge_pr_comments.json"
 RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE="${RUNTIME_DIR}/rb_judge_pr_review_comments.json"
 RB_JUDGE_SEMBLE_PREFETCH=""
-trap '_cleanup_prompt_budget; rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE:-}" "${RB_JUDGE_REQUIREMENT_FILE:-}" "${RB_JUDGE_PR_META_RENDER_FILE:-}" "${RB_JUDGE_PR_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE:-}"' EXIT
+trap '_cleanup_prompt_budget; rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE:-}" "${RB_JUDGE_REQUIREMENT_FILE:-}" "${RB_JUDGE_PR_META_RENDER_FILE:-}" "${RB_JUDGE_PR_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PR_DIFF_FILE:-}" "${RB_JUDGE_PR_DIFF_TMP_FILE:-}"' EXIT
 
 {
   printf '%s\n' 'Review-blocked judge context.'
@@ -695,7 +840,7 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
   sanitize_codex_prompt_file "${RB_JUDGE_PROMPT}"
   if [ "${RB_JUDGE_PROMPT_SIZE_LOGGED}" != "true" ]; then
     RB_JUDGE_PROMPT_BYTES="$(wc -c < "${RB_JUDGE_PROMPT}" 2>/dev/null | tr -cd '0-9' || true)"
-    [ -n "${RB_JUDGE_PROMPT_BYTES}" ] || RB_JUDGE_PROMPT_BYTES=0
+    [[ "${RB_JUDGE_PROMPT_BYTES}" =~ ^[0-9]+$ ]] || RB_JUDGE_PROMPT_BYTES=0
     echo "Review-blocked judge prompt size: ${RB_JUDGE_PROMPT_BYTES} bytes (codex stdin cap: 1048576)."
     if [ "${RB_JUDGE_PROMPT_BYTES:-0}" -gt 950000 ]; then
       echo "::warning::Review-blocked judge prompt is ${RB_JUDGE_PROMPT_BYTES} bytes; close to or over codex 1 MB stdin cap. Expect turn/start failures unless RB_JUDGE_PR_DIFF_MAX_BYTES (current: ${RB_JUDGE_PR_DIFF_MAX_BYTES}) or upstream embed budgets are tightened."

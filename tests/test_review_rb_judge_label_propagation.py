@@ -1613,6 +1613,32 @@ def test_review_rb_judge_validates_pr_number_before_pr_lookups() -> None:
 	)
 
 
+def test_prompt_budget_helpers_fail_closed_on_non_numeric_counters() -> None:
+	"""Prompt-budget helpers must pin their non-numeric-counter fallbacks.
+
+	The shared primary helper (`gh_helpers.sh`) coerces both `_used` and
+	`_size` to 0 before arithmetic. The narrower review-blocked-judge
+	fallback still coerces `_used`, but it must omit the file entirely when
+	`wc -c` returns a non-numeric `_size` so prompt budgeting cannot
+	under-count a full-file embed.
+	"""
+	rb_src = _rb_judge_text()
+	gh_src = (REPO_ROOT / "scripts" / "gh_helpers.sh").read_text(encoding="utf-8")
+	for src, label in ((rb_src, "review_rb_judge.sh fallback"), (gh_src, "gh_helpers.sh primary")):
+		assert '[[ "${_used}" =~ ^[0-9]+$ ]] || _used=0' in src, (
+			f"{label} must coerce non-numeric _used values to 0 before arithmetic in _embed_input_file()."
+		)
+	assert '[[ "${_size}" =~ ^[0-9]+$ ]] || _size=0' in gh_src, (
+		"gh_helpers.sh primary must coerce non-numeric _size values to 0 before integer comparisons in _embed_input_file()."
+	)
+	assert 'if ! [[ "${_size}" =~ ^[0-9]+$ ]]; then' in rb_src, (
+		"review_rb_judge.sh fallback must guard non-numeric _size values before integer comparisons in _embed_input_file()."
+	)
+	assert 'printf \'(omitted — could not determine file size for prompt budgeting)\\n\'' in rb_src, (
+		"review_rb_judge.sh fallback must omit files whose size probe is non-numeric so prompt budgeting cannot under-count a full embed."
+	)
+
+
 def main() -> int:
 	# Direct `python3 tests/<file>.py` entrypoint — the repo's CI runs
 	# tests via that pattern (see ci.yml) rather than pytest discovery,
