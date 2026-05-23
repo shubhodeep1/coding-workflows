@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Implement orchestrator validation resilience plan and archive the plan after verified closeout\",\"issues\":[{\"id\":\"node-runtime-template-family-core\",\"title\":\"Add the core node-runtime validation harness family\",\"priority\":1},{\"id\":\"node-runtime-bootstrap-and-docs\",\"title\":\"Wire node-runtime into validate bootstrap, tests, and README\",\"priority\":2},{\"id\":\"validation-resilience-label-contract\",\"title\":\"Add validation-resilience labels to the central label contract\",\"priority\":1},{\"id\":\"validation-audit-memory-primitives\",\"title\":\"Add deterministic AI-memory primitives for validation history and operator audits\",\"priority\":1},{\"id\":\"orchestrator-harness-error-handling\",\"title\":\"Teach the poller and judge prompts to treat harness_error separately from app failures\",\"priority\":2},{\"id\":\"eager-draft-pr-and-revalidate-composition\",\"title\":\"Open draft integration PRs eagerly and compose the existing /revalidate flow with the new lifecycle\",\"priority\":3},{\"id\":\"validation-history-gating-and-stale-alerts\",\"title\":\"Gate ready-to-merge on per-SHA validation history and alert on stale integration branches\",\"priority\":4},{\"id\":\"force-merge-and-integration-backpressure-controls\",\"title\":\"Add ai:force-merge and integration-backpressure controls to the orchestrator validation lifecycle\",\"priority\":5},{\"id\":\"docs-closeout-and-plan-archival\",\"title\":\"Verify AC1-AC8, archive the completed plan, and leave a pointer in docs/plans\",\"priority\":6}],\"dependency_edges\":[{\"from\":\"node-runtime-template-family-core\",\"to\":\"node-runtime-bootstrap-and-docs\"},{\"from\":\"validation-resilience-label-contract\",\"to\":\"orchestrator-harness-error-handling\"},{\"from\":\"validation-audit-memory-primitives\",\"to\":\"eager-draft-pr-and-revalidate-composition\"},{\"from\":\"orchestrator-harness-error-handling\",\"to\":\"eager-draft-pr-and-revalidate-composition\"},{\"from\":\"eager-draft-pr-and-revalidate-composition\",\"to\":\"validation-history-gating-and-stale-alerts\"},{\"from\":\"validation-history-gating-and-stale-alerts\",\"to\":\"force-merge-and-integration-backpressure-controls\"},{\"from\":\"node-runtime-template-family-core\",\"to\":\"docs-closeout-and-plan-archival\"},{\"from\":\"node-runtime-bootstrap-and-docs\",\"to\":\"docs-closeout-and-plan-archival\"},{\"from\":\"validation-resilience-label-contract\",\"to\":\"docs-closeout-and-plan-archival\"},{\"from\":\"validation-audit-memory-primitives\",\"to\":\"docs-closeout-and-plan-archival\"},{\"from\":\"orchestrator-harness-error-handling\",\"to\":\"docs-closeout-and-plan-archival\"},{\"from\":\"eager-draft-pr-and-revalidate-composition\",\"to\":\"docs-closeout-and-plan-archival\"},{\"from\":\"validation-history-gating-and-stale-alerts\",\"to\":\"docs-closeout-and-plan-archival\"},{\"from\":\"force-merge-and-integration-backpressure-controls\",\"to\":\"docs-closeout-and-plan-archival\"}]}",
+  "fingerprint": "b19458e6a3203ddf1a2bcba273b4adc12e1a3e232acf0837ce6da7364718bf04",
+  "lineage": {
+    "issue_number": 2934,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26336790846",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26336790846",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260523160033_aa4fdc5333",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2934,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26336790846"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Implement orchestrator validation resilience plan and archive the plan after verified closeout' into 9 issues (tracking #2934)",
+  "timestamps": {
+    "created_at": "2026-05-23T16:00:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
