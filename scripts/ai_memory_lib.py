@@ -953,7 +953,6 @@ def append_validation_history_entry(
     payload = get_validation_history(memory_root, normalized_repo, normalized_sha)
     if payload is None:
         payload = _default_validation_history_payload(normalized_repo, normalized_sha)
-    payload = _normalize_validation_history_payload(payload)
     payload["entries"] = [*(payload.get("entries") or []), _normalize_validation_history_entry(entry)]
     normalized = _normalize_validation_history_payload(payload)
     validate_validation_history_payload(normalized, memory_root)
@@ -1003,7 +1002,6 @@ def append_operator_bypass_audit_entry(
     )
     if payload is None:
         payload = _default_operator_bypass_audit_payload(normalized_repo, normalized_tracking_issue, normalized_sha)
-    payload = _normalize_operator_bypass_audit_payload(payload)
     payload["entries"] = [*(payload.get("entries") or []), _normalize_operator_bypass_audit_entry(entry)]
     normalized = _normalize_operator_bypass_audit_payload(payload)
     validate_operator_bypass_audit_payload(normalized, memory_root)
@@ -1056,7 +1054,6 @@ def append_revalidate_event(
     )
     if payload is None:
         payload = _default_revalidate_events_payload(normalized_repo, normalized_tracking_issue, normalized_sha)
-    payload = _normalize_revalidate_events_payload(payload)
     payload["entries"] = [*(payload.get("entries") or []), _normalize_revalidate_event_entry(entry)]
     normalized = _normalize_revalidate_events_payload(payload)
     validate_revalidate_events_payload(normalized, memory_root)
