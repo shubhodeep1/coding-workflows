@@ -2670,6 +2670,19 @@ integration_branch_exists() {
   return 0
 }
 
+_branch_head_sha() {
+  local branch_name="$1"
+  [ -n "${branch_name}" ] || return 1
+
+  local branch_ref
+  local branch_sha
+  branch_ref="$(printf '%s' "${branch_name}" | jq -sRr '@uri')"
+  branch_sha="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch_ref}" --jq '.object.sha // ""' 2>/dev/null || echo "")"
+  [[ "${branch_sha}" =~ ^[0-9A-Fa-f]{7,64}$ ]] || return 1
+  printf '%s' "${branch_sha}"
+  return 0
+}
+
 # Returns the integration branch's "ahead_by" count vs the default branch via
 # GitHub's compare API. Stdout: integer count (0 = default branch contains the
 # integration tip). Exit 0 on success, 1 on API or parse error.
@@ -3689,6 +3702,7 @@ ensure_eager_final_pr() {
     local pr_url
     pr_url="$(gh_retry gh pr create \
       --repo "${GITHUB_REPOSITORY}" \
+      --draft \
       --base "${default_branch}" \
       --head "${integration_branch}" \
       --title "feat: ${project_title}" \
@@ -3698,6 +3712,9 @@ This PR is created eagerly by the self-healing pipeline so that \`main\` <-> \`$
 
 Refs #${TRACKING_NUM}" 2>/dev/null || true)"
     discovered="$(printf '%s\n' "${pr_url}" | grep -oE '/pull/[0-9]+' | tail -n1 | cut -d/ -f3 || true)"
+    if [[ "${discovered}" =~ ^[0-9]+$ ]]; then
+      echo "EAGER_DRAFT_PR_CREATED pr=${discovered} integration_branch=${integration_branch} tracking_issue=${TRACKING_NUM}" >&2
+    fi
   fi
 
   [[ "${discovered}" =~ ^[0-9]+$ ]] || discovered=""
@@ -3710,6 +3727,152 @@ Refs #${TRACKING_NUM}" 2>/dev/null || true)"
 
   echo ""
   return 1
+}
+
+build_eager_pr_validation_status_block() {
+  local next_action_override="${1-}"
+  local tracking_labels_json validation_cycle last_dispatch_cycle
+  local last_run_info last_outcome run_id run_attempt run_url run_timestamp last_run_display next_action
+
+  tracking_labels_json="${TRACKING_LABELS:-[]}"
+  validation_cycle="$(jq -r '.validation_cycle // 1' "${STATE_FILE}" 2>/dev/null || echo 1)"
+  last_dispatch_cycle="$(jq -r '.validation_last_dispatch_cycle // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
+  last_run_info='{"run_id":"","run_attempt":0,"conclusion":"","raw_status":"","run_url":"","run_timestamp":""}'
+
+  if [ "${ENABLE_VALIDATION}" = "true" ] \
+    && { [ "${PROJECT_STATUS:-}" = "validating" ] \
+      || [ "${PROJECT_STATUS:-}" = "validation-fixing" ] \
+      || has_label "${tracking_labels_json}" "ai:validated" \
+      || has_label "${tracking_labels_json}" "ai:validation-failed" \
+      || has_label "${tracking_labels_json}" "ai:validate-failed" \
+      || has_label "${tracking_labels_json}" "ai:harness-broken" \
+      || [ "${last_dispatch_cycle}" != "0" ]; }; then
+    last_run_info="$(get_last_validation_run_info)"
+  fi
+
+  last_outcome="$(printf '%s' "${last_run_info}" | jq -r '.raw_status // empty' 2>/dev/null || echo '')"
+  if [ -z "${last_outcome}" ]; then
+    last_outcome="$(printf '%s' "${last_run_info}" | jq -r '.conclusion // empty' 2>/dev/null || echo '')"
+  fi
+  run_id="$(printf '%s' "${last_run_info}" | jq -r '.run_id // ""' 2>/dev/null || echo '')"
+  run_attempt="$(printf '%s' "${last_run_info}" | jq -r '.run_attempt // 0' 2>/dev/null || echo 0)"
+  run_url="$(printf '%s' "${last_run_info}" | jq -r '.run_url // ""' 2>/dev/null || echo '')"
+  run_timestamp="$(printf '%s' "${last_run_info}" | jq -r '.run_timestamp // ""' 2>/dev/null || echo '')"
+
+  if [ -z "${last_outcome}" ]; then
+    if has_label "${tracking_labels_json}" "ai:harness-broken"; then
+      last_outcome="harness_error"
+    elif has_label "${tracking_labels_json}" "ai:validation-failed" || has_label "${tracking_labels_json}" "ai:validate-failed"; then
+      last_outcome="failed"
+    elif has_label "${tracking_labels_json}" "ai:validated"; then
+      last_outcome="passed"
+    elif [ "${ENABLE_VALIDATION}" != "true" ]; then
+      last_outcome="validation-disabled"
+    else
+      last_outcome="pending"
+    fi
+  fi
+
+  last_run_display="not available"
+  if [ -n "${run_url}" ] && [ -n "${run_id}" ] && [ "${run_id}" != "0" ]; then
+    if [ "${run_attempt}" != "0" ]; then
+      last_run_display="${run_url} (run ${run_id}, attempt ${run_attempt})"
+    else
+      last_run_display="${run_url} (run ${run_id})"
+    fi
+  elif [ -n "${run_url}" ]; then
+    last_run_display="${run_url}"
+  elif [ -n "${run_id}" ] && [ "${run_id}" != "0" ]; then
+    if [ "${run_attempt}" != "0" ]; then
+      last_run_display="run ${run_id}, attempt ${run_attempt}"
+    else
+      last_run_display="run ${run_id}"
+    fi
+  fi
+
+  if [ -n "${next_action_override}" ]; then
+    next_action="${next_action_override}"
+  elif has_label "${tracking_labels_json}" "ai:harness-broken"; then
+    next_action="Harness broken — see #${TRACKING_NUM}."
+  elif has_label "${tracking_labels_json}" "ai:validation-failed" || has_label "${tracking_labels_json}" "ai:validate-failed"; then
+    next_action="Validation failed — see #${TRACKING_NUM}."
+  elif has_label "${tracking_labels_json}" "ai:validated"; then
+    if has_label "${tracking_labels_json}" "ai:ready-to-merge"; then
+      next_action="Validation passing — final merge may proceed."
+    else
+      next_action="Validation passing — awaiting \`ai:ready-to-merge\`."
+    fi
+  elif [ "${ENABLE_VALIDATION}" != "true" ]; then
+    next_action="Validation disabled — final merge will proceed when the project is complete."
+  elif [ "${PROJECT_STATUS:-}" = "validation-fixing" ]; then
+    next_action="Validation fixing in progress — awaiting merged fix-up issues."
+  else
+    next_action="Awaiting validation."
+  fi
+
+  cat <<EOF
+<!-- VALIDATION_STATUS_V1 -->
+## Validation status
+
+- Tracking issue: #${TRACKING_NUM}
+- Validation cycle: ${validation_cycle}
+- Last outcome: \`${last_outcome}\`
+- Last run: ${last_run_display}
+- Timestamp (UTC): ${run_timestamp:-not available}
+- Next action: ${next_action}
+<!-- /VALIDATION_STATUS_V1 -->
+EOF
+}
+
+update_eager_pr_validation_status_section() {
+  local pr_number="$1"
+  local next_action_override="${2-}"
+  local pr_json pr_state pr_body validation_block body_payload_file updated_body response_file
+
+  [[ "${pr_number}" =~ ^[0-9]+$ ]] || return 1
+
+  pr_json="$(_fetch_pr_json "${pr_number}")"
+  pr_state="$(_jq_field "${pr_json}" '.state' 'open|closed|merged')"
+  if [ "${pr_state}" != "open" ]; then
+    return 0
+  fi
+
+  pr_body="$(printf '%s' "${pr_json}" | jq -r '.body // ""' 2>/dev/null || echo '')"
+  validation_block="$(build_eager_pr_validation_status_block "${next_action_override}")"
+  updated_body="$(CURRENT_PR_BODY="${pr_body}" VALIDATION_STATUS_BLOCK="${validation_block}" python3 - <<'PY'
+from __future__ import annotations
+
+import os
+import re
+
+body = os.environ.get("CURRENT_PR_BODY", "").replace("\r\n", "\n").replace("\r", "\n")
+block = os.environ.get("VALIDATION_STATUS_BLOCK", "").replace("\r\n", "\n").replace("\r", "\n").strip()
+pattern = re.compile(r"(?ms)^<!-- VALIDATION_STATUS_V1 -->\n.*?\n<!-- /VALIDATION_STATUS_V1 -->\n?", re.M)
+stripped = pattern.sub("", body).strip()
+if stripped:
+    print(f"{stripped}\n\n{block}")
+else:
+    print(block)
+PY
+)"
+
+  if [ "${updated_body}" = "${pr_body}" ]; then
+    return 0
+  fi
+
+  body_payload_file="$(mktemp "${TMPDIR:-/tmp}/final_pr_body.XXXXXX")"
+  response_file="$(mktemp "${TMPDIR:-/tmp}/final_pr_body_response.XXXXXX")"
+  jq -n --arg body "${updated_body}" '{body: $body}' > "${body_payload_file}"
+  if ! gh_retry_to_file "${response_file}" gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" \
+    -X PATCH --input "${body_payload_file}"; then
+    echo "::warning::[validation-status] failed to update PR #${pr_number} body; will retry on a later cycle." >&2
+    head -c 4096 "${response_file}" >&2 || true
+    echo >&2
+    rm -f "${body_payload_file}" "${response_file}"
+    return 1
+  fi
+  rm -f "${body_payload_file}" "${response_file}"
+  return 0
 }
 
 # Build a prompt for the judge and run codex exec to resolve a
@@ -5461,26 +5624,7 @@ finalize_integration_merge_if_needed() {
 	fi
 
   if [ -z "${final_pr}" ] || [ "${final_pr}" = "null" ]; then
-    final_pr="$(gh_retry gh pr list \
-      --repo "${GITHUB_REPOSITORY}" \
-      --state open \
-      --base "${default_branch}" \
-      --head "${integration_branch}" \
-      --json number \
-      --jq '.[0].number // empty' 2>/dev/null || true)"
-  fi
-
-  if [ -z "${final_pr}" ]; then
-    local final_pr_url
-    final_pr_url="$(gh_retry gh pr create \
-      --repo "${GITHUB_REPOSITORY}" \
-      --base "${default_branch}" \
-      --head "${integration_branch}" \
-      --title "feat: ${project_title}" \
-      --body "Squash merge of orchestrator project #${TRACKING_NUM}.
-
-Refs #${TRACKING_NUM}" 2>/dev/null || true)"
-    final_pr="$(printf '%s\n' "${final_pr_url}" | grep -oE '/pull/[0-9]+' | tail -n1 | cut -d/ -f3 || true)"
+    final_pr="$(ensure_eager_final_pr "${integration_branch}" "${default_branch}" "${project_title}")"
   fi
 
   if [ -z "${final_pr}" ]; then
@@ -5496,18 +5640,57 @@ Unable to create or locate the final integration PR from \`${integration_branch}
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_state_comment || true
 
+  local pr_json
   local pr_state
   local pr_mergeable
   local pr_merged
-  pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
-  pr_mergeable="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.mergeable' || echo "")"
-  pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+  local pr_draft
+  pr_json="$(_fetch_pr_json "${final_pr}")"
+  pr_state="$(_jq_field "${pr_json}" '.state' 'open|closed|merged')"
+  pr_mergeable="$(_jq_field "${pr_json}" '.mergeable' 'true|false')"
+  pr_merged="$(_jq_field "${pr_json}" '.merged_at != null' 'true|false')"
+  pr_draft="$(_jq_field "${pr_json}" '.draft' 'true|false')"
+  [ -n "${pr_merged}" ] || pr_merged="false"
+  [ -n "${pr_draft}" ] || pr_draft="false"
 
   if [ "${pr_state}" = "closed" ] && [ "${pr_merged}" = "true" ]; then
     jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged" | .final_merge_error = ""' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment || true
     return 0
+  fi
+
+  if [ "${pr_state}" = "open" ] && [ "${pr_draft}" = "true" ]; then
+    local ready_gate_reason=""
+    if has_label "${TRACKING_LABELS:-[]}" "ai:ready-to-merge"; then
+      ready_gate_reason="tracking-ready-to-merge"
+    elif has_label "${TRACKING_LABELS:-[]}" "ai:validated"; then
+      ready_gate_reason="tracking-validated-legacy"
+    elif [ "${ENABLE_VALIDATION}" != "true" ]; then
+      ready_gate_reason="validation-disabled-legacy"
+    fi
+
+    if [ -z "${ready_gate_reason}" ]; then
+      FINAL_MERGE_BUDGET_ELIGIBLE="0"
+      echo "  [final-merge] PR #${final_pr} is still draft; waiting for the tracking issue readiness gate."
+      update_eager_pr_validation_status_section "${final_pr}" || true
+      return 1
+    fi
+
+    if ! gh_retry gh pr ready "${final_pr}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+      FINAL_MERGE_BUDGET_ELIGIBLE="0"
+      echo "::warning::  [final-merge] Unable to promote draft PR #${final_pr} via gate=${ready_gate_reason}; will retry next poll." >&2
+      return 1
+    fi
+    echo "EAGER_DRAFT_PR_PROMOTED pr=${final_pr} gate=${ready_gate_reason} tracking_issue=${TRACKING_NUM}"
+    update_eager_pr_validation_status_section "${final_pr}" || true
+    pr_json="$(_fetch_pr_json "${final_pr}")"
+    pr_state="$(_jq_field "${pr_json}" '.state' 'open|closed|merged')"
+    pr_mergeable="$(_jq_field "${pr_json}" '.mergeable' 'true|false')"
+    pr_merged="$(_jq_field "${pr_json}" '.merged_at != null' 'true|false')"
+    pr_draft="$(_jq_field "${pr_json}" '.draft' 'true|false')"
+    [ -n "${pr_merged}" ] || pr_merged="false"
+    [ -n "${pr_draft}" ] || pr_draft="false"
   fi
 
   # Mergeability gate: if the final PR is not mergeable, hand off to
@@ -5550,9 +5733,11 @@ Integration branch \`${integration_branch}\` was squash-merged into \`${default_
     return 0
   fi
 
-  pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
-  pr_mergeable="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.mergeable' || echo "")"
-  pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+  pr_json="$(_fetch_pr_json "${final_pr}")"
+  pr_state="$(_jq_field "${pr_json}" '.state' 'open|closed|merged')"
+  pr_mergeable="$(_jq_field "${pr_json}" '.mergeable' 'true|false')"
+  pr_merged="$(_jq_field "${pr_json}" '.merged_at != null' 'true|false')"
+  [ -n "${pr_merged}" ] || pr_merged="false"
 
   if [ "${pr_state}" = "closed" ] && [ "${pr_merged}" = "true" ]; then
     jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged" | .final_merge_error = ""' \
@@ -5825,7 +6010,8 @@ has_active_validation_run() {
 
 # Return a JSON object describing the most recent *completed* validation
 # workflow run that was created on or after the last dispatch timestamp
-# recorded in state. Fields: run_id, run_attempt, conclusion, raw_status.
+# recorded in state. Fields: run_id, run_attempt, conclusion, raw_status,
+# run_url, run_timestamp.
 #
 # `raw_status` is sourced from `gh run view --json jobs,conclusion,outputs`
 # when the selected run exposes an id. The workflow-run list endpoint is still
@@ -5867,18 +6053,22 @@ get_last_validation_run_info() {
     | last // {}
   ' 2>/dev/null || echo '{}')"
   if [ -z "${selected_run}" ] || [ "${selected_run}" = "null" ] || [ "${selected_run}" = "{}" ]; then
-    echo '{"run_id":"","run_attempt":0,"conclusion":"","raw_status":""}'
+    echo '{"run_id":"","run_attempt":0,"conclusion":"","raw_status":"","run_url":"","run_timestamp":""}'
     return 0
   fi
 
   local run_id
   local run_attempt
   local conclusion
+  local run_url
+  local run_timestamp
   local raw_status=""
   local run_view_json='{}'
   run_id="$(printf '%s' "${selected_run}" | jq -r '(.id // .databaseId // "") | tostring' 2>/dev/null || echo '')"
   run_attempt="$(printf '%s' "${selected_run}" | jq -r '(.run_attempt // 0) | tonumber? // 0' 2>/dev/null || echo '0')"
   conclusion="$(printf '%s' "${selected_run}" | jq -r '.conclusion // ""' 2>/dev/null || echo '')"
+  run_url="$(printf '%s' "${selected_run}" | jq -r '.html_url // ""' 2>/dev/null || echo '')"
+  run_timestamp="$(printf '%s' "${selected_run}" | jq -r '.updated_at // .created_at // ""' 2>/dev/null || echo '')"
 
   if [[ "${run_id}" =~ ^[0-9]+$ ]] && [ "${conclusion}" != "success" ]; then
     if run_view_json="$(gh_retry gh run view "${run_id}" --repo "${GITHUB_REPOSITORY}" --json jobs,conclusion,outputs 2>/dev/null)"; then
@@ -5898,14 +6088,18 @@ get_last_validation_run_info() {
     --arg run_id "${run_id}" \
     --argjson run_attempt "${run_attempt}" \
     --arg conclusion "${conclusion}" \
-    --arg raw_status "${raw_status}" '
+    --arg raw_status "${raw_status}" \
+    --arg run_url "${run_url}" \
+    --arg run_timestamp "${run_timestamp}" '
       {
         run_id: $run_id,
         run_attempt: $run_attempt,
         conclusion: (if $conclusion == "" then (.conclusion // "") else $conclusion end),
-        raw_status: $raw_status
+        raw_status: $raw_status,
+        run_url: $run_url,
+        run_timestamp: $run_timestamp
       }
-    ' 2>/dev/null || echo '{"run_id":"","run_attempt":0,"conclusion":"","raw_status":""}'
+    ' 2>/dev/null || echo '{"run_id":"","run_attempt":0,"conclusion":"","raw_status":"","run_url":"","run_timestamp":""}'
 }
 
 # Return the conclusion of the most recent *completed* validation workflow run
@@ -10888,12 +11082,104 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
   # the latest state comment resets counters and re-dispatches validation.
   if [ "${PROJECT_STATUS}" = "failed" ] \
     && (has_label "${TRACKING_LABELS}" "ai:validation-failed" || has_label "${TRACKING_LABELS}" "ai:validate-failed"); then
-    REVALIDATE_REQUESTED="$(echo "${COMMENTS}" | jq -r '
-      (to_entries | map(select((.value.body // "") | (startswith("<!-- ORCHESTRATOR_STATE_V1") or test("^<!-- ORCHESTRATOR_STATE_V2 part=([0-9]+)/\\1 manifest=[0-9a-f]{64} -->")))) | last | .key // -1) as $last_state_idx |
-      [to_entries[] | select(.key > $last_state_idx and (.value.body | test("^\\s*/revalidate(\\s|$)"; "m")))] | length > 0
+    REVALIDATE_COMMENT_JSON="$(echo "${COMMENTS}" | jq -c '
+      (to_entries
+        | map(select((.value.body // "") | (
+            startswith("<!-- ORCHESTRATOR_STATE_V1")
+            or test("^<!-- ORCHESTRATOR_STATE_V2 part=([0-9]+)/\\1 manifest=[0-9a-f]{64} -->")
+            or startswith("<!-- revalidate-dedup:")
+        )))
+        | last
+        | .key // -1) as $last_revalidate_boundary_idx |
+      [to_entries[]
+        | select(.key > $last_revalidate_boundary_idx and ((.value.body // "") | test("^\\s*/revalidate(\\s|$)"; "m")))
+        | .value
+      ]
+      | last // empty
     ')"
 
-    if [ "${REVALIDATE_REQUESTED}" = "true" ]; then
+    if [ -n "${REVALIDATE_COMMENT_JSON}" ] && [ "${REVALIDATE_COMMENT_JSON}" != "null" ]; then
+      REVALIDATE_COMMENT_BODY="$(printf '%s' "${REVALIDATE_COMMENT_JSON}" | jq -r '.body // ""' 2>/dev/null || echo "")"
+      REVALIDATE_COMMENT_ID="$(printf '%s' "${REVALIDATE_COMMENT_JSON}" | jq -r '.id // ""' 2>/dev/null || echo "")"
+      REVALIDATE_COMMENT_TS="$(printf '%s' "${REVALIDATE_COMMENT_JSON}" | jq -r '.created_at // ""' 2>/dev/null || echo "")"
+      REVALIDATE_COMMENT_ACTOR="$(printf '%s' "${REVALIDATE_COMMENT_JSON}" | jq -r '.user.login // ""' 2>/dev/null || echo "")"
+      REVALIDATE_COMMENT_URL="$(printf '%s' "${REVALIDATE_COMMENT_JSON}" | jq -r '.html_url // ""' 2>/dev/null || echo "")"
+      [ -n "${REVALIDATE_COMMENT_ACTOR}" ] || REVALIDATE_COMMENT_ACTOR="${GITHUB_ACTOR:-unknown}"
+      [ -n "${REVALIDATE_COMMENT_TS}" ] || REVALIDATE_COMMENT_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      if [ -z "${REVALIDATE_COMMENT_URL}" ] && [[ "${REVALIDATE_COMMENT_ID}" =~ ^[0-9]+$ ]]; then
+        REVALIDATE_COMMENT_URL="$(_gh_url "issues/${TRACKING_NUM}#issuecomment-${REVALIDATE_COMMENT_ID}")"
+      fi
+      REVALIDATE_REASON="$(REVALIDATE_COMMENT_BODY="${REVALIDATE_COMMENT_BODY}" python3 - <<'PY'
+from __future__ import annotations
+
+import os
+
+body = os.environ.get("REVALIDATE_COMMENT_BODY", "").lstrip()
+if body.startswith("/revalidate"):
+    print(body[len("/revalidate"):].strip())
+else:
+    print("")
+PY
+      )"
+      REVALIDATE_PRIOR_OUTCOME="$(jq -r '.validation_last_raw_status // .validation_failure_class // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+      if [ -z "${REVALIDATE_PRIOR_OUTCOME}" ]; then
+        if has_label "${TRACKING_LABELS}" "ai:harness-broken"; then
+          REVALIDATE_PRIOR_OUTCOME="harness_error"
+        elif has_label "${TRACKING_LABELS}" "ai:validate-failed"; then
+          REVALIDATE_PRIOR_OUTCOME="validate-failed"
+        elif has_label "${TRACKING_LABELS}" "ai:validation-failed"; then
+          REVALIDATE_PRIOR_OUTCOME="validation-failed"
+        else
+          REVALIDATE_PRIOR_OUTCOME="failed"
+        fi
+      fi
+      REVALIDATE_PRIOR_CONTEXT="$(jq -r '.validation_failure_reason // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+      if [ -z "${REVALIDATE_PRIOR_CONTEXT}" ] && has_label "${TRACKING_LABELS}" "ai:harness-broken"; then
+        REVALIDATE_PRIOR_CONTEXT="tracking issue labeled ai:harness-broken"
+      fi
+
+      REVALIDATE_MEMORY_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+      if [ -z "${REVALIDATE_MEMORY_BRANCH}" ] || [ "${REVALIDATE_MEMORY_BRANCH}" = "null" ]; then
+        REVALIDATE_MEMORY_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "")"
+      fi
+      REVALIDATE_INTEGRATION_SHA=""
+      if [ -n "${REVALIDATE_MEMORY_BRANCH}" ]; then
+        REVALIDATE_INTEGRATION_SHA="$(_branch_head_sha "${REVALIDATE_MEMORY_BRANCH}" || echo "")"
+      fi
+
+      REVALIDATE_DEDUPE_WINDOW_SECONDS=300
+      REVALIDATE_DEDUPE_HIT="false"
+      REVALIDATE_PREVIOUS_TS=""
+      if [ -n "${REVALIDATE_INTEGRATION_SHA}" ]; then
+        REVALIDATE_EVENTS_JSON="$(memory_revalidate_events_get \
+          --repo-root . \
+          --memory-branch "${AI_MEMORY_BRANCH:-ai-memory}" \
+          --memory-root "${AI_MEMORY_ROOT:-ai-memory}" \
+          --repo "${GITHUB_REPOSITORY}" \
+          --tracking-issue "${TRACKING_NUM}" \
+          --integration-sha "${REVALIDATE_INTEGRATION_SHA}" 2>/dev/null || echo '{"ok": true, "enabled": true, "hit": false, "events": null}')"
+        REVALIDATE_RECENT_ENTRY="$(printf '%s' "${REVALIDATE_EVENTS_JSON}" | jq -c --arg actor "${REVALIDATE_COMMENT_ACTOR}" '(.events.entries // []) | map(select((.actor // "") == $actor)) | last // empty' 2>/dev/null || echo "")"
+        if [ -n "${REVALIDATE_RECENT_ENTRY}" ] && [ "${REVALIDATE_RECENT_ENTRY}" != "null" ]; then
+          REVALIDATE_PREVIOUS_TS="$(printf '%s' "${REVALIDATE_RECENT_ENTRY}" | jq -r '.timestamp_utc // ""' 2>/dev/null || echo "")"
+          REVALIDATE_PREVIOUS_EPOCH="$(_iso8601_to_epoch "${REVALIDATE_PREVIOUS_TS}" || echo "")"
+          REVALIDATE_COMMENT_EPOCH="$(_iso8601_to_epoch "${REVALIDATE_COMMENT_TS}" || echo "")"
+          if [[ "${REVALIDATE_PREVIOUS_EPOCH}" =~ ^[0-9]+$ ]] \
+            && [[ "${REVALIDATE_COMMENT_EPOCH}" =~ ^[0-9]+$ ]] \
+            && [ "${REVALIDATE_COMMENT_EPOCH}" -ge "${REVALIDATE_PREVIOUS_EPOCH}" ] \
+            && [ $(( REVALIDATE_COMMENT_EPOCH - REVALIDATE_PREVIOUS_EPOCH )) -lt "${REVALIDATE_DEDUPE_WINDOW_SECONDS}" ]; then
+            REVALIDATE_DEDUPE_HIT="true"
+          fi
+        fi
+      fi
+
+      if [ "${REVALIDATE_DEDUPE_HIT}" = "true" ]; then
+        echo "  /revalidate deduped for project #${TRACKING_NUM}: actor=@${REVALIDATE_COMMENT_ACTOR} integration_sha=${REVALIDATE_INTEGRATION_SHA:-unknown} prior_ts=${REVALIDATE_PREVIOUS_TS}."
+        post_tracking_comment "<!-- revalidate-dedup:${REVALIDATE_COMMENT_ID:-0}:${REVALIDATE_INTEGRATION_SHA:-unknown} -->
+
+Already processed /revalidate from @${REVALIDATE_COMMENT_ACTOR} at ${REVALIDATE_PREVIOUS_TS}."
+        continue
+      fi
+
       echo "  /revalidate requested for project #${TRACKING_NUM}. Resetting validation state."
       jq \
         '.status = "validating" |
@@ -10918,6 +11204,44 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
         --repo "${GITHUB_REPOSITORY}" \
         --remove-label "ai:harness-broken" >/dev/null 2>&1 || true
       set_tracking_phase_label "ai:validating"
+      REVALIDATE_FINAL_PR="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+      if [[ "${REVALIDATE_FINAL_PR}" =~ ^[0-9]+$ ]]; then
+        update_eager_pr_validation_status_section "${REVALIDATE_FINAL_PR}" "Revalidating after operator reset." || true
+      fi
+      if [ -n "${REVALIDATE_INTEGRATION_SHA}" ]; then
+        REVALIDATE_COMMENT_ID_JSON='null'
+        if [[ "${REVALIDATE_COMMENT_ID}" =~ ^[0-9]+$ ]]; then
+          REVALIDATE_COMMENT_ID_JSON="${REVALIDATE_COMMENT_ID}"
+        fi
+        REVALIDATE_ENTRY_FILE="$(mktemp "${TMPDIR:-/tmp}/revalidate_event.XXXXXX")"
+        jq -n \
+          --arg actor "${REVALIDATE_COMMENT_ACTOR}" \
+          --arg timestamp_utc "${REVALIDATE_COMMENT_TS}" \
+          --arg prior_outcome "${REVALIDATE_PRIOR_OUTCOME}" \
+          --arg prior_context "${REVALIDATE_PRIOR_CONTEXT}" \
+          --arg reason "${REVALIDATE_REASON}" \
+          --arg source_comment_url "${REVALIDATE_COMMENT_URL}" \
+          --argjson source_comment_id "${REVALIDATE_COMMENT_ID_JSON}" '
+            {
+              actor: $actor,
+              timestamp_utc: $timestamp_utc,
+              prior_outcome: (if $prior_outcome == "" then null else $prior_outcome end),
+              prior_context: (if $prior_context == "" then null else $prior_context end),
+              reason: (if $reason == "" then null else $reason end),
+              source_comment_id: $source_comment_id,
+              source_comment_url: (if $source_comment_url == "" then null else $source_comment_url end)
+            }
+          ' > "${REVALIDATE_ENTRY_FILE}"
+        memory_revalidate_events_append \
+          --repo-root . \
+          --memory-branch "${AI_MEMORY_BRANCH:-ai-memory}" \
+          --memory-root "${AI_MEMORY_ROOT:-ai-memory}" \
+          --repo "${GITHUB_REPOSITORY}" \
+          --tracking-issue "${TRACKING_NUM}" \
+          --integration-sha "${REVALIDATE_INTEGRATION_SHA}" \
+          --entry-file "${REVALIDATE_ENTRY_FILE}" >/dev/null 2>&1 || true
+        rm -f "${REVALIDATE_ENTRY_FILE}"
+      fi
       post_tracking_comment "## 🔁 Validation reset via /revalidate
 
 All validation counters cleared. Re-dispatching validation (cycle 1)."
@@ -11469,6 +11793,33 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   WAVE_COMPLETE="$(echo "${WAVE_STATUS}" | jq -r '.wave_complete')"
   ANY_FAILED="$(echo "${WAVE_STATUS}" | jq -r '.any_failed')"
   PROJECT_COMPLETE="$(echo "${WAVE_STATUS}" | jq -r '.project_complete')"
+
+  # Ensure the integration→default PR exists as soon as the integration
+  # branch is ahead of default, even before validation completes. Fail
+  # closed on compare ambiguity by requiring a numeric ahead_by > 0.
+  EAGER_FINAL_MERGE_STATUS="$(jq -r '.final_merge_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo "pending")"
+  EAGER_SYNC_STATUS="$(jq -r '.sync.status // "active"' "${STATE_FILE}" 2>/dev/null || echo "active")"
+  if [ -n "${CWS_INTEGRATION_BRANCH}" ] \
+    && [ -n "${CWS_DEFAULT_BRANCH:-}" ] \
+    && [[ "${CWS_AHEAD_BY:-}" =~ ^[0-9]+$ ]] \
+    && [ "${CWS_AHEAD_BY}" -gt 0 ] \
+    && [ "${EAGER_SYNC_STATUS}" != "superseded-by-main" ] \
+    && [ "${EAGER_FINAL_MERGE_STATUS}" != "superseded-by-main" ]; then
+    EAGER_PROJECT_TITLE="$(jq -r '.project_title // "Orchestrator project"' "${STATE_FILE}" 2>/dev/null || echo "Orchestrator project")"
+    EAGER_FINAL_PR="$(ensure_eager_final_pr "${CWS_INTEGRATION_BRANCH}" "${CWS_DEFAULT_BRANCH}" "${EAGER_PROJECT_TITLE}" || true)"
+    if [[ "${EAGER_FINAL_PR}" =~ ^[0-9]+$ ]]; then
+      EAGER_FINAL_PR_BEFORE="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+      EAGER_FINAL_ERROR_BEFORE="$(jq -r '.final_merge_error // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+      if [ "${EAGER_FINAL_PR_BEFORE}" != "${EAGER_FINAL_PR}" ] \
+        || [ "${EAGER_FINAL_MERGE_STATUS}" != "pending" ] \
+        || [ -n "${EAGER_FINAL_ERROR_BEFORE}" ]; then
+        jq --argjson final_pr "${EAGER_FINAL_PR}" '.final_merge_pr = $final_pr | .final_merge_status = "pending" | .final_merge_error = ""' \
+          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        post_state_comment || true
+      fi
+      update_eager_pr_validation_status_section "${EAGER_FINAL_PR}" || true
+    fi
+  fi
 
   # ---------------------------------------------------------------
   # Maintain the pinned "completion status" comment on the tracking

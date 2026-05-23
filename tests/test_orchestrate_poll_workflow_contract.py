@@ -32,9 +32,17 @@ def test_stall_recovery_prompt_is_bootstrapped_with_main_fallback() -> None:
 	assert "install -m 0644 \"${src}\" \"prompts/${pf}\"" in wf
 
 
+def test_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets() -> None:
+	wf = _workflow()
+	assert "validation_history.v1.json" in wf
+	assert "operator_bypass_audit.v1.json" in wf
+	assert "revalidate_events.v1.json" in wf
+
+
 def main() -> int:
 	test_stall_control_env_defaults_are_declared()
 	test_stall_recovery_prompt_is_bootstrapped_with_main_fallback()
+	test_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
 	return 0
 
 
