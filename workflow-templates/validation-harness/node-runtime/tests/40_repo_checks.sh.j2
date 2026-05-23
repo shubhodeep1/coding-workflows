@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+LOG_DIR="${LOG_DIR:-${ROOT_DIR}/logs}"
+COMPOSE_FILE="${COMPOSE_FILE:-validation/docker-compose.test.yml}"
+APP_SERVICE="${APP_SERVICE:-app}"
+TAIL_LINES="${TAIL_LINES:-60}"
+
+source "${SCRIPT_DIR}/../_lib/tap_helpers.sh"
+
+mkdir -p "${LOG_DIR}"
+
+TEST_FILE="$(mktemp)"
+SKIP_FILE="$(mktemp)"
+
+cleanup()
+{
+	rm -f "${TEST_FILE}" "${SKIP_FILE}"
+}
+
+trap cleanup EXIT
+
+render_json_list_to_file()
+{
+	local env_name="$1"
+	local allow_empty="$2"
+	local output_file="$3"
+	local parse_rc=0
+
+	set +e
+	LIST_ENV_NAME="${env_name}" ALLOW_EMPTY="${allow_empty}" \
+		docker compose -f "${COMPOSE_FILE}" exec -T -e LIST_ENV_NAME -e ALLOW_EMPTY "${APP_SERVICE}" /bin/sh <<'SH' >"${output_file}"
+node - <<'JS'
+const envName = process.env.LIST_ENV_NAME || "";
+const allowEmpty = process.env.ALLOW_EMPTY === "1";
+const payload = process.env[envName] || "";
+
+if (!payload) {
+	if (allowEmpty) {
+		process.exit(0);
+	}
+	console.error(`# ${envName} is empty`);
+	process.exit(1);
+}
+
+let items;
+try {
+	items = JSON.parse(payload);
+} catch (error) {
+	console.error(`# invalid ${envName}: ${error.message}`);
+	process.exit(1);
+}
+
+if (!Array.isArray(items)) {
+	console.error(`# ${envName} must decode to an array`);
+	process.exit(1);
+}
+
+for (const item of items) {
+	if (typeof item !== "string") {
+		continue;
+	}
+	const trimmed = item.trim();
+	if (!trimmed) {
+		continue;
+	}
+	process.stdout.write(trimmed);
+	process.stdout.write("\0");
+}
+JS
+SH
+	parse_rc=$?
+	set -e
+
+	return "${parse_rc}"
+}
+
+if ! render_json_list_to_file "SKIP_TESTS_JSON" 1 "${SKIP_FILE}"; then
+	echo "1..1"
+	tap_not_ok 1 "skip tests parsed"
+	echo "# invalid SKIP_TESTS_JSON inside app container"
+	exit 1
+fi
+
+if ! render_json_list_to_file "CUSTOM_TESTS_JSON" 1 "${TEST_FILE}"; then
+	echo "1..1"
+	tap_not_ok 1 "custom tests parsed"
+	echo "# invalid CUSTOM_TESTS_JSON inside app container"
+	exit 1
+fi
+
+SKIP_LIST=()
+if [ -s "${SKIP_FILE}" ]; then
+	mapfile -d '' -t SKIP_LIST < "${SKIP_FILE}"
+fi
+
+TEST_LIST=()
+if [ -s "${TEST_FILE}" ]; then
+	mapfile -d '' -t TEST_LIST < "${TEST_FILE}"
+fi
+
+{% raw %}test_count=${#TEST_LIST[@]}{% endraw %}
+
+if [ "${test_count}" -eq 0 ]; then
+	echo "1..1"
+	tap_not_ok 1 "custom tests parsed"
+	echo "# CUSTOM_TESTS_JSON did not yield executable commands"
+	exit 1
+fi
+
+should_skip()
+{
+	local test_name="$1"
+	local item
+	for item in "${SKIP_LIST[@]}"; do
+		if [ "${item}" = "${test_name}" ]; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+plan_count=0
+for test_cmd in "${TEST_LIST[@]}"; do
+	if should_skip "${test_cmd}"; then
+		continue
+	fi
+	plan_count=$((plan_count + 1))
+done
+
+if [ "${plan_count}" -eq 0 ]; then
+	echo "1..1"
+	tap_ok 1 "all custom tests explicitly skipped"
+	exit 0
+fi
+
+echo "1..${plan_count}"
+
+test_id=1
+for test_cmd in "${TEST_LIST[@]}"; do
+	if should_skip "${test_cmd}"; then
+		echo "# skipped command by skip_tests: ${test_cmd}"
+		continue
+	fi
+
+	test_log="${LOG_DIR}/repo_check_${test_id}.log"
+	set +e
+	REPO_CHECK_CMD="${test_cmd}" \
+		docker compose -f "${COMPOSE_FILE}" exec -T -e REPO_CHECK_CMD "${APP_SERVICE}" /bin/sh -c 'sh -eu -c "${REPO_CHECK_CMD}"' >"${test_log}" 2>&1
+	status=$?
+	set -e
+
+	if [ "${status}" -ne 0 ]; then
+		tap_not_ok "${test_id}" "repo check command: ${test_cmd}"
+		echo "# repo check command failed (exit=${status})"
+		echo "# log tail (${TAIL_LINES} lines):"
+		tail -n "${TAIL_LINES}" "${test_log}" 2>/dev/null || true
+		exit 1
+	fi
+
+	tap_ok "${test_id}" "repo check command: ${test_cmd}"
+	test_id=$((test_id + 1))
+done

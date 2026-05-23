@@ -1,0 +1,50 @@
+{%- set env_overrides = manifest.get('env_overrides', {}) or {} -%}
+{%- set _app_service_override = env_overrides.get('APP_SERVICE') -%}
+{%- set _app_url_override = env_overrides.get('APP_URL') -%}
+{%- set _custom_tests_json_override = env_overrides.get('CUSTOM_TESTS_JSON') -%}
+{%- set _skip_tests_json_override = env_overrides.get('SKIP_TESTS_JSON') -%}
+{%- set _reserved_override_keys = ('APP_SERVICE', 'APP_URL', 'CUSTOM_TESTS_JSON', 'SKIP_TESTS_JSON') -%}
+services:
+  app:
+    init: true
+    build:
+      context: ..
+      dockerfile: {{ output_root_name }}/Dockerfile.app
+    working_dir: /workspace
+    command: ["/bin/sh", "-c", "sleep infinity"]
+    env_file:
+      - validate.env
+    environment:
+{%- if _app_service_override is not none %}
+      APP_SERVICE: "{{ _app_service_override | replace('\\', '\\\\') | replace('"', '\\"') | replace('$', '$$') | replace('\r', '\\r') | replace('\n', '\\n') }}"
+{%- else %}
+      APP_SERVICE: "${APP_SERVICE:-app}"
+{%- endif %}
+{%- if _app_url_override is not none %}
+      APP_URL: "{{ _app_url_override | replace('\\', '\\\\') | replace('"', '\\"') | replace('$', '$$') | replace('\r', '\\r') | replace('\n', '\\n') }}"
+{%- else %}
+      APP_URL: "${APP_URL:-}"
+{%- endif %}
+{%- if _custom_tests_json_override is not none %}
+      CUSTOM_TESTS_JSON: "{{ _custom_tests_json_override | replace('\\', '\\\\') | replace('"', '\\"') | replace('$', '$$') | replace('\r', '\\r') | replace('\n', '\\n') }}"
+{%- else %}
+      CUSTOM_TESTS_JSON: '${CUSTOM_TESTS_JSON:-{{ manifest.get("custom_tests", []) | tojson | replace("'", "''") | replace('$', '$$') }}}'
+{%- endif %}
+{%- if _skip_tests_json_override is not none %}
+      SKIP_TESTS_JSON: "{{ _skip_tests_json_override | replace('\\', '\\\\') | replace('"', '\\"') | replace('$', '$$') | replace('\r', '\\r') | replace('\n', '\\n') }}"
+{%- else %}
+      SKIP_TESTS_JSON: '${SKIP_TESTS_JSON:-{{ manifest.get("skip_tests", []) | tojson | replace("'", "''") | replace('$', '$$') }}}'
+{%- endif %}
+{%- for key, value in env_overrides | dictsort %}
+{%- if key not in _reserved_override_keys %}
+      {{ key }}: "{{ value | replace('\\', '\\\\') | replace('"', '\\"') | replace('$', '$$') | replace('\r', '\\r') | replace('\n', '\\n') }}"
+{%- endif %}
+{%- endfor %}
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "test -f \"/workspace/{{ manifest.get('entry', 'package.json') | replace('"', '\\"') | replace('$', '$$') }}\""
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 3s
