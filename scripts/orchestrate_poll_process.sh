@@ -3839,13 +3839,14 @@ update_eager_pr_validation_status_section() {
 
   pr_body="$(printf '%s' "${pr_json}" | jq -r '.body // ""' 2>/dev/null || echo '')"
   validation_block="$(build_eager_pr_validation_status_block "${next_action_override}")"
-  updated_body="$(CURRENT_PR_BODY="${pr_body}" VALIDATION_STATUS_BLOCK="${validation_block}" python3 - <<'PY'
+  updated_body="$(printf '%s' "${pr_body}" | VALIDATION_STATUS_BLOCK="${validation_block}" python3 -c '
 from __future__ import annotations
 
 import os
 import re
+import sys
 
-body = os.environ.get("CURRENT_PR_BODY", "").replace("\r\n", "\n").replace("\r", "\n")
+body = sys.stdin.read().replace("\r\n", "\n").replace("\r", "\n")
 block = os.environ.get("VALIDATION_STATUS_BLOCK", "").replace("\r\n", "\n").replace("\r", "\n").strip()
 pattern = re.compile(r"(?ms)^<!-- VALIDATION_STATUS_V1 -->\n.*?\n<!-- /VALIDATION_STATUS_V1 -->\n?", re.M)
 stripped = pattern.sub("", body).strip()
@@ -3853,8 +3854,7 @@ if stripped:
     print(f"{stripped}\n\n{block}")
 else:
     print(block)
-PY
-)"
+')"
 
   if [ "${updated_body}" = "${pr_body}" ]; then
     return 0
