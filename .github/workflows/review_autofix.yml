@@ -154,7 +154,7 @@ env:
   # CI/lint failures are detected and fixed every run. See README and
   # agents.md for the contract.
   CHECK_RUNS_AUTOFIX_ENABLED: ${{ vars.CHECK_RUNS_AUTOFIX_ENABLED || 'true' }}
-  CHECK_RUNS_WAIT_TIMEOUT_SECS: ${{ vars.CHECK_RUNS_WAIT_TIMEOUT_SECS || '1200' }}
+  CHECK_RUNS_WAIT_TIMEOUT_SECS: ${{ vars.CHECK_RUNS_WAIT_TIMEOUT_SECS || '900' }}
   CHECK_RUNS_POLL_INTERVAL_SECS: ${{ vars.CHECK_RUNS_POLL_INTERVAL_SECS || '20' }}
   # Per-failed-check-run cap on the `failed[i].log_tail` snapshot field
   # written by the "Collect PR check-run failures" step. The writer resolves
@@ -1935,9 +1935,9 @@ jobs:
 
           # Clamp configurable values to safe ranges. Invalid values fall back
           # to defaults rather than failing the workflow.
-          _wait_timeout="${CHECK_RUNS_WAIT_TIMEOUT_SECS:-1200}"
+          _wait_timeout="${CHECK_RUNS_WAIT_TIMEOUT_SECS:-900}"
           if ! [[ "${_wait_timeout}" =~ ^[0-9]+$ ]] || [ "${_wait_timeout}" -gt 3600 ]; then
-            _wait_timeout=1200
+            _wait_timeout=900
           fi
           _poll_interval="${CHECK_RUNS_POLL_INTERVAL_SECS:-20}"
           if ! [[ "${_poll_interval}" =~ ^[0-9]+$ ]] || [ "${_poll_interval}" -lt 5 ] || [ "${_poll_interval}" -gt 300 ]; then
@@ -2317,12 +2317,20 @@ jobs:
           set -euo pipefail
           echo "ENABLE_REVIEWER_TWO_PASS=false" >> "$GITHUB_ENV"
           echo "REVIEWER_REASONING_EFFORT=low" >> "$GITHUB_ENV"
+          mapfile -t reviewer_models < <(printf '%s\n' "${REVIEWER_MODELS:-}" | sed '/^$/d' | head -n 3)
+          if [ "${#reviewer_models[@]}" -gt 0 ]; then
+            {
+              echo 'REVIEWER_MODELS<<__NO_PR_REVIEWER_MODELS__'
+              printf '%s\n' "${reviewer_models[@]}"
+              echo '__NO_PR_REVIEWER_MODELS__'
+            } >> "$GITHUB_ENV"
+          fi
           # Override the reviewer config written earlier by Create Codex
           # config. This step intentionally runs after the smoke-test
           # tuning block so no-PR claude/** comment-only reviews always use
           # the lightweight single-pass reviewer profile.
           sed -i 's/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*".*"/model_reasoning_effort = "low"/' ~/.codex/config.toml
-          echo "CLAUDE_BRANCH_REVIEW_LIGHT_PROFILE mode=no_pr reviewer_reasoning=low reviewer_two_pass=false"
+          echo "CLAUDE_BRANCH_REVIEW_LIGHT_PROFILE mode=no_pr reviewer_reasoning=low reviewer_two_pass=false reviewer_count=${#reviewer_models[@]}"
 
       - name: Checkout PR head branch
         run: |

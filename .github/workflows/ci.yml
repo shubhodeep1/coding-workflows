@@ -130,12 +130,6 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_lib.py
 
-      - name: Orchestrate poll process unit tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_noop_suspicious_recovery.py
-
       - name: Integration-ahead-by gate regression tests
         run: |
           set -euo pipefail
@@ -514,6 +508,12 @@ jobs:
           set -euo pipefail
           pip install -q ruff
           ruff check --select E,F --ignore E501 scripts/*.py
+
+      - name: Orchestrate poll process unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_noop_suspicious_recovery.py
 
       - name: Semantic cache unit tests
         run: |

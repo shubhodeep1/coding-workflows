@@ -58,8 +58,21 @@ def test_no_pr_claude_branch_review_uses_lightweight_reviewer_profile() -> None:
 	assert "if: env.CLAUDE_BRANCH_REVIEW_MODE == 'true' && env.PR_NUMBER == ''" in block
 	assert 'echo "ENABLE_REVIEWER_TWO_PASS=false" >> "$GITHUB_ENV"' in block
 	assert 'echo "REVIEWER_REASONING_EFFORT=low" >> "$GITHUB_ENV"' in block
+	assert "mapfile -t reviewer_models < <(" in block
+	assert "head -n 3" in block
+	assert "REVIEWER_MODELS<<__NO_PR_REVIEWER_MODELS__" in block
+	assert "printf '%s\\n' \"${reviewer_models[@]}\"" in block
 	assert 'sed -i \'s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*".*"/model_reasoning_effort = "low"/\' ~/.codex/config.toml' in block
-	assert 'CLAUDE_BRANCH_REVIEW_LIGHT_PROFILE mode=no_pr reviewer_reasoning=low reviewer_two_pass=false' in block
+	assert 'CLAUDE_BRANCH_REVIEW_LIGHT_PROFILE mode=no_pr reviewer_reasoning=low reviewer_two_pass=false reviewer_count=${#reviewer_models[@]}' in block
+
+
+def test_check_runs_wait_timeout_default_and_fallback_are_aligned() -> None:
+	wf = _workflow()
+	assert "CHECK_RUNS_WAIT_TIMEOUT_SECS: ${{ vars.CHECK_RUNS_WAIT_TIMEOUT_SECS || '900' }}" in wf
+	assert '_wait_timeout="${CHECK_RUNS_WAIT_TIMEOUT_SECS:-900}"' in wf
+	assert '_wait_timeout=900' in wf
+	assert "CHECK_RUNS_WAIT_TIMEOUT_SECS: ${{ vars.CHECK_RUNS_WAIT_TIMEOUT_SECS || '1200' }}" not in wf
+	assert '_wait_timeout="${CHECK_RUNS_WAIT_TIMEOUT_SECS:-1200}"' not in wf
 
 
 def test_editor_switch_replaces_any_reasoning_value() -> None:
