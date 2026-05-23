@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1. What exact repo area should this issue target?\nChoices:\nA. One specific workflow, script, or file \u2014 name the exact path/file (RECOMMENDED)\nB. One specific pipeline phase \u2014 name it: clarify, plan, implement, review_autofix, validate, or orchestrate\nC. Docs/README only \u2014 name the exact file/section\nD. Another specific area \u2014 describe it precisely\nQ2. What concrete improvement do you want in that area?\nChoices:\nA. Fix a specific bug/regression \u2014 include the current behavior, expected behavior, and any failing run/error text (RECOMMENDED)\nB. Remove a manual step or improve automation \u2014 include the exact manual step or recurring failure\nC. Reduce time/cost/noise \u2014 include what is too slow/expensive/noisy and where you observed it\nD. Improve wording/documentation \u2014 include the exact section and the desired change",
+  "fingerprint": "82ab5d3ebe7002a4115323fba5d7323bfc4fe3fad39aa533d3958e8fc0e0ea2d",
+  "lineage": {
+    "issue_number": 2908,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26328476400",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26328476400",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260523084953_bff9ed35db",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2908,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26328476400"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #2908 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-23T08:49:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
