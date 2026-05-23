@@ -2172,7 +2172,8 @@ _subissue_closing_pr_number()
 # Output:  one `<issue_num>\t<pr_num>\t<reason>` line per purged entry
 #          on stdout.
 # API calls: zero (uses local `git log`, `jq`, and `date -u -d` only).
-# Side effect: mutates the state file in place via `jq | mv` atomically.
+# Side effect: mutates the state file in place via one `jq | mv`
+#              pass after stale keys are collected.
 # Fail-open per entry: any git/jq/date error keeps the entry untouched.
 _purge_stale_fingerprint_entries_on_integration_branch()
 {
@@ -2181,11 +2182,13 @@ _purge_stale_fingerprint_entries_on_integration_branch()
 	[ -f "${state_file}" ] || return 0
 	[ -n "${gate_ref}" ] || return 0
 
-	local issue pr captured_at sfx log_out _sha _ct _subj merge_unix captured_unix any_ref reason fingerprint_rows
+	local issue pr captured_at sfx log_out _sha _ct _subj merge_unix captured_unix any_ref reason fingerprint_rows purge_keys purge_rows
 	if ! fingerprint_rows="$(jq -r '(.merged_issue_fingerprints // {}) | to_entries | .[] | "\(.key)\t\(.value.pr // "")\t\(.value.captured_at // "")"' "${state_file}" 2>/dev/null)"; then
 		echo "Fingerprint-state self-heal: could not parse '${state_file}'; keeping existing fingerprint state." >&2
 		return 0
 	fi
+	purge_keys=""
+	purge_rows=""
 	while IFS=$'\t' read -r issue pr captured_at; do
 		[ -n "${issue}" ] || continue
 		[[ "${pr}" =~ ^[0-9]+$ ]] || continue
@@ -2210,7 +2213,7 @@ _purge_stale_fingerprint_entries_on_integration_branch()
 		elif [ -n "${merge_unix}" ] && [ -n "${captured_at}" ]; then
 			captured_unix="$(date -u -d "${captured_at}" +%s 2>/dev/null || true)"
 			if [[ "${captured_unix}" =~ ^[0-9]+$ ]]; then
-				if [ "${merge_unix}" -gt "${captured_unix}" ]; then
+				if [[ "${merge_unix}" =~ ^[0-9]+$ ]] && [ "${merge_unix}" -gt "${captured_unix}" ]; then
 					reason="captured_before_pr_merged_into_integration_branch"
 				fi
 			else
@@ -2218,15 +2221,21 @@ _purge_stale_fingerprint_entries_on_integration_branch()
 			fi
 		fi
 		if [ -n "${reason}" ]; then
-			if jq --arg k "${issue}" 'del(.merged_issue_fingerprints[$k])' \
-				"${state_file}" > "${state_file}.tmp" \
-				&& mv "${state_file}.tmp" "${state_file}"; then
-				printf '%s\t%s\t%s\n' "${issue}" "${pr}" "${reason}"
-			else
-				rm -f "${state_file}.tmp" 2>/dev/null || true
-			fi
+			purge_keys="${purge_keys}${issue}"$'\n'
+			purge_rows="${purge_rows}${issue}"$'\t'"${pr}"$'\t'"${reason}"$'\n'
 		fi
 	done <<< "${fingerprint_rows}"
+
+	[ -n "${purge_keys}" ] || return 0
+	if jq --arg purge_keys "${purge_keys}" '
+		($purge_keys | split("\n") | map(select(length > 0))) as $drop
+		| reduce $drop[] as $k (. ; del(.merged_issue_fingerprints[$k]))
+	' "${state_file}" > "${state_file}.tmp" \
+		&& mv "${state_file}.tmp" "${state_file}"; then
+		printf '%s' "${purge_rows}"
+	else
+		rm -f "${state_file}.tmp" 2>/dev/null || true
+	fi
 
 	return 0
 }
@@ -14398,7 +14407,6 @@ Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}) 
               _gate_purged_count=$(( _gate_purged_count + 1 ))
             done < <(_purge_stale_fingerprint_entries_on_integration_branch "${STATE_FILE}" "${_gate_ref}")
             if [ "${_gate_purged_count}" -gt 0 ]; then
-              _gate_fp_count="$(jq -r '(.merged_issue_fingerprints // {}) | length' "${STATE_FILE}" 2>/dev/null || echo 0)"
               _gate_heal_plural="entries"
               [ "${_gate_purged_count}" -eq 1 ] && _gate_heal_plural="entry"
               _gate_heal_comment="## 🩹 Integration fingerprint state self-heal — ${_gate_purged_count} stale ${_gate_heal_plural} purged
