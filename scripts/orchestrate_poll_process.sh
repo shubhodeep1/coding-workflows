@@ -459,8 +459,12 @@ _check_final_merge_ineligibility_alert()
 		return 0
 	fi
 
-	local current_sha
-	current_sha="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.head.sha' 2>/dev/null || echo "")"
+	local pr_json current_sha _final_merge_ineligibility_base_ref
+	pr_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" 2>/dev/null || echo "")"
+	current_sha="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .head.sha?) then .head.sha else empty end' 2>/dev/null | tail -n1)"
+	# Reuse the same PR payload inside _summarize_final_merge_blockers so the
+	# alert path does not burn a second PR-metadata round-trip for .base.ref.
+	_final_merge_ineligibility_base_ref="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .base.ref?) then .base.ref else empty end' 2>/dev/null | tail -n1)"
 	if [ -z "${current_sha}" ] || [ "${current_sha}" = "null" ]; then
 		return 0
 	fi
@@ -525,7 +529,7 @@ _check_final_merge_ineligibility_alert()
 
 	local comment_body
 	comment_body="## ⏰ Final merge blocked for ${elapsed_hours}h+"$'\n\n'
-	comment_body+="The integration squash PR #${final_pr} (head \`${current_sha:0:7}\`) has been in the orchestrator's budget-ineligible deferral path for at least ${alert_hours}h. Each poll cycle logs \`[final-merge] budget-ineligible deferral/failure\` and the project never advances to \`status=complete\`."$'\n\n'
+	comment_body+="The integration squash PR #${final_pr} (head \`${current_sha:0:7}\`) has been in the orchestrator's budget-ineligible deferral path for at least ${elapsed_hours}h. Each poll cycle logs \`[final-merge] budget-ineligible deferral/failure\` and the project never advances to \`status=complete\`."$'\n\n'
 	if [ -n "${blocker_summary}" ]; then
 		comment_body+="**Blocking check-runs:** ${blocker_summary}"$'\n\n'
 	else
@@ -556,10 +560,10 @@ _summarize_final_merge_blockers()
 	local final_pr="$1"
 	local head_sha="$2"
 	local pr_json
-	local base_ref=""
+	local base_ref="${_final_merge_ineligibility_base_ref:-}"
 	local required_names_csv
 
-	if [[ "${final_pr}" =~ ^[0-9]+$ ]]; then
+	if [ -z "${base_ref}" ] && [[ "${final_pr}" =~ ^[0-9]+$ ]]; then
 		pr_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" 2>/dev/null || echo "")"
 		base_ref="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .base.ref?) then .base.ref else empty end' 2>/dev/null | tail -n1)"
 	fi

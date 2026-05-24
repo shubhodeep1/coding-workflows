@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import textwrap
 from pathlib import Path
@@ -678,6 +679,16 @@ def test_alert_fires_once_after_threshold_elapses(tmp_path):
 	assert "Final merge blocked for" in tracking_log
 	assert "review / gate (failure)" in tracking_log
 	assert "Copilot (failure)" not in tracking_log
+	match = re.search(r"for at least (\d+)h", tracking_log)
+	assert match is not None
+	assert int(match.group(1)) > 6
+
+	calls = _read_gh_calls(tmp_path)
+	paths = [
+		next((a for a in c["argv"] if a.startswith("repos/")), "")
+		for c in calls
+	]
+	assert sum("/pulls/2955" in p for p in paths) == 1, paths
 
 	# State updated with alert_sent_for_sha so the second invocation is a no-op.
 	written = json.loads((tmp_path / "state.json").read_text())
