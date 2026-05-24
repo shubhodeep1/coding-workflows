@@ -52,6 +52,13 @@ def test_payload_first_fallback_and_shared_helper_usage() -> None:
 	assert payload_pos < fetch_pos, "Fallback GH pull fetch must only run after payload text check"
 
 
+def test_issue_pr_status_bootstraps_revalidate_lifecycle_ai_memory_schemas() -> None:
+	text = _workflow_text()
+	assert "validation_history.v1.json" in text
+	assert "operator_bypass_audit.v1.json" in text
+	assert "revalidate_events.v1.json" in text
+
+
 def test_orchestrator_classification_is_exported_for_downstream_reuse() -> None:
 	update_step = _step_script("Update linked issue labels when PR closes")
 
@@ -334,6 +341,7 @@ def test_orchestrator_managed_children_are_relabeled_and_closed_on_pr_merge() ->
 
 if __name__ == "__main__":
 	test_payload_first_fallback_and_shared_helper_usage()
+	test_issue_pr_status_bootstraps_revalidate_lifecycle_ai_memory_schemas()
 	test_orchestrator_classification_is_exported_for_downstream_reuse()
 	test_fallback_regex_drops_bare_mentions_keeps_closing_keywords_and_urls()
 	test_merged_alert_reuses_exported_managed_classification_before_body_lookup_fallback()
