@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:1166-1170 | severity=medium | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: The numeric guard returns success after skipping comment posting when `body_bytes` is non-numeric, so the orchestrator silently drops the tracking comment.\n  WHY: Both reviewers note that `wc -c`/pipe failures cause the state comment to be lost while the function still returns 0, leaving poll-cycle state stale.\n- .github/workflows/review_autofix.yml:~1059 | severity=medium | confidence=4\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The schema-distribution loop in `review_autofix.yml` omits the three new AI-memory schema files introduced by this PR.\n  WHY: Without copying `validation_history.v1.json`, `operator_bypass_audit.v1.json`, and `revalidate_events.v1.json` into the review/autofix worktree, the corresponding schema validators can fail because the files are unavailable.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update review_autofix.yml to distribute the new AI-memory schemas (validation_history.v1.json, operator_bypass_audit.v1.json, revalidate_events.v1.json) so the resolver, editor, and any future conflict-resolution pass can validate the bypass-audit and revalidate-event payloads.\n  expected_change_site: .github/workflows/review_autofix.yml (the schema-distribution loop near the existing ai-memory/schemas copy)\n  confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, x-ai_grok-4_20]\n  EVIDENCE: orchestrate_poll.yml:319 already lists all three new schemas; review_autofix.yml\u2019s corresponding loop still ships only the pre-existing set; the review_autofix workflow does not source orchestrate_poll_process.sh and does not invoke these new memory helpers.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- Requirement: Update review_autofix.yml to distribute the new AI-memory schemas (validation_history.v1.json, operator_bypass_audit.v1.json, revalidate_events.v1.json) so the resolver, editor, and any future conflict-resolution pass can validate the bypass-audit and revalidate-event payloads.\n  Expected change site: .github/workflows/review_autofix.yml (the schema-distribution loop near the existing ai-memory/schemas copy)\n  Evidence of absence: The linked issue body is empty (\"No linked issues found.\") and the PR description is minimal (\"Squash merge of orchestrator project #2934. Refs #2934\"). The archived plan's Files & Modules section does not list .github/workflows/review_autofix.yml as a file requiring changes. The review_autofix workflow does not source orchestrate_poll_process.sh and does not invoke these new memory helpers.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_poll_process.sh:1166-1170 | confidence=4\n  PROBLEM: The numeric validation guard returns 0 when `body_bytes` is non-numeric, so the comment is skipped without being posted.\n  WHY: If `wc -c` fails or produces non-numeric output, the tracking comment will not be posted, leaving the orchestrator with stale visibility into state updates.\n- scripts/orchestrate_poll_process.sh:1166-1170 | confidence=3\n  PROBLEM: The `return 0` after detecting non-numeric `body_bytes` silently abandons the comment posting operation without attempting a fallback or retry.\n  WHY: Transient `wc -c` failures will cause permanent comment loss for that poll cycle, and the orchestrator's state machine may proceed based on stale data.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/review_autofix.yml:~1059 | confidence=4\n  PROBLEM: The three new AI-memory schema files introduced by this PR are missing from the schema-distribution loop in `review_autofix.yml`.\n  WHY: The resolver/editor worktree will not receive the new schema files, so the Python validation helpers can fail when they try to load them.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/orchestrate_poll_process.sh:1166-1170 | confidence=5\n  PROBLEM: The numeric guard treats a non-numeric `wc -c` result as fatal for the orchestrator state-comment path, so the comment is silently dropped.\n  WHY: The orchestrator state comment becomes stale, and the next poll cannot reconstruct the updated tracking pointers the workflow depends on.\n- Requirement: \u201cUpdate review_autofix.yml to distribute the new AI-memory schemas (validation_history.v1.json, operator_bypass_audit.v1.json, revalidate_events.v1.json) so the resolver, editor, and any future conflict-resolution pass can validate the bypass-audit and revalidate-event payloads.\u201d\n  Expected change site: .github/workflows/review_autofix.yml (the schema-distribution loop near the existing ai-memory/schemas copy)\n  Evidence of absence: orchestrate_poll.yml:319 already lists all three new schemas; review_autofix.yml\u2019s corresponding loop still ships only the pre-existing set. No diff hunk or last-run change touches review_autofix.yml.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "08b3f86b706349c2859ebf29fca27f37ab18be8f578869ccd05ad66b98931f86",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2955,
+    "run_id": "26360701535",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26360701535",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260524123131_1f19888f20",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2955,
+    "run_id": "26360701535"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-24T12:31:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
