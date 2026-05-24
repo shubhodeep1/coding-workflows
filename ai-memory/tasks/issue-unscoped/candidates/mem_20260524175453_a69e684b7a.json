@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:5509-5511 | severity=medium | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The `ALERT_MSG_LEVEL` env var is set from `vars.PR_PROCESSED_ALERT_LEVEL || 'SILENT'`, which can suppress the per-run `PR processed` Telegram ping when `vars` is unavailable.\n  WHY: The step-level guard does not distinguish an intentionally silent configuration from a missing GitHub Actions `vars` context, so expected success notifications may never be sent.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description states: \u201cRestore the matching `README.md` and `CHANGELOG.md` documentation for `PR_PROCESSED_ALERT_LEVEL` so the published workflow contract matches the restored behavior.\u201d\n  expected_change_site: `CHANGELOG.md` and `README.md` sections describing `PR_PROCESSED_ALERT_LEVEL`.\n  confidence=[4]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: `CHANGELOG.md` in LAST RUN DIFF now simply states \u201cflipped LLM verbosity to `low`\u2026\u201d and omits the dedicated entry introduced in earlier autofix runs, and the 146\u2013147 entries in `README.md` are present but incomplete vs the restored/`SILENT` contract.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- File: `.github/workflows/review_autofix.yml`\n  Line or code reference: 5509\u20135511\n  Problem: The `ALERT_MSG_LEVEL` env var is set to `vars.PR_PROCESSED_ALERT_LEVEL || 'SILENT'`, but if the workflow runs outside the GitHub Actions context where `vars` are not available, it will silently suppress the per-run `PR processed` Telegram ping without an intentional opt-in.\n  Why it fails at runtime: The current step-level guard is too coarse and does not distinguish between \"consumer configured a receptor to receive these pings\" vs \"GitHub token/context is missing and should fire a system DEBUG line.\" There is no fallback messaging when the variable is missing/unset at workflow level.\n  ISSUE_CONFIDENCE: 4\n- Requirement: The PR description states: \u201cRestore the matching `README.md` and `CHANGELOG.md` documentation for `PR_PROCESSED_ALERT_LEVEL` so the published workflow contract matches the restored behavior.\u201d\n  Expected change site: `CHANGELOG.md` and `README.md` sections describing `PR_PROCESSED_ALERT_LEVEL`.\n  Evidence of absence: `CHANGELOG.md` in LAST RUN DIFF now simply states \u201cflipped LLM verbosity to `low`\u2026\u201d and omits the dedicated entry introduced in earlier autofix runs, and the 146\u2013147 entries in `README.md` are present but incomplete vs the restored/`SILENT` contract.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "edc44142e68986e22180da47f3e340f224c06c08e2bbb8a9284c261d7fd62465",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2954,
+    "run_id": "26368362651",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26368362651",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260524175453_a69e684b7a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2954,
+    "run_id": "26368362651"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-24T17:54:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
