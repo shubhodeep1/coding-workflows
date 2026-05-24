@@ -6915,7 +6915,7 @@ infer_validation_raw_status() {
     return 0
   fi
 
-  if printf '%s' "${reason}" | grep -qiE 'raw_status["=:[:space:]]*harness_error|Runtime validation harness error|Validation failed due to harness error|Validation harness generation failed|Validation harness tracking violation|Runtime validation harness (generation|pre-flight|tracking)[[:space:]-]*(failed|violation)|harness pre-flight error'; then
+  if printf '%s' "${reason}" | grep -qiE 'raw_status["=:[:space:]]*harness_error|(^|[[:space:][:punct:]])harness_error($|[[:space:][:punct:]])|Runtime validation harness error|Validation failed due to harness error|Validation harness generation failed|Validation harness tracking violation|Runtime validation harness (generation|pre-flight|tracking)[[:space:]-]*(failed|violation)|harness pre-flight error'; then
     echo "harness_error"
     return 0
   fi
