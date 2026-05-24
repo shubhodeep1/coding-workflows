@@ -324,6 +324,16 @@ def _validation_history_payload(*, integration_sha: str, entries: list[dict]) ->
 	}
 
 
+def _operator_bypass_audit_payload(*, tracking_issue_number: int, integration_sha: str, entries: list[dict]) -> dict:
+	return {
+		"schema_version": "v1",
+		"repository": "owner/repo",
+		"tracking_issue_number": tracking_issue_number,
+		"integration_sha": integration_sha,
+		"entries": entries,
+	}
+
+
 def _state_comment(state: dict) -> str:
 	# V1 framing is intentionally retained for test SEED data.  The
 	# production reader handles the V2 → V1 fallback path, so seeding
@@ -506,6 +516,7 @@ def _run_poller(
 	issue_labels: dict[int, list[str]] | None = None,
 	issue_comments: dict[int, list[str | dict]] | None = None,
 	issue_bodies: dict[int, str] | None = None,
+	issue_events: dict[int, list[dict]] | None = None,
 	gql_mode: str = "full",
 	gql_labels: dict[int, list[str]] | None = None,
 	codex_json: dict | None = None,
@@ -562,6 +573,11 @@ def _run_poller(
 	mock_validation_history_get_json: dict | None = None,
 	mock_validation_history_append_exit_code: int = 0,
 	mock_validation_history_append_json: dict | None = None,
+	mock_operator_bypass_audit_payload: dict | None = None,
+	mock_operator_bypass_audit_get_exit_code: int = 0,
+	mock_operator_bypass_audit_get_json: dict | None = None,
+	mock_operator_bypass_audit_append_exit_code: int = 0,
+	mock_operator_bypass_audit_append_json: dict | None = None,
 	mock_revalidate_events_payload: dict | None = None,
 	mock_pr_create_race_pr: dict | None = None,
 ) -> dict:
@@ -572,6 +588,7 @@ def _run_poller(
 		issue_labels = {10: ["ai:merged"]}
 	issue_comments = issue_comments or {}
 	issue_bodies = issue_bodies or {}
+	issue_events = issue_events or {}
 	gql_labels = gql_labels or {}
 	prs = prs or []
 	pr_api_sequence = pr_api_sequence or {}
@@ -601,6 +618,11 @@ def _run_poller(
 	mock_validation_history_get_json = dict(mock_validation_history_get_json or {})
 	mock_validation_history_append_exit_code = int(mock_validation_history_append_exit_code or 0)
 	mock_validation_history_append_json = dict(mock_validation_history_append_json or {})
+	mock_operator_bypass_audit_payload = dict(mock_operator_bypass_audit_payload or {})
+	mock_operator_bypass_audit_get_exit_code = int(mock_operator_bypass_audit_get_exit_code or 0)
+	mock_operator_bypass_audit_get_json = dict(mock_operator_bypass_audit_get_json or {})
+	mock_operator_bypass_audit_append_exit_code = int(mock_operator_bypass_audit_append_exit_code or 0)
+	mock_operator_bypass_audit_append_json = dict(mock_operator_bypass_audit_append_json or {})
 	mock_branch_rebuild_audit_get_json = mock_branch_rebuild_audit_get_json or {}
 	mock_branch_rebuild_audit_put_json = mock_branch_rebuild_audit_put_json or {}
 	branch_protected_branches = branch_protected_branches or {}
@@ -677,6 +699,7 @@ def _run_poller(
 
 		store = {
 			"issues": issues,
+			"issue_events": {str(k): list(v) for k, v in issue_events.items()},
 			"next_comment_id": next_comment_id,
 			"api_calls": [],
 			"label_create_calls": [],
@@ -735,6 +758,11 @@ def _run_poller(
 			"mock_validation_history_get_json": mock_validation_history_get_json,
 			"mock_validation_history_append_exit_code": mock_validation_history_append_exit_code,
 			"mock_validation_history_append_json": mock_validation_history_append_json,
+			"mock_operator_bypass_audit_payload": mock_operator_bypass_audit_payload,
+			"mock_operator_bypass_audit_get_exit_code": mock_operator_bypass_audit_get_exit_code,
+			"mock_operator_bypass_audit_get_json": mock_operator_bypass_audit_get_json,
+			"mock_operator_bypass_audit_append_exit_code": mock_operator_bypass_audit_append_exit_code,
+			"mock_operator_bypass_audit_append_json": mock_operator_bypass_audit_append_json,
 			"mock_revalidate_events_payload": mock_revalidate_events_payload,
 			"mock_pr_create_race_pr": mock_pr_create_race_pr,
 		}
@@ -1449,6 +1477,15 @@ if args[0] == 'api':
 				break
 		save()
 		print(json.dumps({'id': comment_id, 'updated': updated}))
+		sys.exit(0)
+
+	m = re.search(r'/issues/(\d+)/events(?:\?.*)?$', path)
+	if m and method == 'GET':
+		num = m.group(1)
+		calls = store.setdefault('issue_events_get_calls', {})
+		calls[num] = int(calls.get(num, 0)) + 1
+		save()
+		print(json.dumps(store.get('issue_events', {}).get(num, [])))
 		sys.exit(0)
 
 	m = re.search(r'/issues/(\d+)/labels$', path)
@@ -2205,6 +2242,100 @@ if len(args) >= 3 and _script_matches(args[0], "scripts/ai_memory.py") and args[
 		print(json.dumps(response))
 		sys.exit(0)
 
+if len(args) >= 3 and _script_matches(args[0], "scripts/ai_memory.py") and args[1] == "operator-bypass-audit":
+	store = _load_store()
+	cmd = args[2]
+	repo = ""
+	tracking_issue = 0
+	integration_sha = ""
+	entry_file = ""
+	i = 3
+	while i < len(args):
+		if args[i] == "--repo" and i + 1 < len(args):
+			repo = args[i + 1]
+			i += 2
+			continue
+		if args[i] == "--tracking-issue" and i + 1 < len(args):
+			tracking_issue = int(args[i + 1])
+			i += 2
+			continue
+		if args[i] == "--integration-sha" and i + 1 < len(args):
+			integration_sha = args[i + 1].lower()
+			i += 2
+			continue
+		if args[i] == "--entry-file" and i + 1 < len(args):
+			entry_file = args[i + 1]
+			i += 2
+			continue
+		i += 1
+	normalized_repo = repo.lower()
+	payload = store.get("mock_operator_bypass_audit_payload")
+	hit = (
+		isinstance(payload, dict)
+		and payload.get("repository") == normalized_repo
+		and int(payload.get("tracking_issue_number", 0) or 0) == tracking_issue
+		and str(payload.get("integration_sha", "")).lower() == integration_sha
+	)
+	if cmd == "get":
+		store.setdefault("mock_operator_bypass_audit_get_calls", 0)
+		store["mock_operator_bypass_audit_get_calls"] = int(store["mock_operator_bypass_audit_get_calls"]) + 1
+		_save_store(store)
+		exit_code = int(store.get("mock_operator_bypass_audit_get_exit_code", 0) or 0)
+		if exit_code != 0:
+			sys.exit(exit_code)
+		response = {
+			"ok": True,
+			"enabled": True,
+			"hit": hit,
+			"audit": payload if hit else None,
+		}
+		override = store.get("mock_operator_bypass_audit_get_json")
+		if isinstance(override, dict) and override:
+			response.update(override)
+		print(json.dumps(response))
+		sys.exit(0)
+	if cmd == "append":
+		store.setdefault("mock_operator_bypass_audit_append_calls", 0)
+		store["mock_operator_bypass_audit_append_calls"] = int(store["mock_operator_bypass_audit_append_calls"]) + 1
+		_save_store(store)
+		exit_code = int(store.get("mock_operator_bypass_audit_append_exit_code", 0) or 0)
+		if exit_code != 0:
+			sys.exit(exit_code)
+		entry = {}
+		if entry_file:
+			try:
+				entry = json.loads(Path(entry_file).read_text(encoding="utf-8"))
+			except Exception:
+				entry = {}
+		if not hit:
+			payload = {
+				"schema_version": "v1",
+				"repository": normalized_repo,
+				"tracking_issue_number": tracking_issue,
+				"integration_sha": integration_sha,
+				"entries": [],
+			}
+		payload = dict(payload)
+		payload["entries"] = [*(payload.get("entries") or []), entry]
+		response = {
+			"ok": True,
+			"enabled": True,
+			"stored": True,
+			"audit": payload,
+		}
+		override = store.get("mock_operator_bypass_audit_append_json")
+		if isinstance(override, dict) and override:
+			response.update(override)
+		if response.get("stored", False):
+			stored_payload = response.get("audit")
+			if isinstance(stored_payload, dict):
+				store["mock_operator_bypass_audit_payload"] = stored_payload
+			else:
+				store["mock_operator_bypass_audit_payload"] = payload
+		_save_store(store)
+		print(json.dumps(response))
+		sys.exit(0)
+
 if len(args) >= 3 and _script_matches(args[0], "scripts/ai_memory.py") and args[1] == "revalidate-events":
 	store = _load_store()
 	cmd = args[2]
@@ -2442,6 +2573,8 @@ sys.exit(proc.returncode)
 		result["release_dispatches"] = result.get("release_dispatches", [])
 		result["pr_ready_calls"] = result.get("pr_ready_calls", [])
 		result["pr_body_update_calls"] = result.get("pr_body_update_calls", [])
+		result["mock_operator_bypass_audit_get_calls"] = int(result.get("mock_operator_bypass_audit_get_calls", 0))
+		result["mock_operator_bypass_audit_append_calls"] = int(result.get("mock_operator_bypass_audit_append_calls", 0))
 		result["stdout"] = proc.stdout
 		result["stderr"] = proc.stderr
 		judge_prompt_path = runtime_dir / "judge_prompt.txt"
@@ -3707,6 +3840,146 @@ def test_final_merge_promotes_eager_draft_pr_when_tracking_issue_ready_to_merge(
 	assert "EAGER_DRAFT_PR_PROMOTED pr=361 gate=tracking-ready-to-merge" in (result["stdout"] + result["stderr"])
 
 
+def test_force_merge_bypass_promotes_eager_pr_once_per_sha_and_records_audit():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 460,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"headRefFromApi": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	issue_events = {
+		192: [
+			{
+				"id": 991,
+				"event": "labeled",
+				"created_at": "2026-05-23T16:15:00Z",
+				"label": {"name": "ai:force-merge"},
+				"actor": {"login": "octocat"},
+			},
+		],
+	}
+	first = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:force-merge"],
+		issue_labels={10: ["ai:implementing"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		branch_ref_shas={"orchestrator/project-192": "abcdef1234"},
+		issue_events=issue_events,
+	)
+	assert first["latest_state"]["final_merge_pr"] == 460
+	assert first["latest_state"]["force_merge_last_bypassed_integration_sha"] == "abcdef1234"
+	assert first["pr_ready_calls"] == [460]
+	assert first["prs"][0].get("draft") is False
+	assert first["mock_operator_bypass_audit_append_calls"] == 1
+	stored_audit = first["mock_operator_bypass_audit_payload"]
+	assert stored_audit["tracking_issue_number"] == 192
+	assert stored_audit["integration_sha"] == "abcdef1234"
+	assert len(stored_audit["entries"]) == 1
+	assert stored_audit["entries"][0]["actor"] == "octocat"
+	assert stored_audit["entries"][0]["bypass_kind"] == "force-merge"
+	assert stored_audit["entries"][0]["source_comment_id"] == first["latest_state"]["force_merge_last_bypass_tracking_comment_id"]
+	assert any("/issues/192/events?per_page=100" in path for path in first["api_calls"])
+	assert "FORCE_MERGE_BYPASS tracking_issue=192 pr=460 integration_branch=orchestrator/project-192 integration_sha=abcdef1234 actor=octocat ahead_by=5" in (first["stdout"] + first["stderr"])
+	first_tracking_comments = [
+		dict(comment)
+		for comment in first["issues"]["192"]["comments"]
+		if not _is_state_comment(str((comment or {}).get("body", "")))
+	]
+	first_tracking_bodies = [str(comment.get("body", "")) for comment in first_tracking_comments]
+	force_merge_tracking_comments = [
+		body for body in first_tracking_bodies if body.startswith("## ⚠️ Operator bypass applied: ai:force-merge")
+	]
+	assert len(force_merge_tracking_comments) == 1
+	assert "@octocat" in force_merge_tracking_comments[0]
+	assert "abcdef1234" in force_merge_tracking_comments[0]
+	first_pr_comments = [dict(comment) for comment in first["issues"]["460"]["comments"]]
+	first_pr_bodies = [str(comment.get("body", "")) for comment in first_pr_comments]
+	force_merge_pr_comments = [
+		body for body in first_pr_bodies if body.startswith("## ⚠️ Operator bypass recorded")
+	]
+	assert len(force_merge_pr_comments) == 1
+	assert "Tracking issue audit:" in force_merge_pr_comments[0]
+
+	second = _run_poller(
+		state=first["latest_state"],
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=first["tracking_labels"],
+		tracking_comments=first_tracking_comments,
+		issue_labels={10: ["ai:implementing"], 460: []},
+		issue_comments={460: first_pr_comments},
+		prs=first["prs"],
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		branch_ref_shas={"orchestrator/project-192": "abcdef1234"},
+		issue_events=issue_events,
+		mock_operator_bypass_audit_payload=stored_audit,
+	)
+	assert second["pr_ready_calls"] == []
+	assert second["mock_operator_bypass_audit_append_calls"] == 0
+	second_tracking_bodies = [
+		str(comment.get("body", ""))
+		for comment in second["issues"]["192"]["comments"]
+		if not _is_state_comment(str((comment or {}).get("body", "")))
+	]
+	assert len([body for body in second_tracking_bodies if body.startswith("## ⚠️ Operator bypass applied: ai:force-merge")]) == 1
+	second_pr_bodies = [str(comment.get("body", "")) for comment in second["issues"]["460"]["comments"]]
+	assert len([body for body in second_pr_bodies if body.startswith("## ⚠️ Operator bypass recorded")]) == 1
+
+	third_tracking_comments = [
+		dict(comment)
+		for comment in second["issues"]["192"]["comments"]
+		if not _is_state_comment(str((comment or {}).get("body", "")))
+	]
+	third_pr_comments = [dict(comment) for comment in second["issues"]["460"]["comments"]]
+	third = _run_poller(
+		state=second["latest_state"],
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=second["tracking_labels"],
+		tracking_comments=third_tracking_comments,
+		issue_labels={10: ["ai:implementing"], 460: []},
+		issue_comments={460: third_pr_comments},
+		prs=second["prs"],
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=6,
+		branch_ref_shas={"orchestrator/project-192": "fedcba9876"},
+		issue_events=issue_events,
+	)
+	assert third["pr_ready_calls"] == []
+	assert third["latest_state"]["force_merge_last_bypassed_integration_sha"] == "fedcba9876"
+	assert third["mock_operator_bypass_audit_append_calls"] == 1
+	assert third["mock_operator_bypass_audit_payload"]["integration_sha"] == "fedcba9876"
+	third_tracking_bodies = [
+		str(comment.get("body", ""))
+		for comment in third["issues"]["192"]["comments"]
+		if not _is_state_comment(str((comment or {}).get("body", "")))
+	]
+	third_force_merge_tracking_comments = [
+		body for body in third_tracking_bodies if body.startswith("## ⚠️ Operator bypass applied: ai:force-merge")
+	]
+	assert len(third_force_merge_tracking_comments) == 2
+	assert any("fedcba9876" in body for body in third_force_merge_tracking_comments)
+	third_pr_bodies = [str(comment.get("body", "")) for comment in third["issues"]["460"]["comments"]]
+	third_force_merge_pr_comments = [
+		body for body in third_pr_bodies if body.startswith("## ⚠️ Operator bypass recorded")
+	]
+	assert len(third_force_merge_pr_comments) == 2
+	assert any("fedcba9876" in body for body in third_force_merge_pr_comments)
+
+
 def test_final_merge_keeps_legacy_open_non_draft_pr_behind_readiness_gate():
 	state = _base_state(status="merge_conflict")
 	state["integration_branch"] = "orchestrator/project-192"
@@ -4267,6 +4540,83 @@ def test_integration_stale_alert_window_clears_when_branch_catches_up():
 		compare_ahead_by=5,
 	)
 	assert "INTEGRATION_STALE_ALERT_SENT tracking_issue=192 integration_branch=orchestrator/project-192 default_branch=main ahead_by=5" in (second["stdout"] + second["stderr"])
+
+
+def test_integration_backpressure_blocks_merges_at_threshold_and_clears_below_it():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_pr"] = 470
+	prs = [
+		{
+			"number": 470,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"headRefFromApi": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+		{
+			"number": 910,
+			"state": "open",
+			"baseRefName": "orchestrator/project-192",
+			"headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10",
+			"headSha": "sha910",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	first = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:ready-to-merge"]},
+		issue_linked_prs={10: 910},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=10,
+	)
+	assert first["latest_state"]["final_merge_pr"] == 470
+	assert "ai:integration-backpressure" in first["tracking_labels"]
+	assert first.get("merged_prs", []) == []
+	assert "BACKPRESSURE_TRIGGERED tracking_issue=192 integration_branch=orchestrator/project-192 default_branch=main ahead_by=10 threshold=10 final_pr=470" in (first["stdout"] + first["stderr"])
+	first_tracking_comments = [
+		dict(comment)
+		for comment in first["issues"]["192"]["comments"]
+		if not _is_state_comment(str((comment or {}).get("body", "")))
+	]
+	first_completion_comment = next(
+		str(comment.get("body", ""))
+		for comment in first_tracking_comments
+		if "<!-- orchestrator:completion-status -->" in str(comment.get("body", ""))
+	)
+	assert "ai:integration-backpressure" in first_completion_comment
+	assert "open integration PR #470" in first_completion_comment
+	assert "pull/470" in first_completion_comment
+
+	second = _run_poller(
+		state=first["latest_state"],
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_labels=first["tracking_labels"],
+		tracking_comments=first_tracking_comments,
+		issue_labels={10: ["ai:ready-to-merge"]},
+		issue_linked_prs={10: 910},
+		prs=first["prs"],
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=9,
+	)
+	assert "ai:integration-backpressure" not in second["tracking_labels"]
+	assert 910 in second.get("merged_prs", [])
+	assert "BACKPRESSURE_CLEARED tracking_issue=192 integration_branch=orchestrator/project-192 default_branch=main ahead_by=9 threshold=10 final_pr=470" in (second["stdout"] + second["stderr"])
+	second_completion_comment = next(
+		str(comment.get("body", ""))
+		for comment in second["issues"]["192"]["comments"]
+		if "<!-- orchestrator:completion-status -->" in str(comment.get("body", ""))
+	)
+	assert "ai:integration-backpressure" not in second_completion_comment
 
 
 def test_final_merge_treats_closed_merged_pr_as_success():
