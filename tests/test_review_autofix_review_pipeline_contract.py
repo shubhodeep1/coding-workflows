@@ -325,6 +325,13 @@ def test_reject_verifier_bootstrap_and_stage_order_contract() -> None:
 	assert 'CONSOLIDATOR_REJECT_SCHEMA_ENABLED="${CONSOLIDATOR_REJECT_SCHEMA_ENABLED:-false}"' in apply_fixes
 
 
+def test_support_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets() -> None:
+	workflow = _workflow_text()
+	assert "validation_history.v1.json" in workflow
+	assert "operator_bypass_audit.v1.json" in workflow
+	assert "revalidate_events.v1.json" in workflow
+
+
 def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
 	block = _step_block("Append review pipeline iteration summary")
 	assert "### Review Pipeline — Iteration ${iteration_label}" in block
@@ -688,6 +695,7 @@ def test_reviewer_iteration_scope_prepare_path_reports_missing_targeted_context_
 def main() -> int:
 	test_review_pipeline_knobs_are_wired_into_codex_agent_env()
 	test_reject_verifier_bootstrap_and_stage_order_contract()
+	test_support_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
 	test_review_pipeline_summary_step_is_local_only_and_grep_friendly()
 	test_auto_merge_guard_honours_configured_orchestrator_branch_pattern()
 	test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_codex_agent_path()
