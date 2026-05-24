@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_apply_fixes.sh:1409-1414 | severity=medium | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `_tmp_output_first_nonempty_line` can become stale because it is captured once per `while` iteration and reused later in the validation path.\n  WHY: Because the capture happens at the start of the loop but can be used throughout the structured validation, a refusal written after the first check would be missed.\n- scripts/review_apply_fixes.sh:1409-1410 | severity=medium | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: If `_tmp_output_first_nonempty_line` captures an empty or blank string, the refusal check becomes a no-op and may allow a safety filter refusal to pass through.\n  WHY: Check 1b and the retry-loop refusal short-circuit both depend on this variable, so either path being bypassed would silently break the refusal chain.\n- scripts/review_apply_fixes.sh:1409, 1685 | severity=low | confidence=1\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The claimed stale-capture issue in `_tmp_output_first_nonempty_line` is not real.\n  WHY: `tmp_output` is a per-attempt temp file written at the start of each loop iteration and removed before the next iteration, so the file does not grow between the two uses within the same iteration.\n- scripts/review_apply_fixes.sh:1409, 1685 | severity=low | confidence=1\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The claim that an empty `_tmp_output_first_nonempty_line` turns the refusal check into a no-op is not a bug.\n  WHY: If the capture is empty, `grep -qiE` returns no match, so the guard does not trigger the refusal short-circuit and safely falls through to the generic fallback path.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Resolve merge conflicts in the forward-merge of stable into main (conflicting files explicitly listed in PR description including .github/workflows/review_autofix.yml, scripts/review_apply_fixes.sh, tests/test_review_autofix_editor_noop_cascade_contract.py and others).\n  expected_change_site: The merge commit (or follow-up fixes) must produce a clean tree with all listed conflicts resolved.\n  confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The LAST RUN DIFF (and current HEAD) only touches review_rb_judge.sh cleanup (unrelated to the conflicted files); no hunks resolve any of the listed conflict paths. The forward-merge PR remains in conflicted state per the triggering workflow.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/review_apply_fixes.sh:1409-1414 | confidence=4\n  PROBLEM: `_tmp_output_first_nonempty_line` can become stale because it is captured once per `while` iteration and reused later in the validation path.\n  WHY: Because the capture happens at the start of the loop but can be used throughout the structured validation, a refusal written after the first check would be missed.\n- scripts/review_apply_fixes.sh:1409-1410 | confidence=3\n  PROBLEM: If `_tmp_output_first_nonempty_line` captures an empty or blank string, the refusal check becomes a no-op and may allow a safety filter refusal to pass through.\n  WHY: Check 1b and the retry-loop refusal short-circuit both depend on this variable, so either path being bypassed would silently break the refusal chain.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/review_apply_fixes.sh:1409, 1685 | confidence=1\n  PROBLEM: The claimed stale-capture issue in `_tmp_output_first_nonempty_line` is not real.\n  WHY: `tmp_output` is a per-attempt temp file written at the start of each loop iteration and removed before the next iteration, so the file does not grow between the two uses within the same iteration.\n- scripts/review_apply_fixes.sh:1409, 1685 | confidence=1\n  PROBLEM: The claim that an empty `_tmp_output_first_nonempty_line` turns the refusal check into a no-op is not a bug.\n  WHY: If `grep -m1 -vE '^[[:space:]]*$'` finds no non-empty line, `_tmp_output_first_nonempty_line` is empty string; `grep -qiE` against an empty pipe returns exit code 1, so the guard safely falls through to the generic fallback path.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: Resolve merge conflicts in the forward-merge of stable into main (conflicting files explicitly listed in PR description including .github/workflows/review_autofix.yml, scripts/review_apply_fixes.sh, tests/test_review_autofix_editor_noop_cascade_contract.py and others).\n  Expected change site: The merge commit (or follow-up fixes) must produce a clean tree with all listed conflicts resolved.\n  Evidence of absence: The LAST RUN DIFF (and current HEAD) only touches review_rb_judge.sh cleanup (unrelated to the conflicted files); no hunks resolve any of the listed conflict paths. The forward-merge PR remains in conflicted state per the triggering workflow.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "e3d6fd9419155a01af50678adfdfd5430ff6fcc474c05c8eb46ca3a463d01be7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2954,
+    "run_id": "26359410837",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26359410837",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260524111115_61237c132a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2954,
+    "run_id": "26359410837"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-24T11:11:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
