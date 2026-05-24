@@ -378,6 +378,22 @@ def test_review_apply_fixes_centralizes_refusal_regex() -> None:
 	)
 
 
+def test_review_apply_fixes_scopes_refusal_regex_to_first_nonempty_line() -> None:
+	"""Refusal detection must inspect only the first non-empty output
+	line, not the entire editor summary. Otherwise a structured success
+	response that merely quotes a refusal example deeper in the body would
+	be misclassified as a safety refusal."""
+	text = _review_apply_fixes_text()
+	assert 'grep -m1 -vE' in text and '_tmp_output_first_nonempty_line' in text, (
+		"review_apply_fixes.sh must capture the first non-empty output line "
+		"before applying the refusal regex."
+	)
+	assert text.count('_tmp_output_first_nonempty_line') >= 2, (
+		"Both refusal checks (structured-output validation and retry-loop "
+		"short-circuit) must use the first non-empty line capture."
+	)
+
+
 def test_refusal_contract_literals_stay_in_lockstep_across_files() -> None:
 	"""The refusal sentinel/notice/warning strings are duplicated across
 	the shell script, workflows, and runbook by design; enforce lockstep
@@ -691,6 +707,7 @@ if __name__ == "__main__":
 	test_review_apply_fixes_breaks_retry_loop_on_safety_refusal()
 	test_review_apply_fixes_fallback_distinguishes_refusal()
 	test_review_apply_fixes_centralizes_refusal_regex()
+	test_review_apply_fixes_scopes_refusal_regex_to_first_nonempty_line()
 	test_refusal_contract_literals_stay_in_lockstep_across_files()
 	test_editor_prompt_documents_convergence_outcome()
 	test_editor_prompt_requires_changes_match_this_run_writes()

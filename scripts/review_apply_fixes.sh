@@ -1397,7 +1397,8 @@ while [ "${attempt}" -le 3 ]; do
 
   if [ "${cmd_rc}" -eq 0 ]; then
     cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
-    if [ -s "${tmp_output}" ] && grep -q '^Changes made:' "${tmp_output}"                 && grep -q '^Change status:' "${tmp_output}"                 && grep -q '^Already satisfied (suggested but already present):' "${tmp_output}"                 && grep -q '^Ignored suggestions (with short reason):' "${tmp_output}"                 && grep -q '^Reviewer files processed:' "${tmp_output}"                 && grep -q '^Review file issue audit:' "${tmp_output}"                 && ! grep -qiE "I can.?t execute this|need to read|allow read/write shell commands|cannot proceed under the current constraints|${_REFUSAL_REGEX}" "${tmp_output}"; then
+    _tmp_output_first_nonempty_line="$(grep -m1 -vE '^[[:space:]]*$' "${tmp_output}" 2>/dev/null || true)"
+    if [ -s "${tmp_output}" ] && grep -q '^Changes made:' "${tmp_output}"                 && grep -q '^Change status:' "${tmp_output}"                 && grep -q '^Already satisfied (suggested but already present):' "${tmp_output}"                 && grep -q '^Ignored suggestions (with short reason):' "${tmp_output}"                 && grep -q '^Reviewer files processed:' "${tmp_output}"                 && grep -q '^Review file issue audit:' "${tmp_output}"                 && ! printf '%s\n' "${_tmp_output_first_nonempty_line}" | grep -qiE "I can.?t execute this|need to read|allow read/write shell commands|cannot proceed under the current constraints|${_REFUSAL_REGEX}"; then
       reviewer_validation_ok=true
       changes_lost_detected=false
       while IFS= read -r manifest_path; do
@@ -1671,14 +1672,18 @@ while [ "${attempt}" -le 3 ]; do
   fi
   cp "${tmp_output}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.txt" || true
   cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
+  _tmp_output_first_nonempty_line="$(grep -m1 -vE '^[[:space:]]*$' "${tmp_output}" 2>/dev/null || true)"
   # ── Safety-policy refusal short-circuit ──
   # An OpenAI-style refusal as the final-channel output (despite the
   # cache-busting nonce above sometimes failing to defeat very sticky
   # provider-side filter caches) makes further retries on this run
   # almost certain to repeat the refusal. Touch a sentinel that the
   # fallback writer (below) reads to label the failure as a refusal
-  # in the editor summary, then break out of the retry loop.
-  if grep -qiE "${_REFUSAL_REGEX}" "${tmp_output}" 2>/dev/null; then
+  # in the editor summary, then break out of the retry loop. Scope the
+  # grep to the first non-empty line so structured success output that
+  # merely quotes a refusal example deeper in the body is not
+  # misclassified as a refusal.
+  if printf '%s\n' "${_tmp_output_first_nonempty_line}" | grep -qiE "${_REFUSAL_REGEX}"; then
     echo "Editor model returned a safety-policy refusal on attempt ${attempt}; breaking out of retry loop (further attempts likely to repeat the refusal)."
     touch "${PREVIOUS_REVIEWS_DIR}/editor_refused.flag"
     rm -f "${tmp_output}" "${tmp_err}" "${attempt_prompt_file}"

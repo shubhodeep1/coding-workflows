@@ -7446,10 +7446,16 @@ PY
       # API hygiene: when GraphQL already gave us PR number + head ref,
       # seed a minimal JSON payload so retrigger_review can skip a
       # redundant gh api pulls/{n} fetch on the non-retry fast path.
+      # Include head.sha too when GraphQL already provided it; otherwise
+      # a later pulls/{n} re-fetch failure would strip the blank-
+      # head_branch SHA fallback from the in-flight review guard and let
+      # the empty-commit push race a workflow_dispatch review run.
       local _std_cached_head_ref=""
+      local _std_cached_head_sha=""
       _std_cached_head_ref="$(printf '%s' "${_std_conflict_linked}" | jq -r '(.head_ref // .head.ref // .headRefName // empty)' 2>/dev/null || echo "")"
+      _std_cached_head_sha="$(printf '%s' "${_std_conflict_linked}" | jq -r '(.head_sha // .head.sha // .headRefOid // empty)' 2>/dev/null || echo "")"
       if [[ "${_STD_ITER_PR_NUM_CACHED}" =~ ^[0-9]+$ ]] && [ -n "${_std_cached_head_ref}" ] && [ "${_std_cached_head_ref}" != "null" ]; then
-        _STD_ITER_PR_JSON_CACHED="$(jq -cn --argjson n "${_STD_ITER_PR_NUM_CACHED}" --arg hr "${_std_cached_head_ref}" '{number: $n, head: {ref: $hr}}' 2>/dev/null || echo "")"
+        _STD_ITER_PR_JSON_CACHED="$(jq -cn --argjson n "${_STD_ITER_PR_NUM_CACHED}" --arg hr "${_std_cached_head_ref}" --arg hs "${_std_cached_head_sha}" '{number: $n, head: ({ref: $hr} + (if $hs != "" then {sha: $hs} else {} end))}' 2>/dev/null || echo "")"
       fi
 
       # Widen the REST-fallback trigger: GitHub computes mergeability

@@ -529,6 +529,7 @@ def _run_poller(
 	mock_orch_state_v2_pack_mode: str | None = None,
 	mock_git_push_success: bool = False,
 	mock_git_checkout_fail: bool = False,
+	fail_pull_get_numbers: list[int] | None = None,
 	enable_stall_judge: str = "true",
 	stall_judge_trigger_count: str = "2",
 	enable_stall_human_terminalization: str = "false",
@@ -569,6 +570,7 @@ def _run_poller(
 	mock_actions_runs_cache_put_json = mock_actions_runs_cache_put_json or {}
 	actions_runs_workflow_runs = actions_runs_workflow_runs or []
 	actions_runs_status_sequence = actions_runs_status_sequence or []
+	fail_pull_get_numbers = fail_pull_get_numbers or []
 	codex_json = codex_json or {
 		"status": "complete",
 		"justification": "done",
@@ -662,6 +664,7 @@ def _run_poller(
 			"actions_runs_status": int(actions_runs_status),
 			"actions_runs_status_sequence": list(actions_runs_status_sequence),
 			"mock_gh_issue_list_label_filter": bool(mock_gh_issue_list_label_filter),
+			"fail_pull_get_numbers": [int(x) for x in fail_pull_get_numbers],
 			"compare_ahead_by": int(compare_ahead_by),
 			"compare_ahead_by_force_error": bool(compare_ahead_by_force_error),
 		}
@@ -1387,6 +1390,9 @@ if args[0] == 'api':
 				if item.get('number') == pr_num:
 					pr = item
 					break
+		if pr_num in {int(x) for x in store.get('fail_pull_get_numbers', [])}:
+			print('simulated pulls GET failure', file=sys.stderr)
+			sys.exit(1)
 		if pr is None:
 			print('{}')
 			sys.exit(0)
@@ -3411,6 +3417,57 @@ def test_standalone_retrigger_review_skips_empty_commit_when_review_run_has_blan
 	assert result.get("git_push_calls", []) == [], (
 		f"expected no standalone empty-commit push when a blank-head_branch run matches "
 		f"the PR head_sha; got push calls {result.get('git_push_calls', [])}"
+	)
+
+
+def test_standalone_retrigger_review_uses_graphql_head_sha_when_pulls_refetch_fails():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:done",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	# No explicit PR payload is provided below: candidate-details GraphQL
+	# synthesizes the latest linked PR from issue_linked_prs and exposes
+	# headRefOid=mocksha416, but the retrigger_review path's pulls/{n}
+	# re-fetch is forced to fail. The standalone guard must still retain
+	# the GraphQL-sourced head SHA so a blank-head-branch workflow_dispatch
+	# review run is recognized as in-flight and the empty-commit push is
+	# skipped.
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:done"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: 416},
+		mock_gh_issue_list_label_filter=True,
+		existing_branches=["main", "ai/issue-416"],
+		fail_pull_get_numbers=[416],
+		actions_runs_workflow_runs=[
+			{
+				"id": 26088864018,
+				"name": "Review Autofix",
+				"path": ".github/workflows/review_autofix.yml",
+				"status": "queued",
+				"head_branch": "",
+				"head_sha": "mocksha416",
+				"created_at": "2999-01-01T00:00:00Z",
+			},
+		],
+		mock_git_push_success=True,
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 0
+	assert result.get("git_push_calls", []) == [], (
+		f"expected GraphQL head_sha to block the standalone empty-commit push even "
+		f"when pulls/{{n}} re-fetch fails; got push calls {result.get('git_push_calls', [])}"
 	)
 
 
