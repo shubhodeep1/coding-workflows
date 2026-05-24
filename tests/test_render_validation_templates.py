@@ -41,6 +41,14 @@ def _manifest_payload(manifest_type: str) -> dict:
 			"python3 tests/test_render_validation_templates.py",
 			"python3 tests/test_validation_selftest_runner.py",
 		]
+	if manifest_type == "node-runtime":
+		payload["entry"] = "package.json"
+		payload["custom_tests"] = [
+			"npm test",
+			"npm run lint --if-present",
+		]
+		payload["skip_tests"] = []
+		payload["slots"]["canary_tools"] = ["bash", "node", "npm", "npx", "jq"]
 	return payload
 
 
@@ -279,6 +287,7 @@ def test_renderer_fails_unknown_family_type() -> None:
 		assert result.returncode != 0
 		assert "Manifest validation failed" not in result.stderr
 		assert "Unknown manifest type" in result.stderr
+		assert "node-runtime" in result.stderr
 		assert "python-mongo-repo-checks" in result.stderr
 
 
@@ -339,6 +348,53 @@ def test_renderer_family_dispatch_routing() -> None:
 		family_marker_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
 		assert "node-hardhat-solidity family for demo-project" in family_marker_text
 		assert not (output_root / "tests" / "10_http_smoke.sh").exists()
+
+		lint_result = subprocess.run(
+			["python3", str(REPO_ROOT / "scripts" / "validation_lint.py"), str(output_root)],
+			text=True,
+			capture_output=True,
+			env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+		)
+		assert lint_result.returncode == 0, f"lint failed: {lint_result.stdout}\n{lint_result.stderr}"
+
+
+def test_renderer_node_runtime_family_dispatch_routing() -> None:
+	with tempfile.TemporaryDirectory(prefix="render-validation-") as td:
+		temp_root = Path(td)
+		manifest_path = temp_root / "validate.yml"
+		output_root = temp_root / "out"
+		_write_yaml(manifest_path, _manifest_payload("node-runtime"))
+
+		result = _run_renderer(manifest_path, output_root)
+		assert result.returncode == 0, f"renderer failed: {result.stderr}"
+		expected_files = [
+			output_root / "Dockerfile.app",
+			output_root / "_lib" / "tap_helpers.sh",
+			output_root / "docker-compose.test.yml",
+			output_root / "tests" / "00_canary.sh",
+			output_root / "tests" / "10_family_marker.sh",
+			output_root / "tests" / "20_import_audit.sh",
+			output_root / "tests" / "30_graceful_shutdown.sh",
+			output_root / "tests" / "40_repo_checks.sh",
+			output_root / "tests" / "90_tap_report.sh",
+			output_root / "tests" / "_lib" / "graceful_shutdown.py",
+			output_root / "tests" / "_lib" / "import_audit.py",
+			output_root / "validate.env",
+		]
+		for expected in expected_files:
+			assert expected.exists(), f"missing rendered file: {expected}"
+
+		assert not (output_root / "tests" / "20_rpc_probe.sh").exists()
+		assert not (output_root / "tests" / "30_hardhat_test.sh").exists()
+
+		family_marker_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
+		env_text = (output_root / "validate.env").read_text(encoding="utf-8")
+		repo_checks_text = (output_root / "tests" / "40_repo_checks.sh").read_text(encoding="utf-8")
+		assert "node-runtime family for demo-project" in family_marker_text
+		assert 'CUSTOM_TESTS_JSON="' in env_text
+		assert 'SKIP_TESTS_JSON="' in env_text
+		assert "node - <<'JS'" in repo_checks_text
+		assert "json.loads(payload)" not in repo_checks_text
 
 		lint_result = subprocess.run(
 			["python3", str(REPO_ROOT / "scripts" / "validation_lint.py"), str(output_root)],

@@ -31,6 +31,17 @@ def test_validate_workflow_bootstrap_fetches_template_assets() -> None:
 		"workflow-templates/validation-harness/node-hardhat-solidity/tests/20_rpc_probe.sh.j2",
 		"workflow-templates/validation-harness/node-hardhat-solidity/tests/30_hardhat_test.sh.j2",
 		"workflow-templates/validation-harness/node-hardhat-solidity/validate.env.j2",
+		"workflow-templates/validation-harness/node-runtime/Dockerfile.app.j2",
+		"workflow-templates/validation-harness/node-runtime/docker-compose.test.yml.j2",
+		"workflow-templates/validation-harness/node-runtime/validate.env.j2",
+		"workflow-templates/validation-harness/node-runtime/tests/00_canary.sh.j2",
+		"workflow-templates/validation-harness/node-runtime/tests/10_family_marker.sh.j2",
+		"workflow-templates/validation-harness/node-runtime/tests/20_import_audit.sh.j2",
+		"workflow-templates/validation-harness/node-runtime/tests/30_graceful_shutdown.sh.j2",
+		"workflow-templates/validation-harness/node-runtime/tests/40_repo_checks.sh.j2",
+		"workflow-templates/validation-harness/node-runtime/tests/90_tap_report.sh.j2",
+		"workflow-templates/validation-harness/node-runtime/tests/_lib/graceful_shutdown.py.j2",
+		"workflow-templates/validation-harness/node-runtime/tests/_lib/import_audit.py.j2",
 		"workflow-templates/validation-harness/python-mongo-flask/Dockerfile.app.j2",
 		"workflow-templates/validation-harness/python-mongo-flask/docker-compose.test.yml.j2",
 		"workflow-templates/validation-harness/python-mongo-flask/tests/00_canary.sh.j2",
@@ -74,9 +85,17 @@ def test_validate_workflow_passes_template_default_env() -> None:
 	assert 'python3 -m pip install --disable-pip-version-check --quiet --user pyyaml jsonschema jinja2' in wf
 
 
+def test_validate_workflow_bootstraps_revalidate_lifecycle_ai_memory_schemas() -> None:
+	wf = _workflow_text()
+	assert "validation_history.v1.json" in wf
+	assert "operator_bypass_audit.v1.json" in wf
+	assert "revalidate_events.v1.json" in wf
+
+
 def main() -> int:
 	test_validate_workflow_bootstrap_fetches_template_assets()
 	test_validate_workflow_passes_template_default_env()
+	test_validate_workflow_bootstraps_revalidate_lifecycle_ai_memory_schemas()
 	return 0
 
 

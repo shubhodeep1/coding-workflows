@@ -32,10 +32,15 @@ def _diagnose_prompt_text() -> str:
 
 
 JUDGE_PROMPT = REPO_ROOT / "prompts" / "mode-judge.txt"
+ORCHESTRATE_POLL_JUDGE_PROMPT = REPO_ROOT / "prompts" / "mode-orchestrate-poll-judge.txt"
 
 
 def _judge_prompt_text() -> str:
 	return JUDGE_PROMPT.read_text(encoding="utf-8")
+
+
+def _orchestrate_poll_judge_prompt_text() -> str:
+	return ORCHESTRATE_POLL_JUDGE_PROMPT.read_text(encoding="utf-8")
 
 
 def _extract_needs_fixes_branch() -> str:
@@ -229,6 +234,23 @@ def test_audit_gate_prompt_contract_requires_concrete_supported_remediation() ->
 		)
 		assert marker in judge, (
 			"judge prompt must require concrete canonical audit remediation markers"
+		)
+
+
+def test_judge_prompts_treat_harness_errors_as_infrastructure() -> None:
+	"""Harness-only validation failures must be framed as infrastructure defects."""
+	for text in (_judge_prompt_text(), _orchestrate_poll_judge_prompt_text()):
+		assert "raw_status=harness_error" in text, (
+			"judge prompt must mention raw_status=harness_error explicitly"
+		)
+		assert "ai:harness-broken" in text, (
+			"judge prompt must mention the ai:harness-broken label explicitly"
+		)
+		assert "harness/infrastructure failure" in text, (
+			"judge prompt must frame harness-only validation failures as infrastructure defects"
+		)
+		assert "application regression" in text, (
+			"judge prompt must distinguish harness failures from application regressions"
 		)
 
 def main() -> int:
