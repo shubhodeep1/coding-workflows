@@ -1008,6 +1008,18 @@ if ! [[ "${MAX_FINAL_MERGE_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${MAX_FINAL_MERGE_ATT
   MAX_FINAL_MERGE_ATTEMPTS="3"
 fi
 
+ORCH_INTEGRATION_STALE_ALERT_HOURS="${ORCH_INTEGRATION_STALE_ALERT_HOURS:-6}"
+if ! [[ "${ORCH_INTEGRATION_STALE_ALERT_HOURS}" =~ ^[0-9]+$ ]] || [ "${ORCH_INTEGRATION_STALE_ALERT_HOURS}" -lt 1 ]; then
+	echo "::warning::ORCH_INTEGRATION_STALE_ALERT_HOURS must be a positive integer; defaulting to 6"
+	ORCH_INTEGRATION_STALE_ALERT_HOURS="6"
+fi
+
+ORCH_INTEGRATION_STALE_REALERT_HOURS="${ORCH_INTEGRATION_STALE_REALERT_HOURS:-12}"
+if ! [[ "${ORCH_INTEGRATION_STALE_REALERT_HOURS}" =~ ^[0-9]+$ ]] || [ "${ORCH_INTEGRATION_STALE_REALERT_HOURS}" -lt 1 ]; then
+	echo "::warning::ORCH_INTEGRATION_STALE_REALERT_HOURS must be a positive integer; defaulting to 12"
+	ORCH_INTEGRATION_STALE_REALERT_HOURS="12"
+fi
+
 # Per-batch ceiling for "validation-fixing" poll cycles.  The fix-up loop
 # iterates whatever issue numbers a validation workflow posted in its latest
 # "Runtime validation found fixable issues" comment and waits for all of them
@@ -3173,6 +3185,8 @@ ensure_integration_conflict_state_fields() {
         integration_conflict_total_dispatches: (.integration_conflict_total_dispatches // 0),
         merged_issue_fingerprints: (.merged_issue_fingerprints // {}),
         final_merge_attempt_count: (.final_merge_attempt_count // 0),
+        last_main_squash_at_utc: (.last_main_squash_at_utc // null),
+        integration_stale_last_alerted_at_utc: (.integration_stale_last_alerted_at_utc // null),
         judge_last_fingerprint: (.judge_last_fingerprint // ""),
         judge_fingerprint_repeat_count: (.judge_fingerprint_repeat_count // 0)
       }' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
@@ -4482,6 +4496,292 @@ _branch_rebuild_audit_put() {
   printf '%s' "${result_json}" | jq -e '.ok == true and .enabled == true and .stored == true' >/dev/null 2>&1
 }
 
+validation_history_current_integration_sha() {
+	local integration_branch=""
+	integration_branch="$(jq -r '.integration_branch // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+	[ "${integration_branch}" = "null" ] && integration_branch=""
+	[ -n "${integration_branch}" ] || return 1
+	_branch_head_sha "${integration_branch}" 2>/dev/null
+}
+
+validation_history_run_info_json() {
+	local run_info="${LAST_VAL_RUN_INFO:-}"
+	if [ -z "${run_info}" ] || ! printf '%s' "${run_info}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+		run_info="$(get_last_validation_run_info 2>/dev/null || echo '{}')"
+	fi
+	if ! printf '%s' "${run_info}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+		run_info='{}'
+	fi
+	printf '%s' "${run_info}"
+}
+
+append_validation_history_for_current_sha() {
+	local outcome="$1"
+	local raw_status="$2"
+	local raw_conclusion="$3"
+	local cycle="$4"
+	local context="$5"
+	local source="$6"
+	local integration_sha=""
+	local run_info='{}'
+	local run_id=""
+	local run_attempt=""
+	local run_url=""
+	local run_timestamp=""
+	local resolved_conclusion="${raw_conclusion}"
+	local recorded_at=""
+	local run_id_json='null'
+	local run_attempt_json='null'
+	local cycle_json='null'
+	local entry_file=""
+	local append_json=""
+
+	VALIDATION_HISTORY_LAST_APPEND_STORED=""
+	VALIDATION_HISTORY_LAST_APPEND_SHA=""
+	VALIDATION_HISTORY_LAST_APPEND_WARNING=""
+
+	integration_sha="$(validation_history_current_integration_sha 2>/dev/null || true)"
+	if [ -z "${integration_sha}" ]; then
+		return 0
+	fi
+	VALIDATION_HISTORY_LAST_APPEND_SHA="$(printf '%s' "${integration_sha}" | tr '[:upper:]' '[:lower:]')"
+
+	run_info="$(validation_history_run_info_json)"
+	run_id="$(printf '%s' "${run_info}" | jq -r '.run_id // ""' 2>/dev/null || echo '')"
+	run_attempt="$(printf '%s' "${run_info}" | jq -r '.run_attempt // ""' 2>/dev/null || echo '')"
+	run_url="$(printf '%s' "${run_info}" | jq -r '.run_url // ""' 2>/dev/null || echo '')"
+	run_timestamp="$(printf '%s' "${run_info}" | jq -r '.run_timestamp // ""' 2>/dev/null || echo '')"
+	if [ -z "${resolved_conclusion}" ]; then
+		resolved_conclusion="$(printf '%s' "${run_info}" | jq -r '.conclusion // ""' 2>/dev/null || echo '')"
+	fi
+	recorded_at="${run_timestamp}"
+	if [ -z "${recorded_at}" ] || [ "${recorded_at}" = "null" ]; then
+		recorded_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+	fi
+	if [[ "${run_id}" =~ ^[0-9]+$ ]] && [ "${run_id}" -ge 1 ]; then
+		run_id_json="${run_id}"
+	fi
+	if [[ "${run_attempt}" =~ ^[0-9]+$ ]] && [ "${run_attempt}" -ge 1 ]; then
+		run_attempt_json="${run_attempt}"
+	fi
+	if [[ "${cycle}" =~ ^[0-9]+$ ]] && [ "${cycle}" -ge 1 ]; then
+		cycle_json="${cycle}"
+	fi
+
+	entry_file="$(mktemp "${TMPDIR:-/tmp}/validation_history_entry.XXXXXX")"
+	jq -n \
+		--arg outcome "${outcome}" \
+		--arg raw_status "${raw_status}" \
+		--arg raw_conclusion "${resolved_conclusion}" \
+		--arg run_url "${run_url}" \
+		--arg recorded_at "${recorded_at}" \
+		--arg context "${context}" \
+		--arg source "${source}" \
+		--argjson run_id "${run_id_json}" \
+		--argjson run_attempt "${run_attempt_json}" \
+		--argjson cycle "${cycle_json}" '
+			{
+				outcome: $outcome,
+				raw_status: (if $raw_status == "" then null else $raw_status end),
+				raw_conclusion: (if $raw_conclusion == "" then null else $raw_conclusion end),
+				run_id: $run_id,
+				run_attempt: $run_attempt,
+				run_url: (if $run_url == "" then null else $run_url end),
+				recorded_at: $recorded_at,
+				cycle: $cycle,
+				context: (if $context == "" then null else $context end),
+				source: (if $source == "" then null else $source end)
+			}
+		' > "${entry_file}"
+	append_json="$(memory_validation_history_append \
+		--repo-root . \
+		--memory-branch "${AI_MEMORY_BRANCH:-ai-memory}" \
+		--memory-root "${AI_MEMORY_ROOT:-ai-memory}" \
+		--repo "${GITHUB_REPOSITORY}" \
+		--integration-sha "${integration_sha}" \
+		--entry-file "${entry_file}" 2>/dev/null || echo '')"
+	rm -f "${entry_file}"
+	if [ -z "${append_json}" ] || ! printf '%s' "${append_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+		VALIDATION_HISTORY_LAST_APPEND_STORED="false"
+		VALIDATION_HISTORY_LAST_APPEND_WARNING="invalid_json"
+		return 0
+	fi
+	if [ "$(printf '%s' "${append_json}" | jq -r '.stored // false' 2>/dev/null || echo false)" = "true" ]; then
+		VALIDATION_HISTORY_LAST_APPEND_STORED="true"
+		return 0
+	fi
+	VALIDATION_HISTORY_LAST_APPEND_STORED="false"
+	VALIDATION_HISTORY_LAST_APPEND_WARNING="$(printf '%s' "${append_json}" | jq -r '.warning // ""' 2>/dev/null || echo '')"
+	return 0
+}
+
+validation_history_gate_next_action() {
+	local reason="$1"
+	local integration_sha="$2"
+	case "${reason}" in
+		missing_pass)
+			printf 'Validation label present, but no passing validation-history entry exists yet for integration SHA `%s`.' "${integration_sha:-unknown}"
+			;;
+		later_non_harness_failure)
+			printf 'Validation label present, but a later non-harness validation failure is recorded for integration SHA `%s`; rerun validation before promoting.' "${integration_sha:-unknown}"
+			;;
+		*)
+			printf 'Validation history is blocking eager draft promotion for integration SHA `%s`.' "${integration_sha:-unknown}"
+			;;
+	esac
+}
+
+validation_history_gate_decision_for_current_sha() {
+	local integration_sha=""
+	local history_json=""
+	local warning_code=""
+
+	integration_sha="$(validation_history_current_integration_sha 2>/dev/null || true)"
+	if [ -z "${integration_sha}" ]; then
+		jq -cn '{available: false, allow: true, reason: "integration_sha_unavailable", integration_sha: null}'
+		return 0
+	fi
+	integration_sha="$(printf '%s' "${integration_sha}" | tr '[:upper:]' '[:lower:]')"
+
+	if [ "${VALIDATION_HISTORY_LAST_APPEND_STORED:-}" = "false" ] && [ "${VALIDATION_HISTORY_LAST_APPEND_SHA:-}" = "${integration_sha}" ]; then
+		jq -cn --arg integration_sha "${integration_sha}" --arg warning "${VALIDATION_HISTORY_LAST_APPEND_WARNING:-}" '
+			{available: false, allow: true, reason: "history_write_failed_current_tick", integration_sha: $integration_sha, warning: (if $warning == "" then null else $warning end)}
+		'
+		return 0
+	fi
+
+	history_json="$(memory_validation_history_get \
+		--repo-root . \
+		--memory-branch "${AI_MEMORY_BRANCH:-ai-memory}" \
+		--memory-root "${AI_MEMORY_ROOT:-ai-memory}" \
+		--repo "${GITHUB_REPOSITORY}" \
+		--integration-sha "${integration_sha}" 2>/dev/null || echo '')"
+	if [ -z "${history_json}" ] || ! printf '%s' "${history_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+		jq -cn --arg integration_sha "${integration_sha}" '{available: false, allow: true, reason: "history_read_invalid", integration_sha: $integration_sha}'
+		return 0
+	fi
+
+	warning_code="$(printf '%s' "${history_json}" | jq -r '.warning_code // ""' 2>/dev/null || echo '')"
+	if [ "$(printf '%s' "${history_json}" | jq -r '.enabled // false' 2>/dev/null || echo false)" != "true" ] || [ -n "${warning_code}" ]; then
+		printf '%s' "${history_json}" | jq -c --arg integration_sha "${integration_sha}" --arg reason "${warning_code:-history_unavailable}" '
+			{
+				available: false,
+				allow: true,
+				reason: $reason,
+				integration_sha: $integration_sha,
+				warning: (.warning // null)
+			}
+		'
+		return 0
+	fi
+
+	printf '%s' "${history_json}" | jq -c --arg integration_sha "${integration_sha}" '
+		def ordering_key:
+			[(.recorded_at // ""), .__idx];
+		def is_pass:
+			((.outcome // "") | ascii_downcase) as $outcome
+			| ($outcome == "passed" or $outcome == "pass" or $outcome == "success");
+		def is_fail:
+			((.outcome // "") | ascii_downcase) as $outcome
+			| ($outcome == "failed" or $outcome == "fail");
+		(.validation_history.entries // []) as $entries
+		| ($entries | to_entries | map(.value + {__idx: .key})) as $indexed
+		| ($indexed | map(select(is_pass and (((.raw_status // "") | ascii_downcase) != "harness_error")))) as $passes
+		| if ($passes | length) == 0 then
+			{
+				available: true,
+				allow: false,
+				reason: "missing_pass",
+				integration_sha: $integration_sha
+			}
+		else
+			($passes | max_by(ordering_key)) as $latest_pass
+			| ($indexed
+				| map(select(
+					is_fail
+					and (((.raw_status // "") | ascii_downcase) != "harness_error")
+					and (ordering_key > [($latest_pass.recorded_at // ""), $latest_pass.__idx])
+				))) as $later_failures
+			| if ($later_failures | length) > 0 then
+				($later_failures | max_by(ordering_key)) as $latest_failure
+				| {
+					available: true,
+					allow: false,
+					reason: "later_non_harness_failure",
+					integration_sha: $integration_sha,
+					latest_pass_recorded_at: ($latest_pass.recorded_at // null),
+					latest_failure_recorded_at: ($latest_failure.recorded_at // null)
+				}
+			else
+				{
+					available: true,
+					allow: true,
+					reason: "pass_record_present",
+					integration_sha: $integration_sha,
+					latest_pass_recorded_at: ($latest_pass.recorded_at // null)
+				}
+			end
+		end
+	'
+}
+
+mark_integration_branch_squash_fresh() {
+	local now_epoch="${1:-$(date +%s)}"
+	if ! [[ "${now_epoch}" =~ ^[0-9]+$ ]]; then
+		now_epoch="$(date +%s)"
+	fi
+	jq --argjson now_epoch "${now_epoch}" '
+		.last_main_squash_at_utc = $now_epoch
+		| .integration_stale_last_alerted_at_utc = null
+	' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+}
+
+check_integration_branch_staleness() {
+	local integration_branch="$1"
+	local default_branch="$2"
+	local ahead_by="$3"
+	local now_epoch="$(date +%s)"
+	local last_main_squash_at_utc=""
+	local integration_stale_last_alerted_at_utc=""
+	local stale_threshold_secs=$(( ORCH_INTEGRATION_STALE_ALERT_HOURS * 3600 ))
+	local stale_realert_secs=$(( ORCH_INTEGRATION_STALE_REALERT_HOURS * 3600 ))
+	local stale_age_secs=0
+
+	[ -f "${STATE_FILE}" ] || return 0
+	[ -n "${integration_branch}" ] || return 0
+
+	if ! [[ "${ahead_by}" =~ ^[0-9]+$ ]]; then
+		return 0
+	fi
+
+	if [ "${ahead_by}" -eq 0 ]; then
+		mark_integration_branch_squash_fresh "${now_epoch}"
+		return 0
+	fi
+
+	last_main_squash_at_utc="$(jq -r '.last_main_squash_at_utc // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+	if ! [[ "${last_main_squash_at_utc}" =~ ^[0-9]+$ ]]; then
+		mark_integration_branch_squash_fresh "${now_epoch}"
+		return 0
+	fi
+	integration_stale_last_alerted_at_utc="$(jq -r '.integration_stale_last_alerted_at_utc // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+
+	stale_age_secs=$(( now_epoch - last_main_squash_at_utc ))
+	if [ "${stale_age_secs}" -lt "${stale_threshold_secs}" ]; then
+		return 0
+	fi
+
+	if [[ "${integration_stale_last_alerted_at_utc}" =~ ^[0-9]+$ ]] \
+		&& [ $(( now_epoch - integration_stale_last_alerted_at_utc )) -lt "${stale_realert_secs}" ]; then
+		return 0
+	fi
+
+	jq --argjson now_epoch "${now_epoch}" '.integration_stale_last_alerted_at_utc = $now_epoch' \
+		"${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+	echo "INTEGRATION_STALE_ALERT_SENT tracking_issue=${TRACKING_NUM} integration_branch=${integration_branch} default_branch=${default_branch} ahead_by=${ahead_by} stale_hours=$(( stale_age_secs / 3600 )) threshold_hours=${ORCH_INTEGRATION_STALE_ALERT_HOURS}"
+	tg_notify "Integration branch '${integration_branch}' for project #${TRACKING_NUM} has been ahead of '${default_branch}' for at least $(( stale_age_secs / 3600 )) hour(s) (ahead_by=${ahead_by})." "WARNING"
+}
+
 _build_branch_rebuild_audit_json() {
   local integration_branch="$1"
   local default_branch="$2"
@@ -5519,6 +5819,10 @@ finalize_integration_merge_if_needed() {
   local default_branch="$2"
   local project_title="$3"
   local final_pr
+	local validation_history_gate_json='{}'
+	local validation_history_gate_reason=""
+	local validation_history_gate_sha=""
+	local validation_history_gate_wait_message=""
 
 	# Default behavior: failed finalize attempts consume retry budget.
 	# Transient "not-ready-yet" paths below opt out explicitly.
@@ -5622,6 +5926,7 @@ finalize_integration_merge_if_needed() {
       else
         jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged" | .final_merge_error = ""' \
           "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+		mark_integration_branch_squash_fresh
         post_state_comment || true
         return 0
       fi
@@ -5668,6 +5973,7 @@ Unable to create or locate the final integration PR from \`${integration_branch}
   if [ "${pr_state}" = "closed" ] && [ "${pr_merged}" = "true" ]; then
     jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged" | .final_merge_error = ""' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+	mark_integration_branch_squash_fresh
     post_state_comment || true
     return 0
   fi
@@ -5675,19 +5981,34 @@ Unable to create or locate the final integration PR from \`${integration_branch}
   if has_label "${TRACKING_LABELS:-[]}" "ai:ready-to-merge"; then
     ready_gate_reason="tracking-ready-to-merge"
   elif has_label "${TRACKING_LABELS:-[]}" "ai:validated"; then
-    ready_gate_reason="tracking-validated-legacy"
+	validation_history_gate_json="$(validation_history_gate_decision_for_current_sha)"
+	validation_history_gate_reason="$(printf '%s' "${validation_history_gate_json}" | jq -r '.reason // ""' 2>/dev/null || echo '')"
+	validation_history_gate_sha="$(printf '%s' "${validation_history_gate_json}" | jq -r '.integration_sha // ""' 2>/dev/null || echo '')"
+	if [ "$(printf '%s' "${validation_history_gate_json}" | jq -r '.available // false' 2>/dev/null || echo false)" != "true" ]; then
+		echo "  [final-merge] Validation history unavailable for integration SHA ${validation_history_gate_sha:-unknown}; falling back to legacy ai:validated gate (reason=${validation_history_gate_reason:-unknown})."
+		ready_gate_reason="tracking-validated-legacy"
+	elif [ "$(printf '%s' "${validation_history_gate_json}" | jq -r '.allow // false' 2>/dev/null || echo false)" = "true" ]; then
+		ready_gate_reason="tracking-validated-legacy"
+	else
+		validation_history_gate_wait_message="$(validation_history_gate_next_action "${validation_history_gate_reason}" "${validation_history_gate_sha}")"
+	fi
   elif [ "${ENABLE_VALIDATION}" != "true" ]; then
     ready_gate_reason="validation-disabled-legacy"
   fi
 
   if [ "${pr_state}" = "open" ] && [ -z "${ready_gate_reason}" ]; then
     FINAL_MERGE_BUDGET_ELIGIBLE="0"
-    if [ "${pr_draft}" = "true" ]; then
+	if [ -n "${validation_history_gate_wait_message}" ]; then
+		echo "  [final-merge] PR #${final_pr} is blocked by validation history for integration SHA ${validation_history_gate_sha:-unknown} (reason=${validation_history_gate_reason:-unknown})."
+		update_eager_pr_validation_status_section "${final_pr}" "${validation_history_gate_wait_message}" || true
+	elif [ "${pr_draft}" = "true" ]; then
       echo "  [final-merge] PR #${final_pr} is still draft; waiting for the tracking issue readiness gate."
     else
       echo "  [final-merge] PR #${final_pr} is open but not yet allowed to merge; waiting for the tracking issue readiness gate."
     fi
-    update_eager_pr_validation_status_section "${final_pr}" || true
+	if [ -z "${validation_history_gate_wait_message}" ]; then
+		update_eager_pr_validation_status_section "${final_pr}" || true
+	fi
     return 1
   fi
 
@@ -5742,6 +6063,7 @@ Unable to create or locate the final integration PR from \`${integration_branch}
        .integration_sync_last_error = "" |
        .integration_conflict_unresolved_ticks = 0' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+	mark_integration_branch_squash_fresh
     post_state_comment || true
     post_tracking_comment "## ✅ Final merge complete
 
@@ -5758,6 +6080,7 @@ Integration branch \`${integration_branch}\` was squash-merged into \`${default_
   if [ "${pr_state}" = "closed" ] && [ "${pr_merged}" = "true" ]; then
     jq --argjson final_pr "${final_pr}" '.final_merge_pr = $final_pr | .final_merge_status = "merged" | .final_merge_error = ""' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+	mark_integration_branch_squash_fresh
     post_state_comment || true
     return 0
   fi
@@ -6237,6 +6560,8 @@ mark_validation_failed() {
   local reason="$1"
   local _tracking_labels
   local validation_raw_status
+  local validation_cycle=""
+  local validation_history_reason=""
   local harness_reason_one_line
 
   # Check validation recovery budget before going terminal
@@ -6246,10 +6571,19 @@ mark_validation_failed() {
     val_recovery_count="0"
   fi
 
-  validation_raw_status="$(infer_validation_raw_status "${reason}")"
-  if [ "${validation_raw_status}" = "harness_error" ]; then
-    harness_reason_one_line="$(validation_reason_one_line "${reason}")"
-    echo "HARNESS_ERROR_DETECTED reason=${harness_reason_one_line}"
+	validation_raw_status="$(infer_validation_raw_status "${reason}")"
+	validation_cycle="$(jq -r '.validation_cycle // 1' "${STATE_FILE}" 2>/dev/null || echo 1)"
+	validation_history_reason="$(validation_reason_one_line "${reason}")"
+	append_validation_history_for_current_sha \
+		"failed" \
+		"${validation_raw_status}" \
+		"${LAST_VAL_CONCLUSION:-failure}" \
+		"${validation_cycle}" \
+		"${validation_history_reason}" \
+		"orchestrate_poll.mark_validation_failed"
+	if [ "${validation_raw_status}" = "harness_error" ]; then
+		harness_reason_one_line="$(validation_reason_one_line "${reason}")"
+		echo "HARNESS_ERROR_DETECTED reason=${harness_reason_one_line}"
 
     jq --arg reason "${reason}" --arg raw_status "${validation_raw_status}" '
       .status = "failed" |
@@ -6400,6 +6734,8 @@ mark_validation_complete() {
   local _final_pr
   local _final_status
   local _final_err
+  local validation_history_raw_status="${LAST_VAL_RAW_STATUS:-}"
+  local validation_history_conclusion="${LAST_VAL_CONCLUSION:-}"
 
   integration_branch="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
   default_branch="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
@@ -6407,6 +6743,19 @@ mark_validation_complete() {
 
   # Seed final_merge_attempt_count on legacy state blobs that predate this field.
   ensure_integration_conflict_state_fields
+	if [ -z "${validation_history_raw_status}" ] || [ "${validation_history_raw_status}" = "null" ]; then
+		validation_history_raw_status="pass"
+	fi
+	if [ -z "${validation_history_conclusion}" ] || [ "${validation_history_conclusion}" = "null" ]; then
+		validation_history_conclusion="success"
+	fi
+	append_validation_history_for_current_sha \
+		"passed" \
+		"${validation_history_raw_status}" \
+		"${validation_history_conclusion}" \
+		"${validation_cycle}" \
+		"validation passed" \
+		"orchestrate_poll.mark_validation_complete"
 
   if ! finalize_integration_merge_if_needed "${integration_branch}" "${default_branch}" "${project_title}"; then
     # Budget-ineligible final-merge deferrals/failures should return without
@@ -11797,6 +12146,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     # 0 since there is no integration→default merge gate to honour.
     CWS_AHEAD_BY="0"
   fi
+	check_integration_branch_staleness "${CWS_INTEGRATION_BRANCH}" "${CWS_DEFAULT_BRANCH:-}" "${CWS_AHEAD_BY}" || true
 
   WAVE_STATUS="$(python3 scripts/orchestrate_lib.py check-wave-status \
     --state-file "${STATE_FILE}" \

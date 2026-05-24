@@ -14,6 +14,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -314,6 +315,15 @@ def _base_state(status: str = "in_progress") -> dict:
 	}
 
 
+def _validation_history_payload(*, integration_sha: str, entries: list[dict]) -> dict:
+	return {
+		"schema_version": "v1",
+		"repository": "owner/repo",
+		"integration_sha": integration_sha,
+		"entries": entries,
+	}
+
+
 def _state_comment(state: dict) -> str:
 	# V1 framing is intentionally retained for test SEED data.  The
 	# production reader handles the V2 → V1 fallback path, so seeding
@@ -547,6 +557,9 @@ def _run_poller(
 	mock_gh_issue_list_label_filter: bool = False,
 	compare_ahead_by: int = 0,
 	compare_ahead_by_force_error: bool = False,
+	mock_validation_history_payload: dict | None = None,
+	mock_validation_history_get_json: dict | None = None,
+	mock_validation_history_append_json: dict | None = None,
 	mock_revalidate_events_payload: dict | None = None,
 	mock_pr_create_race_pr: dict | None = None,
 ) -> dict:
@@ -581,6 +594,9 @@ def _run_poller(
 	mock_actions_runs_cache_put_json = mock_actions_runs_cache_put_json or {}
 	actions_runs_workflow_runs = actions_runs_workflow_runs or []
 	actions_runs_status_sequence = actions_runs_status_sequence or []
+	mock_validation_history_payload = dict(mock_validation_history_payload or {})
+	mock_validation_history_get_json = dict(mock_validation_history_get_json or {})
+	mock_validation_history_append_json = dict(mock_validation_history_append_json or {})
 	mock_branch_rebuild_audit_get_json = mock_branch_rebuild_audit_get_json or {}
 	mock_branch_rebuild_audit_put_json = mock_branch_rebuild_audit_put_json or {}
 	branch_protected_branches = branch_protected_branches or {}
@@ -710,6 +726,9 @@ def _run_poller(
 			"mock_gh_issue_list_label_filter": bool(mock_gh_issue_list_label_filter),
 			"compare_ahead_by": int(compare_ahead_by),
 			"compare_ahead_by_force_error": bool(compare_ahead_by_force_error),
+			"mock_validation_history_payload": mock_validation_history_payload,
+			"mock_validation_history_get_json": mock_validation_history_get_json,
+			"mock_validation_history_append_json": mock_validation_history_append_json,
 			"mock_revalidate_events_payload": mock_revalidate_events_payload,
 			"mock_pr_create_race_pr": mock_pr_create_race_pr,
 		}
@@ -2093,6 +2112,86 @@ if len(args) >= 3 and _script_matches(args[0], "scripts/ai_memory.py") and args[
 		print(json.dumps(payload))
 		sys.exit(0)
 
+if len(args) >= 3 and _script_matches(args[0], "scripts/ai_memory.py") and args[1] == "validation-history":
+	store = _load_store()
+	cmd = args[2]
+	repo = ""
+	integration_sha = ""
+	entry_file = ""
+	i = 3
+	while i < len(args):
+		if args[i] == "--repo" and i + 1 < len(args):
+			repo = args[i + 1]
+			i += 2
+			continue
+		if args[i] == "--integration-sha" and i + 1 < len(args):
+			integration_sha = args[i + 1].lower()
+			i += 2
+			continue
+		if args[i] == "--entry-file" and i + 1 < len(args):
+			entry_file = args[i + 1]
+			i += 2
+			continue
+		i += 1
+	normalized_repo = repo.lower()
+	payload = store.get("mock_validation_history_payload")
+	hit = (
+		isinstance(payload, dict)
+		and payload.get("repository") == normalized_repo
+		and str(payload.get("integration_sha", "")).lower() == integration_sha
+	)
+	if cmd == "get":
+		store.setdefault("mock_validation_history_get_calls", 0)
+		store["mock_validation_history_get_calls"] = int(store["mock_validation_history_get_calls"]) + 1
+		_save_store(store)
+		response = {
+			"ok": True,
+			"enabled": True,
+			"hit": hit,
+			"validation_history": payload if hit else None,
+		}
+		override = store.get("mock_validation_history_get_json")
+		if isinstance(override, dict) and override:
+			response.update(override)
+		print(json.dumps(response))
+		sys.exit(0)
+	if cmd == "append":
+		entry = {}
+		if entry_file:
+			try:
+				entry = json.loads(Path(entry_file).read_text(encoding="utf-8"))
+			except Exception:
+				entry = {}
+		if not hit:
+			payload = {
+				"schema_version": "v1",
+				"repository": normalized_repo,
+				"integration_sha": integration_sha,
+				"entries": [],
+			}
+		payload = dict(payload)
+		payload["entries"] = [*(payload.get("entries") or []), entry]
+		response = {
+			"ok": True,
+			"enabled": True,
+			"stored": True,
+			"validation_history": payload,
+		}
+		override = store.get("mock_validation_history_append_json")
+		if isinstance(override, dict) and override:
+			response.update(override)
+		if response.get("stored", False):
+			stored_payload = response.get("validation_history")
+			if isinstance(stored_payload, dict):
+				store["mock_validation_history_payload"] = stored_payload
+			else:
+				store["mock_validation_history_payload"] = payload
+		store.setdefault("mock_validation_history_append_calls", 0)
+		store["mock_validation_history_append_calls"] = int(store["mock_validation_history_append_calls"]) + 1
+		_save_store(store)
+		print(json.dumps(response))
+		sys.exit(0)
+
 if len(args) >= 3 and _script_matches(args[0], "scripts/ai_memory.py") and args[1] == "revalidate-events":
 	store = _load_store()
 	cmd = args[2]
@@ -2317,7 +2416,9 @@ sys.exit(proc.returncode)
 
 		result = json.loads(store_file.read_text(encoding="utf-8"))
 		tracking_issue = result["issues"][str(tracking_num)]
+		state_path = runtime_dir / "state.json"
 		result["latest_state"] = _extract_latest_state(tracking_issue["comments"])
+		result["state_on_disk"] = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else None
 		result["tracking_labels"] = tracking_issue["labels"]
 		result["tracking_closed"] = tracking_issue.get("closed", False)
 		result["merge_calls"] = result.get("merge_calls", [])
@@ -3624,6 +3725,401 @@ def test_final_merge_keeps_legacy_open_non_draft_pr_behind_readiness_gate():
 	assert result["pr_ready_calls"] == []
 	assert "<!-- VALIDATION_STATUS_V1 -->" in result["prs"][0].get("body", "")
 	assert "waiting for the tracking issue readiness gate" in (result["stdout"] + result["stderr"])
+
+
+def test_final_merge_legacy_validated_gate_requires_current_sha_pass_history():
+	state = _base_state(status="merge_conflict")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 363,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+			"body": "Squash merge of orchestrator project #192.\n\nRefs #192",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		branch_ref_shas={"orchestrator/project-192": "abcdef1234"},
+		mock_validation_history_payload=_validation_history_payload(
+			integration_sha="deadbeef1234",
+			entries=[
+				{
+					"outcome": "passed",
+					"raw_status": "pass",
+					"raw_conclusion": "success",
+					"run_id": 9001,
+					"run_attempt": 1,
+					"run_url": "https://example.invalid/runs/9001",
+					"recorded_at": "2026-05-23T10:00:00Z",
+					"cycle": 1,
+					"context": "validation passed",
+					"source": "test",
+				}
+			],
+		),
+	)
+	assert result["latest_state"]["status"] == "merge_conflict"
+	assert result["latest_state"]["final_merge_pr"] == 363
+	assert result["latest_state"]["final_merge_status"] == "pending"
+	assert result["pr_ready_calls"] == []
+	assert result.get("merged_prs", []) == []
+	assert result.get("mock_validation_history_get_calls", 0) == 1
+	assert "Validation label present, but no passing validation-history entry exists yet for integration SHA `abcdef1234`." in result["prs"][0]["body"]
+	assert "blocked by validation history" in (result["stdout"] + result["stderr"])
+
+
+def test_final_merge_legacy_validated_gate_allows_current_sha_pass_history():
+	state = _base_state(status="merge_conflict")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 364,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		branch_ref_shas={"orchestrator/project-192": "abcdef1234"},
+		mock_validation_history_payload=_validation_history_payload(
+			integration_sha="abcdef1234",
+			entries=[
+				{
+					"outcome": "passed",
+					"raw_status": "pass",
+					"raw_conclusion": "success",
+					"run_id": 9002,
+					"run_attempt": 1,
+					"run_url": "https://example.invalid/runs/9002",
+					"recorded_at": "2026-05-23T10:00:00Z",
+					"cycle": 1,
+					"context": "validation passed",
+					"source": "test",
+				}
+			],
+		),
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert 364 in result["pr_ready_calls"]
+	assert 364 in result.get("merged_prs", [])
+	assert result.get("mock_validation_history_get_calls", 0) >= 1
+	assert "EAGER_DRAFT_PR_PROMOTED pr=364 gate=tracking-validated-legacy" in (result["stdout"] + result["stderr"])
+
+
+def test_final_merge_legacy_validated_gate_blocks_later_non_harness_failure():
+	state = _base_state(status="merge_conflict")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 365,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+			"body": "Squash merge of orchestrator project #192.\n\nRefs #192",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		branch_ref_shas={"orchestrator/project-192": "abcdef1234"},
+		mock_validation_history_payload=_validation_history_payload(
+			integration_sha="abcdef1234",
+			entries=[
+				{
+					"outcome": "passed",
+					"raw_status": "pass",
+					"raw_conclusion": "success",
+					"run_id": 9003,
+					"run_attempt": 1,
+					"run_url": "https://example.invalid/runs/9003",
+					"recorded_at": "2026-05-23T10:00:00Z",
+					"cycle": 1,
+					"context": "validation passed",
+					"source": "test",
+				},
+				{
+					"outcome": "failed",
+					"raw_status": "needs_fixes",
+					"raw_conclusion": "failure",
+					"run_id": 9004,
+					"run_attempt": 1,
+					"run_url": "https://example.invalid/runs/9004",
+					"recorded_at": "2026-05-23T11:00:00Z",
+					"cycle": 1,
+					"context": "validation failed",
+					"source": "test",
+				},
+			],
+		),
+	)
+	assert result["latest_state"]["status"] == "merge_conflict"
+	assert result["latest_state"]["final_merge_pr"] == 365
+	assert result["latest_state"]["final_merge_status"] == "pending"
+	assert result["pr_ready_calls"] == []
+	assert result.get("merged_prs", []) == []
+	assert "Validation label present, but a later non-harness validation failure is recorded for integration SHA `abcdef1234`; rerun validation before promoting." in result["prs"][0]["body"]
+
+
+def test_final_merge_legacy_validated_gate_ignores_later_harness_failure():
+	state = _base_state(status="merge_conflict")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 366,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		branch_ref_shas={"orchestrator/project-192": "abcdef1234"},
+		mock_validation_history_payload=_validation_history_payload(
+			integration_sha="abcdef1234",
+			entries=[
+				{
+					"outcome": "passed",
+					"raw_status": "pass",
+					"raw_conclusion": "success",
+					"run_id": 9005,
+					"run_attempt": 1,
+					"run_url": "https://example.invalid/runs/9005",
+					"recorded_at": "2026-05-23T10:00:00Z",
+					"cycle": 1,
+					"context": "validation passed",
+					"source": "test",
+				},
+				{
+					"outcome": "failed",
+					"raw_status": "harness_error",
+					"raw_conclusion": "failure",
+					"run_id": 9006,
+					"run_attempt": 1,
+					"run_url": "https://example.invalid/runs/9006",
+					"recorded_at": "2026-05-23T11:00:00Z",
+					"cycle": 1,
+					"context": "harness failed",
+					"source": "test",
+				},
+			],
+		),
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert 366 in result["pr_ready_calls"]
+	assert 366 in result.get("merged_prs", [])
+
+
+def test_final_merge_legacy_validated_gate_fails_open_on_history_read_error():
+	state = _base_state(status="merge_conflict")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 367,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		branch_ref_shas={"orchestrator/project-192": "abcdef1234"},
+		mock_validation_history_get_json={
+			"warning_code": "history_read_failed",
+			"warning": "mock git read failure",
+		},
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert 367 in result["pr_ready_calls"]
+	assert 367 in result.get("merged_prs", [])
+	assert "Validation history unavailable for integration SHA abcdef1234; falling back to legacy ai:validated gate (reason=history_read_failed)." in (result["stdout"] + result["stderr"])
+
+
+def test_mark_validation_complete_fails_open_on_history_write_error():
+	state = _base_state(status="validating")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["validation_cycle"] = 2
+	prs = [
+		{
+			"number": 368,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		branch_ref_shas={"orchestrator/project-192": "abcdef1234"},
+		mock_validation_history_append_json={
+			"stored": False,
+			"warning": "mock git push failure",
+		},
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["validation_completed_cycle"] == 2
+	assert result["latest_state"]["final_merge_pr"] == 368
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert result["pr_ready_calls"] == [368]
+	assert 368 in result.get("merged_prs", [])
+	assert result.get("mock_validation_history_append_calls", 0) == 1
+	assert result.get("mock_validation_history_get_calls", 0) == 0
+	assert "Validation history unavailable for integration SHA abcdef1234; falling back to legacy ai:validated gate (reason=history_write_failed_current_tick)." in (result["stdout"] + result["stderr"])
+
+
+def test_integration_stale_alert_fires_once_after_threshold():
+	now_epoch = int(time.time())
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["last_main_squash_at_utc"] = now_epoch - (7 * 3600)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: []},
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+	)
+	assert "INTEGRATION_STALE_ALERT_SENT tracking_issue=192 integration_branch=orchestrator/project-192 default_branch=main ahead_by=5" in (result["stdout"] + result["stderr"])
+	assert result["state_on_disk"]["last_main_squash_at_utc"] == state["last_main_squash_at_utc"]
+	assert isinstance(result["state_on_disk"]["integration_stale_last_alerted_at_utc"], int)
+	assert result["state_on_disk"]["integration_stale_last_alerted_at_utc"] >= now_epoch - 5
+
+
+def test_integration_stale_alert_dedupes_before_realert_window():
+	now_epoch = int(time.time())
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["last_main_squash_at_utc"] = now_epoch - (7 * 3600)
+	state["integration_stale_last_alerted_at_utc"] = now_epoch - 3600
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: []},
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+	)
+	assert "INTEGRATION_STALE_ALERT_SENT" not in (result["stdout"] + result["stderr"])
+	assert result["state_on_disk"]["integration_stale_last_alerted_at_utc"] == state["integration_stale_last_alerted_at_utc"]
+
+
+def test_integration_stale_alert_repeats_after_realert_window():
+	now_epoch = int(time.time())
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["last_main_squash_at_utc"] = now_epoch - (20 * 3600)
+	state["integration_stale_last_alerted_at_utc"] = now_epoch - (13 * 3600)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: []},
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+	)
+	assert "INTEGRATION_STALE_ALERT_SENT tracking_issue=192 integration_branch=orchestrator/project-192 default_branch=main ahead_by=5" in (result["stdout"] + result["stderr"])
+	assert isinstance(result["state_on_disk"]["integration_stale_last_alerted_at_utc"], int)
+	assert result["state_on_disk"]["integration_stale_last_alerted_at_utc"] > state["integration_stale_last_alerted_at_utc"]
+
+
+def test_integration_stale_alert_window_clears_when_branch_catches_up():
+	now_epoch = int(time.time())
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["last_main_squash_at_utc"] = now_epoch - (20 * 3600)
+	state["integration_stale_last_alerted_at_utc"] = now_epoch - 3600
+	cleared = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: []},
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=0,
+	)
+	assert "INTEGRATION_STALE_ALERT_SENT" not in (cleared["stdout"] + cleared["stderr"])
+	assert cleared["state_on_disk"]["integration_stale_last_alerted_at_utc"] is None
+	assert isinstance(cleared["state_on_disk"]["last_main_squash_at_utc"], int)
+	assert cleared["state_on_disk"]["last_main_squash_at_utc"] >= now_epoch - 5
+
+	second_state = dict(cleared["state_on_disk"])
+	second_state["status"] = "in_progress"
+	second_state["last_main_squash_at_utc"] = int(time.time()) - (7 * 3600)
+	second_state["integration_stale_last_alerted_at_utc"] = None
+	second_state["final_merge_pr"] = None
+	second_state["final_merge_status"] = "pending"
+	second = _run_poller(
+		state=second_state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: []},
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+	)
+	assert "INTEGRATION_STALE_ALERT_SENT tracking_issue=192 integration_branch=orchestrator/project-192 default_branch=main ahead_by=5" in (second["stdout"] + second["stderr"])
 
 
 def test_final_merge_treats_closed_merged_pr_as_success():
