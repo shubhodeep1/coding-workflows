@@ -4036,7 +4036,7 @@ def test_final_merge_legacy_validated_gate_fails_open_on_shell_wrapper_history_r
 	assert "Validation history unavailable for integration SHA abcdef1234; falling back to legacy ai:validated gate (reason=history_read_failed)." in (result["stdout"] + result["stderr"])
 
 
-def test_final_merge_legacy_validated_gate_ignores_later_failure_without_raw_status():
+def test_final_merge_legacy_validated_gate_blocks_later_failure_without_raw_status():
 	state = _base_state(status="merge_conflict")
 	state["integration_branch"] = "orchestrator/project-192"
 	prs = [
