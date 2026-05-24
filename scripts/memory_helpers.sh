@@ -164,7 +164,7 @@ memory_validation_history_get()
 	{
 		_memory_warn "validation-history-get failed (fail-open)"
 		_memory_telemetry '{"op":"validation-history-get","ok":false,"fail_open":true,"source":"shell"}' >&2
-		echo '{"ok": true, "enabled": true, "hit": false, "validation_history": null}'
+		echo '{"ok": true, "enabled": true, "hit": false, "validation_history": null, "warning_code": "history_read_failed", "warning": "validation-history-get failed (shell wrapper fail-open)"}'
 		return 0
 	}
 }
@@ -186,7 +186,7 @@ memory_validation_history_append()
 	{
 		_memory_warn "validation-history-append failed (fail-open)"
 		_memory_telemetry '{"op":"validation-history-append","ok":false,"fail_open":true,"source":"shell"}' >&2
-		echo '{"ok": true, "enabled": true, "stored": false, "validation_history": null}'
+		echo '{"ok": true, "enabled": true, "stored": false, "validation_history": null, "warning_code": "history_write_failed", "warning": "validation-history-append failed (shell wrapper fail-open)"}'
 		return 0
 	}
 }
