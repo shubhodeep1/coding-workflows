@@ -1020,6 +1020,12 @@ if ! [[ "${ORCH_INTEGRATION_STALE_REALERT_HOURS}" =~ ^[0-9]+$ ]] || [ "${ORCH_IN
 	ORCH_INTEGRATION_STALE_REALERT_HOURS="12"
 fi
 
+ORCH_INTEGRATION_MAX_AHEAD_COMMITS="${ORCH_INTEGRATION_MAX_AHEAD_COMMITS:-10}"
+if ! [[ "${ORCH_INTEGRATION_MAX_AHEAD_COMMITS}" =~ ^[0-9]+$ ]] || [ "${ORCH_INTEGRATION_MAX_AHEAD_COMMITS}" -lt 1 ]; then
+	echo "::warning::ORCH_INTEGRATION_MAX_AHEAD_COMMITS must be a positive integer; defaulting to 10"
+	ORCH_INTEGRATION_MAX_AHEAD_COMMITS="10"
+fi
+
 # Per-batch ceiling for "validation-fixing" poll cycles.  The fix-up loop
 # iterates whatever issue numbers a validation workflow posted in its latest
 # "Runtime validation found fixable issues" comment and waits for all of them
@@ -1187,6 +1193,59 @@ post_tracking_comment() {
     --method POST \
     --input "${payload_file}" >/dev/null || true
   rm -f "${payload_file}"
+}
+
+post_issue_comment_json() {
+	local issue_num="$1"
+	local comment_body="$2"
+	local payload_file
+	local payload_err_file
+	local response_file
+	local body_bytes
+	local comment_id=""
+	local comment_url=""
+
+	[[ "${issue_num}" =~ ^[0-9]+$ ]] || return 1
+	body_bytes="$(printf '%s' "${comment_body}" | wc -c | tr -d '[:space:]')"
+	if [ "${body_bytes}" -gt 65536 ]; then
+		echo "::warning::Issue comment body too large for #${issue_num} (${body_bytes} bytes > 65536 GitHub limit); skipping post." >&2
+		return 1
+	fi
+
+	payload_file="$(mktemp "${TMPDIR:-/tmp}/issue_comment_payload.XXXXXX")"
+	payload_err_file="$(mktemp "${TMPDIR:-/tmp}/issue_comment_payload_err.XXXXXX")"
+	if ! printf '%s' "${comment_body}" | jq -Rs '{body: .}' > "${payload_file}" 2>"${payload_err_file}"; then
+		echo "::warning::Failed to encode issue comment JSON payload for #${issue_num}: $(cat "${payload_err_file}" 2>/dev/null)" >&2
+		rm -f "${payload_err_file}" "${payload_file}"
+		return 1
+	fi
+	rm -f "${payload_err_file}"
+
+	response_file="$(mktemp "${TMPDIR:-/tmp}/issue_comment_response.XXXXXX")"
+	if ! gh_retry_to_file "${response_file}" gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
+		--method POST \
+		--input "${payload_file}"; then
+		echo "::warning::Failed to post issue comment for #${issue_num}; will retry on a later cycle." >&2
+		head -c 4096 "${response_file}" >&2 || true
+		echo >&2
+		rm -f "${payload_file}" "${response_file}"
+		return 1
+	fi
+	rm -f "${payload_file}"
+
+	comment_id="$(jq -r '.id // empty' "${response_file}" 2>/dev/null || echo "")"
+	if [[ "${comment_id}" =~ ^[0-9]+$ ]]; then
+		comment_url="$(_gh_url "issues/${issue_num}#issuecomment-${comment_id}")"
+	fi
+	jq -n \
+		--argjson id "${comment_id:-0}" \
+		--arg url "${comment_url}" '
+			{
+				id: (if $id == 0 then null else $id end),
+				html_url: (if $url == "" then null else $url end)
+			}
+		'
+	rm -f "${response_file}"
 }
 
 post_state_comment() {
@@ -2752,6 +2811,130 @@ _integration_branch_ahead_of_default() {
   return 0
 }
 
+compute_cycle_integration_ahead_by() {
+	CWS_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+	[ "${CWS_INTEGRATION_BRANCH}" = "null" ] && CWS_INTEGRATION_BRANCH=""
+	CWS_DEFAULT_BRANCH=""
+	if [ -n "${CWS_INTEGRATION_BRANCH}" ]; then
+		CWS_DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "")"
+		if [ -z "${CWS_DEFAULT_BRANCH}" ]; then
+			CWS_AHEAD_BY=""
+			echo "::warning::  [check-wave-status] Could not resolve default branch via GitHub API; passing empty ahead_by so check-wave-status fails closed and keeps project_complete=false."
+		elif CWS_AHEAD_BY="$(_integration_branch_ahead_of_default "${CWS_INTEGRATION_BRANCH}" "${CWS_DEFAULT_BRANCH}")"; then
+			:
+		else
+			CWS_AHEAD_BY=""
+			echo "::warning::  [check-wave-status] Compare API failed for ${CWS_DEFAULT_BRANCH}...${CWS_INTEGRATION_BRANCH}; failing closed (project_complete forced to false this tick)."
+		fi
+	else
+		# No integration branch (default-branch-only flow): ahead_by is trivially
+		# 0 since there is no integration→default merge gate to honour.
+		CWS_AHEAD_BY="0"
+	fi
+}
+
+integration_backpressure_active_for_ahead_by() {
+	local ahead_by="$1"
+	[[ "${ahead_by}" =~ ^[0-9]+$ ]] && [ "${ahead_by}" -ge "${ORCH_INTEGRATION_MAX_AHEAD_COMMITS}" ]
+}
+
+refresh_integration_backpressure_gate_after_merge() {
+	local prior_block="${INTEGRATION_BACKPRESSURE_BLOCK_MERGES:-false}"
+
+	compute_cycle_integration_ahead_by
+	if ! [[ "${CWS_AHEAD_BY}" =~ ^[0-9]+$ ]]; then
+		INTEGRATION_BACKPRESSURE_BLOCK_MERGES="${prior_block}"
+		return 1
+	fi
+
+	INTEGRATION_BACKPRESSURE_BLOCK_MERGES="false"
+	if integration_backpressure_active_for_ahead_by "${CWS_AHEAD_BY}"; then
+		INTEGRATION_BACKPRESSURE_BLOCK_MERGES="true"
+	fi
+	return 0
+}
+
+latest_force_merge_label_event_json() {
+	local events_json
+	local latest_event
+
+	if [ -n "${FORCE_MERGE_LABEL_EVENT_JSON_CACHE+set}" ]; then
+		[ -n "${FORCE_MERGE_LABEL_EVENT_JSON_CACHE}" ] || return 1
+		printf '%s' "${FORCE_MERGE_LABEL_EVENT_JSON_CACHE}"
+		return 0
+	fi
+
+	# Existing cycle-local state caches cover tracking comments, labels, and PR
+	# payloads, but none retain who applied the latest ai:force-merge label.
+	# A single bounded GET /issues/{n}/events?per_page=100 is the smallest safe
+	# fallback for actor attribution when the bypass is first applied for a SHA.
+	if ! events_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/events?per_page=100" 2>/dev/null)"; then
+		FORCE_MERGE_LABEL_EVENT_JSON_CACHE=""
+		return 1
+	fi
+
+	latest_event="$(printf '%s' "${events_json}" | jq -c '
+		[
+			.[]
+			| select((.event // "") == "labeled" and (.label.name // "") == "ai:force-merge")
+		]
+		| sort_by((.created_at // ""), (.id // 0))
+		| last // empty
+	' 2>/dev/null || echo "")"
+	if [ -z "${latest_event}" ] || [ "${latest_event}" = "null" ]; then
+		FORCE_MERGE_LABEL_EVENT_JSON_CACHE=""
+		return 1
+	fi
+
+	FORCE_MERGE_LABEL_EVENT_JSON_CACHE="${latest_event}"
+	printf '%s' "${latest_event}"
+	return 0
+}
+
+reconcile_integration_backpressure_label() {
+	local integration_branch="$1"
+	local default_branch="$2"
+	local ahead_by="$3"
+	local final_pr="$4"
+	local label_name="ai:integration-backpressure"
+	local label_present="false"
+
+	[ -n "${integration_branch}" ] || return 1
+	if has_label "${TRACKING_LABELS:-[]}" "${label_name}"; then
+		label_present="true"
+	fi
+
+	if integration_backpressure_active_for_ahead_by "${ahead_by}"; then
+		if [ "${label_present}" != "true" ]; then
+			ensure_label_exists "${label_name}" >/dev/null 2>&1 || true
+			if gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" \
+				--add-label "${label_name}" >/dev/null 2>&1; then
+				TRACKING_LABELS="$(printf '%s' "${TRACKING_LABELS:-[]}" | jq -c --arg label "${label_name}" '(. + [$label]) | unique' 2>/dev/null || echo '["ai:integration-backpressure"]')"
+				echo "BACKPRESSURE_TRIGGERED tracking_issue=${TRACKING_NUM} integration_branch=${integration_branch} default_branch=${default_branch:-unknown} ahead_by=${ahead_by} threshold=${ORCH_INTEGRATION_MAX_AHEAD_COMMITS} final_pr=${final_pr:-0}"
+			else
+				echo "::warning::[backpressure] failed to add ${label_name} to tracking issue #${TRACKING_NUM}; merge gate remains active this cycle." >&2
+			fi
+		fi
+		return 0
+	fi
+
+	if ! [[ "${ahead_by}" =~ ^[0-9]+$ ]]; then
+		return 1
+	fi
+
+	if [ "${label_present}" = "true" ]; then
+		if gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" \
+			--remove-label "${label_name}" >/dev/null 2>&1; then
+			TRACKING_LABELS="$(printf '%s' "${TRACKING_LABELS:-[]}" | jq -c --arg label "${label_name}" 'map(select(. != $label))' 2>/dev/null || echo '[]')"
+			echo "BACKPRESSURE_CLEARED tracking_issue=${TRACKING_NUM} integration_branch=${integration_branch} default_branch=${default_branch:-unknown} ahead_by=${ahead_by} threshold=${ORCH_INTEGRATION_MAX_AHEAD_COMMITS} final_pr=${final_pr:-0}"
+		else
+			echo "::warning::[backpressure] failed to remove ${label_name} from tracking issue #${TRACKING_NUM}; will retry after the next numeric compare result." >&2
+		fi
+	fi
+
+	return 0
+}
+
 resolve_active_orchestrator_context_for_issue() {
   local issue_num="$1"
   local preferred_tracking_num="${2:-}"
@@ -3898,6 +4081,268 @@ else:
   fi
   rm -f "${body_payload_file}" "${response_file}"
   return 0
+}
+
+maybe_apply_force_merge_bypass() {
+	local final_pr="$1"
+	local integration_branch="$2"
+	local ahead_by="$3"
+	local pr_json
+	local pr_state
+	local pr_draft
+	local integration_sha=""
+	local validation_cycle="0"
+	local force_merge_message=""
+	local last_bypassed_sha=""
+	local existing_tracking_comment_json=""
+	local existing_tracking_comment_id=""
+	local existing_tracking_comment_url=""
+	local existing_failure_tracking_comment_json=""
+	local now_utc=""
+	local force_merge_event_json=""
+	local requested_actor=""
+	local requested_at=""
+	local requested_actor_display=""
+	local requested_reason=""
+	local validation_context=""
+	local draft_action_text=""
+	local force_merge_retry_message=""
+	local failure_tracking_comment_body=""
+	local tracking_comment_body=""
+	local tracking_comment_json=""
+	local tracking_comment_id=""
+	local existing_tracking_comment_id_json='null'
+	local tracking_comment_id_json='null'
+	local tracking_comment_url=""
+	local pr_comment_body=""
+	local pr_comment_json=""
+	local pr_comment_id=""
+	local pr_comment_id_json='null'
+	local pr_comment_url=""
+	local memory_entry_file=""
+	local memory_result=""
+
+	[[ "${final_pr}" =~ ^[0-9]+$ ]] || return 1
+	[ -n "${integration_branch}" ] || return 1
+	has_label "${TRACKING_LABELS:-[]}" "ai:force-merge" || return 1
+	[[ "${ahead_by}" =~ ^[0-9]+$ ]] || return 1
+	[ "${ahead_by}" -gt 0 ] || return 1
+	case "${PROJECT_STATUS:-}" in
+		complete|failed|validation-failed)
+			return 1
+			;;
+	esac
+
+	pr_json="$(_fetch_pr_json "${final_pr}")"
+	pr_state="$(_jq_field "${pr_json}" '.state' 'open|closed|merged')"
+	[ "${pr_state}" = "open" ] || return 1
+	pr_draft="$(_jq_field "${pr_json}" '.draft' 'true|false')"
+	[ -n "${pr_draft}" ] || pr_draft="false"
+
+	integration_sha="$(_branch_head_sha "${integration_branch}" || echo "")"
+	[[ "${integration_sha}" =~ ^[0-9A-Fa-f]{7,64}$ ]] || return 1
+	integration_sha="$(printf '%s' "${integration_sha}" | tr '[:upper:]' '[:lower:]')"
+	validation_cycle="$(jq -r '.validation_cycle // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
+	force_merge_message="Operator bypass active — \`ai:force-merge\` advanced this integration PR before validation completed for integration SHA \`${integration_sha}\`."
+
+	last_bypassed_sha="$(jq -r '.force_merge_last_bypassed_integration_sha // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+	if [ "${last_bypassed_sha}" = "${integration_sha}" ]; then
+		update_eager_pr_validation_status_section "${final_pr}" "${force_merge_message}" || true
+		return 0
+	fi
+
+	existing_tracking_comment_json="$(printf '%s' "${COMMENTS:-[]}" | jq -c --arg sha "${integration_sha}" '
+		[
+			.[]
+			| select((.body // "") | contains("<!-- force-merge-bypass:" + $sha + " -->"))
+		]
+		| sort_by((.created_at // ""), (.id // 0))
+		| last // empty
+	' 2>/dev/null || echo "")"
+	if [ -n "${existing_tracking_comment_json}" ] && [ "${existing_tracking_comment_json}" != "null" ]; then
+		existing_tracking_comment_id="$(printf '%s' "${existing_tracking_comment_json}" | jq -r '.id // ""' 2>/dev/null || echo "")"
+		existing_tracking_comment_url="$(printf '%s' "${existing_tracking_comment_json}" | jq -r '.html_url // ""' 2>/dev/null || echo "")"
+		if [[ "${existing_tracking_comment_id}" =~ ^[0-9]+$ ]]; then
+			existing_tracking_comment_id_json="${existing_tracking_comment_id}"
+		fi
+		if [ -z "${existing_tracking_comment_url}" ] && [[ "${existing_tracking_comment_id}" =~ ^[0-9]+$ ]]; then
+			existing_tracking_comment_url="$(_gh_url "issues/${TRACKING_NUM}#issuecomment-${existing_tracking_comment_id}")"
+		fi
+		update_eager_pr_validation_status_section "${final_pr}" "${force_merge_message}" || true
+		now_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+		jq \
+			--arg sha "${integration_sha}" \
+			--arg now_utc "${now_utc}" \
+			--argjson tracking_comment_id "${existing_tracking_comment_id_json}" \
+			--arg tracking_comment_url "${existing_tracking_comment_url}" '
+			.force_merge_last_bypassed_integration_sha = $sha
+			| .force_merge_last_bypassed_at_utc = $now_utc
+			| .force_merge_last_bypass_tracking_comment_id = $tracking_comment_id
+			| .force_merge_last_bypass_tracking_comment_url = (if $tracking_comment_url == "" then null else $tracking_comment_url end)
+		' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+		post_state_comment || true
+		return 0
+	fi
+
+	now_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+	if force_merge_event_json="$(latest_force_merge_label_event_json 2>/dev/null || true)" \
+		&& [ -n "${force_merge_event_json}" ]; then
+		requested_actor="$(printf '%s' "${force_merge_event_json}" | jq -r '.actor.login // ""' 2>/dev/null || echo "")"
+		requested_at="$(printf '%s' "${force_merge_event_json}" | jq -r '.created_at // ""' 2>/dev/null || echo "")"
+	fi
+	[ -n "${requested_actor}" ] || requested_actor="unknown"
+	[ -n "${requested_at}" ] || requested_at="${now_utc}"
+	if [ "${requested_actor}" = "unknown" ]; then
+		requested_actor_display="unknown (latest \`ai:force-merge\` label event unavailable)"
+		requested_reason="Tracking issue carries \`ai:force-merge\`, but the latest label event could not be attributed from current cycle data."
+	else
+		requested_actor_display="@${requested_actor}"
+		requested_reason="Tracking issue labeled \`ai:force-merge\` by ${requested_actor_display} at ${requested_at}."
+	fi
+	validation_context="status=${PROJECT_STATUS:-unknown}; validation_cycle=${validation_cycle}; ahead_by=${ahead_by}; final_pr=${final_pr}; integration_branch=${integration_branch}"
+	force_merge_retry_message="Operator requested \`ai:force-merge\` for integration SHA \`${integration_sha}\`, but promoting draft integration PR #${final_pr} failed this cycle. The poller will retry on the next run."
+
+	if [ "${pr_draft}" = "true" ]; then
+		if ! gh_retry gh pr ready "${final_pr}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+			update_eager_pr_validation_status_section "${final_pr}" "${force_merge_retry_message}" || true
+			existing_failure_tracking_comment_json="$(printf '%s' "${COMMENTS:-[]}" | jq -c --arg sha "${integration_sha}" '
+				[
+					.[]
+					| select((.body // "") | contains("<!-- force-merge-bypass-failed:" + $sha + " -->"))
+				]
+				| sort_by((.created_at // ""), (.id // 0))
+				| last // empty
+			' 2>/dev/null || echo "")"
+			if [ -z "${existing_failure_tracking_comment_json}" ] || [ "${existing_failure_tracking_comment_json}" = "null" ]; then
+				failure_tracking_comment_body="$(cat <<EOF
+## ⚠️ Operator bypass requested but not yet applied: ai:force-merge
+
+The poller could not promote draft integration PR #${final_pr} for this integration SHA on this cycle, so the bypass is not yet active.
+
+- Integration branch: \`${integration_branch}\`
+- Integration SHA: \`${integration_sha}\`
+- Ahead of default: ${ahead_by} commit(s)
+- Requested by: ${requested_actor_display}
+- Request observed at (UTC): ${requested_at}
+- Promotion attempt failed at (UTC): ${now_utc}
+- Validation context: \`${validation_context}\`
+
+The poller will retry the promotion on a later cycle.
+
+<!-- force-merge-bypass-failed:${integration_sha} -->
+EOF
+)"
+				post_issue_comment_json "${TRACKING_NUM}" "${failure_tracking_comment_body}" >/dev/null || true
+			fi
+			echo "::warning::[force-merge] Unable to promote draft integration PR #${final_pr}; will retry next poll." >&2
+			return 1
+		fi
+		draft_action_text="promoted integration PR #${final_pr} from draft to ready"
+	else
+		draft_action_text="recorded the operator bypass for already-ready integration PR #${final_pr}"
+	fi
+	update_eager_pr_validation_status_section "${final_pr}" "${force_merge_message}" || true
+
+	tracking_comment_body="$(cat <<EOF
+## ⚠️ Operator bypass applied: ai:force-merge
+
+The orchestrator ${draft_action_text} before validation completed for this integration SHA.
+
+- Integration branch: \`${integration_branch}\`
+- Integration SHA: \`${integration_sha}\`
+- Ahead of default: ${ahead_by} commit(s)
+- Requested by: ${requested_actor_display}
+- Request observed at (UTC): ${requested_at}
+- Bypass applied at (UTC): ${now_utc}
+- Validation context: \`${validation_context}\`
+
+This bypass is recorded once per integration SHA and keeps the existing validation audit trail intact.
+
+<!-- force-merge-bypass:${integration_sha} -->
+EOF
+)"
+	if ! tracking_comment_json="$(post_issue_comment_json "${TRACKING_NUM}" "${tracking_comment_body}")"; then
+		return 1
+	fi
+	tracking_comment_id="$(printf '%s' "${tracking_comment_json}" | jq -r '.id // ""' 2>/dev/null || echo "")"
+	tracking_comment_url="$(printf '%s' "${tracking_comment_json}" | jq -r '.html_url // ""' 2>/dev/null || echo "")"
+	if [[ "${tracking_comment_id}" =~ ^[0-9]+$ ]]; then
+		tracking_comment_id_json="${tracking_comment_id}"
+	fi
+
+	pr_comment_body="$(cat <<EOF
+## ⚠️ Operator bypass recorded
+
+Tracking issue #${TRACKING_NUM} carries \`ai:force-merge\`, so this PR is allowed to proceed before validation completed for integration SHA \`${integration_sha}\`.
+
+- Requested by: ${requested_actor_display}
+- Tracking issue audit: ${tracking_comment_url:-$(_gh_url "issues/${TRACKING_NUM}")}
+- Validation context: \`${validation_context}\`
+
+<!-- force-merge-bypass:${integration_sha} -->
+EOF
+)"
+	if pr_comment_json="$(post_issue_comment_json "${final_pr}" "${pr_comment_body}")"; then
+		pr_comment_id="$(printf '%s' "${pr_comment_json}" | jq -r '.id // ""' 2>/dev/null || echo "")"
+		pr_comment_url="$(printf '%s' "${pr_comment_json}" | jq -r '.html_url // ""' 2>/dev/null || echo "")"
+		if [[ "${pr_comment_id}" =~ ^[0-9]+$ ]]; then
+			pr_comment_id_json="${pr_comment_id}"
+		fi
+	else
+		echo "::warning::[force-merge] Failed to post PR audit comment for #${final_pr}; tracking issue audit is still authoritative." >&2
+	fi
+
+	memory_entry_file="$(mktemp "${TMPDIR:-/tmp}/operator_bypass_audit.XXXXXX")"
+	jq -n \
+		--arg actor "${requested_actor}" \
+		--arg timestamp_utc "${now_utc}" \
+		--arg bypass_kind "force-merge" \
+		--arg reason "${requested_reason}" \
+		--arg validation_context "${validation_context}" \
+		--argjson source_comment_id "${tracking_comment_id_json}" \
+		--arg source_comment_url "${tracking_comment_url}" '
+			{
+				actor: $actor,
+				timestamp_utc: $timestamp_utc,
+				bypass_kind: $bypass_kind,
+				reason: (if $reason == "" then null else $reason end),
+				validation_context: (if $validation_context == "" then null else $validation_context end),
+				source_comment_id: $source_comment_id,
+				source_comment_url: (if $source_comment_url == "" then null else $source_comment_url end)
+			}
+		' > "${memory_entry_file}"
+	memory_result="$(memory_operator_bypass_audit_append \
+		--repo-root . \
+		--memory-branch "${AI_MEMORY_BRANCH:-ai-memory}" \
+		--memory-root "${AI_MEMORY_ROOT:-ai-memory}" \
+		--repo "${GITHUB_REPOSITORY}" \
+		--tracking-issue "${TRACKING_NUM}" \
+		--integration-sha "${integration_sha}" \
+		--entry-file "${memory_entry_file}" 2>/dev/null || echo '{"ok": true, "enabled": true, "stored": false, "audit": null}')"
+	rm -f "${memory_entry_file}"
+	if [ "$(printf '%s' "${memory_result}" | jq -r '.stored // false' 2>/dev/null || echo false)" != "true" ]; then
+		echo "::warning::[force-merge] operator bypass audit append did not confirm storage for integration SHA ${integration_sha}; tracking issue audit comment remains the canonical trail." >&2
+	fi
+
+	jq \
+		--arg sha "${integration_sha}" \
+		--arg now_utc "${now_utc}" \
+		--arg actor "${requested_actor}" \
+		--argjson tracking_comment_id "${tracking_comment_id_json}" \
+		--arg tracking_comment_url "${tracking_comment_url}" \
+		--argjson pr_comment_id "${pr_comment_id_json}" \
+		--arg pr_comment_url "${pr_comment_url}" '
+		.force_merge_last_bypassed_integration_sha = $sha
+		| .force_merge_last_bypassed_at_utc = $now_utc
+		| .force_merge_last_bypass_actor = $actor
+		| .force_merge_last_bypass_tracking_comment_id = $tracking_comment_id
+		| .force_merge_last_bypass_tracking_comment_url = (if $tracking_comment_url == "" then null else $tracking_comment_url end)
+		| .force_merge_last_bypass_pr_comment_id = $pr_comment_id
+		| .force_merge_last_bypass_pr_comment_url = (if $pr_comment_url == "" then null else $pr_comment_url end)
+	' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+	post_state_comment || true
+	echo "FORCE_MERGE_BYPASS tracking_issue=${TRACKING_NUM} pr=${final_pr} integration_branch=${integration_branch} integration_sha=${integration_sha} actor=${requested_actor} ahead_by=${ahead_by}"
+	return 0
 }
 
 # Build a prompt for the judge and run codex exec to resolve a
@@ -10831,6 +11276,7 @@ FEATURE_SWEEP_DONE="false"
 for ((tidx=0; tidx<COUNT; tidx++)); do
   TRACKING_NUM="$(echo "${TRACKING_ISSUES}" | jq -r ".[${tidx}].number")"
   TRACKING_TITLE="$(echo "${TRACKING_ISSUES}" | jq -r ".[${tidx}].title")"
+  unset FORCE_MERGE_LABEL_EVENT_JSON_CACHE
   HEALING_NOTES=()
   echo "========================================"
   echo "Processing tracking issue #${TRACKING_NUM}: ${TRACKING_TITLE}"
@@ -11721,6 +12167,15 @@ The poller will resume processing on the next cycle."
 
   echo "Current wave: ${CURRENT_WAVE}/${TOTAL_WAVES}, Judge cycle: ${JUDGE_CYCLE} (stall: ${JUDGE_STALL_CYCLES}), Recovery count: ${RECOVERY_COUNT}/${MAX_RECOVERY_ATTEMPTS}"
 
+  # Compute the integration branch's ahead_by vs the default branch once per
+  # cycle before any merge paths run so backpressure, check-wave-status, and the
+  # staleness alert all reuse the same compare probe.
+  compute_cycle_integration_ahead_by
+  INTEGRATION_BACKPRESSURE_BLOCK_MERGES="false"
+  if integration_backpressure_active_for_ahead_by "${CWS_AHEAD_BY}"; then
+    INTEGRATION_BACKPRESSURE_BLOCK_MERGES="true"
+  fi
+
   # ---------------------------------------------------------------
   # Backward scan: check prior waves for non-terminal issues
   # ---------------------------------------------------------------
@@ -11834,8 +12289,14 @@ The poller will resume processing on the next cycle."
               fi
               unset _bws_integ
             elif [ "${PW_PR_STATE}" = "open" ] && [ "${PW_PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${PW_PR}" "${_pw_head_sha}"; then
-              gh_retry gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto 2>/dev/null \
-                || gh_retry gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash 2>/dev/null || true
+              if [ "${INTEGRATION_BACKPRESSURE_BLOCK_MERGES:-false}" = "true" ]; then
+                echo "  [backward-scan] Backpressure active (ahead_by=${CWS_AHEAD_BY}, threshold=${ORCH_INTEGRATION_MAX_AHEAD_COMMITS}); deferring auto-merge of PR #${PW_PR} for prior-wave issue #${pw_inum}."
+                continue
+              fi
+              if gh_retry gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto 2>/dev/null \
+                || gh_retry gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash 2>/dev/null; then
+                refresh_integration_backpressure_gate_after_merge || true
+              fi
             elif [ "${PW_PR_STATE}" = "open" ] && [ "${PW_PR_MERGEABLE}" = "false" ]; then
               gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}/update-branch" \
                 -X PUT -f expected_head_sha="${_pw_head_sha}" \
@@ -12123,32 +12584,9 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   # Check wave status
   # ---------------------------------------------------------------
 
-  # Compute the integration branch's ahead_by vs the default branch before
-  # invoking check-wave-status. project_complete must NOT advance to true
-  # while the integration tip has not yet landed on default — otherwise the
-  # judge / validation / completion gates declare success against a stale
-  # default branch. Fail closed on a compare API error: pass "" so
-  # check-wave-status treats ahead_by as unknown and forces project_complete=
-  # false. See shubhodeep1/binance-blessings#135 for the regression case.
-  CWS_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
-  [ "${CWS_INTEGRATION_BRANCH}" = "null" ] && CWS_INTEGRATION_BRANCH=""
-  if [ -n "${CWS_INTEGRATION_BRANCH}" ]; then
-    CWS_DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "")"
-    if [ -z "${CWS_DEFAULT_BRANCH}" ]; then
-      CWS_AHEAD_BY=""
-      echo "::warning::  [check-wave-status] Could not resolve default branch via GitHub API; passing empty ahead_by so check-wave-status fails closed and keeps project_complete=false."
-    elif CWS_AHEAD_BY="$(_integration_branch_ahead_of_default "${CWS_INTEGRATION_BRANCH}" "${CWS_DEFAULT_BRANCH}")"; then
-      :
-    else
-      CWS_AHEAD_BY=""
-      echo "::warning::  [check-wave-status] Compare API failed for ${CWS_DEFAULT_BRANCH}...${CWS_INTEGRATION_BRANCH}; failing closed (project_complete forced to false this tick)."
-    fi
-  else
-    # No integration branch (default-branch-only flow): ahead_by is trivially
-    # 0 since there is no integration→default merge gate to honour.
-    CWS_AHEAD_BY="0"
-  fi
-	check_integration_branch_staleness "${CWS_INTEGRATION_BRANCH}" "${CWS_DEFAULT_BRANCH:-}" "${CWS_AHEAD_BY}" || true
+  # CWS_* was computed before the merge paths ran so this wave-status block,
+  # backpressure, and the staleness alert all reuse the same compare result.
+  check_integration_branch_staleness "${CWS_INTEGRATION_BRANCH}" "${CWS_DEFAULT_BRANCH:-}" "${CWS_AHEAD_BY}" || true
 
   WAVE_STATUS="$(python3 scripts/orchestrate_lib.py check-wave-status \
     --state-file "${STATE_FILE}" \
@@ -12188,6 +12626,11 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       update_eager_pr_validation_status_section "${EAGER_FINAL_PR}" || true
     fi
   fi
+  EAGER_FINAL_PR_EFFECTIVE="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+  if [[ "${EAGER_FINAL_PR_EFFECTIVE}" =~ ^[0-9]+$ ]]; then
+    maybe_apply_force_merge_bypass "${EAGER_FINAL_PR_EFFECTIVE}" "${CWS_INTEGRATION_BRANCH}" "${CWS_AHEAD_BY}" || true
+  fi
+  reconcile_integration_backpressure_label "${CWS_INTEGRATION_BRANCH}" "${CWS_DEFAULT_BRANCH:-}" "${CWS_AHEAD_BY}" "${EAGER_FINAL_PR_EFFECTIVE}" || true
 
   # ---------------------------------------------------------------
   # Maintain the pinned "completion status" comment on the tracking
@@ -12220,6 +12663,10 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
 
   _csc_integration_ahead_by="$(echo "${WAVE_STATUS}" | jq -r '.integration_ahead_by // ""')"
   _csc_integration_contained="$(echo "${WAVE_STATUS}" | jq -r '.integration_contained_in_default // false')"
+  _csc_final_pr="${EAGER_FINAL_PR_EFFECTIVE:-}"
+  if ! [[ "${_csc_final_pr}" =~ ^[0-9]+$ ]]; then
+    _csc_final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+  fi
   _csc_total_waves="$(jq -r '.total_waves // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
   _csc_current_wave="$(echo "${WAVE_STATUS}" | jq -r '.wave // 0')"
   _csc_skipped_lines="$(echo "${WAVE_STATUS}" | jq -r '
@@ -12255,6 +12702,13 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     _csc_body+=$'\n'"Integration branch is ahead of default by **${_csc_integration_ahead_by}** commit(s). The integration→default merge has not landed yet (autofix may still be running on the integration PR)."$'\n'
   else
     _csc_body+=$'\n'"Integration status is unknown this cycle (compare API unavailable). Project completion remains gated until the next successful poll re-check."$'\n'
+  fi
+  if [ "${INTEGRATION_BACKPRESSURE_BLOCK_MERGES:-false}" = "true" ]; then
+    if [[ "${_csc_final_pr}" =~ ^[0-9]+$ ]]; then
+      _csc_body+=$'\n'"Integration backpressure is active (\`ai:integration-backpressure\`): the poller is pausing additional sub-issue merges while the integration branch backlog stays at or above \`${ORCH_INTEGRATION_MAX_AHEAD_COMMITS}\` commit(s). Review the open integration PR #${_csc_final_pr} ($(_gh_url "pull/${_csc_final_pr}")); this clears automatically once the backlog shrinks below the threshold."$'\n'
+    else
+      _csc_body+=$'\n'"Integration backpressure is active (\`ai:integration-backpressure\`): the poller is pausing additional sub-issue merges while the integration branch backlog stays at or above \`${ORCH_INTEGRATION_MAX_AHEAD_COMMITS}\` commit(s). This clears automatically once the backlog shrinks below the threshold."$'\n'
+    fi
   fi
   if [ -n "${_csc_failed_lines}" ]; then
     _csc_body+=$'\n'"**Wave issues closed without merge / implementation-failed:**"$'\n'"${_csc_failed_lines}"$'\n'
@@ -12347,21 +12801,25 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       _rtm_head_sha="$(_jq_field "${_rtm_pr_json}" '.head.sha')"
       _rtm_head_ref="$(_jq_field "${_rtm_pr_json}" '.head.ref')"
       if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
-		if _pr_checks_completed "${RTM_PR}" "${_rtm_head_sha}"; then
-		  # Pre-merge sibling-conflict probe: refuse to squash into the
-		  # integration branch when another open sibling PR would
-		  # textually conflict. This short-circuits the wave-internal
-		  # collision pattern (two siblings editing README.md /
-		  # orchestrate_poll_process.sh / agents.md in parallel) BEFORE
-		  # the merge lands, so the loser never enters an autofix
-		  # rebase loop.
-		  if [ -n "${RTM_INTEGRATION_BRANCH}" ] && [ -n "${_rtm_head_ref}" ] && [ "${_rtm_head_ref}" != "null" ]; then
-		    if ! probe_sibling_merge_conflicts "${RTM_PR}" "${_rtm_head_ref}" "${RTM_INTEGRATION_BRANCH}"; then
-		      _rtm_defer_count="$(_bump_merge_deferral_count "${WAVE_IDX}" "${rtm_issue}")"
-		      [[ "${_rtm_defer_count}" =~ ^[0-9]+$ ]] || _rtm_defer_count=0
-		      echo "  [merge-probe] Deferring merge of PR #${RTM_PR} for issue #${rtm_issue} (defer ${_rtm_defer_count}/${MAX_MERGE_DEFERRALS}) — sibling conflict detected."
-		      if [ "${_rtm_defer_count}" -ge "${MAX_MERGE_DEFERRALS}" ]; then
-		        tg_notify "PR #${RTM_PR} (issue #${rtm_issue}) has exceeded MAX_MERGE_DEFERRALS=${MAX_MERGE_DEFERRALS} with persistent sibling merge-tree conflicts. Human review required."$'\n'"PR: $(_gh_url "pull/${RTM_PR}")"$'\n'"Issue: $(_gh_url "issues/${rtm_issue}")" "WARNING"
+        if [ "${INTEGRATION_BACKPRESSURE_BLOCK_MERGES:-false}" = "true" ]; then
+          echo "  [backpressure] Deferring merge of PR #${RTM_PR} for issue #${rtm_issue}: integration branch ahead_by=${CWS_AHEAD_BY} meets ORCH_INTEGRATION_MAX_AHEAD_COMMITS=${ORCH_INTEGRATION_MAX_AHEAD_COMMITS}."
+          continue
+        fi
+        if _pr_checks_completed "${RTM_PR}" "${_rtm_head_sha}"; then
+          # Pre-merge sibling-conflict probe: refuse to squash into the
+          # integration branch when another open sibling PR would
+          # textually conflict. This short-circuits the wave-internal
+          # collision pattern (two siblings editing README.md /
+          # orchestrate_poll_process.sh / agents.md in parallel) BEFORE
+          # the merge lands, so the loser never enters an autofix
+          # rebase loop.
+          if [ -n "${RTM_INTEGRATION_BRANCH}" ] && [ -n "${_rtm_head_ref}" ] && [ "${_rtm_head_ref}" != "null" ]; then
+            if ! probe_sibling_merge_conflicts "${RTM_PR}" "${_rtm_head_ref}" "${RTM_INTEGRATION_BRANCH}"; then
+              _rtm_defer_count="$(_bump_merge_deferral_count "${WAVE_IDX}" "${rtm_issue}")"
+              [[ "${_rtm_defer_count}" =~ ^[0-9]+$ ]] || _rtm_defer_count=0
+              echo "  [merge-probe] Deferring merge of PR #${RTM_PR} for issue #${rtm_issue} (defer ${_rtm_defer_count}/${MAX_MERGE_DEFERRALS}) — sibling conflict detected."
+              if [ "${_rtm_defer_count}" -ge "${MAX_MERGE_DEFERRALS}" ]; then
+                tg_notify "PR #${RTM_PR} (issue #${rtm_issue}) has exceeded MAX_MERGE_DEFERRALS=${MAX_MERGE_DEFERRALS} with persistent sibling merge-tree conflicts. Human review required."$'\n'"PR: $(_gh_url "pull/${RTM_PR}")"$'\n'"Issue: $(_gh_url "issues/${rtm_issue}")" "WARNING"
 		      fi
 		      continue
 		    fi
@@ -12405,8 +12863,10 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
 		  echo "  Merging PR #${RTM_PR} (squash)..."
 		  if gh_retry gh pr merge "${RTM_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto; then
 		    echo "  PR #${RTM_PR} merge initiated."
+		    refresh_integration_backpressure_gate_after_merge || true
 		  elif gh_retry gh pr merge "${RTM_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
 		    echo "  PR #${RTM_PR} merged directly."
+		    refresh_integration_backpressure_gate_after_merge || true
 		  else
 		    echo "::warning::Could not merge PR #${RTM_PR} for issue #${rtm_issue}. May need manual merge or branch protection prevents it."
 		  fi
