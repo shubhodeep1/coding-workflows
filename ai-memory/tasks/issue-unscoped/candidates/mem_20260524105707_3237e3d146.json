@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The PR archives the completed plan to docs/completed/ but the lint check scripts/lint_plan_archival_completeness.py requires either all sub-issue checkboxes to be ticked on tracking issue #2934 or a non-empty '## De-scoped phases' section in the PR body listing each unshipped phase with rationale.\"\n  expected_change_site: PR body (GitHub metadata, not a repo file)\n  confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  EVIDENCE: PR body is only \"Squash merge of orchestrator project #2934.\\n\\nRefs #2934\" with no required \"## De-scoped phases\" section; lint_plan_archival_completeness.py fails with \"9 unchecked sub-issue checkbox(es) ... without a non-empty explicit ## De-scoped phases section in the body.\"\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- requirement: The plan archive in `docs/completed/orchestrator-validation-resilience-plan.md` must satisfy the archival completeness contract enforced by `scripts/lint_plan_archival_completeness.py`. The lint requires either all sub-issue checkboxes on tracking issue #2934 to be ticked, or a non-empty `## De-scoped phases` section in the PR body listing every unchecked phase with rationale.\n  expected_change_site: PR body (GitHub metadata on this pull request) \u2014 specifically a `## De-scoped phases` section explaining why 9 sub-issue checkboxes remain unchecked on tracking issue #2934.\n  confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: The PR body is only \"Squash merge of orchestrator project #2934. Refs #2934\" with no `## De-scoped phases` section. The CI lint check `scripts/lint_plan_archival_completeness.py` fails deterministically with: `[lint_plan_archival] Tracking issue #2934 has 9 unchecked sub-issue checkbox(es), but PR archives plan to docs/completed/ without a non-empty explicit '## De-scoped phases' section in the body.`\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- requirement: \"Archive the completed plan with a pointer file in docs/plans/, and include a non-empty `## De-scoped phases` section in the PR body when tracking issue #2934 has unchecked sub-issue checkboxes.\"\n  expected_change_site: The PR body itself (entry[4] in PR_ALL_COMMENTS_CONTEXT shows PR body: \"Squash merge of orchestrator project #2934.\\n\\nRefs #2934\")\n  confidence=4\n  flagged_by: [moonshotai_kimi-k2_5]\n  EVIDENCE: The PR body contains only the squash-merge reference without the required \"## De-scoped phases\" disclaimer for the 9 unchecked sub-issue checkboxes. The lint_plan_archival_completeness.py check-run failed with \"[lint_plan_archival] Tracking issue #2934 has 9 unchecked sub-issue checkbox(es), but PR archives plan to docs/completed/ without a non-empty explicit `## De-scoped phases` section in the body.\" per failed[2].log_tail.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- requirement: \"The PR archives the completed plan to docs/completed/ but the lint check scripts/lint_plan_archival_completeness.py requires either all sub-issue checkboxes to be ticked on tracking issue #2934 or a non-empty '## De-scoped phases' section in the PR body listing each unshipped phase with rationale.\"\n  expected_change_site: PR body (GitHub metadata, not a repo file)\n  confidence=4\n  flagged_by: [qwen_qwen3_6-plus]\n  EVIDENCE: The PR body contains only \"Squash merge of orchestrator project #2934.\\n\\nRefs #2934\" with no \"## De-scoped phases\" section. The lint check-run on this PR head SHA is failing with exit 1 for this exact reason (\"9 unchecked sub-issue checkbox(es) ... without a non-empty explicit ## De-scoped phases section in the body\").\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "8972fa6db4d15a46752ac1fd6133f13914c3ddcac96812fef5d07d5585ec7ea2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2955,
+    "run_id": "26358760229",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26358760229",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260524105707_3237e3d146",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2955,
+    "run_id": "26358760229"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-24T10:57:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
