@@ -251,6 +251,7 @@ it is intentionally large.
 | `REVIEW_LEDGER_PATH` | `.ai/review_issue_ledger/pr-${PR_NUMBER}.txt` | Default per-PR ledger path. |
 | `REVIEW_REVIEWER_CHECKLIST_ENABLED` | `1` | Append the reviewer checklist block when the prompt template is available. |
 | `REVIEW_REVIEWER_ITERATION_SCOPING` | `1` | Scope later reviewer passes from last-run changed files plus actionable ledger rows; first pass stays full-diff. |
+| `PR_PROCESSED_ALERT_LEVEL` | `SILENT` | Step-scoped override for the `review_autofix.yml` `PR processed: #N` DEBUG ping. Set to `DEBUG` to re-enable that notification without changing the workflow's other Telegram alert thresholds. |
 
 ## Integration-sync verifier + bootstrap contract
 
