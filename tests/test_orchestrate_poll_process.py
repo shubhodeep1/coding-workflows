@@ -4079,6 +4079,70 @@ def test_force_merge_bypass_promotion_failure_posts_retry_audit_once_per_sha():
 	assert second["mock_operator_bypass_audit_append_calls"] == 0
 
 
+def test_force_merge_bypass_promotes_eager_pr_for_validation_origin_terminal_failure():
+	state = _base_state(status="failed")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_pr"] = 462
+	prs = [
+		{
+			"number": 462,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"headRefFromApi": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	issue_events = {
+		192: [
+			{
+				"id": 993,
+				"event": "labeled",
+				"created_at": "2026-05-23T16:25:00Z",
+				"label": {"name": "ai:force-merge"},
+				"actor": {"login": "octocat"},
+			},
+		],
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed", "ai:harness-broken", "ai:force-merge"],
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		branch_ref_shas={"orchestrator/project-192": "abcdef1234"},
+		issue_events=issue_events,
+	)
+	assert result["latest_state"]["status"] == "failed"
+	assert result["latest_state"]["final_merge_pr"] == 462
+	assert result["latest_state"]["force_merge_last_bypassed_integration_sha"] == "abcdef1234"
+	assert result["pr_ready_calls"] == [462]
+	assert result["prs"][0].get("draft") is False
+	assert result["validation_dispatches"] == []
+	assert result["mock_operator_bypass_audit_append_calls"] == 1
+	stored_audit = result["mock_operator_bypass_audit_payload"]
+	assert stored_audit["tracking_issue_number"] == 192
+	assert stored_audit["integration_sha"] == "abcdef1234"
+	assert len(stored_audit["entries"]) == 1
+	assert stored_audit["entries"][0]["actor"] == "octocat"
+	tracking_bodies = [
+		str(comment.get("body", ""))
+		for comment in result["issues"]["192"]["comments"]
+		if not _is_state_comment(str((comment or {}).get("body", "")))
+	]
+	assert len([
+		body for body in tracking_bodies if body.startswith("## ⚠️ Operator bypass applied: ai:force-merge")
+	]) == 1
+	pr_bodies = [str(comment.get("body", "")) for comment in result["issues"]["462"]["comments"]]
+	assert len([
+		body for body in pr_bodies if body.startswith("## ⚠️ Operator bypass recorded")
+	]) == 1
+
+
 def test_final_merge_keeps_legacy_open_non_draft_pr_behind_readiness_gate():
 	state = _base_state(status="merge_conflict")
 	state["integration_branch"] = "orchestrator/project-192"
