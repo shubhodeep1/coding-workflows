@@ -4090,10 +4090,12 @@ def test_final_merge_legacy_validated_gate_ignores_later_failure_without_raw_sta
 			],
 		),
 	)
-	assert result["latest_state"]["status"] == "complete"
-	assert result["latest_state"]["final_merge_status"] == "merged"
-	assert 370 in result["pr_ready_calls"]
-	assert 370 in result.get("merged_prs", [])
+	assert result["latest_state"]["status"] == "merge_conflict"
+	assert result["latest_state"]["final_merge_pr"] == 370
+	assert result["latest_state"]["final_merge_status"] == "pending"
+	assert result["pr_ready_calls"] == []
+	assert result.get("merged_prs", []) == []
+	assert "Validation label present, but a later non-harness validation failure is recorded for integration SHA `abcdef1234`; rerun validation before promoting." in result["prs"][0]["body"]
 
 
 def test_mark_validation_complete_fails_open_on_history_write_error():

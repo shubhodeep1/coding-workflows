@@ -4701,7 +4701,6 @@ validation_history_gate_decision_for_current_sha() {
 			| ($indexed
 				| map(select(
 					is_fail
-					and (raw_status_text != "")
 					and (raw_status_text != "harness_error")
 					and (ordering_key > [($latest_pass.recorded_at // ""), $latest_pass.__idx])
 				))) as $later_failures
