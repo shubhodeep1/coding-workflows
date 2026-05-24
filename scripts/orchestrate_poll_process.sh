@@ -5130,7 +5130,8 @@ validation_history_gate_decision_for_current_sha() {
 			| ($outcome == "passed" or $outcome == "pass" or $outcome == "success");
 		def is_fail:
 			((.outcome // "") | ascii_downcase) as $outcome
-			| ($outcome == "failed" or $outcome == "fail");
+			| ((.raw_conclusion // "") | ascii_downcase) as $conclusion
+			| ($outcome == "failed" or $outcome == "fail" or $outcome == "error" or $outcome == "errored" or $conclusion == "failure");
 		(.validation_history.entries // []) as $entries
 		| ($entries | to_entries | map(.value + {__idx: .key})) as $indexed
 		| ($indexed | map(select(is_pass and (raw_status_text != "harness_error")))) as $passes

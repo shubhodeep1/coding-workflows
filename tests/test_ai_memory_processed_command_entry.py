@@ -1120,6 +1120,11 @@ def test_positive_int_helpers_reject_boolean_values() -> None:
 		assert False, f"Expected boolean {field_name} to be rejected"
 
 
+def test_optional_text_normalizer_treats_boolean_as_absent() -> None:
+	assert ai_memory_lib._normalize_optional_text(False) is None
+	assert ai_memory_lib._normalize_optional_text(True) is None
+
+
 def test_new_get_cli_fails_open_on_memory_git_error() -> None:
 	def _raise_memory_git_error(*_args, **_kwargs):
 		raise ai_memory.MemoryGitError("simulated git failure")

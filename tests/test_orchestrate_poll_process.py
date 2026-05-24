@@ -4278,6 +4278,69 @@ def test_final_merge_legacy_validated_gate_blocks_later_non_harness_failure():
 	assert "Validation label present, but a later non-harness validation failure is recorded for integration SHA `abcdef1234`; rerun validation before promoting." in result["prs"][0]["body"]
 
 
+def test_final_merge_legacy_validated_gate_blocks_later_error_outcome():
+	state = _base_state(status="merge_conflict")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 365,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+			"body": "Squash merge of orchestrator project #192.\n\nRefs #192",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		branch_ref_shas={"orchestrator/project-192": "abcdef1234"},
+		mock_validation_history_payload=_validation_history_payload(
+			integration_sha="abcdef1234",
+			entries=[
+				{
+					"outcome": "passed",
+					"raw_status": "pass",
+					"raw_conclusion": "success",
+					"run_id": 9003,
+					"run_attempt": 1,
+					"run_url": "https://example.invalid/runs/9003",
+					"recorded_at": "2026-05-23T10:00:00Z",
+					"cycle": 1,
+					"context": "validation passed",
+					"source": "test",
+				},
+				{
+					"outcome": "error",
+					"raw_status": "error",
+					"raw_conclusion": "failure",
+					"run_id": 9004,
+					"run_attempt": 1,
+					"run_url": "https://example.invalid/runs/9004",
+					"recorded_at": "2026-05-23T11:00:00Z",
+					"cycle": 1,
+					"context": "validation errored",
+					"source": "test",
+				},
+			],
+		),
+	)
+	assert result["latest_state"]["status"] == "merge_conflict"
+	assert result["latest_state"]["final_merge_pr"] == 365
+	assert result["latest_state"]["final_merge_status"] == "pending"
+	assert result["pr_ready_calls"] == []
+	assert result.get("merged_prs", []) == []
+	assert "Validation label present, but a later non-harness validation failure is recorded for integration SHA `abcdef1234`; rerun validation before promoting." in result["prs"][0]["body"]
+
+
 def test_final_merge_legacy_validated_gate_ignores_later_harness_failure():
 	state = _base_state(status="merge_conflict")
 	state["integration_branch"] = "orchestrator/project-192"

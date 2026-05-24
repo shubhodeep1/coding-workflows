@@ -605,7 +605,7 @@ def _normalize_required_text(value: Any, field_name: str) -> str:
 
 
 def _normalize_optional_text(value: Any) -> str | None:
-    if value is None:
+    if value is None or isinstance(value, bool):
         return None
     text = str(value).strip()
     return text or None
