@@ -44,6 +44,9 @@ RETRIEVAL_PROFILE_SCHEMA_VERSION = "retrieval_profiles.v1"
 ACTIONS_RUNS_CACHE_SCHEMA_VERSION = "v1"
 FINGERPRINT_QUARANTINE_SCHEMA_VERSION = "v1"
 BRANCH_REBUILD_AUDIT_SCHEMA_VERSION = "v1"
+VALIDATION_HISTORY_SCHEMA_VERSION = "v1"
+OPERATOR_BYPASS_AUDIT_SCHEMA_VERSION = "v1"
+REVALIDATE_EVENTS_SCHEMA_VERSION = "v1"
 MAX_MEMORY_DETAILS_LENGTH = 12000
 LEGACY_MEMORY_ROOT_RELATIVE = ".github/ai-memory"
 CANONICAL_MEMORY_ROOT_RELATIVE = "ai-memory"
@@ -563,6 +566,8 @@ def _validate_repository_name(repository: str) -> str:
 
 
 def _validate_positive_int_field(value: int | str, field_name: str) -> int:
+    if isinstance(value, bool):
+        raise MemoryValidationError(f"{field_name} must be a positive integer")
     try:
         parsed = int(value)
     except (TypeError, ValueError) as exc:
@@ -579,6 +584,48 @@ def _validate_integration_branch_name(integration_branch: str) -> str:
     if len(normalized) > 255:
         raise MemoryValidationError("integration_branch must be 255 characters or fewer")
     return normalized
+
+
+def _normalize_repository_name(repository: str) -> str:
+    return _validate_repository_name(repository).lower()
+
+
+def _validate_integration_sha(integration_sha: str) -> str:
+    normalized = (integration_sha or "").strip().lower()
+    if re.fullmatch(r"[0-9a-f]{7,64}", normalized) is None:
+        raise MemoryValidationError("integration_sha must be 7-64 hexadecimal characters")
+    return normalized
+
+
+def _normalize_required_text(value: Any, field_name: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise MemoryValidationError(f"{field_name} is required")
+    return text
+
+
+def _normalize_optional_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _normalize_optional_positive_int(value: Any, field_name: str) -> int | None:
+    if value is None or str(value).strip() == "":
+        return None
+    return _validate_positive_int_field(value, field_name)
+
+
+def _normalize_datetime_utc(value: Any, field_name: str) -> str:
+    text = _normalize_required_text(value, field_name)
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise MemoryValidationError(f"{field_name} must be a valid date-time string") from exc
+    if parsed.tzinfo is None:
+        raise MemoryValidationError(f"{field_name} must include a timezone")
+    return parsed.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _actions_runs_cache_path(memory_root: Path, repository: str) -> Path:
@@ -613,6 +660,207 @@ def _branch_rebuild_audit_path(
 
 def validate_actions_runs_cache_payload(payload: dict[str, Any], memory_root: Path) -> None:
     _validate_with_schema_file(payload, _schema_file(memory_root, "actions_runs_cache.v1.json"))
+
+
+def _validation_history_path(memory_root: Path, repository: str, integration_sha: str) -> Path:
+    normalized_repo = _normalize_repository_name(repository)
+    normalized_sha = _validate_integration_sha(integration_sha)
+    owner, repo = normalized_repo.split("/", 1)
+    repo_key = f"{sanitize_segment(owner, 'owner')}__{sanitize_segment(repo, 'repo')}"
+    return memory_root / "orchestrator" / "validation_history" / repo_key / normalized_sha[:2] / f"{normalized_sha}.json"
+
+
+def _operator_bypass_audit_path(
+    memory_root: Path,
+    repository: str,
+    tracking_issue_number: int,
+    integration_sha: str,
+) -> Path:
+    normalized_repo = _normalize_repository_name(repository)
+    tracking_issue = _validate_positive_int_field(tracking_issue_number, "tracking_issue_number")
+    normalized_sha = _validate_integration_sha(integration_sha)
+    owner, repo = normalized_repo.split("/", 1)
+    repo_key = f"{sanitize_segment(owner, 'owner')}__{sanitize_segment(repo, 'repo')}"
+    return (
+        memory_root
+        / "orchestrator"
+        / "operator_bypass_audits"
+        / repo_key
+        / f"issue-{tracking_issue}"
+        / f"{normalized_sha}.json"
+    )
+
+
+def _revalidate_events_path(
+    memory_root: Path,
+    repository: str,
+    tracking_issue_number: int,
+    integration_sha: str,
+) -> Path:
+    normalized_repo = _normalize_repository_name(repository)
+    tracking_issue = _validate_positive_int_field(tracking_issue_number, "tracking_issue_number")
+    normalized_sha = _validate_integration_sha(integration_sha)
+    owner, repo = normalized_repo.split("/", 1)
+    repo_key = f"{sanitize_segment(owner, 'owner')}__{sanitize_segment(repo, 'repo')}"
+    return (
+        memory_root
+        / "orchestrator"
+        / "revalidate_events"
+        / repo_key
+        / f"issue-{tracking_issue}"
+        / f"{normalized_sha}.json"
+    )
+
+
+def validate_validation_history_payload(payload: dict[str, Any], memory_root: Path) -> None:
+    _validate_with_schema_file(payload, _schema_file(memory_root, "validation_history.v1.json"))
+
+
+def validate_operator_bypass_audit_payload(payload: dict[str, Any], memory_root: Path) -> None:
+    _validate_with_schema_file(payload, _schema_file(memory_root, "operator_bypass_audit.v1.json"))
+
+
+def validate_revalidate_events_payload(payload: dict[str, Any], memory_root: Path) -> None:
+    _validate_with_schema_file(payload, _schema_file(memory_root, "revalidate_events.v1.json"))
+
+
+def _default_validation_history_payload(repository: str, integration_sha: str) -> dict[str, Any]:
+    return {
+        "schema_version": VALIDATION_HISTORY_SCHEMA_VERSION,
+        "repository": _normalize_repository_name(repository),
+        "integration_sha": _validate_integration_sha(integration_sha),
+        "entries": [],
+    }
+
+
+def _default_operator_bypass_audit_payload(
+    repository: str,
+    tracking_issue_number: int,
+    integration_sha: str,
+) -> dict[str, Any]:
+    return {
+        "schema_version": OPERATOR_BYPASS_AUDIT_SCHEMA_VERSION,
+        "repository": _normalize_repository_name(repository),
+        "tracking_issue_number": _validate_positive_int_field(tracking_issue_number, "tracking_issue_number"),
+        "integration_sha": _validate_integration_sha(integration_sha),
+        "entries": [],
+    }
+
+
+def _default_revalidate_events_payload(
+    repository: str,
+    tracking_issue_number: int,
+    integration_sha: str,
+) -> dict[str, Any]:
+    return {
+        "schema_version": REVALIDATE_EVENTS_SCHEMA_VERSION,
+        "repository": _normalize_repository_name(repository),
+        "tracking_issue_number": _validate_positive_int_field(tracking_issue_number, "tracking_issue_number"),
+        "integration_sha": _validate_integration_sha(integration_sha),
+        "entries": [],
+    }
+
+
+def _normalize_validation_history_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(entry, dict):
+        raise MemoryValidationError("validation_history entry must be a JSON object")
+    return {
+        "outcome": _normalize_required_text(entry.get("outcome"), "validation_history.entries[].outcome"),
+        "raw_status": _normalize_optional_text(entry.get("raw_status")),
+        "raw_conclusion": _normalize_optional_text(entry.get("raw_conclusion")),
+        "run_id": _normalize_optional_positive_int(entry.get("run_id"), "validation_history.entries[].run_id"),
+        "run_attempt": _normalize_optional_positive_int(
+            entry.get("run_attempt"), "validation_history.entries[].run_attempt"
+        ),
+        "run_url": _normalize_optional_text(entry.get("run_url")),
+        "recorded_at": _normalize_datetime_utc(entry.get("recorded_at"), "validation_history.entries[].recorded_at"),
+        "cycle": _normalize_optional_positive_int(entry.get("cycle"), "validation_history.entries[].cycle"),
+        "context": _normalize_optional_text(entry.get("context")),
+        "source": _normalize_optional_text(entry.get("source")),
+    }
+
+
+def _normalize_operator_bypass_audit_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(entry, dict):
+        raise MemoryValidationError("operator_bypass_audit entry must be a JSON object")
+    return {
+        "actor": _normalize_required_text(entry.get("actor"), "operator_bypass_audit.entries[].actor"),
+        "timestamp_utc": _normalize_datetime_utc(
+            entry.get("timestamp_utc"), "operator_bypass_audit.entries[].timestamp_utc"
+        ),
+        "bypass_kind": _normalize_required_text(
+            entry.get("bypass_kind"), "operator_bypass_audit.entries[].bypass_kind"
+        ),
+        "reason": _normalize_optional_text(entry.get("reason")),
+        "validation_context": _normalize_optional_text(entry.get("validation_context")),
+        "source_comment_id": _normalize_optional_positive_int(
+            entry.get("source_comment_id"), "operator_bypass_audit.entries[].source_comment_id"
+        ),
+        "source_comment_url": _normalize_optional_text(entry.get("source_comment_url")),
+    }
+
+
+def _normalize_revalidate_event_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(entry, dict):
+        raise MemoryValidationError("revalidate_events entry must be a JSON object")
+    return {
+        "actor": _normalize_required_text(entry.get("actor"), "revalidate_events.entries[].actor"),
+        "timestamp_utc": _normalize_datetime_utc(entry.get("timestamp_utc"), "revalidate_events.entries[].timestamp_utc"),
+        "prior_outcome": _normalize_optional_text(entry.get("prior_outcome")),
+        "prior_context": _normalize_optional_text(entry.get("prior_context")),
+        "reason": _normalize_optional_text(entry.get("reason")),
+        "source_comment_id": _normalize_optional_positive_int(
+            entry.get("source_comment_id"), "revalidate_events.entries[].source_comment_id"
+        ),
+        "source_comment_url": _normalize_optional_text(entry.get("source_comment_url")),
+    }
+
+
+def _stable_sort_entries_by_field(entries: list[dict[str, Any]], *, field_name: str) -> list[dict[str, Any]]:
+    indexed_entries = list(enumerate(entries))
+    indexed_entries.sort(key=lambda item: (str(item[1].get(field_name) or ""), item[0]))
+    return [entry for _, entry in indexed_entries]
+
+
+def _normalize_validation_history_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise MemoryValidationError("validation_history payload must be a JSON object")
+    entries = [_normalize_validation_history_entry(entry) for entry in payload.get("entries") or []]
+    entries = _stable_sort_entries_by_field(entries, field_name="recorded_at")
+    return {
+        "schema_version": VALIDATION_HISTORY_SCHEMA_VERSION,
+        "repository": _normalize_repository_name(str(payload.get("repository") or "")),
+        "integration_sha": _validate_integration_sha(str(payload.get("integration_sha") or "")),
+        "entries": entries,
+    }
+
+
+def _normalize_operator_bypass_audit_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise MemoryValidationError("operator_bypass_audit payload must be a JSON object")
+    entries = [_normalize_operator_bypass_audit_entry(entry) for entry in payload.get("entries") or []]
+    entries = _stable_sort_entries_by_field(entries, field_name="timestamp_utc")
+    return {
+        "schema_version": OPERATOR_BYPASS_AUDIT_SCHEMA_VERSION,
+        "repository": _normalize_repository_name(str(payload.get("repository") or "")),
+        "tracking_issue_number": _validate_positive_int_field(payload.get("tracking_issue_number"), "tracking_issue_number"),
+        "integration_sha": _validate_integration_sha(str(payload.get("integration_sha") or "")),
+        "entries": entries,
+    }
+
+
+def _normalize_revalidate_events_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise MemoryValidationError("revalidate_events payload must be a JSON object")
+    entries = [_normalize_revalidate_event_entry(entry) for entry in payload.get("entries") or []]
+    entries = _stable_sort_entries_by_field(entries, field_name="timestamp_utc")
+    return {
+        "schema_version": REVALIDATE_EVENTS_SCHEMA_VERSION,
+        "repository": _normalize_repository_name(str(payload.get("repository") or "")),
+        "tracking_issue_number": _validate_positive_int_field(payload.get("tracking_issue_number"), "tracking_issue_number"),
+        "integration_sha": _validate_integration_sha(str(payload.get("integration_sha") or "")),
+        "entries": entries,
+    }
 
 
 def _default_fingerprint_quarantine_payload() -> dict[str, Any]:
@@ -676,6 +924,149 @@ def put_fingerprint_quarantine(memory_root: Path, payload: dict[str, Any]) -> di
 
 def validate_branch_rebuild_audit_payload(payload: dict[str, Any], memory_root: Path) -> None:
     _validate_with_schema_file(payload, _schema_file(memory_root, "branch_rebuild_audit.v1.json"))
+
+
+def get_validation_history(memory_root: Path, repository: str, integration_sha: str) -> dict[str, Any] | None:
+    ensure_memory_layout(memory_root)
+    history_path = _validation_history_path(memory_root, repository, integration_sha)
+    if not history_path.exists():
+        return None
+    payload = _load_json(history_path)
+    if not isinstance(payload, dict):
+        raise MemoryValidationError("validation_history payload must be a JSON object")
+    validate_validation_history_payload(payload, memory_root)
+    normalized = _normalize_validation_history_payload(payload)
+    validate_validation_history_payload(normalized, memory_root)
+    return normalized
+
+
+def append_validation_history_entry(
+    memory_root: Path,
+    *,
+    repository: str,
+    integration_sha: str,
+    entry: dict[str, Any],
+) -> dict[str, Any]:
+    ensure_memory_layout(memory_root)
+    if not isinstance(entry, dict):
+        raise MemoryValidationError("validation history entry must be a JSON object")
+    normalized_repo = _normalize_repository_name(repository)
+    normalized_sha = _validate_integration_sha(integration_sha)
+    with _file_lock(f"validation-history:{normalized_repo}:{normalized_sha}"):
+        payload = get_validation_history(memory_root, normalized_repo, normalized_sha)
+        if payload is None:
+            payload = _default_validation_history_payload(normalized_repo, normalized_sha)
+        payload["entries"] = [*(payload.get("entries") or []), _normalize_validation_history_entry(entry)]
+        normalized = _normalize_validation_history_payload(payload)
+        validate_validation_history_payload(normalized, memory_root)
+        _atomic_write_json(_validation_history_path(memory_root, normalized_repo, normalized_sha), normalized)
+        return normalized
+
+
+def get_operator_bypass_audit(
+    memory_root: Path,
+    *,
+    repository: str,
+    tracking_issue_number: int,
+    integration_sha: str,
+) -> dict[str, Any] | None:
+    ensure_memory_layout(memory_root)
+    audit_path = _operator_bypass_audit_path(memory_root, repository, tracking_issue_number, integration_sha)
+    if not audit_path.exists():
+        return None
+    payload = _load_json(audit_path)
+    if not isinstance(payload, dict):
+        raise MemoryValidationError("operator_bypass_audit payload must be a JSON object")
+    validate_operator_bypass_audit_payload(payload, memory_root)
+    normalized = _normalize_operator_bypass_audit_payload(payload)
+    validate_operator_bypass_audit_payload(normalized, memory_root)
+    return normalized
+
+
+def append_operator_bypass_audit_entry(
+    memory_root: Path,
+    *,
+    repository: str,
+    tracking_issue_number: int,
+    integration_sha: str,
+    entry: dict[str, Any],
+) -> dict[str, Any]:
+    ensure_memory_layout(memory_root)
+    if not isinstance(entry, dict):
+        raise MemoryValidationError("operator bypass audit entry must be a JSON object")
+    normalized_repo = _normalize_repository_name(repository)
+    normalized_tracking_issue = _validate_positive_int_field(tracking_issue_number, "tracking_issue_number")
+    normalized_sha = _validate_integration_sha(integration_sha)
+    with _file_lock(f"operator-bypass-audit:{normalized_repo}:{normalized_tracking_issue}:{normalized_sha}"):
+        payload = get_operator_bypass_audit(
+            memory_root,
+            repository=normalized_repo,
+            tracking_issue_number=normalized_tracking_issue,
+            integration_sha=normalized_sha,
+        )
+        if payload is None:
+            payload = _default_operator_bypass_audit_payload(normalized_repo, normalized_tracking_issue, normalized_sha)
+        payload["entries"] = [*(payload.get("entries") or []), _normalize_operator_bypass_audit_entry(entry)]
+        normalized = _normalize_operator_bypass_audit_payload(payload)
+        validate_operator_bypass_audit_payload(normalized, memory_root)
+        _atomic_write_json(
+            _operator_bypass_audit_path(memory_root, normalized_repo, normalized_tracking_issue, normalized_sha),
+            normalized,
+        )
+        return normalized
+
+
+def get_revalidate_events(
+    memory_root: Path,
+    *,
+    repository: str,
+    tracking_issue_number: int,
+    integration_sha: str,
+) -> dict[str, Any] | None:
+    ensure_memory_layout(memory_root)
+    events_path = _revalidate_events_path(memory_root, repository, tracking_issue_number, integration_sha)
+    if not events_path.exists():
+        return None
+    payload = _load_json(events_path)
+    if not isinstance(payload, dict):
+        raise MemoryValidationError("revalidate_events payload must be a JSON object")
+    validate_revalidate_events_payload(payload, memory_root)
+    normalized = _normalize_revalidate_events_payload(payload)
+    validate_revalidate_events_payload(normalized, memory_root)
+    return normalized
+
+
+def append_revalidate_event(
+    memory_root: Path,
+    *,
+    repository: str,
+    tracking_issue_number: int,
+    integration_sha: str,
+    entry: dict[str, Any],
+) -> dict[str, Any]:
+    ensure_memory_layout(memory_root)
+    if not isinstance(entry, dict):
+        raise MemoryValidationError("revalidate event entry must be a JSON object")
+    normalized_repo = _normalize_repository_name(repository)
+    normalized_tracking_issue = _validate_positive_int_field(tracking_issue_number, "tracking_issue_number")
+    normalized_sha = _validate_integration_sha(integration_sha)
+    with _file_lock(f"revalidate-events:{normalized_repo}:{normalized_tracking_issue}:{normalized_sha}"):
+        payload = get_revalidate_events(
+            memory_root,
+            repository=normalized_repo,
+            tracking_issue_number=normalized_tracking_issue,
+            integration_sha=normalized_sha,
+        )
+        if payload is None:
+            payload = _default_revalidate_events_payload(normalized_repo, normalized_tracking_issue, normalized_sha)
+        payload["entries"] = [*(payload.get("entries") or []), _normalize_revalidate_event_entry(entry)]
+        normalized = _normalize_revalidate_events_payload(payload)
+        validate_revalidate_events_payload(normalized, memory_root)
+        _atomic_write_json(
+            _revalidate_events_path(memory_root, normalized_repo, normalized_tracking_issue, normalized_sha),
+            normalized,
+        )
+        return normalized
 
 
 def get_actions_runs_cache(memory_root: Path, repository: str) -> dict[str, Any] | None:
