@@ -560,6 +560,7 @@ def _run_poller(
 	mock_validation_history_payload: dict | None = None,
 	mock_validation_history_get_exit_code: int = 0,
 	mock_validation_history_get_json: dict | None = None,
+	mock_validation_history_append_exit_code: int = 0,
 	mock_validation_history_append_json: dict | None = None,
 	mock_revalidate_events_payload: dict | None = None,
 	mock_pr_create_race_pr: dict | None = None,
@@ -598,6 +599,7 @@ def _run_poller(
 	mock_validation_history_payload = dict(mock_validation_history_payload or {})
 	mock_validation_history_get_exit_code = int(mock_validation_history_get_exit_code or 0)
 	mock_validation_history_get_json = dict(mock_validation_history_get_json or {})
+	mock_validation_history_append_exit_code = int(mock_validation_history_append_exit_code or 0)
 	mock_validation_history_append_json = dict(mock_validation_history_append_json or {})
 	mock_branch_rebuild_audit_get_json = mock_branch_rebuild_audit_get_json or {}
 	mock_branch_rebuild_audit_put_json = mock_branch_rebuild_audit_put_json or {}
@@ -731,6 +733,7 @@ def _run_poller(
 			"mock_validation_history_payload": mock_validation_history_payload,
 			"mock_validation_history_get_exit_code": mock_validation_history_get_exit_code,
 			"mock_validation_history_get_json": mock_validation_history_get_json,
+			"mock_validation_history_append_exit_code": mock_validation_history_append_exit_code,
 			"mock_validation_history_append_json": mock_validation_history_append_json,
 			"mock_revalidate_events_payload": mock_revalidate_events_payload,
 			"mock_pr_create_race_pr": mock_pr_create_race_pr,
@@ -2162,6 +2165,12 @@ if len(args) >= 3 and _script_matches(args[0], "scripts/ai_memory.py") and args[
 		print(json.dumps(response))
 		sys.exit(0)
 	if cmd == "append":
+		store.setdefault("mock_validation_history_append_calls", 0)
+		store["mock_validation_history_append_calls"] = int(store["mock_validation_history_append_calls"]) + 1
+		_save_store(store)
+		exit_code = int(store.get("mock_validation_history_append_exit_code", 0) or 0)
+		if exit_code != 0:
+			sys.exit(exit_code)
 		entry = {}
 		if entry_file:
 			try:
@@ -2192,8 +2201,6 @@ if len(args) >= 3 and _script_matches(args[0], "scripts/ai_memory.py") and args[
 				store["mock_validation_history_payload"] = stored_payload
 			else:
 				store["mock_validation_history_payload"] = payload
-		store.setdefault("mock_validation_history_append_calls", 0)
-		store["mock_validation_history_append_calls"] = int(store["mock_validation_history_append_calls"]) + 1
 		_save_store(store)
 		print(json.dumps(response))
 		sys.exit(0)
@@ -4125,6 +4132,44 @@ def test_mark_validation_complete_fails_open_on_history_write_error():
 	assert result["latest_state"]["final_merge_status"] == "merged"
 	assert result["pr_ready_calls"] == [368]
 	assert 368 in result.get("merged_prs", [])
+	assert result.get("mock_validation_history_append_calls", 0) == 1
+	assert result.get("mock_validation_history_get_calls", 0) == 0
+	assert "Validation history unavailable for integration SHA abcdef1234; falling back to legacy ai:validated gate (reason=history_write_failed_current_tick)." in (result["stdout"] + result["stderr"])
+
+
+def test_mark_validation_complete_fails_open_on_shell_wrapper_history_write_error():
+	state = _base_state(status="validating")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["validation_cycle"] = 2
+	prs = [
+		{
+			"number": 371,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		branch_ref_shas={"orchestrator/project-192": "abcdef1234"},
+		mock_validation_history_append_exit_code=1,
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["validation_completed_cycle"] == 2
+	assert result["latest_state"]["final_merge_pr"] == 371
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert result["pr_ready_calls"] == [371]
+	assert 371 in result.get("merged_prs", [])
 	assert result.get("mock_validation_history_append_calls", 0) == 1
 	assert result.get("mock_validation_history_get_calls", 0) == 0
 	assert "Validation history unavailable for integration SHA abcdef1234; falling back to legacy ai:validated gate (reason=history_write_failed_current_tick)." in (result["stdout"] + result["stderr"])
