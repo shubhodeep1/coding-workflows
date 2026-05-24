@@ -5501,7 +5501,14 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          # The DEBUG "PR processed: #N" ping fires once per successful run, so
+          # orchestrator-driven PRs that synchronize many times generate noise.
+          # Default this step's ALERT_MSG_LEVEL to SILENT so the DEBUG call below
+          # is suppressed by tg_helpers.sh::_tg_should_send unless the consumer
+          # explicitly opts in via vars.PR_PROCESSED_ALERT_LEVEL. Mirrors the
+          # pattern in update_workflows.yml (see CHANGELOG entry from the
+          # "update_workflows.yml ALERT_MSG_LEVEL default SILENT" change).
+          ALERT_MSG_LEVEL: ${{ vars.PR_PROCESSED_ALERT_LEVEL || 'SILENT' }}
         run: |
           source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true

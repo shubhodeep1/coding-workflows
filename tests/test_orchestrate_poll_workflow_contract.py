@@ -11,7 +11,7 @@ ORCHESTRATE_POLL_WF = REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.ym
 ORCHESTRATE_WF = REPO_ROOT / ".github" / "workflows" / "orchestrate.yml"
 
 
-def _workflow(path: Path) -> str:
+def _workflow(path: Path = ORCHESTRATE_POLL_WF) -> str:
 	return path.read_text(encoding="utf-8")
 
 
@@ -34,7 +34,7 @@ def test_stall_recovery_prompt_is_bootstrapped_with_main_fallback() -> None:
 
 
 def test_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets() -> None:
-	wf = _workflow(ORCHESTRATE_POLL_WF)
+	wf = _workflow()
 	assert "validation_history.v1.json" in wf
 	assert "operator_bypass_audit.v1.json" in wf
 	assert "revalidate_events.v1.json" in wf
