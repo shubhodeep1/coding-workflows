@@ -567,6 +567,7 @@ def _run_poller(
 	judge_repeat_fingerprint_max: str = "2",
 	mock_gh_issue_list_label_filter: bool = False,
 	compare_ahead_by: int = 0,
+	compare_ahead_by_sequence: list[int] | None = None,
 	compare_ahead_by_force_error: bool = False,
 	mock_validation_history_payload: dict | None = None,
 	mock_validation_history_get_exit_code: int = 0,
@@ -580,6 +581,7 @@ def _run_poller(
 	mock_operator_bypass_audit_append_json: dict | None = None,
 	mock_revalidate_events_payload: dict | None = None,
 	mock_pr_create_race_pr: dict | None = None,
+	mock_pr_ready_exit_code: int = 0,
 ) -> dict:
 	tracking_num = 192
 	tracking_labels = tracking_labels or []
@@ -630,6 +632,8 @@ def _run_poller(
 	mock_git_fetch_fail_after = mock_git_fetch_fail_after or {}
 	mock_revalidate_events_payload = dict(mock_revalidate_events_payload or {})
 	mock_pr_create_race_pr = dict(mock_pr_create_race_pr or {})
+	compare_ahead_by_sequence = [int(value) for value in (compare_ahead_by_sequence or [])]
+	mock_pr_ready_exit_code = int(mock_pr_ready_exit_code or 0)
 	codex_json = codex_json or {
 		"status": "complete",
 		"justification": "done",
@@ -752,6 +756,7 @@ def _run_poller(
 			"actions_runs_status_sequence": list(actions_runs_status_sequence),
 			"mock_gh_issue_list_label_filter": bool(mock_gh_issue_list_label_filter),
 			"compare_ahead_by": int(compare_ahead_by),
+			"compare_ahead_by_sequence": list(compare_ahead_by_sequence),
 			"compare_ahead_by_force_error": bool(compare_ahead_by_force_error),
 			"mock_validation_history_payload": mock_validation_history_payload,
 			"mock_validation_history_get_exit_code": mock_validation_history_get_exit_code,
@@ -765,6 +770,7 @@ def _run_poller(
 			"mock_operator_bypass_audit_append_json": mock_operator_bypass_audit_append_json,
 			"mock_revalidate_events_payload": mock_revalidate_events_payload,
 			"mock_pr_create_race_pr": mock_pr_create_race_pr,
+			"mock_pr_ready_exit_code": mock_pr_ready_exit_code,
 		}
 		store_file.write_text(json.dumps(store), encoding="utf-8")
 
@@ -1195,6 +1201,10 @@ if args[0] == 'pr' and len(args) >= 2 and args[1] == 'create':
 
 if args[0] == 'pr' and len(args) >= 3 and args[1] == 'ready':
 	pr_num = int(args[2])
+	exit_code = int(store.get('mock_pr_ready_exit_code', 0) or 0)
+	if exit_code != 0:
+		print('mock pr ready failure', file=sys.stderr)
+		sys.exit(exit_code)
 	for pr in store.get('prs', []):
 		if pr.get('number') == pr_num:
 			pr['draft'] = False
@@ -1838,7 +1848,14 @@ if args[0] == 'api':
 		if store.get('compare_ahead_by_force_error'):
 			sys.stderr.write('simulated compare API error\n')
 			sys.exit(22)
-		ahead_by = int(store.get('compare_ahead_by', 0))
+		sequence = store.get('compare_ahead_by_sequence') or []
+		if sequence:
+			ahead_by = int(sequence[0])
+			if len(sequence) > 1:
+				store['compare_ahead_by_sequence'] = list(sequence[1:])
+				save()
+		else:
+			ahead_by = int(store.get('compare_ahead_by', 0))
 		if jq == '.ahead_by':
 			print(ahead_by)
 		else:
@@ -3980,6 +3997,88 @@ def test_force_merge_bypass_promotes_eager_pr_once_per_sha_and_records_audit():
 	assert any("fedcba9876" in body for body in third_force_merge_pr_comments)
 
 
+def test_force_merge_bypass_promotion_failure_posts_retry_audit_once_per_sha():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 461,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"headRefFromApi": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	issue_events = {
+		192: [
+			{
+				"id": 992,
+				"event": "labeled",
+				"created_at": "2026-05-23T16:20:00Z",
+				"label": {"name": "ai:force-merge"},
+				"actor": {"login": "octocat"},
+			},
+		],
+	}
+	first = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:force-merge"],
+		issue_labels={10: ["ai:implementing"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		branch_ref_shas={"orchestrator/project-192": "abcdef1234"},
+		issue_events=issue_events,
+		mock_pr_ready_exit_code=1,
+	)
+	assert first["pr_ready_calls"] == []
+	assert first["prs"][0].get("draft") is True
+	assert first["latest_state"].get("force_merge_last_bypassed_integration_sha") in (None, "")
+	assert first["mock_operator_bypass_audit_append_calls"] == 0
+	assert 461 in first["pr_body_update_calls"]
+	assert "failed this cycle" in first["prs"][0].get("body", "")
+	first_tracking_comments = [
+		dict(comment)
+		for comment in first["issues"]["192"]["comments"]
+		if not _is_state_comment(str((comment or {}).get("body", "")))
+	]
+	first_failure_comments = [
+		str(comment.get("body", ""))
+		for comment in first_tracking_comments
+		if str(comment.get("body", "")).startswith("## ⚠️ Operator bypass requested but not yet applied: ai:force-merge")
+	]
+	assert len(first_failure_comments) == 1
+	assert "@octocat" in first_failure_comments[0]
+	assert "will retry the promotion" in first_failure_comments[0]
+
+	second = _run_poller(
+		state=first["latest_state"],
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=first["tracking_labels"],
+		tracking_comments=first_tracking_comments,
+		issue_labels={10: ["ai:implementing"]},
+		prs=first["prs"],
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		branch_ref_shas={"orchestrator/project-192": "abcdef1234"},
+		issue_events=issue_events,
+		mock_pr_ready_exit_code=1,
+	)
+	second_failure_comments = [
+		str(comment.get("body", ""))
+		for comment in second["issues"]["192"]["comments"]
+		if str(comment.get("body", "")).startswith("## ⚠️ Operator bypass requested but not yet applied: ai:force-merge")
+	]
+	assert len(second_failure_comments) == 1
+	assert second["mock_operator_bypass_audit_append_calls"] == 0
+
+
 def test_final_merge_keeps_legacy_open_non_draft_pr_behind_readiness_gate():
 	state = _base_state(status="merge_conflict")
 	state["integration_branch"] = "orchestrator/project-192"
@@ -4617,6 +4716,52 @@ def test_integration_backpressure_blocks_merges_at_threshold_and_clears_below_it
 		if "<!-- orchestrator:completion-status -->" in str(comment.get("body", ""))
 	)
 	assert "ai:integration-backpressure" not in second_completion_comment
+
+
+def test_integration_backpressure_refreshes_after_first_merge_within_same_cycle():
+	state = _base_state(status="in_progress")
+	state["total_issues"] = 2
+	state["integration_branch"] = "orchestrator/project-192"
+	state["waves"][0]["issues"] = [
+		{"id": "issue-1", "github_issue": 10, "status": "pending"},
+		{"id": "issue-2", "github_issue": 11, "status": "pending"},
+	]
+	state["issue_number_map"] = {"issue-1": 10, "issue-2": 11}
+	prs = [
+		{
+			"number": 910,
+			"state": "open",
+			"baseRefName": "orchestrator/project-192",
+			"headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10",
+			"headSha": "sha910",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+		{
+			"number": 911,
+			"state": "open",
+			"baseRefName": "orchestrator/project-192",
+			"headRefName": "ai/issue-11",
+			"headRefFromApi": "ai/issue-11",
+			"headSha": "sha911",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:ready-to-merge"], 11: ["ai:ready-to-merge"]},
+		issue_linked_prs={10: 910, 11: 911},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by_sequence=[9, 10],
+	)
+	assert 910 in result.get("merged_prs", [])
+	assert 911 not in result.get("merged_prs", [])
+	assert "[backpressure] Deferring merge of PR #911 for issue #11: integration branch ahead_by=10 meets ORCH_INTEGRATION_MAX_AHEAD_COMMITS=10." in (result["stdout"] + result["stderr"])
 
 
 def test_final_merge_treats_closed_merged_pr_as_success():

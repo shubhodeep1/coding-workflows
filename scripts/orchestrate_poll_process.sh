@@ -2838,6 +2838,22 @@ integration_backpressure_active_for_ahead_by() {
 	[[ "${ahead_by}" =~ ^[0-9]+$ ]] && [ "${ahead_by}" -ge "${ORCH_INTEGRATION_MAX_AHEAD_COMMITS}" ]
 }
 
+refresh_integration_backpressure_gate_after_merge() {
+	local prior_block="${INTEGRATION_BACKPRESSURE_BLOCK_MERGES:-false}"
+
+	compute_cycle_integration_ahead_by
+	if ! [[ "${CWS_AHEAD_BY}" =~ ^[0-9]+$ ]]; then
+		INTEGRATION_BACKPRESSURE_BLOCK_MERGES="${prior_block}"
+		return 1
+	fi
+
+	INTEGRATION_BACKPRESSURE_BLOCK_MERGES="false"
+	if integration_backpressure_active_for_ahead_by "${CWS_AHEAD_BY}"; then
+		INTEGRATION_BACKPRESSURE_BLOCK_MERGES="true"
+	fi
+	return 0
+}
+
 latest_force_merge_label_event_json() {
 	local events_json
 	local latest_event
@@ -2916,7 +2932,7 @@ reconcile_integration_backpressure_label() {
 		fi
 	fi
 
-	return 1
+	return 0
 }
 
 resolve_active_orchestrator_context_for_issue() {
@@ -4081,6 +4097,7 @@ maybe_apply_force_merge_bypass() {
 	local existing_tracking_comment_json=""
 	local existing_tracking_comment_id=""
 	local existing_tracking_comment_url=""
+	local existing_failure_tracking_comment_json=""
 	local now_utc=""
 	local force_merge_event_json=""
 	local requested_actor=""
@@ -4089,6 +4106,8 @@ maybe_apply_force_merge_bypass() {
 	local requested_reason=""
 	local validation_context=""
 	local draft_action_text=""
+	local force_merge_retry_message=""
+	local failure_tracking_comment_body=""
 	local tracking_comment_body=""
 	local tracking_comment_json=""
 	local tracking_comment_id=""
@@ -4165,17 +4184,6 @@ maybe_apply_force_merge_bypass() {
 		return 0
 	fi
 
-	if [ "${pr_draft}" = "true" ]; then
-		if ! gh_retry gh pr ready "${final_pr}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-			echo "::warning::[force-merge] Unable to promote draft integration PR #${final_pr}; will retry next poll." >&2
-			return 1
-		fi
-		draft_action_text="promoted integration PR #${final_pr} from draft to ready"
-	else
-		draft_action_text="recorded the operator bypass for already-ready integration PR #${final_pr}"
-	fi
-	update_eager_pr_validation_status_section "${final_pr}" "${force_merge_message}" || true
-
 	now_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 	if force_merge_event_json="$(latest_force_merge_label_event_json 2>/dev/null || true)" \
 		&& [ -n "${force_merge_event_json}" ]; then
@@ -4192,6 +4200,48 @@ maybe_apply_force_merge_bypass() {
 		requested_reason="Tracking issue labeled \`ai:force-merge\` by ${requested_actor_display} at ${requested_at}."
 	fi
 	validation_context="status=${PROJECT_STATUS:-unknown}; validation_cycle=${validation_cycle}; ahead_by=${ahead_by}; final_pr=${final_pr}; integration_branch=${integration_branch}"
+	force_merge_retry_message="Operator requested \`ai:force-merge\` for integration SHA \`${integration_sha}\`, but promoting draft integration PR #${final_pr} failed this cycle. The poller will retry on the next run."
+
+	if [ "${pr_draft}" = "true" ]; then
+		if ! gh_retry gh pr ready "${final_pr}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+			update_eager_pr_validation_status_section "${final_pr}" "${force_merge_retry_message}" || true
+			existing_failure_tracking_comment_json="$(printf '%s' "${COMMENTS:-[]}" | jq -c --arg sha "${integration_sha}" '
+				[
+					.[]
+					| select((.body // "") | contains("<!-- force-merge-bypass-failed:" + $sha + " -->"))
+				]
+				| sort_by((.created_at // ""), (.id // 0))
+				| last // empty
+			' 2>/dev/null || echo "")"
+			if [ -z "${existing_failure_tracking_comment_json}" ] || [ "${existing_failure_tracking_comment_json}" = "null" ]; then
+				failure_tracking_comment_body="$(cat <<EOF
+## ⚠️ Operator bypass requested but not yet applied: ai:force-merge
+
+The poller could not promote draft integration PR #${final_pr} for this integration SHA on this cycle, so the bypass is not yet active.
+
+- Integration branch: \`${integration_branch}\`
+- Integration SHA: \`${integration_sha}\`
+- Ahead of default: ${ahead_by} commit(s)
+- Requested by: ${requested_actor_display}
+- Request observed at (UTC): ${requested_at}
+- Promotion attempt failed at (UTC): ${now_utc}
+- Validation context: \`${validation_context}\`
+
+The poller will retry the promotion on a later cycle.
+
+<!-- force-merge-bypass-failed:${integration_sha} -->
+EOF
+)"
+				post_issue_comment_json "${TRACKING_NUM}" "${failure_tracking_comment_body}" >/dev/null || true
+			fi
+			echo "::warning::[force-merge] Unable to promote draft integration PR #${final_pr}; will retry next poll." >&2
+			return 1
+		fi
+		draft_action_text="promoted integration PR #${final_pr} from draft to ready"
+	else
+		draft_action_text="recorded the operator bypass for already-ready integration PR #${final_pr}"
+	fi
+	update_eager_pr_validation_status_section "${final_pr}" "${force_merge_message}" || true
 
 	tracking_comment_body="$(cat <<EOF
 ## ⚠️ Operator bypass applied: ai:force-merge
@@ -11226,6 +11276,7 @@ FEATURE_SWEEP_DONE="false"
 for ((tidx=0; tidx<COUNT; tidx++)); do
   TRACKING_NUM="$(echo "${TRACKING_ISSUES}" | jq -r ".[${tidx}].number")"
   TRACKING_TITLE="$(echo "${TRACKING_ISSUES}" | jq -r ".[${tidx}].title")"
+  unset FORCE_MERGE_LABEL_EVENT_JSON_CACHE
   HEALING_NOTES=()
   echo "========================================"
   echo "Processing tracking issue #${TRACKING_NUM}: ${TRACKING_TITLE}"
@@ -11324,9 +11375,9 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
         STATE_JSON="$(cat "${STATE_FILE}")"
         # Post the reconstructed state so future poll cycles find it
         post_state_comment || true
-	  echo "  State reconstructed and posted for tracking issue #${TRACKING_NUM}."
-	  tg_notify "Auto-recovery: rebuilt missing orchestrator state for tracking issue #${TRACKING_NUM}." "DEBUG"
-	else
+        echo "  State reconstructed and posted for tracking issue #${TRACKING_NUM}."
+        tg_notify "Auto-recovery: rebuilt missing orchestrator state for tracking issue #${TRACKING_NUM}." "DEBUG"
+      else
         echo "::warning::State reconstruction produced invalid output for #${TRACKING_NUM}, skipping."
         continue
       fi
@@ -11341,12 +11392,11 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     continue
   fi
 
-	echo "${STATE_JSON}" > "${STATE_FILE}"
-	unset PROJECT_COMPLETE WAVE_COMPLETE ANY_FAILED
-	COMPLETION_STATUS_STATE_CHANGED="false"
-	PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
-	TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
-	unset FORCE_MERGE_LABEL_EVENT_JSON_CACHE
+  echo "${STATE_JSON}" > "${STATE_FILE}"
+  unset PROJECT_COMPLETE WAVE_COMPLETE ANY_FAILED
+  COMPLETION_STATUS_STATE_CHANGED="false"
+  PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
+  TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
 
   # ---------------------------------------------------------------
   # External-finalize detect: if the orchestrator previously recorded
@@ -12243,8 +12293,10 @@ The poller will resume processing on the next cycle."
                 echo "  [backward-scan] Backpressure active (ahead_by=${CWS_AHEAD_BY}, threshold=${ORCH_INTEGRATION_MAX_AHEAD_COMMITS}); deferring auto-merge of PR #${PW_PR} for prior-wave issue #${pw_inum}."
                 continue
               fi
-              gh_retry gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto 2>/dev/null \
-                || gh_retry gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash 2>/dev/null || true
+              if gh_retry gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto 2>/dev/null \
+                || gh_retry gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash 2>/dev/null; then
+                refresh_integration_backpressure_gate_after_merge || true
+              fi
             elif [ "${PW_PR_STATE}" = "open" ] && [ "${PW_PR_MERGEABLE}" = "false" ]; then
               gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PW_PR}/update-branch" \
                 -X PUT -f expected_head_sha="${_pw_head_sha}" \
@@ -12811,8 +12863,10 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
 		  echo "  Merging PR #${RTM_PR} (squash)..."
 		  if gh_retry gh pr merge "${RTM_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto; then
 		    echo "  PR #${RTM_PR} merge initiated."
+		    refresh_integration_backpressure_gate_after_merge || true
 		  elif gh_retry gh pr merge "${RTM_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
 		    echo "  PR #${RTM_PR} merged directly."
+		    refresh_integration_backpressure_gate_after_merge || true
 		  else
 		    echo "::warning::Could not merge PR #${RTM_PR} for issue #${rtm_issue}. May need manual merge or branch protection prevents it."
 		  fi
