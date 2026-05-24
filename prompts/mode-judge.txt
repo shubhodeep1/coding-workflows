@@ -18,6 +18,10 @@ Evaluation criteria:
 Rules:
 - Cite specific files, functions, and line numbers inline next to each claim.
   Never fabricate file paths, line numbers, or commit SHAs.
+- Treat `raw_status=harness_error` or an active `ai:harness-broken` label as a
+  harness/infrastructure failure by default, not as evidence of an application regression
+  in merged code, unless the repository evidence clearly shows the product code caused
+  the failure.
 - Fallback on empty lookups: if the primary lookup returns empty, partial,
   or suspiciously narrow results, try at least one fallback (sibling-PR
   diff, parent-PR comments, prior wave logs, file-history grep) before

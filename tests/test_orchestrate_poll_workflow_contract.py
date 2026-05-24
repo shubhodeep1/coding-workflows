@@ -8,14 +8,15 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ORCHESTRATE_POLL_WF = REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml"
+ORCHESTRATE_WF = REPO_ROOT / ".github" / "workflows" / "orchestrate.yml"
 
 
-def _workflow() -> str:
-	return ORCHESTRATE_POLL_WF.read_text(encoding="utf-8")
+def _workflow(path: Path = ORCHESTRATE_POLL_WF) -> str:
+	return path.read_text(encoding="utf-8")
 
 
 def test_stall_control_env_defaults_are_declared() -> None:
-	wf = _workflow()
+	wf = _workflow(ORCHESTRATE_POLL_WF)
 	assert "STALL_JUDGE_TRIGGER_COUNT: ${{ vars.STALL_JUDGE_TRIGGER_COUNT || '2' }}" in wf
 	assert "ENABLE_STALL_JUDGE: ${{ vars.ENABLE_STALL_JUDGE || 'true' }}" in wf
 	assert "ENABLE_STALL_HUMAN_TERMINALIZATION: ${{ vars.ENABLE_STALL_HUMAN_TERMINALIZATION || 'false' }}" in wf
@@ -23,7 +24,7 @@ def test_stall_control_env_defaults_are_declared() -> None:
 
 
 def test_stall_recovery_prompt_is_bootstrapped_with_main_fallback() -> None:
-	wf = _workflow()
+	wf = _workflow(ORCHESTRATE_POLL_WF)
 	assert "for pf in mode-judge.txt mode-judge-review-blocked.txt mode-judge-stall-recovery.txt; do" in wf
 	assert "src=\".codex-workflow-src/prompts/${pf}\"" in wf
 	assert "if [ ! -f \"${src}\" ] && [ -f \".codex-workflow-src-main/prompts/${pf}\" ]; then" in wf
@@ -32,9 +33,25 @@ def test_stall_recovery_prompt_is_bootstrapped_with_main_fallback() -> None:
 	assert "install -m 0644 \"${src}\" \"prompts/${pf}\"" in wf
 
 
+def test_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets() -> None:
+	wf = _workflow()
+	assert "validation_history.v1.json" in wf
+	assert "operator_bypass_audit.v1.json" in wf
+	assert "revalidate_events.v1.json" in wf
+
+
+def test_orchestrate_workflow_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets() -> None:
+	wf = _workflow(ORCHESTRATE_WF)
+	assert "validation_history.v1.json" in wf
+	assert "operator_bypass_audit.v1.json" in wf
+	assert "revalidate_events.v1.json" in wf
+
+
 def main() -> int:
 	test_stall_control_env_defaults_are_declared()
 	test_stall_recovery_prompt_is_bootstrapped_with_main_fallback()
+	test_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
+	test_orchestrate_workflow_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
 	return 0
 
 

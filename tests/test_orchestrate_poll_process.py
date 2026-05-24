@@ -14,6 +14,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -35,7 +36,7 @@ POLLER_SUBPROCESS_TIMEOUT_SEC = 180.0
 # isolated copy of these so any file mutations the script performs are
 # confined to the sandbox and cannot reach the real coding-workflows
 # checkout the test runner started from.
-_SANDBOX_DIRS = ("scripts", "prompts", ".github/ai")
+_SANDBOX_DIRS = ("scripts", "prompts", ".github/ai", "ai-memory")
 _SANDBOX_FILES = (
 	"agents.md",
 	"unattended_system_instructions.md",
@@ -314,6 +315,25 @@ def _base_state(status: str = "in_progress") -> dict:
 	}
 
 
+def _validation_history_payload(*, integration_sha: str, entries: list[dict]) -> dict:
+	return {
+		"schema_version": "v1",
+		"repository": "owner/repo",
+		"integration_sha": integration_sha,
+		"entries": entries,
+	}
+
+
+def _operator_bypass_audit_payload(*, tracking_issue_number: int, integration_sha: str, entries: list[dict]) -> dict:
+	return {
+		"schema_version": "v1",
+		"repository": "owner/repo",
+		"tracking_issue_number": tracking_issue_number,
+		"integration_sha": integration_sha,
+		"entries": entries,
+	}
+
+
 def _state_comment(state: dict) -> str:
 	# V1 framing is intentionally retained for test SEED data.  The
 	# production reader handles the V2 → V1 fallback path, so seeding
@@ -492,10 +512,11 @@ def _run_poller(
 	enable_validation: str,
 	max_validate_cycles: str,
 	tracking_labels: list[str] | None = None,
-	tracking_comments: list[str] | None = None,
+	tracking_comments: list[str | dict] | None = None,
 	issue_labels: dict[int, list[str]] | None = None,
-	issue_comments: dict[int, list[str]] | None = None,
+	issue_comments: dict[int, list[str | dict]] | None = None,
 	issue_bodies: dict[int, str] | None = None,
+	issue_events: dict[int, list[dict]] | None = None,
 	gql_mode: str = "full",
 	gql_labels: dict[int, list[str]] | None = None,
 	codex_json: dict | None = None,
@@ -547,7 +568,21 @@ def _run_poller(
 	judge_repeat_fingerprint_max: str = "2",
 	mock_gh_issue_list_label_filter: bool = False,
 	compare_ahead_by: int = 0,
+	compare_ahead_by_sequence: list[int] | None = None,
 	compare_ahead_by_force_error: bool = False,
+	mock_validation_history_payload: dict | None = None,
+	mock_validation_history_get_exit_code: int = 0,
+	mock_validation_history_get_json: dict | None = None,
+	mock_validation_history_append_exit_code: int = 0,
+	mock_validation_history_append_json: dict | None = None,
+	mock_operator_bypass_audit_payload: dict | None = None,
+	mock_operator_bypass_audit_get_exit_code: int = 0,
+	mock_operator_bypass_audit_get_json: dict | None = None,
+	mock_operator_bypass_audit_append_exit_code: int = 0,
+	mock_operator_bypass_audit_append_json: dict | None = None,
+	mock_revalidate_events_payload: dict | None = None,
+	mock_pr_create_race_pr: dict | None = None,
+	mock_pr_ready_exit_code: int = 0,
 ) -> dict:
 	tracking_num = 192
 	tracking_labels = tracking_labels or []
@@ -556,6 +591,7 @@ def _run_poller(
 		issue_labels = {10: ["ai:merged"]}
 	issue_comments = issue_comments or {}
 	issue_bodies = issue_bodies or {}
+	issue_events = issue_events or {}
 	gql_labels = gql_labels or {}
 	prs = prs or []
 	pr_api_sequence = pr_api_sequence or {}
@@ -581,11 +617,25 @@ def _run_poller(
 	actions_runs_workflow_runs = actions_runs_workflow_runs or []
 	actions_runs_status_sequence = actions_runs_status_sequence or []
 	fail_pull_get_numbers = fail_pull_get_numbers or []
+	mock_validation_history_payload = dict(mock_validation_history_payload or {})
+	mock_validation_history_get_exit_code = int(mock_validation_history_get_exit_code or 0)
+	mock_validation_history_get_json = dict(mock_validation_history_get_json or {})
+	mock_validation_history_append_exit_code = int(mock_validation_history_append_exit_code or 0)
+	mock_validation_history_append_json = dict(mock_validation_history_append_json or {})
+	mock_operator_bypass_audit_payload = dict(mock_operator_bypass_audit_payload or {})
+	mock_operator_bypass_audit_get_exit_code = int(mock_operator_bypass_audit_get_exit_code or 0)
+	mock_operator_bypass_audit_get_json = dict(mock_operator_bypass_audit_get_json or {})
+	mock_operator_bypass_audit_append_exit_code = int(mock_operator_bypass_audit_append_exit_code or 0)
+	mock_operator_bypass_audit_append_json = dict(mock_operator_bypass_audit_append_json or {})
 	mock_branch_rebuild_audit_get_json = mock_branch_rebuild_audit_get_json or {}
 	mock_branch_rebuild_audit_put_json = mock_branch_rebuild_audit_put_json or {}
 	branch_protected_branches = branch_protected_branches or {}
 	branch_ref_shas = branch_ref_shas or {}
 	mock_git_fetch_fail_after = mock_git_fetch_fail_after or {}
+	mock_revalidate_events_payload = dict(mock_revalidate_events_payload or {})
+	mock_pr_create_race_pr = dict(mock_pr_create_race_pr or {})
+	compare_ahead_by_sequence = [int(value) for value in (compare_ahead_by_sequence or [])]
+	mock_pr_ready_exit_code = int(mock_pr_ready_exit_code or 0)
 	codex_json = codex_json or {
 		"status": "complete",
 		"justification": "done",
@@ -604,13 +654,34 @@ def _run_poller(
 		home_dir.mkdir(parents=True)
 		runtime_dir.mkdir(parents=True)
 
+		def _comment_entry(raw_comment: str | dict, comment_id: int, issue_num: int) -> dict:
+			if isinstance(raw_comment, dict):
+				entry = dict(raw_comment)
+			else:
+				entry = {"body": str(raw_comment)}
+			entry.setdefault("id", comment_id)
+			entry.setdefault("body", "")
+			entry.setdefault("created_at", f"2026-01-01T00:00:{comment_id % 60:02d}Z")
+			user = entry.get("user")
+			if isinstance(user, dict):
+				user_entry = dict(user)
+			else:
+				user_entry = {"login": str(user) if user else "octocat"}
+			user_entry.setdefault("login", "octocat")
+			entry["user"] = user_entry
+			entry.setdefault(
+				"html_url",
+				f"https://github.com/owner/repo/issues/{issue_num}#issuecomment-{entry['id']}",
+			)
+			return entry
+
 		issues: dict[str, dict] = {
 			str(tracking_num): {
 				"labels": list(tracking_labels),
 				"comments": [
-					{"id": 1, "body": _state_comment(state)},
+					_comment_entry({"body": _state_comment(state), "user": {"login": "github-actions[bot]"}}, 1, tracking_num),
 					*[
-						{"id": idx + 2, "body": comment_body}
+						_comment_entry(comment_body, idx + 2, tracking_num)
 						for idx, comment_body in enumerate(tracking_comments)
 					],
 				],
@@ -623,7 +694,7 @@ def _run_poller(
 			raw_comments = issue_comments.get(inum, [])
 			issue_comment_entries = []
 			for comment_body in raw_comments:
-				issue_comment_entries.append({"id": next_comment_id, "body": comment_body})
+				issue_comment_entries.append(_comment_entry(comment_body, next_comment_id, inum))
 				next_comment_id += 1
 			issues[str(inum)] = {
 				"labels": list(labels),
@@ -634,6 +705,7 @@ def _run_poller(
 
 		store = {
 			"issues": issues,
+			"issue_events": {str(k): list(v) for k, v in issue_events.items()},
 			"next_comment_id": next_comment_id,
 			"api_calls": [],
 			"label_create_calls": [],
@@ -687,7 +759,21 @@ def _run_poller(
 			"mock_gh_issue_list_label_filter": bool(mock_gh_issue_list_label_filter),
 			"fail_pull_get_numbers": [int(x) for x in fail_pull_get_numbers],
 			"compare_ahead_by": int(compare_ahead_by),
+			"compare_ahead_by_sequence": list(compare_ahead_by_sequence),
 			"compare_ahead_by_force_error": bool(compare_ahead_by_force_error),
+			"mock_validation_history_payload": mock_validation_history_payload,
+			"mock_validation_history_get_exit_code": mock_validation_history_get_exit_code,
+			"mock_validation_history_get_json": mock_validation_history_get_json,
+			"mock_validation_history_append_exit_code": mock_validation_history_append_exit_code,
+			"mock_validation_history_append_json": mock_validation_history_append_json,
+			"mock_operator_bypass_audit_payload": mock_operator_bypass_audit_payload,
+			"mock_operator_bypass_audit_get_exit_code": mock_operator_bypass_audit_get_exit_code,
+			"mock_operator_bypass_audit_get_json": mock_operator_bypass_audit_get_json,
+			"mock_operator_bypass_audit_append_exit_code": mock_operator_bypass_audit_append_exit_code,
+			"mock_operator_bypass_audit_append_json": mock_operator_bypass_audit_append_json,
+			"mock_revalidate_events_payload": mock_revalidate_events_payload,
+			"mock_pr_create_race_pr": mock_pr_create_race_pr,
+			"mock_pr_ready_exit_code": mock_pr_ready_exit_code,
 		}
 		store_file.write_text(json.dumps(store), encoding="utf-8")
 
@@ -982,6 +1068,23 @@ if args[0] == 'run' and len(args) >= 2 and args[1] == 'list':
 		print(json.dumps(runs))
 	sys.exit(0)
 
+if args[0] == 'run' and len(args) >= 3 and args[1] == 'view':
+	run_id = str(args[2])
+	payload = None
+	for run in store.get('validation_workflow_runs', []):
+		if str((run or {}).get('id', '')) == run_id:
+			payload = {
+				'jobs': list((run or {}).get('jobs', [])),
+				'conclusion': (run or {}).get('conclusion', ''),
+				'outputs': dict((run or {}).get('outputs', {})),
+			}
+			break
+	if payload is None:
+		print(f'run not found: {run_id}', file=sys.stderr)
+		sys.exit(1)
+	print(json.dumps(payload))
+	sys.exit(0)
+
 if args[0] == 'pr' and len(args) >= 2 and args[1] == 'list':
 	base = None
 	head = None
@@ -1002,6 +1105,11 @@ if args[0] == 'pr' and len(args) >= 2 and args[1] == 'list':
 	prs = []
 	for pr in store.get('prs', []):
 		merged = bool(pr.get('merged', False) or pr.get('merged_at') is not None)
+		pr_state = pr.get('state', 'open')
+		if state == 'open' and pr_state != 'open':
+			continue
+		if state == 'closed' and pr_state != 'closed':
+			continue
 		if state == 'merged' and not merged:
 			continue
 		if base and pr.get('baseRefName') != base:
@@ -1027,8 +1135,13 @@ if args[0] == 'pr' and len(args) >= 2 and args[1] == 'create':
 	head = ''
 	title = ''
 	body = ''
+	draft = False
 	i = 2
 	while i < len(args):
+		if args[i] == '--draft':
+			draft = True
+			i += 1
+			continue
 		if args[i] == '--base' and i + 1 < len(args):
 			base = args[i + 1]
 			i += 2
@@ -1046,11 +1159,37 @@ if args[0] == 'pr' and len(args) >= 2 and args[1] == 'create':
 			i += 2
 			continue
 		i += 1
+	race_pr = store.get('mock_pr_create_race_pr')
+	if isinstance(race_pr, dict) and race_pr.get('baseRefName') == base and race_pr.get('headRefName') == head:
+		existing = None
+		for item in store.get('prs', []):
+			if item.get('state', 'open') == 'open' and item.get('baseRefName') == base and item.get('headRefName') == head:
+				existing = item
+				break
+		if existing is None:
+			next_num = store.get('next_pr_number', 300)
+			store['next_pr_number'] = next_num + 1
+			existing = {
+				'number': next_num,
+				'state': 'open',
+				'draft': bool(race_pr.get('draft', draft)),
+				'baseRefName': base,
+				'headRefName': head,
+				'mergeable': race_pr.get('mergeable', True),
+				'mergeable_state': race_pr.get('mergeable_state', 'clean'),
+				'title': race_pr.get('title', title),
+				'body': race_pr.get('body', body),
+			}
+			store.setdefault('prs', []).append(existing)
+			save()
+		print('a pull request already exists for this branch pair', file=sys.stderr)
+		sys.exit(1)
 	next_num = store.get('next_pr_number', 300)
 	store['next_pr_number'] = next_num + 1
 	pr = {
 		'number': next_num,
 		'state': 'open',
+		'draft': draft,
 		'baseRefName': base,
 		'headRefName': head,
 		'mergeable': True,
@@ -1062,6 +1201,21 @@ if args[0] == 'pr' and len(args) >= 2 and args[1] == 'create':
 	save()
 	print(f'https://github.com/owner/repo/pull/{next_num}')
 	sys.exit(0)
+
+if args[0] == 'pr' and len(args) >= 3 and args[1] == 'ready':
+	pr_num = int(args[2])
+	exit_code = int(store.get('mock_pr_ready_exit_code', 0) or 0)
+	if exit_code != 0:
+		print('mock pr ready failure', file=sys.stderr)
+		sys.exit(exit_code)
+	for pr in store.get('prs', []):
+		if pr.get('number') == pr_num:
+			pr['draft'] = False
+			store.setdefault('pr_ready_calls', []).append(pr_num)
+			save()
+			sys.exit(0)
+	print('not found', file=sys.stderr)
+	sys.exit(1)
 
 if args[0] == 'pr' and len(args) >= 3 and args[1] == 'merge':
 	pr_num = int(args[2])
@@ -1297,7 +1451,13 @@ if args[0] == 'api':
 			body = payload_obj.get('body', body)
 		cid = store['next_comment_id']
 		store['next_comment_id'] += 1
-		issue['comments'].append({'id': cid, 'body': body})
+		issue['comments'].append({
+			'id': cid,
+			'body': body,
+			'created_at': f'2026-01-01T00:00:{cid % 60:02d}Z',
+			'user': {'login': 'github-actions[bot]'},
+			'html_url': f'https://github.com/owner/repo/issues/{m.group(1)}#issuecomment-{cid}',
+		})
 		save()
 		print(json.dumps({'id': cid}))
 		sys.exit(0)
@@ -1330,6 +1490,15 @@ if args[0] == 'api':
 				break
 		save()
 		print(json.dumps({'id': comment_id, 'updated': updated}))
+		sys.exit(0)
+
+	m = re.search(r'/issues/(\d+)/events(?:\?.*)?$', path)
+	if m and method == 'GET':
+		num = m.group(1)
+		calls = store.setdefault('issue_events_get_calls', {})
+		calls[num] = int(calls.get(num, 0)) + 1
+		save()
+		print(json.dumps(store.get('issue_events', {}).get(num, [])))
 		sys.exit(0)
 
 	m = re.search(r'/issues/(\d+)/labels$', path)
@@ -1444,9 +1613,26 @@ if args[0] == 'api':
 		if pr is None:
 			print('{}')
 			sys.exit(0)
+		if method == 'PATCH':
+			payload = {}
+			if input_file:
+				try:
+					payload = json.loads(Path(input_file).read_text(encoding='utf-8'))
+				except Exception:
+					payload = {}
+			if 'body' in payload:
+				pr['body'] = payload.get('body', '')
+			if 'draft' in payload:
+				pr['draft'] = bool(payload.get('draft'))
+			store.setdefault('pr_body_update_calls', []).append(pr_num)
+			save()
+			print(json.dumps(pr))
+			sys.exit(0)
 		pr_state = pr.get('stateFromApi', pr.get('state', 'open'))
 		if jq == '.state':
 			print(pr_state)
+		elif jq == '.draft':
+			print('true' if pr.get('draft', False) else 'false')
 		elif jq == '.merged_at != null':
 			merged_at = pr.get('merged_at')
 			if merged_at is None and pr.get('merged') is True:
@@ -1475,6 +1661,7 @@ if args[0] == 'api':
 			print(json.dumps({
 				'number': pr_num,
 				'state': pr_state,
+				'draft': pr.get('draft', False),
 				'mergeable': pr.get('mergeable', True),
 				'mergeable_state': pr.get('mergeable_state', ''),
 				'merged': pr.get('merged', False),
@@ -1667,7 +1854,14 @@ if args[0] == 'api':
 		if store.get('compare_ahead_by_force_error'):
 			sys.stderr.write('simulated compare API error\n')
 			sys.exit(22)
-		ahead_by = int(store.get('compare_ahead_by', 0))
+		sequence = store.get('compare_ahead_by_sequence') or []
+		if sequence:
+			ahead_by = int(sequence[0])
+			if len(sequence) > 1:
+				store['compare_ahead_by_sequence'] = list(sequence[1:])
+				save()
+		else:
+			ahead_by = int(store.get('compare_ahead_by', 0))
 		if jq == '.ahead_by':
 			print(ahead_by)
 		else:
@@ -1886,6 +2080,13 @@ args = sys.argv[1:]
 real_python = os.environ.get("REAL_PYTHON_BIN", "python3")
 store_path = Path(os.environ.get("GH_MOCK_STORE", ""))
 
+
+def _script_matches(arg0: str, rel_path: str) -> bool:
+	if not arg0:
+		return False
+	normalized = arg0.replace("\\", "/")
+	return normalized == rel_path or normalized.endswith(f"/{rel_path}")
+
 def _load_store() -> dict:
 	if not store_path:
 		return {}
@@ -1898,7 +2099,7 @@ def _save_store(store: dict) -> None:
 		return
 	store_path.write_text(json.dumps(store), encoding="utf-8")
 
-if len(args) >= 3 and args[0] == "scripts/ai_memory.py" and args[1] == "actions-runs-cache":
+if len(args) >= 3 and _script_matches(args[0], "scripts/ai_memory.py") and args[1] == "actions-runs-cache":
 	store = _load_store()
 	cmd = args[2]
 	if cmd == "get":
@@ -1977,7 +2178,262 @@ if len(args) >= 3 and args[0] == "scripts/ai_memory.py" and args[1] == "actions-
 		print(json.dumps(payload))
 		sys.exit(0)
 
-if len(args) >= 3 and args[0] == "scripts/ai_memory.py" and args[1] == "branch-rebuild-audit":
+if len(args) >= 3 and _script_matches(args[0], "scripts/ai_memory.py") and args[1] == "validation-history":
+	store = _load_store()
+	cmd = args[2]
+	repo = ""
+	integration_sha = ""
+	entry_file = ""
+	i = 3
+	while i < len(args):
+		if args[i] == "--repo" and i + 1 < len(args):
+			repo = args[i + 1]
+			i += 2
+			continue
+		if args[i] == "--integration-sha" and i + 1 < len(args):
+			integration_sha = args[i + 1].lower()
+			i += 2
+			continue
+		if args[i] == "--entry-file" and i + 1 < len(args):
+			entry_file = args[i + 1]
+			i += 2
+			continue
+		i += 1
+	normalized_repo = repo.lower()
+	payload = store.get("mock_validation_history_payload")
+	hit = (
+		isinstance(payload, dict)
+		and payload.get("repository") == normalized_repo
+		and str(payload.get("integration_sha", "")).lower() == integration_sha
+	)
+	if cmd == "get":
+		store.setdefault("mock_validation_history_get_calls", 0)
+		store["mock_validation_history_get_calls"] = int(store["mock_validation_history_get_calls"]) + 1
+		_save_store(store)
+		exit_code = int(store.get("mock_validation_history_get_exit_code", 0) or 0)
+		if exit_code != 0:
+			sys.exit(exit_code)
+		response = {
+			"ok": True,
+			"enabled": True,
+			"hit": hit,
+			"validation_history": payload if hit else None,
+		}
+		override = store.get("mock_validation_history_get_json")
+		if isinstance(override, dict) and override:
+			response.update(override)
+		print(json.dumps(response))
+		sys.exit(0)
+	if cmd == "append":
+		store.setdefault("mock_validation_history_append_calls", 0)
+		store["mock_validation_history_append_calls"] = int(store["mock_validation_history_append_calls"]) + 1
+		_save_store(store)
+		exit_code = int(store.get("mock_validation_history_append_exit_code", 0) or 0)
+		if exit_code != 0:
+			sys.exit(exit_code)
+		entry = {}
+		if entry_file:
+			try:
+				entry = json.loads(Path(entry_file).read_text(encoding="utf-8"))
+			except Exception:
+				entry = {}
+		if not hit:
+			payload = {
+				"schema_version": "v1",
+				"repository": normalized_repo,
+				"integration_sha": integration_sha,
+				"entries": [],
+			}
+		payload = dict(payload)
+		payload["entries"] = [*(payload.get("entries") or []), entry]
+		response = {
+			"ok": True,
+			"enabled": True,
+			"stored": True,
+			"validation_history": payload,
+		}
+		override = store.get("mock_validation_history_append_json")
+		if isinstance(override, dict) and override:
+			response.update(override)
+		if response.get("stored", False):
+			stored_payload = response.get("validation_history")
+			if isinstance(stored_payload, dict):
+				store["mock_validation_history_payload"] = stored_payload
+			else:
+				store["mock_validation_history_payload"] = payload
+		_save_store(store)
+		print(json.dumps(response))
+		sys.exit(0)
+
+if len(args) >= 3 and _script_matches(args[0], "scripts/ai_memory.py") and args[1] == "operator-bypass-audit":
+	store = _load_store()
+	cmd = args[2]
+	repo = ""
+	tracking_issue = 0
+	integration_sha = ""
+	entry_file = ""
+	i = 3
+	while i < len(args):
+		if args[i] == "--repo" and i + 1 < len(args):
+			repo = args[i + 1]
+			i += 2
+			continue
+		if args[i] == "--tracking-issue" and i + 1 < len(args):
+			tracking_issue = int(args[i + 1])
+			i += 2
+			continue
+		if args[i] == "--integration-sha" and i + 1 < len(args):
+			integration_sha = args[i + 1].lower()
+			i += 2
+			continue
+		if args[i] == "--entry-file" and i + 1 < len(args):
+			entry_file = args[i + 1]
+			i += 2
+			continue
+		i += 1
+	normalized_repo = repo.lower()
+	payload = store.get("mock_operator_bypass_audit_payload")
+	hit = (
+		isinstance(payload, dict)
+		and payload.get("repository") == normalized_repo
+		and int(payload.get("tracking_issue_number", 0) or 0) == tracking_issue
+		and str(payload.get("integration_sha", "")).lower() == integration_sha
+	)
+	if cmd == "get":
+		store.setdefault("mock_operator_bypass_audit_get_calls", 0)
+		store["mock_operator_bypass_audit_get_calls"] = int(store["mock_operator_bypass_audit_get_calls"]) + 1
+		_save_store(store)
+		exit_code = int(store.get("mock_operator_bypass_audit_get_exit_code", 0) or 0)
+		if exit_code != 0:
+			sys.exit(exit_code)
+		response = {
+			"ok": True,
+			"enabled": True,
+			"hit": hit,
+			"audit": payload if hit else None,
+		}
+		override = store.get("mock_operator_bypass_audit_get_json")
+		if isinstance(override, dict) and override:
+			response.update(override)
+		print(json.dumps(response))
+		sys.exit(0)
+	if cmd == "append":
+		store.setdefault("mock_operator_bypass_audit_append_calls", 0)
+		store["mock_operator_bypass_audit_append_calls"] = int(store["mock_operator_bypass_audit_append_calls"]) + 1
+		_save_store(store)
+		exit_code = int(store.get("mock_operator_bypass_audit_append_exit_code", 0) or 0)
+		if exit_code != 0:
+			sys.exit(exit_code)
+		entry = {}
+		if entry_file:
+			try:
+				entry = json.loads(Path(entry_file).read_text(encoding="utf-8"))
+			except Exception:
+				entry = {}
+		if not hit:
+			payload = {
+				"schema_version": "v1",
+				"repository": normalized_repo,
+				"tracking_issue_number": tracking_issue,
+				"integration_sha": integration_sha,
+				"entries": [],
+			}
+		payload = dict(payload)
+		payload["entries"] = [*(payload.get("entries") or []), entry]
+		response = {
+			"ok": True,
+			"enabled": True,
+			"stored": True,
+			"audit": payload,
+		}
+		override = store.get("mock_operator_bypass_audit_append_json")
+		if isinstance(override, dict) and override:
+			response.update(override)
+		if response.get("stored", False):
+			stored_payload = response.get("audit")
+			if isinstance(stored_payload, dict):
+				store["mock_operator_bypass_audit_payload"] = stored_payload
+			else:
+				store["mock_operator_bypass_audit_payload"] = payload
+		_save_store(store)
+		print(json.dumps(response))
+		sys.exit(0)
+
+if len(args) >= 3 and _script_matches(args[0], "scripts/ai_memory.py") and args[1] == "revalidate-events":
+	store = _load_store()
+	cmd = args[2]
+	repo = ""
+	tracking_issue = 0
+	integration_sha = ""
+	entry_file = ""
+	i = 3
+	while i < len(args):
+		if args[i] == "--repo" and i + 1 < len(args):
+			repo = args[i + 1]
+			i += 2
+			continue
+		if args[i] == "--tracking-issue" and i + 1 < len(args):
+			tracking_issue = int(args[i + 1])
+			i += 2
+			continue
+		if args[i] == "--integration-sha" and i + 1 < len(args):
+			integration_sha = args[i + 1].lower()
+			i += 2
+			continue
+		if args[i] == "--entry-file" and i + 1 < len(args):
+			entry_file = args[i + 1]
+			i += 2
+			continue
+		i += 1
+	normalized_repo = repo.lower()
+	payload = store.get("mock_revalidate_events_payload")
+	hit = (
+		isinstance(payload, dict)
+		and payload.get("repository") == normalized_repo
+		and int(payload.get("tracking_issue_number", 0) or 0) == tracking_issue
+		and str(payload.get("integration_sha", "")).lower() == integration_sha
+	)
+	if cmd == "get":
+		store.setdefault("mock_revalidate_events_get_calls", 0)
+		store["mock_revalidate_events_get_calls"] = int(store["mock_revalidate_events_get_calls"]) + 1
+		_save_store(store)
+		print(json.dumps({
+			"ok": True,
+			"enabled": True,
+			"hit": hit,
+			"events": payload if hit else None,
+		}))
+		sys.exit(0)
+	if cmd == "append":
+		entry = {}
+		if entry_file:
+			try:
+				entry = json.loads(Path(entry_file).read_text(encoding="utf-8"))
+			except Exception:
+				entry = {}
+		if not hit:
+			payload = {
+				"schema_version": "v1",
+				"repository": normalized_repo,
+				"tracking_issue_number": tracking_issue,
+				"integration_sha": integration_sha,
+				"entries": [],
+			}
+		payload = dict(payload)
+		payload["entries"] = [*(payload.get("entries") or []), entry]
+		store["mock_revalidate_events_payload"] = payload
+		store.setdefault("mock_revalidate_events_append_calls", 0)
+		store["mock_revalidate_events_append_calls"] = int(store["mock_revalidate_events_append_calls"]) + 1
+		_save_store(store)
+		print(json.dumps({
+			"ok": True,
+			"enabled": True,
+			"stored": True,
+			"events": payload,
+		}))
+		sys.exit(0)
+
+if len(args) >= 3 and _script_matches(args[0], "scripts/ai_memory.py") and args[1] == "branch-rebuild-audit":
 	store = _load_store()
 	cmd = args[2]
 	if cmd == "get":
@@ -2024,7 +2480,7 @@ if len(args) >= 3 and args[0] == "scripts/ai_memory.py" and args[1] == "branch-r
 		print(json.dumps(payload))
 		sys.exit(0)
 
-if len(args) >= 2 and args[0] == "scripts/orchestrate_state_v2.py" and args[1] == "pack":
+if len(args) >= 2 and _script_matches(args[0], "scripts/orchestrate_state_v2.py") and args[1] == "pack":
 	mode = os.environ.get("MOCK_ORCH_STATE_V2_PACK_MODE", "")
 	if mode == "count_mismatch":
 		out_dir = ""
@@ -2127,7 +2583,9 @@ sys.exit(proc.returncode)
 
 		result = json.loads(store_file.read_text(encoding="utf-8"))
 		tracking_issue = result["issues"][str(tracking_num)]
+		state_path = runtime_dir / "state.json"
 		result["latest_state"] = _extract_latest_state(tracking_issue["comments"])
+		result["state_on_disk"] = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else None
 		result["tracking_labels"] = tracking_issue["labels"]
 		result["tracking_closed"] = tracking_issue.get("closed", False)
 		result["merge_calls"] = result.get("merge_calls", [])
@@ -2136,8 +2594,14 @@ sys.exit(proc.returncode)
 		result["label_create_calls"] = result.get("label_create_calls", [])
 		result["api_calls"] = result.get("api_calls", [])
 		result["release_dispatches"] = result.get("release_dispatches", [])
+		result["pr_ready_calls"] = result.get("pr_ready_calls", [])
+		result["pr_body_update_calls"] = result.get("pr_body_update_calls", [])
+		result["mock_operator_bypass_audit_get_calls"] = int(result.get("mock_operator_bypass_audit_get_calls", 0))
+		result["mock_operator_bypass_audit_append_calls"] = int(result.get("mock_operator_bypass_audit_append_calls", 0))
 		result["stdout"] = proc.stdout
 		result["stderr"] = proc.stderr
+		judge_prompt_path = runtime_dir / "judge_prompt.txt"
+		result["judge_prompt"] = judge_prompt_path.read_text(encoding="utf-8") if judge_prompt_path.exists() else ""
 		result["actions_runs_fetch_count"] = int(result.get("actions_runs_fetch_count", 0))
 		result["actions_runs_if_none_match_count"] = int(result.get("actions_runs_if_none_match_count", 0))
 		return result
@@ -2496,6 +2960,76 @@ def test_complete_verdict_enters_validation_and_finishes_after_integration_drift
 		"Validation completion after drift must not re-trigger the pending-wave override; "
 		f"stdout=\n{second['stdout']}\nstderr=\n{second['stderr']}"
 	)
+
+
+def test_integration_ahead_creates_and_reuses_eager_draft_pr_before_validation_complete():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	first = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+	)
+	assert first["latest_state"]["status"] == "validating"
+	assert first["latest_state"]["final_merge_status"] == "pending"
+	assert len(first["prs"]) == 1
+	pr = first["prs"][0]
+	assert first["latest_state"]["final_merge_pr"] == pr["number"]
+	assert pr["headRefName"] == "orchestrator/project-192"
+	assert pr["baseRefName"] == "main"
+	assert pr.get("draft") is True
+	assert "<!-- VALIDATION_STATUS_V1 -->" in pr.get("body", "")
+	assert "Awaiting validation." in pr.get("body", "")
+	assert first["pr_ready_calls"] == []
+	assert "EAGER_DRAFT_PR_CREATED" in (first["stdout"] + first["stderr"])
+
+	second = _run_poller(
+		state=first["latest_state"],
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=first["tracking_labels"],
+		issue_labels={10: ["ai:merged"]},
+		prs=first["prs"],
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+	)
+	assert second["latest_state"]["final_merge_pr"] == pr["number"]
+	assert len(second["prs"]) == 1
+	assert second["prs"][0]["number"] == pr["number"]
+	assert second["prs"][0].get("draft") is True
+	assert second["pr_ready_calls"] == []
+	assert second["pr_body_update_calls"] == []
+
+
+def test_integration_ahead_recovers_when_eager_pr_create_races_existing_open_pr():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		mock_pr_create_race_pr={
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"draft": True,
+		},
+	)
+	assert result["latest_state"]["status"] == "validating"
+	assert result["latest_state"]["final_merge_status"] == "pending"
+	assert len(result["prs"]) == 1
+	pr = result["prs"][0]
+	assert result["latest_state"]["final_merge_pr"] == pr["number"]
+	assert pr["headRefName"] == "orchestrator/project-192"
+	assert pr["baseRefName"] == "main"
+	assert pr.get("draft") is True
+	assert "<!-- VALIDATION_STATUS_V1 -->" in pr.get("body", "")
+	assert result["pr_body_update_calls"] == [pr["number"]]
 
 
 def test_missing_integration_branch_marks_failed():
@@ -3296,10 +3830,1078 @@ def test_final_merge_waits_for_required_checks_before_merging():
 	assert result.get("merged_prs", []) == []
 
 
+def test_final_merge_promotes_eager_draft_pr_when_tracking_issue_ready_to_merge():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 361,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_labels=["ai:ready-to-merge"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["final_merge_pr"] == 361
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert result["pr_ready_calls"] == [361]
+	assert 361 in result.get("merged_prs", [])
+	assert result["prs"][0].get("draft") is False
+	assert "EAGER_DRAFT_PR_PROMOTED pr=361 gate=tracking-ready-to-merge" in (result["stdout"] + result["stderr"])
+
+
+def test_force_merge_bypass_promotes_eager_pr_once_per_sha_and_records_audit():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 460,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"headRefFromApi": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	issue_events = {
+		192: [
+			{
+				"id": 991,
+				"event": "labeled",
+				"created_at": "2026-05-23T16:15:00Z",
+				"label": {"name": "ai:force-merge"},
+				"actor": {"login": "octocat"},
+			},
+		],
+	}
+	first = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:force-merge"],
+		issue_labels={10: ["ai:implementing"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		branch_ref_shas={"orchestrator/project-192": "abcdef1234"},
+		issue_events=issue_events,
+	)
+	assert first["latest_state"]["final_merge_pr"] == 460
+	assert first["latest_state"]["force_merge_last_bypassed_integration_sha"] == "abcdef1234"
+	assert first["pr_ready_calls"] == [460]
+	assert first["prs"][0].get("draft") is False
+	assert first["mock_operator_bypass_audit_append_calls"] == 1
+	stored_audit = first["mock_operator_bypass_audit_payload"]
+	assert stored_audit["tracking_issue_number"] == 192
+	assert stored_audit["integration_sha"] == "abcdef1234"
+	assert len(stored_audit["entries"]) == 1
+	assert stored_audit["entries"][0]["actor"] == "octocat"
+	assert stored_audit["entries"][0]["bypass_kind"] == "force-merge"
+	assert stored_audit["entries"][0]["source_comment_id"] == first["latest_state"]["force_merge_last_bypass_tracking_comment_id"]
+	assert any("/issues/192/events?per_page=100" in path for path in first["api_calls"])
+	assert "FORCE_MERGE_BYPASS tracking_issue=192 pr=460 integration_branch=orchestrator/project-192 integration_sha=abcdef1234 actor=octocat ahead_by=5" in (first["stdout"] + first["stderr"])
+	first_tracking_comments = [
+		dict(comment)
+		for comment in first["issues"]["192"]["comments"]
+		if not _is_state_comment(str((comment or {}).get("body", "")))
+	]
+	first_tracking_bodies = [str(comment.get("body", "")) for comment in first_tracking_comments]
+	force_merge_tracking_comments = [
+		body for body in first_tracking_bodies if body.startswith("## ⚠️ Operator bypass applied: ai:force-merge")
+	]
+	assert len(force_merge_tracking_comments) == 1
+	assert "@octocat" in force_merge_tracking_comments[0]
+	assert "abcdef1234" in force_merge_tracking_comments[0]
+	first_pr_comments = [dict(comment) for comment in first["issues"]["460"]["comments"]]
+	first_pr_bodies = [str(comment.get("body", "")) for comment in first_pr_comments]
+	force_merge_pr_comments = [
+		body for body in first_pr_bodies if body.startswith("## ⚠️ Operator bypass recorded")
+	]
+	assert len(force_merge_pr_comments) == 1
+	assert "Tracking issue audit:" in force_merge_pr_comments[0]
+
+	second = _run_poller(
+		state=first["latest_state"],
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=first["tracking_labels"],
+		tracking_comments=first_tracking_comments,
+		issue_labels={10: ["ai:implementing"], 460: []},
+		issue_comments={460: first_pr_comments},
+		prs=first["prs"],
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		branch_ref_shas={"orchestrator/project-192": "abcdef1234"},
+		issue_events=issue_events,
+		mock_operator_bypass_audit_payload=stored_audit,
+	)
+	assert second["pr_ready_calls"] == []
+	assert second["mock_operator_bypass_audit_append_calls"] == 0
+	second_tracking_bodies = [
+		str(comment.get("body", ""))
+		for comment in second["issues"]["192"]["comments"]
+		if not _is_state_comment(str((comment or {}).get("body", "")))
+	]
+	assert len([body for body in second_tracking_bodies if body.startswith("## ⚠️ Operator bypass applied: ai:force-merge")]) == 1
+	second_pr_bodies = [str(comment.get("body", "")) for comment in second["issues"]["460"]["comments"]]
+	assert len([body for body in second_pr_bodies if body.startswith("## ⚠️ Operator bypass recorded")]) == 1
+
+	third_tracking_comments = [
+		dict(comment)
+		for comment in second["issues"]["192"]["comments"]
+		if not _is_state_comment(str((comment or {}).get("body", "")))
+	]
+	third_pr_comments = [dict(comment) for comment in second["issues"]["460"]["comments"]]
+	third = _run_poller(
+		state=second["latest_state"],
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=second["tracking_labels"],
+		tracking_comments=third_tracking_comments,
+		issue_labels={10: ["ai:implementing"], 460: []},
+		issue_comments={460: third_pr_comments},
+		prs=second["prs"],
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=6,
+		branch_ref_shas={"orchestrator/project-192": "fedcba9876"},
+		issue_events=issue_events,
+	)
+	assert third["pr_ready_calls"] == []
+	assert third["latest_state"]["force_merge_last_bypassed_integration_sha"] == "fedcba9876"
+	assert third["mock_operator_bypass_audit_append_calls"] == 1
+	assert third["mock_operator_bypass_audit_payload"]["integration_sha"] == "fedcba9876"
+	third_tracking_bodies = [
+		str(comment.get("body", ""))
+		for comment in third["issues"]["192"]["comments"]
+		if not _is_state_comment(str((comment or {}).get("body", "")))
+	]
+	third_force_merge_tracking_comments = [
+		body for body in third_tracking_bodies if body.startswith("## ⚠️ Operator bypass applied: ai:force-merge")
+	]
+	assert len(third_force_merge_tracking_comments) == 2
+	assert any("fedcba9876" in body for body in third_force_merge_tracking_comments)
+	third_pr_bodies = [str(comment.get("body", "")) for comment in third["issues"]["460"]["comments"]]
+	third_force_merge_pr_comments = [
+		body for body in third_pr_bodies if body.startswith("## ⚠️ Operator bypass recorded")
+	]
+	assert len(third_force_merge_pr_comments) == 2
+	assert any("fedcba9876" in body for body in third_force_merge_pr_comments)
+
+
+def test_force_merge_bypass_promotion_failure_posts_retry_audit_once_per_sha():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 461,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"headRefFromApi": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	issue_events = {
+		192: [
+			{
+				"id": 992,
+				"event": "labeled",
+				"created_at": "2026-05-23T16:20:00Z",
+				"label": {"name": "ai:force-merge"},
+				"actor": {"login": "octocat"},
+			},
+		],
+	}
+	first = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:force-merge"],
+		issue_labels={10: ["ai:implementing"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		branch_ref_shas={"orchestrator/project-192": "abcdef1234"},
+		issue_events=issue_events,
+		mock_pr_ready_exit_code=1,
+	)
+	assert first["pr_ready_calls"] == []
+	assert first["prs"][0].get("draft") is True
+	assert first["latest_state"].get("force_merge_last_bypassed_integration_sha") in (None, "")
+	assert first["mock_operator_bypass_audit_append_calls"] == 0
+	assert 461 in first["pr_body_update_calls"]
+	assert "failed this cycle" in first["prs"][0].get("body", "")
+	first_tracking_comments = [
+		dict(comment)
+		for comment in first["issues"]["192"]["comments"]
+		if not _is_state_comment(str((comment or {}).get("body", "")))
+	]
+	first_failure_comments = [
+		str(comment.get("body", ""))
+		for comment in first_tracking_comments
+		if str(comment.get("body", "")).startswith("## ⚠️ Operator bypass requested but not yet applied: ai:force-merge")
+	]
+	assert len(first_failure_comments) == 1
+	assert "@octocat" in first_failure_comments[0]
+	assert "will retry the promotion" in first_failure_comments[0]
+
+	second = _run_poller(
+		state=first["latest_state"],
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=first["tracking_labels"],
+		tracking_comments=first_tracking_comments,
+		issue_labels={10: ["ai:implementing"]},
+		prs=first["prs"],
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		branch_ref_shas={"orchestrator/project-192": "abcdef1234"},
+		issue_events=issue_events,
+		mock_pr_ready_exit_code=1,
+	)
+	second_failure_comments = [
+		str(comment.get("body", ""))
+		for comment in second["issues"]["192"]["comments"]
+		if str(comment.get("body", "")).startswith("## ⚠️ Operator bypass requested but not yet applied: ai:force-merge")
+	]
+	assert len(second_failure_comments) == 1
+	assert second["mock_operator_bypass_audit_append_calls"] == 0
+
+
+def test_force_merge_bypass_promotes_eager_pr_for_validation_origin_terminal_failure():
+	state = _base_state(status="failed")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_pr"] = 462
+	prs = [
+		{
+			"number": 462,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"headRefFromApi": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	issue_events = {
+		192: [
+			{
+				"id": 993,
+				"event": "labeled",
+				"created_at": "2026-05-23T16:25:00Z",
+				"label": {"name": "ai:force-merge"},
+				"actor": {"login": "octocat"},
+			},
+		],
+	}
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed", "ai:harness-broken", "ai:force-merge"],
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		branch_ref_shas={"orchestrator/project-192": "abcdef1234"},
+		issue_events=issue_events,
+	)
+	assert result["latest_state"]["status"] == "failed"
+	assert result["latest_state"]["final_merge_pr"] == 462
+	assert result["latest_state"]["force_merge_last_bypassed_integration_sha"] == "abcdef1234"
+	assert result["pr_ready_calls"] == [462]
+	assert result["prs"][0].get("draft") is False
+	assert result["validation_dispatches"] == []
+	assert result["mock_operator_bypass_audit_append_calls"] == 1
+	stored_audit = result["mock_operator_bypass_audit_payload"]
+	assert stored_audit["tracking_issue_number"] == 192
+	assert stored_audit["integration_sha"] == "abcdef1234"
+	assert len(stored_audit["entries"]) == 1
+	assert stored_audit["entries"][0]["actor"] == "octocat"
+	tracking_bodies = [
+		str(comment.get("body", ""))
+		for comment in result["issues"]["192"]["comments"]
+		if not _is_state_comment(str((comment or {}).get("body", "")))
+	]
+	assert len([
+		body for body in tracking_bodies if body.startswith("## ⚠️ Operator bypass applied: ai:force-merge")
+	]) == 1
+	pr_bodies = [str(comment.get("body", "")) for comment in result["issues"]["462"]["comments"]]
+	assert len([
+		body for body in pr_bodies if body.startswith("## ⚠️ Operator bypass recorded")
+	]) == 1
+
+
+def test_final_merge_keeps_legacy_open_non_draft_pr_behind_readiness_gate():
+	state = _base_state(status="merge_conflict")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_status"] = "pending"
+	prs = [
+		{
+			"number": 362,
+			"state": "open",
+			"draft": False,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+			"body": "Squash merge of orchestrator project #192.\n\nRefs #192",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert result["latest_state"]["status"] == "merge_conflict"
+	assert result["latest_state"]["final_merge_pr"] == 362
+	assert result["latest_state"]["final_merge_status"] == "pending"
+	assert result.get("merged_prs", []) == []
+	assert result["pr_ready_calls"] == []
+	assert "<!-- VALIDATION_STATUS_V1 -->" in result["prs"][0].get("body", "")
+	assert "waiting for the tracking issue readiness gate" in (result["stdout"] + result["stderr"])
+
+
+def test_final_merge_legacy_validated_gate_requires_current_sha_pass_history():
+	state = _base_state(status="merge_conflict")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 363,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+			"body": "Squash merge of orchestrator project #192.\n\nRefs #192",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		branch_ref_shas={"orchestrator/project-192": "abcdef1234"},
+		mock_validation_history_payload=_validation_history_payload(
+			integration_sha="deadbeef1234",
+			entries=[
+				{
+					"outcome": "passed",
+					"raw_status": "pass",
+					"raw_conclusion": "success",
+					"run_id": 9001,
+					"run_attempt": 1,
+					"run_url": "https://example.invalid/runs/9001",
+					"recorded_at": "2026-05-23T10:00:00Z",
+					"cycle": 1,
+					"context": "validation passed",
+					"source": "test",
+				}
+			],
+		),
+	)
+	assert result["latest_state"]["status"] == "merge_conflict"
+	assert result["latest_state"]["final_merge_pr"] == 363
+	assert result["latest_state"]["final_merge_status"] == "pending"
+	assert result["pr_ready_calls"] == []
+	assert result.get("merged_prs", []) == []
+	assert result.get("mock_validation_history_get_calls", 0) == 1
+	assert "Validation label present, but no passing validation-history entry exists yet for integration SHA `abcdef1234`." in result["prs"][0]["body"]
+	assert "blocked by validation history" in (result["stdout"] + result["stderr"])
+
+
+def test_final_merge_legacy_validated_gate_allows_current_sha_pass_history():
+	state = _base_state(status="merge_conflict")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 364,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		branch_ref_shas={"orchestrator/project-192": "abcdef1234"},
+		mock_validation_history_payload=_validation_history_payload(
+			integration_sha="abcdef1234",
+			entries=[
+				{
+					"outcome": "passed",
+					"raw_status": "pass",
+					"raw_conclusion": "success",
+					"run_id": 9002,
+					"run_attempt": 1,
+					"run_url": "https://example.invalid/runs/9002",
+					"recorded_at": "2026-05-23T10:00:00Z",
+					"cycle": 1,
+					"context": "validation passed",
+					"source": "test",
+				}
+			],
+		),
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert 364 in result["pr_ready_calls"]
+	assert 364 in result.get("merged_prs", [])
+	assert result.get("mock_validation_history_get_calls", 0) >= 1
+	assert "EAGER_DRAFT_PR_PROMOTED pr=364 gate=tracking-validated-legacy" in (result["stdout"] + result["stderr"])
+
+
+def test_final_merge_legacy_validated_gate_blocks_later_non_harness_failure():
+	state = _base_state(status="merge_conflict")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 365,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+			"body": "Squash merge of orchestrator project #192.\n\nRefs #192",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		branch_ref_shas={"orchestrator/project-192": "abcdef1234"},
+		mock_validation_history_payload=_validation_history_payload(
+			integration_sha="abcdef1234",
+			entries=[
+				{
+					"outcome": "passed",
+					"raw_status": "pass",
+					"raw_conclusion": "success",
+					"run_id": 9003,
+					"run_attempt": 1,
+					"run_url": "https://example.invalid/runs/9003",
+					"recorded_at": "2026-05-23T10:00:00Z",
+					"cycle": 1,
+					"context": "validation passed",
+					"source": "test",
+				},
+				{
+					"outcome": "failed",
+					"raw_status": "needs_fixes",
+					"raw_conclusion": "failure",
+					"run_id": 9004,
+					"run_attempt": 1,
+					"run_url": "https://example.invalid/runs/9004",
+					"recorded_at": "2026-05-23T11:00:00Z",
+					"cycle": 1,
+					"context": "validation failed",
+					"source": "test",
+				},
+			],
+		),
+	)
+	assert result["latest_state"]["status"] == "merge_conflict"
+	assert result["latest_state"]["final_merge_pr"] == 365
+	assert result["latest_state"]["final_merge_status"] == "pending"
+	assert result["pr_ready_calls"] == []
+	assert result.get("merged_prs", []) == []
+	assert "Validation label present, but a later non-harness validation failure is recorded for integration SHA `abcdef1234`; rerun validation before promoting." in result["prs"][0]["body"]
+
+
+def test_final_merge_legacy_validated_gate_blocks_later_error_outcome():
+	state = _base_state(status="merge_conflict")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 365,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+			"body": "Squash merge of orchestrator project #192.\n\nRefs #192",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		branch_ref_shas={"orchestrator/project-192": "abcdef1234"},
+		mock_validation_history_payload=_validation_history_payload(
+			integration_sha="abcdef1234",
+			entries=[
+				{
+					"outcome": "passed",
+					"raw_status": "pass",
+					"raw_conclusion": "success",
+					"run_id": 9003,
+					"run_attempt": 1,
+					"run_url": "https://example.invalid/runs/9003",
+					"recorded_at": "2026-05-23T10:00:00Z",
+					"cycle": 1,
+					"context": "validation passed",
+					"source": "test",
+				},
+				{
+					"outcome": "error",
+					"raw_status": "error",
+					"raw_conclusion": "failure",
+					"run_id": 9004,
+					"run_attempt": 1,
+					"run_url": "https://example.invalid/runs/9004",
+					"recorded_at": "2026-05-23T11:00:00Z",
+					"cycle": 1,
+					"context": "validation errored",
+					"source": "test",
+				},
+			],
+		),
+	)
+	assert result["latest_state"]["status"] == "merge_conflict"
+	assert result["latest_state"]["final_merge_pr"] == 365
+	assert result["latest_state"]["final_merge_status"] == "pending"
+	assert result["pr_ready_calls"] == []
+	assert result.get("merged_prs", []) == []
+	assert "Validation label present, but a later non-harness validation failure is recorded for integration SHA `abcdef1234`; rerun validation before promoting." in result["prs"][0]["body"]
+
+
+def test_final_merge_legacy_validated_gate_ignores_later_harness_failure():
+	state = _base_state(status="merge_conflict")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 366,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		branch_ref_shas={"orchestrator/project-192": "abcdef1234"},
+		mock_validation_history_payload=_validation_history_payload(
+			integration_sha="abcdef1234",
+			entries=[
+				{
+					"outcome": "passed",
+					"raw_status": "pass",
+					"raw_conclusion": "success",
+					"run_id": 9005,
+					"run_attempt": 1,
+					"run_url": "https://example.invalid/runs/9005",
+					"recorded_at": "2026-05-23T10:00:00Z",
+					"cycle": 1,
+					"context": "validation passed",
+					"source": "test",
+				},
+				{
+					"outcome": "failed",
+					"raw_status": "harness_error",
+					"raw_conclusion": "failure",
+					"run_id": 9006,
+					"run_attempt": 1,
+					"run_url": "https://example.invalid/runs/9006",
+					"recorded_at": "2026-05-23T11:00:00Z",
+					"cycle": 1,
+					"context": "harness failed",
+					"source": "test",
+				},
+			],
+		),
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert 366 in result["pr_ready_calls"]
+	assert 366 in result.get("merged_prs", [])
+
+
+def test_final_merge_legacy_validated_gate_fails_open_on_history_read_error():
+	state = _base_state(status="merge_conflict")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 367,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		branch_ref_shas={"orchestrator/project-192": "abcdef1234"},
+		mock_validation_history_get_json={
+			"warning_code": "history_read_failed",
+			"warning": "mock git read failure",
+		},
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert 367 in result["pr_ready_calls"]
+	assert 367 in result.get("merged_prs", [])
+	assert "Validation history unavailable for integration SHA abcdef1234; falling back to legacy ai:validated gate (reason=history_read_failed)." in (result["stdout"] + result["stderr"])
+
+
+def test_final_merge_legacy_validated_gate_fails_open_on_shell_wrapper_history_read_error():
+	state = _base_state(status="merge_conflict")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 369,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		branch_ref_shas={"orchestrator/project-192": "abcdef1234"},
+		mock_validation_history_get_exit_code=1,
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert result.get("mock_validation_history_get_calls", 0) >= 1
+	assert 369 in result["pr_ready_calls"]
+	assert 369 in result.get("merged_prs", [])
+	assert "Validation history unavailable for integration SHA abcdef1234; falling back to legacy ai:validated gate (reason=history_read_failed)." in (result["stdout"] + result["stderr"])
+
+
+def test_final_merge_legacy_validated_gate_blocks_later_failure_without_raw_status():
+	state = _base_state(status="merge_conflict")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 370,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		branch_ref_shas={"orchestrator/project-192": "abcdef1234"},
+		mock_validation_history_payload=_validation_history_payload(
+			integration_sha="abcdef1234",
+			entries=[
+				{
+					"outcome": "passed",
+					"raw_status": "pass",
+					"raw_conclusion": "success",
+					"run_id": 9007,
+					"run_attempt": 1,
+					"run_url": "https://example.invalid/runs/9007",
+					"recorded_at": "2026-05-23T10:00:00Z",
+					"cycle": 1,
+					"context": "validation passed",
+					"source": "test",
+				},
+				{
+					"outcome": "failed",
+					"raw_status": None,
+					"raw_conclusion": "failure",
+					"run_id": 9008,
+					"run_attempt": 1,
+					"run_url": "https://example.invalid/runs/9008",
+					"recorded_at": "2026-05-23T11:00:00Z",
+					"cycle": 1,
+					"context": "validation failed",
+					"source": "test",
+				},
+			],
+		),
+	)
+	assert result["latest_state"]["status"] == "merge_conflict"
+	assert result["latest_state"]["final_merge_pr"] == 370
+	assert result["latest_state"]["final_merge_status"] == "pending"
+	assert result["pr_ready_calls"] == []
+	assert result.get("merged_prs", []) == []
+	assert "Validation label present, but a later non-harness validation failure is recorded for integration SHA `abcdef1234`; rerun validation before promoting." in result["prs"][0]["body"]
+
+
+def test_mark_validation_complete_fails_open_on_history_write_error():
+	state = _base_state(status="validating")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["validation_cycle"] = 2
+	prs = [
+		{
+			"number": 368,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		branch_ref_shas={"orchestrator/project-192": "abcdef1234"},
+		mock_validation_history_append_json={
+			"stored": False,
+			"warning": "mock git push failure",
+		},
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["validation_completed_cycle"] == 2
+	assert result["latest_state"]["final_merge_pr"] == 368
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert result["pr_ready_calls"] == [368]
+	assert 368 in result.get("merged_prs", [])
+	assert result.get("mock_validation_history_append_calls", 0) == 1
+	assert result.get("mock_validation_history_get_calls", 0) == 0
+	assert "Validation history unavailable for integration SHA abcdef1234; falling back to legacy ai:validated gate (reason=history_write_failed_current_tick)." in (result["stdout"] + result["stderr"])
+
+
+def test_mark_validation_complete_fails_open_on_shell_wrapper_history_write_error():
+	state = _base_state(status="validating")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["validation_cycle"] = 2
+	prs = [
+		{
+			"number": 371,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		branch_ref_shas={"orchestrator/project-192": "abcdef1234"},
+		mock_validation_history_append_exit_code=1,
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["validation_completed_cycle"] == 2
+	assert result["latest_state"]["final_merge_pr"] == 371
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert result["pr_ready_calls"] == [371]
+	assert 371 in result.get("merged_prs", [])
+	assert result.get("mock_validation_history_append_calls", 0) == 1
+	assert result.get("mock_validation_history_get_calls", 0) == 0
+	assert "Validation history unavailable for integration SHA abcdef1234; falling back to legacy ai:validated gate (reason=history_write_failed_current_tick)." in (result["stdout"] + result["stderr"])
+
+
+def test_integration_stale_alert_fires_once_after_threshold():
+	now_epoch = int(time.time())
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["last_main_squash_at_utc"] = now_epoch - (7 * 3600)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: []},
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+	)
+	assert "INTEGRATION_STALE_ALERT_SENT tracking_issue=192 integration_branch=orchestrator/project-192 default_branch=main ahead_by=5" in (result["stdout"] + result["stderr"])
+	assert result["state_on_disk"]["last_main_squash_at_utc"] == state["last_main_squash_at_utc"]
+	assert isinstance(result["state_on_disk"]["integration_stale_last_alerted_at_utc"], int)
+	assert result["state_on_disk"]["integration_stale_last_alerted_at_utc"] >= now_epoch - 5
+
+
+def test_integration_stale_alert_dedupes_before_realert_window():
+	now_epoch = int(time.time())
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["last_main_squash_at_utc"] = now_epoch - (7 * 3600)
+	state["integration_stale_last_alerted_at_utc"] = now_epoch - 3600
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: []},
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+	)
+	assert "INTEGRATION_STALE_ALERT_SENT" not in (result["stdout"] + result["stderr"])
+	assert result["state_on_disk"]["integration_stale_last_alerted_at_utc"] == state["integration_stale_last_alerted_at_utc"]
+
+
+def test_integration_stale_alert_repeats_after_realert_window():
+	now_epoch = int(time.time())
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["last_main_squash_at_utc"] = now_epoch - (20 * 3600)
+	state["integration_stale_last_alerted_at_utc"] = now_epoch - (13 * 3600)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: []},
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+	)
+	assert "INTEGRATION_STALE_ALERT_SENT tracking_issue=192 integration_branch=orchestrator/project-192 default_branch=main ahead_by=5" in (result["stdout"] + result["stderr"])
+	assert isinstance(result["state_on_disk"]["integration_stale_last_alerted_at_utc"], int)
+	assert result["state_on_disk"]["integration_stale_last_alerted_at_utc"] > state["integration_stale_last_alerted_at_utc"]
+
+
+def test_integration_stale_alert_window_clears_when_branch_catches_up():
+	now_epoch = int(time.time())
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["last_main_squash_at_utc"] = now_epoch - (20 * 3600)
+	state["integration_stale_last_alerted_at_utc"] = now_epoch - 3600
+	cleared = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: []},
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=0,
+	)
+	assert "INTEGRATION_STALE_ALERT_SENT" not in (cleared["stdout"] + cleared["stderr"])
+	assert cleared["state_on_disk"]["integration_stale_last_alerted_at_utc"] is None
+	assert isinstance(cleared["state_on_disk"]["last_main_squash_at_utc"], int)
+	assert cleared["state_on_disk"]["last_main_squash_at_utc"] >= now_epoch - 5
+
+	second_state = dict(cleared["state_on_disk"])
+	second_state["status"] = "in_progress"
+	second_state["last_main_squash_at_utc"] = int(time.time()) - (7 * 3600)
+	second_state["integration_stale_last_alerted_at_utc"] = None
+	second_state["final_merge_pr"] = None
+	second_state["final_merge_status"] = "pending"
+	second = _run_poller(
+		state=second_state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: []},
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+	)
+	assert "INTEGRATION_STALE_ALERT_SENT tracking_issue=192 integration_branch=orchestrator/project-192 default_branch=main ahead_by=5" in (second["stdout"] + second["stderr"])
+
+
+def test_integration_backpressure_blocks_merges_at_threshold_and_clears_below_it():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_pr"] = 470
+	prs = [
+		{
+			"number": 470,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"headRefFromApi": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+		{
+			"number": 910,
+			"state": "open",
+			"baseRefName": "orchestrator/project-192",
+			"headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10",
+			"headSha": "sha910",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	first = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:ready-to-merge"]},
+		issue_linked_prs={10: 910},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=10,
+	)
+	assert first["latest_state"]["final_merge_pr"] == 470
+	assert "ai:integration-backpressure" in first["tracking_labels"]
+	assert first.get("merged_prs", []) == []
+	assert "BACKPRESSURE_TRIGGERED tracking_issue=192 integration_branch=orchestrator/project-192 default_branch=main ahead_by=10 threshold=10 final_pr=470" in (first["stdout"] + first["stderr"])
+	first_tracking_comments = [
+		dict(comment)
+		for comment in first["issues"]["192"]["comments"]
+		if not _is_state_comment(str((comment or {}).get("body", "")))
+	]
+	first_completion_comment = next(
+		str(comment.get("body", ""))
+		for comment in first_tracking_comments
+		if "<!-- orchestrator:completion-status -->" in str(comment.get("body", ""))
+	)
+	assert "ai:integration-backpressure" in first_completion_comment
+	assert "open integration PR #470" in first_completion_comment
+	assert "pull/470" in first_completion_comment
+
+	second = _run_poller(
+		state=first["latest_state"],
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_labels=first["tracking_labels"],
+		tracking_comments=first_tracking_comments,
+		issue_labels={10: ["ai:ready-to-merge"]},
+		issue_linked_prs={10: 910},
+		prs=first["prs"],
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=9,
+	)
+	assert "ai:integration-backpressure" not in second["tracking_labels"]
+	assert 910 in second.get("merged_prs", [])
+	assert "BACKPRESSURE_CLEARED tracking_issue=192 integration_branch=orchestrator/project-192 default_branch=main ahead_by=9 threshold=10 final_pr=470" in (second["stdout"] + second["stderr"])
+	second_completion_comment = next(
+		str(comment.get("body", ""))
+		for comment in second["issues"]["192"]["comments"]
+		if "<!-- orchestrator:completion-status -->" in str(comment.get("body", ""))
+	)
+	assert "ai:integration-backpressure" not in second_completion_comment
+
+
+def test_integration_backpressure_refreshes_after_first_merge_within_same_cycle():
+	state = _base_state(status="in_progress")
+	state["total_issues"] = 2
+	state["integration_branch"] = "orchestrator/project-192"
+	state["waves"][0]["issues"] = [
+		{"id": "issue-1", "github_issue": 10, "status": "pending"},
+		{"id": "issue-2", "github_issue": 11, "status": "pending"},
+	]
+	state["issue_number_map"] = {"issue-1": 10, "issue-2": 11}
+	prs = [
+		{
+			"number": 910,
+			"state": "open",
+			"baseRefName": "orchestrator/project-192",
+			"headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10",
+			"headSha": "sha910",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+		{
+			"number": 911,
+			"state": "open",
+			"baseRefName": "orchestrator/project-192",
+			"headRefName": "ai/issue-11",
+			"headRefFromApi": "ai/issue-11",
+			"headSha": "sha911",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:ready-to-merge"], 11: ["ai:ready-to-merge"]},
+		issue_linked_prs={10: 910, 11: 911},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by_sequence=[9, 10],
+	)
+	assert 910 in result.get("merged_prs", [])
+	assert 911 not in result.get("merged_prs", [])
+	assert "[backpressure] Deferring merge of PR #911 for issue #11: integration branch ahead_by=10 meets ORCH_INTEGRATION_MAX_AHEAD_COMMITS=10." in (result["stdout"] + result["stderr"])
+
+
 def test_final_merge_treats_closed_merged_pr_as_success():
 	state = _base_state(status="in_progress")
 	state["integration_branch"] = "orchestrator/project-192"
 	state["final_merge_status"] = "conflict"
+	state["final_merge_pr"] = 353
 	prs = [
 		{
 			"number": 353,
@@ -4245,6 +5847,26 @@ def test_review_blocked_merged_fix_followup_keeps_default_base_without_integrati
 	assert "&& { [ \"${BASE_REF}\" = \"${DEFAULT_BRANCH:-main}\" ] || [ \"${BASE_REF}\" = \"main\" ]; }; then" in script
 
 
+def test_post_issue_comment_json_validates_numeric_body_size_before_limit_check():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	post_issue_comment_json = script.split("post_issue_comment_json() {", 1)[1].split('payload_file="$(mktemp', 1)[0]
+	guard = 'if ! [[ "${body_bytes}" =~ ^[0-9]+$ ]]; then'
+	limit_check = 'if [ "${body_bytes}" -gt 65536 ]; then'
+	assert guard in post_issue_comment_json
+	assert 'Failed to capture numeric body size for #${issue_num}; skipping post.' in post_issue_comment_json
+	assert post_issue_comment_json.index(guard) < post_issue_comment_json.index(limit_check)
+
+
+def test_post_tracking_comment_validates_numeric_body_size_before_limit_check():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	post_tracking_comment = script.split("post_tracking_comment() {", 1)[1].split('payload_file="$(mktemp', 1)[0]
+	guard = 'if ! [[ "${body_bytes}" =~ ^[0-9]+$ ]]; then'
+	limit_check = 'if [ "${body_bytes}" -gt 65536 ]; then'
+	assert guard in post_tracking_comment
+	assert 'Failed to capture numeric body size for tracking issue #${TRACKING_NUM}; skipping post.' in post_tracking_comment
+	assert post_tracking_comment.index(guard) < post_tracking_comment.index(limit_check)
+
+
 def test_validation_fixing_backfills_ai_merged_from_linked_merged_pr_evidence():
 	state = _base_state(status="validation-fixing")
 	state["validation_cycle"] = 1
@@ -4345,6 +5967,102 @@ def test_validation_dispatch_failure_marks_failed():
 	assert "ai:validation-failed" in result["tracking_labels"]
 
 
+def test_validation_harness_error_raw_status_preserves_budget_and_sets_additive_label():
+	state = _base_state(status="validating")
+	state["validation_cycle"] = 2
+	state["validation_recovery_count"] = 2
+	state["validation_last_dispatch_cycle"] = 2
+	state["judge_last_fingerprint"] = "fingerprint-before-harness-error"
+	state["judge_fingerprint_repeat_count"] = 3
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed"],
+		validation_workflow_runs=[{
+			"id": 7001,
+			"run_attempt": 1,
+			"status": "completed",
+			"conclusion": "failure",
+			"created_at": "2026-01-01T00:00:00Z",
+			"outputs": {"raw_status": "harness_error"},
+		}],
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "failed"
+	assert ls["validation_cycle"] == 2
+	assert ls["validation_recovery_count"] == 2
+	assert ls["validation_last_raw_status"] == "harness_error"
+	assert (ls["judge_last_fingerprint"], ls["judge_fingerprint_repeat_count"]) == ("", 0)
+	assert "ai:validation-failed" in result["tracking_labels"]
+	assert "ai:harness-broken" in result["tracking_labels"]
+	assert "HARNESS_ERROR_DETECTED" in (result["stdout"] + result["stderr"])
+
+
+
+def test_validation_harness_error_comment_fallback_preserves_budget_when_outputs_missing():
+	state = _base_state(status="validating")
+	state["validation_cycle"] = 2
+	state["validation_recovery_count"] = 2
+	state["validation_last_dispatch_cycle"] = 2
+	state["judge_last_fingerprint"] = "fingerprint-before-harness-error"
+	state["judge_fingerprint_repeat_count"] = 3
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed"],
+		tracking_comments=["## ⚠️ Runtime validation harness generation failed\n\nTemplate renderer failed while generating validation assets."],
+		validation_workflow_runs=[{
+			"id": 7002,
+			"run_attempt": 1,
+			"status": "completed",
+			"conclusion": "failure",
+			"created_at": "2026-01-01T00:00:00Z",
+		}],
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "failed"
+	assert ls["validation_cycle"] == 2
+	assert ls["validation_recovery_count"] == 2
+	assert ls["validation_last_raw_status"] == "harness_error"
+	assert (ls["judge_last_fingerprint"], ls["judge_fingerprint_repeat_count"]) == ("", 0)
+	assert "ai:harness-broken" in result["tracking_labels"]
+	assert "validation_raw_status_fallback" in (result["stdout"] + result["stderr"])
+
+
+
+def test_validation_harness_error_validate_failure_comment_accepts_bare_token():
+	state = _base_state(status="validating")
+	state["validation_cycle"] = 2
+	state["validation_recovery_count"] = 2
+	state["validation_last_dispatch_cycle"] = 2
+	state["judge_last_fingerprint"] = "fingerprint-before-harness-error"
+	state["judge_fingerprint_repeat_count"] = 3
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed"],
+		tracking_comments=["## ❌ Validate workflow failure\n\nharness_error"],
+		validation_workflow_runs=[{
+			"id": 7003,
+			"run_attempt": 1,
+			"status": "completed",
+			"conclusion": "failure",
+			"created_at": "2026-01-01T00:00:00Z",
+		}],
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "failed"
+	assert ls["validation_cycle"] == 2
+	assert ls["validation_recovery_count"] == 2
+	assert ls["validation_last_raw_status"] == "harness_error"
+	assert (ls["judge_last_fingerprint"], ls["judge_fingerprint_repeat_count"]) == ("", 0)
+	assert "ai:harness-broken" in result["tracking_labels"]
+	assert "HARNESS_ERROR_DETECTED" in (result["stdout"] + result["stderr"])
+
+
 
 
 def test_validation_fixing_label_collects_active_fix_issue_ids_from_comment():
@@ -4435,6 +6153,23 @@ def test_validated_label_marks_complete_and_keeps_open():
 	assert result["latest_state"]["validation_completed_cycle"] == 2
 	assert result["tracking_closed"] is False
 	assert "ai:validated" in result["tracking_labels"]
+	assert "ai:harness-broken" not in result["tracking_labels"]
+
+
+def test_validated_clears_harness_broken_label_and_records_pass_raw_status():
+	state = _base_state(status="validating")
+	state["validation_cycle"] = 2
+	state["validation_last_raw_status"] = "harness_error"
+	state["validation_failure_reason"] = "## ❌ Runtime validation harness error\n\nHarness failed"
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated", "ai:harness-broken"],
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["validation_last_raw_status"] == "pass"
+	assert "ai:harness-broken" not in result["tracking_labels"]
 
 
 def test_validated_removes_stale_validating_and_validation_fixing_labels():
@@ -4883,6 +6618,60 @@ def test_judge_repeat_fingerprint_empty_justification_fail_open():
 	assert (ls["judge_last_fingerprint"], ls["judge_fingerprint_repeat_count"]) == ("", 0)
 	assert ls["status"] == "in_progress"
 	assert ls["recovery_count"] == 1
+	assert "ai:blocked" not in result["tracking_labels"]
+
+
+def test_judge_prompt_includes_harness_validation_context():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	state["validation_last_raw_status"] = "harness_error"
+	state["validation_failure_reason"] = "## ❌ Runtime validation harness error\n\nHarness timed out"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		tracking_labels=["ai:harness-broken"],
+		issue_labels={10: ["ai:merged"]},
+		codex_json={
+			"status": "in_progress",
+			"justification": "harness issue still under investigation",
+			"assessment": "waiting for harness repair",
+			"new_issues": [],
+			"issues_to_revert": [],
+		},
+	)
+	prompt = result["judge_prompt"]
+	assert "Latest validation raw status: harness_error" in prompt
+	assert "Harness-broken label present: true" in prompt
+	assert "Judge note: the latest validation failure is classified as a harness/infrastructure defect" in prompt
+
+
+def test_judge_repeat_fingerprint_penalty_is_suppressed_after_harness_error():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	state["validation_last_raw_status"] = "harness_error"
+	state["judge_last_fingerprint"] = "existing-fingerprint"
+	state["judge_fingerprint_repeat_count"] = 2
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		judge_repeat_fingerprint_max="2",
+		tracking_labels=["ai:harness-broken"],
+		issue_labels={10: ["ai:merged"]},
+		codex_json={
+			"status": "failed",
+			"justification": "same harness issue again",
+			"assessment": "still waiting on validation harness repair",
+			"new_issues": [],
+			"issues_to_revert": [],
+		},
+	)
+	ls = result["latest_state"]
+	assert (ls["judge_last_fingerprint"], ls["judge_fingerprint_repeat_count"]) == ("", 0)
+	assert ls["status"] == "in_progress"
 	assert "ai:blocked" not in result["tracking_labels"]
 
 
@@ -5906,7 +7695,7 @@ def test_revalidate_resets_validation_failed_and_dispatches():
 		state=state,
 		enable_validation="true",
 		max_validate_cycles="3",
-		tracking_labels=["ai:validation-failed"],
+		tracking_labels=["ai:validation-failed", "ai:harness-broken"],
 		tracking_comments=["/revalidate"],
 	)
 	ls = result["latest_state"]
@@ -5918,7 +7707,158 @@ def test_revalidate_resets_validation_failed_and_dispatches():
 	assert "validation_failure_reason" not in ls, f"Expected validation_failure_reason to be removed, got {ls.get('validation_failure_reason')}"
 	assert "ai:validating" in result["tracking_labels"]
 	assert "ai:validation-failed" not in result["tracking_labels"]
+	assert "ai:harness-broken" not in result["tracking_labels"]
 	assert len(result["validation_dispatches"]) == 1
+
+
+def test_revalidate_clears_harness_broken_refreshes_draft_pr_and_records_memory_event():
+	state = _base_state(status="failed")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_pr"] = 301
+	state["final_merge_status"] = "pending"
+	state["validation_failure_reason"] = "Harness failed to boot"
+	prs = [
+		{
+			"number": 301,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+			"body": "Squash merge of orchestrator project #192.\n\nRefs #192",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed", "ai:harness-broken"],
+		tracking_comments=[
+			{
+				"id": 7,
+				"body": "/revalidate fixed config",
+				"user": {"login": "octocat"},
+				"created_at": "2026-05-23T16:20:00Z",
+				"html_url": "https://github.com/owner/repo/issues/192#issuecomment-7",
+			}
+		],
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		branch_ref_shas={"orchestrator/project-192": "abcdef1234"},
+	)
+	latest = result["latest_state"]
+	assert latest["status"] == "validating"
+	assert latest["validation_cycle"] == 1
+	assert "ai:validating" in result["tracking_labels"]
+	assert "ai:validation-failed" not in result["tracking_labels"]
+	assert "ai:harness-broken" not in result["tracking_labels"]
+	assert len(result["validation_dispatches"]) == 1
+	assert result["mock_revalidate_events_get_calls"] == 1
+	assert result["mock_revalidate_events_append_calls"] == 1
+	assert result["pr_body_update_calls"] == [301]
+	assert "<!-- VALIDATION_STATUS_V1 -->" in result["prs"][0]["body"]
+	assert "Revalidating after operator reset." in result["prs"][0]["body"]
+	stored_events = result["mock_revalidate_events_payload"]
+	assert stored_events["repository"] == "owner/repo"
+	assert stored_events["tracking_issue_number"] == 192
+	assert stored_events["integration_sha"] == "abcdef1234"
+	entry = stored_events["entries"][0]
+	assert entry["actor"] == "octocat"
+	assert entry["timestamp_utc"] == "2026-05-23T16:20:00Z"
+	assert entry["prior_outcome"] == "harness_error"
+	assert entry["prior_context"] == "Harness failed to boot"
+	assert entry["reason"] == "fixed config"
+	assert entry["source_comment_id"] == 7
+	assert entry["source_comment_url"] == "https://github.com/owner/repo/issues/192#issuecomment-7"
+
+
+def test_revalidate_dedupes_same_actor_and_sha_within_five_minutes():
+	state = _base_state(status="failed")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["validation_failure_reason"] = "Harness failed to boot"
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed", "ai:harness-broken"],
+		tracking_comments=[
+			{
+				"id": 8,
+				"body": "/revalidate retry please",
+				"user": {"login": "octocat"},
+				"created_at": "2026-05-23T16:20:00Z",
+				"html_url": "https://github.com/owner/repo/issues/192#issuecomment-8",
+			}
+		],
+		existing_branches=["main", "orchestrator/project-192"],
+		branch_ref_shas={"orchestrator/project-192": "abcdef1234"},
+		mock_revalidate_events_payload={
+			"schema_version": "v1",
+			"repository": "owner/repo",
+			"tracking_issue_number": 192,
+			"integration_sha": "abcdef1234",
+			"entries": [
+				{
+					"actor": "octocat",
+					"timestamp_utc": "2026-05-23T16:16:30Z",
+					"prior_outcome": "harness_error",
+				}
+			],
+		},
+	)
+	assert result["latest_state"]["status"] == "failed"
+	assert result["validation_dispatches"] == []
+	assert result["mock_revalidate_events_get_calls"] == 1
+	assert result.get("mock_revalidate_events_append_calls", 0) == 0
+	assert "ai:validation-failed" in result["tracking_labels"]
+	assert "ai:harness-broken" in result["tracking_labels"]
+	tracking_bodies = [comment.get("body", "") for comment in result["issues"]["192"]["comments"]]
+	assert any(body.startswith("<!-- revalidate-dedup:8:abcdef1234 -->") for body in tracking_bodies)
+	assert any("Already processed /revalidate from @octocat at 2026-05-23T16:16:30Z." in body for body in tracking_bodies)
+
+
+def test_revalidate_allows_same_actor_after_integration_sha_changes():
+	state = _base_state(status="failed")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["validation_failure_reason"] = "Harness failed to boot"
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed", "ai:harness-broken"],
+		tracking_comments=[
+			{
+				"id": 9,
+				"body": "/revalidate retry after new push",
+				"user": {"login": "octocat"},
+				"created_at": "2026-05-23T16:20:00Z",
+				"html_url": "https://github.com/owner/repo/issues/192#issuecomment-9",
+			}
+		],
+		existing_branches=["main", "orchestrator/project-192"],
+		branch_ref_shas={"orchestrator/project-192": "fedcba9876"},
+		mock_revalidate_events_payload={
+			"schema_version": "v1",
+			"repository": "owner/repo",
+			"tracking_issue_number": 192,
+			"integration_sha": "abcdef1234",
+			"entries": [
+				{
+					"actor": "octocat",
+					"timestamp_utc": "2026-05-23T16:16:30Z",
+					"prior_outcome": "harness_error",
+				}
+			],
+		},
+	)
+	assert result["latest_state"]["status"] == "validating"
+	assert len(result["validation_dispatches"]) == 1
+	assert result["mock_revalidate_events_get_calls"] == 1
+	assert result["mock_revalidate_events_append_calls"] == 1
+	stored_events = result["mock_revalidate_events_payload"]
+	assert stored_events["integration_sha"] == "fedcba9876"
+	assert stored_events["entries"][0]["reason"] == "retry after new push"
 
 
 def test_revalidate_not_blocked_by_prose_marker_comment_after_command():
