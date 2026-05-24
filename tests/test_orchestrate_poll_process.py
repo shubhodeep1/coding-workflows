@@ -12,6 +12,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -525,6 +526,15 @@ def _run_poller(
 	actions_runs_status: int = 200,
 	actions_runs_status_sequence: list[int] | None = None,
 	actions_runs_etag: str = '"etag-initial"',
+	mock_branch_rebuild_audit_payload: dict | None = None,
+	mock_branch_rebuild_audit_get_json: dict | None = None,
+	mock_branch_rebuild_audit_put_json: dict | None = None,
+	branch_protected_branches: dict[str, bool] | None = None,
+	branch_ref_shas: dict[str, str] | None = None,
+	mock_git_fetch_fail_after: dict[str, int] | None = None,
+	branch_rebuild_enabled: str = "false",
+	branch_rebuild_threshold_hours: str = "24",
+	branch_rebuild_cooldown_hours: str = "48",
 	codex_touch_file: str | None = None,
 	mock_orch_state_v2_pack_mode: str | None = None,
 	mock_git_push_success: bool = False,
@@ -571,6 +581,11 @@ def _run_poller(
 	actions_runs_workflow_runs = actions_runs_workflow_runs or []
 	actions_runs_status_sequence = actions_runs_status_sequence or []
 	fail_pull_get_numbers = fail_pull_get_numbers or []
+	mock_branch_rebuild_audit_get_json = mock_branch_rebuild_audit_get_json or {}
+	mock_branch_rebuild_audit_put_json = mock_branch_rebuild_audit_put_json or {}
+	branch_protected_branches = branch_protected_branches or {}
+	branch_ref_shas = branch_ref_shas or {}
+	mock_git_fetch_fail_after = mock_git_fetch_fail_after or {}
 	codex_json = codex_json or {
 		"status": "complete",
 		"justification": "done",
@@ -657,6 +672,12 @@ def _run_poller(
 			"fail_branch_ref_not_found_after": {str(k): int(v) for k, v in fail_branch_ref_not_found_after.items()},
 			"mock_actions_runs_cache_get_json": mock_actions_runs_cache_get_json,
 			"mock_actions_runs_cache_put_json": mock_actions_runs_cache_put_json,
+			"mock_branch_rebuild_audit_payload": mock_branch_rebuild_audit_payload,
+			"mock_branch_rebuild_audit_get_json": mock_branch_rebuild_audit_get_json,
+			"mock_branch_rebuild_audit_put_json": mock_branch_rebuild_audit_put_json,
+			"branch_protected_branches": {str(k): bool(v) for k, v in branch_protected_branches.items()},
+			"branch_ref_shas": {str(k): str(v) for k, v in branch_ref_shas.items()},
+			"mock_git_fetch_fail_after": {str(k): int(v) for k, v in mock_git_fetch_fail_after.items()},
 			"actions_runs_fetch_count": 0,
 			"actions_runs_if_none_match_count": 0,
 			"actions_runs_etag": actions_runs_etag,
@@ -920,6 +941,8 @@ if args[0] == 'workflow' and len(args) >= 3 and args[1] == 'run':
 			sys.exit(1)
 		dispatch = {'workflow': wf}
 		for i, arg in enumerate(args):
+			if arg == '--ref' and i + 1 < len(args):
+				dispatch['ref'] = args[i + 1]
 			if arg == '-f' and i + 1 < len(args):
 				field = args[i + 1]
 				if '=' in field:
@@ -962,26 +985,39 @@ if args[0] == 'run' and len(args) >= 2 and args[1] == 'list':
 if args[0] == 'pr' and len(args) >= 2 and args[1] == 'list':
 	base = None
 	head = None
+	state = None
+	search = None
 	jq_query = None
 	for i, arg in enumerate(args):
 		if arg == '--base' and i + 1 < len(args):
 			base = args[i + 1]
 		if arg == '--head' and i + 1 < len(args):
 			head = args[i + 1]
+		if arg == '--state' and i + 1 < len(args):
+			state = args[i + 1]
+		if arg == '--search' and i + 1 < len(args):
+			search = args[i + 1]
 		if arg == '--jq' and i + 1 < len(args):
 			jq_query = args[i + 1]
 	prs = []
 	for pr in store.get('prs', []):
+		merged = bool(pr.get('merged', False) or pr.get('merged_at') is not None)
+		if state == 'merged' and not merged:
+			continue
 		if base and pr.get('baseRefName') != base:
 			continue
 		if head and pr.get('headRefName') != head:
 			continue
-		prs.append(pr)
-	if jq_query == '.[0].number // empty':
-		if prs:
-			print(prs[0].get('number'))
-		else:
-			print('')
+		if search:
+			m = re.search(r'#(\d+)\s+in:body', search)
+			if m and f"#{m.group(1)}" not in str(pr.get('body', '')):
+				continue
+		payload = dict(pr)
+		payload.setdefault('mergedAt', pr.get('merged_at'))
+		prs.append(payload)
+	if jq_query:
+		p = subprocess.run(['jq', '-r', jq_query], input=json.dumps(prs), capture_output=True, text=True)
+		print(p.stdout.rstrip() if p.returncode == 0 else '')
 	else:
 		print(json.dumps(prs))
 	sys.exit(0)
@@ -1189,19 +1225,31 @@ if args[0] == 'api':
 							'mergeable': True,
 							'mergeable_state': 'clean',
 						}
+					pr_repository = pr.get('repository', {'nameWithOwner': 'owner/repo'})
+					if isinstance(pr_repository, dict):
+						pr_repository = dict(pr_repository)
+						pr_repository['nameWithOwner'] = str(pr_repository.get('nameWithOwner', 'owner/repo'))
+					else:
+						pr_repository = {'nameWithOwner': str(pr_repository)}
 					pr_state = str(pr.get('state', 'open')).upper()
 					if pr_state == 'MERGED':
 						pr_state = 'CLOSED'
 					timeline_nodes.append({
+						'willCloseTarget': bool(pr.get('willCloseTarget', True)),
 						'source': {
 							'__typename': 'PullRequest',
 							'number': int(pr.get('number', linked_pr_num)),
+							'repository': pr_repository,
 							'state': pr_state,
 							'merged': bool(pr.get('merged', False)),
+							'mergedAt': pr.get('merged_at', None),
 							'headRefName': pr.get('headRefName', ''),
 							'headRefOid': pr.get('headRefOid', pr.get('headSha', f'mocksha{linked_pr_num}')),
 							'mergeable': pr.get('mergeable', None),
 							'mergeStateStatus': str(pr.get('mergeStateStatus', pr.get('mergeable_state', ''))).upper(),
+							'mergeCommit': {
+								'oid': pr.get('merge_commit_sha', None),
+							},
 							'commits': {
 								'nodes': [
 									{'commit': {'pushedDate': pr.get('headPushedAt', '2026-01-01T00:00:00Z'), 'committedDate': pr.get('headPushedAt', '2026-01-01T00:00:00Z')}}
@@ -1459,6 +1507,68 @@ if args[0] == 'api':
 		print(json.dumps({'merged': True}))
 		sys.exit(0)
 
+	m = re.search(r'/branches/(.+)$', path)
+	if m:
+		encoded_branch = m.group(1)
+		from urllib.parse import unquote
+		branch = unquote(encoded_branch)
+		if branch not in store.get('existing_branches', ['main']):
+			print('not found', file=sys.stderr)
+			sys.exit(1)
+		protected = bool(store.get('branch_protected_branches', {}).get(branch, False))
+		branch_sha = store.get('branch_ref_shas', {}).get(branch, 'mocksha')
+		result = {'name': branch, 'protected': protected, 'commit': {'sha': branch_sha}}
+		if jq:
+			p = subprocess.run(['jq', '-r', jq], input=json.dumps(result), capture_output=True, text=True)
+			if p.returncode != 0:
+				sys.stderr.write(p.stderr)
+				sys.exit(p.returncode)
+			sys.stdout.write(p.stdout)
+			save()
+			sys.exit(0)
+		save()
+		print(json.dumps(result))
+		sys.exit(0)
+
+	m = re.search(r'/git/refs/heads/(.+)$', path)
+	if m and method == 'DELETE':
+		encoded_branch = m.group(1)
+		from urllib.parse import unquote
+		branch = unquote(encoded_branch)
+		if bool(store.get('branch_protected_branches', {}).get(branch, False)):
+			save()
+			print('protected branch', file=sys.stderr)
+			sys.exit(1)
+		store['existing_branches'] = [str(item) for item in store.get('existing_branches', ['main']) if str(item) != branch]
+		store.setdefault('deleted_branches', []).append(branch)
+		save()
+		print(json.dumps({'ref': f'refs/heads/{branch}'}))
+		sys.exit(0)
+
+	if re.search(r'/git/refs$', path) and method == 'POST':
+		ref = ''
+		sha = ''
+		for f in fields:
+			if f.startswith('ref='):
+				ref = f.split('=', 1)[1]
+			if f.startswith('sha='):
+				sha = f.split('=', 1)[1]
+		branch = ref[len('refs/heads/'):] if ref.startswith('refs/heads/') else ''
+		if not branch:
+			print('bad ref', file=sys.stderr)
+			sys.exit(1)
+		known_branches = [str(item) for item in store.get('existing_branches', ['main'])]
+		if branch not in known_branches:
+			known_branches.append(branch)
+		store['existing_branches'] = known_branches
+		branch_shas = dict(store.get('branch_ref_shas', {}))
+		branch_shas[branch] = sha or 'mocksha'
+		store['branch_ref_shas'] = branch_shas
+		store.setdefault('created_branches', []).append({'branch': branch, 'sha': sha or 'mocksha'})
+		save()
+		print(json.dumps({'ref': ref, 'object': {'sha': sha or 'mocksha'}}))
+		sys.exit(0)
+
 	m = re.search(r'/git/ref/heads/(.+)$', path)
 	if m:
 		encoded_branch = m.group(1)
@@ -1480,10 +1590,21 @@ if args[0] == 'api':
 				save()
 				print('not found', file=sys.stderr)
 				sys.exit(1)
-		save()
 		if branch in store.get('existing_branches', ['main']):
-			print(json.dumps({'ref': f'refs/heads/{branch}', 'object': {'sha': 'mocksha'}}))
+			branch_sha = store.get('branch_ref_shas', {}).get(branch, 'mocksha')
+			result = {'ref': f'refs/heads/{branch}', 'object': {'sha': branch_sha}}
+			if jq:
+				p = subprocess.run(['jq', '-r', jq], input=json.dumps(result), capture_output=True, text=True)
+				if p.returncode != 0:
+					sys.stderr.write(p.stderr)
+					sys.exit(p.returncode)
+				sys.stdout.write(p.stdout)
+				save()
+				sys.exit(0)
+			save()
+			print(json.dumps(result))
 			sys.exit(0)
+		save()
 		print('not found', file=sys.stderr)
 		sys.exit(1)
 
@@ -1692,6 +1813,13 @@ if args and args[0] == 'fetch':
 		refspec = args[3]
 	elif len(args) == 3 and args[1] == 'origin':
 		refspec = args[2]
+	if refspec:
+		calls = store.setdefault('git_fetch_calls', {})
+		calls[refspec] = int(calls.get(refspec, 0)) + 1
+		fail_after = store.get('mock_git_fetch_fail_after', {}).get(refspec)
+		store_path.write_text(json.dumps(store), encoding='utf-8')
+		if fail_after is not None and calls[refspec] > int(fail_after):
+			sys.exit(1)
 	if refspec and ':' in refspec:
 		src_ref, dst_ref = refspec.split(':', 1)
 		src_prefix = 'refs/heads/'
@@ -1849,6 +1977,53 @@ if len(args) >= 3 and args[0] == "scripts/ai_memory.py" and args[1] == "actions-
 		print(json.dumps(payload))
 		sys.exit(0)
 
+if len(args) >= 3 and args[0] == "scripts/ai_memory.py" and args[1] == "branch-rebuild-audit":
+	store = _load_store()
+	cmd = args[2]
+	if cmd == "get":
+		payload = {
+			"ok": True,
+			"enabled": True,
+			"hit": isinstance(store.get("mock_branch_rebuild_audit_payload"), dict),
+			"audit": store.get("mock_branch_rebuild_audit_payload"),
+		}
+		override = store.get("mock_branch_rebuild_audit_get_json")
+		if isinstance(override, dict) and override:
+			payload.update(override)
+		print(json.dumps(payload))
+		sys.exit(0)
+	if cmd == "put":
+		audit_file = ""
+		i = 3
+		while i < len(args):
+			if args[i] == "--audit-file" and i + 1 < len(args):
+				audit_file = args[i + 1]
+				i += 2
+				continue
+			i += 1
+		audit = None
+		if audit_file:
+			try:
+				audit = json.loads(Path(audit_file).read_text(encoding="utf-8"))
+			except Exception:
+				audit = None
+		if isinstance(audit, dict):
+			store["mock_branch_rebuild_audit_payload"] = audit
+		store.setdefault("mock_branch_rebuild_audit_put_calls", 0)
+		store["mock_branch_rebuild_audit_put_calls"] = int(store["mock_branch_rebuild_audit_put_calls"]) + 1
+		_save_store(store)
+		payload = {
+			"ok": True,
+			"enabled": True,
+			"stored": True,
+			"audit": store.get("mock_branch_rebuild_audit_payload"),
+		}
+		override = store.get("mock_branch_rebuild_audit_put_json")
+		if isinstance(override, dict) and override:
+			payload.update(override)
+		print(json.dumps(payload))
+		sys.exit(0)
+
 if len(args) >= 2 and args[0] == "scripts/orchestrate_state_v2.py" and args[1] == "pack":
 	mode = os.environ.get("MOCK_ORCH_STATE_V2_PACK_MODE", "")
 	if mode == "count_mismatch":
@@ -1915,6 +2090,9 @@ sys.exit(proc.returncode)
 				"JUDGE_REPEAT_FINGERPRINT_MAX": judge_repeat_fingerprint_max,
 				"ENABLE_VALIDATION": enable_validation,
 				"MAX_VALIDATE_CYCLES": max_validate_cycles,
+				"BRANCH_REBUILD_ENABLED": branch_rebuild_enabled,
+				"BRANCH_REBUILD_THRESHOLD_HOURS": branch_rebuild_threshold_hours,
+				"BRANCH_REBUILD_COOLDOWN_HOURS": branch_rebuild_cooldown_hours,
 				"GH_MOCK_STORE": str(store_file),
 				"GH_RETRY_MAX_ATTEMPTS": "1",
 				"REAL_GIT_BIN": real_git,
@@ -2194,8 +2372,9 @@ def test_complete_verdict_falls_through_to_finalize_on_integration_drift():
 
 	PR #2778 folded ``integration_contained_in_default`` into the
 	``project_complete`` flag computed by ``cmd_check_wave_status``. That
-	collided with the pre-existing "judge cannot declare complete while
-	waves remain" override at ``orchestrate_poll_process.sh:12090``, which
+	collided with the pre-existing ``Hard guard: judge cannot declare
+	"complete" while waves remain`` override in
+	``scripts/orchestrate_poll_process.sh``, which
 	consumed ``PROJECT_COMPLETE`` and so began overriding ``complete`` →
 	``in_progress`` whenever the integration branch had drifted ahead of
 	default (``ahead_by > 0``) — even when every wave issue was merged.
@@ -2364,6 +2543,7 @@ def test_comprehensive_pending_complete_dispatches_release_with_metadata():
 	assert len(result["release_dispatches"]) == 1
 	dispatch = result["release_dispatches"][0]
 	assert dispatch["workflow"] == "test-and-mark-stable.yml"
+	assert dispatch["ref"] == "stable"
 	assert dispatch["dry_run"] == "false"
 	assert dispatch["version_tag"] == "v9.9.9"
 	assert dispatch["test_repo"] == "owner/release-tests"
@@ -2396,6 +2576,7 @@ def test_comprehensive_pending_complete_dispatches_release_without_optional_meta
 	assert len(result["release_dispatches"]) == 1
 	dispatch = result["release_dispatches"][0]
 	assert dispatch["workflow"] == "test-and-mark-stable.yml"
+	assert dispatch["ref"] == "stable"
 	assert dispatch["dry_run"] == "false"
 	assert "version_tag" not in dispatch
 	assert "test_repo" not in dispatch
@@ -2428,6 +2609,7 @@ def test_comprehensive_pending_already_complete_dispatches_release():
 	assert len(result["release_dispatches"]) == 1
 	dispatch = result["release_dispatches"][0]
 	assert dispatch["workflow"] == "test-and-mark-stable.yml"
+	assert dispatch["ref"] == "stable"
 	assert dispatch["dry_run"] == "false"
 	assert "ai:comprehensive-test-pending" not in result["tracking_labels"]
 
@@ -3174,6 +3356,308 @@ def test_merge_conflict_state_completes_when_final_pr_already_merged_and_branch_
 	assert result["release_dispatches"] == []
 
 
+def test_external_finalize_detect_leaves_merge_conflict_validation_path_intact():
+	state = _base_state(status="merge_conflict")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_pr"] = 356
+	state["final_merge_status"] = "pending"
+	prs = [
+		{
+			"number": 356,
+			"state": "closed",
+			"merged": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": None,
+			"mergeable_state": "unknown",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["final_merge_pr"] == 356
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert result["latest_state"]["validation_completed_cycle"] == 1
+	assert "ai:validated" in result["tracking_labels"]
+	assert "ai:merged" not in result["tracking_labels"]
+
+
+def test_external_finalize_detect_leaves_validation_completion_path_intact():
+	state = _base_state(status="validating")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["validation_cycle"] = 2
+	state["final_merge_pr"] = 357
+	state["final_merge_status"] = "pending"
+	prs = [
+		{
+			"number": 357,
+			"state": "closed",
+			"merged": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": None,
+			"mergeable_state": "unknown",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["final_merge_pr"] == 357
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert result["latest_state"]["validation_completed_cycle"] == 2
+	assert "ai:validated" in result["tracking_labels"]
+	assert "ai:merged" not in result["tracking_labels"]
+
+
+def test_validation_completion_preempts_sync_branch_missing_failure_when_final_pr_already_merged():
+	state = _base_state(status="validating")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["validation_cycle"] = 2
+	state["final_merge_pr"] = 359
+	state["final_merge_status"] = "pending"
+	prs = [
+		{
+			"number": 359,
+			"state": "closed",
+			"merged": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": None,
+			"mergeable_state": "unknown",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main"],
+	)
+	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["validation_completed_cycle"] == 2
+	assert result["latest_state"]["final_merge_pr"] == 359
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert "ai:validated" in result["tracking_labels"]
+	assert "ai:merged" not in result["tracking_labels"]
+	assert not any("Integration branch missing" in body for body in tracking_bodies)
+
+
+def test_validation_fixing_completion_preempts_sync_branch_missing_failure_when_final_pr_already_merged():
+	state = _base_state(status="validation-fixing")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["validation_cycle"] = 2
+	state["validation_active_fix_issues"] = []
+	state["final_merge_pr"] = 360
+	state["final_merge_status"] = "pending"
+	prs = [
+		{
+			"number": 360,
+			"state": "closed",
+			"merged": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": None,
+			"mergeable_state": "unknown",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main"],
+	)
+	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["validation_completed_cycle"] == 2
+	assert result["latest_state"]["final_merge_pr"] == 360
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert "ai:validated" in result["tracking_labels"]
+	assert "ai:merged" not in result["tracking_labels"]
+	assert not any("Integration branch missing" in body for body in tracking_bodies)
+
+
+def test_external_finalize_detect_skips_terminal_fallthrough():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_pr"] = 355
+	state["final_merge_status"] = "pending"
+	prs = [
+		{
+			"number": 355,
+			"state": "closed",
+			"merged": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": None,
+			"mergeable_state": "unknown",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["final_merge_pr"] == 355
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert "Project already complete, skipping." not in result["stdout"]
+
+
+def test_external_finalize_detect_preempts_sync_branch_missing_failure():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_pr"] = 358
+	state["final_merge_status"] = "pending"
+	prs = [
+		{
+			"number": 358,
+			"state": "closed",
+			"merged": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": None,
+			"mergeable_state": "unknown",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main"],
+	)
+	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["final_merge_pr"] == 358
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert "ai:merged" in result["tracking_labels"]
+	assert not any("Integration branch missing" in body for body in tracking_bodies)
+
+
+def test_external_finalize_refuses_complete_when_subissues_never_created():
+	# Behavioural regression test for project #2734 (postmortem layer 6).
+	# State models the actual incident: a multi-wave project where Wave 1
+	# sub-issues were merged but Waves 2-7 were never dispatched — their
+	# entries are present in the state with status="not_created" and
+	# github_issue=null because the orchestrator never created them.  An
+	# operator (or self-heal pipeline) squash-merges the integration PR
+	# externally.  The external-finalize block sees a merged final PR and
+	# would, pre-fix, mark the project complete and broadcast "✅ Project
+	# complete" via Telegram while 7 of 9 sub-issues had shipped no code.
+	#
+	# Post-fix the gate must:
+	#   - leave status as in_progress (NOT transition to complete)
+	#   - leave final_merge_status as pending (NOT transition to merged)
+	#   - NOT apply the ai:merged label
+	#   - emit a [external-finalize-partial] warning to stdout/stderr
+	#   - persist external_finalize_partial_alert_sig on the state file
+	#     so the Telegram alert deduplicates on subsequent ticks
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_pr"] = 2750
+	state["final_merge_status"] = "pending"
+	# Replace the default 1-issue Wave 1 with a 2-wave project: Wave 1
+	# merged, Wave 2 never created (status="not_created", github_issue=null).
+	# This mirrors project #2734's actual `.waves[]` shape from comment #38.
+	state["total_issues"] = 2
+	state["total_waves"] = 2
+	state["waves"] = [
+		{
+			"wave": 1,
+			"issues": [
+				{"id": "phase1-verifier-baseline-delta", "github_issue": 10, "status": "merged"},
+			],
+		},
+		{
+			"wave": 2,
+			"issues": [
+				{"id": "phase1-resolver-bootstrap-wiring", "github_issue": None, "status": "not_created"},
+			],
+		},
+	]
+	state["issue_number_map"] = {"phase1-verifier-baseline-delta": 10}
+	prs = [
+		{
+			"number": 2750,
+			"state": "closed",
+			"merged": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": None,
+			"mergeable_state": "unknown",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	# The gate must refuse to transition state.
+	assert result["latest_state"]["status"] != "complete", (
+		"completeness gate failed: status transitioned to `complete` despite "
+		"Wave 2's sub-issue still being `not_created` — this is the exact "
+		"failure mode the gate is meant to prevent (project #2734 scenario)."
+	)
+	assert result["latest_state"]["final_merge_status"] != "merged", (
+		"completeness gate failed: final_merge_status transitioned to `merged` "
+		"despite incomplete sub-issues."
+	)
+	# The ai:merged label must NOT be applied while sub-issues remain
+	# uncreated; the label is the orchestrator's primary downstream signal
+	# for release callbacks and label-repair sweeps.
+	assert "ai:merged" not in result["tracking_labels"], (
+		"completeness gate failed: ai:merged label was applied to tracking "
+		"issue despite Wave 2 sub-issue never being created. Downstream "
+		"automation would treat this project as done and skip remediation."
+	)
+	# The warning marker must surface so log-analysis tooling can detect
+	# this failure mode in workflow runs.
+	combined_log = result.get("stdout", "") + "\n" + result.get("stderr", "")
+	assert "[external-finalize-partial]" in combined_log, (
+		"completeness gate failed: `[external-finalize-partial]` warning "
+		"marker missing from poller stdout/stderr — without it, log-analysis "
+		"tooling cannot detect this failure mode at scale."
+	)
+	# Note: the alert-dedup signature
+	# (`external_finalize_partial_alert_sig` on the state file) is verified
+	# by the companion static guard test
+	# `test_external_finalize_gates_on_subissue_completeness_before_marking_complete`,
+	# which pins both the persistence and the dedup condition.  This
+	# behavioural test does not re-verify it because `_run_poller` only
+	# exposes state via the comment trail, and the gate intentionally does
+	# NOT post_state_comment (the project is genuinely still in_progress
+	# from the orchestrator's POV — posting a state comment on every gate
+	# fire would re-introduce the alert-fatigue failure mode at the
+	# tracking-issue level).
+
+
 def test_standalone_conflict_sweep_skips_integration_base_prs():
 	state = _base_state(status="complete")
 	prs = [
@@ -3418,8 +3902,6 @@ def test_standalone_retrigger_review_skips_empty_commit_when_review_run_has_blan
 		f"expected no standalone empty-commit push when a blank-head_branch run matches "
 		f"the PR head_sha; got push calls {result.get('git_push_calls', [])}"
 	)
-
-
 def test_standalone_retrigger_review_uses_graphql_head_sha_when_pulls_refetch_fails():
 	state = _base_state(status="complete")
 	standalone_state_comment = (
@@ -3526,6 +4008,43 @@ def test_standalone_stall_recovery_honors_ai_done_phase_attempt_override():
 	assert standalone_state["stall_recovery_count"] == 1
 	assert standalone_state["phase_attempts"]["ai:done"] == 6
 	assert "ai:closed" not in result["issues"]["501"]["labels"]
+
+
+def test_standalone_merged_guard_ignores_refs_only_cross_reference():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:planning",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:planning"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: 416},
+		mock_gh_issue_list_label_filter=True,
+		prs=[
+			{
+				"number": 416,
+				"state": "closed",
+				"merged": True,
+				"merged_at": "2026-04-15T00:00:00Z",
+				"body": "Refs #501",
+				"willCloseTarget": False,
+			},
+		],
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 1
+	assert "ai:merged" not in result["issues"]["501"]["labels"]
 
 
 def test_standalone_retrigger_review_does_not_increment_when_empty_commit_checkout_fails():
@@ -4301,8 +4820,14 @@ def test_judge_repeat_fingerprint_breaker_escalates_after_limit():
 	assert len(third.get("created_issues", [])) == 0
 	assert "ai:blocked" in third["tracking_labels"]
 	tracking_bodies = [c.get("body", "") for c in third["issues"]["192"]["comments"]]
+	completion_comment = next(body for body in tracking_bodies if "<!-- orchestrator:completion-status -->" in body)
+	assert "<!-- status:failed -->" in completion_comment
+	assert "Judge repeat-fingerprint breaker triggered" in completion_comment
 	assert any("Judge repeat-fingerprint breaker triggered" in body for body in tracking_bodies)
-	breaker_comment = next(body for body in tracking_bodies if "Judge repeat-fingerprint breaker triggered" in body)
+	breaker_comment = next(
+		body for body in tracking_bodies
+		if body.startswith("## ❌ Judge repeat-fingerprint breaker triggered")
+	)
 	assert "scripts/lint.sh" in breaker_comment
 	assert ":987" not in breaker_comment
 	assert "2026-01-01T12:39:56Z" not in breaker_comment
@@ -5533,16 +6058,28 @@ def test_revalidate_ignored_when_no_comment():
 	"""Without a /revalidate comment, a validation-failed project stays skipped."""
 	state = _base_state(status="failed")
 	state["validation_failure_reason"] = "Some failure"
+	stale_completion_comment = (
+		"<!-- orchestrator:completion-status -->\n"
+		"<!-- status:in-progress -->\n"
+		"## Completion status\n\n"
+		"**State:** `in-progress`\n\n"
+		"Waiting on wave merges.\n"
+	)
 	result = _run_poller(
 		state=state,
 		enable_validation="true",
 		max_validate_cycles="3",
 		tracking_labels=["ai:validation-failed"],
+		tracking_comments=[stale_completion_comment],
 	)
 	ls = result["latest_state"]
 	assert ls["status"] == "failed", f"Expected status=failed, got {ls['status']}"
 	assert "ai:validation-failed" in result["tracking_labels"]
 	assert result["validation_dispatches"] == []
+	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	completion_comment = next(body for body in tracking_bodies if "<!-- orchestrator:completion-status -->" in body)
+	assert "<!-- status:failed -->" in completion_comment
+	assert "terminal `failed` state" in completion_comment
 
 
 def test_revalidate_with_extra_text_after_command():
@@ -6383,6 +6920,9 @@ def test_retrigger_review_does_not_increment_when_empty_commit_checkout_fails():
 		f"expected checkout failure to leave stall_recovery_count at 0; "
 		f"got {issue_entry['stall_recovery_count']}"
 	)
+	assert f"Issue #10 PR #85 checkout origin/{head_ref} failed after fetch; skipping empty-commit push." in (
+		result["stdout"] + result["stderr"]
+	)
 	assert result.get("git_push_calls", []) == [], (
 		f"expected checkout failure to skip the empty-commit push; "
 		f"got push calls {result.get('git_push_calls', [])}"
@@ -6494,6 +7034,160 @@ def test_no_labels_with_open_linked_pr_skips_retrigger_pipeline():
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	# Counter must NOT increment when the guard skips the action.
 	assert issue_entry["stall_recovery_count"] == 0
+	assert issue_entry["status"] == "in_progress"
+
+
+def test_no_labels_with_cross_repo_linked_pr_still_retriggers_pipeline():
+	# Same-repo linked-PR filtering must ignore cross-repo timeline refs so a
+	# foreign PR cannot suppress repo-local early-phase recovery.
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["last_seen_phase"] = "no_labels"
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: []},
+		issue_linked_prs={10: 936},
+		prs=[{
+			"number": 936,
+			"state": "open",
+			"repository": "other-owner/other-repo",
+			"baseRefName": "main",
+			"headRefName": "ai/issue-10",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		}],
+	)
+	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
+	assert any("/reclarify" in body for body in issue_comments)
+	assert not any("/answer" in body for body in issue_comments)
+	assert "STALL_SKIP issue=10 reason=open_linked_pr pr=936" not in result["stdout"]
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 1
+	assert issue_entry["status"] == "in_progress"
+
+
+def test_no_labels_with_rest_fallback_closing_linked_pr_skips_retrigger_pipeline():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["last_seen_phase"] = "no_labels"
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		gql_mode="error",
+		issue_labels={10: []},
+		issue_linked_prs={10: 932},
+		prs=[{
+			"number": 932,
+			"state": "open",
+			"body": "Fixes #10",
+			"baseRefName": "main",
+			"headRefName": "ai/issue-10",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		}],
+	)
+	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
+	assert not any("/reclarify" in body for body in issue_comments)
+	assert not any("/answer" in body for body in issue_comments)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 0
+	assert issue_entry["status"] == "in_progress"
+
+
+def test_no_labels_with_rest_fallback_keyword_substring_still_retriggers_pipeline():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["last_seen_phase"] = "no_labels"
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		gql_mode="error",
+		issue_labels={10: []},
+		issue_linked_prs={10: 933},
+		prs=[{
+			"number": 933,
+			"state": "open",
+			"body": "We need to prefix #10 before rollout",
+			"baseRefName": "main",
+			"headRefName": "infra/fix-933",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		}],
+	)
+	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
+	assert any("/reclarify" in body for body in issue_comments)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 1
+	assert issue_entry["status"] == "in_progress"
+
+
+def test_no_labels_with_rest_fallback_colon_form_still_retriggers_pipeline():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["last_seen_phase"] = "no_labels"
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		gql_mode="error",
+		issue_labels={10: []},
+		issue_linked_prs={10: 934},
+		prs=[{
+			"number": 934,
+			"state": "open",
+			"body": "Closes: #10",
+			"baseRefName": "main",
+			"headRefName": "infra/fix-934",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		}],
+	)
+	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
+	assert any("/reclarify" in body for body in issue_comments)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 1
+	assert issue_entry["status"] == "in_progress"
+
+
+def test_no_labels_with_refs_only_linked_pr_still_retriggers_pipeline():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["last_seen_phase"] = "no_labels"
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: []},
+		issue_linked_prs={10: 931},
+		prs=[{
+			"number": 931,
+			"state": "open",
+			"body": "Refs #10",
+			"willCloseTarget": False,
+			"baseRefName": "main",
+			"headRefName": "infra/fix-931",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		}],
+	)
+	issue_comments = [c.get("body", "") for c in result["issues"]["10"]["comments"]]
+	assert any("/reclarify" in body for body in issue_comments)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 1
 	assert issue_entry["status"] == "in_progress"
 
 
@@ -6780,6 +7474,31 @@ sys.exit(1)
 # ============================================================
 
 
+def _resolver_retry_state_block_for_test(
+	*,
+	head_sha: str,
+	consecutive_failure_count: int,
+	escalated: bool = True,
+	failure_signature_sha256: str = "signature-1",
+) -> str:
+	payload = {
+		"schema_version": 1,
+		"head_sha": head_sha,
+		"failure_signature_sha256": failure_signature_sha256,
+		"last_failure_signature": failure_signature_sha256,
+		"consecutive_failure_count": consecutive_failure_count,
+		"threshold": 5,
+		"regressed_by_resolver_count": 1,
+		"pre_existing_drift_count": 0,
+		"last_regressed_by_resolver": [{"fp_key": ["scripts/example.py", "EXPECTED_LINE"], "path": "scripts/example.py", "kind": "must_contain", "issue": 1500, "pr": 2600}],
+		"last_pre_existing_drift": [],
+		"escalated": escalated,
+		"escalated_at": "2026-05-20T00:00:00Z" if escalated else "",
+		"updated_at": "2026-05-20T00:00:00Z",
+	}
+	return "<!-- AUTOFIX_RESOLVER_RETRY_STATE_V1\n" + json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n-->"
+
+
 def test_integration_sync_conflict_uses_sync_specific_retry_budget_default_one():
 	# With the new INTEGRATION_SYNC_CONFLICT_MAX_RETRIES=1 default, an
 	# orchestrator/project-* head ref should escalate to the integration
@@ -6860,6 +7579,371 @@ def test_integration_sync_conflict_existing_three_tick_test_still_escalates():
 	assert any("Integration judge invoked" in body for body in tracking_bodies)
 
 
+def test_integration_conflict_redispatch_stops_when_current_final_pr_head_is_resolver_escalated():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_conflict_unresolved_ticks"] = 2
+	state["integration_conflict_dispatch_count"] = 4
+	state["integration_conflict_dispatch_ts"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=[
+			{
+				"number": 353,
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "orchestrator/project-192",
+				"headSha": "escalatedsha353",
+				"mergeable": False,
+				"mergeable_state": "dirty",
+				"body": _resolver_retry_state_block_for_test(
+					head_sha="escalatedsha353",
+					consecutive_failure_count=5,
+				),
+			},
+		],
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_tree_conflict_paths=["scripts/example.py"],
+	)
+	dispatches_for_final = [d for d in result["review_dispatches"] if d.get("pr_number") == 353]
+	assert dispatches_for_final == [], (
+		"expected no resolver redispatch once AUTOFIX_RESOLVER_RETRY_STATE_V1 "
+		"marks the current final-PR head as escalated; got: "
+		+ str(dispatches_for_final)
+	)
+	latest_state = result["latest_state"]
+	assert latest_state["integration_sync_status"] == "escalated"
+	assert latest_state["integration_conflict_unresolved_ticks"] == 2
+	assert latest_state["integration_conflict_dispatch_count"] == 4
+
+
+def test_integration_conflict_redispatch_resumes_when_retry_state_head_sha_is_stale():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_conflict_unresolved_ticks"] = 2
+	state["integration_conflict_dispatch_count"] = 4
+	state["integration_conflict_dispatch_ts"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=[
+			{
+				"number": 354,
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "orchestrator/project-192",
+				"headSha": "freshsha354",
+				"mergeable": False,
+				"mergeable_state": "dirty",
+				"body": _resolver_retry_state_block_for_test(
+					head_sha="stalesha354",
+					consecutive_failure_count=5,
+				),
+			},
+		],
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_tree_conflict_paths=["scripts/example.py"],
+	)
+	dispatches_for_final = [d for d in result["review_dispatches"] if d.get("pr_number") == 354]
+	assert dispatches_for_final, (
+		"expected resolver redispatch to resume when the persisted retry-state "
+		"head SHA no longer matches the current final-PR head"
+	)
+	assert result["latest_state"]["integration_sync_status"] == "healing"
+	assert result["latest_state"]["integration_conflict_unresolved_ticks"] == 1
+	assert result["latest_state"]["integration_conflict_dispatch_count"] == 1
+
+
+def test_integration_conflict_branch_rebuild_waits_for_threshold():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_conflict_unresolved_ticks"] = 2
+	state["integration_conflict_dispatch_count"] = 4
+	state["integration_conflict_dispatch_ts"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=[
+			{
+				"number": 355,
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "orchestrator/project-192",
+				"headSha": "escalatedsha355",
+				"mergeable": False,
+				"mergeable_state": "dirty",
+				"body": _resolver_retry_state_block_for_test(
+					head_sha="escalatedsha355",
+					consecutive_failure_count=5,
+				),
+			},
+		],
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_tree_conflict_paths=["scripts/example.py"],
+		branch_rebuild_enabled="true",
+		branch_rebuild_threshold_hours="999999",
+	)
+	assert result["latest_state"]["integration_sync_status"] == "escalated"
+	assert result.get("mock_branch_rebuild_audit_put_calls", 0) == 0
+	assert not any("/git/refs/heads/orchestrator%2Fproject-192" in path for path in result["api_calls"]), (
+		"branch rebuild threshold gate should skip delete/recreate API calls"
+	)
+	assert not any(path.endswith("/git/refs") for path in result["api_calls"]), (
+		"branch rebuild threshold gate should skip recreate API calls"
+	)
+
+
+def test_integration_conflict_branch_rebuild_respects_cooldown():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_conflict_unresolved_ticks"] = 2
+	state["integration_conflict_dispatch_count"] = 4
+	state["integration_conflict_dispatch_ts"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=[
+			{
+				"number": 356,
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "orchestrator/project-192",
+				"headSha": "escalatedsha356",
+				"mergeable": False,
+				"mergeable_state": "dirty",
+				"body": _resolver_retry_state_block_for_test(
+					head_sha="escalatedsha356",
+					consecutive_failure_count=5,
+				),
+			},
+		],
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_tree_conflict_paths=["scripts/example.py"],
+		branch_rebuild_enabled="true",
+		branch_rebuild_threshold_hours="1",
+		branch_rebuild_cooldown_hours="999999",
+		mock_branch_rebuild_audit_payload={
+			"last_rebuild_at": "2999-01-01T00:00:00Z",
+		},
+	)
+	assert result["latest_state"]["integration_sync_status"] == "escalated"
+	assert result.get("mock_branch_rebuild_audit_put_calls", 0) == 0
+	assert not any("/git/refs/heads/orchestrator%2Fproject-192" in path for path in result["api_calls"]), (
+		"branch rebuild cooldown gate should skip delete API calls"
+	)
+	assert not any(path.endswith("/git/refs") for path in result["api_calls"]), (
+		"branch rebuild cooldown gate should skip recreate API calls"
+	)
+
+
+def test_integration_conflict_branch_rebuild_refuses_audit_warnings():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_conflict_unresolved_ticks"] = 2
+	state["integration_conflict_dispatch_count"] = 4
+	state["integration_conflict_dispatch_ts"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=[
+			{
+				"number": 358,
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "orchestrator/project-192",
+				"headSha": "escalatedsha358",
+				"mergeable": False,
+				"mergeable_state": "dirty",
+				"body": _resolver_retry_state_block_for_test(
+					head_sha="escalatedsha358",
+					consecutive_failure_count=5,
+				),
+			},
+		],
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_tree_conflict_paths=["scripts/example.py"],
+		branch_rebuild_enabled="true",
+		branch_rebuild_threshold_hours="1",
+		branch_rebuild_cooldown_hours="1",
+		mock_branch_rebuild_audit_get_json={
+			"warning": "audit_corrupt",
+			"hit": False,
+			"audit": None,
+		},
+	)
+	assert result["latest_state"]["integration_sync_status"] == "escalated"
+	assert "audit storage is unavailable, disabled, or warning-bearing" in result["stderr"]
+	assert result.get("mock_branch_rebuild_audit_put_calls", 0) == 0
+	assert not any("/git/refs/heads/orchestrator%2Fproject-192" in path for path in result["api_calls"]), (
+		"branch rebuild audit warnings should block delete API calls"
+	)
+	assert not any(path.endswith("/git/refs") for path in result["api_calls"]), (
+		"branch rebuild audit warnings should block recreate API calls"
+	)
+
+
+def test_integration_conflict_branch_rebuild_replay_failure_marks_terminal_failure():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	state["integration_conflict_unresolved_ticks"] = 2
+	state["integration_conflict_dispatch_count"] = 4
+	state["integration_conflict_dispatch_ts"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: 901},
+		prs=[
+			{
+				"number": 357,
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "orchestrator/project-192",
+				"headSha": "escalatedsha357",
+				"mergeable": False,
+				"mergeable_state": "dirty",
+				"body": _resolver_retry_state_block_for_test(
+					head_sha="escalatedsha357",
+					consecutive_failure_count=5,
+				),
+			},
+			{
+				"number": 901,
+				"state": "closed",
+				"merged": True,
+				"merged_at": "2026-05-19T12:00:00Z",
+				"merge_commit_sha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+				"baseRefName": "orchestrator/project-192",
+				"headRefName": "ai/issue-10",
+				"headRefFromApi": "ai/issue-10",
+				"headSha": "childprsha901",
+				"mergeable": True,
+				"mergeable_state": "clean",
+			},
+		],
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_tree_conflict_paths=["scripts/example.py"],
+		branch_rebuild_enabled="true",
+		branch_rebuild_threshold_hours="1",
+		branch_rebuild_cooldown_hours="1",
+		branch_ref_shas={
+			"main": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"orchestrator/project-192": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		},
+	)
+	assert result["latest_state"]["status"] == "failed"
+	assert result["latest_state"]["final_merge_status"] == "failed"
+	assert result["latest_state"]["integration_sync_status"] == "branch_rebuild_failed"
+	assert result.get("mock_branch_rebuild_audit_put_calls", 0) >= 2, result
+	latest_audit = result.get("mock_branch_rebuild_audit_payload") or {}
+	assert latest_audit.get("outcome") == "failed", latest_audit
+	assert latest_audit.get("pre_rebuild_branch_head_sha") == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", latest_audit
+	assert "deadbeef" in str(latest_audit.get("failure_detail", "")) or "missing commit object" in str(latest_audit.get("failure_detail", "")), latest_audit
+	assert any("/git/refs/heads/orchestrator%2Fproject-192" in path for path in result["api_calls"]), (
+		"expected delete-ref API call during rebuild attempt"
+	)
+	assert any(path.endswith("/git/refs") for path in result["api_calls"]), (
+		"expected recreate-ref API call during rebuild attempt"
+	)
+	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert any("Integration branch rebuild failed" in body for body in tracking_bodies), tracking_bodies
+
+
+def test_integration_conflict_branch_rebuild_fetch_retry_stays_escalated_and_ignores_skipped_preflight_cooldown():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	state["integration_conflict_unresolved_ticks"] = 2
+	state["integration_conflict_dispatch_count"] = 4
+	state["integration_conflict_dispatch_ts"] = 0
+	branch_refspec = "refs/heads/orchestrator/project-192:refs/remotes/origin/orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: 902},
+		prs=[
+			{
+				"number": 359,
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": "orchestrator/project-192",
+				"headSha": "escalatedsha359",
+				"mergeable": False,
+				"mergeable_state": "dirty",
+				"body": _resolver_retry_state_block_for_test(
+					head_sha="escalatedsha359",
+					consecutive_failure_count=5,
+				),
+			},
+			{
+				"number": 902,
+				"state": "closed",
+				"merged": True,
+				"merged_at": "2026-05-19T12:00:00Z",
+				"merge_commit_sha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+				"baseRefName": "orchestrator/project-192",
+				"headRefName": "ai/issue-10",
+				"headRefFromApi": "ai/issue-10",
+				"headSha": "childprsha902",
+				"mergeable": True,
+				"mergeable_state": "clean",
+			},
+		],
+		existing_branches=["main", "orchestrator/project-192"],
+		merge_tree_conflict_paths=["scripts/example.py"],
+		branch_rebuild_enabled="true",
+		branch_rebuild_threshold_hours="1",
+		branch_rebuild_cooldown_hours="999999",
+		mock_branch_rebuild_audit_payload={
+			"last_rebuild_at": "2999-01-01T00:00:00Z",
+			"outcome": "skipped_preflight",
+		},
+		branch_ref_shas={
+			"main": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"orchestrator/project-192": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		},
+		mock_git_fetch_fail_after={branch_refspec: 1},
+	)
+	assert result["latest_state"]["status"] == "in_progress"
+	assert result["latest_state"]["integration_sync_status"] == "escalated"
+	assert result.get("mock_branch_rebuild_audit_put_calls", 0) >= 2, result
+	latest_audit = result.get("mock_branch_rebuild_audit_payload") or {}
+	assert latest_audit.get("outcome") == "skipped_preflight", latest_audit
+	assert "could not fetch the new remote branch ref locally" in str(latest_audit.get("failure_detail", "")), latest_audit
+	assert any("/git/refs/heads/orchestrator%2Fproject-192" in path for path in result["api_calls"]), result["api_calls"]
+	assert any(path.endswith("/git/refs") for path in result["api_calls"]), result["api_calls"]
+	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert not any("Integration branch rebuild failed" in body for body in tracking_bodies), tracking_bodies
+
+
+def test_branch_rebuild_replay_configures_git_identity():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert re.search(
+		r'cd "\$\{worktree_dir\}" \|\| exit 20\s+git config user.name "codex-bot" >>"\$\{replay_log\}" 2>&1 \|\| exit 26\s+git config user.email "codex@users\.noreply\.github\.com" >>"\$\{replay_log\}" 2>&1 \|\| exit 26\s+while IFS= read -r replay_item; do',
+		script,
+	), "expected branch rebuild replay subshell to configure git identity before cherry-pick"
+
+
+def test_integration_conflict_mergeable_payload_reuse_preserves_false_values():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert "if .mergeable != null then .mergeable else empty end" in script
+
+
 def test_orchestrator_state_seeds_merged_issue_fingerprints_field():
 	# ensure_integration_conflict_state_fields must seed the new
 	# merged_issue_fingerprints field so downstream jq arithmetic and
@@ -6890,6 +7974,13 @@ def test_capture_intent_fingerprints_helper_is_defined_and_idempotent():
 	assert "capture_intent_fingerprints_for_merged_subissue()" in script
 	assert "FINGERPRINT_PER_FILE_CAP" in script
 	assert "FINGERPRINT_MIN_PATTERN_CHARS" in script
+	assert "FINGERPRINT_POST_MERGE_REF" in script
+	assert "git rev-parse --verify FETCH_HEAD" in script
+	assert "command -v timeout >/dev/null 2>&1" in script
+	assert 'GIT_COMMAND_TIMEOUT_SECS="${integration_fetch_timeout_secs}"' in script
+	assert 'GIT_TERMINAL_PROMPT=0 timeout "${integration_fetch_timeout_secs}s"' in script
+	assert "skipping post-merge presence filter" in script
+	assert 'elif git rev-parse --verify --quiet "refs/remotes/origin/${integration_branch_for_capture}"' not in script
 	# Idempotency guard — must short-circuit when fingerprints are
 	# already recorded for that issue.
 	assert ".merged_issue_fingerprints[$k]" in script
@@ -6952,6 +8043,60 @@ def _verifier_sandbox(files: dict[str, str], fingerprints: dict) -> tuple[Path, 
 	fp_path = td / "fingerprints.json"
 	fp_path.write_text(json.dumps(fingerprints), encoding="utf-8")
 	return td, fp_path
+
+
+def test_verify_integration_fingerprints_baseline_regressions():
+	# CI/release workflows run explicit `python3 tests/<file>.py` allowlists,
+	# so execute the dedicated baseline verifier suite from this already-
+	# allowlisted harness too.
+	import importlib.util
+
+	spec = importlib.util.spec_from_file_location(
+		"test_verify_integration_fingerprints_baseline",
+		REPO_ROOT / "tests" / "test_verify_integration_fingerprints_baseline.py",
+	)
+	assert spec is not None and spec.loader is not None
+	mod = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(mod)
+	for name, value in sorted(vars(mod).items()):
+		if name.startswith("test_") and callable(value):
+			value()
+
+
+def test_verify_integration_fingerprints_partial_removal_regressions():
+	# CI/release workflows run explicit `python3 tests/<file>.py` allowlists,
+	# so execute the dedicated partial-removal verifier suite from this
+	# already-allowlisted harness too.
+	import importlib.util
+
+	spec = importlib.util.spec_from_file_location(
+		"test_verify_integration_fingerprints_partial_removal",
+		REPO_ROOT / "tests" / "test_verify_integration_fingerprints_partial_removal.py",
+	)
+	assert spec is not None and spec.loader is not None
+	mod = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(mod)
+	for name, value in sorted(vars(mod).items()):
+		if name.startswith("test_") and callable(value):
+			value()
+
+
+def test_branch_rebuild_audit_regressions():
+	# CI/release workflows run explicit `python3 tests/<file>.py` allowlists,
+	# so execute the dedicated branch-rebuild audit suite from this already-
+	# allowlisted harness too.
+	import importlib.util
+
+	spec = importlib.util.spec_from_file_location(
+		"test_branch_rebuild",
+		REPO_ROOT / "tests" / "test_branch_rebuild.py",
+	)
+	assert spec is not None and spec.loader is not None
+	mod = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(mod)
+	for name, value in sorted(vars(mod).items()):
+		if name.startswith("test_") and callable(value):
+			value()
 
 
 def test_verify_integration_fingerprints_passes_when_intent_preserved():
@@ -8733,6 +9878,253 @@ def test_resolver_tooling_refresh_allowlist_includes_both_retry_preludes():
 	)
 
 
+def test_external_finalize_detect_marks_project_complete_when_final_pr_already_merged():
+	# Regression guard for the orchestrator/project-2734 wave-2 dispatch
+	# loop (issue #2734): the orchestrator created the final integration
+	# PR (`final_merge_pr=2750`) eagerly via the self-healing pipeline,
+	# an operator squash-merged it at 2026-05-18T21:31:50Z, but
+	# `final_merge_status` stayed `pending` because
+	# `finalize_integration_merge_if_needed` is only invoked from the
+	# `merge_conflict` and judge-`complete` arms — never from the plain
+	# `in_progress` arm.  The poller kept cycling on the wave-dispatch
+	# gate (which fired Telegram `Wave 2 dispatch BLOCKED` alerts every
+	# ~30 min) and never noticed PR #2750 had merged.
+	#
+	# The fix is an external-finalize detect block placed AFTER
+	# `TRACKING_LABELS` is fetched and BEFORE
+	# `sync_default_into_integration_branch` in the orchestrator's
+	# per-tracking-issue loop: read `final_merge_pr` +
+	# `final_merge_status` from state, fetch the PR once via the shared
+	# `_fetch_pr_json` + `_jq_field` helper path, and on confirmed
+	# closed-and-merged, transition status to `complete` before the sync
+	# path can mark a deleted integration branch as failed. The dedicated
+	# `merge_conflict`, `validating`, and `validation-fixing` paths still
+	# own their validation/finalize bookkeeping. This test pins the
+	# placement, the gate condition, AND the state mutation shape
+	# (status=complete + final_merge_status=merged) so a future refactor
+	# cannot silently drop any of the three.
+	poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
+	sync_marker = '    if ! sync_default_into_integration_branch "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}"; then'
+	sync_idx = poller_body.find(sync_marker)
+	assert sync_idx != -1, (
+		"sync_default_into_integration_branch call is missing from the "
+		"per-tracking-issue loop; the external-finalize block must precede "
+		"that sync path so deleted integration branches cannot preempt the "
+		"merged-PR recovery."
+	)
+	# Anchor on the `TRACKING_LABELS=` fetch that precedes the
+	# external-finalize block. Several helpers reuse the same assignment,
+	# so search backward from the sync call and take the nearest preceding
+	# occurrence — that is the per-tracking-issue-loop landmark this
+	# regression is pinning.
+	anchor = '  TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"'
+	anchor_idx = poller_body.rfind(anchor, 0, sync_idx)
+	assert anchor_idx != -1, (
+		"TRACKING_LABELS=... fetch (the documented insertion landmark for "
+		"the external-finalize detect block) is missing or renamed in "
+		"scripts/orchestrate_poll_process.sh; update this test to match "
+		"the new landmark."
+	)
+	# Bound the search window to the block between the TRACKING_LABELS
+	# fetch and the sync call so the assertion enforces *placement*, not
+	# just "appears anywhere in the file" (which would false-positive if
+	# a refactor moved the block back below the sync path and reintroduced
+	# the deleted-branch failure).
+	merge_conflict_marker = 'if [ "${PROJECT_STATUS}" = "merge_conflict" ]; then'
+	merge_conflict_idx = poller_body.find(merge_conflict_marker, sync_idx)
+	assert merge_conflict_idx != -1, (
+		'merge_conflict switch `if [ "${PROJECT_STATUS}" = "merge_conflict" ]` '
+		"is missing from the per-tracking-issue loop; the sync block must "
+		"still flow into the later merge_conflict arm after the external-"
+		"finalize pre-check."
+	)
+	window = poller_body[anchor_idx:sync_idx]
+	# Gate condition: only fire when state is non-terminal, not already
+	# on the dedicated `merge_conflict` / validation-completion paths,
+	# a final PR is pinned, and `final_merge_status` is still `pending`.
+	# Each guard protects a different failure mode (terminal states
+	# already handled, `merge_conflict`/validated states need their own
+	# finalize path, no PR pinned yet means orchestrator hasn't even
+	# created the integration PR, non-pending status means another code
+	# path already finalized).
+	for needle, why in (
+		('.final_merge_pr // empty', "external-finalize block no longer reads `.final_merge_pr` from state; without it the block has no PR to inspect."),
+		('.final_merge_status // "pending"', "external-finalize block no longer reads `.final_merge_status` from state; without it the block cannot tell pending from already-finalized projects and would re-finalize on every tick."),
+		('!= "merge_conflict"', "external-finalize block no longer excludes `merge_conflict`; without that guard the block steals work from the dedicated finalize/validation path and duplicates final-PR reads on every merge_conflict poll tick."),
+		('!= "validating"', "external-finalize block no longer excludes `validating`; without that guard an externally merged final PR bypasses `mark_validation_complete` and drops `validation_completed_cycle` / `ai:validated` on the final validation-complete tick."),
+		('!= "validation-fixing"', "external-finalize block no longer excludes `validation-fixing`; without that guard the shortcut can bypass the validation-completion path that owns the final validated-state transition."),
+		('= "pending"', "external-finalize block no longer guards on `final_merge_status = pending`; without this guard the block would re-fire after the orchestrator's own finalize path already ran."),
+		("'.state'", "external-finalize block no longer reads the pinned PR's `.state` field; without it the block cannot tell open from closed PRs."),
+		("'.merged_at != null'", "external-finalize block no longer reads the pinned PR's `.merged_at` field; without it the block would mis-treat a closed-without-merge PR as a successful finalize."),
+	):
+		assert needle in window, (
+			f"external-finalize detect block in scripts/orchestrate_poll_process.sh "
+			f"no longer contains `{needle}` between the TRACKING_LABELS fetch and "
+			f"the sync_default_into_integration_branch call — {why}"
+		)
+	assert window.count('_fetch_pr_json "${_orch_extfin_pr}"') == 1, (
+		"external-finalize detect block no longer uses a single PR fetch before "
+		"the sync_default_into_integration_branch call; duplicate "
+		"PR fetches reintroduce avoidable API churn and a narrow "
+		"state/merged-at race."
+	)
+	# State mutation shape: must set BOTH status=complete AND
+	# final_merge_status=merged in the same jq pass.  Setting only one
+	# would leave the other path inconsistent: status=complete without
+	# final_merge_status=merged would re-trigger finalize on the next
+	# tick (wasting API budget); final_merge_status=merged without
+	# status=complete would leave the project stuck in `in_progress`
+	# and the wave-dispatch loop running.
+	for needle, why in (
+		('.status = "complete"', "external-finalize block no longer transitions project status to `complete`; without this the project stays in_progress and the wave-dispatch loop keeps firing on every tick."),
+		('.final_merge_status = "merged"', "external-finalize block no longer marks `final_merge_status = merged`; finalize_integration_merge_if_needed's early-return check would re-enter the merge flow on the next tick if it were ever called."),
+	):
+		assert needle in window, (
+			f"external-finalize detect block no longer performs the state "
+			f"mutation `{needle}` before the sync_default_into_integration_branch "
+			f"call — {why}"
+		)
+	# Side-effect surface: tracking comment + Telegram cleanup must
+	# both fire so the operator's open `Wave dispatch BLOCKED` alerts
+	# on the tracking issue + Telegram channel are explicitly
+	# superseded.  Without these the user sees stale BLOCKED comments
+	# at the top of the tracking issue indefinitely.
+	for needle, why in (
+		('post_tracking_comment', "external-finalize block no longer posts a tracking comment explaining the external-merge transition; operators would have to guess why the project suddenly went quiet."),
+		('tg_cleanup_msgs', "external-finalize block no longer calls tg_cleanup_msgs so prior `Wave dispatch BLOCKED` Telegram alerts stay pinned in the channel after the project completes — defeats half of the user-visible silence."),
+		('set_tracking_phase_label "ai:merged"', "external-finalize block no longer sets the `ai:merged` phase label, so downstream label-driven automation (release callbacks, label-repair sweeps) cannot detect that this project is done."),
+	):
+		assert needle in window, (
+			f"external-finalize detect block no longer triggers `{needle}` "
+			f"in its side-effect block — {why}"
+		)
+	assert re.search(r'PROJECT_STATUS="complete"\s+continue', window) is not None, (
+		"external-finalize detect block no longer short-circuits after setting "
+		"`PROJECT_STATUS=complete`; without the `continue`, the same tick falls "
+		"through to the terminal-state skip block and logs a misleading "
+		"`Project already complete, skipping.` line."
+	)
+
+
+def test_external_finalize_gates_on_subissue_completeness_before_marking_complete():
+	# Regression guard for the project #2734 false-completion broadcast
+	# (docs/postmortems/2026-05-18-project-2734-stall.md, layer 6).  The
+	# external-finalize block added by PR #2777 transitioned status=complete
+	# whenever the pinned integration PR was closed+merged, without checking
+	# whether the sub-issues in `.waves[].issues[]` had actually shipped.
+	# Project #2734's integration PR (#2750) was squash-merged externally
+	# with only Wave 1 (2 of 9 sub-issues) merged; on the next poll tick
+	# the unconditional transition broadcast "✅ Project complete" with 7
+	# sub-issues never created.
+	#
+	# The fix: before mutating state, count sub-issues whose status is not
+	# in {merged, closed, skipped}. If any are non-terminal, emit a
+	# structured `[external-finalize-partial]` warning, fire one Telegram
+	# alert per distinct missing-issue set (dedup via sha256 of the
+	# missing set, persisted on the state file as
+	# `external_finalize_partial_alert_sig`), and `continue` to skip the
+	# rest of this tick's processing for this project.  No state mutation.
+	#
+	# This test pins the placement (inside the elif-closed-and-merged arm,
+	# BEFORE the jq state mutation), the gate condition (filter shape
+	# matching the established `status != merged/closed/skipped` pattern
+	# used elsewhere in the script), the dedup mechanism (sha256 signature
+	# of the missing set), the early-exit (`continue` before any state
+	# mutation runs), and the side-effect surface (the
+	# `[external-finalize-partial]` warning marker and the WARNING-level
+	# tg_notify so the operator can take action).
+	poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
+	# Anchor the window on the existing landmarks from
+	# test_external_finalize_detect_marks_project_complete_when_final_pr_already_merged
+	# so a refactor that moves the block also has to update both tests in
+	# lockstep — preventing one test from regressing silently.
+	elif_marker = (
+		'elif [ "${_orch_extfin_pr_state}" = "closed" ] && '
+		'[ "${_orch_extfin_pr_merged}" = "true" ]; then'
+	)
+	elif_idx = poller_body.find(elif_marker)
+	assert elif_idx != -1, (
+		"external-finalize elif (closed+merged) marker is missing from "
+		"scripts/orchestrate_poll_process.sh; the completeness gate must "
+		"live inside that arm, so the elif itself is required."
+	)
+	mutation_marker = "'.final_merge_pr = $final_pr"
+	mutation_idx = poller_body.find(mutation_marker, elif_idx)
+	assert mutation_idx != -1, (
+		"external-finalize state mutation (jq `.final_merge_pr = $final_pr` "
+		"line) is missing after the closed+merged elif; the completeness gate "
+		"must precede that mutation."
+	)
+	gate_window = poller_body[elif_idx:mutation_idx]
+	# Gate condition: must enumerate non-terminal sub-issues using the same
+	# filter shape the rest of the script already uses for terminal-success
+	# detection.  If a future refactor switches to a different filter shape
+	# (e.g. flips the negation or drops `skipped`), this assertion catches
+	# it before the gate starts mis-classifying skipped issues as missing.
+	for needle, why in (
+		(
+			'.waves[]?.issues[]?',
+			"completeness gate no longer iterates `.waves[]?.issues[]?`; without it the gate cannot inspect sub-issue states and would always treat the project as complete.",
+		),
+		(
+			'select(.status == "not_created")',
+			"completeness gate no longer filters on `status == \"not_created\"`; the gate must catch sub-issues that were never dispatched (the project #2734 failure mode) without false-positive-firing on sub-issues that have a github_issue and are merely behind the per-tick label reconciliation. Widening the filter without also reconciling sub-issue status from labels first would break the legitimate external-finalize tests that pass with a `pending` sub-issue whose linked PR is already merged.",
+		),
+		(
+			'_orch_extfin_incomplete_count',
+			"completeness gate no longer computes `_orch_extfin_incomplete_count`; without the count variable the `-gt 0` guard cannot fire and the partial-merge case is silently complete.",
+		),
+		(
+			'-gt 0',
+			"completeness gate no longer gates on `_orch_extfin_incomplete_count -gt 0`; without this guard either every project is treated as incomplete (false positive) or none are (false negative).",
+		),
+		(
+			'[external-finalize-partial]',
+			"completeness gate no longer emits the `[external-finalize-partial]` marker; downstream log-analysis tooling and the postmortem (docs/postmortems/2026-05-18-project-2734-stall.md) anchor on this exact marker.",
+		),
+		(
+			'external_finalize_partial_alert_sig',
+			"completeness gate no longer persists `external_finalize_partial_alert_sig` on the state file; without this dedup key the gate would fire a Telegram alert every poll tick (~12/hour) until the project is completed or de-scoped — alert fatigue is the exact failure mode the postmortem's layer 5 calls out.",
+		),
+		(
+			'tg_notify',
+			"completeness gate no longer fires `tg_notify` on first-detection of an incomplete external-finalize; without the alert the operator has no way to learn the project is stuck except by reading workflow logs.",
+		),
+		(
+			'"WARNING"',
+			"completeness gate no longer escalates the Telegram alert to WARNING level; without the WARNING tag the alert blends into INFO chatter and is easily missed.",
+		),
+		(
+			'continue',
+			"completeness gate no longer short-circuits with `continue` on incomplete detection; without it the gate would warn and then fall through to the state-mutation block, producing the exact false-completion broadcast the gate is meant to prevent.",
+		),
+	):
+		assert needle in gate_window, (
+			"external-finalize completeness gate in scripts/orchestrate_poll_process.sh "
+			f"no longer contains `{needle}` between the closed+merged elif and the "
+			f"state-mutation jq call — {why}"
+		)
+	# Hard requirement: no jq mutation that sets `.status = "complete"`
+	# may appear inside the gate window itself.  The gate's only mutation
+	# is the alert-dedup signature persist; any other state change would
+	# bypass the wave-by-wave finalize path that owns project-status
+	# transitions.
+	# A subtlety: jq operations on `.external_finalize_partial_alert_sig`
+	# are fine; what matters is that `.status = "complete"` (or
+	# `.final_merge_status = "merged"`) does not land before the
+	# `continue`.  Verify the gate window does NOT contain those terminal
+	# transitions.
+	assert '.status = "complete"' not in gate_window, (
+		"external-finalize completeness gate must NOT transition `.status` to `complete` "
+		"itself; that mutation belongs to the post-gate fall-through path which only "
+		"runs when every sub-issue is terminal-success."
+	)
+	assert '.final_merge_status = "merged"' not in gate_window, (
+		"external-finalize completeness gate must NOT mark `.final_merge_status = merged` "
+		"itself; that mutation belongs to the post-gate fall-through path."
+	)
+
+
 def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	# The resolver run: blocks were extracted into
 	# scripts/review_conflict_prepare.sh and
@@ -8748,9 +10140,18 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	wf_body = wf_path.read_text(encoding="utf-8")
 	prepare_body = prepare_path.read_text(encoding="utf-8")
 	resolve_body = resolve_path.read_text(encoding="utf-8")
-	# Verifier bootstrap must be in OPTIONAL list so older script_refs
-	# do not hard-fail.
-	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py"' in wf_body
+	# Resolver safety scripts must prefer the main snapshot so wedged
+	# integration branches still pick up the shipped self-heal helpers.
+	assert (
+		'MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_conflict_resolve.sh '
+		'review_conflict_prepare.sh"'
+	) in wf_body
+	assert 'SUPPORT_ROOT_DIR="${RUNNER_TEMP}/coding-workflows-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in wf_body
+	assert 'SUPPORT_SCRIPTS_DIR="${SUPPORT_ROOT_DIR}/scripts"' in wf_body
+	assert 'SUPPORT_SCRIPTS_DIR="scripts"' not in wf_body
+	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh"' in wf_body
+	assert "for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do" in wf_body
+	assert "Bootstrapped ${f} from main snapshot (branch copy ignored)." in wf_body
 	# The bootstrap still enumerates the script name in review_autofix.yml
 	# even after PR #1495 moved the resolver logic into support scripts.
 	assert "verify_integration_fingerprints.py" in wf_body
@@ -8768,7 +10169,791 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	# when fingerprint verification rejects the resolver output.
 	assert "IS_INTEGRATION_SYNC" in resolve_body
 	assert "verify_integration_fingerprints.py" in resolve_body
+	assert "--baseline-fingerprints-state" in resolve_body
+	assert "--compare-against-baseline" in resolve_body
 	assert "Aborting [ai-merge-resolve] commit: integration fingerprint verification" in resolve_body
+
+
+def _extract_refresh_function_body(poller_body: str) -> str:
+	"""Return the full text of `_refresh_integration_resolver_tooling`
+	(including the closing `}`) from the poller script body by
+	matching the function's outer brace pair. Standalone inner `{` / `}`
+	command-group braces, operator-attached groups like `cmd && {`, and
+	nested shell function definitions should not truncate the extracted
+	body.
+	"""
+	lines = poller_body.splitlines()
+	open_marker = "_refresh_integration_resolver_tooling() {"
+	try:
+		start_idx = next(i for i, line in enumerate(lines) if line == open_marker)
+	except StopIteration:
+		raise AssertionError(
+			f"{open_marker!r} not found in scripts/orchestrate_poll_process.sh — "
+			"function was renamed or removed."
+		) from None
+	depth = 1
+	nested_fn_open_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\(\)\s*\{$")
+	command_group_open_re = re.compile(
+		r"^(?:\{|(?:[^#\"']|\"[^\"]*\"|'[^']*')*(?:&&|\|\||;|\|)\s*\{)\s*(?:#.*)?$"
+	)
+	for idx in range(start_idx + 1, len(lines)):
+		stripped = lines[idx].strip()
+		if nested_fn_open_re.match(stripped) or command_group_open_re.match(stripped):
+			depth += 1
+		elif stripped == "}":
+			depth -= 1
+			if depth == 0:
+				return "\n".join(lines[start_idx:idx + 1])
+	raise AssertionError(
+		"closing brace for _refresh_integration_resolver_tooling not found"
+	)
+
+
+def test_extract_refresh_function_body_keeps_operator_attached_command_groups():
+	sample = """_refresh_integration_resolver_tooling() {
+	  echo start
+	  test -n \"${x:-}\" && {
+	    echo inner
+	  }
+	  echo after  # note | {
+	}
+	after() {
+	  :
+	}"""
+	expected = """_refresh_integration_resolver_tooling() {
+	  echo start
+	  test -n \"${x:-}\" && {
+	    echo inner
+	  }
+	  echo after  # note | {
+	}"""
+	assert _extract_refresh_function_body(sample) == expected
+
+
+def test_resolver_tooling_refresh_function_has_merge_base_divergence_guard():
+	# Static contract: _refresh_integration_resolver_tooling must
+	# compute the merge-base of integration_branch vs default_branch
+	# once before the per-file loop, and skip any file whose
+	# integration-branch hash differs from its merge-base hash.
+	#
+	# Without this guard, the [ai-maint] resolver-tooling refresh
+	# silently reverts files that merged sub-issue PRs intentionally
+	# modified (e.g. PR #2738 landing the Phase 1A baseline/delta
+	# verifier into scripts/verify_integration_fingerprints.py). The
+	# post-resolve merged sub-issue fingerprint verifier then flags
+	# those reverts as a contract violation and the orchestrator
+	# refuses to dispatch the next wave. That is exactly the failure
+	# documented in issue #2734.
+	poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
+	fn_body = _extract_refresh_function_body(poller_body)
+
+	assert "git merge-base" in fn_body, (
+		"_refresh_integration_resolver_tooling must run `git merge-base` "
+		"before the per-file refresh loop (regression guard for issue #2734)."
+	)
+	# Merge-base must be computed against the integration AND default
+	# branch refs, not just one of them.
+	for ref in (
+		"refs/remotes/origin/${integration_branch}",
+		"refs/remotes/origin/${default_branch}",
+	):
+		assert ref in fn_body, (
+			f"_refresh_integration_resolver_tooling's merge-base resolution "
+			f"must reference {ref!r}; without it the divergence check would "
+			f"compare against the wrong baseline."
+		)
+	# Per-file tree-path lookups must use --verify/--quiet so a missing
+	# path resolves to an empty string rather than the literal REV:PATH
+	# token on stdout.
+	for lookup in (
+		'main_hash="$(git rev-parse --verify --quiet "refs/remotes/origin/${default_branch}:${f}"',
+		'int_hash="$(git rev-parse --verify --quiet "HEAD:${f}"',
+		'base_hash="$(git rev-parse --verify --quiet "${merge_base}:${f}"',
+	):
+		assert lookup in fn_body, (
+			"_refresh_integration_resolver_tooling must use `git rev-parse "
+			"--verify --quiet` for every tree-path hash lookup so missing "
+			"files produce an empty string instead of a literal REV:PATH token."
+		)
+	# The function must `continue` (skip refresh) when the integration
+	# branch's hash for the file diverges from the merge-base hash —
+	# this is the actual guard that prevents the issue #2734
+	# regression. Match the conditional and the `continue` together so
+	# the assertion fails if a future refactor accidentally drops the
+	# `continue` while keeping the comparison.
+	diverge_skip_re = re.compile(
+		r'if\s+\[\s+"\$\{int_hash\}"\s+!=\s+"\$\{base_hash\}"\s+\]\s*;\s*then'
+		r'[\s\S]*?\bcontinue\b',
+	)
+	assert diverge_skip_re.search(fn_body), (
+		"_refresh_integration_resolver_tooling must `continue` (skip the "
+		"checkout/refresh) when int_hash differs from base_hash. Without "
+		"this, the function silently reverts files that a merged sub-issue "
+		"PR has modified on the integration branch — see issue #2734."
+	)
+
+
+def test_resolver_tooling_refresh_function_has_3way_merge_fallback():
+	# Static contract for P5 (docs/postmortems/2026-05-18-project-2734-stall.md).
+	# When BOTH the integration branch and main have changed an
+	# allowlisted file since the merge-base, PR #2760's divergence
+	# guard skipped the refresh — preserving the sub-issue PR change
+	# but losing the main-side toolchain fix. P5 layers a 3-way merge
+	# fallback alongside the guard: if both sides changed but the
+	# changes don't conflict, combine them; only fall back to skip on
+	# real conflicts.
+	#
+	# This test pins:
+	#   - presence of the merged_3way_count counter,
+	#   - the `git merge-file` invocation,
+	#   - the conditional that distinguishes "main unchanged" (skip)
+	#     from "both changed" (try 3-way merge),
+	#   - that the 3-way path stages via `git add` (so it lands in the
+	#     refresh commit alongside the deadlock-breaker checkout path),
+	#   - the conflict fallback (skip on non-zero `git merge-file` exit).
+	poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
+	fn_body = _extract_refresh_function_body(poller_body)
+
+	assert "merged_3way_count=0" in fn_body, (
+		"_refresh_integration_resolver_tooling must initialize merged_3way_count "
+		"alongside refreshed_count / skipped_count / drifted_count. Without the "
+		"counter the post-refresh summary cannot distinguish 3-way merges from "
+		"deadlock-breaker checkouts."
+	)
+	assert ': > "${merge_tmpdir}/base"' not in fn_body, (
+		"_refresh_integration_resolver_tooling must not fabricate an empty 3-way "
+		"merge base on `git cat-file` failure. A zero-byte ancestor silently "
+		"degrades the merge and can lose the true merge-base context."
+	)
+	assert "could not materialize one or more 3-way merge inputs" in fn_body, (
+		"_refresh_integration_resolver_tooling must warn and skip when any 3-way "
+		"merge input blob cannot be materialized. Without this guard the function "
+		"can run `git merge-file` with missing or stale tmpfile inputs."
+	)
+	assert "git merge-file" in fn_body, (
+		"_refresh_integration_resolver_tooling must call `git merge-file` to do "
+		"the 3-way merge of integration + main edits when both sides changed "
+		"since the merge-base. Without this the function falls back to PR #2760's "
+		"skip behavior and the toolchain fix never reaches the integration branch."
+	)
+	# The skip sub-case (main unchanged) must come BEFORE the 3-way
+	# merge sub-case so the cheap test runs first.
+	skip_subcase_re = re.compile(
+		r'if\s+\[\s+-z\s+"\$\{base_hash\}"\s+\]\s+\|\|\s+\[\s+"\$\{main_hash\}"\s+=\s+"\$\{base_hash\}"\s+\]\s*;\s*then'
+	)
+	assert skip_subcase_re.search(fn_body), (
+		"3-way merge logic must short-circuit when main is unchanged from "
+		"merge-base (no work to do) BEFORE attempting the merge. Without this "
+		"short-circuit, the function would 3-way merge an unchanged main into "
+		"the integration version, wasting work and adding noise to the refresh."
+	)
+	# The merge must use the standard base/int/main triple in the
+	# correct argument order: `git merge-file <current> <base> <other>`
+	# — `<current>` is the integration version, `<base>` the merge-base,
+	# `<other>` the main version. Swapping any of these would silently
+	# produce the wrong merge or pick the wrong side on conflict.
+	assert '"${merge_tmpdir}/int" "${merge_tmpdir}/base" "${merge_tmpdir}/main"' in fn_body, (
+		"git merge-file argument order must be `int base main` (current, base, "
+		"other). Swapping the order would silently corrupt the merge — the "
+		"integration version is the file we want to update in place, the "
+		"merge-base is the common ancestor, main is the new content to merge in."
+	)
+	# Successful 3-way merge must increment merged_3way_count AND stage
+	# the merged content via git add so it lands in the refresh commit.
+	assert "merged_3way_count=$((merged_3way_count + 1))" in fn_body, (
+		"successful 3-way merge must increment merged_3way_count so the "
+		"post-refresh summary and commit-message body can report it."
+	)
+	assert 'git checkout -- "${f}"' in fn_body, (
+		"the 3-way merge path must revert the worktree copy when `git add` fails. "
+		"Without the revert, a staging failure leaves the poller worktree dirty and "
+		"out of sync with the refresh commit."
+	)
+	cp_fail_re = re.compile(
+		r'if\s+cp\s+"\$\{merge_tmpdir\}/int"\s+"\$\{f\}"[\s\S]{0,800}?\belse\b[\s\S]{0,200}?git\s+checkout\s+--\s+"\$\{f\}"'
+	)
+	assert cp_fail_re.search(fn_body), (
+		"the 3-way merge path must revert the worktree copy when copying the merged "
+		"tmpfile back into `${f}` fails. Without the revert, a partial copy can leave "
+		"the poller worktree dirty even though the file was excluded from the refresh commit."
+	)
+	# Conflict path must fall through to `skipped_count` (matching the
+	# existing skip semantics from PR #2760) — never stage a file with
+	# conflict markers. The conflict path is reached when `git merge-file`
+	# returns non-zero (1+ for conflicts, 255 for binary/error).
+	skip_re = re.compile(
+		r'git\s+merge-file[\s\S]{0,1500}?\belse\b[\s\S]{0,500}?skipped_count=\$\(\(skipped_count\s*\+\s*1\)\)'
+	)
+	assert skip_re.search(fn_body), (
+		"3-way merge must fall back to `skipped_count += 1` when "
+		"`git merge-file` returns non-zero (conflict or binary file). "
+		"Without this fallback the function would either lose conflict "
+		"information silently or stage a file with conflict markers."
+	)
+
+
+def test_resolver_tooling_refresh_does_not_clobber_files_changed_on_integration_branch():
+	# Behavioural regression for issue #2734: run the real
+	# _refresh_integration_resolver_tooling function against a
+	# throwaway git fixture where the integration branch has its own
+	# committed change to a refresh-allowlisted file (simulating a
+	# merged sub-issue PR like #2738), and verify the function leaves
+	# that change intact instead of overwriting it with the
+	# default_branch version.
+	#
+	# Fixture layout:
+	#   bare.git           — origin
+	#   work/              — single clone with main + integration branches
+	#     scripts/check_resolver_diff.sh   ← refresh-allowlisted file
+	#
+	# Timeline:
+	#   1. main has 'main v1'.
+	#   2. orchestrator/project-99 branched off main, then committed
+	#      'sub-issue v1' (the merged sub-issue change we must preserve).
+	#   3. main bumped to 'main v2' (so per-file hashes differ — the
+	#      legacy hash-only check would otherwise refresh).
+	#   4. Run the real refresh function with cwd=work and origin
+	#      pointing at bare.git.
+	# Expected: the integration branch's file is still 'sub-issue v1'.
+	tmp_root = Path(tempfile.mkdtemp(prefix="refresh-noclobber-"))
+	try:
+		bare = tmp_root / "bare.git"
+		work = tmp_root / "work"
+		subprocess.run(
+			["git", "init", "--bare", "--quiet", str(bare)],
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+		)
+		subprocess.run(
+			["git", "init", "--quiet", str(work)],
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+		)
+		for k, v in [
+			("user.name", "test"),
+			("user.email", "t@example.com"),
+			("commit.gpgsign", "false"),
+			("commit.gpgSign", "false"),
+		]:
+			subprocess.run(
+				["git", "-C", str(work), "config", k, v],
+				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			)
+		(work / "scripts").mkdir()
+		# scripts/check_resolver_diff.sh is a real entry in the
+		# refresh_files allowlist (see scripts/orchestrate_poll_process.sh).
+		refresh_target = work / "scripts" / "check_resolver_diff.sh"
+		refresh_target.write_text("# main v1\n", encoding="utf-8")
+
+		def _git(*args: str) -> None:
+			subprocess.run(
+				["git", "-C", str(work), *args],
+				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			)
+
+		_git("checkout", "-B", "main")
+		_git("add", "-A")
+		_git("commit", "-m", "initial main", "--quiet")
+		_git("remote", "add", "origin", str(bare))
+		_git("push", "-u", "origin", "main", "--quiet")
+		# Integration branch with a merged sub-issue change to the
+		# allowlisted file.
+		_git("checkout", "-B", "orchestrator/project-99")
+		refresh_target.write_text("# sub-issue v1\n", encoding="utf-8")
+		_git("add", "-A")
+		_git("commit", "-m", "merged sub-issue PR", "--quiet")
+		_git("push", "-u", "origin", "orchestrator/project-99", "--quiet")
+		# Bump main with a different change so the legacy per-file
+		# hash check would treat the file as "drifted" and refresh.
+		_git("checkout", "main")
+		refresh_target.write_text("# main v2\n", encoding="utf-8")
+		_git("add", "-A")
+		_git("commit", "-m", "main v2", "--quiet")
+		_git("push", "origin", "main", "--quiet")
+
+		poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
+		fn_body = _extract_refresh_function_body(poller_body)
+
+		runtime_dir = tmp_root / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		runner = tmp_root / "run.sh"
+		# Use `set -uo pipefail` (no -e) so the function's own internal
+		# fail-open paths (`|| true`, `|| echo ""`, `|| continue`) behave
+		# the same way they do when sourced into the real poller — the
+		# real poller has `set -e` at the top, but every command inside
+		# the refresh function explicitly handles its own failure.
+		runner.write_text(
+			"#!/usr/bin/env bash\n"
+			"set -uo pipefail\n"
+			f"{fn_body}\n"
+			f"cd {str(work)!r}\n"
+			f"export RUNTIME_DIR={str(runtime_dir)!r}\n"
+			"_refresh_integration_resolver_tooling orchestrator/project-99 main\n",
+			encoding="utf-8",
+		)
+		runner.chmod(0o755)
+		result = subprocess.run(
+			["bash", str(runner)],
+			capture_output=True, text=True, timeout=60,
+		)
+		assert result.returncode == 0, (
+			"_refresh_integration_resolver_tooling fixture run failed before "
+			"the no-clobber assertions could validate its output.\n"
+			f"stdout:\n{result.stdout}\n---\nstderr:\n{result.stderr}\n"
+		)
+		# Source-of-truth for what's actually on the integration branch
+		# is the bare repo. Fetch it via the clone to read.
+		subprocess.run(
+			["git", "-C", str(work), "fetch", "origin", "--quiet"],
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+		)
+		actual = subprocess.run(
+			["git", "-C", str(work), "show",
+			 "origin/orchestrator/project-99:scripts/check_resolver_diff.sh"],
+			capture_output=True, text=True, check=True,
+		).stdout
+		assert actual == "# sub-issue v1\n", (
+			"_refresh_integration_resolver_tooling silently reverted a file "
+			"the integration branch had its own committed changes to "
+			"(issue #2734 regression).\n"
+			f"Expected '# sub-issue v1' on the integration branch.\n"
+			f"Got: {actual!r}\n"
+			f"---\nrefresh stdout:\n{result.stdout}\n"
+			f"---\nrefresh stderr:\n{result.stderr}\n"
+		)
+		# Belt-and-braces: the function should log a skip line naming
+		# the file, so an operator scanning the orchestrator log can see
+		# why the refresh did not advance the branch for this file.
+		assert "skip scripts/check_resolver_diff.sh" in result.stdout, (
+			"_refresh_integration_resolver_tooling did not log the "
+			"expected skip-on-divergence message for the protected file.\n"
+			f"stdout:\n{result.stdout}\n---\nstderr:\n{result.stderr}\n"
+		)
+	finally:
+		shutil.rmtree(tmp_root, ignore_errors=True)
+
+
+def test_resolver_tooling_refresh_3way_merges_disjoint_edits_from_both_branches():
+	# Behavioural test for P5 (docs/postmortems/2026-05-18-project-2734-stall.md).
+	# When BOTH the integration branch and main have edited an allowlisted
+	# file since the merge-base, AND the edits are in non-overlapping
+	# regions, the 3-way merge fallback must combine them so neither
+	# side's intent is lost.
+	#
+	# This is the case PR #2760's divergence guard could not handle:
+	# the guard correctly preserves the sub-issue PR change but loses
+	# the toolchain fix that main shipped to the same file. The P5
+	# layer fills the gap by trying `git merge-file` before skipping.
+	#
+	# Fixture layout:
+	#   bare.git           — origin
+	#   work/              — single clone with main + integration branches
+	#     scripts/check_resolver_diff.sh   — allowlisted, 5-line file
+	#
+	# Timeline:
+	#   1. main has 5 lines of content with `MAIN_LINE_1` at top.
+	#   2. orchestrator/project-99 branched off, edited only the LAST
+	#      line ("SUB_ISSUE_FOOTER").
+	#   3. main edited only the FIRST line ("MAIN_LINE_1_FIXED").
+	#   4. Run the real refresh function. The clean 3-way merge must
+	#      yield BOTH "MAIN_LINE_1_FIXED" at top AND "SUB_ISSUE_FOOTER"
+	#      at bottom on the integration branch.
+	tmp_root = Path(tempfile.mkdtemp(prefix="refresh-3way-"))
+	try:
+		bare = tmp_root / "bare.git"
+		work = tmp_root / "work"
+		subprocess.run(
+			["git", "init", "--bare", "--quiet", str(bare)],
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+		)
+		subprocess.run(
+			["git", "init", "--quiet", str(work)],
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+		)
+		for k, v in [
+			("user.name", "test"),
+			("user.email", "t@example.com"),
+			("commit.gpgsign", "false"),
+			("commit.gpgSign", "false"),
+		]:
+			subprocess.run(
+				["git", "-C", str(work), "config", k, v],
+				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			)
+		(work / "scripts").mkdir()
+		refresh_target = work / "scripts" / "check_resolver_diff.sh"
+		refresh_target.write_text(
+			"MAIN_LINE_1\n"
+			"MAIN_LINE_2\n"
+			"MAIN_LINE_3\n"
+			"MAIN_LINE_4\n"
+			"MAIN_LINE_5\n",
+			encoding="utf-8",
+		)
+
+		def _git(*args: str) -> None:
+			subprocess.run(
+				["git", "-C", str(work), *args],
+				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			)
+
+		_git("checkout", "-B", "main")
+		_git("add", "-A")
+		_git("commit", "-m", "initial main", "--quiet")
+		_git("remote", "add", "origin", str(bare))
+		_git("push", "-u", "origin", "main", "--quiet")
+
+		# Integration branches off main and edits only line 5 (the
+		# footer). This simulates a merged sub-issue PR adding a comment
+		# at the bottom of a toolchain script.
+		_git("checkout", "-B", "orchestrator/project-99")
+		refresh_target.write_text(
+			"MAIN_LINE_1\n"
+			"MAIN_LINE_2\n"
+			"MAIN_LINE_3\n"
+			"MAIN_LINE_4\n"
+			"SUB_ISSUE_FOOTER\n",
+			encoding="utf-8",
+		)
+		_git("add", "-A")
+		_git("commit", "-m", "merged sub-issue: add footer", "--quiet")
+		_git("push", "-u", "origin", "orchestrator/project-99", "--quiet")
+
+		# Main edits only line 1 (the header). Simulates the toolchain
+		# fix the orchestrator wants to propagate to the integration
+		# branch.
+		_git("checkout", "main")
+		refresh_target.write_text(
+			"MAIN_LINE_1_FIXED\n"
+			"MAIN_LINE_2\n"
+			"MAIN_LINE_3\n"
+			"MAIN_LINE_4\n"
+			"MAIN_LINE_5\n",
+			encoding="utf-8",
+		)
+		_git("add", "-A")
+		_git("commit", "-m", "toolchain fix", "--quiet")
+		_git("push", "origin", "main", "--quiet")
+
+		poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
+		fn_body = _extract_refresh_function_body(poller_body)
+
+		runtime_dir = tmp_root / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		runner = tmp_root / "run.sh"
+		runner.write_text(
+			"#!/usr/bin/env bash\n"
+			"set -uo pipefail\n"
+			f"{fn_body}\n"
+			f"cd {str(work)!r}\n"
+			f"export RUNTIME_DIR={str(runtime_dir)!r}\n"
+			"_refresh_integration_resolver_tooling orchestrator/project-99 main\n",
+			encoding="utf-8",
+		)
+		runner.chmod(0o755)
+		result = subprocess.run(
+			["bash", str(runner)],
+			capture_output=True, text=True, timeout=60,
+		)
+		assert result.returncode == 0, (
+			"_refresh_integration_resolver_tooling 3-way merge fixture run "
+			"failed before the merge-result assertions could validate.\n"
+			f"stdout:\n{result.stdout}\n---\nstderr:\n{result.stderr}\n"
+		)
+		subprocess.run(
+			["git", "-C", str(work), "fetch", "origin", "--quiet"],
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+		)
+		actual = subprocess.run(
+			["git", "-C", str(work), "show",
+			 "origin/orchestrator/project-99:scripts/check_resolver_diff.sh"],
+			capture_output=True, text=True, check=True,
+		).stdout
+		# After the 3-way merge, the integration branch's file must
+		# contain BOTH the main-side fix (line 1) AND the sub-issue
+		# footer (line 5). Losing either side defeats the whole point of
+		# the merge.
+		assert "MAIN_LINE_1_FIXED" in actual, (
+			"3-way merge lost the main-side toolchain fix.\n"
+			f"file contents:\n{actual}\n---\n"
+			f"refresh stdout:\n{result.stdout}\n"
+			f"---\nrefresh stderr:\n{result.stderr}\n"
+		)
+		assert "SUB_ISSUE_FOOTER" in actual, (
+			"3-way merge lost the sub-issue footer — the exact regression "
+			"PR #2760's divergence guard prevented and that P5 must "
+			"continue to prevent. If the 3-way merge ever clobbers the "
+			"integration-branch change, the project-#2734 failure mode "
+			"recurs.\n"
+			f"file contents:\n{actual}\n---\n"
+			f"refresh stdout:\n{result.stdout}\n"
+			f"---\nrefresh stderr:\n{result.stderr}\n"
+		)
+		# Conflict markers must not appear — those would mean the merge
+		# fell back to the skip path but staged the file anyway, which
+		# would trip the post-resolve verifier.
+		assert "<<<<<<<" not in actual and ">>>>>>>" not in actual, (
+			"3-way merge result contains conflict markers — the merge "
+			"must EITHER produce a clean result OR fall through to the "
+			"skip path. Staging a file with conflict markers would trip "
+			"the fingerprint verifier and reproduce the wave-dispatch "
+			"deadlock that P5 is meant to break.\n"
+			f"file contents:\n{actual}\n"
+		)
+		# The log line for 3-way merges must surface so an operator
+		# auditing the refresh commit can see this file was merged
+		# rather than clobbered.
+		assert "3-way merged scripts/check_resolver_diff.sh" in result.stdout, (
+			"_refresh_integration_resolver_tooling did not log the "
+			"expected `3-way merged` line for the merged file. Without "
+			"this log line, operators reviewing the orchestrator log "
+			"have no way to tell that this file came from a 3-way merge "
+			"vs the deadlock-breaker checkout path.\n"
+			f"stdout:\n{result.stdout}\n---\nstderr:\n{result.stderr}\n"
+		)
+	finally:
+		shutil.rmtree(tmp_root, ignore_errors=True)
+
+
+def test_resolver_tooling_refresh_3way_merge_falls_back_to_skip_on_conflict():
+	# Behavioural test for the P5 conflict fallback. When the 3-way
+	# merge would produce conflict markers (because main and the
+	# integration branch edited the SAME region of the file in
+	# incompatible ways), the function must NOT stage the conflict-
+	# markered file — it must fall back to the existing skip behavior
+	# so the normal main->integration sync can surface the conflict
+	# under operator review.
+	tmp_root = Path(tempfile.mkdtemp(prefix="refresh-3way-conflict-"))
+	try:
+		bare = tmp_root / "bare.git"
+		work = tmp_root / "work"
+		subprocess.run(
+			["git", "init", "--bare", "--quiet", str(bare)],
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+		)
+		subprocess.run(
+			["git", "init", "--quiet", str(work)],
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+		)
+		for k, v in [
+			("user.name", "test"),
+			("user.email", "t@example.com"),
+			("commit.gpgsign", "false"),
+			("commit.gpgSign", "false"),
+		]:
+			subprocess.run(
+				["git", "-C", str(work), "config", k, v],
+				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			)
+		(work / "scripts").mkdir()
+		refresh_target = work / "scripts" / "check_resolver_diff.sh"
+		refresh_target.write_text("LINE_1\nLINE_2\nLINE_3\n", encoding="utf-8")
+
+		def _git(*args: str) -> None:
+			subprocess.run(
+				["git", "-C", str(work), *args],
+				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			)
+
+		_git("checkout", "-B", "main")
+		_git("add", "-A")
+		_git("commit", "-m", "initial", "--quiet")
+		_git("remote", "add", "origin", str(bare))
+		_git("push", "-u", "origin", "main", "--quiet")
+
+		# Both branches edit the SAME line in incompatible ways — must
+		# produce a conflict that git merge-file cannot auto-resolve.
+		_git("checkout", "-B", "orchestrator/project-99")
+		refresh_target.write_text("LINE_1\nSUB_ISSUE_CHANGE\nLINE_3\n", encoding="utf-8")
+		_git("add", "-A")
+		_git("commit", "-m", "sub-issue edit on line 2", "--quiet")
+		_git("push", "-u", "origin", "orchestrator/project-99", "--quiet")
+
+		_git("checkout", "main")
+		refresh_target.write_text("LINE_1\nMAIN_CHANGE\nLINE_3\n", encoding="utf-8")
+		_git("add", "-A")
+		_git("commit", "-m", "main edit on line 2", "--quiet")
+		_git("push", "origin", "main", "--quiet")
+
+		poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
+		fn_body = _extract_refresh_function_body(poller_body)
+
+		runtime_dir = tmp_root / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		runner = tmp_root / "run.sh"
+		runner.write_text(
+			"#!/usr/bin/env bash\n"
+			"set -uo pipefail\n"
+			f"{fn_body}\n"
+			f"cd {str(work)!r}\n"
+			f"export RUNTIME_DIR={str(runtime_dir)!r}\n"
+			"_refresh_integration_resolver_tooling orchestrator/project-99 main\n",
+			encoding="utf-8",
+		)
+		runner.chmod(0o755)
+		result = subprocess.run(
+			["bash", str(runner)],
+			capture_output=True, text=True, timeout=60,
+		)
+		assert result.returncode == 0, (
+			f"refresh exited non-zero\nstdout:{result.stdout}\nstderr:{result.stderr}"
+		)
+		subprocess.run(
+			["git", "-C", str(work), "fetch", "origin", "--quiet"],
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+		)
+		actual = subprocess.run(
+			["git", "-C", str(work), "show",
+			 "origin/orchestrator/project-99:scripts/check_resolver_diff.sh"],
+			capture_output=True, text=True, check=True,
+		).stdout
+		# On conflict the function must SKIP — integration-branch content
+		# must be unchanged from the sub-issue version.
+		assert actual == "LINE_1\nSUB_ISSUE_CHANGE\nLINE_3\n", (
+			"3-way merge with conflict did NOT fall back to skip — the "
+			"integration branch was modified despite an unresolvable "
+			"merge. This is the exact failure mode P5's conflict-fallback "
+			"branch is meant to prevent: staging conflict markers (or "
+			"silently picking one side) would trip the fingerprint "
+			"verifier and re-introduce the wave-dispatch deadlock.\n"
+			f"file contents:\n{actual}\n---\n"
+			f"refresh stdout:\n{result.stdout}\n"
+			f"---\nrefresh stderr:\n{result.stderr}\n"
+		)
+		# The log line must surface the skip-on-conflict so operators
+		# know the file needs a manual resolve via normal sync.
+		assert "skip scripts/check_resolver_diff.sh" in result.stdout, (
+			"3-way merge conflict path did not log the expected skip line."
+			f"\nstdout:\n{result.stdout}\n---\nstderr:\n{result.stderr}\n"
+		)
+	finally:
+		shutil.rmtree(tmp_root, ignore_errors=True)
+
+
+def test_resolver_tooling_refresh_still_refreshes_files_unchanged_on_integration_branch():
+	# Companion to the no-clobber test above: prove the deadlock-
+	# breaker still works when the integration branch is UNCHANGED for
+	# a refresh-allowlisted file. This is the legitimate use case the
+	# function was originally written for — main shipped a fix to the
+	# resolver toolchain, the integration branch is stuck on the older
+	# version, and the normal main->integration sync cannot proceed
+	# until the integration branch picks up the fix. The merge-base
+	# divergence guard introduced for issue #2734 must NOT regress
+	# this path.
+	tmp_root = Path(tempfile.mkdtemp(prefix="refresh-deadlock-"))
+	try:
+		bare = tmp_root / "bare.git"
+		work = tmp_root / "work"
+		subprocess.run(
+			["git", "init", "--bare", "--quiet", str(bare)],
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+		)
+		subprocess.run(
+			["git", "init", "--quiet", str(work)],
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+		)
+		for k, v in [
+			("user.name", "test"),
+			("user.email", "t@example.com"),
+			("commit.gpgsign", "false"),
+			("commit.gpgSign", "false"),
+		]:
+			subprocess.run(
+				["git", "-C", str(work), "config", k, v],
+				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			)
+		(work / "scripts").mkdir()
+		refresh_target = work / "scripts" / "check_resolver_diff.sh"
+		main_only_target = work / "scripts" / "targeted_file_context.py"
+		refresh_target.write_text("# main v1\n", encoding="utf-8")
+
+		def _git(*args: str) -> None:
+			subprocess.run(
+				["git", "-C", str(work), *args],
+				check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+			)
+
+		_git("checkout", "-B", "main")
+		_git("add", "-A")
+		_git("commit", "-m", "initial main", "--quiet")
+		_git("remote", "add", "origin", str(bare))
+		_git("push", "-u", "origin", "main", "--quiet")
+		# Integration branch with NO change to the allowlisted file —
+		# this is the deadlock-breaker scenario.
+		_git("checkout", "-B", "orchestrator/project-99")
+		(work / "scripts" / "unrelated.sh").write_text("# unrelated\n", encoding="utf-8")
+		_git("add", "-A")
+		_git("commit", "-m", "unrelated integration commit", "--quiet")
+		_git("push", "-u", "origin", "orchestrator/project-99", "--quiet")
+		# Bump main with a fix to the allowlisted file.
+		_git("checkout", "main")
+		refresh_target.write_text("# main v2 with toolchain fix\n", encoding="utf-8")
+		# Also add a second allowlisted file that exists only on main.
+		# Missing-path tree lookups must resolve to empty strings here;
+		# otherwise git rev-parse writes literal REV:PATH tokens and the
+		# refresh incorrectly treats the file as integration-owned drift.
+		main_only_target.write_text("# main-only helper\n", encoding="utf-8")
+		_git("add", "-A")
+		_git("commit", "-m", "main: ship toolchain fix", "--quiet")
+		_git("push", "origin", "main", "--quiet")
+
+		poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
+		fn_body = _extract_refresh_function_body(poller_body)
+		runtime_dir = tmp_root / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		runner = tmp_root / "run.sh"
+		runner.write_text(
+			"#!/usr/bin/env bash\n"
+			"set -uo pipefail\n"
+			f"{fn_body}\n"
+			f"cd {str(work)!r}\n"
+			f"export RUNTIME_DIR={str(runtime_dir)!r}\n"
+			"_refresh_integration_resolver_tooling orchestrator/project-99 main\n",
+			encoding="utf-8",
+		)
+		runner.chmod(0o755)
+		result = subprocess.run(
+			["bash", str(runner)],
+			capture_output=True, text=True, timeout=60,
+		)
+		assert result.returncode == 0, (
+			"_refresh_integration_resolver_tooling fixture run failed before "
+			"the deadlock-breaker assertions could validate its output.\n"
+			f"stdout:\n{result.stdout}\n---\nstderr:\n{result.stderr}\n"
+		)
+		subprocess.run(
+			["git", "-C", str(work), "fetch", "origin", "--quiet"],
+			check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+		)
+		actual = subprocess.run(
+			["git", "-C", str(work), "show",
+			 "origin/orchestrator/project-99:scripts/check_resolver_diff.sh"],
+			capture_output=True, text=True, check=True,
+		).stdout
+		assert actual == "# main v2 with toolchain fix\n", (
+			"_refresh_integration_resolver_tooling failed to refresh a "
+			"file the integration branch had NOT modified — the "
+			"deadlock-breaking path regressed.\n"
+			f"Expected '# main v2 with toolchain fix' on the integration "
+			f"branch.\nGot: {actual!r}\n"
+			f"---\nrefresh stdout:\n{result.stdout}\n"
+			f"---\nrefresh stderr:\n{result.stderr}\n"
+		)
+		added_actual = subprocess.run(
+			["git", "-C", str(work), "show",
+			 "origin/orchestrator/project-99:scripts/targeted_file_context.py"],
+			capture_output=True, text=True, check=True,
+		).stdout
+		assert added_actual == "# main-only helper\n", (
+			"_refresh_integration_resolver_tooling failed to refresh a "
+			"main-only allowlisted file that was absent on the integration "
+			"branch. Missing-path tree lookups must resolve to empty strings, "
+			"not literal REV:PATH tokens.\n"
+			f"Expected '# main-only helper' on the integration branch.\n"
+			f"Got: {added_actual!r}\n"
+			f"---\nrefresh stdout:\n{result.stdout}\n"
+			f"---\nrefresh stderr:\n{result.stderr}\n"
+		)
+	finally:
+		shutil.rmtree(tmp_root, ignore_errors=True)
 
 
 def main() -> int:
@@ -8777,12 +10962,25 @@ def main() -> int:
 	# (which, under a pipe on GitHub Actions, hides all progress until the
 	# process exits and can make a running suite look like a silent hang).
 	try:
-		import sys
 		sys.stdout.reconfigure(line_buffering=True)
 	except Exception:
 		pass
 
-	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	selected_names = list(sys.argv[1:])
+	tests_by_name = {
+		name: func
+		for name, func in sorted(globals().items())
+		if name.startswith("test_") and callable(func)
+	}
+	if selected_names:
+		missing = [name for name in selected_names if name not in tests_by_name]
+		for name in missing:
+			print(f"  FAIL  {name}: unknown test name", flush=True)
+		if missing:
+			return 1
+		test_funcs = [tests_by_name[name] for name in selected_names]
+	else:
+		test_funcs = list(tests_by_name.values())
 	passed = 0
 	failed = 0
 	for func in test_funcs:

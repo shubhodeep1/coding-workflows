@@ -185,6 +185,23 @@ jobs:
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
+          TRACKING_ISSUES=""
+          MANAGED_ISSUES=""
+          ORCHESTRATOR_CLASSIFICATION_COMPLETE="true"
+
+          export_orchestrator_issue_classification() {
+            echo "LINKED_ISSUE_NUMBERS<<EOF" >> "$GITHUB_ENV"
+            printf '%s\n' "${ISSUE_NUMBERS:-}" >> "$GITHUB_ENV"
+            echo "EOF" >> "$GITHUB_ENV"
+            echo "TRACKING_ISSUES<<EOF" >> "$GITHUB_ENV"
+            printf '%s\n' "${TRACKING_ISSUES:-}" >> "$GITHUB_ENV"
+            echo "EOF" >> "$GITHUB_ENV"
+            echo "MANAGED_ISSUES<<EOF" >> "$GITHUB_ENV"
+            printf '%s\n' "${MANAGED_ISSUES:-}" >> "$GITHUB_ENV"
+            echo "EOF" >> "$GITHUB_ENV"
+            echo "ORCHESTRATOR_CLASSIFICATION_COMPLETE=${ORCHESTRATOR_CLASSIFICATION_COMPLETE}" >> "$GITHUB_ENV"
+          }
+
           ISSUE_NUMBERS="$(gh_retry gh api graphql \
             -f owner="${REPOSITORY%/*}" \
             -f name="${REPOSITORY#*/}" \
@@ -229,6 +246,7 @@ jobs:
 
           if [ -z "${ISSUE_NUMBERS}" ]; then
             echo "No linked issues found for PR #${PR_NUMBER}."
+            export_orchestrator_issue_classification
             exit 0
           fi
 
@@ -281,8 +299,6 @@ jobs:
           # N) per CLAUDE.md §15. Fail-open with a per-issue REST
           # fallback so a transient GraphQL failure cannot silently
           # degrade detection.
-          TRACKING_ISSUES=""
-          MANAGED_ISSUES=""
           ORCH_ALIAS_FRAGMENT=""
           ORCH_IDX=0
           while IFS= read -r _orch_num; do
@@ -335,6 +351,7 @@ jobs:
                   # orchestrator poll cycle; mis-classifying a tracking
                   # issue as managed would re-introduce #1469.
                   echo "::warning::Orchestrator fallback lookup failed for issue #${_orch_num}; conservatively treating as tracking (skip)."
+                  ORCHESTRATOR_CLASSIFICATION_COMPLETE="false"
                   TRACKING_ISSUES+="${_orch_num}"$'\n'
                   continue
                 fi
@@ -380,10 +397,9 @@ jobs:
             fi
           done <<< "${ISSUE_NUMBERS}"
 
-          # Export linked issue numbers for TG cleanup step
-          echo "LINKED_ISSUE_NUMBERS<<EOF" >> "$GITHUB_ENV"
-          echo "${ISSUE_NUMBERS}" >> "$GITHUB_ENV"
-          echo "EOF" >> "$GITHUB_ENV"
+          # Export linked issue numbers and orchestrator classification for
+          # downstream lineage, alerting, and cleanup steps.
+          export_orchestrator_issue_classification
 
       - name: Finalize linked issue lineage state
         env:
@@ -450,7 +466,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
-          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: SILENT
           REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
@@ -498,14 +514,25 @@ jobs:
             source scripts/tg_helpers.sh
           fi
 
-          # Only alert for non-orchestrator issues (orchestrator projects
-          # get their own completion alerts from the poller).
+          # Reuse the earlier orchestrator issue classifier on the common path.
+          # Fall back to per-issue body lookup only when that classification is
+          # incomplete (for example, a per-issue REST fallback lookup failed and
+          # the label/close step conservatively treated the issue as tracking).
           IS_ORCHESTRATED="false"
-          if [ -n "${LINKED_ISSUE_NUMBERS:-}" ]; then
+          if [ -n "${MANAGED_ISSUES:-}" ]; then
+            IS_ORCHESTRATED="true"
+          elif [ "${ORCHESTRATOR_CLASSIFICATION_COMPLETE:-false}" != "true" ] && [ -n "${LINKED_ISSUE_NUMBERS:-}" ]; then
+            echo "::warning::Reused orchestrator classification is incomplete; falling back to per-issue body lookup for PR merged alert suppression."
             while IFS= read -r issue_number; do
               [ -n "${issue_number}" ] || continue
-              BODY="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '.body // ""' || echo "")"
-              if printf '%s' "${BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
+              ISSUE_IS_MANAGED="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '
+                ((.labels // []) | map(.name) | index("ai:orchestrator-tracking")) == null
+                and (
+                  ((.labels // []) | map(.name) | index("ai:orchestrator-managed")) != null
+                  or ((.body // "") | contains("Managed by: AI Orchestrator"))
+                )
+              ' || echo "")"
+              if [ "${ISSUE_IS_MANAGED}" = "true" ]; then
                 IS_ORCHESTRATED="true"
                 break
               fi
@@ -538,7 +565,7 @@ jobs:
           fi
 
       - name: Cleanup tracked Telegram messages
-        if: always()
+        if: always() && github.event.pull_request.merged == true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}

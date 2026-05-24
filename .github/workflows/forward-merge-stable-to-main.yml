@@ -24,11 +24,13 @@ name: Forward-merge stable to main
 permissions:
   contents: write
   pull-requests: write
-  # actions: read is required by the hard-failure TG alert step so
-  # the failing-step lookup against the Actions Jobs API works when
-  # GH_PAT is unset and we fall back to github.token. Without this,
-  # `failing_step` would always be empty on github.token-only runs.
-  actions: read
+  # actions: write lets the "Dispatch AI review for the fallback PR" step
+  # below start internal-review.yml via `gh workflow run` (workflow_dispatch
+  # is exempt from the GITHUB_TOKEN no-trigger rule). It is a superset of
+  # actions: read, so the hard-failure TG alert step's failing-step lookup
+  # against the Actions Jobs API still works when GH_PAT is unset and we
+  # fall back to github.token.
+  actions: write
 
 concurrency:
   group: forward-merge-stable-to-main
@@ -242,6 +244,14 @@ jobs:
           # branch name — without it, the second `git push origin
           # <branch>` would fail (non-fast-forward or already-exists)
           # and abort before the PR is opened.
+          resolve_existing_pr_number() {
+            # `gh pr create` only returns a machine-readable URL on the success
+            # path. The benign "already exists" branch still needs the open PR
+            # number for the follow-up review dispatch, so look it up by head/base.
+            gh pr list --head "${BRANCH}" --base main --state open \
+              --json number --jq '.[0].number // empty' 2>/dev/null || true
+          }
+
           BRANCH="auto/forward-merge-stable-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
           # The merge-strategy warning is identical on both paths and
@@ -312,6 +322,13 @@ jobs:
             PR_URL=$(printf '%s' "${PR_OUTPUT}" | grep -oE 'https://github\.com/[^[:space:]]+' | head -n1 || true)
             echo "pr_url=${PR_URL}" >> "$GITHUB_OUTPUT"
             echo "reason=${MERGE_STATUS}" >> "$GITHUB_OUTPUT"
+            # Trailing path segment of the PR URL is its number — consumed by
+            # the "Dispatch AI review for the fallback PR" step below. A PR
+            # opened with GITHUB_TOKEN does not emit the pull_request event
+            # that would otherwise auto-start internal-review.yml's reviewer
+            # and conflict-resolver, so it must be dispatched explicitly.
+            PR_NUMBER=$(printf '%s' "${PR_URL}" | grep -oE '[0-9]+$' || true)
+            echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
           elif printf '%s' "${PR_OUTPUT}" | grep -qiE 'pull request for branch .* already exists'; then
             # Anchored to gh CLI's canonical phrasing: "a pull request
             # for branch <name> into branch <base> already exists". The
@@ -321,6 +338,12 @@ jobs:
             # already alerted, and a re-run shouldn't spam TG.
             echo "::warning::PR already exists for ${BRANCH} — treating as benign"
             echo "${PR_OUTPUT}"
+            PR_NUMBER="$(resolve_existing_pr_number)"
+            if [ -n "${PR_NUMBER}" ]; then
+              echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+            else
+              echo "::warning::Could not resolve the existing fallback PR number for ${BRANCH}; skipping immediate review dispatch."
+            fi
           else
             echo "::error::Failed to create fallback PR for ${BRANCH} (rc=${PR_RC})"
             echo "${PR_OUTPUT}" >&2
@@ -363,6 +386,31 @@ jobs:
           msg+=$'\n'"Bug fixes on stable will not reach main until this PR is merged."
 
           tg_send_msg "${msg}" "ERROR" >/dev/null || true
+
+      - name: Dispatch AI review for the fallback PR
+        # A fallback PR opened with GITHUB_TOKEN does not emit the
+        # pull_request event, so internal-review.yml's reviewer and
+        # conflict-resolver never auto-start. Dispatch it explicitly
+        # (workflow_dispatch is exempt from the GITHUB_TOKEN no-trigger
+        # rule) so the conflict resolver runs promptly instead of
+        # waiting for the orchestrator poller to discover the PR.
+        # Non-fatal: the PR is the durable safety net, and the poller
+        # remains the fallback if this dispatch fails.
+        if: steps.fallback.outputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          PR_NUMBER: ${{ steps.fallback.outputs.pr_number }}
+          ALLOW_WORKFLOW_EDITS: ${{ contains(' 1 true yes on ', format(' {0} ', vars.ALLOW_WORKFLOW_EDITS || 'true')) && 'true' || 'false' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh workflow run internal-review.yml \
+            -f "pr_number=${PR_NUMBER}" \
+            -f "allow_workflow_edits=${ALLOW_WORKFLOW_EDITS}"; then
+            echo "Dispatched internal-review.yml for PR #${PR_NUMBER}"
+          else
+            echo "::warning::Failed to dispatch internal-review.yml for PR #${PR_NUMBER}; the orchestrator poller will pick the PR up on its next cycle."
+          fi
 
       - name: Summary
         if: always()

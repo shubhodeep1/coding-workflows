@@ -1328,7 +1328,7 @@ _embed_input_file()
 	_used=0
 	if [ -f "${_state}" ]; then
 		_used="$(cat "${_state}" 2>/dev/null)"
-		[ -z "${_used}" ] && _used=0
+		[[ "${_used}" =~ ^[0-9]+$ ]] || _used=0
 	fi
 	_budget_remaining=$(( _PROMPT_BUDGET_TOTAL_BYTES - _used ))
 	if [ "${_budget_remaining}" -le 0 ]; then
@@ -1344,7 +1344,7 @@ _embed_input_file()
 
 	local _size
 	_size="$(wc -c < "${_path}" 2>/dev/null | tr -d '[:space:]')"
-	[ -z "${_size}" ] && _size=0
+	[[ "${_size}" =~ ^[0-9]+$ ]] || _size=0
 
 	local _emit_bytes
 	if [ "${_size}" -le "${_effective_cap}" ]; then

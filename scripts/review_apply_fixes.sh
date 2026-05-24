@@ -791,8 +791,13 @@ The reviewer consensus content (already inlined above as ${REVIEWER_CONSENSUS_FI
 - a "=== CONSENSUS FINDINGS ===" block with cross-reviewer-deduplicated findings
   (each entry lists "flagged_by: [reviewer_slug, ...]" — >=2 slugs ⇒ higher
   confidence; a single slug ⇒ one reviewer only, potentially speculative),
+- a "=== CONSENSUS TASK GAPS ===" block listing unmet deliverables from the
+  LINKED ISSUE / PR DESCRIPTION that the PR diff does not implement (each entry
+  carries "requirement", "expected_change_site", "confidence", "flagged_by",
+  and "EVIDENCE" fields; the defect IS absence of code at the expected site),
 - per-reviewer "=== FINDINGS FROM <slug> ===" sections for traceability.
 Prioritize addressing findings flagged by multiple reviewers first.
+Treat CONSENSUS TASK GAPS entries as first-class WILL_FIX work alongside CONSENSUS FINDINGS: the LINKED ISSUE describes what the PR is supposed to deliver, so an unmet requirement is a real defect — implement the missing change at the named expected_change_site (or cite the LINKED ISSUE's own deferral if the requirement is explicitly tracked elsewhere). If a gap genuinely cannot be implemented in this iteration (e.g. it requires schema changes that conflict with §10 contracts), record it under "Ignored suggestions (with short reason):" with the prefix "TASK_GAP_DEFERRED:" so the next iteration sees the rationale.
 
 PR DISCUSSION COMMENT SIGNAL
 The PR discussion content is already inlined above as ${PR_ALL_COMMENTS_CONTEXT_FILE}.
@@ -1245,7 +1250,12 @@ _hb_tmpdir=""
 _hb_fifo=""
 trap '[ -n "${_hb_tmpdir:-}" ] && rm -rf "${_hb_tmpdir}" 2>/dev/null || true' EXIT
 
-_REFUSAL_REGEX="I'?m sorry,? but I (can ?not|can.?t) assist|I (can ?not|can.?t) help with that"
+# Match only standalone OpenAI-style refusal lines, not incidental prose in
+# an otherwise-valid structured summary (for example an Ignored suggestions
+# bullet explaining it can't help with one suggestion). The success-path
+# validator and the retry-loop short-circuit share this anchored pattern so
+# the two checks stay in lockstep without false-positive rejection.
+_REFUSAL_REGEX="(^I'?m sorry,? but I (can ?not|can.?t) assist( with that request)?\\.?$|^I (can ?not|can.?t) help with that( request)?\\.?$)"
 rm -f "${PREVIOUS_REVIEWS_DIR}/editor_refused.flag" 2>/dev/null || true
 
 attempt=1

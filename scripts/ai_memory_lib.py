@@ -42,6 +42,8 @@ TASK_LINEAGE_SCHEMA_VERSION = "task_lineage.v1"
 PROCESSED_COMMAND_SCHEMA_VERSION = "processed_command_entry.v1"
 RETRIEVAL_PROFILE_SCHEMA_VERSION = "retrieval_profiles.v1"
 ACTIONS_RUNS_CACHE_SCHEMA_VERSION = "v1"
+FINGERPRINT_QUARANTINE_SCHEMA_VERSION = "v1"
+BRANCH_REBUILD_AUDIT_SCHEMA_VERSION = "v1"
 MAX_MEMORY_DETAILS_LENGTH = 12000
 LEGACY_MEMORY_ROOT_RELATIVE = ".github/ai-memory"
 CANONICAL_MEMORY_ROOT_RELATIVE = "ai-memory"
@@ -560,6 +562,25 @@ def _validate_repository_name(repository: str) -> str:
     return normalized
 
 
+def _validate_positive_int_field(value: int | str, field_name: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise MemoryValidationError(f"{field_name} must be a positive integer") from exc
+    if parsed < 1:
+        raise MemoryValidationError(f"{field_name} must be a positive integer")
+    return parsed
+
+
+def _validate_integration_branch_name(integration_branch: str) -> str:
+    normalized = (integration_branch or "").strip()
+    if not normalized:
+        raise MemoryValidationError("integration_branch is required")
+    if len(normalized) > 255:
+        raise MemoryValidationError("integration_branch must be 255 characters or fewer")
+    return normalized
+
+
 def _actions_runs_cache_path(memory_root: Path, repository: str) -> Path:
     normalized_repo = _validate_repository_name(repository)
     owner, repo = normalized_repo.split("/", 1)
@@ -568,8 +589,93 @@ def _actions_runs_cache_path(memory_root: Path, repository: str) -> Path:
     return memory_root / "orchestrator" / "actions_runs_cache" / f"{owner_key}__{repo_key}.json"
 
 
+def _branch_rebuild_audit_path(
+    memory_root: Path,
+    repository: str,
+    tracking_issue_number: int,
+    integration_branch: str,
+) -> Path:
+    normalized_repo = _validate_repository_name(repository)
+    tracking_issue = _validate_positive_int_field(tracking_issue_number, "tracking_issue_number")
+    normalized_branch = _validate_integration_branch_name(integration_branch)
+    owner, repo = normalized_repo.split("/", 1)
+    owner_key = sanitize_segment(owner.lower(), "owner")
+    repo_key = sanitize_segment(repo.lower(), "repo")
+    branch_key = sanitize_segment(normalized_branch.lower(), "branch")
+    return (
+        memory_root
+        / "orchestrator"
+        / "branch_rebuild_audits"
+        / f"{owner_key}__{repo_key}"
+        / f"issue-{tracking_issue}__{branch_key}.json"
+    )
+
+
 def validate_actions_runs_cache_payload(payload: dict[str, Any], memory_root: Path) -> None:
     _validate_with_schema_file(payload, _schema_file(memory_root, "actions_runs_cache.v1.json"))
+
+
+def _default_fingerprint_quarantine_payload() -> dict[str, Any]:
+    return {
+        "schema_version": FINGERPRINT_QUARANTINE_SCHEMA_VERSION,
+        "entries": [],
+    }
+
+
+def _fingerprint_quarantine_path(memory_root: Path) -> Path:
+    return memory_root / "orchestrator" / "fingerprint_quarantine.v1.json"
+
+
+def validate_fingerprint_quarantine_payload(payload: dict[str, Any], memory_root: Path) -> None:
+    _validate_with_schema_file(payload, _schema_file(memory_root, "fingerprint_quarantine.v1.json"))
+
+
+def _normalize_fingerprint_quarantine_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    entries: list[dict[str, Any]] = []
+    for entry in payload.get("entries") or []:
+        if not isinstance(entry, dict):
+            continue
+        entries.append(
+            {
+                "fp_key": list(entry.get("fp_key") or []),
+                "issue_key": entry.get("issue_key"),
+                "first_seen_run_id": entry.get("first_seen_run_id"),
+                "last_seen_run_id": entry.get("last_seen_run_id"),
+                "consecutive_unchanged_runs": int(entry.get("consecutive_unchanged_runs") or 1),
+            }
+        )
+    entries.sort(key=lambda item: (str(item.get("issue_key") or ""), tuple(item.get("fp_key") or [])))
+    return {
+        "schema_version": payload.get("schema_version"),
+        "entries": entries,
+    }
+
+
+def get_fingerprint_quarantine(memory_root: Path) -> dict[str, Any]:
+    ensure_memory_layout(memory_root)
+    quarantine_path = _fingerprint_quarantine_path(memory_root)
+    if not quarantine_path.exists():
+        return _default_fingerprint_quarantine_payload()
+    payload = _load_json(quarantine_path)
+    if not isinstance(payload, dict):
+        raise MemoryValidationError("fingerprint_quarantine payload must be a JSON object")
+    validate_fingerprint_quarantine_payload(payload, memory_root)
+    return _normalize_fingerprint_quarantine_payload(payload)
+
+
+def put_fingerprint_quarantine(memory_root: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    ensure_memory_layout(memory_root)
+    if not isinstance(payload, dict):
+        raise MemoryValidationError("fingerprint_quarantine payload must be an object")
+    validate_fingerprint_quarantine_payload(payload, memory_root)
+    normalized = _normalize_fingerprint_quarantine_payload(payload)
+    validate_fingerprint_quarantine_payload(normalized, memory_root)
+    _atomic_write_json(_fingerprint_quarantine_path(memory_root), normalized)
+    return normalized
+
+
+def validate_branch_rebuild_audit_payload(payload: dict[str, Any], memory_root: Path) -> None:
+    _validate_with_schema_file(payload, _schema_file(memory_root, "branch_rebuild_audit.v1.json"))
 
 
 def get_actions_runs_cache(memory_root: Path, repository: str) -> dict[str, Any] | None:
@@ -602,6 +708,49 @@ def put_actions_runs_cache(
     }
     validate_actions_runs_cache_payload(payload, memory_root)
     _atomic_write_json(_actions_runs_cache_path(memory_root, repository), payload)
+    return payload
+
+
+def get_branch_rebuild_audit(
+    memory_root: Path,
+    *,
+    repository: str,
+    tracking_issue_number: int,
+    integration_branch: str,
+) -> dict[str, Any] | None:
+    ensure_memory_layout(memory_root)
+    audit_path = _branch_rebuild_audit_path(memory_root, repository, tracking_issue_number, integration_branch)
+    if not audit_path.exists():
+        return None
+    payload = _load_json(audit_path)
+    validate_branch_rebuild_audit_payload(payload, memory_root)
+    return payload
+
+
+def put_branch_rebuild_audit(
+    memory_root: Path,
+    *,
+    repository: str,
+    tracking_issue_number: int,
+    integration_branch: str,
+    audit: dict[str, Any],
+) -> dict[str, Any]:
+    ensure_memory_layout(memory_root)
+    if not isinstance(audit, dict):
+        raise MemoryValidationError("branch rebuild audit must be a JSON object")
+    normalized_repo = _validate_repository_name(repository)
+    normalized_tracking_issue = _validate_positive_int_field(tracking_issue_number, "tracking_issue_number")
+    normalized_branch = _validate_integration_branch_name(integration_branch)
+    payload = dict(audit)
+    payload["schema_version"] = BRANCH_REBUILD_AUDIT_SCHEMA_VERSION
+    payload["repository"] = normalized_repo
+    payload["tracking_issue_number"] = normalized_tracking_issue
+    payload["integration_branch"] = normalized_branch
+    validate_branch_rebuild_audit_payload(payload, memory_root)
+    _atomic_write_json(
+        _branch_rebuild_audit_path(memory_root, normalized_repo, normalized_tracking_issue, normalized_branch),
+        payload,
+    )
     return payload
 
 
@@ -1670,6 +1819,34 @@ def _clone_for_memory_branch(repo_root: Path, memory_branch: str) -> Path:
     return temp_dir
 
 
+# Memory-branch push retries all contend on the single shared `ai-memory`
+# ref: every concurrent workflow run pushes there.  Without a randomized
+# delay between attempts the contenders retry in lockstep and keep losing
+# the same server-side ref-lock race ("cannot lock ref ... is at X but
+# expected Y"), exhausting the retry budget.  Full-jitter exponential
+# backoff decorrelates them so a push lands within the budget.
+_PUSH_RETRY_BACKOFF_BASE_SECONDS = 0.5
+_PUSH_RETRY_BACKOFF_CAP_SECONDS = 8.0
+
+
+def _push_retry_backoff_seconds(attempt: int) -> float:
+    """Return a randomized delay (seconds) to wait before the next push retry.
+
+    ``attempt`` is the 1-based number of the push attempt that just failed.
+    Full-jitter exponential backoff: the delay is drawn uniformly from
+    ``[0, min(cap, base * 2 ** (attempt - 1))]`` so concurrent pushers
+    spread across the retry window instead of colliding in lockstep.
+    """
+    if attempt < 1:
+        attempt = 1
+    ceiling = min(_PUSH_RETRY_BACKOFF_BASE_SECONDS, _PUSH_RETRY_BACKOFF_CAP_SECONDS)
+    for _ in range(1, attempt):
+        if ceiling >= _PUSH_RETRY_BACKOFF_CAP_SECONDS:
+            break
+        ceiling = min(_PUSH_RETRY_BACKOFF_CAP_SECONDS, ceiling * 2.0)
+    return random.uniform(0.0, ceiling)
+
+
 def persist_memory_operation(
     repo_root: Path,
     *,
@@ -1731,24 +1908,30 @@ def persist_memory_operation(
                         f"Failed to push memory branch after {push_retries} attempts: {push.stderr.strip()}"
                     )
 
-                # Jittered backoff so concurrent memory writers don't retry in lockstep.
-                backoff = min(2 ** (attempt - 1), 16) * (0.5 + random.random())
-                time.sleep(backoff)
+                # Wait a jittered, exponentially growing interval before
+                # re-syncing and retrying so concurrent runs stop losing the
+                # ref-lock race against the shared memory branch in lockstep.
+                time.sleep(_push_retry_backoff_seconds(attempt))
 
-                _run_git(
+                fetch = _run_git(
                     clone_dir,
                     ["fetch", "--no-tags", "origin", f"refs/heads/{memory_branch}:refs/remotes/origin/{memory_branch}"],
                     check=False,
                 )
+                if fetch.returncode != 0:
+                    raise MemoryGitError(f"Memory branch fetch failed while retrying push: {fetch.stderr.strip()}")
                 if _run_git(clone_dir, ["show-ref", "--verify", f"refs/remotes/origin/{memory_branch}"], check=False).returncode == 0:
                     rebase = _run_git(clone_dir, ["rebase", f"refs/remotes/origin/{memory_branch}"], check=False)
                     if rebase.returncode != 0:
-                        _run_git(clone_dir, ["rebase", "--abort"], check=False)
+                        rebase_abort = _run_git(clone_dir, ["rebase", "--abort"], check=False)
+                        if rebase_abort.returncode != 0:
+                            raise MemoryGitError(
+                                "Memory branch rebase failed while retrying push: "
+                                f"{rebase.stderr.strip()} (rebase --abort also failed: {rebase_abort.stderr.strip()})"
+                            )
                         raise MemoryGitError(
                             f"Memory branch rebase failed while retrying push: {rebase.stderr.strip()}"
                         )
-
-            raise MemoryGitError("Unexpected push retry flow")
         finally:
             shutil.rmtree(clone_dir, ignore_errors=True)
 

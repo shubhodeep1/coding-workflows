@@ -1,8 +1,8 @@
 # Integration-Sync Resolver Self-Heal — Pre/Post-Resolve Delta Verification + Main-Snapshot Bootstrap of Safety Scripts
 
-> Status: **DRAFT — proposal only, no code changes yet.**
+> Status: **Phases 1-5 shipped; Phase 6 closed as a discovery-only NO-GO.**
 > Owner: orchestrator (implementation will be driven by the AI orchestrator pipeline).
-> Scope: targeted "safest, partial" fix for the integration-sync resolver loop wedge. Bigger structural options (adaptive fingerprint quarantine, graduated verification tiers, branch rebuild) are deferred to §10 Future Work.
+> Scope: archival design doc for the integration-sync resolver self-heal rollout. The baseline/main-snapshot fix plus the follow-up escape-valve, tiering, quarantine/audit, and branch-rebuild work are now shipped on this branch; the proposed fingerprint replacement with sub-issue test runs was investigated and closed as NO-GO in [`sub-issue-test-runs-spike.md`](sub-issue-test-runs-spike.md).
 
 ---
 
@@ -328,17 +328,17 @@ For implementation reference, the exact lines this plan touches or reads:
 
 ---
 
-## 10. Future Work (deferred, intentionally out of scope here)
+## 10. Follow-up phase status (historical future-work list)
 
-Ranked by leverage. None of these are required for the v1 fix to ship; each is a follow-up issue.
+At drafting time the items below were deferred. On the current branch their status is:
 
-1. **Consecutive-identical-failure escape valve.** After N runs with the same failure signature on the same head SHA, automatically escalate: graduated tier downgrade (see #3), branch rebuild (see #6), or controlled fingerprint quarantine (see #4). Without this, §7 #1 remains a forever-loop risk.
-2. **Structured per-PR consecutive-failure state comment.** A single `<!-- AUTOFIX_RESOLVER_RETRY_STATE_V1 …` comment that tracks: head SHA, consecutive failure count, last failure signature hash, last `pre_existing_drift_count`, last `regressed_by_resolver` set. Updated in place, not appended. Lets the stall poller decide whether to escalate without re-parsing 18 generic comments. Replaces §7 #5's noise problem.
-3. **Graduated verification tiers.** `strict` (today) → `ratio` (must_contain satisfaction ≥ 95%) → `count_only` → `warn_only`, each unlocked after N consecutive failures of the previous tier. Pairs with #1.
-4. **Adaptive fingerprint quarantine.** A fingerprint that has been classified `pre_existing_drift unchanged` for ≥M consecutive runs is moved to a quarantine list and skipped (with a one-time `::warning::FINGERPRINT_QUARANTINED_V1` marker). Long-horizon audit job (#5) periodically re-evaluates quarantined fingerprints against the sub-issue's actual PR diff.
-5. **Drift audit job.** A scheduled workflow that scans `PRE_EXISTING_FINGERPRINT_DRIFT_V1` and `FINGERPRINT_QUARANTINED_V1` markers across recent runs, dedupes by fp_key, opens a tracker issue per persistent drift cluster with the suspected capture-side root cause. Closes the loop on §7 #2 / §7 #6.
-6. **Last-resort branch rebuild.** After M hours of solid failure on the same head SHA, the orchestrator deletes the stuck PR branch and recreates it from current `main`, replaying merged sub-PRs in order. Per-branch rebuild-rate cap to prevent rebuild-loops. The "nothing else worked" hammer.
-7. **Replace fingerprints with sub-issue test runs.** Bigger project: replace regex-based intent capture with "did the sub-issue PR's added tests still pass on the integration tree?" as the gate. Direct evidence of intent preservation rather than regex proxy. Removes the entire capture-quality dependency. Unrelated rewrite; mentioned for completeness.
+1. **Consecutive-identical-failure escape valve.** Shipped as the resolver retry-state / escape-valve flow keyed by `RESOLVER_ESCAPE_THRESHOLD_N`.
+2. **Structured per-PR consecutive-failure state comment.** Shipped as the sticky `<!-- AUTOFIX_RESOLVER_RETRY_STATE_V1 ... -->` PR-body block.
+3. **Graduated verification tiers.** Shipped; `scripts/review_conflict_resolve.sh` advances `strict` → `ratio` → `count_only` → `warn_only` and emits `FINGERPRINT_TIER_DOWNGRADED_V1` on each downgrade.
+4. **Adaptive fingerprint quarantine.** Shipped; `FINGERPRINT_QUARANTINE_RUNS_M` drives ai-memory quarantine state and `FINGERPRINT_QUARANTINED_V1` markers.
+5. **Drift audit job.** Shipped; `.github/workflows/drift-audit.yml` / `scripts/drift_audit.sh` scan `PRE_EXISTING_FINGERPRINT_DRIFT_V1` and `FINGERPRINT_QUARANTINED_V1` markers, cluster by `fp_key`, and create or refresh tracker issues when `DRIFT_AUDIT_ENABLED=true`.
+6. **Last-resort branch rebuild.** Shipped; `BRANCH_REBUILD_ENABLED`, `BRANCH_REBUILD_THRESHOLD_HOURS`, and `BRANCH_REBUILD_COOLDOWN_HOURS` gate the delete/recreate + replay flow, with audit persisted as `BranchRebuildAuditV1` (`ai-memory/schemas/branch_rebuild_audit.v1.json`).
+7. **Replace fingerprints with sub-issue test runs.** Discovery completed as **NO-GO**. See [`sub-issue-test-runs-spike.md`](sub-issue-test-runs-spike.md); if revisited later it should be a hybrid/additive path, not a replacement gate.
 
 ---
 
@@ -347,4 +347,4 @@ Ranked by leverage. None of these are required for the v1 fix to ship; each is a
 - **2026-04-24** — Q1=A (split sync from resolve / verifier-fix-propagation, refined to "delta verification + main-snapshot bootstrap" after confirming clean-sync is already decoupled at `scripts/orchestrate_poll_process.sh:2724-2727`).
 - **2026-04-24** — Q2=A (full plan-of-record matching `docs/resilient-codex-failure-plan.md` shape).
 - **2026-04-24** — Filename `docs/integration-sync-resolver-self-heal.md` chosen.
-- **Open** — N (consecutive-failure threshold for §10 #1), M (drift-quarantine threshold for §10 #4), M-hours (rebuild threshold for §10 #6) all deferred to the respective follow-up issues. **CONFIRM** before implementing any of those.
+- **Resolved** — the follow-up rollout landed with defaults `N=5`, `M=3`, `M-hours=24`, and `REBUILD_COOLDOWN_HOURS=48`; the sub-issue test-run replacement idea concluded with the NO-GO spike at `docs/completed/sub-issue-test-runs-spike.md`.

@@ -46,6 +46,15 @@ WORKFLOW_CONTRACT = {
 			re.compile(r'repos/\$\{REPOSITORY\}/labels/\$\(printf\s+[\'\"]?%s[\'\"]?\s+[\'\"]?\$\{FINAL_LABEL\}[\'\"]?\)'),
 		],
 	},
+	".github/workflows/review_autofix.yml": {
+		"must_contain": [
+			re.compile(r'(?m)^\s*(?:source|\.)\s+["\']?\$\{SUPPORT_SCRIPTS_DIR\}/label_helpers\.sh["\']?(?=[\s;#]|$)'),
+			'ensure_label_exists "ai:resolver-escalated" "${{ github.repository }}"',
+		],
+		"must_not_contain": [
+			re.compile(r"gh\s+label\s+create\s+['\"]?ai:resolver-escalated['\"]?"),
+		],
+	},
 }
 
 
