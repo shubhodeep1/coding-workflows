@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:492,500-506,525-556 | severity=medium | confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: `_final_merge_ineligibility_base_ref` can be unset or stale in `_check_final_merge_ineligibility_alert`, so `_summarize_final_merge_blockers` may fall back to a second PR-metadata fetch and use the wrong required-check set for the alert body.\n  WHY: On transient GitHub API failures the alert can still fire but mis-label advisory check-runs or omit required blockers, defeating the hardening this change is meant to provide.\n- scripts/orchestrate_poll_process.sh:571-577,628-629,6453-6455 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: `_clear_final_merge_ineligibility_state` is defined and tested but the production success path still clears the same keys inline instead of calling the helper.\n  WHY: Runtime behavior is correct today, but the duplicated jq reset can drift from the helper if the tracked keys change, creating a maintenance hazard.\n- agents.md:200 | severity=low | confidence=[3]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The new stable-log-prefix entry for `FINAL_MERGE_INELIGIBILITY_ALERT_SENT` is missing the usual migration note called out by the reviewer.\n  WHY: The reviewer says the agents.md canonical list is incomplete, which can trigger future parser warnings or telemetry drift.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:628-629 | confidence=2\n  PROBLEM: The helper `_clear_final_merge_ineligibility_state` is defined and tested but never called from any production code path.\n  WHY: The inline jq in the merge-success path clears the same keys, so behavior is correct today, but the helper and call site can drift if the tracked keys change.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_poll_process.sh:571-577 | confidence=2\n  PROBLEM: Helper function is defined and tested but never called from production code paths.\n  WHY: No runtime failure, but it creates a maintenance hazard if state keys change in future because the inline jq at lines 6510-6516 clears the same keys but could drift from the helper implementation.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/orchestrate_poll_process.sh:492,500-506 | confidence=4\n  PROBLEM: `_final_merge_ineligibility_base_ref` is set from the first PR payload inside `_check_final_merge_ineligibility_alert` but is a file-scoped shell variable; if the first `gh_retry` fails or returns empty JSON, the variable stays unset or stale.\n  WHY: On transient GitHub API flakes the alert still fires but can mis-label advisory check-runs as blockers or omit the real required ones.\n- scripts/orchestrate_poll_process.sh:500,525-556 | confidence=4\n  PROBLEM: The comment claims the alert path does not burn a second PR-metadata round-trip, but the current implementation still falls back to a second `gh api pulls/...` inside `_summarize_final_merge_blockers` when `_final_merge_ineligibility_base_ref` is empty.\n  WHY: That leaves the double-fetch path live when the base ref is unavailable, so the optimization claim is not fully true in the failure case.\n- agents.md:200 | confidence=3\n  PROBLEM: The PR description and README update mention the new log prefix `FINAL_MERGE_INELIGIBILITY_ALERT_SENT`, but agents.md only lists it without the usual \u201cand shipped:\u201d migration note.\n  WHY: The workflow-log-analysis pipeline and drift-audit tooling rely on the canonical list in agents.md, so an incomplete entry can cause future parser warnings or missed telemetry.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "83a2830e09be864decf5a27a5bcea5030dfe815f923dcb632003e0897fe74960",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2957,
+    "run_id": "26366555700",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26366555700",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260524165309_60cb328354",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2957,
+    "run_id": "26366555700"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-24T16:53:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
