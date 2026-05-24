@@ -224,78 +224,356 @@ assemble_judge_static_context() {
 
 # ---------------------------------------------------------------
 # Helper: Check whether all check-runs on a PR's head commit have
-# completed.  Returns 0 when every check-run has status "completed"
-# and an acceptable conclusion (success/neutral/skipped/cancelled),
-# 1 otherwise (including API errors).  Callers should skip the merge
-# when this returns non-zero so we never merge while checks (e.g.
-# autofix) are still running.
-# Usage:  _pr_checks_completed <PR_NUMBER> [<HEAD_SHA>]
-#   HEAD_SHA is optional; when provided the extra PR fetch is skipped.
+# completed AND none of the check-runs that count as "required"
+# are in an unacceptable conclusion (success/neutral/skipped/cancelled
+# are acceptable). Returns 0 when nothing is blocking, 1 otherwise
+# (including API errors).
+#
+# Layer 1 (Apr 2026): the gate's "required" set is no longer "every
+# check-run on the SHA". Instead it's resolved per call as:
+#   1. Branch protection's `required_status_checks.contexts` on the
+#      PR's base ref, when non-empty.
+#   2. Comma-separated names in ORCH_FINAL_MERGE_REQUIRED_CHECKS,
+#      otherwise.
+#   3. The built-in ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT, if the
+#      env var was never set.
+# Sentinel "*" restores legacy fail-closed-on-any-failure behaviour;
+# sentinel "" (env var explicitly empty) makes the gate allow-all.
+# See ORCH_FINAL_MERGE_REQUIRED_CHECKS docstring near MAX_FINAL_MERGE_ATTEMPTS.
+#
+# The check-runs API call still uses --paginate --slurp so commits
+# with >100 check-runs don't hide failures on later pages, matching
+# the canonical pattern at .github/workflows/review_autofix.yml's
+# "Collect PR check-run failures" step.
+#
+# Usage:  _pr_checks_completed <PR_NUMBER> [<HEAD_SHA>] [<BASE_REF>]
+#   HEAD_SHA optional: when omitted, fetched from the PR (along with
+#   BASE_REF in the same call, per §15 API-hygiene).
+#   BASE_REF optional: when omitted and HEAD_SHA was provided, an extra
+#   PR fetch is issued to retrieve it for the required-checks lookup.
 # ---------------------------------------------------------------
 _pr_checks_completed()
 {
 	local pr_number="$1"
 	local head_sha="${2:-}"
-	if [ -z "${head_sha}" ] || [ "${head_sha}" = "null" ]; then
+	local base_ref="${3:-}"
+
+	# Fetch the PR JSON once if we need EITHER head_sha or base_ref
+	# from it. Avoids two separate calls for the integration-PR case
+	# where the caller only knows the PR number.
+	if [ -z "${head_sha}" ] || [ "${head_sha}" = "null" ] || [ -z "${base_ref}" ]; then
 		local pr_json
 		pr_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" || echo "")"
-		head_sha="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .head.sha?) then .head.sha else empty end' 2>/dev/null | tail -n1)"
+		if [ -z "${head_sha}" ] || [ "${head_sha}" = "null" ]; then
+			head_sha="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .head.sha?) then .head.sha else empty end' 2>/dev/null | tail -n1)"
+		fi
+		if [ -z "${base_ref}" ]; then
+			base_ref="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .base.ref?) then .base.ref else empty end' 2>/dev/null | tail -n1)"
+		fi
 	fi
 	if [ -z "${head_sha}" ] || [ "${head_sha}" = "null" ]; then
 		echo "  [check-runs] Could not resolve head SHA for PR #${pr_number}. Skipping merge."
 		return 1
 	fi
 
+	local required_names_csv
+	required_names_csv="$(_pr_required_check_names_for_base "${base_ref}")"
+
 	local check_runs_json
-	# --paginate --slurp walks all pages and emits an array of page
-	# response objects (each shaped {"total_count": N, "check_runs":
-	# [...]}). Without pagination a commit with >100 check-runs hides
-	# pending/failing runs on later pages and the gate would
-	# incorrectly report success. Matches the canonical pattern used
-	# elsewhere in the repo (e.g. .github/workflows/review_autofix.yml's
-	# "Collect PR check-run failures" step).
-	#
-	# Fallback to '{}' (NOT '[]') on API failure. The jq filter
-	# below has two matching branches: `type == "array"` (production
-	# --paginate --slurp shape) and the elif `type == "object" and
-	# (.check_runs | type == "array")` (legacy single-object shape).
-	# An empty object '{}' matches neither — falls through to `else
-	# empty`, the numeric guard below trips, and the helper returns
-	# 1 (fail-closed). An empty array '[]' would match the first
-	# branch and produce `incomplete=0`, fail-OPEN — treating an API
-	# error as "no check-runs" and letting the merge proceed.
+	# Fallback to '{}' (NOT '[]') on API failure. The jq filter below has
+	# two matching branches: `type == "array"` (production --paginate
+	# --slurp shape) and the elif `type == "object"` (legacy single-object
+	# shape). An empty object '{}' matches neither — falls through to
+	# `else empty`, the numeric guard below trips, and the helper returns
+	# 1 (fail-closed). An empty array '[]' would match the first branch
+	# and produce `incomplete=0`, fail-OPEN — treating an API error as "no
+	# check-runs" and letting the merge proceed.
 	check_runs_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${GITHUB_REPOSITORY}/commits/${head_sha}/check-runs?per_page=100" || echo "{}")"
 
-	# jq filter: handle both the paginated array-of-pages shape (the
-	# production --paginate --slurp call) and the single-object
-	# shape (backward compatibility with callers / tests that
-	# pre-date the pagination change). In either case, flatten every
-	# page check_runs and count items that are NOT yet completed
-	# with an acceptable conclusion. (Note: comments stay outside
-	# the jq script — apostrophes in jq-internal comments would
-	# terminate the outer single-quoted expression early.)
+	# Allow-all sentinel: env var explicitly set to "" means treat every
+	# check-run as advisory. Branch protection (when present) is enforced
+	# server-side by GitHub at merge time.
+	if [ "${required_names_csv}" = "" ]; then
+		echo "  [check-runs] Required-checks gate is empty (allow-all); proceeding with merge for PR #${pr_number} (SHA ${head_sha:0:7})."
+		return 0
+	fi
+
 	local incomplete
-	incomplete="$(printf '%s' "${check_runs_json}" | jq -r '
-		if (type == "array") then
-			[.[]? | (.check_runs // [])[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled"))] | length
-		elif (type == "object" and (.check_runs | type == "array")) then
-			[.check_runs[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled"))] | length
-		else
-			empty
-		end
-	' 2>/dev/null | tail -n1)"
+	if [ "${required_names_csv}" = "*" ]; then
+		# Legacy fail-closed-on-any-failure behaviour. Identical filter
+		# to the pre-Layer-1 implementation.
+		incomplete="$(printf '%s' "${check_runs_json}" | jq -r '
+			if (type == "array") then
+				[.[]? | (.check_runs // [])[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled"))] | length
+			elif (type == "object" and (.check_runs | type == "array")) then
+				[.check_runs[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled"))] | length
+			else
+				empty
+			end
+		' 2>/dev/null | tail -n1)"
+	else
+		# Required-set filter: pending check-runs (status != "completed")
+		# always block — autofix or any other in-flight workflow shouldn't
+		# race a merge — but FAILED check-runs only block when their
+		# `name` appears in required_names_csv. This preserves the original
+		# "pending blocks" semantic while letting non-required advisory
+		# failures (Copilot, optional reviewers, etc.) through. Whitespace
+		# around comma-separated tokens is trimmed so operators can format
+		# the env var with spaces after commas.
+		incomplete="$(printf '%s' "${check_runs_json}" | jq -r --arg names "${required_names_csv}" '
+			($names | split(",") | map(gsub("^\\s+|\\s+$"; ""))) as $required |
+			(
+				if (type == "array") then
+					[.[]? | (.check_runs // [])[]]
+				elif (type == "object" and (.check_runs | type == "array")) then
+					.check_runs
+				else
+					null
+				end
+			) as $runs |
+			if ($runs == null) then empty
+			else
+				[$runs[] | select(
+					(.status != "completed")
+					or (
+						(.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled")
+						and (.name as $n | $required | index($n))
+					)
+				)] | length
+			end
+		' 2>/dev/null | tail -n1)"
+	fi
 	if ! [[ "${incomplete}" =~ ^[0-9]+$ ]]; then
 		echo "  [check-runs] Could not query check-runs for PR #${pr_number} (SHA ${head_sha:0:7}). Skipping merge."
 		return 1
 	fi
 
 	if [ "${incomplete}" -gt 0 ]; then
-		echo "  [check-runs] PR #${pr_number} has ${incomplete} blocking check-run(s) (SHA ${head_sha:0:7}). Skipping merge."
+		echo "  [check-runs] PR #${pr_number} has ${incomplete} blocking required check-run(s) (SHA ${head_sha:0:7}, required-set=${required_names_csv}). Skipping merge."
 		return 1
 	fi
 
-		echo "  [check-runs] All check-runs completed and acceptable for PR #${pr_number} (SHA ${head_sha:0:7}). Proceeding with merge."
+	echo "  [check-runs] All required check-runs completed and acceptable for PR #${pr_number} (SHA ${head_sha:0:7}). Proceeding with merge."
 	return 0
+}
+
+# Helper: returns the comma-separated list of check-run names treated as
+# blocking for the given base ref. Resolution: branch protection's
+# required_status_checks.contexts first (server-side truth), then the
+# operator allowlist in ORCH_FINAL_MERGE_REQUIRED_CHECKS, then the
+# built-in default. Sentinels passed through verbatim: "*" = legacy mode,
+# "" = allow-all.
+#
+# §15 hygiene: this issues one extra `gh api` call per invocation when
+# the base ref is known. The call is fail-fast (gh_retry recognises
+# "Branch not protected" 404 as a non-retryable permanent failure), so
+# unprotected branches resolve in one round trip and fall through to
+# the env var.
+_pr_required_check_names_for_base()
+{
+	local base_ref="$1"
+	local contexts=""
+	if [ -n "${base_ref}" ]; then
+		local protection_json
+		protection_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/branches/${base_ref}/protection" 2>/dev/null || echo "")"
+		if [ -n "${protection_json}" ]; then
+			contexts="$(printf '%s' "${protection_json}" | jq -r '
+				if (type == "object" and (.required_status_checks // null) != null) then
+					(.required_status_checks.contexts // []) | join(",")
+				else
+					""
+				end
+			' 2>/dev/null | tail -n1)"
+		fi
+	fi
+	if [ -n "${contexts}" ]; then
+		echo "${contexts}"
+		return 0
+	fi
+	# ORCH_FINAL_MERGE_REQUIRED_CHECKS resolution: at startup the var is
+	# set to either the operator-provided value (possibly the empty string
+	# for allow-all) or ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT. We honour
+	# that resolved value verbatim — `${VAR-…}` not `${VAR:-…}` because an
+	# explicit empty string must remain empty (allow-all sentinel).
+	echo "${ORCH_FINAL_MERGE_REQUIRED_CHECKS-${ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT}}"
+}
+
+# ---------------------------------------------------------------
+# Layer 2: time-bounded ineligibility alerting.
+#
+# finalize_integration_merge_if_needed sets FINAL_MERGE_BUDGET_ELIGIBLE=0
+# for "transient" merge deferrals — required checks not complete yet,
+# mergeability still computing, mergeable=false (conflict-resolver
+# handling), etc. Those deferrals never increment final_merge_attempt_count,
+# so MAX_FINAL_MERGE_ATTEMPTS=3 will never escalate them to ai:blocked.
+# Without an alert path the orchestrator can sit in that deferral loop
+# indefinitely while a single third-party advisory check (e.g. a Copilot
+# review failure) keeps the merge gate closed — the silent-loop failure
+# mode described in shubhodeep1/coding-workflows#2955.
+#
+# These helpers attach a per-SHA clock to the deferral so an alert fires
+# exactly once after ORCH_FINAL_MERGE_INELIGIBLE_ALERT_HOURS hours. The
+# clock resets when:
+#   - The final PR's head SHA changes (autofix push) — fresh autofix
+#     attempt deserves a fresh window.
+#   - A finalize attempt succeeds (the merge lands).
+#   - The state-file ineligibility keys are cleared by an operator.
+#
+# Auto-escalation to ai:blocked is INTENTIONALLY not implemented — per
+# operator decision, this layer is alert-only. The CRITICAL Telegram
+# alert plus tracking comment surfaces the stall; a human or a future
+# Fix 6 (`ai:force-merge` handler) bypass is the resolution.
+# ---------------------------------------------------------------
+
+# Helper: fire (idempotently per SHA) a CRITICAL alert when the
+# budget-ineligible deferral path has persisted for at least
+# ORCH_FINAL_MERGE_INELIGIBLE_ALERT_HOURS hours on the same final PR
+# head SHA. Called from mark_validation_complete after the
+# budget-ineligible early-return is detected. State-file writes are
+# fail-open: jq/mv errors are swallowed so a transient FS issue doesn't
+# block the orchestrator loop.
+_check_final_merge_ineligibility_alert()
+{
+	local alert_hours="${ORCH_FINAL_MERGE_INELIGIBLE_ALERT_HOURS:-0}"
+	if [ "${alert_hours}" = "0" ]; then
+		return 0
+	fi
+
+	local final_pr
+	final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+	if [ -z "${final_pr}" ] || [ "${final_pr}" = "null" ]; then
+		return 0
+	fi
+
+	local current_sha
+	current_sha="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.head.sha' 2>/dev/null || echo "")"
+	if [ -z "${current_sha}" ] || [ "${current_sha}" = "null" ]; then
+		return 0
+	fi
+
+	local now_utc
+	now_utc="$(date -u +%s)"
+
+	local prev_sha prev_first_blocked_at prev_alert_sent_for_sha
+	prev_sha="$(jq -r '.final_merge_ineligible_blocked_at_sha // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+	prev_first_blocked_at="$(jq -r '.final_merge_ineligible_first_blocked_at_utc // 0' "${STATE_FILE}" 2>/dev/null || echo "0")"
+	prev_alert_sent_for_sha="$(jq -r '.final_merge_ineligible_alert_sent_for_sha // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+
+	# Defensive: if jq returned non-numeric for the timestamp (state file
+	# corruption / unexpected legacy value), treat as "clock just started".
+	if ! [[ "${prev_first_blocked_at}" =~ ^[0-9]+$ ]]; then
+		prev_first_blocked_at="0"
+	fi
+
+	if [ "${prev_sha}" != "${current_sha}" ]; then
+		# New SHA (or first observation) — start the clock fresh, no alert.
+		jq --arg sha "${current_sha}" --argjson now "${now_utc}" \
+			'.final_merge_ineligible_blocked_at_sha = $sha
+			 | .final_merge_ineligible_first_blocked_at_utc = $now
+			 | .final_merge_ineligible_alert_sent_for_sha = ""' \
+			"${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || true
+		return 0
+	fi
+
+	local elapsed_secs threshold_secs
+	elapsed_secs=$(( now_utc - prev_first_blocked_at ))
+	if [ "${elapsed_secs}" -lt 0 ]; then
+		elapsed_secs=0
+	fi
+	threshold_secs=$(( alert_hours * 3600 ))
+
+	if [ "${elapsed_secs}" -lt "${threshold_secs}" ]; then
+		return 0
+	fi
+
+	if [ "${prev_alert_sent_for_sha}" = "${current_sha}" ]; then
+		# Already alerted for this SHA — once per SHA contract.
+		return 0
+	fi
+
+	local elapsed_hours
+	elapsed_hours=$(( elapsed_secs / 3600 ))
+
+	local blocker_summary pr_url
+	blocker_summary="$(_summarize_final_merge_blockers "${final_pr}" "${current_sha}")"
+	pr_url="$(_gh_url "pull/${final_pr}")"
+
+	local msg
+	msg="⛔ Final integration merge stuck for ${elapsed_hours}h+ (project #${TRACKING_NUM})"
+	msg+=$'\n'"PR: ${pr_url}"
+	msg+=$'\n'"Head SHA: ${current_sha:0:7}"
+	if [ -n "${blocker_summary}" ]; then
+		msg+=$'\n'"Blockers: ${blocker_summary}"
+	fi
+	msg+=$'\n'"Resolution: re-run or dismiss the blocking check-run(s), merge manually, or set ORCH_FINAL_MERGE_REQUIRED_CHECKS to omit advisory checks."
+
+	tg_notify "${msg}" "CRITICAL"
+
+	local comment_body
+	comment_body="## ⏰ Final merge blocked for ${elapsed_hours}h+"$'\n\n'
+	comment_body+="The integration squash PR #${final_pr} (head \`${current_sha:0:7}\`) has been in the orchestrator's budget-ineligible deferral path for at least ${alert_hours}h. Each poll cycle logs \`[final-merge] budget-ineligible deferral/failure\` and the project never advances to \`status=complete\`."$'\n\n'
+	if [ -n "${blocker_summary}" ]; then
+		comment_body+="**Blocking check-runs:** ${blocker_summary}"$'\n\n'
+	else
+		comment_body+="**Blocking check-runs:** unknown — see PR check-runs."$'\n\n'
+	fi
+	comment_body+="**Resolution options:**"$'\n'
+	comment_body+="- Re-run, dismiss, or fix the blocking check-run(s) so they return \`success\`/\`neutral\`/\`skipped\`/\`cancelled\`."$'\n'
+	comment_body+="- Merge PR #${final_pr} manually via the GitHub UI (works when the base branch isn't protected)."$'\n'
+	comment_body+="- Override the gate per-repo via \`ORCH_FINAL_MERGE_REQUIRED_CHECKS\` to exclude advisory checks."$'\n\n'
+	comment_body+="This alert fires once per head SHA. A fresh push to PR #${final_pr} resets the clock and requires another ${alert_hours}h before re-alerting."$'\n\n'
+	comment_body+="*(Threshold configurable via \`ORCH_FINAL_MERGE_INELIGIBLE_ALERT_HOURS\`, currently ${alert_hours}h; set to 0 to disable.)*"
+	post_tracking_comment "${comment_body}" || true
+
+	jq --arg sha "${current_sha}" \
+		'.final_merge_ineligible_alert_sent_for_sha = $sha' \
+		"${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || true
+
+	echo "  [final-merge] FINAL_MERGE_INELIGIBILITY_ALERT_SENT pr=${final_pr} sha=${current_sha:0:7} elapsed=${elapsed_hours}h threshold=${alert_hours}h"
+}
+
+# Helper: best-effort short summary of which check-runs would block the
+# orchestrator gate on this SHA. Used in the Layer 2 alert body. Returns
+# the empty string on API failure (the alert still fires; the body just
+# omits the blocker line).
+_summarize_final_merge_blockers()
+{
+	local final_pr="$1"
+	local head_sha="$2"
+
+	local check_runs_json
+	check_runs_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${GITHUB_REPOSITORY}/commits/${head_sha}/check-runs?per_page=100" 2>/dev/null || echo "")"
+	if [ -z "${check_runs_json}" ]; then
+		echo ""
+		return 0
+	fi
+
+	printf '%s' "${check_runs_json}" | jq -r '
+		(
+			if (type == "array") then
+				[.[]? | (.check_runs // [])[]]
+			elif (type == "object" and (.check_runs | type == "array")) then
+				.check_runs
+			else
+				[]
+			end
+		)
+		| map(select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled")))
+		| map("\(.name) (\(.conclusion // .status))")
+		| unique
+		| join(", ")
+	' 2>/dev/null | tail -n1
+}
+
+# Helper: clear the Layer 2 ineligibility tracking state. Called from the
+# merge-success path in finalize_integration_merge_if_needed so a future
+# stall on the same project starts a fresh clock.
+_clear_final_merge_ineligibility_state()
+{
+	jq '.final_merge_ineligible_blocked_at_sha = ""
+	    | .final_merge_ineligible_first_blocked_at_utc = 0
+	    | .final_merge_ineligible_alert_sent_for_sha = ""' \
+		"${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}" || true
 }
 
 # ---------------------------------------------------------------
@@ -1006,6 +1284,47 @@ MAX_FINAL_MERGE_ATTEMPTS="${MAX_FINAL_MERGE_ATTEMPTS:-3}"
 if ! [[ "${MAX_FINAL_MERGE_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${MAX_FINAL_MERGE_ATTEMPTS}" -lt 1 ]; then
   echo "::warning::MAX_FINAL_MERGE_ATTEMPTS must be a positive integer; defaulting to 3"
   MAX_FINAL_MERGE_ATTEMPTS="3"
+fi
+
+# ORCH_FINAL_MERGE_REQUIRED_CHECKS controls which check-runs the
+# orchestrator's _pr_checks_completed gate treats as blocking when deciding
+# whether to attempt the final integration→default squash merge inside
+# finalize_integration_merge_if_needed.
+#
+# Resolution order inside _pr_checks_completed:
+#   1. If branch protection on the PR's base ref exposes a non-empty
+#      required_status_checks.contexts list, that list IS the gate;
+#      advisory third-party checks (e.g. Copilot) not in that list are
+#      ignored even when failing.
+#   2. Otherwise the comma-separated names in this env var form the gate.
+#   3. Otherwise the built-in default below — the five checks the
+#      orchestrator already produces on every integration PR — is used.
+#
+# Sentinels:
+#   "*"  — legacy fail-closed mode (ANY non-acceptable check-run blocks).
+#   ""   — allow-all (no check-run blocks; relies entirely on GitHub
+#           branch protection enforcement at merge time).
+#
+# Defaults preserve current behaviour on protected branches (the
+# branch-protection contexts win) and add a sensible allowlist for the
+# bitsafe-style "main is unprotected, third-party advisory check
+# failure stalls the orchestrator" case that motivated this knob.
+ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT="CI,Integration PR readiness check,Lint plan-archival completeness,Lint PR body for auto-close keywords against orchestrator-tracking issues,review / gate"
+ORCH_FINAL_MERGE_REQUIRED_CHECKS="${ORCH_FINAL_MERGE_REQUIRED_CHECKS-${ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT}}"
+
+# ORCH_FINAL_MERGE_INELIGIBLE_ALERT_HOURS bounds how long the orchestrator
+# may sit in the budget-ineligible deferral path of
+# finalize_integration_merge_if_needed (FINAL_MERGE_BUDGET_ELIGIBLE=0) on
+# the same final PR head SHA before firing a CRITICAL Telegram alert plus
+# tracking-issue comment. The alert fires exactly once per SHA; a fresh
+# autofix push to the integration PR resets the clock.
+#
+# The default 6h matches the staleness threshold used elsewhere for
+# integration-branch alerts. Set to 0 to disable the alert path entirely.
+ORCH_FINAL_MERGE_INELIGIBLE_ALERT_HOURS="${ORCH_FINAL_MERGE_INELIGIBLE_ALERT_HOURS:-6}"
+if ! [[ "${ORCH_FINAL_MERGE_INELIGIBLE_ALERT_HOURS}" =~ ^[0-9]+$ ]]; then
+  echo "::warning::ORCH_FINAL_MERGE_INELIGIBLE_ALERT_HOURS must be a non-negative integer; defaulting to 6"
+  ORCH_FINAL_MERGE_INELIGIBLE_ALERT_HOURS="6"
 fi
 
 # Per-batch ceiling for "validation-fixing" poll cycles.  The fix-up loop
@@ -5527,7 +5846,7 @@ Unable to create or locate the final integration PR from \`${integration_branch}
     return 1
   fi
 
-  if [ "${pr_state}" = "open" ] && [ "${pr_mergeable}" = "true" ] && ! _pr_checks_completed "${final_pr}"; then
+  if [ "${pr_state}" = "open" ] && [ "${pr_mergeable}" = "true" ] && ! _pr_checks_completed "${final_pr}" "" "${default_branch}"; then
     FINAL_MERGE_BUDGET_ELIGIBLE="0"
     echo "  [final-merge] Required checks not complete for PR #${final_pr}. Will retry next poll."
     return 1
@@ -6068,9 +6387,12 @@ mark_validation_complete() {
 
   if ! finalize_integration_merge_if_needed "${integration_branch}" "${default_branch}" "${project_title}"; then
     # Budget-ineligible final-merge deferrals/failures should return without
-    # consuming the bounded retry budget.
+    # consuming the bounded retry budget. Layer 2: check whether the
+    # deferral has persisted long enough on the same head SHA to warrant
+    # a CRITICAL alert (silent-loop guard for stuck advisory checks).
     if [ "${FINAL_MERGE_BUDGET_ELIGIBLE:-1}" != "1" ]; then
       echo "  [final-merge] budget-ineligible deferral/failure; retry budget unchanged."
+      _check_final_merge_ineligibility_alert || true
       return 0
     fi
 
@@ -6122,10 +6444,15 @@ Manual intervention required: resolve the blocking condition on the final PR (me
   fi
 
   # Merge landed; reset the retry counter and mark the project complete.
+  # Layer 2: also clear the ineligibility tracking keys so a future stall
+  # on the same project starts a fresh clock.
   jq --argjson cycle "${validation_cycle}" \
     '.status = "complete"
      | .validation_completed_cycle = $cycle
-     | .final_merge_attempt_count = 0' \
+     | .final_merge_attempt_count = 0
+     | .final_merge_ineligible_blocked_at_sha = ""
+     | .final_merge_ineligible_first_blocked_at_utc = 0
+     | .final_merge_ineligible_alert_sent_for_sha = ""' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_state_comment || true
   _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
