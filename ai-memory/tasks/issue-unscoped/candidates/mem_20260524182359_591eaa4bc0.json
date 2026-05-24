@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: New workflow-controlled repo variables (like `PR_PROCESSED_ALERT_LEVEL`) should be documented in `agents.md`'s env-var table alongside other alert-level knobs so reviewer/editor phases have authoritative reference material.\n  expected_change_site: `agents.md` \u2014 the env-var table section (near `ALERT_MSG_LEVEL` at `agents.md:146` in the original PR diff context).\n  confidence=[4]\n  flagged_by: [qwen_qwen3_6-plus]\n  EVIDENCE: The LAST RUN DIFF only touches `.github/workflows/review_autofix.yml`, `CHANGELOG.md`, and `README.md`. `agents.md` is not in LAST RUN CHANGED FILES. The full PR DIFF also does not touch `agents.md`. The `agents.md` env-var table currently lists `ALERT_MSG_LEVEL` with its `update_workflows` exception but has no row for the new `PR_PROCESSED_ALERT_LEVEL` variable introduced alongside it. Every other dedicated alert-level knob (`ALERT_MSG_LEVEL`, `TG_GH_RATELIMIT_ALERT_COOLDOWN_SECS`) has a corresponding row in this table.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n=== TASK_GAP ===\nRequirement: New workflow-controlled repo variables (like `PR_PROCESSED_ALERT_LEVEL`) should be documented in `agents.md`'s env-var table alongside other alert-level knobs so reviewer/editor phases have authoritative reference material.\nExpected change site: `agents.md` \u2014 the env-var table section (near `ALERT_MSG_LEVEL` at `agents.md:146` in the original PR diff context).\nEvidence of absence: The LAST RUN DIFF only touches `.github/workflows/review_autofix.yml`, `CHANGELOG.md`, and `README.md`. `agents.md` is not in LAST RUN CHANGED FILES. The full PR DIFF also does not touch `agents.md`. The `agents.md` env-var table currently lists `ALERT_MSG_LEVEL` with its `update_workflows` exception but has no row for the new `PR_PROCESSED_ALERT_LEVEL` variable introduced alongside it. Every other dedicated alert-level knob (`ALERT_MSG_LEVEL`, `TG_GH_RATELIMIT_ALERT_COOLDOWN_SECS`) has a corresponding row in this table.\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "f8cf9404e5955c74f2102620eaeb715a3f046c17eac9b1ab41c5938858b30933",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2954,
+    "run_id": "26369040242",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26369040242",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260524182359_591eaa4bc0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2954,
+    "run_id": "26369040242"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-24T18:23:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
