@@ -5738,6 +5738,16 @@ def test_post_issue_comment_json_validates_numeric_body_size_before_limit_check(
 	assert post_issue_comment_json.index(guard) < post_issue_comment_json.index(limit_check)
 
 
+def test_post_tracking_comment_validates_numeric_body_size_before_limit_check():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	post_tracking_comment = script.split("post_tracking_comment() {", 1)[1].split('payload_file="$(mktemp', 1)[0]
+	guard = 'if ! [[ "${body_bytes}" =~ ^[0-9]+$ ]]; then'
+	limit_check = 'if [ "${body_bytes}" -gt 65536 ]; then'
+	assert guard in post_tracking_comment
+	assert 'Failed to capture numeric body size for tracking issue #${TRACKING_NUM}; skipping post.' in post_tracking_comment
+	assert post_tracking_comment.index(guard) < post_tracking_comment.index(limit_check)
+
+
 def test_validation_fixing_backfills_ai_merged_from_linked_merged_pr_evidence():
 	state = _base_state(status="validation-fixing")
 	state["validation_cycle"] = 1

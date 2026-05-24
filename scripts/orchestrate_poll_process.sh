@@ -1166,6 +1166,10 @@ post_tracking_comment() {
   local payload_err_file
   local body_bytes
   body_bytes="$(printf '%s' "${comment_body}" | wc -c | tr -d '[:space:]')"
+  if ! [[ "${body_bytes}" =~ ^[0-9]+$ ]]; then
+    echo "::warning::Failed to capture numeric body size for tracking issue #${TRACKING_NUM}; skipping post." >&2
+    return 0
+  fi
   if [ "${body_bytes}" -gt 65536 ]; then
     echo "::warning::Tracking comment body too large for issue #${TRACKING_NUM} (${body_bytes} bytes > 65536 GitHub limit); skipping post." >&2
     return 0
