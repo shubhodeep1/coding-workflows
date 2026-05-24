@@ -35,12 +35,8 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
-import tempfile
 import textwrap
 from pathlib import Path
-
-import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -383,7 +379,7 @@ def test_gate_ignores_failing_advisory_check_not_in_required_set(tmp_path):
 	})
 	result = _run_shell(
 		tmp_path,
-		'_pr_checks_completed 2955; echo "EXIT=$?"',
+		'_pr_checks_completed 2955 "" "main"; echo "EXIT=$?"',
 		env_overrides={
 			"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "CI,review / gate",
 		},
@@ -403,7 +399,7 @@ def test_gate_blocks_failing_required_check_in_set(tmp_path):
 	})
 	result = _run_shell(
 		tmp_path,
-		'_pr_checks_completed 2955; echo "EXIT=$?"',
+		'_pr_checks_completed 2955 "" "main"; echo "EXIT=$?"',
 		env_overrides={"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "CI"},
 	)
 	assert result.returncode == 0, result.stderr
@@ -421,7 +417,7 @@ def test_gate_blocks_pending_required_check(tmp_path):
 	})
 	result = _run_shell(
 		tmp_path,
-		'_pr_checks_completed 2955; echo "EXIT=$?"',
+		'_pr_checks_completed 2955 "" "main"; echo "EXIT=$?"',
 		env_overrides={"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "CI"},
 	)
 	assert result.returncode == 0, result.stderr
@@ -444,7 +440,7 @@ def test_gate_branch_protection_contexts_win_over_env_var(tmp_path):
 	})
 	result = _run_shell(
 		tmp_path,
-		'_pr_checks_completed 2955; echo "EXIT=$?"',
+		'_pr_checks_completed 2955 "" "main"; echo "EXIT=$?"',
 		# Env var explicitly removes Copilot; protection re-includes it.
 		env_overrides={"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "CI"},
 	)
@@ -466,7 +462,7 @@ def test_gate_star_sentinel_restores_legacy_fail_closed_behavior(tmp_path):
 	})
 	result = _run_shell(
 		tmp_path,
-		'_pr_checks_completed 2955; echo "EXIT=$?"',
+		'_pr_checks_completed 2955 "" "main"; echo "EXIT=$?"',
 		env_overrides={"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "*"},
 	)
 	assert result.returncode == 0, result.stderr
@@ -484,7 +480,7 @@ def test_gate_empty_sentinel_allows_all(tmp_path):
 	})
 	result = _run_shell(
 		tmp_path,
-		'_pr_checks_completed 2955; echo "EXIT=$?"',
+		'_pr_checks_completed 2955 "" "main"; echo "EXIT=$?"',
 		env_overrides={"ORCH_FINAL_MERGE_REQUIRED_CHECKS": ""},
 	)
 	assert result.returncode == 0, result.stderr
@@ -506,7 +502,7 @@ def test_gate_acceptable_conclusions_pass(tmp_path):
 	})
 	result = _run_shell(
 		tmp_path,
-		'_pr_checks_completed 2955; echo "EXIT=$?"',
+		'_pr_checks_completed 2955 "" "main"; echo "EXIT=$?"',
 		env_overrides={
 			"ORCH_FINAL_MERGE_REQUIRED_CHECKS":
 				"ck-success,ck-neutral,ck-skipped,ck-cancelled",
@@ -555,7 +551,7 @@ def test_gate_whitespace_in_csv_is_trimmed(tmp_path):
 	})
 	result = _run_shell(
 		tmp_path,
-		'_pr_checks_completed 2955; echo "EXIT=$?"',
+		'_pr_checks_completed 2955 "" "main"; echo "EXIT=$?"',
 		env_overrides={
 			"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "CI ,  review / gate",
 		},
@@ -563,6 +559,34 @@ def test_gate_whitespace_in_csv_is_trimmed(tmp_path):
 	assert result.returncode == 0, result.stderr
 	# Copilot not in trimmed allowlist; non-blocking.
 	assert "EXIT=0" in result.stdout
+
+
+def test_gate_without_base_ref_keeps_legacy_all_checks_behavior(tmp_path):
+	"""Legacy callers that omit base_ref keep the pre-Layer-1 behaviour:
+	ANY failing check-run still blocks, and no base-ref lookup is needed."""
+	_make_gh_stub(tmp_path, gh_state={
+		"pr": {"2955": {"head_sha": "deadbeefcafe", "base_ref": "main"}},
+		"protection": {"main": "404"},
+		"check_runs": {"deadbeefcafe": [
+			{"name": "CI", "status": "completed", "conclusion": "success"},
+			{"name": "Running Copilot Code Review", "status": "completed",
+			 "conclusion": "failure"},
+		]},
+	})
+	result = _run_shell(
+		tmp_path,
+		'_pr_checks_completed 2955 "deadbeefcafe"; echo "EXIT=$?"',
+		env_overrides={"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "CI"},
+	)
+	assert result.returncode == 0, result.stderr
+	assert "EXIT=1" in result.stdout
+	calls = _read_gh_calls(tmp_path)
+	paths = [
+		next((a for a in c["argv"] if a.startswith("repos/")), "")
+		for c in calls
+	]
+	assert not any("/pulls/2955" in p for p in paths), paths
+	assert not any("/branches/main/protection" in p for p in paths), paths
 
 
 # ---------------------------------------------------------------------------
@@ -619,12 +643,12 @@ def test_alert_fires_once_after_threshold_elapses(tmp_path):
 	_make_gh_stub(tmp_path, gh_state={
 		"pr": {"2955": {"head_sha": "abc1234", "base_ref": "main"}},
 		"check_runs": {"abc1234": [
+			{"name": "review / gate", "status": "completed", "conclusion": "failure"},
 			{"name": "Copilot", "status": "completed", "conclusion": "failure"},
 		]},
 	})
-	# 7h ago — past the 6h threshold.
-	long_ago = 0  # `date -u +%s` returns "now"; use first_blocked_at far in
-	# the past so elapsed > threshold no matter when the test runs.
+	# Epoch time — safely past the 6h threshold on any modern test run.
+	long_ago = 0
 	state_blob = {
 		"final_merge_pr": 2955,
 		"final_merge_ineligible_blocked_at_sha": "abc1234",
@@ -635,20 +659,25 @@ def test_alert_fires_once_after_threshold_elapses(tmp_path):
 		tmp_path,
 		'_check_final_merge_ineligibility_alert; echo "EXIT=$?"',
 		state_blob=state_blob,
-		env_overrides={"ORCH_FINAL_MERGE_INELIGIBLE_ALERT_HOURS": "6"},
+		env_overrides={
+			"ORCH_FINAL_MERGE_INELIGIBLE_ALERT_HOURS": "6",
+			"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "CI,review / gate",
+		},
 	)
 	assert result.returncode == 0, result.stderr
 	assert "EXIT=0" in result.stdout
 
-	# Alert fired with blocker summary including the Copilot failure.
+	# Alert fired with blocker summary including only the actual gate blocker.
 	tg_log = _read_log(tmp_path / "tg_notify.log")
 	assert "Final integration merge stuck" in tg_log
 	assert "PR: https://github.com/test-owner/test-repo/pull/2955" in tg_log
-	assert "Copilot (failure)" in tg_log
+	assert "review / gate (failure)" in tg_log
+	assert "Copilot (failure)" not in tg_log
 
 	tracking_log = _read_log(tmp_path / "tracking_comments.log")
 	assert "Final merge blocked for" in tracking_log
-	assert "Copilot (failure)" in tracking_log
+	assert "review / gate (failure)" in tracking_log
+	assert "Copilot (failure)" not in tracking_log
 
 	# State updated with alert_sent_for_sha so the second invocation is a no-op.
 	written = json.loads((tmp_path / "state.json").read_text())
@@ -750,10 +779,13 @@ def test_clear_helper_resets_all_ineligibility_keys(tmp_path):
 	assert written["final_merge_ineligible_alert_sent_for_sha"] == ""
 
 
-def test_summarize_blockers_returns_failing_check_names(tmp_path):
+def test_summarize_blockers_matches_required_set_and_pending_semantics(tmp_path):
 	_make_gh_stub(tmp_path, gh_state={
+		"pr": {"2955": {"head_sha": "abc1234", "base_ref": "main"}},
+		"protection": {"main": "404"},
 		"check_runs": {"abc1234": [
 			{"name": "CI", "status": "completed", "conclusion": "success"},
+			{"name": "review / gate", "status": "completed", "conclusion": "failure"},
 			{"name": "Copilot", "status": "completed", "conclusion": "failure"},
 			{"name": "Snyk", "status": "in_progress", "conclusion": None},
 		]},
@@ -761,10 +793,13 @@ def test_summarize_blockers_returns_failing_check_names(tmp_path):
 	result = _run_shell(
 		tmp_path,
 		'_summarize_final_merge_blockers 2955 abc1234',
+		env_overrides={"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "CI,review / gate"},
 	)
 	assert result.returncode == 0, result.stderr
 	out = result.stdout.strip()
-	# Successful CI omitted; Copilot and Snyk both surface.
+	# Successful CI omitted; required failures + pending checks surface,
+	# but advisory failures outside the required set do not.
 	assert "CI" not in out
-	assert "Copilot (failure)" in out
+	assert "review / gate (failure)" in out
+	assert "Copilot (failure)" not in out
 	assert "Snyk (in_progress)" in out

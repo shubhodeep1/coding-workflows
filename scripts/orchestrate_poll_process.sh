@@ -247,27 +247,30 @@ assemble_judge_static_context() {
 # "Collect PR check-run failures" step.
 #
 # Usage:  _pr_checks_completed <PR_NUMBER> [<HEAD_SHA>] [<BASE_REF>]
-#   HEAD_SHA optional: when omitted, fetched from the PR (along with
-#   BASE_REF in the same call, per §15 API-hygiene).
-#   BASE_REF optional: when omitted and HEAD_SHA was provided, an extra
-#   PR fetch is issued to retrieve it for the required-checks lookup.
+#   HEAD_SHA optional: when omitted, fetched from the PR.
+#   BASE_REF optional: callers that pass it opt into the Layer-1
+#   required-checks filter. Legacy callers that omit BASE_REF keep the
+#   pre-Layer-1 "all check-runs must pass" behaviour.
 # ---------------------------------------------------------------
 _pr_checks_completed()
 {
 	local pr_number="$1"
 	local head_sha="${2:-}"
 	local base_ref="${3:-}"
+	local use_required_filter="false"
+	if [ "$#" -ge 3 ]; then
+		use_required_filter="true"
+	fi
 
-	# Fetch the PR JSON once if we need EITHER head_sha or base_ref
-	# from it. Avoids two separate calls for the integration-PR case
-	# where the caller only knows the PR number.
-	if [ -z "${head_sha}" ] || [ "${head_sha}" = "null" ] || [ -z "${base_ref}" ]; then
+	# Fetch the PR JSON once if we need the head SHA from it. Callers only
+	# opt into required-check filtering when they pass BASE_REF explicitly;
+	# every legacy caller that omits BASE_REF keeps the original fail-closed
+	# "all check-runs on the head SHA must pass" behaviour.
+	if [ -z "${head_sha}" ] || [ "${head_sha}" = "null" ]; then
 		local pr_json
 		pr_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" || echo "")"
-		if [ -z "${head_sha}" ] || [ "${head_sha}" = "null" ]; then
-			head_sha="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .head.sha?) then .head.sha else empty end' 2>/dev/null | tail -n1)"
-		fi
-		if [ -z "${base_ref}" ]; then
+		head_sha="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .head.sha?) then .head.sha else empty end' 2>/dev/null | tail -n1)"
+		if [ "${use_required_filter}" = "true" ] && [ -z "${base_ref}" ]; then
 			base_ref="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .base.ref?) then .base.ref else empty end' 2>/dev/null | tail -n1)"
 		fi
 	fi
@@ -277,7 +280,10 @@ _pr_checks_completed()
 	fi
 
 	local required_names_csv
-	required_names_csv="$(_pr_required_check_names_for_base "${base_ref}")"
+	required_names_csv="*"
+	if [ "${use_required_filter}" = "true" ]; then
+		required_names_csv="$(_pr_required_check_names_for_base "${base_ref}")"
+	fi
 
 	local check_runs_json
 	# Fallback to '{}' (NOT '[]') on API failure. The jq filter below has
@@ -349,11 +355,19 @@ _pr_checks_completed()
 	fi
 
 	if [ "${incomplete}" -gt 0 ]; then
-		echo "  [check-runs] PR #${pr_number} has ${incomplete} blocking required check-run(s) (SHA ${head_sha:0:7}, required-set=${required_names_csv}). Skipping merge."
+		if [ "${required_names_csv}" = "*" ]; then
+			echo "  [check-runs] PR #${pr_number} has ${incomplete} blocking check-run(s) (SHA ${head_sha:0:7}). Skipping merge."
+		else
+			echo "  [check-runs] PR #${pr_number} has ${incomplete} blocking required check-run(s) (SHA ${head_sha:0:7}, required-set=${required_names_csv}). Skipping merge."
+		fi
 		return 1
 	fi
 
-	echo "  [check-runs] All required check-runs completed and acceptable for PR #${pr_number} (SHA ${head_sha:0:7}). Proceeding with merge."
+	if [ "${required_names_csv}" = "*" ]; then
+		echo "  [check-runs] All check-runs completed and acceptable for PR #${pr_number} (SHA ${head_sha:0:7}). Proceeding with merge."
+	else
+		echo "  [check-runs] All required check-runs completed and acceptable for PR #${pr_number} (SHA ${head_sha:0:7}). Proceeding with merge."
+	fi
 	return 0
 }
 
@@ -533,13 +547,23 @@ _check_final_merge_ineligibility_alert()
 }
 
 # Helper: best-effort short summary of which check-runs would block the
-# orchestrator gate on this SHA. Used in the Layer 2 alert body. Returns
-# the empty string on API failure (the alert still fires; the body just
-# omits the blocker line).
+# final-merge gate on this SHA. Mirrors Layer 1's required-set filter so
+# advisory failures (for example Copilot) are not mislabeled as blockers
+# in the Layer 2 alert body. Returns the empty string on API failure (the
+# alert still fires; the body just omits the blocker line).
 _summarize_final_merge_blockers()
 {
 	local final_pr="$1"
 	local head_sha="$2"
+	local pr_json
+	local base_ref=""
+	local required_names_csv
+
+	if [[ "${final_pr}" =~ ^[0-9]+$ ]]; then
+		pr_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" 2>/dev/null || echo "")"
+		base_ref="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .base.ref?) then .base.ref else empty end' 2>/dev/null | tail -n1)"
+	fi
+	required_names_csv="$(_pr_required_check_names_for_base "${base_ref}")"
 
 	local check_runs_json
 	check_runs_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${GITHUB_REPOSITORY}/commits/${head_sha}/check-runs?per_page=100" 2>/dev/null || echo "")"
@@ -547,8 +571,32 @@ _summarize_final_merge_blockers()
 		echo ""
 		return 0
 	fi
+	if [ "${required_names_csv}" = "" ]; then
+		echo ""
+		return 0
+	fi
 
-	printf '%s' "${check_runs_json}" | jq -r '
+	if [ "${required_names_csv}" = "*" ]; then
+		printf '%s' "${check_runs_json}" | jq -r '
+			(
+				if (type == "array") then
+					[.[]? | (.check_runs // [])[]]
+				elif (type == "object" and (.check_runs | type == "array")) then
+					.check_runs
+				else
+					[]
+				end
+			)
+			| map(select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled")))
+			| map("\(.name) (\(.conclusion // .status))")
+			| unique
+			| join(", ")
+		' 2>/dev/null | tail -n1
+		return 0
+	fi
+
+	printf '%s' "${check_runs_json}" | jq -r --arg names "${required_names_csv}" '
+		($names | split(",") | map(gsub("^\\s+|\\s+$"; ""))) as $required |
 		(
 			if (type == "array") then
 				[.[]? | (.check_runs // [])[]]
@@ -558,7 +606,13 @@ _summarize_final_merge_blockers()
 				[]
 			end
 		)
-		| map(select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled")))
+		| map(select(
+			(.status != "completed")
+			or (
+				(.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled")
+				and (.name as $n | $required | index($n))
+			)
+		))
 		| map("\(.name) (\(.conclusion // .status))")
 		| unique
 		| join(", ")
