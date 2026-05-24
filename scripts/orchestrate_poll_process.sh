@@ -4676,6 +4676,8 @@ validation_history_gate_decision_for_current_sha() {
 	fi
 
 	printf '%s' "${history_json}" | jq -c --arg integration_sha "${integration_sha}" '
+		def raw_status_text:
+			(.raw_status | if type == "string" then ascii_downcase else "" end);
 		def ordering_key:
 			[(.recorded_at // ""), .__idx];
 		def is_pass:
@@ -4686,7 +4688,7 @@ validation_history_gate_decision_for_current_sha() {
 			| ($outcome == "failed" or $outcome == "fail");
 		(.validation_history.entries // []) as $entries
 		| ($entries | to_entries | map(.value + {__idx: .key})) as $indexed
-		| ($indexed | map(select(is_pass and (((.raw_status // "") | ascii_downcase) != "harness_error")))) as $passes
+		| ($indexed | map(select(is_pass and (raw_status_text != "harness_error")))) as $passes
 		| if ($passes | length) == 0 then
 			{
 				available: true,
@@ -4699,7 +4701,8 @@ validation_history_gate_decision_for_current_sha() {
 			| ($indexed
 				| map(select(
 					is_fail
-					and (((.raw_status // "") | ascii_downcase) != "harness_error")
+					and (raw_status_text != "")
+					and (raw_status_text != "harness_error")
 					and (ordering_key > [($latest_pass.recorded_at // ""), $latest_pass.__idx])
 				))) as $later_failures
 			| if ($later_failures | length) > 0 then

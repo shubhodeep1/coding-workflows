@@ -164,7 +164,7 @@ memory_validation_history_get()
 	{
 		_memory_warn "validation-history-get failed (fail-open)"
 		_memory_telemetry '{"op":"validation-history-get","ok":false,"fail_open":true,"source":"shell"}' >&2
-		echo '{"ok": true, "enabled": true, "hit": false, "validation_history": null}'
+		echo '{"ok": true, "enabled": true, "hit": false, "validation_history": null, "warning_code": "history_read_failed", "warning": "validation-history-get failed (shell wrapper fail-open)"}'
 		return 0
 	}
 }

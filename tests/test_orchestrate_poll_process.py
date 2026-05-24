@@ -558,6 +558,7 @@ def _run_poller(
 	compare_ahead_by: int = 0,
 	compare_ahead_by_force_error: bool = False,
 	mock_validation_history_payload: dict | None = None,
+	mock_validation_history_get_exit_code: int = 0,
 	mock_validation_history_get_json: dict | None = None,
 	mock_validation_history_append_json: dict | None = None,
 	mock_revalidate_events_payload: dict | None = None,
@@ -595,6 +596,7 @@ def _run_poller(
 	actions_runs_workflow_runs = actions_runs_workflow_runs or []
 	actions_runs_status_sequence = actions_runs_status_sequence or []
 	mock_validation_history_payload = dict(mock_validation_history_payload or {})
+	mock_validation_history_get_exit_code = int(mock_validation_history_get_exit_code or 0)
 	mock_validation_history_get_json = dict(mock_validation_history_get_json or {})
 	mock_validation_history_append_json = dict(mock_validation_history_append_json or {})
 	mock_branch_rebuild_audit_get_json = mock_branch_rebuild_audit_get_json or {}
@@ -727,6 +729,7 @@ def _run_poller(
 			"compare_ahead_by": int(compare_ahead_by),
 			"compare_ahead_by_force_error": bool(compare_ahead_by_force_error),
 			"mock_validation_history_payload": mock_validation_history_payload,
+			"mock_validation_history_get_exit_code": mock_validation_history_get_exit_code,
 			"mock_validation_history_get_json": mock_validation_history_get_json,
 			"mock_validation_history_append_json": mock_validation_history_append_json,
 			"mock_revalidate_events_payload": mock_revalidate_events_payload,
@@ -2144,6 +2147,9 @@ if len(args) >= 3 and _script_matches(args[0], "scripts/ai_memory.py") and args[
 		store.setdefault("mock_validation_history_get_calls", 0)
 		store["mock_validation_history_get_calls"] = int(store["mock_validation_history_get_calls"]) + 1
 		_save_store(store)
+		exit_code = int(store.get("mock_validation_history_get_exit_code", 0) or 0)
+		if exit_code != 0:
+			sys.exit(exit_code)
 		response = {
 			"ok": True,
 			"enabled": True,
@@ -3987,6 +3993,100 @@ def test_final_merge_legacy_validated_gate_fails_open_on_history_read_error():
 	assert 367 in result["pr_ready_calls"]
 	assert 367 in result.get("merged_prs", [])
 	assert "Validation history unavailable for integration SHA abcdef1234; falling back to legacy ai:validated gate (reason=history_read_failed)." in (result["stdout"] + result["stderr"])
+
+
+def test_final_merge_legacy_validated_gate_fails_open_on_shell_wrapper_history_read_error():
+	state = _base_state(status="merge_conflict")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 369,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		branch_ref_shas={"orchestrator/project-192": "abcdef1234"},
+		mock_validation_history_get_exit_code=1,
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert result.get("mock_validation_history_get_calls", 0) >= 1
+	assert 369 in result["pr_ready_calls"]
+	assert 369 in result.get("merged_prs", [])
+	assert "Validation history unavailable for integration SHA abcdef1234; falling back to legacy ai:validated gate (reason=history_read_failed)." in (result["stdout"] + result["stderr"])
+
+
+def test_final_merge_legacy_validated_gate_ignores_later_failure_without_raw_status():
+	state = _base_state(status="merge_conflict")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 370,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		branch_ref_shas={"orchestrator/project-192": "abcdef1234"},
+		mock_validation_history_payload=_validation_history_payload(
+			integration_sha="abcdef1234",
+			entries=[
+				{
+					"outcome": "passed",
+					"raw_status": "pass",
+					"raw_conclusion": "success",
+					"run_id": 9007,
+					"run_attempt": 1,
+					"run_url": "https://example.invalid/runs/9007",
+					"recorded_at": "2026-05-23T10:00:00Z",
+					"cycle": 1,
+					"context": "validation passed",
+					"source": "test",
+				},
+				{
+					"outcome": "failed",
+					"raw_status": None,
+					"raw_conclusion": "failure",
+					"run_id": 9008,
+					"run_attempt": 1,
+					"run_url": "https://example.invalid/runs/9008",
+					"recorded_at": "2026-05-23T11:00:00Z",
+					"cycle": 1,
+					"context": "validation failed",
+					"source": "test",
+				},
+			],
+		),
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert 370 in result["pr_ready_calls"]
+	assert 370 in result.get("merged_prs", [])
 
 
 def test_mark_validation_complete_fails_open_on_history_write_error():
