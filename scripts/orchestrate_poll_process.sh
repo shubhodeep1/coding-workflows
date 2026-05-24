@@ -1344,6 +1344,7 @@ if ! [[ "${MAX_FINAL_MERGE_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${MAX_FINAL_MERGE_ATT
   MAX_FINAL_MERGE_ATTEMPTS="3"
 fi
 
+
 # ORCH_FINAL_MERGE_REQUIRED_CHECKS controls which check-runs the
 # orchestrator's _pr_checks_completed gate treats as blocking when deciding
 # whether to attempt the final integration→default squash merge inside
@@ -4468,6 +4469,21 @@ else:
   return 0
 }
 
+project_is_validation_origin_terminal_failure() {
+	local project_status="${1:-${PROJECT_STATUS:-}}"
+	local tracking_labels="${2:-${TRACKING_LABELS:-[]}}"
+
+	if [ "${project_status}" = "validation-failed" ]; then
+		return 0
+	fi
+	if [ "${project_status}" != "failed" ]; then
+		return 1
+	fi
+	has_label "${tracking_labels}" "ai:validation-failed" \
+		|| has_label "${tracking_labels}" "ai:validate-failed" \
+		|| has_label "${tracking_labels}" "ai:harness-broken"
+}
+
 maybe_apply_force_merge_bypass() {
 	local final_pr="$1"
 	local integration_branch="$2"
@@ -4513,8 +4529,11 @@ maybe_apply_force_merge_bypass() {
 	[[ "${ahead_by}" =~ ^[0-9]+$ ]] || return 1
 	[ "${ahead_by}" -gt 0 ] || return 1
 	case "${PROJECT_STATUS:-}" in
-		complete|failed|validation-failed)
+		complete)
 			return 1
+			;;
+		failed|validation-failed)
+			project_is_validation_origin_terminal_failure "${PROJECT_STATUS:-}" "${TRACKING_LABELS:-[]}" || return 1
 			;;
 	esac
 
@@ -12546,6 +12565,14 @@ The poller will resume processing on the next cycle."
       if [ "${_completion_status_failed_observation_rc}" -eq 1 ]; then
         set_failed_completion_status_comment \
           "Project is in a terminal \`failed\` state. Manual intervention required. See the latest failure comment on this tracking issue for the diagnostic detail."
+      fi
+      if has_label "${TRACKING_LABELS}" "ai:force-merge" \
+        && project_is_validation_origin_terminal_failure "${PROJECT_STATUS}" "${TRACKING_LABELS}"; then
+        _terminal_force_merge_final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+        if [[ "${_terminal_force_merge_final_pr}" =~ ^[0-9]+$ ]]; then
+          compute_cycle_integration_ahead_by
+          maybe_apply_force_merge_bypass "${_terminal_force_merge_final_pr}" "${CWS_INTEGRATION_BRANCH}" "${CWS_AHEAD_BY}" || true
+        fi
       fi
     fi
     echo "Project already ${PROJECT_STATUS}, skipping."

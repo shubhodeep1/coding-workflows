@@ -434,7 +434,10 @@ jobs:
             run_ledger_entry.v1.json \
             task_lineage.v1.json \
             actions_runs_cache.v1.json \
-            workflow_log_analysis_cache.v1.json; do
+            workflow_log_analysis_cache.v1.json \
+            validation_history.v1.json \
+            operator_bypass_audit.v1.json \
+            revalidate_events.v1.json; do
             if [ ! -f "ai-memory/schemas/${sf}" ]; then
               schema_tmp="ai-memory/schemas/${sf}.tmp"
               if copy_from_ref_or_local "ai-memory/schemas/${sf}" "${schema_tmp}" "false" "true"; then
