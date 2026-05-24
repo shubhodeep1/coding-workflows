@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:5508 | severity=medium | confidence=4\n  flagged_by: [qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: The step-scoped `ALERT_MSG_LEVEL` override treats an explicitly-set empty `PR_PROCESSED_ALERT_LEVEL` as missing and falls back to `SILENT`, so an explicit empty-string suppression choice is ignored.\n  WHY: Both reviewers report that the GitHub Actions `||` fallback collapses empty-string and unset values, contrary to the documented explicit-override contract; x-ai rates the issue confidence 4 and qwen rates it 3.\n- .github/workflows/review_autofix.yml:5504-5513 | severity=medium | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The LAST RUN DIFF reintroduces the shared `ALERT_MSG_LEVEL` pattern and associated docs/CHANGELOG wording instead of keeping the dedicated `PR_PROCESSED_ALERT_LEVEL` behavior.\n  WHY: The reviewer says this regression restores the noisy `PR processed: #N` DEBUG ping on every successful iteration and makes the documented exception contract no longer match the code.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Automated forward-merge of stable into main failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on stable is also present on main.\"\n  expected_change_site: The originally-conflicting files listed in the PR description (`.github/workflows/ci.yml`, `mark-stable.yml`, `review_autofix.yml`, `test-and-mark-stable.yml`, `README.md`, plus the listed scripts/tests)\n  confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: LAST RUN DIFF and current HEAD after this autofix only touch the three alert-level documentation/workflow files; none of the original five conflicting workflow/script/test files appear in LAST RUN DIFF or PR CHANGED FILES beyond the three docs.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- File: .github/workflows/review_autofix.yml\n  Line or code reference: 5508 (`ALERT_MSG_LEVEL: ${{ vars.PR_PROCESSED_ALERT_LEVEL || 'SILENT' }}`)\n  Problem: The step-scoped `ALERT_MSG_LEVEL` override falls back to `SILENT` when `vars.PR_PROCESSED_ALERT_LEVEL` is unset or empty, treating an explicit empty string and a missing var identically.\n  Why it fails at runtime: If a consumer repo explicitly sets `vars.PR_PROCESSED_ALERT_LEVEL` to an empty string as an intentional suppression signal, the `||` operator still treats it as falsy in the GitHub Actions expression language and defaults to `SILENT`, so the intended explicit override is silently ignored.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: .github/workflows/review_autofix.yml\n  Line or code reference: 5508 (env block for Telegram success step)\n  Problem: The step-scoped `ALERT_MSG_LEVEL: ${{ vars.PR_PROCESSED_ALERT_LEVEL || 'SILENT' }}` treats an explicitly-set empty `PR_PROCESSED_ALERT_LEVEL` as \"missing\" and forces `SILENT`, whereas the contract documented for `update_workflows.yml` (and the prior forward-merge intent) expects an empty-string override to be an explicit choice.\n  Why it fails at runtime: A consumer setting `PR_PROCESSED_ALERT_LEVEL=` to suppress the ping (while keeping other DEBUG alerts) will silently receive `SILENT` instead of the explicit intent, breaking the documented isolation.\n  ISSUE_CONFIDENCE: 4\n- File: .github/workflows/review_autofix.yml (and mirrored in README.md / CHANGELOG.md)\n  Line or code reference: 5504-5513 (step env + comment)\n  Problem: This LAST RUN DIFF reverts the dedicated `PR_PROCESSED_ALERT_LEVEL` default (introduced by the immediately-prior autofix) back to the shared `ALERT_MSG_LEVEL` pattern that the forward-merge was cleaning up. The accompanying documentation and CHANGELOG entry are also reverted.\n  Why it fails at runtime: Orchestrator-driven branches will again emit a noisy `PR processed: #N` DEBUG ping on every successful iteration (the exact noise the forward-merge PR and prior autofix were meant to eliminate). The documented exception contract for `review_autofix.yml` no longer matches the code; consumers relying on the `PR_PROCESSED_ALERT_LEVEL=DEBUG` opt-in will be surprised.\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Automated forward-merge of `stable` into `main` failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`.\" (with explicit ancestry preservation note).\n  Expected change site: The originally-conflicting files listed in the PR description (`.github/workflows/ci.yml`, `mark-stable.yml`, `review_autofix.yml`, `test-and-mark-stable.yml`, `README.md`, plus the listed scripts/tests).\n  Evidence of absence: LAST RUN DIFF (and current HEAD after this autofix) only touches the three alert-level documentation/workflow files. The bulk merge-resolve commit (`bc4f246`) landed earlier, but the regression introduced by the preceding `[ai-autofix]` run (the `PR_PROCESSED_ALERT_LEVEL` reversion) was re-applied here instead of being left resolved; none of the original five conflicting workflow/script/test files appear in LAST RUN DIFF or PR CHANGED FILES beyond the three docs.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "6283058e58b2e299d31c832e4bf952c002b042aab1357ca8845737d4293c00e9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2954,
+    "run_id": "26363832603",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26363832603",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260524145004_f50aeb072c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2954,
+    "run_id": "26363832603"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-24T14:50:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
