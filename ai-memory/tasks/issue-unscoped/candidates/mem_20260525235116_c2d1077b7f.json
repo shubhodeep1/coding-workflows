@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:16806-16829 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: The `_is_retry_artifact` jq predicate only matches the literal `review / codex-agent`, so suffixed variants like `review / codex-agent (claude-branch-review)` are not excluded from Gate D.\n  WHY: This lets stale or cancelled claude-branch-review check-runs count as blocking required checks, so the noop-suspicious force-merge recovery sweep can wrongly refuse to proceed.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:16809 and 16829 | severity=medium | confidence=4\n  PROBLEM: The `_is_retry_artifact` filter uses exact string equality `(.name // \"\") == \"review / codex-agent\"`, which does not match the claude-branch-review variant `review / codex-agent (claude-branch-review)`.\n  WHY: A stale failing or cancelled `review / codex-agent (claude-branch-review)` check-run will still block Gate D of the noop-suspicious force-merge path.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/orchestrate_poll_process.sh:16809 and 16829 | severity=medium | confidence=4\n  PROBLEM: The `_is_retry_artifact` jq filter uses exact string equality against `\"review / codex-agent\"`, so `\"review / codex-agent (claude-branch-review)\"` is not excluded from the blocking check-run set.\n  WHY: A stale or failed `review / codex-agent (claude-branch-review)` check-run will be treated as a blocking required check, preventing the recovery sweep from force-merging the PR.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_poll_process.sh:16809 and 16826 | severity=medium | confidence=3\n  PROBLEM: The `_is_retry_artifact` filter uses exact string equality `== \"review / codex-agent\"` which will not match check-run names with additional suffixes like `review / codex-agent (claude-branch-review)`.\n  WHY: A stale check-run with a suffixed name will not be excluded from the blocking check set, causing Gate D to incorrectly block the noop-suspicious force-merge recovery path.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/orchestrate_poll_process.sh:16806-16813 | severity=medium | confidence=4\n  PROBLEM: The filter only matches the literal string `\"review / codex-agent\"`, so it will not exclude variants such as `review / codex-agent (claude-branch-review)` or any other suffixed/in-progress check-run name produced by the reviewer matrix.\n  WHY: A stale/cancelled claude-branch-review or similar retry artifact can still count as a blocking required check, preventing the noop-suspicious force-merge recovery sweep from proceeding.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "913aa3cdb12a34a0cf7315c37d4002561f9aa379dbe19759102fe5f4638e7eca",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2954,
+    "run_id": "26423532669",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26423532669",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260525235116_c2d1077b7f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2954,
+    "run_id": "26423532669"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-25T23:51:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
