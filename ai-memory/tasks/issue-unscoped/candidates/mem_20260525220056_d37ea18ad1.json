@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Resolve the five-file merge conflict set from `.github/workflows/ci.yml .github/workflows/mark-stable.yml .github/workflows/review_autofix.yml .github/workflows/test-and-mark-stable.yml README.md` introduced by the forward-merge conflict so that the bug fix on `stable` is also present on `main`.\n  expected_change_site: `.github/workflows/ci.yml`, `.github/workflows/mark-stable.yml`, `.github/workflows/review_autofix.yml`, `.github/workflows/test-and-mark-stable.yml` (in addition to `README.md` which the full PR diff does touch)\n  confidence=[4]\n  flagged_by: [minimax_minimax-m2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  EVIDENCE: The ORIGINAL PR DIFF and LAST RUN DIFF contain no hunks for `.github/workflows/ci.yml`, `.github/workflows/mark-stable.yml`, `.github/workflows/review_autofix.yml`, or `.github/workflows/test-and-mark-stable.yml`. The PR diff only covers six files: `agents.md`, `probably_unnecessary_but_read_if_stuck.md`, `scripts/orchestrate_poll_process.sh`, `scripts/review_apply_fixes.sh`, `tests/test_orchestrate_poll_process.py`, and `tests/test_review_autofix_editor_noop_cascade_contract.py`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- Requirement: Resolve the five-file merge conflict set from `.github/workflows/ci.yml .github/workflows/mark-stable.yml .github/workflows/review_autofix.yml .github/workflows/test-and-mark-stable.yml README.md` introduced by the forward-merge conflict so that the bug fix on stable is also present on main.\n  Expected change site: `.github/workflows/ci.yml .github/workflows/mark-stable.yml .github/workflows/review_autofix.yml .github/workflows/test-and-mark-stable.yml README.md`\n  Evidence of absence: `git diff origin/main...HEAD -- .github/workflows/` returns empty - there are NO differences in workflow files between the branch and main.\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- Requirement: Resolve the five-file merge conflict set from `.github/workflows/ci.yml .github/workflows/mark-stable.yml .github/workflows/review_autofix.yml .github/workflows/test-and-mark-stable.yml README.md` introduced by the forward-merge conflict so that the bug fix on `stable` is also present on `main`.\n  Expected change site: `.github/workflows/ci.yml`, `.github/workflows/mark-stable.yml`, `.github/workflows/review_autofix.yml`, `.github/workflows/test-and-mark-stable.yml` (in addition to `README.md` which the full PR diff does touch)\n  Evidence of absence: The ORIGINAL PR DIFF and LAST RUN DIFF contain no hunks for `.github/workflows/ci.yml`, `.github/workflows/mark-stable.yml`, `.github/workflows/review_autofix.yml`, or `.github/workflows/test-and-mark-stable.yml`. The PR diff only covers six files: `agents.md`, `probably_unnecessary_but_read_if_stuck.md`, `scripts/orchestrate_poll_process.sh`, `scripts/review_apply_fixes.sh`, `tests/test_orchestrate_poll_process.py`, and `tests/test_review_autofix_editor_noop_cascade_contract.py`.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: Resolve the merge conflicts in the five listed files (`.github/workflows/ci.yml`, `.github/workflows/mark-stable.yml`, `.github/workflows/review_autofix.yml`, `.github/workflows/test-and-mark-stable.yml`, README.md) that arose from the forward-merge of stable\u2192main so that bug fixes present on stable also exist on main.\n  Expected change site: The workflow files and README.md should contain reconciled changes from the stable branch (the PR intent explicitly lists these as the conflicting set).\n  Evidence of absence: The PR diff (and LAST RUN DIFF) contains **no hunks** for any of the four workflow `.yml` files; only post-merge cleanup touches to `agents.md`, `probably_unnecessary_but_read_if_stuck.md`, `scripts/orchestrate_poll_process.sh`, `scripts/review_apply_fixes.sh`, and two test files are present.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "07dba21fadc2f14c7eb4407cabfce7cbeda8e60b810de6aca3304baaaa2bf519",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2954,
+    "run_id": "26421191391",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26421191391",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260525220056_d37ea18ad1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2954,
+    "run_id": "26421191391"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-25T22:00:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
