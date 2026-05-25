@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:~263 | confidence=2\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The `PR_PROCESSED_ALERT_LEVEL` row was added to `agents.md`, but the canonical alert-level knob documentation lives elsewhere, creating documentation drift.\n  WHY: No runtime breakage, but the repo now has inconsistent docs for alert-level knobs and the cross-reference/runbook remains unsynced.\n- scripts/orchestrate_poll_process.sh:10542-10557,~10794 | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The GraphQL-sourced `head.sha` cache seeding can still drop the SHA on transient null/whitespace values, allowing the blank-head re-fetch path to race an already-queued review run.\n  WHY: The reviewer says the cached JSON only adds `sha` when extracted value is non-empty, so transient GraphQL nulls can reintroduce the race under load.\n- scripts/review_apply_fixes.sh:1407-1414,1682-1699 | confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: An empty or truncated `tmp_output` can bypass the first-non-empty-line refusal check, misclassifying a true refusal as a valid structured summary.\n  WHY: Both the structured-validation block and retry short-circuit rely on the captured first non-empty line, and blank/whitespace-only output can skip the refusal sentinel.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`.\"\n  expected_change_site: merge-resolve commit / forward-merge ancestry for all originally conflicting files\n  confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: `git diff --stat origin/main...HEAD` (and the last_run_diff_stat) shows only the nine documentation/test-orchestrator files; the workflow and script files listed in the PR description still carry the stable-side changes that were never re-applied on main after the initial merge-resolve.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: scripts/orchestrate_poll_process.sh (lines 10542-10557 in last_run_diff, matching hunk in PR diff)\n  Line or code reference: `_std_cached_head_sha` extraction + `jq -cn` cache-seeding block (and its mirror at ~10794)\n  Problem: The GraphQL-sourced `head.sha` is now seeded into `_STD_ITER_PR_JSON_CACHED`, but the downstream `# Widen the REST-fallback trigger` comment and later re-fetch logic still treat a completely blank `head_branch` as the sole signal for \"in-flight review run\". When the `pulls/{n}` re-fetch is forced to fail (as covered by the new test), the blank-head guard can still race an empty-commit push against an already-queued `workflow_dispatch` review run.\n  Why it fails at runtime: The test `test_standalone_retrigger_review_uses_graphql_head_sha_when_pulls_refetch_fails` asserts zero pushes, but the cached JSON construction only adds `sha` when the extracted value is non-empty; transient GraphQL nulls or whitespace can still drop the SHA, letting the race re-occur under load.\n  ISSUE_CONFIDENCE: 4\n- File: scripts/review_apply_fixes.sh (lines 1407-1414 and 1682-1699)\n  Line or code reference: `_tmp_output_first_nonempty_line` capture + `printf '%s\\n' \"${_tmp_output_first_nonempty_line}\" | grep -qiE` (both the structured-validation block and the retry short-circuit)\n  Problem: The first-non-empty-line scoping is present, but `grep -m1 -vE '^[[:space:]]*$'` can produce an empty string on a completely blank `tmp_output` (or when the file is truncated mid-write by the watchdog). The downstream `if printf ... | grep` then silently succeeds (no refusal match), so a true refusal that happens to be on line 2+ can be misclassified as a valid structured summary.\n  Why it fails at runtime: The editor refusal short-circuit and the later `EDITOR_NOOP_REFUSAL` validator both rely on this capture; a partially-written or whitespace-only output would bypass the sentinel, letting the refusal fallback marker be omitted and the orchestrator poller treat the run as \"suspicious noop\" instead of \"model refused \u2014 re-run after cache expiry\". The new test only exercises a full refusal example, not the empty-output edge.\n  ISSUE_CONFIDENCE: 3\n- File: agents.md (new row at ~263)\n  Line or code reference: `| `PR_PROCESSED_ALERT_LEVEL` | `SILENT` | \u2026`\n  Problem: The variable was added to the review-pipeline table in this PR, but the canonical doc location for alert-level knobs (including the `ALERT_MSG_LEVEL` defaulting logic and the `update_workflows.yml` exception) is `probably_unnecessary_but_read_if_stuck.md` \u00a720.4 and the top-level variables table in README.md. Duplicating the row without updating the runbook cross-reference creates a documentation drift that future refactors will miss.\n  Why it fails at runtime: No runtime breakage, but the contract-test `test_noop_warning_literal_present_in_poller()` style of lockstep checking cannot catch it; operators will see inconsistent docs when they grep for alert-level knobs.\n  ISSUE_CONFIDENCE: 2 (pure documentation, low operational risk)\n- Requirement: \"Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`.\" (from the PR description) plus the explicit list of conflicting files including `.github/workflows/ci.yml`, `mark-stable.yml`, `review_autofix.yml`, `test-and-mark-stable.yml`, `README.md`, `scripts/ai_memory_lib.py`, `orchestrate_*`, `review_*`, and multiple test files.\n  Expected change site: The merge-resolve commit should have produced a clean ancestry-preserving merge commit containing forward-merged content for **all** originally conflicting files.\n  Evidence of absence: `git diff --stat origin/main...HEAD` (and the last_run_diff_stat) shows only the nine documentation/test-orchestrator files; the workflow and script files listed in the PR description still carry the stable-side changes that were never re-applied on main after the initial merge-resolve.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "b1af02d013661d57a216d4b7e31c78a0309df58c3dc715cbc276419a3e9fd320",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2954,
+    "run_id": "26413558565",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26413558565",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260525181841_143ab97ccb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2954,
+    "run_id": "26413558565"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-25T18:18:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
