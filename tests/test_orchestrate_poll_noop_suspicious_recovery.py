@@ -279,8 +279,8 @@ def test_sweep_force_merge_gate_d_checks_required_checks():
 		assert conclusion in sweep, (
 			f"Gate D must treat conclusion={conclusion} as a blocker."
 		)
-	assert '(.name // "") == "review / codex-agent"' in sweep, (
-		"Gate D must recognize stale `review / codex-agent` retry artifacts."
+	assert 'startswith("review / codex-agent")' in sweep, (
+		"Gate D must match stale `review / codex-agent` retry artifacts by prefix so suffixed variants stay excluded."
 	)
 	assert "_is_retry_artifact | not" in sweep, (
 		"Gate D must exclude stale `review / codex-agent` retry artifacts from the blocker set."

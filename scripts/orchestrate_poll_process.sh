@@ -16806,7 +16806,7 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 		|| echo '{}')"
 
 	_failing_check_count="$(printf '%s' "${N_CHECKS_JSON}" | jq -r '
-		def _is_retry_artifact: (.name // "") == "review / codex-agent";
+		def _is_retry_artifact: (.name // "") | startswith("review / codex-agent");
 		def _is_blocking: (_is_retry_artifact | not) and .status == "completed" and (
 			.conclusion == "failure" or .conclusion == "cancelled" or
 			.conclusion == "timed_out" or .conclusion == "action_required"
@@ -16826,7 +16826,7 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 	fi
 
 	_failing_check="$(printf '%s' "${N_CHECKS_JSON}" | jq -r '
-		def _is_retry_artifact: (.name // "") == "review / codex-agent";
+		def _is_retry_artifact: (.name // "") | startswith("review / codex-agent");
 		def _is_blocking: (_is_retry_artifact | not) and .status == "completed" and (
 			.conclusion == "failure" or .conclusion == "cancelled" or
 			.conclusion == "timed_out" or .conclusion == "action_required"
