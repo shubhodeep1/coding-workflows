@@ -16789,6 +16789,12 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 	fi
 
 	# Gate D: required checks must not be failing.
+	# Ignore completed `review / codex-agent` artifacts here: this
+	# sweep exists specifically to recover repeated noop-suspicious
+	# review_autofix runs on the same head SHA, so counting those stale
+	# host-job failures/cancellations as blockers self-deadlocks the
+	# force-merge path. GitHub branch protection still gates the actual
+	# auto-merge if a real required check is failing.
 	if [ -z "${N_HEAD_SHA}" ]; then
 		tg_send_msg "Noop-suspicious force-merge gate D failed for PR #${N_PR}: head SHA missing. Leaving PR for human review."$'\n'"PR: $(_gh_url "pull/${N_PR}")" "ERROR" >/dev/null 2>&1 || true
 		NOOP_RECOVERY_BLOCKED=$((NOOP_RECOVERY_BLOCKED + 1))
@@ -16800,7 +16806,8 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 		|| echo '{}')"
 
 	_failing_check_count="$(printf '%s' "${N_CHECKS_JSON}" | jq -r '
-		def _is_blocking: .status == "completed" and (
+		def _is_retry_artifact: (.name // "") == "review / codex-agent";
+		def _is_blocking: (_is_retry_artifact | not) and .status == "completed" and (
 			.conclusion == "failure" or .conclusion == "cancelled" or
 			.conclusion == "timed_out" or .conclusion == "action_required"
 		);
@@ -16819,7 +16826,8 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 	fi
 
 	_failing_check="$(printf '%s' "${N_CHECKS_JSON}" | jq -r '
-		def _is_blocking: .status == "completed" and (
+		def _is_retry_artifact: (.name // "") == "review / codex-agent";
+		def _is_blocking: (_is_retry_artifact | not) and .status == "completed" and (
 			.conclusion == "failure" or .conclusion == "cancelled" or
 			.conclusion == "timed_out" or .conclusion == "action_required"
 		);

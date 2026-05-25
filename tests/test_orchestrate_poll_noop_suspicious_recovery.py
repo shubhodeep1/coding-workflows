@@ -271,14 +271,20 @@ def test_sweep_force_merge_gate_skips_when_no_productive_commit():
 
 def test_sweep_force_merge_gate_d_checks_required_checks():
 	"""Gate D blocks force-merge when any completed required check is
-	failure/cancelled/timed_out/action_required. Mirrors the workflow's
-	own auto-merge safety (it would not auto-merge a PR with failing
-	checks either)."""
+	failure/cancelled/timed_out/action_required, but it must ignore the
+	stale `review / codex-agent` retry artifacts that the noop-suspicious
+	recovery loop is explicitly trying to heal."""
 	sweep = _sweep_block()
 	for conclusion in ("failure", "cancelled", "timed_out", "action_required"):
 		assert conclusion in sweep, (
 			f"Gate D must treat conclusion={conclusion} as a blocker."
 		)
+	assert '(.name // "") == "review / codex-agent"' in sweep, (
+		"Gate D must recognize stale `review / codex-agent` retry artifacts."
+	)
+	assert "_is_retry_artifact | not" in sweep, (
+		"Gate D must exclude stale `review / codex-agent` retry artifacts from the blocker set."
+	)
 
 
 def test_sweep_skips_orchestrator_project_branches():
