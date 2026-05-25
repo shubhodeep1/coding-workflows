@@ -16596,6 +16596,34 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 	if [[ "${N_BASE}" == orchestrator/project-* ]] || [[ "${N_HEAD}" == orchestrator/project-* ]]; then
 		continue
 	fi
+	# Skip forward-merge fallback PRs opened by
+	# `.github/workflows/forward-merge-stable-to-main.yml` when the
+	# automated `stable`→`main` merge hits conflict or branch
+	# protection. Head ref is hard-coded as
+	# `auto/forward-merge-stable-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}`
+	# at forward-merge-stable-to-main.yml:255. These PRs MUST be
+	# merged via GitHub's "Create a merge commit" button — NOT
+	# squash/rebase — so the 2-parent merge keeps `stable`'s tip
+	# reachable from `main`. The retry path here would burn API
+	# budget invoking review_autofix repeatedly (the workflow's own
+	# "Enable auto-merge on PR" step suppresses auto-merge for this
+	# head-ref prefix, so the noop-suspicious flag never clears via
+	# a productive [ai-autofix] commit); worse, the force-merge
+	# fallback below executes `gh pr merge --squash --auto`, which
+	# silently strips that ancestry. promote-main-to-stable.yml's
+	# pre-flight `git merge-base --is-ancestor HEAD origin/main`
+	# check then refuses the next promote run (see
+	# `.github/workflows/promote-main-to-stable.yml:115-126` and the
+	# CAUTION banner injected into every fallback PR body at
+	# `.github/workflows/forward-merge-stable-to-main.yml:265-270`).
+	# Mirrors the existing suppressors in `review_autofix.yml`'s
+	# codex-agent "Enable auto-merge on PR" step (line ~5127) and
+	# the `deterministic-skip-merge` sibling job (line ~697). The
+	# pattern is hard-coded — the branch prefix is owned by the
+	# forward-merge workflow and never varies per repo.
+	if [[ "${N_HEAD}" == auto/forward-merge-stable-* ]]; then
+		continue
+	fi
 
 	# ── Step 1: pre-filter via comments scan ──
 	# Fetch up to 100 most-recent comments. Noop-suspicious warnings

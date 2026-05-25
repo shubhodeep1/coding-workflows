@@ -291,6 +291,56 @@ def test_sweep_skips_orchestrator_project_branches():
 	)
 
 
+def test_sweep_skips_forward_merge_fallback_prs():
+	"""Forward-merge fallback PRs (head ref `auto/forward-merge-stable-*`,
+	opened by `.github/workflows/forward-merge-stable-to-main.yml`) MUST
+	be merged via GitHub's "Create a merge commit" button so the
+	2-parent merge keeps `stable`'s tip reachable from `main`. The
+	sweep's force-merge path executes `gh pr merge --squash --auto`,
+	which silently strips that ancestry and trips
+	`promote-main-to-stable.yml`'s pre-flight
+	`git merge-base --is-ancestor` check on the next promote run.
+
+	`review_autofix.yml`'s codex-agent "Enable auto-merge on PR" step
+	and the `deterministic-skip-merge` sibling job both already
+	suppress auto-merge for this head-ref prefix, so the noop counter
+	never clears via a productive [ai-autofix] commit on this PR
+	class — the sweep would otherwise loop forever then force-merge
+	the very thing the workflow chain is designed to protect.
+	"""
+	sweep = _sweep_block()
+	assert '[[ "${N_HEAD}" == auto/forward-merge-stable-* ]]' in sweep, (
+		"Sweep must explicitly skip PRs whose head ref matches "
+		"`auto/forward-merge-stable-*` so the force-merge `--squash --auto` "
+		"path cannot strip the 2-parent ancestry that "
+		"`promote-main-to-stable.yml` relies on. Mirrors the existing "
+		"suppressors in `.github/workflows/review_autofix.yml`."
+	)
+
+
+def test_sweep_forward_merge_skip_precedes_api_calls():
+	"""The forward-merge skip MUST sit alongside the
+	`orchestrator/project-*` skip, before the per-PR comments fetch.
+	Otherwise every forward-merge fallback PR burns a paginated
+	`issues/<n>/comments` GraphQL/REST round-trip every poll cycle
+	(§15), and a transient API failure on that call could allow the
+	force-merge path to fire on the very PR class it's supposed to
+	skip."""
+	sweep = _sweep_block()
+	forward_skip_idx = sweep.find('[[ "${N_HEAD}" == auto/forward-merge-stable-* ]]')
+	comments_fetch_idx = sweep.find('issues/${N_PR}/comments')
+	assert forward_skip_idx != -1, "Forward-merge skip must exist (covered by sibling test)."
+	assert comments_fetch_idx != -1, (
+		"Sweep must still fetch issue comments — the pre-filter is "
+		"the whole point of the cheap-path check."
+	)
+	assert forward_skip_idx < comments_fetch_idx, (
+		"Forward-merge skip must precede the per-PR comments fetch so "
+		"this PR class costs zero extra API calls and cannot fail open "
+		"on a transient comments-fetch error."
+	)
+
+
 def test_sweep_counts_only_post_productive_warnings():
 	"""The retry counter is "noop warnings newer than latest
 	[ai-autofix] / [judge-fix] commit". This is the implicit reset on
