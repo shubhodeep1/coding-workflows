@@ -18,7 +18,7 @@ Hard constraints:
   test-runner config) before omitting a required slot.
 
 Expected YAML shape (top-level `type` and `slots` are REQUIRED; everything else is optional):
-- `type` (REQUIRED): one of the renderer-supported template families — `python-mongo-flask` | `python-mongo-repo-checks` | `python-repo-checks` | `node-hardhat-solidity`. Pick the closest match for the repo; do not invent other values (the renderer rejects unknown families with `FamilyResolutionError`).
+- `type` (REQUIRED): one of the renderer-supported template families — `python-mongo-flask` | `python-mongo-repo-checks` | `python-repo-checks` | `node-hardhat-solidity` | `node-runtime`. Pick the closest match for the repo; do not invent other values (the renderer rejects unknown families with `FamilyResolutionError`). Selection guidance: pick `node-hardhat-solidity` only when the repo actually has `hardhat.config.*` (or `foundry.toml`) anywhere in the tree; pick `node-runtime` for Node/JS/TS repos with `package.json` but no Hardhat/Foundry config (test runners like `npm test`, `npm --workspace=... run test`, jest, vitest, mocha, playwright). For Python repos, prefer `python-mongo-flask` when a Flask app is present with MongoDB usage, `python-mongo-repo-checks` for Python+MongoDB without a serving app, `python-repo-checks` for plain Python repo-level checks.
 - `slots` (REQUIRED, mapping):
   - `project_name` (REQUIRED, non-empty string): short identifier used by rendered compose/test files (e.g. the repo or service slug).
   - `canary_tools` (REQUIRED, non-empty list of strings): tools the canary test must verify are runnable inside the harness container (e.g. `["python", "pip"]` for Python repos, `["node", "npx"]` for Node repos).

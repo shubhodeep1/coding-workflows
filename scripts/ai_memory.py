@@ -18,6 +18,7 @@ from ai_memory_lib import (
     MemoryValidationError,
     append_operator_bypass_audit_entry,
     append_revalidate_event,
+    append_validation_discovery_entry,
     append_validation_history_entry,
     claim_processed_command,
     compact_memory,
@@ -31,6 +32,7 @@ from ai_memory_lib import (
     get_operator_bypass_audit,
     get_processed_command_entry,
     get_revalidate_events,
+    get_validation_discovery,
     get_validation_history,
     list_processed_command_entries,
     parse_bool,
@@ -475,6 +477,14 @@ def _emit_validation_history_fallback(*, mode: str, reason: str, repo: str, inte
     print(
         "::warning::validation_history_fallback "
         f"helper=validation_history mode={mode} reason={reason} repo={repo} integration_sha={integration_sha}",
+        file=sys.stderr,
+    )
+
+
+def _emit_validation_discovery_fallback(*, mode: str, reason: str, repo: str) -> None:
+    print(
+        "::warning::validation_discovery_fallback "
+        f"helper=validation_discovery mode={mode} reason={reason} repo={repo}",
         file=sys.stderr,
     )
 
@@ -1129,6 +1139,135 @@ def cmd_validation_history_append(args: argparse.Namespace) -> int:
                 "enabled": True,
                 "stored": False,
                 "validation_history": None,
+                "warning": _sanitize_git_error(str(exc)),
+            }
+        )
+        return 0
+
+
+def cmd_validation_discovery_get(args: argparse.Namespace) -> int:
+    args = _read_env_defaults(args)
+    repository = _require_nonempty(args.repo, "repo")
+    if not args.enabled:
+        _print_json({"ok": True, "enabled": False, "hit": False, "validation_discovery": None})
+        return 0
+
+    repo_root = _resolve_repo_root(args.repo_root)
+    branch_dir = None
+    try:
+        branch_dir = read_memory_root_from_branch(
+            repo_root,
+            memory_branch=args.memory_branch,
+            memory_root_relative=args.memory_root,
+        )
+        memory_root = _resolve_memory_root(branch_dir, args.memory_root)
+        try:
+            validation_discovery = get_validation_discovery(memory_root, repository)
+        except (MemoryValidationError, json.JSONDecodeError, OSError, ValueError) as exc:
+            _emit_validation_discovery_fallback(
+                mode="get", reason="discovery_corrupt", repo=repository
+            )
+            _print_json(
+                {
+                    "ok": True,
+                    "enabled": True,
+                    "hit": False,
+                    "validation_discovery": None,
+                    "warning_code": "discovery_corrupt",
+                    "warning": _sanitize_git_error(str(exc)),
+                }
+            )
+            return 0
+        _print_json(
+            {
+                "ok": True,
+                "enabled": True,
+                "hit": bool(validation_discovery),
+                "validation_discovery": validation_discovery,
+            }
+        )
+        return 0
+    except MemoryGitError as exc:
+        error_text = _sanitize_git_error(str(exc))
+        if _is_missing_memory_branch_error(error_text):
+            _print_json(
+                {
+                    "ok": True,
+                    "enabled": False,
+                    "hit": False,
+                    "validation_discovery": None,
+                    "warning": error_text,
+                }
+            )
+            return 0
+        _emit_validation_discovery_fallback(
+            mode="get", reason="discovery_read_failed", repo=repository
+        )
+        _print_json(
+            {
+                "ok": True,
+                "enabled": True,
+                "hit": False,
+                "validation_discovery": None,
+                "warning_code": "discovery_read_failed",
+                "warning": error_text,
+            }
+        )
+        return 0
+    finally:
+        if branch_dir:
+            shutil.rmtree(branch_dir, ignore_errors=True)
+
+
+def cmd_validation_discovery_append(args: argparse.Namespace) -> int:
+    args = _read_env_defaults(args)
+    repository = _require_nonempty(args.repo, "repo")
+    if not args.enabled:
+        _print_json({"ok": True, "enabled": False, "stored": False, "validation_discovery": None})
+        return 0
+
+    repo_root = _resolve_repo_root(args.repo_root)
+
+    def _op(clone_dir: Path) -> dict[str, Any]:
+        memory_root = _resolve_memory_root(clone_dir, args.memory_root)
+        entry = _read_json_object_file(args.entry_file, "entry_file")
+        validation_discovery = append_validation_discovery_entry(
+            memory_root,
+            repository=repository,
+            entry=entry,
+        )
+        return {"stored": True, "validation_discovery": validation_discovery}
+
+    try:
+        result = persist_memory_operation(
+            repo_root,
+            memory_branch=args.memory_branch,
+            memory_root_relative=args.memory_root,
+            push_retries=int(args.push_retries),
+            commit_message=f"ai-memory: validation discovery [{repository}]",
+            operation=_op,
+        )
+        op_result = result.get("operation_result") or {}
+        _print_json(
+            {
+                "ok": True,
+                "enabled": True,
+                "stored": bool(op_result.get("stored")),
+                "validation_discovery": op_result.get("validation_discovery"),
+                **result,
+            }
+        )
+        return 0
+    except (MemoryValidationError, json.JSONDecodeError, OSError, ValueError, MemoryGitError) as exc:
+        _emit_validation_discovery_fallback(
+            mode="append", reason="discovery_write_failed", repo=repository
+        )
+        _print_json(
+            {
+                "ok": True,
+                "enabled": True,
+                "stored": False,
+                "validation_discovery": None,
                 "warning": _sanitize_git_error(str(exc)),
             }
         )
@@ -1893,6 +2032,28 @@ def build_parser() -> argparse.ArgumentParser:
     validation_history_append.add_argument("--integration-sha", required=True)
     validation_history_append.add_argument("--entry-file", required=True)
     validation_history_append.set_defaults(func=cmd_validation_history_append)
+
+    validation_discovery = subparsers.add_parser(
+        "validation-discovery", help="Read/append per-repository .ai/validate.yml discovery outcomes"
+    )
+    validation_discovery_subparsers = validation_discovery.add_subparsers(
+        dest="validation_discovery_command", required=True
+    )
+
+    validation_discovery_get = validation_discovery_subparsers.add_parser(
+        "get", help="Read validation discovery history for a consumer repository"
+    )
+    _add_shared_args(validation_discovery_get)
+    validation_discovery_get.add_argument("--repo", required=True)
+    validation_discovery_get.set_defaults(func=cmd_validation_discovery_get)
+
+    validation_discovery_append = validation_discovery_subparsers.add_parser(
+        "append", help="Append a validation discovery entry for a consumer repository"
+    )
+    _add_shared_args(validation_discovery_append)
+    validation_discovery_append.add_argument("--repo", required=True)
+    validation_discovery_append.add_argument("--entry-file", required=True)
+    validation_discovery_append.set_defaults(func=cmd_validation_discovery_append)
 
     operator_bypass_audit = subparsers.add_parser("operator-bypass-audit", help="Read/append operator bypass audit entries")
     operator_bypass_audit_subparsers = operator_bypass_audit.add_subparsers(

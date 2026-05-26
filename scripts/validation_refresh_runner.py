@@ -32,8 +32,46 @@ except ModuleNotFoundError:
 		sys.path.insert(0, str(scripts_dir))
 	from validation_template_bootstrap import bootstrap_validation_manifest
 
+try:
+	import validation_discovery_bootstrap as discovery_module
+except ModuleNotFoundError:
+	scripts_dir = Path(__file__).resolve().parent
+	if str(scripts_dir) not in sys.path:
+		sys.path.insert(0, str(scripts_dir))
+	import validation_discovery_bootstrap as discovery_module
+
 
 REPO_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+
+
+def _env_bool(name: str, default: bool) -> bool:
+	value = os.environ.get(name)
+	if value is None:
+		return default
+	normalized = value.strip().lower()
+	if normalized in ("1", "true", "yes", "on"):
+		return True
+	if normalized in ("0", "false", "no", "off", ""):
+		return False
+	return default
+
+
+def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
+	value = os.environ.get(name)
+	if not value:
+		return default
+	try:
+		parsed = int(value.strip())
+	except ValueError:
+		return default
+	return parsed if parsed >= minimum else default
+
+
+def _env_str(name: str, default: str) -> str:
+	value = os.environ.get(name)
+	if value is None or not value.strip():
+		return default
+	return value.strip()
 
 
 @dataclass(frozen=True)
@@ -57,7 +95,12 @@ class CommandFailure(Exception):
 
 
 class CommandExecutor:
-	"""Thin subprocess wrapper with structured failures."""
+	"""Thin subprocess wrapper with structured failures.
+
+	Accepts `input_text` and `timeout` so the discovery dispatch can route
+	its codex invocation through the same executor instance the refresh
+	pipeline uses, which keeps the FakeExecutor surface uniform in tests.
+	"""
 
 	def run(
 		self,
@@ -66,6 +109,8 @@ class CommandExecutor:
 		cwd: Path | None = None,
 		check: bool = True,
 		env_overrides: dict[str, str] | None = None,
+		input_text: str | None = None,
+		timeout: int = 300,
 	) -> subprocess.CompletedProcess[str]:
 		env = os.environ.copy()
 		env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -79,7 +124,8 @@ class CommandExecutor:
 				capture_output=True,
 				check=False,
 				env=env,
-				timeout=300,
+				input=input_text,
+				timeout=timeout,
 			)
 		except subprocess.TimeoutExpired as exc:
 			raise CommandFailure(
@@ -117,10 +163,23 @@ class RefreshResult:
 	pr_url: str | None = None
 	diagnostics: list[str] = field(default_factory=list)
 	changed: bool = False
+	# Codex-driven `.ai/validate.yml` discovery — populated independently of
+	# the refresh pipeline outcome above. `None` means discovery was disabled
+	# or did not run for this repo this cycle (e.g., 7-day dedup hit).
+	discovery_outcome: str | None = None
+	discovery_pr_url: str | None = None
+	discovery_pr_branch: str | None = None
+	discovery_diagnostics: list[str] = field(default_factory=list)
 
 
 class ValidationRefreshRunner:
-	"""Renders validation assets in a temp clone and reports drift; never pushes."""
+	"""Renders validation assets in a temp clone and reports drift; never pushes.
+
+	Discovery dispatch (codex-driven `.ai/validate.yml` proposal PRs to
+	consumer repos) is layered on top of this read-only drift pipeline and
+	IS allowed to push branches + open PRs on the consumer repo when the
+	caller passes `discovery_enabled=True` (default).
+	"""
 
 	def __init__(
 		self,
@@ -130,15 +189,18 @@ class ValidationRefreshRunner:
 		commit_message: str = "",
 		pr_title: str = "",
 		executor: CommandExecutor | None = None,
+		discovery_ctx: "discovery_module.DiscoveryRunContext | None" = None,
 	) -> None:
 		self.source_root = source_root
 		self.branch_name = branch_name
 		# `commit_message` and `pr_title` are accepted for backward compatibility
 		# with the previous PR-creating runner; this runner no longer commits,
-		# pushes, or opens pull requests, so the values are ignored.
+		# pushes, or opens pull requests in the drift-monitoring pipeline.
+		# Discovery dispatch (below) opens consumer-repo PRs on its own.
 		self.commit_message = commit_message
 		self.pr_title = pr_title
 		self.executor = executor or CommandExecutor()
+		self.discovery_ctx = discovery_ctx if discovery_ctx is not None else _build_default_discovery_ctx(source_root)
 
 	def run_repositories(self, repositories: list[str], workspace_root: Path) -> list[RefreshResult]:
 		results: list[RefreshResult] = []
@@ -173,6 +235,41 @@ class ValidationRefreshRunner:
 		except CommandFailure as exc:
 			result.diagnostics.append(_format_command_failure("checkout", exc))
 			return result
+
+		# Discovery dispatch runs FIRST so it sees the committed default-branch
+		# state before any local bootstrap mutates the tree. It pushes its own
+		# PR branch when applicable; the dispatch helper resets the tree to
+		# `origin/<default>` before returning when (and only when) discovery
+		# actually mutated the working state.
+		if self.discovery_ctx is not None and self.discovery_ctx.enabled:
+			try:
+				self._dispatch_discovery(
+					result=result,
+					repo_dir=repo_dir,
+					repository=repository,
+					default_branch=default_branch,
+				)
+			except Exception as exc:  # pragma: no cover - defensive fail-open
+				print(f"VALIDATION_DISCOVERY_FAILED repository={repository} error={exc!r}")
+				result.discovery_outcome = "failed"
+				result.discovery_diagnostics.append(f"dispatch_uncaught: {exc!r}")
+
+			# Discovery may have switched the working tree to a PR branch
+			# whose `.ai/validate.yml` was overwritten with the discovered
+			# content. Reset the tree to the committed default-branch state
+			# so the drift pipeline below renders against the committed
+			# inputs, not against the discovery proposal.
+			if result.discovery_outcome in ("pr_opened", "pr_reused", "failed", "push_denied"):
+				try:
+					self._checkout_refresh_branch(repo_dir, default_branch)
+				except CommandFailure as exc:
+					result.diagnostics.append(
+						_format_command_failure("post_discovery_checkout", exc)
+					)
+					return result
+		else:
+			result.discovery_outcome = "disabled"
+			print(f"VALIDATION_DISCOVERY_SKIPPED_DISABLED repository={repository}")
 
 		manifest_path = repo_dir / ".ai" / "validate.yml"
 		if not manifest_path.is_file():
@@ -308,6 +405,235 @@ class ValidationRefreshRunner:
 		)
 		return bool((proc.stdout or "").strip())
 
+	def _dispatch_discovery(
+		self,
+		*,
+		result: RefreshResult,
+		repo_dir: Path,
+		repository: str,
+		default_branch: str,
+	) -> None:
+		"""Codex-driven `.ai/validate.yml` discovery for one consumer repo.
+
+		Q1:A — runs once per consumer per cycle when enabled.
+		Q3:B — runs even when a committed manifest is present, opens a PR
+			only on `type` mismatch (Q7:A).
+		Q4:A — codex failure is recorded but never blocks the refresh job.
+		Q5:A — 7-day dedup via `validation_discovery.v1` on the ai-memory
+			branch keeps cost bounded.
+		Q8:A — existing open PR on the same branch is reused, not churned.
+		Q9:A — push denial is recorded and continues with the next consumer.
+		"""
+
+		ctx = self.discovery_ctx
+		if ctx is None or not ctx.enabled:
+			result.discovery_outcome = "disabled"
+			print(f"VALIDATION_DISCOVERY_SKIPPED_DISABLED repository={repository}")
+			return
+
+		# Q5:A dedup — skip when a successful discovery is recorded within window.
+		if _dedup_skip(repository=repository, repo_root=self.source_root, dedup_days=ctx.dedup_days):
+			result.discovery_outcome = "skipped_dedup"
+			result.discovery_diagnostics.append("dedup_window_active")
+			print(f"VALIDATION_DISCOVERY_SKIPPED_DEDUP repository={repository}")
+			return
+
+		consumer_head_sha = self._read_default_branch_head_sha(repo_dir)
+		committed_manifest_text = self._read_committed_manifest_yaml(repo_dir)
+
+		print(
+			"VALIDATION_DISCOVERY_STARTED "
+			f"repository={repository} consumer_head_sha={consumer_head_sha[:12] if consumer_head_sha else 'unknown'} "
+			f"has_committed_manifest={'1' if committed_manifest_text else '0'}"
+		)
+
+		discovery_outcome_for_memory = "failed"
+		discovered_type: str | None = None
+		committed_type: str | None = None
+		pr_url: str | None = None
+		pr_branch: str | None = None
+		codex_attempts_used: int = 0
+		failure_reason: str | None = None
+
+		if ctx.dry_run:
+			# Dry-run mode short-circuits codex invocation but still exercises
+			# the dedup + memory write so operators can validate the pipeline
+			# end-to-end on `workflow_dispatch` without burning LLM cost.
+			discovery_outcome_for_memory = "dry_run"
+			result.discovery_outcome = "dry_run"
+			print(f"VALIDATION_DISCOVERY_DRY_RUN repository={repository}")
+		else:
+			discovery_result = discovery_module.discover_manifest_via_codex(
+				clone_dir=repo_dir,
+				prompt_path=ctx.prompt_path,
+				schema_path=ctx.schema_path,
+				model=ctx.codex_model,
+				reasoning_effort=ctx.codex_reasoning_effort,
+				attempts=ctx.codex_attempts,
+				executor=self.executor,
+			)
+			codex_attempts_used = discovery_result.attempts_used
+
+			if discovery_result.outcome != "success" or discovery_result.manifest_yaml is None:
+				failure_reason = discovery_result.failure_reason or "discovery_failed"
+				discovery_outcome_for_memory = "failed"
+				result.discovery_outcome = "failed"
+				result.discovery_diagnostics.append(f"codex_failed: {failure_reason}")
+				print(
+					"VALIDATION_DISCOVERY_FAILED "
+					f"repository={repository} attempts={codex_attempts_used} reason={failure_reason}"
+				)
+			else:
+				discovered_type = (
+					(discovery_result.parsed_manifest or {}).get("type")
+					if isinstance(discovery_result.parsed_manifest, dict)
+					else None
+				)
+
+				disagreement = discovery_module.classify_disagreement(
+					committed_yaml_text=committed_manifest_text,
+					discovered_yaml_text=discovery_result.manifest_yaml,
+				)
+				committed_type = disagreement.committed_type
+
+				is_seed = committed_manifest_text is None
+
+				if not is_seed and not disagreement.disagrees:
+					# Q3:B + Q7:A — committed type matches discovered type. Record
+					# `success_agree` for dedup but skip opening a PR.
+					discovery_outcome_for_memory = "success_agree"
+					result.discovery_outcome = "agree"
+					print(
+						"VALIDATION_DISCOVERY_AGREE "
+						f"repository={repository} type={discovered_type or 'unknown'}"
+					)
+				else:
+					# Open / reuse a PR with the discovered manifest.
+					if not is_seed:
+						print(
+							"VALIDATION_DISCOVERY_DISAGREE "
+							f"repository={repository} committed_type={committed_type or 'unknown'} "
+							f"discovered_type={discovered_type or 'unknown'}"
+						)
+					pr_branch = discovery_module.build_pr_branch_name(
+						prefix=ctx.pr_branch_prefix,
+						consumer_head_sha=consumer_head_sha or "0" * 12,
+						discovered_type=discovered_type or "unknown",
+					)
+					entry_script_text: str | None = None
+					if is_seed and ctx.stub_entry_script_source.is_file():
+						try:
+							entry_script_text = ctx.stub_entry_script_source.read_text(encoding="utf-8")
+						except OSError:
+							entry_script_text = None
+
+					pr_title = (
+						f"chore(validation): seed .ai/validate.yml (type: {discovered_type or 'unknown'})"
+						if is_seed
+						else f"chore(validation): discovery proposes type change "
+						f"({committed_type or 'unknown'} → {discovered_type or 'unknown'})"
+					)
+					rationale = discovery_module.build_pr_rationale_markdown(
+						consumer_slug=repository,
+						committed_type=committed_type,
+						discovered_type=discovered_type or "unknown",
+						consumer_head_sha=consumer_head_sha or "",
+						codex_model=ctx.codex_model,
+						reasoning_effort=ctx.codex_reasoning_effort,
+						attempts_used=codex_attempts_used,
+						is_seed=is_seed,
+					)
+					pr_result = discovery_module.open_or_update_discovery_pr(
+						consumer_slug=repository,
+						consumer_clone_dir=repo_dir,
+						base_branch=default_branch,
+						pr_branch=pr_branch,
+						manifest_yaml=discovery_result.manifest_yaml,
+						entry_script_text=entry_script_text,
+						entry_script_relative_path="scripts/run_validation_repo_checks.sh",
+						pr_title=pr_title,
+						rationale_md=rationale,
+						label=ctx.pr_label,
+						executor=self.executor,
+					)
+
+					if pr_result.failure_reason and pr_result.failure_reason.startswith("push_denied"):
+						discovery_outcome_for_memory = "push_denied"
+						failure_reason = pr_result.failure_reason
+						result.discovery_outcome = "push_denied"
+						result.discovery_diagnostics.append(pr_result.failure_reason)
+						print(
+							f"VALIDATION_DISCOVERY_FAILED repository={repository} reason={pr_result.failure_reason}"
+						)
+					elif pr_result.failure_reason:
+						discovery_outcome_for_memory = "failed"
+						failure_reason = pr_result.failure_reason
+						result.discovery_outcome = "failed"
+						result.discovery_diagnostics.append(pr_result.failure_reason)
+						print(
+							f"VALIDATION_DISCOVERY_FAILED repository={repository} reason={pr_result.failure_reason}"
+						)
+					else:
+						pr_url = pr_result.pr_url
+						result.discovery_pr_url = pr_url
+						result.discovery_pr_branch = pr_branch
+						if pr_result.pr_was_reused:
+							discovery_outcome_for_memory = (
+								"success_seeded" if is_seed else "success_disagree"
+							)
+							result.discovery_outcome = "pr_reused"
+							print(
+								"VALIDATION_DISCOVERY_PR_REUSED "
+								f"repository={repository} pr_url={pr_url}"
+							)
+						else:
+							discovery_outcome_for_memory = (
+								"success_seeded" if is_seed else "success_disagree"
+							)
+							result.discovery_outcome = "pr_opened"
+							print(
+								"VALIDATION_DISCOVERY_PR_OPENED "
+								f"repository={repository} pr_url={pr_url} kind={'seed' if is_seed else 'disagree'}"
+							)
+
+		# Record outcome on the ai-memory branch (fail-open). Failed and dry-run
+		# entries are kept for observability; the dedup gate counts only
+		# `success_*` entries.
+		_append_discovery_memory(
+			repository=repository,
+			repo_root=self.source_root,
+			outcome=discovery_outcome_for_memory,
+			consumer_head_sha=consumer_head_sha,
+			consumer_default_branch=default_branch,
+			discovered_type=discovered_type,
+			committed_type=committed_type,
+			pr_url=pr_url,
+			pr_branch=pr_branch,
+			codex_attempts_used=codex_attempts_used or None,
+			failure_reason=failure_reason,
+		)
+
+	def _read_default_branch_head_sha(self, repo_dir: Path) -> str | None:
+		try:
+			proc = self.executor.run(
+				["git", "rev-parse", "HEAD"],
+				cwd=repo_dir,
+				check=False,
+			)
+		except CommandFailure:
+			return None
+		text = (proc.stdout or "").strip()
+		return text or None
+
+	def _read_committed_manifest_yaml(self, repo_dir: Path) -> str | None:
+		manifest_path = repo_dir / ".ai" / "validate.yml"
+		if not manifest_path.is_file():
+			return None
+		try:
+			return manifest_path.read_text(encoding="utf-8")
+		except OSError:
+			return None
+
 
 def load_target_repositories(repos_file: Path) -> list[str]:
 	if not repos_file.is_file():
@@ -440,6 +766,176 @@ def main() -> int:
 			temporary_root.cleanup()
 
 	return 1 if any(result.outcome == "error" for result in results) else 0
+
+
+def _build_default_discovery_ctx(source_root: Path) -> "discovery_module.DiscoveryRunContext":
+	"""Resolve discovery configuration from env vars with documented defaults.
+
+	Env vars (all §4 defaults supplied):
+	- VALIDATION_DISCOVERY_ENABLED            (default: true)
+	- VALIDATION_DISCOVERY_DEDUP_DAYS         (default: 7)
+	- VALIDATION_DISCOVERY_MAX_ATTEMPTS       (default: 3)
+	- VALIDATION_DISCOVERY_MODEL              (default: openai/gpt-5.4)
+	- VALIDATION_DISCOVERY_REASONING_EFFORT   (default: xhigh)
+	- VALIDATION_DISCOVERY_PR_BRANCH_PREFIX   (default: automation/validate-discovery)
+	- VALIDATION_DISCOVERY_PR_LABEL           (default: automation:validate-bootstrap)
+	- VALIDATION_DISCOVERY_DRY_RUN            (default: false)
+	"""
+
+	return discovery_module.DiscoveryRunContext(
+		source_root=source_root,
+		prompt_path=source_root / "prompts" / "mode-validate-discover.txt",
+		schema_path=source_root / "scripts" / "templates" / "slot_manifest.schema.json",
+		stub_entry_script_source=source_root
+		/ "examples"
+		/ "validation-fixtures"
+		/ "run_validation_repo_checks.sh",
+		codex_model=_env_str("VALIDATION_DISCOVERY_MODEL", "openai/gpt-5.4"),
+		codex_reasoning_effort=_env_str("VALIDATION_DISCOVERY_REASONING_EFFORT", "xhigh"),
+		codex_attempts=_env_int("VALIDATION_DISCOVERY_MAX_ATTEMPTS", 3),
+		pr_branch_prefix=_env_str(
+			"VALIDATION_DISCOVERY_PR_BRANCH_PREFIX", "automation/validate-discovery"
+		),
+		pr_label=_env_str("VALIDATION_DISCOVERY_PR_LABEL", "automation:validate-bootstrap") or None,
+		dedup_days=_env_int("VALIDATION_DISCOVERY_DEDUP_DAYS", 7),
+		enabled=_env_bool("VALIDATION_DISCOVERY_ENABLED", True),
+		dry_run=_env_bool("VALIDATION_DISCOVERY_DRY_RUN", False),
+	)
+
+
+def _dedup_skip(*, repository: str, repo_root: Path, dedup_days: int) -> bool:
+	"""Return True when a recent successful discovery makes another run redundant.
+
+	Reads `validation_discovery.v1` from ai-memory via the existing
+	`memory_helpers.sh` shell wrapper (fail-open). Counts only
+	`success_seeded` / `success_agree` / `success_disagree` outcomes — failed
+	discoveries do NOT block re-attempts on the next cycle.
+	"""
+
+	if dedup_days <= 0:
+		return False
+	helper_path = repo_root / "scripts" / "memory_helpers.sh"
+	if not helper_path.is_file():
+		return False
+	try:
+		proc = subprocess.run(
+			[
+				"bash",
+				"-c",
+				'. "$1" && memory_validation_discovery_get --repo "$2" --enabled',
+				"bash",
+				helper_path.as_posix(),
+				repository,
+			],
+			cwd=str(repo_root),
+			text=True,
+			capture_output=True,
+			timeout=120,
+			check=False,
+		)
+	except (OSError, subprocess.TimeoutExpired):
+		return False
+	if proc.returncode != 0:
+		return False
+	stdout = (proc.stdout or "").strip()
+	if not stdout:
+		return False
+	try:
+		payload = json.loads(stdout)
+	except json.JSONDecodeError:
+		return False
+	if not isinstance(payload, dict):
+		return False
+	discovery = payload.get("validation_discovery")
+	if not isinstance(discovery, dict):
+		return False
+	entries = discovery.get("entries")
+	if not isinstance(entries, list):
+		return False
+
+	threshold = datetime.now(timezone.utc).timestamp() - (dedup_days * 86400)
+	for entry in entries:
+		if not isinstance(entry, dict):
+			continue
+		outcome = entry.get("outcome")
+		if outcome not in ("success_seeded", "success_agree", "success_disagree"):
+			continue
+		recorded_at = entry.get("recorded_at")
+		if not isinstance(recorded_at, str):
+			continue
+		try:
+			ts = datetime.fromisoformat(recorded_at.replace("Z", "+00:00")).timestamp()
+		except ValueError:
+			continue
+		if ts >= threshold:
+			return True
+	return False
+
+
+def _append_discovery_memory(
+	*,
+	repository: str,
+	repo_root: Path,
+	outcome: str,
+	consumer_head_sha: str | None,
+	consumer_default_branch: str | None,
+	discovered_type: str | None,
+	committed_type: str | None,
+	pr_url: str | None,
+	pr_branch: str | None,
+	codex_attempts_used: int | None,
+	failure_reason: str | None,
+) -> None:
+	"""Persist a single discovery outcome to ai-memory (fail-open)."""
+
+	helper_path = repo_root / "scripts" / "memory_helpers.sh"
+	if not helper_path.is_file():
+		return
+
+	entry = {
+		"outcome": outcome,
+		"recorded_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+		"consumer_head_sha": consumer_head_sha,
+		"consumer_default_branch": consumer_default_branch,
+		"discovered_type": discovered_type,
+		"committed_type": committed_type,
+		"pr_url": pr_url,
+		"pr_branch": pr_branch,
+		"codex_attempts_used": codex_attempts_used,
+		"failure_reason": failure_reason,
+	}
+
+	with tempfile.NamedTemporaryFile(
+		mode="w", encoding="utf-8", suffix=".json", delete=False
+	) as handle:
+		json.dump(entry, handle)
+		entry_file = handle.name
+
+	try:
+		subprocess.run(
+			[
+				"bash",
+				"-c",
+				'. "$1" && memory_validation_discovery_append --repo "$2" --entry-file "$3" --enabled',
+				"bash",
+				helper_path.as_posix(),
+				repository,
+				entry_file,
+			],
+			cwd=str(repo_root),
+			text=True,
+			capture_output=True,
+			timeout=180,
+			check=False,
+		)
+	except (OSError, subprocess.TimeoutExpired):
+		# Fail-open — memory write failure does not block the refresh job.
+		pass
+	finally:
+		try:
+			os.unlink(entry_file)
+		except OSError:
+			pass
 
 
 def _format_command_failure(stage: str, failure: CommandFailure) -> str:
