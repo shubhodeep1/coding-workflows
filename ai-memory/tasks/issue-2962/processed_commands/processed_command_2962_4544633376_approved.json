@@ -5,13 +5,33 @@
   "entry_id": "processed_command_2962_4544633376_approved",
   "issue_number": 2962,
   "metadata": {
+    "branch": "ai/issue-2962",
+    "changed_files": [
+      ".github/workflows/clarify.yml",
+      ".github/workflows/implement.yml",
+      ".github/workflows/orchestrate.yml",
+      ".github/workflows/orchestrate_clarify_respond.yml",
+      ".github/workflows/orchestrate_poll.yml",
+      ".github/workflows/plan.yml",
+      ".github/workflows/review_autofix.yml",
+      ".github/workflows/workflow-log-analysis.yml",
+      "tests/test_implement_semble_contract.py",
+      "tests/test_judge_semble_prefetch_contract.py",
+      "tests/test_review_semble_contract.py",
+      "tests/test_semble_workflow_parity_contract.py"
+    ],
+    "issue_number": 2962,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/2962",
+    "pr_number": 2965,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/2965",
+    "run_attempt": "1",
+    "run_id": "26451983607",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/26451983607"
   },
   "run_attempt": 1,
   "run_id": "26451983607",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-05-26T13:47:42Z",
+  "status": "completed",
+  "timestamp": "2026-05-26T13:50:28Z",
   "workflow": "implement"
 }
