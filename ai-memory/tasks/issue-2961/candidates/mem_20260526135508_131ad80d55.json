@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":2961,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/2961\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/2966\",\"pr_number\":2966,\"branch\":\"ai/issue-2961\",\"run_id\":\"26452175270\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/26452175270\",\"changed_files\":[\".github/workflows/internal-orchestrate-poll.yml\",\".github/workflows/internal-review.yml\",\".github/workflows/issue_pr_status.yml\",\".github/workflows/test-and-mark-stable.yml\",\"scripts/implement_diagnose_post_codex_failure.sh\"]}",
+  "fingerprint": "eb8ff93953b3022cbc45c9cb9999bff7c91e47a03561d508e25ba067e6b05cc8",
+  "lineage": {
+    "issue_number": 2961,
+    "parent_ids": [],
+    "pr_number": 2966,
+    "run_id": "26452175270",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26452175270",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/2966"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260526135508_131ad80d55",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2961,
+    "level": "run",
+    "pr_number": 2966,
+    "run_id": "26452175270"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #2961: https://github.com/shubhodeep1/coding-workflows/pull/2966",
+  "timestamps": {
+    "created_at": "2026-05-26T13:55:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
