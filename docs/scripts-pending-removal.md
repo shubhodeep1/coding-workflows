@@ -53,4 +53,14 @@ Copy this block when adding a new entry:
 
 ## Entries
 
-_No entries yet._
+### `scripts/validation_discovery_bootstrap.py` + `.github/workflows/validation-refresh.yml` discovery dispatch
+
+- **Introduced in:** claude/eloquent-ramanujan-5Mud6 (2026-05-26)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `gh workflow view validation-refresh.yml -R shubhodeep1/coding-workflows` confirms the scheduled cron is still active and the workflow still references `scripts/validation_discovery_bootstrap.py`.
+  - `python3 scripts/ai_memory.py validation-discovery get --repo <consumer> --enabled` returns a recent (within last 30 days) `success_*` entry for every consumer in `.github/ai/consumer_repos.json`, meaning every consumer has a committed `.ai/validate.yml` that discovery has audited at least once.
+  - `gh pr list --repo <consumer> --label automation:validate-bootstrap --state open` returns an empty list for every consumer (no open discovery PRs pending reviewer action).
+  - Removing this code path means daily discovery dispatch stops; ensure consumers' committed manifests are correct and stable before doing so.
+- **Owner:** @shubhodeep1

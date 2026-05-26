@@ -47,6 +47,7 @@ BRANCH_REBUILD_AUDIT_SCHEMA_VERSION = "v1"
 VALIDATION_HISTORY_SCHEMA_VERSION = "v1"
 OPERATOR_BYPASS_AUDIT_SCHEMA_VERSION = "v1"
 REVALIDATE_EVENTS_SCHEMA_VERSION = "v1"
+VALIDATION_DISCOVERY_SCHEMA_VERSION = "v1"
 MAX_MEMORY_DETAILS_LENGTH = 12000
 LEGACY_MEMORY_ROOT_RELATIVE = ".github/ai-memory"
 CANONICAL_MEMORY_ROOT_RELATIVE = "ai-memory"
@@ -960,6 +961,116 @@ def append_validation_history_entry(
         normalized = _normalize_validation_history_payload(payload)
         validate_validation_history_payload(normalized, memory_root)
         _atomic_write_json(_validation_history_path(memory_root, normalized_repo, normalized_sha), normalized)
+        return normalized
+
+
+_VALIDATION_DISCOVERY_OUTCOMES = (
+    "success_seeded",
+    "success_agree",
+    "success_disagree",
+    "failed",
+    "push_denied",
+)
+
+
+def _validation_discovery_path(memory_root: Path, repository: str) -> Path:
+    normalized_repo = _normalize_repository_name(repository)
+    owner, repo = normalized_repo.split("/", 1)
+    repo_key = f"{sanitize_segment(owner, 'owner')}__{sanitize_segment(repo, 'repo')}"
+    return memory_root / "orchestrator" / "validation_discovery" / repo_key / "history.json"
+
+
+def validate_validation_discovery_payload(payload: dict[str, Any], memory_root: Path) -> None:
+    _validate_with_schema_file(payload, _schema_file(memory_root, "validation_discovery.v1.json"))
+
+
+def _default_validation_discovery_payload(repository: str) -> dict[str, Any]:
+    return {
+        "schema_version": VALIDATION_DISCOVERY_SCHEMA_VERSION,
+        "repository": _normalize_repository_name(repository),
+        "entries": [],
+    }
+
+
+def _normalize_validation_discovery_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(entry, dict):
+        raise MemoryValidationError("validation_discovery entry must be a JSON object")
+    outcome = _normalize_required_text(entry.get("outcome"), "validation_discovery.entries[].outcome")
+    if outcome not in _VALIDATION_DISCOVERY_OUTCOMES:
+        raise MemoryValidationError(
+            f"validation_discovery.entries[].outcome must be one of {_VALIDATION_DISCOVERY_OUTCOMES}, got {outcome!r}"
+        )
+    head_sha_raw = entry.get("consumer_head_sha")
+    head_sha: str | None
+    if head_sha_raw in (None, ""):
+        head_sha = None
+    else:
+        head_sha = _validate_integration_sha(str(head_sha_raw))
+    return {
+        "outcome": outcome,
+        "recorded_at": _normalize_datetime_utc(
+            entry.get("recorded_at"), "validation_discovery.entries[].recorded_at"
+        ),
+        "consumer_head_sha": head_sha,
+        "consumer_default_branch": _normalize_optional_text(entry.get("consumer_default_branch")),
+        "discovered_type": _normalize_optional_text(entry.get("discovered_type")),
+        "committed_type": _normalize_optional_text(entry.get("committed_type")),
+        "pr_url": _normalize_optional_text(entry.get("pr_url")),
+        "pr_branch": _normalize_optional_text(entry.get("pr_branch")),
+        "codex_attempts_used": _normalize_optional_positive_int(
+            entry.get("codex_attempts_used"), "validation_discovery.entries[].codex_attempts_used"
+        ),
+        "failure_reason": _normalize_optional_text(entry.get("failure_reason")),
+    }
+
+
+def _normalize_validation_discovery_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise MemoryValidationError("validation_discovery payload must be a JSON object")
+    entries = [_normalize_validation_discovery_entry(entry) for entry in payload.get("entries") or []]
+    entries = _stable_sort_entries_by_field(entries, field_name="recorded_at")
+    return {
+        "schema_version": VALIDATION_DISCOVERY_SCHEMA_VERSION,
+        "repository": _normalize_repository_name(str(payload.get("repository") or "")),
+        "entries": entries,
+    }
+
+
+def get_validation_discovery(memory_root: Path, repository: str) -> dict[str, Any] | None:
+    ensure_memory_layout(memory_root)
+    discovery_path = _validation_discovery_path(memory_root, repository)
+    if not discovery_path.exists():
+        return None
+    payload = _load_json(discovery_path)
+    if not isinstance(payload, dict):
+        raise MemoryValidationError("validation_discovery payload must be a JSON object")
+    validate_validation_discovery_payload(payload, memory_root)
+    normalized = _normalize_validation_discovery_payload(payload)
+    validate_validation_discovery_payload(normalized, memory_root)
+    return normalized
+
+
+def append_validation_discovery_entry(
+    memory_root: Path,
+    *,
+    repository: str,
+    entry: dict[str, Any],
+) -> dict[str, Any]:
+    ensure_memory_layout(memory_root)
+    if not isinstance(entry, dict):
+        raise MemoryValidationError("validation discovery entry must be a JSON object")
+    normalized_repo = _normalize_repository_name(repository)
+    with _file_lock(f"validation-discovery:{normalized_repo}"):
+        payload = get_validation_discovery(memory_root, normalized_repo)
+        if payload is None:
+            payload = _default_validation_discovery_payload(normalized_repo)
+        payload["entries"] = [
+            *(payload.get("entries") or []),
+            _normalize_validation_discovery_entry(entry),
+        ]
+        normalized = _normalize_validation_discovery_payload(payload)
+        validate_validation_discovery_payload(normalized, memory_root)
+        _atomic_write_json(_validation_discovery_path(memory_root, normalized_repo), normalized)
         return normalized
 
 
