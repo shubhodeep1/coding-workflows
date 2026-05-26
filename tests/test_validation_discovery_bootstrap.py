@@ -302,13 +302,17 @@ def test_discover_manifest_via_codex_cli_missing_does_not_loop() -> None:
 def test_open_or_update_discovery_pr_creates_new_pr_when_none_open() -> None:
 	with tempfile.TemporaryDirectory(prefix="discovery-pr-create-") as td:
 		clone_dir = Path(td)
+
+		def on_add(command: list[str], _cwd: Path | None, _input_text: str | None) -> None:
+			assert command == ["git", "add", ".ai/validate.yml"]
+
 		executor = FakeExecutor(
 			[
 				PlannedRun(("gh", "pr", "list"), stdout="[]\n"),
 				PlannedRun(("git", "checkout", "-B")),
 				PlannedRun(("git", "config", "user.name")),
 				PlannedRun(("git", "config", "user.email")),
-				PlannedRun(("git", "add")),
+				PlannedRun(("git", "add"), callback=on_add),
 				PlannedRun(("git", "commit")),
 				PlannedRun(("git", "push", "-u", "origin")),
 				PlannedRun(
@@ -401,6 +405,90 @@ def test_open_or_update_discovery_pr_records_push_denied_on_push_failure() -> No
 		assert result.pr_was_reused is False
 		assert result.failure_reason is not None
 		assert result.failure_reason.startswith("push_denied")
+		executor.assert_consumed()
+
+
+def test_open_or_update_discovery_pr_retries_without_label_when_label_missing() -> None:
+	with tempfile.TemporaryDirectory(prefix="discovery-pr-label-fallback-") as td:
+		clone_dir = Path(td)
+
+		def on_retry(command: list[str], _cwd: Path | None, _input_text: str | None) -> None:
+			assert "--label" not in command
+
+		executor = FakeExecutor(
+			[
+				PlannedRun(("gh", "pr", "list"), stdout="[]\n"),
+				PlannedRun(("git", "checkout", "-B")),
+				PlannedRun(("git", "config", "user.name")),
+				PlannedRun(("git", "config", "user.email")),
+				PlannedRun(("git", "add")),
+				PlannedRun(("git", "commit")),
+				PlannedRun(("git", "push", "-u", "origin")),
+				PlannedRun(
+					("gh", "pr", "create"),
+					returncode=1,
+					stderr="could not add label 'automation:validate-bootstrap': not found\n",
+				),
+				PlannedRun(
+					("gh", "pr", "create"),
+					stdout="https://github.com/octo/demo/pull/43\n",
+					callback=on_retry,
+				),
+			]
+		)
+		result = discovery.open_or_update_discovery_pr(
+			consumer_slug="octo/demo",
+			consumer_clone_dir=clone_dir,
+			base_branch="main",
+			pr_branch="automation/validate-discovery/abc123/node-runtime",
+			manifest_yaml=VALID_NODE_RUNTIME_MANIFEST,
+			entry_script_text=None,
+			entry_script_relative_path="scripts/run_validation_repo_checks.sh",
+			pr_title="chore(validation): seed",
+			rationale_md="body",
+			label="automation:validate-bootstrap",
+			executor=executor,
+		)
+		assert result.pr_url == "https://github.com/octo/demo/pull/43"
+		assert result.failure_reason is None
+		executor.assert_consumed()
+
+
+def test_open_or_update_discovery_pr_does_not_drop_label_on_generic_error() -> None:
+	with tempfile.TemporaryDirectory(prefix="discovery-pr-label-generic-") as td:
+		clone_dir = Path(td)
+		executor = FakeExecutor(
+			[
+				PlannedRun(("gh", "pr", "list"), stdout="[]\n"),
+				PlannedRun(("git", "checkout", "-B")),
+				PlannedRun(("git", "config", "user.name")),
+				PlannedRun(("git", "config", "user.email")),
+				PlannedRun(("git", "add")),
+				PlannedRun(("git", "commit")),
+				PlannedRun(("git", "push", "-u", "origin")),
+				PlannedRun(
+					("gh", "pr", "create"),
+					returncode=1,
+					stderr="secondary rate limit while updating label metadata\n",
+				),
+			]
+		)
+		result = discovery.open_or_update_discovery_pr(
+			consumer_slug="octo/demo",
+			consumer_clone_dir=clone_dir,
+			base_branch="main",
+			pr_branch="automation/validate-discovery/abc123/node-runtime",
+			manifest_yaml=VALID_NODE_RUNTIME_MANIFEST,
+			entry_script_text=None,
+			entry_script_relative_path="scripts/run_validation_repo_checks.sh",
+			pr_title="chore(validation): seed",
+			rationale_md="body",
+			label="automation:validate-bootstrap",
+			executor=executor,
+		)
+		assert result.pr_url is None
+		assert result.failure_reason is not None
+		assert result.failure_reason.startswith("gh_pr_create_failed")
 		executor.assert_consumed()
 
 

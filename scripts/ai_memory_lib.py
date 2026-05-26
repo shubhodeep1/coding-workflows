@@ -968,6 +968,7 @@ _VALIDATION_DISCOVERY_OUTCOMES = (
     "success_seeded",
     "success_agree",
     "success_disagree",
+    "dry_run",
     "failed",
     "push_denied",
 )

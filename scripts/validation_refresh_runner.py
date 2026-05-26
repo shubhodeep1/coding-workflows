@@ -251,6 +251,7 @@ class ValidationRefreshRunner:
 				)
 			except Exception as exc:  # pragma: no cover - defensive fail-open
 				print(f"VALIDATION_DISCOVERY_FAILED repository={repository} error={exc!r}")
+				result.discovery_outcome = "failed"
 				result.discovery_diagnostics.append(f"dispatch_uncaught: {exc!r}")
 
 			# Discovery may have switched the working tree to a PR branch
@@ -416,10 +417,10 @@ class ValidationRefreshRunner:
 
 		Q1:A — runs once per consumer per cycle when enabled.
 		Q3:B — runs even when a committed manifest is present, opens a PR
-		       only on `type` mismatch (Q7:A).
+			only on `type` mismatch (Q7:A).
 		Q4:A — codex failure is recorded but never blocks the refresh job.
 		Q5:A — 7-day dedup via `validation_discovery.v1` on the ai-memory
-		       branch keeps cost bounded.
+			branch keeps cost bounded.
 		Q8:A — existing open PR on the same branch is reused, not churned.
 		Q9:A — push denial is recorded and continues with the next consumer.
 		"""
@@ -458,141 +459,140 @@ class ValidationRefreshRunner:
 			# Dry-run mode short-circuits codex invocation but still exercises
 			# the dedup + memory write so operators can validate the pipeline
 			# end-to-end on `workflow_dispatch` without burning LLM cost.
+			discovery_outcome_for_memory = "dry_run"
 			result.discovery_outcome = "dry_run"
 			print(f"VALIDATION_DISCOVERY_DRY_RUN repository={repository}")
-			return
-
-		discovery_result = discovery_module.discover_manifest_via_codex(
-			clone_dir=repo_dir,
-			prompt_path=ctx.prompt_path,
-			schema_path=ctx.schema_path,
-			model=ctx.codex_model,
-			reasoning_effort=ctx.codex_reasoning_effort,
-			attempts=ctx.codex_attempts,
-			executor=self.executor,
-			sleep_fn=lambda _seconds: None,
-		)
-		codex_attempts_used = discovery_result.attempts_used
-
-		if discovery_result.outcome != "success" or discovery_result.manifest_yaml is None:
-			failure_reason = discovery_result.failure_reason or "discovery_failed"
-			discovery_outcome_for_memory = "failed"
-			result.discovery_outcome = "failed"
-			result.discovery_diagnostics.append(f"codex_failed: {failure_reason}")
-			print(
-				"VALIDATION_DISCOVERY_FAILED "
-				f"repository={repository} attempts={codex_attempts_used} reason={failure_reason}"
-			)
 		else:
-			discovered_type = (
-				(discovery_result.parsed_manifest or {}).get("type")
-				if isinstance(discovery_result.parsed_manifest, dict)
-				else None
+			discovery_result = discovery_module.discover_manifest_via_codex(
+				clone_dir=repo_dir,
+				prompt_path=ctx.prompt_path,
+				schema_path=ctx.schema_path,
+				model=ctx.codex_model,
+				reasoning_effort=ctx.codex_reasoning_effort,
+				attempts=ctx.codex_attempts,
+				executor=self.executor,
 			)
+			codex_attempts_used = discovery_result.attempts_used
 
-			disagreement = discovery_module.classify_disagreement(
-				committed_yaml_text=committed_manifest_text,
-				discovered_yaml_text=discovery_result.manifest_yaml,
-			)
-			committed_type = disagreement.committed_type
-
-			is_seed = committed_manifest_text is None
-
-			if not is_seed and not disagreement.disagrees:
-				# Q3:B + Q7:A — committed type matches discovered type. Record
-				# `success_agree` for dedup but skip opening a PR.
-				discovery_outcome_for_memory = "success_agree"
-				result.discovery_outcome = "agree"
+			if discovery_result.outcome != "success" or discovery_result.manifest_yaml is None:
+				failure_reason = discovery_result.failure_reason or "discovery_failed"
+				discovery_outcome_for_memory = "failed"
+				result.discovery_outcome = "failed"
+				result.discovery_diagnostics.append(f"codex_failed: {failure_reason}")
 				print(
-					"VALIDATION_DISCOVERY_AGREE "
-					f"repository={repository} type={discovered_type or 'unknown'}"
+					"VALIDATION_DISCOVERY_FAILED "
+					f"repository={repository} attempts={codex_attempts_used} reason={failure_reason}"
 				)
 			else:
-				# Open / reuse a PR with the discovered manifest.
-				pr_branch = discovery_module.build_pr_branch_name(
-					prefix=ctx.pr_branch_prefix,
-					consumer_head_sha=consumer_head_sha or "0" * 12,
-					discovered_type=discovered_type or "unknown",
-				)
-				entry_script_text: str | None = None
-				if is_seed and ctx.stub_entry_script_source.is_file():
-					try:
-						entry_script_text = ctx.stub_entry_script_source.read_text(encoding="utf-8")
-					except OSError:
-						entry_script_text = None
-
-				pr_title = (
-					f"chore(validation): seed .ai/validate.yml (type: {discovered_type or 'unknown'})"
-					if is_seed
-					else f"chore(validation): discovery proposes type change "
-					f"({committed_type or 'unknown'} → {discovered_type or 'unknown'})"
-				)
-				rationale = discovery_module.build_pr_rationale_markdown(
-					consumer_slug=repository,
-					committed_type=committed_type,
-					discovered_type=discovered_type or "unknown",
-					consumer_head_sha=consumer_head_sha or "",
-					codex_model=ctx.codex_model,
-					reasoning_effort=ctx.codex_reasoning_effort,
-					attempts_used=codex_attempts_used,
-					is_seed=is_seed,
-				)
-				pr_result = discovery_module.open_or_update_discovery_pr(
-					consumer_slug=repository,
-					consumer_clone_dir=repo_dir,
-					base_branch=default_branch,
-					pr_branch=pr_branch,
-					manifest_yaml=discovery_result.manifest_yaml,
-					entry_script_text=entry_script_text,
-					entry_script_relative_path="scripts/run_validation_repo_checks.sh",
-					pr_title=pr_title,
-					rationale_md=rationale,
-					label=ctx.pr_label,
-					executor=self.executor,
+				discovered_type = (
+					(discovery_result.parsed_manifest or {}).get("type")
+					if isinstance(discovery_result.parsed_manifest, dict)
+					else None
 				)
 
-				if pr_result.failure_reason and pr_result.failure_reason.startswith("push_denied"):
-					discovery_outcome_for_memory = "push_denied"
-					failure_reason = pr_result.failure_reason
-					result.discovery_outcome = "push_denied"
-					result.discovery_diagnostics.append(pr_result.failure_reason)
+				disagreement = discovery_module.classify_disagreement(
+					committed_yaml_text=committed_manifest_text,
+					discovered_yaml_text=discovery_result.manifest_yaml,
+				)
+				committed_type = disagreement.committed_type
+
+				is_seed = committed_manifest_text is None
+
+				if not is_seed and not disagreement.disagrees:
+					# Q3:B + Q7:A — committed type matches discovered type. Record
+					# `success_agree` for dedup but skip opening a PR.
+					discovery_outcome_for_memory = "success_agree"
+					result.discovery_outcome = "agree"
 					print(
-						f"VALIDATION_DISCOVERY_FAILED repository={repository} reason={pr_result.failure_reason}"
-					)
-				elif pr_result.failure_reason:
-					discovery_outcome_for_memory = "failed"
-					failure_reason = pr_result.failure_reason
-					result.discovery_outcome = "failed"
-					result.discovery_diagnostics.append(pr_result.failure_reason)
-					print(
-						f"VALIDATION_DISCOVERY_FAILED repository={repository} reason={pr_result.failure_reason}"
+						"VALIDATION_DISCOVERY_AGREE "
+						f"repository={repository} type={discovered_type or 'unknown'}"
 					)
 				else:
-					pr_url = pr_result.pr_url
-					result.discovery_pr_url = pr_url
-					result.discovery_pr_branch = pr_branch
-					if pr_result.pr_was_reused:
-						discovery_outcome_for_memory = (
-							"success_seeded" if is_seed else "success_disagree"
-						)
-						result.discovery_outcome = "pr_reused"
+					# Open / reuse a PR with the discovered manifest.
+					pr_branch = discovery_module.build_pr_branch_name(
+						prefix=ctx.pr_branch_prefix,
+						consumer_head_sha=consumer_head_sha or "0" * 12,
+						discovered_type=discovered_type or "unknown",
+					)
+					entry_script_text: str | None = None
+					if is_seed and ctx.stub_entry_script_source.is_file():
+						try:
+							entry_script_text = ctx.stub_entry_script_source.read_text(encoding="utf-8")
+						except OSError:
+							entry_script_text = None
+
+					pr_title = (
+						f"chore(validation): seed .ai/validate.yml (type: {discovered_type or 'unknown'})"
+						if is_seed
+						else f"chore(validation): discovery proposes type change "
+						f"({committed_type or 'unknown'} → {discovered_type or 'unknown'})"
+					)
+					rationale = discovery_module.build_pr_rationale_markdown(
+						consumer_slug=repository,
+						committed_type=committed_type,
+						discovered_type=discovered_type or "unknown",
+						consumer_head_sha=consumer_head_sha or "",
+						codex_model=ctx.codex_model,
+						reasoning_effort=ctx.codex_reasoning_effort,
+						attempts_used=codex_attempts_used,
+						is_seed=is_seed,
+					)
+					pr_result = discovery_module.open_or_update_discovery_pr(
+						consumer_slug=repository,
+						consumer_clone_dir=repo_dir,
+						base_branch=default_branch,
+						pr_branch=pr_branch,
+						manifest_yaml=discovery_result.manifest_yaml,
+						entry_script_text=entry_script_text,
+						entry_script_relative_path="scripts/run_validation_repo_checks.sh",
+						pr_title=pr_title,
+						rationale_md=rationale,
+						label=ctx.pr_label,
+						executor=self.executor,
+					)
+
+					if pr_result.failure_reason and pr_result.failure_reason.startswith("push_denied"):
+						discovery_outcome_for_memory = "push_denied"
+						failure_reason = pr_result.failure_reason
+						result.discovery_outcome = "push_denied"
+						result.discovery_diagnostics.append(pr_result.failure_reason)
 						print(
-							"VALIDATION_DISCOVERY_PR_REUSED "
-							f"repository={repository} pr_url={pr_url}"
+							f"VALIDATION_DISCOVERY_FAILED repository={repository} reason={pr_result.failure_reason}"
+						)
+					elif pr_result.failure_reason:
+						discovery_outcome_for_memory = "failed"
+						failure_reason = pr_result.failure_reason
+						result.discovery_outcome = "failed"
+						result.discovery_diagnostics.append(pr_result.failure_reason)
+						print(
+							f"VALIDATION_DISCOVERY_FAILED repository={repository} reason={pr_result.failure_reason}"
 						)
 					else:
-						discovery_outcome_for_memory = (
-							"success_seeded" if is_seed else "success_disagree"
-						)
-						result.discovery_outcome = "pr_opened"
-						print(
-							"VALIDATION_DISCOVERY_PR_OPENED "
-							f"repository={repository} pr_url={pr_url} kind={'seed' if is_seed else 'disagree'}"
-						)
+						pr_url = pr_result.pr_url
+						result.discovery_pr_url = pr_url
+						result.discovery_pr_branch = pr_branch
+						if pr_result.pr_was_reused:
+							discovery_outcome_for_memory = (
+								"success_seeded" if is_seed else "success_disagree"
+							)
+							result.discovery_outcome = "pr_reused"
+							print(
+								"VALIDATION_DISCOVERY_PR_REUSED "
+								f"repository={repository} pr_url={pr_url}"
+							)
+						else:
+							discovery_outcome_for_memory = (
+								"success_seeded" if is_seed else "success_disagree"
+							)
+							result.discovery_outcome = "pr_opened"
+							print(
+								"VALIDATION_DISCOVERY_PR_OPENED "
+								f"repository={repository} pr_url={pr_url} kind={'seed' if is_seed else 'disagree'}"
+							)
 
-		# Record outcome on the ai-memory branch (fail-open). Even failed
-		# discoveries are recorded so dedup will skip a thrashing repo for
-		# a short window; the dedup gate only counts `success_*` entries.
+		# Record outcome on the ai-memory branch (fail-open). Failed and dry-run
+		# entries are kept for observability; the dedup gate counts only
+		# `success_*` entries.
 		_append_discovery_memory(
 			repository=repository,
 			repo_root=self.source_root,

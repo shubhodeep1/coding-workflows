@@ -408,7 +408,10 @@ slots:
 """
 
 
-def _enabled_discovery_ctx() -> "refresh_runner.discovery_module.DiscoveryRunContext":
+
+def _enabled_discovery_ctx(
+	*, dry_run: bool = False
+) -> "refresh_runner.discovery_module.DiscoveryRunContext":
 	return refresh_runner.discovery_module.DiscoveryRunContext(
 		source_root=REPO_ROOT,
 		prompt_path=REPO_ROOT / "prompts" / "mode-validate-discover.txt",
@@ -424,7 +427,7 @@ def _enabled_discovery_ctx() -> "refresh_runner.discovery_module.DiscoveryRunCon
 		pr_label="automation:validate-bootstrap",
 		dedup_days=7,
 		enabled=True,
-		dry_run=False,
+		dry_run=dry_run,
 	)
 
 
@@ -533,7 +536,7 @@ def test_discovery_dispatch_opens_seed_pr_when_manifest_missing() -> None:
 				PlannedCall(("git", "checkout", "-B")),
 				PlannedCall(("git", "config", "user.name")),
 				PlannedCall(("git", "config", "user.email")),
-				PlannedCall(("git", "add"), check=False),
+				PlannedCall(("git", "add")),
 				PlannedCall(("git", "commit")),
 				PlannedCall(("git", "push", "-u", "origin")),
 				PlannedCall(
@@ -640,7 +643,7 @@ def test_discovery_dispatch_opens_disagree_pr_on_type_mismatch() -> None:
 				PlannedCall(("git", "checkout", "-B")),
 				PlannedCall(("git", "config", "user.name")),
 				PlannedCall(("git", "config", "user.email")),
-				PlannedCall(("git", "add"), check=False),
+				PlannedCall(("git", "add")),
 				PlannedCall(("git", "commit")),
 				PlannedCall(("git", "push", "-u", "origin")),
 				PlannedCall(
@@ -666,6 +669,44 @@ def test_discovery_dispatch_opens_disagree_pr_on_type_mismatch() -> None:
 		assert recorded["outcome"] == "success_disagree"
 		assert recorded["committed_type"] == "python-repo-checks"
 		assert recorded["discovered_type"] == "node-runtime"
+		executor.assert_consumed()
+
+
+def test_discovery_dispatch_records_dry_run_outcome_without_codex() -> None:
+	with tempfile.TemporaryDirectory(prefix="discovery-dry-run-") as td, _StubMemory() as stub:
+		workspace = Path(td) / "work"
+		workspace.mkdir(parents=True, exist_ok=True)
+		repository = "octo/demo-repo"
+		repo_dir = workspace / "octo__demo-repo"
+		branch = "ai/validation-refresh"
+
+		def on_clone(_command: list[str], _cwd: Path | None) -> None:
+			_write_manifest(repo_dir)
+
+		executor = FakeExecutor(
+			[
+				PlannedCall(("gh", "repo", "view"), stdout="main\n"),
+				PlannedCall(("gh", "repo", "clone"), callback=on_clone),
+				PlannedCall(("git", "fetch", "origin", "main")),
+				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
+				PlannedCall(("git", "rev-parse", "HEAD"), stdout="abc123def4567890\n", check=False),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
+				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
+				PlannedCall(("git", "status"), stdout=""),
+			]
+		)
+
+		runner = _make_runner(executor, branch, discovery_ctx=_enabled_discovery_ctx(dry_run=True))
+		result = runner.process_repository(repository, workspace)
+
+		assert result.discovery_outcome == "dry_run"
+		assert result.discovery_pr_url is None
+		assert len(stub.appended) == 1
+		recorded = stub.appended[0]
+		assert recorded["outcome"] == "dry_run"
+		assert recorded["pr_url"] is None
+		assert all(cmd[0] != "codex" for cmd, _cwd, _check, _env in executor.seen)
 		executor.assert_consumed()
 
 
@@ -700,11 +741,9 @@ def test_discovery_dispatch_records_failed_when_codex_exhausts() -> None:
 		)
 
 		ctx = _enabled_discovery_ctx()
-		# Use a custom ctx whose discovery module uses a no-sleep helper to
-		# keep the test fast. We can't easily override sleep through the
-		# dispatcher path, but the retry backoff for 3 attempts is small
-		# enough (5+10s) to not be noticeable in CI given that the FakeExecutor
-		# returns immediately. We bound it anyway by patching time.sleep.
+		# Keep the test fast by suppressing the discovery module's retry sleep.
+		# The dispatcher path does not expose a sleep override, so patch the
+		# shared `time.sleep` used by `discover_manifest_via_codex`.
 		import time as _time
 
 		orig_sleep = _time.sleep

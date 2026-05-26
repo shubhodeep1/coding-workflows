@@ -406,11 +406,11 @@ def open_or_update_discovery_pr(
 
 	Behaviour:
 	- If an open PR already exists for `pr_branch` against `base_branch`,
-	  return reused=True without touching the branch (Q8:A).
+		return reused=True without touching the branch (Q8:A).
 	- Otherwise, push a new branch with the manifest (+ optional entry
-	  script) to the consumer repo and open a PR.
+		script) to the consumer repo and open a PR.
 	- On `git push` failure (likely scope), return `failure_reason` set
-	  so the caller can record `outcome=push_denied` (Q9:A).
+		so the caller can record `outcome=push_denied` (Q9:A).
 	"""
 
 	executor = executor or CommandExecutor()
@@ -486,10 +486,13 @@ def open_or_update_discovery_pr(
 			cwd=consumer_clone_dir,
 			check=True,
 		)
+		paths_to_add = [".ai/validate.yml"]
+		if entry_script_text:
+			paths_to_add.append(entry_script_relative_path)
 		executor.run(
-			["git", "add", ".ai/validate.yml", entry_script_relative_path],
+			["git", "add", *paths_to_add],
 			cwd=consumer_clone_dir,
-			check=False,
+			check=True,
 		)
 		executor.run(
 			["git", "commit", "-m", pr_title],
@@ -545,8 +548,9 @@ def open_or_update_discovery_pr(
 	except subprocess.CalledProcessError as exc:
 		# Common case: label doesn't exist on the consumer repo. Retry
 		# without the --label argument before giving up.
-		if label and "label" in ((exc.stderr or "") + (exc.output or "")).lower():
-			fallback_command = [item for item in pr_create_command if item not in ("--label", label)]
+		error_text = "\n".join(part for part in (exc.stderr, exc.output) if part)
+		if _is_missing_pr_label_error(error_text=error_text, label=label):
+			fallback_command = pr_create_command[:-2]
 			try:
 				create_proc = executor.run(fallback_command, check=True)
 			except subprocess.CalledProcessError as inner_exc:
@@ -579,6 +583,18 @@ def open_or_update_discovery_pr(
 		pr_branch=pr_branch,
 		pr_was_reused=False,
 		failure_reason=None,
+	)
+
+
+def _is_missing_pr_label_error(*, error_text: str, label: str | None) -> bool:
+	if not label:
+		return False
+	lowered = (error_text or "").lower()
+	label_lower = label.lower()
+	return label_lower in lowered and (
+		"could not add label" in lowered
+		or "could not resolve to a label" in lowered
+		or "not found" in lowered
 	)
 
 
