@@ -28,8 +28,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-import yaml
-
 
 SUPPORTED_FAMILIES = (
 	"python-mongo-flask",
@@ -49,6 +47,59 @@ _EXPECTED_TOP_LEVEL_KEY_RE = re.compile(
 	re.IGNORECASE,
 )
 _FENCED_BLOCK_RE = re.compile(r"```(?:yaml|yml)?\n(.*?)```", flags=re.DOTALL | re.IGNORECASE)
+
+
+def _wrapped_command_failure(exc: BaseException) -> bool:
+	return (
+		exc.__class__.__name__ == "CommandFailure"
+		and hasattr(exc, "returncode")
+		and hasattr(exc, "stderr")
+	)
+
+
+def _command_exception_returncode(exc: BaseException) -> int | None:
+	value = getattr(exc, "returncode", None)
+	return value if isinstance(value, int) else None
+
+
+def _command_exception_stdout(exc: BaseException) -> str:
+	stdout = getattr(exc, "stdout", None)
+	if isinstance(stdout, str) and stdout:
+		return stdout
+	output = getattr(exc, "output", None)
+	if isinstance(output, str):
+		return output
+	return ""
+
+
+def _command_exception_stderr(exc: BaseException) -> str:
+	stderr = getattr(exc, "stderr", None)
+	return stderr if isinstance(stderr, str) else ""
+
+
+def _command_exception_text(exc: BaseException) -> str:
+	parts: list[str] = []
+	for part in (_command_exception_stderr(exc), _command_exception_stdout(exc)):
+		if part and part not in parts:
+			parts.append(part)
+	if not parts:
+		parts.append(str(exc))
+	return "\n".join(parts)
+
+
+def _known_executor_failure(exc: BaseException) -> bool:
+	return isinstance(
+		exc,
+		(subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError),
+	) or _wrapped_command_failure(exc)
+
+
+def _load_yaml_module() -> tuple[Any | None, str | None]:
+	try:
+		import yaml
+	except ImportError as exc:
+		return None, f"yaml_missing: {exc}"
+	return yaml, None
 
 
 @dataclass(frozen=True)
@@ -173,6 +224,10 @@ def validate_discovered_manifest_yaml(
 	if not any(_EXPECTED_TOP_LEVEL_KEY_RE.match(line) for line in non_blank_non_comment_lines):
 		return False, None, "no_expected_top_level_key"
 
+	yaml, yaml_error = _load_yaml_module()
+	if yaml is None:
+		return False, None, yaml_error
+
 	try:
 		parsed = yaml.safe_load(yaml_text)
 	except yaml.YAMLError as exc:
@@ -261,17 +316,31 @@ def discover_manifest_via_codex(
 				input_text=prompt_text,
 				env_overrides={"CODEX_DISABLE_TELEMETRY": "1"},
 			)
-		except subprocess.TimeoutExpired:
-			last_failure = "codex_timeout"
-		except FileNotFoundError:
+		except Exception as exc:
+			if isinstance(exc, subprocess.TimeoutExpired) or (
+				_wrapped_command_failure(exc) and _command_exception_returncode(exc) == 124
+			):
+				last_failure = "codex_timeout"
+				proc = None
+			elif isinstance(exc, FileNotFoundError) or (
+				_wrapped_command_failure(exc) and _command_exception_returncode(exc) == 127
+			):
 			# Codex CLI not installed in this environment — surface clearly
 			# so the workflow log explains the missing prerequisite without
 			# tripping the validator-rejection retry path.
-			return DiscoveryResult(
-				outcome="failed",
-				attempts_used=attempt,
-				failure_reason="codex_cli_missing",
-			)
+				return DiscoveryResult(
+					outcome="failed",
+					attempts_used=attempt,
+					failure_reason="codex_cli_missing",
+				)
+			elif isinstance(exc, subprocess.CalledProcessError) or _wrapped_command_failure(exc):
+				returncode = _command_exception_returncode(exc)
+				if returncode is None:
+					raise
+				last_failure = f"codex_rc_nonzero(rc={returncode})"
+				proc = None
+			else:
+				raise
 		else:
 			if proc.returncode != 0:
 				last_failure = f"codex_rc_nonzero(rc={proc.returncode})"
@@ -320,6 +389,14 @@ def classify_disagreement(
 	Q7:A — only the top-level `type` field is considered. Optional-key
 	differences (slots, custom_tests, etc.) do NOT trigger a PR.
 	"""
+
+	yaml, _yaml_error = _load_yaml_module()
+	if yaml is None:
+		return DisagreementResult(
+			disagrees=False,
+			committed_type=None,
+			discovered_type=None,
+		)
 
 	discovered_type: str | None = None
 	try:
@@ -433,7 +510,9 @@ def open_or_update_discovery_pr(
 			],
 			check=True,
 		)
-	except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+	except Exception as exc:
+		if not _known_executor_failure(exc):
+			raise
 		return DiscoveryPrResult(
 			pr_url=None,
 			pr_branch=pr_branch,
@@ -499,7 +578,9 @@ def open_or_update_discovery_pr(
 			cwd=consumer_clone_dir,
 			check=True,
 		)
-	except subprocess.CalledProcessError as exc:
+	except Exception as exc:
+		if not _known_executor_failure(exc):
+			raise
 		return DiscoveryPrResult(
 			pr_url=None,
 			pr_branch=pr_branch,
@@ -514,12 +595,14 @@ def open_or_update_discovery_pr(
 			cwd=consumer_clone_dir,
 			check=True,
 		)
-	except subprocess.CalledProcessError as exc:
+	except Exception as exc:
+		if not _known_executor_failure(exc):
+			raise
 		return DiscoveryPrResult(
 			pr_url=None,
 			pr_branch=pr_branch,
 			pr_was_reused=False,
-			failure_reason=f"push_denied: {(exc.stderr or '').strip()[:300]}",
+			failure_reason=f"push_denied: {_command_exception_stderr(exc).strip()[:300]}",
 		)
 
 	# Create the PR. The label is optional — if creation succeeds but
@@ -545,15 +628,19 @@ def open_or_update_discovery_pr(
 
 	try:
 		create_proc = executor.run(pr_create_command, check=True)
-	except subprocess.CalledProcessError as exc:
+	except Exception as exc:
+		if not _known_executor_failure(exc):
+			raise
 		# Common case: label doesn't exist on the consumer repo. Retry
 		# without the --label argument before giving up.
-		error_text = "\n".join(part for part in (exc.stderr, exc.output) if part)
+		error_text = _command_exception_text(exc)
 		if _is_missing_pr_label_error(error_text=error_text, label=label):
 			fallback_command = pr_create_command[:-2]
 			try:
 				create_proc = executor.run(fallback_command, check=True)
-			except subprocess.CalledProcessError as inner_exc:
+			except Exception as inner_exc:
+				if not _known_executor_failure(inner_exc):
+					raise
 				return DiscoveryPrResult(
 					pr_url=None,
 					pr_branch=pr_branch,

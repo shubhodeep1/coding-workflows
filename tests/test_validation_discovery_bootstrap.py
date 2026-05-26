@@ -74,6 +74,14 @@ class FakeExecutor:
 		assert not self._planned, f"unconsumed: {self._planned}"
 
 
+class CommandFailure(Exception):
+	def __init__(self, *, returncode: int, stdout: str = "", stderr: str = "") -> None:
+		super().__init__(stderr or stdout or f"rc={returncode}")
+		self.returncode = returncode
+		self.stdout = stdout
+		self.stderr = stderr
+
+
 VALID_NODE_RUNTIME_MANIFEST = """type: node-runtime
 entry: npm
 slots:
@@ -95,6 +103,10 @@ slots:
     - jq
   tap_plan: 3
 """
+
+
+def test_module_import_is_lazy_for_yaml_dependency() -> None:
+	assert "yaml" not in discovery.__dict__
 
 
 def test_validate_discovered_manifest_yaml_accepts_node_runtime() -> None:
@@ -299,6 +311,36 @@ def test_discover_manifest_via_codex_cli_missing_does_not_loop() -> None:
 	assert exe.calls == 1
 
 
+def test_discover_manifest_via_codex_wrapped_missing_cli_does_not_loop() -> None:
+	class MissingCliExecutor:
+		def __init__(self) -> None:
+			self.calls = 0
+
+		def run(self, *_args, **_kwargs):  # noqa: ANN002 ANN003
+			self.calls += 1
+			raise CommandFailure(
+				returncode=127,
+				stderr="[Errno 2] No such file or directory: 'codex'",
+			)
+
+	exe = MissingCliExecutor()
+	with tempfile.TemporaryDirectory(prefix="discovery-wrapped-missing-cli-") as td:
+		result = discovery.discover_manifest_via_codex(
+			clone_dir=Path(td),
+			prompt_path=PROMPT_PATH,
+			schema_path=SCHEMA_PATH,
+			model="openai/gpt-5.4",
+			reasoning_effort="xhigh",
+			attempts=3,
+			executor=exe,
+			sleep_fn=lambda _seconds: None,
+		)
+	assert result.outcome == "failed"
+	assert result.failure_reason == "codex_cli_missing"
+	assert result.attempts_used == 1
+	assert exe.calls == 1
+
+
 def test_open_or_update_discovery_pr_creates_new_pr_when_none_open() -> None:
 	with tempfile.TemporaryDirectory(prefix="discovery-pr-create-") as td:
 		clone_dir = Path(td)
@@ -408,6 +450,47 @@ def test_open_or_update_discovery_pr_records_push_denied_on_push_failure() -> No
 		executor.assert_consumed()
 
 
+def test_open_or_update_discovery_pr_records_wrapped_push_denied_on_push_failure() -> None:
+	with tempfile.TemporaryDirectory(prefix="discovery-pr-wrapped-push-fail-") as td:
+		clone_dir = Path(td)
+
+		def on_push(_command: list[str], _cwd: Path | None, _input_text: str | None) -> None:
+			raise CommandFailure(
+				returncode=128,
+				stderr="remote: Permission to octo/demo.git denied.\n",
+			)
+
+		executor = FakeExecutor(
+			[
+				PlannedRun(("gh", "pr", "list"), stdout="[]\n"),
+				PlannedRun(("git", "checkout", "-B")),
+				PlannedRun(("git", "config", "user.name")),
+				PlannedRun(("git", "config", "user.email")),
+				PlannedRun(("git", "add")),
+				PlannedRun(("git", "commit")),
+				PlannedRun(("git", "push", "-u", "origin"), callback=on_push),
+			]
+		)
+		result = discovery.open_or_update_discovery_pr(
+			consumer_slug="octo/demo",
+			consumer_clone_dir=clone_dir,
+			base_branch="main",
+			pr_branch="automation/validate-discovery/abc123/node-runtime",
+			manifest_yaml=VALID_NODE_RUNTIME_MANIFEST,
+			entry_script_text=None,
+			entry_script_relative_path="scripts/run_validation_repo_checks.sh",
+			pr_title="chore(validation): seed",
+			rationale_md="body",
+			label="automation:validate-bootstrap",
+			executor=executor,
+		)
+		assert result.pr_url is None
+		assert result.pr_was_reused is False
+		assert result.failure_reason is not None
+		assert result.failure_reason.startswith("push_denied")
+		executor.assert_consumed()
+
+
 def test_open_or_update_discovery_pr_retries_without_label_when_label_missing() -> None:
 	with tempfile.TemporaryDirectory(prefix="discovery-pr-label-fallback-") as td:
 		clone_dir = Path(td)
@@ -450,6 +533,55 @@ def test_open_or_update_discovery_pr_retries_without_label_when_label_missing() 
 			executor=executor,
 		)
 		assert result.pr_url == "https://github.com/octo/demo/pull/43"
+		assert result.failure_reason is None
+		executor.assert_consumed()
+
+
+def test_open_or_update_discovery_pr_retries_without_label_on_wrapped_missing_label_error() -> None:
+	with tempfile.TemporaryDirectory(prefix="discovery-pr-wrapped-label-fallback-") as td:
+		clone_dir = Path(td)
+
+		def on_retry(command: list[str], _cwd: Path | None, _input_text: str | None) -> None:
+			assert "--label" not in command
+
+		def on_label_failure(command: list[str], _cwd: Path | None, _input_text: str | None) -> None:
+			assert "--label" in command
+			raise CommandFailure(
+				returncode=1,
+				stderr="could not add label 'automation:validate-bootstrap': not found\n",
+			)
+
+		executor = FakeExecutor(
+			[
+				PlannedRun(("gh", "pr", "list"), stdout="[]\n"),
+				PlannedRun(("git", "checkout", "-B")),
+				PlannedRun(("git", "config", "user.name")),
+				PlannedRun(("git", "config", "user.email")),
+				PlannedRun(("git", "add")),
+				PlannedRun(("git", "commit")),
+				PlannedRun(("git", "push", "-u", "origin")),
+				PlannedRun(("gh", "pr", "create"), callback=on_label_failure),
+				PlannedRun(
+					("gh", "pr", "create"),
+					stdout="https://github.com/octo/demo/pull/44\n",
+					callback=on_retry,
+				),
+			]
+		)
+		result = discovery.open_or_update_discovery_pr(
+			consumer_slug="octo/demo",
+			consumer_clone_dir=clone_dir,
+			base_branch="main",
+			pr_branch="automation/validate-discovery/abc123/node-runtime",
+			manifest_yaml=VALID_NODE_RUNTIME_MANIFEST,
+			entry_script_text=None,
+			entry_script_relative_path="scripts/run_validation_repo_checks.sh",
+			pr_title="chore(validation): seed",
+			rationale_md="body",
+			label="automation:validate-bootstrap",
+			executor=executor,
+		)
+		assert result.pr_url == "https://github.com/octo/demo/pull/44"
 		assert result.failure_reason is None
 		executor.assert_consumed()
 
@@ -507,3 +639,25 @@ def test_build_pr_rationale_markdown_does_not_use_auto_close_keywords() -> None:
 	# §19 hard rule — no auto-close keywords in PR bodies authored by AI.
 	for forbidden in ("fixes #", "closes #", "resolves #", "fix #", "close #", "resolve #"):
 		assert forbidden not in lowered, f"forbidden auto-close keyword found: {forbidden!r}"
+
+
+def main() -> int:
+	test_funcs = [value for name, value in sorted(globals().items()) if name.startswith("test_")]
+	passed = 0
+	failed = 0
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			func()
+			print(f"  PASS  {name}")
+			passed += 1
+		except Exception as exc:
+			print(f"  FAIL  {name}: {exc}")
+			failed += 1
+
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

@@ -509,6 +509,12 @@ class ValidationRefreshRunner:
 					)
 				else:
 					# Open / reuse a PR with the discovered manifest.
+					if not is_seed:
+						print(
+							"VALIDATION_DISCOVERY_DISAGREE "
+							f"repository={repository} committed_type={committed_type or 'unknown'} "
+							f"discovered_type={discovered_type or 'unknown'}"
+						)
 					pr_branch = discovery_module.build_pr_branch_name(
 						prefix=ctx.pr_branch_prefix,
 						consumer_head_sha=consumer_head_sha or "0" * 12,

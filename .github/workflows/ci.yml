@@ -183,6 +183,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_selftest_status.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_nightly_validation_selftest_workflow_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_refresh_runner.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_discovery_bootstrap.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_refresh_workflow_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_checkout_integration_ref_audit.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_drift_audit_job.py

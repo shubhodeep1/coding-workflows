@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import importlib.util
+import contextlib
+import io
 import json
 import os
 import subprocess
@@ -660,10 +662,16 @@ def test_discovery_dispatch_opens_disagree_pr_on_type_mismatch() -> None:
 		)
 
 		runner = _make_runner(executor, branch, discovery_ctx=_enabled_discovery_ctx())
-		result = runner.process_repository(repository, workspace)
+		stdout = io.StringIO()
+		with contextlib.redirect_stdout(stdout):
+			result = runner.process_repository(repository, workspace)
 
 		assert result.discovery_outcome == "pr_opened"
 		assert result.discovery_pr_url == "https://github.com/octo/demo-repo/pull/101"
+		assert (
+			"VALIDATION_DISCOVERY_DISAGREE "
+			"repository=octo/demo-repo committed_type=python-repo-checks discovered_type=node-runtime"
+		) in stdout.getvalue()
 		assert len(stub.appended) == 1
 		recorded = stub.appended[0]
 		assert recorded["outcome"] == "success_disagree"
