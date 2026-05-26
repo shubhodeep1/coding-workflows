@@ -26,7 +26,7 @@ jobs:
       - name: Install Python CI dependencies
         run: |
           set -euo pipefail
-          python3 -m pip install yamllint coverage pyyaml jsonschema jinja2
+          python3 -m pip install yamllint coverage pyyaml jsonschema jinja2 ruff
 
       - name: YAML lint
         run: |
@@ -107,6 +107,11 @@ jobs:
           # pytest at runtime) still surface only when Phase 4b
           # actually runs the test on the smoke runner.
           python3 -m py_compile tests/test_e2e_editor_smoke_canary.py
+
+      - name: Python lint (ruff)
+        run: |
+          set -euo pipefail
+          ruff check --select E,F --ignore E501 scripts/*.py
 
       - name: Review Semble contract test
         run: |
@@ -509,12 +514,6 @@ jobs:
           for f in scripts/*.sh .claude/hooks/*.sh workflow-templates/.claude/hooks/*.sh; do
             shellcheck --severity=error "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
           done
-
-      - name: Python lint (ruff)
-        run: |
-          set -euo pipefail
-          pip install -q ruff
-          ruff check --select E,F --ignore E501 scripts/*.py
 
       - name: Orchestrate poll process unit tests
         run: |
