@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/implement_diagnose_post_codex_failure.sh:267-277 | severity=medium | confidence=5\n  flagged_by: [minimax_minimax-m2_5, mistralai_mistral-small-2603]\n  PROBLEM: The cached-body jq path can turn `body: null` into an empty-string cache hit and suppress the live API fallback, misclassifying an empty issue body as loaded from metadata.\n  WHY: minimax and mistralai report this as a runtime correctness bug; deepseek_deepseek-v4-pro and qwen_qwen3_6-plus explicitly say the null-body behavior is intentional and correct, so the highest-confidence reports disagree on impact.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The linked issue asks to \"Update analysis/recommendation-processing-report.md into the final repo-state report, grounding every statement in the merged repository state and classifying each recommendation from the processed source docs as actioned, already satisfied, or intentionally deferred/risky, with the concrete code changes called out for the actioned items.\"\n  expected_change_site: analysis/recommendation-processing-report.md\n  confidence=3\n  flagged_by: [minimax_minimax-m2_5]\n  EVIDENCE: The report's \"Processed source docs (85)\" section still lists files deleted in this PR and some ledger entries repeat under heading-text labels rather than stable IDs.\n- requirement: \"Update analysis/recommendation-processing-report.md into the final repo-state report for this pass. The report must ground every statement in the merged repository state and classify each recommendation from the processed source docs as actioned, already satisfied, or intentionally deferred/risky, with the concrete code changes called out for the actioned items.\"\n  expected_change_site: analysis/recommendation-processing-report.md (and the four dated source docs)\n  confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: All four dated optimisation reports were deleted, and the final report was updated with repo-grounded wording and explicit sibling-work citations.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/implement_diagnose_post_codex_failure.sh:269-277 | severity=medium | confidence=5\n  PROBLEM: The jq expression `if has(\"body\") then (.body // \"\") else error(\"missing body\") end` treats a null body value in cached metadata as a valid cache hit by returning an empty string.\n  WHY: When the GitHub API returns `{\"body\": null}`, the new jq logic writes `\"\"` to `ISSUE_BODY_FILE` and never triggers the live API fallback, so an issue with no cached body can be misclassified as loaded from metadata.\n- Requirement: The linked issue asks to \"Update analysis/recommendation-processing-report.md into the final repo-state report, grounding every statement in the merged repository state and classifying each recommendation from the processed source docs as actioned, already satisfied, or intentionally deferred/risky, with the concrete code changes called out for the actioned items.\"\n  Expected change site: analysis/recommendation-processing-report.md\n  Evidence of absence: The report's \"Processed source docs (85)\" section lists files that were just deleted in this same PR (workflow-optimization-2026-05-22.md, workflow-optimization-2026-05-22-2.md, workflow-optimization-2026-05-23.md, workflow-optimization-2026-05-23-2.md). While the report preamble notes filenames are \"retained for provenance,\" this creates a tension: the report claims to ground statements in \"current repository state on this ref\" but enumerates files that no longer exist in that state. The ledger entries also repeat under heading-text labels rather than stable IDs for some 05-23 items.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/implement_diagnose_post_codex_failure.sh:272-277 | severity=medium | confidence=5\n  PROBLEM: The refactored `jq` command for metadata body extraction uses `.body // \"\"`, which treats cached metadata with a missing or null `\"body\"` key as a valid empty-string cache hit.\n  WHY: This causes the live API fallback not to run when metadata is missing the body key or carries `null`, so the issue body can remain empty instead of being fetched from the API.\n- scripts/implement_diagnose_post_codex_failure.sh:267-277 | severity=medium | confidence=3\n  PROBLEM: The new logic can skip the file path entirely when metadata looks empty and the API fetch is not needed, which can lose the semantics of `empty_body` versus a valid cache indicator.\n  WHY: Pull-request and integration scripts that distinguish empty-body from missing-body behavior may not trigger correctly if the file is exported as cache-miss content.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: \"Update analysis/recommendation-processing-report.md into the final repo-state report for this pass. The report must ground every statement in the merged repository state and classify each recommendation from the processed source docs as actioned, already satisfied, or intentionally deferred/risky, with the concrete code changes called out for the actioned items. Preserve the current report's overall grounding style/status buckets unless a smaller rewrite is clearly safer.\"\n  Expected change site: analysis/recommendation-processing-report.md (and the four dated source docs)\n  Evidence of absence: All four dated optimisation reports were deleted (no diff hunks exist). The report was updated with a clean final ledger, repo-grounded wording for the five safe-cleanup items, and explicit \"sibling work\" citations for actioned items. The four source docs are now absent from the tree and the \"Processed source docs\" list has been synced. The change satisfies the intent with minimal rewrite.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "e3ad70cbbf6f12f60f83e33155bafcdaf8420341b84a4911bad9026aab3ef630",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2971,
+    "run_id": "26465058869",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26465058869",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260526175912_dbfb65b0a5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2971,
+    "run_id": "26465058869"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-26T17:59:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
