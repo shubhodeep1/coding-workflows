@@ -297,6 +297,19 @@ def test_sweep_skips_orchestrator_project_branches():
 	)
 
 
+def test_sweep_skips_forward_merge_fallback_branches():
+	"""Forward-merge fallback PRs must be merged manually via Create a
+	merge commit, so the noop-suspicious sweep must not redispatch or
+	force-merge their `auto/forward-merge-stable-*` branches."""
+	sweep = _sweep_block()
+	assert '[[ "${N_HEAD}" == auto/forward-merge-stable-* ]]' in sweep, (
+		"Sweep must explicitly skip forward-merge fallback PR branches."
+	)
+	assert "Create a merge commit" in sweep and "gh pr merge --squash --auto" in sweep, (
+		"Forward-merge skip rationale must document the ancestry-preserving manual merge requirement."
+	)
+
+
 def test_sweep_counts_only_post_productive_warnings():
 	"""The retry counter is "noop warnings newer than latest
 	[ai-autofix] / [judge-fix] commit". This is the implicit reset on
