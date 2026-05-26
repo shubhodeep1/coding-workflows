@@ -386,11 +386,17 @@ def test_open_or_update_discovery_pr_creates_new_pr_when_none_open() -> None:
 def test_open_or_update_discovery_pr_reuses_existing_open_pr() -> None:
 	with tempfile.TemporaryDirectory(prefix="discovery-pr-reuse-") as td:
 		clone_dir = Path(td)
+
+		def on_list(command: list[str], _cwd: Path | None, _input_text: str | None) -> None:
+			assert "--base" in command
+			assert command[command.index("--base") + 1] == "main"
+
 		executor = FakeExecutor(
 			[
 				PlannedRun(
 					("gh", "pr", "list"),
 					stdout='[{"url":"https://github.com/octo/demo/pull/17","number":17}]\n',
+					callback=on_list,
 				),
 			]
 		)

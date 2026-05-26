@@ -90,8 +90,8 @@ jobs:
         id: refresh
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          VALIDATION_DISCOVERY_ENABLED: ${{ github.event.inputs.discovery_enabled || 'true' }}
-          VALIDATION_DISCOVERY_DRY_RUN: ${{ github.event.inputs.discovery_dry_run || 'false' }}
+          VALIDATION_DISCOVERY_ENABLED: ${{ github.event.inputs.discovery_enabled || vars.VALIDATION_DISCOVERY_ENABLED || 'true' }}
+          VALIDATION_DISCOVERY_DRY_RUN: ${{ github.event.inputs.discovery_dry_run || vars.VALIDATION_DISCOVERY_DRY_RUN || 'false' }}
           VALIDATION_DISCOVERY_DEDUP_DAYS: ${{ vars.VALIDATION_DISCOVERY_DEDUP_DAYS || '7' }}
           VALIDATION_DISCOVERY_MAX_ATTEMPTS: ${{ vars.VALIDATION_DISCOVERY_MAX_ATTEMPTS || '3' }}
           VALIDATION_DISCOVERY_MODEL: ${{ vars.VALIDATION_DISCOVERY_MODEL || 'openai/gpt-5.4' }}

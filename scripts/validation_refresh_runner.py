@@ -822,7 +822,10 @@ def _dedup_skip(*, repository: str, repo_root: Path, dedup_days: int) -> bool:
 			[
 				"bash",
 				"-c",
-				f". {helper_path.as_posix()} && memory_validation_discovery_get --repo {repository} --enabled",
+				'. "$1" && memory_validation_discovery_get --repo "$2" --enabled',
+				"bash",
+				helper_path.as_posix(),
+				repository,
 			],
 			cwd=str(repo_root),
 			text=True,
@@ -913,11 +916,11 @@ def _append_discovery_memory(
 			[
 				"bash",
 				"-c",
-				(
-					f". {helper_path.as_posix()} && "
-					f"memory_validation_discovery_append --repo {repository} "
-					f"--entry-file {entry_file} --enabled"
-				),
+				'. "$1" && memory_validation_discovery_append --repo "$2" --entry-file "$3" --enabled',
+				"bash",
+				helper_path.as_posix(),
+				repository,
+				entry_file,
 			],
 			cwd=str(repo_root),
 			text=True,

@@ -325,9 +325,9 @@ def discover_manifest_via_codex(
 			elif isinstance(exc, FileNotFoundError) or (
 				_wrapped_command_failure(exc) and _command_exception_returncode(exc) == 127
 			):
-			# Codex CLI not installed in this environment — surface clearly
-			# so the workflow log explains the missing prerequisite without
-			# tripping the validator-rejection retry path.
+				# Codex CLI not installed in this environment — surface clearly
+				# so the workflow log explains the missing prerequisite without
+				# tripping the validator-rejection retry path.
 				return DiscoveryResult(
 					outcome="failed",
 					attempts_used=attempt,
@@ -468,6 +468,7 @@ def build_pr_branch_name(*, prefix: str, consumer_head_sha: str, discovered_type
 def _find_existing_open_pr_url(
 	*,
 	consumer_slug: str,
+	base_branch: str,
 	pr_branch: str,
 	executor: CommandExecutor,
 	fail_open: bool = False,
@@ -480,6 +481,8 @@ def _find_existing_open_pr_url(
 				"list",
 				"--repo",
 				consumer_slug,
+				"--base",
+				base_branch,
 				"--head",
 				pr_branch,
 				"--state",
@@ -544,6 +547,7 @@ def open_or_update_discovery_pr(
 	# Q8:A — list any existing open PRs on this branch first; skip if found.
 	existing_pr_url, lookup_error = _find_existing_open_pr_url(
 		consumer_slug=consumer_slug,
+		base_branch=base_branch,
 		pr_branch=pr_branch,
 		executor=executor,
 	)
@@ -633,6 +637,7 @@ def open_or_update_discovery_pr(
 			raise
 		existing_pr_url, _ = _find_existing_open_pr_url(
 			consumer_slug=consumer_slug,
+			base_branch=base_branch,
 			pr_branch=pr_branch,
 			executor=executor,
 			fail_open=True,
@@ -689,6 +694,7 @@ def open_or_update_discovery_pr(
 					raise
 				existing_pr_url, _ = _find_existing_open_pr_url(
 					consumer_slug=consumer_slug,
+					base_branch=base_branch,
 					pr_branch=pr_branch,
 					executor=executor,
 					fail_open=True,
@@ -709,6 +715,7 @@ def open_or_update_discovery_pr(
 		else:
 			existing_pr_url, _ = _find_existing_open_pr_url(
 				consumer_slug=consumer_slug,
+				base_branch=base_branch,
 				pr_branch=pr_branch,
 				executor=executor,
 				fail_open=True,
