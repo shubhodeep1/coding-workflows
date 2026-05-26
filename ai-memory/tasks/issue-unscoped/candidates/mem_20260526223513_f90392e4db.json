@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:128-138 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603, moonshotai_kimi-k2_5]\n  PROBLEM: Step name \"Orchestrate poller regression tests\" does not match the tests actually executed in the step.\n  WHY: CI logs and failure attribution will incorrectly map ahead-by-gate failures to the lib step (or vice versa), breaking the intended observability contract.\n- scripts/review_rb_judge.sh:176-180 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Dead duplicate helper block for _embed_input_file remains (lines 176-180 replicate the canonical implementation at line 95).\n  WHY: Shell syntax check (`bash -n`) passes, but duplicate function definitions risk confusion and drift in the prompt-budget fallback within an editorial-cleanup script.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: CI step observability \u2014 step name must match the tests it executes to preserve CI log semantics and operator triage accuracy\n  expected_change_site: .github/workflows/ci.yml step name at line 132\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: Step name \"Orchestrate poller regression tests\" executes `tests/test_orchestrate_poll_process.py` and `tests/test_orchestrate_poll_noop_suspicious_recovery.py`, not the ahead-by-gate tests\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- .github/workflows/ci.yml:132 | confidence=5\n  PROBLEM: Step name \"Orchestrate poller regression tests\" does not match the tests actually executed in the step\n  WHY: CI logs and failure attribution will incorrectly map ahead-by-gate failures to the lib step (or vice versa), breaking the intended observability contract\n\n- scripts/review_rb_judge.sh:176-180 | confidence=5\n  PROBLEM: Dead duplicate helper block for _embed_input_file remains (lines 176-180 replicate the canonical implementation at line 95)\n  WHY: Shell syntax check (`bash -n`) passes, but duplicate function definitions risk confusion and drift in the prompt-budget fallback within an editorial-cleanup script\n\n- Requirement: CI step observability \u2014 step name must match the tests it executes to preserve CI log semantics and operator triage accuracy\n  Expected change site: .github/workflows/ci.yml step name at line 132\n  Evidence of absence: Step name \"Orchestrate poller regression tests\" executes `tests/test_orchestrate_poll_process.py` and `tests/test_orchestrate_poll_noop_suspicious_recovery.py`, not the ahead-by-gate tests\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/ci.yml:128-138 | confidence=4\n  PROBLEM: The step name \"Orchestrate poller regression tests\" is misleading because it does not run the integration-ahead-by gate regression tests.\n  WHY: While tests execute correctly, CI failure attribution and operator triage will mis-map failures to the wrong step, breaking the intended observability contract.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "8d9076473e1b82430163034e1d99de6c9151264337b3d1c9a698a16868f6adbb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2972,
+    "run_id": "26478712790",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26478712790",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260526223513_f90392e4db",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2972,
+    "run_id": "26478712790"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-26T22:35:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
