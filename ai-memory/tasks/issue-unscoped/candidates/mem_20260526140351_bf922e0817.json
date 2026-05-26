@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validation_discovery_bootstrap.py:407-413 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5]\n  PROBLEM: Docstring continuation lines use mixed tabs and spaces, triggering Ruff E101 indentation errors.\n  WHY: Both reviewers reported the same lint failure on the docstring continuation lines, and the CI lint gate fails, blocking merge.\n- scripts/validation_refresh_runner.py:417-422 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5]\n  PROBLEM: Docstring continuation lines use mixed tabs and spaces, triggering Ruff E101 indentation errors.\n  WHY: Both reviewers reported the same lint failure on the docstring continuation lines, and the CI lint gate fails, blocking merge.\n- scripts/validation_refresh_runner.py:454-462 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The dry-run early return skips the memory-write path despite the docstring claiming it is exercised.\n  WHY: The code returns before `_append_discovery_memory`, so operators following the docstring/README would be misled about what dry-run validates.\n- scripts/validation_discovery_bootstrap.py:38-41 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The Python top-level-key regex includes `slots:` but the shell validator regex is not in sync.\n  WHY: This violates the stated contract that both validators must stay synchronized, creating a permissive mismatch between code paths.\n- .github/workflows/orchestrate.yml:233 and 359 | severity=medium | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `validation_discovery.v1.json` is not included in the schema fetch list.\n  WHY: The validation helpers require that schema file, so consumer workflows can fail with a missing-schema error when validation discovery runs.\n- .github/workflows/orchestrate_poll.yml:322 | severity=medium | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `validation_discovery.v1.json` is not included in the schema fetch list.\n  WHY: The validation helpers require that schema file, so schema validation can fail with a missing-schema error when discovery operations run.\n- .github/workflows/orchestrate_clarify_respond.yml:282 | severity=medium | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `validation_discovery.v1.json` is not included in the schema fetch list.\n  WHY: The validation helpers require that schema file, so schema validation can fail with a missing-schema error when discovery operations run.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/validation_discovery_bootstrap.py:409, 411, 413 | severity=medium | confidence=5\n  PROBLEM: Docstring continuation lines use a tab followed by spaces, triggering Ruff E101 mixed indentation errors.\n  WHY: The CI lint check-run fails with E101 on these lines, blocking merge.\n- scripts/validation_refresh_runner.py:419, 422 | severity=medium | confidence=5\n  PROBLEM: Docstring continuation lines use a tab followed by spaces, triggering Ruff E101 mixed indentation errors.\n  WHY: The CI lint check-run fails with E101 on these lines, blocking merge.\n- scripts/validation_refresh_runner.py:454-462 | severity=low | confidence=3\n  PROBLEM: The dry_run early-return path skips the `_append_discovery_memory` call even though the docstring says it still exercises the dedup plus memory write path.\n  WHY: Operators running `discovery_dry_run=true` would be misled about what the code validates, and the docstring points to the wrong behavior.\n- scripts/validation_discovery_bootstrap.py:38-41 | severity=low | confidence=3\n  PROBLEM: The Python regex accepts `slots:` as a top-level key but the shell regex in `validate_process.sh` does not.\n  WHY: This violates the stated sync contract between the two validators and makes the Python surface check more permissive than the shell fallback path.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/validation_discovery_bootstrap.py:407-413 | severity=medium | confidence=5\n  PROBLEM: Mixed indentation (spaces + tabs) in the docstring causes a Ruff E101 lint error.\n  WHY: The lint check fails and blocks PR merge.\n- scripts/validation_refresh_runner.py:417-422 | severity=medium | confidence=5\n  PROBLEM: Mixed indentation (spaces + tabs) in the docstring causes a Ruff E101 lint error.\n  WHY: The lint check fails and blocks PR merge.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/orchestrate.yml:233 and 359 | severity=medium | confidence=5\n  PROBLEM: `validation_discovery.v1.json` is not included in the schema fetch list.\n  WHY: `append_validation_discovery_entry()` and `get_validation_discovery()` require that schema file, so validation discovery can fail with a missing-schema error when the workflows run.\n- .github/workflows/orchestrate_poll.yml:322 | severity=medium | confidence=5\n  PROBLEM: `validation_discovery.v1.json` is not included in the schema fetch list.\n  WHY: The workflow uses memory helpers that may call validation discovery operations, and schema validation will fail if the schema is not fetched.\n- .github/workflows/orchestrate_clarify_respond.yml:282 | severity=medium | confidence=5\n  PROBLEM: `validation_discovery.v1.json` is not included in the schema fetch list.\n  WHY: Discovery operations invoked by this workflow can hit the missing-schema failure path.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "be616270f66b0233b5b92f44a0b3de39b837dd4eb3ab30c4673981576bdd2dd4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26451437956",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26451437956",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260526140351_bf922e0817",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26451437956"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 7 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-26T14:03:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
