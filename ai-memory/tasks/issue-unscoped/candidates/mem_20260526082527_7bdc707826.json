@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:16834-16865 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: The same jq helper pipeline is defined and run twice to parse the same check-runs JSON.\n  WHY: This is redundant work only and adds extra CPU/memory overhead, but no correctness impact.\n- scripts/orchestrate_poll_process.sh:~16834-~16841 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The new `review / codex-agent` retry-artifact filter is applied to all completed check-runs, so a legitimately required cancelled job can be ignored.\n  WHY: That could let the sweep force-merge a PR that branch protection would otherwise block.\n- scripts/orchestrate_poll_process.sh:~10550-~10550 | severity=medium | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: The cached GraphQL head.sha handling can pass a literal `\"null\"` through as if it were a real SHA.\n  WHY: Reviewers disagreed on whether the existing guard already covers this, but the flagged path can still propagate a non-empty `null` SHA into downstream checks.\n- tests/test_orchestrate_poll_noop_suspicious_recovery.py:303-310 | severity=low | confidence=4\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The new test name uses a `_branches` suffix for a PR head-ref guard, which is misleading and duplicates sibling skip coverage.\n  WHY: It does not fail at runtime, but it creates confusing near-duplicate coverage that must be updated together.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:16839-16841,16855-16857 | confidence=2\n  PROBLEM: The `_is_retry_artifact` and `_is_blocking` jq helper functions are defined identically twice within ~20 lines for the two separate jq invocations that process the same `N_CHECKS_JSON` payload.\n  WHY: Does not fail - this is only a minor inefficiency. Both jq invocations operate on the same shell variable, so no extra network call is involved; the overhead is limited to a second JSON parse pass through the already-in-memory string.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_poll_process.sh:16834-16865 | confidence=3\n  PROBLEM: The check-runs JSON is parsed twice with nearly identical jq logic to extract `_failing_check_count` and `_failing_check`.\n  WHY: While functionally correct, this parses the same potentially large JSON payload twice, performing redundant jq transformations. For PRs with many check-runs, this doubles the CPU/memory overhead of the filtering operation.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_orchestrate_poll_noop_suspicious_recovery.py:303-310 | confidence=4\n  PROBLEM: The new test function name uses `_branches` suffix while the existing sibling test added in this same PR is named `test_sweep_skips_forward_merge_fallback_prs`; both tests assert against the same `_sweep_block()` and the same skip guard.\n  WHY: No runtime failure, but the naming is misleading and the coverage is near-duplicate, which makes maintenance harder.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/orchestrate_poll_process.sh:~16834 | confidence=4\n  PROBLEM: The filter `startswith(\"review / codex-agent\")` is applied unconditionally to all completed check-runs when deciding whether Gate D blocks force-merge.\n  WHY: A legitimately required `review / codex-agent` job that is cancelled would be ignored, letting the sweep force-merge a PR that branch protection would otherwise block.\n- scripts/orchestrate_poll_process.sh:~10550 | confidence=3\n  PROBLEM: The `jq -cn` expression only injects `sha: $hs` when `$hs != \"\"`, so a literal `\"null\"` can be treated as a valid SHA.\n  WHY: Downstream blank-`head_branch` detection would see a non-empty `\"null\"` and bypass the in-flight-review guard, allowing a race with a queued `workflow_dispatch` review run.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "57d10e6661fd85959ac86762f6ea43bf26461a1ac8d9b45a2634fd11209a2a1f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2954,
+    "run_id": "26440408759",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26440408759",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260526082527_7bdc707826",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2954,
+    "run_id": "26440408759"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-26T08:25:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
