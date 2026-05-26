@@ -3,6 +3,8 @@
 Grounding note: this report folds the prior recommendation triage into one final artifact. "Actioned" is based on current repository state on this ref, not on historical intent or external GitHub issue state.
 
 ## Processed source docs (85)
+The filenames below are retained for provenance. The four 2026-05-22/23 source docs processed in this pass are no longer present under `analysis/` on this ref because they were deleted on this ref.
+
 - `analysis/workflow-optimization-2026-04-21.md`
 - `analysis/workflow-optimization-2026-04-28-2.md`
 - `analysis/workflow-optimization-2026-04-28-3.md`
