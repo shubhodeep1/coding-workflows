@@ -1607,7 +1607,7 @@ if args[0] == 'api':
 				if item.get('number') == pr_num:
 					pr = item
 					break
-		if pr_num in {int(x) for x in store.get('fail_pull_get_numbers', [])}:
+		if method == 'GET' and pr_num in {int(x) for x in store.get('fail_pull_get_numbers', [])}:
 			print('simulated pulls GET failure', file=sys.stderr)
 			sys.exit(1)
 		if pr is None:
@@ -5553,6 +5553,33 @@ def test_standalone_retrigger_review_uses_graphql_head_sha_when_pulls_refetch_fa
 		f"expected GraphQL head_sha to block the standalone empty-commit push even "
 		f"when pulls/{{n}} re-fetch fails; got push calls {result.get('git_push_calls', [])}"
 	)
+
+
+def test_fail_pull_get_numbers_hook_is_get_only():
+	gh_mock_match = re.search(
+		r"gh_mock = r'''(.*?)'''\n\t\t_write_exec\(bin_dir / \"gh\", gh_mock\)",
+		Path(__file__).read_text(encoding="utf-8"),
+		re.S,
+	)
+	assert gh_mock_match is not None
+	with tempfile.TemporaryDirectory(prefix="gh-mock-pulls-get-only-") as td:
+		tmp = Path(td)
+		gh_path = tmp / "gh"
+		gh_path.write_text(gh_mock_match.group(1), encoding="utf-8")
+		gh_path.chmod(0o755)
+		store_path = tmp / "store.json"
+		store_path.write_text(json.dumps({"prs": [{"number": 416, "body": "old body"}], "fail_pull_get_numbers": [416]}), encoding="utf-8")
+		input_path = tmp / "pull-body.json"
+		input_path.write_text(json.dumps({"body": "new body"}), encoding="utf-8")
+		env = os.environ.copy()
+		env["GH_MOCK_STORE"] = str(store_path)
+		get_result = subprocess.run([str(gh_path), "api", "repos/owner/repo/pulls/416"], env=env, capture_output=True, text=True)
+		assert get_result.returncode != 0
+		patch_result = subprocess.run([str(gh_path), "api", "-X", "PATCH", "repos/owner/repo/pulls/416", "--input", str(input_path)], env=env, capture_output=True, text=True)
+		assert patch_result.returncode == 0, patch_result.stderr
+		store = json.loads(store_path.read_text(encoding="utf-8"))
+		assert store.get("pr_body_update_calls") == [416]
+		assert store["prs"][0]["body"] == "new body"
 
 
 def test_standalone_stall_recovery_skips_when_phase_attempts_exhausted():
