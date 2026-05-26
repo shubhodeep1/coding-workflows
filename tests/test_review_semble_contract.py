@@ -125,7 +125,7 @@ def test_workflow_adds_gated_setup_install_index_and_editor_only_serena_steps() 
 	clear_serena_block = _step_block(workflow, "Clear Serena after editor")
 	detect_serena_block = _step_block(workflow, "Detect preexisting Serena project config")
 
-	assert "astral-sh/setup-uv@v3" in uv_block
+	assert "astral-sh/setup-uv@v7" in uv_block
 	assert "if: env.PR_CLOSED != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')" in uv_block
 	assert "continue-on-error: true" in uv_block
 	assert "if: env.PR_CLOSED != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')" in install_block

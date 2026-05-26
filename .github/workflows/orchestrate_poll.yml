@@ -398,7 +398,7 @@ jobs:
       - name: setup-uv
         if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'
         continue-on-error: true
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v7
 
       - name: Install semble
         if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'

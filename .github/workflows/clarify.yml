@@ -563,7 +563,7 @@ jobs:
       - name: Setup uv
         if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && env.SEMBLE_ENABLED == 'true'
         continue-on-error: true
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v7
 
       - name: Install semble
         if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && env.SEMBLE_ENABLED == 'true'
