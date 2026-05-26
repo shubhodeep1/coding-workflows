@@ -60,8 +60,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
 | implement-repair, implement-repair-syntax | `openai/gpt-5.4` | `xhigh` | `low` |
 | implement-diagnose | `openai/gpt-5.4` | `xhigh` | `low` |
 | review autofix editor | `openai/gpt-5.4` | `xhigh` (smoke: `medium`) | `low` |
-| review autofix reviewers (pass 1) | `openai/gpt-5.4` | `xhigh` (hardcoded at the `run_reviewer_pass ... "xhigh"` callsite in `scripts/review_run_reviewers.sh:1173`; not affected by the smoke `REVIEWER_REASONING_EFFORT=low` override in two-pass mode) | `low` |
-| review autofix reviewers (pass 2) | `openai/gpt-5.4` | `xhigh` (LOC gate collapsed: both `REVIEWER_PASS2_REASONING_SMALL` and `REVIEWER_PASS2_REASONING_LARGE` default to `xhigh`); smoke: `low`; operator override wins | `low` |
+| review autofix reviewers (pass 1) | `openai/gpt-5.4` | `xhigh` (hardcoded at the `run_reviewer_pass ... "xhigh"` callsite in `scripts/review_run_reviewers.sh:1709`; not affected by the smoke `REVIEWER_REASONING_EFFORT=low` override in two-pass mode) | `low` |
+| review autofix reviewers (pass 2) | `openai/gpt-5.4` | `high` on diffs below `REVIEWER_PASS2_DIFF_LARGE_LOC=200`, `xhigh` at or above that threshold; smoke: `low`; operator override wins | `low` |
 | review consolidator | `openai/gpt-5.4` | `xhigh` | `low` |
 | conflict resolver | `openai/gpt-5.4` | `high` (decoupled from smoke; `scripts/review_conflict_resolve.sh` validates `xhigh`, `high`, `medium`, `none` only — `low` is rejected; default lowered from `xhigh` after runs `25627236793` / `25627316961` hit `timeout`-killed retries on degenerate orchestrator-stack integrations; override per-repo via `vars.THINKING_LEVEL_CONFLICT_RESOLVER`) | `low` |
 | validate generate, diagnose | `openai/gpt-5.4` | `xhigh` | `low` |
