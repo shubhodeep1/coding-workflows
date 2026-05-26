@@ -267,13 +267,13 @@ if [ -z "${ISSUE_BODY_FILE:-}" ] || [ ! -f "${ISSUE_BODY_FILE:-}" ]; then
   : > "${ISSUE_BODY_FILE}"
   issue_body_loaded_from_meta=false
   if issue_meta_matches_issue "${ISSUE_META_FILE:-}"; then
-    if jq -jre '.body' "${ISSUE_META_FILE}" > "${ISSUE_BODY_FILE}" 2>/dev/null; then
+    if jq -jre 'if has("body") then (.body // "") else error("missing body") end' "${ISSUE_META_FILE}" > "${ISSUE_BODY_FILE}" 2>/dev/null; then
       issue_body_loaded_from_meta=true
     else
       : > "${ISSUE_BODY_FILE}"
     fi
   fi
-  if [ "${issue_body_loaded_from_meta}" != "true" ] && [ ! -s "${ISSUE_BODY_FILE}" ]; then
+  if [ "${issue_body_loaded_from_meta}" != "true" ]; then
     gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}" --jq '.body // ""' > "${ISSUE_BODY_FILE}" || printf '' > "${ISSUE_BODY_FILE}"
   fi
 fi
