@@ -509,7 +509,7 @@ jobs:
       - name: Setup uv
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && env.SEMBLE_ENABLED == 'true'
         continue-on-error: true
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v7
 
       - name: Install semble
         if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && env.SEMBLE_ENABLED == 'true'

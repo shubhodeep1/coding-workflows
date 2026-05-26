@@ -112,7 +112,7 @@ def test_semble_bootstrap_steps_are_gated_and_fail_open() -> None:
 	setup_step = _step("setup-uv")
 	assert setup_step.get("if") == "env.SKIP_IMPLEMENT != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')"
 	assert setup_step.get("continue-on-error") is True
-	assert setup_step.get("uses") == "astral-sh/setup-uv@v3"
+	assert setup_step.get("uses") == "astral-sh/setup-uv@v7"
 
 	install_step = _step("Install semble")
 	install_block = _step_run_text("Install semble")
