@@ -21,6 +21,16 @@ name: Validation Refresh
         required: false
         default: ""
         type: string
+      discovery_enabled:
+        description: Master gate for codex-driven .ai/validate.yml discovery. Set to "false" to skip discovery entirely for this run (drift monitoring still executes).
+        required: false
+        default: "true"
+        type: string
+      discovery_dry_run:
+        description: When "true", run discovery dedup + memory plumbing but skip the codex invocation and PR creation. Useful for validating the pipeline without LLM cost.
+        required: false
+        default: "false"
+        type: string
 
 env:
   # `inputs` is null on schedule-triggered runs; use `github.event.inputs`
@@ -68,10 +78,26 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install pyyaml jsonschema jinja2
 
+      - name: Install Codex CLI
+        # Required for the codex-driven .ai/validate.yml discovery dispatch
+        # in `scripts/validation_discovery_bootstrap.py`. When
+        # VALIDATION_DISCOVERY_ENABLED=false the codex CLI is never
+        # invoked but the install step is still cheap (~30s) and keeps the
+        # workflow's behavior identical across schedule + dispatch runs.
+        uses: ./.github/actions/install-codex
+
       - name: Run validation refresh
         id: refresh
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          VALIDATION_DISCOVERY_ENABLED: ${{ github.event.inputs.discovery_enabled || vars.VALIDATION_DISCOVERY_ENABLED || 'true' }}
+          VALIDATION_DISCOVERY_DRY_RUN: ${{ github.event.inputs.discovery_dry_run || vars.VALIDATION_DISCOVERY_DRY_RUN || 'false' }}
+          VALIDATION_DISCOVERY_DEDUP_DAYS: ${{ vars.VALIDATION_DISCOVERY_DEDUP_DAYS || '7' }}
+          VALIDATION_DISCOVERY_MAX_ATTEMPTS: ${{ vars.VALIDATION_DISCOVERY_MAX_ATTEMPTS || '3' }}
+          VALIDATION_DISCOVERY_MODEL: ${{ vars.VALIDATION_DISCOVERY_MODEL || 'openai/gpt-5.4' }}
+          VALIDATION_DISCOVERY_REASONING_EFFORT: ${{ vars.VALIDATION_DISCOVERY_REASONING_EFFORT || 'xhigh' }}
+          VALIDATION_DISCOVERY_PR_BRANCH_PREFIX: ${{ vars.VALIDATION_DISCOVERY_PR_BRANCH_PREFIX || 'automation/validate-discovery' }}
+          VALIDATION_DISCOVERY_PR_LABEL: ${{ vars.VALIDATION_DISCOVERY_PR_LABEL || 'automation:validate-bootstrap' }}
         run: |
           set -euo pipefail
           if [ -z "${GH_TOKEN:-}" ]; then
@@ -139,6 +165,7 @@ jobs:
           lines.append(f"- Skipped: {totals.get('skipped', 0)}")
           lines.append(f"- Error: {totals.get('error', 0)}")
           lines.append("")
+          discovery_pr_lines = []
           for item in results:
               repo = item.get("repository", "unknown")
               outcome = item.get("outcome", "unknown")
@@ -147,6 +174,29 @@ jobs:
               if pr_url:
                   line += f" ([PR]({pr_url}))"
               lines.append(line)
+              discovery_outcome = item.get("discovery_outcome")
+              discovery_pr_url = item.get("discovery_pr_url")
+              if discovery_outcome:
+                  dline = f"  - discovery: `{discovery_outcome}`"
+                  if discovery_pr_url:
+                      dline += f" ([discovery PR]({discovery_pr_url}))"
+                  discovery_pr_lines.append((repo, discovery_outcome, discovery_pr_url))
+                  lines.append(dline)
+
+          if discovery_pr_lines:
+              opened = [d for d in discovery_pr_lines if d[1] in ("pr_opened",)]
+              reused = [d for d in discovery_pr_lines if d[1] in ("pr_reused",)]
+              agreed = [d for d in discovery_pr_lines if d[1] in ("agree",)]
+              failed = [d for d in discovery_pr_lines if d[1] in ("failed", "push_denied")]
+              skipped = [d for d in discovery_pr_lines if d[1] in ("skipped_dedup", "disabled", "dry_run")]
+              lines.append("")
+              lines.append("### Discovery dispatch")
+              lines.append("")
+              lines.append(f"- PRs opened: {len(opened)}")
+              lines.append(f"- PRs reused: {len(reused)}")
+              lines.append(f"- Agreements: {len(agreed)}")
+              lines.append(f"- Failures: {len(failed)}")
+              lines.append(f"- Skipped: {len(skipped)}")
 
           with open(Path.cwd() / "_validation_refresh_summary.md", "w", encoding="utf-8") as handle:
               handle.write("\n".join(lines) + "\n")

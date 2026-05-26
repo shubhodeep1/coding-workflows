@@ -1646,6 +1646,34 @@ self-heal patches cannot be merged without explicit human action.
   - Pipeline failure with no file diff: records error (`pipeline_failed_without_changes`).
   - Workflow writes machine-readable summary JSON, appends a human summary to `$GITHUB_STEP_SUMMARY`, and sends Telegram failure notification (`TG_BOT_SECRET` + `TG_ADMIN_CHAT_ID`) on workflow failure.
 
+#### Codex-driven `.ai/validate.yml` discovery dispatch
+
+The refresh runner ALSO runs codex-driven discovery against each consumer's clone (script: [`scripts/validation_discovery_bootstrap.py`](scripts/validation_discovery_bootstrap.py)). Discovery is layered on top of the drift-monitoring pipeline above and DOES open PRs on consumer repos when the discovered `.ai/validate.yml` is either (a) absent on the consumer's default branch, or (b) present but with a different `type` from what codex would propose.
+
+- **Trigger:** automatic on the same daily cron / `workflow_dispatch`. Set `VALIDATION_DISCOVERY_ENABLED=false` (or the `discovery_enabled` workflow input) to skip discovery for that run while preserving drift monitoring.
+- **Codex model:** `openai/gpt-5.4` at reasoning effort `xhigh` (overridable via repo `vars` `VALIDATION_DISCOVERY_MODEL` / `VALIDATION_DISCOVERY_REASONING_EFFORT`). Reads the entire consumer tree via `codex exec --sandbox danger-full-access` and emits YAML against [`scripts/templates/slot_manifest.schema.json`](scripts/templates/slot_manifest.schema.json).
+- **Outcome routing:**
+  - Manifest missing → opens a "seed" PR titled `chore(validation): seed .ai/validate.yml (type: <family>)` with the discovered manifest + onboarding entry script.
+  - Manifest present and `type` matches discovery → no PR opened, `outcome=success_agree` recorded.
+  - Manifest present and `type` mismatches discovery → opens a "discovery disagrees" PR titled `chore(validation): discovery proposes type change (X → Y)`.
+  - Codex exhausts retries → `outcome=failed` recorded, no PR opened.
+  - `git push` denied (PAT scope missing) → `outcome=push_denied` recorded, no PR opened.
+- **Per-PR idempotency:** branch name `automation/validate-discovery/<short_sha>/<type>` is deterministic; an existing open PR on that branch is reused, never churned. When the consumer's default-branch HEAD advances, a fresh branch with the new SHA is computed and a new PR is opened.
+- **Cross-cycle dedup:** discovery outcomes are recorded on the `ai-memory` branch under [`ai-memory/schemas/validation_discovery.v1.json`](ai-memory/schemas/validation_discovery.v1.json) (path: `orchestrator/validation_discovery/<owner>__<repo>/history.json`). A consumer with a `success_*` entry within `VALIDATION_DISCOVERY_DEDUP_DAYS` (default `7`) is skipped on the next cycle; failures do NOT block re-attempts.
+- **Operator opt-out:** set `discovery_enabled=false` on `workflow_dispatch` to skip an individual run; set `VALIDATION_DISCOVERY_ENABLED=false` as a repo `var` to disable the feature globally. `discovery_dry_run=true` exercises the dedup + memory plumbing without invoking codex or opening PRs.
+- **Required PAT scopes:** `GH_PAT` must have `repo` scope on every consumer in [`.github/ai/consumer_repos.json`](.github/ai/consumer_repos.json) (same scope already required for `mark-stable.sh` dispatch).
+
+| Env var | Default | Description |
+|---|---|---|
+| `VALIDATION_DISCOVERY_ENABLED` | `true` | Master gate. `false` skips the discovery dispatch entirely (drift monitoring still runs). |
+| `VALIDATION_DISCOVERY_DEDUP_DAYS` | `7` | Days to skip a consumer after a successful discovery outcome is recorded on `ai-memory`. |
+| `VALIDATION_DISCOVERY_MAX_ATTEMPTS` | `3` | Codex invocation retries before giving up on a consumer. |
+| `VALIDATION_DISCOVERY_MODEL` | `openai/gpt-5.4` | Codex model id. |
+| `VALIDATION_DISCOVERY_REASONING_EFFORT` | `xhigh` | Codex reasoning effort. |
+| `VALIDATION_DISCOVERY_PR_BRANCH_PREFIX` | `automation/validate-discovery` | Branch prefix for proposed PRs. |
+| `VALIDATION_DISCOVERY_PR_LABEL` | `automation:validate-bootstrap` | Optional label applied to created PRs (best-effort; falls back to label-less when the consumer repo doesn't have it). |
+| `VALIDATION_DISCOVERY_DRY_RUN` | `false` | Exercise the dedup + memory write paths without invoking codex or opening PRs. |
+
 ### Nightly Validation Self-Test Status
 
 - Workflow: [`.github/workflows/nightly-validation-selftest.yml`](.github/workflows/nightly-validation-selftest.yml) runs on nightly cron (`15 2 * * *`) and manual `workflow_dispatch`.

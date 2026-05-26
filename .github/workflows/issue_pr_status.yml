@@ -161,7 +161,8 @@ jobs:
             workflow_log_analysis_cache.v1.json \
             validation_history.v1.json \
             operator_bypass_audit.v1.json \
-            revalidate_events.v1.json; do
+            revalidate_events.v1.json \
+            validation_discovery.v1.json; do
             if [ ! -f "ai-memory/schemas/${sf}" ]; then
               if fetch_from_ref_or_local "ai-memory/schemas/${sf}" "ai-memory/schemas/${sf}.tmp"; then
                 mv "ai-memory/schemas/${sf}.tmp" "ai-memory/schemas/${sf}"

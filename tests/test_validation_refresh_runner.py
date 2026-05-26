@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import importlib.util
+import contextlib
+import io
 import json
 import os
 import subprocess
@@ -46,6 +48,8 @@ class FakeExecutor:
 		cwd: Path | None = None,
 		check: bool = True,
 		env_overrides: dict[str, str] | None = None,
+		input_text: str | None = None,
+		timeout: int = 300,
 	) -> subprocess.CompletedProcess[str]:
 		self.seen.append((list(command), cwd, check, env_overrides))
 		assert self._calls, f"unexpected command: {command}"
@@ -86,11 +90,46 @@ slots:
 	)
 
 
-def _make_runner(executor: FakeExecutor, branch: str) -> "refresh_runner.ValidationRefreshRunner":
+def _disabled_discovery_ctx() -> "refresh_runner.discovery_module.DiscoveryRunContext":
+	"""Return a DiscoveryRunContext with discovery disabled.
+
+	Existing drift-monitoring tests assert exact `FakeExecutor` call
+	sequences — leaving discovery enabled would inject extra calls and
+	break unrelated assertions. Discovery is exercised separately by
+	`test_validation_discovery_bootstrap.py` and the per-flow tests at
+	the bottom of this file.
+	"""
+
+	return refresh_runner.discovery_module.DiscoveryRunContext(
+		source_root=REPO_ROOT,
+		prompt_path=REPO_ROOT / "prompts" / "mode-validate-discover.txt",
+		schema_path=REPO_ROOT / "scripts" / "templates" / "slot_manifest.schema.json",
+		stub_entry_script_source=REPO_ROOT
+		/ "examples"
+		/ "validation-fixtures"
+		/ "run_validation_repo_checks.sh",
+		codex_model="openai/gpt-5.4",
+		codex_reasoning_effort="xhigh",
+		codex_attempts=3,
+		pr_branch_prefix="automation/validate-discovery",
+		pr_label="automation:validate-bootstrap",
+		dedup_days=7,
+		enabled=False,
+		dry_run=False,
+	)
+
+
+def _make_runner(
+	executor: FakeExecutor,
+	branch: str,
+	*,
+	discovery_ctx: "refresh_runner.discovery_module.DiscoveryRunContext | None" = None,
+) -> "refresh_runner.ValidationRefreshRunner":
 	return refresh_runner.ValidationRefreshRunner(
 		source_root=REPO_ROOT,
 		branch_name=branch,
 		executor=executor,
+		discovery_ctx=discovery_ctx if discovery_ctx is not None else _disabled_discovery_ctx(),
 	)
 
 
@@ -340,6 +379,395 @@ def test_process_repository_bootstraps_manifest_for_manifestless_repo() -> None:
 		assert all(cmd[:2] != ["gh", "pr"] for cmd, _cwd, _check, _env in executor.seen)
 		assert all(cmd[:2] != ["git", "commit"] for cmd, _cwd, _check, _env in executor.seen)
 		assert all(cmd[:2] != ["git", "push"] for cmd, _cwd, _check, _env in executor.seen)
+		executor.assert_consumed()
+
+
+# ---------------------------------------------------------------------------
+# Codex-driven discovery dispatch integration
+# ---------------------------------------------------------------------------
+
+
+VALID_NODE_RUNTIME_MANIFEST = """type: node-runtime
+entry: npm
+slots:
+  project_name: demo-node
+  canary_tools:
+    - bash
+    - node
+    - npm
+  tap_plan: 3
+"""
+
+VALID_PYTHON_REPO_CHECKS_MANIFEST = """type: python-repo-checks
+entry: scripts/run_validation_repo_checks.sh
+slots:
+  project_name: demo-python
+  canary_tools:
+    - bash
+    - python3
+    - jq
+  tap_plan: 3
+"""
+
+
+
+def _enabled_discovery_ctx(
+	*, dry_run: bool = False
+) -> "refresh_runner.discovery_module.DiscoveryRunContext":
+	return refresh_runner.discovery_module.DiscoveryRunContext(
+		source_root=REPO_ROOT,
+		prompt_path=REPO_ROOT / "prompts" / "mode-validate-discover.txt",
+		schema_path=REPO_ROOT / "scripts" / "templates" / "slot_manifest.schema.json",
+		stub_entry_script_source=REPO_ROOT
+		/ "examples"
+		/ "validation-fixtures"
+		/ "run_validation_repo_checks.sh",
+		codex_model="openai/gpt-5.4",
+		codex_reasoning_effort="xhigh",
+		codex_attempts=3,
+		pr_branch_prefix="automation/validate-discovery",
+		pr_label="automation:validate-bootstrap",
+		dedup_days=7,
+		enabled=True,
+		dry_run=dry_run,
+	)
+
+
+class _StubMemory:
+	"""Monkey-patches `_dedup_skip` + `_append_discovery_memory` for integration tests.
+
+	The bash-driven memory helpers require a live ai-memory branch which
+	we cannot wire up in unit tests; we substitute callables that record
+	the inputs they would have written so the assertions can check the
+	dispatcher routed the right outcome.
+	"""
+
+	def __init__(self, *, dedup_returns: bool = False) -> None:
+		self.dedup_returns = dedup_returns
+		self.appended: list[dict[str, object]] = []
+		self.dedup_calls: list[str] = []
+
+	def install(self) -> None:
+		self._orig_dedup = refresh_runner._dedup_skip
+		self._orig_append = refresh_runner._append_discovery_memory
+
+		def fake_dedup(**kwargs: object) -> bool:
+			self.dedup_calls.append(str(kwargs.get("repository")))
+			return self.dedup_returns
+
+		def fake_append(**kwargs: object) -> None:
+			self.appended.append(kwargs)
+
+		refresh_runner._dedup_skip = fake_dedup  # type: ignore[assignment]
+		refresh_runner._append_discovery_memory = fake_append  # type: ignore[assignment]
+
+	def uninstall(self) -> None:
+		refresh_runner._dedup_skip = self._orig_dedup  # type: ignore[assignment]
+		refresh_runner._append_discovery_memory = self._orig_append  # type: ignore[assignment]
+
+	def __enter__(self) -> "_StubMemory":
+		self.install()
+		return self
+
+	def __exit__(self, *_exc) -> None:  # noqa: ANN002
+		self.uninstall()
+
+
+def test_discovery_dispatch_skips_when_dedup_hits() -> None:
+	with tempfile.TemporaryDirectory(prefix="discovery-dedup-skip-") as td, _StubMemory(
+		dedup_returns=True
+	) as stub:
+		workspace = Path(td) / "work"
+		workspace.mkdir(parents=True, exist_ok=True)
+		repository = "octo/demo-repo"
+		repo_dir = workspace / "octo__demo-repo"
+		branch = "ai/validation-refresh"
+
+		def on_clone(_command: list[str], _cwd: Path | None) -> None:
+			_write_manifest(repo_dir)
+
+		executor = FakeExecutor(
+			[
+				PlannedCall(("gh", "repo", "view"), stdout="main\n"),
+				PlannedCall(("gh", "repo", "clone"), callback=on_clone),
+				PlannedCall(("git", "fetch", "origin", "main")),
+				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
+				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
+				PlannedCall(("git", "status"), stdout=""),
+			]
+		)
+
+		runner = _make_runner(executor, branch, discovery_ctx=_enabled_discovery_ctx())
+		result = runner.process_repository(repository, workspace)
+
+		assert result.discovery_outcome == "skipped_dedup"
+		assert result.discovery_pr_url is None
+		assert stub.appended == []  # dedup short-circuits before any memory write
+		assert stub.dedup_calls == [repository]
+		# No codex / push / PR calls should have been issued.
+		assert all(cmd[0] != "codex" for cmd, _cwd, _check, _env in executor.seen)
+		executor.assert_consumed()
+
+
+def test_discovery_dispatch_opens_seed_pr_when_manifest_missing() -> None:
+	with tempfile.TemporaryDirectory(prefix="discovery-seed-pr-") as td, _StubMemory() as stub:
+		workspace = Path(td) / "work"
+		workspace.mkdir(parents=True, exist_ok=True)
+		repository = "octo/demo-repo"
+		repo_dir = workspace / "octo__demo-repo"
+		branch = "ai/validation-refresh"
+
+		def on_clone(_command: list[str], _cwd: Path | None) -> None:
+			repo_dir.mkdir(parents=True, exist_ok=True)  # no .ai/validate.yml committed
+
+		def on_codex(_command: list[str], _cwd: Path | None, _check, _env) -> None:
+			return None
+
+		executor = FakeExecutor(
+			[
+				PlannedCall(("gh", "repo", "view"), stdout="main\n"),
+				PlannedCall(("gh", "repo", "clone"), callback=on_clone),
+				PlannedCall(("git", "fetch", "origin", "main")),
+				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
+				# Discovery dispatch begins:
+				PlannedCall(("git", "rev-parse", "HEAD"), stdout="abc123def4567890\n", check=False),
+				PlannedCall(("codex",), stdout=VALID_NODE_RUNTIME_MANIFEST, check=False),
+				PlannedCall(("gh", "pr", "list"), stdout="[]\n"),
+				PlannedCall(("git", "checkout", "-B")),
+				PlannedCall(("git", "config", "user.name")),
+				PlannedCall(("git", "config", "user.email")),
+				PlannedCall(("git", "add")),
+				PlannedCall(("git", "commit")),
+				PlannedCall(("git", "push", "-u", "origin")),
+				PlannedCall(
+					("gh", "pr", "create"),
+					stdout="https://github.com/octo/demo-repo/pull/99\n",
+				),
+				# Tree reset after discovery:
+				PlannedCall(("git", "fetch", "origin", "main")),
+				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
+				# Drift monitoring pipeline (no manifest committed → bootstrap):
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
+				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
+				PlannedCall(("git", "status"), stdout=""),
+			]
+		)
+
+		runner = _make_runner(executor, branch, discovery_ctx=_enabled_discovery_ctx())
+		result = runner.process_repository(repository, workspace)
+
+		assert result.discovery_outcome == "pr_opened"
+		assert result.discovery_pr_url == "https://github.com/octo/demo-repo/pull/99"
+		assert result.discovery_pr_branch is not None
+		assert result.discovery_pr_branch.startswith("automation/validate-discovery/")
+		assert len(stub.appended) == 1
+		recorded = stub.appended[0]
+		assert recorded["outcome"] == "success_seeded"
+		assert recorded["discovered_type"] == "node-runtime"
+		assert recorded["committed_type"] is None
+		assert recorded["pr_url"] == "https://github.com/octo/demo-repo/pull/99"
+		executor.assert_consumed()
+
+
+def test_discovery_dispatch_reports_agree_when_types_match() -> None:
+	with tempfile.TemporaryDirectory(prefix="discovery-agree-") as td, _StubMemory() as stub:
+		workspace = Path(td) / "work"
+		workspace.mkdir(parents=True, exist_ok=True)
+		repository = "octo/demo-repo"
+		repo_dir = workspace / "octo__demo-repo"
+		branch = "ai/validation-refresh"
+
+		def on_clone(_command: list[str], _cwd: Path | None) -> None:
+			repo_dir.mkdir(parents=True, exist_ok=True)
+			(repo_dir / ".ai").mkdir(parents=True, exist_ok=True)
+			(repo_dir / ".ai" / "validate.yml").write_text(VALID_NODE_RUNTIME_MANIFEST, encoding="utf-8")
+
+		executor = FakeExecutor(
+			[
+				PlannedCall(("gh", "repo", "view"), stdout="main\n"),
+				PlannedCall(("gh", "repo", "clone"), callback=on_clone),
+				PlannedCall(("git", "fetch", "origin", "main")),
+				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
+				PlannedCall(("git", "rev-parse", "HEAD"), stdout="abc123def4567890\n", check=False),
+				PlannedCall(("codex",), stdout=VALID_NODE_RUNTIME_MANIFEST, check=False),
+				# No PR — agree path skips push and gh pr create.
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
+				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
+				PlannedCall(("git", "status"), stdout=""),
+			]
+		)
+
+		runner = _make_runner(executor, branch, discovery_ctx=_enabled_discovery_ctx())
+		result = runner.process_repository(repository, workspace)
+
+		assert result.discovery_outcome == "agree"
+		assert result.discovery_pr_url is None
+		assert len(stub.appended) == 1
+		recorded = stub.appended[0]
+		assert recorded["outcome"] == "success_agree"
+		assert recorded["committed_type"] == "node-runtime"
+		assert recorded["discovered_type"] == "node-runtime"
+		assert recorded["pr_url"] is None
+		# No codex retry, no push.
+		assert sum(1 for cmd, _cwd, _check, _env in executor.seen if cmd[0] == "codex") == 1
+		assert all(cmd[:3] != ["git", "push", "-u"] for cmd, _cwd, _check, _env in executor.seen)
+		executor.assert_consumed()
+
+
+def test_discovery_dispatch_opens_disagree_pr_on_type_mismatch() -> None:
+	with tempfile.TemporaryDirectory(prefix="discovery-disagree-") as td, _StubMemory() as stub:
+		workspace = Path(td) / "work"
+		workspace.mkdir(parents=True, exist_ok=True)
+		repository = "octo/demo-repo"
+		repo_dir = workspace / "octo__demo-repo"
+		branch = "ai/validation-refresh"
+
+		def on_clone(_command: list[str], _cwd: Path | None) -> None:
+			repo_dir.mkdir(parents=True, exist_ok=True)
+			(repo_dir / ".ai").mkdir(parents=True, exist_ok=True)
+			(repo_dir / ".ai" / "validate.yml").write_text(
+				VALID_PYTHON_REPO_CHECKS_MANIFEST, encoding="utf-8"
+			)
+
+		executor = FakeExecutor(
+			[
+				PlannedCall(("gh", "repo", "view"), stdout="main\n"),
+				PlannedCall(("gh", "repo", "clone"), callback=on_clone),
+				PlannedCall(("git", "fetch", "origin", "main")),
+				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
+				PlannedCall(("git", "rev-parse", "HEAD"), stdout="abc123def4567890\n", check=False),
+				PlannedCall(("codex",), stdout=VALID_NODE_RUNTIME_MANIFEST, check=False),  # discovery says node-runtime
+				PlannedCall(("gh", "pr", "list"), stdout="[]\n"),
+				PlannedCall(("git", "checkout", "-B")),
+				PlannedCall(("git", "config", "user.name")),
+				PlannedCall(("git", "config", "user.email")),
+				PlannedCall(("git", "add")),
+				PlannedCall(("git", "commit")),
+				PlannedCall(("git", "push", "-u", "origin")),
+				PlannedCall(
+					("gh", "pr", "create"),
+					stdout="https://github.com/octo/demo-repo/pull/101\n",
+				),
+				PlannedCall(("git", "fetch", "origin", "main")),
+				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
+				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
+				PlannedCall(("git", "status"), stdout=""),
+			]
+		)
+
+		runner = _make_runner(executor, branch, discovery_ctx=_enabled_discovery_ctx())
+		stdout = io.StringIO()
+		with contextlib.redirect_stdout(stdout):
+			result = runner.process_repository(repository, workspace)
+
+		assert result.discovery_outcome == "pr_opened"
+		assert result.discovery_pr_url == "https://github.com/octo/demo-repo/pull/101"
+		assert (
+			"VALIDATION_DISCOVERY_DISAGREE "
+			"repository=octo/demo-repo committed_type=python-repo-checks discovered_type=node-runtime"
+		) in stdout.getvalue()
+		assert len(stub.appended) == 1
+		recorded = stub.appended[0]
+		assert recorded["outcome"] == "success_disagree"
+		assert recorded["committed_type"] == "python-repo-checks"
+		assert recorded["discovered_type"] == "node-runtime"
+		executor.assert_consumed()
+
+
+def test_discovery_dispatch_records_dry_run_outcome_without_codex() -> None:
+	with tempfile.TemporaryDirectory(prefix="discovery-dry-run-") as td, _StubMemory() as stub:
+		workspace = Path(td) / "work"
+		workspace.mkdir(parents=True, exist_ok=True)
+		repository = "octo/demo-repo"
+		repo_dir = workspace / "octo__demo-repo"
+		branch = "ai/validation-refresh"
+
+		def on_clone(_command: list[str], _cwd: Path | None) -> None:
+			_write_manifest(repo_dir)
+
+		executor = FakeExecutor(
+			[
+				PlannedCall(("gh", "repo", "view"), stdout="main\n"),
+				PlannedCall(("gh", "repo", "clone"), callback=on_clone),
+				PlannedCall(("git", "fetch", "origin", "main")),
+				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
+				PlannedCall(("git", "rev-parse", "HEAD"), stdout="abc123def4567890\n", check=False),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
+				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
+				PlannedCall(("git", "status"), stdout=""),
+			]
+		)
+
+		runner = _make_runner(executor, branch, discovery_ctx=_enabled_discovery_ctx(dry_run=True))
+		result = runner.process_repository(repository, workspace)
+
+		assert result.discovery_outcome == "dry_run"
+		assert result.discovery_pr_url is None
+		assert len(stub.appended) == 1
+		recorded = stub.appended[0]
+		assert recorded["outcome"] == "dry_run"
+		assert recorded["pr_url"] is None
+		assert all(cmd[0] != "codex" for cmd, _cwd, _check, _env in executor.seen)
+		executor.assert_consumed()
+
+
+def test_discovery_dispatch_records_failed_when_codex_exhausts() -> None:
+	with tempfile.TemporaryDirectory(prefix="discovery-failed-") as td, _StubMemory() as stub:
+		workspace = Path(td) / "work"
+		workspace.mkdir(parents=True, exist_ok=True)
+		repository = "octo/demo-repo"
+		repo_dir = workspace / "octo__demo-repo"
+		branch = "ai/validation-refresh"
+
+		def on_clone(_command: list[str], _cwd: Path | None) -> None:
+			_write_manifest(repo_dir)
+
+		executor = FakeExecutor(
+			[
+				PlannedCall(("gh", "repo", "view"), stdout="main\n"),
+				PlannedCall(("gh", "repo", "clone"), callback=on_clone),
+				PlannedCall(("git", "fetch", "origin", "main")),
+				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
+				PlannedCall(("git", "rev-parse", "HEAD"), stdout="abc123def4567890\n", check=False),
+				PlannedCall(("codex",), stdout="error: nope\n", check=False),
+				PlannedCall(("codex",), stdout="error: still nope\n", check=False),
+				PlannedCall(("codex",), stdout="error: never\n", check=False),
+				PlannedCall(("git", "fetch", "origin", "main")),
+				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
+				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
+				PlannedCall(("git", "status"), stdout=""),
+			]
+		)
+
+		ctx = _enabled_discovery_ctx()
+		# Keep the test fast by suppressing the discovery module's retry sleep.
+		# The dispatcher path does not expose a sleep override, so patch the
+		# shared `time.sleep` used by `discover_manifest_via_codex`.
+		import time as _time
+
+		orig_sleep = _time.sleep
+		_time.sleep = lambda _n: None  # type: ignore[assignment]
+		try:
+			runner = _make_runner(executor, branch, discovery_ctx=ctx)
+			result = runner.process_repository(repository, workspace)
+		finally:
+			_time.sleep = orig_sleep  # type: ignore[assignment]
+
+		assert result.discovery_outcome == "failed"
+		assert result.discovery_pr_url is None
+		assert len(stub.appended) == 1
+		recorded = stub.appended[0]
+		assert recorded["outcome"] == "failed"
+		assert recorded["failure_reason"] is not None
 		executor.assert_consumed()
 
 
