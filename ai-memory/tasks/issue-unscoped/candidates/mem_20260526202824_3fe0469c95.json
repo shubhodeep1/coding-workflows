@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:2061-2080 | severity=high | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: `sort_by(.id, .status)` is invalid jq syntax and makes the check-run wait loop fall back to an empty snapshot.\n  WHY: The jq command fails, `|| echo '[]'` yields `_wait_view=[]`, `_in_flight` becomes 0, and the loop exits immediately; deepseek_deepseek-v4-pro explicitly disputed this, but the other reviewers reported the runtime failure.\n- .github/workflows/ci.yml, .github/workflows/clarify.yml:566, .github/workflows/implement.yml:1002, .github/workflows/orchestrate.yml:429, .github/workflows/orchestrate_clarify_respond.yml:512, .github/workflows/orchestrate_poll.yml:401, .github/workflows/plan.yml:753, .github/workflows/review_autofix.yml:1335, .github/workflows/workflow-log-analysis.yml:288,944,1410, tests/test_implement_semble_contract.py:115, tests/test_judge_semble_prefetch_contract.py:268, tests/test_review_semble_contract.py:128, tests/test_semble_workflow_parity_contract.py:23 | severity=high | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: These workflow and test sites pin or assert `astral-sh/setup-uv@v7`.\n  WHY: qwen_qwen3_6-plus and moonshotai_kimi-k2_5 report that `@v7` does not exist / would fail CI bootstrap; deepseek_deepseek-v4-pro and x-ai_grok-4_20 disputed that claim as unverified or outdated.\n- scripts/implement_diagnose_post_codex_failure.sh:270-279 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The cached issue-body path can fall through to an empty body, and the live API fallback can also fail silently.\n  WHY: x-ai_grok-4_20 says the downstream diagnose prompt can lose all task context and increase wrong-fix risk; deepseek_deepseek-v4-pro and qwen_qwen3_6-plus said the guard is safe and more defensive.\n- agents.md:62-67, README.md:391-413 | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The docs describe the new small-diff / large-diff split and report several recommendations as landed, but the reviewer says the runtime behavior is not reflected.\n  WHY: x-ai_grok-4_20 characterized this as documentation drift rather than a crash; qwen_qwen3_6-plus did not flag it, and deepseek_deepseek-v4-pro treated the related updates as correct.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/review_autofix.yml:2069 | severity=high | confidence=5\n  PROBLEM: `sort_by(.id, .status)` is invalid jq syntax.\n  WHY: The jq command errors, the fallback empties the snapshot, and the wait loop exits immediately instead of waiting for check-runs.\n- tests/test_implement_semble_contract.py:115, tests/test_judge_semble_prefetch_contract.py:268, tests/test_review_semble_contract.py:128, tests/test_semble_workflow_parity_contract.py:23 | severity=high | confidence=5\n  PROBLEM: These tests assert `astral-sh/setup-uv@v7`, which the reviewer says does not exist.\n  WHY: The assertions would fail in CI. (4 related items)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/review_autofix.yml:2061-2080 | severity=high | confidence=5\n  PROBLEM: `sort_by(.id, .status)` is invalid jq syntax.\n  WHY: The jq command exits non-zero, `|| echo '[]'` makes `_wait_view` empty, and the reduced timeout/backoff path exits after roughly one poll.\n- .github/workflows/ci.yml, .github/workflows/clarify.yml:566, .github/workflows/implement.yml:1002, .github/workflows/orchestrate.yml:429, .github/workflows/orchestrate_clarify_respond.yml:512, .github/workflows/orchestrate_poll.yml:401, .github/workflows/plan.yml:753, .github/workflows/review_autofix.yml:1335, .github/workflows/workflow-log-analysis.yml:288,944,1410, tests/test_implement_semble_contract.py:115, tests/test_judge_semble_prefetch_contract.py:268, tests/test_review_semble_contract.py:128, tests/test_semble_workflow_parity_contract.py:23 | severity=high | confidence=5\n  PROBLEM: `astral-sh/setup-uv@v7` is pinned/asserted across the cited workflows and tests.\n  WHY: qwen_qwen3_6-plus says the tag does not exist and would fail workflow bootstrap; deepseek_deepseek-v4-pro and x-ai_grok-4_20 disputed that claim as unverified/outdated.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/review_autofix.yml:2062-2080 | severity=high | confidence=5\n  PROBLEM: `sort_by(.id, .status)` is invalid jq syntax and makes the wait loop skip waiting for sibling jobs.\n  WHY: The fallback empty snapshot leaves `_in_flight` at 0 and the adaptive backoff path never runs.\n- scripts/implement_diagnose_post_codex_failure.sh:270-279 | severity=medium | confidence=4\n  PROBLEM: The cached issue-body path can produce an empty body and the live API fallback can still fail silently.\n  WHY: The downstream diagnose prompt can lose task context, increasing wrong-fix risk.\n- agents.md:62-67, README.md:391-413 | severity=low | confidence=3\n  PROBLEM: The docs describe a small-diff / large-diff split and list several recommendations as landed, but the reviewer says the runtime behavior is not reflected.\n  WHY: This is documentation drift rather than a crash, but it can mislead operators about what is actually live.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "23516db4fab05cdfbc9648ade6ea6b7259ffbba1653f02732075e0127a993d4f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2967,
+    "run_id": "26472189298",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26472189298",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260526202824_3fe0469c95",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2967,
+    "run_id": "26472189298"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-26T20:28:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
