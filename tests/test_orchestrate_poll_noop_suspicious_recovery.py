@@ -297,16 +297,44 @@ def test_sweep_skips_orchestrator_project_branches():
 	)
 
 
-def test_sweep_skips_forward_merge_fallback_branches():
-	"""Forward-merge fallback PRs must be merged manually via Create a
-	merge commit, so the noop-suspicious sweep must not redispatch or
-	force-merge their `auto/forward-merge-stable-*` branches."""
+def test_sweep_skips_forward_merge_fallback_prs():
+	"""Forward-merge fallback PRs (head ref `auto/forward-merge-stable-*`,
+	opened by `.github/workflows/forward-merge-stable-to-main.yml`) MUST
+	be merged manually via GitHub's "Create a merge commit" button.
+	The noop-suspicious sweep must therefore skip them entirely rather
+	than re-dispatching review_autofix or eventually force-merging via
+	`gh pr merge --squash --auto`, which would strip the 2-parent merge
+	ancestry that the promote pipeline relies on."""
 	sweep = _sweep_block()
 	assert '[[ "${N_HEAD}" == auto/forward-merge-stable-* ]]' in sweep, (
-		"Sweep must explicitly skip forward-merge fallback PR branches."
+		"Sweep must explicitly skip PRs whose head ref matches "
+		"`auto/forward-merge-stable-*`."
 	)
 	assert "Create a merge commit" in sweep and "gh pr merge --squash --auto" in sweep, (
 		"Forward-merge skip rationale must document the ancestry-preserving manual merge requirement."
+	)
+
+
+def test_sweep_forward_merge_skip_precedes_api_calls():
+	"""The forward-merge skip MUST sit alongside the
+	`orchestrator/project-*` skip, before the per-PR comments fetch.
+	Otherwise every forward-merge fallback PR burns a paginated
+	`issues/<n>/comments` GraphQL/REST round-trip every poll cycle
+	(§15), and a transient API failure on that call could allow the
+	force-merge path to fire on the very PR class it's supposed to
+	skip."""
+	sweep = _sweep_block()
+	forward_skip_idx = sweep.find('[[ "${N_HEAD}" == auto/forward-merge-stable-* ]]')
+	comments_fetch_idx = sweep.find('issues/${N_PR}/comments')
+	assert forward_skip_idx != -1, "Forward-merge skip must exist (covered by sibling test)."
+	assert comments_fetch_idx != -1, (
+		"Sweep must still fetch issue comments — the pre-filter is "
+		"the whole point of the cheap-path check."
+	)
+	assert forward_skip_idx < comments_fetch_idx, (
+		"Forward-merge skip must precede the per-PR comments fetch so "
+		"this PR class costs zero extra API calls and cannot fail open "
+		"on a transient comments-fetch error."
 	)
 
 
