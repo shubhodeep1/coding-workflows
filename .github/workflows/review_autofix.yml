@@ -1910,15 +1910,14 @@ jobs:
           else
             _pr_title="$(jq -r '((.title // "") | if test("\\S") then . else "" end)' "${PR_META_FILE}" 2>/dev/null || echo "")"
             _pr_body_has_text="$(jq -r '((.body // "") | test("\\S"))' "${PR_META_FILE}" 2>/dev/null || echo false)"
-            _pr_body_file="$(mktemp)"
-            if ! jq -r '.body // ""' "${PR_META_FILE}" > "${_pr_body_file}" 2>/dev/null; then
-              : > "${_pr_body_file}"
-            fi
-
             if [ -z "${_pr_title}" ] && [ "${_pr_body_has_text}" != "true" ]; then
               echo "::notice::Reviewer memory retrieval skipped: PR title/body are empty."
               _write_memory_fallback
             elif [ -f "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh" ]; then
+              _pr_body_file="$(mktemp)"
+              if ! jq -r '.body // ""' "${PR_META_FILE}" > "${_pr_body_file}" 2>/dev/null; then
+                : > "${_pr_body_file}"
+              fi
               # shellcheck disable=SC1091
               if source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"; then
                 if declare -F memory_retrieve >/dev/null 2>&1; then
@@ -2049,9 +2048,9 @@ jobs:
             # numbers like `total_count` — and `.check_runs` on a number
             # errors out, silently returning 0 (which the wait loop would
             # mistake for "no in-flight checks").
-            # Build a stable signature from the same self-excluded in-flight
-            # snapshot the wait gate uses so order churn across paginated API
-            # responses does not reset the backoff.
+            # Build a stable semantic signature from the same self-excluded
+            # in-flight snapshot the wait gate uses so pagination/order churn
+            # does not reset the backoff.
             _wait_view="$(jq -c --arg run_id "${SELF_RUN_ID:-}" '
               [
                 ( if type == "array" then .[]? else . end )
@@ -2064,13 +2063,10 @@ jobs:
                   )
                 | {
                     id: (.id // 0),
-                    name: (.name // ""),
-                    status: (.status // ""),
-                    started_at: (.started_at // ""),
-                    details_url: (.details_url // "")
+                    status: (.status // "")
                   }
               ]
-              | sort_by(.id, .name, .details_url)
+              | sort_by(.id, .status)
             ' "${_raw_file}" 2>/dev/null || echo '[]')"
             _in_flight="$(printf '%s' "${_wait_view}" | jq 'length' 2>/dev/null || echo 0)"
             if [ "${_wait_view}" = "${_last_wait_view}" ]; then
