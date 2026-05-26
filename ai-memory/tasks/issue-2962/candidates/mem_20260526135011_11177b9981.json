@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":2962,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/2962\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/2965\",\"pr_number\":2965,\"branch\":\"ai/issue-2962\",\"run_id\":\"26451983607\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/26451983607\",\"changed_files\":[\".github/workflows/clarify.yml\",\".github/workflows/implement.yml\",\".github/workflows/orchestrate.yml\",\".github/workflows/orchestrate_clarify_respond.yml\",\".github/workflows/orchestrate_poll.yml\",\".github/workflows/plan.yml\",\".github/workflows/review_autofix.yml\",\".github/workflows/workflow-log-analysis.yml\",\"tests/test_implement_semble_contract.py\",\"tests/test_judge_semble_prefetch_contract.py\",\"tests/test_review_semble_contract.py\",\"tests/test_semble_workflow_parity_contract.py\"]}",
+  "fingerprint": "928ad46ae5bea3690762939751089ae1725daa38734b14a9a0046c4e3ca4e0fc",
+  "lineage": {
+    "issue_number": 2962,
+    "parent_ids": [],
+    "pr_number": 2965,
+    "run_id": "26451983607",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26451983607",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/2965"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260526135011_11177b9981",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2962,
+    "level": "run",
+    "pr_number": 2965,
+    "run_id": "26451983607"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #2962: https://github.com/shubhodeep1/coding-workflows/pull/2965",
+  "timestamps": {
+    "created_at": "2026-05-26T13:50:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
