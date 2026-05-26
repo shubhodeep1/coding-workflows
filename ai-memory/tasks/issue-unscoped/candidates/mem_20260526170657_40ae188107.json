@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validation_refresh_runner.py:_dispatch_discovery() \u2192 if result.discovery_outcome in (\"pr_opened\", \"pr_reused\", \"failed\", \"push_denied\"): (lines ~270-278 in current tree) | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Tree-reset guard after discovery is scoped too narrowly, so `dry_run`, `skipped_dedup`, `agree`, or unhandled exceptions can leave the clone on a PR branch with mutated `.ai/validate.yml`.\n  WHY: Subsequent render/lint/runtime steps then run against the wrong tree, producing incorrect validation artefacts or spurious diffs.\n- scripts/validation_discovery_bootstrap.py:discover_manifest_via_codex() (the rc=127 / FileNotFoundError branch, currently lines ~325-340) | severity=high | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The `elif` for missing Codex CLI is unindented relative to the preceding `if TimeoutExpired` block, so the comment and `return` fall outside the `except` clause.\n  WHY: The resulting syntax/indentation error prevents module import, which stops `validation_refresh_runner.py` from loading the discovery helper and can fail the refresh job even on dry-run or disabled paths.\n- scripts/validation_refresh_runner.py:_dedup_skip() and _append_discovery_memory() (bash `-c` command construction with unquoted $repository and tempfile path) | severity=medium | confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Positional-parameter hardening remains incomplete at one shell call site, leaving word-splitting possible on malformed repo names or temp paths containing whitespace.\n  WHY: Memory lookup/append can fail or execute unintended commands when repository slug or tempfile path contains special characters.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Test plan commits to wiring tests into \"all CI/stable/nightly workflows\"\n  expected_change_site: .github/workflows/nightly-validation-selftest.yml\n  confidence=4\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  EVIDENCE: nightly-validation-selftest.yml was not updated in the PR diff or last-run diff; only the three explicit allowlist workflows were touched, and no corresponding addition appears in nightly-validation-selftest.yml\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- Requirement: Test plan commits to wiring tests into \"all CI/stable/nightly workflows\" \u2014 the checklist shows [x] for test files and mentions CI/stable workflows, but the \"nightly\" category is not satisfied\n  Expected change site: .github/workflows/nightly-validation-selftest.yml should invoke tests/test_validation_discovery_bootstrap.py similar to how .github/workflows/ci.yml, mark-stable.yml, and test-and-mark-stable.yml were updated\n  Evidence of absence: PR DIFF shows updates to ci.yml:186, mark-stable.yml:245, test-and-mark-stable.yml:3305, but no corresponding addition in nightly-validation-selftest.yml; the test file contains 23 unit tests that would provide nightly regression coverage but are not executed by the nightly self-test workflow\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/validation_refresh_runner.py (post-last-autofix): _dispatch_discovery() \u2192 if result.discovery_outcome in (\"pr_opened\", \"pr_reused\", \"failed\", \"push_denied\"): (lines ~270-278 in current tree) | severity=medium | confidence=4\n  PROBLEM: Tree-reset guard after discovery is scoped too narrowly. A `dry_run`, `skipped_dedup`, `agree`, or any unhandled exception leaves the clone on a PR branch with mutated `.ai/validate.yml`.\n  WHY: The drift pipeline after discovery sees stale or unexpected files, producing incorrect validation artefacts or spurious diffs.\n- scripts/validation_discovery_bootstrap.py: discover_manifest_via_codex() (the rc=127 / FileNotFoundError branch, currently lines ~325-340) | severity=high | confidence=5\n  PROBLEM: The `elif` for missing Codex CLI is unindented relative to the preceding `if TimeoutExpired` block; the comment and `return` fall outside the `except` clause.\n  WHY: Syntax/indentation error prevents module import; `validation_refresh_runner.py` cannot load the discovery helper, causing the entire refresh job to fail even on dry-run or disabled paths.\n- scripts/validation_refresh_runner.py: _dedup_skip() and _append_discovery_memory() (bash `-c` command construction with unquoted `$repository` and tempfile path) | severity=medium | confidence=3\n  PROBLEM: Positional-parameter hardening from previous autofix pass is incomplete in one call site; shell word-splitting remains possible on malformed repo names or temp paths containing whitespace.\n  WHY: Memory lookup/append can fail or execute unintended commands when repository slug or tempfile path contains special characters.\n- Requirement: \"Test plan: [x] tests/test_validation_discovery_bootstrap.py \u2014 17 unit tests covering schema validation, codex retry/exhaustion, disagreement classification, PR open/reuse/push-denied, auto-close keyword guard.\" plus explicit wiring into CI, mark-stable, test-and-mark-stable, and nightly selftest workflows.\n  Expected change site: .github/workflows/nightly-validation-selftest.yml (the matrix that exercises all bootstrap fixtures)\n  Evidence of absence: nightly-validation-selftest.yml was not updated in the PR diff or last-run diff; only the three explicit allowlist workflows were touched. The new test module is imported and has a main() runner, but the nightly self-test matrix still excludes it.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "ab8e2add6ee9b37da8d69698d28e38e30b08ae8c26704636af1c26d9bba3bb83",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2959,
+    "run_id": "26461744343",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26461744343",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260526170657_40ae188107",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2959,
+    "run_id": "26461744343"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-26T17:06:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
