@@ -266,7 +266,7 @@ if [ -z "${ISSUE_BODY_FILE:-}" ] || [ ! -f "${ISSUE_BODY_FILE:-}" ]; then
   # rather than killing the step under set -euo pipefail.
   : > "${ISSUE_BODY_FILE}"
   if issue_meta_matches_issue "${ISSUE_META_FILE:-}"; then
-    jq -er '.body // ""' "${ISSUE_META_FILE}" > "${ISSUE_BODY_FILE}" 2>/dev/null || : > "${ISSUE_BODY_FILE}"
+    jq -er '.body' "${ISSUE_META_FILE}" > "${ISSUE_BODY_FILE}" 2>/dev/null || : > "${ISSUE_BODY_FILE}"
   fi
   if [ ! -s "${ISSUE_BODY_FILE}" ]; then
     gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}" --jq '.body // ""' > "${ISSUE_BODY_FILE}" || printf '' > "${ISSUE_BODY_FILE}"
