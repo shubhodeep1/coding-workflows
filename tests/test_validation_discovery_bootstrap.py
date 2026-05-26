@@ -79,6 +79,7 @@ class CommandFailure(Exception):
 		super().__init__(stderr or stdout or f"rc={returncode}")
 		self.returncode = returncode
 		self.stdout = stdout
+		self.output = stdout
 		self.stderr = stderr
 
 
@@ -428,6 +429,7 @@ def test_open_or_update_discovery_pr_records_push_denied_on_push_failure() -> No
 					returncode=128,
 					stderr="remote: Permission to octo/demo.git denied.\n",
 				),
+				PlannedRun(("gh", "pr", "list"), returncode=1, stderr="gh unavailable\n"),
 			]
 		)
 		result = discovery.open_or_update_discovery_pr(
@@ -469,6 +471,7 @@ def test_open_or_update_discovery_pr_records_wrapped_push_denied_on_push_failure
 				PlannedRun(("git", "add")),
 				PlannedRun(("git", "commit")),
 				PlannedRun(("git", "push", "-u", "origin"), callback=on_push),
+				PlannedRun(("gh", "pr", "list"), returncode=1, stderr="gh unavailable\n"),
 			]
 		)
 		result = discovery.open_or_update_discovery_pr(
@@ -488,6 +491,119 @@ def test_open_or_update_discovery_pr_records_wrapped_push_denied_on_push_failure
 		assert result.pr_was_reused is False
 		assert result.failure_reason is not None
 		assert result.failure_reason.startswith("push_denied")
+		executor.assert_consumed()
+
+
+def test_open_or_update_discovery_pr_reuses_existing_pr_after_push_race() -> None:
+	with tempfile.TemporaryDirectory(prefix="discovery-pr-push-race-") as td:
+		clone_dir = Path(td)
+		executor = FakeExecutor(
+			[
+				PlannedRun(("gh", "pr", "list"), stdout="[]\n"),
+				PlannedRun(("git", "checkout", "-B")),
+				PlannedRun(("git", "config", "user.name")),
+				PlannedRun(("git", "config", "user.email")),
+				PlannedRun(("git", "add")),
+				PlannedRun(("git", "commit")),
+				PlannedRun(
+					("git", "push", "-u", "origin"),
+					returncode=1,
+					stderr="! [rejected] non-fast-forward\n",
+				),
+				PlannedRun(
+					("gh", "pr", "list"),
+					stdout='[{"url":"https://github.com/octo/demo/pull/55","number":55}]\n',
+				),
+			]
+		)
+		result = discovery.open_or_update_discovery_pr(
+			consumer_slug="octo/demo",
+			consumer_clone_dir=clone_dir,
+			base_branch="main",
+			pr_branch="automation/validate-discovery/abc123/node-runtime",
+			manifest_yaml=VALID_NODE_RUNTIME_MANIFEST,
+			entry_script_text=None,
+			entry_script_relative_path="scripts/run_validation_repo_checks.sh",
+			pr_title="chore(validation): seed",
+			rationale_md="body",
+			label="automation:validate-bootstrap",
+			executor=executor,
+		)
+		assert result.pr_url == "https://github.com/octo/demo/pull/55"
+		assert result.pr_was_reused is True
+		assert result.failure_reason is None
+		executor.assert_consumed()
+
+
+def test_open_or_update_discovery_pr_reuses_existing_pr_after_create_race() -> None:
+	with tempfile.TemporaryDirectory(prefix="discovery-pr-create-race-") as td:
+		clone_dir = Path(td)
+		executor = FakeExecutor(
+			[
+				PlannedRun(("gh", "pr", "list"), stdout="[]\n"),
+				PlannedRun(("git", "checkout", "-B")),
+				PlannedRun(("git", "config", "user.name")),
+				PlannedRun(("git", "config", "user.email")),
+				PlannedRun(("git", "add")),
+				PlannedRun(("git", "commit")),
+				PlannedRun(("git", "push", "-u", "origin")),
+				PlannedRun(
+					("gh", "pr", "create"),
+					returncode=1,
+					stderr="a pull request for branch already exists\n",
+				),
+				PlannedRun(
+					("gh", "pr", "list"),
+					stdout='[{"url":"https://github.com/octo/demo/pull/56","number":56}]\n',
+				),
+			]
+		)
+		result = discovery.open_or_update_discovery_pr(
+			consumer_slug="octo/demo",
+			consumer_clone_dir=clone_dir,
+			base_branch="main",
+			pr_branch="automation/validate-discovery/abc123/node-runtime",
+			manifest_yaml=VALID_NODE_RUNTIME_MANIFEST,
+			entry_script_text=None,
+			entry_script_relative_path="scripts/run_validation_repo_checks.sh",
+			pr_title="chore(validation): seed",
+			rationale_md="body",
+			label="automation:validate-bootstrap",
+			executor=executor,
+		)
+		assert result.pr_url == "https://github.com/octo/demo/pull/56"
+		assert result.pr_was_reused is True
+		assert result.failure_reason is None
+		executor.assert_consumed()
+
+
+def test_open_or_update_discovery_pr_rejects_entry_script_path_outside_clone() -> None:
+	with tempfile.TemporaryDirectory(prefix="discovery-pr-invalid-entry-path-") as td:
+		clone_dir = Path(td)
+		outside_path = clone_dir.parent / "escape.sh"
+		executor = FakeExecutor(
+			[
+				PlannedRun(("gh", "pr", "list"), stdout="[]\n"),
+				PlannedRun(("git", "checkout", "-B")),
+			]
+		)
+		result = discovery.open_or_update_discovery_pr(
+			consumer_slug="octo/demo",
+			consumer_clone_dir=clone_dir,
+			base_branch="main",
+			pr_branch="automation/validate-discovery/abc123/node-runtime",
+			manifest_yaml=VALID_NODE_RUNTIME_MANIFEST,
+			entry_script_text="#!/usr/bin/env bash\nexit 0\n",
+			entry_script_relative_path="../escape.sh",
+			pr_title="chore(validation): seed",
+			rationale_md="body",
+			label="automation:validate-bootstrap",
+			executor=executor,
+		)
+		assert result.pr_url is None
+		assert result.pr_was_reused is False
+		assert result.failure_reason == "git_stage_failed: invalid_entry_script_path"
+		assert not outside_path.exists()
 		executor.assert_consumed()
 
 
@@ -603,6 +719,7 @@ def test_open_or_update_discovery_pr_does_not_drop_label_on_generic_error() -> N
 					returncode=1,
 					stderr="secondary rate limit while updating label metadata\n",
 				),
+				PlannedRun(("gh", "pr", "list"), returncode=1, stderr="gh unavailable\n"),
 			]
 		)
 		result = discovery.open_or_update_discovery_pr(

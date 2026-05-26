@@ -465,6 +465,55 @@ def build_pr_branch_name(*, prefix: str, consumer_head_sha: str, discovered_type
 	return f"{prefix_slug}/{short_sha}/{type_slug}"
 
 
+def _find_existing_open_pr_url(
+	*,
+	consumer_slug: str,
+	pr_branch: str,
+	executor: CommandExecutor,
+	fail_open: bool = False,
+) -> tuple[str | None, str | None]:
+	try:
+		existing = executor.run(
+			[
+				"gh",
+				"pr",
+				"list",
+				"--repo",
+				consumer_slug,
+				"--head",
+				pr_branch,
+				"--state",
+				"open",
+				"--json",
+				"url,number",
+			],
+			check=True,
+		)
+	except Exception as exc:
+		if not _known_executor_failure(exc):
+			raise
+		if fail_open:
+			return None, None
+		returncode = _command_exception_returncode(exc)
+		error_text = (_command_exception_text(exc).strip() or str(exc))[:300]
+		rc_text = "unknown" if returncode is None else str(returncode)
+		return None, f"gh_pr_list_failed(rc={rc_text}): {error_text}"
+
+	try:
+		existing_payload = json.loads((existing.stdout or "").strip() or "[]")
+	except json.JSONDecodeError:
+		existing_payload = []
+
+	if isinstance(existing_payload, list):
+		for item in existing_payload:
+			if not isinstance(item, dict):
+				continue
+			url = item.get("url")
+			if isinstance(url, str) and url:
+				return url, None
+	return None, None
+
+
 def open_or_update_discovery_pr(
 	*,
 	consumer_slug: str,
@@ -493,49 +542,25 @@ def open_or_update_discovery_pr(
 	executor = executor or CommandExecutor()
 
 	# Q8:A — list any existing open PRs on this branch first; skip if found.
-	try:
-		existing = executor.run(
-			[
-				"gh",
-				"pr",
-				"list",
-				"--repo",
-				consumer_slug,
-				"--head",
-				pr_branch,
-				"--state",
-				"open",
-				"--json",
-				"url,number",
-			],
-			check=True,
-		)
-	except Exception as exc:
-		if not _known_executor_failure(exc):
-			raise
+	existing_pr_url, lookup_error = _find_existing_open_pr_url(
+		consumer_slug=consumer_slug,
+		pr_branch=pr_branch,
+		executor=executor,
+	)
+	if lookup_error:
 		return DiscoveryPrResult(
 			pr_url=None,
 			pr_branch=pr_branch,
 			pr_was_reused=False,
-			failure_reason=f"gh_pr_list_failed: {exc}",
+			failure_reason=lookup_error,
 		)
-
-	try:
-		existing_payload = json.loads((existing.stdout or "").strip() or "[]")
-	except json.JSONDecodeError:
-		existing_payload = []
-
-	if isinstance(existing_payload, list) and existing_payload:
-		first = existing_payload[0]
-		if isinstance(first, dict):
-			url = first.get("url")
-			if isinstance(url, str) and url:
-				return DiscoveryPrResult(
-					pr_url=url,
-					pr_branch=pr_branch,
-					pr_was_reused=True,
-					failure_reason=None,
-				)
+	if existing_pr_url:
+		return DiscoveryPrResult(
+			pr_url=existing_pr_url,
+			pr_branch=pr_branch,
+			pr_was_reused=True,
+			failure_reason=None,
+		)
 
 	# Stage the manifest + entry script into the consumer clone on a new branch.
 	try:
@@ -544,12 +569,20 @@ def open_or_update_discovery_pr(
 			cwd=consumer_clone_dir,
 			check=True,
 		)
+		clone_root = consumer_clone_dir.resolve()
 		manifest_path = consumer_clone_dir / ".ai" / "validate.yml"
 		manifest_path.parent.mkdir(parents=True, exist_ok=True)
 		manifest_path.write_text(manifest_yaml, encoding="utf-8")
 
 		if entry_script_text:
-			entry_path = consumer_clone_dir / entry_script_relative_path
+			entry_path = (consumer_clone_dir / entry_script_relative_path).resolve()
+			if not entry_path.is_relative_to(clone_root):
+				return DiscoveryPrResult(
+					pr_url=None,
+					pr_branch=pr_branch,
+					pr_was_reused=False,
+					failure_reason="git_stage_failed: invalid_entry_script_path",
+				)
 			entry_path.parent.mkdir(parents=True, exist_ok=True)
 			if not entry_path.exists():
 				entry_path.write_text(entry_script_text, encoding="utf-8")
@@ -598,6 +631,19 @@ def open_or_update_discovery_pr(
 	except Exception as exc:
 		if not _known_executor_failure(exc):
 			raise
+		existing_pr_url, _ = _find_existing_open_pr_url(
+			consumer_slug=consumer_slug,
+			pr_branch=pr_branch,
+			executor=executor,
+			fail_open=True,
+		)
+		if existing_pr_url:
+			return DiscoveryPrResult(
+				pr_url=existing_pr_url,
+				pr_branch=pr_branch,
+				pr_was_reused=True,
+				failure_reason=None,
+			)
 		return DiscoveryPrResult(
 			pr_url=None,
 			pr_branch=pr_branch,
@@ -641,6 +687,19 @@ def open_or_update_discovery_pr(
 			except Exception as inner_exc:
 				if not _known_executor_failure(inner_exc):
 					raise
+				existing_pr_url, _ = _find_existing_open_pr_url(
+					consumer_slug=consumer_slug,
+					pr_branch=pr_branch,
+					executor=executor,
+					fail_open=True,
+				)
+				if existing_pr_url:
+					return DiscoveryPrResult(
+						pr_url=existing_pr_url,
+						pr_branch=pr_branch,
+						pr_was_reused=True,
+						failure_reason=None,
+					)
 				return DiscoveryPrResult(
 					pr_url=None,
 					pr_branch=pr_branch,
@@ -648,6 +707,19 @@ def open_or_update_discovery_pr(
 					failure_reason=f"gh_pr_create_failed: {inner_exc}",
 				)
 		else:
+			existing_pr_url, _ = _find_existing_open_pr_url(
+				consumer_slug=consumer_slug,
+				pr_branch=pr_branch,
+				executor=executor,
+				fail_open=True,
+			)
+			if existing_pr_url:
+				return DiscoveryPrResult(
+					pr_url=existing_pr_url,
+					pr_branch=pr_branch,
+					pr_was_reused=True,
+					failure_reason=None,
+				)
 			return DiscoveryPrResult(
 				pr_url=None,
 				pr_branch=pr_branch,
@@ -681,7 +753,7 @@ def _is_missing_pr_label_error(*, error_text: str, label: str | None) -> bool:
 	return label_lower in lowered and (
 		"could not add label" in lowered
 		or "could not resolve to a label" in lowered
-		or "not found" in lowered
+		or re.search(rf"label ['\"]?{re.escape(label_lower)}['\"]?.*not found", lowered) is not None
 	)
 
 
