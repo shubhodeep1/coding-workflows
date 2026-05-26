@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for `upgrade-setup-uv-node24`\n\n**Ref/context**\n- HEAD: `b90a46ea613492036c61026414264dfd34e5d0a4`\n- Branch: `orchestrator/project-2960`\n- Integration metadata matches checkout: **yes**\n\n**Clarification mapping**\n- No `Q1/Q2/...` were needed.\n- `/answer [auto-answered-by-orchestrator]` added no extra constraints beyond \u201cproceed as scoped.\u201d\n\n**Automation / rollout summary**\n- Change shape: **modify existing reusable workflow YAML only**.\n- Scheduler/PR-push wiring: **none**; keep existing workflow triggers unchanged.\n- New script/supervisor: **none**.\n- DB gates / migrations: **N/A**.\n- Future-removal registry entry: **none**.\n- Estimated implementation budget: **~20\u201330 minutes**.\n\n**Representative reference**\n- Use `.github/workflows/validate.yml` as the canonical pattern: its `setup-uv` step already uses `astral-sh/setup-uv@v7`. Mirror that major only.\n\n## Files likely to change\n\n**Primary in-scope workflow files (8 files / 10 occurrences)**\n1. `.github/workflows/clarify.yml`\n2. `.github/workflows/plan.yml`\n3. `.github/workflows/orchestrate.yml`\n4. `.github/workflows/orchestrate_clarify_respond.yml`\n5. `.github/workflows/orchestrate_poll.yml`\n6. `.github/workflows/review_autofix.yml`\n7. `.github/workflows/implement.yml`\n8. `.github/workflows/workflow-log-analysis.yml` *(3 separate `Setup uv (Semble)` occurrences)*\n\n**Secondary files if `files_touched` allows test updates**\n- `tests/test_semble_workflow_parity_contract.py`\n- `tests/test_judge_semble_prefetch_contract.py`\n- `tests/test_review_semble_contract.py`\n- `tests/test_implement_semble_contract.py`\n\n## Workflow/jobs to update\n- Replace only `uses: astral-sh/setup-uv@v3` \u2192 `uses: astral-sh/setup-uv@v7`.\n- Do **not** change:\n  - step names/casing (`Setup uv`, `setup-uv`, `Setup uv for Semble`, `Setup uv (Semble)`)\n  - `if:` conditions\n  - `continue-on-error`\n  - comments\n  - downstream install/index step order\n\n## Data structures affected\n- Workflow YAML `uses:` scalars only.\n- If tests are in scope, string constants/assertions that hard-code `setup-uv@v3`.\n\n## API/interface changes\n- No reusable-workflow input/output/env/interface changes.\n- No wrapper/template changes.\n- No script behavior changes.\n- Only the referenced external action major changes, aligned to `validate.yml`.\n\n## Risks / edge cases / conflicts\n- **Conflict:** the planning context mentions \u201clisted files/files_touched,\u201d but no explicit list was included; this plan derives scope from the current internal reusable workflows still using `setup-uv@v3`.\n- `workflow-log-analysis.yml` has **three** occurrences, so it is easy to miss one.\n- Current contract tests outside the workflow files still assert `@v3`; if test edits are disallowed by `files_touched`, CI may fail.\n- Historical analysis docs still mention `@v3`; acceptance checks should be scoped to the target workflows, not repo-wide docs.\n\n## Testing considerations\n- Scoped grep over the target workflow files to confirm no remaining `astral-sh/setup-uv@v3`.\n- Focused test run:\n  - `tests/test_semble_workflow_parity_contract.py`\n  - `tests/test_judge_semble_prefetch_contract.py`\n  - `tests/test_review_semble_contract.py`\n  - `tests/test_implement_semble_contract.py`\n  - `tests/test_workflow_log_analysis_failure_contract.py`\n  - `tests/test_validate_semble_contract.py` *(regression guard; should remain on `@v7` and unchanged)*\n\n**Assumptions**\n- The intended target set is the eight current internal reusable workflow files with remaining `setup-uv@v3` references.\n- `validate.yml` remains unchanged and is reference-only.\n\n**Missing-context note**\n- No explicit `files_touched` list was present in the planning context.\n\n**Actions taken**\n- Inspected the current `setup-uv` occurrences in the reusable workflows, the `validate.yml` reference version, and the contract tests that still hard-code `@v3`.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "269e25361dfd7f55dda65ec926942f12f5d6bcb1b2be245dcfb4282b4fc2d3e4",
+  "lineage": {
+    "issue_number": 2962,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26451668093",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26451668093",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2962"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260526134547_9cae3f7555",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2962,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26451668093"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2962",
+  "timestamps": {
+    "created_at": "2026-05-26T13:45:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
