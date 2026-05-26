@@ -14,6 +14,28 @@ def _workflow_text() -> str:
 	return WORKFLOW.read_text(encoding="utf-8")
 
 
+def _step_script(step_name: str) -> str:
+	text = _workflow_text()
+	step_marker = f"      - name: {step_name}\n"
+	start = text.find(step_marker)
+	assert start != -1, f"Missing workflow step: {step_name}"
+
+	run_marker = "\n        run: |\n"
+	run_start = text.find(run_marker, start)
+	assert run_start != -1, f"Missing run block for workflow step: {step_name}"
+	run_start += len(run_marker)
+
+	next_step = text.find("\n      - name: ", run_start)
+	if next_step == -1:
+		next_step = len(text)
+
+	block = text[run_start:next_step]
+	return "\n".join(
+		line[10:] if line.startswith("          ") else line
+		for line in block.splitlines()
+	)
+
+
 def test_payload_first_fallback_and_shared_helper_usage() -> None:
 	text = _workflow_text()
 
@@ -28,6 +50,48 @@ def test_payload_first_fallback_and_shared_helper_usage() -> None:
 	assert payload_pos != -1
 	assert fetch_pos != -1
 	assert payload_pos < fetch_pos, "Fallback GH pull fetch must only run after payload text check"
+
+
+def test_issue_pr_status_bootstraps_revalidate_lifecycle_ai_memory_schemas() -> None:
+	text = _workflow_text()
+	assert "validation_history.v1.json" in text
+	assert "operator_bypass_audit.v1.json" in text
+	assert "revalidate_events.v1.json" in text
+
+
+def test_orchestrator_classification_is_exported_for_downstream_reuse() -> None:
+	update_step = _step_script("Update linked issue labels when PR closes")
+
+	assert 'ORCHESTRATOR_CLASSIFICATION_COMPLETE="true"' in update_step
+	assert "export_orchestrator_issue_classification()" in update_step
+	assert 'echo "TRACKING_ISSUES<<EOF" >> "$GITHUB_ENV"' in update_step
+	assert 'echo "MANAGED_ISSUES<<EOF" >> "$GITHUB_ENV"' in update_step
+	assert (
+		'echo "ORCHESTRATOR_CLASSIFICATION_COMPLETE=${ORCHESTRATOR_CLASSIFICATION_COMPLETE}" >> "$GITHUB_ENV"'
+	) in update_step
+	assert 'ORCHESTRATOR_CLASSIFICATION_COMPLETE="false"' in update_step, (
+		"REST fallback metadata failures must mark the reused classifier as incomplete "
+		"so the merged-alert step can take its safe fallback path."
+	)
+
+	no_issue_pos = update_step.find('echo "No linked issues found for PR #${PR_NUMBER}."')
+	export_before_exit_pos = update_step.find("export_orchestrator_issue_classification", no_issue_pos)
+	exit_pos = update_step.find("exit 0", no_issue_pos)
+	assert no_issue_pos != -1
+	assert export_before_exit_pos != -1
+	assert exit_pos != -1
+	assert no_issue_pos < export_before_exit_pos < exit_pos, (
+		"Even the no-linked-issues exit path must export empty classifier state so later "
+		"steps can consume a defined env contract."
+	)
+
+	loop_end_pos = update_step.rfind('done <<< "${ISSUE_NUMBERS}"')
+	final_export_pos = update_step.rfind("export_orchestrator_issue_classification")
+	assert loop_end_pos != -1
+	assert final_export_pos != -1
+	assert loop_end_pos < final_export_pos, (
+		"Normal success path must export the classifier result after issue processing completes."
+	)
 
 
 def test_fallback_regex_drops_bare_mentions_keeps_closing_keywords_and_urls() -> None:
@@ -63,6 +127,69 @@ def test_fallback_regex_drops_bare_mentions_keeps_closing_keywords_and_urls() ->
 	assert '[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+' not in text, (
 		"Optional colon between closing keyword and '#N' must not be re-introduced; "
 		"GitHub closing-link syntax expects whitespace separation."
+	)
+
+
+def test_merged_alert_reuses_exported_managed_classification_before_body_lookup_fallback() -> None:
+	alert_step = _step_script("Send PR merged Telegram alert")
+
+	assert 'if [ -n "${MANAGED_ISSUES:-}" ]; then' in alert_step, (
+		"Merged-alert step must consult exported MANAGED_ISSUES on the common path"
+	)
+	assert (
+		'elif [ "${ORCHESTRATOR_CLASSIFICATION_COMPLETE:-false}" != "true" ] && [ -n "${LINKED_ISSUE_NUMBERS:-}" ]; then'
+	) in alert_step, (
+		"Body-lookup fallback must only run when the earlier classifier is incomplete"
+	)
+	assert "falling back to per-issue body lookup for PR merged alert suppression" in alert_step
+	assert '_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq ' in alert_step, (
+		"Per-issue issue lookup must remain available for the incomplete-classifier fallback path"
+	)
+
+	managed_pos = alert_step.find('if [ -n "${MANAGED_ISSUES:-}" ]; then')
+	fallback_pos = alert_step.find(
+		'elif [ "${ORCHESTRATOR_CLASSIFICATION_COMPLETE:-false}" != "true" ] && [ -n "${LINKED_ISSUE_NUMBERS:-}" ]; then'
+	)
+	loop_pos = alert_step.find("while IFS= read -r issue_number; do")
+	lookup_pos = alert_step.find('_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq ')
+	assert managed_pos != -1
+	assert fallback_pos != -1
+	assert loop_pos != -1
+	assert lookup_pos != -1
+	assert managed_pos < fallback_pos < loop_pos < lookup_pos, (
+		"Merged-alert step must check exported classification first, and only then enter the "
+		"legacy per-issue fallback lookup."
+	)
+
+
+def test_merged_alert_fallback_preserves_managed_label_or_body_detection() -> None:
+	alert_step = _step_script("Send PR merged Telegram alert")
+
+	assert 'index("ai:orchestrator-tracking")' in alert_step, (
+		"Incomplete-classifier fallback must keep tracking precedence over managed detection"
+	)
+	assert 'index("ai:orchestrator-managed")' in alert_step, (
+		"Incomplete-classifier fallback must keep the managed-label signal"
+	)
+	assert 'contains("Managed by: AI Orchestrator")' in alert_step, (
+		"Incomplete-classifier fallback must keep the body-marker signal"
+	)
+	assert 'if [ "${ISSUE_IS_MANAGED}" = "true" ]; then' in alert_step, (
+		"Fallback lookup must normalize its label-or-body check into a boolean gate"
+	)
+
+	lookup_pos = alert_step.find('_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq ')
+	tracking_pos = alert_step.find('index("ai:orchestrator-tracking")')
+	label_pos = alert_step.find('index("ai:orchestrator-managed")')
+	body_pos = alert_step.find('contains("Managed by: AI Orchestrator")')
+	match_pos = alert_step.find('if [ "${ISSUE_IS_MANAGED}" = "true" ]; then')
+	assert lookup_pos != -1
+	assert tracking_pos != -1
+	assert label_pos != -1
+	assert body_pos != -1
+	assert match_pos != -1
+	assert lookup_pos < tracking_pos < label_pos < body_pos < match_pos, (
+		"Fallback lookup must preserve tracking precedence while evaluating the managed label and body marker before suppressing the alert."
 	)
 
 
@@ -214,7 +341,11 @@ def test_orchestrator_managed_children_are_relabeled_and_closed_on_pr_merge() ->
 
 if __name__ == "__main__":
 	test_payload_first_fallback_and_shared_helper_usage()
+	test_issue_pr_status_bootstraps_revalidate_lifecycle_ai_memory_schemas()
+	test_orchestrator_classification_is_exported_for_downstream_reuse()
 	test_fallback_regex_drops_bare_mentions_keeps_closing_keywords_and_urls()
+	test_merged_alert_reuses_exported_managed_classification_before_body_lookup_fallback()
+	test_merged_alert_fallback_preserves_managed_label_or_body_detection()
 	test_orchestrator_tracking_issues_are_skipped_in_label_close_loop()
 	test_orchestrator_managed_children_are_relabeled_and_closed_on_pr_merge()
 	print("PASS")

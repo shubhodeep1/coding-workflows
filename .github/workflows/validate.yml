@@ -354,6 +354,17 @@ jobs:
           workflow-templates/validation-harness/node-hardhat-solidity/tests/_lib/import_audit.py.j2
           workflow-templates/validation-harness/node-hardhat-solidity/tests/30_hardhat_test.sh.j2
           workflow-templates/validation-harness/node-hardhat-solidity/validate.env.j2
+          workflow-templates/validation-harness/node-runtime/Dockerfile.app.j2
+          workflow-templates/validation-harness/node-runtime/docker-compose.test.yml.j2
+          workflow-templates/validation-harness/node-runtime/validate.env.j2
+          workflow-templates/validation-harness/node-runtime/tests/00_canary.sh.j2
+          workflow-templates/validation-harness/node-runtime/tests/10_family_marker.sh.j2
+          workflow-templates/validation-harness/node-runtime/tests/20_import_audit.sh.j2
+          workflow-templates/validation-harness/node-runtime/tests/30_graceful_shutdown.sh.j2
+          workflow-templates/validation-harness/node-runtime/tests/40_repo_checks.sh.j2
+          workflow-templates/validation-harness/node-runtime/tests/90_tap_report.sh.j2
+          workflow-templates/validation-harness/node-runtime/tests/_lib/graceful_shutdown.py.j2
+          workflow-templates/validation-harness/node-runtime/tests/_lib/import_audit.py.j2
           workflow-templates/validation-harness/python-mongo-flask/Dockerfile.app.j2
           workflow-templates/validation-harness/python-mongo-flask/docker-compose.test.yml.j2
           workflow-templates/validation-harness/python-mongo-flask/tests/00_canary.sh.j2
@@ -423,7 +434,11 @@ jobs:
             run_ledger_entry.v1.json \
             task_lineage.v1.json \
             actions_runs_cache.v1.json \
-            workflow_log_analysis_cache.v1.json; do
+            workflow_log_analysis_cache.v1.json \
+            validation_history.v1.json \
+            operator_bypass_audit.v1.json \
+            revalidate_events.v1.json \
+            validation_discovery.v1.json; do
             if [ ! -f "ai-memory/schemas/${sf}" ]; then
               schema_tmp="ai-memory/schemas/${sf}.tmp"
               if copy_from_ref_or_local "ai-memory/schemas/${sf}" "${schema_tmp}" "false" "true"; then

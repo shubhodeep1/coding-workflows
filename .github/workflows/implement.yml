@@ -906,7 +906,7 @@ jobs:
           fi
 
           mkdir -p ai-memory/schemas
-          for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json actions_runs_cache.v1.json workflow_log_analysis_cache.v1.json; do
+          for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json actions_runs_cache.v1.json workflow_log_analysis_cache.v1.json validation_history.v1.json operator_bypass_audit.v1.json revalidate_events.v1.json validation_discovery.v1.json; do
             src=".codex-workflow-src/ai-memory/schemas/${sf}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/ai-memory/schemas/${sf}" ]; then
               src=".codex-workflow-src-main/ai-memory/schemas/${sf}"
@@ -3836,6 +3836,40 @@ jobs:
             exit 1
           }
 
+      - name: Pre-flight — lint PR title/body for auto-close keywords against tracking issues
+        # P4 from docs/postmortems/2026-05-18-project-2734-stall.md.
+        # The body composed below uses `Closes ${ISSUE_URL}` — correct
+        # when ISSUE_NUMBER points to a sub-issue (the convention), but
+        # if a future change or misconfiguration ever points it at an
+        # ai:orchestrator-tracking issue, the resulting auto-close would
+        # kill the orchestrator's wave dispatch (the project-#2734
+        # failure mode). Catch the violation at composition time so the
+        # PR is never created.  See unattended_system_instructions.md
+        # §21 and CLAUDE.md §19.
+        if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNTIME_DIR}/pr-body-lint"
+          PR_TITLE_FILE="${RUNTIME_DIR}/pr-body-lint/title.txt"
+          PR_BODY_FILE="${RUNTIME_DIR}/pr-body-lint/body.txt"
+          PR_LINT_FILE="${RUNTIME_DIR}/pr-body-lint/lint-input.txt"
+          PR_TITLE="AI implementation for issue #${ISSUE_NUMBER}"
+          printf '%s\n' "${PR_TITLE}" > "${PR_TITLE_FILE}"
+          # Build the exact body that the next step will pass to gh pr
+          # create, plus the title/body squash-merge artifact that the
+          # lint validates. Keep these strings in lockstep — drift means
+          # the lint is checking a different artifact than the one
+          # submitted.
+          printf 'Automated implementation. Closes %s\n' "${ISSUE_URL}" > "${PR_BODY_FILE}"
+          printf '%s\n\n' "${PR_TITLE}" > "${PR_LINT_FILE}"
+          cat "${PR_BODY_FILE}" >> "${PR_LINT_FILE}"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/lint_pr_body_auto_close.py \
+            --pr-body-file "${PR_LINT_FILE}" \
+            --repo "${GITHUB_REPOSITORY}"
+
       - name: Create Pull Request
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true'
         id: create_pr
@@ -3845,6 +3879,17 @@ jobs:
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
+          PR_TITLE_FILE="${RUNTIME_DIR}/pr-body-lint/title.txt"
+          PR_BODY_FILE="${RUNTIME_DIR}/pr-body-lint/body.txt"
+          if [ ! -f "${PR_TITLE_FILE}" ]; then
+            echo "::error::expected PR title file missing: ${PR_TITLE_FILE}" >&2
+            exit 1
+          fi
+          if [ ! -f "${PR_BODY_FILE}" ]; then
+            echo "::error::expected PR body file missing: ${PR_BODY_FILE}" >&2
+            exit 1
+          fi
+          PR_TITLE="$(cat "${PR_TITLE_FILE}")"
 
           # Atomically apply force-review + e2e-smoke-test labels at PR
           # creation time when this is a smoke-test run. Applying them
@@ -3861,8 +3906,8 @@ jobs:
             --repo "${{ github.repository }}"
             --base "${PR_BASE_BRANCH}"
             --head "${TARGET_BRANCH}"
-            --title "AI implementation for issue #${ISSUE_NUMBER}"
-            --body "Automated implementation. Closes ${ISSUE_URL}"
+            --title "${PR_TITLE}"
+            --body-file "${PR_BODY_FILE}"
           )
           if [ "${IS_SMOKE_TEST:-false}" = "true" ]; then
             PR_CREATE_ARGS+=(--label "force-review" --label "e2e-smoke-test")

@@ -22,6 +22,10 @@ def test_validation_refresh_workflow_invokes_runner_with_auth() -> None:
 	content = WORKFLOW_PATH.read_text(encoding="utf-8")
 	assert "scripts/validation_refresh_runner.py" in content
 	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in content
+	assert (
+		"VALIDATION_DISCOVERY_ENABLED: ${{ github.event.inputs.discovery_enabled || "
+		"vars.VALIDATION_DISCOVERY_ENABLED || 'true' }}"
+	) in content
 	# The runner is read-only against consumer repos: no commits, pushes, or
 	# pull requests are produced, so the workflow must NOT request write perms
 	# that imply otherwise.

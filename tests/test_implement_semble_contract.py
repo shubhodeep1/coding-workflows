@@ -101,6 +101,13 @@ def test_stage_workflow_support_files_bootstraps_optional_semble_assets() -> Non
 	assert "semble_helpers.sh" not in required_loop_line
 
 
+def test_stage_workflow_support_files_bootstraps_revalidate_lifecycle_ai_memory_schemas() -> None:
+	stage_block = _step_run_text("Stage workflow support files")
+	assert "validation_history.v1.json" in stage_block
+	assert "operator_bypass_audit.v1.json" in stage_block
+	assert "revalidate_events.v1.json" in stage_block
+
+
 def test_semble_bootstrap_steps_are_gated_and_fail_open() -> None:
 	setup_step = _step("setup-uv")
 	assert setup_step.get("if") == "env.SKIP_IMPLEMENT != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')"

@@ -16,6 +16,10 @@ from typing import Any
 from ai_memory_lib import (
     MemoryGitError,
     MemoryValidationError,
+    append_operator_bypass_audit_entry,
+    append_revalidate_event,
+    append_validation_discovery_entry,
+    append_validation_history_entry,
     claim_processed_command,
     compact_memory,
     compute_normalized_sha256,
@@ -23,11 +27,19 @@ from ai_memory_lib import (
     evaluate_clarify_loop_guard,
     finalize_task_lineage,
     get_actions_runs_cache,
+    get_branch_rebuild_audit,
+    get_fingerprint_quarantine,
+    get_operator_bypass_audit,
     get_processed_command_entry,
+    get_revalidate_events,
+    get_validation_discovery,
+    get_validation_history,
     list_processed_command_entries,
     parse_bool,
     persist_memory_operation,
     put_actions_runs_cache,
+    put_branch_rebuild_audit,
+    put_fingerprint_quarantine,
     promote_candidates,
     read_memory_root_from_branch,
     record_candidate,
@@ -73,7 +85,10 @@ def _resolve_memory_root(memory_dir: Path, memory_root_relative: str) -> Path:
 
 
 def _require_positive_int(value: str | None, field_name: str) -> int:
-    parsed = _safe_int(value)
+    try:
+        parsed = _safe_int(value)
+    except ValueError as exc:
+        raise MemoryValidationError(f"{field_name} must be a positive integer") from exc
     if parsed is None or parsed < 1:
         raise MemoryValidationError(f"{field_name} must be a positive integer")
     return parsed
@@ -277,6 +292,225 @@ def _emit_actions_runs_cache_fallback(*, mode: str, reason: str, repo: str) -> N
     )
 
 
+def _emit_fingerprint_quarantine_fallback(*, mode: str, reason: str) -> None:
+    print(
+        "::warning::fingerprint_quarantine_fallback "
+        f"helper=fingerprint_quarantine mode={mode} reason={reason}",
+        file=sys.stderr,
+    )
+
+
+def _is_missing_memory_branch_error(error_text: str) -> bool:
+    lowered = error_text.lower()
+    return (
+        ("remote branch" in lowered and ("not found" in lowered or "does not exist" in lowered))
+        or "could not find remote ref" in lowered
+        or "couldn't find remote ref" in lowered
+        or "remote ref does not exist" in lowered
+        or "did not match any file(s) known to git" in lowered
+    )
+
+
+def _quarantine_env_defaults(
+    *,
+    repo_root: Path | None = None,
+    memory_branch: str | None = None,
+    memory_root: str | None = None,
+    push_retries: int | None = None,
+    enabled: bool | None = None,
+) -> argparse.Namespace:
+    args = argparse.Namespace(
+        repo_root=(str(repo_root) if repo_root is not None else None),
+        memory_branch=memory_branch,
+        memory_root=memory_root,
+        push_retries=push_retries,
+        enabled=enabled,
+        retrieval_profiles=None,
+    )
+    args = _read_env_defaults(args)
+    if enabled is not None:
+        args.enabled = enabled
+    if memory_branch is not None:
+        args.memory_branch = memory_branch
+    if memory_root is not None:
+        args.memory_root = memory_root
+    if push_retries is not None:
+        args.push_retries = push_retries
+    return args
+
+
+def _load_quarantine_list(
+    *,
+    repo_root: Path | None = None,
+    memory_branch: str | None = None,
+    memory_root: str | None = None,
+    enabled: bool | None = None,
+) -> dict[str, Any]:
+    args = _quarantine_env_defaults(
+        repo_root=repo_root,
+        memory_branch=memory_branch,
+        memory_root=memory_root,
+        enabled=enabled,
+    )
+    if not args.enabled:
+        return {
+            "ok": True,
+            "enabled": False,
+            "quarantine": {"schema_version": "v1", "entries": []},
+        }
+
+    resolved_repo_root = _resolve_repo_root(args.repo_root)
+    branch_dir = None
+    try:
+        branch_dir = read_memory_root_from_branch(
+            resolved_repo_root,
+            memory_branch=args.memory_branch,
+            memory_root_relative=args.memory_root,
+        )
+        memory_root_dir = _resolve_memory_root(branch_dir, args.memory_root)
+        quarantine = get_fingerprint_quarantine(memory_root_dir)
+        return {
+            "ok": True,
+            "enabled": True,
+            "quarantine": quarantine,
+        }
+    except MemoryGitError as exc:
+        error_text = _sanitize_git_error(str(exc))
+        if _is_missing_memory_branch_error(error_text):
+            return {
+                "ok": True,
+                "enabled": False,
+                "quarantine": {"schema_version": "v1", "entries": []},
+                "warning": error_text,
+            }
+        return {
+            "ok": False,
+            "enabled": True,
+            "quarantine": {"schema_version": "v1", "entries": []},
+            "error": error_text,
+        }
+    except (MemoryValidationError, json.JSONDecodeError, OSError, ValueError) as exc:
+        _emit_fingerprint_quarantine_fallback(mode="get", reason="load_failed")
+        return {
+            "ok": True,
+            "enabled": True,
+            "quarantine": {"schema_version": "v1", "entries": []},
+            "warning": str(exc),
+        }
+    finally:
+        if branch_dir:
+            shutil.rmtree(branch_dir, ignore_errors=True)
+
+
+def _persist_quarantine_list(
+    *,
+    payload: dict[str, Any],
+    repo_root: Path | None = None,
+    memory_branch: str | None = None,
+    memory_root: str | None = None,
+    push_retries: int | None = None,
+    enabled: bool | None = None,
+) -> dict[str, Any]:
+    args = _quarantine_env_defaults(
+        repo_root=repo_root,
+        memory_branch=memory_branch,
+        memory_root=memory_root,
+        push_retries=push_retries,
+        enabled=enabled,
+    )
+    if not args.enabled:
+        return {
+            "ok": True,
+            "enabled": False,
+            "stored": False,
+            "quarantine": payload,
+        }
+
+    resolved_repo_root = _resolve_repo_root(args.repo_root)
+
+    def _op(clone_dir: Path) -> dict[str, Any]:
+        memory_root_dir = _resolve_memory_root(clone_dir, args.memory_root)
+        quarantine = put_fingerprint_quarantine(memory_root_dir, payload)
+        return {"quarantine": quarantine, "stored": True}
+
+    try:
+        result = persist_memory_operation(
+            resolved_repo_root,
+            memory_branch=args.memory_branch,
+            memory_root_relative=args.memory_root,
+            push_retries=int(args.push_retries),
+            commit_message="ai-memory: fingerprint quarantine",
+            operation=_op,
+        )
+        return {"ok": True, "enabled": True, **result}
+    except MemoryGitError as exc:
+        return {
+            "ok": True,
+            "enabled": True,
+            "stored": False,
+            "quarantine": None,
+            "warning": _sanitize_git_error(str(exc)),
+        }
+    except (MemoryValidationError, json.JSONDecodeError, OSError, ValueError) as exc:
+        _emit_fingerprint_quarantine_fallback(mode="put", reason="persist_failed")
+        return {
+            "ok": True,
+            "enabled": True,
+            "stored": False,
+            "quarantine": None,
+            "warning": _sanitize_git_error(str(exc)),
+        }
+
+
+def _emit_branch_rebuild_audit_fallback(
+    *, mode: str, reason: str, tracking_issue: int, integration_branch: str
+) -> None:
+    print(
+        "::warning::branch_rebuild_audit_fallback "
+        f"helper=branch_rebuild_audit mode={mode} reason={reason} "
+        f"tracking_issue={tracking_issue} integration_branch={integration_branch}",
+        file=sys.stderr,
+    )
+
+
+def _emit_validation_history_fallback(*, mode: str, reason: str, repo: str, integration_sha: str) -> None:
+    print(
+        "::warning::validation_history_fallback "
+        f"helper=validation_history mode={mode} reason={reason} repo={repo} integration_sha={integration_sha}",
+        file=sys.stderr,
+    )
+
+
+def _emit_validation_discovery_fallback(*, mode: str, reason: str, repo: str) -> None:
+    print(
+        "::warning::validation_discovery_fallback "
+        f"helper=validation_discovery mode={mode} reason={reason} repo={repo}",
+        file=sys.stderr,
+    )
+
+
+def _emit_operator_bypass_audit_fallback(
+    *, mode: str, reason: str, tracking_issue: int | str, integration_sha: str
+) -> None:
+    print(
+        "::warning::operator_bypass_audit_fallback "
+        f"helper=operator_bypass_audit mode={mode} reason={reason} "
+        f"tracking_issue={tracking_issue} integration_sha={integration_sha}",
+        file=sys.stderr,
+    )
+
+
+def _emit_revalidate_events_fallback(
+    *, mode: str, reason: str, tracking_issue: int | str, integration_sha: str
+) -> None:
+    print(
+        "::warning::revalidate_events_fallback "
+        f"helper=revalidate_events mode={mode} reason={reason} "
+        f"tracking_issue={tracking_issue} integration_sha={integration_sha}",
+        file=sys.stderr,
+    )
+
+
 def _read_runs_file(path_text: str) -> list[dict[str, Any]]:
     path = Path(_require_nonempty(path_text, "runs_file"))
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -289,6 +523,14 @@ def _read_runs_file(path_text: str) -> list[dict[str, Any]]:
     if not all(isinstance(item, dict) for item in runs):
         raise MemoryValidationError("runs_file entries must be JSON objects")
     return runs
+
+
+def _read_json_object_file(path_text: str, field_name: str) -> dict[str, Any]:
+    path = Path(_require_nonempty(path_text, field_name))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise MemoryValidationError(f"{field_name} must contain a JSON object")
+    return payload
 
 
 def cmd_record_candidate(args: argparse.Namespace) -> int:
@@ -640,6 +882,661 @@ def cmd_actions_runs_cache_put(args: argparse.Namespace) -> int:
                 "stored": False,
                 "cache": None,
                 "warning": str(exc),
+            }
+        )
+        return 0
+
+
+def cmd_branch_rebuild_audit_get(args: argparse.Namespace) -> int:
+    args = _read_env_defaults(args)
+    repository = _require_nonempty(args.repo, "repo")
+    tracking_issue = _require_positive_int(args.tracking_issue, "tracking_issue")
+    integration_branch = _require_nonempty(args.integration_branch, "integration_branch")
+    if not args.enabled:
+        _print_json({"ok": True, "enabled": False, "hit": False, "audit": None})
+        return 0
+
+    repo_root = _resolve_repo_root(args.repo_root)
+    branch_dir = None
+    try:
+        branch_dir = read_memory_root_from_branch(
+            repo_root,
+            memory_branch=args.memory_branch,
+            memory_root_relative=args.memory_root,
+        )
+        memory_root = _resolve_memory_root(branch_dir, args.memory_root)
+        try:
+            audit = get_branch_rebuild_audit(
+                memory_root,
+                repository=repository,
+                tracking_issue_number=tracking_issue,
+                integration_branch=integration_branch,
+            )
+        except (MemoryValidationError, json.JSONDecodeError, OSError, ValueError) as exc:
+            _emit_branch_rebuild_audit_fallback(
+                mode="get",
+                reason="audit_corrupt",
+                tracking_issue=tracking_issue,
+                integration_branch=integration_branch,
+            )
+            _print_json(
+                {
+                    "ok": True,
+                    "enabled": True,
+                    "hit": False,
+                    "audit": None,
+                    "warning": str(exc),
+                }
+            )
+            return 0
+        _print_json(
+            {
+                "ok": True,
+                "enabled": True,
+                "hit": bool(audit),
+                "audit": audit,
+            }
+        )
+        return 0
+    except MemoryGitError as exc:
+        error_text = _sanitize_git_error(str(exc))
+        if _is_missing_memory_branch_error(error_text):
+            _print_json({"ok": True, "enabled": False, "hit": False, "audit": None, "warning": error_text})
+            return 0
+        print(f"AI_MEMORY_ERROR: {error_text}", file=sys.stderr)
+        _print_json({"ok": False, "enabled": True, "hit": False, "audit": None, "error": error_text})
+        return 2
+    finally:
+        if branch_dir:
+            shutil.rmtree(branch_dir, ignore_errors=True)
+
+
+def cmd_branch_rebuild_audit_put(args: argparse.Namespace) -> int:
+    args = _read_env_defaults(args)
+    repository = _require_nonempty(args.repo, "repo")
+    tracking_issue = _require_positive_int(args.tracking_issue, "tracking_issue")
+    integration_branch = _require_nonempty(args.integration_branch, "integration_branch")
+    if not args.enabled:
+        _print_json({"ok": True, "enabled": False, "stored": False, "audit": None})
+        return 0
+
+    repo_root = _resolve_repo_root(args.repo_root)
+
+    def _op(clone_dir: Path) -> dict[str, Any]:
+        memory_root = _resolve_memory_root(clone_dir, args.memory_root)
+        audit = _read_json_object_file(args.audit_file, "audit_file")
+        stored_audit = put_branch_rebuild_audit(
+            memory_root,
+            repository=repository,
+            tracking_issue_number=tracking_issue,
+            integration_branch=integration_branch,
+            audit=audit,
+        )
+        return {"audit": stored_audit, "stored": True}
+
+    try:
+        result = persist_memory_operation(
+            repo_root,
+            memory_branch=args.memory_branch,
+            memory_root_relative=args.memory_root,
+            push_retries=int(args.push_retries),
+            commit_message=f"ai-memory: branch rebuild audit [{integration_branch}]",
+            operation=_op,
+        )
+        _print_json({"ok": True, **result})
+        return 0
+    except (MemoryValidationError, json.JSONDecodeError, OSError, ValueError, MemoryGitError) as exc:
+        _emit_branch_rebuild_audit_fallback(
+            mode="put",
+            reason="audit_write_failed",
+            tracking_issue=tracking_issue,
+            integration_branch=integration_branch,
+        )
+        _print_json(
+            {
+                "ok": True,
+                "enabled": True,
+                "stored": False,
+                "audit": None,
+                "warning": str(exc),
+            }
+        )
+        return 0
+
+
+def cmd_validation_history_get(args: argparse.Namespace) -> int:
+    args = _read_env_defaults(args)
+    repository = _require_nonempty(args.repo, "repo")
+    integration_sha = _require_nonempty(args.integration_sha, "integration_sha")
+    if not args.enabled:
+        _print_json({"ok": True, "enabled": False, "hit": False, "validation_history": None})
+        return 0
+
+    repo_root = _resolve_repo_root(args.repo_root)
+    branch_dir = None
+    try:
+        branch_dir = read_memory_root_from_branch(
+            repo_root,
+            memory_branch=args.memory_branch,
+            memory_root_relative=args.memory_root,
+        )
+        memory_root = _resolve_memory_root(branch_dir, args.memory_root)
+        try:
+            validation_history = get_validation_history(memory_root, repository, integration_sha)
+        except (MemoryValidationError, json.JSONDecodeError, OSError, ValueError) as exc:
+            _emit_validation_history_fallback(
+                mode="get",
+                reason="history_corrupt",
+                repo=repository,
+                integration_sha=integration_sha,
+            )
+            _print_json(
+                {
+                    "ok": True,
+                    "enabled": True,
+                    "hit": False,
+                    "validation_history": None,
+                    "warning_code": "history_corrupt",
+                    "warning": _sanitize_git_error(str(exc)),
+                }
+            )
+            return 0
+        _print_json(
+            {
+                "ok": True,
+                "enabled": True,
+                "hit": bool(validation_history),
+                "validation_history": validation_history,
+            }
+        )
+        return 0
+    except MemoryGitError as exc:
+        error_text = _sanitize_git_error(str(exc))
+        if _is_missing_memory_branch_error(error_text):
+            _print_json(
+                {
+                    "ok": True,
+                    "enabled": False,
+                    "hit": False,
+                    "validation_history": None,
+                    "warning": error_text,
+                }
+            )
+            return 0
+        _emit_validation_history_fallback(
+            mode="get",
+            reason="history_read_failed",
+            repo=repository,
+            integration_sha=integration_sha,
+        )
+        _print_json(
+            {
+                "ok": True,
+                "enabled": True,
+                "hit": False,
+                "validation_history": None,
+                "warning_code": "history_read_failed",
+                "warning": error_text,
+            }
+        )
+        return 0
+    finally:
+        if branch_dir:
+            shutil.rmtree(branch_dir, ignore_errors=True)
+
+
+def cmd_validation_history_append(args: argparse.Namespace) -> int:
+    args = _read_env_defaults(args)
+    repository = _require_nonempty(args.repo, "repo")
+    integration_sha = _require_nonempty(args.integration_sha, "integration_sha")
+    if not args.enabled:
+        _print_json({"ok": True, "enabled": False, "stored": False, "validation_history": None})
+        return 0
+
+    repo_root = _resolve_repo_root(args.repo_root)
+
+    def _op(clone_dir: Path) -> dict[str, Any]:
+        memory_root = _resolve_memory_root(clone_dir, args.memory_root)
+        entry = _read_json_object_file(args.entry_file, "entry_file")
+        validation_history = append_validation_history_entry(
+            memory_root,
+            repository=repository,
+            integration_sha=integration_sha,
+            entry=entry,
+        )
+        return {"stored": True, "validation_history": validation_history}
+
+    try:
+        result = persist_memory_operation(
+            repo_root,
+            memory_branch=args.memory_branch,
+            memory_root_relative=args.memory_root,
+            push_retries=int(args.push_retries),
+            commit_message=f"ai-memory: validation history [{integration_sha[:12]}]",
+            operation=_op,
+        )
+        op_result = result.get("operation_result") or {}
+        _print_json(
+            {
+                "ok": True,
+                "enabled": True,
+                "stored": bool(op_result.get("stored")),
+                "validation_history": op_result.get("validation_history"),
+                **result,
+            }
+        )
+        return 0
+    except (MemoryValidationError, json.JSONDecodeError, OSError, ValueError, MemoryGitError) as exc:
+        _emit_validation_history_fallback(
+            mode="append",
+            reason="history_write_failed",
+            repo=repository,
+            integration_sha=integration_sha,
+        )
+        _print_json(
+            {
+                "ok": True,
+                "enabled": True,
+                "stored": False,
+                "validation_history": None,
+                "warning": _sanitize_git_error(str(exc)),
+            }
+        )
+        return 0
+
+
+def cmd_validation_discovery_get(args: argparse.Namespace) -> int:
+    args = _read_env_defaults(args)
+    repository = _require_nonempty(args.repo, "repo")
+    if not args.enabled:
+        _print_json({"ok": True, "enabled": False, "hit": False, "validation_discovery": None})
+        return 0
+
+    repo_root = _resolve_repo_root(args.repo_root)
+    branch_dir = None
+    try:
+        branch_dir = read_memory_root_from_branch(
+            repo_root,
+            memory_branch=args.memory_branch,
+            memory_root_relative=args.memory_root,
+        )
+        memory_root = _resolve_memory_root(branch_dir, args.memory_root)
+        try:
+            validation_discovery = get_validation_discovery(memory_root, repository)
+        except (MemoryValidationError, json.JSONDecodeError, OSError, ValueError) as exc:
+            _emit_validation_discovery_fallback(
+                mode="get", reason="discovery_corrupt", repo=repository
+            )
+            _print_json(
+                {
+                    "ok": True,
+                    "enabled": True,
+                    "hit": False,
+                    "validation_discovery": None,
+                    "warning_code": "discovery_corrupt",
+                    "warning": _sanitize_git_error(str(exc)),
+                }
+            )
+            return 0
+        _print_json(
+            {
+                "ok": True,
+                "enabled": True,
+                "hit": bool(validation_discovery),
+                "validation_discovery": validation_discovery,
+            }
+        )
+        return 0
+    except MemoryGitError as exc:
+        error_text = _sanitize_git_error(str(exc))
+        if _is_missing_memory_branch_error(error_text):
+            _print_json(
+                {
+                    "ok": True,
+                    "enabled": False,
+                    "hit": False,
+                    "validation_discovery": None,
+                    "warning": error_text,
+                }
+            )
+            return 0
+        _emit_validation_discovery_fallback(
+            mode="get", reason="discovery_read_failed", repo=repository
+        )
+        _print_json(
+            {
+                "ok": True,
+                "enabled": True,
+                "hit": False,
+                "validation_discovery": None,
+                "warning_code": "discovery_read_failed",
+                "warning": error_text,
+            }
+        )
+        return 0
+    finally:
+        if branch_dir:
+            shutil.rmtree(branch_dir, ignore_errors=True)
+
+
+def cmd_validation_discovery_append(args: argparse.Namespace) -> int:
+    args = _read_env_defaults(args)
+    repository = _require_nonempty(args.repo, "repo")
+    if not args.enabled:
+        _print_json({"ok": True, "enabled": False, "stored": False, "validation_discovery": None})
+        return 0
+
+    repo_root = _resolve_repo_root(args.repo_root)
+
+    def _op(clone_dir: Path) -> dict[str, Any]:
+        memory_root = _resolve_memory_root(clone_dir, args.memory_root)
+        entry = _read_json_object_file(args.entry_file, "entry_file")
+        validation_discovery = append_validation_discovery_entry(
+            memory_root,
+            repository=repository,
+            entry=entry,
+        )
+        return {"stored": True, "validation_discovery": validation_discovery}
+
+    try:
+        result = persist_memory_operation(
+            repo_root,
+            memory_branch=args.memory_branch,
+            memory_root_relative=args.memory_root,
+            push_retries=int(args.push_retries),
+            commit_message=f"ai-memory: validation discovery [{repository}]",
+            operation=_op,
+        )
+        op_result = result.get("operation_result") or {}
+        _print_json(
+            {
+                "ok": True,
+                "enabled": True,
+                "stored": bool(op_result.get("stored")),
+                "validation_discovery": op_result.get("validation_discovery"),
+                **result,
+            }
+        )
+        return 0
+    except (MemoryValidationError, json.JSONDecodeError, OSError, ValueError, MemoryGitError) as exc:
+        _emit_validation_discovery_fallback(
+            mode="append", reason="discovery_write_failed", repo=repository
+        )
+        _print_json(
+            {
+                "ok": True,
+                "enabled": True,
+                "stored": False,
+                "validation_discovery": None,
+                "warning": _sanitize_git_error(str(exc)),
+            }
+        )
+        return 0
+
+
+def cmd_operator_bypass_audit_get(args: argparse.Namespace) -> int:
+    args = _read_env_defaults(args)
+    repository = _require_nonempty(args.repo, "repo")
+    integration_sha = _require_nonempty(args.integration_sha, "integration_sha")
+    tracking_issue = _require_positive_int(args.tracking_issue, "tracking_issue")
+    if not args.enabled:
+        _print_json({"ok": True, "enabled": False, "hit": False, "audit": None})
+        return 0
+
+    repo_root = _resolve_repo_root(args.repo_root)
+    branch_dir = None
+    try:
+        branch_dir = read_memory_root_from_branch(
+            repo_root,
+            memory_branch=args.memory_branch,
+            memory_root_relative=args.memory_root,
+        )
+        memory_root = _resolve_memory_root(branch_dir, args.memory_root)
+        try:
+            audit = get_operator_bypass_audit(
+                memory_root,
+                repository=repository,
+                tracking_issue_number=tracking_issue,
+                integration_sha=integration_sha,
+            )
+        except (MemoryValidationError, json.JSONDecodeError, OSError, ValueError) as exc:
+            _emit_operator_bypass_audit_fallback(
+                mode="get",
+                reason="audit_corrupt",
+                tracking_issue=tracking_issue,
+                integration_sha=integration_sha,
+            )
+            _print_json(
+                {
+                    "ok": True,
+                    "enabled": True,
+                    "hit": False,
+                    "audit": None,
+                    "warning_code": "audit_corrupt",
+                    "warning": _sanitize_git_error(str(exc)),
+                }
+            )
+            return 0
+        _print_json({"ok": True, "enabled": True, "hit": bool(audit), "audit": audit})
+        return 0
+    except MemoryGitError as exc:
+        error_text = _sanitize_git_error(str(exc))
+        if _is_missing_memory_branch_error(error_text):
+            _print_json({"ok": True, "enabled": False, "hit": False, "audit": None, "warning": error_text})
+            return 0
+        _emit_operator_bypass_audit_fallback(
+            mode="get",
+            reason="audit_read_failed",
+            tracking_issue=tracking_issue,
+            integration_sha=integration_sha,
+        )
+        _print_json(
+            {
+                "ok": True,
+                "enabled": True,
+                "hit": False,
+                "audit": None,
+                "warning_code": "audit_read_failed",
+                "warning": error_text,
+            }
+        )
+        return 0
+    finally:
+        if branch_dir:
+            shutil.rmtree(branch_dir, ignore_errors=True)
+
+
+def cmd_operator_bypass_audit_append(args: argparse.Namespace) -> int:
+    args = _read_env_defaults(args)
+    repository = _require_nonempty(args.repo, "repo")
+    integration_sha = _require_nonempty(args.integration_sha, "integration_sha")
+    tracking_issue = _require_positive_int(args.tracking_issue, "tracking_issue")
+    if not args.enabled:
+        _print_json({"ok": True, "enabled": False, "stored": False, "audit": None})
+        return 0
+
+    repo_root = _resolve_repo_root(args.repo_root)
+
+    def _op(clone_dir: Path) -> dict[str, Any]:
+        memory_root = _resolve_memory_root(clone_dir, args.memory_root)
+        entry = _read_json_object_file(args.entry_file, "entry_file")
+        audit = append_operator_bypass_audit_entry(
+            memory_root,
+            repository=repository,
+            tracking_issue_number=tracking_issue,
+            integration_sha=integration_sha,
+            entry=entry,
+        )
+        return {"stored": True, "audit": audit}
+
+    try:
+        result = persist_memory_operation(
+            repo_root,
+            memory_branch=args.memory_branch,
+            memory_root_relative=args.memory_root,
+            push_retries=int(args.push_retries),
+            commit_message=f"ai-memory: operator bypass audit [{tracking_issue}:{integration_sha[:12]}]",
+            operation=_op,
+        )
+        op_result = result.get("operation_result") or {}
+        _print_json(
+            {
+                "ok": True,
+                "enabled": True,
+                "stored": bool(op_result.get("stored")),
+                "audit": op_result.get("audit"),
+                **result,
+            }
+        )
+        return 0
+    except (MemoryValidationError, json.JSONDecodeError, OSError, ValueError, MemoryGitError) as exc:
+        _emit_operator_bypass_audit_fallback(
+            mode="append",
+            reason="audit_write_failed",
+            tracking_issue=tracking_issue,
+            integration_sha=integration_sha,
+        )
+        _print_json(
+            {
+                "ok": True,
+                "enabled": True,
+                "stored": False,
+                "audit": None,
+                "warning": _sanitize_git_error(str(exc)),
+            }
+        )
+        return 0
+
+
+def cmd_revalidate_events_get(args: argparse.Namespace) -> int:
+    args = _read_env_defaults(args)
+    repository = _require_nonempty(args.repo, "repo")
+    integration_sha = _require_nonempty(args.integration_sha, "integration_sha")
+    tracking_issue = _require_positive_int(args.tracking_issue, "tracking_issue")
+    if not args.enabled:
+        _print_json({"ok": True, "enabled": False, "hit": False, "events": None})
+        return 0
+
+    repo_root = _resolve_repo_root(args.repo_root)
+    branch_dir = None
+    try:
+        branch_dir = read_memory_root_from_branch(
+            repo_root,
+            memory_branch=args.memory_branch,
+            memory_root_relative=args.memory_root,
+        )
+        memory_root = _resolve_memory_root(branch_dir, args.memory_root)
+        try:
+            events = get_revalidate_events(
+                memory_root,
+                repository=repository,
+                tracking_issue_number=tracking_issue,
+                integration_sha=integration_sha,
+            )
+        except (MemoryValidationError, json.JSONDecodeError, OSError, ValueError) as exc:
+            _emit_revalidate_events_fallback(
+                mode="get",
+                reason="events_corrupt",
+                tracking_issue=tracking_issue,
+                integration_sha=integration_sha,
+            )
+            _print_json(
+                {
+                    "ok": True,
+                    "enabled": True,
+                    "hit": False,
+                    "events": None,
+                    "warning_code": "events_corrupt",
+                    "warning": _sanitize_git_error(str(exc)),
+                }
+            )
+            return 0
+        _print_json({"ok": True, "enabled": True, "hit": bool(events), "events": events})
+        return 0
+    except MemoryGitError as exc:
+        error_text = _sanitize_git_error(str(exc))
+        if _is_missing_memory_branch_error(error_text):
+            _print_json({"ok": True, "enabled": False, "hit": False, "events": None, "warning": error_text})
+            return 0
+        _emit_revalidate_events_fallback(
+            mode="get",
+            reason="events_read_failed",
+            tracking_issue=tracking_issue,
+            integration_sha=integration_sha,
+        )
+        _print_json(
+            {
+                "ok": True,
+                "enabled": True,
+                "hit": False,
+                "events": None,
+                "warning_code": "events_read_failed",
+                "warning": error_text,
+            }
+        )
+        return 0
+    finally:
+        if branch_dir:
+            shutil.rmtree(branch_dir, ignore_errors=True)
+
+
+def cmd_revalidate_events_append(args: argparse.Namespace) -> int:
+    args = _read_env_defaults(args)
+    repository = _require_nonempty(args.repo, "repo")
+    integration_sha = _require_nonempty(args.integration_sha, "integration_sha")
+    tracking_issue = _require_positive_int(args.tracking_issue, "tracking_issue")
+    if not args.enabled:
+        _print_json({"ok": True, "enabled": False, "stored": False, "events": None})
+        return 0
+
+    repo_root = _resolve_repo_root(args.repo_root)
+
+    def _op(clone_dir: Path) -> dict[str, Any]:
+        memory_root = _resolve_memory_root(clone_dir, args.memory_root)
+        entry = _read_json_object_file(args.entry_file, "entry_file")
+        events = append_revalidate_event(
+            memory_root,
+            repository=repository,
+            tracking_issue_number=tracking_issue,
+            integration_sha=integration_sha,
+            entry=entry,
+        )
+        return {"stored": True, "events": events}
+
+    try:
+        result = persist_memory_operation(
+            repo_root,
+            memory_branch=args.memory_branch,
+            memory_root_relative=args.memory_root,
+            push_retries=int(args.push_retries),
+            commit_message=f"ai-memory: revalidate events [{tracking_issue}:{integration_sha[:12]}]",
+            operation=_op,
+        )
+        op_result = result.get("operation_result") or {}
+        _print_json(
+            {
+                "ok": True,
+                "enabled": True,
+                "stored": bool(op_result.get("stored")),
+                "events": op_result.get("events"),
+                **result,
+            }
+        )
+        return 0
+    except (MemoryValidationError, json.JSONDecodeError, OSError, ValueError, MemoryGitError) as exc:
+        _emit_revalidate_events_fallback(
+            mode="append",
+            reason="events_write_failed",
+            tracking_issue=tracking_issue,
+            integration_sha=integration_sha,
+        )
+        _print_json(
+            {
+                "ok": True,
+                "enabled": True,
+                "stored": False,
+                "events": None,
+                "warning": _sanitize_git_error(str(exc)),
             }
         )
         return 0
@@ -1097,6 +1994,108 @@ def build_parser() -> argparse.ArgumentParser:
     actions_runs_cache_put.add_argument("--ttl-seconds", default="60")
     actions_runs_cache_put.add_argument("--fetched-at", default="")
     actions_runs_cache_put.set_defaults(func=cmd_actions_runs_cache_put)
+
+    branch_rebuild_audit = subparsers.add_parser("branch-rebuild-audit", help="Read/write branch rebuild audit")
+    branch_rebuild_audit_subparsers = branch_rebuild_audit.add_subparsers(
+        dest="branch_rebuild_audit_command", required=True
+    )
+
+    branch_rebuild_audit_get = branch_rebuild_audit_subparsers.add_parser("get", help="Read branch rebuild audit")
+    _add_shared_args(branch_rebuild_audit_get)
+    branch_rebuild_audit_get.add_argument("--repo", required=True)
+    branch_rebuild_audit_get.add_argument("--tracking-issue", required=True)
+    branch_rebuild_audit_get.add_argument("--integration-branch", required=True)
+    branch_rebuild_audit_get.set_defaults(func=cmd_branch_rebuild_audit_get)
+
+    branch_rebuild_audit_put = branch_rebuild_audit_subparsers.add_parser("put", help="Write branch rebuild audit")
+    _add_shared_args(branch_rebuild_audit_put)
+    branch_rebuild_audit_put.add_argument("--repo", required=True)
+    branch_rebuild_audit_put.add_argument("--tracking-issue", required=True)
+    branch_rebuild_audit_put.add_argument("--integration-branch", required=True)
+    branch_rebuild_audit_put.add_argument("--audit-file", required=True)
+    branch_rebuild_audit_put.set_defaults(func=cmd_branch_rebuild_audit_put)
+
+    validation_history = subparsers.add_parser("validation-history", help="Read/append validation history by integration SHA")
+    validation_history_subparsers = validation_history.add_subparsers(
+        dest="validation_history_command", required=True
+    )
+
+    validation_history_get = validation_history_subparsers.add_parser("get", help="Read validation history")
+    _add_shared_args(validation_history_get)
+    validation_history_get.add_argument("--repo", required=True)
+    validation_history_get.add_argument("--integration-sha", required=True)
+    validation_history_get.set_defaults(func=cmd_validation_history_get)
+
+    validation_history_append = validation_history_subparsers.add_parser("append", help="Append validation history entry")
+    _add_shared_args(validation_history_append)
+    validation_history_append.add_argument("--repo", required=True)
+    validation_history_append.add_argument("--integration-sha", required=True)
+    validation_history_append.add_argument("--entry-file", required=True)
+    validation_history_append.set_defaults(func=cmd_validation_history_append)
+
+    validation_discovery = subparsers.add_parser(
+        "validation-discovery", help="Read/append per-repository .ai/validate.yml discovery outcomes"
+    )
+    validation_discovery_subparsers = validation_discovery.add_subparsers(
+        dest="validation_discovery_command", required=True
+    )
+
+    validation_discovery_get = validation_discovery_subparsers.add_parser(
+        "get", help="Read validation discovery history for a consumer repository"
+    )
+    _add_shared_args(validation_discovery_get)
+    validation_discovery_get.add_argument("--repo", required=True)
+    validation_discovery_get.set_defaults(func=cmd_validation_discovery_get)
+
+    validation_discovery_append = validation_discovery_subparsers.add_parser(
+        "append", help="Append a validation discovery entry for a consumer repository"
+    )
+    _add_shared_args(validation_discovery_append)
+    validation_discovery_append.add_argument("--repo", required=True)
+    validation_discovery_append.add_argument("--entry-file", required=True)
+    validation_discovery_append.set_defaults(func=cmd_validation_discovery_append)
+
+    operator_bypass_audit = subparsers.add_parser("operator-bypass-audit", help="Read/append operator bypass audit entries")
+    operator_bypass_audit_subparsers = operator_bypass_audit.add_subparsers(
+        dest="operator_bypass_audit_command", required=True
+    )
+
+    operator_bypass_audit_get = operator_bypass_audit_subparsers.add_parser("get", help="Read operator bypass audit")
+    _add_shared_args(operator_bypass_audit_get)
+    operator_bypass_audit_get.add_argument("--repo", required=True)
+    operator_bypass_audit_get.add_argument("--tracking-issue", required=True)
+    operator_bypass_audit_get.add_argument("--integration-sha", required=True)
+    operator_bypass_audit_get.set_defaults(func=cmd_operator_bypass_audit_get)
+
+    operator_bypass_audit_append = operator_bypass_audit_subparsers.add_parser(
+        "append", help="Append operator bypass audit entry"
+    )
+    _add_shared_args(operator_bypass_audit_append)
+    operator_bypass_audit_append.add_argument("--repo", required=True)
+    operator_bypass_audit_append.add_argument("--tracking-issue", required=True)
+    operator_bypass_audit_append.add_argument("--integration-sha", required=True)
+    operator_bypass_audit_append.add_argument("--entry-file", required=True)
+    operator_bypass_audit_append.set_defaults(func=cmd_operator_bypass_audit_append)
+
+    revalidate_events = subparsers.add_parser("revalidate-events", help="Read/append revalidate event entries")
+    revalidate_events_subparsers = revalidate_events.add_subparsers(
+        dest="revalidate_events_command", required=True
+    )
+
+    revalidate_events_get = revalidate_events_subparsers.add_parser("get", help="Read revalidate events")
+    _add_shared_args(revalidate_events_get)
+    revalidate_events_get.add_argument("--repo", required=True)
+    revalidate_events_get.add_argument("--tracking-issue", required=True)
+    revalidate_events_get.add_argument("--integration-sha", required=True)
+    revalidate_events_get.set_defaults(func=cmd_revalidate_events_get)
+
+    revalidate_events_append = revalidate_events_subparsers.add_parser("append", help="Append revalidate event entry")
+    _add_shared_args(revalidate_events_append)
+    revalidate_events_append.add_argument("--repo", required=True)
+    revalidate_events_append.add_argument("--tracking-issue", required=True)
+    revalidate_events_append.add_argument("--integration-sha", required=True)
+    revalidate_events_append.add_argument("--entry-file", required=True)
+    revalidate_events_append.set_defaults(func=cmd_revalidate_events_append)
 
     processed_check = subparsers.add_parser("processed-command-check", help="Check processed command entry")
     _add_shared_args(processed_check)

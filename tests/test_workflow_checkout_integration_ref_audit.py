@@ -21,7 +21,10 @@ REQUIRED_RESOLVER_WORKFLOWS = {
 # orchestrator-managed issue execution paths.
 ALLOWLIST_EXCEPTIONS = {
 	"ci.yml": "PR CI validation has no orchestrator issue metadata.",
+	"integration-pr-readiness.yml": "Integration-PR readiness check runs on pull_request refs and posts commit status metadata, not orchestrator issue-phase checkout.",
 	"issue_pr_status.yml": "Issue/PR status utility workflow does not execute orchestrator issue phases.",
+	"lint-plan-archival.yml": "Plan-archival lint validates pull_request body/diff state rather than orchestrator issue-phase integration refs.",
+	"lint-pr-body-auto-close.yml": "PR-body auto-close lint validates pull_request metadata rather than orchestrator issue-phase checkout.",
 	"mark-stable.yml": "Release promotion workflow operates on repo refs, not tracking-issue metadata.",
 	"memory_maintenance.yml": "Maintenance workflow has no issue-comment or tracking-issue context.",
 	"orchestrate.yml": "Project bootstrap workflow has no integration-branch metadata at checkout time.",
@@ -29,6 +32,7 @@ ALLOWLIST_EXCEPTIONS = {
 	"review_autofix.yml": "PR review/autofix operates on PR refs rather than orchestrator integration metadata.",
 	"test-and-mark-stable.yml": "Release test workflow checks specific refs/tags and is outside orchestrator phase execution.",
 	"comprehensive-test-and-release.yml": "Comprehensive release conductor dispatches downstream workflows and does not execute tracking-issue integration-ref checkout.",
+	"drift-audit.yml": "Scheduled maintenance workflow audits review-autofix logs and is not an orchestrator issue-phase checkout path.",
 	"update_workflows.yml": "Workflow-template sync job is repository maintenance, not issue-phase execution.",
 	"validation-improvements-intake.yml": "Validation prompt intake workflow is repository_dispatch PR automation.",
 	"validation-refresh.yml": "Validation refresh workflow iterates consumer repos and is not an orchestrator issue-phase checkout path.",

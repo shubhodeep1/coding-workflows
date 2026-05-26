@@ -96,6 +96,7 @@ FAMILY_REGISTRY: dict[str, FamilySpec] = {
 	"python-mongo-flask": FamilySpec(name="python-mongo-flask", relative_dir="python-mongo-flask"),
 	"python-repo-checks": FamilySpec(name="python-repo-checks", relative_dir="python-repo-checks"),
 	"node-hardhat-solidity": FamilySpec(name="node-hardhat-solidity", relative_dir="node-hardhat-solidity"),
+	"node-runtime": FamilySpec(name="node-runtime", relative_dir="node-runtime"),
 	"python-mongo-repo-checks": FamilySpec(name="python-mongo-repo-checks", relative_dir="python-mongo-repo-checks"),
 }
 

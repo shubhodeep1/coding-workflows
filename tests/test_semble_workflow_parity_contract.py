@@ -41,6 +41,12 @@ DISALLOWED_SNIPPETS = (
 	"semble index . --out",
 )
 
+AI_MEMORY_SCHEMA_SNIPPETS = (
+	"validation_history.v1.json",
+	"operator_bypass_audit.v1.json",
+	"revalidate_events.v1.json",
+)
+
 
 def _workflow_text(filename: str) -> str:
 	return (WORKFLOWS_DIR / filename).read_text(encoding="utf-8")
@@ -84,10 +90,18 @@ def test_target_workflows_do_not_add_query_calls_yet() -> None:
 			assert snippet not in wf, f"{workflow_name} should not add Semble query wiring yet: {snippet}"
 
 
+def test_target_workflows_stage_revalidate_lifecycle_ai_memory_schemas() -> None:
+	for workflow_name in sorted(TARGET_WORKFLOWS):
+		wf = _workflow_text(workflow_name)
+		for snippet in AI_MEMORY_SCHEMA_SNIPPETS:
+			assert snippet in wf, f"{workflow_name} missing ai-memory schema bootstrap snippet: {snippet}"
+
+
 def main() -> int:
 	test_target_workflows_define_semble_parity_contract()
 	test_target_workflows_order_semble_steps_before_codex_config()
 	test_target_workflows_do_not_add_query_calls_yet()
+	test_target_workflows_stage_revalidate_lifecycle_ai_memory_schemas()
 	return 0
 
 
