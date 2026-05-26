@@ -157,14 +157,6 @@ issue_meta_matches_issue() {
   jq -er --arg issue_num "${ISSUE_NUMBER}" '(.number | tostring) == $issue_num' "${meta_file}" >/dev/null 2>&1
 }
 
-write_issue_body_from_meta() {
-  local meta_file="${1:-}"
-  local output_file="${2:-}"
-  [ -n "${meta_file}" ] || return 1
-  [ -n "${output_file}" ] || return 1
-  jq -er '.body // ""' "${meta_file}" > "${output_file}" 2>/dev/null
-}
-
 # Reuse the cached issue snapshot when available — see the
 # "Fetch issue metadata" step.  Falls back to a fresh API
 # call when the file is missing OR jq fails to parse it
@@ -273,11 +265,10 @@ if [ -z "${ISSUE_BODY_FILE:-}" ] || [ ! -f "${ISSUE_BODY_FILE:-}" ]; then
   # truncated/partial file) falls through to the API path
   # rather than killing the step under set -euo pipefail.
   : > "${ISSUE_BODY_FILE}"
-  issue_body_loaded_from_meta=false
-  if issue_meta_matches_issue "${ISSUE_META_FILE:-}" && write_issue_body_from_meta "${ISSUE_META_FILE}" "${ISSUE_BODY_FILE}"; then
-    issue_body_loaded_from_meta=true
+  if issue_meta_matches_issue "${ISSUE_META_FILE:-}"; then
+    jq -er '.body // ""' "${ISSUE_META_FILE}" > "${ISSUE_BODY_FILE}" 2>/dev/null || : > "${ISSUE_BODY_FILE}"
   fi
-  if [ "${issue_body_loaded_from_meta}" != "true" ]; then
+  if [ ! -s "${ISSUE_BODY_FILE}" ]; then
     gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}" --jq '.body // ""' > "${ISSUE_BODY_FILE}" || printf '' > "${ISSUE_BODY_FILE}"
   fi
 fi

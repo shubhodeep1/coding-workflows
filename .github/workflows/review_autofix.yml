@@ -106,15 +106,15 @@ env:
   # path forces `low` separately in the "Detect smoke test" step.
   REVIEWER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEWER || 'xhigh' }}
   REVIEWER_VERBOSITY: ${{ vars.VERBOSITY_REVIEWER || 'low' }}
-  # Pass-2 diff-size gate (review_run_reviewers.sh): both the small-diff
-  # and large-diff branches now default to xhigh, so the gate is a no-op
-  # at default settings. The structure is retained so operators can
-  # override one or both branches via vars.REVIEWER_PASS2_REASONING_SMALL
-  # / vars.REVIEWER_PASS2_REASONING_LARGE if they want differentiated
-  # behaviour. The operator override (THINKING_LEVEL_REVIEWER / smoke-set
-  # REVIEWER_REASONING_EFFORT) always wins over the gate.
+  # Pass-2 diff-size gate (review_run_reviewers.sh): by default, small diffs
+  # run a shallower second-pass review than large diffs while preserving the
+  # existing per-branch override structure. Operators can still override one
+  # or both branches via vars.REVIEWER_PASS2_REASONING_SMALL /
+  # vars.REVIEWER_PASS2_REASONING_LARGE, and the operator override
+  # (THINKING_LEVEL_REVIEWER / smoke-set REVIEWER_REASONING_EFFORT) always
+  # wins over the gate.
   REVIEWER_PASS2_DIFF_LARGE_LOC: ${{ vars.REVIEWER_PASS2_DIFF_LARGE_LOC || '200' }}
-  REVIEWER_PASS2_REASONING_SMALL: ${{ vars.REVIEWER_PASS2_REASONING_SMALL || 'xhigh' }}
+  REVIEWER_PASS2_REASONING_SMALL: ${{ vars.REVIEWER_PASS2_REASONING_SMALL || 'high' }}
   REVIEWER_PASS2_REASONING_LARGE: ${{ vars.REVIEWER_PASS2_REASONING_LARGE || 'xhigh' }}
   # Editor (codex apply-fixes loop). Production defaults to xhigh
   # (repo-wide gpt-5.4 policy); smoke runs override to `medium` via the
@@ -154,7 +154,7 @@ env:
   # CI/lint failures are detected and fixed every run. See README and
   # agents.md for the contract.
   CHECK_RUNS_AUTOFIX_ENABLED: ${{ vars.CHECK_RUNS_AUTOFIX_ENABLED || 'true' }}
-  CHECK_RUNS_WAIT_TIMEOUT_SECS: ${{ vars.CHECK_RUNS_WAIT_TIMEOUT_SECS || '900' }}
+  CHECK_RUNS_WAIT_TIMEOUT_SECS: ${{ vars.CHECK_RUNS_WAIT_TIMEOUT_SECS || '300' }}
   CHECK_RUNS_POLL_INTERVAL_SECS: ${{ vars.CHECK_RUNS_POLL_INTERVAL_SECS || '20' }}
   # Per-failed-check-run cap on the `failed[i].log_tail` snapshot field
   # written by the "Collect PR check-run failures" step. The writer resolves
@@ -1501,23 +1501,6 @@ jobs:
             fi
           } > ./pre_assembled_static.txt
 
-      - name: Retrieve reviewer memory context (fail-open)
-        run: |
-          set +e
-
-          if [ -f "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh" ]; then
-            # shellcheck disable=SC1091
-            source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
-            memory_retrieve "${MEMORY_CONTEXT_FILE}" \
-              --role reviewer \
-              --pr-number "${PR_NUMBER}"
-          else
-            echo "::warning::memory helper script missing; writing fallback reviewer memory context"
-            printf 'AI MEMORY CONTEXT\nstatus: unavailable\n' > "${MEMORY_CONTEXT_FILE}"
-          fi
-
-          true
-
       - name: Collect PR metadata
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1911,6 +1894,59 @@ jobs:
           fi
           echo "BASE_BRANCH=${BASE_REF}" >> "$GITHUB_ENV"
 
+      - name: Retrieve reviewer memory context (fail-open)
+        run: |
+          set +e
+
+          _write_memory_fallback() {
+            printf 'AI MEMORY CONTEXT\nstatus: unavailable\n' > "${MEMORY_CONTEXT_FILE}"
+          }
+
+          _pr_body_file=""
+
+          if [ ! -s "${PR_META_FILE}" ]; then
+            echo "::warning::PR metadata missing; writing fallback reviewer memory context"
+            _write_memory_fallback
+          else
+            _pr_title="$(jq -r '((.title // "") | if test("\\S") then . else "" end)' "${PR_META_FILE}" 2>/dev/null || echo "")"
+            _pr_body_has_text="$(jq -r '((.body // "") | test("\\S"))' "${PR_META_FILE}" 2>/dev/null || echo false)"
+            _pr_body_file="$(mktemp)"
+            if ! jq -r '.body // ""' "${PR_META_FILE}" > "${_pr_body_file}" 2>/dev/null; then
+              : > "${_pr_body_file}"
+            fi
+
+            if [ -z "${_pr_title}" ] && [ "${_pr_body_has_text}" != "true" ]; then
+              echo "::notice::Reviewer memory retrieval skipped: PR title/body are empty."
+              _write_memory_fallback
+            elif [ -f "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh" ]; then
+              # shellcheck disable=SC1091
+              if source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"; then
+                if declare -F memory_retrieve >/dev/null 2>&1; then
+                  memory_retrieve "${MEMORY_CONTEXT_FILE}" \
+                    --role reviewer \
+                    --pr-number "${PR_NUMBER}" \
+                    --issue-title "${_pr_title}" \
+                    --issue-body-file "${_pr_body_file}"
+                else
+                  echo "::warning::memory_retrieve helper unavailable; writing fallback reviewer memory context"
+                  _write_memory_fallback
+                fi
+              else
+                echo "::warning::failed to source memory helper script; writing fallback reviewer memory context"
+                _write_memory_fallback
+              fi
+            else
+              echo "::warning::memory helper script missing; writing fallback reviewer memory context"
+              _write_memory_fallback
+            fi
+          fi
+
+          if [ -n "${_pr_body_file}" ]; then
+            rm -f "${_pr_body_file}"
+          fi
+
+          true
+
       - name: Collect PR check-run failures (CI/lint autofix context)
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1961,19 +1997,25 @@ jobs:
 
           # Clamp configurable values to safe ranges. Invalid values fall back
           # to defaults rather than failing the workflow.
-          _wait_timeout="${CHECK_RUNS_WAIT_TIMEOUT_SECS:-900}"
+          _wait_timeout="${CHECK_RUNS_WAIT_TIMEOUT_SECS:-300}"
           if ! [[ "${_wait_timeout}" =~ ^[0-9]+$ ]] || [ "${_wait_timeout}" -gt 3600 ]; then
-            _wait_timeout=900
+            _wait_timeout=300
           fi
           _poll_interval="${CHECK_RUNS_POLL_INTERVAL_SECS:-20}"
           if ! [[ "${_poll_interval}" =~ ^[0-9]+$ ]] || [ "${_poll_interval}" -lt 5 ] || [ "${_poll_interval}" -gt 300 ]; then
             _poll_interval=20
+          fi
+          _backoff_cap=120
+          if [ "${_backoff_cap}" -lt "${_poll_interval}" ]; then
+            _backoff_cap="${_poll_interval}"
           fi
 
           _raw_file="$(mktemp)"
           _err_file="$(mktemp)"
           _final_status="ready"
           _deadline=$(( $(date +%s) + _wait_timeout ))
+          _last_wait_view=""
+          _unchanged_wait_snapshots=0
 
           # Source gh_retry so transient 5xx/network failures don't strand
           # the editor with `collection_status: api_error` while CI is
@@ -2007,7 +2049,10 @@ jobs:
             # numbers like `total_count` — and `.check_runs` on a number
             # errors out, silently returning 0 (which the wait loop would
             # mistake for "no in-flight checks").
-            _in_flight="$(jq --arg run_id "${SELF_RUN_ID:-}" '
+            # Build a stable signature from the same self-excluded in-flight
+            # snapshot the wait gate uses so order churn across paginated API
+            # responses does not reset the backoff.
+            _wait_view="$(jq -c --arg run_id "${SELF_RUN_ID:-}" '
               [
                 ( if type == "array" then .[]? else . end )
                 | (.check_runs // [])
@@ -2017,8 +2062,23 @@ jobs:
                     ($run_id == "")
                     or (((.details_url // "") | contains("/actions/runs/" + $run_id + "/job/")) | not)
                   )
-              ] | length
-            ' "${_raw_file}" 2>/dev/null || echo 0)"
+                | {
+                    id: (.id // 0),
+                    name: (.name // ""),
+                    status: (.status // ""),
+                    started_at: (.started_at // ""),
+                    details_url: (.details_url // "")
+                  }
+              ]
+              | sort_by(.id, .name, .details_url)
+            ' "${_raw_file}" 2>/dev/null || echo '[]')"
+            _in_flight="$(printf '%s' "${_wait_view}" | jq 'length' 2>/dev/null || echo 0)"
+            if [ "${_wait_view}" = "${_last_wait_view}" ]; then
+              _unchanged_wait_snapshots=$((_unchanged_wait_snapshots + 1))
+            else
+              _last_wait_view="${_wait_view}"
+              _unchanged_wait_snapshots=0
+            fi
             if [ "${_in_flight}" = "0" ]; then
               _final_status="ready"
               break
@@ -2031,6 +2091,17 @@ jobs:
             fi
             _remaining=$((_deadline - _now))
             _sleep="${_poll_interval}"
+            # Adaptive backoff: unchanged in-flight snapshots progressively
+            # sleep longer; any material change resets to the base poll
+            # interval.
+            if [ "${_unchanged_wait_snapshots}" -ge 2 ]; then
+              _sleep=$((_poll_interval * 4))
+            elif [ "${_unchanged_wait_snapshots}" -ge 1 ]; then
+              _sleep=$((_poll_interval * 2))
+            fi
+            if [ "${_sleep}" -gt "${_backoff_cap}" ]; then
+              _sleep="${_backoff_cap}"
+            fi
             if [ "${_sleep}" -gt "${_remaining}" ]; then
               _sleep="${_remaining}"
             fi
