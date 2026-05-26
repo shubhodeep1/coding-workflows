@@ -205,12 +205,68 @@ jobs:
             echo "ORCHESTRATOR_CLASSIFICATION_COMPLETE=${ORCHESTRATOR_CLASSIFICATION_COMPLETE}" >> "$GITHUB_ENV"
           }
 
-          ISSUE_NUMBERS="$(gh_retry gh api graphql \
+          classify_orchestrator_issues_from_payload() {
+            local payload="$1"
+            local expected_count="$2"
+
+            [ -n "${payload}" ] || return 1
+            printf '%s' "${payload}" | jq -e --argjson expected "${expected_count}" '
+              ((.errors // []) | length) == 0
+              and (.data.repository? != null)
+              and (([.data.repository.pullRequest.closingIssuesReferences.nodes[]? | select(. != null)] | length) == $expected)
+            ' >/dev/null 2>&1 || return 1
+
+            TRACKING_ISSUES="$(printf '%s' "${payload}" | jq -r '
+              .data.repository.pullRequest.closingIssuesReferences.nodes[]? | select(. != null) |
+              select(((.labels.nodes // []) | map(.name) | index("ai:orchestrator-tracking")) != null) |
+              .number
+            ' 2>/dev/null || echo '')"
+            MANAGED_ISSUES="$(printf '%s' "${payload}" | jq -r '
+              .data.repository.pullRequest.closingIssuesReferences.nodes[]? | select(. != null) |
+              select(((.labels.nodes // []) | map(.name) | index("ai:orchestrator-tracking")) == null) |
+              select(
+                ((.labels.nodes // []) | map(.name) | index("ai:orchestrator-managed")) != null
+                or ((.body // "") | contains("Managed by: AI Orchestrator"))
+              ) |
+              .number
+            ' 2>/dev/null || echo '')"
+          }
+
+          merge_issue_number_list() {
+            local current_list="$1"
+            local incoming_list="$2"
+
+            if [ -z "${current_list}" ]; then
+              printf '%s' "${incoming_list}"
+            elif [ -z "${incoming_list}" ]; then
+              printf '%s' "${current_list}"
+            else
+              printf '%s\n%s\n' "${current_list}" "${incoming_list}" | awk 'NF' | sort -un
+            fi
+          }
+
+          LOOKUP_ISSUE_NUMBERS=""
+          CLOSING_ISSUE_NUMBERS=""
+          CLOSING_ISSUES_RESP=""
+
+          CLOSING_ISSUES_RESP="$(gh_retry gh api graphql \
             -f owner="${REPOSITORY%/*}" \
             -f name="${REPOSITORY#*/}" \
             -F number="${PR_NUMBER}" \
-            -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number } } } } }' \
-            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].number' || true)"
+            -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number body labels(first: 50) { nodes { name } } } } } } }' \
+            2>/dev/null || true)"
+
+          CLOSING_ISSUE_NUMBERS="$(printf '%s' "${CLOSING_ISSUES_RESP}" | jq -r '.data.repository.pullRequest.closingIssuesReferences.nodes[]?.number' 2>/dev/null || true)"
+          ISSUE_NUMBERS="${CLOSING_ISSUE_NUMBERS}"
+
+          if [ -n "${CLOSING_ISSUE_NUMBERS}" ]; then
+            LOOKUP_COUNT="$(printf '%s\n' "${CLOSING_ISSUE_NUMBERS}" | awk 'NF' | wc -l | tr -d '[:space:]')"
+            if ! classify_orchestrator_issues_from_payload "${CLOSING_ISSUES_RESP}" "${LOOKUP_COUNT}"; then
+              TRACKING_ISSUES=""
+              MANAGED_ISSUES=""
+              LOOKUP_ISSUE_NUMBERS="${CLOSING_ISSUE_NUMBERS}"
+            fi
+          fi
 
           if [ -z "${ISSUE_NUMBERS}" ]; then
             # Fallback: extract issue number from PR body/title only when the
@@ -233,16 +289,16 @@ jobs:
               ISSUE_NUMBERS=""
             fi
             if [ -n "${ISSUE_NUMBERS}" ]; then
+              LOOKUP_ISSUE_NUMBERS="$(merge_issue_number_list "${LOOKUP_ISSUE_NUMBERS}" "${ISSUE_NUMBERS}")"
               echo "Found linked issues via PR body/title fallback: ${ISSUE_NUMBERS}"
             fi
           fi
 
           BRANCH_ISSUE_NUMBER="$(printf '%s\n' "${PR_HEAD_REF}" | sed -nE 's#^ai/issue-([0-9]+)([-/].*)?$#\1#p' | head -n1)"
           if [ -n "${BRANCH_ISSUE_NUMBER}" ]; then
-            if [ -n "${ISSUE_NUMBERS}" ]; then
-              ISSUE_NUMBERS="$(printf '%s\n%s\n' "${ISSUE_NUMBERS}" "${BRANCH_ISSUE_NUMBER}" | awk 'NF' | sort -un)"
-            else
-              ISSUE_NUMBERS="${BRANCH_ISSUE_NUMBER}"
+            ISSUE_NUMBERS="$(merge_issue_number_list "${ISSUE_NUMBERS}" "${BRANCH_ISSUE_NUMBER}")"
+            if [ -z "${CLOSING_ISSUE_NUMBERS}" ] || ! printf '%s\n' "${CLOSING_ISSUE_NUMBERS}" | grep -qxF "${BRANCH_ISSUE_NUMBER}"; then
+              LOOKUP_ISSUE_NUMBERS="$(merge_issue_number_list "${LOOKUP_ISSUE_NUMBERS}" "${BRANCH_ISSUE_NUMBER}")"
             fi
             echo "Resolved linked issue from branch ${PR_HEAD_REF}: #${BRANCH_ISSUE_NUMBER}"
           fi
@@ -309,7 +365,7 @@ jobs:
             [[ "${_orch_num}" =~ ^[0-9]+$ ]] || continue
             ORCH_ALIAS_FRAGMENT+=" i${ORCH_IDX}: issue(number: ${_orch_num}) { number labels(first: 50) { nodes { name } } body }"
             ORCH_IDX=$((ORCH_IDX + 1))
-          done <<< "${ISSUE_NUMBERS}"
+          done <<< "${LOOKUP_ISSUE_NUMBERS}"
 
           if [ -n "${ORCH_ALIAS_FRAGMENT}" ]; then
             ORCH_QUERY="query { repository(owner: \"${REPOSITORY%/*}\", name: \"${REPOSITORY#*/}\") {${ORCH_ALIAS_FRAGMENT} } }"
@@ -334,8 +390,8 @@ jobs:
                   ((.body // "") | contains("Managed by: AI Orchestrator"))
                 ) | .number
               ' 2>/dev/null || echo '')"
-              TRACKING_ISSUES="${_tracking_issues}"
-              MANAGED_ISSUES="${_managed_issues}"
+              TRACKING_ISSUES="$(merge_issue_number_list "${TRACKING_ISSUES}" "${_tracking_issues}")"
+              MANAGED_ISSUES="$(merge_issue_number_list "${MANAGED_ISSUES}" "${_managed_issues}")"
               ORCH_BATCH_FAILED=false
             fi
             if [ "${ORCH_BATCH_FAILED}" = true ]; then
@@ -366,7 +422,7 @@ jobs:
                 ' >/dev/null 2>&1; then
                   MANAGED_ISSUES+="${_orch_num}"$'\n'
                 fi
-              done <<< "${ISSUE_NUMBERS}"
+              done <<< "${LOOKUP_ISSUE_NUMBERS}"
             fi
           fi
 
