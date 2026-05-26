@@ -265,7 +265,7 @@ def test_orchestrate_poll_workflow_bootstraps_optional_semble_support_for_judges
     assert "legacy path remains active" in stage_block
 
     assert "steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'" in setup_block
-    assert "uses: astral-sh/setup-uv@v3" in setup_block
+    assert "uses: astral-sh/setup-uv@v7" in setup_block
 
     assert "steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'" in install_block
     assert 'echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"' in install_block

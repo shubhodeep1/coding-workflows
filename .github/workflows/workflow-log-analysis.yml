@@ -285,7 +285,7 @@ jobs:
       - name: Setup uv (Semble)
         if: env.SEMBLE_ENABLED == 'true'
         continue-on-error: true
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v7
 
       - name: Install semble
         if: env.SEMBLE_ENABLED == 'true'
@@ -941,7 +941,7 @@ jobs:
       - name: Setup uv (Semble)
         if: env.SEMBLE_ENABLED == 'true'
         continue-on-error: true
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v7
 
       - name: Install semble
         if: env.SEMBLE_ENABLED == 'true'
@@ -1407,7 +1407,7 @@ jobs:
       - name: Setup uv (Semble)
         if: env.SEMBLE_ENABLED == 'true'
         continue-on-error: true
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v7
 
       - name: Install semble
         if: env.SEMBLE_ENABLED == 'true'

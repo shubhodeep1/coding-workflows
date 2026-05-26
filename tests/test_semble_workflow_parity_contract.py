@@ -20,7 +20,7 @@ REQUIRED_SNIPPETS = (
 	"SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}",
 	"install_semble.sh",
 	"build_semble_wrapper.sh",
-	"uses: astral-sh/setup-uv@v3",
+	"uses: astral-sh/setup-uv@v7",
 	"- name: Install semble",
 	"bash scripts/install_semble.sh",
 	"- name: Build semble index",
