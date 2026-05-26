@@ -90,6 +90,7 @@ jobs:
           HEAD_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          base_ref=""
           # Look up open PRs for this exact head branch.  Filter to PRs
           # whose head ref matches the pushed branch — `gh pr list --head`
           # already does this — and consider only OPEN PRs (closed/merged
@@ -98,7 +99,6 @@ jobs:
           existing_pr="$(gh api \
             "repos/${REPOSITORY}/pulls?state=open&head=${REPOSITORY%/*}:${HEAD_REF}" \
             --jq '[.[] | .number] | first // empty' 2>/dev/null || echo "")"
-          base_ref="$(gh api "repos/${REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo 'main')"
           if [ -n "${existing_pr}" ]; then
             echo "RESOLVE_CLAUDE_BRANCH_PR_SKIP head_ref=${HEAD_REF} existing_pr=${existing_pr} reason=pull_request_synchronize_handles"
             {
@@ -109,6 +109,7 @@ jobs:
             } >> "${GITHUB_OUTPUT}"
             exit 0
           fi
+          base_ref="$(gh api "repos/${REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo 'main')"
           echo "RESOLVE_CLAUDE_BRANCH_PR_PROCEED head_ref=${HEAD_REF} head_sha=${HEAD_SHA} base_ref=${base_ref} reason=no_open_pr"
           {
             echo "proceed=true"

@@ -447,13 +447,13 @@ jobs:
           - Do **not** add comments, headers, or any extra content.
           - This is a fully-specified task — **no clarification is needed**."
 
-          # Create the issue and extract number in one call
-          ISSUE_NUMBER=$(gh api "repos/${TEST_REPO}/issues" \
+          # Create the issue and reuse the returned issue object for both
+          # the number and URL instead of immediately re-reading the issue.
+          ISSUE_CREATE_RESP="$(gh api "repos/${TEST_REPO}/issues" \
             -f title="${TITLE}" \
-            -f body="${BODY}" \
-            --jq '.number')
-
-          ISSUE_URL=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" --jq '.html_url')
+            -f body="${BODY}")"
+          ISSUE_NUMBER="$(printf '%s' "${ISSUE_CREATE_RESP}" | jq -r '.number')"
+          ISSUE_URL="$(printf '%s' "${ISSUE_CREATE_RESP}" | jq -r '.html_url')"
 
           echo "issue_number=${ISSUE_NUMBER}" >> "$GITHUB_OUTPUT"
           echo "Created test issue #${ISSUE_NUMBER}: ${ISSUE_URL}"
