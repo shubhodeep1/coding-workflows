@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:lines 129-136 (current HEAD) | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The cross-pollination consensus flagged the step name as mismatched (\"Integration-ahead-by gate regression tests\" running poller tests), but the current layout has a correct 1:1 step-to-test mapping with no duplicate execution.\n  WHY: The step at line 133 is named \"Integration-ahead-by gate regression tests\" and runs only `tests/test_orchestrate_integration_ahead_by_gate.py`; the preceding \"Orchestrate lib unit tests\" step (line 129) runs only `tests/test_orchestrate_lib.py`; the later \"Orchestrate poll process unit tests\" step (line 520) runs only the two poller tests.\n- .github/workflows/ci.yml:lines 128-140 (the \"Integration-ahead-by gate regression tests\" step introduced in LAST RUN DIFF) | severity=low | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The step name no longer matches the command that actually runs.\n  WHY: CI failure attribution, log grepping, and post-mortem analysis become incorrect; operators will look for ahead-by failures under the wrong step name, violating operational-clarity contracts (agents.md \u00a715 stable log prefixes and \u00a714 GitHub API hygiene). This is a direct regression from the last-run edit.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Automated forward-merge of `stable` (source SHA d4ed47ada2fcd1212bacb7ca765040d713f47965) into main after merge conflicts in the listed files (`.github/workflows/ci.yml`, `review_autofix.yml`, `orchestrate_poll_process.sh`, multiple test files, README.md, supporting scripts), while preserving the CAUTION banner requiring \"Create a merge commit\".\n  expected_change_site: The files listed in the PR description's \"Conflicting files\" section, with substantive conflict-resolution hunks remaining visible in the PR diff.\n  confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: LAST_RUN_CHANGED_FILES and current `git diff --stat origin/main...HEAD` show only a small whitespace/rename edit in ci.yml (the step-name change that introduced the above logic issue). PR_CHANGED_FILES contains only review_autofix.yml + orchestrate_poll_process.sh (with 3 blank-line deletions). The bulk of the original conflict resolution was performed by the earlier `[ai-merge-resolve]` commit (4288ae6); no remaining substantive hunks exist for most listed files. The forward-merge intent is satisfied in ancestry (`git merge-base --is-ancestor ...` succeeds), but the residual PR diff is now almost entirely cosmetic.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/ci.yml:lines 129-136 (current HEAD) | severity=low | confidence=5\n  PROBLEM: The cross-pollination consensus flagged the step name as mismatched (\"Integration-ahead-by gate regression tests\" running poller tests), but the current layout has a correct 1:1 step-to-test mapping with no duplicate execution.\n  WHY: The step at line 133 is named \"Integration-ahead-by gate regression tests\" and runs only `tests/test_orchestrate_integration_ahead_by_gate.py`; the preceding \"Orchestrate lib unit tests\" step (line 129) runs only `tests/test_orchestrate_lib.py`; the later \"Orchestrate poll process unit tests\" step (line 520) runs only the two poller tests.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/ci.yml:lines 128-140 (the \"Integration-ahead-by gate regression tests\" step introduced in LAST RUN DIFF) | severity=low | confidence=5\n  PROBLEM: The step name no longer matches the command that actually runs.\n  WHY: CI failure attribution, log grepping, and post-mortem analysis become incorrect; operators will look for ahead-by failures under the wrong step name, violating operational-clarity contracts (agents.md \u00a715 stable log prefixes and \u00a714 GitHub API hygiene). This is a direct regression from the last-run edit.\n- Requirement: Automated forward-merge of `stable` (source SHA d4ed47ada2fcd1212bacb7ca765040d713f47965) into main after merge conflicts in the listed files (`.github/workflows/ci.yml`, `review_autofix.yml`, `orchestrate_poll_process.sh`, multiple test files, README.md, supporting scripts), while preserving the CAUTION banner requiring \"Create a merge commit\".\n  Expected change site: The files listed in the PR description's \"Conflicting files\" section, with substantive conflict-resolution hunks remaining visible in the PR diff.\n  Evidence of absence: LAST_RUN_CHANGED_FILES and current `git diff --stat origin/main...HEAD` show only a small whitespace/rename edit in ci.yml (the step-name change that introduced the above logic issue). PR_CHANGED_FILES contains only review_autofix.yml + orchestrate_poll_process.sh (with 3 blank-line deletions). The bulk of the original conflict resolution was performed by the earlier `[ai-merge-resolve]` commit (4288ae6); no remaining substantive hunks exist for most listed files. The forward-merge intent is satisfied in ancestry (`git merge-base --is-ancestor ...` succeeds), but the residual PR diff is now almost entirely cosmetic.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "9a60078a6f7991b57811e8c11ed619d7ab5e73ec404a06d89fabd162ea752705",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2972,
+    "run_id": "26511431548",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26511431548",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260527125414_7dc0be2327",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2972,
+    "run_id": "26511431548"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-27T12:54:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
