@@ -1,0 +1,18 @@
+{
+  "entries": [
+    {
+      "codex_attempts_used": 3,
+      "committed_type": null,
+      "consumer_default_branch": "main",
+      "consumer_head_sha": "1e6f1150f020a906779d8998afab039710ac97f8",
+      "discovered_type": null,
+      "failure_reason": "codex_rc_nonzero(rc=1)",
+      "outcome": "failed",
+      "pr_branch": null,
+      "pr_url": null,
+      "recorded_at": "2026-05-27T03:43:25Z"
+    }
+  ],
+  "repository": "shubhodeep1/coding-workflows",
+  "schema_version": "v1"
+}
