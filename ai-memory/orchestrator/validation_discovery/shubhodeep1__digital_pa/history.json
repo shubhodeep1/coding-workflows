@@ -1,0 +1,18 @@
+{
+  "entries": [
+    {
+      "codex_attempts_used": 3,
+      "committed_type": null,
+      "consumer_default_branch": "main",
+      "consumer_head_sha": "007847851f22b7dfa42a75f40206f2fb0a1b089c",
+      "discovered_type": null,
+      "failure_reason": "codex_rc_nonzero(rc=1)",
+      "outcome": "failed",
+      "pr_branch": null,
+      "pr_url": null,
+      "recorded_at": "2026-05-27T03:33:03Z"
+    }
+  ],
+  "repository": "shubhodeep1/digital_pa",
+  "schema_version": "v1"
+}
