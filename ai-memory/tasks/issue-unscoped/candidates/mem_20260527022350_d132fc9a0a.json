@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:129-141 | severity=high | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The step name no longer matches the tests it runs, so the dedicated ahead-by gate and poller regression coverage are mislabeled in CI.\n  WHY: CI logs, failure attribution, and the GitHub UI will point operators at the wrong step when either the gate test or the poller tests fail.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Automated forward-merge of `stable` into `main` failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`.\"\n  expected_change_site: `.github/workflows/ci.yml`, `.github/workflows/mark-stable.yml`, `.github/workflows/review_autofix.yml`, `.github/workflows/test-and-mark-stable.yml`, `README.md`, `scripts/ai_memory_lib.py`, `scripts/orchestrate_lib.py`, `scripts/orchestrate_poll_process.sh`, `scripts/review_apply_fixes.sh`, `scripts/review_rb_judge.sh`, `scripts/validate_editor_audit.sh`, `tests/test_orchestrate_integration_ahead_by_gate.py`, `tests/test_orchestrate_lib.py`, `tests/test_orchestrate_poll_noop_suspicious_recovery.py`, `tests/test_orchestrate_poll_process.py`, `tests/test_review_autofix_editor_noop_cascade_contract.py`, `tests/test_review_autofix_review_pipeline_contract.py`, `tests/test_validate_editor_audit.py`\n  confidence=4\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_20]\n  EVIDENCE: PR DIFF contains only three blank-line deletions (2 in `scripts/orchestrate_poll_process.sh`, 1 in `.github/workflows/review_autofix.yml`). The LAST_RUN DIFF shows only `.github/workflows/ci.yml` changes (test step renaming/reordering).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- Requirement: Automated forward-merge of `stable` into `main` failed due to merge conflicts in 18 listed files; resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`.\n  Expected change site: The 18 conflicting files listed in the PR description:\n  - `.github/workflows/ci.yml`\n  - `.github/workflows/mark-stable.yml`\n  - `.github/workflows/review_autofix.yml`\n  - `.github/workflows/test-and-mark-stable.yml`\n  - `README.md`\n  - `scripts/ai_memory_lib.py`\n  - `scripts/orchestrate_lib.py`\n  - `scripts/orchestrate_poll_process.sh`\n  - `scripts/review_apply_fixes.sh`\n  - `scripts/review_rb_judge.sh`\n  - `scripts/validate_editor_audit.sh`\n  - `tests/test_orchestrate_integration_ahead_by_gate.py`\n  - `tests/test_orchestrate_lib.py`\n  - `tests/test_orchestrate_poll_noop_suspicious_recovery.py`\n  - `tests/test_orchestrate_poll_process.py`\n  - `tests/test_review_autofix_editor_noop_cascade_contract.py`\n  - `tests/test_review_autofix_review_pipeline_contract.py`\n  - `tests/test_validate_editor_audit.py`\n  Evidence of absence: The PR DIFF contains only three blank-line deletions (2 in `scripts/orchestrate_poll_process.sh`, 1 in `.github/workflows/review_autofix.yml`). The LAST RUN DIFF shows only `.github/workflows/ci.yml` changes (test step renaming/reordering). No substantive conflict-resolution hunks exist for any of the 18 listed files. The substantive changes from `stable` appear to have been merged via the prior `[ai-merge-resolve]` commit `4288ae6`, but the current PR diff does not show the remaining conflict resolution work needed \u2014 only whitespace cleanup that was already applied in prior autofix iterations.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: .github/workflows/ci.yml\n  Line or code reference: lines 129-141 (the hunk in LAST_RUN_DIFF)\n  Problem: The step was renamed from \"Orchestrate poller regression tests\" to \"Integration-ahead-by gate regression tests\" but the command that runs was swapped to execute only the ahead-by gate test while the two poller tests (test_orchestrate_poll_process.py and test_orchestrate_poll_noop_suspicious_recovery.py) were moved into it.\n  Why it fails at runtime: CI logs, failure attribution, and GitHub UI \"Tests\" summary will incorrectly label poller-test failures (or the gate test) with the wrong step name; operators debugging a poller regression will look at the wrong job output.\n  ISSUE_CONFIDENCE: 5\n\n- Requirement: \"Automated forward-merge of `stable` into `main` failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`.\" Conflicting files explicitly listed: `.github/workflows/ci.yml .github/workflows/mark-stable.yml .github/workflows/review_autofix.yml .github/workflows/test-and-mark-stable.yml README.md scripts/ai_memory_lib.py scripts/orchestrate_lib.py scripts/orchestrate_poll_process.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/validate_editor_audit.sh` plus multiple test files.\n  Expected change site: The files listed in the PR description (full stable\u2192main reconciliation after conflict resolution).\n  Evidence of absence: LAST_RUN_DIFF and PR_DIFF contain only a 7-line whitespace/renaming change inside .github/workflows/ci.yml. The three stray blank-line deletions in review_autofix.yml and orchestrate_poll_process.sh are the only surviving delta from the original conflict-resolution merge commit. No substantive hunks appear for the majority of the listed files (including the new test wiring, shared helpers, README updates, and editor-audit changes that were present in the parent stable commit).\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "289f3a75600b2faa3832a3c8674695fe4c8666e2bfbdd14e552c91419f1de07b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2972,
+    "run_id": "26486721150",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26486721150",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260527022350_d132fc9a0a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2972,
+    "run_id": "26486721150"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-27T02:23:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
