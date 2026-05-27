@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:129-141 | severity=low | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The step renamed to \u201cIntegration-ahead-by gate regression tests\u201d still runs only the poller tests, while the ahead-by-gate test runs in the preceding step.\n  WHY: CI logs, failure attribution, and operator debugging will map failures to the wrong named step, so the step name no longer accurately describes the tests it executes.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Automated forward-merge of stable into main (triggered by forward-merge-stable-to-main.yml at source SHA d4ed47ada2fcd1212bacb7ca765040d713f47965) hit merge conflicts in .github/workflows/ci.yml, mark-stable.yml, review_autofix.yml, test-and-mark-stable.yml, README.md, several scripts/*.py/*.sh files, and the listed test modules. Resolve those conflicts while preserving the \u201cCreate a merge commit\u201d ancestry contract so promote-main-to-stable.yml\u2019s merge-base check continues to work.\n  expected_change_site: The conflict-listed files (especially the workflow YAMLs and test allow-lists).\n  confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: git merge-base --is-ancestor d4ed47ada2fcd1212bacb7ca765040d713f47965 HEAD succeeds; the substantive [ai-merge-resolve] commit (4288ae6) already carried the manual conflict-resolution work; current LAST RUN DIFF + PR DIFF contain only three blank-line deletions in review_autofix.yml and orchestrate_poll_process.sh.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: .github/workflows/ci.yml (LAST RUN DIFF hunk)\n  Line or code reference: lines 129-141 (step renaming + test reordering)\n  Problem: The step that used to be named \u201cOrchestrate poller regression tests\u201d was renamed to \u201cIntegration-ahead-by gate regression tests\u201d but still executes only the poller tests (`test_orchestrate_poll_process.py` + `test_orchestrate_poll_noop_suspicious_recovery.py`). The ahead-by-gate test now runs in the preceding \u201cOrchestrate lib unit tests\u201d step.\n  Why it fails at runtime: CI logs, failure attribution, and operator debugging will map a poller-test failure to the wrong named step (or vice-versa), violating the stable-log-prefix / contract contract that CI step names must accurately describe the tests they run.\n  ISSUE_CONFIDENCE: 4\n- Requirement: Automated forward-merge of stable into main (triggered by forward-merge-stable-to-main.yml at source SHA d4ed47ada2fcd1212bacb7ca765040d713f47965) hit merge conflicts in .github/workflows/ci.yml, mark-stable.yml, review_autofix.yml, test-and-mark-stable.yml, README.md, several scripts/*.py/*.sh files, and the listed test modules. Resolve those conflicts while preserving the \u201cCreate a merge commit\u201d ancestry contract so promote-main-to-stable.yml\u2019s merge-base check continues to work.\n  Expected change site: The conflict-listed files (especially the workflow YAMLs and test allow-lists).\n  Evidence of absence: git merge-base --is-ancestor d4ed47ada2fcd1212bacb7ca765040d713f47965 HEAD succeeds; the substantive [ai-merge-resolve] commit (4288ae6) already carried the manual conflict-resolution work; current LAST RUN DIFF + PR DIFF contain only three blank-line deletions in review_autofix.yml and orchestrate_poll_process.sh (pure whitespace residual after repeated autofix cleanups).\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "e49a6612da4e0f54beb60a3483de30e8dfc31af49860882a88c3b4798995de42",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2972,
+    "run_id": "26543662933",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26543662933",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260527232000_d7cf14a786",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2972,
+    "run_id": "26543662933"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-27T23:20:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
