@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:134-138 | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: Step name \"Integration-ahead-by gate regression tests\" does not match the tests being executed.\n  WHY: The step runs `test_orchestrate_poll_process.py` and `test_orchestrate_poll_noop_suspicious_recovery.py` (poller tests), but the name suggests it runs the ahead-by gate test, which mislabels CI output and can confuse operators diagnosing failures.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Automated forward-merge of `stable` into `main` after merge conflict\n  expected_change_site: The substantive changes should land via the merge resolution commit\n  confidence=2\n  flagged_by: [minimax_minimax-m2_5]\n  EVIDENCE: The stable source SHA `d4ed47ada2fcd1212bacb7ca765040d713f47965` is an ancestor of HEAD (`git merge-base --is-ancestor` succeeds). The residual PR diff shows only 3 blank-line deletions in `review_autofix.yml` and `orchestrate_poll_process.sh`. The substantive conflict resolution was carried by commit `4288ae6 [ai-merge-resolve] resolve merge conflicts`, which is already on this branch.\n- requirement: \"Automated forward-merge of `stable` into `main`\" resolving conflicts on `.github/workflows/ci.yml`, `.github/workflows/mark-stable.yml`, `.github/workflows/review_autofix.yml`, `.github/workflows/test-and-mark-stable.yml`, `README.md`, `scripts/ai_memory_lib.py`, `scripts/orchestrate_lib.py`, `scripts/orchestrate_poll_process.sh`, `scripts/review_apply_fixes.sh`, `scripts/review_rb_judge.sh`, `scripts/validate_editor_audit.sh`, and multiple test files\n  expected_change_site: The files listed in the PR description's \"Conflicting files\" section\n  confidence=4\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  EVIDENCE: The current PR diff and last_run_diff.patch show only blank-line deletions in `review_autofix.yml` and `orchestrate_poll_process.sh`, and test reordering in `ci.yml`, while the substantive conflict resolution changes for the majority of listed files are absent; the residual whitespace-only blank-line removals exist in `review_autofix.yml` and `orchestrate_poll_process.sh`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- Requirement: Automated forward-merge of `stable` into `main` after merge conflict\n  Expected change site: The substantive changes should land via the merge resolution commit\n  Evidence of absence: The stable source SHA `d4ed47ada2fcd1212bacb7ca765040d713f47965` is an ancestor of HEAD (`git merge-base --is-ancestor` succeeds). The residual PR diff shows only 3 blank-line deletions in `review_autofix.yml` and `orchestrate_poll_process.sh`. The substantive conflict resolution was carried by commit `4288ae6 [ai-merge-resolve] resolve merge conflicts`, which is already on this branch.\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/ci.yml:134-138 | confidence=5\n  PROBLEM: Step name \"Integration-ahead-by gate regression tests\" does not match the tests being executed.\n  WHY: The step runs `test_orchestrate_poll_process.py` and `test_orchestrate_poll_noop_suspicious_recovery.py` (poller tests), but the name suggests it runs the ahead-by gate test, which mislabels CI output and can confuse operators trying to diagnose which test actually failed.\n- Requirement: \"Automated forward-merge of `stable` into `main`\" resolving conflicts on `.github/workflows/ci.yml`, `.github/workflows/mark-stable.yml`, `.github/workflows/review_autofix.yml`, `.github/workflows/test-and-mark-stable.yml`, `README.md`, `scripts/ai_memory_lib.py`, `scripts/orchestrate_lib.py`, `scripts/orchestrate_poll_process.sh`, `scripts/review_apply_fixes.sh`, `scripts/review_rb_judge.sh`, `scripts/validate_editor_audit.sh`, and multiple test files\n  Expected change site: The files listed in the PR description's \"Conflicting files\" section\n  Evidence of absence: The current PR diff and last_run_diff.patch show only blank-line deletions in `review_autofix.yml` and `orchestrate_poll_process.sh`, and test reordering in `ci.yml`. The substantive conflict resolution changes for the majority of listed files are absent from the residual diff.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: Automated forward-merge of `stable` into `main` (triggered by forward-merge-stable-to-main.yml) that failed due to merge conflicts on `.github/workflows/ci.yml`, `.github/workflows/review_autofix.yml`, `.github/workflows/mark-stable.yml`, `.github/workflows/test-and-mark-stable.yml`, `README.md`, `scripts/ai_memory_lib.py`, `scripts/orchestrate_lib.py`, `scripts/orchestrate_poll_process.sh`, `scripts/review_apply_fixes.sh`, `scripts/review_rb_judge.sh`, `scripts/validate_editor_audit.sh` and multiple test files. The PR description cautions against squash/rebase to preserve ancestry for `promote-main-to-stable.yml` and lists these conflicting files.\n  Expected change site: The listed conflict files (especially the workflow/test renames and script hardening changes from the original stable branch).\n  Evidence of absence: LAST_RUN_DIFF (and current PR diff) only touches a test-reordering rename inside `.github/workflows/ci.yml` (moved the ahead-by gate test into a dedicated step). No hunks appear for the other listed files or the broader hardening changes; residual whitespace-only blank-line removals exist in `review_autofix.yml` and `orchestrate_poll_process.sh`.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "28add539a63f857e3d7ec6a8948e485bc651578f1355324a47d7d6346b1380d4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2972,
+    "run_id": "26541612447",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26541612447",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260527223103_72a450006f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2972,
+    "run_id": "26541612447"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-27T22:31:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
