@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Automated forward-merge of `stable` into `main` failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`. Conflicting files listed: `.github/workflows/ci.yml`, `.github/workflows/mark-stable.yml`, `.github/workflows/review_autofix.yml`, `.github/workflows/test-and-mark-stable.yml`, `README.md`, several scripts (`ai_memory_lib.py`, `orchestrate_lib.py`, `orchestrate_poll_process.sh`, `review_apply_fixes.sh`, `review_rb_judge.sh`, `validate_editor_audit.sh`), and multiple test files.\n  expected_change_site: The merge commit / PR diff should carry substantive (non-whitespace) reconciliation changes for the listed conflict files (or the full set of stable changes since the source SHA `d4ed47ada2fcd1212bacb7ca765040d713f47965`).\n  confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: LAST_RUN_DIFF, PR_DIFF, symbol summary, and `git diff origin/main...HEAD` show only whitespace (blank-line removals) in `.github/workflows/review_autofix.yml` (lines ~5128-5133) and `scripts/orchestrate_poll_process.sh` (lines ~3139-3144, ~3319-3324); no substantive changes appear for the other listed files (`ci.yml`, test files, `README.md`, etc.).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- TASK_GAP\n  Requirement: Automated forward-merge of `stable` into `main` failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`. Conflicting files listed: `.github/workflows/ci.yml`, `.github/workflows/mark-stable.yml`, `.github/workflows/review_autofix.yml`, `.github/workflows/test-and-mark-stable.yml`, `README.md`, several scripts (`ai_memory_lib.py`, `orchestrate_lib.py`, `orchestrate_poll_process.sh`, `review_apply_fixes.sh`, `review_rb_judge.sh`, `validate_editor_audit.sh`), and multiple test files.\n  Expected change site: The merge commit / PR diff should carry substantive (non-whitespace) reconciliation changes for the listed conflict files (or the full set of stable changes since the source SHA `d4ed47ada2fcd1212bacb7ca765040d713f47965`).\n  Evidence of absence: LAST_RUN_DIFF, PR_DIFF, symbol summary, and `git diff origin/main...HEAD` show only whitespace (blank-line removals) in `.github/workflows/review_autofix.yml` (lines ~5128-5133) and `scripts/orchestrate_poll_process.sh` (lines ~3139-3144, ~3319-3324). No substantive changes appear for the other listed files (ci.yml, test files, README.md, etc.). The forward-merge CAUTION banner and ancestry check are present, but the resolution of the original merge conflicts is not reflected in the visible diff.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "1f2a2aaa576bfa930d5f79bdeae95146c06624b22849ca475e90522b21672720",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2972,
+    "run_id": "26556331764",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26556331764",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260528054159_a37ecfa25c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2972,
+    "run_id": "26556331764"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-28T05:41:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
