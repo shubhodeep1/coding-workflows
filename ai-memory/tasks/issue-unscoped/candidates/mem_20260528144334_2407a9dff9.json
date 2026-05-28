@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Automated forward-merge of `stable` into `main` failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`. (Preserve \"Create a merge commit\" ancestry per CAUTION banner; conflicting files included `.github/workflows/review_autofix.yml`, `scripts/orchestrate_poll_process.sh`, and many others.)\n  expected_change_site: `.github/workflows/review_autofix.yml:5128-5133` (forward-merge suppressor) and `scripts/orchestrate_poll_process.sh:3139-3144,3319-3324` (integration-ahead-by and backpressure helpers).\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: Substantive conflict resolution occurred in prior merge commit `4288ae6` (`[ai-merge-resolve]`); `git merge-base --is-ancestor d4ed47ada2fcd1212bacb7ca765040d713f47965 HEAD` succeeds; current LAST_RUN_DIFF and PR_DIFF contain only 3 blank-line removals (whitespace-only cosmetic change). The suppressor logic, head-ref pattern, jq body extraction, and CAUTION banner remain fully intact on HEAD. No new implementation of the listed conflicting files is needed.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: Automated forward-merge of `stable` into `main` failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`. (Preserve \"Create a merge commit\" ancestry per CAUTION banner; conflicting files included `.github/workflows/review_autofix.yml`, `scripts/orchestrate_poll_process.sh`, and many others.) | Expected change site: `.github/workflows/review_autofix.yml:5128-5133` (forward-merge suppressor) and `scripts/orchestrate_poll_process.sh:3139-3144,3319-3324` (integration-ahead-by and backpressure helpers). | confidence=5\n  PROBLEM: Automated forward-merge conflict resolution was required for the PR to bring the stable bug fix onto main.\n  WHY: Substantive conflict resolution occurred in prior merge commit `4288ae6` (`[ai-merge-resolve]`); `git merge-base --is-ancestor d4ed47ada2fcd1212bacb7ca765040d713f47965 HEAD` succeeds; current LAST_RUN_DIFF and PR_DIFF contain only 3 blank-line removals (whitespace-only cosmetic change).\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "1f636dacad37235781faeda6c67a364348aa0854fd7f0c33e6d7be071ba2ab07",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2972,
+    "run_id": "26580059509",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26580059509",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260528144334_2407a9dff9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2972,
+    "run_id": "26580059509"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-28T14:43:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
