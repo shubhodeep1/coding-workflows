@@ -11,6 +11,18 @@
       "pr_branch": null,
       "pr_url": null,
       "recorded_at": "2026-05-27T03:43:25Z"
+    },
+    {
+      "codex_attempts_used": 3,
+      "committed_type": null,
+      "consumer_default_branch": "main",
+      "consumer_head_sha": "663e9fa41341d98bf7e5d7fb1234e7b531cc555b",
+      "discovered_type": null,
+      "failure_reason": "codex_rc_nonzero(rc=1)",
+      "outcome": "failed",
+      "pr_branch": null,
+      "pr_url": null,
+      "recorded_at": "2026-05-28T03:43:32Z"
     }
   ],
   "repository": "shubhodeep1/coding-workflows",
