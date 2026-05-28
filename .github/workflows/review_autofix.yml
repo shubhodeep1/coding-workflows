@@ -5128,6 +5128,7 @@ jobs:
             echo "PR #${PR_NUMBER} head ref '${_orch_pr_head_ref}' matches forward-merge fallback pattern '^auto/forward-merge-stable-' — auto-merge suppressed. forward-merge fallback PRs must be merged manually via 'Create a merge commit' (NOT squash/rebase) so stable's commits remain in main's ancestry; promote-main-to-stable.yml's pre-flight 'git merge-base --is-ancestor HEAD origin/main' check refuses otherwise (see promote-main-to-stable.yml:115-126 and the CAUTION banner in the PR body)."
             exit 0
           fi
+
           _orch_pr_body="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.body // ""' 2>/dev/null || echo "")"
           _orch_is_integration_pr="false"
           if [ -n "${ORCH_INTEGRATION_BRANCH_PATTERN}" ]; then

@@ -3139,6 +3139,7 @@ _branch_head_sha() {
   printf '%s' "${branch_sha}"
   return 0
 }
+
 # Returns the integration branch's "ahead_by" count vs the default branch via
 # GitHub's compare API. Stdout: integer count (0 = default branch contains the
 # integration tip). Exit 0 on success, 1 on API or parse error.
@@ -3319,6 +3320,7 @@ reconcile_integration_backpressure_label() {
 
 	return 0
 }
+
 resolve_active_orchestrator_context_for_issue() {
   local issue_num="$1"
   local preferred_tracking_num="${2:-}"
