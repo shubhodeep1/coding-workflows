@@ -83,6 +83,8 @@ SELF_HEAL_OUTPUT_FILE="${RUNTIME_DIR}/validate_self_heal_output.txt"
 SELF_HEAL_LOG_FILE="${RUNTIME_DIR}/validate_self_heal.log"
 SELF_HEAL_DECISION_FILE="${RUNTIME_DIR}/validate_self_heal_decision.json"
 SELF_HEAL_PATCH_TMP="${RUNTIME_DIR}/validate_self_heal_patch.diff"
+SELF_HEAL_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CODEX_HEARTBEAT_HELPER="${SELF_HEAL_SCRIPT_DIR}/codex_heartbeat.sh"
 
 ALLOWED_TARGETS=(
 	"mode-validate-discover.txt"
@@ -231,6 +233,21 @@ build_self_heal_serena_tool_hints()
 		'- Use Serena for evidence and focused navigation only; keep any proposed patch additive, prompt-only, and limited to the four allow-listed validation prompts.'
 }
 
+run_self_heal_codex()
+{
+	local stderr_tmp="$1"
+
+	if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
+		"${CODEX_HEARTBEAT_HELPER}" \
+			--phase validate_self_heal \
+			--stdout-file "${SELF_HEAL_OUTPUT_FILE}" \
+			--stderr-file "${stderr_tmp}" \
+			-- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${SELF_HEAL_PROMPT_FILE}"
+	else
+		codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${SELF_HEAL_PROMPT_FILE}" > "${SELF_HEAL_OUTPUT_FILE}" 2> "${stderr_tmp}"
+	fi
+}
+
 # Ensure the patches ledger exists.
 : > "${SELF_HEAL_LOG_FILE}"
 if [ ! -f "${SELF_HEAL_PATCHES_FILE}" ]; then
@@ -294,7 +311,10 @@ for _llm_attempt in 1 2; do
 	if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
 		sanitize_codex_prompt_file "${SELF_HEAL_PROMPT_FILE}"
 	fi
-	if cat "${SELF_HEAL_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${SELF_HEAL_OUTPUT_FILE}" 2>> "${SELF_HEAL_LOG_FILE}"; then
+	_self_heal_stderr_tmp="$(mktemp)"
+	if run_self_heal_codex "${_self_heal_stderr_tmp}"; then
+		cat "${_self_heal_stderr_tmp}" >> "${SELF_HEAL_LOG_FILE}" 2>/dev/null || true
+		rm -f "${_self_heal_stderr_tmp}"
 		# Extract the last JSON object that contains a "target_prompt" key.
 		# Use json.JSONDecoder.raw_decode() which is string/escape-aware
 		# (the earlier brace-depth counter mis-handled JSON strings that
@@ -344,7 +364,10 @@ PY
 			SELF_HEAL_LLM_SUCCESS=true
 			break
 		fi
+	else
+		cat "${_self_heal_stderr_tmp}" >> "${SELF_HEAL_LOG_FILE}" 2>/dev/null || true
 	fi
+	rm -f "${_self_heal_stderr_tmp}"
 	if [ "${_llm_attempt}" -lt 2 ]; then
 		sleep $((_llm_attempt * 5))
 	fi

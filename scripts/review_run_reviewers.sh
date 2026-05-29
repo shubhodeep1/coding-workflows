@@ -32,6 +32,8 @@ if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   sanitize_codex_prompt_file() { :; }
 fi
 
+CODEX_HEARTBEAT_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_heartbeat.sh"
+
 if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh" ]; then
   # shellcheck source=/dev/null
   source "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh"
@@ -2441,6 +2443,7 @@ execute_reviewer_attempt() {
   local pr_state=""
   local cpid=""
   local wd_iter=0
+  local reviewer_codex_cmd=()
 
   REVIEWER_ATTEMPT_OUTCOME="failed"
   REVIEWER_ATTEMPT_RETRYABLE_CLASS=""
@@ -2477,6 +2480,17 @@ execute_reviewer_attempt() {
   codex_pid_file="$(mktemp /tmp/codex_pid_reviewer.XXXXXX)"
   wd_reason_file="$(mktemp /tmp/reviewer_wd_reason.XXXXXX)"
 
+  _reviewer_kill_pid()
+  {
+    local target_pid="${1:-}"
+    [ -n "${target_pid}" ] || return 0
+    pkill -TERM -P "${target_pid}" 2>/dev/null || true
+    kill -TERM "${target_pid}" 2>/dev/null || true
+    sleep 5
+    pkill -KILL -P "${target_pid}" 2>/dev/null || true
+    kill -KILL "${target_pid}" 2>/dev/null || true
+  }
+
   (
     wd_iter=$(( RANDOM % 9 ))
     while true; do
@@ -2486,7 +2500,7 @@ execute_reviewer_attempt() {
         echo "Reviewer ${effective_model} aborted — PR close sentinel observed." | tee -a "${log_file}" >&2
         printf 'pr_closed_sentinel' > "${wd_reason_file}"
         cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
-        if [ -n "${cpid}" ]; then kill -TERM "${cpid}" 2>/dev/null; sleep 5; kill -KILL "${cpid}" 2>/dev/null; fi
+        _reviewer_kill_pid "${cpid}"
         rm -f "${hb_file}"
         exit 144
       fi
@@ -2498,7 +2512,7 @@ execute_reviewer_attempt() {
         echo "Reviewer ${effective_model} killed — no output for $(( now - last ))s (idle limit: ${reviewer_idle_timeout}s)." | tee -a "${log_file}" >&2
         printf 'idle_timeout' > "${wd_reason_file}"
         cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
-        if [ -n "${cpid}" ]; then kill -TERM "${cpid}" 2>/dev/null; sleep 5; kill -KILL "${cpid}" 2>/dev/null; fi
+        _reviewer_kill_pid "${cpid}"
         rm -f "${hb_file}"
         exit 142
       fi
@@ -2506,7 +2520,7 @@ execute_reviewer_attempt() {
         echo "Reviewer ${effective_model} killed — max wall time ${reviewer_max_wall}s exceeded." | tee -a "${log_file}" >&2
         printf 'max_wall' > "${wd_reason_file}"
         cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
-        if [ -n "${cpid}" ]; then kill -TERM "${cpid}" 2>/dev/null; sleep 5; kill -KILL "${cpid}" 2>/dev/null; fi
+        _reviewer_kill_pid "${cpid}"
         rm -f "${hb_file}"
         exit 143
       fi
@@ -2520,7 +2534,7 @@ execute_reviewer_attempt() {
           touch "/tmp/pr_closed_sentinel_${PR_NUMBER}"
           echo "PR_CLOSED=true" >> "$GITHUB_ENV"
           cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
-          if [ -n "${cpid}" ]; then kill -TERM "${cpid}" 2>/dev/null; sleep 5; kill -KILL "${cpid}" 2>/dev/null; fi
+          _reviewer_kill_pid "${cpid}"
           rm -f "${hb_file}"
           exit 144
         fi
@@ -2530,14 +2544,32 @@ execute_reviewer_attempt() {
   wd_pid=$!
 
   sanitize_codex_prompt_file "${prompt_file}"
-  (
-    exec "${codex_bin}" --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${effective_model}" --sandbox read-only < "${prompt_file}"
-  ) > "${tmp_output}" 2> >(
-    while IFS= read -r line || [ -n "$line" ]; do
-      printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}" 2>/dev/null
-      printf '%s\n' "$line"
-    done > "${tmp_stderr}"
-  ) &
+  reviewer_codex_cmd=(
+    "${codex_bin}"
+    --ask-for-approval never
+    -c model_verbosity=low
+    -c include_apply_patch_tool=true
+    exec
+    --model "${effective_model}"
+    --sandbox read-only
+  )
+  if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
+    "${CODEX_HEARTBEAT_HELPER}" \
+      --phase review_run_reviewers \
+      --stdout-file "${tmp_output}" \
+      --stderr-file "${tmp_stderr}" \
+      --activity-file "${hb_file}" \
+      -- "${reviewer_codex_cmd[@]}" < "${prompt_file}" &
+  else
+    (
+      exec "${reviewer_codex_cmd[@]}" < "${prompt_file}"
+    ) > "${tmp_output}" 2> >(
+      while IFS= read -r line || [ -n "$line" ]; do
+        printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}" 2>/dev/null
+        printf '%s\n' "$line"
+      done > "${tmp_stderr}"
+    ) &
+  fi
   codex_bg_pid=$!
   echo "${codex_bg_pid}" > "${codex_pid_file}"
   wait "${codex_bg_pid}" 2>/dev/null || cmd_rc=$?
