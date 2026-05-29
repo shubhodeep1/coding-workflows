@@ -763,6 +763,62 @@ def test_reviewer_filter_script_ignores_later_hunk_marker_when_first_hunk_has_no
 	assert result["skipped_paths"] == ""
 
 
+def test_reviewer_filter_script_keeps_existing_file_with_marker_on_line_six() -> None:
+	diff_text = "\n".join([
+		"diff --git a/src/manual/client.ts b/src/manual/client.ts",
+		"index 1111111..2222222 100644",
+		"--- a/src/manual/client.ts",
+		"+++ b/src/manual/client.ts",
+		"@@ -1,6 +1,6 @@",
+		" line01",
+		" line02",
+		" line03",
+		" line04",
+		"-line05",
+		"+line05 updated",
+		" @generated",
+	]) + "\n"
+	result = _run_uninteresting_filter_script(
+		diff_text=diff_text,
+		workspace_files={
+			"src/manual/client.ts": "\n".join([
+				"line01",
+				"line02",
+				"line03",
+				"line04",
+				"line05 updated",
+				"@generated",
+			]) + "\n",
+		},
+	)
+
+	assert result["output_diff"] == diff_text
+	assert result["kept_paths"] == "src/manual/client.ts\n"
+	assert result["skipped_paths"] == ""
+
+
+def test_reviewer_filter_script_keeps_deleted_file_with_marker_on_line_six() -> None:
+	diff_text = "\n".join([
+		"diff --git a/src/manual/deleted_client.ts b/src/manual/deleted_client.ts",
+		"deleted file mode 100644",
+		"index 1111111..0000000",
+		"--- a/src/manual/deleted_client.ts",
+		"+++ /dev/null",
+		"@@ -1,6 +0,0 @@",
+		"-line01",
+		"-line02",
+		"-line03",
+		"-line04",
+		"-line05",
+		"-@generated",
+	]) + "\n"
+	result = _run_uninteresting_filter_script(diff_text=diff_text, workspace_files={})
+
+	assert result["output_diff"] == diff_text
+	assert result["kept_paths"] == "src/manual/deleted_client.ts\n"
+	assert result["skipped_paths"] == ""
+
+
 def test_reviewer_filter_script_ignores_existing_file_marker_beyond_header_lines() -> None:
 	diff_text = "\n".join([
 		"diff --git a/src/manual/client.ts b/src/manual/client.ts",
@@ -1290,6 +1346,8 @@ def main() -> int:
 	test_reviewer_filter_script_strips_deleted_generated_file_when_workspace_copy_is_missing()
 	test_reviewer_filter_script_keeps_deleted_file_when_first_hunk_starts_later()
 	test_reviewer_filter_script_ignores_later_hunk_marker_when_first_hunk_has_no_marker()
+	test_reviewer_filter_script_keeps_existing_file_with_marker_on_line_six()
+	test_reviewer_filter_script_keeps_deleted_file_with_marker_on_line_six()
 	test_reviewer_filter_script_ignores_existing_file_marker_beyond_header_lines()
 	test_reviewer_filter_script_ignores_deleted_file_marker_beyond_header_lines()
 	test_reviewer_filter_harness_fails_open_when_disabled_missing_or_failing()
