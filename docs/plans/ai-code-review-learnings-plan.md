@@ -176,8 +176,8 @@ lines 171–179).
     findings to one of `{approved | approved_with_comments |
     minor_issues | significant_concerns}` per Cloudflare's table, and
     only `significant_concerns` (critical or production-safety risks)
-    blocks merge. Define and reserve the `break glass` human-override
-    convention here so Phase H can count it.
+    blocks merge. Define and reserve the `@codex break-glass`
+    human-override convention here so Phase H can count it.
 
 ## Non-goals
 
@@ -275,7 +275,7 @@ lines 171–179).
 | 19 | Cost / latency telemetry (cache hit rate, P99, etc.) | **Partial.** Tokens emitted; `cost_audit.py` aggregates; no cache-hit-rate, no P99 column, no break-glass counter. | **Phase H.** |
 | 20 | Local execution (`@opencode-reviewer/local` / `/fullreview`) | Out of scope — we don't ship a TUI. | None. |
 | 21 | Control-plane KV for live model routing | **Out of scope per Q4 / K.** Our `vars.*` overrides + `@stable` propagation are the existing analogue. | None. |
-| 22 | Cost emits warning when coordinator prompt > 50 % of context window | **Gap-ish.** No explicit warning; codex CLI errors when over context. | Folded into **Phase H** as a sub-task: emit a `CONTEXT_BUDGET_WARN` log when the consolidator input file is >50 % of model context. |
+| 22 | Cost emits warning when coordinator prompt > 50 % of context window | **Gap-ish.** No explicit warning; codex CLI errors when over context. | Folded into **Phase H** as a sub-task: emit a `CONTEXT_BUDGET_WARN` log when a phase's prompt exceeds a per-phase ratio (default `0.7`) of that phase's own model context, with a `MAX_PROMPT_TOKENS_FOR_PHASE` absolute override (Q-OQ-6 resolved; not a flat 50 %). |
 
 ### Phase ordering rationale
 
@@ -351,9 +351,14 @@ reduction in `must-fix` consolidator output.
   `REVIEWER_RISK_TIER_LITE_FILES`. **Always-full carve-out**: if any
   changed file path matches a regex in
   `REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX` (default:
-  `^(scripts/|\.github/workflows/|prompts/|workflow-templates/|db/contracts/)`),
+  `^(scripts/|\.github/workflows/|\.github/ai/|prompts/|workflow-templates/|db/contracts/|ai-memory/)`),
   the tier is forced to `full`. This mirrors Cloudflare's
   "security-sensitive files always trigger full review" rule.
+  `ai-memory/` and `.github/ai/` are in the default per **Q-OQ-2
+  (resolved)**: both steer the pipeline at runtime — memory records
+  are retrieved into prompts, and `.github/ai/` holds the label /
+  orchestrate-schema governance contracts — so a small diff there
+  must never be sampled into a trivial/lite reviewer pass.
 
 - `scripts/review_run_reviewers.sh` reviewer dispatch loop — read
   `risk_tier.txt` and skip reviewers whose `MODEL_NAME` is not in
@@ -435,6 +440,15 @@ stripped and the migration is not.
   low:    bug fixes, single-file feature additions, asset changes.
   ```
 
+  The classifier is **deterministic path-glob only in v1** (Q-OQ-4
+  resolved): it matches the path lists above and makes **no LLM call**
+  in the steady state. The `AGENTS_MD_MATERIALITY_MODEL` /
+  `_REASONING` vars below are reserved for an opt-in LLM fallback (for
+  borderline diffs that match no glob), gated by
+  `AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED` (default `0`); until
+  that flag flips, the classifier stays fully deterministic and
+  traceable.
+
   When materiality is `high` OR `medium` AND `agents.md` is not in
   the changed-file list, post a non-blocking advisory comment under
   the `## AI Materiality Advisory` heading via
@@ -451,7 +465,10 @@ stripped and the migration is not.
   the model's reasoning matches the script's classifier.
 
 **Env vars:** `AGENTS_MD_MATERIALITY_ENABLED` (default `0`),
-`AGENTS_MD_MATERIALITY_MODEL` (default `openai/gpt-5.4-mini`),
+`AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED` (default `0`; reserves
+the opt-in LLM fallback per Q-OQ-4),
+`AGENTS_MD_MATERIALITY_MODEL` (default `openai/gpt-5.4-mini`; used
+only when the fallback flag is on),
 `AGENTS_MD_MATERIALITY_REASONING` (default `medium`).
 
 **Verification:** fixture PRs with (a) `package.json` bump + no
@@ -505,14 +522,23 @@ ignore them.
 - `agents.md` — document the `RE_REVIEW_SKIP` log prefix under §6
   stable-prefix list.
 
-**Env vars:** `REVIEW_REREVIEW_AWARENESS_ENABLED` (default `0`).
+**Env vars:** `REVIEW_LEDGER_REREVIEW_ENABLED` (default `0`) — a
+behaviour sub-flag layered on the **shipped** `REVIEW_LEDGER_*`
+surface (`REVIEW_LEDGER_ENABLED`, `REVIEW_LEDGER_PATH`); re-review
+awareness activates only when the ledger is enabled **and** this
+sub-flag is on.
 
-**Coordination requirement:** before merging this phase, audit
-`docs/completed/judge-loop-and-reissue-plan.md` (shipped) Phase A
-(judge-in-loop) and Phase B (sticky findings) for flag overlap. The
-simplest path is to **rename this phase's flag to match** that plan's
-`REVIEW_JUDGE_IN_LOOP_*` namespace, or to share `REVIEW_LEDGER_REREVIEW_ENABLED`.
-**Open question Q-OQ-1** — see Open Questions.
+**Coordination requirement (Q-OQ-1 resolved → option A, adapted):**
+the judge-loop-and-reissue plan shipped the `REVIEW_LEDGER_*`
+namespace (not the draft `REVIEW_JUDGE_IN_LOOP_*` name this plan
+originally assumed); the ledger lives at
+`.ai/review_issue_ledger/pr-<PR>.txt` and is read via
+`REVIEW_LEDGER_PATH`. Phase F **reuses that exact surface** and adds
+only the `REVIEW_LEDGER_REREVIEW_ENABLED` behaviour sub-flag — it
+introduces **no** parallel `REVIEW_REREVIEW_AWARENESS_*` flag and
+**no** second ledger-read path, which is the single-read-path
+outcome the plan recommended. The implementer must read prior-round
+decisions from the existing ledger format, not define a new store.
 
 **Verification:** simulated multi-round run on a fixture PR; round
 2 must not re-emit a `accepted-residual` finding from round 1; round
@@ -552,6 +578,13 @@ simplest path is to **rename this phase's flag to match** that plan's
 - Log prefix: `REVIEWER_FAILBACK: <primary> -> <fallback>
   reason=<class>` per attempt; `REVIEWER_HEALTH: <model> <state>` per
   transition. Both must be added to `agents.md` §6 prefix list.
+- **Unmapped-slug fail-open (Q-OQ-5 confirmed):** if a primary
+  reviewer slug has no entry in `reviewer_failback_chains.json`, the
+  helper must **skip that reviewer and continue the pass**, emitting
+  `REVIEWER_FAILBACK_UNMAPPED: <slug>` — never crash. Add
+  `REVIEWER_FAILBACK_UNMAPPED` to the `agents.md` §6 prefix list.
+  This keeps the pass resilient as the model set revs ahead of the
+  mapping file.
 
 **Env vars:** `REVIEWER_CIRCUIT_BREAKER_ENABLED` (default `0`),
 `REVIEWER_FAILBACK_MAX_RETRIES` (`1`),
@@ -576,17 +609,25 @@ and after 3 failures the health flips to `open` for the TTL.
   - `context_budget_warn_count` (grep for `CONTEXT_BUDGET_WARN`
     lines — produced by Phase H sub-task below).
 - `scripts/cost_audit.py` — emit a `CONTEXT_BUDGET_WARN: phase=<P>
-  consolidator_prompt_bytes=<N> model_context_window=<W> ratio=<R>`
-  pre-flight check when consolidator / judge inputs exceed 50 % of
-  the target model's context (`codex_model_catalog.json` already
-  carries context window per slug).
+  prompt_tokens=<N> model_context_window=<W> ratio=<R>
+  threshold=<T>` pre-flight check (Q-OQ-6 resolved → per-phase
+  ratio). For each phase, compute the ratio of that phase's own
+  prompt against **that phase's own model** context window
+  (`codex_model_catalog.json` already carries the context window per
+  slug) and warn when it exceeds `CONTEXT_BUDGET_WARN_RATIO`
+  (default `0.7`). An absolute `MAX_PROMPT_TOKENS_FOR_PHASE`
+  override, when set, takes precedence over the ratio. A flat 50 %
+  is **not** used — it is near-useless for the 1M-context
+  consolidator and untuned for the smaller reviewer-pass models.
 - `.github/workflows/workflow-log-analysis.yml` — surface the new
   columns in the periodic audit. **Per §15**, reuse the existing
   `gh` calls that already pull workflow runs; do not add new API
   calls.
 
-**Env vars:** none for the metrics; the warning emitter is always
-on once shipped.
+**Env vars:** none for the metric columns. The warning emitter is
+always on once shipped, tuned by `CONTEXT_BUDGET_WARN_RATIO`
+(default `0.7`) and the optional absolute `MAX_PROMPT_TOKENS_FOR_PHASE`
+override (per Q-OQ-6).
 
 **Verification:** run `cost_audit.py` against the past 30 days of
 `review_autofix.yml` runs; assert the new columns populate without
@@ -636,14 +677,18 @@ exactly 3 heartbeat lines emitted at ~30s intervals.
 - `scripts/post_review_comment.sh` — add the `--review-state` flag
   if not present; default `COMMENT` to preserve current behaviour
   when the flag is unset.
-- `prompts/mode-judge.txt` — define the human-override convention:
-  any human comment matching the regex `^break glass(\b|$)` on the
-  PR causes the next autofix run to log
+- `prompts/mode-judge.txt` — define the human-override convention
+  (Q-OQ-3 resolved → explicit command): any human comment matching
+  the anchored regex `^@codex break-glass\b` on the PR causes the
+  next autofix run to log
   `BREAK_GLASS: pr=<PR> commenter=<login>` and skip the
   `REQUEST_CHANGES` action (still posts the review body as a
-  comment).
+  comment). The explicit `@codex` command form (matching the repo's
+  existing `@codex <verb>` convention, CLAUDE.md §12) is required
+  instead of a free-text phrase so the gate cannot be bypassed by a
+  reviewer merely quoting "break glass" in discussion.
 - `.github/workflows/review_autofix.yml` — add a step that greps PR
-  comments for `^break glass` (reusing the already-fetched
+  comments for `^@codex break-glass` (reusing the already-fetched
   `${PR_ALL_COMMENTS_CONTEXT_FILE}` per §15) and exports
   `REVIEW_BREAK_GLASS=1` if matched.
 - `agents.md` — add `BREAK_GLASS` to the stable-prefix list.
@@ -654,7 +699,7 @@ exactly 3 heartbeat lines emitted at ~30s intervals.
 **Verification:** fixture PRs with (a) all-low findings,
 (b) one-medium finding, (c) one critical finding;
 assert the posted review state matches the rubric. Break-glass
-fixture: critical finding + human `break glass` comment; assert no
+fixture: critical finding + human `@codex break-glass` comment; assert no
 `REQUEST_CHANGES`, but the comment body is still posted and the
 `BREAK_GLASS:` log line is emitted.
 
@@ -675,7 +720,8 @@ fixture: critical finding + human `break glass` comment; assert no
 
 - `agents.md` — append new log prefixes
   (`CODEX_HEARTBEAT`, `BREAK_GLASS`, `REVIEWER_RISK_TIER`,
-  `REVIEWER_FILTER_SKIP`, `REVIEWER_FAILBACK`, `REVIEWER_HEALTH`,
+  `REVIEWER_FILTER_SKIP`, `REVIEWER_FAILBACK`,
+  `REVIEWER_FAILBACK_UNMAPPED`, `REVIEWER_HEALTH`,
   `RE_REVIEW_SKIP`, `CONTEXT_BUDGET_WARN`); add materiality table
   for Phase D; document equivalence to Cloudflare's seven sub-agents
   per row 1 of the mapping table.
@@ -857,6 +903,13 @@ behaviour change on pin — only on explicit opt-in.
 
 ## Open Questions
 
+> **Status (2026-05-29): all six resolved.** Q-OQ-1 and Q-OQ-5 were
+> resolved against the shipped codebase; Q-OQ-2, Q-OQ-3, Q-OQ-4, and
+> Q-OQ-6 were resolved by the maintainer. Each decision is folded into
+> the relevant phase above. The plan is **orchestrator-ready**: the
+> unattended implementer must follow the **RESOLVED** decisions below
+> and must not re-open them.
+
 - **Q-OQ-1**: Phase F (re-review awareness) overlaps
   `docs/completed/judge-loop-and-reissue-plan.md` (shipped) Phase A
   (judge-in-loop) and Phase B (sticky findings). Should this plan's
@@ -870,10 +923,28 @@ behaviour change on pin — only on explicit opt-in.
 
   Recommend **A** to avoid two near-identical ledger-read paths.
 
+  **RESOLVED → A (adapted).** The shipped plan uses the
+  `REVIEW_LEDGER_*` namespace (`REVIEW_LEDGER_ENABLED`,
+  `REVIEW_LEDGER_PATH`, `REVIEW_LEDGER_PERSIST_LIMIT`) with the ledger
+  at `.ai/review_issue_ledger/pr-<PR>.txt`; the draft
+  `REVIEW_JUDGE_IN_LOOP_*` name in option A never shipped. Phase F
+  reuses that exact surface and adds only the
+  `REVIEW_LEDGER_REREVIEW_ENABLED` behaviour sub-flag — no parallel
+  `REVIEW_REREVIEW_AWARENESS_*` flag, no second ledger-read path. See
+  Phase F.
+
 - **Q-OQ-2**: Phase B's `REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX`
   default lists `scripts/|.github/workflows/|prompts/|
   workflow-templates/|db/contracts/`. Should `ai-memory/` (where
   AI instructions live) also force full review?
+
+  **RESOLVED → Yes, plus `.github/ai/`.** Both `^ai-memory/` and
+  `^\.github/ai/` are added to the always-full carve-out default.
+  Both steer the pipeline at runtime — memory records are retrieved
+  into prompts, and `.github/ai/` holds the label / orchestrate-schema
+  governance contracts — so a small diff there must not be sampled
+  into a trivial/lite pass (§1 Security/Correctness > Performance).
+  See Phase B.
 
 - **Q-OQ-3**: Phase J's `break glass` regex `^break glass` matches
   any comment starting with the phrase. Should it require an
@@ -881,11 +952,25 @@ behaviour change on pin — only on explicit opt-in.
   accidental triggers) or stay phrase-match (matches Cloudflare's
   free-text convention)?
 
+  **RESOLVED → explicit command `@codex break-glass`.** The trigger
+  is the anchored regex `^@codex break-glass\b`, matching the repo's
+  existing `@codex <verb>` convention (CLAUDE.md §12). Because the
+  override bypasses an automated REQUEST_CHANGES gate, the
+  accidental-trigger bar must be higher than Cloudflare's free-text
+  phrase (which targets human-in-the-loop review). See Phase J.
+
 - **Q-OQ-4**: Phase D's materiality classifier uses path-glob
   heuristics. Should it call out to `openai/gpt-5.4-mini` for
   borderline cases, or stay deterministic only? Deterministic
   rules are cheaper and traceable; the LLM helps for diffs that
   don't match any glob (e.g. a new top-level concept).
+
+  **RESOLVED → deterministic v1; LLM reserved.** v1 ships the
+  path-glob classifier only — cheap, traceable, fail-open, no LLM
+  call in the steady state (§15). The `AGENTS_MD_MATERIALITY_MODEL` /
+  `_REASONING` vars are reserved for an opt-in fallback gated by
+  `AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED` (default `0`). See
+  Phase D.
 
 - **Q-OQ-5**: Phase G's failback chains assume each reviewer model
   has a prior-generation slug. The current set
@@ -895,11 +980,21 @@ behaviour change on pin — only on explicit opt-in.
   `REVIEWER_FAILBACK_UNMAPPED: <slug>`) rather than crash. Confirm
   this is the desired contract.
 
+  **RESOLVED → confirmed.** Unmapped slug ⇒ skip that reviewer, emit
+  `REVIEWER_FAILBACK_UNMAPPED: <slug>`, continue the pass; never
+  crash. This is the repo's standard fail-open contract. See Phase G.
+
 - **Q-OQ-6**: Phase H's `CONTEXT_BUDGET_WARN` threshold is 50 %
   (Cloudflare's number). Our consolidator runs `xhigh` on
   `openai/gpt-5.4` (1M context). 50 % = 500 K tokens — generous.
   Is the threshold instead `MAX_PROMPT_TOKENS_FOR_PHASE` per-phase
   (e.g. 200 K for reviewer pass on a third-party model)?
+
+  **RESOLVED → per-phase ratio + absolute override.** Warn at
+  `CONTEXT_BUDGET_WARN_RATIO` (default `0.7`) of **each phase's own
+  model** context window (from `codex_model_catalog.json`), with an
+  optional absolute `MAX_PROMPT_TOKENS_FOR_PHASE` override that takes
+  precedence. The flat 50 % is dropped. See Phase H.
 
 ## References
 
