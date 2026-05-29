@@ -248,6 +248,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_targeted_file_context.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_prompt_untrusted_context_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_cost_audit_semble_metrics.py
 
       - name: Review autofix EDITOR_CHANGES_LOST shim regression tests
