@@ -3122,6 +3122,25 @@ if [ "${reviewers_successful}" -eq 0 ]; then
     echo "PR_CLOSED=true" >> "$GITHUB_ENV"
     exit 0
   fi
+  review_skip_only_statuses=0
+  review_hard_failures=0
+  for status_file in "${PREVIOUS_REVIEWS_DIR}"/status_review_*.txt; do
+    [ -f "${status_file}" ] || continue
+    status_value="$(cat "${status_file}" 2>/dev/null || true)"
+    case "${status_value}" in
+      skipped_unmapped|skipped_open)
+        review_skip_only_statuses=$((review_skip_only_statuses + 1))
+        ;;
+      *)
+        review_hard_failures=$((review_hard_failures + 1))
+        ;;
+    esac
+  done
+  if [ "${review_skip_only_statuses}" -gt 0 ] && [ "${review_hard_failures}" -eq 0 ]; then
+    echo "::warning::Reviewer pass produced no successful findings; all review slots were skipped fail-open (cached-open or unmapped). Continuing with REVIEWERS_SUCCESSFUL=0."
+    echo "REVIEWERS_SUCCESSFUL=0" >> "$GITHUB_ENV"
+    exit 0
+  fi
   echo "Reviewer failure diagnostics:"
   for log_file in "${PREVIOUS_REVIEWS_DIR}"/review_*.log; do
     if [ -f "${log_file}" ]; then

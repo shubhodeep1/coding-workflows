@@ -97,6 +97,12 @@ def _reviewer_run_reviewer_pass_block() -> str:
 	return text[start:end]
 
 
+def _reviewer_zero_success_guard_block() -> str:
+	text = _reviewers_text()
+	start = text.index('if [ "${reviewers_successful}" -eq 0 ]; then')
+	return text[start:]
+
+
 def _workflow_reviewer_models() -> list[str]:
 	lines = _workflow_text().splitlines()
 	needle = "  REVIEWER_MODELS: |"
@@ -853,6 +859,45 @@ def _run_reviewer_failback_harness() -> dict[str, object]:
 		}
 
 
+def _run_reviewer_zero_success_guard_harness(*, statuses: list[str]) -> dict[str, object]:
+	guard_block = _reviewer_zero_success_guard_block()
+	with tempfile.TemporaryDirectory(prefix="reviewer-zero-success-") as td:
+		tmp = Path(td)
+		reviews = tmp / "reviews"
+		reviews.mkdir()
+		github_env_file = tmp / "github_env.txt"
+
+		for idx, status in enumerate(statuses, 1):
+			(reviews / f"status_review_model{idx}.txt").write_text(f"{status}\n", encoding="utf-8")
+			(reviews / f"review_model{idx}.log").write_text(f"status={status}\n", encoding="utf-8")
+
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				"reviewers_successful=0\n"
+				f"{guard_block}\n",
+			],
+			cwd=str(REPO_ROOT),
+			env={
+				**os.environ,
+				"PREVIOUS_REVIEWS_DIR": str(reviews),
+				"PR_NUMBER": "123",
+				"GITHUB_ENV": str(github_env_file),
+			},
+			capture_output=True,
+			text=True,
+		)
+
+		return {
+			"returncode": result.returncode,
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			"github_env": github_env_file.read_text(encoding="utf-8") if github_env_file.exists() else "",
+		}
+
+
 def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 	workflow = _workflow_text()
 	for expected in (
@@ -1016,6 +1061,13 @@ def test_reviewer_failback_harness_reuses_cached_open_state_and_skips_unmapped_m
 		"moonshotai/kimi-k2.5\tmoonshotai/kimi-k2.5\txhigh\tattempt 1",
 		"moonshotai/kimi-k2.5\tmoonshotai/kimi-k2.5\thigh\tattempt 2 (cheaper reasoning high)",
 	]
+
+
+def test_reviewer_zero_success_guard_fails_open_when_every_review_slot_was_skipped() -> None:
+	result = _run_reviewer_zero_success_guard_harness(statuses=["skipped_open", "skipped_unmapped"])
+	assert result["returncode"] == 0
+	assert "REVIEWERS_SUCCESSFUL=0\n" == result["github_env"]
+	assert "all review slots were skipped fail-open" in result["stdout"]
 
 
 def test_reviewer_filter_harness_strips_low_signal_paths_and_preserves_exemptions() -> None:
@@ -1782,6 +1834,7 @@ def main() -> int:
 	test_review_filter_helper_wiring_is_flag_gated_and_fail_open()
 	test_reviewer_failback_wiring_stages_asset_and_restores_cache_before_reviewers()
 	test_reviewer_failback_harness_reuses_cached_open_state_and_skips_unmapped_models()
+	test_reviewer_zero_success_guard_fails_open_when_every_review_slot_was_skipped()
 	test_reviewer_filter_harness_strips_low_signal_paths_and_preserves_exemptions()
 	test_reviewer_filter_script_preserves_nested_exempt_paths()
 	test_reviewer_filter_script_preserves_root_level_migration_exempt_paths()
