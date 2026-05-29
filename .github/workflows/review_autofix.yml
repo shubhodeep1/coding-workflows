@@ -518,30 +518,179 @@ jobs:
                     fi
 
                     if [ -n "${pr_files_json}" ] && [ "${pr_files_json}" != "[]" ]; then
-                      gate_materiality="low"
-                      gate_agents_changed="false"
-                      while IFS= read -r gate_path; do
-                        [ -n "${gate_path}" ] || continue
-                        case "${gate_path}" in
-                          agents.md)
-                            gate_agents_changed="true"
-                            ;;
-                        esac
-                        case "${gate_path}" in
-                          package.json|pyproject.toml|Cargo.toml|go.mod|.github/workflows/*|pytest.ini|tox.ini|noxfile.py|jest.config.js|jest.config.cjs|jest.config.mjs|jest.config.ts|vitest.config.js|vitest.config.cjs|vitest.config.mjs|vitest.config.ts|playwright.config.js|playwright.config.cjs|playwright.config.mjs|playwright.config.ts|cypress.config.js|cypress.config.cjs|cypress.config.mjs|cypress.config.ts|webpack.config.js|webpack.config.cjs|webpack.config.mjs|webpack.config.ts|vite.config.js|vite.config.cjs|vite.config.mjs|vite.config.ts|turbo.json|go.work)
-                            gate_materiality="high"
-                            ;;
-                          package-lock.json|bun.lock|bun.lockb|yarn.lock|pnpm-lock.yaml|Cargo.lock|poetry.lock|uv.lock|go.sum|Pipfile|Pipfile.lock|requirements.txt|requirements-dev.txt|requirements-test.txt|constraints.txt|constraints-dev.txt|.eslintrc|.eslintrc.json|.eslintrc.js|.eslintrc.cjs|.eslintrc.yaml|.eslintrc.yml|eslint.config.js|eslint.config.cjs|eslint.config.mjs|eslint.config.ts|.prettierrc|.prettierrc.json|.prettierrc.js|.prettierrc.cjs|.stylelintrc|.stylelintrc.json|.stylelintrc.js|stylelint.config.js|stylelint.config.cjs|stylelint.config.mjs|stylelint.config.ts|ruff.toml|.ruff.toml|.flake8|pylintrc|biome.json|biome.jsonc|*/requirements.txt|*/requirements-dev.txt|*/requirements-test.txt|*/constraints.txt|*/constraints-dev.txt|*api_client*|*api-client*|*http_client*|*http-client*|*github_client*|*github-client*|*rest_client*|*rest-client*|*/client.py|*/client.ts|*/client.js|*/client.tsx|*/client.jsx)
-                            if [ "${gate_materiality}" != "high" ]; then
-                              gate_materiality="medium"
-                            fi
-                            ;;
-                        esac
-                      done < <(printf '%s' "${pr_files_json}" | jq -r '.[].filename' 2>/dev/null || true)
+                      # Mirror the helper's visible path rules here so the gate
+                      # only suppresses deterministic skip when the helper would
+                      # later classify the diff medium/high from PR file paths
+                      # alone. Repo-verified signals such as new top-level
+                      # directories remain helper-only and intentionally fail
+                      # open on the gate path.
+                      if gate_materiality_json="$(printf '%s' "${pr_files_json}" | python3 - <<'PY'
+          import json
+          import sys
+          from pathlib import PurePosixPath
 
-                      if [ "${gate_agents_changed}" != "true" ] && { [ "${gate_materiality}" = "high" ] || [ "${gate_materiality}" = "medium" ]; }; then
-                        MATERIALITY_SKIP_SUPPRESSED="true"
-                        echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=agents_md_materiality pr=${PR_NUMBER} materiality=${gate_materiality} candidate=${candidate_skip_reason}"
+
+          ROOT_HIGH_PATHS = {"package.json", "pyproject.toml", "Cargo.toml", "go.mod"}
+          HIGH_BUILD_TEST_BASENAMES = {
+              "pytest.ini",
+              "tox.ini",
+              "noxfile.py",
+              "jest.config.js",
+              "jest.config.cjs",
+              "jest.config.mjs",
+              "jest.config.ts",
+              "vitest.config.js",
+              "vitest.config.cjs",
+              "vitest.config.mjs",
+              "vitest.config.ts",
+              "playwright.config.js",
+              "playwright.config.cjs",
+              "playwright.config.mjs",
+              "playwright.config.ts",
+              "cypress.config.js",
+              "cypress.config.cjs",
+              "cypress.config.mjs",
+              "cypress.config.ts",
+              "webpack.config.js",
+              "webpack.config.cjs",
+              "webpack.config.mjs",
+              "webpack.config.ts",
+              "vite.config.js",
+              "vite.config.cjs",
+              "vite.config.mjs",
+              "vite.config.ts",
+              "turbo.json",
+              "go.work",
+          }
+          MEDIUM_DEPENDENCY_BASENAMES = {
+              "package-lock.json",
+              "bun.lock",
+              "bun.lockb",
+              "yarn.lock",
+              "pnpm-lock.yaml",
+              "Cargo.lock",
+              "poetry.lock",
+              "uv.lock",
+              "go.sum",
+              "Pipfile",
+              "Pipfile.lock",
+          }
+          MEDIUM_LINT_BASENAMES = {
+              ".eslintrc",
+              ".eslintrc.json",
+              ".eslintrc.js",
+              ".eslintrc.cjs",
+              ".eslintrc.yaml",
+              ".eslintrc.yml",
+              "eslint.config.js",
+              "eslint.config.cjs",
+              "eslint.config.mjs",
+              "eslint.config.ts",
+              ".prettierrc",
+              ".prettierrc.json",
+              ".prettierrc.js",
+              ".prettierrc.cjs",
+              ".stylelintrc",
+              ".stylelintrc.json",
+              ".stylelintrc.js",
+              "stylelint.config.js",
+              "stylelint.config.cjs",
+              "stylelint.config.mjs",
+              "stylelint.config.ts",
+              "ruff.toml",
+              ".ruff.toml",
+              ".flake8",
+              "pylintrc",
+              "biome.json",
+              "biome.jsonc",
+          }
+          CLIENT_WRAPPER_BASENAMES = {
+              "client.py",
+              "client.ts",
+              "client.js",
+              "client.tsx",
+              "client.jsx",
+              "client.go",
+              "client.rb",
+              "client.java",
+          }
+          CLIENT_WRAPPER_TOKENS = (
+              "api_client",
+              "api-client",
+              "http_client",
+              "http-client",
+              "github_client",
+              "github-client",
+              "rest_client",
+              "rest-client",
+              "sdk_client",
+              "sdk-client",
+          )
+
+
+          def looks_like_client_wrapper(path: str) -> bool:
+              pure = PurePosixPath(path)
+              basename = pure.name.lower()
+              if basename in CLIENT_WRAPPER_BASENAMES:
+                  parent_parts = [part.lower() for part in pure.parts[:-1]]
+                  if any(part in {"api", "apis", "client", "clients", "http", "sdk"} for part in parent_parts):
+                      return True
+              if any(token in basename for token in CLIENT_WRAPPER_TOKENS):
+                  return True
+              return False
+
+
+          def classify_path(path: str) -> str:
+              pure = PurePosixPath(path)
+              basename = pure.name
+              if path in ROOT_HIGH_PATHS:
+                  return "high"
+              if path.startswith(".github/workflows/"):
+                  return "high"
+              if "/" not in path and basename in HIGH_BUILD_TEST_BASENAMES:
+                  return "high"
+              if basename in MEDIUM_DEPENDENCY_BASENAMES or (basename.startswith("requirements") and basename.endswith(".txt")) or (basename.startswith("constraints") and basename.endswith(".txt")):
+                  return "medium"
+              if basename in MEDIUM_LINT_BASENAMES:
+                  return "medium"
+              if looks_like_client_wrapper(path):
+                  return "medium"
+              return "low"
+
+
+          entries = json.load(sys.stdin)
+          paths = []
+          seen = set()
+          for entry in entries:
+              path = str((entry or {}).get("filename") or "").strip()
+              if not path or path in seen:
+                  continue
+              seen.add(path)
+              paths.append(path)
+
+          materiality = "low"
+          for path in paths:
+              severity = classify_path(path)
+              if severity == "high":
+                  materiality = "high"
+                  break
+              if severity == "medium":
+                  materiality = "medium"
+
+          print(json.dumps({
+              "agents_md_changed": "agents.md" in seen,
+              "materiality": materiality,
+          }))
+          PY
+                      )"; then
+                        gate_materiality="$(printf '%s' "${gate_materiality_json}" | jq -r '.materiality // "low"' 2>/dev/null || echo low)"
+                        gate_agents_changed="$(printf '%s' "${gate_materiality_json}" | jq -r 'if (.agents_md_changed // false) then "true" else "false" end' 2>/dev/null || echo false)"
+                        if [ "${gate_agents_changed}" != "true" ] && { [ "${gate_materiality}" = "high" ] || [ "${gate_materiality}" = "medium" ]; }; then
+                          MATERIALITY_SKIP_SUPPRESSED="true"
+                          echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=agents_md_materiality pr=${PR_NUMBER} materiality=${gate_materiality} candidate=${candidate_skip_reason}"
+                        fi
+                      else
+                        echo "AUTOFIX_GATE_MATERIALITY_FILES_UNAVAILABLE pr=${PR_NUMBER} candidate=${candidate_skip_reason} — classifier unavailable, keeping deterministic skip fail-open."
                       fi
                     else
                       echo "AUTOFIX_GATE_MATERIALITY_FILES_UNAVAILABLE pr=${PR_NUMBER} candidate=${candidate_skip_reason} — /files fetch failed or empty, keeping deterministic skip fail-open."

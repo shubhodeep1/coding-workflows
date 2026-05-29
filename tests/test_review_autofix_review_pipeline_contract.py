@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import tempfile
+import textwrap
 from pathlib import Path
 
 
@@ -137,6 +138,35 @@ def _diff_changed_paths(diff_text: str) -> list[str]:
 		seen.add(path)
 		paths.append(path)
 	return paths
+
+
+def _gate_agents_md_materiality_classifier_script() -> str:
+	gate_block = _step_block("Evaluate review gate").splitlines()
+	start_idx = -1
+	for idx, line in enumerate(gate_block):
+		if "gate_materiality_json" in line and "python3 - <<'PY'" in line:
+			start_idx = idx + 1
+			break
+	if start_idx < 0:
+		raise AssertionError("AGENTS.md materiality gate classifier heredoc not found")
+	body: list[str] = []
+	for line in gate_block[start_idx:]:
+		if line.strip() == "PY":
+			return textwrap.dedent("\n".join(body))
+		body.append(line)
+	raise AssertionError("AGENTS.md materiality gate classifier heredoc missing terminator")
+
+
+def _run_gate_agents_md_materiality_classifier(paths: list[str]) -> dict[str, object]:
+	result = subprocess.run(
+		["python3", "-c", _gate_agents_md_materiality_classifier_script()],
+		cwd=str(REPO_ROOT),
+		input=json.dumps([{"filename": path} for path in paths]),
+		check=True,
+		capture_output=True,
+		text=True,
+	)
+	return json.loads(result.stdout)
 
 
 def _phase_c_workspace_files() -> dict[str, str]:
@@ -1149,6 +1179,14 @@ def test_agents_md_materiality_classifier_and_workflow_wiring() -> None:
 	assert low_result["advisory_required"] is False
 	assert low_result["reason"] == "low_materiality"
 	assert low["comment"] == ""
+
+	gate_docs_client = _run_gate_agents_md_materiality_classifier(["docs/client.js"])
+	assert gate_docs_client["materiality"] == "low"
+	assert gate_docs_client["agents_md_changed"] is False
+
+	gate_api_client = _run_gate_agents_md_materiality_classifier(["sdk/client.go"])
+	assert gate_api_client["materiality"] == "medium"
+	assert gate_api_client["agents_md_changed"] is False
 
 	workflow = _workflow_text()
 	stage_block = _step_block("Stage workflow support files")
