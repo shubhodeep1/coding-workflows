@@ -26,6 +26,7 @@ if [ -z "${SUPPORT_ROOT_DIR:-}" ]; then
   fi
 fi
 SUPPORT_PROMPTS_DIR="${SUPPORT_PROMPTS_DIR:-${SUPPORT_ROOT_DIR}/prompts}"
+CODEX_HEARTBEAT_HELPER="${SUPPORT_SCRIPTS_DIR}/codex_heartbeat.sh"
 source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 # Fallback: if gh_helpers.sh was not sourced (missing file), define a
 # pass-through so subsequent `gh_retry gh ...` calls still execute —
@@ -880,6 +881,15 @@ PY
 RB_JUDGE_PROMPT_SIZE_LOGGED=false
 JUDGE_SUCCESS=false
 JUDGE_STDERR_FILE="${RUNTIME_DIR}/rb_judge_stderr.txt"
+judge_codex_cmd=(
+  codex
+  --ask-for-approval never
+  -c model_verbosity=low
+  -c include_apply_patch_tool=true
+  exec
+  --model "${MODEL_EDITOR}"
+  --sandbox read-only
+)
 for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
   attempt="$((attempt_idx + 1))"
   level="${JUDGE_ATTEMPT_LEVELS[$attempt_idx]}"
@@ -897,7 +907,40 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
     fi
     RB_JUDGE_PROMPT_SIZE_LOGGED=true
   fi
-  if codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox read-only < "${RB_JUDGE_PROMPT}" > "${RB_JUDGE_OUTPUT}" 2>"${JUDGE_STDERR_FILE}"; then
+  if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
+    if "${CODEX_HEARTBEAT_HELPER}" \
+      --phase review_rb_judge \
+      --stdout-file "${RB_JUDGE_OUTPUT}" \
+      --stderr-file "${JUDGE_STDERR_FILE}" \
+      -- "${judge_codex_cmd[@]}" < "${RB_JUDGE_PROMPT}"; then
+      if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT}"; then
+        JUDGE_EFFECTIVE_REASONING_EFFORT="${level}"
+        JUDGE_SUCCESS=true
+        break
+      fi
+      echo "::warning::Judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} produced empty stdout (reasoning=${level})."
+      if _recover_judge_json "${JUDGE_STDERR_FILE}" "${RB_JUDGE_OUTPUT}"; then
+        echo "Recovered judge JSON from stderr (attempt ${attempt}, reasoning=${level}) — proceeding."
+        JUDGE_EFFECTIVE_REASONING_EFFORT="${level}"
+        JUDGE_SUCCESS=true
+        break
+      fi
+    else
+      rc=$?
+      echo "::warning::Judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} codex exec failed (rc=${rc}, reasoning=${level})."
+      if [ -s "${JUDGE_STDERR_FILE}" ]; then
+        echo "--- judge stderr (attempt ${attempt}) ---"
+        cat "${JUDGE_STDERR_FILE}"
+        echo "---"
+      fi
+      if _recover_judge_json "${JUDGE_STDERR_FILE}" "${RB_JUDGE_OUTPUT}"; then
+        echo "Recovered judge JSON from stderr (attempt ${attempt}, reasoning=${level}) — proceeding despite codex rc=${rc}."
+        JUDGE_EFFECTIVE_REASONING_EFFORT="${level}"
+        JUDGE_SUCCESS=true
+        break
+      fi
+    fi
+  elif codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox read-only < "${RB_JUDGE_PROMPT}" > "${RB_JUDGE_OUTPUT}" 2>"${JUDGE_STDERR_FILE}"; then
     if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT}"; then
       JUDGE_EFFECTIVE_REASONING_EFFORT="${level}"
       JUDGE_SUCCESS=true
@@ -1264,7 +1307,17 @@ __EDIT_DISCIPLINE__
       fi
 
       sanitize_codex_prompt_file "${RB_FIX_PROMPT}"
-      if codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${RB_FIX_PROMPT}" > "${RB_FIX_OUTPUT}" 2>/dev/null; then
+      if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
+        if "${CODEX_HEARTBEAT_HELPER}" \
+          --phase review_rb_fix \
+          --stdout-file "${RB_FIX_OUTPUT}" \
+          --stderr-file /dev/null \
+          -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${RB_FIX_PROMPT}"; then
+          echo "Fix codex completed."
+        else
+          echo "::warning::Fix codex failed for PR #${PR_NUMBER}."
+        fi
+      elif codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${RB_FIX_PROMPT}" > "${RB_FIX_OUTPUT}" 2>/dev/null; then
         echo "Fix codex completed."
       else
         echo "::warning::Fix codex failed for PR #${PR_NUMBER}."

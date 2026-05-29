@@ -186,6 +186,7 @@ CONSOLIDATOR_RAW_FILE="${RUNTIME_DIR}/consolidator_raw.txt"
 JUDGE_INTERIM_PRIORS_FILE="${JUDGE_INTERIM_PRIORS_FILE:-${RUNTIME_DIR}/judge_interim_priors.txt}"
 REVIEW_LEDGER_PATH="${REVIEW_LEDGER_PATH:-.ai/review_issue_ledger/pr-${PR_NUMBER:-0}.txt}"
 PRIOR_ROUND_DECISIONS_FILE="${RUNTIME_DIR}/prior_round_decisions.txt"
+CODEX_HEARTBEAT_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_heartbeat.sh"
 
 # Validate REVIEW_CONSOLIDATOR_REASONING is a known reasoning level.
 # Prevent invalid values from breaking TOML config or shell quoting.
@@ -311,6 +312,15 @@ if [ "${reasoning_config_applied}" -eq 0 ]; then
 fi
 
 cmd_rc=0
+consolidator_cmd=(
+	"${codex_bin}"
+	--ask-for-approval never
+	-c model_verbosity=low
+	-c include_apply_patch_tool=true
+	exec
+	--model "${REVIEW_CONSOLIDATOR_MODEL}"
+	--sandbox danger-full-access
+)
 
 # Strip any invalid UTF-8 from the consolidator prompt before piping
 # to codex (whose stdin reader strictly validates UTF-8). See
@@ -318,10 +328,19 @@ cmd_rc=0
 if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
 	sanitize_codex_prompt_file "${CONSOLIDATOR_PROMPT_FILE}"
 fi
-if ! CODEX_HOME="${consolidator_codex_home}" \
+if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
+	if ! CODEX_HOME="${consolidator_codex_home}" \
+		timeout "${REVIEW_CONSOLIDATOR_TIMEOUT_SECS}" \
+		"${CODEX_HEARTBEAT_HELPER}" \
+		--phase review_consolidate \
+		--stdout-file "${tmp_out}" \
+		--stderr-file "${tmp_err}" \
+		-- "${consolidator_cmd[@]}" < "${CONSOLIDATOR_PROMPT_FILE}"; then
+		cmd_rc=$?
+	fi
+elif ! CODEX_HOME="${consolidator_codex_home}" \
 	timeout "${REVIEW_CONSOLIDATOR_TIMEOUT_SECS}" \
-	"${codex_bin}" --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${REVIEW_CONSOLIDATOR_MODEL}" --sandbox danger-full-access \
-	< "${CONSOLIDATOR_PROMPT_FILE}" > "${tmp_out}" 2> "${tmp_err}"; then
+	"${consolidator_cmd[@]}" < "${CONSOLIDATOR_PROMPT_FILE}" > "${tmp_out}" 2> "${tmp_err}"; then
 	cmd_rc=$?
 fi
 

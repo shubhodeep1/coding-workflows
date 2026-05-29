@@ -61,6 +61,8 @@ env:
   MODEL_VERBOSITY: ${{ vars.VERBOSITY_VALIDATE || 'low' }}
   VALIDATION_INCLUDE_SYNTHESISED: ${{ vars.VALIDATION_INCLUDE_SYNTHESISED || 'true' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
+  CODEX_HEARTBEAT_ENABLED: ${{ vars.CODEX_HEARTBEAT_ENABLED || '1' }}
+  CODEX_HEARTBEAT_INTERVAL_SECS: ${{ vars.CODEX_HEARTBEAT_INTERVAL_SECS || '30' }}
   SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}
 
 jobs:
@@ -460,6 +462,20 @@ jobs:
           else
             rm -f "scripts/codex_model_catalog.json.tmp"
             echo "Model catalog not on ${script_ref} yet; using local copy."
+          fi
+
+          if [ ! -f "scripts/codex_heartbeat.sh" ]; then
+            if copy_from_ref_or_local "scripts/codex_heartbeat.sh" "scripts/codex_heartbeat.sh.tmp" "false" "true"; then
+              mv "scripts/codex_heartbeat.sh.tmp" "scripts/codex_heartbeat.sh"
+              chmod +x "scripts/codex_heartbeat.sh"
+              _fetched_scripts+=(codex_heartbeat.sh)
+            else
+              rm -f "scripts/codex_heartbeat.sh.tmp"
+              echo "Codex heartbeat helper not on ${script_ref} yet; validation will continue without live heartbeat logging."
+            fi
+          else
+            chmod +x "scripts/codex_heartbeat.sh"
+            _fetched_scripts+=(codex_heartbeat.sh)
           fi
 
           # Semble bootstrap helpers (optional; validation falls back if

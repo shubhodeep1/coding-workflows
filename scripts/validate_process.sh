@@ -2459,6 +2459,7 @@ trap cleanup_runtime_containers EXIT
 # so a "Standalone validation run" without a fetched scripts/ tree
 # still picks up the catalog shipped next to validate_process.sh.
 _validate_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CODEX_HEARTBEAT_HELPER="${_validate_script_dir}/codex_heartbeat.sh"
 bash "${_validate_script_dir}/write_codex_config.sh" \
   --model "${MODEL_EDITOR}" \
   --reasoning "${MODEL_REASONING_EFFORT}" \
@@ -2643,13 +2644,20 @@ else
   DISCOVER_FAILURE_MODE=""
   DISCOVER_ATTEMPTS_USED=0
   for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
-    DISCOVER_ATTEMPTS_USED="${attempt}"
-    echo "Validation hint discovery attempt ${attempt}/${MAX_CODEX_ATTEMPTS}"
-    sanitize_codex_prompt_file "${DISCOVER_PROMPT_FILE}"
-    set +e
-    cat "${DISCOVER_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${DISCOVER_OUTPUT_FILE}" 2> >(tee -a "${DISCOVER_LOG_FILE}" >&2)
-    DISCOVER_EXIT=$?
-    set -e
+  DISCOVER_ATTEMPTS_USED="${attempt}"
+  echo "Validation hint discovery attempt ${attempt}/${MAX_CODEX_ATTEMPTS}"
+  sanitize_codex_prompt_file "${DISCOVER_PROMPT_FILE}"
+  set +e
+  if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
+    "${CODEX_HEARTBEAT_HELPER}" \
+      --phase validate_discover \
+      --stdout-file "${DISCOVER_OUTPUT_FILE}" \
+      -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${DISCOVER_PROMPT_FILE}" 2> >(tee -a "${DISCOVER_LOG_FILE}" >&2)
+  else
+    codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${DISCOVER_PROMPT_FILE}" > "${DISCOVER_OUTPUT_FILE}" 2> >(tee -a "${DISCOVER_LOG_FILE}" >&2)
+  fi
+  DISCOVER_EXIT=$?
+  set -e
 
     if [ "${DISCOVER_EXIT}" -ne 0 ]; then
       DISCOVER_FAILURE_MODE="codex_rc_nonzero"
@@ -3341,7 +3349,14 @@ for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
   echo "Validation diagnosis attempt ${attempt}/${MAX_CODEX_ATTEMPTS}"
   sanitize_codex_prompt_file "${DIAGNOSE_PROMPT_FILE}"
   set +e
-  cat "${DIAGNOSE_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${DIAGNOSE_OUTPUT_FILE}" 2> >(tee -a "${DIAGNOSE_LOG_FILE}" >&2)
+  if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
+    "${CODEX_HEARTBEAT_HELPER}" \
+      --phase validate_diagnose \
+      --stdout-file "${DIAGNOSE_OUTPUT_FILE}" \
+      -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${DIAGNOSE_PROMPT_FILE}" 2> >(tee -a "${DIAGNOSE_LOG_FILE}" >&2)
+  else
+    codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${DIAGNOSE_PROMPT_FILE}" > "${DIAGNOSE_OUTPUT_FILE}" 2> >(tee -a "${DIAGNOSE_LOG_FILE}" >&2)
+  fi
   DIAGNOSE_EXIT=$?
   set -e
 
