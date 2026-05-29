@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:~2251 | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: `reviewer_log_health_transition()` now emits health-transition diagnostics to stderr in a way that can mix them into per-reviewer log output paths.\n  WHY: The reviewer says the updated call sites pass `log_dest=\"${log_file}\"`, so the transition lines can contaminate the log stream that downstream consumers expect to stay clean.\n- scripts/review_run_reviewers.sh:~2571 | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Removing the unconditional `cat \"${tmp_stderr}\" >> \"${log_file}\"` left a non-zero-path case where stderr may not be written to the per-reviewer log.\n  WHY: The reviewer reports that on non-zero `cmd_rc` with empty stderr, the later gated append block never runs, so certain failures lose their diagnostic output.\n- scripts/review_run_reviewers.sh:~2903 | confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The cached-open skip path still relies on a shell integer comparison after parsing `REVIEWER_HEALTH_DISPATCH_OPEN_UNTIL_EPOCH`.\n  WHY: The reviewer says the regex guard helps, but parse failures can still leave empty/non-numeric values that later arithmetic callers may hit under `set -euo pipefail`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Persist reviewer health state via the existing review_autofix cache pattern, but keep the runtime state file under .ai/review_runtime/ as an untracked artifact; do not add a committed sample JSON file.\" and \"Wire the new failback/health env vars through .github/workflows/review_autofix.yml\"\n  expected_change_site: .gitignore (to explicitly ignore `.ai/review_runtime/`), plus the cache/restore step ordering\n  confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: LAST RUN DIFF only touches scripts/review_run_reviewers.sh + test; the PR DIFF moves the restore step but does not add a .gitignore entry, and the issue required a targeted untracked-artifact contract.\n- requirement: \"Add the phase-G flaky-reviewer fixture and one focused regression test.\"\n  expected_change_site: tests/test_review_autofix_review_pipeline_contract.py (the _run_reviewer_failback_harness and associated test_reviewer_* functions)\n  confidence=2\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The harness was expanded, but the focused regression for cached-open TTL expiry + stderr-only logging was added only in the previous autofix round; the current test mocks the Python action and does not exercise the real `reviewer_health_state_action \"record\"` path with corrupted JSON or lock contention, and the zero-success guard test does not assert health JSON state transitions after a full pass.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: scripts/review_run_reviewers.sh\n  Line/reference: reviewer_log_health_transition() (lines ~2251, updated in last_run_diff.patch lines 7-11)\n  Problem: The function now always emits to stderr via `| tee -a \"${log_dest}\" >&2` or `>&2`, but the call sites inside reviewer_health_dispatch_prepare() and reviewer_record_health_outcome() pass `log_dest=\"${log_file}\"` (a per-reviewer .log file).\n  Why it fails at runtime: This mixes health-transition diagnostic lines into the same log that the downstream zero-success guard, summariser, and editor expect to be clean machine-parsable/reviewable output.\n  ISSUE_CONFIDENCE: 4\n- File: scripts/review_run_reviewers.sh\n  Line/reference: execute_reviewer_attempt() failure path after `cat \"${tmp_stderr}\" >> \"${log_file}\"` removal (last_run_diff.patch ~2571) + the new `if [ \"${cmd_rc}\" -eq 0 ]; then` empty-output block\n  Problem: The previous autofix removed the unconditional `cat \"${tmp_stderr}\" >> \"${log_file}\"` but left the later gated append block.\n  Why it fails at runtime: On non-zero `cmd_rc` with empty stderr, no stderr ever reaches the per-reviewer `.log`, so the zero-success guard and reviewer failure diagnostics loop cannot surface the root cause for certain transient failures.\n  ISSUE_CONFIDENCE: 4\n- File: scripts/review_run_reviewers.sh\n  Line/reference: reviewer_health_dispatch_prepare() \u2192 the `if [[ \"${REVIEWER_HEALTH_DISPATCH_OPEN_UNTIL_EPOCH:-0}\" =~ ^[0-9]+$ ]]` guard (last_run_diff.patch line ~15, also in test harness)\n  Problem: The regex guard was added, but the caller still relies on a later integer comparison path for the cached-open skip decision.\n  Why it fails at runtime: Transient parse failures can still leave empty/non-numeric values that later arithmetic callers may hit under `set -euo pipefail`, so the guard does not fully eliminate the integer-expression failure risk.\n  ISSUE_CONFIDENCE: 3\n- Requirement: \"Persist reviewer health state via the existing review_autofix cache pattern, but keep the runtime state file under .ai/review_runtime/ as an untracked artifact; do not add a committed sample JSON file.\" (and \"Wire the new failback/health env vars through .github/workflows/review_autofix.yml\")\n  Expected change site: .gitignore (to explicitly ignore `.ai/review_runtime/`), plus the cache/restore step ordering\n  Evidence of absence: LAST RUN DIFF only touches scripts/review_run_reviewers.sh + test; the PR DIFF shows the restore step moved but does not add an entry to .gitignore.\n  ISSUE_CONFIDENCE: 3\n- Requirement: \"Add the phase-G flaky-reviewer fixture and one focused regression test.\"\n  Expected change site: tests/test_review_autofix_review_pipeline_contract.py (the _run_reviewer_failback_harness and associated test_reviewer_* functions)\n  Evidence of absence: The test harness was expanded in the PR, but the focused regression for cached-open TTL expiry + stderr-only logging was added only in the previous autofix round; the current test mocks the Python action but never exercises the real reviewe r_health_state_action \"record\" path with a corrupted JSON or lock-contention case.\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "5f5addc7e2db234dba6e34831f38d2e9b6f5f590fc660c49f5f73950c9fded41",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2994,
+    "run_id": "26643088273",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26643088273",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260529145555_fee5e7832a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2994,
+    "run_id": "26643088273"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-29T14:55:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
