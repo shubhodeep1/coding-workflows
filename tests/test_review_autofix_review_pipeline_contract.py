@@ -15,6 +15,10 @@ REVIEWERS = REPO_ROOT / "scripts" / "review_run_reviewers.sh"
 APPLY_FIXES = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
 FIXTURES_DIR = REPO_ROOT / "scripts" / "fixtures" / "cloudflare-learnings"
 PHASE_A_ANTI_RULES_FIXTURE = FIXTURES_DIR / "phase-a-anti-rules-noisy-pr.patch"
+PHASE_B_RISK_TIER_TRIVIAL_FIXTURE = FIXTURES_DIR / "phase-b-risk-tier-trivial.patch"
+PHASE_B_RISK_TIER_LITE_FIXTURE = FIXTURES_DIR / "phase-b-risk-tier-lite.patch"
+PHASE_B_RISK_TIER_FULL_FIXTURE = FIXTURES_DIR / "phase-b-risk-tier-full.patch"
+PHASE_B_RISK_TIER_ALWAYS_FULL_FIXTURE = FIXTURES_DIR / "phase-b-risk-tier-always-full.patch"
 PHASE_C_FILTER_FIXTURE = FIXTURES_DIR / "phase-c-lockfile-and-generated.patch"
 
 
@@ -61,6 +65,47 @@ def _reviewer_filter_helper_block() -> str:
 	start = text.index("# ── Reviewer uninteresting-file filter helpers")
 	end = text.index("# ── End reviewer uninteresting-file filter helpers", start)
 	return text[start:end]
+
+
+def _reviewer_risk_tier_helper_block() -> str:
+	text = _reviewers_text()
+	start = text.index("# ── Reviewer risk-tier helpers")
+	end = text.index("# ── End reviewer risk-tier helpers", start)
+	return text[start:end]
+
+
+def _workflow_reviewer_models() -> list[str]:
+	lines = _workflow_text().splitlines()
+	needle = "  REVIEWER_MODELS: |"
+	for idx, line in enumerate(lines):
+		if line != needle:
+			continue
+		models: list[str] = []
+		for candidate in lines[idx + 1:]:
+			if not candidate.startswith("    "):
+				break
+			stripped = candidate.strip()
+			if stripped:
+				models.append(stripped)
+		if models:
+			return models
+		break
+	raise AssertionError("REVIEWER_MODELS block not found in workflow")
+
+
+def _diff_changed_paths(diff_text: str) -> list[str]:
+	paths: list[str] = []
+	seen: set[str] = set()
+	for raw_line in diff_text.splitlines():
+		prefix = "diff --git a/"
+		if not raw_line.startswith(prefix):
+			continue
+		path = raw_line[len(prefix):].split(" b/", 1)[0].strip()
+		if not path or path in seen:
+			continue
+		seen.add(path)
+		paths.append(path)
+	return paths
 
 
 def _phase_c_workspace_files() -> dict[str, str]:
@@ -268,6 +313,15 @@ def _run_reviewer_stat_filter_harness(*, diff_stat_text: str, skipped_rows_text:
 		env.update({
 			"SUPPORT_ROOT_DIR": str(REPO_ROOT),
 			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+			"RUNTIME_DIR": str(tmp),
+			"PR_DIFF_FILE": str(input_file),
+			"ORIGINAL_PR_DIFF_FILE": str(input_file),
+			"LAST_RUN_DIFF_FILE": str(input_file),
+			"LAST_RUN_CHANGED_FILES_FILE": str(input_file),
+			"PR_CHANGED_FILES_FILE": str(input_file),
+			"LAST_RUN_DIFF_STAT_FILE": str(input_file),
+			"LAST_COMMIT_STAT_FILE": str(input_file),
+			"SYMBOL_DIFF_SUMMARY_FILE": str(input_file),
 			"INPUT_FILE": str(input_file),
 			"OUTPUT_FILE": str(output_file),
 			"SKIPPED_FILE": str(skipped_file),
@@ -287,6 +341,87 @@ def _run_reviewer_stat_filter_harness(*, diff_stat_text: str, skipped_rows_text:
 			text=True,
 		)
 		return output_file.read_text(encoding="utf-8")
+
+
+def _run_reviewer_risk_tier_harness(
+	*,
+	diff_text: str,
+	current_changed_paths: list[str] | None = None,
+	raw_changed_paths: list[str] | None = None,
+	filter_active: str = "false",
+	extra_env: dict[str, str] | None = None,
+) -> dict[str, str | list[str]]:
+	helper_block = _reviewer_risk_tier_helper_block()
+	with tempfile.TemporaryDirectory(prefix="reviewer-risk-tier-") as td:
+		tmp = Path(td)
+		files = {
+			"pr_diff": tmp / "pr_diff.patch",
+			"pr_changed": tmp / "pr_changed_files.txt",
+			"raw_pr_changed": tmp / "raw_pr_changed_files.txt",
+			"state": tmp / "risk_tier_state.txt",
+			"risk_tier": tmp / "reviewer_risk_tier.txt",
+			"active_models": tmp / "reviewer_active_models.txt",
+		}
+		files["pr_diff"].write_text(diff_text, encoding="utf-8")
+		visible_paths = current_changed_paths if current_changed_paths is not None else _diff_changed_paths(diff_text)
+		files["pr_changed"].write_text("\n".join(visible_paths) + ("\n" if visible_paths else ""), encoding="utf-8")
+		raw_paths = raw_changed_paths if raw_changed_paths is not None else visible_paths
+		files["raw_pr_changed"].write_text("\n".join(raw_paths) + ("\n" if raw_paths else ""), encoding="utf-8")
+
+		env = os.environ.copy()
+		env.update({
+			"SUPPORT_ROOT_DIR": str(REPO_ROOT),
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+			"RUNTIME_DIR": str(tmp),
+			"PR_NUMBER": "123",
+			"HAS_PR_DIFF": "true",
+			"REVIEWER_FILTER_ACTIVE": filter_active,
+			"REVIEWER_RISK_TIER_ENABLED": "true",
+			"REVIEWER_MODELS": "\n".join(_workflow_reviewer_models()) + "\n",
+			"REVIEWER_TIER_TRIVIAL_MODELS": "",
+			"REVIEWER_TIER_LITE_MODELS": "",
+			"PR_DIFF_FILE": str(files["pr_diff"]),
+			"PR_CHANGED_FILES_FILE": str(files["pr_changed"]),
+			"RAW_REVIEWER_PR_CHANGED_FILES_FILE": str(files["raw_pr_changed"]),
+			"STATE_FILE": str(files["state"]),
+		})
+		if extra_env:
+			env.update(extra_env)
+
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				f"{helper_block}\n"
+				"classify_reviewer_risk_tier\n"
+				"{\n"
+				"\tprintf 'REVIEWER_RISK_TIER=%s\\n' \"${REVIEWER_RISK_TIER}\"\n"
+				"\tprintf 'REVIEWER_RISK_TIER_FORCED_FULL=%s\\n' \"${REVIEWER_RISK_TIER_FORCED_FULL}\"\n"
+				"\tprintf 'REVIEWER_RISK_TIER_LOC=%s\\n' \"${REVIEWER_RISK_TIER_LOC}\"\n"
+				"\tprintf 'REVIEWER_RISK_TIER_FILES=%s\\n' \"${REVIEWER_RISK_TIER_FILES}\"\n"
+				"\tprintf 'REVIEWER_ACTIVE_MODELS_SOURCE=%s\\n' \"${REVIEWER_ACTIVE_MODELS_SOURCE}\"\n"
+				"} > \"${STATE_FILE}\"\n",
+			],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+		state: dict[str, str] = {}
+		for raw_line in files["state"].read_text(encoding="utf-8").splitlines():
+			if "=" not in raw_line:
+				continue
+			key, value = raw_line.split("=", 1)
+			state[key] = value
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			**state,
+			"risk_tier_file": files["risk_tier"].read_text(encoding="utf-8").strip(),
+			"active_models": files["active_models"].read_text(encoding="utf-8").splitlines(),
+		}
 
 
 def _run_reviewer_scope_harness(*, scope_mode: str, last_run_changed_text: str, ledger_text: str) -> dict[str, str]:
@@ -546,16 +681,63 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEW_LEDGER_PATH: ${{ vars.REVIEW_LEDGER_PATH || format('.ai/review_issue_ledger/pr-{0}.txt', inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number || '0') }}",
 		"REVIEW_REVIEWER_CHECKLIST_ENABLED: ${{ vars.REVIEW_REVIEWER_CHECKLIST_ENABLED || '1' }}",
 		"REVIEW_REVIEWER_ITERATION_SCOPING: ${{ vars.REVIEW_REVIEWER_ITERATION_SCOPING || '1' }}",
+		"REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}",
+		"REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}",
+		"REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}",
+		"REVIEWER_RISK_TIER_LITE_LOC: ${{ vars.REVIEWER_RISK_TIER_LITE_LOC || '100' }}",
+		"REVIEWER_RISK_TIER_LITE_FILES: ${{ vars.REVIEWER_RISK_TIER_LITE_FILES || '20' }}",
+		"REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX: ${{ vars.REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX || '^(scripts/|\\.github/workflows/|\\.github/ai/|prompts/|workflow-templates/|db/contracts/|ai-memory/)' }}",
+		"REVIEWER_TIER_TRIVIAL_MODELS: ${{ vars.REVIEWER_TIER_TRIVIAL_MODELS || '' }}",
+		"REVIEWER_TIER_LITE_MODELS: ${{ vars.REVIEWER_TIER_LITE_MODELS || '' }}",
 		"REVIEWER_FILTER_UNINTERESTING_ENABLED: ${{ vars.REVIEWER_FILTER_UNINTERESTING_ENABLED || 'false' }}",
 		"REVIEWER_FILTER_EXTRA_GLOBS: ${{ vars.REVIEWER_FILTER_EXTRA_GLOBS || '' }}",
 		"REVIEWER_FILTER_EXEMPT_GLOBS: ${{ vars.REVIEWER_FILTER_EXEMPT_GLOBS || 'db/contracts/**,**/migrations/**,**/migrate/**' }}",
 	):
 		assert expected in workflow, f"Missing codex-agent env wiring: {expected}"
 
+	for expected in (
+		"REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}",
+		"REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}",
+		"REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}",
+		"REVIEWER_RISK_TIER_LITE_LOC: ${{ vars.REVIEWER_RISK_TIER_LITE_LOC || '100' }}",
+		"REVIEWER_RISK_TIER_LITE_FILES: ${{ vars.REVIEWER_RISK_TIER_LITE_FILES || '20' }}",
+		"REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX: ${{ vars.REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX || '^(scripts/|\\.github/workflows/|\\.github/ai/|prompts/|workflow-templates/|db/contracts/|ai-memory/)' }}",
+		"REVIEWER_TIER_TRIVIAL_MODELS: ${{ vars.REVIEWER_TIER_TRIVIAL_MODELS || '' }}",
+		"REVIEWER_TIER_LITE_MODELS: ${{ vars.REVIEWER_TIER_LITE_MODELS || '' }}",
+	):
+		assert workflow.count(expected) >= 2, f"Missing workflow-level + codex-agent env wiring: {expected}"
+
 
 def test_review_filter_smoke_fixtures_are_present() -> None:
 	assert PHASE_A_ANTI_RULES_FIXTURE.exists(), f"missing fixture: {PHASE_A_ANTI_RULES_FIXTURE}"
 	assert PHASE_C_FILTER_FIXTURE.exists(), f"missing fixture: {PHASE_C_FILTER_FIXTURE}"
+	assert PHASE_B_RISK_TIER_TRIVIAL_FIXTURE.exists(), f"missing fixture: {PHASE_B_RISK_TIER_TRIVIAL_FIXTURE}"
+	assert PHASE_B_RISK_TIER_LITE_FIXTURE.exists(), f"missing fixture: {PHASE_B_RISK_TIER_LITE_FIXTURE}"
+	assert PHASE_B_RISK_TIER_FULL_FIXTURE.exists(), f"missing fixture: {PHASE_B_RISK_TIER_FULL_FIXTURE}"
+	assert PHASE_B_RISK_TIER_ALWAYS_FULL_FIXTURE.exists(), f"missing fixture: {PHASE_B_RISK_TIER_ALWAYS_FULL_FIXTURE}"
+
+
+def test_reviewer_risk_tier_classifier_honours_thresholds_and_always_full_regex() -> None:
+	reviewer_models = _workflow_reviewer_models()
+	assert len(reviewer_models) >= 2, "workflow reviewer list should provide default trivial/lite subsets"
+
+	for fixture, expected_tier, expected_models, expected_loc, expected_files, forced_full in (
+		(PHASE_B_RISK_TIER_TRIVIAL_FIXTURE, "trivial", reviewer_models[:1], "2", "1", "false"),
+		(PHASE_B_RISK_TIER_LITE_FIXTURE, "lite", reviewer_models[:2], "50", "1", "false"),
+		(PHASE_B_RISK_TIER_FULL_FIXTURE, "full", reviewer_models, "42", "21", "false"),
+		(PHASE_B_RISK_TIER_ALWAYS_FULL_FIXTURE, "full", reviewer_models, "2", "1", "true"),
+	):
+		result = _run_reviewer_risk_tier_harness(diff_text=fixture.read_text(encoding="utf-8"))
+		assert result["REVIEWER_RISK_TIER"] == expected_tier
+		assert result["risk_tier_file"] == expected_tier
+		assert result["active_models"] == expected_models
+		assert result["REVIEWER_RISK_TIER_LOC"] == expected_loc
+		assert result["REVIEWER_RISK_TIER_FILES"] == expected_files
+		assert result["REVIEWER_RISK_TIER_FORCED_FULL"] == forced_full
+		assert f"REVIEWER_RISK_TIER: tier={expected_tier}" in result["stdout"]
+
+	always_full_result = _run_reviewer_risk_tier_harness(diff_text=PHASE_B_RISK_TIER_ALWAYS_FULL_FIXTURE.read_text(encoding="utf-8"))
+	assert "matched_path=scripts/review_helper.sh" in always_full_result["stdout"]
 
 
 def test_review_filter_helper_wiring_is_flag_gated_and_fail_open() -> None:
@@ -1339,6 +1521,7 @@ def test_reviewer_iteration_scope_prepare_path_reports_missing_targeted_context_
 def main() -> int:
 	test_review_pipeline_knobs_are_wired_into_codex_agent_env()
 	test_review_filter_smoke_fixtures_are_present()
+	test_reviewer_risk_tier_classifier_honours_thresholds_and_always_full_regex()
 	test_review_filter_helper_wiring_is_flag_gated_and_fail_open()
 	test_reviewer_filter_harness_strips_low_signal_paths_and_preserves_exemptions()
 	test_reviewer_filter_script_preserves_nested_exempt_paths()
