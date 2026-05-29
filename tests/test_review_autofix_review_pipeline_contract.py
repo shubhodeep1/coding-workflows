@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import tempfile
+import textwrap
 from pathlib import Path
 
 
@@ -14,6 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 REVIEWERS = REPO_ROOT / "scripts" / "review_run_reviewers.sh"
 APPLY_FIXES = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
+AGENTS_MD_MATERIALITY = REPO_ROOT / "scripts" / "review_agents_md_materiality.sh"
 FIXTURES_DIR = REPO_ROOT / "scripts" / "fixtures" / "cloudflare-learnings"
 PHASE_A_ANTI_RULES_FIXTURE = FIXTURES_DIR / "phase-a-anti-rules-noisy-pr.patch"
 PHASE_B_RISK_TIER_TRIVIAL_FIXTURE = FIXTURES_DIR / "phase-b-risk-tier-trivial.patch"
@@ -21,6 +23,7 @@ PHASE_B_RISK_TIER_LITE_FIXTURE = FIXTURES_DIR / "phase-b-risk-tier-lite.patch"
 PHASE_B_RISK_TIER_FULL_FIXTURE = FIXTURES_DIR / "phase-b-risk-tier-full.patch"
 PHASE_B_RISK_TIER_ALWAYS_FULL_FIXTURE = FIXTURES_DIR / "phase-b-risk-tier-always-full.patch"
 PHASE_C_FILTER_FIXTURE = FIXTURES_DIR / "phase-c-lockfile-and-generated.patch"
+PHASE_D_MATERIALITY_FIXTURE = FIXTURES_DIR / "phase-d-package-bump-no-agents-update.patch"
 PHASE_G_FLAKY_REVIEWER_FIXTURE = FIXTURES_DIR / "phase-g-flaky-reviewer.patch"
 
 
@@ -135,6 +138,35 @@ def _diff_changed_paths(diff_text: str) -> list[str]:
 		seen.add(path)
 		paths.append(path)
 	return paths
+
+
+def _gate_agents_md_materiality_classifier_script() -> str:
+	gate_block = _step_block("Evaluate review gate").splitlines()
+	start_idx = -1
+	for idx, line in enumerate(gate_block):
+		if "gate_materiality_json" in line and "python3 - <<'PY'" in line:
+			start_idx = idx + 1
+			break
+	if start_idx < 0:
+		raise AssertionError("AGENTS.md materiality gate classifier heredoc not found")
+	body: list[str] = []
+	for line in gate_block[start_idx:]:
+		if line.strip() == "PY":
+			return textwrap.dedent("\n".join(body))
+		body.append(line)
+	raise AssertionError("AGENTS.md materiality gate classifier heredoc missing terminator")
+
+
+def _run_gate_agents_md_materiality_classifier(paths: list[str]) -> dict[str, object]:
+	result = subprocess.run(
+		["python3", "-c", _gate_agents_md_materiality_classifier_script()],
+		cwd=str(REPO_ROOT),
+		input=json.dumps([{"filename": path} for path in paths]),
+		check=True,
+		capture_output=True,
+		text=True,
+	)
+	return json.loads(result.stdout)
 
 
 def _phase_c_workspace_files() -> dict[str, str]:
@@ -450,6 +482,64 @@ def _run_reviewer_risk_tier_harness(
 			**state,
 			"risk_tier_file": files["risk_tier"].read_text(encoding="utf-8").strip(),
 			"active_models": files["active_models"].read_text(encoding="utf-8").splitlines(),
+		}
+
+
+def _run_agents_md_materiality_harness(
+	*,
+	diff_text: str,
+	changed_paths: list[str] | None = None,
+	workspace_files: dict[str, str] | None = None,
+	enabled: str = "true",
+) -> dict[str, object]:
+	with tempfile.TemporaryDirectory(prefix="agents-md-materiality-") as td:
+		tmp = Path(td)
+		workspace = tmp / "workspace"
+		workspace.mkdir()
+		files = {
+			"diff": tmp / "pr_diff.patch",
+			"changed": tmp / "pr_changed_files.txt",
+			"result": tmp / "agents_md_materiality_result.json",
+			"comment": tmp / "agents_md_materiality_comment.md",
+		}
+		files["diff"].write_text(diff_text, encoding="utf-8")
+		visible_paths = changed_paths if changed_paths is not None else _diff_changed_paths(diff_text)
+		files["changed"].write_text("\n".join(visible_paths) + ("\n" if visible_paths else ""), encoding="utf-8")
+
+		for rel_path, text in (workspace_files or {"agents.md": "# repo agents\n"}).items():
+			target = workspace / rel_path
+			target.parent.mkdir(parents=True, exist_ok=True)
+			target.write_text(text, encoding="utf-8")
+
+		result = subprocess.run(
+			["bash", str(AGENTS_MD_MATERIALITY)],
+			cwd=str(REPO_ROOT),
+			env={
+				**os.environ,
+				"AGENTS_MD_MATERIALITY_ENABLED": enabled,
+				"AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED": "0",
+				"AGENTS_MD_MATERIALITY_MODEL": "openai/gpt-5.4-mini",
+				"AGENTS_MD_MATERIALITY_REASONING": "medium",
+				"AGENTS_MD_MATERIALITY_RESULT_FILE": str(files["result"]),
+				"AGENTS_MD_MATERIALITY_COMMENT_FILE": str(files["comment"]),
+				"PR_CHANGED_FILES_FILE": str(files["changed"]),
+				"PR_DIFF_FILE": str(files["diff"]),
+				"GITHUB_WORKSPACE": str(workspace),
+				"REPOSITORY": "octo/example",
+				"PR_NUMBER": "123",
+				"GITHUB_SERVER_URL": "https://github.com",
+				"GITHUB_RUN_ID": "456",
+				"BASE_BRANCH": "main",
+			},
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			"result": json.loads(files["result"].read_text(encoding="utf-8")),
+			"comment": files["comment"].read_text(encoding="utf-8"),
 		}
 
 
@@ -971,6 +1061,10 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEWER_FILTER_UNINTERESTING_ENABLED: ${{ vars.REVIEWER_FILTER_UNINTERESTING_ENABLED || 'false' }}",
 		"REVIEWER_FILTER_EXTRA_GLOBS: ${{ vars.REVIEWER_FILTER_EXTRA_GLOBS || '' }}",
 		"REVIEWER_FILTER_EXEMPT_GLOBS: ${{ vars.REVIEWER_FILTER_EXEMPT_GLOBS || 'db/contracts/**,**/migrations/**,**/migrate/**' }}",
+		"AGENTS_MD_MATERIALITY_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_ENABLED || '0' }}",
+		"AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED || '0' }}",
+		"AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-5.4-mini' }}",
+		"AGENTS_MD_MATERIALITY_REASONING: ${{ vars.AGENTS_MD_MATERIALITY_REASONING || 'medium' }}",
 	):
 		assert expected in workflow, f"Missing codex-agent env wiring: {expected}"
 
@@ -987,6 +1081,10 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEWER_FAILBACK_MAX_RETRIES: ${{ vars.REVIEWER_FAILBACK_MAX_RETRIES || '1' }}",
 		"REVIEWER_HEALTH_OPEN_THRESHOLD: ${{ vars.REVIEWER_HEALTH_OPEN_THRESHOLD || '3' }}",
 		"REVIEWER_HEALTH_OPEN_TTL_SECS: ${{ vars.REVIEWER_HEALTH_OPEN_TTL_SECS || '1800' }}",
+		"AGENTS_MD_MATERIALITY_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_ENABLED || '0' }}",
+		"AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED || '0' }}",
+		"AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-5.4-mini' }}",
+		"AGENTS_MD_MATERIALITY_REASONING: ${{ vars.AGENTS_MD_MATERIALITY_REASONING || 'medium' }}",
 	):
 		assert workflow.count(expected) >= 2, f"Missing workflow-level + codex-agent env wiring: {expected}"
 
@@ -998,6 +1096,7 @@ def test_review_filter_smoke_fixtures_are_present() -> None:
 	assert PHASE_B_RISK_TIER_LITE_FIXTURE.exists(), f"missing fixture: {PHASE_B_RISK_TIER_LITE_FIXTURE}"
 	assert PHASE_B_RISK_TIER_FULL_FIXTURE.exists(), f"missing fixture: {PHASE_B_RISK_TIER_FULL_FIXTURE}"
 	assert PHASE_B_RISK_TIER_ALWAYS_FULL_FIXTURE.exists(), f"missing fixture: {PHASE_B_RISK_TIER_ALWAYS_FULL_FIXTURE}"
+	assert PHASE_D_MATERIALITY_FIXTURE.exists(), f"missing fixture: {PHASE_D_MATERIALITY_FIXTURE}"
 	assert PHASE_G_FLAKY_REVIEWER_FIXTURE.exists(), f"missing fixture: {PHASE_G_FLAKY_REVIEWER_FIXTURE}"
 
 
@@ -1043,6 +1142,77 @@ def test_review_filter_helper_wiring_is_flag_gated_and_fail_open() -> None:
 	assert 'prepare_reviewer_filtered_artifacts' in reviewers
 	assert 'REVIEWER_FILTER_SKIP:' in reviewers
 	assert 'review_filter_uninteresting_files.sh unavailable' in reviewers
+
+
+def test_agents_md_materiality_classifier_and_workflow_wiring() -> None:
+	positive = _run_agents_md_materiality_harness(
+		diff_text=PHASE_D_MATERIALITY_FIXTURE.read_text(encoding="utf-8"),
+		workspace_files={"agents.md": "# repo agents\n"},
+	)
+	positive_result = positive["result"]
+	assert positive_result["materiality"] == "high"
+	assert positive_result["advisory_required"] is True
+	assert positive_result["agents_md_changed"] is False
+	assert "## AI Materiality Advisory" in positive["comment"]
+	assert "`package.json`" in positive["comment"]
+	assert "informational only" in positive["comment"]
+	assert "AGENTS_MD_MATERIALITY: materiality=high advisory=true" in positive["stdout"]
+
+	satisfied = _run_agents_md_materiality_harness(
+		diff_text=PHASE_D_MATERIALITY_FIXTURE.read_text(encoding="utf-8"),
+		changed_paths=["package.json", "agents.md"],
+		workspace_files={"agents.md": "# repo agents\n"},
+	)
+	satisfied_result = satisfied["result"]
+	assert satisfied_result["materiality"] == "high"
+	assert satisfied_result["advisory_required"] is False
+	assert satisfied_result["agents_md_changed"] is True
+	assert satisfied_result["reason"] == "agents_md_changed"
+	assert satisfied["comment"] == ""
+
+	low = _run_agents_md_materiality_harness(
+		diff_text=PHASE_B_RISK_TIER_TRIVIAL_FIXTURE.read_text(encoding="utf-8"),
+		workspace_files={"agents.md": "# repo agents\n"},
+	)
+	low_result = low["result"]
+	assert low_result["materiality"] == "low"
+	assert low_result["advisory_required"] is False
+	assert low_result["reason"] == "low_materiality"
+	assert low["comment"] == ""
+
+	gate_docs_client = _run_gate_agents_md_materiality_classifier(["docs/client.js"])
+	assert gate_docs_client["materiality"] == "low"
+	assert gate_docs_client["agents_md_changed"] is False
+
+	gate_api_client = _run_gate_agents_md_materiality_classifier(["sdk/client.go"])
+	assert gate_api_client["materiality"] == "medium"
+	assert gate_api_client["agents_md_changed"] is False
+
+	workflow = _workflow_text()
+	stage_block = _step_block("Stage workflow support files")
+	preflight_block = _step_block('"Preflight: Verify required files before reviewer invocation"')
+	reviewer_block = _step_block("Run reviewer models")
+	advisory_block = _step_block("Post AI Materiality Advisory comment")
+	gate_block = _step_block("Evaluate review gate")
+
+	assert "AGENTS_MD_MATERIALITY_RESULT_FILE=${RUNTIME_DIR}/agents_md_materiality_result.json" in workflow
+	assert "AGENTS_MD_MATERIALITY_COMMENT_FILE=${RUNTIME_DIR}/agents_md_materiality_comment.md" in workflow
+	assert 'if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh" ]; then' in stage_block
+	assert 'src=".codex-workflow-src/scripts/review_agents_md_materiality.sh"' in stage_block
+	assert 'src=".codex-workflow-src-main/scripts/review_agents_md_materiality.sh"' in stage_block
+	assert 'install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh"' in stage_block
+	assert 'review_agents_md_materiality.sh not found in checked-out support sources' in stage_block
+	assert 'check_soft_file "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh"' in preflight_block
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh" &' in reviewer_block
+	assert 'materiality_pid="$!"' in reviewer_block
+	assert 'AGENTS_MD_MATERIALITY_ENABLED:-0' in reviewer_block
+	assert "continue-on-error: true" in advisory_block
+	assert "AGENTS_MD_MATERIALITY_RESULT_FILE" in advisory_block
+	assert "PR_ISSUE_COMMENTS_FILE" in advisory_block
+	assert 'issues/comments/${existing_comment_id}' in advisory_block
+	assert 'issues/${PR_NUMBER}/comments' in advisory_block
+	assert 'AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=agents_md_materiality' in gate_block
+	assert 'AGENTS_MD_MATERIALITY_ENABLED:-0' in gate_block
 
 
 def test_reviewer_failback_wiring_stages_asset_and_restores_cache_before_reviewers() -> None:
@@ -1879,6 +2049,7 @@ def main() -> int:
 	test_review_filter_smoke_fixtures_are_present()
 	test_reviewer_risk_tier_classifier_honours_thresholds_and_always_full_regex()
 	test_review_filter_helper_wiring_is_flag_gated_and_fail_open()
+	test_agents_md_materiality_classifier_and_workflow_wiring()
 	test_reviewer_failback_wiring_stages_asset_and_restores_cache_before_reviewers()
 	test_reviewer_failback_harness_reuses_cached_open_state_and_skips_unmapped_models()
 	test_reviewer_health_dispatch_logs_to_stderr_only()
