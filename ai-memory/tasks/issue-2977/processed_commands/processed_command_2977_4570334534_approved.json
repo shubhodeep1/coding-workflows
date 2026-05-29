@@ -5,13 +5,33 @@
   "entry_id": "processed_command_2977_4570334534_approved",
   "issue_number": 2977,
   "metadata": {
+    "branch": "ai/issue-2977",
+    "changed_files": [
+      ".github/workflows/clarify.yml",
+      ".github/workflows/implement.yml",
+      ".github/workflows/plan.yml",
+      "prompts/mode-clarify.txt",
+      "prompts/mode-implement.txt",
+      "prompts/mode-plan.txt",
+      "prompts/mode-validate-diagnose.txt",
+      "prompts/mode-validate-discover.txt",
+      "prompts/mode-validate-fix-harness.txt",
+      "prompts/mode-validate-generate.txt",
+      "prompts/mode-validate-self-heal.txt",
+      "tests/test_phase_prompt_untrusted_context_contract.py"
+    ],
+    "issue_number": 2977,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/2977",
+    "pr_number": 2978,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/2978",
+    "run_attempt": "1",
+    "run_id": "26616863983",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/26616863983"
   },
   "run_attempt": 1,
   "run_id": "26616863983",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-05-29T03:52:54Z",
+  "status": "completed",
+  "timestamp": "2026-05-29T03:58:26Z",
   "workflow": "implement"
 }
