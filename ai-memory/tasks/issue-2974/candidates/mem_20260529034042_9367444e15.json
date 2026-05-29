@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Implement the AI code review learnings plan and archive it only after a full completion audit\",\"issues\":[{\"id\":\"review-noise-reduction\",\"title\":\"Reduce reviewer noise with anti-rules and uninteresting-file filtering\",\"priority\":1},{\"id\":\"review-surface-prompt-hardening\",\"title\":\"Fence untrusted review inputs in consolidator, review-blocked judge, and resolver prompts\",\"priority\":1},{\"id\":\"cross-phase-prompt-hardening\",\"title\":\"Audit clarify/plan/implement/validate prompts for missing UNTRUSTED fences\",\"priority\":2},{\"id\":\"reviewer-risk-tiers\",\"title\":\"Add reviewer risk tiers that gate model fan-out\",\"priority\":2},{\"id\":\"reviewer-failback-and-health\",\"title\":\"Add per-reviewer failback and cached health-state circuit breaker\",\"priority\":3},{\"id\":\"agents-materiality-advisory\",\"title\":\"Add deterministic AGENTS.md materiality advisory to review_autofix\",\"priority\":3},{\"id\":\"ledger-rereview-and-approval-rubric\",\"title\":\"Make re-review ledger-aware and add approval-rubric / break-glass handling\",\"priority\":2},{\"id\":\"codex-heartbeat-logging\",\"title\":\"Add CODEX_HEARTBEAT logging to long-running review and validation Codex calls\",\"priority\":4},{\"id\":\"review-telemetry-surfacing\",\"title\":\"Surface review cost/latency metrics and budget warnings in workflow-log-analysis\",\"priority\":4},{\"id\":\"review-learnings-docs-and-plan-archive\",\"title\":\"Audit plan completion, update docs, and archive the plan only when fully implemented\",\"priority\":5}],\"dependency_edges\":[{\"from\":\"review-noise-reduction\",\"to\":\"reviewer-risk-tiers\"},{\"from\":\"reviewer-risk-tiers\",\"to\":\"reviewer-failback-and-health\"},{\"from\":\"reviewer-failback-and-health\",\"to\":\"agents-materiality-advisory\"},{\"from\":\"review-surface-prompt-hardening\",\"to\":\"ledger-rereview-and-approval-rubric\"},{\"from\":\"agents-materiality-advisory\",\"to\":\"ledger-rereview-and-approval-rubric\"},{\"from\":\"ledger-rereview-and-approval-rubric\",\"to\":\"codex-heartbeat-logging\"},{\"from\":\"codex-heartbeat-logging\",\"to\":\"review-telemetry-surfacing\"},{\"from\":\"review-noise-reduction\",\"to\":\"review-learnings-docs-and-plan-archive\"},{\"from\":\"review-surface-prompt-hardening\",\"to\":\"review-learnings-docs-and-plan-archive\"},{\"from\":\"cross-phase-prompt-hardening\",\"to\":\"review-learnings-docs-and-plan-archive\"},{\"from\":\"reviewer-risk-tiers\",\"to\":\"review-learnings-docs-and-plan-archive\"},{\"from\":\"reviewer-failback-and-health\",\"to\":\"review-learnings-docs-and-plan-archive\"},{\"from\":\"agents-materiality-advisory\",\"to\":\"review-learnings-docs-and-plan-archive\"},{\"from\":\"ledger-rereview-and-approval-rubric\",\"to\":\"review-learnings-docs-and-plan-archive\"},{\"from\":\"codex-heartbeat-logging\",\"to\":\"review-learnings-docs-and-plan-archive\"},{\"from\":\"review-telemetry-surfacing\",\"to\":\"review-learnings-docs-and-plan-archive\"}]}",
+  "fingerprint": "26c68df25af30d08328c396ff0778d40a9df344dafce3e91e00c48a8c9d30d82",
+  "lineage": {
+    "issue_number": 2974,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26615965741",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26615965741",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260529034042_9367444e15",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2974,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26615965741"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Implement the AI code review learnings plan and archive it only after a full completion audit' into 10 issues (tracking #2974)",
+  "timestamps": {
+    "created_at": "2026-05-29T03:40:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
