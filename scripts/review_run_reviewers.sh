@@ -128,7 +128,7 @@ run_cache_probe() {
 	esac
 
 	local probe_model
-	probe_model="$(printf '%s\n' "${REVIEWER_MODELS}" | sed '/^$/d' | head -n1)"
+  probe_model="$(get_active_reviewer_models_text | head -n1)"
   if [ -z "${probe_model}" ]; then
     return 0
   fi
@@ -483,6 +483,317 @@ prepare_reviewer_filtered_artifacts() {
 # ── End reviewer uninteresting-file filter helpers ──────────────────
 
 prepare_reviewer_filtered_artifacts
+
+# ── Reviewer risk-tier helpers ───────────────────────────────────────
+REVIEWER_RISK_TIER_FILE="${RUNTIME_DIR}/reviewer_risk_tier.txt"
+REVIEWER_ACTIVE_MODELS_FILE="${RUNTIME_DIR}/reviewer_active_models.txt"
+REVIEWER_RISK_TIER="full"
+REVIEWER_RISK_TIER_FORCED_FULL=false
+REVIEWER_RISK_TIER_LOC=0
+REVIEWER_RISK_TIER_FILES=0
+REVIEWER_ACTIVE_MODELS_SOURCE="full"
+
+reviewer_parse_positive_int_env() {
+  local key="$1"
+  local default_value="$2"
+  local raw_value="${!key:-${default_value}}"
+  local normalized_value
+
+  if [[ "${raw_value}" =~ ^[0-9]+$ ]]; then
+    normalized_value="$(printf '%s' "${raw_value}" | sed -E 's/^0+//')"
+    if [ -z "${normalized_value}" ]; then
+      normalized_value=0
+    fi
+    printf '%s\n' "${normalized_value}"
+    return 0
+  fi
+
+  echo "::warning::Invalid ${key}='${raw_value}'. Falling back to ${default_value}." >&2
+  printf '%s\n' "${default_value}"
+}
+
+reviewer_count_diff_loc() {
+  local diff_file="$1"
+
+  if [ ! -s "${diff_file}" ]; then
+    printf '0\n'
+    return 0
+  fi
+
+  awk '/^[+-]{3} / { next } /^[+-]/ { n++ } END { print n+0 }' "${diff_file}" 2>/dev/null || printf '0\n'
+}
+
+reviewer_count_paths_file() {
+  local paths_file="$1"
+
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
+    "$paths_file" <<'PY'
+from pathlib import Path
+import sys
+
+try:
+	from targeted_file_context import parse_paths_file
+except ModuleNotFoundError:
+	from scripts.targeted_file_context import parse_paths_file
+
+paths_file = Path(sys.argv[1])
+if not paths_file.is_file():
+	print(0)
+	sys.exit(0)
+
+print(len(parse_paths_file(str(paths_file))))
+PY
+}
+
+reviewer_any_path_matches_regex() {
+  local paths_file="$1"
+  local pattern="$2"
+
+  PYTHONDONTWRITEBYTECODE=1 python3 - "$paths_file" "$pattern" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+paths_file = Path(sys.argv[1])
+pattern = sys.argv[2]
+
+try:
+	regex = re.compile(pattern)
+except re.error as exc:
+	print(exc, file=sys.stderr)
+	sys.exit(2)
+
+if not paths_file.is_file():
+	sys.exit(1)
+
+for raw_line in paths_file.read_text(encoding="utf-8", errors="replace").splitlines():
+	if not raw_line.strip():
+		continue
+	path = raw_line.split("\t", 1)[0].strip()
+	if regex.search(path):
+		print(path)
+		sys.exit(0)
+
+sys.exit(1)
+PY
+}
+
+normalize_reviewer_model_list() {
+  local raw_list="$1"
+
+  printf '%s\n' "${raw_list}" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | sed '/^$/d'
+}
+
+reviewer_write_model_list_file() {
+  local output_file="$1"
+  shift || true
+
+  : > "${output_file}"
+  if [ "$#" -eq 0 ]; then
+    return 0
+  fi
+
+  printf '%s\n' "$@" > "${output_file}"
+}
+
+get_active_reviewer_models_text() {
+  if [ -s "${REVIEWER_ACTIVE_MODELS_FILE}" ]; then
+    cat "${REVIEWER_ACTIVE_MODELS_FILE}"
+  else
+    normalize_reviewer_model_list "${REVIEWER_MODELS}"
+  fi
+}
+
+resolve_active_reviewer_models() {
+  local tier="$1"
+  local selected_raw=""
+  local selected_display=""
+  local model
+  local -A live_models_map=()
+  local -A resolved_models_seen=()
+  local -a live_models=()
+  local -a resolved_models=()
+
+  REVIEWER_ACTIVE_MODELS_SOURCE="full"
+
+  while IFS= read -r model; do
+    [ -z "${model}" ] && continue
+    live_models+=("${model}")
+    live_models_map["${model}"]=1
+  done <<< "$(normalize_reviewer_model_list "${REVIEWER_MODELS}")"
+
+  if [ "${#live_models[@]}" -eq 0 ]; then
+    reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}"
+    REVIEWER_ACTIVE_MODELS_SOURCE="empty_live"
+    return 1
+  fi
+
+  case "${tier}" in
+    trivial)
+      selected_raw="${REVIEWER_TIER_TRIVIAL_MODELS:-}"
+      if [ -z "${selected_raw}" ]; then
+        reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "${live_models[0]}"
+        REVIEWER_ACTIVE_MODELS_SOURCE="default_trivial"
+        return 0
+      fi
+      ;;
+    lite)
+      selected_raw="${REVIEWER_TIER_LITE_MODELS:-}"
+      if [ -z "${selected_raw}" ]; then
+        if [ "${#live_models[@]}" -ge 2 ]; then
+          reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "${live_models[0]}" "${live_models[1]}"
+        else
+          reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "${live_models[0]}"
+        fi
+        REVIEWER_ACTIVE_MODELS_SOURCE="default_lite"
+        return 0
+      fi
+      ;;
+    *)
+      reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "${live_models[@]}"
+      REVIEWER_ACTIVE_MODELS_SOURCE="full"
+      return 0
+      ;;
+  esac
+
+  while IFS= read -r model; do
+    [ -z "${model}" ] && continue
+    if [ -z "${live_models_map[${model}]:-}" ]; then
+      echo "::warning::Ignoring unknown reviewer tier model '${model}' for tier ${tier}." >&2
+      continue
+    fi
+    if [ -n "${resolved_models_seen[${model}]:-}" ]; then
+      continue
+    fi
+    resolved_models+=("${model}")
+    resolved_models_seen["${model}"]=1
+  done <<< "$(normalize_reviewer_model_list "${selected_raw}")"
+
+  if [ "${#resolved_models[@]}" -eq 0 ]; then
+    selected_display="$(printf '%s' "${selected_raw}" | tr '\n' ',' | sed 's/,$//')"
+    [ -n "${selected_display}" ] || selected_display="(empty)"
+    echo "::warning::Reviewer tier ${tier} resolved zero configured models from '${selected_display}'. Failing open to full reviewer set." >&2
+    reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "${live_models[@]}"
+    REVIEWER_ACTIVE_MODELS_SOURCE="fallback_full_empty_subset"
+    return 0
+  fi
+
+  reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "${resolved_models[@]}"
+  REVIEWER_ACTIVE_MODELS_SOURCE="configured_${tier}"
+}
+
+classify_reviewer_risk_tier() {
+  local enabled=false
+  local enabled_raw
+  local has_pr_diff_raw
+  local reason="disabled"
+  local matched_sensitive_path=""
+  local reviewer_count=0
+  local current_tier
+
+  enabled_raw="$(printf '%s' "${REVIEWER_RISK_TIER_ENABLED:-0}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+  case "${enabled_raw}" in
+    1|true|yes|on) enabled=true ;;
+  esac
+
+  REVIEWER_RISK_TIER="full"
+  REVIEWER_RISK_TIER_FORCED_FULL=false
+  REVIEWER_RISK_TIER_LOC=0
+  REVIEWER_RISK_TIER_FILES=0
+
+  if [ "${enabled}" = "true" ]; then
+    local trivial_loc trivial_files lite_loc lite_files always_full_regex file_count
+    trivial_loc="$(reviewer_parse_positive_int_env REVIEWER_RISK_TIER_TRIVIAL_LOC 10)"
+    trivial_files="$(reviewer_parse_positive_int_env REVIEWER_RISK_TIER_TRIVIAL_FILES 20)"
+    lite_loc="$(reviewer_parse_positive_int_env REVIEWER_RISK_TIER_LITE_LOC 100)"
+    lite_files="$(reviewer_parse_positive_int_env REVIEWER_RISK_TIER_LITE_FILES 20)"
+    always_full_regex="${REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX:-^(scripts/|\.github/workflows/|\.github/ai/|prompts/|workflow-templates/|db/contracts/|ai-memory/)}"
+    has_pr_diff_raw="$(printf '%s' "${HAS_PR_DIFF:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+
+    if [ -z "${PR_NUMBER:-}" ]; then
+      reason="no_pr_number"
+    elif [ ! -s "${RAW_REVIEWER_PR_CHANGED_FILES_FILE}" ]; then
+      reason="changed_files_unavailable"
+    elif [ "${REVIEWER_FILTER_ACTIVE}" != "true" ] && [ ! -s "${PR_CHANGED_FILES_FILE}" ]; then
+      reason="changed_files_unavailable"
+    elif [[ "${has_pr_diff_raw}" == "0" || "${has_pr_diff_raw}" == "false" || "${has_pr_diff_raw}" == "no" || "${has_pr_diff_raw}" == "off" ]]; then
+      reason="pr_diff_unavailable"
+    else
+      REVIEWER_RISK_TIER_LOC="$(reviewer_count_diff_loc "${PR_DIFF_FILE}")"
+      if ! file_count="$(reviewer_count_paths_file "${PR_CHANGED_FILES_FILE}")"; then
+        echo "::warning::Failed to count reviewer-visible changed files from ${PR_CHANGED_FILES_FILE}; failing open to full reviewer tier." >&2
+        REVIEWER_RISK_TIER_FORCED_FULL=true
+        reason="changed_files_count_failed"
+      else
+        REVIEWER_RISK_TIER_FILES="${file_count}"
+        current_tier="full"
+
+        if matched_sensitive_path="$(reviewer_any_path_matches_regex "${RAW_REVIEWER_PR_CHANGED_FILES_FILE}" "${always_full_regex}" 2>&1)"; then
+          REVIEWER_RISK_TIER_FORCED_FULL=true
+          current_tier="full"
+          reason="always_full_regex"
+        else
+          case "$?" in
+            1)
+              if [ "${REVIEWER_RISK_TIER_LOC}" -le "${trivial_loc}" ] && [ "${REVIEWER_RISK_TIER_FILES}" -le "${trivial_files}" ]; then
+                current_tier="trivial"
+                reason="within_trivial_thresholds"
+              elif [ "${REVIEWER_RISK_TIER_LOC}" -le "${lite_loc}" ] && [ "${REVIEWER_RISK_TIER_FILES}" -le "${lite_files}" ]; then
+                current_tier="lite"
+                reason="within_lite_thresholds"
+              else
+                current_tier="full"
+                reason="threshold_exceeded"
+              fi
+              matched_sensitive_path=""
+              ;;
+            2)
+              echo "::warning::Invalid REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX='${always_full_regex}'. Failing safe to full reviewer tier." >&2
+              REVIEWER_RISK_TIER_FORCED_FULL=true
+              current_tier="full"
+              reason="invalid_always_full_regex"
+              matched_sensitive_path=""
+              ;;
+            *)
+              echo "::warning::Failed to evaluate REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX against ${RAW_REVIEWER_PR_CHANGED_FILES_FILE}; failing open to full reviewer tier." >&2
+              REVIEWER_RISK_TIER_FORCED_FULL=true
+              current_tier="full"
+              reason="always_full_check_failed"
+              matched_sensitive_path=""
+              ;;
+          esac
+        fi
+
+        REVIEWER_RISK_TIER="${current_tier}"
+      fi
+    fi
+  fi
+
+  resolve_active_reviewer_models "${REVIEWER_RISK_TIER}" || true
+  case "${REVIEWER_ACTIVE_MODELS_SOURCE}" in
+    fallback_full_empty_subset)
+      REVIEWER_RISK_TIER="full"
+      REVIEWER_RISK_TIER_FORCED_FULL=true
+      reason="empty_tier_subset"
+      ;;
+    empty_live)
+      REVIEWER_RISK_TIER="full"
+      REVIEWER_RISK_TIER_FORCED_FULL=true
+      reason="no_live_models"
+      ;;
+  esac
+
+  printf '%s\n' "${REVIEWER_RISK_TIER}" > "${REVIEWER_RISK_TIER_FILE}"
+  reviewer_count="$(wc -l < "${REVIEWER_ACTIVE_MODELS_FILE}" 2>/dev/null || echo 0)"
+  if [ -n "${matched_sensitive_path}" ]; then
+    echo "REVIEWER_RISK_TIER: tier=${REVIEWER_RISK_TIER} loc=${REVIEWER_RISK_TIER_LOC} files=${REVIEWER_RISK_TIER_FILES} forced_full=${REVIEWER_RISK_TIER_FORCED_FULL} reviewers=${reviewer_count} enabled=${enabled} reason=${reason} matched_path=${matched_sensitive_path}"
+  else
+    echo "REVIEWER_RISK_TIER: tier=${REVIEWER_RISK_TIER} loc=${REVIEWER_RISK_TIER_LOC} files=${REVIEWER_RISK_TIER_FILES} forced_full=${REVIEWER_RISK_TIER_FORCED_FULL} reviewers=${reviewer_count} enabled=${enabled} reason=${reason}"
+  fi
+}
+# ── End reviewer risk-tier helpers ───────────────────────────────────
+
+classify_reviewer_risk_tier
 
 # ── Reviewer iteration-scoping helpers ───────────────────────────────
 write_reviewer_scope_summary() {
@@ -1887,7 +2198,7 @@ case "$(printf '%s' "${ENABLE_REVIEWER_TWO_PASS:-true}" | tr '[:upper:]' '[:lowe
   0|false|no|off) TWO_PASS_ENABLED=false ;;
 esac
 
-# Helper: fan out all reviewer models in parallel for a given pass.
+# Helper: fan out the active reviewer model set in parallel for a given pass.
 # Args: $1=output_prefix  $2=prompt_file  $3=reasoning_level_override (optional)
 run_reviewer_pass() {
   local pass_prefix="$1"
@@ -1907,7 +2218,7 @@ run_reviewer_pass() {
     pass_log_files+=("${PREVIOUS_REVIEWS_DIR}/${pass_prefix}_${safe_name}.log")
     run_reviewer "${model}" "${safe_name}" "${pass_prefix}" "${pass_prompt}" "${pass_reasoning}" >&2 &
     pass_pids+=("$!")
-  done <<< "${REVIEWER_MODELS}"
+  done <<< "$(get_active_reviewer_models_text)"
 
   if [ "${#pass_pids[@]}" -eq 0 ]; then
     echo "No reviewer models configured." >&2
