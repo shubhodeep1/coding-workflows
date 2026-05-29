@@ -320,7 +320,18 @@ def extract_stat_path(raw_line: str) -> str | None:
 	if not left:
 		return None
 	if " => " in left:
-		left = left.rsplit(" => ", 1)[1].strip()
+		if "{" in left and "}" in left:
+			prefix, rest = left.split("{", 1)
+			brace_content, suffix = rest.split("}", 1)
+			if " => " in brace_content:
+				_, new_part = brace_content.split(" => ", 1)
+				left = f"{prefix}{new_part.strip()}{suffix}"
+				while "//" in left:
+					left = left.replace("//", "/")
+			else:
+				left = left.rsplit(" => ", 1)[1].strip()
+		else:
+			left = left.rsplit(" => ", 1)[1].strip()
 	return normalize_path(left)
 
 kept_lines: list[str] = []
