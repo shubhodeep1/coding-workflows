@@ -680,6 +680,24 @@ def test_reviewer_filter_script_strips_deleted_generated_file_when_workspace_cop
 	assert result["skipped_paths"] == "src/generated/deleted_client.ts\tgenerated-marker:/* eslint-disable */\n"
 
 
+def test_reviewer_filter_script_keeps_deleted_file_when_first_hunk_starts_later() -> None:
+	diff_text = "\n".join([
+		"diff --git a/src/generated/deleted_client.ts b/src/generated/deleted_client.ts",
+		"deleted file mode 100644",
+		"index 1111111..0000000",
+		"--- a/src/generated/deleted_client.ts",
+		"+++ /dev/null",
+		"@@ -10,2 +0,0 @@",
+		"-/* eslint-disable */",
+		"-export const endpoint = '/v1';",
+	]) + "\n"
+	result = _run_uninteresting_filter_script(diff_text=diff_text, workspace_files={})
+
+	assert result["output_diff"] == diff_text
+	assert result["kept_paths"] == "src/generated/deleted_client.ts\n"
+	assert result["skipped_paths"] == ""
+
+
 def test_reviewer_filter_harness_fails_open_when_disabled_missing_or_failing() -> None:
 	disabled = _run_reviewer_filter_harness(filter_enabled="false", helper_mode="repo")
 	assert disabled["REVIEWER_FILTER_ACTIVE"] == "false"
@@ -1106,6 +1124,7 @@ def main() -> int:
 	test_reviewer_filter_harness_strips_low_signal_paths_and_preserves_exemptions()
 	test_reviewer_filter_script_preserves_nested_exempt_paths()
 	test_reviewer_filter_script_strips_deleted_generated_file_when_workspace_copy_is_missing()
+	test_reviewer_filter_script_keeps_deleted_file_when_first_hunk_starts_later()
 	test_reviewer_filter_harness_fails_open_when_disabled_missing_or_failing()
 	test_reviewer_filter_stat_harness_handles_brace_expansion_renames()
 	test_reject_verifier_bootstrap_and_stage_order_contract()

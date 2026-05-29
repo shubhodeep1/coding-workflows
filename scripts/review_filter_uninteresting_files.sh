@@ -35,6 +35,7 @@ GENERATED_MARKERS: list[tuple[str, str]] = [
 ]
 GENERATED_MARKER_SCAN_BYTES = 4096
 DIFF_HEADER_RE = re.compile(r"^diff --git a/(.+?) b/(.+)$")
+HUNK_HEADER_RE = re.compile(r"^@@ -(?P<old_start>\d+)(?:,\d+)? \+(?P<new_start>\d+)(?:,\d+)? @@")
 
 
 def parse_csv(value: str) -> list[str]:
@@ -70,9 +71,18 @@ def detect_generated_marker(repo_root: Path, rel_path: str) -> str | None:
 	return None
 
 
+def hunk_starts_at_file_top(header: str) -> bool:
+	match = HUNK_HEADER_RE.match(header.rstrip("\n"))
+	if not match:
+		return False
+	old_start = int(match.group("old_start"))
+	new_start = int(match.group("new_start"))
+	return old_start <= 1 and new_start <= 1 and (old_start == 1 or new_start == 1)
+
+
 def detect_generated_marker_in_block(block: list[str]) -> str | None:
 	first_hunk_header = next((line for line in block if line.startswith("@@")), None)
-	if not first_hunk_header or not first_hunk_header.startswith("@@ -1"):
+	if not first_hunk_header or not hunk_starts_at_file_top(first_hunk_header):
 		return None
 	scanned: list[str] = []
 	total = 0
