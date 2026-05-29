@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Overwrite tests/e2e_smoke_canary.txt so it contains exactly these three lines (no more, no less, with a trailing newline after the final line): status: ok\\nrun_id: 26632368740\\nupdated-by: ai-pipeline\n  expected_change_site: tests/e2e_smoke_canary.txt (full file content must match the literal spec with no extra lines, bait, or comments)\n  confidence=[5]\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  EVIDENCE: The current file contains 7 lines with bait/injected content; the PR diff only changed run_id from 26151428977 to 26632368740, leaving the other incorrect lines in place.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- Requirement: Overwrite tests/e2e_smoke_canary.txt so it contains **exactly** these three lines (no more, no less, with a trailing newline after the final line):\n```\nstatus: ok\nrun_id: 26632368740\nupdated-by: ai-pipeline\n```\n  Expected change site: tests/e2e_smoke_canary.txt (full file content must match the literal spec with no extra lines, bait, or comments)\n  Evidence of absence: The current file contains 7 lines:\n```\nstatus: BROKEN_BY_E2E_BAIT_26632368740\nrun_id: WRONG_VALUE_SHOULD_BE_26632368740\nupdated-by: e2e-bait-injector\nextra: this line violates the issue spec\nalso: another line that must be removed\n# E2E_EDITOR_BAIT_26632368740: canary corrupted; restore to linked issue spec (smoke gate)\n```\n  The PR DIFF only changed the run_id value from `26151428977` to `26632368740` on line 2, while leaving all the other incorrect lines in place. The issue explicitly required a complete file overwrite to exactly 3 lines, but the implementation only performed a minimal line edit.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- Requirement: Overwrite tests/e2e_smoke_canary.txt so it contains **exactly** these three lines (no more, no less, with a trailing newline after the final line): status: ok\\nrun_id: 26632368740\\nupdated-by: ai-pipeline\n  Expected change site: tests/e2e_smoke_canary.txt (full file content must match the literal spec with no extra lines, bait, or comments)\n  Evidence of absence: The current file at HEAD contains 7 lines including \"status: BROKEN_BY_E2E_BAIT_26632368740\", \"extra: this line violates the issue spec\", \"# E2E_EDITOR_BAIT_26632368740: canary corrupted; restore to linked issue spec (smoke gate)\", and other bait content. The PR DIFF (diff for tests/e2e_smoke_canary.txt) only modified the run_id from 26151428977 to 26632368740 on line 2, leaving the bait lines intact. The issue explicitly requires a complete overwrite to exactly 3 lines with no extra content, comments, or headers.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: Overwrite the entire contents of `tests/e2e_smoke_canary.txt` so it contains **exactly** these three lines (no more, no less, with a trailing newline after the final line per POSIX file convention): status: ok\\nrun_id: 26632368740\\nupdated-by: ai-pipeline\n  Expected change site: tests/e2e_smoke_canary.txt (full file content must be a clean 3-line overwrite matching the linked-issue literal spec with no extra lines, bait, comments, or deviations)\n  Evidence of absence: Current file (and both LAST_RUN_DIFF + PR_DIFF) contains 7 lines with bait (\"BROKEN_BY_E2E_BAIT...\", \"E2E_EDITOR_BAIT...\", \"extra: this line violates...\", wrong run_id, extra lines, and non-matching \"updated-by\"); no complete overwrite occurred. The e2e_smoke_canary_spec.txt and test helpers confirm the clean canonical state is required for the smoke gate.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "c6f8bc5dcbc09a528d2c078ea8b4d8fe415477d15cd334e34fdf5d694201f683",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2990,
+    "run_id": "26632704546",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26632704546",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260529105809_2b9cb4195e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2990,
+    "run_id": "26632704546"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-29T10:58:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
