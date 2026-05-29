@@ -47,6 +47,18 @@
       "pr_branch": null,
       "pr_url": null,
       "recorded_at": "2026-05-29T03:43:34Z"
+    },
+    {
+      "codex_attempts_used": 3,
+      "committed_type": null,
+      "consumer_default_branch": "main",
+      "consumer_head_sha": "ebbb0b062ac151c913e24881599efa97d9b235c8",
+      "discovered_type": null,
+      "failure_reason": "codex_rc_nonzero(rc=1)",
+      "outcome": "failed",
+      "pr_branch": null,
+      "pr_url": null,
+      "recorded_at": "2026-05-29T10:49:02Z"
     }
   ],
   "repository": "shubhodeep1/bitsafe.io",
