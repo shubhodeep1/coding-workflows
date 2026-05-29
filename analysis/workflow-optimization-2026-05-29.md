@@ -11,7 +11,7 @@
 ## Speed Optimizations
 
 1. **Inline `review_autofix` gate into the heavy job (critical-path win)**
-   - **Evidence:** In `review_autofix`, run `26624807639` spent 4,163.1s between `review.codex-agent.if` evaluating true and runner pickup; run `26622285035` spent 1,096.7s on the same gap. Both were successful runs, so this is pure queue overhead.
+   - **Evidence:** In `review_autofix`, run `26624807639` spent 4,163.1s between `review.codex-agent.if` evaluating true (`08:41:24.471Z`) and runner pickup (`08:50:47.549Z`); run `26622285035` spent 1,096.7s on the same gap. Both were successful runs, so this is pure queue overhead.
    - **Root cause:** `.github/workflows/review_autofix.yml` splits a tiny `gate` job from the long `codex-agent` job, forcing a second hosted-runner acquisition.
    - **Exact change:** Move `Evaluate review gate` into the start of `codex-agent` for PR-backed runs, and keep separate jobs only for the rare deterministic-skip/post-merge dispatch paths.
    - **Estimated time savings:** 18–69 minutes on bad outliers; this is the strongest lever on `review_autofix` p95.
@@ -524,9 +524,9 @@ No findings.
   - **Evidence:**
     ```sh
     # .github/workflows/review_autofix.yml:1593-1598
-    gh_retry_to_file /tmp/gh_issue_comments_raw.json gh api --paginate repos/${{ github.repository }}/issues/"${PR_NUMBER}"/comments
+    gh_retry /tmp/gh_issue_comments_raw.json api --paginate repos/${{ github.repository }}/issues/"${PR_NUMBER}"/comments
     ...
-    gh_retry_to_file /tmp/gh_review_comments_raw.json gh api --paginate repos/${{ github.repository }}/pulls/"${PR_NUMBER}"/comments
+    gh_retry /tmp/gh_review_comments_raw.json api --paginate repos/${{ github.repository }}/pulls/"${PR_NUMBER}"/comments
     ```
 
     ```sh
@@ -565,7 +565,7 @@ No findings.
 
     ```sh
     # .github/workflows/review_autofix.yml:1592-1606
-    gh_retry_to_file "${PR_PAYLOAD_FILE}" gh api repos/${{ github.repository }}/pulls/"${PR_NUMBER}"
+    gh_retry "${PR_PAYLOAD_FILE}" api repos/${{ github.repository }}/pulls/"${PR_NUMBER}"
     ...
     }' "${PR_PAYLOAD_FILE}" > "${PR_META_FILE}"
     ```
