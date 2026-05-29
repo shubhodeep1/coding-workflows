@@ -9,6 +9,7 @@ import fnmatch
 import os
 import re
 import sys
+from functools import lru_cache
 from pathlib import Path, PurePosixPath
 
 
@@ -46,7 +47,27 @@ def path_matches(path: str, pattern: str) -> bool:
 	pure = PurePosixPath(path)
 	if "/" not in pattern:
 		return pure.name == pattern or fnmatch.fnmatch(pure.name, pattern) or pure.match(pattern)
-	return fnmatch.fnmatch(path, pattern)
+	path_parts = pure.parts
+	pattern_parts = PurePosixPath(pattern).parts
+
+	@lru_cache(maxsize=None)
+	def match_parts(path_idx: int, pattern_idx: int) -> bool:
+		while pattern_idx < len(pattern_parts):
+			pattern_part = pattern_parts[pattern_idx]
+			if pattern_part == "**":
+				if pattern_idx + 1 == len(pattern_parts):
+					return True
+				for next_path_idx in range(path_idx, len(path_parts) + 1):
+					if match_parts(next_path_idx, pattern_idx + 1):
+						return True
+				return False
+			if path_idx >= len(path_parts) or not fnmatch.fnmatchcase(path_parts[path_idx], pattern_part):
+				return False
+			path_idx += 1
+			pattern_idx += 1
+		return path_idx == len(path_parts)
+
+	return match_parts(0, 0)
 
 
 def first_matching_glob(path: str, patterns: list[str]) -> str | None:
