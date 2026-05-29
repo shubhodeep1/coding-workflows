@@ -35,6 +35,18 @@
       "pr_branch": null,
       "pr_url": null,
       "recorded_at": "2026-05-29T01:19:04Z"
+    },
+    {
+      "codex_attempts_used": 3,
+      "committed_type": null,
+      "consumer_default_branch": "main",
+      "consumer_head_sha": "d31aac15e79ddefcaf600dd3bbd85d877eba8822",
+      "discovered_type": null,
+      "failure_reason": "codex_rc_nonzero(rc=1)",
+      "outcome": "failed",
+      "pr_branch": null,
+      "pr_url": null,
+      "recorded_at": "2026-05-29T03:31:06Z"
     }
   ],
   "repository": "shubhodeep1/tele-funtoken-msg-scoring",
