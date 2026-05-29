@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":2995,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/2995\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/2996\",\"pr_number\":2996,\"branch\":\"ai/issue-2995\",\"run_id\":\"26648072789\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/26648072789\",\"changed_files\":[\".github/workflows/review_autofix.yml\",\"scripts/fixtures/cloudflare-learnings/phase-d-package-bump-no-agents-update.patch\",\"scripts/review_agents_md_materiality.sh\",\"tests/test_review_autofix_review_pipeline_contract.py\"]}",
+  "fingerprint": "86d5ea192260ea073ed939eb9c70500a151dd4ae2bc6f8949da385e2c86c003e",
+  "lineage": {
+    "issue_number": 2995,
+    "parent_ids": [],
+    "pr_number": 2996,
+    "run_id": "26648072789",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26648072789",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/2996"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260529162206_65601d28ee",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2995,
+    "level": "run",
+    "pr_number": 2996,
+    "run_id": "26648072789"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #2995: https://github.com/shubhodeep1/coding-workflows/pull/2996",
+  "timestamps": {
+    "created_at": "2026-05-29T16:22:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
