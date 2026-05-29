@@ -128,7 +128,7 @@ run_cache_probe() {
 	esac
 
 	local probe_model
-  probe_model="$(get_active_reviewer_models_text | head -n1)"
+	probe_model="$(get_active_reviewer_models_text | head -n1)"
   if [ -z "${probe_model}" ]; then
     return 0
   fi
@@ -658,11 +658,11 @@ resolve_active_reviewer_models() {
 
   while IFS= read -r model; do
     [ -z "${model}" ] && continue
-    if [ -z "${live_models_map[${model}]:-}" ]; then
+    if [ -z "${live_models_map["${model}"]:-}" ]; then
       echo "::warning::Ignoring unknown reviewer tier model '${model}' for tier ${tier}." >&2
       continue
     fi
-    if [ -n "${resolved_models_seen[${model}]:-}" ]; then
+    if [ -n "${resolved_models_seen["${model}"]:-}" ]; then
       continue
     fi
     resolved_models+=("${model}")
