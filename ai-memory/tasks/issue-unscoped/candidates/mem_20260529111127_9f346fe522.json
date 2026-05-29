@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:132 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The `if [ -z \"${probe_model}\" ]; then` line remains space-indented while the surrounding block uses TAB indentation, creating mixed indentation in the same shell block.\n  WHY: Both reviewers identified a style-only TAB-vs-space inconsistency in the same code path; they noted Bash still executes it correctly and there is no runtime impact.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- File: scripts/review_run_reviewers.sh\n  Line: 132\n  Problem: The prior autofix correctly changed line 131 to TAB indentation for the `probe_model=` assignment, but line 132 (`if [ -z \"${probe_model}\" ]; then`) was left unchanged with 2-space indentation. This creates mixed indentation (TAB + spaces) within the same function block, violating the codebase style rule that shell recipe bodies must use literal TAB characters.\n  Why it fails at runtime: While Bash functionally handles mixed indentation, it violates the explicit tab-for-indentation convention in the codebase style guide (agents.md \u00a711), creating visual inconsistency in the same code block.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- File: scripts/review_run_reviewers.sh\n  Line 132: `  if [ -z \"${probe_model}\" ]; then`\n  Problem: Mixed indentation \u2014 line 131 uses TAB (correct per repo style), but line 132 uses two spaces instead of TAB within the same code block.\n  Why it fails at runtime: Creates visual inconsistency and violates the tab-for-indentation convention documented in unattended_system_instructions.md \u00a711. While bash executes this correctly, it creates maintenance confusion and breaks style consistency.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "fb3f222e2cf0d7e7a025d008b630f3c516481e7c54ce31c70d18f09f42c553b9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2983,
+    "run_id": "26632754250",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26632754250",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260529111127_9f346fe522",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2983,
+    "run_id": "26632754250"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-29T11:11:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
