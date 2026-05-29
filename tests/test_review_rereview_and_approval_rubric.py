@@ -156,6 +156,8 @@ def test_prompts_and_workflow_wire_rereview_and_review_state_contract() -> None:
 
 	assert "RE_REVIEW_SKIP:" in consolidator_prompt
 	assert "Files absent from the bundle are intentionally invisible here" in consolidator_prompt
+	assert "If `prior_decision` is `accepted-residual` or `won't-fix`, do not" in consolidator_prompt
+	assert "If `PRIOR_DECISION` is `accepted-residual` or `won't-fix`, do not" not in consolidator_prompt
 	assert '"review_state": "APPROVE" | "APPROVE_WITH_COMMENTS" | "COMMENT" | "REQUEST_CHANGES"' in judge_prompt
 	assert "AI Materiality Advisory comment is informational only" in judge_prompt
 	assert "REVIEW_LEDGER_REREVIEW_ENABLED: ${{ vars.REVIEW_LEDGER_REREVIEW_ENABLED || 'false' }}" in workflow
@@ -303,3 +305,25 @@ def test_review_state_mapping_and_break_glass_preserve_review_body() -> None:
 		assert [payload["event"] for payload in review_payloads] == ["COMMENT", "APPROVE"]
 		assert review_payloads[0]["body"] == comment_body
 		assert review_payloads[1]["body"] == approve_body
+
+
+def main() -> int:
+	test_funcs = [value for key, value in sorted(globals().items()) if key.startswith("test_")]
+	passed = 0
+	failed = 0
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			func()
+			print(f"  PASS  {name}")
+			passed += 1
+		except Exception as exc:
+			print(f"  FAIL  {name}: {exc}")
+			failed += 1
+
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

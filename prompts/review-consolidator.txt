@@ -51,7 +51,7 @@ Optional carry-over input:
 - Each line in that block is a single prior issue entry with compact
   `issue_id=...`, `file=...`, `lines=...`, `status=...`,
   `prior_decision=...`, and `editor_outcomes=...` fields.
-- If `PRIOR_DECISION` is `accepted-residual` or `won't-fix`, do not
+- If `prior_decision` is `accepted-residual` or `won't-fix`, do not
   re-emit the finding unless the new evidence clearly worsened.
 - A finding counts as worsened only when the new evidence shows a higher
   severity, a broader or new anchor, a larger blast radius, or a same-area
