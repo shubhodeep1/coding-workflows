@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":2993,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/2993\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/2994\",\"pr_number\":2994,\"branch\":\"ai/issue-2993\",\"run_id\":\"26634899090\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/26634899090\",\"changed_files\":[\".github/workflows/review_autofix.yml\",\"scripts/fixtures/cloudflare-learnings/phase-g-flaky-reviewer.patch\",\"scripts/review_run_reviewers.sh\",\"scripts/reviewer_failback_chains.json\",\"tests/test_review_autofix_review_pipeline_contract.py\"]}",
+  "fingerprint": "8a1c4d83be55ee8690169e4e6d5f9f2eb185ec31e0796fed4bcd5b4aa922fc5a",
+  "lineage": {
+    "issue_number": 2993,
+    "parent_ids": [],
+    "pr_number": 2994,
+    "run_id": "26634899090",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26634899090",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/2994"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260529122009_a45f9aff12",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2993,
+    "level": "run",
+    "pr_number": 2994,
+    "run_id": "26634899090"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #2993: https://github.com/shubhodeep1/coding-workflows/pull/2994",
+  "timestamps": {
+    "created_at": "2026-05-29T12:20:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
