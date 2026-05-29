@@ -155,7 +155,6 @@ child = subprocess.Popen(
 	stdout=subprocess.PIPE,
 	stderr=subprocess.PIPE,
 	bufsize=0,
-	start_new_session=True,
 )
 
 assert child.stdout is not None
@@ -171,7 +170,14 @@ def _forward_signal(signum: int, _frame) -> None:
 	if child.poll() is not None:
 		return
 	try:
-		os.killpg(child.pid, signum)
+		child_pgid = os.getpgid(child.pid)
+	except ProcessLookupError:
+		return
+	try:
+		if child_pgid != os.getpgrp():
+			os.killpg(child_pgid, signum)
+		else:
+			child.send_signal(signum)
 	except ProcessLookupError:
 		return
 
@@ -218,7 +224,10 @@ try:
 				output_handle.flush()
 			continue
 
-		if HEARTBEAT_ENABLED and child.poll() is None:
+		if HEARTBEAT_ENABLED:
+			# Keep ticking while any inherited stdout/stderr pipe stays open.
+			# Descendants can outlive the direct child briefly; gating on
+			# child.poll() would let next_heartbeat_at go stale and busy-spin.
 			elapsed = int(time.monotonic() - last_output_at)
 			os.write(2, f"CODEX_HEARTBEAT: phase={PHASE} elapsed_secs={elapsed}\n".encode("utf-8"))
 			_write_activity_marker()
