@@ -154,6 +154,10 @@ env:
   REVIEWER_FILTER_UNINTERESTING_ENABLED: ${{ vars.REVIEWER_FILTER_UNINTERESTING_ENABLED || 'false' }}
   REVIEWER_FILTER_EXTRA_GLOBS: ${{ vars.REVIEWER_FILTER_EXTRA_GLOBS || '' }}
   REVIEWER_FILTER_EXEMPT_GLOBS: ${{ vars.REVIEWER_FILTER_EXEMPT_GLOBS || 'db/contracts/**,**/migrations/**,**/migrate/**' }}
+  AGENTS_MD_MATERIALITY_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_ENABLED || '0' }}
+  AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED || '0' }}
+  AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-5.4-mini' }}
+  AGENTS_MD_MATERIALITY_REASONING: ${{ vars.AGENTS_MD_MATERIALITY_REASONING || 'medium' }}
   # Cross-reviewer consensus summariser: after each pass (pass-1 feeds pass-2,
   # pass-2 feeds the editor), all reviewer outputs are fed to one codex-cli
   # call that emits a consolidated ledger. Hard-fails the workflow on repeat
@@ -439,6 +443,7 @@ jobs:
               # /pulls/{n} does not include them.
               DOC_ONLY="false"
               file_count=""
+              pr_files_json=""
               if [ "${SMALL_DIFF}" != "true" ] && [ "${AUTOFIX_SKIP_DOC_ONLY:-true}" != "false" ]; then
                 # `gh api --paginate --jq '[…]'` emits one JSON array per
                 # page. Without `jq -s 'add // []'` the concatenated output
@@ -483,19 +488,76 @@ jobs:
                 fi
               fi
 
+              candidate_skip="false"
+              candidate_skip_reason=""
               if [ "${DOC_ONLY}" = "true" ]; then
-                DETERMINISTIC_SKIP="true"
-                DET_SKIP_REASON="docs_only"
-                SHOULD_RUN="false"
-                SKIP_REASON="deterministic_skip_docs_only"
+                candidate_skip="true"
+                candidate_skip_reason="docs_only"
               elif [ "${SMALL_DIFF}" = "true" ]; then
-                DETERMINISTIC_SKIP="true"
-                DET_SKIP_REASON="small_diff"
-                SHOULD_RUN="false"
-                SKIP_REASON="deterministic_skip_small_diff"
+                candidate_skip="true"
+                candidate_skip_reason="small_diff"
               fi
 
-              echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} files=${file_count:-skipped} additions=${pr_additions:-?} deletions=${pr_deletions:-?} max_add=${max_add} max_del=${max_del} doc_only=${DOC_ONLY} small_diff=${SMALL_DIFF} skip=${DETERMINISTIC_SKIP} reason=${DET_SKIP_REASON}"
+              MATERIALITY_SKIP_SUPPRESSED="false"
+              case "$(printf '%s' "${AGENTS_MD_MATERIALITY_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
+                1|true|yes|on)
+                  # Keep medium/high material PRs on the codex-agent path so
+                  # the advisory comment is still reachable when the diff
+                  # would otherwise short-circuit through deterministic skip.
+                  # This lightweight gate only has /pulls/{n}/files path data,
+                  # so it suppresses skip on the path-glob signals that are
+                  # visible here and fails open for helper-only signals such as
+                  # repo-verified new top-level directories.
+                  if [ "${candidate_skip}" = "true" ]; then
+                    if [ -z "${pr_files_json}" ] || [ "${pr_files_json}" = "[]" ]; then
+                      if pr_files_json="$(gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '[.[] | {filename: .filename}]' 2>/dev/null | jq -s 'add // []' 2>/dev/null)"; then
+                        file_count="$(printf '%s' "${pr_files_json}" | jq 'length' 2>/dev/null || echo "${file_count:-0}")"
+                      else
+                        pr_files_json=""
+                      fi
+                    fi
+
+                    if [ -n "${pr_files_json}" ] && [ "${pr_files_json}" != "[]" ]; then
+                      gate_materiality="low"
+                      gate_agents_changed="false"
+                      while IFS= read -r gate_path; do
+                        [ -n "${gate_path}" ] || continue
+                        case "${gate_path}" in
+                          agents.md)
+                            gate_agents_changed="true"
+                            ;;
+                        esac
+                        case "${gate_path}" in
+                          package.json|pyproject.toml|Cargo.toml|go.mod|.github/workflows/*|pytest.ini|tox.ini|noxfile.py|jest.config.js|jest.config.cjs|jest.config.mjs|jest.config.ts|vitest.config.js|vitest.config.cjs|vitest.config.mjs|vitest.config.ts|playwright.config.js|playwright.config.cjs|playwright.config.mjs|playwright.config.ts|cypress.config.js|cypress.config.cjs|cypress.config.mjs|cypress.config.ts|webpack.config.js|webpack.config.cjs|webpack.config.mjs|webpack.config.ts|vite.config.js|vite.config.cjs|vite.config.mjs|vite.config.ts|turbo.json|go.work)
+                            gate_materiality="high"
+                            ;;
+                          package-lock.json|bun.lock|bun.lockb|yarn.lock|pnpm-lock.yaml|Cargo.lock|poetry.lock|uv.lock|go.sum|Pipfile|Pipfile.lock|requirements.txt|requirements-dev.txt|requirements-test.txt|constraints.txt|constraints-dev.txt|.eslintrc|.eslintrc.json|.eslintrc.js|.eslintrc.cjs|.eslintrc.yaml|.eslintrc.yml|eslint.config.js|eslint.config.cjs|eslint.config.mjs|eslint.config.ts|.prettierrc|.prettierrc.json|.prettierrc.js|.prettierrc.cjs|.stylelintrc|.stylelintrc.json|.stylelintrc.js|stylelint.config.js|stylelint.config.cjs|stylelint.config.mjs|stylelint.config.ts|ruff.toml|.ruff.toml|.flake8|pylintrc|biome.json|biome.jsonc|*/requirements.txt|*/requirements-dev.txt|*/requirements-test.txt|*/constraints.txt|*/constraints-dev.txt|*api_client*|*api-client*|*http_client*|*http-client*|*github_client*|*github-client*|*rest_client*|*rest-client*|*/client.py|*/client.ts|*/client.js|*/client.tsx|*/client.jsx)
+                            if [ "${gate_materiality}" != "high" ]; then
+                              gate_materiality="medium"
+                            fi
+                            ;;
+                        esac
+                      done < <(printf '%s' "${pr_files_json}" | jq -r '.[].filename' 2>/dev/null || true)
+
+                      if [ "${gate_agents_changed}" != "true" ] && { [ "${gate_materiality}" = "high" ] || [ "${gate_materiality}" = "medium" ]; }; then
+                        MATERIALITY_SKIP_SUPPRESSED="true"
+                        echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=agents_md_materiality pr=${PR_NUMBER} materiality=${gate_materiality} candidate=${candidate_skip_reason}"
+                      fi
+                    else
+                      echo "AUTOFIX_GATE_MATERIALITY_FILES_UNAVAILABLE pr=${PR_NUMBER} candidate=${candidate_skip_reason} — /files fetch failed or empty, keeping deterministic skip fail-open."
+                    fi
+                  fi
+                  ;;
+              esac
+
+              if [ "${candidate_skip}" = "true" ] && [ "${MATERIALITY_SKIP_SUPPRESSED}" != "true" ]; then
+                DETERMINISTIC_SKIP="true"
+                DET_SKIP_REASON="${candidate_skip_reason}"
+                SHOULD_RUN="false"
+                SKIP_REASON="deterministic_skip_${candidate_skip_reason}"
+              fi
+
+              echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} files=${file_count:-skipped} additions=${pr_additions:-?} deletions=${pr_deletions:-?} max_add=${max_add} max_del=${max_del} doc_only=${DOC_ONLY} small_diff=${SMALL_DIFF} skip=${DETERMINISTIC_SKIP} reason=${DET_SKIP_REASON} materiality_suppressed=${MATERIALITY_SKIP_SUPPRESSED}"
             fi
           fi
 
@@ -830,6 +892,10 @@ jobs:
       REVIEWER_FILTER_UNINTERESTING_ENABLED: ${{ vars.REVIEWER_FILTER_UNINTERESTING_ENABLED || 'false' }}
       REVIEWER_FILTER_EXTRA_GLOBS: ${{ vars.REVIEWER_FILTER_EXTRA_GLOBS || '' }}
       REVIEWER_FILTER_EXEMPT_GLOBS: ${{ vars.REVIEWER_FILTER_EXEMPT_GLOBS || 'db/contracts/**,**/migrations/**,**/migrate/**' }}
+      AGENTS_MD_MATERIALITY_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_ENABLED || '0' }}
+      AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED || '0' }}
+      AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-5.4-mini' }}
+      AGENTS_MD_MATERIALITY_REASONING: ${{ vars.AGENTS_MD_MATERIALITY_REASONING || 'medium' }}
       JUDGE_INTERIM_ENABLED: ${{ vars.JUDGE_INTERIM_ENABLED || 'false' }}
       JUDGE_INTERIM_REASONING: ${{ vars.JUDGE_INTERIM_REASONING || 'low' }}
       JUDGE_INTERIM_TIMEOUT_S: ${{ vars.JUDGE_INTERIM_TIMEOUT_S || '120' }}
@@ -1236,6 +1302,18 @@ jobs:
               rm -f "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh"
             fi
           fi
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh" ]; then
+            src=".codex-workflow-src/scripts/review_agents_md_materiality.sh"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/review_agents_md_materiality.sh" ]; then
+              src=".codex-workflow-src-main/scripts/review_agents_md_materiality.sh"
+            fi
+            if [ -f "${src}" ]; then
+              install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh"
+            else
+              echo "::warning::review_agents_md_materiality.sh not found in checked-out support sources for ${SCRIPT_REF}; AGENTS.md materiality advisories will fail open even when AGENTS_MD_MATERIALITY_ENABLED=true."
+              rm -f "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh"
+            fi
+          fi
           if [ ! -f "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt" ]; then
             src=".codex-workflow-src/prompts/conflict-resolver.txt"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/conflict-resolver.txt" ]; then
@@ -1348,6 +1426,8 @@ jobs:
             echo "PR_DIFF_FILE=${RUNTIME_DIR}/pr_diff.patch"
             echo "ORIGINAL_PR_DIFF_FILE=${RUNTIME_DIR}/original_pr_diff.patch"
             echo "PR_ISSUE_COMMENTS_FILE=${RUNTIME_DIR}/pr_issue_comments.json"
+            echo "AGENTS_MD_MATERIALITY_RESULT_FILE=${RUNTIME_DIR}/agents_md_materiality_result.json"
+            echo "AGENTS_MD_MATERIALITY_COMMENT_FILE=${RUNTIME_DIR}/agents_md_materiality_comment.md"
             echo "PR_REVIEWS_FILE=${RUNTIME_DIR}/pr_reviews.json"
             echo "PR_REVIEW_COMMENTS_FILE=${RUNTIME_DIR}/pr_review_comments.json"
             echo "PR_ALL_COMMENTS_CONTEXT_FILE=${RUNTIME_DIR}/pr_all_comments_context.txt"
@@ -3137,6 +3217,9 @@ jobs:
           case "$(printf '%s' "${REVIEWER_FILTER_UNINTERESTING_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
             1|true|yes|on) check_soft_file "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh" ;;
           esac
+          case "$(printf '%s' "${AGENTS_MD_MATERIALITY_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on) check_soft_file "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh" ;;
+          esac
           case "$(printf '%s' "${REVIEWER_CIRCUIT_BREAKER_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
             1|true|yes|on) check_soft_file "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json" ;;
           esac
@@ -3414,7 +3497,30 @@ jobs:
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
         run: |
           set -euo pipefail
-          bash "${SUPPORT_SCRIPTS_DIR}/review_run_reviewers.sh"
+          materiality_pid=""
+          case "$(printf '%s' "${AGENTS_MD_MATERIALITY_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on)
+              if [ "${CLAUDE_BRANCH_REVIEW_MODE:-false}" != "true" ] && [ -x "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh" ]; then
+                bash "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh" &
+                materiality_pid="$!"
+              elif [ "${CLAUDE_BRANCH_REVIEW_MODE:-false}" != "true" ]; then
+                echo "::warning::review_agents_md_materiality.sh unavailable at ${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh; AGENTS.md materiality advisory will fail open."
+              fi
+              ;;
+          esac
+
+          reviewers_rc=0
+          bash "${SUPPORT_SCRIPTS_DIR}/review_run_reviewers.sh" || reviewers_rc=$?
+
+          if [ -n "${materiality_pid}" ]; then
+            materiality_rc=0
+            wait "${materiality_pid}" || materiality_rc=$?
+            if [ "${materiality_rc}" -ne 0 ]; then
+              echo "::warning::review_agents_md_materiality.sh exited with ${materiality_rc}; AGENTS.md materiality advisory will fail open."
+            fi
+          fi
+
+          exit "${reviewers_rc}"
 
       - name: Upload per-reviewer logs (always)
         if: always() && env.PREVIOUS_REVIEWS_DIR != '' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
@@ -3429,6 +3535,65 @@ jobs:
             ${{ env.PREVIOUS_REVIEWS_DIR }}/pass1_*.txt
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Post AI Materiality Advisory comment
+        if: always() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+
+          if [ ! -s "${AGENTS_MD_MATERIALITY_RESULT_FILE:-}" ]; then
+            echo "AGENTS_MD_MATERIALITY: no result file; skipping advisory comment."
+            exit 0
+          fi
+
+          advisory_required="$(jq -r '.advisory_required // false' "${AGENTS_MD_MATERIALITY_RESULT_FILE}" 2>/dev/null || echo false)"
+          if [ "${advisory_required}" != "true" ]; then
+            echo "AGENTS_MD_MATERIALITY: advisory not required."
+            exit 0
+          fi
+
+          if [ ! -s "${AGENTS_MD_MATERIALITY_COMMENT_FILE:-}" ]; then
+            echo "::warning::AGENTS.md materiality advisory requested but comment body file is missing/empty; skipping."
+            exit 0
+          fi
+
+          if [ ! -s "${PR_ISSUE_COMMENTS_FILE:-}" ]; then
+            echo "::warning::PR_ISSUE_COMMENTS_FILE missing/empty; skipping AI Materiality Advisory comment."
+            exit 0
+          fi
+
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+
+          comment_marker="$(jq -r '.comment_marker // "<!-- AI_MATERIALITY_ADVISORY_V1 -->"' "${AGENTS_MD_MATERIALITY_RESULT_FILE}" 2>/dev/null || echo '<!-- AI_MATERIALITY_ADVISORY_V1 -->')"
+          existing_comment_id="$(jq -r --arg marker "${comment_marker}" '([.[] | select(((.body // "") | contains($marker))) | {id: ((.id // 0) | tonumber), body: (.body // "")}] | sort_by(.id) | last | .id) // empty' "${PR_ISSUE_COMMENTS_FILE}" 2>/dev/null || echo "")"
+          existing_comment_body="$(jq -r --arg marker "${comment_marker}" '([.[] | select(((.body // "") | contains($marker))) | {id: ((.id // 0) | tonumber), body: (.body // "")}] | sort_by(.id) | last | .body) // ""' "${PR_ISSUE_COMMENTS_FILE}" 2>/dev/null || echo "")"
+          if [ -n "${existing_comment_id}" ] && [ "${existing_comment_body}" = "$(cat "${AGENTS_MD_MATERIALITY_COMMENT_FILE}")" ]; then
+            echo "AGENTS_MD_MATERIALITY: advisory comment already up to date (#${existing_comment_id})."
+            exit 0
+          fi
+
+          payload="$(mktemp)"
+          jq -n --rawfile body "${AGENTS_MD_MATERIALITY_COMMENT_FILE}" '{body: $body}' > "${payload}"
+
+          if [ -n "${existing_comment_id}" ] && [[ "${existing_comment_id}" =~ ^[0-9]+$ ]]; then
+            if gh_retry gh api -X PATCH "repos/${{ github.repository }}/issues/comments/${existing_comment_id}" --input "${payload}" >/dev/null 2>&1; then
+              echo "AGENTS_MD_MATERIALITY: refreshed advisory comment #${existing_comment_id}."
+              rm -f "${payload}"
+              exit 0
+            fi
+            echo "::warning::Failed to refresh AI Materiality Advisory comment #${existing_comment_id}; will try posting a new advisory."
+          fi
+
+          if gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --input "${payload}" >/dev/null 2>&1; then
+            echo "AGENTS_MD_MATERIALITY: posted advisory comment."
+          else
+            echo "::warning::Failed to post AI Materiality Advisory comment on PR #${PR_NUMBER}."
+          fi
+          rm -f "${payload}"
 
       - name: Record reviewer consensus candidate in memory (fail-open)
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
