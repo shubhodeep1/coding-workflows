@@ -124,6 +124,10 @@ env:
   REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX: ${{ vars.REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX || '^(scripts/|\.github/workflows/|\.github/ai/|prompts/|workflow-templates/|db/contracts/|ai-memory/)' }}
   REVIEWER_TIER_TRIVIAL_MODELS: ${{ vars.REVIEWER_TIER_TRIVIAL_MODELS || '' }}
   REVIEWER_TIER_LITE_MODELS: ${{ vars.REVIEWER_TIER_LITE_MODELS || '' }}
+  REVIEWER_CIRCUIT_BREAKER_ENABLED: ${{ vars.REVIEWER_CIRCUIT_BREAKER_ENABLED || '0' }}
+  REVIEWER_FAILBACK_MAX_RETRIES: ${{ vars.REVIEWER_FAILBACK_MAX_RETRIES || '1' }}
+  REVIEWER_HEALTH_OPEN_THRESHOLD: ${{ vars.REVIEWER_HEALTH_OPEN_THRESHOLD || '3' }}
+  REVIEWER_HEALTH_OPEN_TTL_SECS: ${{ vars.REVIEWER_HEALTH_OPEN_TTL_SECS || '1800' }}
   # Editor (codex apply-fixes loop). Production defaults to xhigh
   # (repo-wide gpt-5.4 policy); smoke runs override to `medium` via the
   # "Detect smoke test PR" step (search "EDITOR_REASONING_EFFORT=medium"
@@ -819,6 +823,10 @@ jobs:
       REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX: ${{ vars.REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX || '^(scripts/|\.github/workflows/|\.github/ai/|prompts/|workflow-templates/|db/contracts/|ai-memory/)' }}
       REVIEWER_TIER_TRIVIAL_MODELS: ${{ vars.REVIEWER_TIER_TRIVIAL_MODELS || '' }}
       REVIEWER_TIER_LITE_MODELS: ${{ vars.REVIEWER_TIER_LITE_MODELS || '' }}
+      REVIEWER_CIRCUIT_BREAKER_ENABLED: ${{ vars.REVIEWER_CIRCUIT_BREAKER_ENABLED || '0' }}
+      REVIEWER_FAILBACK_MAX_RETRIES: ${{ vars.REVIEWER_FAILBACK_MAX_RETRIES || '1' }}
+      REVIEWER_HEALTH_OPEN_THRESHOLD: ${{ vars.REVIEWER_HEALTH_OPEN_THRESHOLD || '3' }}
+      REVIEWER_HEALTH_OPEN_TTL_SECS: ${{ vars.REVIEWER_HEALTH_OPEN_TTL_SECS || '1800' }}
       REVIEWER_FILTER_UNINTERESTING_ENABLED: ${{ vars.REVIEWER_FILTER_UNINTERESTING_ENABLED || 'false' }}
       REVIEWER_FILTER_EXTRA_GLOBS: ${{ vars.REVIEWER_FILTER_EXTRA_GLOBS || '' }}
       REVIEWER_FILTER_EXEMPT_GLOBS: ${{ vars.REVIEWER_FILTER_EXEMPT_GLOBS || 'db/contracts/**,**/migrations/**,**/migrate/**' }}
@@ -1106,6 +1114,19 @@ jobs:
             install -m 0644 "${catalog_src}" "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
           else
             echo "Model catalog not on ${SCRIPT_REF} yet; using local copy."
+          fi
+
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json" ]; then
+            failback_src=".codex-workflow-src/scripts/reviewer_failback_chains.json"
+            if [ ! -f "${failback_src}" ] && [ -f ".codex-workflow-src-main/scripts/reviewer_failback_chains.json" ]; then
+              failback_src=".codex-workflow-src-main/scripts/reviewer_failback_chains.json"
+            fi
+            if [ -f "${failback_src}" ]; then
+              install -m 0644 "${failback_src}" "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json"
+            else
+              echo "::warning::reviewer_failback_chains.json not found in checked-out support sources for ${SCRIPT_REF}; reviewer failback will fail open even when REVIEWER_CIRCUIT_BREAKER_ENABLED=true."
+              rm -f "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json"
+            fi
           fi
 
           for f in unattended_system_instructions.md; do
@@ -2335,6 +2356,24 @@ jobs:
             echo "Check-run context sha256: $(sha256sum "${PR_CHECK_RUNS_CONTEXT_FILE}" | awk '{print $1}')"
           fi
 
+      # Restore the per-PR review-issue ledger + reviewer health state from the
+      # previous autofix iteration before reviewers run. Both artifacts live
+      # under .ai/, are gitignored, and persist across iterations only through
+      # this cache pair. Missing cache is fail-open: iteration-scoping and
+      # reviewer failback health both treat absence as first-run state.
+      - name: Restore review-issue ledger
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .ai/review_issue_ledger/
+            .ai/review_runtime/
+            ${{ env.REVIEW_LEDGER_PATH }}
+          key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-
+
       - name: Detect smoke test and tune LLM settings
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -3098,6 +3137,9 @@ jobs:
           case "$(printf '%s' "${REVIEWER_FILTER_UNINTERESTING_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
             1|true|yes|on) check_soft_file "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh" ;;
           esac
+          case "$(printf '%s' "${REVIEWER_CIRCUIT_BREAKER_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on) check_soft_file "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json" ;;
+          esac
           check_soft_file "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
           check_soft_file "${SUPPORT_SCRIPTS_DIR}/install_semble.sh"
           check_soft_file "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh"
@@ -3569,29 +3611,6 @@ jobs:
             sed -i "/^model_reasoning_effort = /a model_reasoning_summary = \"auto\"" ~/.codex/config.toml
           fi
           echo "Enabled reasoning summaries (auto) for editor phase"
-
-      # Restore the per-PR review-issue ledger from the previous autofix
-      # iteration (each iteration is a separate workflow run).  The ledger
-      # lives at .ai/review_issue_ledger/pr-<PR_NUMBER>.txt and is
-      # gitignored, so it never reaches the PR branch — cross-iteration
-      # persistence is provided entirely by this cache pair.  The unique
-      # run-id key ensures every iteration saves a fresh entry; the
-      # restore-keys prefix falls back to the most recent cache from any
-      # prior iteration of the same PR on this repo.  Missing cache is
-      # fail-open: the ledger script treats an absent prior ledger as
-      # iteration-1 state and proceeds normally.
-      - name: Restore review-issue ledger
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
-        continue-on-error: true
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            .ai/review_issue_ledger/
-            .ai/review_runtime/
-            ${{ env.REVIEW_LEDGER_PATH }}
-          key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-
 
       - name: Setup Serena for editor
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.SERENA_ENABLED == 'true'
