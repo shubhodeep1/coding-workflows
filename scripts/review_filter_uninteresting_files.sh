@@ -107,8 +107,16 @@ def detect_generated_marker_in_block(block: list[str]) -> str | None:
 		return None
 	scanned: list[str] = []
 	total = 0
+	in_first_hunk = False
 	for line in block:
-		if line.startswith(("diff --git ", "index ", "--- ", "+++ ", "@@")):
+		if line.startswith("@@"):
+			if in_first_hunk:
+				break
+			in_first_hunk = True
+			continue
+		if line.startswith(("diff --git ", "index ", "--- ", "+++ ")):
+			continue
+		if not in_first_hunk:
 			continue
 		if not line or line[0] not in {" ", "+", "-"}:
 			continue
