@@ -223,6 +223,11 @@ def test_reviewer_checklist_prompt_contract_and_gate() -> None:
 		assert idx > last_index
 		last_index = idx
 
+	assert checklist.count("WHAT TO FLAG") == 7
+	assert checklist.count("WHAT NOT TO FLAG") == 7
+	assert "Theoretical exploit chains" in checklist
+	assert "Alternative implementations that are merely cleaner" in checklist
+	assert "Pure naming preferences" in checklist
 	assert "literal word NONE" in checklist
 	assert "File:" in checklist
 	assert "Line or code reference:" in checklist
@@ -246,11 +251,15 @@ def test_reviewer_checklist_prompt_contract_and_gate() -> None:
 	assert 'cat "${REVIEWER_CHECKLIST_PROMPT_TEMPLATE}"' in helper_block
 	assert 'append_reviewer_checklist_block' in assemble_block
 	assert assemble_block.index('cat "${extra_context_file}"') < assemble_block.index('append_reviewer_checklist_block')
+	assert "COMMON ANTI-RULES" in reviewers
+	assert "These anti-rules suppress suggestion / nit-level noise only." in reviewers
+	assert "accepted as residual or won't-fix" in reviewers
 	assert 'assemble_reviewer_prompt "${PASS1_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}"' in reviewers
 	assert 'assemble_reviewer_prompt "${PASS2_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}" "${CROSS_POLLINATION_FILE}"' in reviewers
 	assert enabled_prompt.index("PROMPT BODY SENTINEL") < enabled_prompt.index("REVIEWER CHECKLIST")
 	for heading in expected_headings:
 		assert heading in enabled_prompt
+	assert "WHAT NOT TO FLAG" in enabled_prompt
 	assert "REVIEWER CHECKLIST" not in disabled_prompt
 	assert disabled_stderr.strip() == ""
 	assert "REVIEWER CHECKLIST" not in missing_prompt

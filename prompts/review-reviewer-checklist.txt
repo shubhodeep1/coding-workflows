@@ -7,12 +7,61 @@ Findings under the first seven lenses MUST include the repo-relative file path a
 Findings under the eighth lens (TASK COMPLETENESS / INTENT GAPS) use the TASK_GAP format below and may cite an expected-but-absent change site instead of a file:line — absence of code is acceptable evidence for that lens only.
 
 SECURITY & INPUT VALIDATION
+WHAT TO FLAG
+- Missing or weakened validation, authorization, escaping, secret handling, or unsafe trust boundaries in the changed code.
+WHAT NOT TO FLAG
+- Theoretical exploit chains that require attacker control, deployment settings, or infrastructure behavior not evidenced in the code or runtime context.
+- Defense-in-depth asks when the primary validation / escaping / authorization guard already exists and the diff does not weaken it.
+- Style-only security commentary with no concrete runtime failure path.
+
 CORRECTNESS & LOGIC
+WHAT TO FLAG
+- Demonstrable logic, control-flow, state-transition, or API-compatibility bugs in the modified code.
+WHAT NOT TO FLAG
+- Hypothetical edge paths with no concrete trigger in the changed code.
+- Alternative implementations that are merely cleaner, shorter, or more elegant.
+- Refactor requests when the current code is correct at runtime.
+
 CONCURRENCY / RACES / IDEMPOTENCY
+WHAT TO FLAG
+- Real races, missing idempotency guards, or ordering bugs that the current code path can actually hit.
+WHAT NOT TO FLAG
+- Concurrency concerns when the code is single-threaded / single-shot in its actual runtime path.
+- Speculation about retries, duplicate delivery, or multi-writer behavior without evidence that this code path receives them.
+- Purely advisory locking suggestions when existing guards already make the path safe enough for the documented behavior.
+
 ERROR PATHS & EDGE CASES
+WHAT TO FLAG
+- Missing failure handling, unchecked error states, or concrete boundary cases that the changed code now mishandles.
+WHAT NOT TO FLAG
+- Generic “add more logging / retries / catch-all handling” advice without a shown failing path.
+- Extremely contrived inputs that are not reachable from the code’s real callers or validation rules.
+- Requests for broader cleanup when the current error handling is sufficient for the task.
+
 PERFORMANCE & RESOURCE USE
+WHAT TO FLAG
+- Regressions with a clear hot-path, unbounded-growth, or unnecessary repeated-work impact in the changed code.
+WHAT NOT TO FLAG
+- Micro-optimizations with no measurable or user-visible effect.
+- One-time setup cost or tiny constant-factor differences in non-hot paths.
+- “Could be faster” commentary that does not identify a concrete scaling or latency failure.
+
 INDEX-CONTRACT / DB RULES
+WHAT TO FLAG
+- Concrete query/index mismatches, unsafe uniqueness behavior, missing migration / contract updates, or write paths that violate documented DB rules.
+WHAT NOT TO FLAG
+- Generic “maybe add an index” advice without a shown query / write path that needs it.
+- Schema redesign suggestions unrelated to the changed code.
+- DB-rule commentary on files or data paths the diff never touches.
+
 NAMING / BACKWARD COMPATIBILITY
+WHAT TO FLAG
+- Real contract breaks: renamed / removed public identifiers, changed outputs, incompatible flags, or behavior drift that callers depend on.
+WHAT NOT TO FLAG
+- Pure naming preferences, wording tweaks, or style-only consistency nits.
+- Requests to rename working internal symbols when no external contract is affected.
+- Backward-compatibility concerns that require assumptions about callers not evidenced in the repo or task context.
+
 TASK COMPLETENESS / INTENT GAPS
 
 Under each non-empty heading from the first seven lenses, preserve this issue format:

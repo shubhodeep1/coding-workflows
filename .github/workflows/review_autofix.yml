@@ -139,6 +139,9 @@ env:
   TARGETED_FILE_CONTEXT_MAX_BYTES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_BYTES || '102400' }}
   ENABLE_REVIEWER_TWO_PASS: ${{ vars.ENABLE_REVIEWER_TWO_PASS || 'true' }}
   REVIEW_REVIEWER_CHECKLIST_ENABLED: ${{ vars.REVIEW_REVIEWER_CHECKLIST_ENABLED || 'false' }}
+  REVIEWER_FILTER_UNINTERESTING_ENABLED: ${{ vars.REVIEWER_FILTER_UNINTERESTING_ENABLED || 'false' }}
+  REVIEWER_FILTER_EXTRA_GLOBS: ${{ vars.REVIEWER_FILTER_EXTRA_GLOBS || '' }}
+  REVIEWER_FILTER_EXEMPT_GLOBS: ${{ vars.REVIEWER_FILTER_EXEMPT_GLOBS || 'db/contracts/**,**/migrations/**,**/migrate/**' }}
   # Cross-reviewer consensus summariser: after each pass (pass-1 feeds pass-2,
   # pass-2 feeds the editor), all reviewer outputs are fed to one codex-cli
   # call that emits a consolidated ledger. Hard-fails the workflow on repeat
@@ -800,6 +803,9 @@ jobs:
       REVIEW_LEDGER_PATH: ${{ vars.REVIEW_LEDGER_PATH || format('.ai/review_issue_ledger/pr-{0}.txt', inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number || '0') }}
       REVIEW_REVIEWER_CHECKLIST_ENABLED: ${{ vars.REVIEW_REVIEWER_CHECKLIST_ENABLED || '1' }}
       REVIEW_REVIEWER_ITERATION_SCOPING: ${{ vars.REVIEW_REVIEWER_ITERATION_SCOPING || '1' }}
+      REVIEWER_FILTER_UNINTERESTING_ENABLED: ${{ vars.REVIEWER_FILTER_UNINTERESTING_ENABLED || 'false' }}
+      REVIEWER_FILTER_EXTRA_GLOBS: ${{ vars.REVIEWER_FILTER_EXTRA_GLOBS || '' }}
+      REVIEWER_FILTER_EXEMPT_GLOBS: ${{ vars.REVIEWER_FILTER_EXEMPT_GLOBS || 'db/contracts/**,**/migrations/**,**/migrate/**' }}
       JUDGE_INTERIM_ENABLED: ${{ vars.JUDGE_INTERIM_ENABLED || 'false' }}
       JUDGE_INTERIM_REASONING: ${{ vars.JUDGE_INTERIM_REASONING || 'low' }}
       JUDGE_INTERIM_TIMEOUT_S: ${{ vars.JUDGE_INTERIM_TIMEOUT_S || '120' }}
@@ -1179,6 +1185,18 @@ jobs:
             else
               echo "::warning::review-reviewer-checklist.txt not found in checked-out support sources for ${SCRIPT_REF}; reviewer prompts will keep the checklist disabled even when REVIEW_REVIEWER_CHECKLIST_ENABLED=true."
               rm -f "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt"
+            fi
+          fi
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh" ]; then
+            src=".codex-workflow-src/scripts/review_filter_uninteresting_files.sh"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/review_filter_uninteresting_files.sh" ]; then
+              src=".codex-workflow-src-main/scripts/review_filter_uninteresting_files.sh"
+            fi
+            if [ -f "${src}" ]; then
+              install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh"
+            else
+              echo "::warning::review_filter_uninteresting_files.sh not found in checked-out support sources for ${SCRIPT_REF}; reviewer diff filtering will fail open even when REVIEWER_FILTER_UNINTERESTING_ENABLED=true."
+              rm -f "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh"
             fi
           fi
           if [ ! -f "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt" ]; then
@@ -3060,6 +3078,9 @@ jobs:
           check_soft_file "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt"
           case "$(printf '%s' "${REVIEW_REVIEWER_CHECKLIST_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
             1|true|yes|on) check_soft_file "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt" ;;
+          esac
+          case "$(printf '%s' "${REVIEWER_FILTER_UNINTERESTING_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on) check_soft_file "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh" ;;
           esac
           check_soft_file "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
           check_soft_file "${SUPPORT_SCRIPTS_DIR}/install_semble.sh"
