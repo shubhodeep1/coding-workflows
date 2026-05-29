@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/mark-stable.yml:215-222 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The pip install command runs with `--quiet` but has no `--no-cache-dir`, no version pinning, and installs directly into the runner's system Python site-packages.\n  WHY: A cached stale wheel, partial download, or future dependency conflict can cause the subsequent Unit tests to load an incompatible version and reproduce the validator desync the release fix is meant to avoid.\n- .github/workflows/mark-stable.yml:211-223 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The install step has no retry wrapper or fallback, and `set -euo pipefail` makes any transient PyPI/network failure abort the validate-scripts job.\n  WHY: Occasional PyPI blips or mirror lag would block the release gate even when the underlying test bug is fixed, making the workflow brittle.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Add an `Install Python test dependencies` step (`pip install pyyaml jsonschema jinja2`) before the Unit tests step in both `.github/workflows/test-and-mark-stable.yml` and `.github/workflows/mark-stable.yml`, mirroring the dependency set used elsewhere, to fix the v1.14.0 release failure caused by missing test dependencies.\n  expected_change_site: Both `.github/workflows/test-and-mark-stable.yml` and `.github/workflows/mark-stable.yml`\n  confidence=5\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_20]\n  EVIDENCE: Both workflow files now contain matching `Install Python test dependencies` blocks before the `Unit tests` step; the sibling-workflow gap identified by Copilot has been closed.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- Requirement: Add an `Install Python test dependencies` step (`pip install pyyaml jsonschema jinja2`) before the Unit tests step in both `.github/workflows/test-and-mark-stable.yml` and `.github/workflows/mark-stable.yml`, mirroring the dependency set used elsewhere, to fix the v1.14.0 release failure caused by missing test dependencies.\n  Expected change site: Both `.github/workflows/test-and-mark-stable.yml` (lines ~3269-3286) and `.github/workflows/mark-stable.yml` (lines ~209-226)\n  Evidence of absence: Both workflow files now contain the identical `Install Python test dependencies` step before the `Unit tests` step. The original PR added the fix to test-and-mark-stable.yml, and the last-run autofix added the identical fix to mark-stable.yml (addressing the Copilot reviewer note about the sibling workflow gap). The task is complete.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/mark-stable.yml:215-222 | severity=medium | confidence=4\n  PROBLEM: The pip install command runs with `--quiet` but has no `--no-cache-dir`, no version pinning, and installs directly into the runner's system Python site-packages (no virtualenv or `--user` guard beyond what GitHub provides).\n  WHY: A cached stale wheel, partial download, or future dependency conflict (jsonschema ecosystem moves fast) can cause the subsequent Unit tests (which import the real validator) to load the wrong/incompatible version, reproducing the exact desync that the original release failure exposed.\n- .github/workflows/mark-stable.yml:211-223 and symmetric block in test-and-mark-stable.yml:3271-3283 | severity=medium | confidence=4\n  PROBLEM: No retry wrapper or `|| true` fallback on the pip install. The step uses `set -euo pipefail` so any transient PyPI/network failure aborts the entire validate-scripts job.\n  WHY: GitHub runners experience occasional PyPI blips (rate limits, transient 5xx, mirror lag). This would prevent the release gate from completing even when the underlying test bug is fixed, violating the intent of a robust CI gate.\n- Requirement: \"Add an `Install Python test dependencies` step (`pip install pyyaml jsonschema jinja2`) before the Unit tests step in `.github/workflows/test-and-mark-stable.yml`, mirroring the dependency set used elsewhere.\" (plus Copilot review explicitly calling out that the identical validate-scripts job in mark-stable.yml also needs the same fix).\n  Expected change site: Both `.github/workflows/test-and-mark-stable.yml` (original PR) and `.github/workflows/mark-stable.yml` (handled in LAST RUN DIFF).\n  Evidence of absence: LAST_RUN_DIFF and PR_DIFF now both contain matching blocks with identical comment and command; the sibling-workflow gap identified by Copilot (and prior reviewers) has been closed. No further deliverables remain unmet.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "a8bf005801ae7c4f1dc63dd9a52e5f13434933dee5a0a57fc30ed665d13a8d9f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2999,
+    "run_id": "26661341973",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26661341973",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260529210447_b6fc1a1400",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2999,
+    "run_id": "26661341973"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-29T21:04:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
