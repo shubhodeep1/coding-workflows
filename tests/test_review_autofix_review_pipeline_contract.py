@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import tempfile
@@ -20,6 +21,7 @@ PHASE_B_RISK_TIER_LITE_FIXTURE = FIXTURES_DIR / "phase-b-risk-tier-lite.patch"
 PHASE_B_RISK_TIER_FULL_FIXTURE = FIXTURES_DIR / "phase-b-risk-tier-full.patch"
 PHASE_B_RISK_TIER_ALWAYS_FULL_FIXTURE = FIXTURES_DIR / "phase-b-risk-tier-always-full.patch"
 PHASE_C_FILTER_FIXTURE = FIXTURES_DIR / "phase-c-lockfile-and-generated.patch"
+PHASE_G_FLAKY_REVIEWER_FIXTURE = FIXTURES_DIR / "phase-g-flaky-reviewer.patch"
 
 
 def _workflow_text() -> str:
@@ -72,6 +74,33 @@ def _reviewer_risk_tier_helper_block() -> str:
 	start = text.index("# ── Reviewer risk-tier helpers")
 	end = text.index("# ── End reviewer risk-tier helpers", start)
 	return text[start:end]
+
+
+def _reviewer_failback_helper_block() -> str:
+	text = _reviewers_text()
+	start = text.index("# ── Reviewer failback / health helpers")
+	end = text.index("# ── End reviewer failback / health helpers", start)
+	return text[start:end]
+
+
+def _reviewer_run_reviewer_block() -> str:
+	text = _reviewers_text()
+	start = text.index("run_reviewer() {")
+	end = text.index("# ── Two-pass reviewer architecture", start)
+	return text[start:end]
+
+
+def _reviewer_run_reviewer_pass_block() -> str:
+	text = _reviewers_text()
+	start = text.index("run_reviewer_pass() {")
+	end = text.index("# Wrap a consolidated pass-1 ledger", start)
+	return text[start:end]
+
+
+def _reviewer_zero_success_guard_block() -> str:
+	text = _reviewers_text()
+	start = text.index('if [ "${reviewers_successful}" -eq 0 ]; then')
+	return text[start:]
 
 
 def _workflow_reviewer_models() -> list[str]:
@@ -662,6 +691,252 @@ def _run_prepare_reviewer_scope_harness(*, last_run_changed_text: str, ledger_te
 			"semble_query": files["semble_query"].read_text(encoding="utf-8"),
 			"scoped_active": files["scoped_active"].read_text(encoding="utf-8").strip(),
 		}
+def _run_reviewer_failback_harness() -> dict[str, object]:
+	helper_block = _reviewer_failback_helper_block()
+	run_reviewer_block = _reviewer_run_reviewer_block()
+	run_reviewer_pass_block = _reviewer_run_reviewer_pass_block()
+	with tempfile.TemporaryDirectory(prefix="reviewer-failback-") as td:
+		tmp = Path(td)
+		reviews = tmp / "reviews"
+		runtime = tmp / "runtime"
+		home = tmp / "home"
+		runner_temp = tmp / "runner_temp"
+		bin_dir = tmp / "bin"
+		seed_codex_home = tmp / "codex_home_seed"
+		reviews.mkdir()
+		runtime.mkdir()
+		home.mkdir()
+		runner_temp.mkdir()
+		bin_dir.mkdir()
+		seed_codex_home.mkdir()
+
+		prompt_file = runtime / "reviewer_prompt.patch"
+		prompt_file.write_text(PHASE_G_FLAKY_REVIEWER_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+
+		failback_file = tmp / "reviewer_failback_chains.json"
+		failback_file.write_text(json.dumps({
+			"x-ai/grok-4.20": ["x-ai/grok-4.1-fast"],
+		}, indent=2) + "\n", encoding="utf-8")
+
+		catalog_file = tmp / "codex_model_catalog.json"
+		catalog_file.write_text(json.dumps({
+			"models": [
+				{"slug": "x-ai/grok-4.20"},
+				{"slug": "x-ai/grok-4.1-fast"},
+				{"slug": "moonshotai/kimi-k2.5"},
+			],
+		}, indent=2) + "\n", encoding="utf-8")
+
+		health_file = tmp / ".ai" / "review_runtime" / "pr-123" / "reviewer_health_state.json"
+		health_file.parent.mkdir(parents=True)
+		attempt_log_file = tmp / "attempts.tsv"
+		state_file = tmp / "state.txt"
+		github_env_file = tmp / "github_env.txt"
+
+		codex_stub = bin_dir / "codex"
+		codex_stub.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+		codex_stub.chmod(0o755)
+
+		env = os.environ.copy()
+		env.update({
+			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			"PREVIOUS_REVIEWS_DIR": str(reviews),
+			"RUNTIME_DIR": str(runtime),
+			"PROMPT_FILE": str(prompt_file),
+			"PR_NUMBER": "123",
+			"RUNNER_TEMP": str(runner_temp),
+			"HOME": str(home),
+			"CODEX_HOME": str(seed_codex_home),
+			"GITHUB_ENV": str(github_env_file),
+			"REVIEWER_CIRCUIT_BREAKER_ENABLED": "1",
+			"REVIEWER_FAILBACK_MAX_RETRIES": "1",
+			"REVIEWER_HEALTH_OPEN_THRESHOLD": "1",
+			"REVIEWER_HEALTH_OPEN_TTL_SECS": "600",
+			"REVIEWER_FAILBACK_CHAINS_FILE": str(failback_file),
+			"REVIEWER_MODEL_CATALOG_FILE": str(catalog_file),
+			"REVIEWER_HEALTH_STATE_FILE": str(health_file),
+			"REVIEWER_REASONING_EFFORT": "xhigh",
+			"HEARTBEAT_IDLE_TIMEOUT": "30",
+			"HEARTBEAT_MAX_WALL": "30",
+			"REVIEW_PR_STATE_POLL_INTERVAL_SECS": "10",
+			"ATTEMPT_LOG_FILE": str(attempt_log_file),
+			"STATE_FILE": str(state_file),
+		})
+
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				f"{helper_block}\n"
+				f"{run_reviewer_block}\n"
+				f"{run_reviewer_pass_block}\n"
+				"execute_reviewer_attempt() {\n"
+				"\tlocal _attempt_label=\"${1:-}\"\n"
+				"\tlocal _attempt_number=\"${2:-}\"\n"
+				"\tlocal _attempt_reasoning=\"${3:-}\"\n"
+				"\tprintf '%s\t%s\t%s\t%s\n' \"${slot_model}\" \"${effective_model}\" \"${_attempt_reasoning:-<empty>}\" \"${_attempt_label}\" >> \"${ATTEMPT_LOG_FILE}\"\n"
+				"\tcase \"${slot_model}\" in\n"
+				"\t\tx-ai/grok-4.20)\n"
+				"\t\t\tcase \"${effective_model}\" in\n"
+				"\t\t\t\tx-ai/grok-4.20)\n"
+				"\t\t\t\t\tREVIEWER_ATTEMPT_OUTCOME=\"retryable_failure\"\n"
+				"\t\t\t\t\tREVIEWER_ATTEMPT_RETRYABLE_CLASS=\"rate_limit\"\n"
+				"\t\t\t\t\tREVIEWER_ATTEMPT_CMD_RC=1\n"
+				"\t\t\t\t\treturn 0\n"
+				"\t\t\t\t\t;;\n"
+				"\t\t\t\tx-ai/grok-4.1-fast)\n"
+				"\t\t\t\t\tprintf 'fallback success for %s\\n' \"${slot_model}\" > \"${output_file}\"\n"
+				"\t\t\t\t\tREVIEWER_ATTEMPT_OUTCOME=\"success\"\n"
+				"\t\t\t\t\tREVIEWER_ATTEMPT_RETRYABLE_CLASS=\"\"\n"
+				"\t\t\t\t\tREVIEWER_ATTEMPT_CMD_RC=0\n"
+				"\t\t\t\t\treturn 0\n"
+				"\t\t\t\t\t;;\n"
+				"\t\t\tesac\n"
+				"\t\t\t;;\n"
+				"\t\tmoonshotai/kimi-k2.5)\n"
+				"\t\t\tREVIEWER_ATTEMPT_OUTCOME=\"retryable_failure\"\n"
+				"\t\t\tREVIEWER_ATTEMPT_RETRYABLE_CLASS=\"server_error\"\n"
+				"\t\t\tREVIEWER_ATTEMPT_CMD_RC=1\n"
+				"\t\t\treturn 0\n"
+				"\t\t\t;;\n"
+				"\tesac\n"
+				"\tREVIEWER_ATTEMPT_OUTCOME=\"failed\"\n"
+				"\tREVIEWER_ATTEMPT_RETRYABLE_CLASS=\"\"\n"
+				"\tREVIEWER_ATTEMPT_CMD_RC=1\n"
+				"\treturn 0\n"
+				"}\n"
+				"get_active_reviewer_models_text() {\n"
+				"\tprintf 'x-ai/grok-4.20\\n'\n"
+				"}\n"
+				"mapped_model=\"x-ai/grok-4.20\"\n"
+				"mapped_safe_name=\"$(printf '%s' \"${mapped_model}\" | tr '/.:' '___')\"\n"
+				"unmapped_model=\"moonshotai/kimi-k2.5\"\n"
+				"unmapped_safe_name=\"$(printf '%s' \"${unmapped_model}\" | tr '/.:' '___')\"\n"
+				"run_reviewer \"${mapped_model}\" \"${mapped_safe_name}\" \"mapped\" \"${PROMPT_FILE}\" \"xhigh\"\n"
+				"cached_successes=\"$(run_reviewer_pass \"cached\" \"${PROMPT_FILE}\" \"xhigh\")\"\n"
+				"run_reviewer \"${unmapped_model}\" \"${unmapped_safe_name}\" \"unmapped\" \"${PROMPT_FILE}\" \"xhigh\"\n"
+				"{\n"
+				"\tprintf 'MAPPED_STATUS_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/status_mapped_${mapped_safe_name}.txt\"\n"
+				"\tprintf 'MAPPED_OUTPUT_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/mapped_${mapped_safe_name}.txt\"\n"
+				"\tprintf 'MAPPED_LOG_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/mapped_${mapped_safe_name}.log\"\n"
+				"\tprintf 'CACHED_STATUS_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/status_cached_${mapped_safe_name}.txt\"\n"
+				"\tprintf 'CACHED_OUTPUT_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/cached_${mapped_safe_name}.txt\"\n"
+				"\tprintf 'CACHED_LOG_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/cached_${mapped_safe_name}.log\"\n"
+				"\tprintf 'UNMAPPED_STATUS_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/status_unmapped_${unmapped_safe_name}.txt\"\n"
+				"\tprintf 'UNMAPPED_OUTPUT_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/unmapped_${unmapped_safe_name}.txt\"\n"
+				"\tprintf 'UNMAPPED_LOG_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/unmapped_${unmapped_safe_name}.log\"\n"
+				"\tprintf 'ATTEMPT_LOG_FILE=%s\\n' \"${ATTEMPT_LOG_FILE}\"\n"
+				"\tprintf 'CACHED_SUCCESSES=%s\\n' \"${cached_successes}\"\n"
+				"} > \"${STATE_FILE}\"\n",
+			],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+
+		state: dict[str, str] = {}
+		for raw_line in state_file.read_text(encoding="utf-8").splitlines():
+			if "=" not in raw_line:
+				continue
+			key, value = raw_line.split("=", 1)
+			state[key] = value
+
+		artifact_contents = {
+			f"{key}_CONTENT": Path(path).read_text(encoding="utf-8")
+			for key, path in state.items()
+			if key.endswith("_FILE")
+		}
+
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			**state,
+			**artifact_contents,
+			"health_state": json.loads(health_file.read_text(encoding="utf-8")),
+		}
+
+
+def _run_reviewer_health_dispatch_logging_harness() -> dict[str, str]:
+	helper_block = _reviewer_failback_helper_block()
+	with tempfile.TemporaryDirectory(prefix="reviewer-health-dispatch-") as td:
+		tmp = Path(td)
+		health_file = tmp / "reviewer_health_state.json"
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				f"{helper_block}\n"
+				"reviewer_health_state_action() {\n"
+				"\tcat <<'EOF'\n"
+				"decision=run\n"
+				"state=healthy\n"
+				"transition=healthy\n"
+				"reason=open_ttl_expired\n"
+				"consecutive_retryable_failures=0\n"
+				"effective_model=x-ai/grok-4.1-fast\n"
+				"open_until_epoch=0\n"
+				"EOF\n"
+				"}\n"
+				"reviewer_health_dispatch_prepare 'x-ai/grok-4.20'\n",
+			],
+			cwd=str(REPO_ROOT),
+			env={
+				**os.environ,
+				"REVIEWER_CIRCUIT_BREAKER_ENABLED": "1",
+				"REVIEWER_HEALTH_STATE_FILE": str(health_file),
+			},
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+		}
+
+
+def _run_reviewer_zero_success_guard_harness(*, statuses: list[str]) -> dict[str, object]:
+	guard_block = _reviewer_zero_success_guard_block()
+	with tempfile.TemporaryDirectory(prefix="reviewer-zero-success-") as td:
+		tmp = Path(td)
+		reviews = tmp / "reviews"
+		reviews.mkdir()
+		github_env_file = tmp / "github_env.txt"
+
+		for idx, status in enumerate(statuses, 1):
+			(reviews / f"status_review_model{idx}.txt").write_text(f"{status}\n", encoding="utf-8")
+			(reviews / f"review_model{idx}.log").write_text(f"status={status}\n", encoding="utf-8")
+
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				"reviewers_successful=0\n"
+				f"{guard_block}\n",
+			],
+			cwd=str(REPO_ROOT),
+			env={
+				**os.environ,
+				"PREVIOUS_REVIEWS_DIR": str(reviews),
+				"PR_NUMBER": "123",
+				"GITHUB_ENV": str(github_env_file),
+			},
+			capture_output=True,
+			text=True,
+		)
+
+		return {
+			"returncode": result.returncode,
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			"github_env": github_env_file.read_text(encoding="utf-8") if github_env_file.exists() else "",
+		}
 
 
 def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
@@ -689,6 +964,10 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX: ${{ vars.REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX || '^(scripts/|\\.github/workflows/|\\.github/ai/|prompts/|workflow-templates/|db/contracts/|ai-memory/)' }}",
 		"REVIEWER_TIER_TRIVIAL_MODELS: ${{ vars.REVIEWER_TIER_TRIVIAL_MODELS || '' }}",
 		"REVIEWER_TIER_LITE_MODELS: ${{ vars.REVIEWER_TIER_LITE_MODELS || '' }}",
+		"REVIEWER_CIRCUIT_BREAKER_ENABLED: ${{ vars.REVIEWER_CIRCUIT_BREAKER_ENABLED || '0' }}",
+		"REVIEWER_FAILBACK_MAX_RETRIES: ${{ vars.REVIEWER_FAILBACK_MAX_RETRIES || '1' }}",
+		"REVIEWER_HEALTH_OPEN_THRESHOLD: ${{ vars.REVIEWER_HEALTH_OPEN_THRESHOLD || '3' }}",
+		"REVIEWER_HEALTH_OPEN_TTL_SECS: ${{ vars.REVIEWER_HEALTH_OPEN_TTL_SECS || '1800' }}",
 		"REVIEWER_FILTER_UNINTERESTING_ENABLED: ${{ vars.REVIEWER_FILTER_UNINTERESTING_ENABLED || 'false' }}",
 		"REVIEWER_FILTER_EXTRA_GLOBS: ${{ vars.REVIEWER_FILTER_EXTRA_GLOBS || '' }}",
 		"REVIEWER_FILTER_EXEMPT_GLOBS: ${{ vars.REVIEWER_FILTER_EXEMPT_GLOBS || 'db/contracts/**,**/migrations/**,**/migrate/**' }}",
@@ -704,6 +983,10 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX: ${{ vars.REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX || '^(scripts/|\\.github/workflows/|\\.github/ai/|prompts/|workflow-templates/|db/contracts/|ai-memory/)' }}",
 		"REVIEWER_TIER_TRIVIAL_MODELS: ${{ vars.REVIEWER_TIER_TRIVIAL_MODELS || '' }}",
 		"REVIEWER_TIER_LITE_MODELS: ${{ vars.REVIEWER_TIER_LITE_MODELS || '' }}",
+		"REVIEWER_CIRCUIT_BREAKER_ENABLED: ${{ vars.REVIEWER_CIRCUIT_BREAKER_ENABLED || '0' }}",
+		"REVIEWER_FAILBACK_MAX_RETRIES: ${{ vars.REVIEWER_FAILBACK_MAX_RETRIES || '1' }}",
+		"REVIEWER_HEALTH_OPEN_THRESHOLD: ${{ vars.REVIEWER_HEALTH_OPEN_THRESHOLD || '3' }}",
+		"REVIEWER_HEALTH_OPEN_TTL_SECS: ${{ vars.REVIEWER_HEALTH_OPEN_TTL_SECS || '1800' }}",
 	):
 		assert workflow.count(expected) >= 2, f"Missing workflow-level + codex-agent env wiring: {expected}"
 
@@ -715,6 +998,7 @@ def test_review_filter_smoke_fixtures_are_present() -> None:
 	assert PHASE_B_RISK_TIER_LITE_FIXTURE.exists(), f"missing fixture: {PHASE_B_RISK_TIER_LITE_FIXTURE}"
 	assert PHASE_B_RISK_TIER_FULL_FIXTURE.exists(), f"missing fixture: {PHASE_B_RISK_TIER_FULL_FIXTURE}"
 	assert PHASE_B_RISK_TIER_ALWAYS_FULL_FIXTURE.exists(), f"missing fixture: {PHASE_B_RISK_TIER_ALWAYS_FULL_FIXTURE}"
+	assert PHASE_G_FLAKY_REVIEWER_FIXTURE.exists(), f"missing fixture: {PHASE_G_FLAKY_REVIEWER_FIXTURE}"
 
 
 def test_reviewer_risk_tier_classifier_honours_thresholds_and_always_full_regex() -> None:
@@ -759,6 +1043,78 @@ def test_review_filter_helper_wiring_is_flag_gated_and_fail_open() -> None:
 	assert 'prepare_reviewer_filtered_artifacts' in reviewers
 	assert 'REVIEWER_FILTER_SKIP:' in reviewers
 	assert 'review_filter_uninteresting_files.sh unavailable' in reviewers
+
+
+def test_reviewer_failback_wiring_stages_asset_and_restores_cache_before_reviewers() -> None:
+	workflow = _workflow_text()
+	stage_block = _step_block("Stage workflow support files")
+	preflight_block = _step_block('"Preflight: Verify required files before reviewer invocation"')
+	restore_block = _step_block("Restore review-issue ledger")
+	reviewers = _reviewers_text()
+
+	assert 'failback_src=".codex-workflow-src/scripts/reviewer_failback_chains.json"' in stage_block
+	assert 'failback_src=".codex-workflow-src-main/scripts/reviewer_failback_chains.json"' in stage_block
+	assert 'install -m 0644 "${failback_src}" "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json"' in stage_block
+	assert 'reviewer_failback_chains.json not found in checked-out support sources' in stage_block
+	assert 'check_soft_file "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json"' in preflight_block
+	assert 'REVIEWER_FAILBACK_CHAINS_FILE="${REVIEWER_FAILBACK_CHAINS_FILE:-${SUPPORT_SCRIPTS_DIR:-scripts}/reviewer_failback_chains.json}"' in reviewers
+	assert '.ai/review_runtime/' in restore_block
+	assert workflow.index('- name: Restore review-issue ledger') < workflow.index('- name: Run reviewer models')
+
+
+def test_reviewer_failback_harness_reuses_cached_open_state_and_skips_unmapped_models() -> None:
+	result = _run_reviewer_failback_harness()
+	health_state = result["health_state"]
+	assert isinstance(health_state, dict)
+	assert health_state["version"] == 1
+
+	mapped_entry = health_state["reviewers"]["x-ai/grok-4.20"]
+	assert mapped_entry["state"] == "open"
+	assert mapped_entry["effective_model"] == "x-ai/grok-4.1-fast"
+	assert mapped_entry["last_failure_kind"] == "rate_limit"
+	assert mapped_entry["open_until_epoch"] > 0
+
+	unmapped_entry = health_state["reviewers"]["moonshotai/kimi-k2.5"]
+	assert unmapped_entry["state"] == "open"
+	assert unmapped_entry["effective_model"] == ""
+	assert unmapped_entry["last_failure_kind"] == "server_error"
+
+	assert result["MAPPED_STATUS_FILE_CONTENT"].strip() == "success"
+	assert "fallback success for x-ai/grok-4.20" in result["MAPPED_OUTPUT_FILE_CONTENT"]
+	assert "REVIEWER_FAILBACK: x-ai/grok-4.20 -> x-ai/grok-4.1-fast reason=rate_limit" in result["MAPPED_LOG_FILE_CONTENT"]
+	assert "REVIEWER_HEALTH: x-ai/grok-4.20 open reason=rate_limit failures=1 effective_model=x-ai/grok-4.1-fast" in result["MAPPED_LOG_FILE_CONTENT"]
+
+	assert result["CACHED_SUCCESSES"] == "0"
+	assert result["CACHED_STATUS_FILE_CONTENT"].strip() == "skipped_open"
+	assert "cached reviewer health state is open" in result["CACHED_OUTPUT_FILE_CONTENT"]
+	assert "cached reviewer health state is open" in result["CACHED_LOG_FILE_CONTENT"]
+	assert "cached_effective_model=x-ai/grok-4.1-fast" in result["CACHED_LOG_FILE_CONTENT"]
+
+	assert result["UNMAPPED_STATUS_FILE_CONTENT"].strip() == "skipped_unmapped"
+	assert "no same-family failback mapping is available" in result["UNMAPPED_OUTPUT_FILE_CONTENT"]
+	assert "REVIEWER_FAILBACK_UNMAPPED: moonshotai/kimi-k2.5" in result["UNMAPPED_LOG_FILE_CONTENT"]
+
+	attempt_lines = result["ATTEMPT_LOG_FILE_CONTENT"].splitlines()
+	assert attempt_lines == [
+		"x-ai/grok-4.20\tx-ai/grok-4.20\txhigh\tattempt 1",
+		"x-ai/grok-4.20\tx-ai/grok-4.20\thigh\tattempt 2 (cheaper reasoning high)",
+		"x-ai/grok-4.20\tx-ai/grok-4.1-fast\txhigh\tattempt 3 (failback x-ai/grok-4.1-fast)",
+		"moonshotai/kimi-k2.5\tmoonshotai/kimi-k2.5\txhigh\tattempt 1",
+		"moonshotai/kimi-k2.5\tmoonshotai/kimi-k2.5\thigh\tattempt 2 (cheaper reasoning high)",
+	]
+
+
+def test_reviewer_health_dispatch_logs_to_stderr_only() -> None:
+	result = _run_reviewer_health_dispatch_logging_harness()
+	assert result["stdout"] == ""
+	assert "REVIEWER_HEALTH: x-ai/grok-4.20 healthy reason=open_ttl_expired failures=0 effective_model=x-ai/grok-4.1-fast" in result["stderr"]
+
+
+def test_reviewer_zero_success_guard_fails_open_when_every_review_slot_was_skipped() -> None:
+	result = _run_reviewer_zero_success_guard_harness(statuses=["skipped_open", "skipped_unmapped"])
+	assert result["returncode"] == 0
+	assert "REVIEWERS_SUCCESSFUL=0\n" == result["github_env"]
+	assert "all review slots were skipped fail-open" in result["stdout"]
 
 
 def test_reviewer_filter_harness_strips_low_signal_paths_and_preserves_exemptions() -> None:
@@ -1523,6 +1879,10 @@ def main() -> int:
 	test_review_filter_smoke_fixtures_are_present()
 	test_reviewer_risk_tier_classifier_honours_thresholds_and_always_full_regex()
 	test_review_filter_helper_wiring_is_flag_gated_and_fail_open()
+	test_reviewer_failback_wiring_stages_asset_and_restores_cache_before_reviewers()
+	test_reviewer_failback_harness_reuses_cached_open_state_and_skips_unmapped_models()
+	test_reviewer_health_dispatch_logs_to_stderr_only()
+	test_reviewer_zero_success_guard_fails_open_when_every_review_slot_was_skipped()
 	test_reviewer_filter_harness_strips_low_signal_paths_and_preserves_exemptions()
 	test_reviewer_filter_script_preserves_nested_exempt_paths()
 	test_reviewer_filter_script_preserves_root_level_migration_exempt_paths()
