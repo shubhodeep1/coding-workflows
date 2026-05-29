@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_agents_md_materiality.sh:lines ~380-400 in the heredoc | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The broad `except Exception as exc` swallows non-recoverable errors, writes a fallback JSON, and exits 0, hiding the underlying failure from operators.\n  WHY: This can make workflow failures appear successful while obscuring the root cause in logs.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/review_agents_md_materiality.sh:lines ~380-400 in the heredoc | confidence=4\n  PROBLEM: The broad `except Exception as exc` catches all errors, logs a warning, writes a fallback JSON with `\"internal_error:...\"`, and then re-raises `SystemExit(0)`.\n  WHY: A non-recoverable error can silently suppress the real exception trace while still exiting 0, masking the root cause from workflow operators.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "f51ac89de550701e9613e196cd9d27b26da5cc2cf1028d32cc4632570cb3d44c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2996,
+    "run_id": "26648874856",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26648874856",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260529164658_3eaf7f09e1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2996,
+    "run_id": "26648874856"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-29T16:46:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
