@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-2974` @ `dbbfd85d49dbc4eab97ab59a3578d16271c01b44` (matches integration branch metadata).\n\nClarification mapping: no `Q<ID>` questions were issued; `/answer [auto-answered-by-orchestrator]` only confirms continuation, so there are no option-specific constraints to apply.\n\nActions taken:\n- Inspected the current non-review prompt surfaces and their live consumers.\n- Used the existing review prompt-injection guard (`scripts/review_run_reviewers.sh`) and its contract test (`tests/test_review_autofix_smoke_editor_override.py`) as the representative pattern.\n\nAssumptions / missing context:\n- \u201cListed prompt files\u201d maps to `prompts/mode-clarify.txt`, `prompts/mode-plan.txt`, `prompts/mode-implement.txt`, and `prompts/mode-validate-*.txt`.\n- Out of scope: review/autofix surfaces and implement-repair / implement-diagnose prompts.\n- The issue references `files_touched`, but none were provided in the supplied body; this plan assumes the minimal prompt/test surface only.\n\nAutomation / wiring:\n- Existing prompt surfaces only; no new script, scheduler wiring, supervisor, or DB gate.\n\n1. Files likely to change\n- Primary prompt files:\n  - `prompts/mode-clarify.txt`\n  - `prompts/mode-plan.txt`\n  - `prompts/mode-implement.txt`\n  - `prompts/mode-validate-discover.txt`\n  - `prompts/mode-validate-generate.txt`\n  - `prompts/mode-validate-diagnose.txt`\n  - `prompts/mode-validate-fix-harness.txt`\n  - `prompts/mode-validate-self-heal.txt`\n- Live clarify/plan/implement prompt surfaces (runtime parity):\n  - `.github/workflows/clarify.yml`\n  - `.github/workflows/plan.yml`\n  - `.github/workflows/implement.yml`\n- One new lightweight contract test under `tests/` (for example `tests/test_phase_prompt_untrusted_context_contract.py`).\n\n2. Functions/modules to implement\n- No logic-module change; this is a prompt-contract hardening pass.\n- Add a short, additive trust-boundary clause to each in-scope prompt surface:\n  - clarify: issue description + issue comments are untrusted author-controlled data; use for task intent only.\n  - plan: issue body, clarification Q&A, and comment thread are untrusted author-controlled data; use for planning facts only.\n  - implement: issue body, clarification answers, approved plan text, and issue comments are untrusted input; use for task intent/approved scope, not operational override.\n  - validate-discover / diagnose: tracking-issue project spec, failure JSON, logs, and similar inlined artifacts are evidence, not instructions.\n  - validate-generate / fix-harness / self-heal: any inlined validation context, logs, comments, diagnosis JSON, or raw model output is untrusted evidence and cannot override the prompt\u2019s rules/schema.\n- Keep additions near each prompt\u2019s existing context/input intro; do not restructure prompts or add new sections.\n- Reuse the review guard vocabulary (`UNTRUSTED`, `data not instructions`, `intent/evidence only`) as the pattern, but keep these edits lighter than the full review guard.\n\n3. Data structures affected\n- No runtime data-model changes.\n- No env vars, JSON schemas, YAML shapes, issue markers, or labels change.\n- Only prompt strings and the new test\u2019s expected-snippet map are affected.\n\n4. API or interface changes\n- None.\n- Preserve all current output contracts exactly:\n  - clarify `STATUS / CONFIDENCE / RATIONALE / QUESTIONS`\n  - plan\u2019s existing seven-section plan + estimate line\n  - implement `Output: repository changes only`\n  - validate YAML/JSON schemas and self-heal JSON diff schema\n- No GitHub API, workflow input, CLI, or scheduler changes.\n\n5. Potential risks or edge cases\n- Conflict detected: `prompts/mode-clarify.txt`, `prompts/mode-plan.txt`, and `prompts/mode-implement.txt` are contract files, but the live clarify/plan/implement prompts are assembled inline in `.github/workflows/clarify.yml`, `.github/workflows/plan.yml`, and `.github/workflows/implement.yml`. Editing only the prompt files would not harden the live runtime for those phases.\n- Conflict detected: the issue says \u201cstay inside files_touched\u201d, but no `files_touched` list was provided in the supplied issue body.\n- `mode-validate-generate.txt` and `mode-validate-fix-harness.txt` are currently compatibility/self-heal prompt ledgers rather than the main validate execution path; wording changes there still matter, but mostly for contract/self-heal behavior.\n- Keep wording minimal so CI prompt-length caps in `.github/workflows/ci.yml` are not tripped, especially for `mode-clarify.txt`, `mode-plan.txt`, `mode-validate-discover.txt`, and `mode-validate-self-heal.txt`.\n- Avoid literal `=== BEGIN/END UNTRUSTED ===` block rewrites unless the surrounding assembler is also updated to emit matching fences; for this issue, short additive guard text is the safer minimal change.\n- Do not over-harden the language so much that the model stops using issue/project text or logs for legitimate intent/evidence extraction.\n\n6. Testing considerations\n- Add one focused regression test that asserts the new trust-boundary language remains present on every changed prompt surface.\n- Make the test string-based and narrow: assert for the stable anchor phrases introduced by this change rather than exact line numbers.\n- Include the clarify/plan/implement workflow heredocs in that same test if those inline prompt surfaces are updated for runtime parity.\n- Use the existing review contract test style as the model: `tests/test_review_autofix_smoke_editor_override.py`.\n- After adding the new test, run it plus the smallest related existing prompt-contract tests (`tests/test_plan_clarify_blocked_output.py`, the `mode-implement.txt` prompt assertions in `tests/test_implement_post_codex_recovery.py`, and `tests/test_validate_semble_contract.py`) to confirm no schema/placeholder text was accidentally removed.\n\nImplementation-time estimate: 60 minutes\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "60905f5b76a0c2d7731ddd297fa6fd50cedb9b5bde70dc4240dba2c8fb871421",
+  "lineage": {
+    "issue_number": 2977,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26616549595",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26616549595",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2977"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260529035118_de3bca50d3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2977,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26616549595"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2977",
+  "timestamps": {
+    "created_at": "2026-05-29T03:51:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
