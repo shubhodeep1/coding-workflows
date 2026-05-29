@@ -187,6 +187,80 @@ emit_review_rb_untrusted_file() {
   printf '=== END UNTRUSTED %s ===\n' "${label}"
 }
 
+flag_enabled() {
+  local normalized=""
+  normalized="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  case "${normalized}" in
+    1|true|yes|on)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+normalize_review_state() {
+  case "${1:-}" in
+    APPROVE|APPROVE_WITH_COMMENTS|COMMENT|REQUEST_CHANGES)
+      printf '%s' "${1}"
+      ;;
+    *)
+      printf '%s' ""
+      ;;
+  esac
+}
+
+resolve_review_state_for_post() {
+  local logical_state=""
+  logical_state="$(normalize_review_state "${1:-}")"
+  if ! flag_enabled "${REVIEW_APPROVAL_RUBRIC_ENABLED:-false}"; then
+    printf '%s' ""
+    return 0
+  fi
+  if [ -z "${logical_state}" ]; then
+    printf '%s' ""
+    return 0
+  fi
+  if [ "${logical_state}" = "REQUEST_CHANGES" ] \
+    && flag_enabled "${REVIEW_BREAK_GLASS_ENABLED:-false}" \
+    && flag_enabled "${REVIEW_BREAK_GLASS:-false}"; then
+    printf 'BREAK_GLASS: pr=%s commenter=%s\n' "${PR_NUMBER:-unknown}" "${REVIEW_BREAK_GLASS_COMMENTER:-unknown}" >&2
+    printf 'COMMENT'
+    return 0
+  fi
+  printf '%s' "${logical_state}"
+}
+
+post_review_blocked_assessment() {
+  local body_file="$1"
+  local review_state="$2"
+  local head_sha="$3"
+  local head_ref="$4"
+
+  if [ -n "${review_state}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/post_review_comment.sh" ]; then
+    if HEAD_SHA="${head_sha}" \
+      HEAD_REF="${head_ref}" \
+      PR_NUMBER="${PR_NUMBER}" \
+      REPOSITORY="${REPOSITORY}" \
+      GITHUB_RUN_ID="${GITHUB_RUN_ID:-}" \
+      GITHUB_SERVER_URL="${GITHUB_SERVER_URL:-https://github.com}" \
+      bash "${SUPPORT_SCRIPTS_DIR}/post_review_comment.sh" --review-state "${review_state}" --body-file "${body_file}"; then
+      return 0
+    fi
+    echo "::warning::Review-blocked judge failed to post PR review via post_review_comment.sh; falling back to a PR comment." >&2
+  fi
+
+  gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+    -f body="$(cat "${body_file}")" >/dev/null 2>&1 || return 1
+  return 0
+}
+
+REVIEW_APPROVAL_RUBRIC_ENABLED="${REVIEW_APPROVAL_RUBRIC_ENABLED:-false}"
+REVIEW_BREAK_GLASS_ENABLED="${REVIEW_BREAK_GLASS_ENABLED:-false}"
+REVIEW_BREAK_GLASS="${REVIEW_BREAK_GLASS:-false}"
+REVIEW_BREAK_GLASS_COMMENTER="${REVIEW_BREAK_GLASS_COMMENTER:-}"
+
 REVIEW_RB_SEMBLE_HELPERS_AVAILABLE="false"
 REVIEW_RB_SEMBLE_MAX_CHUNKS="4"
 REVIEW_RB_SEMBLE_QUERY_MAX_BYTES="12000"
@@ -540,6 +614,14 @@ PR_REVIEW_COMMENTS="$(printf '%s' "${PR_CONTEXT_JSON}" | jq -c '.review_comments
 PR_META_JSON="$(printf '%s' "${PR_CONTEXT_JSON}" | jq -c '.meta // {}' 2>/dev/null || echo "{}")"
 if [ "${PR_META_JSON}" = "{}" ]; then
   PR_META_JSON="$(jq '.' "${PR_META_FILE}" 2>/dev/null || echo "{}")"
+fi
+POST_REVIEW_HEAD_SHA="$(printf '%s' "${PR_META_JSON}" | jq -r '.head_sha // ""' 2>/dev/null || echo "")"
+POST_REVIEW_HEAD_REF="$(printf '%s' "${PR_META_JSON}" | jq -r '.head_ref // ""' 2>/dev/null || echo "")"
+if [ -z "${POST_REVIEW_HEAD_SHA}" ]; then
+  POST_REVIEW_HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"
+fi
+if [ -z "${POST_REVIEW_HEAD_REF}" ]; then
+  POST_REVIEW_HEAD_REF="${TARGET_BRANCH:-}"
 fi
 
 # -----------------------------------------------------------
@@ -925,9 +1007,28 @@ RB_ACTION="$(printf '%s\n' "${JUDGE_JSON}" | jq -r '.action')"
 RB_JUSTIFICATION="$(printf '%s\n' "${JUDGE_JSON}" | jq -r '.justification // "no justification"')"
 RB_FIX_DESC="$(printf '%s\n' "${JUDGE_JSON}" | jq -r '.fix_description // ""')"
 RB_REMAINING="$(printf '%s\n' "${JUDGE_JSON}" | jq -r '.remaining_issues_summary // ""')"
+RB_LOGICAL_REVIEW_STATE="$(normalize_review_state "$(printf '%s\n' "${JUDGE_JSON}" | jq -r '.review_state // ""')")"
+if flag_enabled "${REVIEW_APPROVAL_RUBRIC_ENABLED}" && [ -z "${RB_LOGICAL_REVIEW_STATE}" ]; then
+  echo "::warning::Review-blocked judge output omitted or invalid review_state; defaulting logical/outbound review state to COMMENT." >&2
+  RB_LOGICAL_REVIEW_STATE="COMMENT"
+fi
+RB_OUTBOUND_REVIEW_STATE="$(resolve_review_state_for_post "${RB_LOGICAL_REVIEW_STATE}")"
+
+if [ -n "${RB_LOGICAL_REVIEW_STATE}" ]; then
+  echo "judge_review_state_logical=${RB_LOGICAL_REVIEW_STATE}" >> "$GITHUB_OUTPUT"
+fi
+if [ -n "${RB_OUTBOUND_REVIEW_STATE}" ]; then
+  echo "judge_review_state_outbound=${RB_OUTBOUND_REVIEW_STATE}" >> "$GITHUB_OUTPUT"
+fi
 
 echo "Judge decision: ${RB_ACTION}"
 echo "Justification: ${RB_JUSTIFICATION}"
+if [ -n "${RB_LOGICAL_REVIEW_STATE}" ]; then
+  echo "Logical review state: ${RB_LOGICAL_REVIEW_STATE}"
+fi
+if [ -n "${RB_OUTBOUND_REVIEW_STATE}" ] && [ "${RB_OUTBOUND_REVIEW_STATE}" != "${RB_LOGICAL_REVIEW_STATE}" ]; then
+  echo "Outbound review state: ${RB_OUTBOUND_REVIEW_STATE}"
+fi
 
 # -----------------------------------------------------------
 # Merged-PR action guard (runs BEFORE judge comment post so a
@@ -992,16 +1093,29 @@ fi
 # -----------------------------------------------------------
 # Post judge assessment to PR
 # -----------------------------------------------------------
-JUDGE_COMMENT="## Review-Blocked Judge Decision
+JUDGE_COMMENT="## Review-Blocked Judge Decision"
+RB_JUDGE_COMMENT_FILE="${RUNTIME_DIR}/rb_judge_comment.md"
+{
+  echo "${JUDGE_COMMENT}"
+  echo
+  echo "**Decision:** ${RB_ACTION}"
+  if [ -n "${RB_LOGICAL_REVIEW_STATE}" ]; then
+    echo "**Logical review state:** ${RB_LOGICAL_REVIEW_STATE}"
+  fi
+  if [ -n "${RB_OUTBOUND_REVIEW_STATE}" ] && [ "${RB_OUTBOUND_REVIEW_STATE}" != "${RB_LOGICAL_REVIEW_STATE}" ]; then
+    echo "**Posted review state:** ${RB_OUTBOUND_REVIEW_STATE} (break-glass override)"
+  fi
+  echo "**Retry:** $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}"
+  echo "**Justification:** ${RB_JUSTIFICATION}"
+  echo
+  echo "**Remaining issues:** ${RB_REMAINING}"
+} > "${RB_JUDGE_COMMENT_FILE}"
 
-**Decision:** ${RB_ACTION}
-**Retry:** $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}
-**Justification:** ${RB_JUSTIFICATION}
-
-**Remaining issues:** ${RB_REMAINING}"
-
-gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
-  -f body="${JUDGE_COMMENT}" >/dev/null 2>&1 || true
+post_review_blocked_assessment \
+  "${RB_JUDGE_COMMENT_FILE}" \
+  "${RB_OUTBOUND_REVIEW_STATE}" \
+  "${POST_REVIEW_HEAD_SHA}" \
+  "${POST_REVIEW_HEAD_REF}" || true
 
 # -----------------------------------------------------------
 # Execute judge action

@@ -1022,8 +1022,11 @@ jobs:
       REVIEW_PARSER_FAILOPEN: ${{ vars.REVIEW_PARSER_FAILOPEN || '1' }}
       CONSOLIDATOR_REJECT_SCHEMA_ENABLED: ${{ vars.CONSOLIDATOR_REJECT_SCHEMA_ENABLED || 'false' }}
       REVIEW_LEDGER_ENABLED: ${{ vars.REVIEW_LEDGER_ENABLED || '1' }}
+      REVIEW_LEDGER_REREVIEW_ENABLED: ${{ vars.REVIEW_LEDGER_REREVIEW_ENABLED || 'false' }}
       REVIEW_LEDGER_PERSIST_LIMIT: ${{ vars.REVIEW_LEDGER_PERSIST_LIMIT || '2' }}
       REVIEW_LEDGER_PATH: ${{ vars.REVIEW_LEDGER_PATH || format('.ai/review_issue_ledger/pr-{0}.txt', inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number || '0') }}
+      REVIEW_APPROVAL_RUBRIC_ENABLED: ${{ vars.REVIEW_APPROVAL_RUBRIC_ENABLED || 'false' }}
+      REVIEW_BREAK_GLASS_ENABLED: ${{ vars.REVIEW_BREAK_GLASS_ENABLED || 'false' }}
       REVIEW_REVIEWER_CHECKLIST_ENABLED: ${{ vars.REVIEW_REVIEWER_CHECKLIST_ENABLED || '1' }}
       REVIEW_REVIEWER_ITERATION_SCOPING: ${{ vars.REVIEW_REVIEWER_ITERATION_SCOPING || '1' }}
       REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}
@@ -5188,6 +5191,66 @@ jobs:
             echo "Setting ai:ready-to-merge on issue #${issue_number}"
             set_issue_phase_label_resilient "${issue_number}" "ai:ready-to-merge" "${REPOSITORY}"
           done <<< "${ISSUE_NUMBERS}"
+      - name: Detect review-blocked break-glass override
+        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        run: |
+          set -euo pipefail
+          echo "REVIEW_BREAK_GLASS=false" >> "$GITHUB_ENV"
+          echo "REVIEW_BREAK_GLASS_COMMENTER=" >> "$GITHUB_ENV"
+
+          if [ "${REVIEW_BREAK_GLASS_ENABLED:-false}" != 'true' ]; then
+            exit 0
+          fi
+
+          if [ ! -s "${PR_ISSUE_COMMENTS_FILE:-}" ] && [ ! -s "${PR_REVIEWS_FILE:-}" ]; then
+            echo "Review-blocked break-glass scan inputs missing; continuing with override disabled."
+            exit 0
+          fi
+
+          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' >> "$GITHUB_ENV"
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          issue_comments_path = os.environ.get("PR_ISSUE_COMMENTS_FILE", "")
+          reviews_path = os.environ.get("PR_REVIEWS_FILE", "")
+          pattern = re.compile(r"^@codex break-glass\b")
+
+          def load(path_text: str):
+              if not path_text:
+                  return []
+              path = Path(path_text)
+              if not path.exists() or path.stat().st_size == 0:
+                  return []
+              try:
+                  data = json.loads(path.read_text(encoding="utf-8"))
+              except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                  return []
+              if not isinstance(data, list):
+                  return []
+              return [item for item in data if isinstance(item, dict)]
+
+          matches = []
+          for entry in load(issue_comments_path) + load(reviews_path):
+              user = entry.get("user") or {}
+              if not isinstance(user, dict) or user.get("type") != "User":
+                  continue
+              body = entry.get("body")
+              if not isinstance(body, str) or not pattern.match(body):
+                  continue
+              sort_key = entry.get("created_at") or entry.get("submitted_at") or entry.get("updated_at") or ""
+              try:
+                  ident = int(entry.get("id") or 0)
+              except (TypeError, ValueError):
+                  ident = 0
+              matches.append((sort_key, ident, str(user.get("login") or "unknown")))
+
+          if matches:
+              matches.sort()
+              print("REVIEW_BREAK_GLASS=true")
+              print(f"REVIEW_BREAK_GLASS_COMMENTER={matches[-1][2]}")
+          PY
 
       - name: Review-blocked judge decision
         id: rb_judge
