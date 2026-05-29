@@ -47,6 +47,18 @@
       "pr_branch": null,
       "pr_url": null,
       "recorded_at": "2026-05-29T03:34:52Z"
+    },
+    {
+      "codex_attempts_used": 3,
+      "committed_type": null,
+      "consumer_default_branch": "main",
+      "consumer_head_sha": "9b67ecb668a49fc5b77e74e76e7cb211e6e07dce",
+      "discovered_type": null,
+      "failure_reason": "codex_rc_nonzero(rc=1)",
+      "outcome": "failed",
+      "pr_branch": null,
+      "pr_url": null,
+      "recorded_at": "2026-05-29T10:39:47Z"
     }
   ],
   "repository": "shubhodeep1/btc_sweeper",
