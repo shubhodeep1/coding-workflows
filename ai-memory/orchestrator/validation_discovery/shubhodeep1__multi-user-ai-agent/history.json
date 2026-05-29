@@ -47,6 +47,18 @@
       "pr_branch": null,
       "pr_url": null,
       "recorded_at": "2026-05-29T03:39:39Z"
+    },
+    {
+      "codex_attempts_used": 3,
+      "committed_type": null,
+      "consumer_default_branch": "main",
+      "consumer_head_sha": "bc55dffff1ad536ccb326419076361d7e4a69959",
+      "discovered_type": null,
+      "failure_reason": "codex_rc_nonzero(rc=1)",
+      "outcome": "failed",
+      "pr_branch": null,
+      "pr_url": null,
+      "recorded_at": "2026-05-29T10:44:53Z"
     }
   ],
   "repository": "shubhodeep1/multi-user-ai-agent",
