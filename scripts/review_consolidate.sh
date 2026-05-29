@@ -34,6 +34,133 @@ emit_consolidator_untrusted_file()
 	printf '=== END UNTRUSTED %s ===\n' "${label}"
 }
 
+is_truthy()
+{
+	local normalized
+	normalized="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+	case "${normalized}" in
+		1|true|yes|on)
+			return 0
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+render_prior_round_decisions_file()
+{
+	local ledger_path="$1"
+	local out_path="$2"
+	local tmp_path=""
+
+	: > "${out_path}"
+	if ! is_truthy "${REVIEW_LEDGER_ENABLED:-1}" || ! is_truthy "${REVIEW_LEDGER_REREVIEW_ENABLED:-0}"; then
+		return 0
+	fi
+	if [ ! -s "${ledger_path}" ]; then
+		return 0
+	fi
+	if ! command -v python3 >/dev/null 2>&1; then
+		review_log "rereview_enabled=1 missing=python3 ledger_path=${ledger_path}"
+		return 0
+	fi
+
+	tmp_path="$(mktemp)"
+	if PYTHONDONTWRITEBYTECODE=1 python3 - "${ledger_path}" > "${tmp_path}" <<'PY'
+from pathlib import Path
+import sys
+
+ledger_path = Path(sys.argv[1])
+raw = ledger_path.read_text(encoding="utf-8", errors="replace").splitlines()
+
+entries = []
+current = None
+editor_outcomes = []
+in_editor_outcomes = False
+
+def clean(value: str) -> str:
+	return " ".join(value.replace("\t", " ").split())
+
+def flush_current() -> None:
+	global current, editor_outcomes, in_editor_outcomes
+	if current is None:
+		return
+	current["EDITOR_OUTCOMES"] = " | ".join(clean(line) for line in editor_outcomes if clean(line))
+	entries.append(current)
+	current = None
+	editor_outcomes = []
+	in_editor_outcomes = False
+
+for line in raw:
+	if line.startswith("=== ENTRY ") and line.endswith(" ==="):
+		flush_current()
+		current = {"ISSUE_ID": line[len("=== ENTRY "):-len(" ===")].strip()}
+		editor_outcomes = []
+		in_editor_outcomes = False
+		continue
+	if line == "=== END ENTRY ===":
+		flush_current()
+		continue
+	if current is None:
+		continue
+	if in_editor_outcomes:
+		if line.startswith("  "):
+			editor_outcomes.append(line[2:])
+			continue
+		in_editor_outcomes = False
+	if line.startswith("EDITOR_OUTCOMES:"):
+		payload = line.split(":", 1)[1].strip()
+		if payload:
+			editor_outcomes = [payload]
+		else:
+			editor_outcomes = []
+			in_editor_outcomes = True
+		continue
+	if ":" in line:
+		key, value = line.split(":", 1)
+		current[key.strip()] = value.strip()
+
+flush_current()
+
+for entry in sorted(entries, key=lambda item: item.get("ISSUE_ID", "")):
+	status = clean(entry.get("STATUS", ""))
+	editor_text = entry.get("EDITOR_OUTCOMES", "")
+	editor_lower = editor_text.lower()
+	prior_decision = ""
+	if status == "accepted-residual":
+		prior_decision = "accepted-residual"
+	elif (
+		"won't fix" in editor_lower
+		or "wont fix" in editor_lower
+		or "won't-fix" in editor_lower
+		or "wont-fix" in editor_lower
+		or "will not fix" in editor_lower
+	):
+		prior_decision = "won't-fix"
+
+	parts = [
+		f'issue_id={clean(entry.get("ISSUE_ID", "")) or "unknown"}',
+		f'file={clean(entry.get("FILE", "")) or "unknown"}',
+		f'lines={clean(entry.get("LINES", "")) or "unknown"}',
+		f'lens={clean(entry.get("LENS", "")) or "unknown"}',
+		f'severity={clean(entry.get("SEVERITY", "")) or "unknown"}',
+		f'status={status or "unknown"}',
+		f'prior_decision={prior_decision or "none"}',
+		f'persist_count={clean(entry.get("PERSIST_COUNT", "")) or "0"}',
+		f'editor_outcomes={editor_text or "none"}',
+	]
+	print("; ".join(parts))
+PY
+	then
+		mv "${tmp_path}" "${out_path}"
+	else
+		review_log "rereview_enabled=1 ledger_parse_failed=1 ledger_path=${ledger_path}"
+		rm -f "${tmp_path}"
+		: > "${out_path}"
+	fi
+}
+
 # Per the OpenAI prompt guide, consolidation/aggregation is a synthesis
 # task with a closed output contract. Model TIER is bumped from
 # gpt-5.4-mini to gpt-5.4 (full) to align with the guide's "synthesis
@@ -46,6 +173,8 @@ REVIEW_CONSOLIDATOR_MODEL="${REVIEW_CONSOLIDATOR_MODEL:-openai/gpt-5.4}"
 REVIEW_CONSOLIDATOR_REASONING="${REVIEW_CONSOLIDATOR_REASONING:-xhigh}"
 REVIEW_CONSOLIDATOR_TIMEOUT_SECS="${REVIEW_CONSOLIDATOR_TIMEOUT_SECS:-300}"
 REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT="${REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT:-16000}"
+REVIEW_LEDGER_ENABLED="${REVIEW_LEDGER_ENABLED:-1}"
+REVIEW_LEDGER_REREVIEW_ENABLED="${REVIEW_LEDGER_REREVIEW_ENABLED:-0}"
 
 RUNTIME_DIR="${RUNTIME_DIR:?RUNTIME_DIR is required}"
 PROMPT_TEMPLATE="${SUPPORT_PROMPTS_DIR:-prompts}/review-consolidator.txt"
@@ -55,6 +184,8 @@ LAST_RUN_DIFF_STAT_FILE="${LAST_RUN_DIFF_STAT_FILE:-${RUNTIME_DIR}/last_run_diff
 CONSOLIDATOR_PROMPT_FILE="${RUNTIME_DIR}/review_consolidator_prompt.txt"
 CONSOLIDATOR_RAW_FILE="${RUNTIME_DIR}/consolidator_raw.txt"
 JUDGE_INTERIM_PRIORS_FILE="${JUDGE_INTERIM_PRIORS_FILE:-${RUNTIME_DIR}/judge_interim_priors.txt}"
+REVIEW_LEDGER_PATH="${REVIEW_LEDGER_PATH:-.ai/review_issue_ledger/pr-${PR_NUMBER:-0}.txt}"
+PRIOR_ROUND_DECISIONS_FILE="${RUNTIME_DIR}/prior_round_decisions.txt"
 
 # Validate REVIEW_CONSOLIDATOR_REASONING is a known reasoning level.
 # Prevent invalid values from breaking TOML config or shell quoting.
@@ -79,6 +210,8 @@ for required in "${PROMPT_TEMPLATE}" "${REVIEWER_BUNDLE_FILE}"; do
 		exit 0
 	fi
 done
+
+render_prior_round_decisions_file "${REVIEW_LEDGER_PATH}" "${PRIOR_ROUND_DECISIONS_FILE}"
 
 {
 	if [ -s ./pre_assembled_static.txt ]; then
@@ -107,6 +240,12 @@ done
 	echo
 	if [ -s "${JUDGE_INTERIM_PRIORS_FILE}" ]; then
 		cat "${JUDGE_INTERIM_PRIORS_FILE}"
+		echo
+	fi
+	if [ -s "${PRIOR_ROUND_DECISIONS_FILE}" ]; then
+		echo "=== BEGIN PRIOR ROUND DECISIONS ==="
+		cat "${PRIOR_ROUND_DECISIONS_FILE}"
+		echo "=== END PRIOR ROUND DECISIONS ==="
 		echo
 	fi
 	echo "=== REVIEWER BUNDLE ==="
@@ -208,6 +347,13 @@ if [ "${raw_bytes}" -gt "${max_bytes_actual}" ]; then
 else
 	cp "${tmp_out}" "${CONSOLIDATOR_RAW_FILE}"
 	capped=0
+fi
+
+if [ -s "${CONSOLIDATOR_RAW_FILE}" ]; then
+	while IFS= read -r rereview_line || [ -n "${rereview_line}" ]; do
+		[ -n "${rereview_line}" ] || continue
+		review_log "${rereview_line}"
+	done < <(grep -E '^RE_REVIEW_SKIP:[[:space:]]+' "${CONSOLIDATOR_RAW_FILE}" 2>/dev/null || true)
 fi
 
 output_bytes="$(wc -c < "${CONSOLIDATOR_RAW_FILE}" | tr -d '[:space:]')"
