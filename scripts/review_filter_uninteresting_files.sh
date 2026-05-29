@@ -70,6 +70,29 @@ def detect_generated_marker(repo_root: Path, rel_path: str) -> str | None:
 	return None
 
 
+def detect_generated_marker_in_block(block: list[str]) -> str | None:
+	first_hunk_header = next((line for line in block if line.startswith("@@")), None)
+	if not first_hunk_header or not first_hunk_header.startswith("@@ -1"):
+		return None
+	scanned: list[str] = []
+	total = 0
+	for line in block:
+		if line.startswith(("diff --git ", "index ", "--- ", "+++ ", "@@")):
+			continue
+		if not line or line[0] not in {" ", "+", "-"}:
+			continue
+		fragment = line[1:]
+		scanned.append(fragment)
+		total += len(fragment)
+		if total >= GENERATED_MARKER_SCAN_BYTES:
+			break
+	window = "".join(scanned)[:GENERATED_MARKER_SCAN_BYTES].lower()
+	for needle, label in GENERATED_MARKERS:
+		if needle in window:
+			return label
+	return None
+
+
 def split_diff(diff_text: str) -> tuple[list[str], list[list[str]]]:
 	prefix: list[str] = []
 	blocks: list[list[str]] = []
@@ -151,6 +174,8 @@ def main() -> int:
 			reason = f"path-glob:{matched_glob}"
 		else:
 			marker = detect_generated_marker(repo_root, path)
+			if not marker and not (repo_root / path).is_file():
+				marker = detect_generated_marker_in_block(block)
 			if marker:
 				reason = f"generated-marker:{marker}"
 		if reason:
