@@ -223,6 +223,267 @@ REVIEWER_SCOPED_FILES_CONTEXT_FILE="${RUNTIME_DIR}/reviewer_scoped_files_context
 REVIEWER_SCOPE_QUERY_SEED_FILE="${RUNTIME_DIR}/reviewer_scope_query_seed.txt"
 TARGETED_FILE_CONTEXT_SCRIPT="${TARGETED_FILE_CONTEXT_SCRIPT:-${SUPPORT_SCRIPTS_DIR:-scripts}/targeted_file_context.py}"
 
+# ── Reviewer uninteresting-file filter helpers ──────────────────────
+RAW_REVIEWER_PR_DIFF_FILE="${PR_DIFF_FILE}"
+RAW_REVIEWER_ORIGINAL_PR_DIFF_FILE="${ORIGINAL_PR_DIFF_FILE}"
+RAW_REVIEWER_LAST_RUN_DIFF_FILE="${LAST_RUN_DIFF_FILE}"
+RAW_REVIEWER_LAST_RUN_CHANGED_FILES_FILE="${LAST_RUN_CHANGED_FILES_FILE}"
+RAW_REVIEWER_PR_CHANGED_FILES_FILE="${PR_CHANGED_FILES_FILE}"
+RAW_REVIEWER_LAST_RUN_DIFF_STAT_FILE="${LAST_RUN_DIFF_STAT_FILE}"
+RAW_REVIEWER_LAST_COMMIT_STAT_FILE="${LAST_COMMIT_STAT_FILE}"
+RAW_REVIEWER_SYMBOL_DIFF_SUMMARY_FILE="${SYMBOL_DIFF_SUMMARY_FILE}"
+
+REVIEWER_FILTER_SCRIPT="${SUPPORT_SCRIPTS_DIR:-scripts}/review_filter_uninteresting_files.sh"
+REVIEWER_FILTER_ACTIVE=false
+REVIEWER_FILTER_ENABLED=false
+case "$(printf '%s' "${REVIEWER_FILTER_UNINTERESTING_ENABLED:-0}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+  1|true|yes|on) REVIEWER_FILTER_ENABLED=true ;;
+esac
+
+REVIEWER_FILTERED_PR_DIFF_FILE="${RUNTIME_DIR}/reviewer_filtered_pr_diff.patch"
+REVIEWER_FILTERED_ORIGINAL_PR_DIFF_FILE="${RUNTIME_DIR}/reviewer_filtered_original_pr_diff.patch"
+REVIEWER_FILTERED_LAST_RUN_DIFF_FILE="${RUNTIME_DIR}/reviewer_filtered_last_run_diff.patch"
+REVIEWER_FILTERED_PR_CHANGED_FILES_FILE="${RUNTIME_DIR}/reviewer_filtered_pr_changed_files.txt"
+REVIEWER_FILTERED_LAST_RUN_CHANGED_FILES_FILE="${RUNTIME_DIR}/reviewer_filtered_last_run_changed_files.txt"
+REVIEWER_FILTERED_LAST_RUN_DIFF_STAT_FILE="${RUNTIME_DIR}/reviewer_filtered_last_run_diff_stat.txt"
+REVIEWER_FILTERED_LAST_COMMIT_STAT_FILE="${RUNTIME_DIR}/reviewer_filtered_last_commit_stat.txt"
+REVIEWER_FILTERED_SYMBOL_DIFF_SUMMARY_FILE="${RUNTIME_DIR}/reviewer_filtered_symbol_diff_summary.txt"
+REVIEWER_FILTERED_PR_KEPT_PATHS_FILE="${RUNTIME_DIR}/reviewer_filtered_pr_kept_paths.txt"
+REVIEWER_FILTERED_LAST_RUN_KEPT_PATHS_FILE="${RUNTIME_DIR}/reviewer_filtered_last_run_kept_paths.txt"
+REVIEWER_FILTERED_PR_SKIPPED_FILE="${RUNTIME_DIR}/reviewer_filtered_pr_skipped.txt"
+REVIEWER_FILTERED_LAST_RUN_SKIPPED_FILE="${RUNTIME_DIR}/reviewer_filtered_last_run_skipped.txt"
+
+filter_reviewer_paths_file_against_skips() {
+  local input_file="$1"
+  local output_file="$2"
+  local skipped_file="$3"
+
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
+    "$input_file" "$output_file" "$skipped_file" <<'PY'
+from pathlib import Path
+import sys
+
+try:
+	from targeted_file_context import parse_paths_file
+except ModuleNotFoundError:
+	from scripts.targeted_file_context import parse_paths_file
+
+input_path = Path(sys.argv[1])
+output_path = Path(sys.argv[2])
+skipped_path = Path(sys.argv[3])
+
+skip_paths: set[str] = set()
+if skipped_path.is_file():
+	for raw_line in skipped_path.read_text(encoding="utf-8", errors="replace").splitlines():
+		if not raw_line.strip():
+			continue
+		skip_paths.add(raw_line.split("\t", 1)[0].strip())
+
+paths = parse_paths_file(str(input_path)) if input_path.is_file() else []
+kept_paths = [path for path in paths if path not in skip_paths]
+
+output_path.parent.mkdir(parents=True, exist_ok=True)
+output_path.write_text("\n".join(kept_paths) + ("\n" if kept_paths else ""), encoding="utf-8")
+PY
+}
+
+filter_reviewer_stat_file_against_skips() {
+  local input_file="$1"
+  local output_file="$2"
+  local skipped_file="$3"
+
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
+    "$input_file" "$output_file" "$skipped_file" <<'PY'
+from pathlib import Path
+import sys
+
+try:
+	from targeted_file_context import normalize_path
+except ModuleNotFoundError:
+	from scripts.targeted_file_context import normalize_path
+
+input_path = Path(sys.argv[1])
+output_path = Path(sys.argv[2])
+skipped_path = Path(sys.argv[3])
+
+skip_paths: set[str] = set()
+if skipped_path.is_file():
+	for raw_line in skipped_path.read_text(encoding="utf-8", errors="replace").splitlines():
+		if not raw_line.strip():
+			continue
+		skip_paths.add(raw_line.split("\t", 1)[0].strip())
+
+def extract_stat_path(raw_line: str) -> str | None:
+	if "|" not in raw_line:
+		return None
+	left = raw_line.split("|", 1)[0].strip()
+	if not left:
+		return None
+	if " => " in left:
+		if "{" in left and "}" in left:
+			prefix, rest = left.split("{", 1)
+			brace_content, suffix = rest.split("}", 1)
+			if " => " in brace_content:
+				_, new_part = brace_content.split(" => ", 1)
+				left = f"{prefix}{new_part.strip()}{suffix}"
+				while "//" in left:
+					left = left.replace("//", "/")
+			else:
+				left = left.rsplit(" => ", 1)[1].strip()
+		else:
+			left = left.rsplit(" => ", 1)[1].strip()
+	return normalize_path(left)
+
+kept_lines: list[str] = []
+if input_path.is_file():
+	for raw_line in input_path.read_text(encoding="utf-8", errors="replace").splitlines():
+		candidate = extract_stat_path(raw_line)
+		if candidate and candidate in skip_paths:
+			continue
+		kept_lines.append(raw_line)
+
+output_path.parent.mkdir(parents=True, exist_ok=True)
+output_path.write_text("\n".join(kept_lines) + ("\n" if kept_lines else ""), encoding="utf-8")
+PY
+}
+
+ensure_reviewer_filter_diff_placeholder() {
+  local target_file="$1"
+  local message="$2"
+
+  if [ ! -s "${target_file}" ]; then
+    printf '%s\n' "${message}" > "${target_file}"
+  fi
+}
+
+build_reviewer_filtered_symbol_diff_summary() {
+  local diff_file="$1"
+  local changed_files_file="$2"
+  local output_file="$3"
+  local generator_script="${SUPPORT_SCRIPTS_DIR:-scripts}/generate_symbol_diff_summary.py"
+
+  if [ ! -f "${generator_script}" ]; then
+    printf '%s\n' "Filtered reviewer symbol diff summary unavailable." > "${output_file}"
+    return 0
+  fi
+
+  if [ -s "${diff_file}" ] || [ -s "${changed_files_file}" ]; then
+    PYTHONDONTWRITEBYTECODE=1 python3 "${generator_script}" \
+      --diff-file "${diff_file}" \
+      --changed-files "${changed_files_file}" \
+      --output "${output_file}" \
+      --project-dir "${GITHUB_WORKSPACE:-$(pwd)}" >/dev/null 2>&1 || {
+        printf '%s\n' "Filtered reviewer symbol diff summary unavailable." > "${output_file}"
+      }
+  else
+    printf '%s\n' "No reviewer-visible diff available for symbol summary." > "${output_file}"
+  fi
+}
+
+emit_reviewer_filter_skip_logs() {
+  local pr_skipped_file="$1"
+  local last_run_skipped_file="$2"
+
+  PYTHONDONTWRITEBYTECODE=1 python3 - "$pr_skipped_file" "$last_run_skipped_file" <<'PY'
+from pathlib import Path
+import sys
+
+seen: set[tuple[str, str]] = set()
+for candidate in sys.argv[1:]:
+	path = Path(candidate)
+	if not path.is_file():
+		continue
+	for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+		if not raw_line.strip():
+			continue
+		parts = raw_line.split("\t", 1)
+		if len(parts) != 2:
+			continue
+		row = (parts[0].strip(), parts[1].strip())
+		if row in seen:
+			continue
+		seen.add(row)
+		print(f"REVIEWER_FILTER_SKIP: {row[0]} {row[1]}")
+PY
+}
+
+prepare_reviewer_filtered_artifacts() {
+  REVIEWER_FILTER_ACTIVE=false
+
+  if [ "${REVIEWER_FILTER_ENABLED}" != "true" ]; then
+    return 0
+  fi
+
+  if [ ! -x "${REVIEWER_FILTER_SCRIPT}" ]; then
+    echo "::warning::review_filter_uninteresting_files.sh unavailable at ${REVIEWER_FILTER_SCRIPT}; fail-open to raw reviewer artifacts."
+    return 0
+  fi
+
+  if ! bash "${REVIEWER_FILTER_SCRIPT}" \
+    --diff-file "${RAW_REVIEWER_PR_DIFF_FILE}" \
+    --output-diff "${REVIEWER_FILTERED_PR_DIFF_FILE}" \
+    --kept-paths-file "${REVIEWER_FILTERED_PR_KEPT_PATHS_FILE}" \
+    --skipped-paths-file "${REVIEWER_FILTERED_PR_SKIPPED_FILE}" \
+    --repo-root "${GITHUB_WORKSPACE:-$(pwd)}"; then
+    echo "::warning::review_filter_uninteresting_files.sh failed for ${RAW_REVIEWER_PR_DIFF_FILE}; fail-open to raw reviewer artifacts."
+    return 0
+  fi
+
+  if ! bash "${REVIEWER_FILTER_SCRIPT}" \
+    --diff-file "${RAW_REVIEWER_LAST_RUN_DIFF_FILE}" \
+    --output-diff "${REVIEWER_FILTERED_LAST_RUN_DIFF_FILE}" \
+    --kept-paths-file "${REVIEWER_FILTERED_LAST_RUN_KEPT_PATHS_FILE}" \
+    --skipped-paths-file "${REVIEWER_FILTERED_LAST_RUN_SKIPPED_FILE}" \
+    --repo-root "${GITHUB_WORKSPACE:-$(pwd)}"; then
+    echo "::warning::review_filter_uninteresting_files.sh failed for ${RAW_REVIEWER_LAST_RUN_DIFF_FILE}; fail-open to raw reviewer artifacts."
+    return 0
+  fi
+
+  if ! cp "${REVIEWER_FILTERED_PR_DIFF_FILE}" "${REVIEWER_FILTERED_ORIGINAL_PR_DIFF_FILE}"; then
+    echo "::warning::Failed to prepare filtered ORIGINAL_PR_DIFF_FILE; fail-open to raw reviewer artifacts."
+    return 0
+  fi
+
+  if ! filter_reviewer_paths_file_against_skips "${RAW_REVIEWER_PR_CHANGED_FILES_FILE}" "${REVIEWER_FILTERED_PR_CHANGED_FILES_FILE}" "${REVIEWER_FILTERED_PR_SKIPPED_FILE}"; then
+    echo "::warning::Failed to filter PR changed files for reviewers; fail-open to raw reviewer artifacts."
+    return 0
+  fi
+
+  if ! filter_reviewer_paths_file_against_skips "${RAW_REVIEWER_LAST_RUN_CHANGED_FILES_FILE}" "${REVIEWER_FILTERED_LAST_RUN_CHANGED_FILES_FILE}" "${REVIEWER_FILTERED_LAST_RUN_SKIPPED_FILE}"; then
+    echo "::warning::Failed to filter last-run changed files for reviewers; fail-open to raw reviewer artifacts."
+    return 0
+  fi
+
+  if ! filter_reviewer_stat_file_against_skips "${RAW_REVIEWER_LAST_RUN_DIFF_STAT_FILE}" "${REVIEWER_FILTERED_LAST_RUN_DIFF_STAT_FILE}" "${REVIEWER_FILTERED_LAST_RUN_SKIPPED_FILE}"; then
+    echo "::warning::Failed to filter last-run diffstat for reviewers; fail-open to raw reviewer artifacts."
+    return 0
+  fi
+
+  if ! filter_reviewer_stat_file_against_skips "${RAW_REVIEWER_LAST_COMMIT_STAT_FILE}" "${REVIEWER_FILTERED_LAST_COMMIT_STAT_FILE}" "${REVIEWER_FILTERED_LAST_RUN_SKIPPED_FILE}"; then
+    echo "::warning::Failed to filter last-commit diffstat for reviewers; fail-open to raw reviewer artifacts."
+    return 0
+  fi
+
+  ensure_reviewer_filter_diff_placeholder "${REVIEWER_FILTERED_PR_DIFF_FILE}" "All reviewer-visible PR diff hunks were filtered by REVIEWER_FILTER_UNINTERESTING."
+  ensure_reviewer_filter_diff_placeholder "${REVIEWER_FILTERED_ORIGINAL_PR_DIFF_FILE}" "All reviewer-visible PR diff hunks were filtered by REVIEWER_FILTER_UNINTERESTING."
+  ensure_reviewer_filter_diff_placeholder "${REVIEWER_FILTERED_LAST_RUN_DIFF_FILE}" "All reviewer-visible last-run diff hunks were filtered by REVIEWER_FILTER_UNINTERESTING."
+  build_reviewer_filtered_symbol_diff_summary "${REVIEWER_FILTERED_PR_DIFF_FILE}" "${REVIEWER_FILTERED_PR_CHANGED_FILES_FILE}" "${REVIEWER_FILTERED_SYMBOL_DIFF_SUMMARY_FILE}"
+  emit_reviewer_filter_skip_logs "${REVIEWER_FILTERED_PR_SKIPPED_FILE}" "${REVIEWER_FILTERED_LAST_RUN_SKIPPED_FILE}"
+
+  PR_DIFF_FILE="${REVIEWER_FILTERED_PR_DIFF_FILE}"
+  ORIGINAL_PR_DIFF_FILE="${REVIEWER_FILTERED_ORIGINAL_PR_DIFF_FILE}"
+  LAST_RUN_DIFF_FILE="${REVIEWER_FILTERED_LAST_RUN_DIFF_FILE}"
+  LAST_RUN_CHANGED_FILES_FILE="${REVIEWER_FILTERED_LAST_RUN_CHANGED_FILES_FILE}"
+  PR_CHANGED_FILES_FILE="${REVIEWER_FILTERED_PR_CHANGED_FILES_FILE}"
+  LAST_RUN_DIFF_STAT_FILE="${REVIEWER_FILTERED_LAST_RUN_DIFF_STAT_FILE}"
+  LAST_COMMIT_STAT_FILE="${REVIEWER_FILTERED_LAST_COMMIT_STAT_FILE}"
+  SYMBOL_DIFF_SUMMARY_FILE="${REVIEWER_FILTERED_SYMBOL_DIFF_SUMMARY_FILE}"
+  REVIEWER_FILTER_ACTIVE=true
+}
+# ── End reviewer uninteresting-file filter helpers ──────────────────
+
+prepare_reviewer_filtered_artifacts
+
 # ── Reviewer iteration-scoping helpers ───────────────────────────────
 write_reviewer_scope_summary() {
   local mode="$1"
@@ -604,6 +865,16 @@ else
   echo "Reviewer iteration scoping: full-diff (${REVIEWER_SCOPE_REASON})."
 fi
 
+REVIEWER_FILTER_CONTEXT_NOTE_BLOCK=""
+if [ "${REVIEWER_FILTER_ACTIVE}" = "true" ]; then
+  REVIEWER_FILTER_CONTEXT_NOTE_BLOCK="$(cat <<'EOF'
+REVIEWER FILTER NOTE
+Reviewer-visible diff/context artifacts below exclude configured low-signal files such as lockfiles, generated files, minified assets, sourcemaps, and tsbuildinfo unless the path matches an exemption like db/contracts/** or a migration directory.
+If an expected changed file is absent from the reviewer context, assume the pre-filter may have removed it intentionally.
+EOF
+)"
+fi
+
 if [ "${IS_FIRST_ITERATION}" = "true" ]; then
   ITERATION_CONTEXT_BLOCK="$(printf '%s\n' \
     'ITERATION CONTEXT' \
@@ -895,6 +1166,9 @@ __REVIEWER_PROMPT__
   if [ -n "${REVIEWER_INPUT_CONTEXT_NOTE_BLOCK}" ]; then
     printf '\n%s\n' "${REVIEWER_INPUT_CONTEXT_NOTE_BLOCK}"
   fi
+  if [ -n "${REVIEWER_FILTER_CONTEXT_NOTE_BLOCK}" ]; then
+    printf '\n%s\n' "${REVIEWER_FILTER_CONTEXT_NOTE_BLOCK}"
+  fi
   printf '\n'
   emit_reviewer_prompt_context_sections
 
@@ -951,6 +1225,13 @@ Before suggesting a change, check for overengineering:
 2. Would a human reviewer likely choose a simpler fix?
 3. Does the fix introduce unnecessary complexity?
 Prefer the simpler solution.
+
+COMMON ANTI-RULES
+These anti-rules suppress suggestion / nit-level noise only. Still report any clear blocker or high-severity runtime defect.
+- Do not report theoretical risks that require unlikely preconditions not evidenced in the changed code, runtime artifacts, or task context.
+- Do not report defense-in-depth nits when the primary safeguard already exists and the diff does not weaken it.
+- Do not report style-only, naming-preference, or “cleaner alternative” suggestions when no documented rule or runtime failure is involved.
+- Do not re-flag prior-round issues that were explicitly accepted as residual or won't-fix unless LAST RUN DIFF changes the evidence, raises the severity, or reintroduces the runtime failure.
 
 Review the pull request as a senior engineer and identify issues in the modified code.
 Focus on problems that could realistically affect:
