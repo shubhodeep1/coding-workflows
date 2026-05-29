@@ -40,8 +40,15 @@ def _extract_shell_function(path: Path, function_name: str) -> str:
 	if start is None:
 		raise AssertionError(f"missing function {function_name} in {path}")
 
-	brace_line = start + 1
-	while brace_line < len(lines) and lines[brace_line].strip() != "{":
+	function_opens_inline = re.match(
+		rf"^{re.escape(function_name)}\(\)\s*\{{(?:\s+#.*)?$",
+		lines[start].strip(),
+	) is not None
+	brace_line = start if function_opens_inline else start + 1
+	while not function_opens_inline and brace_line < len(lines):
+		stripped = lines[brace_line].strip()
+		if stripped == "{" or stripped.startswith("{ "):
+			break
 		brace_line += 1
 	if brace_line >= len(lines):
 		raise AssertionError(f"missing opening brace for {function_name}")
@@ -59,9 +66,9 @@ def _extract_shell_function(path: Path, function_name: str) -> str:
 		match = re.search(r"<<[-]?'?([A-Za-z_][A-Za-z0-9_]*)'?", lines[end])
 		if match:
 			in_heredoc = match.group(1)
-		if stripped == "{":
+		if stripped == "{" or stripped.startswith("{ "):
 			depth += 1
-		elif stripped == "}":
+		elif stripped == "}" or stripped.startswith("}"):
 			depth -= 1
 			if depth == 0:
 				return "\n".join(lines[start : end + 1]) + "\n"
@@ -211,21 +218,20 @@ def _render_integration_conflict_prompt(tmp_p: Path, payload: str) -> str:
 	fingerprints_file.write_text("{}\n", encoding="utf-8")
 
 	script_lines = CONFLICT_PREPARE.read_text(encoding="utf-8").splitlines(keepends=True)
-	start = next(
-		i for i, ln in enumerate(script_lines)
-		if ln.rstrip("\n") == 'PROMPT_TPL="${PROMPT_TPL}" \\'
-	)
 	end = next(
 		i
-		for i, ln in enumerate(script_lines[start:], start=start)
-		if ln.rstrip("\n") == "fi"
-		and i > start
-		and "_smoke_override_tmp" in "".join(script_lines[start : i + 1])
-	) + 1
+		for i, ln in enumerate(script_lines)
+		if ln.strip() == '> "${CONFLICT_RESOLVER_PROMPT_FILE}"'
+	)
+	start = next(
+		i
+		for i in range(end, -1, -1)
+		if script_lines[i].lstrip().startswith("PROMPT_TPL=")
+	)
 	block = (
 		'PROMPT_TPL="${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver.txt"\n'
 		"set -euo pipefail\n"
-		+ "".join(script_lines[start:end])
+		+ "".join(script_lines[start : end + 1])
 	)
 	env = os.environ.copy()
 	env.update({
