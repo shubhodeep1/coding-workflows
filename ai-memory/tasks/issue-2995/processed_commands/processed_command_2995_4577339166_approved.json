@@ -5,13 +5,25 @@
   "entry_id": "processed_command_2995_4577339166_approved",
   "issue_number": 2995,
   "metadata": {
+    "branch": "ai/issue-2995",
+    "changed_files": [
+      ".github/workflows/review_autofix.yml",
+      "scripts/fixtures/cloudflare-learnings/phase-d-package-bump-no-agents-update.patch",
+      "scripts/review_agents_md_materiality.sh",
+      "tests/test_review_autofix_review_pipeline_contract.py"
+    ],
+    "issue_number": 2995,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/2995",
+    "pr_number": 2996,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/2996",
+    "run_attempt": "1",
+    "run_id": "26648072789",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/26648072789"
   },
   "run_attempt": 1,
   "run_id": "26648072789",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-05-29T16:07:35Z",
+  "status": "completed",
+  "timestamp": "2026-05-29T16:22:21Z",
   "workflow": "implement"
 }
