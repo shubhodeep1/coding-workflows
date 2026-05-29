@@ -479,3 +479,141 @@
 | Code modularization | 8-12 | Large |
 | Expression size reduction | 3-4 | Medium |
 | Medium/Low fixes | 2-5 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-05-29)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the consolidation is proven safe from static reading alone; `NEEDS_VERIFICATION` means there is a plausible reduction, but step ordering, freshness, or failure semantics still need a targeted check first; `RISKY_SKIP` means the overlap is real but the call sits in pagination, poller/race-defense, or similarly sensitive logic that must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+No findings.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID:** `REUSE-001`
+  - **Safety tag:** `NEEDS_VERIFICATION`
+  - **Files:** `.github/workflows/implement.yml:69-82`, `.github/workflows/implement.yml:340-406`, `.github/workflows/implement.yml:1046-1057`
+  - **Current call count:** 2 logical REST reads on the normal implement path, plus a 3rd conditional read when `${ISSUE_META_FILE}` was not populated earlier.
+  - **Proposed call count:** 1 logical REST read.
+  - **Endpoint(s):** `GET /repos/{owner}/{repo}/issues/{issue_number}`
+  - **Evidence:**
+    ```sh
+    # .github/workflows/implement.yml:80
+    ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '{state: (.state // "open"), labels: [.labels[].name]}')"
+
+    # .github/workflows/implement.yml:391-406
+    if ! issue_meta_json="$(gh_api_with_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"; then
+    ...
+    printf '%s\n' "${issue_meta_json}" > "${ISSUE_META_FILE}"
+
+    # .github/workflows/implement.yml:1055-1056
+    if [ ! -s "${ISSUE_META_FILE}" ]; then
+      gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
+    fi
+    ```
+  - **Proposed fix:** Move `Create runtime workspace` ahead of `Precheck approval phase label`, have the precheck fetch the full issue JSON once into `${ISSUE_META_FILE}`, derive `state`/`labels` from that file, and make `Resolve checkout ref` plus `Fetch issue metadata` file-only readers.
+  - **Safety rationale:** `NEEDS_VERIFICATION` because the reads are in different steps with different failure contracts (`gh api` hard-fail in precheck vs retry/fallback behavior in later steps), so one cached fetch is not statically proven to preserve both paths.
+  - **Downstream signal:** Verify on an open issue, a closed issue, and a simulated issue-metadata fetch failure that skip behavior and checkout-ref fallback remain unchanged before collapsing these reads.
+
+- **ID:** `REUSE-002`
+  - **Safety tag:** `RISKY_SKIP`
+  - **Files:** `.github/workflows/review_autofix.yml:1593-1598`, `scripts/review_rb_judge.sh:503-518`, `scripts/gh_helpers.sh:720-725`, `scripts/gh_helpers.sh:812-899`
+  - **Current call count:** 3 logical fetches minimum on the PR-backed `rb_judge` path (2 paginated REST snapshot invocations + 1 later `gh_pr_with_all_comments` invocation), or 4 logical fetches if `gh_pr_with_all_comments` falls back to REST.
+  - **Proposed call count:** 2 logical fetches, if the judge consumes the already-snapshotted comment files instead of re-querying GitHub.
+  - **Endpoint(s):** GraphQL `repository.pullRequest(number: $number) { comments, reviews { comments } }`; REST `GET /repos/{repo}/issues/{pr}/comments`; REST `GET /repos/{repo}/pulls/{pr}/comments`
+  - **Evidence:**
+    ```sh
+    # .github/workflows/review_autofix.yml:1593-1598
+    gh_retry /tmp/gh_issue_comments_raw.json api --paginate repos/${{ github.repository }}/issues/"${PR_NUMBER}"/comments
+    ...
+    gh_retry /tmp/gh_review_comments_raw.json api --paginate repos/${{ github.repository }}/pulls/"${PR_NUMBER}"/comments
+    ```
+
+    ```sh
+    # scripts/review_rb_judge.sh:503-513
+    PRELOADED_PR_META="$(jq -c '{ ... }' "${PR_META_FILE}" 2>/dev/null || echo '{}')"
+    PR_CONTEXT_JSON="$(gh_pr_with_all_comments "${REPOSITORY%%/*}" "${REPOSITORY##*/}" "${PR_NUMBER}" "${PRELOADED_PR_META}" || echo '{}')"
+    ```
+
+    ```sh
+    # scripts/gh_helpers.sh:720-725,812-817,898-899
+    comments_json="$(gh_retry gh api --paginate "repos/${repo_path}/issues/${pr_number}/comments" ...)"
+    review_comments_json="$(gh_retry gh api --paginate "repos/${repo_path}/pulls/${pr_number}/comments" ...)"
+    gh api graphql ...
+    _gh_pr_with_all_comments_rest "${owner}" "${repo}" "${pr_number}" "${preloaded_meta_json}"
+    ```
+  - **Proposed fix:** If this is ever pursued manually, extend `gh_pr_with_all_comments` in `scripts/gh_helpers.sh` to accept preloaded `PR_ISSUE_COMMENTS_FILE` / `PR_REVIEW_COMMENTS_FILE` inputs and let `review_rb_judge.sh` opt into them explicitly, while keeping the live GraphQL/REST path as a freshness override.
+  - **Safety rationale:** `RISKY_SKIP` because the overlapping reads are paginated and the judge runs long after the initial snapshot, so collapsing them can change both page-boundary semantics and freshness-sensitive judge input.
+  - **Downstream signal:** Do not auto-implement; manually prove that no required PR discussion is added after the early snapshot and that >100-comment PRs keep identical ordering/content before reusing these files.
+
+- **ID:** `REUSE-003`
+  - **Safety tag:** `NEEDS_VERIFICATION`
+  - **Files:** `.github/workflows/review_autofix.yml:253-260`, `.github/workflows/review_autofix.yml:1248-1263`, `.github/workflows/review_autofix.yml:1592-1606`
+  - **Current call count:** 3 logical PR reads on PR-backed runs.
+  - **Proposed call count:** 1 logical PR read.
+  - **Endpoint(s):** `GET /repos/{owner}/{repo}/pulls/{pr_number}`
+  - **Evidence:**
+    ```sh
+    # .github/workflows/review_autofix.yml:259
+    if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.state, (.merged // false), (.head.ref // ""), ((.labels // []) | map(.name) | join(",")), (.additions // 0), (.deletions // 0)] | @tsv')"; then
+    ```
+
+    ```sh
+    # .github/workflows/review_autofix.yml:1259
+    pr_state="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' || echo "")"
+    ```
+
+    ```sh
+    # .github/workflows/review_autofix.yml:1592-1606
+    gh_retry "${PR_PAYLOAD_FILE}" api repos/${{ github.repository }}/pulls/"${PR_NUMBER}"
+    ...
+    }' "${PR_PAYLOAD_FILE}" > "${PR_META_FILE}"
+    ```
+  - **Proposed fix:** Only after the report’s gate-inline refactor lands, make the first in-job `/pulls/{n}` fetch the single source of truth: write the full payload once (to `${PR_PAYLOAD_FILE}` or a temp file promoted there), derive gate outputs and the defense-in-depth `PR_CLOSED` check from that file, and leave `Collect PR metadata` as a pure `jq` transform.
+  - **Safety rationale:** `NEEDS_VERIFICATION` because the current reads span a job boundary and also use different fallback/error semantics, so static inspection cannot prove that one cached payload preserves queue-delay-sensitive `should_run`, `post_merge_dispatch`, and `PR_CLOSED` behavior.
+  - **Downstream signal:** After prototyping the gate-inline change, replay PR-backed runs that close/merge while queued and confirm `should_run`, `post_merge_dispatch`, deterministic-skip, and `PR_CLOSED` outcomes are unchanged when all three reads are collapsed.
+
+### Dead Calls (DEAD-API-###)
+
+- **ID:** `DEAD-API-001`
+  - **Safety tag:** `RISKY_SKIP`
+  - **Files:** `scripts/orchestrate_poll_process.sh:8419-8426`
+  - **Current call count:** 1 dormant paginated call site, 0 in-repo callers.
+  - **Proposed call count:** 0.
+  - **Endpoint(s):** `GET /repos/{repo}/issues/{issue_num}/comments?sort=created&direction=desc&per_page=100`
+  - **Evidence:**
+    ```sh
+    # scripts/orchestrate_poll_process.sh:8419-8426
+    read_standalone_state_json() {
+      local issue_num="$1"
+      local comments_json
+      if ! comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" | jq -s 'add // []' 2>/dev/null)"; then
+        comments_json='[]'
+      fi
+      _extract_standalone_state_json_from_comments "${comments_json}"
+    }
+    ```
+
+    ```sh
+    $ rg -n -w -- 'read_standalone_state_json' .github/workflows scripts
+    scripts/orchestrate_poll_process.sh:8419:read_standalone_state_json() {
+    ```
+  - **Proposed fix:** Remove the unused helper or mark it deprecated in place after manual poller review.
+  - **Safety rationale:** `RISKY_SKIP` because the dead helper lives in `scripts/orchestrate_poll_process.sh` and wraps a paginated poller-path API read, both of which the contract requires to stay manual-review-only.
+  - **Downstream signal:** Do not auto-implement; manually confirm no external runbooks, sourced snippets, or observability tooling depend on this helper name before deleting or deprecating it.
+
+### Cross-References to Deep Audit Section
+- `API-001`: `NEEDS_VERIFICATION` — real duplicate metadata reads, but caching across workflow steps must preserve child/tracking issue freshness and prompt-input shape.
+- `BATCH-001`: `RISKY_SKIP` — valid batching target, but it sits inside `scripts/orchestrate_poll_process.sh`, a race-defense poller path that requires manual review.
+- `BATCH-002`: `NEEDS_VERIFICATION` — batching the fallback label lookup is plausible, but the regex-fallback path must preserve missing-issue/null-label behavior before dispatch.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 2 | REUSE-001, REUSE-003 |
+| RISKY_SKIP | 2 | REUSE-002, DEAD-API-001 |
+
+### Implement-Stage Handoff
+No SAFE_TO_MERGE findings in this pass.
