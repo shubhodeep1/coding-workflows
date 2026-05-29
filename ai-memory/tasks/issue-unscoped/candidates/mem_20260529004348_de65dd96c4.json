@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Automated forward-merge of `stable` into `main` failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`.\"\n  expected_change_site: Branch ancestry should show the stable source SHA (d4ed47ada2fcd1212bacb7ca765040d713f47965) merged into this PR branch\n  confidence=[4]\n  flagged_by: [minimax_minimax-m2_5]\n  EVIDENCE: The cross-pollination summary confirms via AI autofix editor summary logs that `git merge-base --is-ancestor d4ed47ada2fcd1212bacb7ca765040d713f47965 HEAD` returned success. The current PR diff shows only 3 blank-line deletions (whitespace-only cosmetic changes) in `.github/workflows/review_autofix.yml` and `scripts/orchestrate_poll_process.sh`. This indicates the substantive merge conflict resolution for the 13 cited conflict files already occurred in prior commits (e.g., commit `4288ae6 [ai-merge-resolve]`), and the forward-merge source SHA is already present in branch ancestry.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- Requirement: \"Automated forward-merge of `stable` into `main` failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`.\"\n  Expected change site: Branch ancestry should show the stable source SHA (d4ed47ada2fcd1212bacb7ca765040d713f47965) merged into this PR branch\n  Evidence of absence: The cross-pollination summary confirms via AI autofix editor summary logs that `git merge-base --is-ancestor d4ed47ada2fcd1212bacb7ca765040d713f47965 HEAD` returned success. The current PR diff shows only 3 blank-line deletions (whitespace-only cosmetic changes) in `.github/workflows/review_autofix.yml` and `scripts/orchestrate_poll_process.sh`. This indicates the substantive merge conflict resolution for the 13 cited conflict files already occurred in prior commits (e.g., commit `4288ae6 [ai-merge-resolve]`), and the forward-merge source SHA is already present in branch ancestry.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "808273badefe73d76c8aaf2497252bf0c8da1729bfeb91bb52265a723284dc8f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2972,
+    "run_id": "26610274382",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26610274382",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260529004348_de65dd96c4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2972,
+    "run_id": "26610274382"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-29T00:43:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
