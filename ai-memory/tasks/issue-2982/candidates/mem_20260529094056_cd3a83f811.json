@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nActions taken:\n- Inspected the live reviewer model source in `.github/workflows/review_autofix.yml`.\n- Inspected `scripts/review_run_reviewers.sh` around the current reviewer fan-out and pass-2 diff-size gate.\n- Inspected `tests/test_review_autofix_review_pipeline_contract.py` and the existing `scripts/fixtures/cloudflare-learnings/*.patch` fixture pattern.\n- Read the Phase B notes in `docs/plans/ai-code-review-learnings-plan.md` only for the threshold/carve-out contract, not for the stale model list.\n\nPlanning ref:\n- SHA: `0a90068aed7030ff18ea3f18f267cee210334099`\n- Branch: `orchestrator/project-2974`\n\nClarification mapping:\n- No `Q1`/`Q2` batch existed for this issue.\n- `/answer [auto-answered-by-orchestrator]` only confirms continuation; there were no missing answers to resolve.\n\nAutomation / wiring:\n- Change type: extend existing script/workflow/tests only.\n- Entry point: existing `.github/workflows/review_autofix.yml` (`workflow_call`) \u2192 codex-agent reviewer path \u2192 `scripts/review_run_reviewers.sh`.\n- New script/supervisor: none.\n- DB work/gate: none.\n- `docs/scripts-pending-removal.md` entry: none.\n\nConflict / assumptions:\n- Older Phase B notes describe a 5-model full tier, but the live `REVIEWER_MODELS` block currently has 6 models (including `mistralai/mistral-small-2603`). Full tier should derive from the live `REVIEWER_MODELS` list, not a copied stale list.\n- `scripts/review_run_reviewers.sh` still has an inline comment saying both pass-2 defaults are `xhigh`, but the live workflow env sets `REVIEWER_PASS2_REASONING_SMALL=high` and `..._LARGE=xhigh`. The workflow env is the source of truth.\n- Assumption carried forward from the Phase B design: trivial = 1 reviewer, lite = 2 reviewers, full = all configured reviewers. If the new subset env vars are unset, derive those defaults from the current `REVIEWER_MODELS` order rather than duplicating slugs.\n\nImplementation plan\n\n1. Files likely to change\n- `scripts/review_run_reviewers.sh`\n- `.github/workflows/review_autofix.yml`\n- `tests/test_review_autofix_review_pipeline_contract.py`\n- New fixture patches under `scripts/fixtures/cloudflare-learnings/`, likely:\n  - `phase-b-risk-tier-trivial.patch`\n  - `phase-b-risk-tier-lite.patch`\n  - `phase-b-risk-tier-full.patch`\n  - `phase-b-risk-tier-always-full.patch`\n\n2. Functions / modules to implement\n- In `scripts/review_run_reviewers.sh`:\n  - Add a dedicated risk-tier helper block near the other reviewer helper sections.\n  - Compute `trivial|lite|full` from reviewer-visible PR size/file count using the already-materialized reviewer artifacts (`PR_DIFF_FILE` / `PR_CHANGED_FILES_FILE`, which may already be filtered).\n  - Reuse the current unified-diff LOC counting shape used by the pass-2 gate so header lines are excluded consistently.\n  - Use the raw changed-file list for the always-full carve-out so a sensitive path cannot be hidden by later filtering.\n  - Parse and validate new threshold env vars:\n    - `REVIEWER_RISK_TIER_TRIVIAL_LOC` default `10`\n    - `REVIEWER_RISK_TIER_TRIVIAL_FILES` default `20`\n    - `REVIEWER_RISK_TIER_LITE_LOC` default `100`\n    - `REVIEWER_RISK_TIER_LITE_FILES` default `20`\n    - `REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX` default `^(scripts/|\\\\.github/workflows/|\\\\.github/ai/|prompts/|workflow-templates/|db/contracts/|ai-memory/)`\n  - Resolve tier-specific reviewer subsets from new env vars for trivial/lite only, while keeping full bound to `REVIEWER_MODELS`.\n  - Update `run_reviewer_pass` (or a small wrapper around it) to use the resolved active reviewer list for both two-pass and single-pass mode.\n  - Emit grep-friendly `REVIEWER_RISK_TIER:` summary logging before fan-out.\n\n- In `.github/workflows/review_autofix.yml`:\n  - Add the new threshold/subset env vars near the existing reviewer envs.\n  - Plumb them through the codex-agent env block so `review_run_reviewers.sh` receives them in the same way as other reviewer controls.\n  - Keep docs untouched per issue scope.\n\n3. Data structures affected\n- New runtime reviewer-tier state in `RUNTIME_DIR` (for example a small `reviewer_risk_tier.txt`/equivalent shell vars) so the computed tier is reused across both passes and testable.\n- Derived active reviewer list for the current run/pass.\n- New Phase B patch fixtures in `scripts/fixtures/cloudflare-learnings/`.\n\n4. API / interface changes\n- New env-surface for reviewer tiering:\n  - Threshold vars above.\n  - Trivial/lite subset override vars (best fit: `REVIEWER_TIER_TRIVIAL_MODELS` and `REVIEWER_TIER_LITE_MODELS`), parsed flexibly from comma and/or newline separators.\n- Full tier remains the live `REVIEWER_MODELS` list; do not add a separate stale full-tier slug list.\n- New log contract:\n  - `REVIEWER_RISK_TIER: tier=<trivial|lite|full> loc=<n> files=<n> forced_full=<true|false> reviewers=<n> ...`\n- No external API changes.\n\n5. Risks / edge cases\n- Invalid numeric env vars should warn and fall back to defaults, not silently disable the gate.\n- Invalid always-full regex should fail safe (warn and keep/force full review rather than downgrading to a smaller tier).\n- Tier override env vars may contain stale or unknown slugs; intersect them with the live `REVIEWER_MODELS` set, and if the resolved subset is empty, fail open to full.\n- No-PR/lightweight reviewer mode should keep its existing behavior; missing PR diff inputs should not accidentally classify as trivial and shrink below the current lightweight profile.\n- First-review-iteration PRs should tier against PR artifacts, not \u201cno previous autofix\u201d placeholder files.\n- Both reviewer passes must use the same resolved active model list so summariser output and reviewer status accounting remain aligned.\n\n6. Testing considerations\n- Add one focused regression test in `tests/test_review_autofix_review_pipeline_contract.py`, following the existing helper-block extraction harness style already used for reviewer filter tests.\n- Feed it the new Phase B fixtures and assert:\n  - trivial tier for a tiny safe diff,\n  - lite tier for a medium safe diff,\n  - full tier when thresholds are exceeded,\n  - full tier when a tiny diff matches the always-full regex.\n- Make the \u201cfull\u201d threshold case exercise file-count overflow (or LOC overflow if simpler), so the test covers both dimensions of the classifier.\n- Also update the existing workflow env-wiring assertions in that same test file to include the new risk-tier vars.\n\nMissing-context notes:\n- No blocking context gaps remain.\n- I am assuming the intended default reviewer cardinalities stay at 1 / 2 / all unless overridden.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "39e22ffecb900c964d779965be0e4bfc6f5c7a6bbb53fc5c6f187e7b8c8db83e",
+  "lineage": {
+    "issue_number": 2982,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26629610285",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26629610285",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2982"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260529094056_cd3a83f811",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2982,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26629610285"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2982",
+  "timestamps": {
+    "created_at": "2026-05-29T09:40:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
