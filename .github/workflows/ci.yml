@@ -326,6 +326,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_rb_judge_self_run_exclusion.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_surface_prompt_hardening.py
 
       - name: Summariser sandbox-mode pin contract test
         run: |

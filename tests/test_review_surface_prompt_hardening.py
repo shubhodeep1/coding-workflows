@@ -322,3 +322,13 @@ def test_phase_e_review_surface_prompts_keep_injected_fence_text_as_data() -> No
 		minimum_blocks=2,
 		required_snippet="Repository task: Resolve merge conflicts on an orchestrator integration branch.",
 	)
+
+
+def main() -> int:
+	test_phase_e_review_surface_prompts_keep_injected_fence_text_as_data()
+	print("OK: review-surface prompt hardening preserves injected fence bait as data")
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
