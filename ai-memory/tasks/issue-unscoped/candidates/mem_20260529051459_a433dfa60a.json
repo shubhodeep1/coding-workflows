@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_filter_uninteresting_files.sh:74-76 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: `detect_generated_marker_in_block` uses `startswith(\"@@ -1\")`, which can match hunks that do not actually start at file line 1 and can therefore misclassify deleted-file diffs as generated.\n  WHY: This can cause reviewer-visible deletions to be silently dropped when later hunk content contains a generated-marker substring, and all reviewers reported the same root cause.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_filter_uninteresting_files.sh:75 | severity=high | confidence=5\n  PROBLEM: The `first_hunk_header.startswith(\"@@ -1\")` guard is too loose and can match hunks whose old-start line number merely begins with `1`, not just hunks starting at line 1.\n  WHY: A deleted file whose diff hunk starts at line 10+ and contains a generated-marker substring can be incorrectly classified as generated, causing its diff to be stripped from reviewer-visible output.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_filter_uninteresting_files.sh:76 | severity=high | confidence=5\n  PROBLEM: The `detect_generated_marker_in_block` guard `first_hunk_header.startswith(\"@@ -1\")` is too loose and matches hunks starting at line 10, 100, 15, and similar non-line-1 locations.\n  WHY: When the workspace file is missing and the fallback block scan runs, a deleted file with later-line generated-marker text can be incorrectly treated as generated and dropped from reviewer-visible diffs.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_filter_uninteresting_files.sh:75 | severity=high | confidence=5\n  PROBLEM: The hunk header guard uses a loose prefix check `startswith(\"@@ -1\")` which incorrectly matches hunk headers like `@@ -10,5 +10,5 @@`, `@@ -100,...`, and `@@ -15 +15 @@`.\n  WHY: If a deleted file's diff hunk starts at line 10, 100, etc. and contains a generated-marker substring, it will be incorrectly classified as generated and dropped from reviewer-visible diffs.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/review_filter_uninteresting_files.sh:74 | severity=high | confidence=5\n  PROBLEM: `detect_generated_marker_in_block` uses `startswith(\"@@ -1\")` which matches any hunk header containing the substring \"@@ -1\", including non-line-1 hunks such as `@@ -10,5 +10,5 @@`.\n  WHY: This can activate the fallback scan on hunks that do not cover the beginning of the file, causing deleted/generated files with later-line generated-marker text to be dropped from reviewer-visible artifacts.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "d9cdceb191232bb0ac31202b4cac27eb705ebfae650dc2eb095c11d9960ab24c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2980,
+    "run_id": "26619096227",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26619096227",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260529051459_a433dfa60a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2980,
+    "run_id": "26619096227"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-29T05:14:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
