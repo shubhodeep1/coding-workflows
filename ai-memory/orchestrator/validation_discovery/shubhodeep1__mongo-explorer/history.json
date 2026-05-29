@@ -47,6 +47,18 @@
       "pr_branch": null,
       "pr_url": null,
       "recorded_at": "2026-05-29T03:38:28Z"
+    },
+    {
+      "codex_attempts_used": 3,
+      "committed_type": null,
+      "consumer_default_branch": "main",
+      "consumer_head_sha": "2f5af256cdf1f245328ebd499e8cfdddbc6d639e",
+      "discovered_type": null,
+      "failure_reason": "codex_rc_nonzero(rc=1)",
+      "outcome": "failed",
+      "pr_branch": null,
+      "pr_url": null,
+      "recorded_at": "2026-05-29T10:43:37Z"
     }
   ],
   "repository": "shubhodeep1/mongo-explorer",
