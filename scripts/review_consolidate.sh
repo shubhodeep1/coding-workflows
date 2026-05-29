@@ -131,8 +131,7 @@ for entry in sorted(entries, key=lambda item: item.get("ISSUE_ID", "")):
 	if status == "accepted-residual":
 		prior_decision = "accepted-residual"
 	elif (
-		"consolidator_overridden:" in editor_lower
-		or "won't fix" in editor_lower
+		"won't fix" in editor_lower
 		or "wont fix" in editor_lower
 		or "won't-fix" in editor_lower
 		or "wont-fix" in editor_lower

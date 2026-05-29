@@ -41,12 +41,20 @@ def _install_mock_codex(mock_bin_dir: Path, output_fixture: Path) -> Path:
 	return output_file
 
 
-def _run_consolidator(output_fixture_name: str) -> tuple[subprocess.CompletedProcess[str], Path]:
+def _run_consolidator(
+	output_fixture_name: str,
+	*,
+	ledger_text: str | None = None,
+) -> tuple[subprocess.CompletedProcess[str], Path]:
 	tmp_dir = Path(tempfile.mkdtemp())
 	runtime_dir = tmp_dir / "runtime"
 	runtime_dir.mkdir(parents=True, exist_ok=True)
 	shutil.copy2(FIXTURES / "phase_f_reviewer_bundle.txt", runtime_dir / "reviewer_bundle.txt")
-	shutil.copy2(FIXTURES / "phase_f_prior_ledger.txt", runtime_dir / "review_issue_ledger.txt")
+	ledger_path = runtime_dir / "review_issue_ledger.txt"
+	if ledger_text is None:
+		shutil.copy2(FIXTURES / "phase_f_prior_ledger.txt", ledger_path)
+	else:
+		ledger_path.write_text(ledger_text, encoding="utf-8")
 	mock_bin = tmp_dir / "mock_bin"
 	mock_output = _install_mock_codex(mock_bin, FIXTURES / output_fixture_name)
 
@@ -58,7 +66,7 @@ def _run_consolidator(output_fixture_name: str) -> tuple[subprocess.CompletedPro
 	env["REVIEW_CONSOLIDATOR_ENABLED"] = "1"
 	env["REVIEW_LEDGER_ENABLED"] = "1"
 	env["REVIEW_LEDGER_REREVIEW_ENABLED"] = "1"
-	env["REVIEW_LEDGER_PATH"] = str(runtime_dir / "review_issue_ledger.txt")
+	env["REVIEW_LEDGER_PATH"] = str(ledger_path)
 	env["MOCK_CODEX_OUTPUT_FILE"] = str(mock_output)
 	env["PATH"] = f"{mock_bin}:{env.get('PATH', '')}"
 
@@ -178,6 +186,39 @@ def test_consolidator_injects_prior_round_decisions_and_logs_rereview_skip() -> 
 	assert raw == (FIXTURES / "phase_f_residual_suppressed.txt").read_text(encoding="utf-8")
 	assert "stage=consolidator RE_REVIEW_SKIP: issue_residual accepted-residual" in result.stderr
 	assert "stage=consolidator RE_REVIEW_SKIP: issue_wontfix won't-fix" in result.stderr
+
+
+def test_consolidator_does_not_treat_all_overrides_as_wontfix() -> None:
+	result, runtime_dir = _run_consolidator(
+		"phase_f_worsened_reemit.txt",
+		ledger_text=textwrap.dedent(
+			"""\
+			=== LEDGER v1 ===
+			PR_NUMBER: 4242
+			FIRST_SEEN_ITERATION: 1
+			LAST_UPDATED_ITERATION: 2
+			=== END HEADER ===
+
+			=== ENTRY issue_override ===
+			FILE: src/module.py
+			LINES: 8
+			LENS: CORRECTNESS & LOGIC
+			SEVERITY: low
+			STATUS: PERSISTING
+			FIRST_SEEN_ITERATION: 1
+			LAST_SEEN_ITERATION: 2
+			PERSIST_COUNT: 1
+			EDITOR_OUTCOMES:
+			  iter2> CONSOLIDATOR_OVERRIDDEN: issue_override — already fixed in HEAD
+			=== END ENTRY ===
+			"""
+		),
+	)
+	assert result.returncode == 0, result.stderr
+
+	prompt = (runtime_dir / "review_consolidator_prompt.txt").read_text(encoding="utf-8")
+	assert "issue_id=issue_override; file=src/module.py; lines=8; lens=CORRECTNESS & LOGIC; severity=low; status=PERSISTING; prior_decision=none; persist_count=1" in prompt
+	assert "issue_id=issue_override; file=src/module.py; lines=8; lens=CORRECTNESS & LOGIC; severity=low; status=PERSISTING; prior_decision=won't-fix; persist_count=1" not in prompt
 
 
 def test_consolidator_allows_worsened_prior_issue_to_reemit() -> None:
