@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import sys
+import traceback
 from pathlib import Path, PurePosixPath
 
 
@@ -417,6 +418,8 @@ except SystemExit:
 except Exception as exc:  # pragma: no cover - fail-open guard
 	result_path = Path(os.environ.get("AGENTS_MD_MATERIALITY_RESULT_FILE") or os.devnull)
 	comment_path = Path(os.environ.get("AGENTS_MD_MATERIALITY_COMMENT_FILE") or os.devnull)
+	print(f"::warning::review_agents_md_materiality.sh failed open: {exc.__class__.__name__}: {exc}", file=sys.stderr)
+	traceback.print_exc(file=sys.stderr)
 	fallback_result = {
 		"version": 1,
 		"classifier_mode": "deterministic-path-glob-v1",
@@ -436,7 +439,6 @@ except Exception as exc:  # pragma: no cover - fail-open guard
 		"llm_fallback_reasoning": str(os.environ.get("AGENTS_MD_MATERIALITY_REASONING") or "medium"),
 	}
 	write_outputs(result_path=result_path, comment_path=comment_path, result=fallback_result, comment_body="")
-	print(f"::warning::review_agents_md_materiality.sh failed open: {exc}", file=sys.stderr)
 	print("AGENTS_MD_MATERIALITY: internal failure advisory=false materiality=low")
 	raise SystemExit(0)
 PY
