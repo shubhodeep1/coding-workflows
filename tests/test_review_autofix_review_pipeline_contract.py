@@ -859,6 +859,47 @@ def _run_reviewer_failback_harness() -> dict[str, object]:
 		}
 
 
+def _run_reviewer_health_dispatch_logging_harness() -> dict[str, str]:
+	helper_block = _reviewer_failback_helper_block()
+	with tempfile.TemporaryDirectory(prefix="reviewer-health-dispatch-") as td:
+		tmp = Path(td)
+		health_file = tmp / "reviewer_health_state.json"
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				f"{helper_block}\n"
+				"reviewer_health_state_action() {\n"
+				"\tcat <<'EOF'\n"
+				"decision=run\n"
+				"state=healthy\n"
+				"transition=healthy\n"
+				"reason=open_ttl_expired\n"
+				"consecutive_retryable_failures=0\n"
+				"effective_model=x-ai/grok-4.1-fast\n"
+				"open_until_epoch=0\n"
+				"EOF\n"
+				"}\n"
+				"reviewer_health_dispatch_prepare 'x-ai/grok-4.20'\n",
+			],
+			cwd=str(REPO_ROOT),
+			env={
+				**os.environ,
+				"REVIEWER_CIRCUIT_BREAKER_ENABLED": "1",
+				"REVIEWER_HEALTH_STATE_FILE": str(health_file),
+			},
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+		}
+
+
 def _run_reviewer_zero_success_guard_harness(*, statuses: list[str]) -> dict[str, object]:
 	guard_block = _reviewer_zero_success_guard_block()
 	with tempfile.TemporaryDirectory(prefix="reviewer-zero-success-") as td:
@@ -1061,6 +1102,12 @@ def test_reviewer_failback_harness_reuses_cached_open_state_and_skips_unmapped_m
 		"moonshotai/kimi-k2.5\tmoonshotai/kimi-k2.5\txhigh\tattempt 1",
 		"moonshotai/kimi-k2.5\tmoonshotai/kimi-k2.5\thigh\tattempt 2 (cheaper reasoning high)",
 	]
+
+
+def test_reviewer_health_dispatch_logs_to_stderr_only() -> None:
+	result = _run_reviewer_health_dispatch_logging_harness()
+	assert result["stdout"] == ""
+	assert "REVIEWER_HEALTH: x-ai/grok-4.20 healthy reason=open_ttl_expired failures=0 effective_model=x-ai/grok-4.1-fast" in result["stderr"]
 
 
 def test_reviewer_zero_success_guard_fails_open_when_every_review_slot_was_skipped() -> None:
@@ -1834,6 +1881,7 @@ def main() -> int:
 	test_review_filter_helper_wiring_is_flag_gated_and_fail_open()
 	test_reviewer_failback_wiring_stages_asset_and_restores_cache_before_reviewers()
 	test_reviewer_failback_harness_reuses_cached_open_state_and_skips_unmapped_models()
+	test_reviewer_health_dispatch_logs_to_stderr_only()
 	test_reviewer_zero_success_guard_fails_open_when_every_review_slot_was_skipped()
 	test_reviewer_filter_harness_strips_low_signal_paths_and_preserves_exemptions()
 	test_reviewer_filter_script_preserves_nested_exempt_paths()

@@ -2245,9 +2245,9 @@ reviewer_log_health_transition() {
     line="${line} effective_model=${effective_model}"
   fi
   if [ -n "${log_dest}" ]; then
-    printf '%s\n' "${line}" | tee -a "${log_dest}"
+    printf '%s\n' "${line}" | tee -a "${log_dest}" >&2
   else
-    printf '%s\n' "${line}"
+    printf '%s\n' "${line}" >&2
   fi
 }
 
@@ -2571,7 +2571,6 @@ execute_reviewer_attempt() {
     return 0
   fi
 
-  cat "${tmp_stderr}" >> "${log_file}"
   if [ "${cmd_rc}" -eq 0 ]; then
     echo "Reviewer slot ${slot_model} (${effective_model}) produced empty output on ${attempt_label}." | tee -a "${log_file}"
     if [ -s "${tmp_stderr}" ]; then
@@ -2900,7 +2899,7 @@ run_reviewer_pass() {
           cached_effective_model_note=" cached_effective_model=${REVIEWER_HEALTH_DISPATCH_EFFECTIVE_MODEL}"
         fi
         skip_reason="cached reviewer health state is open"
-        if [ "${REVIEWER_HEALTH_DISPATCH_OPEN_UNTIL_EPOCH:-0}" -gt 0 ] 2>/dev/null; then
+        if [[ "${REVIEWER_HEALTH_DISPATCH_OPEN_UNTIL_EPOCH:-0}" =~ ^[0-9]+$ ]] && [ "${REVIEWER_HEALTH_DISPATCH_OPEN_UNTIL_EPOCH:-0}" -gt 0 ]; then
           skip_reason="${skip_reason} until epoch ${REVIEWER_HEALTH_DISPATCH_OPEN_UNTIL_EPOCH}"
         fi
         printf 'Reviewer slot %s skipped — %s.%s\n' "${model}" "${skip_reason}" "${cached_effective_model_note}" | tee -a "${log_file}" >&2
