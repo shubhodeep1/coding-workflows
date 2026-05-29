@@ -2480,6 +2480,17 @@ execute_reviewer_attempt() {
   codex_pid_file="$(mktemp /tmp/codex_pid_reviewer.XXXXXX)"
   wd_reason_file="$(mktemp /tmp/reviewer_wd_reason.XXXXXX)"
 
+  _reviewer_kill_pid()
+  {
+    local target_pid="${1:-}"
+    [ -n "${target_pid}" ] || return 0
+    pkill -TERM -P "${target_pid}" 2>/dev/null || true
+    kill -TERM "${target_pid}" 2>/dev/null || true
+    sleep 5
+    pkill -KILL -P "${target_pid}" 2>/dev/null || true
+    kill -KILL "${target_pid}" 2>/dev/null || true
+  }
+
   (
     wd_iter=$(( RANDOM % 9 ))
     while true; do
@@ -2489,7 +2500,7 @@ execute_reviewer_attempt() {
         echo "Reviewer ${effective_model} aborted — PR close sentinel observed." | tee -a "${log_file}" >&2
         printf 'pr_closed_sentinel' > "${wd_reason_file}"
         cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
-        if [ -n "${cpid}" ]; then kill -TERM "${cpid}" 2>/dev/null; sleep 5; kill -KILL "${cpid}" 2>/dev/null; fi
+        _reviewer_kill_pid "${cpid}"
         rm -f "${hb_file}"
         exit 144
       fi
@@ -2501,7 +2512,7 @@ execute_reviewer_attempt() {
         echo "Reviewer ${effective_model} killed — no output for $(( now - last ))s (idle limit: ${reviewer_idle_timeout}s)." | tee -a "${log_file}" >&2
         printf 'idle_timeout' > "${wd_reason_file}"
         cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
-        if [ -n "${cpid}" ]; then kill -TERM "${cpid}" 2>/dev/null; sleep 5; kill -KILL "${cpid}" 2>/dev/null; fi
+        _reviewer_kill_pid "${cpid}"
         rm -f "${hb_file}"
         exit 142
       fi
@@ -2509,7 +2520,7 @@ execute_reviewer_attempt() {
         echo "Reviewer ${effective_model} killed — max wall time ${reviewer_max_wall}s exceeded." | tee -a "${log_file}" >&2
         printf 'max_wall' > "${wd_reason_file}"
         cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
-        if [ -n "${cpid}" ]; then kill -TERM "${cpid}" 2>/dev/null; sleep 5; kill -KILL "${cpid}" 2>/dev/null; fi
+        _reviewer_kill_pid "${cpid}"
         rm -f "${hb_file}"
         exit 143
       fi
@@ -2523,7 +2534,7 @@ execute_reviewer_attempt() {
           touch "/tmp/pr_closed_sentinel_${PR_NUMBER}"
           echo "PR_CLOSED=true" >> "$GITHUB_ENV"
           cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
-          if [ -n "${cpid}" ]; then kill -TERM "${cpid}" 2>/dev/null; sleep 5; kill -KILL "${cpid}" 2>/dev/null; fi
+          _reviewer_kill_pid "${cpid}"
           rm -f "${hb_file}"
           exit 144
         fi

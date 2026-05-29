@@ -11,13 +11,13 @@ EOF
 run_without_heartbeat()
 {
 	if [ -n "${stdout_file}" ] && [ -n "${stderr_file}" ]; then
-		"$@" > "${stdout_file}" 2> "${stderr_file}"
+		exec "$@" > "${stdout_file}" 2> "${stderr_file}"
 	elif [ -n "${stdout_file}" ]; then
-		"$@" > "${stdout_file}"
+		exec "$@" > "${stdout_file}"
 	elif [ -n "${stderr_file}" ]; then
-		"$@" 2> "${stderr_file}"
+		exec "$@" 2> "${stderr_file}"
 	else
-		"$@"
+		exec "$@"
 	fi
 }
 
@@ -92,7 +92,6 @@ fi
 if ! command -v python3 >/dev/null 2>&1; then
 	echo "::warning::python3 unavailable; running ${phase} without heartbeat wrapper support." >&2
 	run_without_heartbeat "$@"
-	exit $?
 fi
 
 export CODEX_HEARTBEAT_PHASE="${phase}"
@@ -102,7 +101,7 @@ export CODEX_HEARTBEAT_STDERR_FILE="${stderr_file}"
 export CODEX_HEARTBEAT_ACTIVITY_FILE="${activity_file}"
 export CODEX_HEARTBEAT_INTERVAL_SECS_EFFECTIVE="${heartbeat_interval_raw}"
 
-python3 - "$@" <<'PY'
+exec python3 -c "$(cat <<'PY'
 from __future__ import annotations
 
 import os
@@ -153,7 +152,6 @@ stderr_handle, close_stderr = _open_output(STDERR_FILE, sys.stderr.buffer)
 
 child = subprocess.Popen(
 	COMMAND,
-	stdin=None,
 	stdout=subprocess.PIPE,
 	stderr=subprocess.PIPE,
 	bufsize=0,
@@ -223,6 +221,7 @@ try:
 		if HEARTBEAT_ENABLED and child.poll() is None:
 			elapsed = int(time.monotonic() - last_output_at)
 			os.write(2, f"CODEX_HEARTBEAT: phase={PHASE} elapsed_secs={elapsed}\n".encode("utf-8"))
+			_write_activity_marker()
 			next_heartbeat_at += INTERVAL_SECS
 			while next_heartbeat_at <= time.monotonic():
 				next_heartbeat_at += INTERVAL_SECS
@@ -237,3 +236,4 @@ finally:
 
 raise SystemExit(_shell_rc(returncode))
 PY
+)" "$@"

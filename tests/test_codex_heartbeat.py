@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -20,12 +21,14 @@ def test_codex_heartbeat_emits_idle_lines_without_polluting_child_streams() -> N
 		stdout_file = tmp / "child.stdout"
 		stderr_file = tmp / "child.stderr"
 		activity_file = tmp / "activity.txt"
+		stdin_payload = "prompt-from-stdin\nsecond-line\n"
 
 		env = os.environ.copy()
 		env["PYTHONDONTWRITEBYTECODE"] = "1"
 		env["CODEX_HEARTBEAT_ENABLED"] = "1"
 		env["CODEX_HEARTBEAT_INTERVAL_SECS"] = "1"
 
+		started_at = time.time()
 		result = subprocess.run(
 			[
 				"bash",
@@ -43,19 +46,20 @@ def test_codex_heartbeat_emits_idle_lines_without_polluting_child_streams() -> N
 				"-c",
 				(
 					"import sys, time; "
-					"print('stdout-start'); sys.stdout.flush(); "
+					"payload = sys.stdin.read(); "
+					"print(payload.replace('\\n', '|')); sys.stdout.flush(); "
 					"print('stderr-start', file=sys.stderr); sys.stderr.flush(); "
 					"time.sleep(3.6); "
-					"print('stdout-end'); sys.stdout.flush(); "
-					"print('stderr-end', file=sys.stderr); sys.stderr.flush(); "
 					"raise SystemExit(17)"
 				),
 			],
 			env=env,
+			input=stdin_payload,
 			capture_output=True,
 			text=True,
 			timeout=30,
 		)
+		finished_at = time.time()
 
 		assert result.returncode == 17, result.stderr
 		assert result.stdout == ""
@@ -76,11 +80,13 @@ def test_codex_heartbeat_emits_idle_lines_without_polluting_child_streams() -> N
 		assert elapsed == sorted(elapsed), heartbeat_lines
 		assert elapsed[-1] >= 3, heartbeat_lines
 
-		assert stdout_file.read_text(encoding="utf-8") == "stdout-start\nstdout-end\n"
+		assert stdout_file.read_text(encoding="utf-8") == "prompt-from-stdin|second-line|\n"
 		child_stderr = stderr_file.read_text(encoding="utf-8")
-		assert child_stderr == "stderr-start\nstderr-end\n"
+		assert child_stderr == "stderr-start\n"
 		assert "CODEX_HEARTBEAT:" not in child_stderr
-		assert re.fullmatch(r"\d+", activity_file.read_text(encoding="utf-8").strip())
+		activity_seen_at = int(activity_file.read_text(encoding="utf-8").strip())
+		assert activity_seen_at >= int(started_at) + 2
+		assert activity_seen_at <= int(finished_at)
 
 
 def test_codex_heartbeat_disabled_still_tracks_child_activity() -> None:
