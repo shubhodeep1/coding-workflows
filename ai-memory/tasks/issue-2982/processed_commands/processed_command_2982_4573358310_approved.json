@@ -5,13 +5,28 @@
   "entry_id": "processed_command_2982_4573358310_approved",
   "issue_number": 2982,
   "metadata": {
+    "branch": "ai/issue-2982",
+    "changed_files": [
+      ".github/workflows/review_autofix.yml",
+      "scripts/fixtures/cloudflare-learnings/phase-b-risk-tier-always-full.patch",
+      "scripts/fixtures/cloudflare-learnings/phase-b-risk-tier-full.patch",
+      "scripts/fixtures/cloudflare-learnings/phase-b-risk-tier-lite.patch",
+      "scripts/fixtures/cloudflare-learnings/phase-b-risk-tier-trivial.patch",
+      "scripts/review_run_reviewers.sh",
+      "tests/test_review_autofix_review_pipeline_contract.py"
+    ],
+    "issue_number": 2982,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/2982",
+    "pr_number": 2983,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/2983",
+    "run_attempt": "1",
+    "run_id": "26630085547",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/26630085547"
   },
   "run_attempt": 1,
   "run_id": "26630085547",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-05-29T09:42:52Z",
+  "status": "completed",
+  "timestamp": "2026-05-29T09:54:46Z",
   "workflow": "implement"
 }
