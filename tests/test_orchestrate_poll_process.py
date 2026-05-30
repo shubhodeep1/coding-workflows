@@ -540,6 +540,7 @@ def _run_poller(
 	mock_stall_judge_json: dict | None = None,
 	fail_issue_comment_get_after: dict[int, int] | None = None,
 	fail_issue_get_for: list[int] | None = None,
+	fail_issue_edit_for: list[int] | None = None,
 	fail_branch_ref_after: dict[str, int] | None = None,
 	fail_branch_ref_not_found_after: dict[str, int] | None = None,
 	mock_actions_runs_cache_get_json: dict | None = None,
@@ -610,6 +611,7 @@ def _run_poller(
 	mock_stall_judge_json = mock_stall_judge_json or {}
 	fail_issue_comment_get_after = fail_issue_comment_get_after or {}
 	fail_issue_get_for = fail_issue_get_for or []
+	fail_issue_edit_for = fail_issue_edit_for or []
 	fail_branch_ref_after = fail_branch_ref_after or {}
 	fail_branch_ref_not_found_after = fail_branch_ref_not_found_after or {}
 	mock_actions_runs_cache_get_json = mock_actions_runs_cache_get_json or {}
@@ -741,6 +743,7 @@ def _run_poller(
 			"timeline_fail_for_issues": [int(x) for x in timeline_fail_for_issues],
 			"fail_issue_comment_get_after": {str(k): int(v) for k, v in fail_issue_comment_get_after.items()},
 			"fail_issue_get_for": [int(x) for x in fail_issue_get_for],
+			"fail_issue_edit_for": [int(x) for x in fail_issue_edit_for],
 			"fail_branch_ref_after": {str(k): int(v) for k, v in fail_branch_ref_after.items()},
 			"fail_branch_ref_not_found_after": {str(k): int(v) for k, v in fail_branch_ref_not_found_after.items()},
 			"mock_actions_runs_cache_get_json": mock_actions_runs_cache_get_json,
@@ -1234,6 +1237,10 @@ if args[0] == 'pr' and len(args) >= 3 and args[1] == 'merge':
 
 if args[0] == 'issue' and len(args) >= 3 and args[1] == 'edit':
 	num = args[2]
+	if int(num) in set(store.get('fail_issue_edit_for', [])):
+		save()
+		print('forced issue edit failure', file=sys.stderr)
+		sys.exit(1)
 	issue = get_issue(num)
 	body = None
 	i = 3
@@ -4044,6 +4051,70 @@ Summary text.
 			"target_url": "https://github.com/owner/repo/issues/192",
 		}
 	]
+	assert result["latest_state"]["status"] == "in_progress"
+	assert result["latest_state"]["final_merge_status"] == "pending"
+
+
+def test_tracking_body_reconcile_skips_readiness_refresh_when_issue_body_edit_fails():
+	tracking_body = """## Project: Test Project
+
+Summary text.
+
+---
+
+**Total issues:** 1 | **Waves:** 1
+**Integration branch:** `orchestrator/project-192`
+
+### Wave 1
+
+- [ ] **issue-1**: First task (priority 1)
+
+---
+*This issue is managed by the AI orchestrator. Do not edit manually.*
+`ai:orchestrator-tracking`
+"""
+	stale_hash = hashlib.sha256(tracking_body.encode("utf-8")).hexdigest()
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["project_body_snapshot"] = tracking_body
+	state["tracking_body_sync_hash"] = stale_hash
+	state["tracking_body_last_readiness_refresh_hash"] = stale_hash
+	state["final_merge_pr"] = 472
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	prs = [
+		{
+			"number": 472,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"headRefFromApi": "orchestrator/project-192",
+			"headSha": "headsha472",
+			"mergeable": True,
+			"mergeable_state": "clean",
+			"body": "Squash merge of orchestrator project #192.\n\nRefs #192",
+		},
+	]
+
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_labels=["ai:orchestrator-tracking"],
+		tracking_body=tracking_body,
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		blocked_check_shas=["headsha472"],
+		fail_issue_edit_for=[192],
+	)
+
+	assert result["issues"]["192"]["body"] == tracking_body
+	assert result["issue_body_edit_calls"] == []
+	assert result["commit_status_posts"] == []
+	assert result["latest_state"]["tracking_body_sync_hash"] == stale_hash
+	assert result["latest_state"]["tracking_body_last_readiness_refresh_hash"] == stale_hash
 	assert result["latest_state"]["status"] == "in_progress"
 	assert result["latest_state"]["final_merge_status"] == "pending"
 

@@ -2381,7 +2381,7 @@ PY
 			rm -f "${desired_body_file}" "${render_err_file}" "${issue_json_file}" "${template_body_file}"
 			return 1
 		fi
-		if ! grep -Eq '^\s*-\s*\[[ xX]\]\s+\*\*[^*]+' "${template_body_file}"; then
+		if ! grep -Eq '^[[:space:]]*-[[:space:]]*\[[ xX]\][[:space:]]+\*\*[^*]+' "${template_body_file}"; then
 			rm -f "${desired_body_file}" "${render_err_file}" "${issue_json_file}" "${template_body_file}"
 			return 0
 		fi
@@ -2428,7 +2428,9 @@ PY
 		[ "${edit_err_file}" = "/dev/null" ] || rm -f "${edit_err_file}"
 	fi
 
-	if [ "${body_changed}" = "true" ] || [ "${desired_hash}" != "${last_refresh_hash}" ]; then
+	# Refresh readiness only when the live issue body is known to match the
+	# rendered desired body (just edited successfully, or already synced).
+	if [ "${body_changed}" = "true" ] || { [ "${desired_hash}" = "${current_hash}" ] && [ "${desired_hash}" != "${last_refresh_hash}" ]; }; then
 		if [[ "${final_pr}" =~ ^[0-9]+$ ]]; then
 			pr_json="$(_fetch_pr_json "${final_pr}")"
 			pr_state="$(_jq_field "${pr_json}" '.state' 'open|closed|merged')"

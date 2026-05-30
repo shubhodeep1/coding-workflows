@@ -207,13 +207,6 @@ def main() -> int:
 			if not issue["body"]:
 				issue["body"] = fetched_issue["body"]
 
-	if issue is None:
-		desc = f"could not fetch tracking issue #{tracking_num}; cannot assess readiness"
-		print(f"::warning::{desc}")
-		if not args.dry_run and not _post_commit_status_or_error(args.repo, args.head_sha, "error", desc, tracking_url):
-			return 1
-		return 1
-
 	if TRACKING_LABEL not in issue["labels"]:
 		# Branch matches orchestrator/project-N but the linked issue is
 		# not actually a tracking issue. Surface as neutral success.
