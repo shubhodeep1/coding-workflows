@@ -209,6 +209,18 @@ jobs:
           pip install -q ruff
           ruff check --select E,F --ignore E501 scripts/*.py
 
+      - name: Install Python test dependencies
+        run: |
+          set -euo pipefail
+          # test_validation_refresh_runner.py exercises the real discovery
+          # manifest validator (validate_discovered_manifest_yaml), which needs
+          # pyyaml + jsonschema; jinja2 is required by the template-render tests.
+          # Matches the dependency set installed in ci.yml, validation-refresh.yml
+          # and nightly-validation-selftest.yml. Without these, the validator
+          # short-circuits with jsonschema_missing, the codex retry loop fires,
+          # and the FakeExecutor planned-call sequence desyncs (false failure).
+          python3 -m pip install --quiet pyyaml jsonschema jinja2
+
       - name: Unit tests
         run: |
           set -euo pipefail
