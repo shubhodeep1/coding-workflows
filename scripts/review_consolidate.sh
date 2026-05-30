@@ -48,6 +48,47 @@ is_truthy()
 	esac
 }
 
+emit_context_budget_warn_for_prompt()
+{
+	local phase="$1"
+	local prompt_path="$2"
+	local model="$3"
+	local warn_line=""
+
+	[ -n "${phase}" ] || return 0
+	[ -n "${prompt_path}" ] || return 0
+	[ -n "${model}" ] || return 0
+	[ -f "${prompt_path}" ] || return 0
+	if ! command -v python3 >/dev/null 2>&1; then
+		return 0
+	fi
+
+	warn_line="$(
+		PYTHONDONTWRITEBYTECODE=1 \
+		PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}:${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
+		python3 - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
+import sys
+
+try:
+	from cost_audit import build_context_budget_warn_line_for_file
+except ModuleNotFoundError:
+	sys.exit(0)
+
+phase, prompt_path, model = sys.argv[1:4]
+line = build_context_budget_warn_line_for_file(
+	phase=phase,
+	prompt_path=prompt_path,
+	model=model,
+)
+if line:
+	print(line)
+PY
+	)"
+	if [ -n "${warn_line}" ]; then
+		printf '%s\n' "${warn_line}"
+	fi
+}
+
 render_prior_round_decisions_file()
 {
 	local ledger_path="$1"
@@ -328,6 +369,7 @@ consolidator_cmd=(
 if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
 	sanitize_codex_prompt_file "${CONSOLIDATOR_PROMPT_FILE}"
 fi
+emit_context_budget_warn_for_prompt "consolidator" "${CONSOLIDATOR_PROMPT_FILE}" "${REVIEW_CONSOLIDATOR_MODEL}"
 if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
 	if ! CODEX_HOME="${consolidator_codex_home}" \
 		timeout "${REVIEW_CONSOLIDATOR_TIMEOUT_SECS}" \

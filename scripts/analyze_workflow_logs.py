@@ -22,6 +22,11 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+	from cost_audit import aggregate_run_cost_telemetry
+except ModuleNotFoundError:
+	from scripts.cost_audit import aggregate_run_cost_telemetry
+
 DEFAULT_OUTPUT_DIR = "analysis"
 DEFAULT_INPUT_FILE = "workflow_log_report.json"
 
@@ -200,6 +205,9 @@ def _normalized_run_view(run: dict[str, Any]) -> dict[str, Any]:
 	log_summary = run.get("log_summary")
 	if isinstance(log_summary, str) and log_summary.strip():
 		view["log_summary"] = log_summary
+	cost_telemetry = run.get("cost_telemetry")
+	if isinstance(cost_telemetry, dict) and cost_telemetry:
+		view["cost_telemetry"] = dict(cost_telemetry)
 	return view
 
 
@@ -223,6 +231,7 @@ def _summarize_runs(runs: list[dict[str, Any]]) -> dict[str, Any]:
 		"avg_duration_seconds": avg_duration,
 		"p50_duration_seconds": _percentile(durations, 50),
 		"p95_duration_seconds": _percentile(durations, 95),
+		"cost_telemetry": aggregate_run_cost_telemetry(runs),
 	}
 
 
@@ -239,6 +248,7 @@ def _aggregate_runs_by_key(runs: list[dict[str, Any]], key_name: str) -> dict[st
 				"cancelled_count": 0,
 				"other_count": 0,
 				"durations": [],
+				"rows": [],
 			},
 		)
 		entry["total_runs"] += 1
@@ -252,15 +262,18 @@ def _aggregate_runs_by_key(runs: list[dict[str, Any]], key_name: str) -> dict[st
 		else:
 			entry["other_count"] += 1
 		entry["durations"].append(_to_int(run.get("duration_seconds"), 0))
+		entry["rows"].append(run)
 
 	result: dict[str, dict[str, Any]] = {}
 	for key_value, entry in agg.items():
 		durations = [int(v) for v in entry.pop("durations") if isinstance(v, int)]
+		rows = [item for item in entry.pop("rows") if isinstance(item, dict)]
 		total_runs = max(1, _to_int(entry.get("total_runs"), 1))
 		entry["avg_duration_seconds"] = float(sum(durations) / len(durations)) if durations else 0.0
 		entry["p50_duration_seconds"] = _percentile(durations, 50)
 		entry["p95_duration_seconds"] = _percentile(durations, 95)
 		entry["failure_rate"] = float(entry.get("failure_count", 0) / total_runs)
+		entry["cost_telemetry"] = aggregate_run_cost_telemetry(rows)
 		result[key_value] = entry
 	return result
 
@@ -302,6 +315,8 @@ def prepare_analysis_context(input_data: dict[str, Any]) -> dict[str, Any]:
 			summary = overall
 		else:
 			summary = _summarize_runs(runs)
+	summary = dict(summary)
+	summary["cost_telemetry"] = aggregate_run_cost_telemetry(runs)
 
 	per_repo: dict[str, dict[str, Any]] = {}
 	per_workflow_family: dict[str, dict[str, Any]] = {}
@@ -323,8 +338,20 @@ def prepare_analysis_context(input_data: dict[str, Any]) -> dict[str, Any]:
 
 	if not per_repo:
 		per_repo = _aggregate_runs_by_key(runs, "repository")
+	else:
+		computed_per_repo = _aggregate_runs_by_key(runs, "repository")
+		for key, value in computed_per_repo.items():
+			entry = per_repo.setdefault(key, {})
+			if isinstance(entry, dict):
+				entry["cost_telemetry"] = value.get("cost_telemetry")
 	if not per_workflow_family:
 		per_workflow_family = _aggregate_runs_by_key(runs, "workflow_family")
+	else:
+		computed_per_family = _aggregate_runs_by_key(runs, "workflow_family")
+		for key, value in computed_per_family.items():
+			entry = per_workflow_family.setdefault(key, {})
+			if isinstance(entry, dict):
+				entry["cost_telemetry"] = value.get("cost_telemetry")
 
 	normalized_runs = [_normalized_run_view(run) for run in runs]
 	failing_runs = [

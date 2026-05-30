@@ -93,6 +93,45 @@ fi
 if ! command -v _cleanup_prompt_budget >/dev/null 2>&1; then
   _cleanup_prompt_budget() { :; }
 fi
+emit_context_budget_warn_for_prompt() {
+  local phase="$1"
+  local prompt_path="$2"
+  local model="$3"
+  local warn_line=""
+
+  [ -n "${phase}" ] || return 0
+  [ -n "${prompt_path}" ] || return 0
+  [ -n "${model}" ] || return 0
+  [ -f "${prompt_path}" ] || return 0
+  if ! command -v python3 >/dev/null 2>&1; then
+    return 0
+  fi
+
+  warn_line="$({
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}:${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
+import sys
+
+try:
+    from cost_audit import build_context_budget_warn_line_for_file
+except ModuleNotFoundError:
+    sys.exit(0)
+
+phase, prompt_path, model = sys.argv[1:4]
+line = build_context_budget_warn_line_for_file(
+    phase=phase,
+    prompt_path=prompt_path,
+    model=model,
+)
+if line:
+    print(line)
+PY
+  })"
+  if [ -n "${warn_line}" ]; then
+    printf '%s\n' "${warn_line}"
+  fi
+}
 if ! command -v _embed_input_file >/dev/null 2>&1; then
   : "${_PROMPT_BUDGET_TOTAL_BYTES:=800000}"
   _prompt_budget_state_file() {
@@ -905,6 +944,7 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
     if [ "${RB_JUDGE_PROMPT_BYTES:-0}" -gt 950000 ]; then
       echo "::warning::Review-blocked judge prompt is ${RB_JUDGE_PROMPT_BYTES} bytes; close to or over codex 1 MB stdin cap. Expect turn/start failures unless RB_JUDGE_PR_DIFF_MAX_BYTES (current: ${RB_JUDGE_PR_DIFF_MAX_BYTES}) or upstream embed budgets are tightened."
     fi
+    emit_context_budget_warn_for_prompt "review_blocked_judge" "${RB_JUDGE_PROMPT}" "${MODEL_EDITOR}"
     RB_JUDGE_PROMPT_SIZE_LOGGED=true
   fi
   if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then

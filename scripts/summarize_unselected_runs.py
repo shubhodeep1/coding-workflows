@@ -37,6 +37,11 @@ SCRIPTS_DIR = REPO_ROOT / "scripts"
 if str(REPO_ROOT) not in sys.path:
 	sys.path.insert(0, str(REPO_ROOT))
 
+try:
+	from cost_audit import build_run_cost_telemetry
+except ModuleNotFoundError:
+	from scripts.cost_audit import build_run_cost_telemetry
+
 
 DEFAULT_MODEL = "openai/gpt-5.4-mini"
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
@@ -60,6 +65,7 @@ SYSTEM_PROMPT = (
 	"- Outcome (success/failure/cancelled) and the failing step name if any\n"
 	"- Notable warnings (deprecation, cache invalidation, secondary rate limit)\n"
 	"- Token usage / model usage lines (e.g. tokens_used=..., model=openai/...)\n"
+	"- `BREAK_GLASS:` / `CONTEXT_BUDGET_WARN:` lines (preserve verbatim, max 3 total)\n"
 	"- AI_MEMORY_TELEMETRY: lines (preserve verbatim, max 3)\n"
 	"- `SEMBLE_*` / `SERENA_*` lines (preserve verbatim, max 3 per prefix family; include `target=`, `bytes=` / `response_bytes=`, `reason=`, `result=`, and `tool=` values when present)\n"
 	"- GH API call hot-spots (high call counts, HTTP 429, secondary rate limit)\n"
@@ -241,6 +247,23 @@ def _truncate_step(content: str, head_chars: int, tail_chars: int) -> str:
 	if tail:
 		return f"{marker}\n{tail}"
 	return marker
+
+
+def _full_logs_to_text(full_logs: list[dict[str, str]]) -> str:
+	parts: list[str] = []
+	for step in full_logs:
+		content = str(step.get("content") or "")
+		if not content:
+			continue
+		parts.append(content)
+	return "\n".join(parts)
+
+
+def _run_wall_clock_ms(run: dict[str, Any]) -> int | None:
+	duration_seconds = _to_int(run.get("duration_seconds"), 0)
+	if duration_seconds <= 0:
+		return None
+	return duration_seconds * 1000
 
 
 def build_summary_input(
@@ -569,6 +592,10 @@ def main(argv: list[str] | None = None) -> int:
 				repository, run_id, token=gh_token, cache=None
 			)
 			full_logs = collector.extract_full_logs(archive_bytes)
+			run["cost_telemetry"] = build_run_cost_telemetry(
+				_full_logs_to_text(full_logs),
+				fallback_wall_clock_ms=_run_wall_clock_ms(run),
+			)
 		except Exception as exc:  # noqa: BLE001 — fail-open per run
 			_warn(f"log archive fetch failed for {repository}#{run_id}: {exc}")
 			stats["skipped_fetch_error"] += 1
