@@ -7,7 +7,7 @@
         203,
         204
       ],
-      "last_updated": "2026-05-30T12:15:34Z",
+      "last_updated": "2026-05-30T14:13:37Z",
       "logs_seen_set": [
         201,
         202
@@ -15,6 +15,33 @@
       "rows_snapshot": [
         {
           "conclusion": "failure",
+          "cost_telemetry": {
+            "break_glass_count": 0,
+            "cache_hit_rate": null,
+            "codex_calls": 0,
+            "codex_tokens_used": 0,
+            "context_budget_warn_count": 0,
+            "log_parsed": true,
+            "or_cache_read_tokens": 0,
+            "or_cache_write_tokens": 0,
+            "or_calls": 0,
+            "or_completion_tokens": 0,
+            "or_prompt_tokens": 0,
+            "or_total_tokens": 0,
+            "semble_fallbacks": 0,
+            "semble_query_bytes": 0,
+            "semble_query_calls": 0,
+            "serena_fallbacks": 0,
+            "serena_probe_failed": 0,
+            "serena_probe_ok": 0,
+            "serena_probe_skipped": 0,
+            "serena_query_calls": 0,
+            "serena_query_ms": 0,
+            "serena_query_response_bytes": 0,
+            "serena_query_tool_calls": 0,
+            "wall_clock_p50_ms": 400000,
+            "wall_clock_p99_ms": 400000
+          },
           "created_at": "2026-04-10T14:00:00Z",
           "duration_seconds": 400,
           "failure_point": {
@@ -40,6 +67,33 @@
         },
         {
           "conclusion": "success",
+          "cost_telemetry": {
+            "break_glass_count": 0,
+            "cache_hit_rate": null,
+            "codex_calls": 0,
+            "codex_tokens_used": 0,
+            "context_budget_warn_count": 0,
+            "log_parsed": true,
+            "or_cache_read_tokens": 0,
+            "or_cache_write_tokens": 0,
+            "or_calls": 0,
+            "or_completion_tokens": 0,
+            "or_prompt_tokens": 0,
+            "or_total_tokens": 0,
+            "semble_fallbacks": 0,
+            "semble_query_bytes": 0,
+            "semble_query_calls": 0,
+            "serena_fallbacks": 0,
+            "serena_probe_failed": 0,
+            "serena_probe_ok": 0,
+            "serena_probe_skipped": 0,
+            "serena_query_calls": 0,
+            "serena_query_ms": 0,
+            "serena_query_response_bytes": 0,
+            "serena_query_tool_calls": 0,
+            "wall_clock_p50_ms": 500000,
+            "wall_clock_p99_ms": 500000
+          },
           "created_at": "2026-04-10T13:00:00Z",
           "duration_seconds": 500,
           "failure_point": {
@@ -153,7 +207,7 @@
           "updated_at": "2026-04-10T11:05:00Z"
         }
       ],
-      "runs_window_start": "2026-05-23T12:15:30Z"
+      "runs_window_start": "2026-05-23T14:13:31Z"
     },
     "shubhodeep1/atlas-bridge.gd": {
       "jobs_seen_set": [
