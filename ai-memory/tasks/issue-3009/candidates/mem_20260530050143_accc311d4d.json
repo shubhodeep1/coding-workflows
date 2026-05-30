@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-2974` @ `02e63fb261c4a47c29c9bdedb6db0bd8315646cd`\n\n## Actions taken\n- Verified the planning ref matches the issue\u2019s integration branch metadata.\n- Reviewed the current audit doc (`docs/plans/ai-code-review-learnings-plan.md`), the repo\u2019s archived-plan pattern (`docs/plans/integration-sync-resolver-self-heal-plan.md`, `docs/completed/integration-sync-resolver-self-heal-plan.md`, `docs/plans/orchestrator-validation-resilience-plan.md`), the Phase F/G/H source-of-truth files, and `scripts/lint_plan_archival_completeness.py`.\n- Interpreted the auto-answer as \u201cno clarification needed; proceed with the issue body as authoritative.\u201d\n\n## Automation / wiring impact\n- Change type: existing docs only; no new scripts, workflows, scheduler wiring, supervisors, or DB work.\n- Scheduler / PR-push entry point: none.\n- `docs/scripts-pending-removal.md`: no entry needed.\n\n## Conflicts / repo-truth notes\n- **Phase H is stale in the current plan doc.** Current repo truth already shows workflow-log-analysis ingesting/surfacing `cost_telemetry` via `scripts/collect_workflow_logs.py`, `scripts/analyze_workflow_logs.py`, `.github/workflows/workflow-log-analysis.yml`, and `prompts/mode-workflow-analysis.txt`.\n- **Current branch still appears to have live F/G gaps.** `scripts/review_rb_judge.sh` still lacks a dedicated ledger-fed re-review input path, and `scripts/reviewer_failback_chains.json` still maps only `x-ai/grok-4.20`.\n- **Archive convention conflict:** this repo does not hard-delete the `docs/plans/` path when archiving; it keeps a short pointer there for link stability and puts the canonical full archive under `docs/completed/`.\n- **Archival guard risk:** `scripts/lint_plan_archival_completeness.py` will reject a new `docs/completed/ai-code-review-learnings-plan.md` unless tracking issue `#2974` has no unchecked task-list items or the PR body carries a valid de-scope section. `gh issue view 2974` currently still shows the wave checkboxes unchecked.\n\n## Implementation plan\n1. **Re-run the completion audit against current HEAD**\n   - Update `docs/plans/ai-code-review-learnings-plan.md`\u2019s audit date, outcome, evidence snapshot, phase table, and \u201cRemaining blockers before archival\u201d.\n   - Remove the stale Phase H blocker unless fresh code inspection finds a real regression.\n   - Re-evaluate Phases F and G strictly from current repo truth.\n   - Keep scope doc-only: if F/G are still incomplete, document the real blockers and do **not** broaden this issue into implementing missing code.\n\n2. **Refresh docs that are meant to summarize shipped behavior**\n   - Update `agents.md` if its current review-pipeline facts still lag the merged F/G/H behavior after the audit.\n   - Update `README.md` only where operator-facing descriptions now diverge from HEAD (for example, if `REVIEW_LEDGER_REREVIEW_ENABLED` semantics or final review-pipeline caveats changed in the last implementation pass).\n\n3. **Archive only if the repo is actually complete**\n   - If every planned phase is complete **and** the archival guard is satisfiable, create `docs/completed/ai-code-review-learnings-plan.md` as the canonical archived copy.\n   - Replace `docs/plans/ai-code-review-learnings-plan.md` with a short archived-pointer file, following the existing archived-plan pattern.\n   - If any real blocker remains, or the archival guard still fails, leave the plan in `docs/plans/` and list only the actual remaining blockers.\n\n## Files likely to change\n- **Definite:** `docs/plans/ai-code-review-learnings-plan.md`\n- **Conditional:** `docs/completed/ai-code-review-learnings-plan.md`\n- **Conditional:** `agents.md`\n- **Conditional:** `README.md`\n- **Possible only if stale claims are found:** other learnings docs under `docs/plans/*.md`\n\n## Functions / modules to inspect (no new runtime modules expected)\n- `scripts/review_rb_judge.sh`\n- `scripts/reviewer_failback_chains.json`\n- `scripts/collect_workflow_logs.py`\n- `scripts/analyze_workflow_logs.py`\n- `.github/workflows/workflow-log-analysis.yml`\n- `prompts/mode-workflow-analysis.txt`\n- `scripts/lint_plan_archival_completeness.py`\n\n## Data structures affected\n- The markdown phase-status table in the plan\n- The blocker list / evidence snapshot in the plan\n- The archived-plan closeout summary + pointer metadata, if archived\n- Possibly `agents.md` bullets and `README.md` env-var / behavior rows\n\n## API / interface changes\n- No runtime API or workflow-interface changes are planned.\n- Delivery constraint only: any archival PR must still use `Refs #2974` and satisfy the plan-archival lint.\n\n## Risks / edge cases\n- The audit may still legitimately conclude \u201cnot complete yet\u201d because F/G remain partial on this branch.\n- Do not leave two full copies of the plan; if archived, use the repo\u2019s canonical-copy + short-pointer convention.\n- If the repo is complete but the tracking-issue checklist is still stale, the safest outcome is still \u201cdo not archive yet\u201d rather than inventing a de-scope.\n- Keep `README.md` / `agents.md` edits minimal; those are hot files reserved for this final docs pass.\n\n## Testing / verification considerations\n- Verify each F/G/H conclusion directly against the authoritative files above.\n- If archiving, confirm the pointer links resolve and the completed copy contains a closeout summary.\n- Check `scripts/lint_plan_archival_completeness.py` expectations before taking the archive path.\n- Grep updated docs for stale \u201cPhase H partial\u201d or stale F/G caveats so the plan and summary docs agree with HEAD.\n\n## Assumptions\n- This issue is an audit/docs closeout, not the vehicle for any still-missing Phase F/G code work.\n- Archival is conditional on both actual repo completeness and the repo\u2019s archival guardrails.\n\n## Missing-context note\n- Whether the orchestrator will sync tracking-issue `#2974` checkboxes before the PR is created is external to the repo; treat it as an archival risk, not a reason to expand scope.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "ffea976bc176cebdc59635cbed4d54937cef494d745f8669df23b3a921f8caf2",
+  "lineage": {
+    "issue_number": 3009,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26675036082",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26675036082",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3009"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260530050143_accc311d4d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3009,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26675036082"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3009",
+  "timestamps": {
+    "created_at": "2026-05-30T05:01:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
