@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:5196-5247 | severity=medium | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The codex-agent forward-merge branch does not set `auto_merge_summary`, so the workflow summary can show missing or stale auto-merge status for those PRs.\n  WHY: Both reviewers identified the same unset-summary issue in the codex-agent path; one reviewer dismissed it as a false alarm, but the other two agreed the forward-merge branch does not populate the summary variable.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/review_autofix.yml:5235-5245 | confidence=5\n  PROBLEM: The codex-agent path forward-merge section does not set the `auto_merge_summary` variable, unlike the deterministic-skip-merge path which sets it in all branches.\n  WHY: The deterministic-skip-merge step outputs `echo \"- **Auto-merge:** ${auto_merge_summary}\"` at line 746, expecting the variable to be set. If the codex-agent path executes forward-merge handling and exits at line 5245 without setting this variable, the summary output becomes empty or shows stale state from a previous run.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/review_autofix.yml:5196-5247 | confidence=4\n  PROBLEM: The codex-agent path handles forward-merge fallback PRs but never sets the `auto_merge_summary` variable, unlike the deterministic-skip-merge path which sets it for all branches.\n  WHY: The workflow summary step outputs `echo \"- **Auto-merge:** ${auto_merge_summary:-N/A}\"`. For forward-merge fallback PRs processed by the codex-agent path, the summary will always show \"N/A\" regardless of whether auto-merge was enabled, failed, or suppressed, which makes the summary inconsistent and less useful.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "b1d76dc0f2ae29b4ffd68dd542378ea7e5bcc95f7e1f22a540120145fe373723",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3014,
+    "run_id": "26677814831",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26677814831",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260530074814_64b1a999bd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3014,
+    "run_id": "26677814831"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-30T07:48:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
