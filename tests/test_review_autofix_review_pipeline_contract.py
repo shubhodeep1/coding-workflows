@@ -149,7 +149,14 @@ def _reviewer_failback_chains() -> dict[str, list[str]]:
 			entry = [entry]
 		if not isinstance(model, str) or not isinstance(entry, list):
 			raise AssertionError("reviewer failback chains entries must be string -> list[str]")
-		chains[model] = [candidate.strip() for candidate in entry if isinstance(candidate, str) and candidate.strip()]
+		candidates: list[str] = []
+		for candidate in entry:
+			if not isinstance(candidate, str) or not candidate.strip():
+				raise AssertionError(
+					f"reviewer failback chains candidates must be non-empty strings, got {candidate!r}"
+				)
+			candidates.append(candidate.strip())
+		chains[model] = candidates
 	return chains
 
 
@@ -1324,15 +1331,15 @@ def test_reviewer_failback_mapping_covers_live_reviewer_roster() -> None:
 				"a same-provider fallback slug"
 			)
 
-	assert mapped == [
+	assert sorted(mapped) == [
 		"deepseek/deepseek-v4-pro",
 		"qwen/qwen3.6-plus",
 		"x-ai/grok-4.20",
 	]
-	assert unmapped == [
+	assert sorted(unmapped) == [
 		"minimax/minimax-m2.5",
-		"moonshotai/kimi-k2.5",
 		"mistralai/mistral-small-2603",
+		"moonshotai/kimi-k2.5",
 	]
 	assert chains["deepseek/deepseek-v4-pro"] == ["deepseek/deepseek-v3.2"]
 	assert chains["qwen/qwen3.6-plus"] == ["qwen/qwen3-coder-plus"]
