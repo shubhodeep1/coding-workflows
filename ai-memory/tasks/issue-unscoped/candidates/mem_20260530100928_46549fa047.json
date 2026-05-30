@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/commands/investigate-issue.md:lines ~65-68 | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The Step 2 close-out sentence is structurally nested under the pinned-upstream sub-section, so a Markdown-aware parse can treat the Evidence Ledger update as applying only to that case.\n  WHY: If the model scopes that sentence too narrowly, it may skip recording the classification for non-pinned paths.\n- workflow-templates/.claude/commands/investigate-issue.md:Step 2 classification / Steps 9-10 output labels | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: Step 2 uses `[CONSUMER-INTERNAL]` while later output sections use `[CONSUMER]`, creating a label mismatch risk.\n  WHY: The mapping is explained, but the two similar labels can still lead the model to emit the wrong token in the final report.\n- workflow-templates/.claude/commands/investigate-issue.md:Steps 2 and 4 interaction for `[BOTH]` classification | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The stable-pinning procedure is scoped to `[UPSTREAM]`, so `[BOTH]` does not explicitly state that the upstream side must follow the same pinning rule.\n  WHY: Step 4 makes the pinning behavior operationally clear, but the heading scope leaves a small specification gap.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- workflow-templates/.claude/commands/investigate-issue.md:lines ~65-68 | confidence=2\n  PROBLEM: This sentence is structurally inside the `### Stable-pinning procedure` Markdown sub-section, so a strict parse can treat the Evidence Ledger update as only applying to the pinned-upstream case.\n  WHY: The blank-line close-out is semantically meant for Step 2, but a Markdown-aware structural read could cause the model to skip recording the classification for non-pinned paths.\n- workflow-templates/.claude/commands/investigate-issue.md:Step 2 classification uses `[CONSUMER-INTERNAL]`; Steps 9-10 output label uses `[CONSUMER]` | confidence=2\n  PROBLEM: Two distinct label strings are used for closely related concepts, which increases the chance of emitting the wrong label in the final output.\n  WHY: Step 9 explains the mapping, but the similar strings can still cause a confused model to swap `[CONSUMER-INTERNAL]` and `[CONSUMER]`.\n- workflow-templates/.claude/commands/investigate-issue.md:Steps 2 and 4 interaction for `[BOTH]` classification | confidence=2\n  PROBLEM: The stable-pinning procedure is scoped to `(only for `[UPSTREAM]` when `THIS_REPO != shubhodeep1/coding-workflows`)`, so `[BOTH]` does not explicitly include that upstream pinning case.\n  WHY: Step 4 covers the upstream reads operationally, but the heading scope leaves a minor specification gap for `[BOTH]`.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "8918fdb1ece7eea7587f26734d02f03c03af0b8858ff826975ef47186dca577f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26680672126",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26680672126",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260530100928_46549fa047",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26680672126"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-30T10:09:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
