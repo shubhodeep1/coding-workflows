@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/mark-stable.yml:212-222 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Unconditional `python3 -m pip install --quiet pyyaml jsonschema jinja2` runs on every validate-scripts job, adding repeated network/package-resolution overhead.\n  WHY: The step is duplicated in `test-and-mark-stable.yml:3272-3282`, and the packages are only needed by the immediately following unit tests, so the reviewer classified the repeated install as a performance issue.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/mark-stable.yml:212-222 | severity=medium | confidence=4\n  PROBLEM: Unconditional `python3 -m pip install --quiet pyyaml jsonschema jinja2` on every run of the validate-scripts job (which is part of the mark-stable workflow triggered on stable releases).\n  WHY: Every stable-marking run pays repeated network/package-resolution cost (~1-2s + cache overhead) even though the packages are also installed unpinned in ci.yml/validation-refresh.yml/nightly-validation-selftest.yml and the install is not combined with the preceding ruff step.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "bb27d7845f637a1add6c697f9a5cf076365a2045414a2e263a97ef75e26c5b5e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3002,
+    "run_id": "26676967073",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26676967073",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260530064449_02b9eae1c1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3002,
+    "run_id": "26676967073"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-30T06:44:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
