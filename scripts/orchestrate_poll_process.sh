@@ -3246,20 +3246,30 @@ compute_cycle_integration_ahead_by() {
 # project's own merges never trip backpressure, while genuinely anomalous
 # over-drift (e.g. a runaway fix-up loop far beyond the planned count) still
 # trips it. Fails open to the configured floor when the planned count is
-# unavailable (missing/unreadable STATE_FILE, malformed JSON).
+# unavailable (missing/unreadable STATE_FILE, malformed JSON, non-numeric
+# planned-count fields). Cached per tracking-issue loop: STATE_FILE is
+# rewritten once at the top of the loop and the planned issue count is stable
+# for the rest of the cycle.
 _integration_backpressure_effective_threshold() {
+	if [ -n "${_INTEGRATION_BACKPRESSURE_EFFECTIVE_THRESHOLD_CACHE+set}" ]; then
+		printf '%s' "${_INTEGRATION_BACKPRESSURE_EFFECTIVE_THRESHOLD_CACHE}"
+		return 0
+	fi
+
 	local base="${ORCH_INTEGRATION_MAX_AHEAD_COMMITS}"
+	local threshold="${base}"
 	local planned=""
 	if [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
-		planned="$(jq -r '(.total_issues // ([.waves[]?.issues[]?] | length)) // 0' "${STATE_FILE}" 2>/dev/null || echo "")"
+		planned="$(jq -r '((.total_issues // ([.waves[]?.issues? | length] | add)) // 0) | tostring' "${STATE_FILE}" 2>/dev/null || echo "")"
 	fi
-	[[ "${planned}" =~ ^[0-9]+$ ]] || planned=0
-	local floor=$(( planned + ORCH_INTEGRATION_BACKPRESSURE_PROJECT_MARGIN ))
-	if [ "${floor}" -gt "${base}" ]; then
-		printf '%s' "${floor}"
-	else
-		printf '%s' "${base}"
+	if [[ "${planned}" =~ ^[0-9]+$ ]]; then
+		local floor=$(( planned + ORCH_INTEGRATION_BACKPRESSURE_PROJECT_MARGIN ))
+		if [ "${floor}" -gt "${base}" ]; then
+			threshold="${floor}"
+		fi
 	fi
+	_INTEGRATION_BACKPRESSURE_EFFECTIVE_THRESHOLD_CACHE="${threshold}"
+	printf '%s' "${threshold}"
 }
 
 integration_backpressure_active_for_ahead_by() {
@@ -11735,6 +11745,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   TRACKING_NUM="$(echo "${TRACKING_ISSUES}" | jq -r ".[${tidx}].number")"
   TRACKING_TITLE="$(echo "${TRACKING_ISSUES}" | jq -r ".[${tidx}].title")"
   unset FORCE_MERGE_LABEL_EVENT_JSON_CACHE
+  unset _INTEGRATION_BACKPRESSURE_EFFECTIVE_THRESHOLD_CACHE
   HEALING_NOTES=()
   echo "========================================"
   echo "Processing tracking issue #${TRACKING_NUM}: ${TRACKING_TITLE}"
@@ -12756,7 +12767,7 @@ The poller will resume processing on the next cycle."
               unset _bws_integ
             elif [ "${PW_PR_STATE}" = "open" ] && [ "${PW_PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${PW_PR}" "${_pw_head_sha}"; then
               if [ "${INTEGRATION_BACKPRESSURE_BLOCK_MERGES:-false}" = "true" ]; then
-                echo "  [backward-scan] Backpressure active (ahead_by=${CWS_AHEAD_BY}, threshold=$(_integration_backpressure_effective_threshold)); deferring auto-merge of PR #${PW_PR} for prior-wave issue #${pw_inum}."
+                echo "  [backward-scan] Backpressure active (ahead_by=${CWS_AHEAD_BY}, threshold=${ORCH_INTEGRATION_MAX_AHEAD_COMMITS}, effective_threshold=$(_integration_backpressure_effective_threshold)); deferring auto-merge of PR #${PW_PR} for prior-wave issue #${pw_inum}."
                 continue
               fi
               if gh_retry gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto 2>/dev/null \
