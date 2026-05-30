@@ -1283,7 +1283,7 @@ section; do not duplicate here.
     mirrors its structure.
   - `docs/ai-tools-future-improvements.md` — sibling companion doc
     from the prior precedent.
-  - `docs/plans/ai-code-review-learnings-plan.md` — similar
+  - `docs/completed/ai-code-review-learnings-plan.md` — similar
     "borrow from external system" plan.
 
 - **In-repo constraint sources:**

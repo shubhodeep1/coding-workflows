@@ -1403,6 +1403,8 @@ def test_build_tracking_state_schema():
 	assert state["recovery_attempted"] is False
 	assert state["status"] == "in_progress"
 	assert state["integration_branch"] == "orchestrator/project-42"
+	assert re.fullmatch(r"[0-9a-f]{64}", state["tracking_body_sync_hash"])
+	assert re.fullmatch(r"[0-9a-f]{64}", state["tracking_body_last_readiness_refresh_hash"])
 	assert state["final_merge_strategy"] == "squash"
 	assert state["final_merge_pr"] is None
 	assert state["final_merge_status"] == "pending"
@@ -1446,9 +1448,116 @@ Summary
 """
 	state = orchestrate_lib.rebuild_tracking_state(body, {"issue-1": 10}, tracking_issue=123)
 	assert state["integration_branch"] == "orchestrator/project-77"
+	assert re.fullmatch(r"[0-9a-f]{64}", state["tracking_body_sync_hash"])
+	assert re.fullmatch(r"[0-9a-f]{64}", state["tracking_body_last_readiness_refresh_hash"])
 	assert state["final_merge_strategy"] == "squash"
 	assert state["final_merge_pr"] is None
 	assert state["final_merge_status"] == "pending"
+
+
+def test_render_tracking_issue_body_from_state_preserves_structure_and_ticks_terminal_rows():
+	template = """## Project: Test Project
+
+Summary text stays the same.
+
+---
+
+**Total issues:** 4 | **Waves:** 2
+**Integration branch:** `orchestrator/project-77`
+
+### Wave 1
+
+- [ ] **issue-1**: First task (priority 1)
+- [ ] **issue-2**: Second task (priority 2)
+
+### Wave 2
+
+- [ ] **issue-3**: Third task (priority 3)
+- [ ] **issue-4**: Fourth task (priority 4)
+
+### Dependencies
+
+- `issue-1` -> `issue-3`
+
+---
+*This issue is managed by the AI orchestrator. Do not edit manually.*
+`ai:orchestrator-tracking`
+"""
+	state = _make_state(
+		waves=[
+			{
+				"wave": 1,
+				"issues": [
+					{"id": "issue-1", "github_issue": 10, "status": "merged"},
+					{"id": "issue-2", "github_issue": 11, "status": "closed"},
+				],
+			},
+			{
+				"wave": 2,
+				"issues": [
+					{"id": "issue-3", "github_issue": 12, "status": "skipped"},
+					{"id": "issue-4", "github_issue": None, "status": "not_created"},
+				],
+			},
+		],
+	)
+	state["project_body_snapshot"] = template
+
+	rendered = orchestrate_lib.render_tracking_issue_body_from_state(state)
+
+	assert "Summary text stays the same." in rendered
+	assert "**Integration branch:** `orchestrator/project-77`" in rendered
+	assert "### Dependencies" in rendered
+	assert "- `issue-1` -> `issue-3`" in rendered
+	assert rendered.rstrip().endswith("`ai:orchestrator-tracking`")
+	assert "- [x] **issue-1**: First task (priority 1)" in rendered
+	assert "- [x] **issue-2**: Second task (priority 2)" in rendered
+	assert "- [x] **issue-3**: Third task (priority 3)" in rendered
+	assert "- [ ] **issue-4**: Fourth task (priority 4)" in rendered
+
+
+def test_render_tracking_issue_body_from_state_inserts_missing_issue_rows_into_existing_wave():
+	template = """## Project: Test Project
+
+### Wave 1
+
+- [ ] **issue-1**: First task (priority 1)
+"""
+	state = _make_state()
+	state["project_body_snapshot"] = template
+
+	rendered = orchestrate_lib.render_tracking_issue_body_from_state(state)
+
+	assert "- [ ] **issue-1**: First task (priority 1)" in rendered
+	assert "- [ ] **issue-2**: #11" in rendered
+
+
+def test_render_tracking_issue_body_from_state_rejects_missing_wave_heading_for_state_wave():
+	template = """## Project: Test Project
+
+### Wave 1
+
+- [ ] **issue-1**: First task (priority 1)
+"""
+	state = _make_state(
+		waves=[
+			{
+				"wave": 1,
+				"issues": [{"id": "issue-1", "github_issue": 10, "status": "merged"}],
+			},
+			{
+				"wave": 2,
+				"issues": [{"id": "issue-2", "github_issue": 11, "status": "merged"}],
+			},
+		],
+	)
+	state["project_body_snapshot"] = template
+
+	try:
+		orchestrate_lib.render_tracking_issue_body_from_state(state)
+		assert False, "Should have raised OrchestrateError"
+	except orchestrate_lib.OrchestrateError as exc:
+		assert "missing wave heading" in str(exc)
 
 
 def test_resolve_integration_ref_parity_for_fixtures():

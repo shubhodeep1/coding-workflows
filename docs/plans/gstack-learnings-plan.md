@@ -139,7 +139,7 @@ than re-litigate.
   pipelines actually read at runtime; any reviewer or consolidator
   prompt change must be reflected here or in `agents.md`, not just
   in `CLAUDE.md`.
-- `docs/plans/ai-code-review-learnings-plan.md` — sibling plan
+- `docs/completed/ai-code-review-learnings-plan.md` — sibling plan
   applying Cloudflare's `ai-code-review` lessons. Phase E here
   (Eng-Manager plan-template enrichment) overlaps that plan's
   "approval rubric biased toward `approved_with_comments`" item —
@@ -1603,7 +1603,7 @@ implementation starts.
   <https://github.com/garrytan/gstack/blob/main/ETHOS.md>;
   AGENTS.md:
   <https://github.com/garrytan/gstack/blob/main/AGENTS.md>.
-- `docs/plans/ai-code-review-learnings-plan.md` — sibling plan
+- `docs/completed/ai-code-review-learnings-plan.md` — sibling plan
   applying Cloudflare's `ai-code-review` lessons (overlaps
   Phase E here).
 - `docs/completed/judge-loop-and-reissue-plan.md` (shipped) — covers

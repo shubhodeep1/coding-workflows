@@ -11,6 +11,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT_PATH = REPO_ROOT / "scripts" / "lint_plan_archival_completeness.py"
+ORCHESTRATE_LIB_PATH = REPO_ROOT / "scripts" / "orchestrate_lib.py"
 
 
 def _import_lint():
@@ -18,6 +19,15 @@ def _import_lint():
 	assert spec is not None and spec.loader is not None
 	module = importlib.util.module_from_spec(spec)
 	sys.modules["lint_plan_archival"] = module
+	spec.loader.exec_module(module)
+	return module
+
+
+def _import_orchestrate_lib():
+	spec = importlib.util.spec_from_file_location("orchestrate_lib_for_archival_lint", ORCHESTRATE_LIB_PATH)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	sys.modules["orchestrate_lib_for_archival_lint"] = module
 	spec.loader.exec_module(module)
 	return module
 
@@ -136,6 +146,75 @@ def test_archival_with_all_ticked_tracking_issue_passes():
 	violations, errors = mod.lint(
 		pr_body="Squash merge.\n\nRefs #2734\n",
 		added_files=["docs/completed/integration-sync-resolver-self-heal-plan.md"],
+		repo="owner/repo",
+		fail_open_on_lookup_error=False,
+		issue_fetcher=fetch,
+	)
+	assert violations == []
+	assert errors == []
+
+
+def test_archival_with_reconciled_tracking_body_from_state_passes_without_descope_section():
+	# The review-learnings closeout path first re-renders the live tracking
+	# body from orchestrator state, then relies on this lint to allow the
+	# archive move without a synthetic de-scope rationale.
+	lint_mod = _import_lint()
+	orch_mod = _import_orchestrate_lib()
+	template = """## Project: AI Code Review Learnings
+
+Summary text stays intact.
+
+---
+
+**Total issues:** 2 | **Waves:** 2
+**Integration branch:** `orchestrator/project-2974`
+
+### Wave 1
+
+- [ ] **phase-f-reviewer-fanout**: Reviewer fan-out shipped
+
+### Wave 2
+
+- [ ] **phase-g-closeout-archival**: Closeout and archival shipped
+
+### Dependencies
+
+- `phase-f-reviewer-fanout` -> `phase-g-closeout-archival`
+
+---
+*This issue is managed by the AI orchestrator. Do not edit manually.*
+`ai:orchestrator-tracking`
+"""
+	state = {
+		"project_body_snapshot": template,
+		"waves": [
+			{
+				"wave": 1,
+				"issues": [
+					{"id": "phase-f-reviewer-fanout", "github_issue": 3011, "status": "merged"},
+				],
+			},
+			{
+				"wave": 2,
+				"issues": [
+					{"id": "phase-g-closeout-archival", "github_issue": 3012, "status": "closed"},
+				],
+			},
+		],
+	}
+	reconciled_body = orch_mod.render_tracking_issue_body_from_state(state)
+
+	assert "- [x] **phase-f-reviewer-fanout**: Reviewer fan-out shipped" in reconciled_body
+	assert "- [x] **phase-g-closeout-archival**: Closeout and archival shipped" in reconciled_body
+
+	def fetch(repo: str, n: int) -> dict | None:
+		if n == 2974:
+			return {"labels": ["ai:orchestrator-tracking"], "body": reconciled_body}
+		return None
+
+	violations, errors = lint_mod.lint(
+		pr_body="Automated implementation. Refs #2974\n",
+		added_files=["docs/completed/ai-code-review-learnings-plan.md"],
 		repo="owner/repo",
 		fail_open_on_lookup_error=False,
 		issue_fetcher=fetch,
