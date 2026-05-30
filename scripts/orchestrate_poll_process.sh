@@ -3249,15 +3249,22 @@ compute_cycle_integration_ahead_by() {
 # unavailable (missing/unreadable STATE_FILE, malformed JSON, non-numeric
 # planned-count fields). Cached per tracking-issue loop: STATE_FILE is
 # rewritten once at the top of the loop and the planned issue count is stable
-# for the rest of the cycle.
+# for the rest of the cycle. Callers that want the cache benefit must invoke
+# the helper directly with an output-variable name; command substitution would
+# run it in a subshell and lose the cached value.
 _integration_backpressure_effective_threshold() {
+	local outvar="${1:-}"
 	if [ -n "${_INTEGRATION_BACKPRESSURE_EFFECTIVE_THRESHOLD_CACHE+set}" ]; then
-		printf '%s' "${_INTEGRATION_BACKPRESSURE_EFFECTIVE_THRESHOLD_CACHE}"
+		if [ -n "${outvar}" ]; then
+			printf -v "${outvar}" '%s' "${_INTEGRATION_BACKPRESSURE_EFFECTIVE_THRESHOLD_CACHE}"
+		else
+			printf '%s' "${_INTEGRATION_BACKPRESSURE_EFFECTIVE_THRESHOLD_CACHE}"
+		fi
 		return 0
 	fi
 
 	local base="${ORCH_INTEGRATION_MAX_AHEAD_COMMITS}"
-	local threshold="${base}"
+	local resolved_threshold="${base}"
 	local planned=""
 	if [ -n "${STATE_FILE:-}" ] && [ -f "${STATE_FILE}" ]; then
 		planned="$(jq -r '((.total_issues // ([.waves[]?.issues? | length] | add)) // 0) | tostring' "${STATE_FILE}" 2>/dev/null || echo "")"
@@ -3265,17 +3272,21 @@ _integration_backpressure_effective_threshold() {
 	if [[ "${planned}" =~ ^[0-9]+$ ]]; then
 		local floor=$(( planned + ORCH_INTEGRATION_BACKPRESSURE_PROJECT_MARGIN ))
 		if [ "${floor}" -gt "${base}" ]; then
-			threshold="${floor}"
+			resolved_threshold="${floor}"
 		fi
 	fi
-	_INTEGRATION_BACKPRESSURE_EFFECTIVE_THRESHOLD_CACHE="${threshold}"
-	printf '%s' "${threshold}"
+	_INTEGRATION_BACKPRESSURE_EFFECTIVE_THRESHOLD_CACHE="${resolved_threshold}"
+	if [ -n "${outvar}" ]; then
+		printf -v "${outvar}" '%s' "${resolved_threshold}"
+	else
+		printf '%s' "${resolved_threshold}"
+	fi
 }
 
 integration_backpressure_active_for_ahead_by() {
 	local ahead_by="$1"
 	local threshold
-	threshold="$(_integration_backpressure_effective_threshold)"
+	_integration_backpressure_effective_threshold threshold
 	[[ "${ahead_by}" =~ ^[0-9]+$ ]] && [ "${ahead_by}" -ge "${threshold}" ]
 }
 
@@ -3339,6 +3350,7 @@ reconcile_integration_backpressure_label() {
 	local final_pr="$4"
 	local label_name="ai:integration-backpressure"
 	local label_present="false"
+	local effective_threshold=""
 
 	[ -n "${integration_branch}" ] || return 1
 	if has_label "${TRACKING_LABELS:-[]}" "${label_name}"; then
@@ -3346,12 +3358,13 @@ reconcile_integration_backpressure_label() {
 	fi
 
 	if integration_backpressure_active_for_ahead_by "${ahead_by}"; then
+		_integration_backpressure_effective_threshold effective_threshold
 		if [ "${label_present}" != "true" ]; then
 			ensure_label_exists "${label_name}" >/dev/null 2>&1 || true
 			if gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" \
 				--add-label "${label_name}" >/dev/null 2>&1; then
 				TRACKING_LABELS="$(printf '%s' "${TRACKING_LABELS:-[]}" | jq -c --arg label "${label_name}" '(. + [$label]) | unique' 2>/dev/null || echo '["ai:integration-backpressure"]')"
-				echo "BACKPRESSURE_TRIGGERED tracking_issue=${TRACKING_NUM} integration_branch=${integration_branch} default_branch=${default_branch:-unknown} ahead_by=${ahead_by} threshold=${ORCH_INTEGRATION_MAX_AHEAD_COMMITS} effective_threshold=$(_integration_backpressure_effective_threshold) final_pr=${final_pr:-0}"
+				echo "BACKPRESSURE_TRIGGERED tracking_issue=${TRACKING_NUM} integration_branch=${integration_branch} default_branch=${default_branch:-unknown} ahead_by=${ahead_by} threshold=${ORCH_INTEGRATION_MAX_AHEAD_COMMITS} effective_threshold=${effective_threshold} final_pr=${final_pr:-0}"
 			else
 				echo "::warning::[backpressure] failed to add ${label_name} to tracking issue #${TRACKING_NUM}; merge gate remains active this cycle." >&2
 			fi
@@ -3364,10 +3377,11 @@ reconcile_integration_backpressure_label() {
 	fi
 
 	if [ "${label_present}" = "true" ]; then
+		_integration_backpressure_effective_threshold effective_threshold
 		if gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" \
 			--remove-label "${label_name}" >/dev/null 2>&1; then
 			TRACKING_LABELS="$(printf '%s' "${TRACKING_LABELS:-[]}" | jq -c --arg label "${label_name}" 'map(select(. != $label))' 2>/dev/null || echo '[]')"
-			echo "BACKPRESSURE_CLEARED tracking_issue=${TRACKING_NUM} integration_branch=${integration_branch} default_branch=${default_branch:-unknown} ahead_by=${ahead_by} threshold=${ORCH_INTEGRATION_MAX_AHEAD_COMMITS} effective_threshold=$(_integration_backpressure_effective_threshold) final_pr=${final_pr:-0}"
+			echo "BACKPRESSURE_CLEARED tracking_issue=${TRACKING_NUM} integration_branch=${integration_branch} default_branch=${default_branch:-unknown} ahead_by=${ahead_by} threshold=${ORCH_INTEGRATION_MAX_AHEAD_COMMITS} effective_threshold=${effective_threshold} final_pr=${final_pr:-0}"
 		else
 			echo "::warning::[backpressure] failed to remove ${label_name} from tracking issue #${TRACKING_NUM}; will retry after the next numeric compare result." >&2
 		fi
@@ -12767,7 +12781,8 @@ The poller will resume processing on the next cycle."
               unset _bws_integ
             elif [ "${PW_PR_STATE}" = "open" ] && [ "${PW_PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${PW_PR}" "${_pw_head_sha}"; then
               if [ "${INTEGRATION_BACKPRESSURE_BLOCK_MERGES:-false}" = "true" ]; then
-                echo "  [backward-scan] Backpressure active (ahead_by=${CWS_AHEAD_BY}, threshold=${ORCH_INTEGRATION_MAX_AHEAD_COMMITS}, effective_threshold=$(_integration_backpressure_effective_threshold)); deferring auto-merge of PR #${PW_PR} for prior-wave issue #${pw_inum}."
+                _integration_backpressure_effective_threshold _bws_effective_threshold
+                echo "  [backward-scan] Backpressure active (ahead_by=${CWS_AHEAD_BY}, threshold=${ORCH_INTEGRATION_MAX_AHEAD_COMMITS}, effective_threshold=${_bws_effective_threshold}); deferring auto-merge of PR #${PW_PR} for prior-wave issue #${pw_inum}."
                 continue
               fi
               if gh_retry gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto 2>/dev/null \
@@ -13181,7 +13196,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     _csc_body+=$'\n'"Integration status is unknown this cycle (compare API unavailable). Project completion remains gated until the next successful poll re-check."$'\n'
   fi
   if [ "${INTEGRATION_BACKPRESSURE_BLOCK_MERGES:-false}" = "true" ]; then
-    _csc_effective_threshold="$(_integration_backpressure_effective_threshold)"
+    _integration_backpressure_effective_threshold _csc_effective_threshold
     if [[ "${_csc_final_pr}" =~ ^[0-9]+$ ]]; then
       _csc_body+=$'\n'"Integration backpressure is active (\`ai:integration-backpressure\`): the poller is pausing additional sub-issue merges while the integration branch backlog stays at or above \`${_csc_effective_threshold}\` commit(s). Review the open integration PR #${_csc_final_pr} ($(_gh_url "pull/${_csc_final_pr}")); this clears automatically once the backlog shrinks below the threshold."$'\n'
     else
@@ -13280,7 +13295,8 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       _rtm_head_ref="$(_jq_field "${_rtm_pr_json}" '.head.ref')"
       if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
         if [ "${INTEGRATION_BACKPRESSURE_BLOCK_MERGES:-false}" = "true" ]; then
-          echo "  [backpressure] Deferring merge of PR #${RTM_PR} for issue #${rtm_issue}: integration branch ahead_by=${CWS_AHEAD_BY} meets effective threshold $(_integration_backpressure_effective_threshold) (configured floor ORCH_INTEGRATION_MAX_AHEAD_COMMITS=${ORCH_INTEGRATION_MAX_AHEAD_COMMITS})."
+          _integration_backpressure_effective_threshold _rtm_effective_threshold
+          echo "  [backpressure] Deferring merge of PR #${RTM_PR} for issue #${rtm_issue}: integration branch ahead_by=${CWS_AHEAD_BY} meets effective threshold ${_rtm_effective_threshold} (configured floor ORCH_INTEGRATION_MAX_AHEAD_COMMITS=${ORCH_INTEGRATION_MAX_AHEAD_COMMITS})."
           continue
         fi
         if _pr_checks_completed "${RTM_PR}" "${_rtm_head_sha}"; then

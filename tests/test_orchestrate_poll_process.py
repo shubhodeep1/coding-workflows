@@ -5119,6 +5119,32 @@ def test_backward_scan_backpressure_log_reports_floor_and_effective_threshold():
 	assert "[backward-scan] Backpressure active (ahead_by=10, threshold=10, effective_threshold=10); deferring auto-merge of PR #935 for prior-wave issue #35." in (result["stdout"] + result["stderr"])
 
 
+def test_integration_backpressure_threshold_cache_avoids_command_substitution_subshells():
+	# Static contract: the size-aware threshold helper caches its computed
+	# value in `_INTEGRATION_BACKPRESSURE_EFFECTIVE_THRESHOLD_CACHE`, but
+	# bash command substitution runs in a subshell. Calling the helper as
+	# `foo="$(_integration_backpressure_effective_threshold)"` therefore
+	# re-runs jq on every use because the cache write dies with the subshell.
+	# The call sites must pass an output variable directly instead.
+	poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
+
+	assert "$(_integration_backpressure_effective_threshold" not in poller_body, (
+		"_integration_backpressure_effective_threshold must not be invoked via "
+		"command substitution; that drops the cached threshold in a subshell "
+		"and respawns jq on every call."
+	)
+	direct_calls = re.findall(
+		r"^\s*_integration_backpressure_effective_threshold\s+[A-Za-z_][A-Za-z0-9_]*\s*$",
+		poller_body,
+		re.MULTILINE,
+	)
+	assert len(direct_calls) >= 5, (
+		"Backpressure threshold call sites must pass an output variable "
+		"directly so the per-tracking-issue jq result stays cached in the "
+		"current shell."
+	)
+
+
 def test_final_merge_treats_closed_merged_pr_as_success():
 	state = _base_state(status="in_progress")
 	state["integration_branch"] = "orchestrator/project-192"
