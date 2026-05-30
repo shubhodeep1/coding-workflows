@@ -533,6 +533,20 @@ jobs:
           BRANCH_REBUILD_ENABLED: ${{ vars.BRANCH_REBUILD_ENABLED || 'false' }}
           BRANCH_REBUILD_THRESHOLD_HOURS: ${{ vars.BRANCH_REBUILD_THRESHOLD_HOURS || '24' }}
           BRANCH_REBUILD_COOLDOWN_HOURS: ${{ vars.BRANCH_REBUILD_COOLDOWN_HOURS || '48' }}
+          # Integration-backpressure size-aware margin (see scripts/orchestrate_poll_process.sh
+          # _integration_backpressure_effective_threshold). Effective threshold is
+          # max(ORCH_INTEGRATION_MAX_AHEAD_COMMITS, planned_issue_count + this margin).
+          # Raised from the script-level fallback of 5 to 20: the original margin of 5 only
+          # absorbed a handful of non-sub-issue commits, but a real project's integration
+          # branch also accrues `main`→integration sync-merge commits, judge conflict-merge
+          # commits, and re-decomposed fix-up issues beyond the planned count. Project #2974
+          # (10 planned issues) drifted to 22 commits ahead — past the old effective
+          # threshold of max(10, 10+5)=15 — and self-deadlocked: backpressure paused the very
+          # sub-issue merges needed to reach completion, and completion is what drains the
+          # integration branch to clear backpressure. With margin 20 the threshold is
+          # max(10, 10+20)=30, leaving headroom for that sync/judge/fix-up overhead while
+          # still tripping on genuinely anomalous over-drift. Override via repo var.
+          ORCH_INTEGRATION_BACKPRESSURE_PROJECT_MARGIN: ${{ vars.ORCH_INTEGRATION_BACKPRESSURE_PROJECT_MARGIN || '20' }}
           MODEL_CONFLICT_RESOLVER: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
           # Default lowered from 'xhigh' to 'high' in lockstep with
           # review_autofix.yml's CONFLICT_RESOLVER_REASONING_EFFORT (see the
