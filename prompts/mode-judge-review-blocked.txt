@@ -15,6 +15,12 @@ Context provided below:
 - The autofix iteration count and failure reason
 - The current repository state
 - Any AI Materiality Advisory comment is informational only and must never block merge by itself.
+- The prompt may also include a `=== BEGIN PRIOR ROUND DECISIONS ===` block.
+- Treat that block as advisory ledger history from the existing review ledger, not as fresh reviewer evidence.
+- Each line in that block is a compact prior issue entry with `issue_id=...`, `file=...`, `lines=...`, `status=...`, `prior_decision=...`, and `editor_outcomes=...` fields.
+- If `prior_decision` is `accepted-residual` or `won't-fix`, do not re-raise it unless the current PR evidence clearly worsened.
+- A finding counts as worsened only when the current evidence shows higher severity, a broader or new anchor, a larger blast radius, or a same-area diff change that materially strengthens the evidence.
+- Never let the prior-round block suppress fresh grounded evidence from the current diff, code, or review comments.
 
 You have full access to the repository checkout and all tools (shell,
 file reads). Use them to inspect the actual code — do not rely solely on

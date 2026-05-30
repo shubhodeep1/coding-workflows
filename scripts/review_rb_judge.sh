@@ -240,6 +240,134 @@ flag_enabled() {
   esac
 }
 
+render_review_rb_prior_round_decisions_file() {
+  local ledger_path="$1"
+  local out_path="$2"
+  local tmp_path=""
+  local ledger_enabled=""
+  local rereview_enabled=""
+
+  : > "${out_path}"
+  ledger_enabled="$(printf '%s' "${REVIEW_LEDGER_ENABLED:-1}" | tr '[:upper:]' '[:lower:]')"
+  rereview_enabled="$(printf '%s' "${REVIEW_LEDGER_REREVIEW_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')"
+  case "${ledger_enabled}" in
+    1|true|yes|on)
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+  case "${rereview_enabled}" in
+    1|true|yes|on)
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+  if [ ! -s "${ledger_path}" ]; then
+    return 0
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    return 0
+  fi
+
+  tmp_path="$(mktemp)" || return 0
+  if PYTHONDONTWRITEBYTECODE=1 python3 - "${ledger_path}" > "${tmp_path}" <<'PY'
+from pathlib import Path
+import sys
+
+ledger_path = Path(sys.argv[1])
+raw = ledger_path.read_text(encoding="utf-8", errors="replace").splitlines()
+
+entries = []
+current = None
+editor_outcomes = []
+in_editor_outcomes = False
+
+def clean(value: str) -> str:
+    return " ".join(value.replace("\t", " ").split())
+
+def flush_current() -> None:
+    global current, editor_outcomes, in_editor_outcomes
+    if current is None:
+        return
+    current["EDITOR_OUTCOMES"] = " | ".join(clean(line) for line in editor_outcomes if clean(line))
+    entries.append(current)
+    current = None
+    editor_outcomes = []
+    in_editor_outcomes = False
+
+for line in raw:
+    if line.startswith("=== ENTRY ") and line.endswith(" ==="):
+        flush_current()
+        current = {"ISSUE_ID": line[len("=== ENTRY "):-len(" ===")].strip()}
+        editor_outcomes = []
+        in_editor_outcomes = False
+        continue
+    if line == "=== END ENTRY ===":
+        flush_current()
+        continue
+    if current is None:
+        continue
+    if in_editor_outcomes:
+        if line.startswith("  "):
+            editor_outcomes.append(line[2:])
+            continue
+        in_editor_outcomes = False
+    if line.startswith("EDITOR_OUTCOMES:"):
+        payload = line.split(":", 1)[1].strip()
+        if payload:
+            editor_outcomes = [payload]
+        else:
+            editor_outcomes = []
+            in_editor_outcomes = True
+        continue
+    if ":" in line:
+        key, value = line.split(":", 1)
+        current[key.strip()] = value.strip()
+
+flush_current()
+
+for entry in sorted(entries, key=lambda item: item.get("ISSUE_ID", "")):
+    status = clean(entry.get("STATUS", ""))
+    editor_text = entry.get("EDITOR_OUTCOMES", "")
+    editor_lower = editor_text.lower()
+    prior_decision = ""
+    if status == "accepted-residual":
+        prior_decision = "accepted-residual"
+    elif (
+        "won't fix" in editor_lower
+        or "wont fix" in editor_lower
+        or "won't-fix" in editor_lower
+        or "wont-fix" in editor_lower
+        or "will not fix" in editor_lower
+    ):
+        prior_decision = "won't-fix"
+
+    parts = [
+        f'issue_id={clean(entry.get("ISSUE_ID", "")) or "unknown"}',
+        f'file={clean(entry.get("FILE", "")) or "unknown"}',
+        f'lines={clean(entry.get("LINES", "")) or "unknown"}',
+        f'lens={clean(entry.get("LENS", "")) or "unknown"}',
+        f'severity={clean(entry.get("SEVERITY", "")) or "unknown"}',
+        f'status={status or "unknown"}',
+        f'prior_decision={prior_decision or "none"}',
+        f'persist_count={clean(entry.get("PERSIST_COUNT", "")) or "0"}',
+        f'editor_outcomes={editor_text or "none"}',
+    ]
+    print("; ".join(parts))
+PY
+  then
+    mv "${tmp_path}" "${out_path}" 2>/dev/null || {
+      rm -f "${tmp_path}"
+      : > "${out_path}"
+    }
+  else
+    rm -f "${tmp_path}"
+    : > "${out_path}"
+  fi
+}
+
 normalize_review_state() {
   case "${1:-}" in
     APPROVE|APPROVE_WITH_COMMENTS|COMMENT|REQUEST_CHANGES)
@@ -300,6 +428,9 @@ REVIEW_APPROVAL_RUBRIC_ENABLED="${REVIEW_APPROVAL_RUBRIC_ENABLED:-false}"
 REVIEW_BREAK_GLASS_ENABLED="${REVIEW_BREAK_GLASS_ENABLED:-false}"
 REVIEW_BREAK_GLASS="${REVIEW_BREAK_GLASS:-false}"
 REVIEW_BREAK_GLASS_COMMENTER="${REVIEW_BREAK_GLASS_COMMENTER:-}"
+REVIEW_LEDGER_ENABLED="${REVIEW_LEDGER_ENABLED:-1}"
+REVIEW_LEDGER_REREVIEW_ENABLED="${REVIEW_LEDGER_REREVIEW_ENABLED:-0}"
+REVIEW_LEDGER_PATH="${REVIEW_LEDGER_PATH:-.ai/review_issue_ledger/pr-${PR_NUMBER:-0}.txt}"
 
 REVIEW_RB_SEMBLE_HELPERS_AVAILABLE="false"
 REVIEW_RB_SEMBLE_MAX_CHUNKS="4"
@@ -663,6 +794,10 @@ fi
 if [ -z "${POST_REVIEW_HEAD_REF}" ]; then
   POST_REVIEW_HEAD_REF="${TARGET_BRANCH:-}"
 fi
+RB_JUDGE_PRIOR_ROUND_DECISIONS_FILE="${RUNTIME_DIR}/rb_judge_prior_round_decisions.txt"
+if command -v render_review_rb_prior_round_decisions_file >/dev/null 2>&1; then
+  render_review_rb_prior_round_decisions_file "${REVIEW_LEDGER_PATH}" "${RB_JUDGE_PRIOR_ROUND_DECISIONS_FILE}"
+fi
 
 # -----------------------------------------------------------
 # Build judge prompt
@@ -675,7 +810,7 @@ RB_JUDGE_PR_META_RENDER_FILE="${RUNTIME_DIR}/rb_judge_pr_meta.json"
 RB_JUDGE_PR_COMMENTS_RENDER_FILE="${RUNTIME_DIR}/rb_judge_pr_comments.json"
 RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE="${RUNTIME_DIR}/rb_judge_pr_review_comments.json"
 RB_JUDGE_SEMBLE_PREFETCH=""
-trap '_cleanup_prompt_budget; rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE:-}" "${RB_JUDGE_REQUIREMENT_FILE:-}" "${RB_JUDGE_PR_META_RENDER_FILE:-}" "${RB_JUDGE_PR_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PR_DIFF_FILE:-}" "${RB_JUDGE_PR_DIFF_TMP_FILE:-}"' EXIT
+trap '_cleanup_prompt_budget; rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE:-}" "${RB_JUDGE_REQUIREMENT_FILE:-}" "${RB_JUDGE_PR_META_RENDER_FILE:-}" "${RB_JUDGE_PR_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PRIOR_ROUND_DECISIONS_FILE:-}" "${RB_JUDGE_PR_DIFF_FILE:-}" "${RB_JUDGE_PR_DIFF_TMP_FILE:-}"' EXIT
 
 {
   printf '%s\n' 'Review-blocked judge context.'
@@ -724,6 +859,7 @@ RB_JUDGE_REQUIREMENT_MAX_BYTES=50000
 RB_JUDGE_PR_META_MAX_BYTES=50000
 RB_JUDGE_PR_COMMENTS_MAX_BYTES=150000
 RB_JUDGE_PR_REVIEW_COMMENTS_MAX_BYTES=100000
+RB_JUDGE_PRIOR_ROUND_DECISIONS_MAX_BYTES=50000
 _init_prompt_budget "${RB_JUDGE_CONTEXT_BUDGET_BYTES}"
 
 {
@@ -801,6 +937,12 @@ _init_prompt_budget "${RB_JUDGE_CONTEXT_BUDGET_BYTES}"
     "${RB_JUDGE_PR_COMMENTS_RENDER_FILE}" \
     "${RB_JUDGE_PR_COMMENTS_MAX_BYTES}"
   echo
+  if [ -s "${RB_JUDGE_PRIOR_ROUND_DECISIONS_FILE}" ]; then
+    echo "=== BEGIN PRIOR ROUND DECISIONS ==="
+    _embed_input_file "${RB_JUDGE_PRIOR_ROUND_DECISIONS_FILE}" "${RB_JUDGE_PRIOR_ROUND_DECISIONS_MAX_BYTES}"
+    echo "=== END PRIOR ROUND DECISIONS ==="
+    echo
+  fi
   echo "=== REVIEW-BLOCKED CONTEXT ==="
   echo "Review-blocked judge retry: $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}"
   echo "Retries exhausted: ${IS_FINAL}"

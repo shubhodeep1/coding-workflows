@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -20,6 +21,7 @@ RB_JUDGE_SCRIPT = REPO_ROOT / "scripts" / "review_rb_judge.sh"
 REVIEW_AUTOFIX_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 REVIEW_CONSOLIDATOR_PROMPT = REPO_ROOT / "prompts" / "review-consolidator.txt"
 REVIEW_BLOCKED_PROMPT = REPO_ROOT / "prompts" / "mode-judge-review-blocked.txt"
+GH_HELPERS = REPO_ROOT / "scripts" / "gh_helpers.sh"
 
 
 def _install_mock_codex(mock_bin_dir: Path, output_fixture: Path) -> Path:
@@ -78,6 +80,118 @@ def _run_consolidator(
 		text=True,
 	)
 	return result, runtime_dir
+
+
+def _render_rb_judge_prompt(
+	*,
+	ledger_text: str | None = None,
+	review_ledger_enabled: str = "1",
+	review_ledger_rereview_enabled: str = "1",
+	create_ledger: bool = True,
+) -> str:
+	with tempfile.TemporaryDirectory() as td:
+		tmp_dir = Path(td)
+		runtime = tmp_dir / "runtime"
+		runtime.mkdir(parents=True, exist_ok=True)
+
+		pr_meta_file = runtime / "pr_meta.json"
+		pr_payload_file = runtime / "pr_payload.json"
+		pr_meta_file.write_text(
+			json.dumps({"title": "RB judge prompt", "body": "Current PR body"}, ensure_ascii=False) + "\n",
+			encoding="utf-8",
+		)
+		pr_payload_file.write_text(
+			json.dumps({"body": "Current PR body"}, ensure_ascii=False) + "\n",
+			encoding="utf-8",
+		)
+		pr_context_json = json.dumps(
+			{
+				"meta": {"title": "RB judge prompt", "body": "Current PR body"},
+				"comments": [{"id": 1, "body": "Current PR comment", "user": {"login": "alice"}}],
+				"review_comments": [
+					{"id": 2, "body": "Current inline comment", "path": "src/module.py", "line": 7}
+				],
+			},
+			ensure_ascii=False,
+		)
+
+		ledger_path = runtime / "review_issue_ledger.txt"
+		if create_ledger:
+			if ledger_text is None:
+				shutil.copy2(FIXTURES / "phase_f_prior_ledger.txt", ledger_path)
+			else:
+				ledger_path.write_text(ledger_text, encoding="utf-8")
+
+		script_text = RB_JUDGE_SCRIPT.read_text(encoding="utf-8")
+		script_lines = script_text.splitlines(keepends=True)
+		start = next(
+			i
+			for i, ln in enumerate(script_lines)
+			if ln.startswith('PR_COMMENTS="$(printf') and ".comments // []" in ln
+		)
+		end = next(
+			i
+			for i, ln in enumerate(script_lines[start:], start=start)
+			if ln.strip() == '} > "${RB_JUDGE_PROMPT}"'
+		) + 1
+		block = (
+			"set -euo pipefail\n"
+			f"source {shlex.quote(str(GH_HELPERS))}\n"
+			+ "\n\n".join(
+				[
+					_extract_shell_function(script_text, "append_review_rb_semble_query_section"),
+					_extract_shell_function(script_text, "render_review_rb_semble_prefetch"),
+					_extract_shell_function(script_text, "emit_review_rb_untrusted_file"),
+					_extract_shell_function(script_text, "render_review_rb_prior_round_decisions_file"),
+				]
+			)
+			+ "\n\n"
+			+ "".join(script_lines[start:end])
+		)
+
+		env = os.environ.copy()
+		env.update({
+			"PYTHONDONTWRITEBYTECODE": "1",
+			"RUNTIME_DIR": str(runtime),
+			"SUPPORT_ROOT_DIR": str(REPO_ROOT),
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+			"SUPPORT_PROMPTS_DIR": str(REPO_ROOT / "prompts"),
+			"TOOL_CALL_BUDGET_JUDGE": "50",
+			"FIRST_ISSUE": "123",
+			"FIRST_ISSUE_BODY": "Original requirement body",
+			"PR_META_FILE": str(pr_meta_file),
+			"PR_PAYLOAD_FILE": str(pr_payload_file),
+			"PR_CONTEXT_JSON": pr_context_json,
+			"PR_NUMBER": "42",
+			"PR_DIFF": (
+				"diff --git a/src/module.py b/src/module.py\n"
+				"--- a/src/module.py\n"
+				"+++ b/src/module.py\n"
+				"@@ -1 +1 @@\n"
+				"-old\n"
+				"+new\n"
+			),
+			"PR_DIFF_TRUNCATED": "false",
+			"PR_DIFF_BYTES_TOTAL": "0",
+			"RETRY_COUNT": "0",
+			"MAX_REVIEW_BLOCKED_RETRIES": "3",
+			"IS_FINAL": "false",
+			"REVIEW_RB_SEMBLE_HELPERS_AVAILABLE": "false",
+			"SEMBLE_AVAILABLE": "false",
+			"SEMBLE_INDEX_AVAILABLE": "false",
+			"REVIEW_LEDGER_ENABLED": review_ledger_enabled,
+			"REVIEW_LEDGER_REREVIEW_ENABLED": review_ledger_rereview_enabled,
+			"REVIEW_LEDGER_PATH": str(ledger_path),
+		})
+		result = subprocess.run(
+			["bash", "-c", block],
+			cwd=str(tmp_dir),
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+		assert result.returncode == 0, result.stderr
+		return (runtime / "rb_judge_prompt.txt").read_text(encoding="utf-8")
 
 
 def _extract_shell_function(script_text: str, name: str) -> str:
@@ -166,6 +280,10 @@ def test_prompts_and_workflow_wire_rereview_and_review_state_contract() -> None:
 	assert "Files absent from the bundle are intentionally invisible here" in consolidator_prompt
 	assert "If `prior_decision` is `accepted-residual` or `won't-fix`, do not" in consolidator_prompt
 	assert "If `PRIOR_DECISION` is `accepted-residual` or `won't-fix`, do not" not in consolidator_prompt
+	assert "=== BEGIN PRIOR ROUND DECISIONS ===" in judge_prompt
+	assert "Treat that block as advisory ledger history from the existing review ledger, not as fresh reviewer evidence." in judge_prompt
+	assert "If `prior_decision` is `accepted-residual` or `won't-fix`, do not re-raise it unless the current PR evidence clearly worsened." in judge_prompt
+	assert "Never let the prior-round block suppress fresh grounded evidence from the current diff, code, or review comments." in judge_prompt
 	assert '"review_state": "APPROVE" | "APPROVE_WITH_COMMENTS" | "COMMENT" | "REQUEST_CHANGES"' in judge_prompt
 	assert "AI Materiality Advisory comment is informational only" in judge_prompt
 	assert "REVIEW_LEDGER_REREVIEW_ENABLED: ${{ vars.REVIEW_LEDGER_REREVIEW_ENABLED || 'false' }}" in workflow
@@ -229,6 +347,63 @@ def test_consolidator_allows_worsened_prior_issue_to_reemit() -> None:
 	assert "=== ISSUE 201 ===" in raw
 	assert "SEVERITY: blocker" in raw
 	assert "RE_REVIEW_SKIP:" not in result.stderr
+
+
+def test_review_blocked_judge_injects_prior_round_decisions_when_rereview_enabled() -> None:
+	prompt = _render_rb_judge_prompt()
+
+	assert "\n=== BEGIN PRIOR ROUND DECISIONS ===\n" in prompt
+	assert "issue_id=issue_residual; file=src/module.py; lines=2-3; lens=CORRECTNESS & LOGIC; severity=high; status=accepted-residual; prior_decision=accepted-residual; persist_count=3" in prompt
+	assert "issue_id=issue_wontfix; file=src/module.py; lines=6; lens=PERFORMANCE & RESOURCE USE; severity=low; status=PERSISTING; prior_decision=won't-fix; persist_count=1" in prompt
+	assert "\n=== END PRIOR ROUND DECISIONS ===\n" in prompt
+
+
+def test_review_blocked_judge_gates_prior_round_decisions_on_both_flags() -> None:
+	for kwargs in (
+		{"review_ledger_enabled": "0"},
+		{"review_ledger_rereview_enabled": "0"},
+	):
+		prompt = _render_rb_judge_prompt(**kwargs)
+		assert "\n=== BEGIN PRIOR ROUND DECISIONS ===\n" not in prompt
+
+
+def test_review_blocked_judge_fails_open_when_ledger_missing_or_empty() -> None:
+	for kwargs in (
+		{"create_ledger": False},
+		{"ledger_text": ""},
+	):
+		prompt = _render_rb_judge_prompt(**kwargs)
+		assert "\n=== BEGIN PRIOR ROUND DECISIONS ===\n" not in prompt
+
+
+def test_review_blocked_judge_does_not_treat_all_overrides_as_wontfix() -> None:
+	prompt = _render_rb_judge_prompt(
+		ledger_text=textwrap.dedent(
+			"""\
+			=== LEDGER v1 ===
+			PR_NUMBER: 4242
+			FIRST_SEEN_ITERATION: 1
+			LAST_UPDATED_ITERATION: 2
+			=== END HEADER ===
+
+			=== ENTRY issue_override ===
+			FILE: src/module.py
+			LINES: 8
+			LENS: CORRECTNESS & LOGIC
+			SEVERITY: low
+			STATUS: PERSISTING
+			FIRST_SEEN_ITERATION: 1
+			LAST_SEEN_ITERATION: 2
+			PERSIST_COUNT: 1
+			EDITOR_OUTCOMES:
+			  iter2> CONSOLIDATOR_OVERRIDDEN: issue_override — already fixed in HEAD
+			=== END ENTRY ===
+			"""
+		),
+	)
+
+	assert "issue_id=issue_override; file=src/module.py; lines=8; lens=CORRECTNESS & LOGIC; severity=low; status=PERSISTING; prior_decision=none; persist_count=1" in prompt
+	assert "issue_id=issue_override; file=src/module.py; lines=8; lens=CORRECTNESS & LOGIC; severity=low; status=PERSISTING; prior_decision=won't-fix; persist_count=1" not in prompt
 
 
 def test_break_glass_scan_prefers_latest_human_anchored_override() -> None:
