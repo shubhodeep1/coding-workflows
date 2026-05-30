@@ -582,6 +582,7 @@ def _run_poller(
 	mock_revalidate_events_payload: dict | None = None,
 	mock_pr_create_race_pr: dict | None = None,
 	mock_pr_ready_exit_code: int = 0,
+	env_overrides: dict[str, str] | None = None,
 ) -> dict:
 	tracking_num = 192
 	tracking_labels = tracking_labels or []
@@ -2562,6 +2563,8 @@ sys.exit(proc.returncode)
 			env["MOCK_CODEX_TOUCH_FILE"] = str(touch_path)
 		if mock_orch_state_v2_pack_mode:
 			env["MOCK_ORCH_STATE_V2_PACK_MODE"] = mock_orch_state_v2_pack_mode
+		if env_overrides:
+			env.update({str(k): str(v) for k, v in env_overrides.items()})
 
 		proc = _run_poller_subprocess(
 			["bash", str(POLLER_SCRIPT)],
@@ -4807,7 +4810,7 @@ def test_integration_backpressure_blocks_merges_at_threshold_and_clears_below_it
 	assert first["latest_state"]["final_merge_pr"] == 470
 	assert "ai:integration-backpressure" in first["tracking_labels"]
 	assert first.get("merged_prs", []) == []
-	assert "BACKPRESSURE_TRIGGERED tracking_issue=192 integration_branch=orchestrator/project-192 default_branch=main ahead_by=10 threshold=10 final_pr=470" in (first["stdout"] + first["stderr"])
+	assert "BACKPRESSURE_TRIGGERED tracking_issue=192 integration_branch=orchestrator/project-192 default_branch=main ahead_by=10 threshold=10 effective_threshold=10 final_pr=470" in (first["stdout"] + first["stderr"])
 	first_tracking_comments = [
 		dict(comment)
 		for comment in first["issues"]["192"]["comments"]
@@ -4836,7 +4839,7 @@ def test_integration_backpressure_blocks_merges_at_threshold_and_clears_below_it
 	)
 	assert "ai:integration-backpressure" not in second["tracking_labels"]
 	assert 910 in second.get("merged_prs", [])
-	assert "BACKPRESSURE_CLEARED tracking_issue=192 integration_branch=orchestrator/project-192 default_branch=main ahead_by=9 threshold=10 final_pr=470" in (second["stdout"] + second["stderr"])
+	assert "BACKPRESSURE_CLEARED tracking_issue=192 integration_branch=orchestrator/project-192 default_branch=main ahead_by=9 threshold=10 effective_threshold=10 final_pr=470" in (second["stdout"] + second["stderr"])
 	second_completion_comment = next(
 		str(comment.get("body", ""))
 		for comment in second["issues"]["192"]["comments"]
@@ -4888,7 +4891,258 @@ def test_integration_backpressure_refreshes_after_first_merge_within_same_cycle(
 	)
 	assert 910 in result.get("merged_prs", [])
 	assert 911 not in result.get("merged_prs", [])
-	assert "[backpressure] Deferring merge of PR #911 for issue #11: integration branch ahead_by=10 meets ORCH_INTEGRATION_MAX_AHEAD_COMMITS=10." in (result["stdout"] + result["stderr"])
+	assert "[backpressure] Deferring merge of PR #911 for issue #11: integration branch ahead_by=10 meets effective threshold 10 (configured floor ORCH_INTEGRATION_MAX_AHEAD_COMMITS=10)." in (result["stdout"] + result["stderr"])
+
+
+def test_integration_backpressure_size_aware_floor_does_not_self_deadlock_large_project():
+	# Regression for the project-#2974 self-deadlock: a project with more
+	# planned sub-issue commits than the flat ORCH_INTEGRATION_MAX_AHEAD_COMMITS
+	# (10) would otherwise trip backpressure on its own merges before the
+	# integration->default PR can drain (the eager final PR only merges at
+	# completion), so the very merge needed to reach completion is paused
+	# forever. With the size-aware floor the effective threshold becomes
+	# max(10, planned_issue_count + margin) = max(10, 10 + 5) = 15, so an
+	# integration branch 12 commits ahead must NOT trip backpressure and the
+	# ready-to-merge sub-issue PR must still merge.
+	state = _base_state(status="in_progress")
+	state["total_issues"] = 10
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_pr"] = 470
+	prs = [
+		{
+			"number": 470,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"headRefFromApi": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+		{
+			"number": 910,
+			"state": "open",
+			"baseRefName": "orchestrator/project-192",
+			"headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10",
+			"headSha": "sha910",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:ready-to-merge"]},
+		issue_linked_prs={10: 910},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=12,
+	)
+	# ahead_by=12 < effective threshold 15 -> backpressure inactive.
+	assert "ai:integration-backpressure" not in result["tracking_labels"]
+	assert 910 in result.get("merged_prs", [])
+	assert "BACKPRESSURE_TRIGGERED" not in (result["stdout"] + result["stderr"])
+	completion_comment = next(
+		str(comment.get("body", ""))
+		for comment in result["issues"]["192"]["comments"]
+		if "<!-- orchestrator:completion-status -->" in str(comment.get("body", ""))
+	)
+	assert "ai:integration-backpressure" not in completion_comment
+
+
+def test_integration_backpressure_uses_wave_issue_count_when_total_issues_missing():
+	state = _base_state(status="in_progress")
+	state.pop("total_issues", None)
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_pr"] = 470
+	state["waves"][0]["issues"] = [
+		{"id": "issue-1", "github_issue": 10, "status": "pending"},
+		{"id": "issue-2", "github_issue": 11, "status": "merged"},
+		{"id": "issue-3", "github_issue": 12, "status": "merged"},
+	]
+	state["issue_number_map"] = {"issue-1": 10, "issue-2": 11, "issue-3": 12}
+	prs = [
+		{
+			"number": 470,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"headRefFromApi": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+		{
+			"number": 910,
+			"state": "open",
+			"baseRefName": "orchestrator/project-192",
+			"headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10",
+			"headSha": "sha910",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:ready-to-merge"], 11: ["ai:merged"], 12: ["ai:merged"]},
+		issue_linked_prs={10: 910},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=3,
+		env_overrides={
+			"ORCH_INTEGRATION_MAX_AHEAD_COMMITS": "2",
+			"ORCH_INTEGRATION_BACKPRESSURE_PROJECT_MARGIN": "1",
+		},
+	)
+	assert "ai:integration-backpressure" not in result["tracking_labels"]
+	assert 910 in result.get("merged_prs", [])
+	assert "BACKPRESSURE_TRIGGERED" not in (result["stdout"] + result["stderr"])
+
+
+def test_integration_backpressure_falls_back_to_floor_on_non_numeric_total_issues():
+	state = _base_state(status="in_progress")
+	state["total_issues"] = "oops"
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_pr"] = 470
+	prs = [
+		{
+			"number": 470,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"headRefFromApi": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+		{
+			"number": 910,
+			"state": "open",
+			"baseRefName": "orchestrator/project-192",
+			"headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10",
+			"headSha": "sha910",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:ready-to-merge"]},
+		issue_linked_prs={10: 910},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=2,
+		env_overrides={
+			"ORCH_INTEGRATION_MAX_AHEAD_COMMITS": "2",
+			"ORCH_INTEGRATION_BACKPRESSURE_PROJECT_MARGIN": "5",
+		},
+	)
+	assert "ai:integration-backpressure" in result["tracking_labels"]
+	assert result.get("merged_prs", []) == []
+	assert "BACKPRESSURE_TRIGGERED tracking_issue=192 integration_branch=orchestrator/project-192 default_branch=main ahead_by=2 threshold=2 effective_threshold=2 final_pr=470" in (result["stdout"] + result["stderr"])
+
+
+def test_backward_scan_backpressure_log_reports_floor_and_effective_threshold():
+	state = {
+		"schema_version": "orchestrate_state.v1",
+		"project_title": "Test Project",
+		"total_issues": 2,
+		"total_waves": 2,
+		"current_wave": 2,
+		"judge_cycle": 0,
+		"recovery_attempted": False,
+		"review_blocked_retries": {},
+		"status": "in_progress",
+		"waves": [
+			{
+				"wave": 1,
+				"issues": [
+					{"id": "issue-1", "github_issue": 35, "status": "pending"},
+				],
+			},
+			{
+				"wave": 2,
+				"issues": [
+					{"id": "issue-2", "github_issue": 20, "status": "pending"},
+				],
+			},
+		],
+		"dependency_edges": [],
+		"issue_number_map": {"issue-1": 35, "issue-2": 20},
+		"pending_issue_defs": {},
+		"integration_branch": "orchestrator/project-192",
+		"final_merge_strategy": "squash",
+		"final_merge_pr": 470,
+		"final_merge_status": "pending",
+	}
+	prs = [
+		{
+			"number": 470,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"headRefFromApi": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+		{
+			"number": 935,
+			"state": "open",
+			"baseRefName": "orchestrator/project-192",
+			"headRefName": "ai/issue-35",
+			"headRefFromApi": "ai/issue-35",
+			"headSha": "sha935",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={35: ["ai:ready-to-merge"], 20: ["ai:implementing"]},
+		issue_linked_prs={35: 935},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=10,
+	)
+	assert 935 not in result.get("merged_prs", [])
+	assert "[backward-scan] Backpressure active (ahead_by=10, threshold=10, effective_threshold=10); deferring auto-merge of PR #935 for prior-wave issue #35." in (result["stdout"] + result["stderr"])
+
+
+def test_integration_backpressure_threshold_cache_avoids_command_substitution_subshells():
+	# Static contract: the size-aware threshold helper caches its computed
+	# value in `_INTEGRATION_BACKPRESSURE_EFFECTIVE_THRESHOLD_CACHE`, but
+	# bash command substitution runs in a subshell. Calling the helper as
+	# `foo="$(_integration_backpressure_effective_threshold)"` therefore
+	# re-runs jq on every use because the cache write dies with the subshell.
+	# The call sites must pass an output variable directly instead.
+	poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
+
+	assert "$(_integration_backpressure_effective_threshold" not in poller_body, (
+		"_integration_backpressure_effective_threshold must not be invoked via "
+		"command substitution; that drops the cached threshold in a subshell "
+		"and respawns jq on every call."
+	)
+	direct_calls = re.findall(
+		r"^\s*_integration_backpressure_effective_threshold\s+[A-Za-z_][A-Za-z0-9_]*\s*$",
+		poller_body,
+		re.MULTILINE,
+	)
+	assert len(direct_calls) >= 5, (
+		"Backpressure threshold call sites must pass an output variable "
+		"directly so the per-tracking-issue jq result stays cached in the "
+		"current shell."
+	)
 
 
 def test_final_merge_treats_closed_merged_pr_as_success():
