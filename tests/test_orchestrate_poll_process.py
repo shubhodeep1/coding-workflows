@@ -4807,7 +4807,7 @@ def test_integration_backpressure_blocks_merges_at_threshold_and_clears_below_it
 	assert first["latest_state"]["final_merge_pr"] == 470
 	assert "ai:integration-backpressure" in first["tracking_labels"]
 	assert first.get("merged_prs", []) == []
-	assert "BACKPRESSURE_TRIGGERED tracking_issue=192 integration_branch=orchestrator/project-192 default_branch=main ahead_by=10 threshold=10 final_pr=470" in (first["stdout"] + first["stderr"])
+	assert "BACKPRESSURE_TRIGGERED tracking_issue=192 integration_branch=orchestrator/project-192 default_branch=main ahead_by=10 threshold=10 effective_threshold=10 final_pr=470" in (first["stdout"] + first["stderr"])
 	first_tracking_comments = [
 		dict(comment)
 		for comment in first["issues"]["192"]["comments"]
@@ -4836,7 +4836,7 @@ def test_integration_backpressure_blocks_merges_at_threshold_and_clears_below_it
 	)
 	assert "ai:integration-backpressure" not in second["tracking_labels"]
 	assert 910 in second.get("merged_prs", [])
-	assert "BACKPRESSURE_CLEARED tracking_issue=192 integration_branch=orchestrator/project-192 default_branch=main ahead_by=9 threshold=10 final_pr=470" in (second["stdout"] + second["stderr"])
+	assert "BACKPRESSURE_CLEARED tracking_issue=192 integration_branch=orchestrator/project-192 default_branch=main ahead_by=9 threshold=10 effective_threshold=10 final_pr=470" in (second["stdout"] + second["stderr"])
 	second_completion_comment = next(
 		str(comment.get("body", ""))
 		for comment in second["issues"]["192"]["comments"]
@@ -4888,7 +4888,65 @@ def test_integration_backpressure_refreshes_after_first_merge_within_same_cycle(
 	)
 	assert 910 in result.get("merged_prs", [])
 	assert 911 not in result.get("merged_prs", [])
-	assert "[backpressure] Deferring merge of PR #911 for issue #11: integration branch ahead_by=10 meets ORCH_INTEGRATION_MAX_AHEAD_COMMITS=10." in (result["stdout"] + result["stderr"])
+	assert "[backpressure] Deferring merge of PR #911 for issue #11: integration branch ahead_by=10 meets effective threshold 10 (configured floor ORCH_INTEGRATION_MAX_AHEAD_COMMITS=10)." in (result["stdout"] + result["stderr"])
+
+
+def test_integration_backpressure_size_aware_floor_does_not_self_deadlock_large_project():
+	# Regression for the project-#2974 self-deadlock: a project with more
+	# planned sub-issue commits than the flat ORCH_INTEGRATION_MAX_AHEAD_COMMITS
+	# (10) would otherwise trip backpressure on its own merges before the
+	# integration->default PR can drain (the eager final PR only merges at
+	# completion), so the very merge needed to reach completion is paused
+	# forever. With the size-aware floor the effective threshold becomes
+	# max(10, planned_issue_count + margin) = max(10, 10 + 5) = 15, so an
+	# integration branch 12 commits ahead must NOT trip backpressure and the
+	# ready-to-merge sub-issue PR must still merge.
+	state = _base_state(status="in_progress")
+	state["total_issues"] = 10
+	state["integration_branch"] = "orchestrator/project-192"
+	state["final_merge_pr"] = 470
+	prs = [
+		{
+			"number": 470,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"headRefFromApi": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+		{
+			"number": 910,
+			"state": "open",
+			"baseRefName": "orchestrator/project-192",
+			"headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10",
+			"headSha": "sha910",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:ready-to-merge"]},
+		issue_linked_prs={10: 910},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=12,
+	)
+	# ahead_by=12 < effective threshold 15 -> backpressure inactive.
+	assert "ai:integration-backpressure" not in result["tracking_labels"]
+	assert 910 in result.get("merged_prs", [])
+	assert "BACKPRESSURE_TRIGGERED" not in (result["stdout"] + result["stderr"])
+	completion_comment = next(
+		str(comment.get("body", ""))
+		for comment in result["issues"]["192"]["comments"]
+		if "<!-- orchestrator:completion-status -->" in str(comment.get("body", ""))
+	)
+	assert "ai:integration-backpressure" not in completion_comment
 
 
 def test_final_merge_treats_closed_merged_pr_as_success():
