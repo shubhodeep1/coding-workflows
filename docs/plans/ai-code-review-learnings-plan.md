@@ -1,5 +1,44 @@
 # AI Code Review Learnings — Applying Cloudflare's `ai-code-review` Lessons to `review_autofix` and Adjacent Phases
 
+## 2026-05-30 completion audit
+
+### Audit outcome
+
+This plan remains in `docs/plans/`. The repository audit found that most of
+the review-pipeline learnings shipped, but the implementation is not fully
+complete yet, so archival is deferred.
+
+### Evidence snapshot
+
+- Reviewer fan-out / filtering / materiality / failback: `.github/workflows/review_autofix.yml`, `scripts/review_run_reviewers.sh`, `scripts/review_filter_uninteresting_files.sh`, `scripts/review_agents_md_materiality.sh`, `scripts/reviewer_failback_chains.json`, `tests/test_review_autofix_review_pipeline_contract.py`
+- Consolidator / judge / prompt hardening / review-state posting: `scripts/review_consolidate.sh`, `prompts/review-consolidator.txt`, `scripts/review_rb_judge.sh`, `prompts/mode-judge-review-blocked.txt`, `scripts/post_review_comment.sh`, `tests/test_review_rereview_and_approval_rubric.py`, `tests/test_review_surface_prompt_hardening.py`
+- Telemetry / heartbeat: `scripts/cost_audit.py`, `scripts/codex_heartbeat.sh`, `tests/test_cost_audit_semble_metrics.py`, `tests/test_codex_heartbeat.py`
+
+### Phase-by-phase shipped status
+
+| Phase | Status | Shipped repo truth | Remaining drift / blocker |
+|---|---|---|---|
+| A — anti-rules | Complete | `prompts/review-reviewer-checklist.txt` now carries seven `WHAT NOT TO FLAG` blocks, and `scripts/review_run_reviewers.sh` renders shared `COMMON ANTI-RULES` text into reviewer prompts. | None. |
+| B — risk-tier reviewer count | Complete with drift | `scripts/review_run_reviewers.sh` classifies `trivial | lite | full`, logs `REVIEWER_RISK_TIER`, and honors the always-full regex. | Default trivial/lite subsets follow the live `REVIEWER_MODELS` order (first one / first two reviewers) rather than the draft's separate mini-model roster, and there is no `REVIEWER_TIER_FULL_MODELS` override. |
+| C — low-signal diff filter | Complete | `scripts/review_filter_uninteresting_files.sh` strips lock/generated/minified files before reviewer fan-out and logs `REVIEWER_FILTER_SKIP`; `db/contracts/**`, `**/migrations/**`, and `**/migrate/**` stay exempt. | None. |
+| D — `AGENTS.md` materiality advisory | Complete with drift | `scripts/review_agents_md_materiality.sh` ships the deterministic path-glob classifier, result JSON, and non-blocking advisory comment path. | The fallback flags remain reserved; even when requested, the current script does not make a model call. |
+| E — prompt-injection hardening | Complete | Review-surface prompts are fenced via `review_consolidate.sh`, `review_rb_judge.sh`, and `review_conflict_prepare.sh`; clarify / plan / implement / validate prompts now explicitly treat author-controlled context as UNTRUSTED data. | None. |
+| F — re-review awareness | Partial | Consolidator-side ledger suppression shipped: `scripts/review_consolidate.sh` renders `=== BEGIN PRIOR ROUND DECISIONS ===`, and `prompts/review-consolidator.txt` can emit `RE_REVIEW_SKIP`. | `scripts/review_rb_judge.sh` does not ingest a dedicated ledger-fed prior-decision block and does not consume `REVIEW_LEDGER_REREVIEW_ENABLED`; judge-side awareness is limited to prior editor / PR comment context in `prompts/mode-judge-review-blocked.txt`. |
+| G — per-reviewer failback + health | Partial | Reviewer health caching, open-state suppression, cheaper-reasoning retry, and fail-open `REVIEWER_FAILBACK_UNMAPPED` behavior shipped in `scripts/review_run_reviewers.sh`. | `scripts/reviewer_failback_chains.json` currently maps only `x-ai/grok-4.20 -> x-ai/grok-4.1-fast`, so the planned same-family mapping coverage for the rest of the reviewer roster is still missing. |
+| H — telemetry surfacing | Partial | `scripts/cost_audit.py` now computes `cache_hit_rate`, `wall_clock_p50_ms`, `wall_clock_p99_ms`, `break_glass_count`, `context_budget_warn_count`, and formats `CONTEXT_BUDGET_WARN`. | `.github/workflows/workflow-log-analysis.yml`, `scripts/collect_workflow_logs.py`, and `scripts/analyze_workflow_logs.py` do not yet call or surface `cost_audit.py` output, so the workflow-log-analysis surfacing half of the phase is still open. |
+| I — heartbeat logging | Complete | `scripts/codex_heartbeat.sh` is wired through reviewer, consolidator, review-blocked judge, conflict-resolver, validate, and self-heal Codex callsites, with `CODEX_HEARTBEAT` regression coverage. | None. |
+| J — approval rubric + break glass | Complete with drift | The review-blocked judge now emits logical `review_state` values, `scripts/post_review_comment.sh --review-state` maps them to PR review events, and `@codex break-glass` can downgrade the outbound `REQUEST_CHANGES` event to comment-only. | The shipped judge prompt path is `prompts/mode-judge-review-blocked.txt`, not the draft's `prompts/mode-judge.txt`. |
+
+### Remaining blockers before archival
+
+1. **Phase F is still partial.** Judge-side re-review awareness has not landed as a ledger-fed input path; the shipped implementation only uses prior editor / PR comment context.
+2. **Phase G is still partial.** The failback-chain file does not yet cover the full reviewer roster.
+3. **Phase H is still partial.** The new `cost_audit.py` metrics are not yet surfaced by the workflow-log-analysis collector/analyzer path.
+4. **The plan-archival guard would still fail today.** Tracking issue `#2974` still has unchecked task-list items as of this audit (`gh issue view 2974 --json body --repo shubhodeep1/coding-workflows`), so adding a `docs/completed/` copy in the current state would require a PR-body `## De-scoped phases` section to satisfy `scripts/lint_plan_archival_completeness.py`.
+
+The original future-tense proposal is preserved below for reference. Where it
+conflicts with the audit table above, the audit table is authoritative.
+
 ## Summary
 
 Cloudflare's `ai-code-review` post documents ten concrete techniques that
