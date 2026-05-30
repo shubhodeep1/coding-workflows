@@ -1,4 +1,6 @@
-Investigate a PR, issue, workflow run, or other reference inside this repo, identify the root cause, and ship a fix. `$ARGUMENTS` is **free-form prose** that may contain any combination of GitHub PR URLs, issue URLs, Actions run/job URLs, raw log URLs, `#1234` references, run IDs / job IDs, commit SHAs, branch / tag names, file paths, stack traces, and quoted error messages — plus an optional free-form description of what the user expects you to focus on.
+Investigate a PR, issue, workflow run, or other reference, identify the root cause, and ship a fix. `$ARGUMENTS` is **free-form prose** that may contain any combination of GitHub PR URLs, issue URLs, Actions run/job URLs, raw log URLs, `#1234` references, run IDs / job IDs, commit SHAs, branch / tag names, file paths, stack traces, and quoted error messages — plus an optional free-form description of what the user expects you to focus on.
+
+**Which repo / which ref.** By default the reference lives in **this** repo (`shubhodeep1/coding-workflows`), which is investigated at **`main`** (the local working checkout) — never a `stable` tag, because this is the upstream library itself and the fix lands on `main`. If the evidence shows the reference actually concerns a **different** repo (e.g. a consumer repo) and the root cause is internal to that repo, investigate **that** repo at its **`main`** branch instead — decide which repo to investigate from the leads + description + evidence, and state the decision in the `Summary`. You can only commit / push fixes to **this** repo: when the fix must land in a different repo, do not edit — produce the [Output Format](#output-format) report with the proposed fix and tell the user which repo to open.
 
 $ARGUMENTS
 
@@ -14,7 +16,8 @@ $ARGUMENTS
 
 After investigation, classify each finding as **EVIDENCE-BASED** (fully supported by logs + code + linked PR/issue context, plus reproduction when feasible) or **HYPOTHESIS** (plausible but unverified). Then:
 
-- **All findings are EVIDENCE-BASED and no missing/inaccessible resource blocks root cause or fix verification** → design the fix, apply it, verify it (re-run the repro / failing test when feasible), commit, push, open a PR. Do not ask. Report using the [Output Format](#output-format) afterward. Non-blocking gaps (e.g. an inaccessible linked PR that doesn't affect the diagnosis) still get listed under `Artifacts needed` for transparency.
+- **All findings are EVIDENCE-BASED, the fix lands in THIS repo (`shubhodeep1/coding-workflows`), and no missing/inaccessible resource blocks root cause or fix verification** → design the fix, apply it against `main`, verify it (re-run the repro / failing test when feasible), commit, push, open a PR. Do not ask. Report using the [Output Format](#output-format) afterward. Non-blocking gaps (e.g. an inaccessible linked PR that doesn't affect the diagnosis) still get listed under `Artifacts needed` for transparency.
+- **All findings are EVIDENCE-BASED but the fix must land in a DIFFERENT repo** (the root cause is internal to a consumer repo, investigated at its `main`, and you have no checkout to push to) → do **not** edit. Emit the proposed fix in the `Fix:` line with a `file:line` anchor and tell the user which repo to open a session against. This is the only read-only path.
 - **Otherwise** (any HYPOTHESIS finding, or any missing/inaccessible resource that blocks root cause or fix verification) → stop before editing. Report using the [Output Format](#output-format) and ask the user how to proceed.
 - **Environmental failure** (service down, rate limit, runner outage) → no fix; say so explicitly.
 
@@ -23,7 +26,7 @@ After investigation, classify each finding as **EVIDENCE-BASED** (fully supporte
 Keep it tight. No prose padding.
 
 ```
-Summary: <1–2 lines: parsed leads, what failed, root cause; mention the user's description in one phrase>
+Summary: <1–2 lines: parsed leads, which repo + ref was investigated (this repo @ main, or <other-repo> @ main), what failed, root cause; mention the user's description in one phrase>
 
 Evidence-based:
 - <claim> — log-<n> L<line>: "<text>" (or just L<line>: "<text>" if only one log); <file>:<line>; <SHA/PR if applicable>
@@ -49,7 +52,7 @@ GitHub reads can go through either of two equivalent paths — pick whichever is
 
 **Always pass `-R <owner>/<repo>` on `gh` calls that need repo context.** In Claude Code Web sessions the only git remote points at a local proxy (e.g. `http://...@127.0.0.1:PORT/git/<owner>/<repo>`), so `gh` cannot auto-detect the GitHub repo from `git remote -v`; bare `gh run view ...` fails with `failed to determine base repo`. The SessionStart hook prints the resolved slug — use that value (defaults to `shubhodeep1/coding-workflows` for this repo).
 
-Repo scope: `shubhodeep1/coding-workflows`. If `gh auth status` succeeds, `gh` is usable; if a *specific* `gh` call returns 401/403/404 for one resource (GitHub returns 404 for many auth-walled / private resources, so treat it as a permission-or-visibility error rather than "resource missing"), or `gh` is missing entirely, fall back to the MCP tool for that call — don't conclude `gh` is broken globally and don't stop the investigation.
+Repo scope: primarily `shubhodeep1/coding-workflows`, but reads may target a different repo (e.g. a consumer repo) when the evidence points there — pass `-R <owner>/<repo>` for the repo you're actually reading. If `gh auth status` succeeds, `gh` is usable; if a *specific* `gh` call returns 401/403/404 for one resource (GitHub returns 404 for many auth-walled / private resources, so treat it as a permission-or-visibility error rather than "resource missing"), or `gh` is missing entirely, fall back to the MCP tool for that call — don't conclude `gh` is broken globally and don't stop the investigation.
 
 **Keep going until the diagnosis is evidence-based.** A single PR, issue, or run rarely contains the whole story. If the root cause isn't yet supported by log + source citations, pull the next layer: re-fetch the run with `--log-failed`, fetch sibling/previous runs of the same workflow, fetch the linked PR/issue, fetch the workflow YAML, fetch artifacts, follow `git blame` on the failing line. Only stop reading when (a) you have an evidence-based fix, (b) you've hit a [Decision Rule](#decision-rule) blocker that genuinely requires the user, or (c) every reasonable lead is exhausted and recorded under `Artifacts needed`.
 
@@ -57,7 +60,7 @@ Repo scope: `shubhodeep1/coding-workflows`. If `gh auth status` succeeds, `gh` i
 
 - **Always emit the full Output Format — even when the fix has been applied, committed, and pushed.** The PR/commit alone is not the user-facing report. The chat reply MUST include `Summary` (with the root cause), `Evidence-based` cites, and `Fix:` describing what changed and why. A bare "Done — see PR #X" is not acceptable; the user wants the diagnosis and a description of the generated fix without leaving the chat.
 - Download / read every referenced artifact in full; never truncate. When multiple URLs are present, this rule applies to each.
-- Prefer `mcp__github__*` for GitHub reads; fall back to `gh` CLI when `GH_TOKEN` is set and the MCP surface is awkward (see [Tool Access](#tool-access)). Repo scope: `shubhodeep1/coding-workflows`.
+- Prefer `mcp__github__*` for GitHub reads; fall back to `gh` CLI when `GH_TOKEN` is set and the MCP surface is awkward (see [Tool Access](#tool-access)). Repo scope: primarily `shubhodeep1/coding-workflows`; read a different repo at its `main` when the evidence shows the root cause is internal to it (pass the right `-R <owner>/<repo>`).
 - **`gh` calls that need repo context MUST pass `-R <owner>/<repo>` explicitly.** Claude Code Web's git remote is a local proxy that `gh` cannot auto-resolve — bare `gh run view --log <id>` fails with `failed to determine base repo`. The SessionStart hook prints the resolved slug; use that value (`shubhodeep1/coding-workflows` for this repo).
 - No citation → no claim. No claim → no fix.
 - Forbidden silent moves: editing tests to pass without evidence the test is wrong, broadening `except`/`catch`, suppressing warnings, version-bumping without verified compatibility, adding retries to mask deterministic failures.
