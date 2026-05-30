@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/mark-stable.yml:212-222 (and identical block in .github/workflows/test-and-mark-stable.yml:3272-3282) | severity=low | confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Unconditional `python3 -m pip install --quiet pyyaml jsonschema jinja2` on every validate-scripts invocation.\n  WHY: The step runs before every Unit tests execution in the same always-run job, so it adds consistent pip/network latency even though the consuming test follows immediately.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Automated forward-merge of stable into main after resolving merge conflict in analysis/workflow-optimization-2026-05-29.md; carry forward the exact Python test dependency install fix from stable so that tests continue to pass on main (and the validate-scripts job succeeds without jsonschema_missing short-circuit).\n  expected_change_site: .github/workflows/mark-stable.yml (validate-scripts job), .github/workflows/test-and-mark-stable.yml (parallel validate-scripts job), plus conflict resolution of the analysis report.\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: None \u2014 LAST RUN DIFF, PR DIFF, last_commit_stat.txt, current on-disk workflows (lines ~212-256 and ~3272-3316), and analysis file all confirm the stable-forwarded install step + matching comment + `test_validation_refresh_runner.py` in the unit-test list + resolved report without markers. The forward-merge intent is fully satisfied.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: .github/workflows/mark-stable.yml:212-222 (and identical block in .github/workflows/test-and-mark-stable.yml:3272-3282)  \n  Line or code reference: the added \"Install Python test dependencies\" step (run unconditionally inside validate-scripts job)  \n  Problem: Unconditional `python3 -m pip install --quiet pyyaml jsonschema jinja2` on every validate-scripts invocation.  \n  Why it fails at runtime: The step runs before every Unit tests execution (including on unrelated PRs, nightly schedules, or non-test workflows). Even though the consuming test (`tests/test_validation_refresh_runner.py`) is present in the allowlist and runs immediately after, this adds consistent network/pip overhead and latency with no conditional gate. Matches the consensus finding from pass-1 reviewers (x-ai/grok-4_20) but remains live on HEAD.  \n  ISSUE_CONFIDENCE: 4\n\n- Requirement: Automated forward-merge of stable into main after resolving merge conflict in analysis/workflow-optimization-2026-05-29.md; carry forward the exact Python test dependency install fix from stable so that tests continue to pass on main (and the validate-scripts job succeeds without jsonschema_missing short-circuit).  \n  Expected change site: .github/workflows/mark-stable.yml (validate-scripts job), .github/workflows/test-and-mark-stable.yml (parallel validate-scripts job), plus conflict resolution of the analysis report.  \n  Evidence of absence: None \u2014 LAST RUN DIFF, PR DIFF, last_commit_stat.txt, current on-disk workflows (lines ~212-256 and ~3272-3316), and analysis file all confirm the stable-forwarded install step + matching comment + `test_validation_refresh_runner.py` in the unit-test list + resolved report without markers. The forward-merge intent is fully satisfied.  \n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "83e5c451f0b271633be0f8bec763214c12ef1aa212183287f8900dbc79890ffc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3002,
+    "run_id": "26671729745",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26671729745",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260530022305_8008ead9e1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3002,
+    "run_id": "26671729745"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-30T02:23:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
