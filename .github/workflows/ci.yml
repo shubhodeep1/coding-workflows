@@ -445,6 +445,10 @@ jobs:
           # exception — its 700+ lines of conditional procedure are slated
           # for sidecar extraction in a separate smoke-gated PR. Same for
           # the validate-fix-harness / validate-diagnose phase prompts.
+          # mode-judge-review-blocked.txt is capped at 230 (not 200) to fit
+          # the deliberate prompt-injection guard + approval-rubric / break-
+          # glass hardening added by the review-learnings project; the extra
+          # lines are security-relevant invariants, not process bloat.
           declare -A CAPS=(
             [prompts/mode-implement.txt]=200
             [prompts/mode-implement-repair.txt]=200
@@ -456,7 +460,7 @@ jobs:
             [prompts/mode-orchestrate.txt]=200
             [prompts/mode-judge.txt]=150
             [prompts/mode-orchestrate-poll-judge.txt]=150
-            [prompts/mode-judge-review-blocked.txt]=200
+            [prompts/mode-judge-review-blocked.txt]=230
             [prompts/mode-judge-stall-recovery.txt]=150
             [prompts/conflict-resolver.txt]=150
             [prompts/integration-sync-conflict-resolver.txt]=200
