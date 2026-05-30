@@ -244,26 +244,11 @@ render_review_rb_prior_round_decisions_file() {
   local ledger_path="$1"
   local out_path="$2"
   local tmp_path=""
-  local ledger_enabled=""
-  local rereview_enabled=""
 
   : > "${out_path}"
-  ledger_enabled="$(printf '%s' "${REVIEW_LEDGER_ENABLED:-1}" | tr '[:upper:]' '[:lower:]')"
-  rereview_enabled="$(printf '%s' "${REVIEW_LEDGER_REREVIEW_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')"
-  case "${ledger_enabled}" in
-    1|true|yes|on)
-      ;;
-    *)
-      return 0
-      ;;
-  esac
-  case "${rereview_enabled}" in
-    1|true|yes|on)
-      ;;
-    *)
-      return 0
-      ;;
-  esac
+  if ! flag_enabled "${REVIEW_LEDGER_ENABLED:-1}" || ! flag_enabled "${REVIEW_LEDGER_REREVIEW_ENABLED:-0}"; then
+    return 0
+  fi
   if [ ! -s "${ledger_path}" ]; then
     return 0
   fi
@@ -286,7 +271,7 @@ editor_outcomes = []
 in_editor_outcomes = False
 
 def clean(value: str) -> str:
-    return " ".join(value.replace("\t", " ").split())
+    return " ".join(value.replace("\t", " ").replace(";", ",").split())
 
 def flush_current() -> None:
     global current, editor_outcomes, in_editor_outcomes
@@ -941,7 +926,9 @@ _init_prompt_budget "${RB_JUDGE_CONTEXT_BUDGET_BYTES}"
   echo
   if [ -s "${RB_JUDGE_PRIOR_ROUND_DECISIONS_FILE}" ]; then
     echo "=== BEGIN PRIOR ROUND DECISIONS ==="
-    _embed_input_file "${RB_JUDGE_PRIOR_ROUND_DECISIONS_FILE}" "${RB_JUDGE_PRIOR_ROUND_DECISIONS_MAX_BYTES}"
+    while IFS= read -r line || [ -n "${line}" ]; do
+      printf 'UNTRUSTED_DATA: %s\n' "${line}"
+    done < <(_embed_input_file "${RB_JUDGE_PRIOR_ROUND_DECISIONS_FILE}" "${RB_JUDGE_PRIOR_ROUND_DECISIONS_MAX_BYTES}")
     echo "=== END PRIOR ROUND DECISIONS ==="
     echo
   fi

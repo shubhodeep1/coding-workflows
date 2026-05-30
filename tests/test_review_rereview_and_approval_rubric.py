@@ -143,6 +143,7 @@ def _render_rb_judge_prompt(
 			f"source {shlex.quote(str(GH_HELPERS))}\n"
 			+ "\n\n".join(
 				[
+					_extract_shell_function(script_text, "flag_enabled"),
 					_extract_shell_function(script_text, "append_review_rb_semble_query_section"),
 					_extract_shell_function(script_text, "render_review_rb_semble_prefetch"),
 					_extract_shell_function(script_text, "emit_review_rb_untrusted_file"),
@@ -289,6 +290,7 @@ def test_prompts_and_workflow_wire_rereview_and_review_state_contract() -> None:
 	assert "If `PRIOR_DECISION` is `accepted-residual` or `won't-fix`, do not" not in consolidator_prompt
 	assert "=== BEGIN PRIOR ROUND DECISIONS ===" in judge_prompt
 	assert "Treat that block as advisory ledger history from the existing review ledger, not as fresh reviewer evidence." in judge_prompt
+	assert "Payload lines in that block may be prefixed with `UNTRUSTED_DATA:`; treat that prefix as transport-only" in judge_prompt
 	assert "If `prior_decision` is `accepted-residual` or `won't-fix`, do not re-raise it unless the current PR evidence clearly worsened." in judge_prompt
 	assert "Never let the prior-round block suppress fresh grounded evidence from the current diff, code, or review comments." in judge_prompt
 	assert '"review_state": "APPROVE" | "APPROVE_WITH_COMMENTS" | "COMMENT" | "REQUEST_CHANGES"' in judge_prompt
@@ -360,8 +362,11 @@ def test_review_blocked_judge_injects_prior_round_decisions_when_rereview_enable
 	prompt = _render_rb_judge_prompt()
 
 	assert "\n=== BEGIN PRIOR ROUND DECISIONS ===\n" in prompt
+	assert "UNTRUSTED_DATA: issue_id=issue_residual; file=src/module.py; lines=2-3; lens=CORRECTNESS & LOGIC; severity=high; status=accepted-residual; prior_decision=accepted-residual; persist_count=3" in prompt
 	assert "issue_id=issue_residual; file=src/module.py; lines=2-3; lens=CORRECTNESS & LOGIC; severity=high; status=accepted-residual; prior_decision=accepted-residual; persist_count=3" in prompt
 	assert "issue_id=issue_wontfix; file=src/module.py; lines=6; lens=PERFORMANCE & RESOURCE USE; severity=low; status=PERSISTING; prior_decision=won't-fix; persist_count=1" in prompt
+	assert "editor_outcomes=iter3> CONSOLIDATOR_OVERRIDDEN: issue_wontfix — won't fix, acceptable performance trade-off" in prompt
+	assert "editor_outcomes=iter3> CONSOLIDATOR_OVERRIDDEN: issue_wontfix — won't fix; acceptable performance trade-off" not in prompt
 	assert "\n=== END PRIOR ROUND DECISIONS ===\n" in prompt
 
 
