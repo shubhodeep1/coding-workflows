@@ -2287,6 +2287,192 @@ get_issue_labels_json() {
   gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/labels" --jq '[.[].name]' || echo '[]'
 }
 
+write_label_names_file_from_json() {
+	local labels_json="${1:-[]}"
+	local out_file="$2"
+	if ! printf '%s' "${labels_json}" | jq -r '.[]?' > "${out_file}" 2>/dev/null; then
+		: > "${out_file}"
+	fi
+}
+
+reconcile_tracking_issue_body_from_state() {
+	local final_pr="${1:-}"
+	local integration_branch="${2:-}"
+	local current_hash=""
+	local last_refresh_hash=""
+	local desired_hash=""
+	local desired_body_file=""
+	local render_err_file=""
+	local edit_err_file=""
+	local template_body_file=""
+	local issue_json_file=""
+	local body_changed="false"
+	local pr_json=""
+	local pr_state=""
+	local pr_head_sha=""
+	local pr_head_ref=""
+	local pr_labels_json='[]'
+	local pr_labels_file=""
+	local tracking_labels_file=""
+	local render_err=""
+	local edit_err=""
+
+	current_hash="$(jq -r '.tracking_body_sync_hash // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+	if [ -z "${current_hash}" ] && jq -e '(.project_body_snapshot // "") != ""' "${STATE_FILE}" >/dev/null 2>&1; then
+		current_hash="$(python3 - "${STATE_FILE}" <<'PY'
+import hashlib
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+	state = json.load(fh)
+body = state.get("project_body_snapshot", "") or ""
+print(hashlib.sha256(body.encode("utf-8")).hexdigest() if body else "")
+PY
+)"
+	fi
+	last_refresh_hash="$(jq -r '
+		if has("tracking_body_last_readiness_refresh_hash") then
+			(.tracking_body_last_readiness_refresh_hash // "")
+		else
+			""
+		end
+	' "${STATE_FILE}" 2>/dev/null || echo "")"
+
+	desired_body_file="$(mktemp "${TMPDIR:-/tmp}/tracking_body_render.XXXXXX")" || return 1
+	render_err_file="$(mktemp "${TMPDIR:-/tmp}/tracking_body_render_err.XXXXXX")" || {
+		rm -f "${desired_body_file}"
+		return 1
+	}
+
+	if jq -e '(.project_body_snapshot // "") != ""' "${STATE_FILE}" >/dev/null 2>&1; then
+		if ! python3 scripts/orchestrate_lib.py render-tracking-body \
+			--state-file "${STATE_FILE}" > "${desired_body_file}" 2>"${render_err_file}"; then
+			render_err="$(tr '\n' ' ' < "${render_err_file}" 2>/dev/null | head -c 512 || true)"
+			echo "::warning::[tracking-body-sync] failed to render tracking body for issue #${TRACKING_NUM}: ${render_err:-unknown error}" >&2
+			rm -f "${desired_body_file}" "${render_err_file}"
+			return 1
+		fi
+	else
+		issue_json_file="$(mktemp "${TMPDIR:-/tmp}/tracking_body_issue.XXXXXX")" || {
+			rm -f "${desired_body_file}" "${render_err_file}"
+			return 1
+		}
+		template_body_file="$(mktemp "${TMPDIR:-/tmp}/tracking_body_template.XXXXXX")" || {
+			rm -f "${desired_body_file}" "${render_err_file}" "${issue_json_file}"
+			return 1
+		}
+		if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}" > "${issue_json_file}" 2>"${render_err_file}"; then
+			render_err="$(tr '\n' ' ' < "${render_err_file}" 2>/dev/null | head -c 512 || true)"
+			echo "::warning::[tracking-body-sync] failed to fetch live template body for issue #${TRACKING_NUM}: ${render_err:-unknown error}" >&2
+			rm -f "${desired_body_file}" "${render_err_file}" "${issue_json_file}" "${template_body_file}"
+			return 1
+		fi
+		if ! python3 - "${issue_json_file}" > "${template_body_file}" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+	issue = json.load(fh)
+sys.stdout.write(issue.get("body", "") or "")
+PY
+		then
+			echo "::warning::[tracking-body-sync] failed to decode live template body for issue #${TRACKING_NUM}." >&2
+			rm -f "${desired_body_file}" "${render_err_file}" "${issue_json_file}" "${template_body_file}"
+			return 1
+		fi
+		if ! grep -Eq '^\s*-\s*\[[ xX]\]\s+\*\*[^*]+' "${template_body_file}"; then
+			rm -f "${desired_body_file}" "${render_err_file}" "${issue_json_file}" "${template_body_file}"
+			return 0
+		fi
+		if [ -z "${current_hash}" ]; then
+			current_hash="$(sha256sum "${template_body_file}" 2>/dev/null | awk '{print $1}' || true)"
+		fi
+		if ! python3 scripts/orchestrate_lib.py render-tracking-body \
+			--state-file "${STATE_FILE}" \
+			--template-body-file "${template_body_file}" > "${desired_body_file}" 2>"${render_err_file}"; then
+			render_err="$(tr '\n' ' ' < "${render_err_file}" 2>/dev/null | head -c 512 || true)"
+			echo "::warning::[tracking-body-sync] failed to render tracking body from live template for issue #${TRACKING_NUM}: ${render_err:-unknown error}" >&2
+			rm -f "${desired_body_file}" "${render_err_file}" "${issue_json_file}" "${template_body_file}"
+			return 1
+		fi
+	fi
+
+	desired_hash="$(sha256sum "${desired_body_file}" 2>/dev/null | awk '{print $1}' || true)"
+	if [ -z "${desired_hash}" ]; then
+		echo "::warning::[tracking-body-sync] failed to hash rendered tracking body for issue #${TRACKING_NUM}." >&2
+		rm -f "${desired_body_file}" "${render_err_file}" "${issue_json_file}" "${template_body_file}"
+		return 1
+	fi
+
+	if [ "${desired_hash}" != "${current_hash}" ]; then
+		edit_err_file="$(mktemp "${TMPDIR:-/tmp}/tracking_body_edit_err.XXXXXX")" || edit_err_file="/dev/null"
+		if gh_retry gh issue edit "${TRACKING_NUM}" \
+			--repo "${GITHUB_REPOSITORY}" \
+			--body-file "${desired_body_file}" >/dev/null 2>"${edit_err_file}"; then
+			if jq --arg hash "${desired_hash}" '
+				.tracking_body_sync_hash = $hash
+				| .tracking_body_last_readiness_refresh_hash = (.tracking_body_last_readiness_refresh_hash // "")
+			' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+				TRACKING_BODY_SYNC_STATE_CHANGED="true"
+			else
+				rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+				echo "::warning::[tracking-body-sync] body edit for issue #${TRACKING_NUM} succeeded but the new body hash could not be persisted; a later cycle may retry the edit." >&2
+			fi
+			body_changed="true"
+			echo "TRACKING_BODY_SYNC issue=${TRACKING_NUM} hash=${desired_hash}" >&2
+		else
+			edit_err="$(tr '\n' ' ' < "${edit_err_file}" 2>/dev/null | head -c 512 || true)"
+			echo "::warning::[tracking-body-sync] failed to update tracking issue #${TRACKING_NUM}: ${edit_err:-unknown error}" >&2
+		fi
+		[ "${edit_err_file}" = "/dev/null" ] || rm -f "${edit_err_file}"
+	fi
+
+	if [ "${body_changed}" = "true" ] || [ "${desired_hash}" != "${last_refresh_hash}" ]; then
+		if [[ "${final_pr}" =~ ^[0-9]+$ ]]; then
+			pr_json="$(_fetch_pr_json "${final_pr}")"
+			pr_state="$(_jq_field "${pr_json}" '.state' 'open|closed|merged')"
+			pr_head_sha="$(_jq_field "${pr_json}" '.head.sha')"
+			pr_head_ref="$(_jq_field "${pr_json}" '.head.ref')"
+			[ -n "${pr_head_ref}" ] || pr_head_ref="${integration_branch}"
+			if [ "${pr_state}" = "open" ] && [ -n "${pr_head_sha}" ] && [ -n "${pr_head_ref}" ]; then
+				tracking_labels_file="$(mktemp "${TMPDIR:-/tmp}/tracking_body_labels.XXXXXX")" || tracking_labels_file=""
+				pr_labels_file="$(mktemp "${TMPDIR:-/tmp}/tracking_body_pr_labels.XXXXXX")" || pr_labels_file=""
+				[ -n "${tracking_labels_file}" ] || tracking_labels_file="/dev/null"
+				[ -n "${pr_labels_file}" ] || pr_labels_file="/dev/null"
+				write_label_names_file_from_json "${TRACKING_LABELS:-[]}" "${tracking_labels_file}"
+				pr_labels_json="$(get_issue_labels_json "${final_pr}")"
+				write_label_names_file_from_json "${pr_labels_json}" "${pr_labels_file}"
+				if python3 scripts/check_integration_pr_readiness.py \
+					--repo "${GITHUB_REPOSITORY}" \
+					--head-ref "${pr_head_ref}" \
+					--head-sha "${pr_head_sha}" \
+					--pr-labels-file "${pr_labels_file}" \
+					--tracking-body-file "${desired_body_file}" \
+					--tracking-labels-file "${tracking_labels_file}"; then
+					if jq --arg hash "${desired_hash}" '
+						.tracking_body_sync_hash = $hash
+						| .tracking_body_last_readiness_refresh_hash = $hash
+					' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+						TRACKING_BODY_SYNC_STATE_CHANGED="true"
+					else
+						rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+						echo "::warning::[tracking-body-sync] refreshed readiness for PR #${final_pr} but could not persist the refresh hash; a later cycle may refresh again." >&2
+					fi
+					echo "TRACKING_BODY_READINESS_REFRESH issue=${TRACKING_NUM} pr=${final_pr} sha=${pr_head_sha}" >&2
+				else
+					echo "::warning::[tracking-body-sync] failed to refresh orchestrator/integration-pr-not-ready for PR #${final_pr}; will retry on a later cycle if needed." >&2
+				fi
+				[ "${tracking_labels_file}" = "/dev/null" ] || rm -f "${tracking_labels_file}"
+				[ "${pr_labels_file}" = "/dev/null" ] || rm -f "${pr_labels_file}"
+			fi
+		fi
+	fi
+
+	rm -f "${desired_body_file}" "${render_err_file}" "${issue_json_file}" "${template_body_file}"
+	return 0
+}
+
 # _fetch_issue_labels_batch_graphql — Batch-fetch issue labels for a list
 # of issue numbers using GraphQL aliases.
 #
@@ -11967,6 +12153,15 @@ The orchestrator detected that the integration PR was squash-merged outside the 
     FINAL_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
     FINAL_DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
     FINAL_PROJECT_TITLE="$(jq -r '.project_title // "Orchestrator project"' "${STATE_FILE}")"
+    FINAL_PR_FOR_TRACKING_BODY="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
+
+    TRACKING_BODY_SYNC_STATE_CHANGED="false"
+    if [ -n "${FINAL_INTEGRATION_BRANCH}" ] || [[ "${FINAL_PR_FOR_TRACKING_BODY}" =~ ^[0-9]+$ ]]; then
+      reconcile_tracking_issue_body_from_state "${FINAL_PR_FOR_TRACKING_BODY}" "${FINAL_INTEGRATION_BRANCH}" || true
+      if [ "${TRACKING_BODY_SYNC_STATE_CHANGED:-false}" = "true" ]; then
+        post_state_comment || true
+      fi
+    fi
 
     if ! finalize_integration_merge_if_needed "${FINAL_INTEGRATION_BRANCH}" "${FINAL_DEFAULT_BRANCH}" "${FINAL_PROJECT_TITLE}"; then
       continue
@@ -13202,6 +13397,11 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       fi
     fi
   done < <(echo "${WAVE_STATUS}" | jq -c '.issues[]')
+
+  TRACKING_BODY_SYNC_STATE_CHANGED="false"
+  if [ -n "${CWS_INTEGRATION_BRANCH}" ] || [[ "${EAGER_FINAL_PR_EFFECTIVE}" =~ ^[0-9]+$ ]]; then
+    reconcile_tracking_issue_body_from_state "${EAGER_FINAL_PR_EFFECTIVE}" "${CWS_INTEGRATION_BRANCH}" || true
+  fi
 
   # ---------------------------------------------------------------
   # Auto-merge: merge PRs that are ready-to-merge
@@ -15312,7 +15512,7 @@ with open('${STATE_FILE}', 'w') as f:
       fi
     fi
 
-    if [ "${STALL_STATE_CHANGED}" = "true" ] || [ "${STALL_HEALING_CHANGED}" = "true" ] || [ "${TIMESTAMP_STATE_CHANGED}" = "true" ] || [ "${RECONCILE_STATE_CHANGED}" = "true" ] || [ "${RECONCILE_LABELS_CHANGED}" = "true" ] || [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
+    if [ "${STALL_STATE_CHANGED}" = "true" ] || [ "${STALL_HEALING_CHANGED}" = "true" ] || [ "${TIMESTAMP_STATE_CHANGED}" = "true" ] || [ "${RECONCILE_STATE_CHANGED}" = "true" ] || [ "${RECONCILE_LABELS_CHANGED}" = "true" ] || [ "${TRACKING_BODY_SYNC_STATE_CHANGED:-false}" = "true" ] || [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
       post_state_comment || true
     fi
     if [ "${RECONCILE_LABELS_CHANGED}" = "true" ] || [ "${RECONCILE_STATE_CHANGED}" = "true" ] || [ "${STALL_HEALING_CHANGED}" = "true" ]; then

@@ -513,6 +513,7 @@ def _run_poller(
 	max_validate_cycles: str,
 	tracking_labels: list[str] | None = None,
 	tracking_comments: list[str | dict] | None = None,
+	tracking_body: str | None = None,
 	issue_labels: dict[int, list[str]] | None = None,
 	issue_comments: dict[int, list[str | dict]] | None = None,
 	issue_bodies: dict[int, str] | None = None,
@@ -682,8 +683,8 @@ def _run_poller(
 						_comment_entry(comment_body, idx + 2, tracking_num)
 						for idx, comment_body in enumerate(tracking_comments)
 					],
-				],
-				"body": "Tracking issue body",
+					],
+				"body": tracking_body if tracking_body is not None else "Tracking issue body",
 				"closed": False,
 			}
 		}
@@ -711,6 +712,8 @@ def _run_poller(
 			"validation_dispatches": [],
 			"release_dispatches": [],
 			"review_dispatches": [],
+			"issue_body_edit_calls": [],
+			"commit_status_posts": [],
 			"closed_issues": [],
 			"graphql_mode": gql_mode,
 			"graphql_labels": {str(k): list(v) for k, v in gql_labels.items()},
@@ -1232,6 +1235,7 @@ if args[0] == 'pr' and len(args) >= 3 and args[1] == 'merge':
 if args[0] == 'issue' and len(args) >= 3 and args[1] == 'edit':
 	num = args[2]
 	issue = get_issue(num)
+	body = None
 	i = 3
 	while i < len(args):
 		if args[i] == '--add-label' and i + 1 < len(args):
@@ -1245,7 +1249,22 @@ if args[0] == 'issue' and len(args) >= 3 and args[1] == 'edit':
 			issue['labels'] = [x for x in issue['labels'] if x != label]
 			i += 2
 			continue
+		if args[i] in ('--body', '-b') and i + 1 < len(args):
+			body = args[i + 1]
+			i += 2
+			continue
+		if args[i] in ('--body-file', '-F') and i + 1 < len(args):
+			body_file = args[i + 1]
+			if body_file == '-':
+				body = sys.stdin.read()
+			else:
+				body = Path(body_file).read_text(encoding='utf-8')
+			i += 2
+			continue
 		i += 1
+	if body is not None:
+		issue['body'] = body
+		store.setdefault('issue_body_edit_calls', []).append({'issue': int(num), 'body': body})
 	save()
 	sys.exit(0)
 
@@ -1670,6 +1689,19 @@ if args[0] == 'api':
 					'ref': pr.get('headRefFromApi', pr.get('headRefName', '')),
 				},
 			}))
+		sys.exit(0)
+
+	m = re.search(r'/statuses/([^/?]+)$', path)
+	if m and method == 'POST':
+		sha = m.group(1)
+		payload = {'sha': sha}
+		for f in fields:
+			if '=' in f:
+				key, value = f.split('=', 1)
+				payload[key] = value
+		store.setdefault('commit_status_posts', []).append(payload)
+		save()
+		print(json.dumps(payload))
 		sys.exit(0)
 
 	if re.search(r'/merges$', path) and (method == 'POST' or fields):
@@ -2588,6 +2620,8 @@ sys.exit(proc.returncode)
 		result["label_create_calls"] = result.get("label_create_calls", [])
 		result["api_calls"] = result.get("api_calls", [])
 		result["release_dispatches"] = result.get("release_dispatches", [])
+		result["issue_body_edit_calls"] = result.get("issue_body_edit_calls", [])
+		result["commit_status_posts"] = result.get("commit_status_posts", [])
 		result["pr_ready_calls"] = result.get("pr_ready_calls", [])
 		result["pr_body_update_calls"] = result.get("pr_body_update_calls", [])
 		result["mock_operator_bypass_audit_get_calls"] = int(result.get("mock_operator_bypass_audit_get_calls", 0))
@@ -3855,6 +3889,93 @@ def test_final_merge_promotes_eager_draft_pr_when_tracking_issue_ready_to_merge(
 	assert 361 in result.get("merged_prs", [])
 	assert result["prs"][0].get("draft") is False
 	assert "EAGER_DRAFT_PR_PROMOTED pr=361 gate=tracking-ready-to-merge" in (result["stdout"] + result["stderr"])
+
+
+def test_tracking_body_reconcile_self_heals_stale_tracker_and_refreshes_readiness_status():
+	tracking_body = """## Project: Test Project
+
+Summary text.
+
+---
+
+**Total issues:** 1 | **Waves:** 1
+**Integration branch:** `orchestrator/project-192`
+
+### Wave 1
+
+- [ ] **issue-1**: First task (priority 1)
+
+---
+*This issue is managed by the AI orchestrator. Do not edit manually.*
+`ai:orchestrator-tracking`
+"""
+	expected_body = tracking_body.replace("- [ ] **issue-1**", "- [x] **issue-1**")
+	state = _base_state(status="merge_conflict")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["project_body_snapshot"] = tracking_body
+	state["tracking_body_sync_hash"] = hashlib.sha256(tracking_body.encode("utf-8")).hexdigest()
+	state["final_merge_pr"] = 472
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	prs = [
+		{
+			"number": 472,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"headRefFromApi": "orchestrator/project-192",
+			"headSha": "headsha472",
+			"mergeable": True,
+			"mergeable_state": "clean",
+			"body": "Squash merge of orchestrator project #192.\n\nRefs #192",
+		},
+	]
+
+	first = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:orchestrator-tracking"],
+		tracking_body=tracking_body,
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+	)
+	assert first["issues"]["192"]["body"] == expected_body
+	assert first["issue_body_edit_calls"] == [{"issue": 192, "body": expected_body}]
+	assert first["latest_state"]["tracking_body_sync_hash"] == hashlib.sha256(expected_body.encode("utf-8")).hexdigest()
+	assert first["latest_state"]["tracking_body_last_readiness_refresh_hash"] == hashlib.sha256(expected_body.encode("utf-8")).hexdigest()
+	assert first["commit_status_posts"] == [
+		{
+			"sha": "headsha472",
+			"state": "success",
+			"context": "orchestrator/integration-pr-not-ready",
+			"description": "all 1 sub-issue(s) on #192 are ticked — integration PR is ready",
+			"target_url": "https://github.com/owner/repo/issues/192",
+		}
+	]
+
+	first_tracking_comments = [
+		dict(comment)
+		for comment in first["issues"]["192"]["comments"]
+		if not _is_state_comment(str((comment or {}).get("body", "")))
+	]
+	second = _run_poller(
+		state=first["latest_state"],
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=first["tracking_labels"],
+		tracking_comments=first_tracking_comments,
+		tracking_body=first["issues"]["192"]["body"],
+		issue_labels={10: ["ai:merged"]},
+		prs=first["prs"],
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+	)
+	assert second["issues"]["192"]["body"] == expected_body
+	assert second["issue_body_edit_calls"] == []
+	assert second["commit_status_posts"] == []
 
 
 def test_force_merge_bypass_promotes_eager_pr_once_per_sha_and_records_audit():

@@ -1,23 +1,36 @@
 # AI Code Review Learnings — Applying Cloudflare's `ai-code-review` Lessons to `review_autofix` and Adjacent Phases
 
-## 2026-05-30 completion re-audit
+## Archived status
 
-### Audit outcome
+This file is the canonical completed-plan record for tracking issue `#2974`.
 
-This plan remains in `docs/plans/`. The repository re-audit shows that Phases
-F, G, and H are complete on current HEAD. Archival remains deferred because
-tracking issue `#2974` still has all 10 task-list items unchecked, so the
-existing plan-archival guard is not yet satisfiable.
+The closeout summary below reflects the shipped repository state audited for
+archival. The historical plan text that follows is preserved for context;
+where the original plan text conflicts with the closeout re-audit or the old
+stale-tracker assumptions, the closeout sections below are authoritative. No
+acceptance criteria were silently de-scoped in this archive.
 
-### Evidence snapshot
+## Closeout summary
+
+- Phases A-J are complete on current HEAD; the only archival blocker was stale
+  tracking-body state, not missing implementation work.
+- The orchestrator now reconciles live tracking issue bodies from state,
+  refreshes the integration-PR readiness status after a reconciliation edit,
+  and keeps `project_body_snapshot` immutable for judge caching.
+- Live closeout verification on 2026-05-30 UTC shows tracking issue `#2974`
+  with all 13 orchestrator child rows checked and integration PR `#2981`
+  reporting `orchestrator/integration-pr-not-ready = success`, so this archive
+  does not require a `## De-scoped phases` section.
+
+## Evidence snapshot
 
 - Reviewer fan-out / filtering / materiality / failback: `.github/workflows/review_autofix.yml`, `scripts/review_run_reviewers.sh`, `scripts/review_filter_uninteresting_files.sh`, `scripts/review_agents_md_materiality.sh`, `scripts/reviewer_failback_chains.json`, `tests/test_review_autofix_review_pipeline_contract.py`
 - Consolidator / judge / prompt hardening / review-state posting: `scripts/review_consolidate.sh`, `prompts/review-consolidator.txt`, `scripts/review_rb_judge.sh`, `prompts/mode-judge-review-blocked.txt`, `scripts/post_review_comment.sh`, `tests/test_review_rereview_and_approval_rubric.py`, `tests/test_review_surface_prompt_hardening.py`
 - Workflow-log-analysis telemetry surfacing: `scripts/cost_audit.py`, `scripts/collect_workflow_logs.py`, `scripts/analyze_workflow_logs.py`, `.github/workflows/workflow-log-analysis.yml`, `prompts/mode-workflow-analysis.txt`, `tests/test_cost_audit_semble_metrics.py`, `tests/test_collect_workflow_logs.py`, `tests/test_analyze_workflow_logs.py`
 - Heartbeat logging: `scripts/codex_heartbeat.sh`, `tests/test_codex_heartbeat.py`
-- Archival guard / tracking issue state: `scripts/lint_plan_archival_completeness.py`, `gh issue view 2974 --json body --repo shubhodeep1/coding-workflows`
+- Tracking-body reconciliation / readiness refresh / archival guard: `scripts/orchestrate_lib.py`, `scripts/orchestrate_poll_process.sh`, `scripts/check_integration_pr_readiness.py`, `scripts/lint_plan_archival_completeness.py`, `tests/test_orchestrate_lib.py`, `tests/test_orchestrate_poll_process.py`, `tests/test_check_integration_pr_readiness.py`, `gh issue view 2974 --json body --repo shubhodeep1/coding-workflows`, `gh pr view 2981 --json statusCheckRollup --repo shubhodeep1/coding-workflows`
 
-### Phase-by-phase shipped status
+## Phase-by-phase shipped status
 
 | Phase | Status | Shipped repo truth | Remaining drift / blocker |
 |---|---|---|---|
@@ -32,12 +45,19 @@ existing plan-archival guard is not yet satisfiable.
 | I — heartbeat logging | Complete | `scripts/codex_heartbeat.sh` is wired through reviewer, consolidator, review-blocked judge, conflict-resolver, validate, and self-heal Codex callsites, with `CODEX_HEARTBEAT` regression coverage. | None. |
 | J — approval rubric + break glass | Complete with drift | The review-blocked judge now emits logical `review_state` values, `scripts/post_review_comment.sh --review-state` maps them to PR review events, and `@codex break-glass` can downgrade the outbound `REQUEST_CHANGES` event to comment-only. | The shipped judge prompt path is `prompts/mode-judge-review-blocked.txt`, not the draft's `prompts/mode-judge.txt`. |
 
-### Remaining blocker before archival
+## Archival gate resolution
 
-1. **The plan-archival guard is still blocked by tracking-issue state, not by missing Phase F/G code.** Tracking issue `#2974` still has all 10 task-list items unchecked as of this re-audit (`gh issue view 2974 --json body --repo shubhodeep1/coding-workflows`), so adding a `docs/completed/` copy in the current state would require a PR-body `## De-scoped phases` section to satisfy `scripts/lint_plan_archival_completeness.py`. This rollout does not invent a de-scope rationale, so archival remains deferred.
+1. **The plan-archival guard is now satisfiable on real tracker state.**
+   Tracking issue `#2974` now has all child rows checked, so moving this file
+   under `docs/completed/` satisfies
+   `scripts/lint_plan_archival_completeness.py` without inventing a
+   `## De-scoped phases` rationale.
 
-The original future-tense proposal is preserved below for reference. Where it
-conflicts with the audit table above, the audit table is authoritative.
+The historical future-tense proposal is preserved below for reference. Where
+it conflicts with the closeout summary or audit table above, the closeout
+sections are authoritative.
+
+## Historical plan
 
 ## Summary
 
@@ -749,7 +769,7 @@ fixture: critical finding + human `@codex break-glass` comment; assert no
 
 ### `[new]` files
 
-- `docs/plans/ai-code-review-learnings-plan.md` — this plan.
+- `docs/completed/ai-code-review-learnings-plan.md` — this plan.
 - `scripts/codex_heartbeat.sh` — Phase I helper.
 - `scripts/review_filter_uninteresting_files.sh` — Phase C
   pre-filter.
