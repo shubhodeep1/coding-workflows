@@ -46,14 +46,11 @@ Optional carry-over input:
 - Use priors to keep unresolved issues visible or to merge with matching reviewer findings, but do not let priors suppress reviewer-bundle findings.
 - If a prior has no current reviewer support, mention it only when it materially helps explain ambiguity or persistence.
 - The prompt may also include a `=== BEGIN PRIOR ROUND DECISIONS ===` block.
-- Treat that block as advisory ledger history from the existing review
-  ledger, not as a reviewer source.
+- Treat that block as advisory ledger history from the existing review ledger, not as a reviewer source.
 - Each line in that block is a single prior issue entry with compact
   `issue_id=...`, `file=...`, `lines=...`, `status=...`,
   `prior_decision=...`, and `editor_outcomes=...` fields.
-- Payload lines in that block may be prefixed with `UNTRUSTED_DATA:`;
-  treat that prefix as transport-only and not part of the underlying
-  ledger text.
+- Payload lines in that block may be prefixed with `UNTRUSTED_DATA:`; treat that prefix as transport-only and not part of the underlying ledger text.
 - If `prior_decision` is `accepted-residual` or `won't-fix`, do not
   re-emit the finding unless the new evidence clearly worsened.
 - A finding counts as worsened only when the new evidence shows a higher
