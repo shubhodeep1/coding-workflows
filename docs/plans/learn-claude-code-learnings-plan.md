@@ -51,7 +51,7 @@ repo. The first two are the templates for shape and depth:
   prompt improvements from `x1xhlol/system-prompts-and-models-of-ai-tools`.
   Plan was prompt-prose-only (zero code paths touched). Used the
   "cross-cutting goals / cross-cutting non-goals" framing.
-- `docs/plans/ai-code-review-learnings-plan.md` — mapped 10 Cloudflare
+- `docs/completed/ai-code-review-learnings-plan.md` — mapped 10 Cloudflare
   AI-code-review techniques onto `review_autofix`, classified
   already-done / partial / gap, and proposed flag-gated phases. That
   plan **did** touch code paths and used the
@@ -1093,7 +1093,7 @@ zh:{title,description}, ja:{...} }`.
 - `docs/plans/complete-squad-improvements-plan.md:189-198` has an
   "Alternatives considered" prose section.
 - `docs/completed/judge-loop-and-reissue-plan.md` (shipped) and
-  `docs/plans/ai-code-review-learnings-plan.md` also have prose
+  `docs/completed/ai-code-review-learnings-plan.md` also have prose
   alternatives sections.
 - `docs/plans/apply-ai-tools-learnings-plan.md` does not.
 - There is no enforced schema. No linter. No standard heading
@@ -1159,7 +1159,7 @@ workflow step; never blocks merge.
   are suppressed. When on, warnings surface in CI logs.
 - **Bake-out.** Land convention + linter with flag off. Validate
   the linter parses `apply-ai-tools-learnings-plan.md`,
-  `ai-code-review-learnings-plan.md`,
+  `docs/completed/ai-code-review-learnings-plan.md`,
   `complete-squad-improvements-plan.md`,
   `docs/completed/judge-loop-and-reissue-plan.md`, and this plan
   correctly.
@@ -1604,7 +1604,7 @@ decision before implementation kicks off:
 - In-repo prior "external learnings" plans (template precedent):
   - `docs/plans/apply-ai-tools-learnings-plan.md` — prompt-only
     additive borrow.
-  - `docs/plans/ai-code-review-learnings-plan.md` — flag-gated,
+  - `docs/completed/ai-code-review-learnings-plan.md` — flag-gated,
     fail-open phased rollout (closest structural sibling).
 - In-repo constraint sources:
   - `unattended_system_instructions.md` — §8 (env-var

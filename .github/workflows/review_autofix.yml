@@ -116,6 +116,18 @@ env:
   REVIEWER_PASS2_DIFF_LARGE_LOC: ${{ vars.REVIEWER_PASS2_DIFF_LARGE_LOC || '200' }}
   REVIEWER_PASS2_REASONING_SMALL: ${{ vars.REVIEWER_PASS2_REASONING_SMALL || 'high' }}
   REVIEWER_PASS2_REASONING_LARGE: ${{ vars.REVIEWER_PASS2_REASONING_LARGE || 'xhigh' }}
+  REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}
+  REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}
+  REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}
+  REVIEWER_RISK_TIER_LITE_LOC: ${{ vars.REVIEWER_RISK_TIER_LITE_LOC || '100' }}
+  REVIEWER_RISK_TIER_LITE_FILES: ${{ vars.REVIEWER_RISK_TIER_LITE_FILES || '20' }}
+  REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX: ${{ vars.REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX || '^(scripts/|\.github/workflows/|\.github/ai/|prompts/|workflow-templates/|db/contracts/|ai-memory/)' }}
+  REVIEWER_TIER_TRIVIAL_MODELS: ${{ vars.REVIEWER_TIER_TRIVIAL_MODELS || '' }}
+  REVIEWER_TIER_LITE_MODELS: ${{ vars.REVIEWER_TIER_LITE_MODELS || '' }}
+  REVIEWER_CIRCUIT_BREAKER_ENABLED: ${{ vars.REVIEWER_CIRCUIT_BREAKER_ENABLED || '0' }}
+  REVIEWER_FAILBACK_MAX_RETRIES: ${{ vars.REVIEWER_FAILBACK_MAX_RETRIES || '1' }}
+  REVIEWER_HEALTH_OPEN_THRESHOLD: ${{ vars.REVIEWER_HEALTH_OPEN_THRESHOLD || '3' }}
+  REVIEWER_HEALTH_OPEN_TTL_SECS: ${{ vars.REVIEWER_HEALTH_OPEN_TTL_SECS || '1800' }}
   # Editor (codex apply-fixes loop). Production defaults to xhigh
   # (repo-wide gpt-5.4 policy); smoke runs override to `medium` via the
   # "Detect smoke test PR" step (search "EDITOR_REASONING_EFFORT=medium"
@@ -128,6 +140,8 @@ env:
   # isolated and never read by the editor.
   EDITOR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_EDITOR || 'xhigh' }}
   EDITOR_VERBOSITY: ${{ vars.VERBOSITY_EDITOR || 'low' }}
+  CONTEXT_BUDGET_WARN_RATIO: ${{ vars.CONTEXT_BUDGET_WARN_RATIO || '0.7' }}
+  MAX_PROMPT_TOKENS_FOR_PHASE: ${{ vars.MAX_PROMPT_TOKENS_FOR_PHASE || '' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   # Targeted-file-context inlining limit — propagated to scripts/
   # review_apply_fixes.sh (autofix editor) and scripts/review_conflict_resolve.sh
@@ -137,8 +151,17 @@ env:
   # scripts/targeted_file_context.py docstring for semantics. Set to 0
   # to disable inlining entirely. Default matches implement.yml.
   TARGETED_FILE_CONTEXT_MAX_BYTES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_BYTES || '102400' }}
+  CODEX_HEARTBEAT_ENABLED: ${{ vars.CODEX_HEARTBEAT_ENABLED || '1' }}
+  CODEX_HEARTBEAT_INTERVAL_SECS: ${{ vars.CODEX_HEARTBEAT_INTERVAL_SECS || '30' }}
   ENABLE_REVIEWER_TWO_PASS: ${{ vars.ENABLE_REVIEWER_TWO_PASS || 'true' }}
   REVIEW_REVIEWER_CHECKLIST_ENABLED: ${{ vars.REVIEW_REVIEWER_CHECKLIST_ENABLED || 'false' }}
+  REVIEWER_FILTER_UNINTERESTING_ENABLED: ${{ vars.REVIEWER_FILTER_UNINTERESTING_ENABLED || 'false' }}
+  REVIEWER_FILTER_EXTRA_GLOBS: ${{ vars.REVIEWER_FILTER_EXTRA_GLOBS || '' }}
+  REVIEWER_FILTER_EXEMPT_GLOBS: ${{ vars.REVIEWER_FILTER_EXEMPT_GLOBS || 'db/contracts/**,**/migrations/**,**/migrate/**' }}
+  AGENTS_MD_MATERIALITY_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_ENABLED || '0' }}
+  AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED || '0' }}
+  AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-5.4-mini' }}
+  AGENTS_MD_MATERIALITY_REASONING: ${{ vars.AGENTS_MD_MATERIALITY_REASONING || 'medium' }}
   # Cross-reviewer consensus summariser: after each pass (pass-1 feeds pass-2,
   # pass-2 feeds the editor), all reviewer outputs are fed to one codex-cli
   # call that emits a consolidated ledger. Hard-fails the workflow on repeat
@@ -424,6 +447,7 @@ jobs:
               # /pulls/{n} does not include them.
               DOC_ONLY="false"
               file_count=""
+              pr_files_json=""
               if [ "${SMALL_DIFF}" != "true" ] && [ "${AUTOFIX_SKIP_DOC_ONLY:-true}" != "false" ]; then
                 # `gh api --paginate --jq '[…]'` emits one JSON array per
                 # page. Without `jq -s 'add // []'` the concatenated output
@@ -468,19 +492,227 @@ jobs:
                 fi
               fi
 
+              candidate_skip="false"
+              candidate_skip_reason=""
               if [ "${DOC_ONLY}" = "true" ]; then
-                DETERMINISTIC_SKIP="true"
-                DET_SKIP_REASON="docs_only"
-                SHOULD_RUN="false"
-                SKIP_REASON="deterministic_skip_docs_only"
+                candidate_skip="true"
+                candidate_skip_reason="docs_only"
               elif [ "${SMALL_DIFF}" = "true" ]; then
-                DETERMINISTIC_SKIP="true"
-                DET_SKIP_REASON="small_diff"
-                SHOULD_RUN="false"
-                SKIP_REASON="deterministic_skip_small_diff"
+                candidate_skip="true"
+                candidate_skip_reason="small_diff"
               fi
 
-              echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} files=${file_count:-skipped} additions=${pr_additions:-?} deletions=${pr_deletions:-?} max_add=${max_add} max_del=${max_del} doc_only=${DOC_ONLY} small_diff=${SMALL_DIFF} skip=${DETERMINISTIC_SKIP} reason=${DET_SKIP_REASON}"
+              MATERIALITY_SKIP_SUPPRESSED="false"
+              case "$(printf '%s' "${AGENTS_MD_MATERIALITY_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
+                1|true|yes|on)
+                  # Keep medium/high material PRs on the codex-agent path so
+                  # the advisory comment is still reachable when the diff
+                  # would otherwise short-circuit through deterministic skip.
+                  # This lightweight gate only has /pulls/{n}/files path data,
+                  # so it suppresses skip on the path-glob signals that are
+                  # visible here and fails open for helper-only signals such as
+                  # repo-verified new top-level directories.
+                  if [ "${candidate_skip}" = "true" ]; then
+                    if [ -z "${pr_files_json}" ] || [ "${pr_files_json}" = "[]" ]; then
+                      if pr_files_json="$(gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '[.[] | {filename: .filename}]' 2>/dev/null | jq -s 'add // []' 2>/dev/null)"; then
+                        file_count="$(printf '%s' "${pr_files_json}" | jq 'length' 2>/dev/null || echo "${file_count:-0}")"
+                      else
+                        pr_files_json=""
+                      fi
+                    fi
+
+                    if [ -n "${pr_files_json}" ] && [ "${pr_files_json}" != "[]" ]; then
+                      # Mirror the helper's visible path rules here so the gate
+                      # only suppresses deterministic skip when the helper would
+                      # later classify the diff medium/high from PR file paths
+                      # alone. Repo-verified signals such as new top-level
+                      # directories remain helper-only and intentionally fail
+                      # open on the gate path.
+                      if gate_materiality_json="$(PR_FILES_JSON="${pr_files_json}" python3 - <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import PurePosixPath
+
+
+          ROOT_HIGH_PATHS = {"package.json", "pyproject.toml", "Cargo.toml", "go.mod"}
+          HIGH_BUILD_TEST_BASENAMES = {
+              "pytest.ini",
+              "tox.ini",
+              "noxfile.py",
+              "jest.config.js",
+              "jest.config.cjs",
+              "jest.config.mjs",
+              "jest.config.ts",
+              "vitest.config.js",
+              "vitest.config.cjs",
+              "vitest.config.mjs",
+              "vitest.config.ts",
+              "playwright.config.js",
+              "playwright.config.cjs",
+              "playwright.config.mjs",
+              "playwright.config.ts",
+              "cypress.config.js",
+              "cypress.config.cjs",
+              "cypress.config.mjs",
+              "cypress.config.ts",
+              "webpack.config.js",
+              "webpack.config.cjs",
+              "webpack.config.mjs",
+              "webpack.config.ts",
+              "vite.config.js",
+              "vite.config.cjs",
+              "vite.config.mjs",
+              "vite.config.ts",
+              "turbo.json",
+              "go.work",
+          }
+          MEDIUM_DEPENDENCY_BASENAMES = {
+              "package-lock.json",
+              "bun.lock",
+              "bun.lockb",
+              "yarn.lock",
+              "pnpm-lock.yaml",
+              "Cargo.lock",
+              "poetry.lock",
+              "uv.lock",
+              "go.sum",
+              "Pipfile",
+              "Pipfile.lock",
+          }
+          MEDIUM_LINT_BASENAMES = {
+              ".eslintrc",
+              ".eslintrc.json",
+              ".eslintrc.js",
+              ".eslintrc.cjs",
+              ".eslintrc.yaml",
+              ".eslintrc.yml",
+              "eslint.config.js",
+              "eslint.config.cjs",
+              "eslint.config.mjs",
+              "eslint.config.ts",
+              ".prettierrc",
+              ".prettierrc.json",
+              ".prettierrc.js",
+              ".prettierrc.cjs",
+              ".stylelintrc",
+              ".stylelintrc.json",
+              ".stylelintrc.js",
+              "stylelint.config.js",
+              "stylelint.config.cjs",
+              "stylelint.config.mjs",
+              "stylelint.config.ts",
+              "ruff.toml",
+              ".ruff.toml",
+              ".flake8",
+              "pylintrc",
+              "biome.json",
+              "biome.jsonc",
+          }
+          CLIENT_WRAPPER_BASENAMES = {
+              "client.py",
+              "client.ts",
+              "client.js",
+              "client.tsx",
+              "client.jsx",
+              "client.go",
+              "client.rb",
+              "client.java",
+          }
+          CLIENT_WRAPPER_TOKENS = (
+              "api_client",
+              "api-client",
+              "http_client",
+              "http-client",
+              "github_client",
+              "github-client",
+              "rest_client",
+              "rest-client",
+              "sdk_client",
+              "sdk-client",
+          )
+
+
+          def looks_like_client_wrapper(path: str) -> bool:
+              pure = PurePosixPath(path)
+              basename = pure.name.lower()
+              if basename in CLIENT_WRAPPER_BASENAMES:
+                  parent_parts = [part.lower() for part in pure.parts[:-1]]
+                  if any(part in {"api", "apis", "client", "clients", "http", "sdk"} for part in parent_parts):
+                      return True
+              if any(token in basename for token in CLIENT_WRAPPER_TOKENS):
+                  return True
+              return False
+
+
+          def classify_path(path: str) -> str:
+              pure = PurePosixPath(path)
+              basename = pure.name
+              if path in ROOT_HIGH_PATHS:
+                  return "high"
+              if path.startswith(".github/workflows/"):
+                  return "high"
+              if "/" not in path and basename in HIGH_BUILD_TEST_BASENAMES:
+                  return "high"
+              if basename in MEDIUM_DEPENDENCY_BASENAMES or (basename.startswith("requirements") and basename.endswith(".txt")) or (basename.startswith("constraints") and basename.endswith(".txt")):
+                  return "medium"
+              if basename in MEDIUM_LINT_BASENAMES:
+                  return "medium"
+              if looks_like_client_wrapper(path):
+                  return "medium"
+              return "low"
+
+
+          payload = os.environ.get("PR_FILES_JSON", "")
+          entries = json.loads(payload) if payload else json.load(sys.stdin)
+          paths = []
+          seen = set()
+          for entry in entries:
+              path = str((entry or {}).get("filename") or "").strip()
+              if not path or path in seen:
+                  continue
+              seen.add(path)
+              paths.append(path)
+
+          materiality = "low"
+          for path in paths:
+              severity = classify_path(path)
+              if severity == "high":
+                  materiality = "high"
+                  break
+              if severity == "medium":
+                  materiality = "medium"
+
+          print(json.dumps({
+              "agents_md_changed": "agents.md" in seen,
+              "materiality": materiality,
+          }))
+          PY
+                      )"; then
+                        gate_materiality="$(printf '%s' "${gate_materiality_json}" | jq -r '.materiality // "low"' 2>/dev/null || echo low)"
+                        gate_agents_changed="$(printf '%s' "${gate_materiality_json}" | jq -r 'if (.agents_md_changed // false) then "true" else "false" end' 2>/dev/null || echo false)"
+                        if [ "${gate_agents_changed}" != "true" ] && { [ "${gate_materiality}" = "high" ] || [ "${gate_materiality}" = "medium" ]; }; then
+                          MATERIALITY_SKIP_SUPPRESSED="true"
+                          echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=agents_md_materiality pr=${PR_NUMBER} materiality=${gate_materiality} candidate=${candidate_skip_reason}"
+                        fi
+                      else
+                        echo "AUTOFIX_GATE_MATERIALITY_FILES_UNAVAILABLE pr=${PR_NUMBER} candidate=${candidate_skip_reason} — classifier unavailable, keeping deterministic skip fail-open."
+                      fi
+                    else
+                      echo "AUTOFIX_GATE_MATERIALITY_FILES_UNAVAILABLE pr=${PR_NUMBER} candidate=${candidate_skip_reason} — /files fetch failed or empty, keeping deterministic skip fail-open."
+                    fi
+                  fi
+                  ;;
+              esac
+
+              if [ "${candidate_skip}" = "true" ] && [ "${MATERIALITY_SKIP_SUPPRESSED}" != "true" ]; then
+                DETERMINISTIC_SKIP="true"
+                DET_SKIP_REASON="${candidate_skip_reason}"
+                SHOULD_RUN="false"
+                SKIP_REASON="deterministic_skip_${candidate_skip_reason}"
+              fi
+
+              echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} files=${file_count:-skipped} additions=${pr_additions:-?} deletions=${pr_deletions:-?} max_add=${max_add} max_del=${max_del} doc_only=${DOC_ONLY} small_diff=${SMALL_DIFF} skip=${DETERMINISTIC_SKIP} reason=${DET_SKIP_REASON} materiality_suppressed=${MATERIALITY_SKIP_SUPPRESSED}"
             fi
           fi
 
@@ -814,10 +1046,32 @@ jobs:
       REVIEW_PARSER_FAILOPEN: ${{ vars.REVIEW_PARSER_FAILOPEN || '1' }}
       CONSOLIDATOR_REJECT_SCHEMA_ENABLED: ${{ vars.CONSOLIDATOR_REJECT_SCHEMA_ENABLED || 'false' }}
       REVIEW_LEDGER_ENABLED: ${{ vars.REVIEW_LEDGER_ENABLED || '1' }}
+      REVIEW_LEDGER_REREVIEW_ENABLED: ${{ vars.REVIEW_LEDGER_REREVIEW_ENABLED || 'false' }}
       REVIEW_LEDGER_PERSIST_LIMIT: ${{ vars.REVIEW_LEDGER_PERSIST_LIMIT || '2' }}
       REVIEW_LEDGER_PATH: ${{ vars.REVIEW_LEDGER_PATH || format('.ai/review_issue_ledger/pr-{0}.txt', inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number || '0') }}
+      REVIEW_APPROVAL_RUBRIC_ENABLED: ${{ vars.REVIEW_APPROVAL_RUBRIC_ENABLED || 'false' }}
+      REVIEW_BREAK_GLASS_ENABLED: ${{ vars.REVIEW_BREAK_GLASS_ENABLED || 'false' }}
       REVIEW_REVIEWER_CHECKLIST_ENABLED: ${{ vars.REVIEW_REVIEWER_CHECKLIST_ENABLED || '1' }}
       REVIEW_REVIEWER_ITERATION_SCOPING: ${{ vars.REVIEW_REVIEWER_ITERATION_SCOPING || '1' }}
+      REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}
+      REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}
+      REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}
+      REVIEWER_RISK_TIER_LITE_LOC: ${{ vars.REVIEWER_RISK_TIER_LITE_LOC || '100' }}
+      REVIEWER_RISK_TIER_LITE_FILES: ${{ vars.REVIEWER_RISK_TIER_LITE_FILES || '20' }}
+      REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX: ${{ vars.REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX || '^(scripts/|\.github/workflows/|\.github/ai/|prompts/|workflow-templates/|db/contracts/|ai-memory/)' }}
+      REVIEWER_TIER_TRIVIAL_MODELS: ${{ vars.REVIEWER_TIER_TRIVIAL_MODELS || '' }}
+      REVIEWER_TIER_LITE_MODELS: ${{ vars.REVIEWER_TIER_LITE_MODELS || '' }}
+      REVIEWER_CIRCUIT_BREAKER_ENABLED: ${{ vars.REVIEWER_CIRCUIT_BREAKER_ENABLED || '0' }}
+      REVIEWER_FAILBACK_MAX_RETRIES: ${{ vars.REVIEWER_FAILBACK_MAX_RETRIES || '1' }}
+      REVIEWER_HEALTH_OPEN_THRESHOLD: ${{ vars.REVIEWER_HEALTH_OPEN_THRESHOLD || '3' }}
+      REVIEWER_HEALTH_OPEN_TTL_SECS: ${{ vars.REVIEWER_HEALTH_OPEN_TTL_SECS || '1800' }}
+      REVIEWER_FILTER_UNINTERESTING_ENABLED: ${{ vars.REVIEWER_FILTER_UNINTERESTING_ENABLED || 'false' }}
+      REVIEWER_FILTER_EXTRA_GLOBS: ${{ vars.REVIEWER_FILTER_EXTRA_GLOBS || '' }}
+      REVIEWER_FILTER_EXEMPT_GLOBS: ${{ vars.REVIEWER_FILTER_EXEMPT_GLOBS || 'db/contracts/**,**/migrations/**,**/migrate/**' }}
+      AGENTS_MD_MATERIALITY_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_ENABLED || '0' }}
+      AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED || '0' }}
+      AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-5.4-mini' }}
+      AGENTS_MD_MATERIALITY_REASONING: ${{ vars.AGENTS_MD_MATERIALITY_REASONING || 'medium' }}
       JUDGE_INTERIM_ENABLED: ${{ vars.JUDGE_INTERIM_ENABLED || 'false' }}
       JUDGE_INTERIM_REASONING: ${{ vars.JUDGE_INTERIM_REASONING || 'low' }}
       JUDGE_INTERIM_TIMEOUT_S: ${{ vars.JUDGE_INTERIM_TIMEOUT_S || '120' }}
@@ -998,7 +1252,7 @@ jobs:
             echo "SUPPORT_AGENTS_FILE=${SUPPORT_ROOT_DIR}/agents.md"
           } >> "$GITHUB_ENV"
 
-          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py review_run_reviewers.sh review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh"
+          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py cost_audit.py codex_heartbeat.sh review_run_reviewers.sh review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh"
           # Main-primary bootstrap scripts: prefer the fresh main snapshot so
           # wedged integration branches still pick up resolver safety fixes
           # shipped on main. Missing from both refs remains fail-open so older
@@ -1104,6 +1358,19 @@ jobs:
             echo "Model catalog not on ${SCRIPT_REF} yet; using local copy."
           fi
 
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json" ]; then
+            failback_src=".codex-workflow-src/scripts/reviewer_failback_chains.json"
+            if [ ! -f "${failback_src}" ] && [ -f ".codex-workflow-src-main/scripts/reviewer_failback_chains.json" ]; then
+              failback_src=".codex-workflow-src-main/scripts/reviewer_failback_chains.json"
+            fi
+            if [ -f "${failback_src}" ]; then
+              install -m 0644 "${failback_src}" "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json"
+            else
+              echo "::warning::reviewer_failback_chains.json not found in checked-out support sources for ${SCRIPT_REF}; reviewer failback will fail open even when REVIEWER_CIRCUIT_BREAKER_ENABLED=true."
+              rm -f "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json"
+            fi
+          fi
+
           for f in unattended_system_instructions.md; do
             target_path="${SUPPORT_ROOT_DIR}/${f}"
             if [ ! -f "${target_path}" ]; then
@@ -1197,6 +1464,30 @@ jobs:
             else
               echo "::warning::review-reviewer-checklist.txt not found in checked-out support sources for ${SCRIPT_REF}; reviewer prompts will keep the checklist disabled even when REVIEW_REVIEWER_CHECKLIST_ENABLED=true."
               rm -f "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt"
+            fi
+          fi
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh" ]; then
+            src=".codex-workflow-src/scripts/review_filter_uninteresting_files.sh"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/review_filter_uninteresting_files.sh" ]; then
+              src=".codex-workflow-src-main/scripts/review_filter_uninteresting_files.sh"
+            fi
+            if [ -f "${src}" ]; then
+              install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh"
+            else
+              echo "::warning::review_filter_uninteresting_files.sh not found in checked-out support sources for ${SCRIPT_REF}; reviewer diff filtering will fail open even when REVIEWER_FILTER_UNINTERESTING_ENABLED=true."
+              rm -f "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh"
+            fi
+          fi
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh" ]; then
+            src=".codex-workflow-src/scripts/review_agents_md_materiality.sh"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/review_agents_md_materiality.sh" ]; then
+              src=".codex-workflow-src-main/scripts/review_agents_md_materiality.sh"
+            fi
+            if [ -f "${src}" ]; then
+              install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh"
+            else
+              echo "::warning::review_agents_md_materiality.sh not found in checked-out support sources for ${SCRIPT_REF}; AGENTS.md materiality advisories will fail open even when AGENTS_MD_MATERIALITY_ENABLED=true."
+              rm -f "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh"
             fi
           fi
           if [ ! -f "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt" ]; then
@@ -1311,6 +1602,8 @@ jobs:
             echo "PR_DIFF_FILE=${RUNTIME_DIR}/pr_diff.patch"
             echo "ORIGINAL_PR_DIFF_FILE=${RUNTIME_DIR}/original_pr_diff.patch"
             echo "PR_ISSUE_COMMENTS_FILE=${RUNTIME_DIR}/pr_issue_comments.json"
+            echo "AGENTS_MD_MATERIALITY_RESULT_FILE=${RUNTIME_DIR}/agents_md_materiality_result.json"
+            echo "AGENTS_MD_MATERIALITY_COMMENT_FILE=${RUNTIME_DIR}/agents_md_materiality_comment.md"
             echo "PR_REVIEWS_FILE=${RUNTIME_DIR}/pr_reviews.json"
             echo "PR_REVIEW_COMMENTS_FILE=${RUNTIME_DIR}/pr_review_comments.json"
             echo "PR_ALL_COMMENTS_CONTEXT_FILE=${RUNTIME_DIR}/pr_all_comments_context.txt"
@@ -2319,6 +2612,30 @@ jobs:
             echo "Check-run context sha256: $(sha256sum "${PR_CHECK_RUNS_CONTEXT_FILE}" | awk '{print $1}')"
           fi
 
+      # Restore the per-PR review-issue ledger + reviewer health state from the
+      # previous autofix iteration before reviewers run. Both artifacts live
+      # under .ai/, are gitignored, and persist across iterations only through
+      # this cache pair. Missing cache is fail-open: iteration-scoping and
+      # reviewer failback health both treat absence as first-run state.
+      - name: Restore review-issue ledger
+        # NOTE: this step runs BEFORE the `retrigger_guard` step (id below),
+        # so `steps.retrigger_guard.outputs.*` is not yet populated here — the
+        # former `max_iterations_reached != 'true'` guard was a no-op at this
+        # point (always an empty string) and actionlint correctly rejected the
+        # forward step reference. Gate only on the env signals that are already
+        # set this early in the job.
+        if: env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .ai/review_issue_ledger/
+            .ai/review_runtime/
+            ${{ env.REVIEW_LEDGER_PATH }}
+          key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-
+
       - name: Detect smoke test and tune LLM settings
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -3079,6 +3396,15 @@ jobs:
           case "$(printf '%s' "${REVIEW_REVIEWER_CHECKLIST_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
             1|true|yes|on) check_soft_file "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt" ;;
           esac
+          case "$(printf '%s' "${REVIEWER_FILTER_UNINTERESTING_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on) check_soft_file "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh" ;;
+          esac
+          case "$(printf '%s' "${AGENTS_MD_MATERIALITY_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on) check_soft_file "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh" ;;
+          esac
+          case "$(printf '%s' "${REVIEWER_CIRCUIT_BREAKER_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on) check_soft_file "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json" ;;
+          esac
           check_soft_file "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
           check_soft_file "${SUPPORT_SCRIPTS_DIR}/install_semble.sh"
           check_soft_file "${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh"
@@ -3144,7 +3470,7 @@ jobs:
 
           # Mirror the late merge-precheck cleanup so runtime-fetched helper
           # files cannot trip an exit-128 pre-merge abort before reviewers run.
-          rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh scripts/openrouter_prompt_cache.py scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/summarize_reviewer_consensus.sh scripts/check_external_branch_advance.sh 2>/dev/null || true
+          rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh scripts/openrouter_prompt_cache.py scripts/cost_audit.py scripts/codex_heartbeat.sh scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/summarize_reviewer_consensus.sh scripts/check_external_branch_advance.sh 2>/dev/null || true
           if ! git reset --hard HEAD; then
             echo "::warning::git reset --hard HEAD failed during pre-review merge-topology gate; fail-open to reviewer path."
             exit 0
@@ -3353,7 +3679,30 @@ jobs:
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
         run: |
           set -euo pipefail
-          bash "${SUPPORT_SCRIPTS_DIR}/review_run_reviewers.sh"
+          materiality_pid=""
+          case "$(printf '%s' "${AGENTS_MD_MATERIALITY_ENABLED:-0}" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on)
+              if [ "${CLAUDE_BRANCH_REVIEW_MODE:-false}" != "true" ] && [ -x "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh" ]; then
+                bash "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh" &
+                materiality_pid="$!"
+              elif [ "${CLAUDE_BRANCH_REVIEW_MODE:-false}" != "true" ]; then
+                echo "::warning::review_agents_md_materiality.sh unavailable at ${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh; AGENTS.md materiality advisory will fail open."
+              fi
+              ;;
+          esac
+
+          reviewers_rc=0
+          bash "${SUPPORT_SCRIPTS_DIR}/review_run_reviewers.sh" || reviewers_rc=$?
+
+          if [ -n "${materiality_pid}" ]; then
+            materiality_rc=0
+            wait "${materiality_pid}" || materiality_rc=$?
+            if [ "${materiality_rc}" -ne 0 ]; then
+              echo "::warning::review_agents_md_materiality.sh exited with ${materiality_rc}; AGENTS.md materiality advisory will fail open."
+            fi
+          fi
+
+          exit "${reviewers_rc}"
 
       - name: Upload per-reviewer logs (always)
         if: always() && env.PREVIOUS_REVIEWS_DIR != '' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
@@ -3368,6 +3717,65 @@ jobs:
             ${{ env.PREVIOUS_REVIEWS_DIR }}/pass1_*.txt
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Post AI Materiality Advisory comment
+        if: always() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+
+          if [ ! -s "${AGENTS_MD_MATERIALITY_RESULT_FILE:-}" ]; then
+            echo "AGENTS_MD_MATERIALITY: no result file; skipping advisory comment."
+            exit 0
+          fi
+
+          advisory_required="$(jq -r '.advisory_required // false' "${AGENTS_MD_MATERIALITY_RESULT_FILE}" 2>/dev/null || echo false)"
+          if [ "${advisory_required}" != "true" ]; then
+            echo "AGENTS_MD_MATERIALITY: advisory not required."
+            exit 0
+          fi
+
+          if [ ! -s "${AGENTS_MD_MATERIALITY_COMMENT_FILE:-}" ]; then
+            echo "::warning::AGENTS.md materiality advisory requested but comment body file is missing/empty; skipping."
+            exit 0
+          fi
+
+          if [ ! -s "${PR_ISSUE_COMMENTS_FILE:-}" ]; then
+            echo "::warning::PR_ISSUE_COMMENTS_FILE missing/empty; skipping AI Materiality Advisory comment."
+            exit 0
+          fi
+
+          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+
+          comment_marker="$(jq -r '.comment_marker // "<!-- AI_MATERIALITY_ADVISORY_V1 -->"' "${AGENTS_MD_MATERIALITY_RESULT_FILE}" 2>/dev/null || echo '<!-- AI_MATERIALITY_ADVISORY_V1 -->')"
+          existing_comment_id="$(jq -r --arg marker "${comment_marker}" '([.[] | select(((.body // "") | contains($marker))) | {id: ((.id // 0) | tonumber), body: (.body // "")}] | sort_by(.id) | last | .id) // empty' "${PR_ISSUE_COMMENTS_FILE}" 2>/dev/null || echo "")"
+          existing_comment_body="$(jq -r --arg marker "${comment_marker}" '([.[] | select(((.body // "") | contains($marker))) | {id: ((.id // 0) | tonumber), body: (.body // "")}] | sort_by(.id) | last | .body) // ""' "${PR_ISSUE_COMMENTS_FILE}" 2>/dev/null || echo "")"
+          if [ -n "${existing_comment_id}" ] && [ "${existing_comment_body}" = "$(cat "${AGENTS_MD_MATERIALITY_COMMENT_FILE}")" ]; then
+            echo "AGENTS_MD_MATERIALITY: advisory comment already up to date (#${existing_comment_id})."
+            exit 0
+          fi
+
+          payload="$(mktemp)"
+          jq -n --rawfile body "${AGENTS_MD_MATERIALITY_COMMENT_FILE}" '{body: $body}' > "${payload}"
+
+          if [ -n "${existing_comment_id}" ] && [[ "${existing_comment_id}" =~ ^[0-9]+$ ]]; then
+            if gh_retry gh api -X PATCH "repos/${{ github.repository }}/issues/comments/${existing_comment_id}" --input "${payload}" >/dev/null 2>&1; then
+              echo "AGENTS_MD_MATERIALITY: refreshed advisory comment #${existing_comment_id}."
+              rm -f "${payload}"
+              exit 0
+            fi
+            echo "::warning::Failed to refresh AI Materiality Advisory comment #${existing_comment_id}; will try posting a new advisory."
+          fi
+
+          if gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --input "${payload}" >/dev/null 2>&1; then
+            echo "AGENTS_MD_MATERIALITY: posted advisory comment."
+          else
+            echo "::warning::Failed to post AI Materiality Advisory comment on PR #${PR_NUMBER}."
+          fi
+          rm -f "${payload}"
 
       - name: Record reviewer consensus candidate in memory (fail-open)
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true'
@@ -3550,29 +3958,6 @@ jobs:
             sed -i "/^model_reasoning_effort = /a model_reasoning_summary = \"auto\"" ~/.codex/config.toml
           fi
           echo "Enabled reasoning summaries (auto) for editor phase"
-
-      # Restore the per-PR review-issue ledger from the previous autofix
-      # iteration (each iteration is a separate workflow run).  The ledger
-      # lives at .ai/review_issue_ledger/pr-<PR_NUMBER>.txt and is
-      # gitignored, so it never reaches the PR branch — cross-iteration
-      # persistence is provided entirely by this cache pair.  The unique
-      # run-id key ensures every iteration saves a fresh entry; the
-      # restore-keys prefix falls back to the most recent cache from any
-      # prior iteration of the same PR on this repo.  Missing cache is
-      # fail-open: the ledger script treats an absent prior ledger as
-      # iteration-1 state and proceeds normally.
-      - name: Restore review-issue ledger
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
-        continue-on-error: true
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            .ai/review_issue_ledger/
-            .ai/review_runtime/
-            ${{ env.REVIEW_LEDGER_PATH }}
-          key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-
 
       - name: Setup Serena for editor
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.SERENA_ENABLED == 'true'
@@ -4277,7 +4662,7 @@ jobs:
           # git merge later tries to write the same path from origin/BASE_BRANCH.
           # In the source repo these files are tracked, so git reset --hard HEAD
           # will restore them after this removal — no data loss occurs.
-          rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh scripts/openrouter_prompt_cache.py scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/summarize_reviewer_consensus.sh scripts/check_external_branch_advance.sh 2>/dev/null || true
+          rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh scripts/openrouter_prompt_cache.py scripts/cost_audit.py scripts/codex_heartbeat.sh scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/summarize_reviewer_consensus.sh scripts/check_external_branch_advance.sh 2>/dev/null || true
           git reset --hard HEAD
           # Use -ffdx: double-force clears nested git repos (-ff), and -x also
           # removes files matching .gitignore so nothing
@@ -4288,7 +4673,7 @@ jobs:
           # commit step (caller repos delete fetched scripts before committing)
           # or wiped by git clean -ffdx above.
           # Re-stage any missing scripts from checked-out support source.
-          for f in gh_helpers.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh cost_audit.py codex_heartbeat.sh review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh; do
             if [ ! -f "${SUPPORT_SCRIPTS_DIR}/${f}" ]; then
               mkdir -p "${SUPPORT_SCRIPTS_DIR}"
               src=".codex-workflow-src/scripts/${f}"
@@ -4836,6 +5221,67 @@ jobs:
             echo "Setting ai:ready-to-merge on issue #${issue_number}"
             set_issue_phase_label_resilient "${issue_number}" "ai:ready-to-merge" "${REPOSITORY}"
           done <<< "${ISSUE_NUMBERS}"
+      - name: Detect review-blocked break-glass override
+        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        run: |
+          set -euo pipefail
+          echo "REVIEW_BREAK_GLASS=false" >> "$GITHUB_ENV"
+          echo "REVIEW_BREAK_GLASS_COMMENTER=" >> "$GITHUB_ENV"
+
+          case "$(printf '%s' "${REVIEW_BREAK_GLASS_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on) ;;
+            *) exit 0 ;;
+          esac
+
+          if [ ! -s "${PR_ISSUE_COMMENTS_FILE:-}" ] && [ ! -s "${PR_REVIEWS_FILE:-}" ]; then
+            echo "Review-blocked break-glass scan inputs missing; continuing with override disabled."
+            exit 0
+          fi
+
+          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' >> "$GITHUB_ENV"
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          issue_comments_path = os.environ.get("PR_ISSUE_COMMENTS_FILE", "")
+          reviews_path = os.environ.get("PR_REVIEWS_FILE", "")
+          pattern = re.compile(r"^@codex break-glass\b")
+
+          def load(path_text: str):
+              if not path_text:
+                  return []
+              path = Path(path_text)
+              if not path.exists() or path.stat().st_size == 0:
+                  return []
+              try:
+                  data = json.loads(path.read_text(encoding="utf-8"))
+              except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                  return []
+              if not isinstance(data, list):
+                  return []
+              return [item for item in data if isinstance(item, dict)]
+
+          matches = []
+          for entry in load(issue_comments_path) + load(reviews_path):
+              user = entry.get("user") or {}
+              if not isinstance(user, dict) or user.get("type") != "User":
+                  continue
+              body = entry.get("body")
+              if not isinstance(body, str) or not pattern.match(body):
+                  continue
+              sort_key = entry.get("created_at") or entry.get("submitted_at") or entry.get("updated_at") or ""
+              try:
+                  ident = int(entry.get("id") or 0)
+              except (TypeError, ValueError):
+                  ident = 0
+              matches.append((sort_key, ident, str(user.get("login") or "unknown")))
+
+          if matches:
+              matches.sort()
+              print("REVIEW_BREAK_GLASS=true")
+              print(f"REVIEW_BREAK_GLASS_COMMENTER={matches[-1][2]}")
+          PY
 
       - name: Review-blocked judge decision
         id: rb_judge
@@ -6406,7 +6852,7 @@ jobs:
           # notification steps (tg_helpers.sh, label_helpers.sh, etc.).
           # Skip when running on coding-workflows itself — these are source.
           if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
-            rm -f scripts/gh_helpers.sh scripts/git_ref_health_check.sh scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py scripts/openrouter_prompt_cache.py scripts/codex_model_catalog.json scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/summarize_reviewer_consensus.sh scripts/check_external_branch_advance.sh
+            rm -f scripts/gh_helpers.sh scripts/git_ref_health_check.sh scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py scripts/openrouter_prompt_cache.py scripts/cost_audit.py scripts/codex_heartbeat.sh scripts/codex_model_catalog.json scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/summarize_reviewer_consensus.sh scripts/check_external_branch_advance.sh
             rm -rf prompts
             rm -f .github/ai/orchestrate_schema.v1.json
           fi

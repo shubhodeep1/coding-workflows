@@ -989,6 +989,32 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `ORCH_INTEGRATION_STALE_REALERT_HOURS` | `12` | Minimum hours between repeated stale-integration alerts; the window clears once the branch catches up / squash lands |
 | `ORCH_INTEGRATION_MAX_AHEAD_COMMITS` | `10` | Backpressure **floor**; the effective threshold is `max(this, planned_issue_count + ORCH_INTEGRATION_BACKPRESSURE_PROJECT_MARGIN)` so a project's own merges never self-deadlock backpressure. Activates `ai:integration-backpressure`, pauses additional sub-issue merges, and auto-clears once the backlog drops below the effective threshold |
 | `ORCH_INTEGRATION_BACKPRESSURE_PROJECT_MARGIN` | `20` | Headroom added to a project's planned sub-issue count when deriving the size-aware backpressure threshold (sync-merges + judge merges + fix-up issues). Raised from `5` to `20` after the #2974 integration over-drift deadlock (22 commits ahead vs the old `max(10, 10+5)=15` threshold). Non-negative integer; script-level fallback `5` |
+| `REVIEW_LEDGER_REREVIEW_ENABLED` | `false` | Enable consolidator-side suppression of repeated `accepted-residual` / `won't-fix` findings from the existing review ledger and the review-blocked judge's ledger-fed prior-round decision input. |
+| `REVIEW_APPROVAL_RUBRIC_ENABLED` | `false` | Enable logical `review_state` output from the review-blocked judge and outbound PR-review posting via `post_review_comment.sh --review-state`. |
+| `REVIEW_BREAK_GLASS_ENABLED` | `false` | Enable the anchored `@codex break-glass` override scan; it downgrades only the outbound `REQUEST_CHANGES` review event to a comment-only review. |
+| `REVIEWER_RISK_TIER_ENABLED` | `0` | Enable deterministic `trivial | lite | full` reviewer fan-out by reviewer-visible diff LOC/file count. |
+| `REVIEWER_RISK_TIER_TRIVIAL_LOC` | `10` | Trivial-tier LOC threshold. |
+| `REVIEWER_RISK_TIER_TRIVIAL_FILES` | `20` | Trivial-tier changed-file threshold. |
+| `REVIEWER_RISK_TIER_LITE_LOC` | `100` | Lite-tier LOC threshold. |
+| `REVIEWER_RISK_TIER_LITE_FILES` | `20` | Lite-tier changed-file threshold. |
+| `REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX` | sensitive-path regex | Force full reviewer fan-out on matching paths (default covers `scripts/`, `.github/workflows/`, `.github/ai/`, `prompts/`, `workflow-templates/`, `db/contracts/`, and `ai-memory/`). |
+| `REVIEWER_TIER_TRIVIAL_MODELS` | _(empty)_ | Optional comma-separated trivial-tier reviewer subset; empty falls back to the first live reviewer model from `REVIEWER_MODELS`. |
+| `REVIEWER_TIER_LITE_MODELS` | _(empty)_ | Optional comma-separated lite-tier reviewer subset; empty falls back to the first two live reviewer models from `REVIEWER_MODELS`. |
+| `REVIEWER_FILTER_UNINTERESTING_ENABLED` | `false` | Enable pre-review stripping of low-signal lock/generated/minified files before reviewer fan-out. |
+| `REVIEWER_FILTER_EXTRA_GLOBS` | _(empty)_ | Optional comma-separated extra skip globs for `review_filter_uninteresting_files.sh`. |
+| `REVIEWER_FILTER_EXEMPT_GLOBS` | `db/contracts/**,**/migrations/**,**/migrate/**` | Comma-separated exemption globs that stay reviewer-visible even when they match a skip rule. |
+| `REVIEWER_CIRCUIT_BREAKER_ENABLED` | `0` | Enable per-reviewer health-state caching and same-family failback attempts. |
+| `REVIEWER_FAILBACK_MAX_RETRIES` | `1` | Retryable-failure budget before a reviewer slot consults `reviewer_failback_chains.json`. |
+| `REVIEWER_HEALTH_OPEN_THRESHOLD` | `3` | Consecutive retryable failures required to mark a reviewer slot `open` in the health cache. |
+| `REVIEWER_HEALTH_OPEN_TTL_SECS` | `1800` | Seconds an `open` reviewer-health entry suppresses dispatch before automatic expiry. |
+| `AGENTS_MD_MATERIALITY_ENABLED` | `0` | Enable the deterministic non-blocking `AGENTS.md` materiality advisory. |
+| `AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED` | `0` | Reserved only; deterministic v1 still makes no materiality model call when this flag is on. |
+| `AGENTS_MD_MATERIALITY_MODEL` | `openai/gpt-5.4-mini` | Reserved future materiality fallback model slug. |
+| `AGENTS_MD_MATERIALITY_REASONING` | `medium` | Reserved future materiality fallback reasoning effort. |
+| `CONTEXT_BUDGET_WARN_RATIO` | `0.7` | Per-model context-window ratio above which review surfaces emit `CONTEXT_BUDGET_WARN`. |
+| `MAX_PROMPT_TOKENS_FOR_PHASE` | _(empty)_ | Absolute prompt-token override that takes precedence over `CONTEXT_BUDGET_WARN_RATIO`; phase-specific `MAX_PROMPT_TOKENS_FOR_<PHASE>` overrides remain supported. |
+| `CODEX_HEARTBEAT_ENABLED` | `1` | Enable the `codex_heartbeat.sh` wrapper on long-running review / validate Codex calls. |
+| `CODEX_HEARTBEAT_INTERVAL_SECS` | `30` | Silence interval (seconds) between emitted `CODEX_HEARTBEAT` lines. |
 
 ## Semantic Cache (Clarification Only)
 
@@ -1121,6 +1147,7 @@ Or create them manually — see the inline examples in the [Quickstart](#quickst
      multiple siblings editing this list in parallel is a known conflict
      generator, and the partition guard will serialize waves that touch
      the same anchor. See prompts/mode-orchestrate.txt. -->
+12d. **Review/autofix learnings sweep (flagged):** `review_autofix.yml` now supports deterministic reviewer risk tiers, low-signal diff filtering, consolidator re-review suppression, per-reviewer health/failback state, non-blocking `AGENTS.md` materiality advisories, `CODEX_HEARTBEAT` / `CONTEXT_BUDGET_WARN` telemetry, and review-blocked judge review-state posting with optional human `@codex break-glass` downgrade from outbound `REQUEST_CHANGES` to a comment-only review event.
 1. **Decomposition:** The LLM reads your repo and breaks the project into scoped issues with a dependency graph. A tracking issue (labeled `ai:orchestrator-tracking`) and integration branch are always created, even for single-issue decompositions — this ensures every orchestrator-managed task goes through the full pipeline including post-merge validation and fixups.
 2. **Wave dispatch:** Wave 1 issues (no dependencies) are created immediately and enter the existing clarify → plan → implement → review pipeline automatically. If clarification questions are raised, the `orchestrate_clarify_respond` workflow answers them automatically using an LLM. A **data-provision guard** (`scripts/clarify_data_provision_guard.py`) post-processes the LLM's answers before posting: if the selected option requires the respondent to provide concrete external data (PR URLs, commit SHAs, branch names) that the auto-responder cannot supply, the guard overrides the answer with the most conservative fallback option from the same question. This prevents circular clarification loops where the auto-responder repeatedly selects a "provide the URL" option without providing one. When `plan.yml` emits structured `Q<ID>` clarification blocks with single-letter `(RECOMMENDED)` options for every question, `plan.yml` now posts a synthesized `/answer Q1: A, ... [auto-answered-by-orchestrator]`; if parsing fails or any recommendation is non-single-letter (for example `A+C`), it does not auto-answer and keeps the human `/answer` loop.
 3. **Auto-merge:** The poller automatically merges PRs via squash merge when they reach `ai:ready-to-merge`. If a PR has merge conflicts (e.g. `main` advanced since the PR was created), the poller automatically updates the PR branch via the GitHub API before retrying the merge. This requires either (a) no branch protection rules, or (b) branch protection with "Require status checks" that have already passed. See [Enabling auto-merge](#enabling-auto-merge) below.

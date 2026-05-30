@@ -248,6 +248,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_targeted_file_context.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_prompt_untrusted_context_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_cost_audit_semble_metrics.py
 
       - name: Review autofix EDITOR_CHANGES_LOST shim regression tests
@@ -326,6 +327,8 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_rb_judge_self_run_exclusion.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_rereview_and_approval_rubric.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_surface_prompt_hardening.py
 
       - name: Summariser sandbox-mode pin contract test
         run: |
@@ -403,6 +406,11 @@ jobs:
           python3 -m coverage run tests/test_analyze_workflow_logs.py
           python3 -m coverage report --include='scripts/analyze_workflow_logs.py' --fail-under=67
 
+      - name: Workflow log analysis contract tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_log_analysis_failure_contract.py
+
       - name: JSON schema validation
         run: |
           set -euo pipefail
@@ -437,6 +445,10 @@ jobs:
           # exception — its 700+ lines of conditional procedure are slated
           # for sidecar extraction in a separate smoke-gated PR. Same for
           # the validate-fix-harness / validate-diagnose phase prompts.
+          # mode-judge-review-blocked.txt is capped at 230 (not 200) to fit
+          # the deliberate prompt-injection guard + approval-rubric / break-
+          # glass hardening added by the review-learnings project; the extra
+          # lines are security-relevant invariants, not process bloat.
           declare -A CAPS=(
             [prompts/mode-implement.txt]=200
             [prompts/mode-implement-repair.txt]=200
@@ -448,7 +460,7 @@ jobs:
             [prompts/mode-orchestrate.txt]=200
             [prompts/mode-judge.txt]=150
             [prompts/mode-orchestrate-poll-judge.txt]=150
-            [prompts/mode-judge-review-blocked.txt]=200
+            [prompts/mode-judge-review-blocked.txt]=230
             [prompts/mode-judge-stall-recovery.txt]=150
             [prompts/conflict-resolver.txt]=150
             [prompts/integration-sync-conflict-resolver.txt]=200

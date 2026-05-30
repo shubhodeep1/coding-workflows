@@ -32,6 +32,48 @@ if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   sanitize_codex_prompt_file() { :; }
 fi
 
+emit_context_budget_warn_for_prompt() {
+  local phase="$1"
+  local prompt_path="$2"
+  local model="$3"
+  local warn_line=""
+
+  [ -n "${phase}" ] || return 0
+  [ -n "${prompt_path}" ] || return 0
+  [ -n "${model}" ] || return 0
+  [ -f "${prompt_path}" ] || return 0
+  if ! command -v python3 >/dev/null 2>&1; then
+    return 0
+  fi
+
+  warn_line="$({
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}:${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
+import sys
+
+try:
+    from cost_audit import build_context_budget_warn_line_for_file
+except ModuleNotFoundError:
+    sys.exit(0)
+
+phase, prompt_path, model = sys.argv[1:4]
+line = build_context_budget_warn_line_for_file(
+    phase=phase,
+    prompt_path=prompt_path,
+    model=model,
+)
+if line:
+    print(line)
+PY
+  })"
+  if [ -n "${warn_line}" ]; then
+    printf '%s\n' "${warn_line}"
+  fi
+}
+
+CODEX_HEARTBEAT_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_heartbeat.sh"
+
 if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh" ]; then
   # shellcheck source=/dev/null
   source "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh"
@@ -128,7 +170,7 @@ run_cache_probe() {
 	esac
 
 	local probe_model
-	probe_model="$(printf '%s\n' "${REVIEWER_MODELS}" | sed '/^$/d' | head -n1)"
+	probe_model="$(get_active_reviewer_models_text | head -n1)"
   if [ -z "${probe_model}" ]; then
     return 0
   fi
@@ -222,6 +264,585 @@ REVIEWER_SCOPE_SUMMARY_FILE="${RUNTIME_DIR}/reviewer_scope_summary.txt"
 REVIEWER_SCOPED_FILES_CONTEXT_FILE="${RUNTIME_DIR}/reviewer_scoped_files_context.txt"
 REVIEWER_SCOPE_QUERY_SEED_FILE="${RUNTIME_DIR}/reviewer_scope_query_seed.txt"
 TARGETED_FILE_CONTEXT_SCRIPT="${TARGETED_FILE_CONTEXT_SCRIPT:-${SUPPORT_SCRIPTS_DIR:-scripts}/targeted_file_context.py}"
+
+# ── Reviewer uninteresting-file filter helpers ──────────────────────
+RAW_REVIEWER_PR_DIFF_FILE="${PR_DIFF_FILE}"
+RAW_REVIEWER_ORIGINAL_PR_DIFF_FILE="${ORIGINAL_PR_DIFF_FILE}"
+RAW_REVIEWER_LAST_RUN_DIFF_FILE="${LAST_RUN_DIFF_FILE}"
+RAW_REVIEWER_LAST_RUN_CHANGED_FILES_FILE="${LAST_RUN_CHANGED_FILES_FILE}"
+RAW_REVIEWER_PR_CHANGED_FILES_FILE="${PR_CHANGED_FILES_FILE}"
+RAW_REVIEWER_LAST_RUN_DIFF_STAT_FILE="${LAST_RUN_DIFF_STAT_FILE}"
+RAW_REVIEWER_LAST_COMMIT_STAT_FILE="${LAST_COMMIT_STAT_FILE}"
+RAW_REVIEWER_SYMBOL_DIFF_SUMMARY_FILE="${SYMBOL_DIFF_SUMMARY_FILE}"
+
+REVIEWER_FILTER_SCRIPT="${SUPPORT_SCRIPTS_DIR:-scripts}/review_filter_uninteresting_files.sh"
+REVIEWER_FILTER_ACTIVE=false
+REVIEWER_FILTER_ENABLED=false
+case "$(printf '%s' "${REVIEWER_FILTER_UNINTERESTING_ENABLED:-0}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+  1|true|yes|on) REVIEWER_FILTER_ENABLED=true ;;
+esac
+
+REVIEWER_FILTERED_PR_DIFF_FILE="${RUNTIME_DIR}/reviewer_filtered_pr_diff.patch"
+REVIEWER_FILTERED_ORIGINAL_PR_DIFF_FILE="${RUNTIME_DIR}/reviewer_filtered_original_pr_diff.patch"
+REVIEWER_FILTERED_LAST_RUN_DIFF_FILE="${RUNTIME_DIR}/reviewer_filtered_last_run_diff.patch"
+REVIEWER_FILTERED_PR_CHANGED_FILES_FILE="${RUNTIME_DIR}/reviewer_filtered_pr_changed_files.txt"
+REVIEWER_FILTERED_LAST_RUN_CHANGED_FILES_FILE="${RUNTIME_DIR}/reviewer_filtered_last_run_changed_files.txt"
+REVIEWER_FILTERED_LAST_RUN_DIFF_STAT_FILE="${RUNTIME_DIR}/reviewer_filtered_last_run_diff_stat.txt"
+REVIEWER_FILTERED_LAST_COMMIT_STAT_FILE="${RUNTIME_DIR}/reviewer_filtered_last_commit_stat.txt"
+REVIEWER_FILTERED_SYMBOL_DIFF_SUMMARY_FILE="${RUNTIME_DIR}/reviewer_filtered_symbol_diff_summary.txt"
+REVIEWER_FILTERED_PR_KEPT_PATHS_FILE="${RUNTIME_DIR}/reviewer_filtered_pr_kept_paths.txt"
+REVIEWER_FILTERED_LAST_RUN_KEPT_PATHS_FILE="${RUNTIME_DIR}/reviewer_filtered_last_run_kept_paths.txt"
+REVIEWER_FILTERED_PR_SKIPPED_FILE="${RUNTIME_DIR}/reviewer_filtered_pr_skipped.txt"
+REVIEWER_FILTERED_LAST_RUN_SKIPPED_FILE="${RUNTIME_DIR}/reviewer_filtered_last_run_skipped.txt"
+
+filter_reviewer_paths_file_against_skips() {
+  local input_file="$1"
+  local output_file="$2"
+  local skipped_file="$3"
+
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
+    "$input_file" "$output_file" "$skipped_file" <<'PY'
+from pathlib import Path
+import sys
+
+try:
+	from targeted_file_context import parse_paths_file
+except ModuleNotFoundError:
+	from scripts.targeted_file_context import parse_paths_file
+
+input_path = Path(sys.argv[1])
+output_path = Path(sys.argv[2])
+skipped_path = Path(sys.argv[3])
+
+skip_paths: set[str] = set()
+if skipped_path.is_file():
+	for raw_line in skipped_path.read_text(encoding="utf-8", errors="replace").splitlines():
+		if not raw_line.strip():
+			continue
+		skip_paths.add(raw_line.split("\t", 1)[0].strip())
+
+paths = parse_paths_file(str(input_path)) if input_path.is_file() else []
+kept_paths = [path for path in paths if path not in skip_paths]
+
+output_path.parent.mkdir(parents=True, exist_ok=True)
+output_path.write_text("\n".join(kept_paths) + ("\n" if kept_paths else ""), encoding="utf-8")
+PY
+}
+
+filter_reviewer_stat_file_against_skips() {
+  local input_file="$1"
+  local output_file="$2"
+  local skipped_file="$3"
+
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
+    "$input_file" "$output_file" "$skipped_file" <<'PY'
+from pathlib import Path
+import sys
+
+try:
+	from targeted_file_context import normalize_path
+except ModuleNotFoundError:
+	from scripts.targeted_file_context import normalize_path
+
+input_path = Path(sys.argv[1])
+output_path = Path(sys.argv[2])
+skipped_path = Path(sys.argv[3])
+
+skip_paths: set[str] = set()
+if skipped_path.is_file():
+	for raw_line in skipped_path.read_text(encoding="utf-8", errors="replace").splitlines():
+		if not raw_line.strip():
+			continue
+		skip_paths.add(raw_line.split("\t", 1)[0].strip())
+
+def extract_stat_path(raw_line: str) -> str | None:
+	if "|" not in raw_line:
+		return None
+	left = raw_line.split("|", 1)[0].strip()
+	if not left:
+		return None
+	if " => " in left:
+		if "{" in left and "}" in left:
+			prefix, rest = left.split("{", 1)
+			brace_content, suffix = rest.split("}", 1)
+			if " => " in brace_content:
+				_, new_part = brace_content.split(" => ", 1)
+				left = f"{prefix}{new_part.strip()}{suffix}"
+				while "//" in left:
+					left = left.replace("//", "/")
+			else:
+				left = left.rsplit(" => ", 1)[1].strip()
+		else:
+			left = left.rsplit(" => ", 1)[1].strip()
+	return normalize_path(left)
+
+kept_lines: list[str] = []
+if input_path.is_file():
+	for raw_line in input_path.read_text(encoding="utf-8", errors="replace").splitlines():
+		candidate = extract_stat_path(raw_line)
+		if candidate and candidate in skip_paths:
+			continue
+		stripped = raw_line.strip()
+		if candidate is None \
+			and stripped \
+			and stripped[0].isdigit() \
+			and " changed" in stripped \
+			and (stripped.endswith(" changed") or " changed, " in stripped):
+			continue
+		kept_lines.append(raw_line)
+
+output_path.parent.mkdir(parents=True, exist_ok=True)
+output_path.write_text("\n".join(kept_lines) + ("\n" if kept_lines else ""), encoding="utf-8")
+PY
+}
+
+ensure_reviewer_filter_diff_placeholder() {
+  local target_file="$1"
+  local message="$2"
+
+  if [ ! -s "${target_file}" ]; then
+    printf '%s\n' "${message}" > "${target_file}"
+  fi
+}
+
+build_reviewer_filtered_symbol_diff_summary() {
+  local diff_file="$1"
+  local changed_files_file="$2"
+  local output_file="$3"
+  local generator_script="${SUPPORT_SCRIPTS_DIR:-scripts}/generate_symbol_diff_summary.py"
+
+  if [ ! -f "${generator_script}" ]; then
+    printf '%s\n' "Filtered reviewer symbol diff summary unavailable." > "${output_file}"
+    return 0
+  fi
+
+  if [ -s "${diff_file}" ] || [ -s "${changed_files_file}" ]; then
+    PYTHONDONTWRITEBYTECODE=1 python3 "${generator_script}" \
+      --diff-file "${diff_file}" \
+      --changed-files "${changed_files_file}" \
+      --output "${output_file}" \
+      --project-dir "${GITHUB_WORKSPACE:-$(pwd)}" >/dev/null 2>&1 || {
+        printf '%s\n' "Filtered reviewer symbol diff summary unavailable." > "${output_file}"
+      }
+  else
+    printf '%s\n' "No reviewer-visible diff available for symbol summary." > "${output_file}"
+  fi
+}
+
+emit_reviewer_filter_skip_logs() {
+  local pr_skipped_file="$1"
+  local last_run_skipped_file="$2"
+
+  PYTHONDONTWRITEBYTECODE=1 python3 - "$pr_skipped_file" "$last_run_skipped_file" <<'PY'
+from pathlib import Path
+import sys
+
+seen: set[tuple[str, str]] = set()
+for candidate in sys.argv[1:]:
+	path = Path(candidate)
+	if not path.is_file():
+		continue
+	for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+		if not raw_line.strip():
+			continue
+		parts = raw_line.split("\t", 1)
+		if len(parts) != 2:
+			continue
+		row = (parts[0].strip(), parts[1].strip())
+		if row in seen:
+			continue
+		seen.add(row)
+		print(f"REVIEWER_FILTER_SKIP: {row[0]} {row[1]}")
+PY
+}
+
+prepare_reviewer_filtered_artifacts() {
+  REVIEWER_FILTER_ACTIVE=false
+
+  if [ "${REVIEWER_FILTER_ENABLED}" != "true" ]; then
+    return 0
+  fi
+
+  if [ ! -x "${REVIEWER_FILTER_SCRIPT}" ]; then
+    echo "::warning::review_filter_uninteresting_files.sh unavailable at ${REVIEWER_FILTER_SCRIPT}; fail-open to raw reviewer artifacts."
+    return 0
+  fi
+
+  if ! bash "${REVIEWER_FILTER_SCRIPT}" \
+    --diff-file "${RAW_REVIEWER_PR_DIFF_FILE}" \
+    --output-diff "${REVIEWER_FILTERED_PR_DIFF_FILE}" \
+    --kept-paths-file "${REVIEWER_FILTERED_PR_KEPT_PATHS_FILE}" \
+    --skipped-paths-file "${REVIEWER_FILTERED_PR_SKIPPED_FILE}" \
+    --repo-root "${GITHUB_WORKSPACE:-$(pwd)}"; then
+    echo "::warning::review_filter_uninteresting_files.sh failed for ${RAW_REVIEWER_PR_DIFF_FILE}; fail-open to raw reviewer artifacts."
+    return 0
+  fi
+
+  if ! bash "${REVIEWER_FILTER_SCRIPT}" \
+    --diff-file "${RAW_REVIEWER_LAST_RUN_DIFF_FILE}" \
+    --output-diff "${REVIEWER_FILTERED_LAST_RUN_DIFF_FILE}" \
+    --kept-paths-file "${REVIEWER_FILTERED_LAST_RUN_KEPT_PATHS_FILE}" \
+    --skipped-paths-file "${REVIEWER_FILTERED_LAST_RUN_SKIPPED_FILE}" \
+    --repo-root "${GITHUB_WORKSPACE:-$(pwd)}"; then
+    echo "::warning::review_filter_uninteresting_files.sh failed for ${RAW_REVIEWER_LAST_RUN_DIFF_FILE}; fail-open to raw reviewer artifacts."
+    return 0
+  fi
+
+  if ! cp "${REVIEWER_FILTERED_PR_DIFF_FILE}" "${REVIEWER_FILTERED_ORIGINAL_PR_DIFF_FILE}"; then
+    echo "::warning::Failed to prepare filtered ORIGINAL_PR_DIFF_FILE; fail-open to raw reviewer artifacts."
+    return 0
+  fi
+
+  if ! filter_reviewer_paths_file_against_skips "${RAW_REVIEWER_PR_CHANGED_FILES_FILE}" "${REVIEWER_FILTERED_PR_CHANGED_FILES_FILE}" "${REVIEWER_FILTERED_PR_SKIPPED_FILE}"; then
+    echo "::warning::Failed to filter PR changed files for reviewers; fail-open to raw reviewer artifacts."
+    return 0
+  fi
+
+  if ! filter_reviewer_paths_file_against_skips "${RAW_REVIEWER_LAST_RUN_CHANGED_FILES_FILE}" "${REVIEWER_FILTERED_LAST_RUN_CHANGED_FILES_FILE}" "${REVIEWER_FILTERED_LAST_RUN_SKIPPED_FILE}"; then
+    echo "::warning::Failed to filter last-run changed files for reviewers; fail-open to raw reviewer artifacts."
+    return 0
+  fi
+
+  if ! filter_reviewer_stat_file_against_skips "${RAW_REVIEWER_LAST_RUN_DIFF_STAT_FILE}" "${REVIEWER_FILTERED_LAST_RUN_DIFF_STAT_FILE}" "${REVIEWER_FILTERED_LAST_RUN_SKIPPED_FILE}"; then
+    echo "::warning::Failed to filter last-run diffstat for reviewers; fail-open to raw reviewer artifacts."
+    return 0
+  fi
+
+  if ! filter_reviewer_stat_file_against_skips "${RAW_REVIEWER_LAST_COMMIT_STAT_FILE}" "${REVIEWER_FILTERED_LAST_COMMIT_STAT_FILE}" "${REVIEWER_FILTERED_LAST_RUN_SKIPPED_FILE}"; then
+    echo "::warning::Failed to filter last-commit diffstat for reviewers; fail-open to raw reviewer artifacts."
+    return 0
+  fi
+
+  ensure_reviewer_filter_diff_placeholder "${REVIEWER_FILTERED_PR_DIFF_FILE}" "All reviewer-visible PR diff hunks were filtered by REVIEWER_FILTER_UNINTERESTING."
+  ensure_reviewer_filter_diff_placeholder "${REVIEWER_FILTERED_ORIGINAL_PR_DIFF_FILE}" "All reviewer-visible PR diff hunks were filtered by REVIEWER_FILTER_UNINTERESTING."
+  ensure_reviewer_filter_diff_placeholder "${REVIEWER_FILTERED_LAST_RUN_DIFF_FILE}" "All reviewer-visible last-run diff hunks were filtered by REVIEWER_FILTER_UNINTERESTING."
+  build_reviewer_filtered_symbol_diff_summary "${REVIEWER_FILTERED_PR_DIFF_FILE}" "${REVIEWER_FILTERED_PR_CHANGED_FILES_FILE}" "${REVIEWER_FILTERED_SYMBOL_DIFF_SUMMARY_FILE}"
+  emit_reviewer_filter_skip_logs "${REVIEWER_FILTERED_PR_SKIPPED_FILE}" "${REVIEWER_FILTERED_LAST_RUN_SKIPPED_FILE}"
+
+  PR_DIFF_FILE="${REVIEWER_FILTERED_PR_DIFF_FILE}"
+  ORIGINAL_PR_DIFF_FILE="${REVIEWER_FILTERED_ORIGINAL_PR_DIFF_FILE}"
+  LAST_RUN_DIFF_FILE="${REVIEWER_FILTERED_LAST_RUN_DIFF_FILE}"
+  LAST_RUN_CHANGED_FILES_FILE="${REVIEWER_FILTERED_LAST_RUN_CHANGED_FILES_FILE}"
+  PR_CHANGED_FILES_FILE="${REVIEWER_FILTERED_PR_CHANGED_FILES_FILE}"
+  LAST_RUN_DIFF_STAT_FILE="${REVIEWER_FILTERED_LAST_RUN_DIFF_STAT_FILE}"
+  LAST_COMMIT_STAT_FILE="${REVIEWER_FILTERED_LAST_COMMIT_STAT_FILE}"
+  SYMBOL_DIFF_SUMMARY_FILE="${REVIEWER_FILTERED_SYMBOL_DIFF_SUMMARY_FILE}"
+  REVIEWER_FILTER_ACTIVE=true
+}
+# ── End reviewer uninteresting-file filter helpers ──────────────────
+
+prepare_reviewer_filtered_artifacts
+
+# ── Reviewer risk-tier helpers ───────────────────────────────────────
+REVIEWER_RISK_TIER_FILE="${RUNTIME_DIR}/reviewer_risk_tier.txt"
+REVIEWER_ACTIVE_MODELS_FILE="${RUNTIME_DIR}/reviewer_active_models.txt"
+REVIEWER_RISK_TIER="full"
+REVIEWER_RISK_TIER_FORCED_FULL=false
+REVIEWER_RISK_TIER_LOC=0
+REVIEWER_RISK_TIER_FILES=0
+REVIEWER_ACTIVE_MODELS_SOURCE="full"
+
+reviewer_parse_positive_int_env() {
+  local key="$1"
+  local default_value="$2"
+  local raw_value="${!key:-${default_value}}"
+  local normalized_value
+
+  if [[ "${raw_value}" =~ ^[0-9]+$ ]]; then
+    normalized_value="$(printf '%s' "${raw_value}" | sed -E 's/^0+//')"
+    if [ -z "${normalized_value}" ]; then
+      normalized_value=0
+    fi
+    printf '%s\n' "${normalized_value}"
+    return 0
+  fi
+
+  echo "::warning::Invalid ${key}='${raw_value}'. Falling back to ${default_value}." >&2
+  printf '%s\n' "${default_value}"
+}
+
+reviewer_count_diff_loc() {
+  local diff_file="$1"
+
+  if [ ! -s "${diff_file}" ]; then
+    printf '0\n'
+    return 0
+  fi
+
+  awk '/^[+-]{3} / { next } /^[+-]/ { n++ } END { print n+0 }' "${diff_file}" 2>/dev/null || printf '0\n'
+}
+
+reviewer_count_paths_file() {
+  local paths_file="$1"
+
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
+    "$paths_file" <<'PY'
+from pathlib import Path
+import sys
+
+try:
+	from targeted_file_context import parse_paths_file
+except ModuleNotFoundError:
+	from scripts.targeted_file_context import parse_paths_file
+
+paths_file = Path(sys.argv[1])
+if not paths_file.is_file():
+	print(0)
+	sys.exit(0)
+
+print(len(parse_paths_file(str(paths_file))))
+PY
+}
+
+reviewer_any_path_matches_regex() {
+  local paths_file="$1"
+  local pattern="$2"
+
+  PYTHONDONTWRITEBYTECODE=1 python3 - "$paths_file" "$pattern" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+paths_file = Path(sys.argv[1])
+pattern = sys.argv[2]
+
+try:
+	regex = re.compile(pattern)
+except re.error as exc:
+	print(exc, file=sys.stderr)
+	sys.exit(2)
+
+if not paths_file.is_file():
+	sys.exit(1)
+
+for raw_line in paths_file.read_text(encoding="utf-8", errors="replace").splitlines():
+	if not raw_line.strip():
+		continue
+	path = raw_line.split("\t", 1)[0].strip()
+	if regex.search(path):
+		print(path)
+		sys.exit(0)
+
+sys.exit(1)
+PY
+}
+
+normalize_reviewer_model_list() {
+  local raw_list="$1"
+
+  printf '%s\n' "${raw_list}" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | sed '/^$/d'
+}
+
+reviewer_write_model_list_file() {
+  local output_file="$1"
+  shift || true
+
+  : > "${output_file}"
+  if [ "$#" -eq 0 ]; then
+    return 0
+  fi
+
+  printf '%s\n' "$@" > "${output_file}"
+}
+
+get_active_reviewer_models_text() {
+  if [ -s "${REVIEWER_ACTIVE_MODELS_FILE}" ]; then
+    cat "${REVIEWER_ACTIVE_MODELS_FILE}"
+  else
+    normalize_reviewer_model_list "${REVIEWER_MODELS}"
+  fi
+}
+
+resolve_active_reviewer_models() {
+  local tier="$1"
+  local selected_raw=""
+  local selected_display=""
+  local model
+  local -A live_models_map=()
+  local -A resolved_models_seen=()
+  local -a live_models=()
+  local -a resolved_models=()
+
+  REVIEWER_ACTIVE_MODELS_SOURCE="full"
+
+  while IFS= read -r model; do
+    [ -z "${model}" ] && continue
+    live_models+=("${model}")
+    live_models_map["${model}"]=1
+  done <<< "$(normalize_reviewer_model_list "${REVIEWER_MODELS}")"
+
+  if [ "${#live_models[@]}" -eq 0 ]; then
+    reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}"
+    REVIEWER_ACTIVE_MODELS_SOURCE="empty_live"
+    return 1
+  fi
+
+  case "${tier}" in
+    trivial)
+      selected_raw="${REVIEWER_TIER_TRIVIAL_MODELS:-}"
+      if [ -z "${selected_raw}" ]; then
+        reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "${live_models[0]}"
+        REVIEWER_ACTIVE_MODELS_SOURCE="default_trivial"
+        return 0
+      fi
+      ;;
+    lite)
+      selected_raw="${REVIEWER_TIER_LITE_MODELS:-}"
+      if [ -z "${selected_raw}" ]; then
+        if [ "${#live_models[@]}" -ge 2 ]; then
+          reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "${live_models[0]}" "${live_models[1]}"
+        else
+          reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "${live_models[0]}"
+        fi
+        REVIEWER_ACTIVE_MODELS_SOURCE="default_lite"
+        return 0
+      fi
+      ;;
+    *)
+      reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "${live_models[@]}"
+      REVIEWER_ACTIVE_MODELS_SOURCE="full"
+      return 0
+      ;;
+  esac
+
+  while IFS= read -r model; do
+    [ -z "${model}" ] && continue
+    if [ -z "${live_models_map["${model}"]:-}" ]; then
+      echo "::warning::Ignoring unknown reviewer tier model '${model}' for tier ${tier}." >&2
+      continue
+    fi
+    if [ -n "${resolved_models_seen["${model}"]:-}" ]; then
+      continue
+    fi
+    resolved_models+=("${model}")
+    resolved_models_seen["${model}"]=1
+  done <<< "$(normalize_reviewer_model_list "${selected_raw}")"
+
+  if [ "${#resolved_models[@]}" -eq 0 ]; then
+    selected_display="$(printf '%s' "${selected_raw}" | tr '\n' ',' | sed 's/,$//')"
+    [ -n "${selected_display}" ] || selected_display="(empty)"
+    echo "::warning::Reviewer tier ${tier} resolved zero configured models from '${selected_display}'. Failing open to full reviewer set." >&2
+    reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "${live_models[@]}"
+    REVIEWER_ACTIVE_MODELS_SOURCE="fallback_full_empty_subset"
+    return 0
+  fi
+
+  reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "${resolved_models[@]}"
+  REVIEWER_ACTIVE_MODELS_SOURCE="configured_${tier}"
+}
+
+classify_reviewer_risk_tier() {
+  local enabled=false
+  local enabled_raw
+  local has_pr_diff_raw
+  local reason="disabled"
+  local matched_sensitive_path=""
+  local reviewer_count=0
+  local current_tier
+
+  enabled_raw="$(printf '%s' "${REVIEWER_RISK_TIER_ENABLED:-0}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+  case "${enabled_raw}" in
+    1|true|yes|on) enabled=true ;;
+  esac
+
+  REVIEWER_RISK_TIER="full"
+  REVIEWER_RISK_TIER_FORCED_FULL=false
+  REVIEWER_RISK_TIER_LOC=0
+  REVIEWER_RISK_TIER_FILES=0
+
+  if [ "${enabled}" = "true" ]; then
+    local trivial_loc trivial_files lite_loc lite_files always_full_regex file_count
+    trivial_loc="$(reviewer_parse_positive_int_env REVIEWER_RISK_TIER_TRIVIAL_LOC 10)"
+    trivial_files="$(reviewer_parse_positive_int_env REVIEWER_RISK_TIER_TRIVIAL_FILES 20)"
+    lite_loc="$(reviewer_parse_positive_int_env REVIEWER_RISK_TIER_LITE_LOC 100)"
+    lite_files="$(reviewer_parse_positive_int_env REVIEWER_RISK_TIER_LITE_FILES 20)"
+    always_full_regex="${REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX:-^(scripts/|\.github/workflows/|\.github/ai/|prompts/|workflow-templates/|db/contracts/|ai-memory/)}"
+    has_pr_diff_raw="$(printf '%s' "${HAS_PR_DIFF:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+
+    if [ -z "${PR_NUMBER:-}" ]; then
+      reason="no_pr_number"
+    elif [ ! -s "${RAW_REVIEWER_PR_CHANGED_FILES_FILE}" ]; then
+      reason="changed_files_unavailable"
+    elif [ "${REVIEWER_FILTER_ACTIVE}" != "true" ] && [ ! -s "${PR_CHANGED_FILES_FILE}" ]; then
+      reason="changed_files_unavailable"
+    elif [[ "${has_pr_diff_raw}" == "0" || "${has_pr_diff_raw}" == "false" || "${has_pr_diff_raw}" == "no" || "${has_pr_diff_raw}" == "off" ]]; then
+      reason="pr_diff_unavailable"
+    else
+      REVIEWER_RISK_TIER_LOC="$(reviewer_count_diff_loc "${PR_DIFF_FILE}")"
+      if ! file_count="$(reviewer_count_paths_file "${PR_CHANGED_FILES_FILE}")"; then
+        echo "::warning::Failed to count reviewer-visible changed files from ${PR_CHANGED_FILES_FILE}; failing open to full reviewer tier." >&2
+        REVIEWER_RISK_TIER_FORCED_FULL=true
+        reason="changed_files_count_failed"
+      else
+        REVIEWER_RISK_TIER_FILES="${file_count}"
+        current_tier="full"
+
+        if matched_sensitive_path="$(reviewer_any_path_matches_regex "${RAW_REVIEWER_PR_CHANGED_FILES_FILE}" "${always_full_regex}" 2>&1)"; then
+          REVIEWER_RISK_TIER_FORCED_FULL=true
+          current_tier="full"
+          reason="always_full_regex"
+        else
+          case "$?" in
+            1)
+              if [ "${REVIEWER_RISK_TIER_LOC}" -le "${trivial_loc}" ] && [ "${REVIEWER_RISK_TIER_FILES}" -le "${trivial_files}" ]; then
+                current_tier="trivial"
+                reason="within_trivial_thresholds"
+              elif [ "${REVIEWER_RISK_TIER_LOC}" -le "${lite_loc}" ] && [ "${REVIEWER_RISK_TIER_FILES}" -le "${lite_files}" ]; then
+                current_tier="lite"
+                reason="within_lite_thresholds"
+              else
+                current_tier="full"
+                reason="threshold_exceeded"
+              fi
+              matched_sensitive_path=""
+              ;;
+            2)
+              echo "::warning::Invalid REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX='${always_full_regex}'. Failing safe to full reviewer tier." >&2
+              REVIEWER_RISK_TIER_FORCED_FULL=true
+              current_tier="full"
+              reason="invalid_always_full_regex"
+              matched_sensitive_path=""
+              ;;
+            *)
+              echo "::warning::Failed to evaluate REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX against ${RAW_REVIEWER_PR_CHANGED_FILES_FILE}; failing open to full reviewer tier." >&2
+              REVIEWER_RISK_TIER_FORCED_FULL=true
+              current_tier="full"
+              reason="always_full_check_failed"
+              matched_sensitive_path=""
+              ;;
+          esac
+        fi
+
+        REVIEWER_RISK_TIER="${current_tier}"
+      fi
+    fi
+  fi
+
+  resolve_active_reviewer_models "${REVIEWER_RISK_TIER}" || true
+  case "${REVIEWER_ACTIVE_MODELS_SOURCE}" in
+    fallback_full_empty_subset)
+      REVIEWER_RISK_TIER="full"
+      REVIEWER_RISK_TIER_FORCED_FULL=true
+      reason="empty_tier_subset"
+      ;;
+    empty_live)
+      REVIEWER_RISK_TIER="full"
+      REVIEWER_RISK_TIER_FORCED_FULL=true
+      reason="no_live_models"
+      ;;
+  esac
+
+  printf '%s\n' "${REVIEWER_RISK_TIER}" > "${REVIEWER_RISK_TIER_FILE}"
+  reviewer_count="$(wc -l < "${REVIEWER_ACTIVE_MODELS_FILE}" 2>/dev/null || echo 0)"
+  if [ -n "${matched_sensitive_path}" ]; then
+    echo "REVIEWER_RISK_TIER: tier=${REVIEWER_RISK_TIER} loc=${REVIEWER_RISK_TIER_LOC} files=${REVIEWER_RISK_TIER_FILES} forced_full=${REVIEWER_RISK_TIER_FORCED_FULL} reviewers=${reviewer_count} enabled=${enabled} reason=${reason} matched_path=${matched_sensitive_path}"
+  else
+    echo "REVIEWER_RISK_TIER: tier=${REVIEWER_RISK_TIER} loc=${REVIEWER_RISK_TIER_LOC} files=${REVIEWER_RISK_TIER_FILES} forced_full=${REVIEWER_RISK_TIER_FORCED_FULL} reviewers=${reviewer_count} enabled=${enabled} reason=${reason}"
+  fi
+}
+# ── End reviewer risk-tier helpers ───────────────────────────────────
+
+classify_reviewer_risk_tier
 
 # ── Reviewer iteration-scoping helpers ───────────────────────────────
 write_reviewer_scope_summary() {
@@ -604,6 +1225,16 @@ else
   echo "Reviewer iteration scoping: full-diff (${REVIEWER_SCOPE_REASON})."
 fi
 
+REVIEWER_FILTER_CONTEXT_NOTE_BLOCK=""
+if [ "${REVIEWER_FILTER_ACTIVE}" = "true" ]; then
+  REVIEWER_FILTER_CONTEXT_NOTE_BLOCK="$(cat <<'EOF'
+REVIEWER FILTER NOTE
+Reviewer-visible diff/context artifacts below exclude configured low-signal files such as lockfiles, generated files, minified assets, sourcemaps, and tsbuildinfo unless the path matches an exemption like db/contracts/** or a migration directory.
+If an expected changed file is absent from the reviewer context, assume the pre-filter may have removed it intentionally.
+EOF
+)"
+fi
+
 if [ "${IS_FIRST_ITERATION}" = "true" ]; then
   ITERATION_CONTEXT_BLOCK="$(printf '%s\n' \
     'ITERATION CONTEXT' \
@@ -895,6 +1526,9 @@ __REVIEWER_PROMPT__
   if [ -n "${REVIEWER_INPUT_CONTEXT_NOTE_BLOCK}" ]; then
     printf '\n%s\n' "${REVIEWER_INPUT_CONTEXT_NOTE_BLOCK}"
   fi
+  if [ -n "${REVIEWER_FILTER_CONTEXT_NOTE_BLOCK}" ]; then
+    printf '\n%s\n' "${REVIEWER_FILTER_CONTEXT_NOTE_BLOCK}"
+  fi
   printf '\n'
   emit_reviewer_prompt_context_sections
 
@@ -951,6 +1585,13 @@ Before suggesting a change, check for overengineering:
 2. Would a human reviewer likely choose a simpler fix?
 3. Does the fix introduce unnecessary complexity?
 Prefer the simpler solution.
+
+COMMON ANTI-RULES
+These anti-rules suppress suggestion / nit-level noise only. Still report any clear blocker or high-severity runtime defect.
+- Do not report theoretical risks that require unlikely preconditions not evidenced in the changed code, runtime artifacts, or task context.
+- Do not report defense-in-depth nits when the primary safeguard already exists and the diff does not weaken it.
+- Do not report style-only, naming-preference, or “cleaner alternative” suggestions when no documented rule or runtime failure is involved.
+- Do not re-flag prior-round issues that were explicitly accepted as residual or won't-fix unless LAST RUN DIFF changes the evidence, raises the severity, or reintroduces the runtime failure.
 
 Review the pull request as a senior engineer and identify issues in the modified code.
 Focus on problems that could realistically affect:
@@ -1289,71 +1930,845 @@ assemble_reviewer_prompt() {
 # Assemble the default (pass 1 / single-pass) prompt.
 assemble_reviewer_prompt "${REVIEWER_PROMPT_FILE}" "${REVIEWER_PROMPT_BODY_FILE}"
 
+# ── Reviewer failback / health helpers ──────────────────────────────
+REVIEWER_FAILBACK_CHAINS_FILE="${REVIEWER_FAILBACK_CHAINS_FILE:-${SUPPORT_SCRIPTS_DIR:-scripts}/reviewer_failback_chains.json}"
+REVIEWER_MODEL_CATALOG_FILE="${REVIEWER_MODEL_CATALOG_FILE:-${SUPPORT_SCRIPTS_DIR:-scripts}/codex_model_catalog.json}"
+REVIEWER_HEALTH_STATE_FILE="${REVIEWER_HEALTH_STATE_FILE:-}"
+if [ -z "${REVIEWER_HEALTH_STATE_FILE}" ] && [ -n "${PR_NUMBER:-}" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] && [ "${PR_NUMBER}" -gt 0 ]; then
+  REVIEWER_HEALTH_STATE_FILE=".ai/review_runtime/pr-${PR_NUMBER}/reviewer_health_state.json"
+fi
+
+reviewer_circuit_breaker_enabled() {
+  case "$(printf '%s' "${REVIEWER_CIRCUIT_BREAKER_ENABLED:-0}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+    1|true|yes|on) return 0 ;;
+  esac
+  return 1
+}
+
+reviewer_failback_max_retries() {
+  local raw="${REVIEWER_FAILBACK_MAX_RETRIES:-1}"
+  case "${raw}" in
+    ''|*[!0-9]*) printf '1\n' ;;
+    0) printf '0\n' ;;
+    *) printf '1\n' ;;
+  esac
+}
+
+reviewer_health_open_threshold() {
+  local raw="${REVIEWER_HEALTH_OPEN_THRESHOLD:-3}"
+  case "${raw}" in
+    ''|*[!0-9]*) printf '3\n' ;;
+    0) printf '1\n' ;;
+    *) printf '%s\n' "${raw}" ;;
+  esac
+}
+
+reviewer_health_open_ttl_secs() {
+  local raw="${REVIEWER_HEALTH_OPEN_TTL_SECS:-1800}"
+  case "${raw}" in
+    ''|*[!0-9]*) printf '1800\n' ;;
+    0) printf '1\n' ;;
+    *) printf '%s\n' "${raw}" ;;
+  esac
+}
+
+reviewer_normalize_reasoning_effort() {
+  local raw="${1:-}"
+  case "${raw}" in
+    xhigh|high|medium|low|none)
+      printf '%s\n' "${raw}"
+      return 0
+      ;;
+    '')
+      return 1
+      ;;
+    *)
+      printf 'xhigh\n'
+      return 0
+      ;;
+  esac
+}
+
+reviewer_base_reasoning_effort() {
+  local candidate="${1:-${REVIEWER_REASONING_EFFORT:-xhigh}}"
+  if reviewer_normalize_reasoning_effort "${candidate}" 2>/dev/null; then
+    return 0
+  fi
+  printf 'xhigh\n'
+}
+
+reviewer_next_lower_reasoning_effort() {
+  case "$(reviewer_base_reasoning_effort "${1:-}")" in
+    xhigh) printf 'high\n' ;;
+    high) printf 'medium\n' ;;
+    medium) printf 'low\n' ;;
+    *) return 1 ;;
+  esac
+}
+
+reviewer_catalog_declares_model() {
+  local model="$1"
+  [ -n "${model}" ] || return 1
+  if [ ! -s "${REVIEWER_MODEL_CATALOG_FILE}" ]; then
+    return 0
+  fi
+  PYTHONDONTWRITEBYTECODE=1 python3 - "${REVIEWER_MODEL_CATALOG_FILE}" "${model}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+catalog_path = Path(sys.argv[1])
+model = sys.argv[2]
+
+try:
+    payload = json.loads(catalog_path.read_text(encoding="utf-8"))
+except Exception:
+    sys.exit(0)
+
+models = payload.get("models") if isinstance(payload, dict) else payload
+if not isinstance(models, list):
+    sys.exit(0)
+
+for entry in models:
+    if not isinstance(entry, dict):
+        continue
+    if entry.get("slug") == model:
+        sys.exit(0)
+
+sys.exit(1)
+PY
+}
+
+reviewer_failback_target_for_model() {
+  local model="$1"
+  local candidate=""
+  [ -n "${model}" ] || return 1
+  [ -s "${REVIEWER_FAILBACK_CHAINS_FILE}" ] || return 1
+
+  while IFS= read -r candidate; do
+    [ -n "${candidate}" ] || continue
+    [ "${candidate}" != "${model}" ] || continue
+    if reviewer_catalog_declares_model "${candidate}"; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done < <(PYTHONDONTWRITEBYTECODE=1 python3 - "${REVIEWER_FAILBACK_CHAINS_FILE}" "${model}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+chains_path = Path(sys.argv[1])
+model = sys.argv[2]
+
+try:
+    payload = json.loads(chains_path.read_text(encoding="utf-8"))
+except Exception:
+    sys.exit(0)
+
+if not isinstance(payload, dict):
+    sys.exit(0)
+
+entry = payload.get(model)
+if isinstance(entry, str):
+    entry = [entry]
+if not isinstance(entry, list):
+    sys.exit(0)
+
+for candidate in entry:
+    if isinstance(candidate, str) and candidate.strip():
+        print(candidate.strip())
+PY
+  )
+
+  return 1
+}
+
+reviewer_health_state_action() {
+  local action="$1"
+  shift || true
+  [ -n "${REVIEWER_HEALTH_STATE_FILE:-}" ] || return 0
+
+  PYTHONDONTWRITEBYTECODE=1 python3 - "${action}" "${REVIEWER_HEALTH_STATE_FILE}" "$@" <<'PY'
+import json
+import os
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - platform fallback
+    fcntl = None
+
+action = sys.argv[1]
+state_path_raw = sys.argv[2]
+args = sys.argv[3:]
+
+if not state_path_raw:
+    sys.exit(0)
+
+state_path = Path(state_path_raw)
+lock_path = Path(f"{state_path}.lock")
+
+
+def default_doc() -> dict:
+    return {"version": 1, "reviewers": {}}
+
+
+def as_int(value, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def normalize_entry(raw) -> dict:
+    entry = raw if isinstance(raw, dict) else {}
+    state = entry.get("state") if isinstance(entry.get("state"), str) else "healthy"
+    if state not in {"healthy", "degraded", "open"}:
+        state = "healthy"
+    return {
+        "state": state,
+        "consecutive_retryable_failures": max(0, as_int(entry.get("consecutive_retryable_failures"), 0)),
+        "effective_model": entry.get("effective_model") if isinstance(entry.get("effective_model"), str) else "",
+        "last_failure_kind": entry.get("last_failure_kind") if isinstance(entry.get("last_failure_kind"), str) else "",
+        "state_updated_at_utc": entry.get("state_updated_at_utc") if isinstance(entry.get("state_updated_at_utc"), str) else "",
+        "open_until_epoch": max(0, as_int(entry.get("open_until_epoch"), 0)),
+        "open_until_utc": entry.get("open_until_utc") if isinstance(entry.get("open_until_utc"), str) else "",
+        "last_success_at_utc": entry.get("last_success_at_utc") if isinstance(entry.get("last_success_at_utc"), str) else "",
+    }
+
+
+def load_doc() -> dict:
+    if not state_path.is_file():
+        return default_doc()
+    try:
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+    except Exception:
+        return default_doc()
+    if not isinstance(payload, dict):
+        return default_doc()
+    reviewers = payload.get("reviewers")
+    if not isinstance(reviewers, dict):
+        reviewers = {}
+    payload["version"] = 1
+    payload["reviewers"] = reviewers
+    return payload
+
+
+def write_doc(doc: dict) -> None:
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=str(state_path.parent), delete=False) as tmp:
+        json.dump(doc, tmp, indent=2, sort_keys=True)
+        tmp.write("\n")
+        tmp_path = Path(tmp.name)
+    os.replace(tmp_path, state_path)
+
+
+def emit(**fields) -> None:
+    for key, value in fields.items():
+        print(f"{key}={value}")
+
+
+state_path.parent.mkdir(parents=True, exist_ok=True)
+lock_path.parent.mkdir(parents=True, exist_ok=True)
+with open(lock_path, "a+", encoding="utf-8") as lock_handle:
+    if fcntl is not None:
+        fcntl.flock(lock_handle, fcntl.LOCK_EX)
+    doc = load_doc()
+    reviewers = doc.setdefault("reviewers", {})
+
+    if action == "dispatch":
+        model, now_epoch_raw, now_iso, _ttl_raw = args
+        now_epoch = as_int(now_epoch_raw, 0)
+        entry = normalize_entry(reviewers.get(model))
+        transition = "none"
+        reason = ""
+        if entry["state"] == "open" and entry["open_until_epoch"] and entry["open_until_epoch"] <= now_epoch:
+            entry.update({
+                "state": "healthy",
+                "consecutive_retryable_failures": 0,
+                "effective_model": "",
+                "last_failure_kind": "",
+                "state_updated_at_utc": now_iso,
+                "open_until_epoch": 0,
+                "open_until_utc": "",
+            })
+            reviewers[model] = entry
+            write_doc(doc)
+            transition = "healthy"
+            reason = "open_ttl_expired"
+        decision = "skip_open" if entry["state"] == "open" and entry["open_until_epoch"] > now_epoch else "run"
+        emit(
+            decision=decision,
+            state=entry["state"],
+            transition=transition,
+            reason=reason,
+            consecutive_retryable_failures=entry["consecutive_retryable_failures"],
+            effective_model=entry["effective_model"],
+            open_until_epoch=entry["open_until_epoch"],
+        )
+        sys.exit(0)
+
+    if action == "record":
+        model, outcome, effective_model, failure_kind, threshold_raw, ttl_raw, now_epoch_raw, now_iso = args
+        threshold = max(1, as_int(threshold_raw, 3))
+        ttl = max(1, as_int(ttl_raw, 1800))
+        now_epoch = as_int(now_epoch_raw, 0)
+        entry = normalize_entry(reviewers.get(model))
+        previous_state = entry["state"]
+        transition = "none"
+        reason = failure_kind or outcome
+
+        if outcome == "primary_success":
+            entry.update({
+                "state": "healthy",
+                "consecutive_retryable_failures": 0,
+                "effective_model": effective_model if effective_model else model,
+                "last_failure_kind": "",
+                "state_updated_at_utc": now_iso,
+                "open_until_epoch": 0,
+                "open_until_utc": "",
+                "last_success_at_utc": now_iso,
+            })
+            if previous_state != "healthy":
+                transition = "healthy"
+                reason = "success"
+        elif outcome == "retryable_failure":
+            consecutive = entry["consecutive_retryable_failures"] + 1
+            new_state = "open" if consecutive >= threshold else "degraded"
+            entry.update({
+                "state": new_state,
+                "consecutive_retryable_failures": consecutive,
+                "effective_model": effective_model if effective_model and effective_model != model else "",
+                "last_failure_kind": failure_kind,
+                "state_updated_at_utc": now_iso,
+                "open_until_epoch": now_epoch + ttl if new_state == "open" else 0,
+                "open_until_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now_epoch + ttl)) if new_state == "open" else "",
+            })
+            if previous_state != new_state:
+                transition = new_state
+        elif outcome == "non_retryable_failure":
+            entry.update({
+                "effective_model": effective_model if effective_model and effective_model != model else entry["effective_model"],
+                "last_failure_kind": failure_kind,
+                "state_updated_at_utc": now_iso,
+            })
+        else:
+            emit(
+                state=entry["state"],
+                transition="none",
+                reason="",
+                consecutive_retryable_failures=entry["consecutive_retryable_failures"],
+                effective_model=entry["effective_model"],
+                open_until_epoch=entry["open_until_epoch"],
+            )
+            sys.exit(0)
+
+        reviewers[model] = entry
+        write_doc(doc)
+        emit(
+            state=entry["state"],
+            transition=transition,
+            reason=reason,
+            consecutive_retryable_failures=entry["consecutive_retryable_failures"],
+            effective_model=entry["effective_model"],
+            open_until_epoch=entry["open_until_epoch"],
+        )
+        sys.exit(0)
+
+    raise SystemExit(0)
+PY
+}
+
+reviewer_log_health_transition() {
+  local model="$1"
+  local state="$2"
+  local reason="${3:-state_change}"
+  local failures="${4:-0}"
+  local effective_model="${5:-}"
+  local log_dest="${6:-}"
+  local line="REVIEWER_HEALTH: ${model} ${state} reason=${reason} failures=${failures}"
+  if [ -n "${effective_model}" ]; then
+    line="${line} effective_model=${effective_model}"
+  fi
+  if [ -n "${log_dest}" ]; then
+    printf '%s\n' "${line}" | tee -a "${log_dest}" >&2
+  else
+    printf '%s\n' "${line}" >&2
+  fi
+}
+
+reviewer_health_dispatch_prepare() {
+  local model="$1"
+  local now_epoch=""
+  local now_iso=""
+  local output=""
+  local key=""
+  local value=""
+
+  REVIEWER_HEALTH_DISPATCH_DECISION="run"
+  REVIEWER_HEALTH_DISPATCH_STATE="healthy"
+  REVIEWER_HEALTH_DISPATCH_TRANSITION="none"
+  REVIEWER_HEALTH_DISPATCH_REASON=""
+  REVIEWER_HEALTH_DISPATCH_FAILURES="0"
+  REVIEWER_HEALTH_DISPATCH_EFFECTIVE_MODEL=""
+  REVIEWER_HEALTH_DISPATCH_OPEN_UNTIL_EPOCH="0"
+
+  if ! reviewer_circuit_breaker_enabled || [ -z "${REVIEWER_HEALTH_STATE_FILE:-}" ]; then
+    return 0
+  fi
+
+  now_epoch="$(date +%s)"
+  now_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  output="$(reviewer_health_state_action dispatch "${model}" "${now_epoch}" "${now_iso}" "$(reviewer_health_open_ttl_secs)")"
+  while IFS='=' read -r key value; do
+    case "${key}" in
+      decision) REVIEWER_HEALTH_DISPATCH_DECISION="${value}" ;;
+      state) REVIEWER_HEALTH_DISPATCH_STATE="${value}" ;;
+      transition) REVIEWER_HEALTH_DISPATCH_TRANSITION="${value}" ;;
+      reason) REVIEWER_HEALTH_DISPATCH_REASON="${value}" ;;
+      consecutive_retryable_failures) REVIEWER_HEALTH_DISPATCH_FAILURES="${value}" ;;
+      effective_model) REVIEWER_HEALTH_DISPATCH_EFFECTIVE_MODEL="${value}" ;;
+      open_until_epoch) REVIEWER_HEALTH_DISPATCH_OPEN_UNTIL_EPOCH="${value}" ;;
+    esac
+  done <<< "${output}"
+
+  if [ "${REVIEWER_HEALTH_DISPATCH_TRANSITION}" != "none" ]; then
+    reviewer_log_health_transition \
+      "${model}" \
+      "${REVIEWER_HEALTH_DISPATCH_STATE}" \
+      "${REVIEWER_HEALTH_DISPATCH_REASON:-state_change}" \
+      "${REVIEWER_HEALTH_DISPATCH_FAILURES}" \
+      "${REVIEWER_HEALTH_DISPATCH_EFFECTIVE_MODEL}"
+  fi
+}
+
+reviewer_record_health_outcome() {
+  local model="$1"
+  local outcome="$2"
+  local effective_model="${3:-}"
+  local failure_kind="${4:-}"
+  local log_dest="${5:-}"
+  local now_epoch=""
+  local now_iso=""
+  local output=""
+  local key=""
+  local value=""
+
+  if ! reviewer_circuit_breaker_enabled || [ -z "${REVIEWER_HEALTH_STATE_FILE:-}" ]; then
+    return 0
+  fi
+
+  now_epoch="$(date +%s)"
+  now_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  output="$(reviewer_health_state_action record \
+    "${model}" \
+    "${outcome}" \
+    "${effective_model}" \
+    "${failure_kind}" \
+    "$(reviewer_health_open_threshold)" \
+    "$(reviewer_health_open_ttl_secs)" \
+    "${now_epoch}" \
+    "${now_iso}")"
+
+  REVIEWER_HEALTH_LAST_STATE="healthy"
+  REVIEWER_HEALTH_LAST_TRANSITION="none"
+  REVIEWER_HEALTH_LAST_REASON=""
+  REVIEWER_HEALTH_LAST_FAILURES="0"
+  REVIEWER_HEALTH_LAST_EFFECTIVE_MODEL=""
+  REVIEWER_HEALTH_LAST_OPEN_UNTIL_EPOCH="0"
+
+  while IFS='=' read -r key value; do
+    case "${key}" in
+      state) REVIEWER_HEALTH_LAST_STATE="${value}" ;;
+      transition) REVIEWER_HEALTH_LAST_TRANSITION="${value}" ;;
+      reason) REVIEWER_HEALTH_LAST_REASON="${value}" ;;
+      consecutive_retryable_failures) REVIEWER_HEALTH_LAST_FAILURES="${value}" ;;
+      effective_model) REVIEWER_HEALTH_LAST_EFFECTIVE_MODEL="${value}" ;;
+      open_until_epoch) REVIEWER_HEALTH_LAST_OPEN_UNTIL_EPOCH="${value}" ;;
+    esac
+  done <<< "${output}"
+
+  if [ "${REVIEWER_HEALTH_LAST_TRANSITION}" != "none" ]; then
+    reviewer_log_health_transition \
+      "${model}" \
+      "${REVIEWER_HEALTH_LAST_STATE}" \
+      "${REVIEWER_HEALTH_LAST_REASON:-state_change}" \
+      "${REVIEWER_HEALTH_LAST_FAILURES}" \
+      "${REVIEWER_HEALTH_LAST_EFFECTIVE_MODEL}" \
+      "${log_dest}"
+  fi
+}
+
+reviewer_patch_reasoning_config_file() {
+  local config_file="$1"
+  local reasoning_level="$2"
+  [ -f "${config_file}" ] || return 0
+  if grep -q '^[[:space:]]*model_reasoning_effort[[:space:]]*=' "${config_file}" 2>/dev/null; then
+    sed -i "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=.*/model_reasoning_effort = \"${reasoning_level}\"/" "${config_file}" 2>/dev/null || true
+  else
+    printf '\nmodel_reasoning_effort = "%s"\n' "${reasoning_level}" >> "${config_file}"
+  fi
+}
+
+reviewer_prepare_reasoning_configs() {
+  local config_path="$1"
+  local config_backup="$2"
+  local alt_config_path="$3"
+  local alt_config_backup="$4"
+  local reasoning_level="${5:-}"
+
+  if [ -n "${config_backup}" ] && [ -f "${config_backup}" ] && [ -n "${config_path}" ]; then
+    cp "${config_backup}" "${config_path}" 2>/dev/null || true
+  fi
+  if [ -n "${alt_config_backup}" ] && [ -f "${alt_config_backup}" ] && [ -n "${alt_config_path}" ]; then
+    mkdir -p "$(dirname "${alt_config_path}")"
+    cp "${alt_config_backup}" "${alt_config_path}" 2>/dev/null || true
+  fi
+  if [ -z "${reasoning_level}" ]; then
+    return 0
+  fi
+  if [ -n "${config_path}" ]; then
+    reviewer_patch_reasoning_config_file "${config_path}" "${reasoning_level}"
+  fi
+  if [ -n "${alt_config_path}" ]; then
+    reviewer_patch_reasoning_config_file "${alt_config_path}" "${reasoning_level}"
+  fi
+}
+
+reviewer_classify_retryable_failure() {
+  local cmd_rc="$1"
+  local wd_reason="$2"
+  local stderr_file="$3"
+
+  case "${wd_reason}" in
+    idle_timeout|max_wall)
+      printf 'timeout\n'
+      return 0
+      ;;
+  esac
+
+  case "${cmd_rc}" in
+    124|137|142|143)
+      printf 'timeout\n'
+      return 0
+      ;;
+  esac
+
+  if [ -s "${stderr_file}" ]; then
+    if grep -Eiq '(^|[^0-9])429([^0-9]|$)|too many requests|rate limit' "${stderr_file}"; then
+      printf 'rate_limit\n'
+      return 0
+    fi
+    if grep -Eiq '(^|[^0-9])(500|502|503|504|520|521|522|523|524|525|526|527|529|530)([^0-9]|$)|internal server error|bad gateway|service unavailable|gateway timeout|server error' "${stderr_file}"; then
+      printf 'server_error\n'
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+execute_reviewer_attempt() {
+  local attempt_label="$1"
+  local attempt_number="$2"
+  local attempt_reasoning="${3:-}"
+  local tmp_output=""
+  local tmp_stderr=""
+  local hb_file=""
+  local start_time=""
+  local codex_pid_file=""
+  local wd_reason_file=""
+  local wd_pid=""
+  local codex_bg_pid=""
+  local cmd_rc=0
+  local wd_reason=""
+  local now=""
+  local last=""
+  local pr_state=""
+  local cpid=""
+  local wd_iter=0
+  local reviewer_codex_cmd=()
+
+  REVIEWER_ATTEMPT_OUTCOME="failed"
+  REVIEWER_ATTEMPT_RETRYABLE_CLASS=""
+  REVIEWER_ATTEMPT_WD_REASON=""
+  REVIEWER_ATTEMPT_CMD_RC=0
+
+  reviewer_prepare_reasoning_configs \
+    "${reviewer_config_path:-}" \
+    "${reviewer_config_backup:-}" \
+    "${reviewer_alt_config_path:-}" \
+    "${reviewer_alt_config_backup:-}" \
+    "${attempt_reasoning}"
+
+  if is_mcp_incompatible_model "${effective_model}"; then
+    for cfg_path in "${reviewer_codex_home}/config.toml" "${reviewer_codex_home}/.codex/config.toml"; do
+      if [ -f "${cfg_path}" ]; then
+        strip_all_mcp_server_blocks "${cfg_path}" || \
+          echo "::warning::Failed to strip MCP blocks from ${cfg_path} for reviewer ${effective_model}; namespace tool envelope may still trigger 422." >&2
+      fi
+    done
+  fi
+
+  if [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+    echo "Reviewer slot ${slot_model} skipped — PR #${PR_NUMBER} was closed/merged." | tee -a "${log_file}"
+    REVIEWER_ATTEMPT_OUTCOME="pr_closed"
+    return 0
+  fi
+
+  tmp_output="$(mktemp)"
+  tmp_stderr="$(mktemp)"
+  hb_file="$(mktemp /tmp/heartbeat_reviewer.XXXXXX)"
+  printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}"
+  start_time="$(date +%s)"
+  codex_pid_file="$(mktemp /tmp/codex_pid_reviewer.XXXXXX)"
+  wd_reason_file="$(mktemp /tmp/reviewer_wd_reason.XXXXXX)"
+
+  _reviewer_kill_pid()
+  {
+    local target_pid="${1:-}"
+    [ -n "${target_pid}" ] || return 0
+    pkill -TERM -P "${target_pid}" 2>/dev/null || true
+    kill -TERM "${target_pid}" 2>/dev/null || true
+    sleep 5
+    pkill -KILL -P "${target_pid}" 2>/dev/null || true
+    kill -KILL "${target_pid}" 2>/dev/null || true
+  }
+
+  (
+    wd_iter=$(( RANDOM % 9 ))
+    while true; do
+      sleep "${reviewer_watchdog_sleep}"
+
+      if [ -n "${PR_NUMBER:-}" ] && [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+        echo "Reviewer ${effective_model} aborted — PR close sentinel observed." | tee -a "${log_file}" >&2
+        printf 'pr_closed_sentinel' > "${wd_reason_file}"
+        cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
+        _reviewer_kill_pid "${cpid}"
+        rm -f "${hb_file}"
+        exit 144
+      fi
+
+      now="$(date +%s)"
+      last="$(cat "${hb_file}" 2>/dev/null || echo "$now")"
+      if ! [[ "${last}" =~ ^[0-9]+$ ]]; then last="${now}"; fi
+      if [ $(( now - last )) -ge "${reviewer_idle_timeout}" ]; then
+        echo "Reviewer ${effective_model} killed — no output for $(( now - last ))s (idle limit: ${reviewer_idle_timeout}s)." | tee -a "${log_file}" >&2
+        printf 'idle_timeout' > "${wd_reason_file}"
+        cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
+        _reviewer_kill_pid "${cpid}"
+        rm -f "${hb_file}"
+        exit 142
+      fi
+      if [ $(( now - start_time )) -ge "${reviewer_max_wall}" ]; then
+        echo "Reviewer ${effective_model} killed — max wall time ${reviewer_max_wall}s exceeded." | tee -a "${log_file}" >&2
+        printf 'max_wall' > "${wd_reason_file}"
+        cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
+        _reviewer_kill_pid "${cpid}"
+        rm -f "${hb_file}"
+        exit 143
+      fi
+
+      wd_iter=$((wd_iter + 1))
+      if [ $((wd_iter % 9)) -eq 0 ]; then
+        pr_state="$({ gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open"; } 2>/dev/null)"
+        if [ "${pr_state}" != "open" ]; then
+          echo "Reviewer ${effective_model} aborted — PR #${PR_NUMBER} is ${pr_state}." | tee -a "${log_file}" >&2
+          printf 'pr_closed_api' > "${wd_reason_file}"
+          touch "/tmp/pr_closed_sentinel_${PR_NUMBER}"
+          echo "PR_CLOSED=true" >> "$GITHUB_ENV"
+          cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
+          _reviewer_kill_pid "${cpid}"
+          rm -f "${hb_file}"
+          exit 144
+        fi
+      fi
+    done
+  ) &
+  wd_pid=$!
+
+  if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+    sanitize_codex_prompt_file "${prompt_file}"
+  fi
+  reviewer_codex_cmd=(
+    "${codex_bin}"
+    --ask-for-approval never
+    -c model_verbosity=low
+    -c include_apply_patch_tool=true
+    exec
+    --model "${effective_model}"
+    --sandbox read-only
+  )
+  if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
+    "${CODEX_HEARTBEAT_HELPER}" \
+      --phase review_run_reviewers \
+      --stdout-file "${tmp_output}" \
+      --stderr-file "${tmp_stderr}" \
+      --activity-file "${hb_file}" \
+      -- "${reviewer_codex_cmd[@]}" < "${prompt_file}" &
+  else
+    (
+      exec "${reviewer_codex_cmd[@]}" < "${prompt_file}"
+    ) > "${tmp_output}" 2> >(
+      while IFS= read -r line || [ -n "$line" ]; do
+        printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}" 2>/dev/null
+        printf '%s\n' "$line"
+      done > "${tmp_stderr}"
+    ) &
+  fi
+  codex_bg_pid=$!
+  echo "${codex_bg_pid}" > "${codex_pid_file}"
+  wait "${codex_bg_pid}" 2>/dev/null || cmd_rc=$?
+
+  kill "${wd_pid}" 2>/dev/null; wait "${wd_pid}" 2>/dev/null || true
+  rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}"
+
+  if [ -s "${wd_reason_file}" ]; then
+    wd_reason="$(cat "${wd_reason_file}" 2>/dev/null || true)"
+  fi
+  rm -f "${wd_reason_file}"
+
+  case "${wd_reason}" in
+    pr_closed_sentinel|pr_closed_api)
+      cat "${tmp_stderr}" >> "${log_file}"
+      echo "Reviewer slot ${slot_model} stopped — PR #${PR_NUMBER:-unknown} was closed/merged (reason: ${wd_reason})." | tee -a "${log_file}"
+      rm -f "${tmp_output}" "${tmp_stderr}"
+      REVIEWER_ATTEMPT_OUTCOME="pr_closed"
+      REVIEWER_ATTEMPT_WD_REASON="${wd_reason}"
+      return 0
+      ;;
+  esac
+
+  if [ "${cmd_rc}" -eq 0 ] && [ -s "${tmp_output}" ]; then
+    cat "${tmp_stderr}" >> "${log_file}"
+    mv "${tmp_output}" "${output_file}"
+    echo "Reviewer slot ${slot_model} (${effective_model}) succeeded on ${attempt_label}." | tee -a "${log_file}"
+    rm -f "${tmp_output}" "${tmp_stderr}"
+    REVIEWER_ATTEMPT_OUTCOME="success"
+    REVIEWER_ATTEMPT_CMD_RC=0
+    return 0
+  fi
+
+  if [ "${cmd_rc}" -eq 0 ]; then
+    echo "Reviewer slot ${slot_model} (${effective_model}) produced empty output on ${attempt_label}." | tee -a "${log_file}"
+    if [ -s "${tmp_stderr}" ]; then
+      {
+        echo "----- reviewer ${effective_model} stderr tail -n 40 (empty-output diagnostic, ${attempt_label}) -----"
+        tail -n 40 "${tmp_stderr}" 2>/dev/null | sed 's/^/  | /'
+        echo "------------------------------------------------------------------------------------"
+      } | tee -a "${log_file}" >&2
+    else
+      echo "Reviewer slot ${slot_model} (${effective_model}) ${attempt_label}: codex-cli stderr was also empty (no diagnostic available)." | tee -a "${log_file}" >&2
+    fi
+  else
+    case "${wd_reason}" in
+      idle_timeout)
+        echo "Reviewer slot ${slot_model} (${effective_model}) killed by watchdog on ${attempt_label} (idle timeout ${reviewer_idle_timeout}s, exit=${cmd_rc})." | tee -a "${log_file}"
+        ;;
+      max_wall)
+        echo "Reviewer slot ${slot_model} (${effective_model}) killed by watchdog on ${attempt_label} (max wall ${reviewer_max_wall}s, exit=${cmd_rc})." | tee -a "${log_file}"
+        ;;
+      *)
+        echo "Reviewer slot ${slot_model} (${effective_model}) execution failed on ${attempt_label} (exit=${cmd_rc})." | tee -a "${log_file}"
+        ;;
+    esac
+  fi
+
+  if [ -s "${tmp_stderr}" ]; then
+    echo "Reviewer slot ${slot_model} (${effective_model}) codex-cli stderr on ${attempt_label}:" | tee -a "${log_file}"
+    sed 's/^/  | /' "${tmp_stderr}" | tee -a "${log_file}"
+  fi
+
+  REVIEWER_ATTEMPT_RETRYABLE_CLASS="$(reviewer_classify_retryable_failure "${cmd_rc}" "${wd_reason}" "${tmp_stderr}" || true)"
+  if [ -n "${REVIEWER_ATTEMPT_RETRYABLE_CLASS}" ]; then
+    echo "Reviewer slot ${slot_model} (${effective_model}) failure classified as retryable (${REVIEWER_ATTEMPT_RETRYABLE_CLASS}) on ${attempt_label}." | tee -a "${log_file}"
+    REVIEWER_ATTEMPT_OUTCOME="retryable_failure"
+  else
+    REVIEWER_ATTEMPT_OUTCOME="failed"
+  fi
+  REVIEWER_ATTEMPT_WD_REASON="${wd_reason}"
+  REVIEWER_ATTEMPT_CMD_RC="${cmd_rc}"
+  rm -f "${tmp_output}" "${tmp_stderr}"
+  return 0
+}
+# ── End reviewer failback / health helpers ─────────────────────────
+
 run_reviewer() {
   local model="$1"
   local safe_name="$2"
   local output_prefix="${3:-review}"
   local prompt_file="${4:-${REVIEWER_PROMPT_FILE}}"
   local reasoning_level="${5:-}"
-  local strip_mcp=0
-  if is_mcp_incompatible_model "${model}"; then
-    strip_mcp=1
-  fi
   local output_file="${PREVIOUS_REVIEWS_DIR}/${output_prefix}_${safe_name}.txt"
   local status_file="${PREVIOUS_REVIEWS_DIR}/status_${output_prefix}_${safe_name}.txt"
-	local log_file="${PREVIOUS_REVIEWS_DIR}/${output_prefix}_${safe_name}.log"
-	local reviewer_idle_timeout="${HEARTBEAT_IDLE_TIMEOUT:-900}"
-	local reviewer_max_wall="${HEARTBEAT_MAX_WALL:-7200}"
-	local reviewer_pr_poll_interval_default=10
-	local reviewer_pr_poll_interval_raw="${REVIEW_PR_STATE_POLL_INTERVAL_SECS:-${reviewer_pr_poll_interval_default}}"
-	local reviewer_pr_poll_interval="${reviewer_pr_poll_interval_default}"
-	local reviewer_pr_poll_interval_norm=""
-	local reviewer_pr_poll_interval_warn=0
-	local reviewer_pr_poll_interval_raw_escaped=""
-	local reviewer_watchdog_sleep="${reviewer_pr_poll_interval_default}"
-	local attempt=1
-
-	if [[ "${reviewer_pr_poll_interval_raw}" =~ ^[0-9]+$ ]]; then
-		reviewer_pr_poll_interval_norm="$(printf '%s' "${reviewer_pr_poll_interval_raw}" | sed -E 's/^0+//')"
-		if [ -z "${reviewer_pr_poll_interval_norm}" ]; then
-			reviewer_pr_poll_interval_norm=0
-		fi
-		if [ "${#reviewer_pr_poll_interval_norm}" -le 4 ] && [ "${reviewer_pr_poll_interval_norm}" -ge 10 ] && [ "${reviewer_pr_poll_interval_norm}" -le 3600 ]; then
-			reviewer_pr_poll_interval="${reviewer_pr_poll_interval_norm}"
-		else
-			reviewer_pr_poll_interval_warn=1
-		fi
-	else
-		reviewer_pr_poll_interval_warn=1
-	fi
-	if [ "${reviewer_pr_poll_interval_warn}" -ne 0 ]; then
-		reviewer_pr_poll_interval_raw_escaped="$(printf '%q' "${reviewer_pr_poll_interval_raw}")"
-		echo "::warning::rate_limit_audit_fallback key=REVIEW_PR_STATE_POLL_INTERVAL_SECS invalid=${reviewer_pr_poll_interval_raw_escaped} fallback=${reviewer_pr_poll_interval_default} min=10 max=3600" >&2
-		reviewer_pr_poll_interval="${reviewer_pr_poll_interval_default}"
-	fi
-	reviewer_watchdog_sleep="${reviewer_pr_poll_interval}"
-	if [ "${reviewer_watchdog_sleep}" -gt "${reviewer_idle_timeout}" ]; then
-		reviewer_watchdog_sleep="${reviewer_idle_timeout}"
-		echo "::warning::rate_limit_audit_fallback key=REVIEW_PR_STATE_POLL_INTERVAL_SECS capped=${reviewer_pr_poll_interval} idle_timeout=${reviewer_idle_timeout} effective_sleep=${reviewer_watchdog_sleep}" >&2
-	fi
+  local log_file="${PREVIOUS_REVIEWS_DIR}/${output_prefix}_${safe_name}.log"
+  local reviewer_idle_timeout="${HEARTBEAT_IDLE_TIMEOUT:-900}"
+  local reviewer_max_wall="${HEARTBEAT_MAX_WALL:-7200}"
+  local reviewer_pr_poll_interval_default=10
+  local reviewer_pr_poll_interval_raw="${REVIEW_PR_STATE_POLL_INTERVAL_SECS:-${reviewer_pr_poll_interval_default}}"
+  local reviewer_pr_poll_interval="${reviewer_pr_poll_interval_default}"
+  local reviewer_pr_poll_interval_norm=""
+  local reviewer_pr_poll_interval_warn=0
+  local reviewer_pr_poll_interval_raw_escaped=""
+  local reviewer_watchdog_sleep="${reviewer_pr_poll_interval_default}"
+  local attempt=1
+  local circuit_breaker_enabled=false
+  local base_reasoning=""
+  local retry_reasoning=""
+  local fallback_model=""
+  local final_retryable_class=""
+  local reviewer_codex_root=""
+  local reviewer_codex_home=""
+  local reviewer_config_path=""
+  local reviewer_config_backup=""
+  local reviewer_alt_config_path=""
+  local reviewer_alt_config_backup=""
+  local context_budget_warn_models_emitted=""
+  local codex_bin=""
+  local slot_model="${model}"
+  local effective_model="${model}"
 
   : > "${log_file}"
 
-  # Resolve codex binary before mutating PATH/CODEX_HOME. This keeps reviewer
-  # executions pinned to the workflow-installed codex CLI, even when each
-  # reviewer uses an isolated CODEX_HOME.
-  local codex_bin
+  if reviewer_circuit_breaker_enabled; then
+    circuit_breaker_enabled=true
+  fi
+
+  if [[ "${reviewer_pr_poll_interval_raw}" =~ ^[0-9]+$ ]]; then
+    reviewer_pr_poll_interval_norm="$(printf '%s' "${reviewer_pr_poll_interval_raw}" | sed -E 's/^0+//')"
+    if [ -z "${reviewer_pr_poll_interval_norm}" ]; then
+      reviewer_pr_poll_interval_norm=0
+    fi
+    if [ "${#reviewer_pr_poll_interval_norm}" -le 4 ] && [ "${reviewer_pr_poll_interval_norm}" -ge 10 ] && [ "${reviewer_pr_poll_interval_norm}" -le 3600 ]; then
+      reviewer_pr_poll_interval="${reviewer_pr_poll_interval_norm}"
+    else
+      reviewer_pr_poll_interval_warn=1
+    fi
+  else
+    reviewer_pr_poll_interval_warn=1
+  fi
+  if [ "${reviewer_pr_poll_interval_warn}" -ne 0 ]; then
+    reviewer_pr_poll_interval_raw_escaped="$(printf '%q' "${reviewer_pr_poll_interval_raw}")"
+    echo "::warning::rate_limit_audit_fallback key=REVIEW_PR_STATE_POLL_INTERVAL_SECS invalid=${reviewer_pr_poll_interval_raw_escaped} fallback=${reviewer_pr_poll_interval_default} min=10 max=3600" >&2
+    reviewer_pr_poll_interval="${reviewer_pr_poll_interval_default}"
+  fi
+  reviewer_watchdog_sleep="${reviewer_pr_poll_interval}"
+  if [ "${reviewer_watchdog_sleep}" -gt "${reviewer_idle_timeout}" ]; then
+    reviewer_watchdog_sleep="${reviewer_idle_timeout}"
+    echo "::warning::rate_limit_audit_fallback key=REVIEW_PR_STATE_POLL_INTERVAL_SECS capped=${reviewer_pr_poll_interval} idle_timeout=${reviewer_idle_timeout} effective_sleep=${reviewer_watchdog_sleep}" >&2
+  fi
+
   codex_bin="$(command -v codex || true)"
   if [ -z "${codex_bin}" ]; then
     echo "Reviewer ${model} failed: codex CLI not found in PATH." | tee -a "${log_file}"
+    echo "Reviewer ${model} failed: codex CLI not found in PATH." > "${output_file}"
     echo "failed" > "${status_file}"
     return 0
   fi
 
-  # Each reviewer gets its own CODEX_HOME to prevent MCP server
-  # conflicts when running in parallel.
-  # Avoid /tmp for CODEX_HOME because codex refuses helper binary setup there.
-  local reviewer_codex_root reviewer_codex_home
   reviewer_codex_root="${RUNNER_TEMP:-${HOME}/.cache}/codex_home_reviewers"
   mkdir -p "${reviewer_codex_root}"
   reviewer_codex_home="$(mktemp -d "${reviewer_codex_root}/reviewer.${safe_name}.XXXXXX")"
@@ -1362,236 +2777,188 @@ run_reviewer() {
   fi
   mkdir -p "${reviewer_codex_home}/bin"
   export CODEX_HOME="${reviewer_codex_home}"
-
-  # Strip MCP server tables from this reviewer's isolated codex-home for slugs
-  # whose upstream provider rejects the v0.125 namespace tool envelope on
-  # /v1/responses. The model naturally falls back to shell tools (rg/grep/cat)
-  # when MCP is absent.
-  if [ "${strip_mcp}" = "1" ]; then
-    for cfg_path in "${reviewer_codex_home}/config.toml" "${reviewer_codex_home}/.codex/config.toml"; do
-      if [ -f "${cfg_path}" ]; then
-        strip_all_mcp_server_blocks "${cfg_path}" || \
-          echo "::warning::Failed to strip MCP blocks from ${cfg_path} for reviewer ${model}; namespace tool envelope may still trigger 422." >&2
-      fi
-    done
+  if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+    sanitize_codex_prompt_file "${prompt_file}"
   fi
 
-  while [ "${attempt}" -le 3 ]; do
-    # Early exit if PR was closed/merged (detected by watchdog or another reviewer)
-    if [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
-      echo "Reviewer ${model} skipped — PR #${PR_NUMBER} was closed/merged." | tee -a "${log_file}"
-      echo "pr_closed" > "${status_file}"
+  reviewer_config_path="${reviewer_codex_home}/config.toml"
+  if [ -f "${reviewer_config_path}" ]; then
+    reviewer_config_backup="${reviewer_codex_home}/config.toml.reviewer_base"
+    cp "${reviewer_config_path}" "${reviewer_config_backup}" 2>/dev/null || true
+  else
+    reviewer_config_path=""
+  fi
+  reviewer_alt_config_path="${reviewer_codex_home}/.codex/config.toml"
+  if [ -f "${reviewer_alt_config_path}" ]; then
+    reviewer_alt_config_backup="${reviewer_codex_home}/.codex/config.toml.reviewer_base"
+    cp "${reviewer_alt_config_path}" "${reviewer_alt_config_backup}" 2>/dev/null || true
+  else
+    reviewer_alt_config_path=""
+  fi
+
+  if [ "${circuit_breaker_enabled}" != "true" ]; then
+    while [ "${attempt}" -le 3 ]; do
+      effective_model="${model}"
+      if [[ " ${context_budget_warn_models_emitted} " != *" ${effective_model} "* ]]; then
+        if command -v emit_context_budget_warn_for_prompt >/dev/null 2>&1; then
+          emit_context_budget_warn_for_prompt "review" "${prompt_file}" "${effective_model}"
+        fi
+        context_budget_warn_models_emitted="${context_budget_warn_models_emitted} ${effective_model}"
+      fi
+      execute_reviewer_attempt "attempt ${attempt}" "${attempt}" "${reasoning_level}"
+      case "${REVIEWER_ATTEMPT_OUTCOME}" in
+        success)
+          echo "success" > "${status_file}"
+          rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
+          rm -rf "${reviewer_codex_home}" 2>/dev/null || true
+          return 0
+          ;;
+        pr_closed)
+          echo "pr_closed" > "${status_file}"
+          rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
+          rm -rf "${reviewer_codex_home}" 2>/dev/null || true
+          return 0
+          ;;
+      esac
+      attempt=$((attempt + 1))
+      sleep 2
+    done
+
+    echo "Reviewer ${model} failed after retries." > "${output_file}"
+    echo "failed" > "${status_file}"
+    echo "Reviewer ${model} failed after 3 attempts." | tee -a "${log_file}"
+    rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
+    rm -rf "${reviewer_codex_home}" 2>/dev/null || true
+    return 0
+  fi
+
+  base_reasoning="$(reviewer_base_reasoning_effort "${reasoning_level}")"
+  effective_model="${model}"
+  if [[ " ${context_budget_warn_models_emitted} " != *" ${effective_model} "* ]]; then
+    if command -v emit_context_budget_warn_for_prompt >/dev/null 2>&1; then
+      emit_context_budget_warn_for_prompt "review" "${prompt_file}" "${effective_model}"
+    fi
+    context_budget_warn_models_emitted="${context_budget_warn_models_emitted} ${effective_model}"
+  fi
+  execute_reviewer_attempt "attempt 1" "1" "${base_reasoning}"
+  case "${REVIEWER_ATTEMPT_OUTCOME}" in
+    success)
+      reviewer_record_health_outcome "${model}" "primary_success" "${model}" "" "${log_file}"
+      echo "success" > "${status_file}"
+      rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
       rm -rf "${reviewer_codex_home}" 2>/dev/null || true
       return 0
-    fi
+      ;;
+    pr_closed)
+      echo "pr_closed" > "${status_file}"
+      rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
+      rm -rf "${reviewer_codex_home}" 2>/dev/null || true
+      return 0
+      ;;
+    retryable_failure)
+      final_retryable_class="${REVIEWER_ATTEMPT_RETRYABLE_CLASS:-retryable_failure}"
+      ;;
+    *)
+      reviewer_record_health_outcome "${model}" "non_retryable_failure" "${model}" "non_retryable" "${log_file}"
+      echo "Reviewer ${model} failed after circuit-breaker primary attempt." > "${output_file}"
+      echo "failed" > "${status_file}"
+      echo "Reviewer ${model} failed after circuit-breaker primary attempt." | tee -a "${log_file}"
+      rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
+      rm -rf "${reviewer_codex_home}" 2>/dev/null || true
+      return 0
+      ;;
+  esac
 
-    tmp_output="$(mktemp)"
-    tmp_stderr="$(mktemp)"
-    # Use heartbeat file per reviewer to track activity.
-    # IMPORTANT: all writes use atomic rename (write to .tmp then mv)
-    # to avoid a race where the watchdog reads an empty/partial file
-    # mid-truncate and computes now-0 = epoch → false idle kill.
-    local hb_file
-    hb_file="$(mktemp /tmp/heartbeat_reviewer.XXXXXX)"
-    printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}"
-    local start_time
-    start_time="$(date +%s)"
-    local codex_pid_file
-    codex_pid_file="$(mktemp /tmp/codex_pid_reviewer.XXXXXX)"
-
-    # Reason file — watchdog writes here before exit so the outer loop
-    # can distinguish idle timeout vs max wall vs PR-closed kill from a
-    # generic codex failure. Cleaned up alongside the heartbeat file.
-    local wd_reason_file
-    wd_reason_file="$(mktemp /tmp/reviewer_wd_reason.XXXXXX)"
-
-    # Background watchdog for this reviewer attempt
-	(
-		wd_iter=$(( RANDOM % 9 ))  # jitter: stagger PR state checks across reviewers
-		while true; do
-			sleep "${reviewer_watchdog_sleep}"
-
-        # Fast path: if another reviewer (or the pre-flight check) already
-        # detected PR closure, short-circuit immediately instead of waiting
-        # up to ~90s for our own gh api poll cycle.
-        if [ -n "${PR_NUMBER:-}" ] && [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
-          echo "Reviewer ${model} aborted — PR close sentinel observed." | tee -a "${log_file}" >&2
-          printf 'pr_closed_sentinel' > "${wd_reason_file}"
-          local cpid
-          cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
-          if [ -n "${cpid}" ]; then kill -TERM "${cpid}" 2>/dev/null; sleep 5; kill -KILL "${cpid}" 2>/dev/null; fi
-          rm -f "${hb_file}"
-          exit 144
-        fi
-
-        now="$(date +%s)"
-        last="$(cat "${hb_file}" 2>/dev/null || echo "$now")"
-        # Guard against empty/corrupt reads: if last is not numeric, treat as now
-        if ! [[ "${last}" =~ ^[0-9]+$ ]]; then last="${now}"; fi
-        if [ $(( now - last )) -ge "${reviewer_idle_timeout}" ]; then
-          echo "Reviewer ${model} killed — no output for $(( now - last ))s (idle limit: ${reviewer_idle_timeout}s)." | tee -a "${log_file}" >&2
-          printf 'idle_timeout' > "${wd_reason_file}"
-          # Actually kill the codex process
-          local cpid
-          cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
-          if [ -n "${cpid}" ]; then kill -TERM "${cpid}" 2>/dev/null; sleep 5; kill -KILL "${cpid}" 2>/dev/null; fi
-          rm -f "${hb_file}"
-          exit 142
-        fi
-        if [ $(( now - start_time )) -ge "${reviewer_max_wall}" ]; then
-          echo "Reviewer ${model} killed — max wall time ${reviewer_max_wall}s exceeded." | tee -a "${log_file}" >&2
-          printf 'max_wall' > "${wd_reason_file}"
-          local cpid
-          cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
-          if [ -n "${cpid}" ]; then kill -TERM "${cpid}" 2>/dev/null; sleep 5; kill -KILL "${cpid}" 2>/dev/null; fi
-          rm -f "${hb_file}"
-          exit 143
-        fi
-
-			# PR state check — abort if PR was merged/closed (~every 9 polls; default ~90s)
-        wd_iter=$((wd_iter + 1))
-        if [ $((wd_iter % 9)) -eq 0 ]; then
-          # Pipe through grep to reject error JSON that gh api dumps to
-          # stdout on 403/429 rate-limit responses (--jq is not applied
-          # to error bodies, so raw JSON leaks into the variable and
-          # defeats the || echo "open" fallback).
-          pr_state="$({ gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open"; } 2>/dev/null)"
-          if [ "${pr_state}" != "open" ]; then
-            echo "Reviewer ${model} aborted — PR #${PR_NUMBER} is ${pr_state}." | tee -a "${log_file}" >&2
-            printf 'pr_closed_api' > "${wd_reason_file}"
-            touch "/tmp/pr_closed_sentinel_${PR_NUMBER}"
-            echo "PR_CLOSED=true" >> "$GITHUB_ENV"
-            local cpid
-            cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
-            if [ -n "${cpid}" ]; then kill -TERM "${cpid}" 2>/dev/null; sleep 5; kill -KILL "${cpid}" 2>/dev/null; fi
-            rm -f "${hb_file}"
-            exit 144
-          fi
-        fi
-      done
-    ) &
-    local wd_pid=$!
-
-    # Run codex in a wrapper subshell so we can capture its PID
-    # for the watchdog to kill on timeout.
-    # If a per-pass reasoning level override is set, temporarily patch the
-    # codex config inside the isolated CODEX_HOME so the model uses the
-    # desired thinking level without affecting other reviewers.
-    if [ -n "${reasoning_level}" ] && [ -f "${reviewer_codex_home}/config.toml" ]; then
-      sed -i "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*\".*\"/model_reasoning_effort = \"${reasoning_level}\"/" "${reviewer_codex_home}/config.toml" 2>/dev/null || true
-    elif [ -n "${reasoning_level}" ] && [ -f "${HOME}/.codex/config.toml" ] && [ -d "${reviewer_codex_home}" ]; then
-      # Config might be at the standard location within the isolated home
-      if [ -f "${reviewer_codex_home}/.codex/config.toml" ]; then
-        sed -i "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*\".*\"/model_reasoning_effort = \"${reasoning_level}\"/" "${reviewer_codex_home}/.codex/config.toml" 2>/dev/null || true
+  if [ "$(reviewer_failback_max_retries)" -gt 0 ]; then
+    retry_reasoning="$(reviewer_next_lower_reasoning_effort "${base_reasoning}" || true)"
+  fi
+  if [ -n "${retry_reasoning}" ]; then
+    effective_model="${model}"
+    if [[ " ${context_budget_warn_models_emitted} " != *" ${effective_model} "* ]]; then
+      if command -v emit_context_budget_warn_for_prompt >/dev/null 2>&1; then
+        emit_context_budget_warn_for_prompt "review" "${prompt_file}" "${effective_model}"
       fi
+      context_budget_warn_models_emitted="${context_budget_warn_models_emitted} ${effective_model}"
     fi
-    # Strip any invalid UTF-8 from the reviewer prompt before piping
-    # to codex (whose stdin reader strictly validates UTF-8). See
-    # sanitize_codex_prompt_file in scripts/gh_helpers.sh.
-    sanitize_codex_prompt_file "${prompt_file}"
-    (
-      # Reviewers must not mutate the workspace: writes here pollute the pre-editor
-      # snapshot used by review_autofix.yml's touched-file detector (comm -13 safety
-      # union) and cause EDITOR_CHANGES_LOST false positives.
-      exec "${codex_bin}" --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${model}" --sandbox read-only < "${prompt_file}"
-    ) > "${tmp_output}" 2> >(
-      while IFS= read -r line || [ -n "$line" ]; do
-        # Atomic heartbeat update: write to tmp then rename
-        printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}" 2>/dev/null
-        printf '%s\n' "$line"
-      done > "${tmp_stderr}"
-    ) &
-    local codex_bg_pid=$!
-    echo "${codex_bg_pid}" > "${codex_pid_file}"
-    # Use || to prevent set -e from killing the worker subshell
-    # when codex exits non-zero. Without this, the entire retry
-    # loop and error handling are bypassed silently.
-    local cmd_rc=0
-    wait "${codex_bg_pid}" 2>/dev/null || cmd_rc=$?
-
-    kill "${wd_pid}" 2>/dev/null; wait "${wd_pid}" 2>/dev/null || true
-    rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}"
-
-    # Pick up the watchdog termination reason (if any) before we delete it.
-    # Values: idle_timeout | max_wall | pr_closed_sentinel | pr_closed_api
-    local wd_reason=""
-    if [ -s "${wd_reason_file}" ]; then
-      wd_reason="$(cat "${wd_reason_file}" 2>/dev/null || true)"
-    fi
-    rm -f "${wd_reason_file}"
-
-    # Watchdog-induced PR-closed kill: do not retry, do not treat as failure.
-    case "${wd_reason}" in
-      pr_closed_sentinel|pr_closed_api)
-        cat "${tmp_stderr}" >> "${log_file}"
-        echo "Reviewer ${model} stopped — PR #${PR_NUMBER:-unknown} was closed/merged (reason: ${wd_reason})." | tee -a "${log_file}"
+    execute_reviewer_attempt "attempt 2 (cheaper reasoning ${retry_reasoning})" "2" "${retry_reasoning}"
+    case "${REVIEWER_ATTEMPT_OUTCOME}" in
+      success)
+        reviewer_record_health_outcome "${model}" "primary_success" "${model}" "" "${log_file}"
+        echo "success" > "${status_file}"
+        rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
+        rm -rf "${reviewer_codex_home}" 2>/dev/null || true
+        return 0
+        ;;
+      pr_closed)
         echo "pr_closed" > "${status_file}"
-        rm -f "${tmp_output}" "${tmp_stderr}"
+        rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
+        rm -rf "${reviewer_codex_home}" 2>/dev/null || true
+        return 0
+        ;;
+      retryable_failure)
+        final_retryable_class="${REVIEWER_ATTEMPT_RETRYABLE_CLASS:-${final_retryable_class}}"
+        ;;
+      *)
+        reviewer_record_health_outcome "${model}" "non_retryable_failure" "${model}" "non_retryable" "${log_file}"
+        echo "Reviewer ${model} failed after cheaper-reasoning retry." > "${output_file}"
+        echo "failed" > "${status_file}"
+        echo "Reviewer ${model} failed after cheaper-reasoning retry." | tee -a "${log_file}"
+        rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
         rm -rf "${reviewer_codex_home}" 2>/dev/null || true
         return 0
         ;;
     esac
+  fi
 
-    if [ "${cmd_rc}" -eq 0 ]; then
-      cat "${tmp_stderr}" >> "${log_file}"
-      if [ -s "${tmp_output}" ]; then
-        mv "${tmp_output}" "${output_file}"
-        echo "success" > "${status_file}"
-        echo "Reviewer ${model} succeeded on attempt ${attempt}." | tee -a "${log_file}"
-        rm -f "${tmp_output}" "${tmp_stderr}"
-        rm -rf "${reviewer_codex_home}" 2>/dev/null || true
-        return 0
-      fi
-      echo "Reviewer ${model} produced empty output on attempt ${attempt}." | tee -a "${log_file}"
-      # Empty-output diagnostic: codex-cli exited 0 but emitted nothing on
-      # stdout, which means the model never produced a final review message
-      # (typical causes: tool-call/turn budget exhausted, sandbox command
-      # timeout loop, or model giving up silently). Surface the tail of the
-      # codex stderr inline so the cause is visible in the GitHub Actions
-      # job log without having to scroll through thousands of streamed lines
-      # or download artifacts. Structured with grep-able delimiters per
-      # CLAUDE.md §8.
-      if [ -s "${tmp_stderr}" ]; then
-        {
-          echo "----- reviewer ${model} stderr tail -n 40 (empty-output diagnostic, attempt ${attempt}) -----"
-          tail -n 40 "${tmp_stderr}" 2>/dev/null | sed 's/^/  | /'
-          echo "------------------------------------------------------------------------------------------"
-        } | tee -a "${log_file}" >&2
-      else
-        echo "Reviewer ${model} attempt ${attempt}: codex-cli stderr was also empty (no diagnostic available)." | tee -a "${log_file}" >&2
-      fi
-    else
-      cat "${tmp_stderr}" >> "${log_file}"
-      case "${wd_reason}" in
-        idle_timeout)
-          echo "Reviewer ${model} killed by watchdog on attempt ${attempt} (idle timeout ${reviewer_idle_timeout}s, exit=${cmd_rc})." | tee -a "${log_file}"
-          ;;
-        max_wall)
-          echo "Reviewer ${model} killed by watchdog on attempt ${attempt} (max wall ${reviewer_max_wall}s, exit=${cmd_rc})." | tee -a "${log_file}"
-          ;;
-        *)
-          echo "Reviewer ${model} execution failed on attempt ${attempt} (exit=${cmd_rc})." | tee -a "${log_file}"
-          ;;
-      esac
+  fallback_model="$(reviewer_failback_target_for_model "${model}" || true)"
+  if [ -z "${fallback_model}" ]; then
+    echo "REVIEWER_FAILBACK_UNMAPPED: ${model}" | tee -a "${log_file}"
+    reviewer_record_health_outcome "${model}" "retryable_failure" "" "${final_retryable_class}" "${log_file}"
+    printf 'Reviewer slot %s skipped after retryable failure (%s); no same-family failback mapping is available.\n' "${model}" "${final_retryable_class:-retryable_failure}" > "${output_file}"
+    echo "skipped_unmapped" > "${status_file}"
+    rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
+    rm -rf "${reviewer_codex_home}" 2>/dev/null || true
+    return 0
+  fi
+
+  echo "REVIEWER_FAILBACK: ${model} -> ${fallback_model} reason=${final_retryable_class:-retryable_failure}" | tee -a "${log_file}"
+  effective_model="${fallback_model}"
+  if [[ " ${context_budget_warn_models_emitted} " != *" ${effective_model} "* ]]; then
+    if command -v emit_context_budget_warn_for_prompt >/dev/null 2>&1; then
+      emit_context_budget_warn_for_prompt "review" "${prompt_file}" "${effective_model}"
     fi
+    context_budget_warn_models_emitted="${context_budget_warn_models_emitted} ${effective_model}"
+  fi
+  execute_reviewer_attempt "attempt 3 (failback ${fallback_model})" "3" "${base_reasoning}"
+  case "${REVIEWER_ATTEMPT_OUTCOME}" in
+    success)
+      reviewer_record_health_outcome "${model}" "retryable_failure" "${fallback_model}" "${final_retryable_class}" "${log_file}"
+      echo "success" > "${status_file}"
+      rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
+      rm -rf "${reviewer_codex_home}" 2>/dev/null || true
+      return 0
+      ;;
+    pr_closed)
+      echo "pr_closed" > "${status_file}"
+      rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
+      rm -rf "${reviewer_codex_home}" 2>/dev/null || true
+      return 0
+      ;;
+    retryable_failure)
+      reviewer_record_health_outcome "${model}" "retryable_failure" "${fallback_model}" "${REVIEWER_ATTEMPT_RETRYABLE_CLASS:-${final_retryable_class}}" "${log_file}"
+      ;;
+    *)
+      reviewer_record_health_outcome "${model}" "retryable_failure" "${fallback_model}" "${final_retryable_class}" "${log_file}"
+      ;;
+  esac
 
-    if [ -s "${tmp_stderr}" ]; then
-      echo "Reviewer ${model} codex-cli stderr on attempt ${attempt}:" | tee -a "${log_file}"
-      sed 's/^/  | /' "${tmp_stderr}" | tee -a "${log_file}"
-    fi
-
-    rm -f "${tmp_output}" "${tmp_stderr}"
-    attempt=$((attempt + 1))
-    sleep 2
-  done
-
-  echo "Reviewer ${model} failed after retries." > "${output_file}"
+  echo "Reviewer ${model} failed after circuit-breaker failback." > "${output_file}"
   echo "failed" > "${status_file}"
-  echo "Reviewer ${model} failed after 3 attempts." | tee -a "${log_file}"
+  echo "Reviewer ${model} failed after circuit-breaker failback." | tee -a "${log_file}"
+  rm -f "${reviewer_config_backup}" "${reviewer_alt_config_backup}"
   rm -rf "${reviewer_codex_home}" 2>/dev/null || true
   return 0
 }
-
 # ── Two-pass reviewer architecture ──────────────────────────────────────
 # Pass 1: broad sweep at lower thinking level → collect findings
 # Cross-pollination: summarise pass 1 findings for pass 2 context
@@ -1606,13 +2973,14 @@ case "$(printf '%s' "${ENABLE_REVIEWER_TWO_PASS:-true}" | tr '[:upper:]' '[:lowe
   0|false|no|off) TWO_PASS_ENABLED=false ;;
 esac
 
-# Helper: fan out all reviewer models in parallel for a given pass.
+# Helper: fan out the active reviewer model set in parallel for a given pass.
 # Args: $1=output_prefix  $2=prompt_file  $3=reasoning_level_override (optional)
 run_reviewer_pass() {
   local pass_prefix="$1"
   local pass_prompt="$2"
   local pass_reasoning="${3:-}"
   local -a pass_pids=()
+  local -a pass_pid_models=()
   local -a pass_models=()
   local -a pass_status_files=()
   local -a pass_log_files=()
@@ -1620,22 +2988,49 @@ run_reviewer_pass() {
   while IFS= read -r model; do
     [ -z "${model}" ] && continue
     local safe_name
+    local status_file
+    local log_file
+    local output_file
+    local skip_reason=""
+    local cached_effective_model_note=""
     safe_name="$(echo "${model}" | tr '/.:' '___')"
+    status_file="${PREVIOUS_REVIEWS_DIR}/status_${pass_prefix}_${safe_name}.txt"
+    log_file="${PREVIOUS_REVIEWS_DIR}/${pass_prefix}_${safe_name}.log"
+    output_file="${PREVIOUS_REVIEWS_DIR}/${pass_prefix}_${safe_name}.txt"
     pass_models+=("${model}")
-    pass_status_files+=("${PREVIOUS_REVIEWS_DIR}/status_${pass_prefix}_${safe_name}.txt")
-    pass_log_files+=("${PREVIOUS_REVIEWS_DIR}/${pass_prefix}_${safe_name}.log")
+    pass_status_files+=("${status_file}")
+    pass_log_files+=("${log_file}")
+
+    if reviewer_circuit_breaker_enabled; then
+      reviewer_health_dispatch_prepare "${model}"
+      if [ "${REVIEWER_HEALTH_DISPATCH_DECISION}" = "skip_open" ]; then
+        if [ -n "${REVIEWER_HEALTH_DISPATCH_EFFECTIVE_MODEL:-}" ]; then
+          cached_effective_model_note=" cached_effective_model=${REVIEWER_HEALTH_DISPATCH_EFFECTIVE_MODEL}"
+        fi
+        skip_reason="cached reviewer health state is open"
+        if [[ "${REVIEWER_HEALTH_DISPATCH_OPEN_UNTIL_EPOCH:-0}" =~ ^[0-9]+$ ]] && [ "${REVIEWER_HEALTH_DISPATCH_OPEN_UNTIL_EPOCH:-0}" -gt 0 ]; then
+          skip_reason="${skip_reason} until epoch ${REVIEWER_HEALTH_DISPATCH_OPEN_UNTIL_EPOCH}"
+        fi
+        printf 'Reviewer slot %s skipped — %s.%s\n' "${model}" "${skip_reason}" "${cached_effective_model_note}" | tee -a "${log_file}" >&2
+        printf 'Reviewer slot %s skipped because %s.\n' "${model}" "${skip_reason}" > "${output_file}"
+        echo "skipped_open" > "${status_file}"
+        continue
+      fi
+    fi
+
     run_reviewer "${model}" "${safe_name}" "${pass_prefix}" "${pass_prompt}" "${pass_reasoning}" >&2 &
     pass_pids+=("$!")
-  done <<< "${REVIEWER_MODELS}"
+    pass_pid_models+=("${model}")
+  done <<< "$(get_active_reviewer_models_text)"
 
-  if [ "${#pass_pids[@]}" -eq 0 ]; then
+  if [ "${#pass_models[@]}" -eq 0 ]; then
     echo "No reviewer models configured." >&2
     exit 1
   fi
 
   for idx in "${!pass_pids[@]}"; do
     local pid="${pass_pids[$idx]}"
-    local model="${pass_models[$idx]}"
+    local model="${pass_pid_models[$idx]}"
     if ! wait "${pid}"; then
       echo "Reviewer worker process crashed for model ${model} (${pass_prefix})." >&2
     fi
@@ -1655,6 +3050,8 @@ run_reviewer_pass() {
     case "${sf_status}" in
       success)
         pass_successful=$((pass_successful + 1))
+        ;;
+      pr_closed|skipped_unmapped|skipped_open)
         ;;
       *)
         echo "::warning::Reviewer ${sf_model} (${pass_prefix}): status='${sf_status:-<empty>}' — not counted as success. See ${pass_log_files[$((sf_idx - 1))]} for per-reviewer log." >&2
@@ -1831,6 +3228,25 @@ if [ "${reviewers_successful}" -eq 0 ]; then
   if [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
     echo "PR #${PR_NUMBER} was closed/merged during review — exiting cleanly."
     echo "PR_CLOSED=true" >> "$GITHUB_ENV"
+    exit 0
+  fi
+  review_skip_only_statuses=0
+  review_hard_failures=0
+  for status_file in "${PREVIOUS_REVIEWS_DIR}"/status_review_*.txt; do
+    [ -f "${status_file}" ] || continue
+    status_value="$(cat "${status_file}" 2>/dev/null || true)"
+    case "${status_value}" in
+      skipped_unmapped|skipped_open)
+        review_skip_only_statuses=$((review_skip_only_statuses + 1))
+        ;;
+      *)
+        review_hard_failures=$((review_hard_failures + 1))
+        ;;
+    esac
+  done
+  if [ "${review_skip_only_statuses}" -gt 0 ] && [ "${review_hard_failures}" -eq 0 ]; then
+    echo "::warning::Reviewer pass produced no successful findings; all review slots were skipped fail-open (cached-open or unmapped). Continuing with REVIEWERS_SUCCESSFUL=0."
+    echo "REVIEWERS_SUCCESSFUL=0" >> "$GITHUB_ENV"
     exit 0
   fi
   echo "Reviewer failure diagnostics:"

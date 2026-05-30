@@ -218,6 +218,70 @@ def test_prepare_analysis_context_failing_runs_sorted_by_duration():
 	assert [r["run_id"] for r in ctx["slow_runs"][:1]] == [3]
 
 
+def test_prepare_analysis_context_carries_cost_telemetry_through_rollups():
+	runs = [
+		{
+			"repository": "o/r",
+			"run_id": 1,
+			"workflow_name": "AI Review",
+			"workflow_family": "review_autofix",
+			"conclusion": "failure",
+			"duration_seconds": 10,
+			"created_at": "2026-04-01T00:00:00Z",
+			"cost_telemetry": {
+				"log_parsed": True,
+				"or_prompt_tokens": 100,
+				"or_completion_tokens": 25,
+				"or_total_tokens": 125,
+				"or_cache_write_tokens": 30,
+				"or_cache_read_tokens": 40,
+				"or_calls": 1,
+				"break_glass_count": 1,
+				"context_budget_warn_count": 0,
+				"wall_clock_p50_ms": 1000,
+				"wall_clock_p99_ms": 1000,
+			},
+		},
+		{
+			"repository": "o/r",
+			"run_id": 2,
+			"workflow_name": "AI Review",
+			"workflow_family": "review_autofix",
+			"conclusion": "success",
+			"duration_seconds": 20,
+			"created_at": "2026-04-02T00:00:00Z",
+			"cost_telemetry": {
+				"log_parsed": True,
+				"or_prompt_tokens": 50,
+				"or_completion_tokens": 10,
+				"or_total_tokens": 60,
+				"or_cache_write_tokens": 0,
+				"or_cache_read_tokens": 20,
+				"or_calls": 1,
+				"break_glass_count": 0,
+				"context_budget_warn_count": 1,
+				"wall_clock_p50_ms": 2000,
+				"wall_clock_p99_ms": 2000,
+			},
+		},
+	]
+	ctx = analyzer.prepare_analysis_context(
+		{
+			"source_files": [],
+			"collector_report": {"runs": runs, "summary": {"total_runs": 2}, "errors": []},
+			"run_metrics": None,
+			"summary_stats": None,
+		}
+	)
+
+	assert ctx["summary"]["cost_telemetry"]["runs_with_log_telemetry"] == 2
+	assert ctx["summary"]["cost_telemetry"]["or_total_tokens"] == 185
+	assert ctx["summary"]["cost_telemetry"]["context_budget_warn_count"] == 1
+	assert ctx["per_repo"]["o/r"]["cost_telemetry"]["break_glass_count"] == 1
+	assert ctx["per_workflow_family"]["review_autofix"]["cost_telemetry"]["context_budget_warn_count"] == 1
+	assert ctx["failing_runs"][0]["cost_telemetry"]["break_glass_count"] == 1
+
+
 # ---------- resolve_dated_output_path --------------------------------------
 
 

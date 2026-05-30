@@ -30,12 +30,16 @@ Usage:
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
+from functools import lru_cache
 import json
+import os
 import re
 import subprocess
 import sys
 from collections import defaultdict
-from typing import Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 DEFAULT_WORKFLOWS = [
     "clarify.yml",
@@ -90,11 +94,331 @@ MCP_PROBE_GENERIC_RE = re.compile(
 )
 
 KNOWN_MCP_SERVERS = frozenset({"SEMBLE", "SERENA"})
+BREAK_GLASS_RE = re.compile(r"(?:^|\s)BREAK_GLASS:(?:\s|$)")
+CONTEXT_BUDGET_WARN_RE = re.compile(
+    r"(?:^|\s)CONTEXT_BUDGET_WARN:\s+"
+    r"phase=(?P<phase>\S+)\s+"
+    r"prompt_tokens=(?P<prompt_tokens>\d+)\s+"
+    r"model_context_window=(?P<model_context_window>\d+)\s+"
+    r"ratio=(?P<ratio>\d+(?:\.\d+)?)\s+"
+    r"threshold=(?P<threshold>\d+)(?:\s|$)"
+)
+DEFAULT_CONTEXT_BUDGET_WARN_RATIO = 0.7
+DEFAULT_MODEL_CATALOG_PATH = Path(__file__).resolve().with_name("codex_model_catalog.json")
+RUN_COST_TELEMETRY_FIELDS = (
+    "codex_tokens_used",
+    "codex_calls",
+    "or_prompt_tokens",
+    "or_completion_tokens",
+    "or_total_tokens",
+    "or_cache_write_tokens",
+    "or_cache_read_tokens",
+    "or_calls",
+    "semble_query_calls",
+    "semble_query_bytes",
+    "semble_fallbacks",
+    "serena_query_calls",
+    "serena_query_response_bytes",
+    "serena_query_tool_calls",
+    "serena_query_ms",
+    "serena_fallbacks",
+    "serena_probe_ok",
+    "serena_probe_failed",
+    "serena_probe_skipped",
+    "break_glass_count",
+    "context_budget_warn_count",
+    "cache_hit_rate",
+    "wall_clock_p50_ms",
+    "wall_clock_p99_ms",
+)
+AGGREGATABLE_COST_FIELDS = (
+    "codex_tokens_used",
+    "codex_calls",
+    "or_prompt_tokens",
+    "or_completion_tokens",
+    "or_total_tokens",
+    "or_cache_write_tokens",
+    "or_cache_read_tokens",
+    "or_calls",
+    "semble_query_calls",
+    "semble_query_bytes",
+    "semble_fallbacks",
+    "serena_query_calls",
+    "serena_query_response_bytes",
+    "serena_query_tool_calls",
+    "serena_query_ms",
+    "serena_fallbacks",
+    "serena_probe_ok",
+    "serena_probe_failed",
+    "serena_probe_skipped",
+    "break_glass_count",
+    "context_budget_warn_count",
+)
 
 
 def _extract_log_field(line: str, field: str) -> Optional[str]:
     m = re.search(rf"(?:^|\s){re.escape(field)}=([^\s]+)", line)
     return m.group(1) if m else None
+
+
+def _to_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _to_float(value: Any, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _parse_iso8601(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    normalized = value.strip()
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _duration_ms_from_run(run: dict[str, Any]) -> Optional[int]:
+    started_at = _parse_iso8601(run.get("startedAt") or run.get("started_at"))
+    updated_at = _parse_iso8601(run.get("updatedAt") or run.get("updated_at"))
+    if started_at and updated_at:
+        return max(int((updated_at - started_at).total_seconds() * 1000), 0)
+    return None
+
+
+def _percentile(values: list[int], pct: int) -> Optional[float]:
+    if not values:
+        return None
+    sorted_values = sorted(values)
+    if len(sorted_values) == 1:
+        return float(sorted_values[0])
+    rank = max(0.0, min(1.0, pct / 100.0)) * (len(sorted_values) - 1)
+    lower = int(rank)
+    upper = min(lower + 1, len(sorted_values) - 1)
+    weight = rank - lower
+    return float(sorted_values[lower] * (1.0 - weight) + sorted_values[upper] * weight)
+
+
+def _percentile_int(values: list[int], pct: int) -> Optional[int]:
+    value = _percentile(values, pct)
+    if value is None:
+        return None
+    return int(round(value))
+
+
+def _format_ratio(value: float) -> str:
+    formatted = f"{value:.4f}".rstrip("0").rstrip(".")
+    return formatted or "0"
+
+
+def estimate_prompt_tokens_from_bytes(prompt_bytes: int) -> int:
+    prompt_bytes = max(_to_int(prompt_bytes, 0), 0)
+    return (prompt_bytes + 3) // 4
+
+
+def compute_cache_hit_rate(values: dict[str, Any]) -> Optional[float]:
+    prompt_tokens = _to_int(values.get("or_prompt_tokens"), 0)
+    cache_write_tokens = _to_int(values.get("or_cache_write_tokens"), 0)
+    cache_read_tokens = _to_int(values.get("or_cache_read_tokens"), 0)
+    denominator = prompt_tokens + cache_write_tokens + cache_read_tokens
+    if denominator <= 0:
+        return None
+    ratio = cache_read_tokens / denominator
+    ratio = max(0.0, min(1.0, ratio))
+    return round(ratio, 6)
+
+
+@lru_cache(maxsize=4)
+def _load_model_catalog(catalog_path: str) -> dict[str, dict[str, Any]]:
+    path = Path(catalog_path)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+    models = payload.get("models") if isinstance(payload, dict) else payload
+    if not isinstance(models, list):
+        return {}
+
+    indexed: dict[str, dict[str, Any]] = {}
+    for entry in models:
+        if not isinstance(entry, dict):
+            continue
+        slug = entry.get("slug")
+        if isinstance(slug, str) and slug:
+            indexed[slug] = entry
+    return indexed
+
+
+def get_model_context_window(model: str, catalog_path: str | None = None) -> Optional[int]:
+    if not model:
+        return None
+    resolved_catalog = str(Path(catalog_path) if catalog_path else DEFAULT_MODEL_CATALOG_PATH)
+    entry = _load_model_catalog(resolved_catalog).get(model)
+    if not isinstance(entry, dict):
+        return None
+    context_window = _to_int(entry.get("context_window"), 0)
+    return context_window if context_window > 0 else None
+
+
+def _phase_override_keys(phase: str) -> list[str]:
+    normalized_phase = re.sub(r"[^A-Za-z0-9]+", "_", phase.strip().upper()).strip("_")
+    keys = []
+    if normalized_phase:
+        keys.append(f"MAX_PROMPT_TOKENS_FOR_{normalized_phase}")
+    keys.append("MAX_PROMPT_TOKENS_FOR_PHASE")
+    return keys
+
+
+def resolve_context_budget_warn_threshold(
+    phase: str,
+    model_context_window: int,
+    *,
+    env: dict[str, str] | None = None,
+    ratio: float | None = None,
+) -> tuple[int, float]:
+    env_map = env if env is not None else dict(os.environ)  # type: ignore[name-defined]
+    ratio_value = ratio
+    if ratio_value is None:
+        ratio_value = _to_float(
+            env_map.get("CONTEXT_BUDGET_WARN_RATIO", str(DEFAULT_CONTEXT_BUDGET_WARN_RATIO)),
+            DEFAULT_CONTEXT_BUDGET_WARN_RATIO,
+        )
+    if ratio_value <= 0:
+        ratio_value = DEFAULT_CONTEXT_BUDGET_WARN_RATIO
+
+    for key in _phase_override_keys(phase):
+        override_raw = env_map.get(key)
+        override_value = _to_int(override_raw, 0)
+        if override_value > 0:
+            return override_value, ratio_value
+
+    return max(int(model_context_window * ratio_value), 1), ratio_value
+
+
+def build_context_budget_warning(
+    *,
+    phase: str,
+    prompt_tokens: int,
+    model: str,
+    catalog_path: str | None = None,
+    env: dict[str, str] | None = None,
+    ratio: float | None = None,
+) -> dict[str, Any] | None:
+    if not phase or prompt_tokens <= 0 or not model:
+        return None
+
+    model_context_window = get_model_context_window(model, catalog_path=catalog_path)
+    if model_context_window is None:
+        return None
+
+    threshold, _configured_ratio = resolve_context_budget_warn_threshold(
+        phase,
+        model_context_window,
+        env=env,
+        ratio=ratio,
+    )
+    if prompt_tokens <= threshold:
+        return None
+
+    actual_ratio = prompt_tokens / model_context_window
+    return {
+        "phase": phase,
+        "prompt_tokens": prompt_tokens,
+        "model_context_window": model_context_window,
+        "ratio": round(actual_ratio, 6),
+        "threshold": threshold,
+    }
+
+
+def format_context_budget_warn_line(warning: dict[str, Any] | None) -> str | None:
+    if not isinstance(warning, dict):
+        return None
+    return (
+        "CONTEXT_BUDGET_WARN: "
+        f"phase={warning['phase']} "
+        f"prompt_tokens={warning['prompt_tokens']} "
+        f"model_context_window={warning['model_context_window']} "
+        f"ratio={_format_ratio(_to_float(warning.get('ratio'), 0.0))} "
+        f"threshold={warning['threshold']}"
+    )
+
+
+def build_context_budget_warn_line_for_file(
+    *,
+    phase: str,
+    prompt_path: str | Path,
+    model: str,
+    catalog_path: str | None = None,
+    env: dict[str, str] | None = None,
+    ratio: float | None = None,
+) -> str | None:
+    try:
+        prompt_bytes = Path(prompt_path).stat().st_size
+    except OSError:
+        return None
+
+    warning = build_context_budget_warning(
+        phase=phase,
+        prompt_tokens=estimate_prompt_tokens_from_bytes(prompt_bytes),
+        model=model,
+        catalog_path=catalog_path,
+        env=env,
+        ratio=ratio,
+    )
+    return format_context_budget_warn_line(warning)
+
+
+def build_run_cost_telemetry(log: str, *, fallback_wall_clock_ms: int | None = None) -> dict[str, Any]:
+    parsed = parse_log(log, fallback_wall_clock_ms=fallback_wall_clock_ms)
+    telemetry = {field: parsed[field] for field in RUN_COST_TELEMETRY_FIELDS}
+    telemetry["log_parsed"] = True
+    return telemetry
+
+
+def aggregate_run_cost_telemetry(runs: list[dict[str, Any]]) -> dict[str, Any]:
+    aggregate = {
+        "runs_with_log_telemetry": 0,
+        "wall_clock_sample_count": 0,
+        "cache_hit_rate": None,
+        "wall_clock_p50_ms": None,
+        "wall_clock_p99_ms": None,
+        "wall_clock_samples_ms": [],
+    }
+    for field in AGGREGATABLE_COST_FIELDS:
+        aggregate[field] = 0
+
+    for run in runs:
+        telemetry = run.get("cost_telemetry")
+        if not isinstance(telemetry, dict) or telemetry.get("log_parsed") is not True:
+            continue
+        aggregate["runs_with_log_telemetry"] += 1
+        for field in AGGREGATABLE_COST_FIELDS:
+            aggregate[field] += _to_int(telemetry.get(field), 0)
+        sample_ms = _to_int(telemetry.get("wall_clock_p99_ms"), 0)
+        if sample_ms <= 0:
+            sample_ms = _to_int(telemetry.get("wall_clock_p50_ms"), 0)
+        if sample_ms > 0:
+            aggregate["wall_clock_samples_ms"].append(sample_ms)
+
+    aggregate["cache_hit_rate"] = compute_cache_hit_rate(aggregate)
+    aggregate["wall_clock_sample_count"] = len(aggregate["wall_clock_samples_ms"])
+    aggregate["wall_clock_p50_ms"] = _percentile_int(aggregate["wall_clock_samples_ms"], 50)
+    aggregate["wall_clock_p99_ms"] = _percentile_int(aggregate["wall_clock_samples_ms"], 99)
+    aggregate.pop("wall_clock_samples_ms", None)
+    return aggregate
 
 
 def gh(args: List[str]) -> Optional[str]:
@@ -122,7 +446,7 @@ def list_runs(repo: str, workflow: str, limit: int, since: Optional[str]) -> Lis
         "--workflow", workflow,
         "--limit", str(limit),
         "--json",
-        "databaseId,workflowName,createdAt,conclusion,event,headBranch,status",
+        "databaseId,workflowName,createdAt,startedAt,updatedAt,conclusion,event,headBranch,status",
     ])
     if not out:
         return []
@@ -132,7 +456,7 @@ def list_runs(repo: str, workflow: str, limit: int, since: Optional[str]) -> Lis
     return runs
 
 
-def parse_log(log: str) -> dict:
+def parse_log(log: str, *, fallback_wall_clock_ms: int | None = None) -> dict:
     """Return aggregated token counts and per-call breakdown for one run."""
     out = {
         "codex_tokens_used": 0,
@@ -159,7 +483,13 @@ def parse_log(log: str) -> dict:
         "serena_targets": defaultdict(lambda: defaultdict(int)),
         "serena_tools": defaultdict(lambda: defaultdict(int)),
         "other_mcp": defaultdict(lambda: defaultdict(int)),
+        "break_glass_count": 0,
+        "context_budget_warn_count": 0,
+        "cache_hit_rate": None,
+        "wall_clock_p50_ms": None,
+        "wall_clock_p99_ms": None,
     }
+    wall_clock_samples_ms: list[int] = []
 
     for m in CODEX_TOKENS_RE.finditer(log):
         try:
@@ -167,12 +497,6 @@ def parse_log(log: str) -> dict:
             out["codex_calls"] += 1
         except ValueError:
             continue
-
-    def _to_int(v: str) -> int:
-        try:
-            return int(v)
-        except (TypeError, ValueError):
-            return 0
 
     for m in OPENROUTER_RE.finditer(log):
         pt = _to_int(m.group("pt"))
@@ -193,6 +517,12 @@ def parse_log(log: str) -> dict:
         out["or_phases"][phase]["calls"] += 1
 
     for line in log.splitlines():
+        if BREAK_GLASS_RE.search(line):
+            out["break_glass_count"] += 1
+
+        if CONTEXT_BUDGET_WARN_RE.search(line):
+            out["context_budget_warn_count"] += 1
+
         if SEMBLE_QUERY_RE.search(line):
             target = _extract_log_field(line, "target") or "unknown"
             logged_bytes = _to_int(_extract_log_field(line, "bytes") or "0")
@@ -265,6 +595,13 @@ def parse_log(log: str) -> dict:
                 # known SEMBLE/SERENA prefixes are handled above.
                 break
 
+    if fallback_wall_clock_ms and fallback_wall_clock_ms > 0:
+        wall_clock_samples_ms.append(fallback_wall_clock_ms)
+
+    out["cache_hit_rate"] = compute_cache_hit_rate(out)
+    out["wall_clock_p50_ms"] = _percentile_int(wall_clock_samples_ms, 50)
+    out["wall_clock_p99_ms"] = _percentile_int(wall_clock_samples_ms, 99)
+
     out["or_phases"] = {p: dict(v) for p, v in out["or_phases"].items()}
     out["semble_targets"] = {p: dict(v) for p, v in out["semble_targets"].items()}
     out["serena_targets"] = {p: dict(v) for p, v in out["serena_targets"].items()}
@@ -275,6 +612,18 @@ def parse_log(log: str) -> dict:
 
 def fmt(n: int) -> str:
     return f"{n:,}" if n else "-"
+
+
+def fmt_rate(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    return f"{value:.1%}"
+
+
+def fmt_ms(value: int | None) -> str:
+    if value is None:
+        return "N/A"
+    return f"{value:,}"
 
 
 def main() -> int:
@@ -326,6 +675,12 @@ def main() -> int:
             "serena_targets": defaultdict(lambda: defaultdict(int)),
             "serena_tools": defaultdict(lambda: defaultdict(int)),
             "other_mcp": defaultdict(lambda: defaultdict(int)),
+            "break_glass_count": 0,
+            "context_budget_warn_count": 0,
+            "cache_hit_rate": None,
+            "wall_clock_p50_ms": None,
+            "wall_clock_p99_ms": None,
+            "wall_clock_samples_ms": [],
         }
 
         for i, r in enumerate(runs, 1):
@@ -339,7 +694,8 @@ def main() -> int:
             if log is None:
                 sys.stderr.write("skip (log unavailable)\n")
                 continue
-            parsed = parse_log(log)
+            fallback_wall_clock_ms = _duration_ms_from_run(r)
+            parsed = parse_log(log, fallback_wall_clock_ms=fallback_wall_clock_ms)
             if (
                 parsed["codex_tokens_used"]
                 or parsed["or_calls"]
@@ -350,9 +706,13 @@ def main() -> int:
                 or parsed["serena_probe_ok"]
                 or parsed["serena_probe_failed"]
                 or parsed["serena_probe_skipped"]
+                or parsed["break_glass_count"]
+                or parsed["context_budget_warn_count"]
                 or parsed["other_mcp"]
             ):
                 agg["runs_with_data"] += 1
+            if fallback_wall_clock_ms and fallback_wall_clock_ms > 0:
+                agg["wall_clock_samples_ms"].append(fallback_wall_clock_ms)
             for k in ("codex_tokens_used", "codex_calls", "or_prompt_tokens",
                       "or_completion_tokens", "or_total_tokens",
                       "or_cache_write_tokens", "or_cache_read_tokens",
@@ -361,7 +721,8 @@ def main() -> int:
                       "serena_query_calls", "serena_query_response_bytes",
                       "serena_query_tool_calls", "serena_query_ms",
                       "serena_fallbacks", "serena_probe_ok",
-                      "serena_probe_failed", "serena_probe_skipped"):
+                      "serena_probe_failed", "serena_probe_skipped",
+                      "break_glass_count", "context_budget_warn_count"):
                 agg[k] += parsed[k]
             for phase, vals in parsed["or_phases"].items():
                 for k, v in vals.items():
@@ -382,6 +743,8 @@ def main() -> int:
                 "workflow": wf,
                 "run_id": rid,
                 "created_at": r.get("createdAt"),
+                "started_at": r.get("startedAt"),
+                "updated_at": r.get("updatedAt"),
                 "conclusion": r.get("conclusion"),
                 "head_branch": r.get("headBranch"),
                 **{k: parsed[k] for k in (
@@ -393,6 +756,8 @@ def main() -> int:
                     "serena_query_tool_calls", "serena_query_ms",
                     "serena_fallbacks", "serena_probe_ok",
                     "serena_probe_failed", "serena_probe_skipped",
+                    "break_glass_count", "context_budget_warn_count",
+                    "cache_hit_rate", "wall_clock_p50_ms", "wall_clock_p99_ms",
                 )},
                 "semble_targets": parsed["semble_targets"],
                 "serena_targets": parsed["serena_targets"],
@@ -408,9 +773,17 @@ def main() -> int:
                 f"serena_calls={fmt(parsed['serena_query_calls'])} "
                 f"serena_fallbacks={fmt(parsed['serena_fallbacks'])} "
                 f"serena_probe_failed={fmt(parsed['serena_probe_failed'])} "
+                f"cache_hit={fmt_rate(parsed['cache_hit_rate'])} "
+                f"wall_p99_ms={fmt_ms(parsed['wall_clock_p99_ms'])} "
+                f"break_glass={fmt(parsed['break_glass_count'])} "
+                f"context_warn={fmt(parsed['context_budget_warn_count'])} "
                 f"other_mcp={len(parsed['other_mcp'])}\n"
             )
 
+        agg["cache_hit_rate"] = compute_cache_hit_rate(agg)
+        agg["wall_clock_p50_ms"] = _percentile_int(agg["wall_clock_samples_ms"], 50)
+        agg["wall_clock_p99_ms"] = _percentile_int(agg["wall_clock_samples_ms"], 99)
+        agg.pop("wall_clock_samples_ms", None)
         agg["or_phases"] = {p: dict(v) for p, v in agg["or_phases"].items()}
         agg["semble_targets"] = {p: dict(v) for p, v in agg["semble_targets"].items()}
         agg["serena_targets"] = {p: dict(v) for p, v in agg["serena_targets"].items()}
@@ -426,15 +799,19 @@ def main() -> int:
     print()
     print("| Workflow | runs | with_data | codex_tokens | codex_calls | "
           "or_prompt | or_completion | or_total | or_cache_write | "
-          "or_cache_read | or_calls |")
-    print("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+          "or_cache_read | or_calls | cache_hit_rate | wall_clock_p50_ms | "
+          "wall_clock_p99_ms | break_glass | context_budget_warn |")
+    print("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
     for wf, a in per_wf.items():
         print(
             f"| {wf} | {a['run_count']} | {a['runs_with_data']} | "
             f"{fmt(a['codex_tokens_used'])} | {fmt(a['codex_calls'])} | "
             f"{fmt(a['or_prompt_tokens'])} | {fmt(a['or_completion_tokens'])} | "
             f"{fmt(a['or_total_tokens'])} | {fmt(a['or_cache_write_tokens'])} | "
-            f"{fmt(a['or_cache_read_tokens'])} | {fmt(a['or_calls'])} |"
+            f"{fmt(a['or_cache_read_tokens'])} | {fmt(a['or_calls'])} | "
+            f"{fmt_rate(a['cache_hit_rate'])} | {fmt_ms(a['wall_clock_p50_ms'])} | "
+            f"{fmt_ms(a['wall_clock_p99_ms'])} | {fmt(a['break_glass_count'])} | "
+            f"{fmt(a['context_budget_warn_count'])} |"
         )
 
     # OpenRouter phase breakdown (review_autofix only emits phases)

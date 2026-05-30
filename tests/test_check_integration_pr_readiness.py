@@ -218,6 +218,66 @@ def test_main_fails_closed_when_tracking_issue_has_no_checkboxes():
 		mod._fetch_issue = original_fetch
 
 
+def test_main_posts_success_when_all_tracking_boxes_are_ticked():
+	mod = _import()
+	posted: list[tuple[str, str]] = []
+	original_post = mod._post_commit_status
+	original_fetch = mod._fetch_issue
+	old_argv = sys.argv
+	try:
+		mod._post_commit_status = lambda repo, sha, state, description, target_url="": posted.append((state, description)) or True
+		mod._fetch_issue = lambda repo, n: {
+			"labels": [mod.TRACKING_LABEL],
+			"body": "- [x] shipped A\n- [X] shipped B\n",
+		}
+		sys.argv = [
+			"check_integration_pr_readiness.py",
+			"--head-ref", "orchestrator/project-2734",
+			"--head-sha", "deadbeef",
+			"--repo", "owner/repo",
+		]
+		rc = mod.main()
+		assert rc == 0
+		assert posted == [(
+			"success",
+			"all 2 sub-issue(s) on #2734 are ticked — integration PR is ready",
+		)]
+	finally:
+		sys.argv = old_argv
+		mod._post_commit_status = original_post
+		mod._fetch_issue = original_fetch
+
+
+def test_main_fails_when_any_tracking_checkbox_remains_unchecked():
+	mod = _import()
+	posted: list[tuple[str, str]] = []
+	original_post = mod._post_commit_status
+	original_fetch = mod._fetch_issue
+	old_argv = sys.argv
+	try:
+		mod._post_commit_status = lambda repo, sha, state, description, target_url="": posted.append((state, description)) or True
+		mod._fetch_issue = lambda repo, n: {
+			"labels": [mod.TRACKING_LABEL],
+			"body": "- [x] shipped A\n- [ ] outstanding B\n- [X] shipped C\n",
+		}
+		sys.argv = [
+			"check_integration_pr_readiness.py",
+			"--head-ref", "orchestrator/project-2734",
+			"--head-sha", "deadbeef",
+			"--repo", "owner/repo",
+		]
+		rc = mod.main()
+		assert rc == 0
+		assert posted == [(
+			"failure",
+			"1/3 sub-issues on #2734 still unchecked: outstanding B",
+		)]
+	finally:
+		sys.argv = old_argv
+		mod._post_commit_status = original_post
+		mod._fetch_issue = original_fetch
+
+
 def test_main_errors_when_failure_status_cannot_be_posted():
 	mod = _import()
 	posted: list[tuple[str, str, str]] = []

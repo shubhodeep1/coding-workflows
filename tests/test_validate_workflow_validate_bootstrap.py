@@ -3,10 +3,12 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+CODEX_HEARTBEAT_TEST = REPO_ROOT / "tests" / "test_codex_heartbeat.py"
 VALIDATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "validate.yml"
 
 
@@ -92,10 +94,34 @@ def test_validate_workflow_bootstraps_revalidate_lifecycle_ai_memory_schemas() -
 	assert "revalidate_events.v1.json" in wf
 
 
+def test_validate_workflow_bootstraps_codex_heartbeat_support() -> None:
+	wf = _workflow_text()
+	for snippet in (
+		"CODEX_HEARTBEAT_ENABLED: ${{ vars.CODEX_HEARTBEAT_ENABLED || '1' }}",
+		"CODEX_HEARTBEAT_INTERVAL_SECS: ${{ vars.CODEX_HEARTBEAT_INTERVAL_SECS || '30' }}",
+		'copy_from_ref_or_local "scripts/codex_heartbeat.sh" "scripts/codex_heartbeat.sh.tmp" "false" "true"',
+		'_fetched_scripts+=(codex_heartbeat.sh)',
+	):
+		assert snippet in wf
+
+
+def test_codex_heartbeat_helper_contract() -> None:
+	result = subprocess.run(
+		["python3", str(CODEX_HEARTBEAT_TEST)],
+		cwd=REPO_ROOT,
+		capture_output=True,
+		text=True,
+		timeout=60,
+	)
+	assert result.returncode == 0, result.stdout + result.stderr
+
+
 def main() -> int:
 	test_validate_workflow_bootstrap_fetches_template_assets()
 	test_validate_workflow_passes_template_default_env()
 	test_validate_workflow_bootstraps_revalidate_lifecycle_ai_memory_schemas()
+	test_validate_workflow_bootstraps_codex_heartbeat_support()
+	test_codex_heartbeat_helper_contract()
 	return 0
 
 

@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import tempfile
+import textwrap
 from pathlib import Path
 
 
@@ -13,6 +15,21 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 REVIEWERS = REPO_ROOT / "scripts" / "review_run_reviewers.sh"
 APPLY_FIXES = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
+CONSOLIDATE = REPO_ROOT / "scripts" / "review_consolidate.sh"
+RB_JUDGE = REPO_ROOT / "scripts" / "review_rb_judge.sh"
+AGENTS_MD_MATERIALITY = REPO_ROOT / "scripts" / "review_agents_md_materiality.sh"
+REVIEWER_FAILBACK_CHAINS = REPO_ROOT / "scripts" / "reviewer_failback_chains.json"
+MODEL_CATALOG = REPO_ROOT / "scripts" / "codex_model_catalog.json"
+FIXTURES_DIR = REPO_ROOT / "scripts" / "fixtures" / "cloudflare-learnings"
+PHASE_A_ANTI_RULES_FIXTURE = FIXTURES_DIR / "phase-a-anti-rules-noisy-pr.patch"
+PHASE_B_RISK_TIER_TRIVIAL_FIXTURE = FIXTURES_DIR / "phase-b-risk-tier-trivial.patch"
+PHASE_B_RISK_TIER_LITE_FIXTURE = FIXTURES_DIR / "phase-b-risk-tier-lite.patch"
+PHASE_B_RISK_TIER_FULL_FIXTURE = FIXTURES_DIR / "phase-b-risk-tier-full.patch"
+PHASE_B_RISK_TIER_ALWAYS_FULL_FIXTURE = FIXTURES_DIR / "phase-b-risk-tier-always-full.patch"
+PHASE_C_FILTER_FIXTURE = FIXTURES_DIR / "phase-c-lockfile-and-generated.patch"
+PHASE_D_MATERIALITY_FIXTURE = FIXTURES_DIR / "phase-d-package-bump-no-agents-update.patch"
+PHASE_G_FLAKY_REVIEWER_FIXTURE = FIXTURES_DIR / "phase-g-flaky-reviewer.patch"
+PHASE_H_CONTEXT_BUDGET_FIXTURE = FIXTURES_DIR / "phase-h-context-budget-overflow.txt"
 
 
 def _workflow_text() -> str:
@@ -25,6 +42,14 @@ def _reviewers_text() -> str:
 
 def _apply_fixes_text() -> str:
 	return APPLY_FIXES.read_text(encoding="utf-8")
+
+
+def _consolidate_text() -> str:
+	return CONSOLIDATE.read_text(encoding="utf-8")
+
+
+def _rb_judge_text() -> str:
+	return RB_JUDGE.read_text(encoding="utf-8")
 
 
 def _step_block(step_name: str) -> str:
@@ -51,6 +76,522 @@ def _reviewer_iteration_scope_helper_block() -> str:
 	start = text.index("# ── Reviewer iteration-scoping helpers")
 	end = text.index("# ── End reviewer iteration-scoping helpers", start)
 	return text[start:end]
+
+
+def _reviewer_filter_helper_block() -> str:
+	text = _reviewers_text()
+	start = text.index("# ── Reviewer uninteresting-file filter helpers")
+	end = text.index("# ── End reviewer uninteresting-file filter helpers", start)
+	return text[start:end]
+
+
+def _reviewer_risk_tier_helper_block() -> str:
+	text = _reviewers_text()
+	start = text.index("# ── Reviewer risk-tier helpers")
+	end = text.index("# ── End reviewer risk-tier helpers", start)
+	return text[start:end]
+
+
+def _reviewer_failback_helper_block() -> str:
+	text = _reviewers_text()
+	start = text.index("# ── Reviewer failback / health helpers")
+	end = text.index("# ── End reviewer failback / health helpers", start)
+	return text[start:end]
+
+
+def _reviewer_run_reviewer_block() -> str:
+	text = _reviewers_text()
+	start = text.index("run_reviewer() {")
+	end = text.index("# ── Two-pass reviewer architecture", start)
+	return text[start:end]
+
+
+def _reviewer_run_reviewer_pass_block() -> str:
+	text = _reviewers_text()
+	start = text.index("run_reviewer_pass() {")
+	end = text.index("# Wrap a consolidated pass-1 ledger", start)
+	return text[start:end]
+
+
+def _reviewer_zero_success_guard_block() -> str:
+	text = _reviewers_text()
+	start = text.index('if [ "${reviewers_successful}" -eq 0 ]; then')
+	return text[start:]
+
+
+def _workflow_reviewer_models() -> list[str]:
+	lines = _workflow_text().splitlines()
+	needle = "  REVIEWER_MODELS: |"
+	for idx, line in enumerate(lines):
+		if line != needle:
+			continue
+		models: list[str] = []
+		for candidate in lines[idx + 1:]:
+			if not candidate.startswith("    "):
+				break
+			stripped = candidate.strip()
+			if stripped:
+				models.append(stripped)
+		if models:
+			return models
+		break
+	raise AssertionError("REVIEWER_MODELS block not found in workflow")
+
+
+def _reviewer_failback_chains() -> dict[str, list[str]]:
+	payload = json.loads(REVIEWER_FAILBACK_CHAINS.read_text(encoding="utf-8"))
+	if not isinstance(payload, dict):
+		raise AssertionError("reviewer failback chains must be a JSON object")
+
+	chains: dict[str, list[str]] = {}
+	for model, entry in payload.items():
+		if isinstance(entry, str):
+			entry = [entry]
+		if not isinstance(model, str) or not isinstance(entry, list):
+			raise AssertionError("reviewer failback chains entries must be string -> list[str]")
+		candidates: list[str] = []
+		for candidate in entry:
+			if not isinstance(candidate, str) or not candidate.strip():
+				raise AssertionError(
+					f"reviewer failback chains candidates must be non-empty strings, got {candidate!r}"
+				)
+			candidates.append(candidate.strip())
+		chains[model] = candidates
+	return chains
+
+
+def _catalog_declared_model_slugs() -> set[str]:
+	payload = json.loads(MODEL_CATALOG.read_text(encoding="utf-8"))
+	models = payload.get("models") if isinstance(payload, dict) else payload
+	if not isinstance(models, list):
+		raise AssertionError("model catalog must expose a top-level models list")
+
+	declared: set[str] = set()
+	for entry in models:
+		if not isinstance(entry, dict):
+			continue
+		slug = entry.get("slug")
+		if isinstance(slug, str) and slug.strip():
+			declared.add(slug.strip())
+	return declared
+
+
+def _diff_changed_paths(diff_text: str) -> list[str]:
+	paths: list[str] = []
+	seen: set[str] = set()
+	for raw_line in diff_text.splitlines():
+		prefix = "diff --git a/"
+		if not raw_line.startswith(prefix):
+			continue
+		path = raw_line[len(prefix):].split(" b/", 1)[0].strip()
+		if not path or path in seen:
+			continue
+		seen.add(path)
+		paths.append(path)
+	return paths
+
+
+def _gate_agents_md_materiality_classifier_script() -> str:
+	gate_block = _step_block("Evaluate review gate").splitlines()
+	start_idx = -1
+	for idx, line in enumerate(gate_block):
+		if "gate_materiality_json" in line and "python3 - <<'PY'" in line:
+			start_idx = idx + 1
+			break
+	if start_idx < 0:
+		raise AssertionError("AGENTS.md materiality gate classifier heredoc not found")
+	body: list[str] = []
+	for line in gate_block[start_idx:]:
+		if line.strip() == "PY":
+			return textwrap.dedent("\n".join(body))
+		body.append(line)
+	raise AssertionError("AGENTS.md materiality gate classifier heredoc missing terminator")
+
+
+def _run_gate_agents_md_materiality_classifier(paths: list[str]) -> dict[str, object]:
+	result = subprocess.run(
+		["python3", "-c", _gate_agents_md_materiality_classifier_script()],
+		cwd=str(REPO_ROOT),
+		input=json.dumps([{"filename": path} for path in paths]),
+		check=True,
+		capture_output=True,
+		text=True,
+	)
+	return json.loads(result.stdout)
+
+
+def _phase_c_workspace_files() -> dict[str, str]:
+	return {
+		"package-lock.json": '{\n  "lockfileVersion": 3\n}\n',
+		"src/generated/client.ts": "@generated\nexport const endpoint = '/v2';\n",
+		"public/app.min.js": "console.log('minified');\n",
+		"db/migrations/20260529000000_generated.sql": "-- GENERATED FILE\nCREATE TABLE widgets (id INT);\n",
+		"scripts/migrate/seed.sh": "# GENERATED BY seed-tool\necho seed\n",
+		"db/contracts/widgets.yml": "# GENERATED BY contract-tool\ncollection: widgets\n",
+	}
+
+
+def _phase_c_changed_files_text() -> str:
+	return "\n".join(_phase_c_workspace_files().keys()) + "\n"
+
+
+def _phase_c_diff_stat_text() -> str:
+	return "\n".join([
+		" package-lock.json                          | 2 +-",
+		" src/generated/client.ts                   | 2 +-",
+		" public/app.min.js                         | 2 +-",
+		" db/migrations/20260529000000_generated.sql | 2 +-",
+		" scripts/migrate/seed.sh                   | 2 +-",
+		" db/contracts/widgets.yml                  | 2 +-",
+		" 6 files changed, 6 insertions(+), 6 deletions(-)",
+	]) + "\n"
+
+
+def _run_uninteresting_filter_script(*, diff_text: str, workspace_files: dict[str, str]) -> dict[str, str]:
+	with tempfile.TemporaryDirectory(prefix="reviewer-filter-script-") as td:
+		tmp = Path(td)
+		workspace = tmp / "workspace"
+		workspace.mkdir()
+		diff_file = tmp / "input.patch"
+		output_diff_file = tmp / "output.patch"
+		kept_paths_file = tmp / "kept_paths.txt"
+		skipped_paths_file = tmp / "skipped_paths.txt"
+
+		for rel_path, text in workspace_files.items():
+			target = workspace / rel_path
+			target.parent.mkdir(parents=True, exist_ok=True)
+			target.write_text(text, encoding="utf-8")
+
+		diff_file.write_text(diff_text, encoding="utf-8")
+		result = subprocess.run(
+			[
+				"bash",
+				str(REPO_ROOT / "scripts" / "review_filter_uninteresting_files.sh"),
+				"--diff-file",
+				str(diff_file),
+				"--output-diff",
+				str(output_diff_file),
+				"--kept-paths-file",
+				str(kept_paths_file),
+				"--skipped-paths-file",
+				str(skipped_paths_file),
+				"--repo-root",
+				str(workspace),
+			],
+			cwd=str(REPO_ROOT),
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			"output_diff": output_diff_file.read_text(encoding="utf-8"),
+			"kept_paths": kept_paths_file.read_text(encoding="utf-8"),
+			"skipped_paths": skipped_paths_file.read_text(encoding="utf-8"),
+		}
+
+
+def _run_reviewer_filter_harness(*, filter_enabled: str, helper_mode: str) -> dict[str, str]:
+	helper_block = _reviewer_filter_helper_block()
+	with tempfile.TemporaryDirectory(prefix="reviewer-filter-") as td:
+		tmp = Path(td)
+		workspace = tmp / "workspace"
+		workspace.mkdir()
+		runtime = tmp / "runtime"
+		runtime.mkdir()
+
+		for rel_path, text in _phase_c_workspace_files().items():
+			target = workspace / rel_path
+			target.parent.mkdir(parents=True, exist_ok=True)
+			target.write_text(text, encoding="utf-8")
+
+		files = {
+			"pr_diff": runtime / "pr_diff.patch",
+			"original_pr_diff": runtime / "original_pr_diff.patch",
+			"last_run_diff": runtime / "last_run_diff.patch",
+			"pr_changed": runtime / "pr_changed_files.txt",
+			"last_run_changed": runtime / "last_run_changed_files.txt",
+			"last_run_diff_stat": runtime / "last_run_diff_stat.txt",
+			"last_commit_stat": runtime / "last_commit_stat.txt",
+			"symbol_diff": runtime / "symbol_diff_summary.txt",
+			"state": runtime / "filter_state.txt",
+		}
+		fixture_text = PHASE_C_FILTER_FIXTURE.read_text(encoding="utf-8")
+		files["pr_diff"].write_text(fixture_text, encoding="utf-8")
+		files["original_pr_diff"].write_text(fixture_text, encoding="utf-8")
+		files["last_run_diff"].write_text(fixture_text, encoding="utf-8")
+		changed_files = _phase_c_changed_files_text()
+		files["pr_changed"].write_text(changed_files, encoding="utf-8")
+		files["last_run_changed"].write_text(changed_files, encoding="utf-8")
+		diff_stat = _phase_c_diff_stat_text()
+		files["last_run_diff_stat"].write_text(diff_stat, encoding="utf-8")
+		files["last_commit_stat"].write_text(diff_stat, encoding="utf-8")
+		files["symbol_diff"].write_text(
+			"RAW SYMBOL SUMMARY\npackage-lock.json\nsrc/generated/client.ts\n",
+			encoding="utf-8",
+		)
+
+		if helper_mode == "repo":
+			support_scripts_dir = REPO_ROOT / "scripts"
+		elif helper_mode == "missing":
+			support_scripts_dir = tmp / "missing_support_scripts"
+			support_scripts_dir.mkdir()
+		elif helper_mode == "failing":
+			support_scripts_dir = tmp / "failing_support_scripts"
+			support_scripts_dir.mkdir()
+			(support_scripts_dir / "review_filter_uninteresting_files.sh").write_text(
+				"#!/usr/bin/env bash\nset -euo pipefail\nexit 42\n",
+				encoding="utf-8",
+			)
+			(support_scripts_dir / "review_filter_uninteresting_files.sh").chmod(0o755)
+		else:
+			raise AssertionError(f"unknown helper_mode: {helper_mode}")
+
+		env = os.environ.copy()
+		env.update({
+			"SUPPORT_ROOT_DIR": str(REPO_ROOT),
+			"SUPPORT_SCRIPTS_DIR": str(support_scripts_dir),
+			"RUNTIME_DIR": str(runtime),
+			"GITHUB_WORKSPACE": str(workspace),
+			"REVIEWER_FILTER_UNINTERESTING_ENABLED": filter_enabled,
+			"REVIEWER_FILTER_EXTRA_GLOBS": "",
+			"REVIEWER_FILTER_EXEMPT_GLOBS": "db/contracts/**,**/migrations/**,**/migrate/**",
+			"PR_DIFF_FILE": str(files["pr_diff"]),
+			"ORIGINAL_PR_DIFF_FILE": str(files["original_pr_diff"]),
+			"LAST_RUN_DIFF_FILE": str(files["last_run_diff"]),
+			"LAST_RUN_CHANGED_FILES_FILE": str(files["last_run_changed"]),
+			"PR_CHANGED_FILES_FILE": str(files["pr_changed"]),
+			"LAST_RUN_DIFF_STAT_FILE": str(files["last_run_diff_stat"]),
+			"LAST_COMMIT_STAT_FILE": str(files["last_commit_stat"]),
+			"SYMBOL_DIFF_SUMMARY_FILE": str(files["symbol_diff"]),
+			"HARNESS_STATE_FILE": str(files["state"]),
+		})
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				f"{helper_block}\n"
+				"prepare_reviewer_filtered_artifacts\n"
+				"{\n"
+				"\tprintf 'REVIEWER_FILTER_ACTIVE=%s\\n' \"${REVIEWER_FILTER_ACTIVE}\"\n"
+				"\tprintf 'PR_DIFF_FILE=%s\\n' \"${PR_DIFF_FILE}\"\n"
+				"\tprintf 'ORIGINAL_PR_DIFF_FILE=%s\\n' \"${ORIGINAL_PR_DIFF_FILE}\"\n"
+				"\tprintf 'LAST_RUN_DIFF_FILE=%s\\n' \"${LAST_RUN_DIFF_FILE}\"\n"
+				"\tprintf 'PR_CHANGED_FILES_FILE=%s\\n' \"${PR_CHANGED_FILES_FILE}\"\n"
+				"\tprintf 'LAST_RUN_CHANGED_FILES_FILE=%s\\n' \"${LAST_RUN_CHANGED_FILES_FILE}\"\n"
+				"\tprintf 'LAST_RUN_DIFF_STAT_FILE=%s\\n' \"${LAST_RUN_DIFF_STAT_FILE}\"\n"
+				"\tprintf 'LAST_COMMIT_STAT_FILE=%s\\n' \"${LAST_COMMIT_STAT_FILE}\"\n"
+				"\tprintf 'SYMBOL_DIFF_SUMMARY_FILE=%s\\n' \"${SYMBOL_DIFF_SUMMARY_FILE}\"\n"
+				"} > \"${HARNESS_STATE_FILE}\"\n",
+			],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+		state: dict[str, str] = {}
+		for raw_line in files["state"].read_text(encoding="utf-8").splitlines():
+			if "=" not in raw_line:
+				continue
+			key, value = raw_line.split("=", 1)
+			state[key] = value
+		artifact_contents = {
+			f"{key}_CONTENT": Path(path).read_text(encoding="utf-8")
+			for key, path in state.items()
+			if key.endswith("_FILE")
+		}
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			**{key: value for key, value in state.items()},
+			**artifact_contents,
+		}
+
+
+def _run_reviewer_stat_filter_harness(*, diff_stat_text: str, skipped_rows_text: str) -> str:
+	helper_block = _reviewer_filter_helper_block()
+	with tempfile.TemporaryDirectory(prefix="reviewer-filter-stat-") as td:
+		tmp = Path(td)
+		input_file = tmp / "diff_stat.txt"
+		output_file = tmp / "filtered_diff_stat.txt"
+		skipped_file = tmp / "skipped_paths.txt"
+		input_file.write_text(diff_stat_text, encoding="utf-8")
+		skipped_file.write_text(skipped_rows_text, encoding="utf-8")
+
+		env = os.environ.copy()
+		env.update({
+			"SUPPORT_ROOT_DIR": str(REPO_ROOT),
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+			"RUNTIME_DIR": str(tmp),
+			"PR_DIFF_FILE": str(input_file),
+			"ORIGINAL_PR_DIFF_FILE": str(input_file),
+			"LAST_RUN_DIFF_FILE": str(input_file),
+			"LAST_RUN_CHANGED_FILES_FILE": str(input_file),
+			"PR_CHANGED_FILES_FILE": str(input_file),
+			"LAST_RUN_DIFF_STAT_FILE": str(input_file),
+			"LAST_COMMIT_STAT_FILE": str(input_file),
+			"SYMBOL_DIFF_SUMMARY_FILE": str(input_file),
+			"INPUT_FILE": str(input_file),
+			"OUTPUT_FILE": str(output_file),
+			"SKIPPED_FILE": str(skipped_file),
+		})
+		subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				f"{helper_block}\n"
+				'filter_reviewer_stat_file_against_skips "${INPUT_FILE}" "${OUTPUT_FILE}" "${SKIPPED_FILE}"\n',
+			],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+		return output_file.read_text(encoding="utf-8")
+
+
+def _run_reviewer_risk_tier_harness(
+	*,
+	diff_text: str,
+	current_changed_paths: list[str] | None = None,
+	raw_changed_paths: list[str] | None = None,
+	filter_active: str = "false",
+	extra_env: dict[str, str] | None = None,
+) -> dict[str, str | list[str]]:
+	helper_block = _reviewer_risk_tier_helper_block()
+	with tempfile.TemporaryDirectory(prefix="reviewer-risk-tier-") as td:
+		tmp = Path(td)
+		files = {
+			"pr_diff": tmp / "pr_diff.patch",
+			"pr_changed": tmp / "pr_changed_files.txt",
+			"raw_pr_changed": tmp / "raw_pr_changed_files.txt",
+			"state": tmp / "risk_tier_state.txt",
+			"risk_tier": tmp / "reviewer_risk_tier.txt",
+			"active_models": tmp / "reviewer_active_models.txt",
+		}
+		files["pr_diff"].write_text(diff_text, encoding="utf-8")
+		visible_paths = current_changed_paths if current_changed_paths is not None else _diff_changed_paths(diff_text)
+		files["pr_changed"].write_text("\n".join(visible_paths) + ("\n" if visible_paths else ""), encoding="utf-8")
+		raw_paths = raw_changed_paths if raw_changed_paths is not None else visible_paths
+		files["raw_pr_changed"].write_text("\n".join(raw_paths) + ("\n" if raw_paths else ""), encoding="utf-8")
+
+		env = os.environ.copy()
+		env.update({
+			"SUPPORT_ROOT_DIR": str(REPO_ROOT),
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+			"RUNTIME_DIR": str(tmp),
+			"PR_NUMBER": "123",
+			"HAS_PR_DIFF": "true",
+			"REVIEWER_FILTER_ACTIVE": filter_active,
+			"REVIEWER_RISK_TIER_ENABLED": "true",
+			"REVIEWER_MODELS": "\n".join(_workflow_reviewer_models()) + "\n",
+			"REVIEWER_TIER_TRIVIAL_MODELS": "",
+			"REVIEWER_TIER_LITE_MODELS": "",
+			"PR_DIFF_FILE": str(files["pr_diff"]),
+			"PR_CHANGED_FILES_FILE": str(files["pr_changed"]),
+			"RAW_REVIEWER_PR_CHANGED_FILES_FILE": str(files["raw_pr_changed"]),
+			"STATE_FILE": str(files["state"]),
+		})
+		if extra_env:
+			env.update(extra_env)
+
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				f"{helper_block}\n"
+				"classify_reviewer_risk_tier\n"
+				"{\n"
+				"\tprintf 'REVIEWER_RISK_TIER=%s\\n' \"${REVIEWER_RISK_TIER}\"\n"
+				"\tprintf 'REVIEWER_RISK_TIER_FORCED_FULL=%s\\n' \"${REVIEWER_RISK_TIER_FORCED_FULL}\"\n"
+				"\tprintf 'REVIEWER_RISK_TIER_LOC=%s\\n' \"${REVIEWER_RISK_TIER_LOC}\"\n"
+				"\tprintf 'REVIEWER_RISK_TIER_FILES=%s\\n' \"${REVIEWER_RISK_TIER_FILES}\"\n"
+				"\tprintf 'REVIEWER_ACTIVE_MODELS_SOURCE=%s\\n' \"${REVIEWER_ACTIVE_MODELS_SOURCE}\"\n"
+				"} > \"${STATE_FILE}\"\n",
+			],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+		state: dict[str, str] = {}
+		for raw_line in files["state"].read_text(encoding="utf-8").splitlines():
+			if "=" not in raw_line:
+				continue
+			key, value = raw_line.split("=", 1)
+			state[key] = value
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			**state,
+			"risk_tier_file": files["risk_tier"].read_text(encoding="utf-8").strip(),
+			"active_models": files["active_models"].read_text(encoding="utf-8").splitlines(),
+		}
+
+
+def _run_agents_md_materiality_harness(
+	*,
+	diff_text: str,
+	changed_paths: list[str] | None = None,
+	workspace_files: dict[str, str] | None = None,
+	enabled: str = "true",
+) -> dict[str, object]:
+	with tempfile.TemporaryDirectory(prefix="agents-md-materiality-") as td:
+		tmp = Path(td)
+		workspace = tmp / "workspace"
+		workspace.mkdir()
+		files = {
+			"diff": tmp / "pr_diff.patch",
+			"changed": tmp / "pr_changed_files.txt",
+			"result": tmp / "agents_md_materiality_result.json",
+			"comment": tmp / "agents_md_materiality_comment.md",
+		}
+		files["diff"].write_text(diff_text, encoding="utf-8")
+		visible_paths = changed_paths if changed_paths is not None else _diff_changed_paths(diff_text)
+		files["changed"].write_text("\n".join(visible_paths) + ("\n" if visible_paths else ""), encoding="utf-8")
+
+		for rel_path, text in (workspace_files or {"agents.md": "# repo agents\n"}).items():
+			target = workspace / rel_path
+			target.parent.mkdir(parents=True, exist_ok=True)
+			target.write_text(text, encoding="utf-8")
+
+		result = subprocess.run(
+			["bash", str(AGENTS_MD_MATERIALITY)],
+			cwd=str(REPO_ROOT),
+			env={
+				**os.environ,
+				"AGENTS_MD_MATERIALITY_ENABLED": enabled,
+				"AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED": "0",
+				"AGENTS_MD_MATERIALITY_MODEL": "openai/gpt-5.4-mini",
+				"AGENTS_MD_MATERIALITY_REASONING": "medium",
+				"AGENTS_MD_MATERIALITY_RESULT_FILE": str(files["result"]),
+				"AGENTS_MD_MATERIALITY_COMMENT_FILE": str(files["comment"]),
+				"PR_CHANGED_FILES_FILE": str(files["changed"]),
+				"PR_DIFF_FILE": str(files["diff"]),
+				"GITHUB_WORKSPACE": str(workspace),
+				"REPOSITORY": "octo/example",
+				"PR_NUMBER": "123",
+				"GITHUB_SERVER_URL": "https://github.com",
+				"GITHUB_RUN_ID": "456",
+				"BASE_BRANCH": "main",
+			},
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			"result": json.loads(files["result"].read_text(encoding="utf-8")),
+			"comment": files["comment"].read_text(encoding="utf-8"),
+		}
 
 
 def _run_reviewer_scope_harness(*, scope_mode: str, last_run_changed_text: str, ledger_text: str) -> dict[str, str]:
@@ -291,6 +832,244 @@ def _run_prepare_reviewer_scope_harness(*, last_run_changed_text: str, ledger_te
 			"semble_query": files["semble_query"].read_text(encoding="utf-8"),
 			"scoped_active": files["scoped_active"].read_text(encoding="utf-8").strip(),
 		}
+def _run_reviewer_failback_harness() -> dict[str, object]:
+	helper_block = _reviewer_failback_helper_block()
+	run_reviewer_block = _reviewer_run_reviewer_block()
+	run_reviewer_pass_block = _reviewer_run_reviewer_pass_block()
+	with tempfile.TemporaryDirectory(prefix="reviewer-failback-") as td:
+		tmp = Path(td)
+		reviews = tmp / "reviews"
+		runtime = tmp / "runtime"
+		home = tmp / "home"
+		runner_temp = tmp / "runner_temp"
+		bin_dir = tmp / "bin"
+		seed_codex_home = tmp / "codex_home_seed"
+		reviews.mkdir()
+		runtime.mkdir()
+		home.mkdir()
+		runner_temp.mkdir()
+		bin_dir.mkdir()
+		seed_codex_home.mkdir()
+
+		prompt_file = runtime / "reviewer_prompt.patch"
+		prompt_file.write_text(PHASE_G_FLAKY_REVIEWER_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+
+		failback_file = tmp / "reviewer_failback_chains.json"
+		failback_file.write_text(REVIEWER_FAILBACK_CHAINS.read_text(encoding="utf-8"), encoding="utf-8")
+
+		catalog_file = tmp / "codex_model_catalog.json"
+		catalog_file.write_text(MODEL_CATALOG.read_text(encoding="utf-8"), encoding="utf-8")
+
+		health_file = tmp / ".ai" / "review_runtime" / "pr-123" / "reviewer_health_state.json"
+		health_file.parent.mkdir(parents=True)
+		attempt_log_file = tmp / "attempts.tsv"
+		state_file = tmp / "state.txt"
+		github_env_file = tmp / "github_env.txt"
+
+		codex_stub = bin_dir / "codex"
+		codex_stub.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+		codex_stub.chmod(0o755)
+
+		env = os.environ.copy()
+		env.update({
+			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			"PREVIOUS_REVIEWS_DIR": str(reviews),
+			"RUNTIME_DIR": str(runtime),
+			"PROMPT_FILE": str(prompt_file),
+			"PR_NUMBER": "123",
+			"RUNNER_TEMP": str(runner_temp),
+			"HOME": str(home),
+			"CODEX_HOME": str(seed_codex_home),
+			"GITHUB_ENV": str(github_env_file),
+			"REVIEWER_CIRCUIT_BREAKER_ENABLED": "1",
+			"REVIEWER_FAILBACK_MAX_RETRIES": "1",
+			"REVIEWER_HEALTH_OPEN_THRESHOLD": "1",
+			"REVIEWER_HEALTH_OPEN_TTL_SECS": "600",
+			"REVIEWER_FAILBACK_CHAINS_FILE": str(failback_file),
+			"REVIEWER_MODEL_CATALOG_FILE": str(catalog_file),
+			"REVIEWER_HEALTH_STATE_FILE": str(health_file),
+			"REVIEWER_REASONING_EFFORT": "xhigh",
+			"HEARTBEAT_IDLE_TIMEOUT": "30",
+			"HEARTBEAT_MAX_WALL": "30",
+			"REVIEW_PR_STATE_POLL_INTERVAL_SECS": "10",
+			"ATTEMPT_LOG_FILE": str(attempt_log_file),
+			"STATE_FILE": str(state_file),
+		})
+
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				f"{helper_block}\n"
+				f"{run_reviewer_block}\n"
+				f"{run_reviewer_pass_block}\n"
+				"execute_reviewer_attempt() {\n"
+				"\tlocal _attempt_label=\"${1:-}\"\n"
+				"\tlocal _attempt_number=\"${2:-}\"\n"
+				"\tlocal _attempt_reasoning=\"${3:-}\"\n"
+				"\tprintf '%s\t%s\t%s\t%s\n' \"${slot_model}\" \"${effective_model}\" \"${_attempt_reasoning:-<empty>}\" \"${_attempt_label}\" >> \"${ATTEMPT_LOG_FILE}\"\n"
+				"\tcase \"${slot_model}\" in\n"
+				"\t\tx-ai/grok-4.20)\n"
+				"\t\t\tcase \"${effective_model}\" in\n"
+				"\t\t\t\tx-ai/grok-4.20)\n"
+				"\t\t\t\t\tREVIEWER_ATTEMPT_OUTCOME=\"retryable_failure\"\n"
+				"\t\t\t\t\tREVIEWER_ATTEMPT_RETRYABLE_CLASS=\"rate_limit\"\n"
+				"\t\t\t\t\tREVIEWER_ATTEMPT_CMD_RC=1\n"
+				"\t\t\t\t\treturn 0\n"
+				"\t\t\t\t\t;;\n"
+				"\t\t\t\tx-ai/grok-4.1-fast)\n"
+				"\t\t\t\t\tprintf 'fallback success for %s\\n' \"${slot_model}\" > \"${output_file}\"\n"
+				"\t\t\t\t\tREVIEWER_ATTEMPT_OUTCOME=\"success\"\n"
+				"\t\t\t\t\tREVIEWER_ATTEMPT_RETRYABLE_CLASS=\"\"\n"
+				"\t\t\t\t\tREVIEWER_ATTEMPT_CMD_RC=0\n"
+				"\t\t\t\t\treturn 0\n"
+				"\t\t\t\t\t;;\n"
+				"\t\t\tesac\n"
+				"\t\t\t;;\n"
+				"\t\tmoonshotai/kimi-k2.5)\n"
+				"\t\t\tREVIEWER_ATTEMPT_OUTCOME=\"retryable_failure\"\n"
+				"\t\t\tREVIEWER_ATTEMPT_RETRYABLE_CLASS=\"server_error\"\n"
+				"\t\t\tREVIEWER_ATTEMPT_CMD_RC=1\n"
+				"\t\t\treturn 0\n"
+				"\t\t\t;;\n"
+				"\tesac\n"
+				"\tREVIEWER_ATTEMPT_OUTCOME=\"failed\"\n"
+				"\tREVIEWER_ATTEMPT_RETRYABLE_CLASS=\"\"\n"
+				"\tREVIEWER_ATTEMPT_CMD_RC=1\n"
+				"\treturn 0\n"
+				"}\n"
+				"get_active_reviewer_models_text() {\n"
+				"\tprintf 'x-ai/grok-4.20\\n'\n"
+				"}\n"
+				"mapped_model=\"x-ai/grok-4.20\"\n"
+				"mapped_safe_name=\"$(printf '%s' \"${mapped_model}\" | tr '/.:' '___')\"\n"
+				"unmapped_model=\"moonshotai/kimi-k2.5\"\n"
+				"unmapped_safe_name=\"$(printf '%s' \"${unmapped_model}\" | tr '/.:' '___')\"\n"
+				"run_reviewer \"${mapped_model}\" \"${mapped_safe_name}\" \"mapped\" \"${PROMPT_FILE}\" \"xhigh\"\n"
+				"cached_successes=\"$(run_reviewer_pass \"cached\" \"${PROMPT_FILE}\" \"xhigh\")\"\n"
+				"run_reviewer \"${unmapped_model}\" \"${unmapped_safe_name}\" \"unmapped\" \"${PROMPT_FILE}\" \"xhigh\"\n"
+				"{\n"
+				"\tprintf 'MAPPED_STATUS_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/status_mapped_${mapped_safe_name}.txt\"\n"
+				"\tprintf 'MAPPED_OUTPUT_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/mapped_${mapped_safe_name}.txt\"\n"
+				"\tprintf 'MAPPED_LOG_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/mapped_${mapped_safe_name}.log\"\n"
+				"\tprintf 'CACHED_STATUS_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/status_cached_${mapped_safe_name}.txt\"\n"
+				"\tprintf 'CACHED_OUTPUT_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/cached_${mapped_safe_name}.txt\"\n"
+				"\tprintf 'CACHED_LOG_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/cached_${mapped_safe_name}.log\"\n"
+				"\tprintf 'UNMAPPED_STATUS_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/status_unmapped_${unmapped_safe_name}.txt\"\n"
+				"\tprintf 'UNMAPPED_OUTPUT_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/unmapped_${unmapped_safe_name}.txt\"\n"
+				"\tprintf 'UNMAPPED_LOG_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/unmapped_${unmapped_safe_name}.log\"\n"
+				"\tprintf 'ATTEMPT_LOG_FILE=%s\\n' \"${ATTEMPT_LOG_FILE}\"\n"
+				"\tprintf 'CACHED_SUCCESSES=%s\\n' \"${cached_successes}\"\n"
+				"} > \"${STATE_FILE}\"\n",
+			],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+
+		state: dict[str, str] = {}
+		for raw_line in state_file.read_text(encoding="utf-8").splitlines():
+			if "=" not in raw_line:
+				continue
+			key, value = raw_line.split("=", 1)
+			state[key] = value
+
+		artifact_contents = {
+			f"{key}_CONTENT": Path(path).read_text(encoding="utf-8")
+			for key, path in state.items()
+			if key.endswith("_FILE")
+		}
+
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			**state,
+			**artifact_contents,
+			"health_state": json.loads(health_file.read_text(encoding="utf-8")),
+		}
+
+
+def _run_reviewer_health_dispatch_logging_harness() -> dict[str, str]:
+	helper_block = _reviewer_failback_helper_block()
+	with tempfile.TemporaryDirectory(prefix="reviewer-health-dispatch-") as td:
+		tmp = Path(td)
+		health_file = tmp / "reviewer_health_state.json"
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				f"{helper_block}\n"
+				"reviewer_health_state_action() {\n"
+				"\tcat <<'EOF'\n"
+				"decision=run\n"
+				"state=healthy\n"
+				"transition=healthy\n"
+				"reason=open_ttl_expired\n"
+				"consecutive_retryable_failures=0\n"
+				"effective_model=x-ai/grok-4.1-fast\n"
+				"open_until_epoch=0\n"
+				"EOF\n"
+				"}\n"
+				"reviewer_health_dispatch_prepare 'x-ai/grok-4.20'\n",
+			],
+			cwd=str(REPO_ROOT),
+			env={
+				**os.environ,
+				"REVIEWER_CIRCUIT_BREAKER_ENABLED": "1",
+				"REVIEWER_HEALTH_STATE_FILE": str(health_file),
+			},
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+		}
+
+
+def _run_reviewer_zero_success_guard_harness(*, statuses: list[str]) -> dict[str, object]:
+	guard_block = _reviewer_zero_success_guard_block()
+	with tempfile.TemporaryDirectory(prefix="reviewer-zero-success-") as td:
+		tmp = Path(td)
+		reviews = tmp / "reviews"
+		reviews.mkdir()
+		github_env_file = tmp / "github_env.txt"
+
+		for idx, status in enumerate(statuses, 1):
+			(reviews / f"status_review_model{idx}.txt").write_text(f"{status}\n", encoding="utf-8")
+			(reviews / f"review_model{idx}.log").write_text(f"status={status}\n", encoding="utf-8")
+
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				"reviewers_successful=0\n"
+				f"{guard_block}\n",
+			],
+			cwd=str(REPO_ROOT),
+			env={
+				**os.environ,
+				"PREVIOUS_REVIEWS_DIR": str(reviews),
+				"PR_NUMBER": "123",
+				"GITHUB_ENV": str(github_env_file),
+			},
+			capture_output=True,
+			text=True,
+		)
+
+		return {
+			"returncode": result.returncode,
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			"github_env": github_env_file.read_text(encoding="utf-8") if github_env_file.exists() else "",
+		}
 
 
 def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
@@ -310,8 +1089,696 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEW_LEDGER_PATH: ${{ vars.REVIEW_LEDGER_PATH || format('.ai/review_issue_ledger/pr-{0}.txt', inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number || '0') }}",
 		"REVIEW_REVIEWER_CHECKLIST_ENABLED: ${{ vars.REVIEW_REVIEWER_CHECKLIST_ENABLED || '1' }}",
 		"REVIEW_REVIEWER_ITERATION_SCOPING: ${{ vars.REVIEW_REVIEWER_ITERATION_SCOPING || '1' }}",
+		"REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}",
+		"REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}",
+		"REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}",
+		"REVIEWER_RISK_TIER_LITE_LOC: ${{ vars.REVIEWER_RISK_TIER_LITE_LOC || '100' }}",
+		"REVIEWER_RISK_TIER_LITE_FILES: ${{ vars.REVIEWER_RISK_TIER_LITE_FILES || '20' }}",
+		"REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX: ${{ vars.REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX || '^(scripts/|\\.github/workflows/|\\.github/ai/|prompts/|workflow-templates/|db/contracts/|ai-memory/)' }}",
+		"REVIEWER_TIER_TRIVIAL_MODELS: ${{ vars.REVIEWER_TIER_TRIVIAL_MODELS || '' }}",
+		"REVIEWER_TIER_LITE_MODELS: ${{ vars.REVIEWER_TIER_LITE_MODELS || '' }}",
+		"REVIEWER_CIRCUIT_BREAKER_ENABLED: ${{ vars.REVIEWER_CIRCUIT_BREAKER_ENABLED || '0' }}",
+		"REVIEWER_FAILBACK_MAX_RETRIES: ${{ vars.REVIEWER_FAILBACK_MAX_RETRIES || '1' }}",
+		"REVIEWER_HEALTH_OPEN_THRESHOLD: ${{ vars.REVIEWER_HEALTH_OPEN_THRESHOLD || '3' }}",
+		"REVIEWER_HEALTH_OPEN_TTL_SECS: ${{ vars.REVIEWER_HEALTH_OPEN_TTL_SECS || '1800' }}",
+		"CONTEXT_BUDGET_WARN_RATIO: ${{ vars.CONTEXT_BUDGET_WARN_RATIO || '0.7' }}",
+		"MAX_PROMPT_TOKENS_FOR_PHASE: ${{ vars.MAX_PROMPT_TOKENS_FOR_PHASE || '' }}",
+		"CODEX_HEARTBEAT_ENABLED: ${{ vars.CODEX_HEARTBEAT_ENABLED || '1' }}",
+		"CODEX_HEARTBEAT_INTERVAL_SECS: ${{ vars.CODEX_HEARTBEAT_INTERVAL_SECS || '30' }}",
+		"REVIEWER_FILTER_UNINTERESTING_ENABLED: ${{ vars.REVIEWER_FILTER_UNINTERESTING_ENABLED || 'false' }}",
+		"REVIEWER_FILTER_EXTRA_GLOBS: ${{ vars.REVIEWER_FILTER_EXTRA_GLOBS || '' }}",
+		"REVIEWER_FILTER_EXEMPT_GLOBS: ${{ vars.REVIEWER_FILTER_EXEMPT_GLOBS || 'db/contracts/**,**/migrations/**,**/migrate/**' }}",
+		"AGENTS_MD_MATERIALITY_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_ENABLED || '0' }}",
+		"AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED || '0' }}",
+		"AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-5.4-mini' }}",
+		"AGENTS_MD_MATERIALITY_REASONING: ${{ vars.AGENTS_MD_MATERIALITY_REASONING || 'medium' }}",
 	):
 		assert expected in workflow, f"Missing codex-agent env wiring: {expected}"
+
+	required_bootstrap_line = next(
+		line for line in workflow.splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line
+	)
+	assert "codex_heartbeat.sh" in required_bootstrap_line, required_bootstrap_line
+	assert "cost_audit.py" in required_bootstrap_line, required_bootstrap_line
+
+	for expected in (
+		"REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}",
+		"REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}",
+		"REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}",
+		"REVIEWER_RISK_TIER_LITE_LOC: ${{ vars.REVIEWER_RISK_TIER_LITE_LOC || '100' }}",
+		"REVIEWER_RISK_TIER_LITE_FILES: ${{ vars.REVIEWER_RISK_TIER_LITE_FILES || '20' }}",
+		"REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX: ${{ vars.REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX || '^(scripts/|\\.github/workflows/|\\.github/ai/|prompts/|workflow-templates/|db/contracts/|ai-memory/)' }}",
+		"REVIEWER_TIER_TRIVIAL_MODELS: ${{ vars.REVIEWER_TIER_TRIVIAL_MODELS || '' }}",
+		"REVIEWER_TIER_LITE_MODELS: ${{ vars.REVIEWER_TIER_LITE_MODELS || '' }}",
+		"REVIEWER_CIRCUIT_BREAKER_ENABLED: ${{ vars.REVIEWER_CIRCUIT_BREAKER_ENABLED || '0' }}",
+		"REVIEWER_FAILBACK_MAX_RETRIES: ${{ vars.REVIEWER_FAILBACK_MAX_RETRIES || '1' }}",
+		"REVIEWER_HEALTH_OPEN_THRESHOLD: ${{ vars.REVIEWER_HEALTH_OPEN_THRESHOLD || '3' }}",
+		"REVIEWER_HEALTH_OPEN_TTL_SECS: ${{ vars.REVIEWER_HEALTH_OPEN_TTL_SECS || '1800' }}",
+		"AGENTS_MD_MATERIALITY_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_ENABLED || '0' }}",
+		"AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED || '0' }}",
+		"AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-5.4-mini' }}",
+		"AGENTS_MD_MATERIALITY_REASONING: ${{ vars.AGENTS_MD_MATERIALITY_REASONING || 'medium' }}",
+	):
+		assert workflow.count(expected) >= 2, f"Missing workflow-level + codex-agent env wiring: {expected}"
+
+
+def test_review_scripts_emit_context_budget_warn_signals() -> None:
+	for script_text, expected_call in (
+		(_reviewers_text(), 'emit_context_budget_warn_for_prompt "review"'),
+		(_consolidate_text(), 'emit_context_budget_warn_for_prompt "consolidator"'),
+		(_apply_fixes_text(), 'emit_context_budget_warn_for_prompt "editor"'),
+		(_rb_judge_text(), 'emit_context_budget_warn_for_prompt "review_blocked_judge"'),
+	):
+		assert "build_context_budget_warn_line_for_file" in script_text
+		assert expected_call in script_text
+
+
+def test_review_filter_smoke_fixtures_are_present() -> None:
+	assert PHASE_A_ANTI_RULES_FIXTURE.exists(), f"missing fixture: {PHASE_A_ANTI_RULES_FIXTURE}"
+	assert PHASE_C_FILTER_FIXTURE.exists(), f"missing fixture: {PHASE_C_FILTER_FIXTURE}"
+	assert PHASE_B_RISK_TIER_TRIVIAL_FIXTURE.exists(), f"missing fixture: {PHASE_B_RISK_TIER_TRIVIAL_FIXTURE}"
+	assert PHASE_B_RISK_TIER_LITE_FIXTURE.exists(), f"missing fixture: {PHASE_B_RISK_TIER_LITE_FIXTURE}"
+	assert PHASE_B_RISK_TIER_FULL_FIXTURE.exists(), f"missing fixture: {PHASE_B_RISK_TIER_FULL_FIXTURE}"
+	assert PHASE_B_RISK_TIER_ALWAYS_FULL_FIXTURE.exists(), f"missing fixture: {PHASE_B_RISK_TIER_ALWAYS_FULL_FIXTURE}"
+	assert PHASE_D_MATERIALITY_FIXTURE.exists(), f"missing fixture: {PHASE_D_MATERIALITY_FIXTURE}"
+	assert PHASE_G_FLAKY_REVIEWER_FIXTURE.exists(), f"missing fixture: {PHASE_G_FLAKY_REVIEWER_FIXTURE}"
+	assert PHASE_H_CONTEXT_BUDGET_FIXTURE.exists(), f"missing fixture: {PHASE_H_CONTEXT_BUDGET_FIXTURE}"
+
+
+def test_reviewer_risk_tier_classifier_honours_thresholds_and_always_full_regex() -> None:
+	reviewer_models = _workflow_reviewer_models()
+	assert len(reviewer_models) >= 2, "workflow reviewer list should provide default trivial/lite subsets"
+
+	for fixture, expected_tier, expected_models, expected_loc, expected_files, forced_full in (
+		(PHASE_B_RISK_TIER_TRIVIAL_FIXTURE, "trivial", reviewer_models[:1], "2", "1", "false"),
+		(PHASE_B_RISK_TIER_LITE_FIXTURE, "lite", reviewer_models[:2], "50", "1", "false"),
+		(PHASE_B_RISK_TIER_FULL_FIXTURE, "full", reviewer_models, "42", "21", "false"),
+		(PHASE_B_RISK_TIER_ALWAYS_FULL_FIXTURE, "full", reviewer_models, "2", "1", "true"),
+	):
+		result = _run_reviewer_risk_tier_harness(diff_text=fixture.read_text(encoding="utf-8"))
+		assert result["REVIEWER_RISK_TIER"] == expected_tier
+		assert result["risk_tier_file"] == expected_tier
+		assert result["active_models"] == expected_models
+		assert result["REVIEWER_RISK_TIER_LOC"] == expected_loc
+		assert result["REVIEWER_RISK_TIER_FILES"] == expected_files
+		assert result["REVIEWER_RISK_TIER_FORCED_FULL"] == forced_full
+		assert f"REVIEWER_RISK_TIER: tier={expected_tier}" in result["stdout"]
+
+	always_full_result = _run_reviewer_risk_tier_harness(diff_text=PHASE_B_RISK_TIER_ALWAYS_FULL_FIXTURE.read_text(encoding="utf-8"))
+	assert "matched_path=scripts/review_helper.sh" in always_full_result["stdout"]
+
+
+def test_review_filter_helper_wiring_is_flag_gated_and_fail_open() -> None:
+	workflow = _workflow_text()
+	stage_block = _step_block("Stage workflow support files")
+	preflight_block = _step_block('"Preflight: Verify required files before reviewer invocation"')
+	reviewers = _reviewers_text()
+
+	assert "REVIEWER_FILTER_UNINTERESTING_ENABLED: ${{ vars.REVIEWER_FILTER_UNINTERESTING_ENABLED || 'false' }}" in workflow
+	assert "REVIEWER_FILTER_EXTRA_GLOBS: ${{ vars.REVIEWER_FILTER_EXTRA_GLOBS || '' }}" in workflow
+	assert "REVIEWER_FILTER_EXEMPT_GLOBS: ${{ vars.REVIEWER_FILTER_EXEMPT_GLOBS || 'db/contracts/**,**/migrations/**,**/migrate/**' }}" in workflow
+	assert 'if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh" ]; then' in stage_block
+	assert 'src=".codex-workflow-src/scripts/review_filter_uninteresting_files.sh"' in stage_block
+	assert 'src=".codex-workflow-src-main/scripts/review_filter_uninteresting_files.sh"' in stage_block
+	assert 'install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh"' in stage_block
+	assert 'review_filter_uninteresting_files.sh not found in checked-out support sources' in stage_block
+	assert 'check_soft_file "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh"' in preflight_block
+	assert 'REVIEWER_FILTER_SCRIPT="${SUPPORT_SCRIPTS_DIR:-scripts}/review_filter_uninteresting_files.sh"' in reviewers
+	assert 'prepare_reviewer_filtered_artifacts' in reviewers
+	assert 'REVIEWER_FILTER_SKIP:' in reviewers
+	assert 'review_filter_uninteresting_files.sh unavailable' in reviewers
+
+
+def test_agents_md_materiality_classifier_and_workflow_wiring() -> None:
+	positive = _run_agents_md_materiality_harness(
+		diff_text=PHASE_D_MATERIALITY_FIXTURE.read_text(encoding="utf-8"),
+		workspace_files={"agents.md": "# repo agents\n"},
+	)
+	positive_result = positive["result"]
+	assert positive_result["materiality"] == "high"
+	assert positive_result["advisory_required"] is True
+	assert positive_result["agents_md_changed"] is False
+	assert "## AI Materiality Advisory" in positive["comment"]
+	assert "`package.json`" in positive["comment"]
+	assert "informational only" in positive["comment"]
+	assert "AGENTS_MD_MATERIALITY: materiality=high advisory=true" in positive["stdout"]
+
+	satisfied = _run_agents_md_materiality_harness(
+		diff_text=PHASE_D_MATERIALITY_FIXTURE.read_text(encoding="utf-8"),
+		changed_paths=["package.json", "agents.md"],
+		workspace_files={"agents.md": "# repo agents\n"},
+	)
+	satisfied_result = satisfied["result"]
+	assert satisfied_result["materiality"] == "high"
+	assert satisfied_result["advisory_required"] is False
+	assert satisfied_result["agents_md_changed"] is True
+	assert satisfied_result["reason"] == "agents_md_changed"
+	assert satisfied["comment"] == ""
+
+	low = _run_agents_md_materiality_harness(
+		diff_text=PHASE_B_RISK_TIER_TRIVIAL_FIXTURE.read_text(encoding="utf-8"),
+		workspace_files={"agents.md": "# repo agents\n"},
+	)
+	low_result = low["result"]
+	assert low_result["materiality"] == "low"
+	assert low_result["advisory_required"] is False
+	assert low_result["reason"] == "low_materiality"
+	assert low["comment"] == ""
+
+	gate_docs_client = _run_gate_agents_md_materiality_classifier(["docs/client.js"])
+	assert gate_docs_client["materiality"] == "low"
+	assert gate_docs_client["agents_md_changed"] is False
+
+	gate_api_client = _run_gate_agents_md_materiality_classifier(["sdk/client.go"])
+	assert gate_api_client["materiality"] == "medium"
+	assert gate_api_client["agents_md_changed"] is False
+
+	workflow = _workflow_text()
+	stage_block = _step_block("Stage workflow support files")
+	preflight_block = _step_block('"Preflight: Verify required files before reviewer invocation"')
+	reviewer_block = _step_block("Run reviewer models")
+	advisory_block = _step_block("Post AI Materiality Advisory comment")
+	gate_block = _step_block("Evaluate review gate")
+
+	assert "AGENTS_MD_MATERIALITY_RESULT_FILE=${RUNTIME_DIR}/agents_md_materiality_result.json" in workflow
+	assert "AGENTS_MD_MATERIALITY_COMMENT_FILE=${RUNTIME_DIR}/agents_md_materiality_comment.md" in workflow
+	assert 'if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh" ]; then' in stage_block
+	assert 'src=".codex-workflow-src/scripts/review_agents_md_materiality.sh"' in stage_block
+	assert 'src=".codex-workflow-src-main/scripts/review_agents_md_materiality.sh"' in stage_block
+	assert 'install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh"' in stage_block
+	assert 'review_agents_md_materiality.sh not found in checked-out support sources' in stage_block
+	assert 'check_soft_file "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh"' in preflight_block
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh" &' in reviewer_block
+	assert 'materiality_pid="$!"' in reviewer_block
+	assert 'AGENTS_MD_MATERIALITY_ENABLED:-0' in reviewer_block
+	assert "continue-on-error: true" in advisory_block
+	assert "AGENTS_MD_MATERIALITY_RESULT_FILE" in advisory_block
+	assert "PR_ISSUE_COMMENTS_FILE" in advisory_block
+	assert 'issues/comments/${existing_comment_id}' in advisory_block
+	assert 'issues/${PR_NUMBER}/comments' in advisory_block
+	assert 'AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=agents_md_materiality' in gate_block
+	assert 'AGENTS_MD_MATERIALITY_ENABLED:-0' in gate_block
+	assert 'PR_FILES_JSON="${pr_files_json}" python3 - <<\'PY\'' in gate_block
+
+
+def test_reviewer_failback_wiring_stages_asset_and_restores_cache_before_reviewers() -> None:
+	workflow = _workflow_text()
+	stage_block = _step_block("Stage workflow support files")
+	preflight_block = _step_block('"Preflight: Verify required files before reviewer invocation"')
+	restore_block = _step_block("Restore review-issue ledger")
+	reviewers = _reviewers_text()
+
+	assert 'failback_src=".codex-workflow-src/scripts/reviewer_failback_chains.json"' in stage_block
+	assert 'failback_src=".codex-workflow-src-main/scripts/reviewer_failback_chains.json"' in stage_block
+	assert 'install -m 0644 "${failback_src}" "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json"' in stage_block
+	assert 'reviewer_failback_chains.json not found in checked-out support sources' in stage_block
+	assert 'check_soft_file "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json"' in preflight_block
+	assert 'REVIEWER_FAILBACK_CHAINS_FILE="${REVIEWER_FAILBACK_CHAINS_FILE:-${SUPPORT_SCRIPTS_DIR:-scripts}/reviewer_failback_chains.json}"' in reviewers
+	assert '.ai/review_runtime/' in restore_block
+	assert workflow.index('- name: Restore review-issue ledger') < workflow.index('- name: Run reviewer models')
+
+
+def test_reviewer_failback_mapping_covers_live_reviewer_roster() -> None:
+	# reviewer_failback_target_for_model() only checks whether a candidate slug is
+	# declared in scripts/codex_model_catalog.json, so the contract test mirrors
+	# that lookup rather than inspecting supported_in_api.
+	reviewer_models = _workflow_reviewer_models()
+	chains = _reviewer_failback_chains()
+	catalog_slugs = _catalog_declared_model_slugs()
+	mapped: list[str] = []
+	unmapped: list[str] = []
+
+	for model in reviewer_models:
+		provider_prefix = f"{model.split('/', 1)[0]}/"
+		catalog_alternates = sorted(
+			slug for slug in catalog_slugs
+			if slug.startswith(provider_prefix) and slug != model
+		)
+		configured_candidates = chains.get(model, [])
+		for candidate in configured_candidates:
+			assert candidate.startswith(provider_prefix)
+			assert candidate != model
+			assert candidate in catalog_slugs
+		if catalog_alternates:
+			mapped.append(model)
+			assert configured_candidates, (
+				f"live reviewer {model} has catalog-declared same-provider fallback(s) "
+				f"{catalog_alternates} but reviewer_failback_chains.json leaves it unmapped"
+			)
+		else:
+			unmapped.append(model)
+			assert model not in chains, (
+				f"live reviewer {model} should stay unmapped until the catalog ships "
+				"a same-provider fallback slug"
+			)
+
+	assert sorted(mapped) == [
+		"deepseek/deepseek-v4-pro",
+		"qwen/qwen3.6-plus",
+		"x-ai/grok-4.20",
+	]
+	assert sorted(unmapped) == [
+		"minimax/minimax-m2.5",
+		"mistralai/mistral-small-2603",
+		"moonshotai/kimi-k2.5",
+	]
+	assert chains["deepseek/deepseek-v4-pro"] == ["deepseek/deepseek-v3.2"]
+	assert chains["qwen/qwen3.6-plus"] == ["qwen/qwen3-coder-plus"]
+	assert chains["x-ai/grok-4.20"] == ["x-ai/grok-4.1-fast"]
+
+
+def test_reviewer_failback_harness_reuses_cached_open_state_and_skips_unmapped_models() -> None:
+	result = _run_reviewer_failback_harness()
+	health_state = result["health_state"]
+	assert isinstance(health_state, dict)
+	assert health_state["version"] == 1
+
+	mapped_entry = health_state["reviewers"]["x-ai/grok-4.20"]
+	assert mapped_entry["state"] == "open"
+	assert mapped_entry["effective_model"] == "x-ai/grok-4.1-fast"
+	assert mapped_entry["last_failure_kind"] == "rate_limit"
+	assert mapped_entry["open_until_epoch"] > 0
+
+	unmapped_entry = health_state["reviewers"]["moonshotai/kimi-k2.5"]
+	assert unmapped_entry["state"] == "open"
+	assert unmapped_entry["effective_model"] == ""
+	assert unmapped_entry["last_failure_kind"] == "server_error"
+
+	assert result["MAPPED_STATUS_FILE_CONTENT"].strip() == "success"
+	assert "fallback success for x-ai/grok-4.20" in result["MAPPED_OUTPUT_FILE_CONTENT"]
+	assert "REVIEWER_FAILBACK: x-ai/grok-4.20 -> x-ai/grok-4.1-fast reason=rate_limit" in result["MAPPED_LOG_FILE_CONTENT"]
+	assert "REVIEWER_HEALTH: x-ai/grok-4.20 open reason=rate_limit failures=1 effective_model=x-ai/grok-4.1-fast" in result["MAPPED_LOG_FILE_CONTENT"]
+
+	assert result["CACHED_SUCCESSES"] == "0"
+	assert result["CACHED_STATUS_FILE_CONTENT"].strip() == "skipped_open"
+	assert "cached reviewer health state is open" in result["CACHED_OUTPUT_FILE_CONTENT"]
+	assert "cached reviewer health state is open" in result["CACHED_LOG_FILE_CONTENT"]
+	assert "cached_effective_model=x-ai/grok-4.1-fast" in result["CACHED_LOG_FILE_CONTENT"]
+
+	assert result["UNMAPPED_STATUS_FILE_CONTENT"].strip() == "skipped_unmapped"
+	assert "no same-family failback mapping is available" in result["UNMAPPED_OUTPUT_FILE_CONTENT"]
+	assert "REVIEWER_FAILBACK_UNMAPPED: moonshotai/kimi-k2.5" in result["UNMAPPED_LOG_FILE_CONTENT"]
+
+	attempt_lines = result["ATTEMPT_LOG_FILE_CONTENT"].splitlines()
+	assert attempt_lines == [
+		"x-ai/grok-4.20\tx-ai/grok-4.20\txhigh\tattempt 1",
+		"x-ai/grok-4.20\tx-ai/grok-4.20\thigh\tattempt 2 (cheaper reasoning high)",
+		"x-ai/grok-4.20\tx-ai/grok-4.1-fast\txhigh\tattempt 3 (failback x-ai/grok-4.1-fast)",
+		"moonshotai/kimi-k2.5\tmoonshotai/kimi-k2.5\txhigh\tattempt 1",
+		"moonshotai/kimi-k2.5\tmoonshotai/kimi-k2.5\thigh\tattempt 2 (cheaper reasoning high)",
+	]
+
+
+def test_reviewer_health_dispatch_logs_to_stderr_only() -> None:
+	result = _run_reviewer_health_dispatch_logging_harness()
+	assert result["stdout"] == ""
+	assert "REVIEWER_HEALTH: x-ai/grok-4.20 healthy reason=open_ttl_expired failures=0 effective_model=x-ai/grok-4.1-fast" in result["stderr"]
+
+
+def test_reviewer_zero_success_guard_fails_open_when_every_review_slot_was_skipped() -> None:
+	result = _run_reviewer_zero_success_guard_harness(statuses=["skipped_open", "skipped_unmapped"])
+	assert result["returncode"] == 0
+	assert "REVIEWERS_SUCCESSFUL=0\n" == result["github_env"]
+	assert "all review slots were skipped fail-open" in result["stdout"]
+
+
+def test_reviewer_filter_harness_strips_low_signal_paths_and_preserves_exemptions() -> None:
+	result = _run_reviewer_filter_harness(filter_enabled="true", helper_mode="repo")
+	pr_diff = result["PR_DIFF_FILE_CONTENT"]
+	pr_changed = result["PR_CHANGED_FILES_FILE_CONTENT"]
+	last_run_changed = result["LAST_RUN_CHANGED_FILES_FILE_CONTENT"]
+	last_run_diff_stat = result["LAST_RUN_DIFF_STAT_FILE_CONTENT"]
+	last_commit_stat = result["LAST_COMMIT_STAT_FILE_CONTENT"]
+	symbol_summary = result["SYMBOL_DIFF_SUMMARY_FILE_CONTENT"]
+
+	assert result["REVIEWER_FILTER_ACTIVE"] == "true"
+	assert result["PR_DIFF_FILE"].endswith("reviewer_filtered_pr_diff.patch")
+	for skipped_path in ("package-lock.json", "src/generated/client.ts", "public/app.min.js"):
+		assert skipped_path not in pr_diff
+		assert skipped_path not in pr_changed
+		assert skipped_path not in last_run_changed
+		assert skipped_path not in last_run_diff_stat
+		assert skipped_path not in last_commit_stat
+		assert skipped_path not in symbol_summary
+	for kept_path in (
+		"db/migrations/20260529000000_generated.sql",
+		"scripts/migrate/seed.sh",
+		"db/contracts/widgets.yml",
+	):
+		assert kept_path in pr_diff
+		assert kept_path in pr_changed
+		assert kept_path in last_run_changed
+		assert kept_path in symbol_summary
+	assert "REVIEWER_FILTER_SKIP: package-lock.json path-glob:package-lock.json" in result["stdout"]
+	assert "REVIEWER_FILTER_SKIP: src/generated/client.ts generated-marker:@generated" in result["stdout"]
+	assert "REVIEWER_FILTER_SKIP: public/app.min.js path-glob:*.min.js" in result["stdout"]
+
+
+def test_reviewer_filter_script_preserves_nested_exempt_paths() -> None:
+	diff_text = "\n".join([
+		"diff --git a/db/contracts/nested/widgets.yml b/db/contracts/nested/widgets.yml",
+		"index 1111111..2222222 100644",
+		"--- a/db/contracts/nested/widgets.yml",
+		"+++ b/db/contracts/nested/widgets.yml",
+		"@@ -1,2 +1,2 @@",
+		"-collection: widget_versions",
+		"+collection: widgets",
+		"diff --git a/db/migrations/nested/20260529000000_generated.sql b/db/migrations/nested/20260529000000_generated.sql",
+		"index 3333333..4444444 100644",
+		"--- a/db/migrations/nested/20260529000000_generated.sql",
+		"+++ b/db/migrations/nested/20260529000000_generated.sql",
+		"@@ -1,2 +1,2 @@",
+		"-CREATE TABLE widgets (id INTEGER);",
+		"+CREATE TABLE widgets (id INT);",
+		"diff --git a/scripts/migrate/nested/seed.sh b/scripts/migrate/nested/seed.sh",
+		"index 5555555..6666666 100644",
+		"--- a/scripts/migrate/nested/seed.sh",
+		"+++ b/scripts/migrate/nested/seed.sh",
+		"@@ -1,2 +1,2 @@",
+		"-echo old-seed",
+		"+echo seed",
+		"diff --git a/src/generated/deep/client.ts b/src/generated/deep/client.ts",
+		"index 7777777..8888888 100644",
+		"--- a/src/generated/deep/client.ts",
+		"+++ b/src/generated/deep/client.ts",
+		"@@ -1,2 +1,2 @@",
+		"-export const endpoint = '/v1';",
+		"+export const endpoint = '/v2';",
+	]) + "\n"
+	result = _run_uninteresting_filter_script(
+		diff_text=diff_text,
+		workspace_files={
+			"db/contracts/nested/widgets.yml": "# GENERATED BY contract-tool\ncollection: widgets\n",
+			"db/migrations/nested/20260529000000_generated.sql": "-- GENERATED FILE\nCREATE TABLE widgets (id INT);\n",
+			"scripts/migrate/nested/seed.sh": "# GENERATED BY seed-tool\necho seed\n",
+			"src/generated/deep/client.ts": "@generated export const endpoint = '/v2';\n",
+		},
+	)
+
+	assert "db/contracts/nested/widgets.yml" in result["output_diff"]
+	assert "db/migrations/nested/20260529000000_generated.sql" in result["output_diff"]
+	assert "scripts/migrate/nested/seed.sh" in result["output_diff"]
+	assert "src/generated/deep/client.ts" not in result["output_diff"]
+	assert "db/contracts/nested/widgets.yml\n" in result["kept_paths"]
+	assert "db/migrations/nested/20260529000000_generated.sql\n" in result["kept_paths"]
+	assert "scripts/migrate/nested/seed.sh\n" in result["kept_paths"]
+	assert "src/generated/deep/client.ts\tgenerated-marker:@generated\n" in result["skipped_paths"]
+
+
+def test_reviewer_filter_script_preserves_root_level_migration_exempt_paths() -> None:
+	diff_text = "\n".join([
+		"diff --git a/migrations/20260529000000_generated.sql b/migrations/20260529000000_generated.sql",
+		"index 1111111..2222222 100644",
+		"--- a/migrations/20260529000000_generated.sql",
+		"+++ b/migrations/20260529000000_generated.sql",
+		"@@ -1,2 +1,2 @@",
+		"--- GENERATED FILE",
+		"-CREATE TABLE widgets (id INTEGER);",
+		"+CREATE TABLE widgets (id INT);",
+		"diff --git a/migrate/seed.sh b/migrate/seed.sh",
+		"index 3333333..4444444 100644",
+		"--- a/migrate/seed.sh",
+		"+++ b/migrate/seed.sh",
+		"@@ -1,2 +1,2 @@",
+		"-# GENERATED BY seed-tool",
+		"+# GENERATED BY seed-tool",
+		"-echo old-seed",
+		"+echo seed",
+		"diff --git a/src/generated/client.ts b/src/generated/client.ts",
+		"index 5555555..6666666 100644",
+		"--- a/src/generated/client.ts",
+		"+++ b/src/generated/client.ts",
+		"@@ -1,2 +1,2 @@",
+		"-@generated export const endpoint = '/v1';",
+		"+@generated export const endpoint = '/v2';",
+	]) + "\n"
+	result = _run_uninteresting_filter_script(
+		diff_text=diff_text,
+		workspace_files={
+			"migrations/20260529000000_generated.sql": "-- GENERATED FILE\nCREATE TABLE widgets (id INT);\n",
+			"migrate/seed.sh": "# GENERATED BY seed-tool\necho seed\n",
+			"src/generated/client.ts": "@generated export const endpoint = '/v2';\n",
+		},
+	)
+
+	assert "migrations/20260529000000_generated.sql" in result["output_diff"]
+	assert "migrate/seed.sh" in result["output_diff"]
+	assert "src/generated/client.ts" not in result["output_diff"]
+	assert "migrations/20260529000000_generated.sql\n" in result["kept_paths"]
+	assert "migrate/seed.sh\n" in result["kept_paths"]
+	assert "src/generated/client.ts\tgenerated-marker:@generated\n" in result["skipped_paths"]
+
+
+def test_reviewer_filter_script_strips_deleted_generated_file_when_workspace_copy_is_missing() -> None:
+	diff_text = "\n".join([
+		"diff --git a/src/generated/deleted_client.ts b/src/generated/deleted_client.ts",
+		"deleted file mode 100644",
+		"index 1111111..0000000",
+		"--- a/src/generated/deleted_client.ts",
+		"+++ /dev/null",
+		"@@ -1,2 +0,0 @@",
+		"-@generated",
+		"-export const endpoint = '/v1';",
+	]) + "\n"
+	result = _run_uninteresting_filter_script(diff_text=diff_text, workspace_files={})
+
+	assert result["output_diff"] == ""
+	assert result["kept_paths"] == ""
+	assert result["skipped_paths"] == "src/generated/deleted_client.ts\tgenerated-marker:@generated\n"
+
+
+def test_reviewer_filter_script_keeps_deleted_file_when_first_hunk_starts_later() -> None:
+	diff_text = "\n".join([
+		"diff --git a/src/generated/deleted_client.ts b/src/generated/deleted_client.ts",
+		"deleted file mode 100644",
+		"index 1111111..0000000",
+		"--- a/src/generated/deleted_client.ts",
+		"+++ /dev/null",
+		"@@ -10,2 +0,0 @@",
+		"-@generated",
+		"-export const endpoint = '/v1';",
+	]) + "\n"
+	result = _run_uninteresting_filter_script(diff_text=diff_text, workspace_files={})
+
+	assert result["output_diff"] == diff_text
+	assert result["kept_paths"] == "src/generated/deleted_client.ts\n"
+	assert result["skipped_paths"] == ""
+
+
+def test_reviewer_filter_script_ignores_later_hunk_marker_when_first_hunk_has_no_marker() -> None:
+	diff_text = "\n".join([
+		"diff --git a/src/manual/client.ts b/src/manual/client.ts",
+		"deleted file mode 100644",
+		"index 1111111..0000000",
+		"--- a/src/manual/client.ts",
+		"+++ /dev/null",
+		"@@ -1,2 +0,0 @@",
+		"-const endpoint = '/v1';",
+		"-const timeoutMs = 5000;",
+		"@@ -50,2 +0,0 @@",
+		"-@generated",
+		"-console.log('later marker');",
+	]) + "\n"
+	result = _run_uninteresting_filter_script(diff_text=diff_text, workspace_files={})
+
+	assert result["output_diff"] == diff_text
+	assert result["kept_paths"] == "src/manual/client.ts\n"
+	assert result["skipped_paths"] == ""
+
+
+def test_reviewer_filter_script_keeps_existing_file_with_marker_on_line_six() -> None:
+	diff_text = "\n".join([
+		"diff --git a/src/manual/client.ts b/src/manual/client.ts",
+		"index 1111111..2222222 100644",
+		"--- a/src/manual/client.ts",
+		"+++ b/src/manual/client.ts",
+		"@@ -1,6 +1,6 @@",
+		" line01",
+		" line02",
+		" line03",
+		" line04",
+		"-line05",
+		"+line05 updated",
+		" @generated",
+	]) + "\n"
+	result = _run_uninteresting_filter_script(
+		diff_text=diff_text,
+		workspace_files={
+			"src/manual/client.ts": "\n".join([
+				"line01",
+				"line02",
+				"line03",
+				"line04",
+				"line05 updated",
+				"@generated",
+			]) + "\n",
+		},
+	)
+
+	assert result["output_diff"] == diff_text
+	assert result["kept_paths"] == "src/manual/client.ts\n"
+	assert result["skipped_paths"] == ""
+
+
+def test_reviewer_filter_script_keeps_deleted_file_with_marker_on_line_six() -> None:
+	diff_text = "\n".join([
+		"diff --git a/src/manual/deleted_client.ts b/src/manual/deleted_client.ts",
+		"deleted file mode 100644",
+		"index 1111111..0000000",
+		"--- a/src/manual/deleted_client.ts",
+		"+++ /dev/null",
+		"@@ -1,6 +0,0 @@",
+		"-line01",
+		"-line02",
+		"-line03",
+		"-line04",
+		"-line05",
+		"-@generated",
+	]) + "\n"
+	result = _run_uninteresting_filter_script(diff_text=diff_text, workspace_files={})
+
+	assert result["output_diff"] == diff_text
+	assert result["kept_paths"] == "src/manual/deleted_client.ts\n"
+	assert result["skipped_paths"] == ""
+
+
+def test_reviewer_filter_script_ignores_existing_file_marker_beyond_header_lines() -> None:
+	diff_text = "\n".join([
+		"diff --git a/src/manual/client.ts b/src/manual/client.ts",
+		"index 1111111..2222222 100644",
+		"--- a/src/manual/client.ts",
+		"+++ b/src/manual/client.ts",
+		"@@ -1,20 +1,20 @@",
+		" line01",
+		" line02",
+		" line03",
+		" line04",
+		" line05",
+		" line06",
+		" line07",
+		" line08",
+		" line09",
+		" line10",
+		" line11",
+		" line12",
+		" line13",
+		" line14",
+		" line15",
+		" line16",
+		" line17",
+		" line18",
+		"-line19",
+		"+line19 updated",
+		" @generated",
+	]) + "\n"
+	result = _run_uninteresting_filter_script(
+		diff_text=diff_text,
+		workspace_files={
+			"src/manual/client.ts": "\n".join([
+				"line01",
+				"line02",
+				"line03",
+				"line04",
+				"line05",
+				"line06",
+				"line07",
+				"line08",
+				"line09",
+				"line10",
+				"line11",
+				"line12",
+				"line13",
+				"line14",
+				"line15",
+				"line16",
+				"line17",
+				"line18",
+				"line19 updated",
+				"@generated",
+			]) + "\n",
+		},
+	)
+
+	assert result["output_diff"] == diff_text
+	assert result["kept_paths"] == "src/manual/client.ts\n"
+	assert result["skipped_paths"] == ""
+
+
+def test_reviewer_filter_script_ignores_deleted_file_marker_beyond_header_lines() -> None:
+	diff_text = "\n".join([
+		"diff --git a/src/manual/deleted_client.ts b/src/manual/deleted_client.ts",
+		"deleted file mode 100644",
+		"index 1111111..0000000",
+		"--- a/src/manual/deleted_client.ts",
+		"+++ /dev/null",
+		"@@ -1,20 +0,0 @@",
+		"-line01",
+		"-line02",
+		"-line03",
+		"-line04",
+		"-line05",
+		"-line06",
+		"-line07",
+		"-line08",
+		"-line09",
+		"-line10",
+		"-line11",
+		"-line12",
+		"-line13",
+		"-line14",
+		"-line15",
+		"-line16",
+		"-line17",
+		"-line18",
+		"-line19",
+		"-@generated",
+	]) + "\n"
+	result = _run_uninteresting_filter_script(diff_text=diff_text, workspace_files={})
+
+	assert result["output_diff"] == diff_text
+	assert result["kept_paths"] == "src/manual/deleted_client.ts\n"
+	assert result["skipped_paths"] == ""
+
+
+def test_reviewer_filter_harness_fails_open_when_disabled_missing_or_failing() -> None:
+	disabled = _run_reviewer_filter_harness(filter_enabled="false", helper_mode="repo")
+	assert disabled["REVIEWER_FILTER_ACTIVE"] == "false"
+	assert disabled["PR_DIFF_FILE"].endswith("pr_diff.patch")
+	assert disabled["PR_DIFF_FILE_CONTENT"] == PHASE_C_FILTER_FIXTURE.read_text(encoding="utf-8")
+	assert disabled["SYMBOL_DIFF_SUMMARY_FILE_CONTENT"] == "RAW SYMBOL SUMMARY\npackage-lock.json\nsrc/generated/client.ts\n"
+	assert "REVIEWER_FILTER_SKIP:" not in disabled["stdout"]
+
+	missing = _run_reviewer_filter_harness(filter_enabled="true", helper_mode="missing")
+	assert missing["REVIEWER_FILTER_ACTIVE"] == "false"
+	assert missing["PR_DIFF_FILE"].endswith("pr_diff.patch")
+	assert "review_filter_uninteresting_files.sh unavailable" in missing["stdout"]
+	assert missing["SYMBOL_DIFF_SUMMARY_FILE_CONTENT"] == "RAW SYMBOL SUMMARY\npackage-lock.json\nsrc/generated/client.ts\n"
+
+	failing = _run_reviewer_filter_harness(filter_enabled="true", helper_mode="failing")
+	assert failing["REVIEWER_FILTER_ACTIVE"] == "false"
+	assert failing["PR_DIFF_FILE"].endswith("pr_diff.patch")
+	assert "review_filter_uninteresting_files.sh failed for" in failing["stdout"]
+	assert failing["SYMBOL_DIFF_SUMMARY_FILE_CONTENT"] == "RAW SYMBOL SUMMARY\npackage-lock.json\nsrc/generated/client.ts\n"
+
+
+def test_reviewer_filter_stat_harness_handles_brace_expansion_renames() -> None:
+	output = _run_reviewer_stat_filter_harness(
+		diff_stat_text="\n".join([
+			" src/{generated => api}/client.ts | 2 +-",
+			" lib/{ => util}/helpers.py | 2 +-",
+			" db/contracts/{legacy => nested}/widgets.yml | 2 +-",
+			" 3 files changed, 3 insertions(+), 3 deletions(-)",
+		]) + "\n",
+		skipped_rows_text="\n".join([
+			"src/api/client.ts\tgenerated-marker:@generated",
+			"lib/util/helpers.py\tgenerated-marker:@generated",
+		]) + "\n",
+	)
+
+	assert "src/{generated => api}/client.ts" not in output
+	assert "lib/{ => util}/helpers.py" not in output
+	assert "db/contracts/{legacy => nested}/widgets.yml" in output
+	assert "3 files changed, 3 insertions(+), 3 deletions(-)" not in output
 
 
 def test_reject_verifier_bootstrap_and_stage_order_contract() -> None:
@@ -734,6 +2201,27 @@ def test_reviewer_iteration_scope_prepare_path_reports_missing_targeted_context_
 
 def main() -> int:
 	test_review_pipeline_knobs_are_wired_into_codex_agent_env()
+	test_review_scripts_emit_context_budget_warn_signals()
+	test_review_filter_smoke_fixtures_are_present()
+	test_reviewer_risk_tier_classifier_honours_thresholds_and_always_full_regex()
+	test_review_filter_helper_wiring_is_flag_gated_and_fail_open()
+	test_agents_md_materiality_classifier_and_workflow_wiring()
+	test_reviewer_failback_wiring_stages_asset_and_restores_cache_before_reviewers()
+	test_reviewer_failback_harness_reuses_cached_open_state_and_skips_unmapped_models()
+	test_reviewer_health_dispatch_logs_to_stderr_only()
+	test_reviewer_zero_success_guard_fails_open_when_every_review_slot_was_skipped()
+	test_reviewer_filter_harness_strips_low_signal_paths_and_preserves_exemptions()
+	test_reviewer_filter_script_preserves_nested_exempt_paths()
+	test_reviewer_filter_script_preserves_root_level_migration_exempt_paths()
+	test_reviewer_filter_script_strips_deleted_generated_file_when_workspace_copy_is_missing()
+	test_reviewer_filter_script_keeps_deleted_file_when_first_hunk_starts_later()
+	test_reviewer_filter_script_ignores_later_hunk_marker_when_first_hunk_has_no_marker()
+	test_reviewer_filter_script_keeps_existing_file_with_marker_on_line_six()
+	test_reviewer_filter_script_keeps_deleted_file_with_marker_on_line_six()
+	test_reviewer_filter_script_ignores_existing_file_marker_beyond_header_lines()
+	test_reviewer_filter_script_ignores_deleted_file_marker_beyond_header_lines()
+	test_reviewer_filter_harness_fails_open_when_disabled_missing_or_failing()
+	test_reviewer_filter_stat_harness_handles_brace_expansion_renames()
 	test_reject_verifier_bootstrap_and_stage_order_contract()
 	test_support_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
 	test_review_pipeline_summary_step_is_local_only_and_grep_friendly()

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -32,6 +33,16 @@ TRACKING_ISSUE_LINE_RE = re.compile(
 	r"^\s*(?:-\s*)?(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+)\s*$",
 	re.MULTILINE,
 )
+TRACKING_BODY_ISSUE_LINE_RE = re.compile(
+	r"^(?P<prefix>\s*-\s*)\[(?P<checkbox>[ xX])\](?P<suffix>\s*\*\*(?P<id>[^*\n]+)\*\*:.*)$"
+)
+TRACKING_BODY_WAVE_HEADING_RE = re.compile(r"^### Wave (?P<wave>\d+)\s*$")
+TRACKING_BODY_CHECKED_STATUSES: set[str] = {"merged", "closed", "skipped"}
+
+
+def tracking_body_sync_hash(body: str) -> str:
+	"""Return the stable hash used to cache live tracking-body sync state."""
+	return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -686,9 +697,10 @@ def build_tracking_state(
 	# tracking issue body on every poll tick so (a) the body is
 	# guaranteed byte-stable for provider-side prompt-prefix caching,
 	# (b) one GH API call per judge tick is eliminated. The tracking
-	# body is immutable by contract ("Do not edit manually." — see
-	# build_tracking_issue_body below); validate and clarify-respond
-	# continue to read the live body for their own narrower purposes.
+	# body *snapshot* is immutable by contract even though the live
+	# GitHub issue body may later be re-rendered from state to reconcile
+	# checkbox rows. Validate and clarify-respond continue to read the
+	# live body for their own narrower purposes.
 	project_body_snapshot = build_tracking_issue_body(
 		data, waves, integration_branch=integration_branch
 	)
@@ -697,6 +709,8 @@ def build_tracking_state(
 		"schema_version": "orchestrate_state.v1",
 		"project_title": data["project_title"],
 		"project_body_snapshot": project_body_snapshot,
+		"tracking_body_sync_hash": tracking_body_sync_hash(project_body_snapshot),
+		"tracking_body_last_readiness_refresh_hash": tracking_body_sync_hash(project_body_snapshot),
 		"total_issues": len(data["issues"]),
 		"total_waves": len(waves),
 		"current_wave": 1,
@@ -761,6 +775,165 @@ def build_tracking_issue_body(
 	lines.append("*This issue is managed by the AI orchestrator. Do not edit manually.*")
 	lines.append("`ai:orchestrator-tracking`")
 	return "\n".join(lines)
+
+
+def render_tracking_issue_body_from_state(
+	state: dict[str, Any],
+	template_body: str | None = None,
+) -> str:
+	"""Render the live tracking issue body from orchestrator state.
+
+	The cached ``project_body_snapshot`` remains the canonical immutable
+	template for judge prompt caching. The live GitHub issue body may be
+	re-rendered from state so completed sub-issue rows flip from ``[ ]`` to
+	``[x]`` without losing the original summary/dependencies/footer text.
+	"""
+	body_template = template_body if template_body is not None else str(state.get("project_body_snapshot", "") or "")
+	if not body_template.strip():
+		raise OrchestrateError("Tracking issue body template is required to render live body state")
+
+	issue_status_by_id: dict[str, str] = {}
+	issues_by_wave: dict[int, list[dict[str, Any]]] = {}
+	issue_id_order: list[str] = []
+	for wave in state.get("waves", []) or []:
+		if not isinstance(wave, dict):
+			continue
+		wave_num = wave.get("wave")
+		if not isinstance(wave_num, int):
+			continue
+		wave_issues: list[dict[str, Any]] = []
+		for issue in wave.get("issues", []) or []:
+			if not isinstance(issue, dict):
+				continue
+			issue_id = str(issue.get("id", "") or "").strip()
+			if not issue_id:
+				continue
+			payload = {
+				"id": issue_id,
+				"status": str(issue.get("status", "") or ""),
+				"github_issue": issue.get("github_issue"),
+				"wave": wave_num,
+			}
+			issue_status_by_id[issue_id] = payload["status"]
+			issue_id_order.append(issue_id)
+			wave_issues.append(payload)
+		issues_by_wave[wave_num] = wave_issues
+
+	if not issue_status_by_id:
+		raise OrchestrateError("Tracking state contains no issue rows to reconcile")
+
+	def _synthesized_issue_line(issue: dict[str, Any], prefix: str) -> str:
+		checkbox = "x" if issue["status"] in TRACKING_BODY_CHECKED_STATUSES else " "
+		gh_num = issue.get("github_issue")
+		if isinstance(gh_num, int) or (isinstance(gh_num, str) and gh_num.isdigit()):
+			suffix = f" **{issue['id']}**: #{gh_num}"
+		else:
+			suffix = f" **{issue['id']}**: pending creation"
+		return f"{prefix}[{checkbox}]{suffix}"
+
+	lines = body_template.splitlines()
+	section_starts = [idx for idx, line in enumerate(lines) if line.startswith("### ")]
+	section_end_by_start = {
+		start: (section_starts[pos + 1] if pos + 1 < len(section_starts) else len(lines))
+		for pos, start in enumerate(section_starts)
+	}
+	wave_sections: list[tuple[int, int]] = []
+	for idx, line in enumerate(lines):
+		match = TRACKING_BODY_WAVE_HEADING_RE.match(line)
+		if match is None:
+			continue
+		wave_sections.append((idx, int(match.group("wave"))))
+
+	rendered_lines: list[str] = []
+	matched_ids: set[str] = set()
+	duplicate_ids: set[str] = set()
+	saw_issue_row = False
+	seen_wave_numbers: set[int] = set()
+	cursor = 0
+	for start_idx, wave_num in wave_sections:
+		end_idx = section_end_by_start.get(start_idx, len(lines))
+		rendered_lines.extend(lines[cursor:start_idx])
+		block_lines = lines[start_idx:end_idx]
+		block_output: list[str] = []
+		expected_issues = issues_by_wave.get(wave_num, [])
+		expected_ids = {issue["id"] for issue in expected_issues}
+		matched_in_wave: set[str] = set()
+		insertion_prefix = "- "
+		last_issue_output_idx: int | None = None
+		seen_wave_numbers.add(wave_num)
+
+		for line in block_lines:
+			match = TRACKING_BODY_ISSUE_LINE_RE.match(line)
+			if match is None:
+				block_output.append(line)
+				continue
+
+			saw_issue_row = True
+			issue_id = match.group("id").strip()
+			if expected_ids:
+				insertion_prefix = match.group("prefix") or insertion_prefix
+			if issue_id not in expected_ids:
+				block_output.append(line)
+				last_issue_output_idx = len(block_output) - 1
+				continue
+
+			if issue_id in matched_ids:
+				duplicate_ids.add(issue_id)
+			matched_ids.add(issue_id)
+			matched_in_wave.add(issue_id)
+
+			checkbox = "x" if issue_status_by_id[issue_id] in TRACKING_BODY_CHECKED_STATUSES else " "
+			block_output.append(f"{match.group('prefix')}[{checkbox}]{match.group('suffix')}")
+			last_issue_output_idx = len(block_output) - 1
+
+		missing_in_wave = [issue for issue in expected_issues if issue["id"] not in matched_in_wave]
+		if missing_in_wave:
+			if last_issue_output_idx is not None:
+				insert_at = last_issue_output_idx + 1
+			else:
+				insert_at = 1
+				while insert_at < len(block_output) and block_output[insert_at].strip() == "":
+					insert_at += 1
+			inserted_lines = [_synthesized_issue_line(issue, insertion_prefix) for issue in missing_in_wave]
+			block_output[insert_at:insert_at] = inserted_lines
+			matched_ids.update(issue["id"] for issue in missing_in_wave)
+
+		rendered_lines.extend(block_output)
+		cursor = end_idx
+
+	rendered_lines.extend(lines[cursor:])
+
+	if duplicate_ids:
+		dups = ", ".join(sorted(duplicate_ids))
+		raise OrchestrateError(f"Tracking issue body template repeats local issue id(s): {dups}")
+
+	missing_wave_numbers = sorted(wave_num for wave_num, issues in issues_by_wave.items() if issues and wave_num not in seen_wave_numbers)
+	if missing_wave_numbers:
+		preview = ", ".join(str(wave_num) for wave_num in missing_wave_numbers[:10])
+		raise OrchestrateError(
+			"Tracking issue body template is missing wave heading(s): "
+			f"{preview}"
+		)
+
+	missing_ids = [issue_id for issue_id in issue_id_order if issue_id not in matched_ids]
+	if missing_ids:
+		preview = ", ".join(missing_ids[:10])
+		if len(missing_ids) > 10:
+			preview += f", ... +{len(missing_ids) - 10} more"
+		if saw_issue_row or wave_sections:
+			raise OrchestrateError(
+				"Tracking issue body template is missing local issue id(s): "
+				f"{preview}"
+			)
+		raise OrchestrateError(
+			"Tracking issue body template does not contain parseable sub-issue rows; "
+			f"missing ids: {preview}"
+		)
+
+	rendered = "\n".join(rendered_lines)
+	if body_template.endswith("\n"):
+		rendered += "\n"
+	return rendered
 
 
 def format_wave_status_comment(state: dict[str, Any], wave_idx: int) -> str:
@@ -2151,6 +2324,8 @@ def rebuild_tracking_state(
 		# tracking body, so snapshot it directly for subsequent judge
 		# ticks (same semantics as build_tracking_state above).
 		"project_body_snapshot": body,
+		"tracking_body_sync_hash": tracking_body_sync_hash(body),
+		"tracking_body_last_readiness_refresh_hash": tracking_body_sync_hash(body),
 		"total_issues": total_issues,
 		"total_waves": len(parsed["waves"]),
 		"current_wave": 1,
@@ -2323,6 +2498,22 @@ def cmd_build_tracking_body(args: argparse.Namespace) -> int:
 	waves = compute_waves(data)
 	body = build_tracking_issue_body(data, waves, integration_branch=(args.integration_branch or ""))
 	print(body)
+	return 0
+
+
+def cmd_render_tracking_body(args: argparse.Namespace) -> int:
+	path = Path(args.state_file).resolve()
+	with path.open("r", encoding="utf-8") as f:
+		state = json.load(f)
+
+	template_body: str | None = None
+	if getattr(args, "template_body_file", None):
+		template_path = Path(args.template_body_file).resolve()
+		with template_path.open("r", encoding="utf-8") as f:
+			template_body = f.read()
+
+	body = render_tracking_issue_body_from_state(state, template_body=template_body)
+	sys.stdout.write(body)
 	return 0
 
 
@@ -2638,6 +2829,15 @@ def build_parser() -> argparse.ArgumentParser:
 	p_body.add_argument("--input-file", required=True)
 	p_body.add_argument("--integration-branch", default="", help="Optional integration branch name")
 	p_body.set_defaults(func=cmd_build_tracking_body)
+
+	p_render = subparsers.add_parser("render-tracking-body", help="Render the live tracking issue body from orchestrator state")
+	p_render.add_argument("--state-file", required=True)
+	p_render.add_argument(
+		"--template-body-file",
+		default=None,
+		help="Optional body template path. Defaults to .project_body_snapshot in the state file.",
+	)
+	p_render.set_defaults(func=cmd_render_tracking_body)
 
 	p_next = subparsers.add_parser("next-wave", help="Get next wave to dispatch")
 	p_next.add_argument("--state-file", required=True)

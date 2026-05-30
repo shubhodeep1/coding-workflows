@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# post_review_comment.sh — Post a consolidated reviewer-consensus ledger to
-# the appropriate GitHub surface for the claude-branch-review mode of
-# review_autofix.yml.
+# post_review_comment.sh — Post review output to the appropriate GitHub
+# surface for review_autofix.yml. Legacy claude-branch-review mode posts
+# chunked issue / commit comments; review-blocked judge mode can also post
+# a single pull-request review when `--review-state` is supplied.
 #
 # Routing (matches CLAUDE.md Q3 decision: PR-comment when an open PR exists,
 # fall back to commit comment otherwise):
@@ -29,6 +30,7 @@
 # Env contract:
 #   REVIEWER_CONSENSUS_FILE   path to the ledger written by
 #                             summarize_reviewer_consensus.sh --prefix review
+#                             (legacy comment mode)
 #   REPOSITORY                <owner>/<repo> (default github.repository)
 #   PR_NUMBER                 numeric PR number, optional
 #   HEAD_SHA                  commit SHA the review covers (used for commit
@@ -43,6 +45,16 @@
 #   POST_REVIEW_DRY_RUN       when "true", print the chunked bodies to stdout
 #                             instead of posting (used by tests / debugging)
 #
+# Optional CLI flags / additive inputs:
+#   --review-state <state>    logical review state for PR-review mode:
+#                             APPROVE | APPROVE_WITH_COMMENTS | COMMENT |
+#                             REQUEST_CHANGES. When set and a PR route exists,
+#                             the script posts a single pull-request review via
+#                             /repos/{repo}/pulls/{pr}/reviews instead of the
+#                             legacy issue/commit comment path.
+#   --body-file <path>        exact body file to post. Falls back to
+#                             REVIEW_BODY_FILE, then REVIEWER_CONSENSUS_FILE.
+#
 # Exit codes:
 #   0   posted (or dry-ran) successfully, OR ledger was empty/missing and
 #       posting was skipped (warning emitted)
@@ -50,6 +62,70 @@
 #   2   bad usage / missing required env
 
 set -euo pipefail
+
+normalize_review_state()
+{
+	case "${1:-}" in
+		APPROVE|APPROVE_WITH_COMMENTS|COMMENT|REQUEST_CHANGES)
+			printf '%s' "${1}"
+			;;
+		*)
+			printf '%s' ""
+			;;
+	esac
+}
+
+map_review_state_to_event()
+{
+	case "${1:-}" in
+		APPROVE)
+			printf 'APPROVE'
+			;;
+		APPROVE_WITH_COMMENTS)
+			printf 'APPROVE'
+			;;
+		COMMENT)
+			printf 'COMMENT'
+			;;
+		REQUEST_CHANGES)
+			printf 'REQUEST_CHANGES'
+			;;
+		*)
+			printf '%s' ""
+			;;
+	esac
+}
+
+REVIEW_STATE_INPUT="${REVIEW_STATE:-}"
+BODY_FILE_OVERRIDE="${REVIEW_BODY_FILE:-}"
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--review-state)
+			if [ "$#" -lt 2 ]; then
+				echo "::error::post_review_comment: --review-state requires a value." >&2
+				exit 2
+			fi
+			REVIEW_STATE_INPUT="$2"
+			shift 2
+			;;
+		--body-file)
+			if [ "$#" -lt 2 ]; then
+				echo "::error::post_review_comment: --body-file requires a path." >&2
+				exit 2
+			fi
+			BODY_FILE_OVERRIDE="$2"
+			shift 2
+			;;
+		--)
+			shift
+			break
+			;;
+		*)
+			echo "::error::post_review_comment: unknown argument '$1'." >&2
+			exit 2
+			;;
+	esac
+done
 
 # ── Env defaults + required-input validation ────────────────────────────
 # Required vars use explicit `if [ -z ]; then exit 2` (instead of bash's
@@ -62,9 +138,16 @@ GITHUB_RUN_ID="${GITHUB_RUN_ID:-}"
 GITHUB_SERVER_URL="${GITHUB_SERVER_URL:-https://github.com}"
 COMMENT_BODY_SOFT_LIMIT="${COMMENT_BODY_SOFT_LIMIT:-60000}"
 POST_REVIEW_DRY_RUN="${POST_REVIEW_DRY_RUN:-false}"
+INPUT_BODY_FILE="${BODY_FILE_OVERRIDE:-${REVIEWER_CONSENSUS_FILE:-}}"
+NORMALIZED_REVIEW_STATE="$(normalize_review_state "${REVIEW_STATE_INPUT}")"
+REVIEW_EVENT="$(map_review_state_to_event "${NORMALIZED_REVIEW_STATE}")"
 
-if [ -z "${REVIEWER_CONSENSUS_FILE:-}" ]; then
-	echo "::error::post_review_comment: REVIEWER_CONSENSUS_FILE must be set." >&2
+if [ -n "${REVIEW_STATE_INPUT}" ] && [ -z "${NORMALIZED_REVIEW_STATE}" ]; then
+	echo "::error::post_review_comment: invalid review state '${REVIEW_STATE_INPUT}'." >&2
+	exit 2
+fi
+if [ -z "${INPUT_BODY_FILE}" ]; then
+	echo "::error::post_review_comment: REVIEWER_CONSENSUS_FILE or --body-file must be set." >&2
 	exit 2
 fi
 if [ -z "${REPOSITORY}" ]; then
@@ -92,9 +175,9 @@ fi
 # Fallback shim when gh_helpers is unavailable — bare `gh` with no retry.
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
-# ── Ledger sanity ───────────────────────────────────────────────────────
-if [ ! -s "${REVIEWER_CONSENSUS_FILE}" ]; then
-	echo "::warning::post_review_comment: REVIEWER_CONSENSUS_FILE is empty or missing (${REVIEWER_CONSENSUS_FILE}); nothing to post."
+# ── Input-body sanity ───────────────────────────────────────────────────
+if [ ! -s "${INPUT_BODY_FILE}" ]; then
+	echo "::warning::post_review_comment: input body file is empty or missing (${INPUT_BODY_FILE}); nothing to post."
 	exit 0
 fi
 
@@ -102,16 +185,17 @@ fi
 # emitted by summarize_reviewer_consensus.sh as a no-op so we don't post a
 # review comment for every push that fails reviewer fan-out. The summariser
 # already logs the failure to the workflow run.
-if grep -Fq "(No reviewer outputs available for this pass.)" "${REVIEWER_CONSENSUS_FILE}" || \
-	{ grep -Fqx "(No findings reported.)" "${REVIEWER_CONSENSUS_FILE}" && \
-	  grep -Fqx "(No task gaps reported.)" "${REVIEWER_CONSENSUS_FILE}" && \
-	  ! grep -Fq "=== FINDINGS FROM " "${REVIEWER_CONSENSUS_FILE}"; }; then
+if [ -z "${BODY_FILE_OVERRIDE}" ] && \
+	{ grep -Fq "(No reviewer outputs available for this pass.)" "${INPUT_BODY_FILE}" || \
+	  { grep -Fqx "(No findings reported.)" "${INPUT_BODY_FILE}" && \
+	    grep -Fqx "(No task gaps reported.)" "${INPUT_BODY_FILE}" && \
+	    ! grep -Fq "=== FINDINGS FROM " "${INPUT_BODY_FILE}"; }; }; then
 	echo "::warning::post_review_comment: ledger contains the empty-pass sentinel; skipping post."
 	exit 0
 fi
 
-LEDGER_BYTES="$(wc -c < "${REVIEWER_CONSENSUS_FILE}" | tr -d '[:space:]')"
-echo "post_review_comment: ledger=${REVIEWER_CONSENSUS_FILE} bytes=${LEDGER_BYTES} sha=${HEAD_SHA} pr_in=${PR_NUMBER:-<none>}"
+BODY_BYTES="$(wc -c < "${INPUT_BODY_FILE}" | tr -d '[:space:]')"
+echo "post_review_comment: body=${INPUT_BODY_FILE} bytes=${BODY_BYTES} sha=${HEAD_SHA} pr_in=${PR_NUMBER:-<none>} review_state=${NORMALIZED_REVIEW_STATE:-<none>}"
 
 # ── Open-then-push race recovery ────────────────────────────────────────
 # review_autofix.yml's caller (internal-review.yml resolve-claude-branch-pr)
@@ -169,6 +253,41 @@ else
 	ROUTE="commit"
 fi
 echo "post_review_comment: route=${ROUTE} pr=${PR_NUMBER:-<none>}"
+
+if [ "${ROUTE}" = "pr" ] && [ -n "${REVIEW_EVENT}" ]; then
+	if [ "${POST_REVIEW_DRY_RUN}" = "true" ]; then
+		echo "─── DRY RUN: PR review (logical=${NORMALIZED_REVIEW_STATE} event=${REVIEW_EVENT}) ───"
+		cat "${INPUT_BODY_FILE}"
+		echo "─── END DRY RUN: PR review ───"
+		exit 0
+	fi
+
+	pr_review_payload="$(mktemp)"
+	trap 'rm -f "${pr_review_payload}"; rm -rf "${CHUNK_DIR:-}"' EXIT
+		PYTHONDONTWRITEBYTECODE=1 python3 - "${INPUT_BODY_FILE}" "${REVIEW_EVENT}" > "${pr_review_payload}" <<'PY'
+from pathlib import Path
+import json
+import os
+import sys
+
+body = Path(sys.argv[1]).read_text(encoding="utf-8")
+event = sys.argv[2]
+payload = {"body": body, "event": event}
+head_sha = os.environ.get("HEAD_SHA", "")
+if head_sha:
+	payload["commit_id"] = head_sha
+json.dump(payload, sys.stdout)
+PY
+	if gh_retry gh api -X POST "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews" \
+		--input "${pr_review_payload}" >/dev/null; then
+		echo "post_review_comment: posted PR review state=${NORMALIZED_REVIEW_STATE} event=${REVIEW_EVENT} → repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews"
+		rm -f "${pr_review_payload}"
+		exit 0
+	fi
+	rm -f "${pr_review_payload}"
+	echo "::error::post_review_comment: failed to post PR review state=${NORMALIZED_REVIEW_STATE} event=${REVIEW_EVENT} → repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews" >&2
+	exit 1
+fi
 
 # ── Build header / trailer envelope ─────────────────────────────────────
 RUN_URL=""
@@ -244,7 +363,7 @@ fi
 CHUNK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/post_review_comment_chunks.XXXXXX")"
 trap 'rm -rf "${CHUNK_DIR}"' EXIT
 
-PYTHONDONTWRITEBYTECODE=1 python3 - "${REVIEWER_CONSENSUS_FILE}" "${CHUNK_DIR}" "${MAX_BODY}" <<'PYCHUNK'
+PYTHONDONTWRITEBYTECODE=1 python3 - "${INPUT_BODY_FILE}" "${CHUNK_DIR}" "${MAX_BODY}" <<'PYCHUNK'
 import os
 import sys
 

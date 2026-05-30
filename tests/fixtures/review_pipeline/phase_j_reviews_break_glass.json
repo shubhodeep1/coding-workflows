@@ -1,0 +1,20 @@
+[
+  {
+    "id": 201,
+    "submitted_at": "2026-05-29T18:03:00Z",
+    "body": "@codex break-glass latest human override",
+    "user": {
+      "login": "bob",
+      "type": "User"
+    }
+  },
+  {
+    "id": 202,
+    "submitted_at": "2026-05-29T18:04:00Z",
+    "body": "Quoted text: \"@codex break-glass\" should not match because it is not anchored.",
+    "user": {
+      "login": "dana",
+      "type": "User"
+    }
+  }
+]

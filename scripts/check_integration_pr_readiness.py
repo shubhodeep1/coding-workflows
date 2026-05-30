@@ -35,6 +35,8 @@ Usage:
     --head-ref orchestrator/project-2734 \\
     --head-sha <commit-sha-to-attach-status-to> \\
     [--pr-labels-file <path>]               # newline-separated labels on the PR
+    [--tracking-body-file <path>]           # optional body override; skips gh issue fetch body lookup
+    [--tracking-labels-file <path>]         # optional newline-separated tracking labels override
     [--repo <owner/repo>]                   # default: $GITHUB_REPOSITORY
     [--dry-run]                             # print status, don't post
 """
@@ -96,6 +98,12 @@ def _count_checkboxes(body: str) -> tuple[list[str], int]:
 	return unchecked, total
 
 
+def _read_labels_file(path: Path | None) -> list[str]:
+	if path is None or not path.exists():
+		return []
+	return [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
 def _post_commit_status(
 	repo: str,
 	sha: str,
@@ -147,6 +155,10 @@ def main() -> int:
 	parser.add_argument("--head-sha", required=True)
 	parser.add_argument("--pr-labels-file", type=Path, default=None,
 		help="Path to a newline-separated file of label names on the PR.")
+	parser.add_argument("--tracking-body-file", type=Path, default=None,
+		help="Optional path to the tracking issue body to evaluate instead of fetching it via gh.")
+	parser.add_argument("--tracking-labels-file", type=Path, default=None,
+		help="Optional path to newline-separated tracking-issue labels to evaluate instead of fetching them via gh.")
 	parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", ""))
 	parser.add_argument("--dry-run", action="store_true")
 	args = parser.parse_args()
@@ -171,17 +183,29 @@ def main() -> int:
 
 	tracking_url = f"https://github.com/{args.repo}/issues/{tracking_num}"
 
-	pr_labels: list[str] = []
-	if args.pr_labels_file and args.pr_labels_file.exists():
-		pr_labels = [line.strip() for line in args.pr_labels_file.read_text().splitlines() if line.strip()]
+	pr_labels = _read_labels_file(args.pr_labels_file)
 
-	issue = _fetch_issue(args.repo, tracking_num)
-	if issue is None:
-		desc = f"could not fetch tracking issue #{tracking_num}; cannot assess readiness"
-		print(f"::warning::{desc}")
-		if not args.dry_run and not _post_commit_status_or_error(args.repo, args.head_sha, "error", desc, tracking_url):
+	issue: dict | None = None
+	if args.tracking_body_file or args.tracking_labels_file:
+		issue = {"labels": _read_labels_file(args.tracking_labels_file), "body": ""}
+		if args.tracking_body_file and args.tracking_body_file.exists():
+			issue["body"] = args.tracking_body_file.read_text(encoding="utf-8")
+
+	if issue is None or not issue["body"] or not issue["labels"]:
+		fetched_issue = _fetch_issue(args.repo, tracking_num)
+		if fetched_issue is None:
+			desc = f"could not fetch tracking issue #{tracking_num}; cannot assess readiness"
+			print(f"::warning::{desc}")
+			if not args.dry_run and not _post_commit_status_or_error(args.repo, args.head_sha, "error", desc, tracking_url):
+				return 1
 			return 1
-		return 1
+		if issue is None:
+			issue = fetched_issue
+		else:
+			if not issue["labels"]:
+				issue["labels"] = fetched_issue["labels"]
+			if not issue["body"]:
+				issue["body"] = fetched_issue["body"]
 
 	if TRACKING_LABEL not in issue["labels"]:
 		# Branch matches orchestrator/project-N but the linked issue is
