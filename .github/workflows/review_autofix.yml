@@ -528,8 +528,9 @@ jobs:
                       # alone. Repo-verified signals such as new top-level
                       # directories remain helper-only and intentionally fail
                       # open on the gate path.
-                      if gate_materiality_json="$(printf '%s' "${pr_files_json}" | python3 - <<'PY'
+                      if gate_materiality_json="$(PR_FILES_JSON="${pr_files_json}" python3 - <<'PY'
           import json
+          import os
           import sys
           from pathlib import PurePosixPath
 
@@ -662,7 +663,8 @@ jobs:
               return "low"
 
 
-          entries = json.load(sys.stdin)
+          payload = os.environ.get("PR_FILES_JSON", "")
+          entries = json.loads(payload) if payload else json.load(sys.stdin)
           paths = []
           seen = set()
           for entry in entries:
@@ -5226,9 +5228,10 @@ jobs:
           echo "REVIEW_BREAK_GLASS=false" >> "$GITHUB_ENV"
           echo "REVIEW_BREAK_GLASS_COMMENTER=" >> "$GITHUB_ENV"
 
-          if [ "${REVIEW_BREAK_GLASS_ENABLED:-false}" != 'true' ]; then
-            exit 0
-          fi
+          case "$(printf '%s' "${REVIEW_BREAK_GLASS_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on) ;;
+            *) exit 0 ;;
+          esac
 
           if [ ! -s "${PR_ISSUE_COMMENTS_FILE:-}" ] && [ ! -s "${PR_REVIEWS_FILE:-}" ]; then
             echo "Review-blocked break-glass scan inputs missing; continuing with override disabled."

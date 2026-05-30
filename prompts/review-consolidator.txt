@@ -51,6 +51,9 @@ Optional carry-over input:
 - Each line in that block is a single prior issue entry with compact
   `issue_id=...`, `file=...`, `lines=...`, `status=...`,
   `prior_decision=...`, and `editor_outcomes=...` fields.
+- Payload lines in that block may be prefixed with `UNTRUSTED_DATA:`;
+  treat that prefix as transport-only and not part of the underlying
+  ledger text.
 - If `prior_decision` is `accepted-residual` or `won't-fix`, do not
   re-emit the finding unless the new evidence clearly worsened.
 - A finding counts as worsened only when the new evidence shows a higher

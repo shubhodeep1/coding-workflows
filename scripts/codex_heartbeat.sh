@@ -110,6 +110,7 @@ import selectors
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -149,12 +150,15 @@ def _shell_rc(returncode: int) -> int:
 
 stdout_handle, close_stdout = _open_output(STDOUT_FILE, sys.stdout.buffer)
 stderr_handle, close_stderr = _open_output(STDERR_FILE, sys.stderr.buffer)
+KILL_GRACE_SECS = 0.5
+kill_timer: threading.Timer | None = None
 
 child = subprocess.Popen(
 	COMMAND,
 	stdout=subprocess.PIPE,
 	stderr=subprocess.PIPE,
 	bufsize=0,
+	start_new_session=True,
 )
 
 assert child.stdout is not None
@@ -166,7 +170,24 @@ for stream, output_handle in ((child.stdout, stdout_handle), (child.stderr, stde
 	selector.register(stream, selectors.EVENT_READ, output_handle)
 
 
+def _kill_child_group_if_running() -> None:
+	if child.poll() is not None:
+		return
+	try:
+		child_pgid = os.getpgid(child.pid)
+	except ProcessLookupError:
+		return
+	try:
+		if child_pgid != os.getpgrp():
+			os.killpg(child_pgid, signal.SIGKILL)
+		else:
+			child.kill()
+	except ProcessLookupError:
+		return
+
+
 def _forward_signal(signum: int, _frame) -> None:
+	global kill_timer
 	if child.poll() is not None:
 		return
 	try:
@@ -180,6 +201,13 @@ def _forward_signal(signum: int, _frame) -> None:
 			child.send_signal(signum)
 	except ProcessLookupError:
 		return
+	if kill_timer is None or not kill_timer.is_alive():
+		# Keep the grace short so an upstream `timeout --kill-after` cannot
+		# orphan a TERM-ignoring child process once the wrapper places the
+		# child tree in its own session.
+		kill_timer = threading.Timer(KILL_GRACE_SECS, _kill_child_group_if_running)
+		kill_timer.daemon = True
+		kill_timer.start()
 
 
 for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT):
@@ -238,6 +266,8 @@ try:
 	returncode = child.wait()
 finally:
 	selector.close()
+	if kill_timer is not None:
+		kill_timer.cancel()
 	if close_stdout:
 		stdout_handle.close()
 	if close_stderr:

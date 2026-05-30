@@ -264,14 +264,19 @@ if [ "${ROUTE}" = "pr" ] && [ -n "${REVIEW_EVENT}" ]; then
 
 	pr_review_payload="$(mktemp)"
 	trap 'rm -f "${pr_review_payload}"; rm -rf "${CHUNK_DIR:-}"' EXIT
-	PYTHONDONTWRITEBYTECODE=1 python3 - "${INPUT_BODY_FILE}" "${REVIEW_EVENT}" > "${pr_review_payload}" <<'PY'
+		PYTHONDONTWRITEBYTECODE=1 python3 - "${INPUT_BODY_FILE}" "${REVIEW_EVENT}" > "${pr_review_payload}" <<'PY'
 from pathlib import Path
 import json
+import os
 import sys
 
 body = Path(sys.argv[1]).read_text(encoding="utf-8")
 event = sys.argv[2]
-json.dump({"body": body, "event": event}, sys.stdout)
+payload = {"body": body, "event": event}
+head_sha = os.environ.get("HEAD_SHA", "")
+if head_sha:
+	payload["commit_id"] = head_sha
+json.dump(payload, sys.stdout)
 PY
 	if gh_retry gh api -X POST "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews" \
 		--input "${pr_review_payload}" >/dev/null; then

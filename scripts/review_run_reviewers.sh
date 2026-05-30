@@ -382,6 +382,13 @@ if input_path.is_file():
 		candidate = extract_stat_path(raw_line)
 		if candidate and candidate in skip_paths:
 			continue
+		stripped = raw_line.strip()
+		if candidate is None \
+			and stripped \
+			and stripped[0].isdigit() \
+			and " changed" in stripped \
+			and (stripped.endswith(" changed") or " changed, " in stripped):
+			continue
 		kept_lines.append(raw_line)
 
 output_path.parent.mkdir(parents=True, exist_ok=True)

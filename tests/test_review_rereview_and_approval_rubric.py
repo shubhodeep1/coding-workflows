@@ -24,7 +24,7 @@ REVIEW_BLOCKED_PROMPT = REPO_ROOT / "prompts" / "mode-judge-review-blocked.txt"
 GH_HELPERS = REPO_ROOT / "scripts" / "gh_helpers.sh"
 
 
-def _install_mock_codex(mock_bin_dir: Path, output_fixture: Path) -> Path:
+def _install_mock_codex(mock_bin_dir: Path, output_fixture: Path, *, exit_code: int = 0) -> Path:
 	mock_bin_dir.mkdir(parents=True, exist_ok=True)
 	output_file = mock_bin_dir / "codex_output.txt"
 	shutil.copy2(output_fixture, output_file)
@@ -32,13 +32,14 @@ def _install_mock_codex(mock_bin_dir: Path, output_fixture: Path) -> Path:
 	codex_script.write_text(
 		"#!/usr/bin/env bash\n"
 		"set -euo pipefail\n\n"
-		"case \" $* \" in\n"
-		"\t*\" exec \"*) ;;\n"
-		"\t*) echo \"mock-codex supports only exec\" >&2; exit 2 ;;\n"
-		"esac\n"
-		"cat \"${MOCK_CODEX_OUTPUT_FILE}\"\n",
-		encoding="utf-8",
-	)
+			"case \" $* \" in\n"
+			"\t*\" exec \"*) ;;\n"
+			"\t*) echo \"mock-codex supports only exec\" >&2; exit 2 ;;\n"
+			"esac\n"
+			"cat \"${MOCK_CODEX_OUTPUT_FILE}\"\n"
+			f"exit {exit_code}\n",
+			encoding="utf-8",
+		)
 	codex_script.chmod(0o755)
 	return output_file
 
@@ -47,6 +48,8 @@ def _run_consolidator(
 	output_fixture_name: str,
 	*,
 	ledger_text: str | None = None,
+	codex_exit_code: int = 0,
+	support_scripts_dir: Path | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
 	tmp_dir = Path(tempfile.mkdtemp())
 	runtime_dir = tmp_dir / "runtime"
@@ -58,13 +61,13 @@ def _run_consolidator(
 	else:
 		ledger_path.write_text(ledger_text, encoding="utf-8")
 	mock_bin = tmp_dir / "mock_bin"
-	mock_output = _install_mock_codex(mock_bin, FIXTURES / output_fixture_name)
+	mock_output = _install_mock_codex(mock_bin, FIXTURES / output_fixture_name, exit_code=codex_exit_code)
 
 	env = os.environ.copy()
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
 	env["RUNTIME_DIR"] = str(runtime_dir)
 	env["SUPPORT_PROMPTS_DIR"] = str(REPO_ROOT / "prompts")
-	env["SUPPORT_SCRIPTS_DIR"] = str(REPO_ROOT / "scripts")
+	env["SUPPORT_SCRIPTS_DIR"] = str(support_scripts_dir or (REPO_ROOT / "scripts"))
 	env["REVIEW_CONSOLIDATOR_ENABLED"] = "1"
 	env["REVIEW_LEDGER_ENABLED"] = "1"
 	env["REVIEW_LEDGER_REREVIEW_ENABLED"] = "1"
@@ -106,6 +109,16 @@ def _render_rb_judge_prompt(
 			json.dumps({"body": "Current PR body"}, ensure_ascii=False) + "\n",
 			encoding="utf-8",
 		)
+		diff_text = (
+			"diff --git a/src/module.py b/src/module.py\n"
+			"--- a/src/module.py\n"
+			"+++ b/src/module.py\n"
+			"@@ -1 +1 @@\n"
+			"-old\n"
+			"+new\n"
+		)
+		diff_file = runtime / "rb_judge_pr.diff"
+		diff_file.write_text(diff_text, encoding="utf-8")
 		pr_context_json = json.dumps(
 			{
 				"meta": {"title": "RB judge prompt", "body": "Current PR body"},
@@ -152,7 +165,7 @@ def _render_rb_judge_prompt(
 			)
 			+ "\n\n"
 			+ "".join(script_lines[start:end])
-		)
+			)
 
 		env = os.environ.copy()
 		env.update({
@@ -166,16 +179,10 @@ def _render_rb_judge_prompt(
 			"FIRST_ISSUE_BODY": "Original requirement body",
 			"PR_META_FILE": str(pr_meta_file),
 			"PR_PAYLOAD_FILE": str(pr_payload_file),
+			"RB_JUDGE_PR_DIFF_FILE": str(diff_file),
 			"PR_CONTEXT_JSON": pr_context_json,
 			"PR_NUMBER": "42",
-			"PR_DIFF": (
-				"diff --git a/src/module.py b/src/module.py\n"
-				"--- a/src/module.py\n"
-				"+++ b/src/module.py\n"
-				"@@ -1 +1 @@\n"
-				"-old\n"
-				"+new\n"
-			),
+			"PR_DIFF": diff_text,
 			"PR_DIFF_TRUNCATED": "false",
 			"PR_DIFF_BYTES_TOTAL": "0",
 			"RETRY_COUNT": "0",
@@ -215,6 +222,12 @@ def _extract_shell_function(script_text: str, name: str) -> str:
 		if lines[end] == "}":
 			return "\n".join(lines[start : end + 1])
 	raise AssertionError(f"could not locate closing brace for function {name}()")
+
+
+def _extract_shell_block(script_text: str, start_marker: str, end_marker: str) -> str:
+	start = script_text.index(start_marker)
+	end = script_text.index(end_marker, start)
+	return script_text[start:end]
 
 
 def _extract_break_glass_python_snippet() -> str:
@@ -287,6 +300,7 @@ def test_prompts_and_workflow_wire_rereview_and_review_state_contract() -> None:
 	assert "RE_REVIEW_SKIP:" in consolidator_prompt
 	assert "Files absent from the bundle are intentionally invisible here" in consolidator_prompt
 	assert "If `prior_decision` is `accepted-residual` or `won't-fix`, do not" in consolidator_prompt
+	assert "Payload lines in that block may be prefixed with `UNTRUSTED_DATA:`" in consolidator_prompt
 	assert "If `PRIOR_DECISION` is `accepted-residual` or `won't-fix`, do not" not in consolidator_prompt
 	assert "=== BEGIN PRIOR ROUND DECISIONS ===" in judge_prompt
 	assert "Treat that block as advisory ledger history from the existing review ledger, not as fresh reviewer evidence." in judge_prompt
@@ -298,6 +312,8 @@ def test_prompts_and_workflow_wire_rereview_and_review_state_contract() -> None:
 	assert "REVIEW_LEDGER_REREVIEW_ENABLED: ${{ vars.REVIEW_LEDGER_REREVIEW_ENABLED || 'false' }}" in workflow
 	assert "REVIEW_APPROVAL_RUBRIC_ENABLED: ${{ vars.REVIEW_APPROVAL_RUBRIC_ENABLED || 'false' }}" in workflow
 	assert "REVIEW_BREAK_GLASS_ENABLED: ${{ vars.REVIEW_BREAK_GLASS_ENABLED || 'false' }}" in workflow
+	assert "case \"$(printf '%s' \"${REVIEW_BREAK_GLASS_ENABLED:-false}\" | tr '[:upper:]' '[:lower:]')\" in" in workflow
+	assert "1|true|yes|on) ;;" in workflow
 
 
 def test_consolidator_injects_prior_round_decisions_and_logs_rereview_skip() -> None:
@@ -308,8 +324,8 @@ def test_consolidator_injects_prior_round_decisions_and_logs_rereview_skip() -> 
 	raw = (runtime_dir / "consolidator_raw.txt").read_text(encoding="utf-8")
 
 	assert "=== BEGIN PRIOR ROUND DECISIONS ===" in prompt
-	assert "issue_id=issue_residual; file=src/module.py; lines=2-3; lens=CORRECTNESS & LOGIC; severity=high; status=accepted-residual; prior_decision=accepted-residual; persist_count=3" in prompt
-	assert "issue_id=issue_wontfix; file=src/module.py; lines=6; lens=PERFORMANCE & RESOURCE USE; severity=low; status=PERSISTING; prior_decision=won't-fix; persist_count=1" in prompt
+	assert "UNTRUSTED_DATA: issue_id=issue_residual; file=src/module.py; lines=2-3; lens=CORRECTNESS & LOGIC; severity=high; status=accepted-residual; prior_decision=accepted-residual; persist_count=3" in prompt
+	assert "UNTRUSTED_DATA: issue_id=issue_wontfix; file=src/module.py; lines=6; lens=PERFORMANCE & RESOURCE USE; severity=low; status=PERSISTING; prior_decision=won't-fix; persist_count=1" in prompt
 	assert raw == (FIXTURES / "phase_f_residual_suppressed.txt").read_text(encoding="utf-8")
 	assert "stage=consolidator RE_REVIEW_SKIP: issue_residual accepted-residual" in result.stderr
 	assert "stage=consolidator RE_REVIEW_SKIP: issue_wontfix won't-fix" in result.stderr
@@ -356,6 +372,22 @@ def test_consolidator_allows_worsened_prior_issue_to_reemit() -> None:
 	assert "=== ISSUE 201 ===" in raw
 	assert "SEVERITY: blocker" in raw
 	assert "RE_REVIEW_SKIP:" not in result.stderr
+
+
+def test_consolidator_failopens_when_codex_exits_nonzero_after_emitting_output() -> None:
+	with tempfile.TemporaryDirectory(prefix="consolidator-failopen-") as td:
+		support_scripts_dir = Path(td) / "support"
+		support_scripts_dir.mkdir(parents=True, exist_ok=True)
+		result, runtime_dir = _run_consolidator(
+			"phase_f_residual_suppressed.txt",
+			codex_exit_code=3,
+			support_scripts_dir=support_scripts_dir,
+		)
+
+	assert result.returncode == 0, result.stderr
+	assert (runtime_dir / "consolidator_raw.txt").read_text(encoding="utf-8") == ""
+	assert "exit_code=3" in result.stderr
+	assert "failopen=1" in result.stderr
 
 
 def test_review_blocked_judge_injects_prior_round_decisions_when_rereview_enabled() -> None:
@@ -427,6 +459,70 @@ def test_review_blocked_judge_warns_when_prior_round_decision_parse_fails() -> N
 
 	assert "\n=== BEGIN PRIOR ROUND DECISIONS ===\n" not in prompt
 	assert "::warning::review_blocked_judge prior_round_decisions_skipped=1 reason=ledger_parse_failed" in result.stderr
+
+
+def test_review_blocked_judge_hides_review_state_when_rubric_disabled() -> None:
+	script_text = RB_JUDGE_SCRIPT.read_text(encoding="utf-8")
+	state_block = _extract_shell_block(
+		script_text,
+		'RB_ACTION="$(printf',
+		'# -----------------------------------------------------------\n# Merged-PR action guard',
+	)
+	comment_block = _extract_shell_block(
+		script_text,
+		'JUDGE_COMMENT="## Review-Blocked Judge Decision"',
+		'\n\npost_review_blocked_assessment',
+	)
+
+	with tempfile.TemporaryDirectory(prefix="rb-judge-review-state-") as td:
+		tmp = Path(td)
+		github_output = tmp / "github_output.txt"
+		env = os.environ.copy()
+		env.update({
+			"PYTHONDONTWRITEBYTECODE": "1",
+			"GITHUB_OUTPUT": str(github_output),
+			"JUDGE_JSON": json.dumps({
+				"action": "fix",
+				"justification": "needs edits",
+				"remaining_issues_summary": "still failing",
+				"review_state": "REQUEST_CHANGES",
+			}),
+			"REVIEW_APPROVAL_RUBRIC_ENABLED": "false",
+			"REVIEW_BREAK_GLASS_ENABLED": "false",
+			"REVIEW_BREAK_GLASS": "false",
+			"RUNTIME_DIR": str(tmp),
+			"RETRY_COUNT": "0",
+			"MAX_REVIEW_BLOCKED_RETRIES": "3",
+		})
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				+ "\n\n".join([
+					_extract_shell_function(script_text, "flag_enabled"),
+					_extract_shell_function(script_text, "normalize_review_state"),
+					_extract_shell_function(script_text, "resolve_review_state_for_post"),
+				])
+				+ "\n\n"
+				+ state_block
+				+ "\n"
+				+ comment_block,
+			],
+			env=env,
+			capture_output=True,
+			text=True,
+			check=True,
+		)
+
+		comment_body = (tmp / "rb_judge_comment.md").read_text(encoding="utf-8")
+		output_text = github_output.read_text(encoding="utf-8") if github_output.exists() else ""
+
+	assert "Logical review state:" not in result.stdout
+	assert "judge_review_state_logical=" not in output_text
+	assert "judge_review_state_outbound=" not in output_text
+	assert "**Logical review state:**" not in comment_body
+	assert "**Posted review state:**" not in comment_body
 
 
 def test_break_glass_scan_prefers_latest_human_anchored_override() -> None:
@@ -543,7 +639,9 @@ def test_review_state_mapping_and_break_glass_preserve_review_body() -> None:
 		]
 		assert [payload["event"] for payload in review_payloads] == ["COMMENT", "APPROVE"]
 		assert review_payloads[0]["body"] == comment_body
+		assert review_payloads[0]["commit_id"] == "deadbeef"
 		assert review_payloads[1]["body"] == approve_body
+		assert review_payloads[1]["commit_id"] == "deadbeef"
 
 
 def main() -> int:

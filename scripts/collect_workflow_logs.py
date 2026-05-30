@@ -1465,17 +1465,15 @@ def main(argv: list[str] | None = None) -> int:
             if run_id in logs_seen_lookup:
                 cached_row = cached_rows_by_run_id.get(cache_key)
                 cached_excerpts = _cached_log_excerpts(cached_row)
-                if cached_excerpts is not None:
+                cached_cost_telemetry = _cached_cost_telemetry(cached_row)
+                if cached_excerpts is not None and cached_cost_telemetry is not None:
                     run["log_excerpts"] = cached_excerpts
-                    cached_cost_telemetry = _cached_cost_telemetry(cached_row)
-                    if cached_cost_telemetry is not None:
-                        run["cost_telemetry"] = cached_cost_telemetry
+                    run["cost_telemetry"] = cached_cost_telemetry
                     identity = (repository, run_id)
                     canonical = run_rows_by_identity.get(identity)
                     if canonical is not None:
                         canonical["log_excerpts"] = cached_excerpts
-                        if cached_cost_telemetry is not None:
-                            canonical["cost_telemetry"] = cached_cost_telemetry
+                        canonical["cost_telemetry"] = cached_cost_telemetry
                     continue
 
         try:
