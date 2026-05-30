@@ -18,6 +18,8 @@ APPLY_FIXES = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
 CONSOLIDATE = REPO_ROOT / "scripts" / "review_consolidate.sh"
 RB_JUDGE = REPO_ROOT / "scripts" / "review_rb_judge.sh"
 AGENTS_MD_MATERIALITY = REPO_ROOT / "scripts" / "review_agents_md_materiality.sh"
+REVIEWER_FAILBACK_CHAINS = REPO_ROOT / "scripts" / "reviewer_failback_chains.json"
+MODEL_CATALOG = REPO_ROOT / "scripts" / "codex_model_catalog.json"
 FIXTURES_DIR = REPO_ROOT / "scripts" / "fixtures" / "cloudflare-learnings"
 PHASE_A_ANTI_RULES_FIXTURE = FIXTURES_DIR / "phase-a-anti-rules-noisy-pr.patch"
 PHASE_B_RISK_TIER_TRIVIAL_FIXTURE = FIXTURES_DIR / "phase-b-risk-tier-trivial.patch"
@@ -134,6 +136,44 @@ def _workflow_reviewer_models() -> list[str]:
 			return models
 		break
 	raise AssertionError("REVIEWER_MODELS block not found in workflow")
+
+
+def _reviewer_failback_chains() -> dict[str, list[str]]:
+	payload = json.loads(REVIEWER_FAILBACK_CHAINS.read_text(encoding="utf-8"))
+	if not isinstance(payload, dict):
+		raise AssertionError("reviewer failback chains must be a JSON object")
+
+	chains: dict[str, list[str]] = {}
+	for model, entry in payload.items():
+		if isinstance(entry, str):
+			entry = [entry]
+		if not isinstance(model, str) or not isinstance(entry, list):
+			raise AssertionError("reviewer failback chains entries must be string -> list[str]")
+		candidates: list[str] = []
+		for candidate in entry:
+			if not isinstance(candidate, str) or not candidate.strip():
+				raise AssertionError(
+					f"reviewer failback chains candidates must be non-empty strings, got {candidate!r}"
+				)
+			candidates.append(candidate.strip())
+		chains[model] = candidates
+	return chains
+
+
+def _catalog_declared_model_slugs() -> set[str]:
+	payload = json.loads(MODEL_CATALOG.read_text(encoding="utf-8"))
+	models = payload.get("models") if isinstance(payload, dict) else payload
+	if not isinstance(models, list):
+		raise AssertionError("model catalog must expose a top-level models list")
+
+	declared: set[str] = set()
+	for entry in models:
+		if not isinstance(entry, dict):
+			continue
+		slug = entry.get("slug")
+		if isinstance(slug, str) and slug.strip():
+			declared.add(slug.strip())
+	return declared
 
 
 def _diff_changed_paths(diff_text: str) -> list[str]:
@@ -815,18 +855,10 @@ def _run_reviewer_failback_harness() -> dict[str, object]:
 		prompt_file.write_text(PHASE_G_FLAKY_REVIEWER_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
 
 		failback_file = tmp / "reviewer_failback_chains.json"
-		failback_file.write_text(json.dumps({
-			"x-ai/grok-4.20": ["x-ai/grok-4.1-fast"],
-		}, indent=2) + "\n", encoding="utf-8")
+		failback_file.write_text(REVIEWER_FAILBACK_CHAINS.read_text(encoding="utf-8"), encoding="utf-8")
 
 		catalog_file = tmp / "codex_model_catalog.json"
-		catalog_file.write_text(json.dumps({
-			"models": [
-				{"slug": "x-ai/grok-4.20"},
-				{"slug": "x-ai/grok-4.1-fast"},
-				{"slug": "moonshotai/kimi-k2.5"},
-			],
-		}, indent=2) + "\n", encoding="utf-8")
+		catalog_file.write_text(MODEL_CATALOG.read_text(encoding="utf-8"), encoding="utf-8")
 
 		health_file = tmp / ".ai" / "review_runtime" / "pr-123" / "reviewer_health_state.json"
 		health_file.parent.mkdir(parents=True)
@@ -1263,6 +1295,55 @@ def test_reviewer_failback_wiring_stages_asset_and_restores_cache_before_reviewe
 	assert 'REVIEWER_FAILBACK_CHAINS_FILE="${REVIEWER_FAILBACK_CHAINS_FILE:-${SUPPORT_SCRIPTS_DIR:-scripts}/reviewer_failback_chains.json}"' in reviewers
 	assert '.ai/review_runtime/' in restore_block
 	assert workflow.index('- name: Restore review-issue ledger') < workflow.index('- name: Run reviewer models')
+
+
+def test_reviewer_failback_mapping_covers_live_reviewer_roster() -> None:
+	# reviewer_failback_target_for_model() only checks whether a candidate slug is
+	# declared in scripts/codex_model_catalog.json, so the contract test mirrors
+	# that lookup rather than inspecting supported_in_api.
+	reviewer_models = _workflow_reviewer_models()
+	chains = _reviewer_failback_chains()
+	catalog_slugs = _catalog_declared_model_slugs()
+	mapped: list[str] = []
+	unmapped: list[str] = []
+
+	for model in reviewer_models:
+		provider_prefix = f"{model.split('/', 1)[0]}/"
+		catalog_alternates = sorted(
+			slug for slug in catalog_slugs
+			if slug.startswith(provider_prefix) and slug != model
+		)
+		configured_candidates = chains.get(model, [])
+		for candidate in configured_candidates:
+			assert candidate.startswith(provider_prefix)
+			assert candidate != model
+			assert candidate in catalog_slugs
+		if catalog_alternates:
+			mapped.append(model)
+			assert configured_candidates, (
+				f"live reviewer {model} has catalog-declared same-provider fallback(s) "
+				f"{catalog_alternates} but reviewer_failback_chains.json leaves it unmapped"
+			)
+		else:
+			unmapped.append(model)
+			assert model not in chains, (
+				f"live reviewer {model} should stay unmapped until the catalog ships "
+				"a same-provider fallback slug"
+			)
+
+	assert sorted(mapped) == [
+		"deepseek/deepseek-v4-pro",
+		"qwen/qwen3.6-plus",
+		"x-ai/grok-4.20",
+	]
+	assert sorted(unmapped) == [
+		"minimax/minimax-m2.5",
+		"mistralai/mistral-small-2603",
+		"moonshotai/kimi-k2.5",
+	]
+	assert chains["deepseek/deepseek-v4-pro"] == ["deepseek/deepseek-v3.2"]
+	assert chains["qwen/qwen3.6-plus"] == ["qwen/qwen3-coder-plus"]
+	assert chains["x-ai/grok-4.20"] == ["x-ai/grok-4.1-fast"]
 
 
 def test_reviewer_failback_harness_reuses_cached_open_state_and_skips_unmapped_models() -> None:

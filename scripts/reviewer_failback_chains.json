@@ -1,4 +1,10 @@
 {
+  "deepseek/deepseek-v4-pro": [
+    "deepseek/deepseek-v3.2"
+  ],
+  "qwen/qwen3.6-plus": [
+    "qwen/qwen3-coder-plus"
+  ],
   "x-ai/grok-4.20": [
     "x-ai/grok-4.1-fast"
   ]
