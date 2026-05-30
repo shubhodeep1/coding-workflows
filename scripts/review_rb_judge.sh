@@ -268,6 +268,7 @@ render_review_rb_prior_round_decisions_file() {
     return 0
   fi
   if ! command -v python3 >/dev/null 2>&1; then
+    printf '%s\n' "::warning::review_blocked_judge prior_round_decisions_skipped=1 reason=missing_python3 ledger_path=${ledger_path}" >&2
     return 0
   fi
 
@@ -363,6 +364,7 @@ PY
       : > "${out_path}"
     }
   else
+    printf '%s\n' "::warning::review_blocked_judge prior_round_decisions_skipped=1 reason=ledger_parse_failed ledger_path=${ledger_path}" >&2
     rm -f "${tmp_path}"
     : > "${out_path}"
   fi

@@ -88,7 +88,9 @@ def _render_rb_judge_prompt(
 	review_ledger_enabled: str = "1",
 	review_ledger_rereview_enabled: str = "1",
 	create_ledger: bool = True,
-) -> str:
+	ledger_as_directory: bool = False,
+	include_result: bool = False,
+) -> str | tuple[str, subprocess.CompletedProcess[str]]:
 	with tempfile.TemporaryDirectory() as td:
 		tmp_dir = Path(td)
 		runtime = tmp_dir / "runtime"
@@ -116,7 +118,9 @@ def _render_rb_judge_prompt(
 		)
 
 		ledger_path = runtime / "review_issue_ledger.txt"
-		if create_ledger:
+		if ledger_as_directory:
+			ledger_path.mkdir()
+		elif create_ledger:
 			if ledger_text is None:
 				shutil.copy2(FIXTURES / "phase_f_prior_ledger.txt", ledger_path)
 			else:
@@ -191,7 +195,10 @@ def _render_rb_judge_prompt(
 			text=True,
 		)
 		assert result.returncode == 0, result.stderr
-		return (runtime / "rb_judge_prompt.txt").read_text(encoding="utf-8")
+		prompt = (runtime / "rb_judge_prompt.txt").read_text(encoding="utf-8")
+		if include_result:
+			return prompt, result
+		return prompt
 
 
 def _extract_shell_function(script_text: str, name: str) -> str:
@@ -404,6 +411,17 @@ def test_review_blocked_judge_does_not_treat_all_overrides_as_wontfix() -> None:
 
 	assert "issue_id=issue_override; file=src/module.py; lines=8; lens=CORRECTNESS & LOGIC; severity=low; status=PERSISTING; prior_decision=none; persist_count=1" in prompt
 	assert "issue_id=issue_override; file=src/module.py; lines=8; lens=CORRECTNESS & LOGIC; severity=low; status=PERSISTING; prior_decision=won't-fix; persist_count=1" not in prompt
+
+
+def test_review_blocked_judge_warns_when_prior_round_decision_parse_fails() -> None:
+	prompt, result = _render_rb_judge_prompt(
+		create_ledger=False,
+		ledger_as_directory=True,
+		include_result=True,
+	)
+
+	assert "\n=== BEGIN PRIOR ROUND DECISIONS ===\n" not in prompt
+	assert "::warning::review_blocked_judge prior_round_decisions_skipped=1 reason=ledger_parse_failed" in result.stderr
 
 
 def test_break_glass_scan_prefers_latest_human_anchored_override() -> None:
