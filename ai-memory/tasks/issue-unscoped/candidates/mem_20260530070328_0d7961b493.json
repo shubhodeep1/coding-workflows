@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:render_review_rb_prior_round_decisions_file() (new function ~lines 243-312 in current HEAD) | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The new prior-ledger renderer can silently omit the prior-round block on malformed/unreadable ledger input or Python/mktemp failure, leaving the judge prompt without a deterministic ledger-unavailable sentinel.\n  WHY: On transient filesystem pressure or Python-not-in-PATH in exotic runners the block is omitted with only a `::warning::` on stderr, so the judge sees an inconsistent context surface across runs.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/review_rb_judge.sh:render_review_rb_prior_round_decisions_file() (new function ~lines 243-312 in current HEAD) | severity=medium | confidence=4\n  PROBLEM: The Python parser assumes well-formed ledger entries with `=== ENTRY` / `=== END ENTRY ===` markers and `KEY: value` lines; malformed, unreadable, or directory inputs fall back to an empty file and the prompt builder has no deterministic `ledger-unavailable` sentinel.\n  WHY: On transient filesystem pressure or Python-not-in-PATH in exotic runners the prior-round block is silently omitted with only a `::warning::` on stderr, so the judge sees an inconsistent context surface across runs.\n- Requirement: \"Extend the review-blocked judge path to load/render prior ledger decisions when `REVIEW_LEDGER_ENABLED` and `REVIEW_LEDGER_REREVIEW_ENABLED` are enabled.\"\n  Expected change site: scripts/review_rb_judge.sh + prompts/mode-judge-review-blocked.txt + tests/test_review_rereview_and_approval_rubric.py\n  Evidence of absence: All three files now contain the gating, the `render_review_rb_prior_round_decisions_file` implementation, the `UNTRUSTED_DATA:` fenced block, updated prompt rules, and comprehensive test harness covering gating, parse failure, override semantics, and prompt injection safety. The linked issue acceptance criteria are fully met in the current LAST RUN DIFF and PR DIFF. No gap remains.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "59cb1dac095b601d6a54305f1f8a900100c473cc25b791e8e4d736d04cc95b6e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3012,
+    "run_id": "26676917985",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26676917985",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260530070328_0d7961b493",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3012,
+    "run_id": "26676917985"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-30T07:03:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
