@@ -1111,9 +1111,14 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 
 
 def test_review_scripts_emit_context_budget_warn_signals() -> None:
-	for script_text in (_reviewers_text(), _consolidate_text(), _apply_fixes_text(), _rb_judge_text()):
+	for script_text, expected_call in (
+		(_reviewers_text(), 'emit_context_budget_warn_for_prompt "review"'),
+		(_consolidate_text(), 'emit_context_budget_warn_for_prompt "consolidator"'),
+		(_apply_fixes_text(), 'emit_context_budget_warn_for_prompt "editor"'),
+		(_rb_judge_text(), 'emit_context_budget_warn_for_prompt "review_blocked_judge"'),
+	):
 		assert "build_context_budget_warn_line_for_file" in script_text
-		assert "CONTEXT_BUDGET_WARN" in script_text
+		assert expected_call in script_text
 
 
 def test_review_filter_smoke_fixtures_are_present() -> None:
@@ -2074,6 +2079,7 @@ def test_reviewer_iteration_scope_prepare_path_reports_missing_targeted_context_
 
 def main() -> int:
 	test_review_pipeline_knobs_are_wired_into_codex_agent_env()
+	test_review_scripts_emit_context_budget_warn_signals()
 	test_review_filter_smoke_fixtures_are_present()
 	test_reviewer_risk_tier_classifier_honours_thresholds_and_always_full_regex()
 	test_review_filter_helper_wiring_is_flag_gated_and_fail_open()

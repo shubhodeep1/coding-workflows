@@ -102,6 +102,7 @@ def test_semble_wiring_is_consistent_across_three_codex_jobs() -> None:
 def main() -> int:
 	test_codex_retry_knobs_are_env_driven()
 	test_issue_context_failure_marker_and_label_contract_present()
+	test_codex_jobs_use_heartbeat_wrapper()
 	test_semble_wiring_is_consistent_across_three_codex_jobs()
 	return 0
 
