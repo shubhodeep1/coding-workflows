@@ -3978,6 +3978,76 @@ Summary text.
 	assert second["commit_status_posts"] == []
 
 
+def test_tracking_body_reconcile_runs_during_normal_poll_cycle():
+	tracking_body = """## Project: Test Project
+
+Summary text.
+
+---
+
+**Total issues:** 1 | **Waves:** 1
+**Integration branch:** `orchestrator/project-192`
+
+### Wave 1
+
+- [ ] **issue-1**: First task (priority 1)
+
+---
+*This issue is managed by the AI orchestrator. Do not edit manually.*
+`ai:orchestrator-tracking`
+"""
+	expected_body = tracking_body.replace("- [ ] **issue-1**", "- [x] **issue-1**")
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["project_body_snapshot"] = tracking_body
+	state["tracking_body_sync_hash"] = hashlib.sha256(tracking_body.encode("utf-8")).hexdigest()
+	state["final_merge_pr"] = 472
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	prs = [
+		{
+			"number": 472,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"headRefFromApi": "orchestrator/project-192",
+			"headSha": "headsha472",
+			"mergeable": True,
+			"mergeable_state": "clean",
+			"body": "Squash merge of orchestrator project #192.\n\nRefs #192",
+		},
+	]
+
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_labels=["ai:orchestrator-tracking"],
+		tracking_body=tracking_body,
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		blocked_check_shas=["headsha472"],
+	)
+
+	assert result["issues"]["192"]["body"] == expected_body
+	assert result["issue_body_edit_calls"] == [{"issue": 192, "body": expected_body}]
+	assert result["latest_state"]["tracking_body_sync_hash"] == hashlib.sha256(expected_body.encode("utf-8")).hexdigest()
+	assert result["latest_state"]["tracking_body_last_readiness_refresh_hash"] == hashlib.sha256(expected_body.encode("utf-8")).hexdigest()
+	assert result["commit_status_posts"] == [
+		{
+			"sha": "headsha472",
+			"state": "success",
+			"context": "orchestrator/integration-pr-not-ready",
+			"description": "all 1 sub-issue(s) on #192 are ticked — integration PR is ready",
+			"target_url": "https://github.com/owner/repo/issues/192",
+		}
+	]
+	assert result["latest_state"]["status"] == "in_progress"
+	assert result["latest_state"]["final_merge_status"] == "pending"
+
+
 def test_force_merge_bypass_promotes_eager_pr_once_per_sha_and_records_audit():
 	state = _base_state(status="in_progress")
 	state["integration_branch"] = "orchestrator/project-192"
