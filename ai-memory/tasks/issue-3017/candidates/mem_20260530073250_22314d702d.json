@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nActions taken:\n- Audited `docs/plans/ai-code-review-learnings-plan.md`, the Phase F/G implementation points (`scripts/review_rb_judge.sh`, `prompts/mode-judge-review-blocked.txt`, `.github/workflows/review_autofix.yml`, `scripts/review_run_reviewers.sh`, `scripts/reviewer_failback_chains.json`), the regression tests, the archival guard (`scripts/lint_plan_archival_completeness.py`), the current archive pattern in `docs/completed/`, `agents.md`, and tracking issue `#2974`.\n\nClarification mapping:\n- No `Q1`/`Q2` batch existed; `/answer [auto-answered-by-orchestrator]` means the issue body is the full scope.\n\nPlanning ref:\n- `c9f0b13543b543eb3f61d80a1d4cdf66bbdf2f93`\n- branch `orchestrator/project-2974`\n- matches integration metadata\n\nImplementation shape\n- Change type: docs-only unless the re-audit finds a real current-HEAD code/test mismatch.\n- New script/workflow/scheduler wiring: none.\n- Long-running supervisor: none.\n- DB work / gate pattern: none.\n- Pending-removal registry entry: none.\n- Existing archival guard, if archive is attempted: `.github/workflows/lint-plan-archival.yml` (`pull_request` on `docs/completed/**`).\n\nRepresentative pattern to follow\n- If archival ever becomes valid in this rollout, mirror `docs/completed/orchestrator-validation-resilience-plan.md` + `docs/plans/orchestrator-validation-resilience-plan.md`: canonical completed copy under `docs/completed/`, short pointer left under `docs/plans/`.\n\nExpected primary outcome\n- Based on current repo + GitHub state, the likely safe outcome is:\n  1. keep `docs/plans/ai-code-review-learnings-plan.md` in place,\n  2. update the re-audit so Phase F is marked shipped and Phase G reflects the live roster/failback contract,\n  3. record the archival guard / tracking-issue checklist state as the only remaining blocker,\n  4. update `agents.md` so it no longer contradicts the shipped judge behavior.\n- Do not archive unless the archival guard becomes truthfully satisfiable.\n\nFiles likely to change\n1. `docs/plans/ai-code-review-learnings-plan.md`\n   - Rewrite the 2026-05-30 audit outcome, evidence snapshot, phase table, and remaining-blockers section from current HEAD.\n   - Mark Phase F as shipped via judge-side prior-round ledger input.\n   - Mark Phase G as shipped/complete-with-drift via the live six-model roster, current failback map, and intentional `REVIEWER_FAILBACK_UNMAPPED` fail-open path.\n   - Refresh any nearby present-tense summary lines that still cite the old five-model roster or `prompts/mode-judge.txt`, so the top-of-file audit no longer conflicts with HEAD.\n2. `agents.md`\n   - Update the stale review-autofix bullet that still says judge-side re-review lacks a dedicated ledger-fed block.\n3. `docs/completed/ai-code-review-learnings-plan.md` (conditional only)\n   - Create only if archival becomes honestly valid.\n4. `README.md` (unlikely)\n   - Recheck for stale audit/archive wording; change only if a concrete contradiction is found.\n\nNo new runtime modules are expected. The docs update should be grounded in these existing symbols/modules:\n- Phase F: `render_review_rb_prior_round_decisions_file` in `scripts/review_rb_judge.sh`, the `=== BEGIN PRIOR ROUND DECISIONS ===` rules in `prompts/mode-judge-review-blocked.txt`, and `tests/test_review_rereview_and_approval_rubric.py`.\n- Phase G: `REVIEWER_MODELS` in `.github/workflows/review_autofix.yml`, `reviewer_failback_target_for_model` plus the `REVIEWER_FAILBACK_UNMAPPED` path in `scripts/review_run_reviewers.sh`, `scripts/reviewer_failback_chains.json`, and `tests/test_review_autofix_review_pipeline_contract.py`.\n- Archival gate: `scripts/lint_plan_archival_completeness.py`.\n\nData structures affected\n- Markdown audit table / blocker list / evidence snapshot in `docs/plans/ai-code-review-learnings-plan.md`.\n- The documented judge prior-round-decision line format (`issue_id=...; file=...; ...`) as evidence only; no code-format change.\n- The documented reviewer roster + failback-map JSON semantics as evidence only; no runtime contract change.\n- If archival happens: completed-plan closeout-summary structure plus a short pointer file.\n\nAPI / interface changes\n- None to runtime behavior, workflows, env vars, or CLI interfaces.\n- Documentation-only contract updates:\n  - judge-side re-review awareness is now ledger-fed,\n  - Phase G\u2019s intentionally unmapped reviewer families fail open by design,\n  - archival status depends on the existing guard, not stale Phase F/G blocker text.\n\nConflicts detected\n- `docs/plans/ai-code-review-learnings-plan.md` is stale vs HEAD:\n  - it still says Phase F/G are partial,\n  - it still describes the reviewer roster as five models,\n  - it still references `prompts/mode-judge.txt`.\n- `agents.md` is stale vs HEAD:\n  - it says `scripts/review_rb_judge.sh` does not ingest a separate ledger block, but current code/tests show that it does.\n- Tracking issue `#2974` still has 10 unchecked task-list items, so a `docs/completed/**` move would currently trip `scripts/lint_plan_archival_completeness.py` unless that external state is resolved truthfully.\n\nRisks and edge cases\n- Do not \u201csatisfy\u201d the archival lint by inventing de-scoped phases.\n- If the code is complete but the tracking issue remains unchecked, the correct result is \u201cplan stays in `docs/plans/`, code-complete audit updated, archival deferred by guard.\u201d\n- If archival is attempted, follow the existing move/pointer pattern; do not leave two divergent full copies.\n- Use \u201ccomplete with drift\u201d where shipped behavior differs from the original proposal, not \u201cpartial\u201d when code + tests show the feature landed.\n\nTesting considerations\n- Run the issue\u2019s required suite:\n  - `python3 -m pytest -q tests/test_review_rereview_and_approval_rubric.py tests/test_review_autofix_review_pipeline_contract.py tests/test_cost_audit_semble_metrics.py tests/test_collect_workflow_logs.py tests/test_analyze_workflow_logs.py tests/test_codex_heartbeat.py tests/test_review_surface_prompt_hardening.py`\n- If archiving is attempted, also run the archival guard coverage:\n  - `python3 tests/test_lint_plan_archival_completeness.py`\n  - and verify the actual archival-lint preconditions against the intended PR body + tracking issue state before creating `docs/completed/ai-code-review-learnings-plan.md`.\n\nAssumptions\n- Scope stays docs-only unless the re-audit reveals a real code/test mismatch.\n- The rollout should not mutate tracking issue `#2974` just to force archival unless that extra step is explicitly justified and grounded.\n\nMissing-context note\n- The final PR body does not exist yet; because the archival lint inspects both PR body and tracking-issue checkboxes, archival cannot be assumed from repo files alone.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "85928394f6abf7cc4e071798eeea18c249ef138eedfe9029b3410884f6969c99",
+  "lineage": {
+    "issue_number": 3017,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26678012549",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26678012549",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3017"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260530073250_22314d702d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3017,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26678012549"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3017",
+  "timestamps": {
+    "created_at": "2026-05-30T07:32:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
