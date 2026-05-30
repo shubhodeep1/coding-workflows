@@ -5,13 +5,24 @@
   "entry_id": "processed_command_3008_4581737065_approved",
   "issue_number": 3008,
   "metadata": {
+    "branch": "ai/issue-3008",
+    "changed_files": [
+      "agents.md",
+      "scripts/reviewer_failback_chains.json",
+      "tests/test_review_autofix_review_pipeline_contract.py"
+    ],
+    "issue_number": 3008,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/3008",
+    "pr_number": 3011,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/3011",
+    "run_attempt": "1",
+    "run_id": "26675181698",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/26675181698"
   },
   "run_attempt": 1,
   "run_id": "26675181698",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-05-30T05:03:09Z",
+  "status": "completed",
+  "timestamp": "2026-05-30T05:08:55Z",
   "workflow": "implement"
 }
