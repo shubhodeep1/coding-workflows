@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/mark-stable.yml:212-222 (and identically mirrored at .github/workflows/test-and-mark-stable.yml:3272-3282) | severity=low | confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The unconditional install step adds repeated workflow latency for test-only Python dependencies.\n  WHY: The packages are only required by `tests/test_validation_refresh_runner.py`, but the step runs on every workflow execution immediately before Unit tests, so this is a performance issue rather than a correctness defect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: .github/workflows/mark-stable.yml:212-222 (and identically mirrored at .github/workflows/test-and-mark-stable.yml:3272-3282)  \n  Line or code reference: The unconditional `python3 -m pip install --quiet pyyaml jsonschema jinja2` step (and its identical comment block) inserted immediately before the \"Unit tests\" step.  \n  Problem: The packages are only required by `tests/test_validation_refresh_runner.py` (one test out of ~40), yet the install runs on every workflow execution with no `if` guard, no reuse of the prior `pip install -q ruff` cache from the prior step, and no `--no-deps` / constraint pinning.  \n  Why it fails at runtime: Every CI run (including the frequent `test-and-mark-stable` matrix) incurs repeated network/cache-check/subprocess overhead; the forward-merge PR that introduced this change made the latency permanent on both `main` and `stable`.  \n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "992ff0b6614b09cdd056ed8170a1552b1d5175810bedc6fe84dde881a5054af9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3002,
+    "run_id": "26668955677",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26668955677",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260530003340_a3219d8f77",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3002,
+    "run_id": "26668955677"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-30T00:33:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
