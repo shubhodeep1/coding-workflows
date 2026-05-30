@@ -2598,7 +2598,13 @@ jobs:
       # this cache pair. Missing cache is fail-open: iteration-scoping and
       # reviewer failback health both treat absence as first-run state.
       - name: Restore review-issue ledger
-        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        # NOTE: this step runs BEFORE the `retrigger_guard` step (id below),
+        # so `steps.retrigger_guard.outputs.*` is not yet populated here — the
+        # former `max_iterations_reached != 'true'` guard was a no-op at this
+        # point (always an empty string) and actionlint correctly rejected the
+        # forward step reference. Gate only on the env signals that are already
+        # set this early in the job.
+        if: env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         continue-on-error: true
         uses: actions/cache/restore@v4
         with:
