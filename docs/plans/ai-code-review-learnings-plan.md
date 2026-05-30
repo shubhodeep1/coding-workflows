@@ -1,18 +1,19 @@
 # AI Code Review Learnings — Applying Cloudflare's `ai-code-review` Lessons to `review_autofix` and Adjacent Phases
 
-## 2026-05-30 completion audit
+## 2026-05-30 completion re-audit
 
 ### Audit outcome
 
-This plan remains in `docs/plans/`. The repository audit found that most of
-the review-pipeline learnings shipped, but the implementation is not fully
-complete yet, so archival is deferred.
+This plan remains in `docs/plans/`. The repository re-audit shows that Phase H
+is complete on current HEAD, but Phases F and G still have live gaps and the
+archival guard is not yet satisfiable, so archival remains deferred.
 
 ### Evidence snapshot
 
 - Reviewer fan-out / filtering / materiality / failback: `.github/workflows/review_autofix.yml`, `scripts/review_run_reviewers.sh`, `scripts/review_filter_uninteresting_files.sh`, `scripts/review_agents_md_materiality.sh`, `scripts/reviewer_failback_chains.json`, `tests/test_review_autofix_review_pipeline_contract.py`
 - Consolidator / judge / prompt hardening / review-state posting: `scripts/review_consolidate.sh`, `prompts/review-consolidator.txt`, `scripts/review_rb_judge.sh`, `prompts/mode-judge-review-blocked.txt`, `scripts/post_review_comment.sh`, `tests/test_review_rereview_and_approval_rubric.py`, `tests/test_review_surface_prompt_hardening.py`
-- Telemetry / heartbeat: `scripts/cost_audit.py`, `scripts/codex_heartbeat.sh`, `tests/test_cost_audit_semble_metrics.py`, `tests/test_codex_heartbeat.py`
+- Workflow-log-analysis telemetry surfacing: `scripts/cost_audit.py`, `scripts/collect_workflow_logs.py`, `scripts/analyze_workflow_logs.py`, `.github/workflows/workflow-log-analysis.yml`, `prompts/mode-workflow-analysis.txt`, `tests/test_cost_audit_semble_metrics.py`, `tests/test_collect_workflow_logs.py`, `tests/test_analyze_workflow_logs.py`
+- Heartbeat logging: `scripts/codex_heartbeat.sh`, `tests/test_codex_heartbeat.py`
 
 ### Phase-by-phase shipped status
 
@@ -25,16 +26,15 @@ complete yet, so archival is deferred.
 | E — prompt-injection hardening | Complete | Review-surface prompts are fenced via `review_consolidate.sh`, `review_rb_judge.sh`, and `review_conflict_prepare.sh`; clarify / plan / implement / validate prompts now explicitly treat author-controlled context as UNTRUSTED data. | None. |
 | F — re-review awareness | Partial | Consolidator-side ledger suppression shipped: `scripts/review_consolidate.sh` renders `=== BEGIN PRIOR ROUND DECISIONS ===`, and `prompts/review-consolidator.txt` can emit `RE_REVIEW_SKIP`. | `scripts/review_rb_judge.sh` does not ingest a dedicated ledger-fed prior-decision block and does not consume `REVIEW_LEDGER_REREVIEW_ENABLED`; judge-side awareness is limited to prior editor / PR comment context in `prompts/mode-judge-review-blocked.txt`. |
 | G — per-reviewer failback + health | Partial | Reviewer health caching, open-state suppression, cheaper-reasoning retry, and fail-open `REVIEWER_FAILBACK_UNMAPPED` behavior shipped in `scripts/review_run_reviewers.sh`. | `scripts/reviewer_failback_chains.json` currently maps only `x-ai/grok-4.20 -> x-ai/grok-4.1-fast`, so the planned same-family mapping coverage for the rest of the reviewer roster is still missing. |
-| H — telemetry surfacing | Partial | `scripts/cost_audit.py` now computes `cache_hit_rate`, `wall_clock_p50_ms`, `wall_clock_p99_ms`, `break_glass_count`, `context_budget_warn_count`, and formats `CONTEXT_BUDGET_WARN`. | `.github/workflows/workflow-log-analysis.yml`, `scripts/collect_workflow_logs.py`, and `scripts/analyze_workflow_logs.py` do not yet call or surface `cost_audit.py` output, so the workflow-log-analysis surfacing half of the phase is still open. |
+| H — telemetry surfacing | Complete | `scripts/cost_audit.py` computes `cache_hit_rate`, `wall_clock_p50_ms`, `wall_clock_p99_ms`, `break_glass_count`, and `context_budget_warn_count`; `scripts/collect_workflow_logs.py` attaches that `cost_telemetry` to run rows and report summaries; `scripts/analyze_workflow_logs.py` carries and rolls it up into the Codex analysis context; `.github/workflows/workflow-log-analysis.yml` passes that context to the analysis prompt; and `prompts/mode-workflow-analysis.txt` explicitly tells the analyst to use those metrics. | None. |
 | I — heartbeat logging | Complete | `scripts/codex_heartbeat.sh` is wired through reviewer, consolidator, review-blocked judge, conflict-resolver, validate, and self-heal Codex callsites, with `CODEX_HEARTBEAT` regression coverage. | None. |
 | J — approval rubric + break glass | Complete with drift | The review-blocked judge now emits logical `review_state` values, `scripts/post_review_comment.sh --review-state` maps them to PR review events, and `@codex break-glass` can downgrade the outbound `REQUEST_CHANGES` event to comment-only. | The shipped judge prompt path is `prompts/mode-judge-review-blocked.txt`, not the draft's `prompts/mode-judge.txt`. |
 
 ### Remaining blockers before archival
 
-1. **Phase F is still partial.** Judge-side re-review awareness has not landed as a ledger-fed input path; the shipped implementation only uses prior editor / PR comment context.
-2. **Phase G is still partial.** The failback-chain file does not yet cover the full reviewer roster.
-3. **Phase H is still partial.** The new `cost_audit.py` metrics are not yet surfaced by the workflow-log-analysis collector/analyzer path.
-4. **The plan-archival guard would still fail today.** Tracking issue `#2974` still has unchecked task-list items as of this audit (`gh issue view 2974 --json body --repo shubhodeep1/coding-workflows`), so adding a `docs/completed/` copy in the current state would require a PR-body `## De-scoped phases` section to satisfy `scripts/lint_plan_archival_completeness.py`.
+1. **Phase F is still partial.** Judge-side re-review awareness has not landed as a ledger-fed input path; the shipped implementation still relies on prior editor / PR comment context in `prompts/mode-judge-review-blocked.txt`.
+2. **Phase G is still partial.** The failback-chain file does not yet cover the full reviewer roster; `scripts/reviewer_failback_chains.json` still maps only `x-ai/grok-4.20 -> x-ai/grok-4.1-fast`, so other families still take the documented `REVIEWER_FAILBACK_UNMAPPED` path.
+3. **The plan-archival guard would still fail today.** Tracking issue `#2974` still has all 10 task-list items unchecked as of this re-audit (`gh issue view 2974 --json body --repo shubhodeep1/coding-workflows`), so adding a `docs/completed/` copy in the current state would require a PR-body `## De-scoped phases` section to satisfy `scripts/lint_plan_archival_completeness.py`.
 
 The original future-tense proposal is preserved below for reference. Where it
 conflicts with the audit table above, the audit table is authoritative.
