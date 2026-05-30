@@ -140,6 +140,8 @@ env:
   # isolated and never read by the editor.
   EDITOR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_EDITOR || 'xhigh' }}
   EDITOR_VERBOSITY: ${{ vars.VERBOSITY_EDITOR || 'low' }}
+  CONTEXT_BUDGET_WARN_RATIO: ${{ vars.CONTEXT_BUDGET_WARN_RATIO || '0.7' }}
+  MAX_PROMPT_TOKENS_FOR_PHASE: ${{ vars.MAX_PROMPT_TOKENS_FOR_PHASE || '' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   # Targeted-file-context inlining limit — propagated to scripts/
   # review_apply_fixes.sh (autofix editor) and scripts/review_conflict_resolve.sh
@@ -1230,7 +1232,7 @@ jobs:
             echo "SUPPORT_AGENTS_FILE=${SUPPORT_ROOT_DIR}/agents.md"
           } >> "$GITHUB_ENV"
 
-          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py codex_heartbeat.sh review_run_reviewers.sh review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh"
+          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py cost_audit.py codex_heartbeat.sh review_run_reviewers.sh review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh"
           # Main-primary bootstrap scripts: prefer the fresh main snapshot so
           # wedged integration branches still pick up resolver safety fixes
           # shipped on main. Missing from both refs remains fail-open so older
@@ -3442,7 +3444,7 @@ jobs:
 
           # Mirror the late merge-precheck cleanup so runtime-fetched helper
           # files cannot trip an exit-128 pre-merge abort before reviewers run.
-          rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh scripts/openrouter_prompt_cache.py scripts/codex_heartbeat.sh scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/summarize_reviewer_consensus.sh scripts/check_external_branch_advance.sh 2>/dev/null || true
+          rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh scripts/openrouter_prompt_cache.py scripts/cost_audit.py scripts/codex_heartbeat.sh scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/summarize_reviewer_consensus.sh scripts/check_external_branch_advance.sh 2>/dev/null || true
           if ! git reset --hard HEAD; then
             echo "::warning::git reset --hard HEAD failed during pre-review merge-topology gate; fail-open to reviewer path."
             exit 0
@@ -4634,7 +4636,7 @@ jobs:
           # git merge later tries to write the same path from origin/BASE_BRANCH.
           # In the source repo these files are tracked, so git reset --hard HEAD
           # will restore them after this removal — no data loss occurs.
-          rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh scripts/openrouter_prompt_cache.py scripts/codex_heartbeat.sh scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/summarize_reviewer_consensus.sh scripts/check_external_branch_advance.sh 2>/dev/null || true
+          rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh scripts/openrouter_prompt_cache.py scripts/cost_audit.py scripts/codex_heartbeat.sh scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/summarize_reviewer_consensus.sh scripts/check_external_branch_advance.sh 2>/dev/null || true
           git reset --hard HEAD
           # Use -ffdx: double-force clears nested git repos (-ff), and -x also
           # removes files matching .gitignore so nothing
@@ -4645,7 +4647,7 @@ jobs:
           # commit step (caller repos delete fetched scripts before committing)
           # or wiped by git clean -ffdx above.
           # Re-stage any missing scripts from checked-out support source.
-          for f in gh_helpers.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh codex_heartbeat.sh review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh cost_audit.py codex_heartbeat.sh review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh; do
             if [ ! -f "${SUPPORT_SCRIPTS_DIR}/${f}" ]; then
               mkdir -p "${SUPPORT_SCRIPTS_DIR}"
               src=".codex-workflow-src/scripts/${f}"
@@ -6792,7 +6794,7 @@ jobs:
           # notification steps (tg_helpers.sh, label_helpers.sh, etc.).
           # Skip when running on coding-workflows itself — these are source.
           if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
-            rm -f scripts/gh_helpers.sh scripts/git_ref_health_check.sh scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py scripts/openrouter_prompt_cache.py scripts/codex_heartbeat.sh scripts/codex_model_catalog.json scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/summarize_reviewer_consensus.sh scripts/check_external_branch_advance.sh
+            rm -f scripts/gh_helpers.sh scripts/git_ref_health_check.sh scripts/generate_symbol_diff_summary.py scripts/label_helpers.sh scripts/tg_helpers.sh scripts/memory_helpers.sh scripts/ai_memory.py scripts/ai_memory_lib.py scripts/openrouter_prompt_cache.py scripts/cost_audit.py scripts/codex_heartbeat.sh scripts/codex_model_catalog.json scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/summarize_reviewer_consensus.sh scripts/check_external_branch_advance.sh
             rm -rf prompts
             rm -f .github/ai/orchestrate_schema.v1.json
           fi

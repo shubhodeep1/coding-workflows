@@ -8,8 +8,17 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
+PHASE_H_CONTEXT_BUDGET_OVERFLOW_FIXTURE = (
+	REPO_ROOT / "scripts" / "fixtures" / "cloudflare-learnings" / "phase-h-context-budget-overflow.txt"
+)
 
-from cost_audit import parse_log  # noqa: E402
+from cost_audit import (  # noqa: E402
+	aggregate_run_cost_telemetry,
+	build_context_budget_warning,
+	build_context_budget_warn_line_for_file,
+	build_run_cost_telemetry,
+	parse_log,
+)
 
 
 def test_parse_log_counts_semble_query_bytes_and_fallbacks_by_target() -> None:
@@ -81,6 +90,59 @@ SEMBLE_FALLBACK target=conflict-resolver reason=exit=9 stderr tail with spaces m
 		"unknown": {"query_calls": 1, "bytes": 17, "fallbacks": 1},
 		"conflict-resolver": {"fallbacks": 1},
 	}
+
+
+def test_context_budget_warn_fixture_generates_and_parses_review_telemetry() -> None:
+	assert PHASE_H_CONTEXT_BUDGET_OVERFLOW_FIXTURE.exists()
+
+	warn_line = build_context_budget_warn_line_for_file(
+		phase="consolidator",
+		prompt_path=PHASE_H_CONTEXT_BUDGET_OVERFLOW_FIXTURE,
+		model="openai/gpt-5.4",
+	)
+
+	assert warn_line is not None
+	assert warn_line.startswith("CONTEXT_BUDGET_WARN: phase=consolidator ")
+	assert "model_context_window=272000" in warn_line
+	assert "threshold=190400" in warn_line
+
+	log = "\n".join(
+		[
+			"tokens used\n12,345",
+			"INFO: openrouter usage phase=review call=pass1 model=openai/gpt-5.4 cache_enabled=true cache_breakpoint_enabled=false cache_breakpoint_fallback_retry=false prompt_tokens=100 completion_tokens=25 total_tokens=125 cache_creation_input_tokens=30 cache_read_input_tokens=40",
+			"BREAK_GLASS: phase=editor reason=manual-override",
+			warn_line,
+		]
+	)
+
+	parsed = parse_log(log, fallback_wall_clock_ms=3210)
+	assert parsed["codex_tokens_used"] == 12345
+	assert parsed["break_glass_count"] == 1
+	assert parsed["context_budget_warn_count"] == 1
+	assert parsed["cache_hit_rate"] == 0.235294
+	assert parsed["wall_clock_p50_ms"] == 3210
+	assert parsed["wall_clock_p99_ms"] == 3210
+
+	telemetry = build_run_cost_telemetry(log, fallback_wall_clock_ms=3210)
+	assert telemetry["log_parsed"] is True
+	assert telemetry["break_glass_count"] == 1
+	assert telemetry["context_budget_warn_count"] == 1
+
+	aggregate = aggregate_run_cost_telemetry([{"cost_telemetry": telemetry}])
+	assert aggregate["runs_with_log_telemetry"] == 1
+	assert aggregate["break_glass_count"] == 1
+	assert aggregate["context_budget_warn_count"] == 1
+	assert aggregate["wall_clock_p50_ms"] == 3210
+	assert aggregate["wall_clock_p99_ms"] == 3210
+
+	override = build_context_budget_warning(
+		phase="review",
+		prompt_tokens=200,
+		model="openai/gpt-5.4",
+		env={"MAX_PROMPT_TOKENS_FOR_PHASE": "128"},
+	)
+	assert override is not None
+	assert override["threshold"] == 128
 
 
 def main() -> int:

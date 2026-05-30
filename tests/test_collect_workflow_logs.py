@@ -454,6 +454,41 @@ def test_extract_full_logs_decodes_without_truncation():
 	assert full_logs == [{"step_name": "failure", "content": "E" * 5000}]
 
 
+def test_apply_cost_telemetry_from_full_logs_preserves_review_warning_signals():
+	run = {
+		"repository": "owner/repo",
+		"run_id": 410,
+		"conclusion": "failure",
+		"duration_seconds": 12,
+		"workflow_family": "review_autofix",
+	}
+	full_logs = [
+		{
+			"step_name": "review",
+			"content": "\n".join(
+				[
+					"INFO: openrouter usage phase=review call=pass1 model=openai/gpt-5.4 cache_enabled=true cache_breakpoint_enabled=false cache_breakpoint_fallback_retry=false prompt_tokens=100 completion_tokens=25 total_tokens=125 cache_creation_input_tokens=30 cache_read_input_tokens=40",
+					"BREAK_GLASS: phase=editor reason=manual-override",
+					"CONTEXT_BUDGET_WARN: phase=review prompt_tokens=200000 model_context_window=272000 ratio=0.7353 threshold=190400",
+				]
+			),
+		}
+	]
+
+	collector._apply_cost_telemetry_from_full_logs(run, full_logs)
+	telemetry = run["cost_telemetry"]
+	assert telemetry["or_total_tokens"] == 125
+	assert telemetry["break_glass_count"] == 1
+	assert telemetry["context_budget_warn_count"] == 1
+	assert telemetry["wall_clock_p50_ms"] == 12000
+	assert telemetry["wall_clock_p99_ms"] == 12000
+
+	report = collector.build_report(["owner/repo"], [run], [])
+	assert report["summary"]["cost_telemetry"]["runs_with_log_telemetry"] == 1
+	assert report["summary"]["cost_telemetry"]["break_glass_count"] == 1
+	assert report["summary"]["cost_telemetry"]["context_budget_warn_count"] == 1
+
+
 def test_fetch_run_log_archive_retries_transient_then_succeeds():
 	orig_gh_api_bytes = collector.gh_api_bytes
 	orig_sleep = collector.time.sleep

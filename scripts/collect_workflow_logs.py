@@ -42,6 +42,11 @@ except ModuleNotFoundError:
         resolve_memory_root_dir,
     )
 
+try:
+    from cost_audit import aggregate_run_cost_telemetry, build_run_cost_telemetry
+except ModuleNotFoundError:
+    from scripts.cost_audit import aggregate_run_cost_telemetry, build_run_cost_telemetry
+
 SCHEMA_VERSION = "workflow_log_collector.v2"
 LOG_EXPORT_CATEGORIES = ("errors", "slow", "recent")
 LOG_EXCERPT_MAX_CHARS = 4000
@@ -226,6 +231,17 @@ def _cached_log_excerpts(row: dict[str, Any] | None) -> list[dict[str, str]] | N
             }
         )
     return excerpts
+
+
+def _cached_cost_telemetry(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(row, dict):
+        return None
+
+    telemetry = row.get("cost_telemetry")
+    if not isinstance(telemetry, dict):
+        return None
+
+    return dict(telemetry)
 
 
 def _run_snapshot_for_cache(run: dict[str, Any]) -> dict[str, Any]:
@@ -916,6 +932,7 @@ def build_report(
             "p50_duration_seconds": _percentile(durations, 50),
             "p95_duration_seconds": _percentile(durations, 95),
             "sampled_success_runs": sampled_success_count,
+            "cost_telemetry": aggregate_run_cost_telemetry(runs),
         },
         "errors": errors,
     }
@@ -1109,6 +1126,49 @@ def extract_full_logs(log_archive: bytes) -> list[dict[str, str]]:
     return full_logs
 
 
+def build_log_excerpts_from_full_logs(
+    full_logs: list[dict[str, str]],
+    max_chars: int = LOG_EXCERPT_MAX_CHARS,
+) -> list[dict[str, str]]:
+    excerpts: list[dict[str, str]] = []
+    for step in full_logs:
+        text = str(step.get("content") or "")
+        if not text:
+            continue
+        excerpts.append(
+            {
+                "step_name": str(step.get("step_name") or "unknown_step"),
+                "excerpt": text[:max_chars],
+            }
+        )
+    return excerpts
+
+
+def _full_logs_to_text(full_logs: list[dict[str, str]]) -> str:
+    parts: list[str] = []
+    for step in full_logs:
+        content = str(step.get("content") or "")
+        if not content:
+            continue
+        parts.append(content)
+    return "\n".join(parts)
+
+
+def _run_wall_clock_ms(run: dict[str, Any]) -> int | None:
+    duration_seconds = _to_int(run.get("duration_seconds"), 0)
+    if duration_seconds <= 0:
+        return None
+    return duration_seconds * 1000
+
+
+def _apply_cost_telemetry_from_full_logs(run: dict[str, Any], full_logs: list[dict[str, str]]) -> None:
+    telemetry = build_run_cost_telemetry(
+        _full_logs_to_text(full_logs),
+        fallback_wall_clock_ms=_run_wall_clock_ms(run),
+    )
+    run["cost_telemetry"] = telemetry
+
+
 def _sanitize_path_component(value: str, fallback: str) -> str:
     candidate = re.sub(r"[^a-zA-Z0-9._-]+", "_", value.strip())
     candidate = candidate.strip("._-")
@@ -1186,7 +1246,9 @@ def export_categorized_logs(
                 token=token,
                 cache=log_archive_cache,
             )
-            full_logs_by_identity[identity] = extract_full_logs(payload)
+            full_logs = extract_full_logs(payload)
+            full_logs_by_identity[identity] = full_logs
+            _apply_cost_telemetry_from_full_logs(run, full_logs)
         except Exception as exc:  # noqa: BLE001
             _append_log_error(errors, repository, run_id, exc)
 
@@ -1401,27 +1463,34 @@ def main(argv: list[str] | None = None) -> int:
             cached_rows_by_run_id = _index_cached_rows(repo_cache.get("rows_snapshot"))
             cache_key = _cache_run_key(run_id, _to_int(run.get("run_attempt"), 1))
             if run_id in logs_seen_lookup:
-                cached_excerpts = _cached_log_excerpts(cached_rows_by_run_id.get(cache_key))
+                cached_row = cached_rows_by_run_id.get(cache_key)
+                cached_excerpts = _cached_log_excerpts(cached_row)
                 if cached_excerpts is not None:
                     run["log_excerpts"] = cached_excerpts
+                    cached_cost_telemetry = _cached_cost_telemetry(cached_row)
+                    if cached_cost_telemetry is not None:
+                        run["cost_telemetry"] = cached_cost_telemetry
                     identity = (repository, run_id)
                     canonical = run_rows_by_identity.get(identity)
                     if canonical is not None:
                         canonical["log_excerpts"] = cached_excerpts
+                        if cached_cost_telemetry is not None:
+                            canonical["cost_telemetry"] = cached_cost_telemetry
                     continue
 
         try:
-            if log_archive_cache is not None:
-                payload = _fetch_run_log_archive(repository, run_id, token=token, cache=log_archive_cache)
-                log_excerpts = extract_log_excerpts(payload)
-            else:
-                log_excerpts = list_run_log_excerpts(repository, run_id, token=token)
+            payload = _fetch_run_log_archive(repository, run_id, token=token, cache=log_archive_cache)
+            full_logs = extract_full_logs(payload)
+            log_excerpts = build_log_excerpts_from_full_logs(full_logs)
+            _apply_cost_telemetry_from_full_logs(run, full_logs)
 
             run["log_excerpts"] = log_excerpts
             identity = (repository, run_id)
             canonical = run_rows_by_identity.get(identity)
             if canonical is not None:
                 canonical["log_excerpts"] = log_excerpts
+                if "cost_telemetry" in run:
+                    canonical["cost_telemetry"] = dict(run["cost_telemetry"])
 
             if isinstance(repo_cache, dict):
                 logs_seen_set = _touch_seen_set(_normalize_seen_set(repo_cache.get("logs_seen_set")), run_id)
@@ -1434,6 +1503,8 @@ def main(argv: list[str] | None = None) -> int:
                         merged_row = dict(row)
                         merged_row["run_attempt"] = _to_int(run.get("run_attempt"), 1)
                         merged_row["log_excerpts"] = log_excerpts
+                        if "cost_telemetry" in run:
+                            merged_row["cost_telemetry"] = dict(run["cost_telemetry"])
                         updated_rows.append(merged_row)
                         replaced = True
                     else:

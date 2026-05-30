@@ -36,6 +36,17 @@ def test_issue_context_failure_marker_and_label_contract_present() -> None:
 	assert "without tracking issue context" in wf
 
 
+def test_codex_jobs_use_heartbeat_wrapper() -> None:
+	wf = _workflow_text()
+	assert wf.count("bash scripts/codex_heartbeat.sh") == 3
+	assert "--phase workflow_log_analysis" in wf
+	assert "--phase workflow_deep_audit" in wf
+	assert "--phase workflow_api_redundancy" in wf
+	assert "2> >(tee -a /tmp/workflow-analysis-codex.log >&2)" in wf
+	assert "2> >(tee -a /tmp/workflow-audit-codex.log >&2)" in wf
+	assert "2> >(tee -a /tmp/workflow-api-redundancy-codex.log >&2)" in wf
+
+
 def test_semble_wiring_is_consistent_across_three_codex_jobs() -> None:
 	# workflow-log-analysis.yml uses a deliberately different Semble
 	# integration pattern from the parity workflows (RUNNER_TEMP instead of
@@ -91,6 +102,7 @@ def test_semble_wiring_is_consistent_across_three_codex_jobs() -> None:
 def main() -> int:
 	test_codex_retry_knobs_are_env_driven()
 	test_issue_context_failure_marker_and_label_contract_present()
+	test_codex_jobs_use_heartbeat_wrapper()
 	test_semble_wiring_is_consistent_across_three_codex_jobs()
 	return 0
 

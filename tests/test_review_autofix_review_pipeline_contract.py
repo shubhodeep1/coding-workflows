@@ -15,6 +15,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 REVIEWERS = REPO_ROOT / "scripts" / "review_run_reviewers.sh"
 APPLY_FIXES = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
+CONSOLIDATE = REPO_ROOT / "scripts" / "review_consolidate.sh"
+RB_JUDGE = REPO_ROOT / "scripts" / "review_rb_judge.sh"
 AGENTS_MD_MATERIALITY = REPO_ROOT / "scripts" / "review_agents_md_materiality.sh"
 FIXTURES_DIR = REPO_ROOT / "scripts" / "fixtures" / "cloudflare-learnings"
 PHASE_A_ANTI_RULES_FIXTURE = FIXTURES_DIR / "phase-a-anti-rules-noisy-pr.patch"
@@ -25,6 +27,7 @@ PHASE_B_RISK_TIER_ALWAYS_FULL_FIXTURE = FIXTURES_DIR / "phase-b-risk-tier-always
 PHASE_C_FILTER_FIXTURE = FIXTURES_DIR / "phase-c-lockfile-and-generated.patch"
 PHASE_D_MATERIALITY_FIXTURE = FIXTURES_DIR / "phase-d-package-bump-no-agents-update.patch"
 PHASE_G_FLAKY_REVIEWER_FIXTURE = FIXTURES_DIR / "phase-g-flaky-reviewer.patch"
+PHASE_H_CONTEXT_BUDGET_FIXTURE = FIXTURES_DIR / "phase-h-context-budget-overflow.txt"
 
 
 def _workflow_text() -> str:
@@ -37,6 +40,14 @@ def _reviewers_text() -> str:
 
 def _apply_fixes_text() -> str:
 	return APPLY_FIXES.read_text(encoding="utf-8")
+
+
+def _consolidate_text() -> str:
+	return CONSOLIDATE.read_text(encoding="utf-8")
+
+
+def _rb_judge_text() -> str:
+	return RB_JUDGE.read_text(encoding="utf-8")
 
 
 def _step_block(step_name: str) -> str:
@@ -1058,6 +1069,8 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEWER_FAILBACK_MAX_RETRIES: ${{ vars.REVIEWER_FAILBACK_MAX_RETRIES || '1' }}",
 		"REVIEWER_HEALTH_OPEN_THRESHOLD: ${{ vars.REVIEWER_HEALTH_OPEN_THRESHOLD || '3' }}",
 		"REVIEWER_HEALTH_OPEN_TTL_SECS: ${{ vars.REVIEWER_HEALTH_OPEN_TTL_SECS || '1800' }}",
+		"CONTEXT_BUDGET_WARN_RATIO: ${{ vars.CONTEXT_BUDGET_WARN_RATIO || '0.7' }}",
+		"MAX_PROMPT_TOKENS_FOR_PHASE: ${{ vars.MAX_PROMPT_TOKENS_FOR_PHASE || '' }}",
 		"CODEX_HEARTBEAT_ENABLED: ${{ vars.CODEX_HEARTBEAT_ENABLED || '1' }}",
 		"CODEX_HEARTBEAT_INTERVAL_SECS: ${{ vars.CODEX_HEARTBEAT_INTERVAL_SECS || '30' }}",
 		"REVIEWER_FILTER_UNINTERESTING_ENABLED: ${{ vars.REVIEWER_FILTER_UNINTERESTING_ENABLED || 'false' }}",
@@ -1074,6 +1087,7 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		line for line in workflow.splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line
 	)
 	assert "codex_heartbeat.sh" in required_bootstrap_line, required_bootstrap_line
+	assert "cost_audit.py" in required_bootstrap_line, required_bootstrap_line
 
 	for expected in (
 		"REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}",
@@ -1096,6 +1110,17 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		assert workflow.count(expected) >= 2, f"Missing workflow-level + codex-agent env wiring: {expected}"
 
 
+def test_review_scripts_emit_context_budget_warn_signals() -> None:
+	for script_text, expected_call in (
+		(_reviewers_text(), 'emit_context_budget_warn_for_prompt "review"'),
+		(_consolidate_text(), 'emit_context_budget_warn_for_prompt "consolidator"'),
+		(_apply_fixes_text(), 'emit_context_budget_warn_for_prompt "editor"'),
+		(_rb_judge_text(), 'emit_context_budget_warn_for_prompt "review_blocked_judge"'),
+	):
+		assert "build_context_budget_warn_line_for_file" in script_text
+		assert expected_call in script_text
+
+
 def test_review_filter_smoke_fixtures_are_present() -> None:
 	assert PHASE_A_ANTI_RULES_FIXTURE.exists(), f"missing fixture: {PHASE_A_ANTI_RULES_FIXTURE}"
 	assert PHASE_C_FILTER_FIXTURE.exists(), f"missing fixture: {PHASE_C_FILTER_FIXTURE}"
@@ -1105,6 +1130,7 @@ def test_review_filter_smoke_fixtures_are_present() -> None:
 	assert PHASE_B_RISK_TIER_ALWAYS_FULL_FIXTURE.exists(), f"missing fixture: {PHASE_B_RISK_TIER_ALWAYS_FULL_FIXTURE}"
 	assert PHASE_D_MATERIALITY_FIXTURE.exists(), f"missing fixture: {PHASE_D_MATERIALITY_FIXTURE}"
 	assert PHASE_G_FLAKY_REVIEWER_FIXTURE.exists(), f"missing fixture: {PHASE_G_FLAKY_REVIEWER_FIXTURE}"
+	assert PHASE_H_CONTEXT_BUDGET_FIXTURE.exists(), f"missing fixture: {PHASE_H_CONTEXT_BUDGET_FIXTURE}"
 
 
 def test_reviewer_risk_tier_classifier_honours_thresholds_and_always_full_regex() -> None:
@@ -2053,6 +2079,7 @@ def test_reviewer_iteration_scope_prepare_path_reports_missing_targeted_context_
 
 def main() -> int:
 	test_review_pipeline_knobs_are_wired_into_codex_agent_env()
+	test_review_scripts_emit_context_budget_warn_signals()
 	test_review_filter_smoke_fixtures_are_present()
 	test_reviewer_risk_tier_classifier_honours_thresholds_and_always_full_regex()
 	test_review_filter_helper_wiring_is_flag_gated_and_fail_open()

@@ -32,6 +32,46 @@ if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   sanitize_codex_prompt_file() { :; }
 fi
 
+emit_context_budget_warn_for_prompt() {
+  local phase="$1"
+  local prompt_path="$2"
+  local model="$3"
+  local warn_line=""
+
+  [ -n "${phase}" ] || return 0
+  [ -n "${prompt_path}" ] || return 0
+  [ -n "${model}" ] || return 0
+  [ -f "${prompt_path}" ] || return 0
+  if ! command -v python3 >/dev/null 2>&1; then
+    return 0
+  fi
+
+  warn_line="$({
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}:${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
+import sys
+
+try:
+    from cost_audit import build_context_budget_warn_line_for_file
+except ModuleNotFoundError:
+    sys.exit(0)
+
+phase, prompt_path, model = sys.argv[1:4]
+line = build_context_budget_warn_line_for_file(
+    phase=phase,
+    prompt_path=prompt_path,
+    model=model,
+)
+if line:
+    print(line)
+PY
+  })"
+  if [ -n "${warn_line}" ]; then
+    printf '%s\n' "${warn_line}"
+  fi
+}
+
 CODEX_HEARTBEAT_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_heartbeat.sh"
 
 if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh" ]; then
@@ -2543,7 +2583,9 @@ execute_reviewer_attempt() {
   ) &
   wd_pid=$!
 
-  sanitize_codex_prompt_file "${prompt_file}"
+  if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+    sanitize_codex_prompt_file "${prompt_file}"
+  fi
   reviewer_codex_cmd=(
     "${codex_bin}"
     --ask-for-approval never
@@ -2677,6 +2719,7 @@ run_reviewer() {
   local reviewer_config_backup=""
   local reviewer_alt_config_path=""
   local reviewer_alt_config_backup=""
+  local context_budget_warn_models_emitted=""
   local codex_bin=""
   local slot_model="${model}"
   local effective_model="${model}"
@@ -2727,6 +2770,9 @@ run_reviewer() {
   fi
   mkdir -p "${reviewer_codex_home}/bin"
   export CODEX_HOME="${reviewer_codex_home}"
+  if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+    sanitize_codex_prompt_file "${prompt_file}"
+  fi
 
   reviewer_config_path="${reviewer_codex_home}/config.toml"
   if [ -f "${reviewer_config_path}" ]; then
@@ -2746,6 +2792,12 @@ run_reviewer() {
   if [ "${circuit_breaker_enabled}" != "true" ]; then
     while [ "${attempt}" -le 3 ]; do
       effective_model="${model}"
+      if [[ " ${context_budget_warn_models_emitted} " != *" ${effective_model} "* ]]; then
+        if command -v emit_context_budget_warn_for_prompt >/dev/null 2>&1; then
+          emit_context_budget_warn_for_prompt "review" "${prompt_file}" "${effective_model}"
+        fi
+        context_budget_warn_models_emitted="${context_budget_warn_models_emitted} ${effective_model}"
+      fi
       execute_reviewer_attempt "attempt ${attempt}" "${attempt}" "${reasoning_level}"
       case "${REVIEWER_ATTEMPT_OUTCOME}" in
         success)
@@ -2775,6 +2827,12 @@ run_reviewer() {
 
   base_reasoning="$(reviewer_base_reasoning_effort "${reasoning_level}")"
   effective_model="${model}"
+  if [[ " ${context_budget_warn_models_emitted} " != *" ${effective_model} "* ]]; then
+    if command -v emit_context_budget_warn_for_prompt >/dev/null 2>&1; then
+      emit_context_budget_warn_for_prompt "review" "${prompt_file}" "${effective_model}"
+    fi
+    context_budget_warn_models_emitted="${context_budget_warn_models_emitted} ${effective_model}"
+  fi
   execute_reviewer_attempt "attempt 1" "1" "${base_reasoning}"
   case "${REVIEWER_ATTEMPT_OUTCOME}" in
     success)
@@ -2809,6 +2867,12 @@ run_reviewer() {
   fi
   if [ -n "${retry_reasoning}" ]; then
     effective_model="${model}"
+    if [[ " ${context_budget_warn_models_emitted} " != *" ${effective_model} "* ]]; then
+      if command -v emit_context_budget_warn_for_prompt >/dev/null 2>&1; then
+        emit_context_budget_warn_for_prompt "review" "${prompt_file}" "${effective_model}"
+      fi
+      context_budget_warn_models_emitted="${context_budget_warn_models_emitted} ${effective_model}"
+    fi
     execute_reviewer_attempt "attempt 2 (cheaper reasoning ${retry_reasoning})" "2" "${retry_reasoning}"
     case "${REVIEWER_ATTEMPT_OUTCOME}" in
       success)
@@ -2852,6 +2916,12 @@ run_reviewer() {
 
   echo "REVIEWER_FAILBACK: ${model} -> ${fallback_model} reason=${final_retryable_class:-retryable_failure}" | tee -a "${log_file}"
   effective_model="${fallback_model}"
+  if [[ " ${context_budget_warn_models_emitted} " != *" ${effective_model} "* ]]; then
+    if command -v emit_context_budget_warn_for_prompt >/dev/null 2>&1; then
+      emit_context_budget_warn_for_prompt "review" "${prompt_file}" "${effective_model}"
+    fi
+    context_budget_warn_models_emitted="${context_budget_warn_models_emitted} ${effective_model}"
+  fi
   execute_reviewer_attempt "attempt 3 (failback ${fallback_model})" "3" "${base_reasoning}"
   case "${REVIEWER_ATTEMPT_OUTCOME}" in
     success)

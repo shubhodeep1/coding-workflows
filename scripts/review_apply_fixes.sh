@@ -35,6 +35,46 @@ if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   sanitize_codex_prompt_file() { :; }
 fi
 
+emit_context_budget_warn_for_prompt() {
+  local phase="$1"
+  local prompt_path="$2"
+  local model="$3"
+  local warn_line=""
+
+  [ -n "${phase}" ] || return 0
+  [ -n "${prompt_path}" ] || return 0
+  [ -n "${model}" ] || return 0
+  [ -f "${prompt_path}" ] || return 0
+  if ! command -v python3 >/dev/null 2>&1; then
+    return 0
+  fi
+
+  warn_line="$({
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}:${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
+import sys
+
+try:
+    from cost_audit import build_context_budget_warn_line_for_file
+except ModuleNotFoundError:
+    sys.exit(0)
+
+phase, prompt_path, model = sys.argv[1:4]
+line = build_context_budget_warn_line_for_file(
+    phase=phase,
+    prompt_path=prompt_path,
+    model=model,
+)
+if line:
+    print(line)
+PY
+  })"
+  if [ -n "${warn_line}" ]; then
+    printf '%s\n' "${warn_line}"
+  fi
+}
+
 # Filter workflow-generated Serena runtime artifacts from the editor
 # no-op detector only when the repo did not already own the Serena
 # project config before bootstrap and that config stayed unchanged.
@@ -1161,6 +1201,7 @@ sanitize_codex_prompt_file "${EDITOR_PROMPT_FILE}"
 
 echo "Editor prompt bytes: $(wc -c < "${EDITOR_PROMPT_FILE}")"
 echo "Editor prompt sha256: $(sha256sum "${EDITOR_PROMPT_FILE}" | awk '{print $1}')"
+emit_context_budget_warn_for_prompt "editor" "${EDITOR_PROMPT_FILE}" "${MODEL_EDITOR}"
 
 rm -f "${EDITOR_SUMMARY_FILE}"
 
