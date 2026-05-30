@@ -837,6 +837,12 @@ jobs:
       PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
       DET_SKIP_REASON: ${{ needs.gate.outputs.det_skip_reason }}
       ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
+      # When 'true' (default), forward-merge fallback PRs (head ref
+      # `^auto/forward-merge-stable-`) auto-merge via a real merge commit
+      # (`gh pr merge --merge --auto`) instead of being left for a manual
+      # merge. Set to any non-'true' value to restore the previous
+      # manual-merge-commit behaviour. See the auto-merge step below.
+      FORWARD_MERGE_FALLBACK_AUTO_MERGE: ${{ vars.FORWARD_MERGE_FALLBACK_AUTO_MERGE || 'true' }}
       # Reused from the gate job's existing /pulls/{n} fetch (§15 API hygiene) —
       # consumed by the forward-merge-fallback suppressor in the auto-merge
       # step below. May be empty when the gate could not resolve the PR
@@ -925,18 +931,30 @@ jobs:
           if [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
             echo "Auto-merge disabled (ENABLE_AUTO_MERGE != true) — leaving PR for manual merge."
           elif [ -n "${PR_HEAD_REF}" ] && printf '%s\n' "${PR_HEAD_REF}" | grep -Eq '^auto/forward-merge-stable-'; then
-            # Mirror of the forward-merge-fallback suppressor in the
-            # codex-agent "Enable auto-merge on PR" step. Defense in depth:
-            # a tiny forward-merge fallback PR (e.g. one that just happens
-            # to fall under AUTOFIX_SKIP_MAX_ADDITIONS / _DELETIONS) would
-            # otherwise short-circuit through this deterministic-skip-merge
-            # path and squash-merge before the codex-agent path's suppressor
-            # ever runs. See the longer comment block on this exact regex
-            # in the "Enable auto-merge on PR" step for the full rationale
-            # (promote-main-to-stable.yml ancestry check, "Create a merge
-            # commit" requirement, etc.).
-            auto_merge_summary="SUPPRESSED (forward-merge fallback head ref '${PR_HEAD_REF}')"
-            echo "PR #${PR_NUMBER} head ref '${PR_HEAD_REF}' matches forward-merge fallback pattern '^auto/forward-merge-stable-' — auto-merge suppressed on the deterministic-skip path. forward-merge fallback PRs must be merged manually via 'Create a merge commit' (NOT squash/rebase) so stable's commits remain in main's ancestry; promote-main-to-stable.yml's pre-flight 'git merge-base --is-ancestor HEAD origin/main' check refuses otherwise."
+            # Mirror of the forward-merge-fallback handling in the codex-agent
+            # "Enable auto-merge on PR" step. Defense in depth: a tiny
+            # forward-merge fallback PR (e.g. one that just happens to fall
+            # under AUTOFIX_SKIP_MAX_ADDITIONS / _DELETIONS) short-circuits
+            # through this deterministic-skip-merge path before the codex-agent
+            # path runs, so the same merge-commit auto-merge (or its opt-out)
+            # must be applied here too — otherwise the `--squash --auto` tail
+            # below would strip stable's ancestry. See the longer comment block
+            # on this exact regex in the "Enable auto-merge on PR" step for the
+            # full rationale (promote-main-to-stable.yml ancestry check,
+            # "Create a merge commit" requirement, etc.).
+            if [ "${FORWARD_MERGE_FALLBACK_AUTO_MERGE}" = "true" ]; then
+              echo "Enabling auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER} (head ref '${PR_HEAD_REF}')..."
+              if gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --merge --auto; then
+                auto_merge_summary="ENABLED (merge commit)"
+                echo "Auto-merge (merge commit) enabled. PR will merge once all required checks pass, preserving stable's ancestry on main."
+              else
+                auto_merge_summary="FAILED to enable merge-commit auto-merge (see warnings above)"
+                echo "::warning::Could not enable auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER}. Check that 'Allow merge commits' and 'Allow auto-merge' are enabled in repo settings and branch protection is configured. The PR remains open for manual 'Create a merge commit'."
+              fi
+            else
+              auto_merge_summary="SUPPRESSED (forward-merge fallback head ref '${PR_HEAD_REF}', FORWARD_MERGE_FALLBACK_AUTO_MERGE != 'true')"
+              echo "PR #${PR_NUMBER} head ref '${PR_HEAD_REF}' matches forward-merge fallback pattern '^auto/forward-merge-stable-' and FORWARD_MERGE_FALLBACK_AUTO_MERGE != 'true' — auto-merge suppressed on the deterministic-skip path. Merge manually via 'Create a merge commit' (NOT squash/rebase) so stable's commits remain in main's ancestry; promote-main-to-stable.yml's pre-flight 'git merge-base --is-ancestor HEAD origin/main' check refuses otherwise."
+            fi
           else
             echo "Enabling auto-merge (squash) on PR #${PR_NUMBER}..."
             if gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto; then
@@ -5492,6 +5510,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
+          # When 'true' (default), forward-merge fallback PRs auto-merge via a
+          # real merge commit instead of being suppressed for manual merge.
+          # See the forward-merge-fallback branch below for the full rationale.
+          FORWARD_MERGE_FALLBACK_AUTO_MERGE: ${{ vars.FORWARD_MERGE_FALLBACK_AUTO_MERGE || 'true' }}
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
         run: |
           set -euo pipefail
@@ -5617,25 +5639,52 @@ jobs:
           fi
 
           # Scoped opt-out for forward-merge fallback PRs opened by
-          # forward-merge-stable-to-main.yml. Head ref is hard-coded as
+          # forward-merge-stable-to-main.yml — these are routed AWAY from the
+          # `--squash --auto` tail below. Head ref is hard-coded as
           # `auto/forward-merge-stable-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}`
-          # at forward-merge-stable-to-main.yml:255. These PRs MUST be merged
-          # via "Create a merge commit" so the 2-parent merge keeps stable's
-          # tip reachable from main; auto-merge here would call
-          # `gh pr merge --squash --auto` (this step's tail and the
-          # deterministic-skip-merge sibling), which silently strips
-          # stable's commits from main's ancestry. promote-main-to-stable.yml's
-          # pre-flight `git merge-base --is-ancestor HEAD origin/main` then
-          # refuses to fast-forward stable on the next promote run, with the
-          # exact "squash/rebase strips ancestry" error at
-          # promote-main-to-stable.yml:122. Suppressing auto-merge leaves
-          # the PR for manual "Create a merge commit" — the CAUTION banner
-          # in the PR body (forward-merge-stable-to-main.yml:265-270) and
-          # this log line both call that out. Hard-coded pattern, not a
-          # configurable env var, because the branch prefix is owned by
-          # forward-merge-stable-to-main.yml and never varies per repo.
+          # at forward-merge-stable-to-main.yml:255. These PRs MUST land as a
+          # "Create a merge commit" so the 2-parent merge keeps stable's tip
+          # reachable from main; the squash auto-merge would silently strip
+          # stable's commits from main's ancestry, after which
+          # promote-main-to-stable.yml's pre-flight
+          # `git merge-base --is-ancestor HEAD origin/main` refuses to
+          # fast-forward stable on the next promote run, with the exact
+          # "squash/rebase strips ancestry" error at
+          # promote-main-to-stable.yml:122. By default
+          # (FORWARD_MERGE_FALLBACK_AUTO_MERGE='true') we therefore call
+          # `gh pr merge --merge --auto` — the unattended equivalent of the
+          # manual "Create a merge commit" the PR-body CAUTION banner
+          # (forward-merge-stable-to-main.yml:265-270) asks for, which
+          # preserves ancestry. Set the var to any non-'true' value to suppress
+          # auto-merge entirely and leave the PR for a manual merge commit. The
+          # head-ref pattern is hard-coded (not configurable) because the branch
+          # prefix is owned by forward-merge-stable-to-main.yml and never varies
+          # per repo; only the auto-merge-vs-manual choice is var-gated.
           if printf '%s\n' "${_orch_pr_head_ref}" | grep -Eq '^auto/forward-merge-stable-'; then
-            echo "PR #${PR_NUMBER} head ref '${_orch_pr_head_ref}' matches forward-merge fallback pattern '^auto/forward-merge-stable-' — auto-merge suppressed. forward-merge fallback PRs must be merged manually via 'Create a merge commit' (NOT squash/rebase) so stable's commits remain in main's ancestry; promote-main-to-stable.yml's pre-flight 'git merge-base --is-ancestor HEAD origin/main' check refuses otherwise (see promote-main-to-stable.yml:115-126 and the CAUTION banner in the PR body)."
+            # forward-merge fallback PRs (opened by forward-merge-stable-to-main.yml)
+            # MUST land as a real 2-parent merge commit so stable's commits stay
+            # reachable from main. A squash/rebase strips stable's ancestry even
+            # though the file content is forwarded, which then trips
+            # promote-main-to-stable.yml's pre-flight
+            # `git merge-base --is-ancestor HEAD origin/main` check
+            # (promote-main-to-stable.yml:115-126). `gh pr merge --merge --auto`
+            # is the unattended equivalent of the manual "Create a merge commit"
+            # the PR-body CAUTION banner asks for, so it preserves ancestry and
+            # satisfies that check — unlike the `--squash --auto` tail below.
+            #
+            # Gated by FORWARD_MERGE_FALLBACK_AUTO_MERGE (default 'true'); set the
+            # repo var to any non-'true' value to fall back to the previous
+            # behaviour of leaving these PRs for a manual merge commit.
+            if [ "${FORWARD_MERGE_FALLBACK_AUTO_MERGE}" = "true" ]; then
+              echo "Enabling auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER} (head ref '${_orch_pr_head_ref}')..."
+              if gh_retry gh pr merge "${PR_NUMBER}" --repo "${{ github.repository }}" --merge --auto; then
+                echo "Auto-merge (merge commit) enabled. PR will merge once all required checks pass, preserving stable's ancestry on main."
+              else
+                echo "::warning::Could not enable auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER}. Check that 'Allow merge commits' and 'Allow auto-merge' are enabled in repo settings and branch protection is configured. The PR remains open for manual 'Create a merge commit'."
+              fi
+            else
+              echo "PR #${PR_NUMBER} head ref '${_orch_pr_head_ref}' matches forward-merge fallback pattern '^auto/forward-merge-stable-' and FORWARD_MERGE_FALLBACK_AUTO_MERGE != 'true' — auto-merge suppressed. Merge manually via 'Create a merge commit' (NOT squash/rebase) so stable's commits remain in main's ancestry; promote-main-to-stable.yml's pre-flight 'git merge-base --is-ancestor HEAD origin/main' check refuses otherwise (see promote-main-to-stable.yml:115-126 and the CAUTION banner in the PR body)."
+            fi
             exit 0
           fi
 

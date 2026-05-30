@@ -1859,10 +1859,15 @@ def test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_codex_agent_pa
 	# forward-merge-stable-to-main.yml opens fallback PRs with head ref
 	# `auto/forward-merge-stable-<run-id>-<attempt>`. These MUST be merged
 	# via "Create a merge commit" so stable's tip stays in main's ancestry —
-	# the workflow's own auto-merge call `gh pr merge --squash --auto` would
-	# strip that ancestry and break the next promote-main-to-stable.yml run.
-	# Verify the codex-agent "Enable auto-merge on PR" step short-circuits
-	# on this head-ref pattern BEFORE reaching the squash-auto call.
+	# the regular auto-merge call `gh pr merge --squash --auto` would strip
+	# that ancestry and break the next promote-main-to-stable.yml run. By
+	# default (FORWARD_MERGE_FALLBACK_AUTO_MERGE='true') the codex-agent
+	# "Enable auto-merge on PR" step instead enables auto-merge with a REAL
+	# merge commit (`gh pr merge --merge --auto`) — the unattended equivalent
+	# of "Create a merge commit", which preserves ancestry — and short-circuits
+	# (exit 0) BEFORE reaching the orchestrator block and the squash-auto tail.
+	# Setting the var to any non-'true' value restores the old behaviour of
+	# leaving the PR for a manual merge commit; both branches are verified.
 	block = _step_block("Enable auto-merge on PR")
 	assert "Scoped opt-out for forward-merge fallback PRs" in block, (
 		"Forward-merge fallback suppressor comment is missing"
@@ -1888,6 +1893,28 @@ def test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_codex_agent_pa
 	assert idx_orch_match != -1
 	assert idx_forward < idx_orch_match, (
 		"Forward-merge suppressor must short-circuit before the orchestrator-pattern match attempt"
+	)
+	# Default behaviour: gated by FORWARD_MERGE_FALLBACK_AUTO_MERGE and merges
+	# via a real merge commit (NOT squash) so stable's ancestry is preserved.
+	assert "FORWARD_MERGE_FALLBACK_AUTO_MERGE" in block, (
+		"Forward-merge auto-merge must be gated by the FORWARD_MERGE_FALLBACK_AUTO_MERGE var"
+	)
+	assert 'gh pr merge "${PR_NUMBER}" --repo "${{ github.repository }}" --merge --auto' in block, (
+		"Forward-merge fallback PRs must auto-merge via a real merge commit (--merge --auto), not squash"
+	)
+	# The merge-commit enable must sit on the forward-merge branch, before the
+	# exit 0 that prevents falling through to the --squash --auto tail. Anchor
+	# on the full command lines so comment mentions of "--squash --auto" above
+	# the call site do not perturb the ordering check.
+	idx_fm_merge = block.find('--repo "${{ github.repository }}" --merge --auto')
+	idx_squash = block.find('--repo "${{ github.repository }}" --squash --auto')
+	assert idx_fm_merge != -1 and idx_squash != -1
+	assert idx_fm_merge < idx_squash, (
+		"Forward-merge merge-commit call must precede (and short-circuit before) the squash tail"
+	)
+	# Opt-out branch still suppresses + explains when the var is not 'true'.
+	assert "FORWARD_MERGE_FALLBACK_AUTO_MERGE != 'true' — auto-merge suppressed" in block, (
+		"Forward-merge path must still suppress + log when the opt-out var is set"
 	)
 
 
@@ -1917,10 +1944,23 @@ def test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_deterministic_
 		"Forward-merge suppressor must short-circuit before the gh pr merge --squash --auto call"
 	)
 	assert 'auto_merge_summary="SUPPRESSED (forward-merge fallback head ref' in block, (
-		"deterministic-skip-merge must track suppressed auto-merge state for the step summary"
+		"deterministic-skip-merge must track suppressed auto-merge state for the step summary (opt-out branch)"
 	)
 	assert 'echo "- **Auto-merge:** ${auto_merge_summary}"' in block, (
 		"Deterministic-skip summary must report the actual auto-merge outcome"
+	)
+	# Default behaviour mirrors the codex-agent path: gated by
+	# FORWARD_MERGE_FALLBACK_AUTO_MERGE and merged via a real merge commit so a
+	# small/doc-only forward-merge fallback PR routed through deterministic-skip
+	# does not get squash-merged and strip stable's ancestry.
+	assert "FORWARD_MERGE_FALLBACK_AUTO_MERGE" in block, (
+		"deterministic-skip-merge forward-merge handling must be gated by FORWARD_MERGE_FALLBACK_AUTO_MERGE"
+	)
+	assert 'gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --merge --auto' in block, (
+		"deterministic-skip-merge must auto-merge forward-merge fallback PRs via a real merge commit"
+	)
+	assert 'auto_merge_summary="ENABLED (merge commit)"' in block, (
+		"deterministic-skip-merge must record the merge-commit auto-merge outcome for the step summary"
 	)
 
 
