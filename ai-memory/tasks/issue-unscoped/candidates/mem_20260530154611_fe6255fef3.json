@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- prompts/review-consolidator.txt:35-42 | severity=medium | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The transport note and `UNTRUSTED_DATA:` prefix were reflowed onto fewer lines without changing behaviour.\n  WHY: This avoids the prompt-budget regression previously logged at 153 lines and keeps the file within the 150-line coder prompt cap enforced by `.github/workflows/ci.yml:445-460` and `scripts/review_consolidate.sh:370`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update the review pipeline with prompt-injection hardening for all review-surface inputs (consolidator, review-blocked judge, conflict resolver), deterministic reviewer tiers, low-signal filtering, per-reviewer failback/health state, `AGENTS.md` materiality advisory, `CODEX_HEARTBEAT` telemetry, context-budget warnings, and logical `review_state` + `@codex break-glass` support (tracking issue #2974 closeout).\n  expected_change_site: prompts/review-consolidator.txt (and adjacent files in LAST RUN CHANGED FILES / PR CHANGED FILES list) + archival move of the plan.\n  confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The reflow in the last-run diff is the final 150-line enforcement for this file; all referenced features landed in prior waves of this PR and are reflected in the current HEAD (docs/completed/ai-code-review-learnings-plan.md already records the audit). No further gap remains.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- prompts/review-consolidator.txt:35-42 | severity=medium | confidence=5\n  PROBLEM: The transport note and `UNTRUSTED_DATA:` prefix were reflowed onto fewer lines without changing behaviour.\n  WHY: This avoids the prompt-budget regression that was previously logged at 153 lines and keeps the file within the 150-line coder prompt cap enforced by `.github/workflows/ci.yml:445-460` and `scripts/review_consolidate.sh:370`.\n- Requirement: Update the review pipeline with prompt-injection hardening for all review-surface inputs (consolidator, review-blocked judge, conflict resolver), deterministic reviewer tiers, low-signal filtering, per-reviewer failback/health state, `AGENTS.md` materiality advisory, `CODEX_HEARTBEAT` telemetry, context-budget warnings, and logical `review_state` + `@codex break-glass` support (tracking issue #2974 closeout).\n  Expected change site: prompts/review-consolidator.txt (and adjacent files in LAST RUN CHANGED FILES / PR CHANGED FILES list) + archival move of the plan.\n  Evidence of absence: The reflow in the last-run diff is the final 150-line enforcement for this file; all referenced features landed in prior waves of this PR and are reflected in the current HEAD (docs/completed/ai-code-review-learnings-plan.md already records the audit). No further gap remains.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "6f9f8bc7c00a9ae54f6640a407f4656198a1dfdaa291cd13583085cdca2b772e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2981,
+    "run_id": "26687511592",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26687511592",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260530154611_fe6255fef3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2981,
+    "run_id": "26687511592"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-30T15:46:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
