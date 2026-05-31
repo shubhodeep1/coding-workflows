@@ -71,6 +71,18 @@
       "pr_branch": null,
       "pr_url": null,
       "recorded_at": "2026-05-30T03:32:17Z"
+    },
+    {
+      "codex_attempts_used": 3,
+      "committed_type": null,
+      "consumer_default_branch": "main",
+      "consumer_head_sha": "cdc928e0dd69ffe76528c880b4da086942691b58",
+      "discovered_type": null,
+      "failure_reason": "codex_rc_nonzero(rc=1)",
+      "outcome": "failed",
+      "pr_branch": null,
+      "pr_url": null,
+      "recorded_at": "2026-05-31T03:32:58Z"
     }
   ],
   "repository": "shubhodeep1/digital_pa",
