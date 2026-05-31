@@ -71,6 +71,18 @@
       "pr_branch": null,
       "pr_url": null,
       "recorded_at": "2026-05-30T03:36:20Z"
+    },
+    {
+      "codex_attempts_used": 3,
+      "committed_type": null,
+      "consumer_default_branch": "main",
+      "consumer_head_sha": "1edb91d84626f353c9159d42f766a3597c66d818",
+      "discovered_type": null,
+      "failure_reason": "codex_rc_nonzero(rc=1)",
+      "outcome": "failed",
+      "pr_branch": null,
+      "pr_url": null,
+      "recorded_at": "2026-05-31T03:36:57Z"
     }
   ],
   "repository": "shubhodeep1/atlas-bridge.gd",
