@@ -1,5 +1,23 @@
 # Apply Learnings from External AI-Tools System Prompts
 
+## Archival audit status (2026-06-01)
+
+**BLOCKED:** archival for tracking issue #3024 remains open. This plan stays
+canonical under `docs/plans/` because the re-audit against shipped HEAD
+already finds the following confirmed load-bearing gaps:
+
+1. **Goal 10 — naming verbosity.** `prompts/mode-implement.txt` says
+   "Prefer descriptive names over abbreviations..." but still lacks the
+   stricter "avoid 1–2 character names except in tight scopes" guidance this
+   plan committed to land.
+2. **Goal 12 — flow rubric.** `prompts/mode-implement.txt` keeps only a
+   shortened "Preferred flow..." line and does not yet include the fuller
+   discovery / status-update / batch-tool-call / reconcile cadence this plan
+   specified.
+
+Do not archive this plan into `docs/completed/` until those prompt gaps land
+or a follow-up plan explicitly narrows the requirement.
+
 ## Summary
 
 Adopt 13 additive prompt-improvement items distilled from the
