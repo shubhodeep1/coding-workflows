@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlan for `docs/plans/apply-ai-tools-learnings-plan.md` Phases 1\u20132, scoped to this issue only.\n\nRef context\n- Commit: `fc9049673fdeeec58b291d0998d3af6e78834f8e`\n- Branch: `orchestrator/project-3024`\n- Integration metadata match: yes\n\nClarification interpretation\n- No clarification questions were asked.\n- `/answer [auto-answered-by-orchestrator]` adds no new constraints, so planning proceeds from the issue body as written.\n\nAutomation / wiring summary\n- Change type: modify one existing file only.\n- Scheduler / PR-push wiring: none.\n- New supervisor: none.\n- DB gate pattern: n/a.\n- `docs/scripts-pending-removal.md`: no entry needed.\n\n1. Files likely to change\n- `unattended_system_instructions.md` only.\n- No creates, deletes, or renames.\n- All edits are additive except the existing \u00a74 shell-write verification bullet, which is refined in place.\n- No workflow, script, prompt, README, or `CLAUDE.md` changes in this issue.\n\n2. Functions / modules / sections to implement\nTreat the numbered sections in `unattended_system_instructions.md` as the implementation units.\n\n- `\u00a72. Bias to Action` (current lines ~81\u201392)\n  - Append one new anti-laziness paragraph after the current `BLOCKED:` paragraph and before the `---`.\n  - Use the Phase 1 wording from the source-of-truth plan, ending with: \u201cEither emit the artefact or emit `BLOCKED:` with a scalar reason.\u201d\n\n- `\u00a73. Tool-Call Discipline (codex paths)` (current lines ~98\u2013111)\n  - Insert a new XML-style block named `<status_update_cadence>` before the section separator.\n  - Follow the formatting pattern already used by `<tool_persistence_rules>` and `<verification_loop>`.\n  - The new block must cover:\n    - one short preamble sentence (\u226420 words) before each tool-call batch;\n    - a compact `Checkpoint:` after every 3\u20135 tool calls, or after any edit burst touching more than 3 files since the last checkpoint;\n    - preambles/checkpoints go to stdout/logs and do not replace the \u00a716 terminal summary or count as the artefact.\n\n- `\u00a74. Edit-Tool Discipline (codex paths)` (current lines ~127\u2013129)\n  - Refine the existing bullet so it explicitly applies to shell writes only (`heredoc`, `printf`, redirected `cat`, `tee`).\n  - Add the sibling `apply_patch` rule from the source-of-truth plan:\n    - no reread after a successful `apply_patch`;\n    - end-of-rollout verification still happens via `git diff --stat` across the edited files.\n\n- `\u00a79. Minimal Change Set` (after current line ~187)\n  - Append the new final bullet with the \u201cdefault mode is surgical\u201d wording from the source-of-truth plan, including the rule that ambiguity defaults to surgical, never ambitious.\n\n- `\u00a715. Role-Specific Behavior` (current role paragraphs at ~295\u2013310)\n  - Append the same root-cause sentence to:\n    - `Editor (review autofix)`\n    - `Implementer (implement)`\n    - `Diagnoser / Judge`\n  - Keep the sentence identical in all 3 places for grepability.\n\n- `\u00a716. Output Contract`\n  - Add one new outer bullet to the existing list requiring user-visible artefacts to describe actions in natural language rather than tool names.\n  - Add one new bullet inside the existing `<verification_loop>` with the ordered executable-check tiers:\n    - `typecheck \u2192 lint \u2192 tests \u2192 build \u2192 smoke`\n    - stop at the first failing tier.\n\n- Acceptance alignment\n  - Keep all existing section numbers and headings unchanged.\n  - Keep all existing XML tag names unchanged.\n  - The only new tag is `<status_update_cadence>`.\n  - Final diff stays limited to `unattended_system_instructions.md`.\n\n3. Data structures affected\n- No runtime data structures.\n- Prompt-contract structures only:\n  - new internal XML-style block: `<status_update_cadence>`;\n  - existing `<verification_loop>` gains one bullet;\n  - existing role paragraphs and bullet lists gain additive text.\n- No env vars, log prefixes, identifiers, or DB contracts change.\n\n4. API / interface changes\n- No public API or workflow interface changes.\n- Internal behavioral contract changes only, affecting phases that consume `unattended_system_instructions.md`:\n  - artefact-producing phases must emit the artefact or `BLOCKED:`;\n  - user-visible artefacts should avoid tool-name wording;\n  - verification guidance gains an explicit tier order;\n  - stdout/log cadence gains preambles/checkpoints.\n\n5. Potential risks / edge cases\n- Keep the new `<status_update_cadence>` block inside \u00a73, before the `---`.\n- Keep the new verification-order bullet inside the existing `<verification_loop>` block, not after it.\n- Do not weaken the existing verification rule in \u00a74:\n  - shell writes still require immediate diff verification;\n  - `apply_patch` still gets end-of-rollout diff verification.\n- Avoid unrelated prose reflow in adjacent sections.\n- Keep the root-cause sentence identical in all three roles.\n- Conflict to note:\n  - `prompts/mode-implement.txt:31-33` conditionally allows editing `unattended_system_instructions.md` when the approved plan scopes it.\n  - `.github/workflows/implement.yml:1510` still unconditionally says not to modify `ai_pipeline.md, unattended_system_instructions.md, or CLAUDE.md`.\n  - That conflicts with the issue note that the unlock dependency is in place. Treat the separate unlock issue as a prerequisite/rebase dependency; do not widen this issue to change workflow or prompt files.\n\n6. Testing considerations\n- Scope check: `git diff --stat -- unattended_system_instructions.md` should show only this file.\n- Manual diff review should confirm:\n  - all six requested additions landed;\n  - \u00a74 is the only refined-in-place edit;\n  - no section renumbering or tag renaming occurred.\n- Spot checks:\n  - `<status_update_cadence>` appears once;\n  - the root-cause sentence appears in exactly 3 role paragraphs;\n  - the tool-name-opacity bullet is in \u00a716\u2019s outer list;\n  - the verification-order bullet is inside `<verification_loop>`.\n- Optional post-merge smoke:\n  - run one small unattended implement/review cycle and confirm logs show preambles/checkpoints and user-visible artefacts avoid tool-name phrasing.\n\nAssumption\n- The implement-prompt unlock dependency is merged into `orchestrator/project-3024` before implementation starts; otherwise this single-file plan is correct but the live implement workflow may still block the edit.\n\nEstimated effort\n- ~25\u201335 minutes once the unlock dependency is present, so this should fit within the one-rollout (~55 minute) target.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "49a018b38b5069554aac307791ef98a794fc7fc79ffa0735846be979bd73e051",
+  "lineage": {
+    "issue_number": 3031,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26734083838",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26734083838",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3031"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260601035441_ca43e384f4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3031,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26734083838"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3031",
+  "timestamps": {
+    "created_at": "2026-06-01T03:54:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
