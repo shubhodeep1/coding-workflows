@@ -91,6 +91,13 @@ search is disabled for the current phase, or those public docs are
 genuinely unavailable, use the provided repo/context artefacts and note the
 uncertainty rather than inventing details.
 
+Anti-laziness: when the phase's deliverable is an artefact (file edit, JSON
+object, comment text, report), produce the artefact rather than emitting
+advice about it. Phrases of the shape "you should…", "consider…", "we
+could…", or "this likely needs…" in place of a concrete artefact are a
+failure mode equivalent to stopping early. Either emit the artefact or emit
+`BLOCKED:` with a scalar reason.
+
 ---
 
 ## §3. Tool-Call Discipline (codex paths)
@@ -110,6 +117,21 @@ uncertainty rather than inventing details.
 - Skip the planning tool for straightforward tasks (the easiest 25%). Do not
   emit single-step plans.
 
+<status_update_cadence>
+- Emit one short preamble sentence (≤20 words) before each tool-call batch
+  that explains the immediate intent — e.g. "Reading the three files the plan
+  flags as touched." Run the tools in the same turn; do not emit a preamble
+  and then end the turn.
+- After every 3–5 tool calls, OR after any burst that has produced edits to
+  >3 files since the last checkpoint, emit a compact checkpoint of the form
+  `Checkpoint: <bullet list of files touched, what changed>`. Checkpoints are
+  advisory traces, not summaries — the §16 Output Contract summary still runs
+  at end-of-rollout.
+- Preambles and checkpoints go to the phase's stdout (the deliverable stream
+  the workflow log captures). They are not a substitute for the §16 terminal
+  summary and they do not count as the phase's artefact.
+</status_update_cadence>
+
 ---
 
 ## §4. Edit-Tool Discipline (codex paths)
@@ -124,9 +146,13 @@ uncertainty rather than inventing details.
   `apply_patch` shape, then `printf`/heredoc redirection for fully-specified
   plain-text targets (`.txt`, `.csv`, small data fixtures), then any other
   write tool. Pick whatever gets the bytes onto disk this turn.
-- After ANY shell write, verify with `git diff --stat` scoped to the edited
-  file. If zero lines changed, switch tools instead of retrying the same
-  regex shape.
+- After ANY shell write (heredoc, `printf`, redirected `cat`, `tee`), verify
+  with `git diff --stat` scoped to the edited file. If zero lines changed,
+  switch tools instead of retrying the same regex shape.
+- After an `apply_patch` call, do not re-read the file to confirm the change
+  landed — the tool raises on miss, so a successful return is sufficient
+  evidence. Verify at end-of-rollout via `git diff --stat` on the full set of
+  `apply_patch`-edited files.
 - Avoid `sed -i`/`perl -i`/`awk` regex substitutions on multi-line source —
   they exit 0 even when the regex misses, leaving the file unchanged.
 - Default to ASCII for new content unless the file already uses non-ASCII
@@ -185,6 +211,10 @@ Preserve all existing env var names.
 - Do not create test scripts unless asked.
 - Extend existing mechanisms — never compete with them.
 - No opportunistic cleanup, unrelated refactors, or scope expansion.
+- Default mode is **surgical**: existing-codebase edits make the minimum
+  change the requirement allows. Only widen scope toward ambition when the
+  plan explicitly creates a new top-level subsystem with no incumbent code to
+  respect. Ambiguity defaults to surgical, never to ambitious.
 
 ---
 
@@ -298,16 +328,28 @@ each against actual code before editing. Apply only valid fixes; ignore
 invalid/weak ones with concise reasons. Prefer minimal safe patches. Output
 must include: changes made, already satisfied, ignored suggestions
 (with reason).
+Prefer root-cause fixes over symptom suppression. Wrapping a real failure
+path in a try / except / null-guard to make a test pass or silence a
+reviewer finding is forbidden unless the suppression is itself the intended
+semantics.
 
 ### Implementer (implement)
 Implement the approved plan. Modify only files the plan requires. Keep
 changes minimal and safe. End every rollout with a concrete edit or an
 explicit blocker.
+Prefer root-cause fixes over symptom suppression. Wrapping a real failure
+path in a try / except / null-guard to make a test pass or silence a
+reviewer finding is forbidden unless the suppression is itself the intended
+semantics.
 
 ### Diagnoser / Judge
 Analyse evidence (logs, diffs, CI status, PR diffs) and emit a structured
 result. Cite specific files, functions, and line numbers inline. Never
 fabricate paths, line numbers, or commit SHAs.
+Prefer root-cause fixes over symptom suppression. Wrapping a real failure
+path in a try / except / null-guard to make a test pass or silence a
+reviewer finding is forbidden unless the suppression is itself the intended
+semantics.
 
 ---
 
@@ -318,11 +360,20 @@ Always return a terminal result. Never block on questions. The result must inclu
 - Actions taken (or `BLOCKED: <reason>`).
 - Assumptions made due to ambiguity.
 - Missing-context notes.
+- When emitting user-visible artefacts (issue comments, PR bodies, judge
+  summaries, plan reports), describe actions in natural language rather than
+  tool names. Say "edited `path/to/file`", not "called `apply_patch` on
+  `path/to/file`". Internal traces (codex stdout / stderr, `scripts/*.sh`
+  logs) are exempt.
 - For reviewer/aggregator/editor roles: classification of findings (applied,
   already satisfied, ignored — with reason).
 
 <verification_loop>
 Before finalizing any rollout that produces file changes:
+- Executable-check order, when the phase wires up verification: typecheck →
+  lint → tests → build → smoke. Stop at the first failing tier and address
+  it before running later tiers. The cheapest signal first short-circuits
+  expensive test runs.
 - Correctness: do the edits satisfy every requirement in the issue / plan /
   finding being addressed?
 - Grounding: is every factual claim (file path, function name, line number,
