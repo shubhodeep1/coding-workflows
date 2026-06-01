@@ -5,7 +5,7 @@
 This is a **backlog / consideration doc**, not an action plan. It enumerates
 the structural refactors and contentious items surfaced by the research
 into `x1xhlol/system-prompts-and-models-of-ai-tools` that the companion
-implementation plan (`docs/plans/apply-ai-tools-learnings-plan.md`)
+implementation plan (`docs/completed/apply-ai-tools-learnings-plan.md`)
 deliberately did NOT adopt. Each item lists what it would do, the source
 prompts, pro / con, estimated cost, the open decisions that have to be
 made before a real implementation plan can be drafted, and any
@@ -753,7 +753,7 @@ PRs in any order.
 ## References
 
 - **External source**: <https://github.com/x1xhlol/system-prompts-and-models-of-ai-tools>
-- **Companion plan**: `docs/plans/apply-ai-tools-learnings-plan.md`
+- **Companion plan**: `docs/completed/apply-ai-tools-learnings-plan.md`
   (the implementation plan for the items adopted now).
 - **In-repo precedent**: `docs/symphony-inspired-improvements.md` —
   similar structure for "borrow from external system, drop the
