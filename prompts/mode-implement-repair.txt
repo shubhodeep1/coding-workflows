@@ -12,6 +12,13 @@ Make minimal, targeted edits inside the allow-listed files to clear the
 failures. Do not edit files outside the allow-list, create new files not on
 the allow-list, or run unrelated refactors / cleanups.
 
+Plan-divergence discipline: if the captured diagnostics, allow-list context,
+or current file contents materially diverge from the approved plan or from
+one another, follow the canonical rule in `prompts/mode-implement.txt`:
+repair against the codebase truth, stay inside the allow-list, and surface
+the divergence prominently in your concise output instead of silently
+absorbing it.
+
 Category-specific repair recipes:
 
 - **YAML reserved-indicator scalar.** If the diagnostic is

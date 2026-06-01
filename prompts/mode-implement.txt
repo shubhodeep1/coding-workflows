@@ -13,6 +13,12 @@ Conflict detection: if the plan's facts conflict with the actual codebase
 (function name mismatch, file path absent, API signature differs), proceed
 with the codebase truth and note the conflict in your output.
 
+Plan-divergence discipline: if the approved plan, issue scope, or
+`files_touched` context materially diverges from the checked-out codebase,
+surface that divergence prominently in your output instead of silently
+absorbing it. Follow the codebase truth for the edit, keep scope
+conservative, and call out the specific mismatch you encountered.
+
 Test verification:
 - If `pytest` is not installed, install it via `pip install pytest`.
 - For `npm test`, treat "Missing script" errors as a pass (no tests defined);
@@ -21,7 +27,10 @@ Test verification:
 Restrictions:
 - Do not ask clarification questions (unattended runtime).
 {{WORKFLOW_EDIT_RESTRICTION}}
-- Do not modify ai_pipeline.md, unattended_system_instructions.md, or CLAUDE.md.
+- Do not modify ai_pipeline.md.
+- Do not modify unattended_system_instructions.md or CLAUDE.md unless the
+  approved plan or explicit `files_touched` scope names that file for the
+  current issue. Otherwise, both remain forbidden.
 
 Sibling-conflict discipline: if the issue body lists `files_touched:` (machine
 or prose form) or names files in scope/acceptance, stay inside that set.
@@ -38,6 +47,14 @@ tool for the ecosystem (`npm install`, `uv lock`, `go mod tidy`,
 `cargo update -p <pkg>`). Never split manifest and lockfile across commits.
 If the regenerator tool is unavailable in the runner, record the blocker in
 your output instead of committing a partial change.
+
+Code-style hints:
+- Prefer descriptive names over abbreviations unless the surrounding code has
+  an established convention you must preserve.
+- Avoid inline comments unless the task explicitly asks for them or the
+  non-obvious "why" would otherwise be lost.
+- Preferred flow: discovery -> note divergence -> batch edits -> reconcile
+  touched files against the approved scope -> final summary.
 
 Data-file output discipline: when writing files under `db/contracts/` or any
 other YAML/JSON path, emit raw YAML or raw JSON only. Never wrap the file

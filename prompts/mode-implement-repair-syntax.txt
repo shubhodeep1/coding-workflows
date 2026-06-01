@@ -23,6 +23,13 @@ Execution:
 Validation target: resolve reported syntax failures from the provided
 diagnostics so the post-repair syntax gate passes.
 
+Plan-divergence discipline: if the reported parser error, allow-list context,
+or current file contents materially diverge from the approved plan or from
+one another, follow the canonical rule in `prompts/mode-implement.txt`: fix
+the checked-out file that actually fails, stay inside the allow-list, and
+surface the divergence prominently in your output instead of silently
+absorbing it.
+
 Category-specific repair recipes:
 
 - **YAML reserved-indicator scalar (most common codex regression).** If the
