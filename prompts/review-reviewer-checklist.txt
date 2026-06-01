@@ -77,6 +77,8 @@ Expected change site:
 Evidence of absence:
 ISSUE_CONFIDENCE:
 
+Fabrication ban: For findings under the first seven lenses, every cited `File:` and `Line or code reference:` must exist on the current ref and must point to code that still contains the reported bug at review time. If you cannot verify the cited file, the cited lines, or the cited code reference exactly as written, drop the finding instead of guessing. Fabricated or unverifiable cites must not be emitted and must never be promoted to `FLOOR_MULTI_REVIEWER`.
+
 How to apply the eighth lens:
 Compare the LINKED ISSUE body and PR DESCRIPTION (the intent) against the PR DIFF and LAST RUN DIFF (the delivery). For each concrete deliverable named in the task that is not reflected anywhere in the diff, emit one TASK_GAP entry. "No diff hunk at the expected file/symbol" is sufficient evidence — the absence is the defect; do not skip a gap because there is no file:line to point at, and do not weaken it to "possible/might/could" language.
 This lens is required in BOTH full-context and scoped-context reviewer passes. In scoped passes, TASK_GAP findings may name files OUTSIDE the scoped reviewer focus set when the missing implementation belongs there — do not suppress a gap just because its expected site is outside the scope.
