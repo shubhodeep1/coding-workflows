@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlan for `archive-ai-tools-learnings-plan`\n\nPlanning ref\n- HEAD: `d4c1f8566c38077af5909642c42f2c4cdbd4f6ad`\n- Checked-out branch: `orchestrator/project-3024`\n- Integration metadata branch: `orchestrator/project-3024`\n- Branch mismatch: none\n\nClarification mapping\n- No `Q1/Q2/...` questions were issued.\n- `/answer [auto-answered-by-orchestrator]` only confirms continuation; it adds no extra scope beyond the issue body.\n\nPreliminary audit note / likely blocker\n- Read-only inspection already suggests archival may still be blocked:\n  - Goal 10 (\u201cnaming verbosity\u201d) appears only partially present: `prompts/mode-implement.txt` has \u201cPrefer descriptive names over abbreviations\u2026\u201d, but not the stricter \u201cavoid 1\u20132 character names except tight scopes\u201d rule from the plan.\n  - Goal 12 (\u201cflow rubric\u201d) also appears lighter than planned: the file currently has a short \u201cPreferred flow\u2026\u201d line, not the fuller discovery/status-update/batch/reconcile cadence described in the plan.\n- Because this issue forbids edits outside the two plan-doc paths, the implementation rollout should start with the audit gate. If either gap is confirmed as truly missing (not just acceptable wording drift), the correct outcome is `BLOCKED:` with no archival edits.\n\nFiles likely to change\n- `docs/completed/apply-ai-tools-learnings-plan.md` \u2014 new canonical completed-plan record, only if all 13 goals pass the re-audit.\n- `docs/plans/apply-ai-tools-learnings-plan.md` \u2014 replace the full body with a short archived-pointer stub, only if the archive gate passes.\n\nRead-only audit inputs (do not edit in this issue)\n- `unattended_system_instructions.md`\n- `CLAUDE.md`\n- `prompts/mode-implement.txt`\n- `prompts/mode-implement-diagnose.txt`\n- `prompts/mode-implement-repair.txt`\n- `prompts/mode-implement-repair-syntax.txt`\n- `prompts/review-reviewer-checklist.txt`\n- `docs/completed/ai-code-review-learnings-plan.md` (closeout format precedent)\n- `docs/plans/orchestrator-validation-resilience-plan.md`\n- `docs/plans/integration-sync-resolver-self-heal-plan.md`\n\nImplementation steps\n1. Re-audit all 13 goals from `docs/plans/apply-ai-tools-learnings-plan.md` against shipped HEAD, using this mapping:\n   - 1 tool-name opacity \u2192 `unattended_system_instructions.md` output contract + `CLAUDE.md` \u00a77\n   - 2 anti-laziness \u2192 `unattended_system_instructions.md` \u00a72\n   - 3 root-cause-not-symptom \u2192 `unattended_system_instructions.md` role sections\n   - 4 status-update cadence \u2192 `unattended_system_instructions.md` \u00a73\n   - 5 verification order \u2192 `unattended_system_instructions.md` verification loop\n   - 6 no re-read after `apply_patch` \u2192 `unattended_system_instructions.md` \u00a74\n   - 7 subagent dos/don\u2019ts \u2192 `CLAUDE.md` \u00a716\n   - 8 surgical-vs-ambitious guidance \u2192 `unattended_system_instructions.md` \u00a79\n   - 9 plan-divergence discipline \u2192 `prompts/mode-implement*.txt`\n   - 10 descriptive naming verbosity \u2192 `prompts/mode-implement.txt`\n   - 11 no inline comments unless requested \u2192 `prompts/mode-implement.txt`\n   - 12 flow rubric \u2192 `prompts/mode-implement.txt`\n   - 13 reviewer fabrication ban \u2192 `prompts/review-reviewer-checklist.txt`\n2. Decision gate:\n   - If any goal is missing or only partially satisfied in a load-bearing way, stop and return `BLOCKED:` listing each missing goal explicitly. Make no file edits.\n   - Treat minor wording drift as acceptable only if the full behavioral constraint is still present.\n3. If all 13 goals pass, create `docs/completed/apply-ai-tools-learnings-plan.md` using the existing plan title plus:\n   - `## Archived status`\n   - `## Closeout summary`\n   - `## Evidence snapshot`\n   - a goal-by-goal shipped-status table (13 rows; this plan is goal-based, not phase-based)\n   - `## Archival gate resolution`\n   - `## Historical plan`\n   Then append the current full plan body verbatim under `## Historical plan`.\n4. Replace `docs/plans/apply-ai-tools-learnings-plan.md` with a short pointer stub modeled on the existing archived-pointer files:\n   - archived notice\n   - canonical completed-plan path\n   - tracking issue `#3024`\n   - completed/archived status\n   - explicit note that the full historical plan now lives only under `docs/completed/`\n5. Leave `docs/ai-tools-future-improvements.md` untouched.\n\nData structures affected\n- Markdown-only:\n  - completed-plan closeout sections\n  - 13-row audit/status table\n  - pointer-stub bullet list\n- No code, schema, index, or runtime data changes.\n\nAPI / interface changes\n- No runtime/API changes.\n- Documentation interface only: the stable `docs/plans/...` link remains, but the canonical full plan source moves to `docs/completed/...`.\n\nRisks / edge cases\n- The docs-only scope means any real missing prompt/guidance implementation is a hard blocker, not something to fix in this rollout.\n- Avoid leaving two full copies of the plan body in both directories.\n- Include tracking issue `#3024` in the archive summary because it is present in the orchestrator metadata.\n- Do not silently de-scope any missing goal in the archive summary.\n\nTesting / verification\n- First verify the 13-goal audit before editing.\n- If archiving proceeds, verify the diff touches only the two plan-path files.\n- Verify `docs/completed/apply-ai-tools-learnings-plan.md` contains the closeout header sections plus the preserved full historical plan.\n- Verify `docs/plans/apply-ai-tools-learnings-plan.md` is pointer-only and no longer duplicates the historical plan body.\n- If a PR is opened, the existing plan-archival lint will provide the final guardrail for tracking-issue completeness; do not use archival prose to hide genuinely missing goals.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "d1b09377cc0e35359f481104804c3a534499e178856c0a7fef17e43532b8f9fb",
+  "lineage": {
+    "issue_number": 3034,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26737048180",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26737048180",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3034"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260601053744_c2a3fda474",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3034,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26737048180"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3034",
+  "timestamps": {
+    "created_at": "2026-06-01T05:37:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
