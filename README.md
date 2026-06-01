@@ -1665,6 +1665,7 @@ self-heal patches cannot be merged without explicit human action.
 
 - Authentication:
   - Uses `GH_PAT` (exported as `GH_TOKEN`) for all cross-repository clone/branch/PR operations.
+  - Uses `OPENROUTER_API_KEY` for the codex-driven discovery dispatch below. The workflow writes `~/.codex/config.toml` via `scripts/write_codex_config.sh` (provider `openrouter`, `env_key=OPENROUTER_API_KEY`); without this secret `codex exec` exits non-zero and discovery degrades to drift-monitoring only. `GH_PAT` alone is not sufficient — it authenticates GitHub git/PR operations, not the model provider.
 - Workflow: [`.github/workflows/validation-refresh.yml`](.github/workflows/validation-refresh.yml)
 - Triggers:
   - Daily cron (`17 2 * * *`)

@@ -35,6 +35,21 @@ def test_validation_refresh_workflow_invokes_runner_with_auth() -> None:
 	assert "--summary-json" in content
 
 
+def test_validation_refresh_workflow_wires_codex_provider_auth() -> None:
+	# Discovery dispatch invokes `codex exec` (via the refresh runner), which
+	# can only authenticate to the model provider when (a) ~/.codex/config.toml
+	# defines model_provider=openrouter + env_key=OPENROUTER_API_KEY (written by
+	# scripts/write_codex_config.sh) and (b) the OPENROUTER_API_KEY secret is
+	# present in the step env. PR #2959 shipped discovery without either, so
+	# every `codex exec` exited codex_rc_nonzero(rc=1) and the daily refresh
+	# silently degraded to drift-monitoring only. Lock both halves in so the
+	# provider wiring can't regress again.
+	content = WORKFLOW_PATH.read_text(encoding="utf-8")
+	assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" in content
+	assert "scripts/write_codex_config.sh" in content
+	assert "CODEX_HOME" in content
+
+
 def test_validation_refresh_workflow_summarizes_and_notifies_on_failure() -> None:
 	content = WORKFLOW_PATH.read_text(encoding="utf-8")
 	assert "GITHUB_STEP_SUMMARY" in content
