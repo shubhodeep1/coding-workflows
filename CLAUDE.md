@@ -143,6 +143,10 @@ In every final response:
   formatting-only).
 - If behavior changes: update `README.md` / `agents.md` with env vars,
   DB behavior, indexes, operational steps, failure modes.
+- In user-facing replies, describe file changes as `edited path/to/file`
+  rather than naming internal edit tools such as `Edit`, `Write`, or
+  `apply_patch`; internal logs and code comments may still name concrete
+  tools when useful.
 
 ---
 
@@ -461,6 +465,23 @@ Spawn rules:
 - Haiku cannot spawn subagents. If it needs to, return to parent.
 - Max spawn depth: 2
 - Subagents escalate to parent, never self-escalate model tier
+
+When to use a subagent:
+- Treat each subagent like a productive junior engineer who cannot ask
+  follow-up questions once started; tasks that may need mid-rollout
+  clarification should stay with the parent.
+- Do use subagents for well-specified multi-file scaffolding that should
+  not need follow-up clarification.
+- Do use subagents for mass renames, bulk generation, or repetitive lint
+  sweeps.
+- Do use subagents for parallel independent research reads, web fetches,
+  or grep sweeps.
+- Do not use subagents for exploratory codebase mapping where the right
+  questions emerge mid-task.
+- Do not use subagents for architecture or tradeoff decisions that should
+  stay with the parent.
+- Do not use subagents for debugging that may need follow-up user
+  questions.
 
 ---
 
