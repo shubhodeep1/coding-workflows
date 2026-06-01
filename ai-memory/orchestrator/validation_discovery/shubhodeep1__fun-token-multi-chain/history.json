@@ -95,6 +95,18 @@
       "pr_branch": null,
       "pr_url": null,
       "recorded_at": "2026-06-01T03:18:25Z"
+    },
+    {
+      "codex_attempts_used": 1,
+      "committed_type": "python-repo-checks",
+      "consumer_default_branch": "main",
+      "consumer_head_sha": "b995feda19e900d339ddc678c660b8ee1090dd59",
+      "discovered_type": "node-hardhat-solidity",
+      "failure_reason": null,
+      "outcome": "success_disagree",
+      "pr_branch": "automation/validate-discovery/b995feda19e9/node-hardhat-solidity",
+      "pr_url": "https://github.com/shubhodeep1/fun-token-multi-chain/pull/241",
+      "recorded_at": "2026-06-01T04:31:21Z"
     }
   ],
   "repository": "shubhodeep1/fun-token-multi-chain",
