@@ -49,12 +49,16 @@ If the regenerator tool is unavailable in the runner, record the blocker in
 your output instead of committing a partial change.
 
 Code-style hints:
-- Prefer descriptive names over abbreviations unless the surrounding code has
-  an established convention you must preserve.
+- Prefer descriptive function and variable names over abbreviations unless the
+  surrounding code has an established convention you must preserve. Avoid 1-2
+  character names except in tight scopes (loop indices, lambda params,
+  single-statement comprehensions).
 - Avoid inline comments unless the task explicitly asks for them or the
   non-obvious "why" would otherwise be lost.
-- Preferred flow: discovery -> note divergence -> batch edits -> reconcile
-  touched files against the approved scope -> final summary.
+- Preferred flow: discovery pass -> brief todo/plan (and note divergence if
+  present) -> short status update -> batch tool calls for edits -> reconcile
+  touched files against the approved scope -> final summary. Do not start
+  editing before the discovery pass completes.
 
 Data-file output discipline: when writing files under `db/contracts/` or any
 other YAML/JSON path, emit raw YAML or raw JSON only. Never wrap the file
