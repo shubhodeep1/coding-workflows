@@ -33,6 +33,12 @@ Self-contained fix-up: assume the next implement run starts cold and only
 sees the issue body. Include all required context directly. Do not rely on
 prior run logs being available outside the issue body.
 
+Plan-divergence discipline: if the approved plan, failing diff, and current
+code context materially diverge, follow the canonical rule in
+`prompts/mode-implement.txt`: diagnose against the codebase truth and surface
+the divergence prominently inside existing JSON fields instead of silently
+normalizing it or inventing schema changes.
+
 Output contract:
 - Return exactly one valid JSON object.
 - Do not wrap JSON in markdown fences.
