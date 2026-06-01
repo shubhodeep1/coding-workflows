@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for `reviewer-checklist-fabrication-ban`\n\nPlanning ref\n- Commit: `b6d95bfd42f5ae77ec860edaa55794eea89ba53e`\n- Checked-out branch: `orchestrator/project-3024`\n- Integration branch metadata: `orchestrator/project-3024`\n- Integration branch mismatch: none\n\nClarification mapping\n- No `Q1`/`Q2` clarification questions were issued.\n- The `/answer [auto-answered-by-orchestrator]` comment adds no new constraints, so the issue body remains the full scoped requirement set.\n\nAutomation / wiring impact\n- Change type: modify an existing prompt file only.\n- Scheduler / PR-push entry point: none.\n- New script or supervisor: none.\n- DB gate / migration / contract work: none.\n- `docs/scripts-pending-removal.md`: no entry needed.\n\nActions taken\n- Inspected `prompts/review-reviewer-checklist.txt` on the current ref.\n- Confirmed the existing reviewer format block is at lines 67-79, followed immediately by `How to apply the eighth lens`.\n- Confirmed there is currently no `FLOOR_MULTI_REVIEWER` mention in this file.\n\nFiles likely to change\n- `prompts/review-reviewer-checklist.txt`\n  - Insert one new prose paragraph after the existing format block (after current line 79, before `How to apply the eighth lens`).\n- No other files should change.\n\nFunctions / modules / sections to implement\n1. Add a `Fabrication ban` paragraph in the checklist formatting section.\n2. Make that paragraph explicitly require every cited `File:` and `Line or code reference:` to:\n   - exist on the current ref, and\n   - point to code that still contains the bug at review time.\n3. State that reviewers must drop findings when the cited file or cited lines/code reference cannot be verified.\n4. Explicitly preserve the exact identifier `FLOOR_MULTI_REVIEWER` when stating that fabricated or unverifiable cites must not be promoted.\n\nData structures affected\n- No runtime data structures.\n- The prompt\u2019s plain-text finding schema stays unchanged:\n  - First seven lenses keep `File:`, `Line or code reference:`, `Problem:`, `Why it fails at runtime:`, `ISSUE_CONFIDENCE:`\n  - Eighth lens keeps the existing `TASK_GAP` format.\n- Only the citation-verification rules for the first seven lenses are tightened.\n\nAPI / interface changes\n- No external API or workflow interface changes.\n- Internal reviewer-output contract becomes stricter: findings with `File:` / `Line or code reference:` must be grounded in verifiable current-ref code before they are emitted.\n\nPotential risks / edge cases\n- Do not reorder or rewrite the eight lens headings.\n- Do not alter the existing issue formats or plain-text-only contract.\n- Keep this as an appended paragraph, not a new heading or format rewrite.\n- Ensure the new rule applies only to findings that cite `File:` / `Line or code reference:` so it does not conflict with the eighth-lens absence-of-code `TASK_GAP` exception.\n- Cover both literal line numbers and symbolic code references, since the field is `Line or code reference:`.\n- Preserve the exact spelling/casing of `FLOOR_MULTI_REVIEWER`.\n\nTesting / verification considerations\n- Verify `git diff --stat` shows exactly one changed file: `prompts/review-reviewer-checklist.txt`.\n- Confirm the new paragraph lands between the existing format block and `How to apply the eighth lens`.\n- Confirm all eight headings remain in the same order.\n- Confirm the existing field labels remain unchanged.\n- Verify the new paragraph explicitly requires:\n  - current-ref existence of every cited `File:` and `Line or code reference:`\n  - the cited location to contain the buggy code at review time\n  - dropping unverifiable findings\n  - not promoting fabricated cites to `FLOOR_MULTI_REVIEWER`\n\nConflicts detected\n- None. The scoped file exists, and the checked-out branch matches the integration branch metadata.\n\nAssumptions\n- The issue body\u2019s scoped Phase 5 summary is the full required scope.\n- This remains a single-file, prompt-only change suitable for one implement rollout.\n\nMissing-context notes\n- None blocking. Final prose can vary as long as it satisfies the required semantics and preserves the existing checklist structure.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "cdbedf449bd442e5274a89e7b1b549622e4c5a21b316a3f6dad97aa79c0e3732",
+  "lineage": {
+    "issue_number": 3026,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26733775666",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26733775666",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3026"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260601034043_6f2184e146",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3026,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26733775666"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3026",
+  "timestamps": {
+    "created_at": "2026-06-01T03:40:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
