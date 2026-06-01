@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Apply AI-tools prompt learnings and archive the completed plan\",\"issues\":[{\"id\":\"implement-prompt-family-learnings\",\"title\":\"Enable plan-listed governance-file edits and land the implement-family prompt learnings\",\"priority\":1},{\"id\":\"reviewer-checklist-fabrication-ban\",\"title\":\"Add the reviewer cite-validation / fabrication ban to the reviewer checklist prompt\",\"priority\":1},{\"id\":\"unattended-system-instructions-learnings\",\"title\":\"Apply the AI-tools learnings to unattended_system_instructions.md\",\"priority\":2},{\"id\":\"claude-md-learnings\",\"title\":\"Mirror tool-name opacity and subagent guidance in CLAUDE.md\",\"priority\":2},{\"id\":\"archive-ai-tools-learnings-plan\",\"title\":\"Re-audit the AI-tools learnings rollout and archive the completed plan\",\"priority\":3}],\"dependency_edges\":[{\"from\":\"implement-prompt-family-learnings\",\"to\":\"unattended-system-instructions-learnings\"},{\"from\":\"implement-prompt-family-learnings\",\"to\":\"claude-md-learnings\"},{\"from\":\"implement-prompt-family-learnings\",\"to\":\"archive-ai-tools-learnings-plan\"},{\"from\":\"reviewer-checklist-fabrication-ban\",\"to\":\"archive-ai-tools-learnings-plan\"},{\"from\":\"unattended-system-instructions-learnings\",\"to\":\"archive-ai-tools-learnings-plan\"},{\"from\":\"claude-md-learnings\",\"to\":\"archive-ai-tools-learnings-plan\"}]}",
+  "fingerprint": "bfc7dd26401b232769cc43725257924ded1096e81f1f7fef489c6bbe73e171b0",
+  "lineage": {
+    "issue_number": 3024,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26733518587",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26733518587",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260601033614_25bf9c96c1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3024,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26733518587"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Apply AI-tools prompt learnings and archive the completed plan' into 5 issues (tracking #3024)",
+  "timestamps": {
+    "created_at": "2026-06-01T03:36:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
