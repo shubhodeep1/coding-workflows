@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/e2e_smoke_canary.txt:1-3 | severity=low | confidence=5\n  PROBLEM: None. The file contents exactly match the three required lines from issue #2233: \"status: ok\", \"run_id: alt-25480794077\", \"updated-by: ai-pipeline\". Confirmed via direct file read (cat output matches precisely, no extra lines or trailing blank). Only this file modified as constrained.\n  WHY: Runtime impact: Validation scripts will read exact match, passing the smoke test.\n- tests/e2e_smoke_canary.txt:2 | severity=low | confidence=5\n  PROBLEM: None. Copilot review comment claims extra blank 4th line at EOF, but diff hunk is @@ -1,3 +1,3 @@ (both sides 3 lines exactly) and cat confirms no extra line.\n  WHY: Runtime impact: File is exactly as specified.\n- tests/e2e_smoke_canary.txt:2 | severity=low | confidence=5\n  PROBLEM: None. Gemini review comment claims non-numeric run_id breaks tools expecting numeric (citing e2e_smoke_canary_spec.txt template with __RUN_ID__), but issue #2233 explicitly requires \"run_id: alt-25480794077\" for this alt-model smoke test run. Canary overrides spec template for test signaling.\n  WHY: Runtime impact: Matches task intent; tools parsing canary will see prefixed ID as specified.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "4ac80f7b92c731c174f28745f8ef2ca52c4828cbf642301b77f0b04281984977",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2237,
+    "run_id": "25481054711",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25481054711",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260507072046_7a1cdfdc7c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2237,
+    "run_id": "25481054711"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-07T07:20:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

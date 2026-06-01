@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:2428-2435 | severity=high | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: A failed `gh issue edit` could still advance the readiness-refresh path against a stale tracker body, yielding a false-positive `orchestrator/integration-pr-not-ready=success`.\n  WHY: The tightened guard now requires either a successful body change or an already-synced hash before refreshing, so the stale-body success path is closed.\n- scripts/orchestrate_poll_process.sh:2384 | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: Using `\\s` in the grep regex is GNU-only and can break template-body detection on BSD grep.\n  WHY: `[[:space:]]` is POSIX-compliant and avoids the silent failure mode on macOS.\n- scripts/check_integration_pr_readiness.py:207-212 | severity=low | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The `if issue is None` branch was unreachable after the partial-override refactor.\n  WHY: The earlier error handling already returns before this branch, so removing it is dead-code cleanup.\n- tests/test_orchestrate_poll_process.py:4058-4128 | severity=low | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: A regression test now covers the `gh issue edit` failure path and verifies readiness refresh is skipped when the edit fails.\n  WHY: The test injects `fail_issue_edit_for=[192]` and asserts `commit_status_posts` stays empty while `tracking_body_sync_hash` and `tracking_body_last_readiness_refresh_hash` remain stale.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_poll_process.sh:2428-2431 | severity=high | confidence=4\n  PROBLEM: The readiness refresh condition now correctly gates on successful edit or already-synced-but-not-yet-refreshed state, preventing false-positive success status posts when `gh issue edit` fails\n  WHY: Before the fix, if `gh issue edit` failed, the code could still proceed to refresh `orchestrator/integration-pr-not-ready` using the locally rendered `desired_body_file` instead of the still-stale live tracker body, incorrectly reporting the integration PR as \"ready\".\n- scripts/orchestrate_poll_process.sh:2384 | severity=low | confidence=3\n  PROBLEM: Changed `\\s` to `[[:space:]]` in the grep regex.\n  WHY: The previous regex would fail on BSD grep (macOS), causing the template body detection to fail silently and potentially skip reconciliation.\n- scripts/check_integration_pr_readiness.py:207-212 | severity=low | confidence=4\n  PROBLEM: Removed unreachable `if issue is None` check after the new partial-override logic.\n  WHY: After the refactoring to support `--tracking-body-file` and `--tracking-labels-file` overrides, the earlier error handling on lines 199-201 already returns, making this code unreachable.\n- tests/test_orchestrate_poll_process.py:4058-4128 | severity=low | confidence=5\n  PROBLEM: Added regression test `test_tracking_body_reconcile_skips_readiness_refresh_when_issue_body_edit_fails` that verifies when `gh issue edit` fails, no readiness refresh occurs and state hashes remain unchanged.\n  WHY: The test correctly injects failure via `fail_issue_edit_for=[192]` and asserts that `commit_status_posts` is empty and both `tracking_body_sync_hash` and `tracking_body_last_readiness_refresh_hash` remain at their stale values.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/orchestrate_poll_process.sh:~2405, ~2431-2435 | severity=high | confidence=5\n  PROBLEM: The `reconcile_tracking_issue_body_from_state` path now correctly guards readiness refresh behind a successful body edit (or already-synced hash), eliminating the false-positive `orchestrator/integration-pr-not-ready=success` that could have been posted against a stale live tracker body.\n  WHY: Previously a transient `gh issue edit` failure could leave the live body stale while the state hash moved forward, causing later poll ticks to skip the retry; the tightened condition closes that exact path.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "48efa0ae009d68490e71ad8179c3ce3a2a13127fa282fea1d905c8a970278f10",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3022,
+    "run_id": "26682452376",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26682452376",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260530114906_66d504a897",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3022,
+    "run_id": "26682452376"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-30T11:49:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

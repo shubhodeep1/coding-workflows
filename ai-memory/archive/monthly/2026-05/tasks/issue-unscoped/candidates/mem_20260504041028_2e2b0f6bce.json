@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The file contains an extra 4th comment line that violates the task specification requiring exactly three lines with no extra content.\n  WHY: The issue explicitly requires the file to contain exactly `status: ok`, `run_id: 25300046587`, and `updated-by: ai-pipeline`, and the 4th line `# E2E_EDITOR_BAIT_25300046587: this line should be removed by the editor (smoke gate)` is extraneous.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  PROBLEM: The file contains an extra 4th comment line that violates the task specification.\n  WHY: The issue #2052 explicitly requires the file to contain exactly these three lines with no extra content: `status: ok`, `run_id: 25300046587`, `updated-by: ai-pipeline`. The constraints state: \"Do not add comments, headers, or any extra content.\" The 4th line is a comment that violates this requirement.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  PROBLEM: The file contains an extra 4th comment line that violates the task specification\n  WHY: The issue explicitly requires exactly 3 lines with no extra content - `status: ok`, `run_id: 25300046587`, and `updated-by: ai-pipeline`. The 4th line `# E2E_EDITOR_BAIT_25300046587: this line should be removed by the editor (smoke gate)` is extraneous and must be removed.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:Line 4 | severity=high | confidence=5\n  PROBLEM: The file contains 4 lines but the task specification requires exactly 3 lines with no extra content.\n  WHY: The issue #2052 explicitly states the file must contain exactly these three lines and no extra content: \"status: ok\", \"run_id: 25300046587\", and \"updated-by: ai-pipeline\". The current file has an extra 4th comment line that must be removed to meet the specification.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  PROBLEM: File contains a 4th line `# E2E_EDITOR_BAIT_25300046587: this line should be removed by the editor (smoke gate)` that is not part of the exact three-line specification.\n  WHY: The issue specification requires the file to contain exactly three lines with no extra content. The file currently has four lines, so it does not match the required specification.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/e2e_smoke_canary.txt:Fourth line | severity=high | confidence=5\n  PROBLEM: File contains four lines instead of exactly three as required by issue #2052.\n  WHY: Smoke test validation will fail due to mismatch against expected exact three-line content (status: ok\\nrun_id: 25300046587\\nupdated-by: ai-pipeline); extra line violates \"no more, no less\" and \"no extra content\" constraints.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  PROBLEM: The file contains 4 lines but the task specification requires exactly 3 lines with no comments or extra content.\n  WHY: The issue #2052 explicitly states the file must contain \"exactly these three lines (no more, no less)\" and specifies \"Do not add comments, headers, or any extra content.\" The presence of a 4th comment line violates this requirement. The task is a fully-specified E2E smoke test designed to verify editor compliance with the three-line requirement.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "4bcd434722736c4ed014b338339bf0a09e9b64a2ccc4b8d58d664bc5cb533627",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2058,
+    "run_id": "25300167876",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25300167876",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260504041028_2e2b0f6bce",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2058,
+    "run_id": "25300167876"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-04T04:10:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

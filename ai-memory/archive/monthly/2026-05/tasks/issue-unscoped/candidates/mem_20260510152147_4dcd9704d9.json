@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- prompts/integration-sync-conflict-resolver-retry-prelude.txt:1-4 | severity=low | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The fixed prelude body still leaves misleading boilerplate visible on timeout/error paths, so the model can anchor on post-validation framing despite the notice.\n  WHY: The reviewer called this a presentational concern that may still mislead even though the notice explicitly tells the model to ignore it.\n- scripts/review_conflict_resolve.sh:666-673 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Truncation failures fail open, which can leave stale violation data in the next retry prompt.\n  WHY: The reviewer said the warning makes the failure visible, but stale counts/details can still leak if truncation does not succeed.\n- scripts/review_conflict_resolve.sh:~609 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `_prev_attempt_outcome` was thought to need explicit export or passing into the retry loop.\n  WHY: The reviewer then concluded the current Bash scoping/defaulting behavior is actually correct, so this is a low-confidence issue candidate.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_conflict_resolve.sh:~609 | severity=low | confidence=2\n  PROBLEM: Missing `export` or explicit passing of `_prev_attempt_outcome` to retry loop.\n  WHY: The reviewer re-checked the flow and concluded the current Bash scoping/defaulting makes the behavior correct.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/review_conflict_resolve.sh:666-673 | severity=medium | confidence=4\n  PROBLEM: Truncation fail-open leaves violation files unchanged on write failure, leaking stale counts/details from a prior attempt into the next retry.\n  WHY: The reviewer described an inconsistent prompt signal risk if truncation fails and the next retry reuses stale data.\n- prompts/integration-sync-conflict-resolver-retry-prelude.txt:1-4 | severity=low | confidence=2\n  PROBLEM: The timeout/error prelude still shows fixed body text that can anchor the model on \"failed post-resolve validation\" framing.\n  WHY: The reviewer said the notice helps, but the visible boilerplate can still bias the model on timeout/error paths.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "ed60497855e57b8b96374409cc2c52445fc85d7b758d37af8cad139a8746cba7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2449,
+    "run_id": "25631840897",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25631840897",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510152147_4dcd9704d9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2449,
+    "run_id": "25631840897"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-10T15:21:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

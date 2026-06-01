@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_judge_semble_prefetch_contract.py:101-113, 199 | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Removal of duplicate test coverage for empty-string SEMBLE_PREFETCH input; the retained test already covers the same behavior.\n  WHY: The deleted test asserted the same placeholder-dropping behavior as the existing coverage, so removing it does not change runtime behavior.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/test_judge_semble_prefetch_contract.py:101-113, 199 | confidence=5\n  PROBLEM: Removal of duplicate test coverage for empty-string SEMBLE_PREFETCH input; the retained test_render_prompt_drops_semble_prefetch_placeholder_when_empty() already passes identical input (\"\") and asserts the same output/behavior.\n  WHY: The removed test duplicated coverage already provided by the remaining contract test, so its deletion does not reduce fidelity.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "04a639d89f4b282421c92c5b4d794e824933b6f5be33ea8d09a75f88b733c6bd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2419,
+    "run_id": "25615705824",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25615705824",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510004548_ad2507a548",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2419,
+    "run_id": "25615705824"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-10T00:45:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

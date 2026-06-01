@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- PR metadata (title/description):PR title: \"review_autofix: swap z-ai/glm-5 \u2192 mistralai/codestral-2508 in reviewer panel\" | severity=low | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The PR title and description claim the change swaps to `mistralai/codestral-2508`, but the implementation uses `mistralai/mistral-small-2603`.\n  WHY: This is a metadata-only mismatch that can mislead reviewers and maintainers about what model is actually deployed.\n- scripts/codex_model_catalog.json:487-518 | severity=medium | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: The `x-ai/grok-4.1-fast` entry is marked `supported_in_api: false` but remains `visibility: \"list\"`, so tooling that filters on visibility alone can still surface a dead slug.\n  WHY: Consumers can present or schedule an unavailable model and then hit invocation failures when the model is requested.\n- scripts/review_reject_verify.sh:normalize_patch_path() (lines ~215-225) and parse_diff_git_paths() (lines ~228-235) + callers in parse_patch() | severity=high | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Both functions unconditionally call `shlex.split` on git diff header lines and quoted paths, so paths with spaces or quotes can make `parse_patch()` drop files and return an empty map.\n  WHY: `shlex.split` can raise `ValueError` or mis-tokenize, leaving `current_path/current_old_path` unset and making already-fixed rejections inconclusive, which repeats the same finding.\n- scripts/review_reject_verify.sh:extract_files_touched(), first_value(), parse_evidence_map (Python block ~290-310) and verify_already_fixed (~340) | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: When `PR_DIFF_FILE` is empty or missing, the verifier returns `None/{}` without a distinct `diff_unavailable` verdict or log marker.\n  WHY: Callers treat already-fixed items as open/inconclusive, causing ledger churn and repeated editor passes.\n- scripts/review_reject_verify.sh:top-level ROUND_NUMBER_BASE / AUTOFIX_ITERATION_VALUE / CURRENT_ROUND calculation (~40-55) and ARTIFACT_DIR construction | severity=high | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The round calculation falls back from `ROUND_NUMBER` to legacy `AUTOFIX_ITERATION`, so wrapper runs that only export the old variable can pin `CURRENT_ROUND` to 1.\n  WHY: That points artifact lookup at round-1 every iteration, breaking prior-round ledger lookups and the REVIEW_LEDGER_PATH/floor-rule contracts.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- PR metadata (title/description):PR title: \"review_autofix: swap z-ai/glm-5 \u2192 mistralai/codestral-2508 in reviewer panel\" | severity=low | confidence=5\n  PROBLEM: The PR title and description claim the change swaps to `mistralai/codestral-2508`, but the implementation uses `mistralai/mistral-small-2603`.\n  WHY: This is a metadata-only mismatch that can mislead reviewers and maintainers about what model is actually deployed.\n- scripts/codex_model_catalog.json:x-ai/grok-4.1-fast entry (lines ~490-518) | severity=medium | confidence=3\n  PROBLEM: The entry has `visibility: \"list\"` combined with `supported_in_api: false`, so automation that filters only on visibility could surface this historical dead slug.\n  WHY: If a consumer script does not also check `supported_in_api`, it can present an unavailable model and attempt to schedule it, leading to invocation failures.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/codex_model_catalog.json:x-ai/grok-4.1-fast entry around line 490-492 (last-run diff changes supported_in_api to false but leaves visibility: \"list\") | severity=medium | confidence=2\n  PROBLEM: The last-run diff sets `supported_in_api: false` for `x-ai/grok-4.1-fast` while leaving `visibility: \"list\"` unchanged, so the dead slug can still be surfaced as selectable.\n  WHY: Automation that picks from visible catalog entries could attempt to invoke a model with no active OpenRouter endpoints, resulting in reviewer-time failures.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/review_reject_verify.sh:normalize_patch_path() (lines ~215-225) and parse_diff_git_paths() (lines ~228-235) + callers in parse_patch() | severity=high | confidence=5\n  PROBLEM: Both functions unconditionally call `shlex.split` on git diff header lines and quoted paths, so paths with spaces or quotes can make `parse_patch()` drop files and return an empty map.\n  WHY: `shlex.split` can raise `ValueError` or mis-tokenize, leaving `current_path/current_old_path` unset and making already-fixed rejections inconclusive, which repeats the same finding.\n- scripts/review_reject_verify.sh:extract_files_touched(), first_value(), parse_evidence_map (Python block ~290-310) and verify_already_fixed (~340) | severity=medium | confidence=4\n  PROBLEM: When `PR_DIFF_FILE` is empty or missing, the verifier returns `None/{}` without a distinct `diff_unavailable` verdict or log marker.\n  WHY: Callers treat already-fixed items as open/inconclusive, causing ledger churn and repeated editor passes.\n- scripts/review_reject_verify.sh:top-level ROUND_NUMBER_BASE / AUTOFIX_ITERATION_VALUE / CURRENT_ROUND calculation (~40-55) and ARTIFACT_DIR construction | severity=high | confidence=4\n  PROBLEM: The round calculation falls back from `ROUND_NUMBER` to legacy `AUTOFIX_ITERATION`, so wrapper runs that only export the old variable can pin `CURRENT_ROUND` to 1.\n  WHY: That points artifact lookup at round-1 every iteration, breaking prior-round ledger lookups and the REVIEW_LEDGER_PATH/floor-rule contracts.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "354384c2a0ca2434a92a65639c3258595f59607a67e5c298d5b540ce16c87e85",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2731,
+    "run_id": "26016386978",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26016386978",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260518061646_845e794f74",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2731,
+    "run_id": "26016386978"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-18T06:16:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

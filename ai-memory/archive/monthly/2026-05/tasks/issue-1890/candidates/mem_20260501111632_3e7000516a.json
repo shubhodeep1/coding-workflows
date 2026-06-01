@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-1889` @ `815c62712558990d6af8015fc804a8afeaca939f` (resolved ref matches integration branch metadata).\n\nClarification mapping: none required; `/answer [auto-answered-by-orchestrator]` confirms the task is fully specified.\n\n1. Files likely to change\n- [tests/e2e_smoke_canary.txt](tests/e2e_smoke_canary.txt) only.\n\n2. Functions or modules to implement\n- No code modules or functions are involved; this is a minimal text-file update.\n- The current file already starts with `status: ok`, so the smallest expected implementation is to replace the current second line (`run_id: alt-25208710605`) with `decompose-run: 25212177682`.\n- Keep trailing content only if the file still begins with the required two lines exactly; with the current file state, leaving the existing third line in place is acceptable and smaller than a full overwrite.\n\n3. Data structures affected\n- Only the plain-text header content of the canary file.\n- Required post-state: line 1 `status: ok`; line 2 `decompose-run: 25212177682`.\n\n4. API or interface changes\n- None. No workflow logic, env vars, scripts, DB contracts, or public interfaces should change.\n\n5. Potential risks or edge cases\n- Stay strictly inside `files_touched`; do not edit any other file.\n- Do not introduce any dependency on the sibling issue or sibling canary file.\n- Avoid blank leading lines, BOMs, or newline churn that would break the exact first-two-line match.\n- Conflict note: [test-and-mark-stable.yml](.github/workflows/test-and-mark-stable.yml) still contains other smoke-task paths that use an older exact-three-line canary format with `run_id`, but this author-decomposed orchestrate issue explicitly requires the `decompose-run` second line. Follow the issue text for this sub-issue.\n\n6. Testing considerations\n- Verify the first two lines exactly match the acceptance criteria.\n- Verify no other files changed in the worktree.\n- A simple `sed -n '1,2p' tests/e2e_smoke_canary.txt` or equivalent is sufficient for acceptance.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "4faa8e23f7a09db5b5b414d5f4cfd09986bab91d703701c0f7c6eeac1aa61f7c",
+  "lineage": {
+    "issue_number": 1890,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25212287062",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25212287062",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1890"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260501111632_3e7000516a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1890,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25212287062"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1890",
+  "timestamps": {
+    "created_at": "2026-05-01T11:16:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

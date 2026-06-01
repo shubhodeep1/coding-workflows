@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:~2999 | confidence=5\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: \"Upload per-reviewer logs (always)\" is still missing continue-on-error: true.\n  WHY: minimax reports this omission would let a transient artifact-upload failure poison downstream success() checks and skip the editor phase; other reviewers explicitly state the key is already present in lines 2998-3004, so this finding is disputed.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/review_autofix.yml:~2999 | confidence=5\n  PROBLEM: Missing `continue-on-error: true` on the \"Upload per-reviewer logs (always)\" step.\n  WHY: A transient GitHub Artifacts API failure could still poison the implicit `success()` check and short-circuit the editor phase.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "0f516d9cbd428d493dfb7ff0b2e6655d7686b2824862e4234326650d39bb1542",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2612,
+    "run_id": "25914137984",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25914137984",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260515110741_b6cea3b764",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2612,
+    "run_id": "25914137984"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-15T11:07:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

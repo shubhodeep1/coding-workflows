@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for issue #2765\n\nActions taken\n- Verified `tests/e2e_smoke_canary.txt` exists on the planning ref and currently differs from the requested `run_id`.\n- Inspected the existing smoke-canary contract in `scripts/review_apply_fixes.sh` to confirm exact-content requirements.\n\nPlanning ref\n- HEAD: `78778c57869fc092ec3e867ce272b815643feadb`\n- Branch: `main`\n- Integration branch metadata: not present; no mismatch to reconcile\n- Clarification mapping: no `Q1`/`Q2` items were asked; `/answer [auto-answered-by-clarify]` confirms the task was already fully specified\n\nAutomation / wiring impact\n- Existing file only; no new script, workflow, scheduler wiring, supervisor, or DB gate changes\n- Estimated time budget: ~10 minutes\n\nRepresentative contract inspected\n- `scripts/review_apply_fixes.sh:402-408` identifies `tests/e2e_smoke_canary.txt` as the smoke canary path\n- `scripts/review_apply_fixes.sh:497-523` requires that file to match the issue-specified 3-line payload exactly, with no extra lines/content, and forbids modifying any other file\n\nFiles likely to change\n- `tests/e2e_smoke_canary.txt` only\n\nFunctions or modules to implement\n- None. This is a deterministic single-file content rewrite, not a code-path change.\n\nData structures affected\n- One plain-text smoke fixture containing the existing three keys:\n  - `status`\n  - `run_id`\n  - `updated-by`\n\nPlanned change\n- Overwrite `tests/e2e_smoke_canary.txt` so its content is exactly:\n\n```text\nstatus: ok\nrun_id: alt-26045005085\nupdated-by: ai-pipeline\n```\n\nAPI / interface changes\n- None\n- The only observable behavior change is that smoke consumers of this fixture will now read the new `run_id`\n\nRisks / edge cases\n- Do not modify any file other than `tests/e2e_smoke_canary.txt`\n- Use LF line endings, no comments, no extra blank lines, no extra whitespace\n- Preserve the expected terminal newline because the smoke gate treats this file as byte-sensitive\n- Current file state is not already correct: `tests/e2e_smoke_canary.txt:2` currently reads `run_id: 26039859964`, so implementation must be an actual overwrite\n- No factual conflicts found; the referenced file exists on this ref\n\nTesting considerations\n- Verify the file matches the expected payload byte-for-byte after the edit\n- Verify `git diff --stat -- tests/e2e_smoke_canary.txt` shows only that file changed\n- No test code or workflow updates are needed\n\nAssumptions\n- The issue body is the authoritative source for the target payload, including the `alt-26045005085` run ID\n\nMissing context\n- None needed for planning\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "ada5fbcfad64dbfed32b13e6491e65406df0bd0ceca88d956d1735df7f143aa1",
+  "lineage": {
+    "issue_number": 2765,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26045137848",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26045137848",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2765"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260518160834_6e71c9c6e3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2765,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26045137848"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2765",
+  "timestamps": {
+    "created_at": "2026-05-18T16:08:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

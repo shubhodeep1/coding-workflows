@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: Which part of this repo should change? (Multiple selections allowed.)**\nChoices:\n- **A** \u2014 The core issue-to-PR pipeline (`clarify`, `plan`, `implement`, `review_autofix`) (RECOMMENDED)\n- **B** \u2014 The orchestrator / poller / validation / merge automation (`orchestrate*`, `validate`) (RECOMMENDED)\n- **C** \u2014 Docs, prompts, or operator-facing text only\nReply: `Q1: A+B`\n**Q2: What exact request should planning anchor to?**\nChoices:\n- **A** \u2014 Fix a broken behavior; in your reply, include the exact primary workflow/script/file and one issue/PR/run number that reproduces it (RECOMMENDED)\n- **B** \u2014 Improve a specific metric without changing behavior; in your reply, include the exact primary workflow/script/file and the metric to improve (`runtime`, `API calls`, `cost`, `notification noise`, etc.) (RECOMMENDED)\n- **C** \u2014 Change docs/prompt/text only; in your reply, include the exact file/section and what should read differently\nReply: `Q2: A`",
+  "fingerprint": "f2136680175a0ed81dbfaef18defe1014abc0d371d56f88f5998751a7d974fd6",
+  "lineage": {
+    "issue_number": 1935,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25244065681",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25244065681",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260502045107_32ce7164f0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1935,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25244065681"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #1935 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-02T04:51:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

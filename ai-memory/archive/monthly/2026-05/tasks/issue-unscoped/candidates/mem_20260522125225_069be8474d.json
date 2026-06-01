@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:1215-1223 | severity=medium | confidence=4\n  flagged_by: [qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: The linked-PR fixture does not exercise the non-matching `repository.nameWithOwner` path for the new same-repo filter.\n  WHY: The mocked payload always matches the `$repo` filter, so a regression in `select((.repository.nameWithOwner // \"\") == $repo)` would still pass tests because cross-repo rejection is never covered.\n- scripts/orchestrate_poll_process.sh:14577-14583 | severity=low | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The `continue` statement for the `N_HEAD` null-check is de-indented relative to the surrounding block.\n  WHY: Bash control flow is unchanged, but the visual misalignment makes the early-exit path easy to miss during future edits.\n- scripts/orchestrate_poll_process.sh:14783 | severity=high | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The `gh_retry _safe_gh_jq \u2026 || echo '{}'` fallback still swallows stderr on check-runs lookup failures.\n  WHY: Other reviewers considered this pre-existing or intentional fail-open behavior, but this review flags it as still hiding diagnostics and risking a merge decision on empty data.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Automated forward-merge of stable into main failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on stable is also present on main.\" (plus the explicit caution to use \"Create a merge commit\" to preserve ancestry).\n  expected_change_site: The final merge commit of this PR itself.\n  confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: LAST_COMMIT_STAT shows a two-parent merge commit authored by codex-bot with message \"[ai-autofix] apply PR fixes\".\n- requirement: All regression-test and contract-test updates introduced by the stable branch (new ahead-by gate, noop-suspicious recovery, refusal/caching guards, updated allowlists, etc.) must be present on main.\n  expected_change_site: scripts/orchestrate_poll_process.sh, tests/test_*.py, .github/workflows/*.yml, README.md.\n  confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The forward-merge PR diff contains exactly those changes (plus the minimal editor clean-ups from the three prior autofix rounds).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_orchestrate_poll_process.py:1215-1223 | severity=medium | confidence=4\n  PROBLEM: The mock fixture for linked PRs defaults the new `repository.nameWithOwner` field to `\"owner/repo\"`, which always matches the `$repo` filter under test (`GITHUB_REPOSITE`).\n  WHY: The new same-repo filter `select((.repository.nameWithOwner // \"\") == $repo)` therefore never exercises the rejection path for cross-repo linked PRs, so a regression in the filter would still pass tests.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/orchestrate_poll_process.sh:14577-14583 | severity=low | confidence=4\n  PROBLEM: The `continue` statement for the `N_HEAD` null-check was left un-indented (de-dented relative to the preceding `if` and the identical guard on line 14570).\n  WHY: Bash control flow is unchanged (`bash -n` passes), but the visual misalignment makes the early-exit path easy to miss during future edits and increases the chance of introducing a copy-paste error.\n- scripts/orchestrate_poll_process.sh:14783 | severity=high | confidence=5\n  PROBLEM: The `gh_retry _safe_gh_jq \u2026 || echo '{}'` fallback still silently swallows stderr on transient failures.\n  WHY: On rate-limit, 5xx, or network errors the operator sees no diagnostic before the empty-object path is taken; `_failing_check_count` can evaluate to 0, allowing a noop-suspicious PR with broken CI to be force-merged.\n- tests/test_orchestrate_poll_process.py:1215-1223 | severity=medium | confidence=4\n  PROBLEM: The test fixture now supplies a `repository.nameWithOwner` object only inside the `parse_api()` path.\n  WHY: The new jq filter `select((.repository.nameWithOwner // \"\") == $repo)` can drop valid linked PRs (or produce an empty batch) when fixtures or cached responses omit the field, and the test does not exercise the non-matching-repo path.\n- Requirement: \"Automated forward-merge of stable into main failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on stable is also present on main.\" (plus the explicit caution to use \"Create a merge commit\" to preserve ancestry).\n  Expected change site: The final merge commit of this PR itself.\n  Evidence of absence: LAST_COMMIT_STAT shows a two-parent merge commit authored by codex-bot with message \"[ai-autofix] apply PR fixes\".\n  ISSUE_CONFIDENCE: 5\n- Requirement: All regression-test and contract-test updates introduced by the stable branch (new ahead-by gate, noop-suspicious recovery, refusal/caching guards, updated allowlists, etc.) must be present on main.\n  Expected change site: scripts/orchestrate_poll_process.sh, tests/test_*.py, .github/workflows/*.yml, README.md.\n  Evidence of absence: The forward-merge PR diff contains exactly those changes (plus the minimal editor clean-ups from the three prior autofix rounds).\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "5fdd68e7dfc05fadb00ed83dffff7739585c8cbb634d58b8c5bf016ad1e4f39a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2905,
+    "run_id": "26287604248",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26287604248",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260522125225_069be8474d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2905,
+    "run_id": "26287604248"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-22T12:52:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

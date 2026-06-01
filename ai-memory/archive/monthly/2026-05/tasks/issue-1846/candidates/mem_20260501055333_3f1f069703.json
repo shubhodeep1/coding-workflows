@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: Which area is actually in scope?**  \nMultiple selections allowed.\nChoices:\n- **A** \u2014 `review_autofix` / PR review-autofix flow\n- **B** \u2014 orchestrator / poller / issue-lifecycle flow\n- **C** \u2014 another exact workflow, script, or path; name it in the same reply **(RECOMMENDED)**\nReply: `Q1: C`\n**Q2: What concrete outcome should that change produce?**\nChoices:\n- **A** \u2014 Fix a specific broken behavior; include the current wrong behavior and one concrete issue/PR/run/log example **(RECOMMENDED)**\n- **B** \u2014 Add or change a specific behavior; include the expected before/after\n- **C** \u2014 Non-behavioral cleanup only; include the exact quality goal and affected path(s)\nReply: `Q2: A`",
+  "fingerprint": "2d30ad29dc7007191e95a4ea7df4eef3b5ef83b9a7199ab2354cc4c114e9a749",
+  "lineage": {
+    "issue_number": 1846,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25204182739",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25204182739",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260501055333_3f1f069703",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1846,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25204182739"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #1846 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-01T05:53:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

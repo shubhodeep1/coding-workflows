@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml:698-722 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m2_5, qwen_qwen3_6-plus]\n  PROBLEM: The new checkout-ref fallback chain is tautological because `steps.checkout_ref.outputs.ref` always resolves to the same ref already produced by `steps.refctx.outputs.ref || github.event.repository.default_branch`.\n  WHY: This only adds indirection and complexity without changing behavior; both reviewers described it as a benign no-op, and the highest stated confidence was 4.\n- tests/test_workflow_checkout_integration_ref_audit.py:79-92 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: The `/git/ref/heads/` audit check was narrowed from all required resolver workflows to only `implement.yml`, weakening coverage for future workflows that might add baseline-branch resolution.\n  WHY: The current codebase only needs the check in `implement.yml`, but this removes a shared guardrail and creates a future regression gap; some reviewers framed it as a bug while others framed it as a hardening concern.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/implement.yml:698-704, 716-722 | confidence=4 (2 related items)\n  PROBLEM: The fallback chain adds `steps.checkout_ref.outputs.ref` as the first element, but it resolves to the same value as the existing `steps.refctx.outputs.ref` chain, and when `SKIP_IMPLEMENT` is true both the producer and consumers are skipped so the empty-output case cannot occur.\n  WHY: `checkout_ref` already emits the default ref and the shared `if: env.SKIP_IMPLEMENT != 'true'` guard prevents the new prefix from changing runtime behavior.\n- tests/test_workflow_checkout_integration_ref_audit.py:79-92 | confidence=4\n  PROBLEM: The `/git/ref/heads/` disallowed marker was moved from the shared audit check applied to all `REQUIRED_RESOLVER_WORKFLOWS` to only `implement.yml`.\n  WHY: Future additions of `/git/ref/heads/` resolution patterns in any workflow other than `implement.yml` would bypass the audit check.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_workflow_checkout_integration_ref_audit.py:79-92\n  PROBLEM: The `/git/ref/heads/` security audit marker was moved from `base_disallowed_inline_markers` to only `implement.yml`.\n  WHY: While only `implement.yml` currently uses the baseline-ref pattern that involves `/git/ref/heads/`, this creates a defense-in-depth gap if other workflows are later modified to add similar baseline resolution logic.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/implement.yml:701, 719 | confidence=4\n  PROBLEM: The fallback expression `steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch` is functionally tautological because `checkout_ref.outputs.ref` always matches the ref already derived by `steps.refctx.outputs.ref || github.event.repository.default_branch`.\n  WHY: The expression is redundant and adds indirection without behavioral benefit.\n- tests/test_workflow_checkout_integration_ref_audit.py:79-92 | confidence=3\n  PROBLEM: The disallowed inline marker `/git/ref/heads/` was removed from the shared audit list and now applies only to `implement.yml`.\n  WHY: Future edits to `validate.yml`, `plan.yml`, `clarify.yml`, or `orchestrate_clarify_respond.yml` could introduce `/git/ref/heads/` baseline resolution without the audit catching it.\n- .github/workflows/implement.yml:701, 719\n  PROBLEM: The log line echoes the fallback expression template rather than the resolved value.\n  WHY: If GitHub Actions expression evaluation diverges between the `ref:` line and the `echo` line, the log could misrepresent the actual checkout; echoing the resolved ref would make the pair unambiguous.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/implement.yml:701, 719\n  PROBLEM: The fallback chain `steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch` is functionally redundant.\n  WHY: `checkout_ref.outputs.ref` is always set to the same default ref, so surfacing it first is a deliberate defensive safety-net rather than a bug.\n- tests/test_workflow_checkout_integration_ref_audit.py:82-92\n  PROBLEM: The `/git/ref/heads/` audit marker was narrowed to only `implement.yml`.\n  WHY: This creates a defense-in-depth gap if other workflows are later modified to add similar baseline resolution logic.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "417eaa976921cb07db54c2c744fdb3c6d2d3087c5f6a6c19e58640eab3d809ae",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2701,
+    "run_id": "25991911686",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25991911686",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517135300_f7335de95a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2701,
+    "run_id": "25991911686"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-17T13:53:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

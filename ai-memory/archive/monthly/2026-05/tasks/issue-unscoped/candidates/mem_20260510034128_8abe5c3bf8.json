@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_apply_fixes.sh:814-821 | severity=low | confidence=5\n  flagged_by: [qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: The added comment block assumes future `render_prompt.sh` behavior and bakes in implementation-specific details, so it may become stale or misleading if PR #2392 diverges.\n  WHY: Both reviewers flagged the same advisory-only comment-drift risk; qwen said it could mislead future maintainers, and grok said it risks incorrect future debugging if empty `SEMBLE_PREFETCH` handling changes.\n- scripts/review_apply_fixes.sh:819 + review_run_reviewers.sh:721 + validate_process.sh:2077, 2780 | severity=medium | confidence=3\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: Other `render_prompt.sh` callers still invoke the script without `SEMBLE_PREFETCH=`, so the same inlined-template failure can recur in reviewer/validate paths once PR #2392\u2019s guard is active.\n  WHY: qwen identified an out-of-scope consistency gap across these callers and said the same exit-1 failure will recur in those paths when the new `render_prompt.sh` behavior lands.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/review_apply_fixes.sh:814-818 | severity=low | confidence=5\n  PROBLEM: The comment describes specific `render_prompt.sh` behavior that does not exist on current main, so it risks becoming stale and misleading to future maintainers.\n  WHY: This is comment-only and has zero runtime effect, but maintainers may form incorrect assumptions if PR #2392 diverges further.\n- scripts/review_apply_fixes.sh (line 819) + review_run_reviewers.sh (line 721) + validate_process.sh (lines 2077, 2780) | severity=medium | confidence=3\n  PROBLEM: If these callers' prompt bodies also contain inlined templates with `{{SEMBLE_PREFETCH}}` lines, they will fail identically when PR #2392 lands because only the editor stage was patched.\n  WHY: The same exit-1 failure will recur in reviewer/validate paths once `render_prompt.sh` enforces the new guard.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/review_apply_fixes.sh:814-821 | severity=low | confidence=3\n  PROBLEM: The comment assumes future behavior of unreleased `render_prompt.sh` changes without citing the exact mechanism, so if PR #2392 diverges or adds new guards it may mislead maintainers.\n  WHY: This has no runtime failure, but it risks incorrect future debugging if `render_prompt.sh` handling of empty `SEMBLE_PREFETCH` changes.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "d25431a1443c6ba97d417ceb232d5760f414f3a7a35c4c5c67718f6d1fec29eb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2422,
+    "run_id": "25618631565",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25618631565",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510034128_8abe5c3bf8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2422,
+    "run_id": "25618631565"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-10T03:41:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `0a239a05c94899b4ad77e67778f82fce427b1825` on `orchestrator/project-2867` (matches integration branch metadata).\n\nClarification mapping:\n- No clarification questions were required.\n- `/answer [auto-answered-by-orchestrator]` adds no extra constraints beyond the issue body.\n\nAutomation / wiring\n- Change type: extend existing script + existing test only.\n- Existing entry point remains `.github/workflows/review_autofix.yml`\u2019s review-blocked judge step (`bash \"${SUPPORT_SCRIPTS_DIR}/review_rb_judge.sh\"`, around lines 4697-4705).\n- No workflow/cron wiring changes.\n- No new supervisor.\n- No DB work / gate pattern.\n- No `docs/scripts-pending-removal.md` entry needed.\n\nFiles likely to change\n1. `scripts/review_rb_judge.sh`\n2. `tests/test_review_rb_judge_label_propagation.py`\n\nFunctions / modules / code blocks to change\n1. `scripts/review_rb_judge.sh:425-460`\n   - Keep the initial `_pr_meta` payload alive past the early open/merged guard instead of unsetting it before linked-issue fallback.\n   - Replace the unconditional fallback re-fetch with a two-stage flow:\n     - first, derive the regex search text from cached `_pr_meta` locally;\n     - second, only if that cached JSON is empty, malformed, or cannot produce the required normalized title/body string, do the existing fail-open `pulls/${PR_NUMBER}` re-fetch.\n   - Preserve the existing regex extraction, `ISSUE_NUMBERS` behavior, and downstream `FIRST_ISSUE*` / label semantics.\n   - Keep the change local; do not move this into shared helpers or redesign the linked-issue parser.\n\n2. `tests/test_review_rb_judge_label_propagation.py`\n   - Add regression coverage for the metadata-reuse path.\n   - Add regression coverage for the fail-open fallback path when cached JSON is bad.\n   - Follow the existing extracted-snippet harness pattern already used by `_extract_body_fetch_loop` / `_run_body_fetch_loop` (good representative model).\n\nData structures affected\n- `_pr_meta` shell JSON cache (or a local alias derived from it)\n- `PR_DATA`\n- `ISSUE_NUMBERS`\n- Test-side captured API call state / harness outputs\n\nAPI / interface changes\n- No external interface or label-contract changes.\n- Internal GitHub API behavior changes only:\n  - common path: reuse the first `pulls/{pr}` payload;\n  - fallback path: keep the second `pulls/{pr}` fetch only for invalid/missing cached metadata.\n- No GraphQL contract changes.\n\nRisks / edge cases\n- `_pr_meta` may be `{}`, empty, or malformed if the first fetch failed; reuse must validate before skipping the fallback fetch.\n- Body may be null/missing; normalization should preserve current `(.body // \"\")` behavior.\n- Do not disturb the earlier PR closed/merged guard logic.\n- Do not broaden into the later prompt-building use of `PR_META_FILE` / `PR_PAYLOAD_FILE`.\n- Preserve the script\u2019s existing `printf '%s\\n' | jq` style so the xpg_echo-related tests stay valid.\n\nTesting considerations\n- Add one runtime test where GraphQL returns no closing issues and cached `_pr_meta` is valid; assert linked-issue extraction succeeds without a fallback `pulls/{pr}` call in that path.\n- Add one runtime test where GraphQL returns no closing issues and cached `_pr_meta` is invalid or unusable; assert the secondary `pulls/{pr}` fetch still happens and extraction still succeeds.\n- Prefer a dedicated local harness for this snippet over broad shared-mock changes; the current mock only has narrow `--jq` special-casing.\n- Run the full `tests/test_review_rb_judge_label_propagation.py` module after the change, since helper extraction and shell-string assertions are shared.\n\nAssumptions / missing-context notes\n- Assumption: the allowed `files_touched` set is the two files explicitly named in the issue.\n- Assumption: \u201crequired fields\u201d means \u201cenough cached JSON to reproduce the same normalized title/body search text,\u201d not a broader schema change.\n\nConflicts\n- No issue/code conflict found.\n- Current code matches the issue description exactly: `scripts/review_rb_judge.sh:425-460` fetches PR metadata once, unsets it, then re-fetches it when `closingIssuesReferences` is empty.\n\nActions taken\n- Inspected the targeted `review_rb_judge.sh` PR-metadata / linked-issue block.\n- Inspected the existing review-blocked judge test harness patterns and mock behavior.\n- Inspected the current workflow entry point that invokes `review_rb_judge.sh`.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "447cd0640f3fdc60d499d1f31a020ad387540a8d217df0da347ca7ad9d22bd33",
+  "lineage": {
+    "issue_number": 2871,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26268304909",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26268304909",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2871"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260522043039_3101006a09",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2871,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26268304909"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2871",
+  "timestamps": {
+    "created_at": "2026-05-22T04:30:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

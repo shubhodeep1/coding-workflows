@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:4015-4027 | severity=low | confidence=1\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The added inline comment uses backticks around the error message, which renders as inline code in GitHub Markdown previews of workflow YAML.\n  WHY: This is cosmetic only and does not affect YAML parsing or runtime execution.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/test-and-mark-stable.yml:4015-4027 | severity=low | confidence=1\n  PROBLEM: The added inline comment accurately describes the failure mode and fix rationale, but the backticks around the error message in the comment use grave accents (`fatal: ...`), which render as inline code in GitHub Markdown previews of workflow YAML.\n  WHY: Runtime impact: None \u2014 comment is ignored by GitHub Actions runner.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "85a6de8f84827dcdf009de49e0c448b55fa6446218defa45c938aa8d4108dacc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2041,
+    "run_id": "25292957332",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25292957332",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260503230130_e964e3abd7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2041,
+    "run_id": "25292957332"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-03T23:01:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

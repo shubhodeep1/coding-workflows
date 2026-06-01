@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/codex_model_catalog.json:codestral-2508 entry, truncation_policy field | severity=low | confidence=1\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_6-plus]\n  PROBLEM: The codestral-2508 entry uses `\"mode\": \"bytes\"`, so truncation will occur around ~64k tokens well before the declared 256k context window.\n  WHY: Both reviewers flagged the same bytes-mode truncation policy as an early cap; they also noted this matches the reviewer-only convention and is unlikely to cause a runtime failure.\n- agents.md:81-88 and 106-113 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The PR narrative says codestral-2508 was added to both third-party reviewer lists in `agents.md`, but the last run only changed the second list.\n  WHY: This is a documentation consistency issue only, with no runtime failure expected.\n- scripts/codex_model_catalog.json:codestral-2508 entry, supported_reasoning_levels field | severity=low | confidence=1\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The codestral-2508 catalog entry advertises `medium`, `high`, and `xhigh` reasoning levels but omits `low` and `none`.\n  WHY: This only matters if an operator overrides `THINKING_LEVEL_REVIEWER` to an unsupported level and runtime validation rejects it; the default reviewer path is unaffected.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/codex_model_catalog.json:codestral-2508 entry, truncation_policy field | confidence=1\n  PROBLEM: The truncation_policy uses mode \"bytes\" with limit 256000 (~64K tokens), while the model's context_window is 256000 tokens and auto_compact_token_limit is 184000 tokens.\n  WHY: The bytes-mode limit will trigger before auto-compaction ever would; this matches the convention used by minimax/minimax-m2.5 and moonshotai/kimi-k2.5, and reviewer prompts are typically within the safe range.\n- scripts/codex_model_catalog.json:codestral-2508 entry, supported_reasoning_levels field | confidence=1\n  PROBLEM: The catalog entry lists supported reasoning levels as medium, high, xhigh \u2014 omitting low and none.\n  WHY: This only becomes an issue if an operator overrides THINKING_LEVEL_REVIEWER to low or none and codex validates the level against the catalog and the provider rejects it.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- agents.md:81-88 and 106-113 | confidence=3\n  PROBLEM: The PR description states codestral-2508 was added to both third-party reviewer lists in agents.md, but the last run only added it to the second list.\n  WHY: The first list at line 81-88 was already updated in the original PR diff, so the documentation should be checked for consistency.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/codex_model_catalog.json:codestral-2508 entry, `truncation_policy` mode diverges from half the active reviewer panel | confidence=1\n  PROBLEM: The codestral-2508 entry sets `\"mode\": \"bytes\"` while some reviewer models use `\"mode\": \"tokens\"`, so codestral will hit the truncation floor well before its 256k context window.\n  WHY: This is not broken \u2014 bytes-mode reviewer entries have been operating the same way without reported truncation-related failures, and the limit matches the stated context window in bytes-mode terms.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===",
+  "fingerprint": "fe4fceb578e5f9b73f4ae862e1dfd3950f6eba8d9aa0f3b0997bc13f3f72e367",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2731,
+    "run_id": "26013104229",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26013104229",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260518042729_216a9a7bbc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2731,
+    "run_id": "26013104229"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-18T04:27:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

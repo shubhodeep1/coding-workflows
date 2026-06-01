@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:8063-8076 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: `command_group_open_re` is overly permissive and can miscount brace depth on lines with `&`/`|` or quoted strings that are not command-group openers.\n  WHY: Multiple reviewers flagged the same `_extract_refresh_function_body` regex as a false-positive source; they specifically called out single-operator cases and `|` appearing inside strings/comments/pipelines.\n- tests/test_orchestrate_poll_process.py:8057-8060 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The helper hardcodes `_refresh_integration_resolver_tooling() {`, so a rename or removal trips a generic AssertionError.\n  WHY: The reviewer reported the exact failure mode and noted the test is intentionally fragile to function renames.\n- tests/test_orchestrate_poll_process.py:8088-8157 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_20]\n  PROBLEM: The `diverge_skip_re` contract check is brittle to whitespace, indentation, and comment/layout changes.\n  WHY: Both reviewers described the same static-regex fragility around the merge-base divergence guard; formatting-only edits can break or unenforce the guard.\n- scripts/orchestrate_poll_process.sh:3349-3353 | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The `base_hash` lookup can resolve to empty without an explicit diagnostic after a merge-base is found, silently taking the skip path.\n  WHY: The reviewer flagged that stderr is swallowed and a real lookup failure can prevent a legitimate deadlock-breaker refresh.\n- probably_unnecessary_but_read_if_stuck.md:225 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_20]\n  PROBLEM: The operator documentation and live `refresh_files` allowlist can drift apart.\n  WHY: Both reviewers called out the manual sync contract between the runbook paragraph and `scripts/orchestrate_poll_process.sh:refresh_files`.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_orchestrate_poll_process.py:8063 | confidence=3\n  PROBLEM: `command_group_open_re` can false-positive on edge cases like `echo \"foo\" | {` because `.search()` treats `|` as a command separator.\n  WHY: The reviewer called this a test-only concern and said it is brittle to formatting changes and pipe characters.\n- tests/test_orchestrate_poll_process.py:8088-8115 | confidence=4\n  PROBLEM: `diverge_skip_re` is brittle to whitespace and formatting changes.\n  WHY: The reviewer explicitly warned that harmless reformatting can break the static contract test.\n- probably_unnecessary_but_read_if_stuck.md:225 | confidence=2\n  PROBLEM: The allowlist documentation and code can drift.\n  WHY: The reviewer called out manual sync between the runbook paragraph and `scripts/orchestrate_poll_process.sh:refresh_files`.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_orchestrate_poll_process.py:8063-8076 | confidence=3\n  PROBLEM: The regex `r\"(?:^|[;&|])\\s*\\{\\s*(?:#.*)?$\"` is overly permissive and can false-positive on lines containing pipe characters in string literals.\n  WHY: The reviewer said the helper correctly handles `cmd && {`, but the current pattern can miscount brace depth on `|` inside quoted strings.\n- tests/test_orchestrate_poll_process.py:8057-8060 | confidence=2\n  PROBLEM: The function name `_refresh_integration_resolver_tooling()` is hardcoded in the test helper; if the shell function is renamed, the test fails with AssertionError.\n  WHY: The reviewer said the helper uses a hardcoded string match and already acknowledges that fragility in its own error message.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_orchestrate_poll_process.py:8067 | confidence=4\n  PROBLEM: The regex treats a single `&` or `|` as a command-group introducer, but those operators do not open a brace group.\n  WHY: The reviewer said this can falsely increment depth for `& {` or `| {`-style lines and is not covered by the current test samples.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_orchestrate_poll_process.py:8063-8076 | confidence=4\n  PROBLEM: The regex `r\"(?:^|[;&|])\\s*\\{\\s*(?:#.*)?$\"` matches `|` anywhere, including in comments, strings, or pipelines that are not starting a command group `{`.\n  WHY: The reviewer said a line like `cmd | {` or future formatting could increment depth erroneously and truncate the extracted function body.\n- scripts/orchestrate_poll_process.sh:3349-3353 | confidence=3\n  PROBLEM: `base_hash=... 2>/dev/null || echo \"\"` swallows stderr but still leaves the possibility of an empty `base_hash` for legitimate cases and rare lookup failures, with no explicit diagnostic.\n  WHY: The reviewer said shallow clones, ref corruption, or transient git issues can silently take the skip path and prevent a legitimate deadlock-breaker refresh.\n- tests/test_orchestrate_poll_process.py:8153-8157 | confidence=4\n  PROBLEM: Both the brace-depth parser and `diverge_skip_re` are sensitive to exact whitespace, indentation, and comment placement.\n  WHY: The reviewer said harmless reformatting can break the contract test and leave the merge-base divergence guard unenforced.\n- probably_unnecessary_but_read_if_stuck.md:225 | confidence=2\n  PROBLEM: The operator documentation and the live `refresh_files` array are manually kept in sync and can silently drift.\n  WHY: The reviewer said changes to one without the other can create incorrect expectations about what the refresh will or will not clobber.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "d7aa42b5c6ddca7a645e31792a367c33aba312175debca7713911d31f475a11f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2760,
+    "run_id": "26048685679",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26048685679",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260518175948_69843d922c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2760,
+    "run_id": "26048685679"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-18T17:59:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

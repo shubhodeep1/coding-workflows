@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:5744-5748 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The date fallback path is inconsistent, so a failed `date +%s` can leave the guard with an empty timestamp and bypass the intended freshness check.\n  WHY: If `date` is missing or unavailable, the downstream guard loses its defensive fallback and may skip the epoch-based check.\n- tests/test_orchestrate_poll_process.py:1552-1584 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `save()` runs before the numeric/date/token validation, so the mock can persist state even when the parse fails.\n  WHY: Persisting before the guard can corrupt the stub state and make downstream test calls flaky if validation aborts.\n- scripts/orchestrate_poll_process.sh:5743-5748 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `_load_actions_runs_cached` failures are converted to `{\"workflow_runs\":[]}`, masking loader or I/O errors.\n  WHY: Disk, git, or helper failures would look like a valid empty result and silently alter the guard's behavior.\n- scripts/orchestrate_poll_process.sh:5755 | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The jq pipeline can continue into `.[0].id` even when the filtered run list is empty.\n  WHY: An empty array can produce unexpected jq output or fallthrough instead of a clean no-match result.\n- scripts/orchestrate_poll_process.sh:5770-5778 | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The in-flight guard snapshots cached runs and later fetches, commits, and pushes without protecting against another `review_autofix` push in between.\n  WHY: A concurrent editor commit in that window can make the empty commit land on a stale base and invalidate the gate on the next sync.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/orchestrate_poll_process.sh:5744-5748 | confidence=4\n  PROBLEM: The date fallback path is inconsistent, so a failed `date +%s` can leave the guard with an empty timestamp and bypass the intended freshness check.\n  WHY: If `date` is missing or unavailable, the downstream guard loses its defensive fallback and may skip the epoch-based check.\n- tests/test_orchestrate_poll_process.py:1552-1584 | confidence=4\n  PROBLEM: `save()` runs before the numeric/date/token validation, so the mock can persist state even when the parse fails.\n  WHY: Persisting before the guard can corrupt the stub state and make downstream test calls flaky if validation aborts.\n- scripts/orchestrate_poll_process.sh:5743-5748 | confidence=5\n  PROBLEM: `_load_actions_runs_cached` failures are converted to `{\"workflow_runs\":[]}`, masking loader or I/O errors.\n  WHY: Disk, git, or helper failures would look like a valid empty result and silently alter the guard's behavior.\n- scripts/orchestrate_poll_process.sh:5755 | confidence=3\n  PROBLEM: The jq pipeline can continue into `.[0].id` even when the filtered run list is empty.\n  WHY: An empty array can produce unexpected jq output or fallthrough instead of a clean no-match result.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/orchestrate_poll_process.sh:5770-5778 | confidence=4\n  PROBLEM: The in-flight guard snapshots cached runs and later fetches, commits, and pushes without protecting against another `review_autofix` push in between.\n  WHY: A concurrent editor commit in that window can make the empty commit land on a stale base and invalidate the gate on the next sync.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "a0b9d08cf6611ad04bec884fa41a7c49b513f4e94437cf8de72360d6a3123381",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2790,
+    "run_id": "26107348317",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26107348317",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260519160029_399f171470",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2790,
+    "run_id": "26107348317"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-19T16:00:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

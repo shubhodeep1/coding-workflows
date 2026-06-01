@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/mark-stable.yml:215-217 | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The new Python test-dependency install step runs unconditionally before \"Unit tests\", even though the comment says it is needed only for test_validation_refresh_runner.py.\n  WHY: The reviewer says it always runs, so it adds fixed network/cache churn and a ~2-4s setup tax; the same block is also duplicated in test-and-mark-stable.yml:3275-3277.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: .github/workflows/mark-stable.yml:215\n  Line or code reference: Install Python test dependencies step (new)\n  Problem: The new step runs unconditionally before \"Unit tests\" in the release job, but comment claims it is needed only for test_validation_refresh_runner.py (which exercises validate_discovered_manifest_yaml).\n  Why it fails at runtime: On paths that skip Unit tests or where the test harness is unreachable, the pip install still executes (network, cache churn, ~2-4s).\n- File: .github/workflows/mark-stable.yml:215-217 (and duplicate in test-and-mark-stable.yml:3275-3277)\n  Line or code reference: New \"Install Python test dependencies\" step + comment explaining dependency set.\n  Problem: Unconditional pip install of pyyaml/jsonschema/jinja2 in release-marking workflow (even when only lint/ruff ran previously).\n  Why it fails at runtime: Adds fixed setup tax on every release; no condition or --no-deps guard.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "5eb70755639b66b316ae700b5148ce4fcb08e72ec6ae2242eaa87793c48ec70f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3002,
+    "run_id": "26662343151",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26662343151",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260529212859_33f3085c0a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3002,
+    "run_id": "26662343151"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-29T21:28:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

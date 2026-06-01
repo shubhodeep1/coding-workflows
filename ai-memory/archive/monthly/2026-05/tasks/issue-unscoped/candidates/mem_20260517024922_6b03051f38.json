@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/validation-harness/node-hardhat-solidity/validate.env.j2:7 | severity=medium | confidence=4\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: Consumers that previously relied on manifest.port to set ANVIL_PORT will now get 8545 unless they explicitly set env_overrides.ANVIL_PORT.\n  WHY: The change intentionally decouples ANVIL_PORT from manifest.port, but that is a silent runtime behavior change for existing manifests that depended on the old value.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- workflow-templates/validation-harness/node-hardhat-solidity/validate.env.j2:7 | severity=medium | confidence=4\n  PROBLEM: Consumers who previously relied on manifest.port to set a non-default chain RPC port will see a silent behavior change: ANVIL_PORT will now always default to 8545 regardless of manifest.port.\n  WHY: An existing consumer manifest with port=8080 would have previously produced ANVIL_PORT=\"8080\" (wrong, but explicit), and now produces ANVIL_PORT=\"8545\" unless env_overrides.ANVIL_PORT is set.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "54d4661768cf237835c0dddcb51e0a4a8214805857c5e0220f848e26640988f5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2674,
+    "run_id": "25979159697",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25979159697",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517024922_6b03051f38",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2674,
+    "run_id": "25979159697"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-17T02:49:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/validation-harness/node-hardhat-solidity/validate.env.j2:line 7 | severity=medium | confidence=5\n  flagged_by: [qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: ANVIL_PORT no longer derives from manifest.port and is hardcoded to 8545, changing the rendered harness behavior for consumers that relied on the old manifest-driven value.\n  WHY: Both reviewers flag this as a semantic/backward-compatibility change; qwen calls it a breaking change and z-ai notes consumers will silently get 8545 instead of the previous manifest.port-derived value.\n- tests/test_render_validation_templates_node_hardhat_regressions.py:lines 179-230 | severity=low | confidence=3\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The test covers the validate.env override ordering, but not the end-to-end compose healthcheck behavior that consumes ANVIL_PORT.\n  WHY: The reviewer notes the rendered validate.env assertion does not verify propagation into the docker-compose healthcheck path.\n- tests/test_render_validation_templates_node_hardhat_regressions.py:lines 232-265 | severity=low | confidence=2\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The compose-command test only checks the default manifest payload and does not cover the override case for ANVIL_PORT.\n  WHY: The reviewer notes this is a minor edge-case coverage gap rather than a runtime bug.\n- workflow-templates/validation-harness/node-hardhat-solidity/docker-compose.test.yml.j2:line 6 | severity=low | confidence=1\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: ANVIL_PORT is not listed in _reserved_override_keys, so env_overrides.ANVIL_PORT is emitted into the app service environment as a no-op leak.\n  WHY: The reviewer explicitly calls this a harmless but unnecessary compose-output leak and suggests reserving the key.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- workflow-templates/validation-harness/node-hardhat-solidity/validate.env.j2: line 7 (previously line 4) | severity=medium | confidence=5\n  PROBLEM: Consumers whose `.ai/validate.yml` sets `port:` to a non-8545 value and relied on that value propagating to ANVIL_PORT will now silently get ANVIL_PORT=8545 instead.\n  WHY: The reviewer notes this was previously the template\u2019s documented behavior, so the change can break setups that depended on the old manifest.port-derived mapping.\n- tests/test_render_validation_templates_node_hardhat_regressions.py: lines 179-230 | severity=low | confidence=3\n  PROBLEM: The test verifies the rendered validate.env text, but not end-to-end compose behavior using the overridden ANVIL_PORT value.\n  WHY: The reviewer notes this is a coverage gap because it does not confirm the compose healthcheck reflects the override propagation.\n- tests/test_render_validation_templates_node_hardhat_regressions.py: lines 232-265 | severity=low | confidence=2\n  PROBLEM: The compose-command test only validates the default manifest payload and does not exercise the env_overrides.ANVIL_PORT case.\n  WHY: The reviewer notes this is a minor edge-case coverage gap, not a runtime issue.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- workflow-templates/validation-harness/node-hardhat-solidity/validate.env.j2: `ANVIL_PORT=\"8545\"` (replacing `ANVIL_PORT=\"{{ manifest.get('port', 8545) }}\"`) | severity=medium | confidence=3\n  PROBLEM: Consumers that relied on `.ai/validate.yml` `port:` propagating to ANVIL_PORT will silently get 8545 instead.\n  WHY: The reviewer states the old behavior was semantically wrong but still documented, so this is a silent backward-compatibility change for existing manifests.\n- workflow-templates/validation-harness/node-hardhat-solidity/docker-compose.test.yml.j2: line 6 (`_reserved_override_keys`) | severity=low | confidence=1\n  PROBLEM: ANVIL_PORT is not reserved, so env_overrides.ANVIL_PORT leaks into the app service environment as an unnecessary no-op.\n  WHY: The reviewer explicitly calls this harmless but undesirable and suggests adding ANVIL_PORT to the reserved override keys.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "df4e4ccc0a46ab8537401f9c795b2069ffc3fc2397986b76467df85d973f53dd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25979151097",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25979151097",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517024417_abd85d6f6d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25979151097"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-17T02:44:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

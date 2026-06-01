@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_reject_verify.sh:473-544 | severity=medium | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: The reason field is truncated/validated at 400 characters even though the prompt contract says to keep it under 200 characters.\n  WHY: That mismatch lets longer reasons pass validation and reach verified artifacts and REVERSAL_REASON outputs, so the LLM and code enforce different limits.\n- scripts/review_reject_verify.sh:503-525 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: codex_home is created before the run_llm_verifier_batch try/finally scope, so an exception in the gap can leak the temp directory.\n  WHY: If anything raises before the finally block is entered, the mkdtemp directory under RUNNER_TEMP can remain orphaned and accumulate.\n- scripts/review_reject_verify.sh:524-552 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: The TimeoutExpired handler calls shutil.rmtree(codex_home, ignore_errors=True) even though the finally block already does the same cleanup.\n  WHY: It is harmless duplication, but it adds dead control flow and makes the cleanup path harder to reason about.\n- scripts/review_reject_verify.sh:108 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The model name \"openai/gpt-5.4-mini\" was questioned as invalid but is actually valid.\n  WHY: It appears in scripts/codex_model_catalog.json line 397, so there is no issue here.\n- scripts/review_reject_verify.sh:754-757 | severity=medium | confidence=3\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The bare except around verify_llm_rejections swallows the traceback and emits only a generic unexpected_exception reason.\n  WHY: When verify_llm_rejections throws, operators lose exception type and stack context needed to diagnose which block failed.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_reject_verify.sh:503-525 | severity=medium | confidence=2\n  PROBLEM: The temp directory created by prepare_llm_codex_home is allocated before the try/finally block that guarantees its cleanup.\n  WHY: If any unexpected exception lands in that gap, the temp directory under codex_home_reject_verify/ would leak because the finally block never executes.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_reject_verify.sh:544 | severity=medium | confidence=4\n  PROBLEM: The reason character limit in code (400) does not match the prompt contract (200)\n  WHY: The prompt `prompts/consolidator-reject-verifier.txt` says \"Keep it under 200 characters\" but the validator uses `squish(str(row.get(\"reason\", \"\")), 400)`.\n- scripts/review_reject_verify.sh:503-518 | severity=medium | confidence=4\n  PROBLEM: Potential codex_home temp directory leak if exception occurs after prepare_llm_codex_home succeeds but before the try block\n  WHY: If prepare_llm_codex_home returns successfully and an exception occurs later, the codex_home directory created by mkdtemp could leak because the finally block only starts at line 537.\n- scripts/review_reject_verify.sh:108 | severity=low | confidence=5\n  PROBLEM: The model name \"openai/gpt-5.4-mini\" was questioned as invalid but is actually valid\n  WHY: The model `openai/gpt-5.4-mini` exists in the codebase's model catalog (scripts/codex_model_catalog.json line 397).\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_reject_verify.sh:473 | severity=medium | confidence=4\n  PROBLEM: The prompt contract in consolidator-reject-verifier.txt specifies reasons must be \"Keep it under 200 characters\", but the validator truncates at 400 characters instead of 200.\n  WHY: This contract mismatch allows oversized reasons to reach artifacts and downstream REVERSAL_REASON updates.\n- scripts/review_reject_verify.sh:503-523 | severity=medium | confidence=3\n  PROBLEM: If an exception occurs after prepare_llm_codex_home returns but before entering the try block, the temp directory codex_home will leak because the finally block hasn't been entered yet.\n  WHY: While prepare_llm_codex_home has its own cleanup on exception, once it returns successfully, the caller run_llm_verifier_batch assumes responsibility and any exception in the gap bypasses cleanup.\n- scripts/review_reject_verify.sh:524-534 | severity=low | confidence=3\n  PROBLEM: The `shutil.rmtree(codex_home, ignore_errors=True)` call in the `except subprocess.TimeoutExpired` block is redundant because the `finally` block already performs the same cleanup.\n  WHY: It is not a functional bug, but it creates maintenance burden and confusing control flow.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/review_reject_verify.sh:544 | severity=medium | confidence=4\n  PROBLEM: The prompt contract in `prompts/consolidator-reject-verifier.txt` states \"Keep it under 200 characters\" for the reason field, but the validator truncates at 400 characters before writing the reason into the verified_rejections.json artifact and the REVERSAL_REASON line.\n  WHY: An LLM that returns a 300-character reason will pass validation and be written into review_issues.txt as REVERSAL_REASON, so the prompt contract and code disagree.\n- scripts/review_reject_verify.sh:503-523 | severity=medium | confidence=4\n  PROBLEM: The call to prepare_llm_codex_home() and the construction of the cmd list happen outside the try/except/finally block.\n  WHY: If either call raises, the codex_home temp directory is leaked because the finally block that rmtree's codex_home is never entered.\n- scripts/review_reject_verify.sh:548-552 | severity=low | confidence=5\n  PROBLEM: The rmtree(codex_home, ignore_errors=True) in the TimeoutExpired handler is redundant because the finally block immediately below performs the identical cleanup.\n  WHY: No incorrect runtime behavior occurs, but the duplicate call makes the control flow harder to reason about.\n- scripts/review_reject_verify.sh:754-757 | severity=medium | confidence=3\n  PROBLEM: The bare except around verify_llm_rejections swallows the traceback and emits only a generic unexpected_exception reason.\n  WHY: When an unexpected exception occurs, operators cannot identify the exception class or the failing issue block, which delays root-cause analysis.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "73ea3d641f8a4994dc5ea81f5a10130ac78e3bd689b562f8a7f42d7d0657a3ae",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2717,
+    "run_id": "26000043892",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26000043892",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517193622_7b5301222a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2717,
+    "run_id": "26000043892"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-17T19:36:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

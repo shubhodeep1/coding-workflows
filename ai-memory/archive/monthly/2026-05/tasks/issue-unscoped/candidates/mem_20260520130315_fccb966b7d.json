@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_lib.py:1628-1631 | severity=medium | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `_parse_iso8601_to_epoch()` originally only caught `ValueError` and `TypeError`, so `datetime.timestamp()` could still raise `OverflowError` or `OSError`.\n  WHY: That would let stall detection crash on certain out-of-range or platform-specific timestamps instead of failing open to `None`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Resolve merge conflicts in the forward-merge PR to bring bug fixes from stable into main\n  expected_change_site: Conflicting files: `.github/workflows/review_autofix.yml`, `README.md`, `scripts/orchestrate_poll_process.sh`, `scripts/review_apply_fixes.sh`, `scripts/review_rb_judge.sh`, `tests/test_orchestrate_integration_ahead_by_gate.py`, `tests/test_orchestrate_poll_process.py`, `tests/test_review_autofix_review_pipeline_contract.py`\n  confidence=5\n  flagged_by: [minimax_minimax-m2_5]\n  EVIDENCE: The PR diff shows 10 files have been modified to resolve conflicts. All listed conflicting files appear in the PR changed files list. The forward-merge appears complete with all necessary conflict resolutions applied.\n- requirement: `_parse_iso8601_to_epoch() should fail open on all timestamp conversion errors, treating platform-specific exceptions (OverflowError, OSError) the same as parse errors`\n  expected_change_site: `scripts/orchestrate_lib.py` in the `_parse_iso8601_to_epoch()` function\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: Before this PR, the function only caught `ValueError` and `TypeError`, which are insufficient as `datetime.timestamp()` can raise `OverflowError` and `OSError`\n- requirement: `Tests should cover the fail-open behavior of _parse_iso8601_to_epoch() under platform-specific timestamp conversion errors`\n  expected_change_site: `tests/test_orchestrate_lib.py` near the `_parse_iso8601_to_epoch()` unit tests\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: Existing test only covered malformed ISO strings, not `timestamp()` exceptions\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- requirement: Resolve merge conflicts in the forward-merge PR to bring bug fixes from stable into main\n  expected_change_site: Conflicting files: `.github/workflows/review_autofix.yml`, `README.md`, `scripts/orchestrate_poll_process.sh`, `scripts/review_apply_fixes.sh`, `scripts/review_rb_judge.sh`, `tests/test_orchestrate_integration_ahead_by_gate.py`, `tests/test_orchestrate_poll_process.py`, `tests/test_review_autofix_review_pipeline_contract.py`\n  confidence=5\n  flagged_by: [minimax_minimax-m2_5]\n  EVIDENCE: The PR diff shows 10 files have been modified to resolve conflicts. All listed conflicting files appear in the PR changed files list. The forward-merge appears complete with all necessary conflict resolutions applied.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/orchestrate_lib.py:1628-1631 | severity=medium | confidence=5\n  PROBLEM: The original exception handling only caught `ValueError` and `TypeError`, missing platform-specific exceptions (`OverflowError` and `OSError`) from `datetime.timestamp()`.\n  WHY: Stall detection could crash when converting certain timestamps instead of gracefully returning `None`.\n- Requirement: `_parse_iso8601_to_epoch() should fail open on all timestamp conversion errors, treating platform-specific exceptions (OverflowError, OSError) the same as parse errors`\n  Expected change site: `scripts/orchestrate_lib.py` in the `_parse_iso8601_to_epoch()` function\n  Evidence of absence: Before this PR, the function only caught `ValueError` and `TypeError`, which are insufficient as `datetime.timestamp()` can raise `OverflowError` and `OSError`\n  ISSUE_CONFIDENCE: 5\n- Requirement: `Tests should cover the fail-open behavior of _parse_iso8601_to_epoch() under platform-specific timestamp conversion errors`\n  Expected change site: `tests/test_orchestrate_lib.py` near the `_parse_iso8601_to_epoch()` unit tests\n  Evidence of absence: Existing test only covered malformed ISO strings, not `timestamp()` exceptions\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "4b4196e938f34fdb189a610a748481d880b489082826c037b211fc303bb0268f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2801,
+    "run_id": "26162938352",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26162938352",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260520130315_fccb966b7d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2801,
+    "run_id": "26162938352"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-20T13:03:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

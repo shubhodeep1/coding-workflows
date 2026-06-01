@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: What scope should this issue cover?**\nChoices:\n- **A** \u2014 One specific workflow, script, or file only (RECOMMENDED)\n- **B** \u2014 One pipeline phase across a few related files (RECOMMENDED)\n- **C** \u2014 Repo-wide improvement across multiple phases\nReply: `Q1: A`\n**Q2: Which area should be improved first?**\nChoices:\n- **A** \u2014 Clarify / plan workflow logic (RECOMMENDED)\n- **B** \u2014 Implement / review_autofix workflow logic (RECOMMENDED)\n- **C** \u2014 Orchestrator / poller / validation logic (RECOMMENDED)\n- **D** \u2014 Docs / README / agents instructions only (RECOMMENDED)\nReply: `Q2: B`\n**Q3: What kind of improvement do you want?**\nChoices:\n- **A** \u2014 Fix a specific bug or regression (RECOMMENDED)\n- **B** \u2014 Reduce cost / API calls / runtime (RECOMMENDED)\n- **C** \u2014 Improve maintainability without changing behavior\n- **D** \u2014 Improve operator clarity / documentation / alerts\nReply: `Q3: A`",
+  "fingerprint": "de2cc764f6f90c2eacdc8927b031929e4136b012bfb600d3096d661d348a78aa",
+  "lineage": {
+    "issue_number": 2022,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25273383272",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25273383272",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260503074527_c9549086ee",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2022,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25273383272"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #2022 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-03T07:45:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

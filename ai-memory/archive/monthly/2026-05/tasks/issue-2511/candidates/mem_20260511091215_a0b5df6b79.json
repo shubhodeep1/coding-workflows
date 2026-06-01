@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Ship Serena MCP support across unattended code-touching workflows\",\"issues\":[{\"id\":\"serena-core-bootstrap\",\"title\":\"Add Serena bootstrap helpers, handshake probe, and core fixtures\",\"priority\":1},{\"id\":\"serena-implement-flow\",\"title\":\"Wire Serena into implement, diagnose, and repair flows\",\"priority\":1},{\"id\":\"serena-review-editor\",\"title\":\"Enable Serena for the review-autofix editor while preserving reviewer isolation\",\"priority\":2},{\"id\":\"serena-validate-flow\",\"title\":\"Add Serena bootstrap and prompt hints to validate workflows\",\"priority\":2},{\"id\":\"serena-conflict-resolver\",\"title\":\"Add Serena-aware resolver prompt rendering for merge-conflict flows\",\"priority\":3},{\"id\":\"serena-observability-docs\",\"title\":\"Add Serena telemetry parsing and reconcile docs/changelog contracts\",\"priority\":4}],\"dependency_edges\":[{\"from\":\"serena-core-bootstrap\",\"to\":\"serena-implement-flow\"},{\"from\":\"serena-implement-flow\",\"to\":\"serena-review-editor\"},{\"from\":\"serena-implement-flow\",\"to\":\"serena-validate-flow\"},{\"from\":\"serena-review-editor\",\"to\":\"serena-conflict-resolver\"},{\"from\":\"serena-implement-flow\",\"to\":\"serena-observability-docs\"},{\"from\":\"serena-review-editor\",\"to\":\"serena-observability-docs\"},{\"from\":\"serena-validate-flow\",\"to\":\"serena-observability-docs\"},{\"from\":\"serena-conflict-resolver\",\"to\":\"serena-observability-docs\"}]}",
+  "fingerprint": "226291538eb980248a8fda9169045b3786b08c6306b89aa6da91630eb6a7de0d",
+  "lineage": {
+    "issue_number": 2511,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25659179210",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25659179210",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260511091215_a0b5df6b79",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2511,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25659179210"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Ship Serena MCP support across unattended code-touching workflows' into 6 issues (tracking #2511)",
+  "timestamps": {
+    "created_at": "2026-05-11T09:12:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

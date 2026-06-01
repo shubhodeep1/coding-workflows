@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:2167-2181 | confidence=5\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The preexisting Serena config detection only checks for `.serena/project.yml`, so repos that track other `.serena/*` files but not that file are misdetected as not preexisting.\n  WHY: That lets setup create a bootstrap `project.yml`, after which the cleanup path can delete tracked `.serena/*` files and stage their removal.\n- scripts/review_commit_changes.sh:97-114 | confidence=5\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The `rm -rf .serena` cleanup runs when the bootstrap hash matches without checking whether other tracked files exist under `.serena/`.\n  WHY: In repos that track other `.serena/*` files, this deletes the whole tree, including tracked files, and the deletion is then staged.\n- scripts/review_commit_changes.sh:312 | confidence=5\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The staging command does not exclude `.serena`.\n  WHY: Untracked Serena runtime files can be added to the commit as noise.\n- scripts/review_commit_changes.sh:135-141 | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The `.serena|.serena/*` case block only skips the warning echo for untracked `.serena` paths and does not exclude them from downstream staging.\n  WHY: Untracked Serena runtime files can still reach the consumer-repo staging path and be committed as noise.\n- scripts/review_apply_fixes.sh:32-105 | confidence=4\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The `.serena` noise filter only excludes runtime changes in the narrow non-preexisting/bootstrap-unchanged case, so preexisting or mutated Serena state is treated as substantive.\n  WHY: When that happens, the commit flow proceeds to staging where `.serena` changes can be committed or trigger the deletion path on a later run.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/review_autofix.yml:2173-2178 | confidence=5\n  PROBLEM: The detection logic only checks for `.serena/project.yml` being tracked or existing.\n  WHY: If a consumer repo tracks other files in `.serena/` but not `project.yml`, the detection returns false, bootstrap creates `project.yml`, and cleanup can delete tracked files.\n- scripts/review_commit_changes.sh:312 | confidence=5\n  PROBLEM: The staging command does not exclude `.serena`.\n  WHY: Untracked Serena runtime files can be added to the commit as noise.\n- scripts/review_commit_changes.sh:105-111 | confidence=5\n  PROBLEM: `rm -rf .serena` executes when the bootstrap hash matches without checking for other tracked files in `.serena/`.\n  WHY: If other `.serena/*` files are tracked, the whole tree is deleted and those deletions can be staged.\n- scripts/review_apply_fixes.sh:41-56, 78-92 | confidence=4\n  PROBLEM: The Serena runtime-noise ignore logic returns false for preexisting `project.yml` or hash mismatches, so `.serena` changes are treated as substantive.\n  WHY: Those changes then proceed through staging where they may be committed or where the deletion bug can apply on a later run.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/review_autofix.yml:2167-2181 | confidence=5\n  PROBLEM: Detection logic sets `SERENA_PROJECT_PREEXISTED=false` if the repo tracks files like `.serena/other.txt` but not `.serena/project.yml`.\n  WHY: That lets setup create bootstrap `.serena/project.yml`, and cleanup can delete tracked `.serena/other.txt` before `git add -u` stages the deletion.\n- scripts/review_commit_changes.sh:97-114 | confidence=5\n  PROBLEM: `rm -rf .serena` executes unconditionally when the bootstrap hash matches, without checking for other tracked files under `.serena/`.\n  WHY: In a partially tracked Serena tree, the entire directory is removed and tracked files are deleted.\n- scripts/review_commit_changes.sh:135-141 | confidence=5\n  PROBLEM: The `.serena|.serena/*` case block only skips the warning echo for untracked `.serena` paths in the workflow-source loop.\n  WHY: There is no exclusion in the downstream consumer-repo staging path, so untracked Serena runtime files can still be committed as noise.\n- scripts/review_apply_fixes.sh:32-105 | confidence=4\n  PROBLEM: `.serena` is excluded from git diff/untracked probes only in the narrow non-preexisting, bootstrap-unchanged case.\n  WHY: When `SERENA_PROJECT_PREEXISTED=true` or the bootstrap hash changes, Serena mutations are treated as substantive and can proceed to staging/commit.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "4b4a6f120938aeec955fd4ccf0d5e277466b41fff55339dc7e895b3cbd06caed",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2528,
+    "run_id": "25697639408",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25697639408",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260511213611_2de35ea675",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2528,
+    "run_id": "25697639408"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-11T21:36:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

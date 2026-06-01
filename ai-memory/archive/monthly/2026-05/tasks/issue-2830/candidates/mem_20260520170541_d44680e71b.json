@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1. Which part of this repository should change?\nChoices:\nA. Workflow / automation behavior \u2014 name the exact phase, workflow, script, or file path in your reply (RECOMMENDED)\nB. Documentation / README / setup guidance \u2014 name the exact file or section\nC. Another area \u2014 name the exact feature or path\nQ2. What kind of improvement do you want?\nChoices:\nA. Fix incorrect or broken behavior \u2014 describe the current behavior and the expected behavior (RECOMMENDED)\nB. Improve reliability / speed / cost / alert noise \u2014 describe what is too slow, flaky, expensive, or noisy\nC. Add a missing capability \u2014 describe the new behavior and when it should run\nQ3. What concrete evidence can you point us to?\nChoices:\nA. A specific issue, PR, workflow run, log excerpt, or error message \u2014 include repo + number/link if relevant (RECOMMENDED)\nB. A reproducible scenario or step list\nC. No existing evidence; I only have a desired outcome\nQ4. What should count as \u201cdone\u201d?\nChoices:\nA. A specific failing case or scenario should pass after the change (RECOMMENDED)\nB. A measurable behavior should improve (for example runtime, flakiness, API usage, or alert noise)\nC. A specific doc, comment, output, or label should change",
+  "fingerprint": "7753e1e699aee8860fb3a16962dbc0f6f82ef349d648a222b25da768e798bfea",
+  "lineage": {
+    "issue_number": 2830,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26177484663",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26177484663",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260520170541_d44680e71b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2830,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26177484663"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #2830 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-20T17:05:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

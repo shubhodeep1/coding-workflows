@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The completed plan states that a new **`re_render_harness_from_stable`** helper must be added to `scripts/orchestrate_poll_process.sh` (PR B step 8) to refresh the harness from latest `@stable` when `raw_status=harness_error`.\n  expected_change_site: `scripts/orchestrate_poll_process.sh`\n  confidence=[5]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: no such helper function exists in `scripts/orchestrate_poll_process.sh`; no call sites to it in any file. The orchestrator only calls `render_validation_templates.py` indirectly via `validate.yml` dispatch \u2014 no retry logic or custom refresh path is on disk.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement: The completed plan states that a new **`re_render_harness_from_stable`** helper must be added to `scripts/orchestrate_poll_process.sh` (PR B step 8) to refresh the harness from latest `@stable` when `raw_status=harness_error`. Evidence of absence: no such helper function exists in `scripts/orchestrate_poll_process.sh`; no call sites to it in any file. The orchestrator only calls `render_validation_templates.py` indirectly via `validate.yml` dispatch \u2014 no retry logic or custom refresh path is on disk.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "5ef16e56836b86f8cb1ba7a6cda12fbe1849c693d8ce93f14bceaffdbc38ff9e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2955,
+    "run_id": "26361421471",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26361421471",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260524130727_8d9a96f58b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2955,
+    "run_id": "26361421471"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-24T13:07:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

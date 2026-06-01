@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CLAUDE.md:476-558; unattended_system_instructions.md:377-456 | flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The PR adds the automation-bias policy text in \u00a718/\u00a720, but the reviewer says the same content was already merged via PR #2746 / commit 5342173.\n  WHY: The branch is duplicating content already present in origin/main, so the change is redundant.\n- CLAUDE.md:492 | confidence=2 | flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: `**STOP and ask**` in \u00a718.A tells the interactive Claude agent to stop before adding a manual-invocation script, while the unattended policy says to surface it explicitly in the plan output instead.\n  WHY: The reviewer explicitly called this an intentional interactive/unattended split rather than a defect.\n- CLAUDE.md:531-535 | confidence=4 | flagged_by: [qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: \u00a718.D cites `\u00a710.E` / `\u00a710.C` even though the referenced MongoDB rules are organized as unlabeled bullets, so the cross-reference text does not match the document structure.\n  WHY: One reviewer flagged the non-existent subsection labels and another flagged the `\u00a710` vs `\u00a712` mismatch; both point to the same inconsistent cross-reference text.\n- CLAUDE.md:543-558 | confidence=4 | flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The new policy says plans omitting required wiring/gate details `MUST` be revised, but no validator, template update, or reviewer checklist entry enforces that requirement.\n  WHY: Without machine-readable enforcement, incomplete plans can still pass review and reach implementation.\n- unattended_system_instructions.md:442-456 | confidence=5 | flagged_by: [x-ai_grok-4_20]\n  PROBLEM: \u00a720.E requires a dedicated top-of-plan checklist for scheduler wiring, supervisor needs, and DB gate patterns, but nothing in the workflow enforces or parses it.\n  WHY: The reviewer says orchestrator runs can still accept plans that omit the checklist, so the policy is not operational.\n- unattended_system_instructions.md:385-456 | confidence=4 | flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The new \u00a720.A/\u00a720.E combination creates a self-contradictory edge case when these policy files themselves are updated, because the producing plan would also have to satisfy the policy it is adding.\n  WHY: The reviewer says future runs touching these policy files can violate the newly added rules and stall the review flow.\n- CLAUDE.md:476 | confidence=5 | flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Inserting \u00a718 before FINAL REMINDER shifts the top-level numbering/layout and breaks the reviewer's backward-compatibility expectations.\n  WHY: The reviewer says downstream consumers that grep section headings or rely on the old layout can load mismatched context.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- CLAUDE.md:476-558; unattended_system_instructions.md:377-456 | PROBLEM: The reviewer says the automation-bias policy text in \u00a718/\u00a720 was already merged via PR #2746 / commit 5342173, so this PR is duplicate content.\n  WHY: The same content is already present in origin/main, making the branch redundant.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- CLAUDE.md:492 | confidence=2\n  PROBLEM: The new \u00a718.A instructs the interactive Claude agent to **STOP and ask** before adding a manual-invocation script, while the unattended version says to surface it explicitly in the plan output instead.\n  WHY: The reviewer explicitly called this an intentional interactive/unattended split rather than a defect.\n- CLAUDE.md:530-541 | confidence=4\n  PROBLEM: \u00a718.D cites `\u00a710.E` / `\u00a710.C` even though the referenced MongoDB rules are organized as unlabeled bullets, so the cross-reference text does not match the document structure.\n  WHY: The reviewer repeated the same issue under INDEX-CONTRACT / DB RULES and noted that the mirror uses `\u00a712` generically, making the anchors inconsistent.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- unattended_system_instructions.md:~440-455 | confidence=5\n  PROBLEM: The new \u00a720.E requires every orchestrator plan to cite the exact scheduler / PR-push entry point and gate pattern, but no workflow or script was updated to enforce, parse, or surface that required section.\n  WHY: The reviewer says orchestrator implementation will keep accepting incomplete plans, so the checklist is not machine-enforced.\n- CLAUDE.md:530-535 | confidence=4\n  PROBLEM: \u00a718.D uses outdated `\u00a710` references in the mirror instead of the current `\u00a712` MongoDB Rules reference.\n  WHY: The reviewer says the added policy is not operationally enforced, so plans can still ship an un-gated DB operation.\n- unattended_system_instructions.md:385-456 | confidence=4\n  PROBLEM: The hard rule against standalone manual scripts and the new plan-output checklist create a self-contradictory edge case for changes to these policy files themselves.\n  WHY: The reviewer says future runs touching these exact files would violate the policy they are adding, leading to self-contradictory output and stalled waves.\n- CLAUDE.md:476 | confidence=5\n  PROBLEM: Inserting a new top-level \u00a718 before FINAL REMINDER shifts the numbering/layout and breaks backward compatibility for consumers that rely on the old section headings.\n  WHY: The reviewer says section-number consumers and grep-based tooling can load mismatched context.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "392e0ae286633a610d98a3f1bfa7674c7c43a6af30bc77e57464d97e9d3c53db",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26036354970",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26036354970",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260518133654_65a2e2b9d6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26036354970"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 7 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-18T13:36:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

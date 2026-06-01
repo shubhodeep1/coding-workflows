@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:247-260 | severity=low | confidence=3\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: build_judge_semble_prefetch() has an untested empty-query early-return branch when helpers are available but build_judge_semble_query returns no text.\n  WHY: qwen flagged that the existing test only covers the helpers-unavailable path, so this branch can regress without coverage.\n- scripts/review_rb_judge.sh:110-122 | severity=low | confidence=3\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: build_rb_judge_semble_prefetch() has an untested empty-query early-return branch when helpers are available but build_rb_judge_semble_query returns no text.\n  WHY: qwen flagged that the existing test only covers the helpers-unavailable path, so this branch can regress without coverage.\n- scripts/orchestrate_poll_process.sh:254-260 | severity=medium | confidence=3\n  flagged_by: [qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: The `cat >/dev/null 2>/dev/null || true` stdin drain in build_judge_semble_prefetch() depends on `cat` being available and unaliased.\n  WHY: qwen calls this a minor robustness concern while grok says it can leave stdin undrained and trigger SIGPIPE on minimal shells, so the higher severity is retained.\n- scripts/review_rb_judge.sh:116-122 | severity=medium | confidence=3\n  flagged_by: [qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: The `cat >/dev/null 2>/dev/null || true` stdin drain in build_rb_judge_semble_prefetch() depends on `cat` being available and unaliased.\n  WHY: qwen calls this a minor robustness concern while grok says it can leave stdin undrained and trigger SIGPIPE on minimal shells, so the higher severity is retained.\n- tests/test_judge_semble_prefetch_contract.py:63-93 | severity=low | confidence=2\n  flagged_by: [qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: The contract tests invoke bash with `-lc`, which sources login profiles before running the test body.\n  WHY: qwen and grok both note this can perturb the test environment, though both also say the explicit `set -euo pipefail` keeps it harmless in normal CI.\n- scripts/orchestrate_poll_process.sh:185-185 | severity=low | confidence=2\n  flagged_by: [qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: `python3 /dev/fd/3` is not portable outside Linux-style `/dev/fd` environments.\n  WHY: qwen and grok both call out portability limits, though they also note the target GitHub Actions runners are Linux.\n- scripts/review_rb_judge.sh:49-49 | severity=low | confidence=1\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: `python3 /dev/fd/3` is not portable outside Linux-style `/dev/fd` environments.\n  WHY: qwen notes this is not a runtime bug in the target Linux runner environment, but it remains a portability concern elsewhere.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/orchestrate_poll_process.sh:247-268 | confidence=3\n  PROBLEM: build_judge_semble_prefetch() has an untested empty-query early-return branch when helpers are available but build_judge_semble_query returns no output.\n  WHY: The current test only covers the helpers-unavailable path, so this branch is not exercised.\n- scripts/review_rb_judge.sh:110-130 | confidence=3\n  PROBLEM: build_rb_judge_semble_prefetch() has an untested empty-query early-return branch when helpers are available but build_rb_judge_semble_query returns no output.\n  WHY: The current test only covers the helpers-unavailable path, so this branch is not exercised.\n- scripts/orchestrate_poll_process.sh:254-260 | confidence=1\n  PROBLEM: The stdin drain uses `cat >/dev/null 2>/dev/null || true`, which depends on `cat` being available and unaliased.\n  WHY: In the standard GitHub Actions Linux environment this is usually fine, but it is a minor robustness concern.\n- scripts/review_rb_judge.sh:116-122 | confidence=1\n  PROBLEM: The stdin drain uses `cat >/dev/null 2>/dev/null || true`, which depends on `cat` being available and unaliased.\n  WHY: In the standard GitHub Actions Linux environment this is usually fine, but it is a minor robustness concern.\n- tests/test_judge_semble_prefetch_contract.py:63-93 | confidence=1\n  PROBLEM: `_run_bash()` uses `[\"bash\", \"-lc\", command]`, which sources login profiles.\n  WHY: The explicit `set -euo pipefail` in the command string overrides that in practice, so this is not a runtime bug.\n- scripts/orchestrate_poll_process.sh:185-185 | confidence=1\n  PROBLEM: `python3 /dev/fd/3` is not portable to macOS or minimal containers.\n  WHY: The target environment is GitHub Actions Linux runners, so this is not a runtime bug there.\n- scripts/review_rb_judge.sh:49-49 | confidence=1\n  PROBLEM: `python3 /dev/fd/3` is not portable to macOS or minimal containers.\n  WHY: The target environment is GitHub Actions Linux runners, so this is not a runtime bug there.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/orchestrate_poll_process.sh:254-260 | confidence=3\n  PROBLEM: `cat >/dev/null 2>/dev/null || true` in build_judge_semble_prefetch() can fail to drain stdin if `cat` is unavailable or aliased.\n  WHY: grok says this can leave the pipe open and risk SIGPIPE under minimal shells.\n- scripts/review_rb_judge.sh:116-122 | confidence=3\n  PROBLEM: `cat >/dev/null 2>/dev/null || true` in build_rb_judge_semble_prefetch() can fail to drain stdin if `cat` is unavailable or aliased.\n  WHY: grok says this can leave the pipe open and risk SIGPIPE under minimal shells.\n- tests/test_judge_semble_prefetch_contract.py:79-93 | confidence=2\n  PROBLEM: `_run_large_pipe()` uses `bash -lc`, which can source login profiles and alter the test environment.\n  WHY: This can inject aliases or env changes, though the CI environment is usually clean.\n- scripts/orchestrate_poll_process.sh:185-185 | confidence=2\n  PROBLEM: `python3 /dev/fd/3` is not portable to some non-GNU systems.\n  WHY: grok says it can fail outside Linux-style environments.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "a1b1e89722cc73cda9cefd236c8e43c792062d3037faba94cad9a3393094890b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2392,
+    "run_id": "25610276461",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25610276461",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260509201148_8c0342f28c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2392,
+    "run_id": "25610276461"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer finding(s) across 7 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-09T20:11:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

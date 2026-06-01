@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR description lists scripts/review_apply_fixes.sh as one of seven conflicting files that the forward-merge PR must resolve.\n  expected_change_site: scripts/review_apply_fixes.sh (merge-conflict markers \u2192 resolved content)\n  confidence=4\n  flagged_by: [qwen_qwen3_6-plus]\n  EVIDENCE: PR diff (original_pr_diff.patch) contains no hunk for scripts/review_apply_fixes.sh; the file is absent from pr_changed_files.txt; no merge-conflict resolution appears in any diff section.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- Requirement: PR description lists scripts/review_apply_fixes.sh as one of seven conflicting files that the forward-merge PR must resolve.\n  Expected change site: scripts/review_apply_fixes.sh (merge-conflict markers \u2192 resolved content)\n  Evidence of absence: PR diff (original_pr_diff.patch) contains no hunk for scripts/review_apply_fixes.sh. The file is absent from pr_changed_files.txt, and no merge-conflict resolution appears in any diff section. The six other listed conflict files (README.md, scripts/orchestrate_poll_process.sh, scripts/review_rb_judge.sh, tests/test_orchestrate_integration_ahead_by_gate.py, tests/test_orchestrate_poll_process.py, tests/test_review_autofix_review_pipeline_contract.py) all have modifications, but review_apply_fixes.sh does not.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "3159233599d4be5fec1550755a6a17c598186b508722c5ecbc5ec82d83c7d32e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2816,
+    "run_id": "26161033685",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26161033685",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260520122229_16f8413ff4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2816,
+    "run_id": "26161033685"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-20T12:22:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

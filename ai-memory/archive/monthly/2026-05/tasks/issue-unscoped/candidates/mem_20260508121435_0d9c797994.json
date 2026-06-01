@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/targeted_file_context.py:161,433 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: An invalid explicit Semble binary path logs `invalid_binary` and then the caller logs `missing_binary` for the same overflow event.\n  WHY: This emits duplicate `SEMBLE_FALLBACK` lines for one root cause and misclassifies the failure mode, though fallback still works correctly.\n- scripts/targeted_file_context.py:226 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: `SEMBLE_QUERY` uses the queried file path as `target`, creating unbounded log-cardinality.\n  WHY: Each file path becomes a distinct log series, which hurts aggregation and alerting at scale.\n- scripts/targeted_file_context.py:390,420,433,438,521 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: `SEMBLE_FALLBACK` uses the queried file path as `target`, creating unbounded log-cardinality.\n  WHY: Each fallback path becomes a distinct log series, including the response_over_budget path, which breaks aggregation at scale.\n- scripts/targeted_file_context.py:437-450 | severity=medium | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: Semble chunk retrievals still increment `inlined`, so the summary reports partial retrievals as fully inlined files.\n  WHY: Downstream consumers can misread context completeness and assume full-file coverage that is not present.\n- scripts/targeted_file_context.py:390,522,528-529 | severity=medium | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: `--semble-max-chunks` defaults to 3 in code/CLI, but the integration plan documents 6.\n  WHY: Unset environments retrieve fewer chunks than the documented contract, reducing overflow context.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/targeted_file_context.py:161,433 | confidence=4\n  PROBLEM: `_resolve_semble_bin` logs `invalid_binary`, then `emit_context` logs `missing_binary` for the same invalid-path fallback.\n  WHY: This produces duplicate `SEMBLE_FALLBACK` logs and mislabels invalid-binary failures as missing-binary, though fallback still works.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/targeted_file_context.py:450 | confidence=5\n  PROBLEM: `inlined += 1` is executed for Semble chunk retrievals on overflowed files, so partial results are counted as fully inlined files.\n  WHY: The summary `X inlined, Y marker-only` misrepresents context completeness.\n- scripts/targeted_file_context.py:226 | confidence=5\n  PROBLEM: `SEMBLE_QUERY` uses the relative file path as `target`, creating unbounded log-cardinality.\n  WHY: Each path becomes a distinct log series, hurting aggregation at scale.\n- scripts/targeted_file_context.py:433,438 | confidence=5\n  PROBLEM: `SEMBLE_FALLBACK` uses the relative file path as `target`, creating unbounded log-cardinality.\n  WHY: Each fallback path becomes a distinct log series, hurting aggregation at scale.\n- scripts/targeted_file_context.py:390,529 | confidence=4\n  PROBLEM: The default `--semble-max-chunks` is 3, but the integration plan says 6.\n  WHY: Unset environments fetch fewer chunks than documented.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/targeted_file_context.py:226 | confidence=4\n  PROBLEM: `SEMBLE_QUERY` uses the queried relative file path as `target`, creating high-cardinality log labels.\n  WHY: Each unique file path generates a distinct log series, which makes log aggregation unusable at scale.\n- scripts/targeted_file_context.py:433,438 | confidence=4\n  PROBLEM: `SEMBLE_FALLBACK` uses the queried relative file path as `target`, creating high-cardinality log labels.\n  WHY: Each unique file path generates a distinct fallback log series, preventing aggregation across files.\n- scripts/targeted_file_context.py:449 | confidence=4\n  PROBLEM: `inlined += 1` counts Semble chunk retrievals as fully inlined files.\n  WHY: The summary reports full inlines even when only partial chunks were retrieved, which misleads consumers about context completeness.\n- scripts/targeted_file_context.py:390 and 529 | confidence=4\n  PROBLEM: `--semble-max-chunks` defaults to 3 in code, but the integration plan documents 6.\n  WHY: When the environment variable is unset, overflow queries retrieve fewer chunks than intended by the documented contract.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/targeted_file_context.py:226 | confidence=5\n  PROBLEM: The `SEMBLE_QUERY` log uses the queried relative file path as `target`.\n  WHY: Unbounded file paths create high-cardinality log labels that overwhelm aggregation systems.\n- scripts/targeted_file_context.py:433,438 | confidence=5\n  PROBLEM: The `SEMBLE_FALLBACK` logs use the queried relative file path as `target`.\n  WHY: This creates the same high-cardinality aggregation problem on fallback paths.\n- scripts/targeted_file_context.py:450 | confidence=5\n  PROBLEM: `inlined += 1` counts Semble chunk retrievals as fully inlined files.\n  WHY: The summary reports full-file inlining even when only partial chunks were retrieved.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/targeted_file_context.py:226 | confidence=5\n  PROBLEM: `SEMBLE_QUERY` uses the dynamic relative path as `target=`.\n  WHY: This causes log-cardinality explosion because every queried file path creates a separate log series.\n- scripts/targeted_file_context.py:390,420,521 | confidence=5\n  PROBLEM: `SEMBLE_FALLBACK` logs use the dynamic relative path as `target=`.\n  WHY: This creates the same unbounded cardinality problem for fallback paths, including response_over_budget.\n- scripts/targeted_file_context.py:437-450 | confidence=4\n  PROBLEM: `inlined += 1` is incremented after emitting partial Semble chunks.\n  WHY: The final summary reports full inlines even when the context contains only retrieved chunks, misleading the consuming model about completeness.\n- scripts/targeted_file_context.py:522 | confidence=4\n  PROBLEM: `--semble-max-chunks` hardcodes default=3 despite the integration plan specifying 6.\n  WHY: Unset environments retrieve fewer chunks than the documented integration contract expects.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "4b4365b1a8a2bfb12dfefde6ed7a74595921cd26af05e7965f9a2a33d6cfbce0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2294,
+    "run_id": "25554169128",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25554169128",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260508121435_0d9c797994",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2294,
+    "run_id": "25554169128"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-08T12:14:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:3315-3318 | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The GH_PAT prerequisite messages for the two jobs use different workflow-family names across the adjacent dispatch checks.\n  WHY: The reviewer reported that this creates inconsistent operator-facing messaging when GH_PAT is missing, so the prerequisite text is harder to interpret.\n- .github/workflows/review_autofix.yml:4650-4666 | confidence=5\n  flagged_by: [minimax_minimax-m2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: The comment describing legacy synchronize-self-skip is inaccurate because AUTOFIX_SKIP_SELF_TRIGGERED=true is not sufficient by itself; the guard also depends on continuation_enabled=false, and ledger-only commits skip unconditionally.\n  WHY: All three reviewers agreed the comment overstates what one variable does and omits at least one additional condition in the actual shell guard.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/review_autofix.yml:4651-4658 | confidence=5\n  PROBLEM: The comment block is misleading about the legacy skip behavior for AUTOFIX_CONTINUATION_ENABLED and AUTOFIX_SKIP_SELF_TRIGGERED.\n  WHY: The actual code requires both AUTOFIX_SKIP_SELF_TRIGGERED=true and continuation_enabled=false, so the comment as written does not match the guard.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/review_autofix.yml:~4650-4663 | confidence=3\n  PROBLEM: The comment directly above the self-triggered skip condition documents only one of the skip paths.\n  WHY: The actual condition also skips unconditionally for is_ledger_only_commit=true, so the comment omits a separate path that affects whether dispatch happens.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/test-and-mark-stable.yml:3315-3318 | confidence=3\n  PROBLEM: Error message now claims \"workflow-log-analysis dispatch\" but the reviewer reported the adjacent job messaging as inconsistent with the symmetric swap at line 3504.\n  WHY: The reviewer said the mismatched workflow names erode operational clarity when GH_PAT is missing.\n- .github/workflows/review_autofix.yml:4652-4666 | confidence=5\n  PROBLEM: Comment \"# Opt in to the legacy synchronize-self-skip with AUTOFIX_SKIP_SELF_TRIGGERED=true on the repo variable.\" implies skip_self_triggered=true alone opts into legacy behavior.\n  WHY: The actual condition requires both AUTOFIX_SKIP_SELF_TRIGGERED=true and continuation_enabled=false, so the comment does not match the guard.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "0d2f1fd63f7bc96e4c02e0fb1d51c77247d72a7dfa678b8caec0d8cd1fad1945",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2561,
+    "run_id": "25797132056",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25797132056",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260513121045_7f78839dde",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2561,
+    "run_id": "25797132056"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-13T12:10:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

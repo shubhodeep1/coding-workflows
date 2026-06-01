@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/implement_diagnose_post_codex_failure.sh:269-273 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m2_5, mistralai_mistral-small-2603, qwen_qwen3_6-plus]\n  PROBLEM: When cached issue metadata contains a literal empty-string body, the body file ends up empty and `[ ! -s \"${ISSUE_BODY_FILE}\" ]` treats the cache hit as a miss, triggering a live GitHub API fallback.\n  WHY: The API returns the same empty body, so correctness is unchanged; the cost is redundant requests and extra latency on cache hits.\n- scripts/implement_diagnose_post_codex_failure.sh:269 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: When cached JSON contains `\"body\": \"\"`, `jq -er '.body'` writes a single newline byte, so the issue-body file is not truly empty even though the cached body is empty.\n  WHY: The reviewer reports this only changes the file contents by one byte on a theoretical edge case and does not change API-call behavior.\n- scripts/implement_diagnose_post_codex_failure.sh:269-273 | severity=low | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Direct `jq -er '.body'` extraction does not handle null/missing body cases properly.\n  WHY: The reviewer says jq exits non-zero on missing/null body in the cache, which causes an unnecessary live API fallback on cache hits.\n- scripts/implement_diagnose_post_codex_failure.sh:273 | severity=low | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Suppressing jq stderr makes malformed cached JSON failures silent.\n  WHY: Hidden parse errors make cache-handling problems harder to diagnose in production.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/implement_diagnose_post_codex_failure.sh:269 | severity=low | confidence=2\n  PROBLEM: When the cached JSON contains `\"body\": \"\"` (literal empty string, not null and not absent), `jq -er '.body'` exits 0 and writes a single newline byte, so the file contains `\"\\n\"` instead of being truly empty.\n  WHY: `[ ! -s \"${ISSUE_BODY_FILE}\" ]` then evaluates false, so the empty cached body is accepted as-is; the only concrete effect is a one-byte difference in the body file on a theoretical edge case.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/implement_diagnose_post_codex_failure.sh:269 (`jq -er '.body' \"${ISSUE_META_FILE}\" > \"${ISSUE_BODY_FILE}\" 2>/dev/null || : > \"${ISSUE_BODY_FILE}\"`) | severity=low | confidence=4\n  PROBLEM: When cached issue body is the literal empty string `\"\"`, `jq -er '.body'` succeeds with exit 0 but writes zero bytes to the output file.\n  WHY: The subsequent check `[ ! -s \"${ISSUE_BODY_FILE}\" ]` then evaluates to true, unnecessarily triggering the live GitHub API fallback for every cached empty-body case.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/implement_diagnose_post_codex_failure.sh:269-273 | severity=low | confidence=3\n  PROBLEM: Direct jq '.body' extraction without handling null/missing body cases properly.\n  WHY: jq exits non-zero on missing/null body in cache, triggering unnecessary fallback to API on cache hits.\n- scripts/implement_diagnose_post_codex_failure.sh:270-273 | severity=low | confidence=3\n  PROBLEM: `[ ! -s \"${ISSUE_BODY_FILE}\" ]` incorrectly triggers on empty cached bodies.\n  WHY: Empty/zero-byte cached body file is treated as missing, so the API fallback runs.\n- scripts/implement_diagnose_post_codex_failure.sh:273 | severity=low | confidence=3\n  PROBLEM: Suppressing jq stderr makes malformed cached JSON failures silent.\n  WHY: This can hide parse errors during cache handling.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/implement_diagnose_post_codex_failure.sh:269 | severity=low | confidence=2\n  PROBLEM: When cached issue metadata contains \"body\": \"\" (empty string), jq -er '.body' succeeds with exit 0 but writes zero bytes to ISSUE_BODY_FILE. The subsequent [ ! -s \"${ISSUE_BODY_FILE}\" ] check treats this as a cache miss and falls through to the live GitHub API, causing an unnecessary API call.\n  WHY: Correctness is preserved (fallback returns same data), but an extra API call is made on the rare edge case where a GitHub issue has an explicitly empty string body rather than null.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/implement_diagnose_post_codex_failure.sh:269-272 | severity=low | confidence=3\n  PROBLEM: When the cached JSON contains a literal empty-string body (`\"body\": \"\"`), `jq -er '.body'` exits 0 but writes zero bytes to the file. The subsequent `[ ! -s \"${ISSUE_BODY_FILE}\" ]` test is true, so the script falls through to the live GitHub API fetch even though the cached empty string is the correct content.\n  WHY: The API call succeeds and returns the same empty body, so behavior is functionally unchanged \u2014 the cost is one redundant `GET /issues/{n}` request on this edge case path.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "d538740d61d4892aa459e7c1966b1eb0c3ec9e52ff9501d30c3f5158ac299c1c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2971,
+    "run_id": "26462805705",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26462805705",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260526171657_5600d17849",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2971,
+    "run_id": "26462805705"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-26T17:16:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

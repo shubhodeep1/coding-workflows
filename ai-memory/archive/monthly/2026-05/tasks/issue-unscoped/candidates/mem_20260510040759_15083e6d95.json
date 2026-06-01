@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/render_prompt.sh:33-59 | severity=medium | confidence=5\n  flagged_by: [qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: When `SEMBLE_PREFETCH` is unset, the renderer emits the literal `{{SEMBLE_PREFETCH}}` placeholder instead of failing fast.\n  WHY: Both reviewers report that the unresolved placeholder reaches the rendered prompt, which can confuse the LLM and should be rejected.\n- scripts/orchestrate_poll_process.sh:9417-9418 | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The review-blocked judge installs its trap after `assemble_judge_static_context`, leaving early exits before later temp-file setup without cleanup.\n  WHY: The reviewer says long poll cycles can accumulate stale temp artifacts until explicit cleanup.\n- scripts/review_rb_judge.sh:307-310 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The truncation block runs `mv -f` even when `head -c` fails, so an empty or partial temp file can replace the existing Semble context file.\n  WHY: Multiple reviewers report that a transient read or filesystem failure could silently degrade the context file rather than preserving the original.\n- tests/test_judge_semble_prefetch_contract.py:28-44 | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `_run_render` uses tab indentation while the rest of the test file uses four spaces.\n  WHY: The reviewer says this is inconsistent with the file\u2019s indentation style and could be problematic in some editors.\n- scripts/orchestrate_poll_process.sh:2789-2793 | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The integration-conflict judge creates multiple `mktemp` files but relies only on explicit end-of-function `rm` calls for cleanup.\n  WHY: The reviewer says an early exit, signal, or termination before the final cleanup would leave stale temporary files behind.\n- scripts/review_rb_judge.sh:373 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The explicit cleanup uses `${RB_JUDGE_SEMBLE_QUERY_FILE}` / `${RB_JUDGE_SEMBLE_CONTEXT_FILE}` without the `${var:-}` fallback used in the EXIT trap.\n  WHY: The reviewer says the trap is safer if variables are unexpectedly unset; impact is low.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_rb_judge.sh:309-310 | severity=low | confidence=2\n  PROBLEM: `head -c ... > .tmp 2>/dev/null || true` is followed by unconditional `mv -f .tmp context_file`.\n  WHY: A transient read failure can leave an empty `.tmp` that replaces the valid Semble context file, degrading the prompt.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_rb_judge.sh:307-308 | severity=low | confidence=2\n  PROBLEM: The `mv` operation runs unconditionally even if `head` fails.\n  WHY: A transient failure in `head` could replace a valid context file with an empty or partial one, degrading the downstream prompt.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_judge_semble_prefetch_contract.py:28-44 | confidence=3\n  PROBLEM: The function `_run_render` uses tab characters for indentation while the rest of the file uses 4 spaces.\n  WHY: This violates the file\u2019s indentation consistency and could cause readability issues or subtle editor-dependent problems.\n- scripts/orchestrate_poll_process.sh:2789-2793 | confidence=3\n  PROBLEM: The integration conflict judge creates temp files with `mktemp` but relies on explicit `rm -f` cleanup at the end of the function.\n  WHY: If the function exits early due to an error, signal, or termination, temporary files can be left behind.\n- scripts/review_rb_judge.sh:307-310 | confidence=3\n  PROBLEM: The `mv` runs unconditionally even if `head -c` fails.\n  WHY: A read error or file issue could replace a valid context file with an empty or partial one.\n- scripts/review_rb_judge.sh:373 | confidence=2\n  PROBLEM: The explicit cleanup omits the `${var:-}` fallback used in the EXIT trap.\n  WHY: If a variable were unexpectedly unset, the shell could error instead of safely removing nothing.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/render_prompt.sh:~49-55 | confidence=5\n  PROBLEM: The `{{SEMBLE_PREFETCH}}` case branch prints the literal placeholder when `SEMBLE_PREFETCH` is unset instead of failing.\n  WHY: The reviewer says unresolved placeholders should be rejected so the raw marker does not reach the rendered prompt.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/render_prompt.sh:33-59 | confidence=5\n  PROBLEM: The `SEMBLE_PREFETCH` case prints the literal `{{SEMBLE_PREFETCH}}` line when the env var is unset, without the exit-and-error path used for `WORKFLOW_EDIT_RESTRICTION`.\n  WHY: The reviewer says raw placeholders can confuse prompt parsing and the contract test expects an unresolved-SEMBLE failure.\n- scripts/orchestrate_poll_process.sh:9417-9418 | confidence=3\n  PROBLEM: The trap is installed after `assemble_judge_static_context()`, leaving early returns from static assembly without cleanup.\n  WHY: The reviewer says stale temp files can accumulate across stalled-issue loops until explicit cleanup.\n- scripts/review_rb_judge.sh:307-310 | confidence=3\n  PROBLEM: `head -c ... > .tmp || true` followed by `mv -f .tmp context || true` can overwrite a valid context with an empty or partial temp file.\n  WHY: A transient read error can corrupt `RB_JUDGE_SEMBLE_CONTEXT_FILE` before prompt rendering.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/review_rb_judge.sh:307-310 | confidence=2\n  PROBLEM: The `head -c` / `mv` truncation pattern can corrupt the context file if `head` encounters an I/O error.\n  WHY: If `head -c` writes nothing or partial data, `mv` replaces the valid original file with the corrupted version.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "1f81f7ecbbae9252188c1907578df029e98077e17e079f30d01180e217f298af",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2398,
+    "run_id": "25619016204",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25619016204",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510040759_15083e6d95",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2398,
+    "run_id": "25619016204"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 6 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-10T04:07:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

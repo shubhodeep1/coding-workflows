@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:129-141 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: The renamed CI step label no longer clearly matches the tests executed in that block, making CI failure attribution misleading.\n  WHY: All reviewers who flagged this reported a step-name/test-grouping mismatch; the disagreement is only about whether the ahead-by gate test was moved or still grouped, not about the underlying mislabeling.\n- scripts/review_rb_judge.sh:169-247 | severity=low | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The last-run diff removes a duplicate `_embed_input_file` helper block.\n  WHY: The reviewer treated this as peripheral cleanup with no runtime impact; no other reviewer reported a distinct defect in this block.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Automated forward-merge of stable into main failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on stable is also present on main.\"\n  expected_change_site: All files listed in the forward-merge conflict block of the PR description.\n  confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: LAST_RUN_DIFF and current PR diff only touch .github/workflows/ci.yml and scripts/review_rb_judge.sh; the substantive conflict-resolution changes from the original merge commit are already present on HEAD.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- File: .github/workflows/ci.yml\n  Code: step name change on line ~134\n  Problem: The CI step name was changed from \"Integration-ahead-by gate regression tests\" to \"Orchestrate poller regression tests\", but the test list still includes `test_orchestrate_integration_ahead_by_gate.py` while the commands run `test_orchestrate_poll_process.py` and `test_orchestrate_poll_noop_suspicious_recovery.py`.\n  Why it fails at runtime: CI logs and failure attribution become misleading; operators debugging will see the wrong step name for the actual tests being run.\n  ISSUE_CONFIDENCE: 4\n\n- File: scripts/review_rb_judge.sh\n  Code: lines 169-247, duplicate _embed_input_file helper removal\n  Problem: The last-run diff removed a duplicate `_embed_input_file` helper block, but this change appears to be peripheral to the actual forward-merge resolution work.\n  Why it fails at runtime: No runtime impact; this is cosmetic cleanup with no functional change.\n  ISSUE_CONFIDENCE: 5\n\n- Requirement: \"Automated forward-merge of stable into main failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on stable is also present on main.\"\n  Expected change site: All files listed in the forward-merge conflict block of the PR description.\n  Evidence of absence: LAST_RUN_DIFF and current PR diff only touch .github/workflows/ci.yml and scripts/review_rb_judge.sh; the substantive conflict-resolution changes from the original merge commit are already present on HEAD.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- File: .github/workflows/ci.yml\n  Line or code reference: lines 129-141 (renamed step + test reorganization)\n  Problem: `test_orchestrate_integration_ahead_by_gate.py` was promoted (lines 132) to run in the same unnamed step as `test_orchestrate_lib.py` (line 131), losing its own dedicated CI step identity. The renamed \"Orchestrate poller regression tests\" step (line 134) now runs `test_orchestrate_poll_process.py` and `test_orchestrate_poll_noop_suspicious_recovery.py`, while the ahead-by-gate test is grouped with a library test in a step with no visible name in the diff context.\n  Why it fails at runtime: When `test_orchestrate_integration_ahead_by_gate.py` fails, the CI step name in logs will not immediately identify which test failed (it shares the step with `test_orchestrate_lib.py`), increasing mean-time-to-diagnosis. The prior dedicated step \"Integration-ahead-by gate regression tests\" gave it its own CI attribution. The rename partially addresses this \u2014 the new step name is a superset \u2014 but the ahead-by-gate test specifically loses its own named bucket.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: .github/workflows/ci.yml:133\n  Line or code reference: `- name: Orchestrate poller regression tests` (after last-run rename)\n  Problem: Step name no longer matches all tests executed inside the block (runs both the ahead-by gate test and full poller/noop tests).\n  Why it fails at runtime: CI log attribution, failure triage, and any downstream log-parsing that keys off step name become inconsistent with actual test coverage.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "71ac852a979fa4b2de3b3f0c89be9d4cd85d92f020a483cb6f013cc270163f6e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2972,
+    "run_id": "26477317450",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26477317450",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260526221823_87202452f4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2972,
+    "run_id": "26477317450"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-26T22:18:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:12099-12107 | severity=critical | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The judge override guard is reported to have malformed shell syntax with an extra `fi`.\n  WHY: mistralai marked it as a critical syntax error; other reviewers ran `bash -n` and treated it as a false positive, so the existence of the bug is disputed.\n- tests/test_orchestrate_poll_process.py:2166-2225 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: The docstring still contains stale line-number references for the related shell/test code paths.\n  WHY: Multiple reviewers flagged outdated references in the docstring as maintenance drift rather than a runtime defect.\n- tests/test_orchestrate_poll_process.py:2265-2335 | severity=medium | confidence=3\n  flagged_by: [mistralai_mistral-small-2603, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: The validation-enabled test does not fully prove the finalize path because the second poll does not explicitly assert the intermediate validation/merge-state progression.\n  WHY: Reviewers said the single validated poll can overclaim completion or mask a deferred-merge path, so the regression coverage is under-asserted.\n- tests/test_orchestrate_poll_process.py:2252-2319 | severity=medium | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The second `_run_poller` call may not preserve PR state changes from the first poll, so the merge path can query incomplete PR data.\n  WHY: moonshotai said the mock `gh pr view` reads from `store['prs']`, but the first run's `final_merge_pr` is not persisted into that store for the second run.\n- scripts/orchestrate_poll_process.sh:12090-12107 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The nested `if`/`fi` structure around the override guard is considered structurally fragile and error-prone.\n  WHY: The reviewer called it syntactically valid but brittle for future maintenance.\n- tests/test_orchestrate_poll_process.py:2290-2303 | severity=low | confidence=2\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The test can pass after a single validated poll without distinguishing an immediate merge from a deferred merge path.\n  WHY: qwen said the mocked synchronous merge can mask the real deferred-completion path, so the assertion surface over-claims what one poll proves.\n- scripts/orchestrate_poll_process.sh:12093-12100 | severity=low | confidence=2\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The operator-facing warning/comment text changed semantics while retaining old grep tokens.\n  WHY: x-ai_grok warned that existing monitors looking for the old phrasing may no longer match exactly, even though `project_complete=` remains for compatibility.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_orchestrate_poll_process.py:2198 | severity=low | confidence=4\n  PROBLEM: The docstring in `test_complete_verdict_falls_through_to_finalize_on_integration_drift` still cites stale line numbers.\n  WHY: The reviewer said `L12101` and `L3986-4006` no longer match the current code locations, which can mislead future maintenance.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/orchestrate_poll_process.sh:12099-12107 | severity=critical | confidence=5\n  PROBLEM: The judge override guard is reported to have malformed shell syntax with an extra `fi`.\n  WHY: The reviewer said Bash would hit an unexpected-token syntax error and fail the workflow.\n- tests/test_orchestrate_poll_process.py:2265-2294 | severity=medium | confidence=3\n  PROBLEM: The validation test does not assert enough intermediate validation state to prove the finalize path ran.\n  WHY: The reviewer said the second poll should also check validation state such as `validation_completed_cycle` to harden the regression.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_orchestrate_poll_process.py:2252-2319 | severity=medium | confidence=3\n  PROBLEM: The second `_run_poller` call may not preserve PR state from the first poll, so `finalize_integration_merge_if_needed` can query incomplete data.\n  WHY: The reviewer said the mock `gh pr view` reads from `store['prs']`, but the first run's `final_merge_pr` is not persisted into that store.\n- scripts/orchestrate_poll_process.sh:12090-12107 | severity=low | confidence=2\n  PROBLEM: The nested `if`/`fi` structure around the override guard is considered structurally fragile.\n  WHY: The reviewer called it syntactically valid but error-prone for future maintenance.\n- tests/test_orchestrate_poll_process.py:2170-2225 | severity=low | confidence=3\n  PROBLEM: The docstring contains stale line-number references.\n  WHY: The reviewer said `L12101` and `L3986-4006` are stale and create documentation drift.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_orchestrate_poll_process.py:2290-2303 | severity=low | confidence=2\n  PROBLEM: The test can pass after a single validated poll without distinguishing an immediate merge from a deferred merge path.\n  WHY: The reviewer said the mocked synchronous merge can mask a future `pending` completion path, so the assertion surface over-claims what one poll proves.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_orchestrate_poll_process.py:lines ~2166-2188 and ~2265-2335 | severity=low | confidence=3\n  PROBLEM: The docstring still contains stale line-number references, and the second validation poll does not explicitly assert the carried-forward validation/merge state.\n  WHY: The reviewer said both the old line references and the implicit reliance on `_run_poller` state-merging weaken the regression guarantee.\n- scripts/orchestrate_poll_process.sh:12093-12100 | severity=low | confidence=2\n  PROBLEM: The operator-facing warning/comment text changed semantics while preserving old grep tokens.\n  WHY: The reviewer warned existing monitors looking for the old phrasing may partially miss the new message even though `project_complete=` remains for compatibility.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "331bc30ce52db6867757ffcf3b591f120479b3b3bea4cd57510c16b595a1eeb2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2798,
+    "run_id": "26144599085",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26144599085",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260520063750_32783b326e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2798,
+    "run_id": "26144599085"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 7 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-20T06:37:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

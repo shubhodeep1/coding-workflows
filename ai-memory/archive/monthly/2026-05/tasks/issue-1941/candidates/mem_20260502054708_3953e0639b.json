@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: How wide should the scope of this issue be?**\nChoices:\n- **A** \u2014 One workflow family only (RECOMMENDED)\n- **B** \u2014 Two related workflow families\n- **C** \u2014 Three or more workflow families / repository-wide cleanup\nReply: `Q1: A`\n**Q2: Which workflow family is in scope?**\nChoices:\n- **A** \u2014 `clarify`, `plan`, or `implement` (RECOMMENDED)\n- **B** \u2014 `review_autofix`, PR merge, or conflict resolution (RECOMMENDED)\n- **C** \u2014 `orchestrate*`, validation, issue/PR status sync, memory, or workflow updates (RECOMMENDED)\n**Note:** If `Q1: A`, reply to `Q2` with exactly one letter. If `Q1: B`, reply with two letters (for example `Q2: A+B`). If `Q1: C`, reply `Q2: A+B+C`.\nReply: `Q2: A`\n**Q3: Which best matches the improvement you want?**\nChoices:\n- **A** \u2014 Fix incorrect issue/PR labels, comments, or phase transitions in the chosen scope (RECOMMENDED)\n- **B** \u2014 Fix incorrect dispatch, retrigger, merge, or validation behavior in the chosen scope (RECOMMENDED)\n- **C** \u2014 Intentionally add or change workflow behavior\n- **D** \u2014 No behavior change; improve docs/configuration/runtime/API/log noise only\nReply: `Q3: A`\n**Q4: Should existing interfaces, names, and contracts remain backward compatible except for the selected improvement?**\nChoices:\n- **A** \u2014 Yes, preserve them and keep the change minimal (RECOMMENDED)\n- **B** \u2014 No, breaking behavior/interface changes are intended\n- **C** \u2014 Not sure\n**Note:** `Q4: B` is incompatible with `Q3: D`.\nReply: `Q4: A`",
+  "fingerprint": "fce4d91f8a30ee5d211c895c1a02dfbc5fe2d416cda5ea66cc636cf725f5a07b",
+  "lineage": {
+    "issue_number": 1941,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25245012627",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25245012627",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260502054708_3953e0639b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1941,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25245012627"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #1941 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-02T05:47:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

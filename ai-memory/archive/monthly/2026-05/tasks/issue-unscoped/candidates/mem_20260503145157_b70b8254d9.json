@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:4 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The file contains an extra fourth comment line, so it no longer matches the required exactly three-line canary content.\n  WHY: All reviewers identify the added line as violating the explicit \u201cexactly these three lines (no more, no less)\u201d requirement, which will cause the exact-content smoke validation to fail.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:4 | severity=medium | confidence=5\n  PROBLEM: The file contains 4 lines instead of the required exactly 3, and line 4 is a bait comment that must be removed.\n  WHY: The smoke canary check performs exact content matching, so the extra comment line violates the specification and causes validation to fail.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:4 (entire line) | severity=medium | confidence=5\n  PROBLEM: The file contains a fourth line (`# E2E_EDITOR_BAIT_25281876234: this line should be removed by the editor (smoke gate)`) that violates the task requirements.\n  WHY: The issue specification explicitly requires exactly three lines with no extra content, so the extra line causes the canary validation to fail.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:4 (entire line) | severity=medium | confidence=5\n  PROBLEM: Extra comment line violates the requirement for exactly 3 lines with no extra content.\n  WHY: The E2E smoke test validation expects exactly the 3 specified lines, and the extra comment line will cause the canary check to fail.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:4 | severity=medium | confidence=5\n  PROBLEM: The file contains a fourth comment line that violates the explicit task requirement of \u201cexactly these three lines (no more, no less)\u201d and the constraint against extra content.\n  WHY: The smoke test validation performs exact content matching on this canary file, so a fourth line will cause the validation to fail.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/e2e_smoke_canary.txt:4 (# E2E_EDITOR_BAIT_25281876234: this line should be removed by the editor (smoke gate)) | severity=medium | confidence=5\n  PROBLEM: File contains four lines including an extraneous comment line instead of exactly the three specified lines.\n  WHY: The task mandates exactly three lines with no extra content like comments, and the smoke test validation checks for precise content match.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:4 | severity=medium | confidence=5\n  PROBLEM: The file contains 4 lines instead of the required exactly 3 lines.\n  WHY: The task specification explicitly requires the file to contain exactly three lines, so the extra comment line causes exact-content validation to fail.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "b3a7c8ea1f43bea39cbdb616f5c5db66987e6d19607165d4dd6e00d281376ece",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2039,
+    "run_id": "25282089655",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25282089655",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260503145157_b70b8254d9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2039,
+    "run_id": "25282089655"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-03T14:51:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

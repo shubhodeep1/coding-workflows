@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Document the new `PR_PROCESSED_ALERT_LEVEL` environment variable and its contract in the repository's review-pipeline documentation\n  expected_change_site: `agents.md` review-pipeline env-var table or nearby section\n  confidence=[1-5]\n  flagged_by: [deepseek_deepseek-v4-pro, mistralai_mistral-small-2603]\n  EVIDENCE: `agents.md` had no entry for `PR_PROCESSED_ALERT_LEVEL` in its review-pipeline table and the env var was documented in `README.md`; the last run diff adds a single documentation row for `PR_PROCESSED_ALERT_LEVEL` to `agents.md:254`\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- Requirement: The PR description states the intent is to resolve merge conflicts from the automated forward-merge and carry stable's changes into main. The last run (`[ai-autofix] apply PR fixes` commit `f99e0741`) addresses a documentation completeness gap: the `PR_PROCESSED_ALERT_LEVEL` env var was documented in `README.md` but missing from the `agents.md` review-pipeline contract table.\n  Expected change site: `agents.md:254`\n  Evidence of absence: The addition is a single line appending the new variable to the existing table, consistent in format with the surrounding rows.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement: Document the new `PR_PROCESSED_ALERT_LEVEL` environment variable and its contract in the repository's review-pipeline documentation\n  Expected change site: `agents.md` review-pipeline env-var table or nearby section\n  Evidence of absence: Before recent autofix runs, `agents.md` had no entry for `PR_PROCESSED_ALERT_LEVEL` in its review-pipeline table, leaving the contract undocumented\n  ISSUE_CONFIDENCE: 5\n  Status: RESOLVED \u2014 The latest run added `PR_PROCESSED_ALERT_LEVEL` to the `agents.md` review-pipeline table, documenting this step-scoped override.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "ed49d534474d7a31923ae28c6c1cff669bb53c5e3e616ed487de4d5f309d81d0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2954,
+    "run_id": "26370590131",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26370590131",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260524193531_e9233de689",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2954,
+    "run_id": "26370590131"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-24T19:35:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

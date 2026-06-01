@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":2982,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/2982\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/2983\",\"pr_number\":2983,\"branch\":\"ai/issue-2982\",\"run_id\":\"26630085547\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/26630085547\",\"changed_files\":[\".github/workflows/review_autofix.yml\",\"scripts/fixtures/cloudflare-learnings/phase-b-risk-tier-always-full.patch\",\"scripts/fixtures/cloudflare-learnings/phase-b-risk-tier-full.patch\",\"scripts/fixtures/cloudflare-learnings/phase-b-risk-tier-lite.patch\",\"scripts/fixtures/cloudflare-learnings/phase-b-risk-tier-trivial.patch\",\"scripts/review_run_reviewers.sh\",\"tests/test_review_autofix_review_pipeline_contract.py\"]}",
+  "fingerprint": "7c41ba8426cd488fde6859501bee5152af8624c2ff8dd19b40c4d0bc807be0df",
+  "lineage": {
+    "issue_number": 2982,
+    "parent_ids": [],
+    "pr_number": 2983,
+    "run_id": "26630085547",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26630085547",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/2983"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260529095427_855a3209f3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2982,
+    "level": "run",
+    "pr_number": 2983,
+    "run_id": "26630085547"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #2982: https://github.com/shubhodeep1/coding-workflows/pull/2983",
+  "timestamps": {
+    "created_at": "2026-05-29T09:54:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

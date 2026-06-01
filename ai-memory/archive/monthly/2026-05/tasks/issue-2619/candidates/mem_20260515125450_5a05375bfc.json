@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref\n- Branch: orchestrator/project-2617\n- Commit: 83df4a7b5aef57035d322c47917bcec75e0b1e82\n- Integration metadata matches checkout\n- Clarification: none required; proceeded from the issue body\n\nActions taken\n- Inspected `scripts/review_run_reviewers.sh` prompt assembly (`assemble_reviewer_prompt()` plus pass-1/pass-2 call sites)\n- Inspected `prompts/review-consolidator.txt` for the canonical seven lens headings\n- Inspected `.github/workflows/review_autofix.yml` support-prompt staging\n- Inspected `tests/test_review_semble_contract.py` for the existing reviewer prompt contract pattern\n\nImplementation plan\n\n1. Files likely to change\n- `prompts/review-reviewer-checklist.txt` (new)\n- `scripts/review_run_reviewers.sh`\n- `tests/test_review_semble_contract.py`\n\n2. Functions or modules to implement\n- Add `prompts/review-reviewer-checklist.txt` as the checklist template, using the same seven headings already canonicalized in `prompts/review-consolidator.txt`, in this order:\n  - SECURITY & INPUT VALIDATION\n  - CORRECTNESS & LOGIC\n  - CONCURRENCY / RACES / IDEMPOTENCY\n  - ERROR PATHS & EDGE CASES\n  - PERFORMANCE & RESOURCE USE\n  - INDEX-CONTRACT / DB RULES\n  - NAMING / BACKWARD COMPATIBILITY\n- Put the `NONE`-when-empty instruction in that prompt file, while keeping the existing reviewer issue-report format intact (`File:`, `Line or code reference:`, `Problem:`, `Why it fails at runtime:`, `ISSUE_CONFIDENCE:`).\n- In `scripts/review_run_reviewers.sh`, add a small gated prompt-append path near `assemble_reviewer_prompt()` rather than rewriting the big heredoc:\n  - resolve the checklist template from `${SUPPORT_PROMPTS_DIR:-prompts}`\n  - append it only when `REVIEW_REVIEWER_CHECKLIST_ENABLED=1`\n  - keep the existing prompt-injection guard, two-pass flow, reviewer model fan-out, watchdog behavior, and raw output handling unchanged\n- Reuse the shared `assemble_reviewer_prompt()` hook so both pass-1 and pass-2 inherit the same checklist logic without duplicated code. This also keeps single-pass behavior consistent if that fallback is used.\n- Follow the existing support-prompt resolution style already used elsewhere (for example `scripts/review_consolidate.sh` uses `${SUPPORT_PROMPTS_DIR:-prompts}`).\n\n3. Data structures affected\n- New prompt asset: `prompts/review-reviewer-checklist.txt`\n- Generated prompt artifacts:\n  - `reviewer_prompt.txt`\n  - `reviewer_prompt_pass1.txt`\n  - `reviewer_prompt_pass2.txt`\n- New internal env contract: `REVIEW_REVIEWER_CHECKLIST_ENABLED`\n- Reviewer output stays plain text; no JSON/schema change to reviewer bundle serialization\n\n4. API or interface changes\n- New optional environment toggle consumed by `scripts/review_run_reviewers.sh`\n- No changes to:\n  - reviewer models\n  - pass structure\n  - watchdog/polling behavior\n  - reviewer output file names\n  - reviewer bundle format consumers\n\n5. Potential risks or edge cases\n- `REVIEW_REVIEWER_CHECKLIST_ENABLED` does not exist yet in the repo; default-off behavior should be explicit.\n- `review_autofix.yml` currently stages only a small subset of prompt files into `SUPPORT_PROMPTS_DIR`; if the script relies only on `SUPPORT_PROMPTS_DIR`, consumer-repo runs may miss the new template unless there is a fallback path or a later workflow-staging follow-up.\n- Do not insert the checklist ahead of the prompt-injection guard; the guard currently lives at the top of the reviewer body and should remain first.\n- The checklist adds headings/`NONE` lines to reviewer output; downstream consumers must still see unchanged issue blocks when findings exist.\n- Keep `reviewer_prompt_body.txt` as the base body artifact if possible; append the checklist during final prompt assembly rather than folding it into the heredoc.\n\n6. Testing considerations\n- Extend `tests/test_review_semble_contract.py` with a narrow reviewer-prompt contract test that asserts:\n  - the new prompt file exists\n  - it contains the seven headings in the expected order\n  - it includes the `NONE` instruction\n  - `scripts/review_run_reviewers.sh` gates checklist inclusion on `REVIEW_REVIEWER_CHECKLIST_ENABLED`\n  - both pass-1 and pass-2 prompt assembly paths inherit the checklist append\n  - the disabled path omits the checklist cleanly\n- Because `tests/test_review_semble_contract.py` has a manual `main()`, add the new test to that runner as well.\n- Targeted validation should be the narrow contract test only, not a broader review-pipeline refactor.\n\nConflicts detected\n- Confirmed: `prompts/review-reviewer-checklist.txt` is missing.\n- Confirmed: `scripts/review_run_reviewers.sh` currently assembles reviewer prompts without the checklist block.\n- Conflict with stated narrow scope: consumer-repo support-prompt staging does not currently install this new prompt file, so prompt resolution must tolerate that or a later workflow change will be needed.\n\nAssumptions\n- Default behavior should remain unchanged unless the flag is explicitly enabled.\n- The canonical source for the seven lens names/order is `prompts/review-consolidator.txt`.\n- The design doc wording itself is not required to plan this change because the issue already specifies the needed checklist behavior.\n\nMissing-context notes\n- The design doc text is not included in the planning context, so exact prose beyond the required headings/`NONE` instruction should be kept conservative and aligned to the current repo contracts.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "bc2166d2b9c9c5fae3c60d4c7ed43b511a3887f0b34f140e6e3a734ec41f24e3",
+  "lineage": {
+    "issue_number": 2619,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25918530709",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25918530709",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2619"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260515125450_5a05375bfc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2619,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25918530709"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2619",
+  "timestamps": {
+    "created_at": "2026-05-15T12:54:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

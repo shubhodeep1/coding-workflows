@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1. Which specific part of this repository should be improved? (Choose one)\nChoices:\nA. A specific workflow/script/file \u2014 reply with the exact path or phase name (RECOMMENDED)\nB. Documentation only \u2014 reply with the exact doc/file\nC. A specific pipeline phase \u2014 reply with one of: `clarify`, `plan`, `implement`, `review_autofix`, `orchestrate`, or `validate` (RECOMMENDED)\nQ2. What kind of improvement do you want in that target? (Choose one)\nChoices:\nA. Fix a bug or regression \u2014 include current behavior and expected behavior (RECOMMENDED)\nB. Improve reliability, runtime, or cost \u2014 include the symptom or metric you want improved (RECOMMENDED)\nC. Add or change functionality \u2014 include the user-visible behavior you want\nD. Wording/docs cleanup only \u2014 include the text or section to change\nQ3. What concrete reference should planning use? (Choose one or more)\nChoices:\nA. A failing workflow run URL/number, issue, or PR reference (RECOMMENDED)\nB. A log snippet or exact error text\nC. The exact file path(s) involved\nD. A short \u201cdone when\u2026\u201d acceptance statement (RECOMMENDED)",
+  "fingerprint": "2fc1efcfb66e0649f1deadda772297ef181dafb0cf89935e055942005d7f768a",
+  "lineage": {
+    "issue_number": 2648,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25958568627",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25958568627",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260516093600_ce9165d2a6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2648,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25958568627"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #2648 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-16T09:36:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

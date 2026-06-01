@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:4 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The file has an extra 4th line containing the bait comment, so it no longer matches the required exact three-line content.\n  WHY: All reviewers identified the same exact-content mismatch: the file must contain only `status: ok`, `run_id: 25237291900`, and `updated-by: ai-pipeline`.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  PROBLEM: The file contains a 4th line (`# E2E_EDITOR_BAIT_25237291900: this line should be removed by the editor (smoke gate)`) that violates the task specification.\n  WHY: The task explicitly requires exactly three lines: `status: ok`, `run_id: 25237291900`, `updated-by: ai-pipeline`; the extra comment line causes the smoke validation to fail.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt | confidence=5\n  PROBLEM: The file contains a fourth line instead of the required exactly three lines.\n  WHY: The current content includes the bait comment line and must be reduced to `status: ok`, `run_id: 25237291900`, `updated-by: ai-pipeline`.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  PROBLEM: The file contains a fourth line (the bait comment) when it should contain exactly three lines as specified in the task requirements.\n  WHY: The task requires exact three-line content with no extra content, so the bait line must be removed.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt | confidence=5\n  PROBLEM: The editor failed to remove the bait line that was injected during the implement step, leaving 4 lines instead of the required 3.\n  WHY: The last run diff shows the bait line persisted, so the file no longer matches the required exact content.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  PROBLEM: File contains four lines including an extra bait comment line after the required three-line content.\n  WHY: The task requires an exact three-line match with no extra content, so the current file will fail smoke-test validation.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  PROBLEM: The file contains a fourth line (a bait comment) that violates the explicit requirement for exactly three lines with no extra content.\n  WHY: The smoke test validation compares the file content against the expected three-line format, and the bait line causes a mismatch.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "aa4e8976e8fe4459dbe6f5844c1b3c82219e4ec4da44ac331f2e06ea05cd26e7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1920,
+    "run_id": "25237552686",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25237552686",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260502000707_bb1acfea23",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1920,
+    "run_id": "25237552686"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-02T00:07:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

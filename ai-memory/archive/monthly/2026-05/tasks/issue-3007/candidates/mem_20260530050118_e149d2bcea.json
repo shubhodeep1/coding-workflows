@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `02e63fb261c4a47c29c9bdedb6db0bd8315646cd` on `orchestrator/project-2974` (matches the integration-branch metadata).\n\nClarification mapping:\n- No `Q1`/`Q2` batch was issued.\n- `/answer [auto-answered-by-orchestrator]` only confirms continuation; it does not add new requirements.\n\nRepresentative pattern inspected:\n- `scripts/review_consolidate.sh` + `prompts/review-consolidator.txt` + the existing consolidator assertions in `tests/test_review_rereview_and_approval_rubric.py`. The judge change should mirror that shipped rereview contract instead of inventing a new ledger format.\n\nAutomation / wiring summary:\n- Change type: modify existing code only.\n- Existing entry point: `.github/workflows/review_autofix.yml` already invokes `scripts/review_rb_judge.sh` in the review-blocked judge step when autofix retries are exhausted; the same path is reused by `review_rb_judge_dispatch.yml`.\n- New scheduler wiring: none.\n- New long-running supervisor: none.\n- DB work / gate pattern: none.\n- `docs/scripts-pending-removal.md` entry: none.\n\nImplementation plan\n\n1. Files likely to change\n- `scripts/review_rb_judge.sh`\n- `prompts/mode-judge-review-blocked.txt`\n- `tests/test_review_rereview_and_approval_rubric.py`\n\nLikely no workflow-file change is needed because `.github/workflows/review_autofix.yml` already exports `REVIEW_LEDGER_ENABLED`, `REVIEW_LEDGER_REREVIEW_ENABLED`, and `REVIEW_LEDGER_PATH` into the judge environment.\n\n2. Functions / modules to implement\n- In `scripts/review_rb_judge.sh`, add a judge-side helper equivalent to consolidator-side `render_prior_round_decisions_file()`:\n  - gate on `REVIEW_LEDGER_ENABLED` and `REVIEW_LEDGER_REREVIEW_ENABLED`;\n  - read `REVIEW_LEDGER_PATH`;\n  - parse the existing ledger entries;\n  - render the same compact one-line summary format used by the consolidator (`issue_id=...; file=...; lines=...; status=...; prior_decision=...; persist_count=...; editor_outcomes=...`);\n  - fail open to an empty file when the ledger is missing, empty, or unparsable.\n- Add judge runtime paths/defaults for the ledger input and rendered prior-decision artifact under `RUNTIME_DIR`.\n- Inject a dedicated `=== BEGIN PRIOR ROUND DECISIONS ===` / `=== END PRIOR ROUND DECISIONS ===` section into the review-blocked judge prompt only when the rendered file is non-empty.\n- Update `prompts/mode-judge-review-blocked.txt` so the judge explicitly treats that section as advisory ledger history, not fresh reviewer evidence, and so it mirrors the consolidator\u2019s rereview rule: repeated `accepted-residual` / `won't-fix` items should not be re-raised unless current evidence clearly worsened.\n- Extend `tests/test_review_rereview_and_approval_rubric.py` with a judge-prompt assembly helper and judge-specific assertions, reusing the same local-execution style the repo already uses for prompt-contract tests.\n\n3. Data structures affected\n- No ledger schema change; reuse the existing review-ledger entry format.\n- New/updated runtime artifact in the judge path: rendered prior-decision text file under `RUNTIME_DIR`.\n- Prompt surface change only: a new advisory prior-decision section in the judge input.\n- Judge JSON output schema stays unchanged.\n\n4. API / interface changes\n- No external API changes.\n- No new env vars should be introduced; the judge should start honoring the existing `REVIEW_LEDGER_*` knobs already wired by the workflow.\n- Internal prompt contract changes only.\n\n5. Risks / edge cases\n- `scripts/review_rb_judge.sh` does not currently have the consolidator\u2019s `review_log()` helper, so the ledger-render code cannot be copied blindly; any diagnostic path should stay lightweight and fail open.\n- Missing/empty ledger, malformed ledger, or `python3` unavailability must not block the judge.\n- The new section should stay compact so the judge prompt does not regress toward the 1 MB stdin limit.\n- Prior decisions must remain advisory: they can suppress stale repeats, but they must not hide genuinely worsened evidence in the current diff/code.\n- Keep existing shell function names and prompt-assembly anchors stable where possible; several nearby tests extract `review_rb_judge.sh` snippets structurally.\n\n6. Testing considerations\nAdd/extend regression coverage in `tests/test_review_rereview_and_approval_rubric.py` for:\n- prompt assembly when rereview is enabled and the ledger exists;\n- flag gating when `REVIEW_LEDGER_ENABLED=0` or `REVIEW_LEDGER_REREVIEW_ENABLED=0`;\n- fail-open omission when the ledger is missing/empty;\n- prompt-text semantics that distinguish advisory prior decisions from new reviewer evidence and require \u201cre-emit only if worsened\u201d.\n\nPrimary verification:\n- `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_rereview_and_approval_rubric.py`\n\nRecommended nearby smoke checks if prompt-assembly structure shifts:\n- `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_surface_prompt_hardening.py`\n- `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_judge_semble_prefetch_contract.py`\n\nConflicts found\n- None. The issue description matches the current code: rereview-aware ledger handling exists in the consolidator path, and the review-blocked judge path does not yet consume that ledger context.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "f8854c2b564b404d1a39fb6f6cae1dab9cdc1684a82f05b9a0c84da080e3103b",
+  "lineage": {
+    "issue_number": 3007,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26675039869",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26675039869",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3007"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260530050118_e149d2bcea",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3007,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26675039869"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3007",
+  "timestamps": {
+    "created_at": "2026-05-30T05:01:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

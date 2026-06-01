@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for issue #2097 on `main` at `7fe2b8015e21bee2ce349250cea937b295e3c86c`.\n\n1. Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n2. Functions or modules to implement\n- No code modules or functions are involved.\n- Perform a full-file overwrite of `tests/e2e_smoke_canary.txt` so its contents are exactly:\n  - `status: ok`\n  - `run_id: 25347776357`\n  - `updated-by: ai-pipeline`\n\n3. Data structures affected\n- Plain text file content only.\n- No schemas, collections, indexes, or structured runtime data are affected.\n\n4. API or interface changes\n- None.\n- No CLI, workflow interface, env var, or external API change is required.\n\n5. Potential risks or edge cases\n- The file must be overwritten completely, not appended to.\n- The final file must contain exactly three lines and no extra header/footer content.\n- Preserve the requested literal values, especially `run_id: 25347776357`.\n- Scope must stay limited to the single file named in the issue.\n\n6. Testing considerations\n- Verify the file exists and was updated in place.\n- Verify the file content matches the three required lines exactly.\n- Verify no other repository files changed.\n\nConflict check\n- No factual conflicts found between the issue description and the provided planning context.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "261fbd7ba2052e62c4b60a25617e56302d927065ac44fd9943e901af96b6b1fa",
+  "lineage": {
+    "issue_number": 2097,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25347847475",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25347847475",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2097"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260504225210_11017e5912",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2097,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25347847475"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2097",
+  "timestamps": {
+    "created_at": "2026-05-04T22:52:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

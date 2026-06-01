@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/drift_audit.sh:\u2248 604-507 | severity=high | confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: `_pattern_matches_patch` strips diff-line prefixes before applying the regex, so removals can still satisfy `must_contain` fingerprints.\n  WHY: This can make `_cluster_resolved_by_pr_files` report a false resolution and close the drift tracker even though the required content was removed.\n- scripts/drift_audit.sh:\u2248 517 | severity=high | confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: `_cluster_resolved_by_pr_files` treats a removed file as a resolution for every fingerprint kind, including `must_contain`.\n  WHY: Deleting the file that should contain the required pattern is counted as fixing the drift, so the tracker can be closed while the underlying issue remains.\n- scripts/drift_audit.sh:\u2248 1450 | severity=high | confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: `_fetch_latest_merged_linked_prs` can drop issues when the generated GraphQL aliases and response-processing assumptions do not line up for every supplied issue number.\n  WHY: Missing nodes are silently skipped during recheck, which can leave persistent drift trackers open indefinitely.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/drift_audit.sh:lines \u2248 604-507 in the function body | ISSUE_CONFIDENCE: 5\n  Problem: The helper strips all diff-line prefixes (via `line_prefixes` parameter that is never used for `+`/`-` discrimination) before applying the regex. The same function is called for both `must_contain` and `must_not_contain` fingerprints.\n  Why it fails at runtime: When a PR removes a line that previously matched a `must_contain` fingerprint, `_cluster_resolved_by_pr_files` can incorrectly return `true` for that fingerprint, causing the drift-audit job to close the tracker issue even though the required content is gone. This defeats the whole point of the \u201cpersistent drift\u201d tracker.\n- scripts/drift_audit.sh:lines \u2248 517 | ISSUE_CONFIDENCE: 5\n  Problem: The function treats a removed file (status == \"removed\") as a resolution for *any* fingerprint kind, including `must_contain`.\n  Why it fails at runtime: Deleting the file that was supposed to contain a required pattern is counted as \u201cthe violation has been fixed\u201d, so tracker issues for must-contain drift can be closed when the root cause is still present on integration.\n- scripts/drift_audit.sh:\u2248 line 1450 | ISSUE_CONFIDENCE: 4\n  Problem: The dynamically generated query only creates `i0:`, `i1:`, \u2026 aliases up to the batch size, but the result-processing code assumes node `iN` always exists for every supplied issue number. If the batch size is truncated or an issue number is missing from the response, the recheck for that issue is silently dropped.\n  Why it fails at runtime: Issues that carry persistent `PRE_EXISTING_FINGERPRINT_DRIFT_V1` markers can be omitted from the daily drift-audit re-evaluation, allowing long-lived false-positive trackers to remain open forever.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "1e417d90d8d7e6350f5e841a9621e02c1ad42c3d99b367a47a147e00903e1736",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2865,
+    "run_id": "26250898495",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26250898495",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260521205804_16d434fddd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2865,
+    "run_id": "26250898495"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-21T20:58:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

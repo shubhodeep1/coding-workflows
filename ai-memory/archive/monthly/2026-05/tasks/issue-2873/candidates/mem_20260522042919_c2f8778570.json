@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nActions taken: inspected `.github/workflows/issue_pr_status.yml` and `tests/test_issue_pr_status_payload_fallback_contract.py` on `0a239a05c94899b4ad77e67778f82fce427b1825` (`orchestrator/project-2867`). Checkout ref matches integration metadata.\n\nClarification mapping:\n- No `Q1`/`Q2` batch was asked.\n- `/answer [auto-answered-by-orchestrator]` means proceed with the issue body as authoritative.\n\nAutomation / wiring\n- Change type: modify existing code only.\n- Entry point: reusable workflow `.github/workflows/issue_pr_status.yml` (`workflow_call`), specifically job `sync-issue-status`, step `Update linked issue labels when PR closes`, feeding `Send PR merged Telegram alert`.\n- New script/supervisor: none.\n- DB work / gates: none.\n- `docs/scripts-pending-removal.md`: no entry needed.\n\nFiles likely to change\n- `.github/workflows/issue_pr_status.yml`\n- `tests/test_issue_pr_status_payload_fallback_contract.py`\n\nFunctions / modules to implement\n1. In `Update linked issue labels when PR closes`, reuse the existing orchestrator classifier output (`TRACKING_ISSUES` / `MANAGED_ISSUES`) instead of keeping it step-local only.\n   - Follow the existing `LINKED_ISSUE_NUMBERS` \u2192 `$GITHUB_ENV` threading pattern already used later in the same step.\n   - Export the reused classification in a form the merged-alert step can consume safely even when empty.\n\n2. Also thread forward classifier-status/uncertainty information.\n   - The alert step needs to know whether the earlier result is authoritative or whether it should fall back.\n   - Important nuance from the current code: `ORCH_BATCH_FAILED` means \u201cGraphQL batch failed,\u201d not necessarily \u201cfinal classification is unusable,\u201d because the step already has a REST fallback. Do not reuse that flag blindly without defining the downstream meaning.\n\n3. In `Send PR merged Telegram alert`, replace the current per-linked-issue body fetch loop with the exported classification on the common path.\n   - Suppress the alert from `MANAGED_ISSUES` (or a derived managed boolean), not from tracking membership.\n   - Keep the GraphQL-first / REST-fallback safety model intact by retaining a fallback path only when the earlier classification is unavailable/uncertain.\n\nData structures affected\n- Existing newline-delimited linked-issue buckets:\n  - `LINKED_ISSUE_NUMBERS`\n  - `TRACKING_ISSUES`\n  - `MANAGED_ISSUES`\n- Likely one new internal env contract for downstream alert gating, e.g. a classifier-status flag or derived \u201cmanaged issue present\u201d boolean.\n\nAPI / interface changes\n- No external API change.\n- Internal workflow-step interface change only: the label/close step will export orchestrator classification metadata for later steps.\n- No Telegram helper API changes.\n- No shared linked-issue parser/helper refactor.\n\nPotential risks / edge cases\n- `set -u` is enabled in both steps, so exported vars must always be initialized, including empty values.\n- Do not change routing semantics:\n  - tracking issues still skip label/close mutation;\n  - managed children still close on merged integration-branch PRs;\n  - standalone issues still follow the existing main-branch gate.\n- The current alert step is body-marker-only; the earlier classifier is label-or-body for managed children. Reusing classifier output intentionally aligns the alert step with the classifier contract, but tracking precedence must still win.\n- If prior classification is uncertain, avoid silently defaulting to \u201cnon-orchestrated\u201d and sending a false merged alert for orchestrator-owned work.\n\nTesting considerations\n- Extend `tests/test_issue_pr_status_payload_fallback_contract.py` to cover the new step-to-step contract.\n- Add assertions that the workflow exports the reused classifier result from the label/close step.\n- Add alert-step-specific assertions that the common merged-alert path consults the exported classification instead of doing one body GET per linked issue.\n- Keep existing assertions that the batched GraphQL classifier and per-issue REST fallback remain present.\n- If whole-file string checks become ambiguous because the REST fallback must remain elsewhere in the workflow, add a tiny local step-extraction helper inside this test file only; do not create a shared helper/refactor.\n\nAssumptions\n- The intended `files_touched` scope is exactly the workflow and the named contract test, since no explicit list was included in the planning context and the issue explicitly says not to broaden into helper/shared-parser refactors.\n\nMissing-context notes\n- No explicit `files_touched` list was provided in the planning context; the plan keeps scope to the two issue-named files.\n- No factual repo/issue conflict found beyond the current implementation detail that the merged-alert step still performs its own body fetch loop today.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "3a473110f42662ec5576ff140d5db0ed3d5e8b01d1a40c6eae5410d47fee7126",
+  "lineage": {
+    "issue_number": 2873,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26268306446",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26268306446",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2873"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260522042919_c2f8778570",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2873,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26268306446"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2873",
+  "timestamps": {
+    "created_at": "2026-05-22T04:29:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

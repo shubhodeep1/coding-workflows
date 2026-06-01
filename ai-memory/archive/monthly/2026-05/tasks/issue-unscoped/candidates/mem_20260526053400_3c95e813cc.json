@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_noop_suspicious_recovery.py:after line 297 | confidence=[5]\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The new test function `test_sweep_skips_forward_merge_fallback_branches()` duplicates the existing `test_sweep_skips_forward_merge_fallback_prs()` by asserting the same two grep patterns against the same `_sweep_block()` text slice.\n  WHY: Both tests pass, but the second is fully redundant and adds CI/runtime and maintenance overhead if the sweep comment text changes.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- File: tests/test_orchestrate_poll_noop_suspicious_recovery.py\nLine or code reference: test_sweep_skips_forward_merge_fallback_branches (last_run_diff, new function after line 297)\nProblem: The last_run adds a new test function `test_sweep_skips_forward_merge_fallback_branches()` that asserts exactly the same two grep patterns (`[[ \"${N_HEAD}\" == auto/forward-merge-stable-* ]]` and `\"Create a merge commit\"`) against the same `_sweep_block()` as the existing function `test_sweep_skips_forward_merge_fallback_prs()` (already present in the PR diff at line 300). Both functions grep the identical sweep text slice for the identical strings, so the second function is fully redundant.\nWhy it fails at runtime: Not a runtime failure -- both tests pass. But the duplicate test inflates CI runtime, adds maintenance overhead (if the poller comment text ever changes, both tests must be updated), and obscures which test is the canonical contract for forward-merge fallback skipping.\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "5b7ba7dc03e883d342b882f040bcb6b263bcfdbe758f534f55b5a18f56027d11",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2954,
+    "run_id": "26433744399",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26433744399",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260526053400_3c95e813cc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2954,
+    "run_id": "26433744399"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-26T05:34:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

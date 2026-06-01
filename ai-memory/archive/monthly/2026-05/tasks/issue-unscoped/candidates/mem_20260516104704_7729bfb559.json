@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:1355 | flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: Using `git ls-tree -r --name-only ... | grep` to check whether a file exists scans the whole tree and is less efficient than `git cat-file -e`.\n  WHY: The reviewer called it a minor inefficiency / cleanup-only issue rather than a correctness bug.\n- .github/workflows/implement.yml:349-361 | flagged_by: [moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: `gh_api_with_retry` discards stderr from failed API calls, so fallback warnings lose the underlying API diagnostics.\n  WHY: Both reviewers identified the helper's `2>/dev/null` redirection as reducing observability when retries are exhausted.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_rb_judge.sh:1355\n  PROBLEM: Using `git ls-tree -r --name-only \"${RB_HEAD_SHA}\" -- \"${RB_FILE}\" | grep -Fx -- \"${RB_FILE}\"` iterates the tree to check file existence.\n  WHY: The reviewer noted this is functionally correct but less efficient than `git cat-file -e \"${RB_HEAD_SHA}:${RB_FILE}\"`.\n- .github/workflows/implement.yml:349-358\n  PROBLEM: The local retry helper redirects stderr to `/dev/null` on every attempt, discarding specific API failure diagnostics.\n  WHY: The reviewer noted that when retries are exhausted, the warning loses rate-limit, authentication, and HTTP status details that would aid debugging.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/implement.yml:349-361\n  PROBLEM: The local retry helper discards stderr from failed API calls, which hides diagnostic details when the step falls back to the default ref.\n  WHY: The reviewer noted that redirecting stderr to `/dev/null` suppresses rate-limit, authentication, and HTTP status information.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "bd10d60a1d5a5d4a06c4abb3132a82641d867b775051ade5223904da735d45f5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2635,
+    "run_id": "25959622365",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25959622365",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260516104704_7729bfb559",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2635,
+    "run_id": "25959622365"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-16T10:47:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

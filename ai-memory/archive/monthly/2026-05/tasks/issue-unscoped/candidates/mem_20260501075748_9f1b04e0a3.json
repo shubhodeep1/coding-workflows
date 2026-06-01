@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The canary file contains a fourth bait line, so it does not match the required exact three-line content.\n  WHY: The smoke-test validation checks for an exact content match and will fail while the extra line remains; all six reviewers reported this same issue.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  PROBLEM: The file contains 4 lines instead of the required exactly 3 lines.\n  WHY: The smoke-test validation gate checks the canary file against the exact three-line golden content, so the extra line causes the validation to fail.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  PROBLEM: The file contains 4 lines instead of the required exactly 3 lines.\n  WHY: The smoke-test validation checks for exact content match, and the explicit requirement in issue #1857 is \"exactly these three lines (no more, no less)\".\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  PROBLEM: The file contains 4 lines but issue #1857 explicitly requires exactly 3 lines with no extra content.\n  WHY: The smoke test validation will fail because it checks for exactly 3 lines matching the specified content, and the extra 4th line violates the \"exactly these three lines (no more, no less)\" constraint.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  PROBLEM: The file contains an extra fourth line that violates the explicit task requirement of \"exactly these three lines (no more, no less)\".\n  WHY: The E2E smoke gate validates the canary file by comparing its content against the exact golden content, so the extra fourth line causes the content check to fail.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  PROBLEM: File contains 4 lines instead of exactly 3 as required by issue #1857.\n  WHY: Smoke test validation checks for exact content match, so the extra line causes a mismatch and failure.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  PROBLEM: The file contains 4 lines instead of the required exactly 3 lines.\n  WHY: The E2E smoke test validates the canary file against exact golden content matching the three specified lines, so any extra line causes a content mismatch failure.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "d44db8ab80f50f4e0c84e569a70896ff365cc2b833a375e2c5008920e5101a3f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1861,
+    "run_id": "25206966310",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25206966310",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260501075748_9f1b04e0a3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1861,
+    "run_id": "25206966310"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-01T07:57:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

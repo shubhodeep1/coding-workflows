@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref\n- HEAD: `08e7211e8cfad24e148ac6ca90cd45d3e6e64148`\n- Checked-out branch: `orchestrator/project-2306`\n- Integration branch metadata: `orchestrator/project-2306`\n- Integration branch mismatch: no\n\nClarification interpretation\n- No clarification questions were asked for this issue.\n- The `/answer [auto-answered-by-orchestrator]` comment simply confirms the issue was already sufficiently specified, so the issue body is the full requirement source.\n\nObserved current state\n- `tests/e2e_smoke_canary.txt` exists.\n- Its first lines currently are:\n  1. `status: ok`\n  2. `run_id: 25548305105`\n  3. `updated-by: ai-pipeline`\n\nImplementation plan\n\n1. Files likely to change\n- `tests/e2e_smoke_canary.txt` only.\n\n2. Functions or modules to implement\n- No code functions or modules need to be added or modified.\n- Make a minimal in-place edit to `tests/e2e_smoke_canary.txt`:\n  - leave line 1 as `status: ok`\n  - replace line 2 with `decompose-run: 25558853263`\n  - preserve any content after line 2 exactly as-is\n\n3. Data structures affected\n- Only the plain-text header content of the canary file is affected.\n- The second-line key/value changes from `run_id: ...` to `decompose-run: ...` for this fixture.\n- No runtime schema, JSON structure, workflow input, or code-level data structure changes are involved.\n\n4. API or interface changes\n- None.\n- The only externally visible change is the file content expected by the smoke issue acceptance criteria.\n\n5. Potential risks or edge cases\n- Avoid rewriting the whole file in a way that changes unrelated trailing content, whitespace, or newline handling.\n- Preserve line 3 and any later lines unchanged if they are present at implementation time.\n- Stay strictly within `files_touched`; no other file should be edited.\n- If the file contents differ slightly by implementation time, the safe behavior is still to normalize only the first two lines to the required values and leave everything after line 2 untouched.\n\n6. Testing considerations\n- Verify `tests/e2e_smoke_canary.txt` starts with exactly:\n  1. `status: ok`\n  2. `decompose-run: 25558853263`\n- Verify any pre-existing trailing content after line 2 remains unchanged.\n- Verify no other files were modified, e.g. `git diff --stat` should show only `tests/e2e_smoke_canary.txt`.\n\nPotential conflicts\n- No issue/codebase path conflict was found.\n- No integration-branch mismatch was found.\n- The current file does not yet satisfy the requested second line (`run_id: 25548305105` vs. required `decompose-run: 25558853263`), which is the intended edit rather than a blocker.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "857cdf87fd9b46000d23b0e7a9cadec02e530a0a15f23c01cfc33e97e9b7b8a5",
+  "lineage": {
+    "issue_number": 2307,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25559175906",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25559175906",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2307"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260508135020_483a1ae17c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2307,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25559175906"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2307",
+  "timestamps": {
+    "created_at": "2026-05-08T13:50:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

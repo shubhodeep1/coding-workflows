@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:169-246 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Removing the local fallback block can leave `_init_prompt_budget`, `_cleanup_prompt_budget`, and `_embed_input_file` undefined if `gh_helpers.sh` is not sourced at runtime.\n  WHY: The script still references those helpers after the deletion, and the reviewer flagged that there is no runtime guard ensuring the imported module always provides them; other reviewers disagreed and treated the removal as safe because `gh_helpers.sh` is sourced early.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- File: scripts/review_rb_judge.sh\n  Code: Removal of local fallback block for helpers _init_prompt_budget, _cleanup_prompt_budget, _embed_input_file\n  Problem: If gh_helpers.sh is not sourced at runtime, the active script would lack the helper definitions, causing a runtime error at the call sites.\n  Why it fails at runtime: Code in scripts/review_rb_judge.sh still references _init_prompt_budget, _cleanup_prompt_budget, and _embed_input_file after the local fallback block removal. If these helpers aren't provided by an imported module, the sourcing would exit non-zero or references would be undefined.\n  Evidence:\n  - Line 169: REVIEW_RB_SEMBLE_HELPERS_AVAILABLE=\"false\"\n  - No subsequent block attempts to provide the helpers if the sourcing fails.\n  ISSUE_CONFIDENCE: 4\n- File: scripts/review_rb_judge.sh\n  Code: Local fallback block removal with no safe import guard\n  Problem: The removal assumes the helpers will always be available from an imported module, but the active code does not enforce or verify sourcing of gh_helpers.sh.\n  Why it fails at runtime: At runtime, if gh_helpers.sh is not sourced before these helpers are referenced, the script would exit due to unbound variables or missing commands, breaking the review-rb-judge flow entirely.\n  Evidence: The active shell script body (lines 1\u2013169) assigns REVIEW_RB_SEMBLE_HELPERS_AVAILABLE=\"false\" and immediately proceeds to code that expects the helpers to be defined; there is no fallback mechanism or guard.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "2c924a98b7fc58a63e3e059cdc683f9a815140c51acbb7dfba6217db918d041a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2954,
+    "run_id": "26360120535",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26360120535",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260524114342_0e75e943d8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2954,
+    "run_id": "26360120535"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-24T11:43:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

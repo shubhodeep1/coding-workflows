@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_synthesise_smoke.sh:491-498 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: CURRENT_ROUND is not independently validated before path construction, so the script relies on upstream regex/arithmetic/literal fallbacks rather than an explicit invariant check.\n  WHY: The current code appears safe because invalid inputs fall back to \"1\" and the arithmetic path is regex-gated, but three reviewers flagged the lack of an explicit guard as a defense-in-depth concern.\n- scripts/review_synthesise_smoke.sh:570 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: The first `rm -rf \"${SYNTH_DIR}\"` has no explicit guard to confirm SYNTH_DIR stays under `.ai/review_runtime/`.\n  WHY: The path is currently derived from validated numeric inputs, so there is no demonstrated runtime failure, but reviewers flagged the missing boundary check as defense-in-depth.\n- scripts/review_synthesise_smoke.sh:588, 597, 677 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m2_5, z-ai_glm-5]\n  PROBLEM: The recursive deletions of `SYNTH_DIR` at these sites have no explicit non-empty or prefix guard before `rm -rf`.\n  WHY: The current validation chain keeps the path non-empty and under `.ai/review_runtime/`, but reviewers flagged the absence of a direct deletion guard as a defense-in-depth risk.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_synthesise_smoke.sh:491-498 | severity=low | confidence=2\n  PROBLEM: CURRENT_ROUND is derived from ROUND_NUMBER_BASE or AUTOFIX_ITERATION with regex validation, but there's no explicit numeric validation of CURRENT_ROUND itself before path construction.\n  WHY: The current code is actually safe because it defaults to \"1\" when inputs are invalid, but the cross-pollination noted this as a defense-in-depth concern.\n- scripts/review_synthesise_smoke.sh:588, 597, 677 | severity=low | confidence=2\n  PROBLEM: The rm -rf \"${SYNTH_DIR}\" commands execute without an explicit path-boundary guard to ensure SYNTH_DIR stays within .ai/review_runtime/.\n  WHY: Currently mitigated by PR_NUMBER validation (must match ^[0-9]+$), which prevents path traversal. The risk is low but a defense-in-depth path check would provide additional safety.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_synthesise_smoke.sh:570 | severity=low | confidence=2\n  PROBLEM: No guard verifies SYNTH_DIR is actually under .ai/review_runtime/ before recursive deletion\n  WHY: If path construction logic changes or variables are manipulated, rm -rf could escape the intended directory. A defensive check would prevent accidental deletion of unintended paths.\n- scripts/review_synthesise_smoke.sh:491-498 | severity=low | confidence=1\n  PROBLEM: While ROUND_NUMBER_BASE is checked with regex before arithmetic, there's no explicit handling for empty string case before the [[ test\n  WHY: An empty ROUND_NUMBER_BASE would fail the regex check and fall through to elif/else, which is correct behavior, but the pattern is slightly fragile. The current code works but could be more explicit.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/review_synthesise_smoke.sh:491\u2013498 | severity=low | confidence=1\n  PROBLEM: `ROUND_NUMBER_BASE` undergoes regex validation only when non-empty. When unset, the script falls back through `AUTOFIX_ITERATION` then defaults to `\"1\"` \u2014 all safe. However, once `CURRENT_ROUND` is set it is not independently validated before path construction at line 501.\n  WHY: In practice this path cannot produce a non-integer because every assignment path either regex-guards or assigns a string literal `\"1\"`. No runtime failure demonstrated. ISSUING this only as a note that the cross-pollination summary from kimi-k2 flagged it, but after full repo inspection the risk is negligible.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/review_synthesise_smoke.sh:588, 597, 677 \u2014 `rm -rf \"${SYNTH_DIR}\"` | severity=low | confidence=2\n  PROBLEM: No defensive non-empty or prefix guard on `rm -rf` before recursive deletion. While `SYNTH_DIR` is always a well-formed path under `.ai/review_runtime/` given the current validation chain (`PR_NUMBER` validated non-empty numeric, `CURRENT_ROUND` always a positive integer), a future refactor that weakens the upstream guards could allow an empty or unexpected path.\n  WHY: Does not fail today \u2014 all three `rm -rf` sites receive validated, non-empty relative paths. This is a defense-in-depth observation, not a current bug. The `cleanup_behavioural_smoke_codex` function at line 611 already demonstrates the pattern (`if [ -n \"${smoke_codex_home}\" ]` guard before `rm -rf`), but `SYNTH_DIR` sites lack the equivalent.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "0243bfb0f2803f78cb3a26ac4e44a5781751b9c126325aad32a30fc069027618",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2667,
+    "run_id": "25979830085",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25979830085",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517031947_7bda12a6ec",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2667,
+    "run_id": "25979830085"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-17T03:19:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:129-140 | severity=medium | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The \"Integration-ahead-by gate regression tests\" step no longer matches the commands it runs and appears to duplicate the poller tests while leaving the dedicated poller step intact.\n  WHY: CI step names no longer map 1:1 to their test groups, which makes failure attribution and log tracing unreliable.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Automated forward-merge of `stable` into `main` failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`.\" (plus explicit CAUTION about using \"Create a merge commit\").\n  expected_change_site: The merge commit that landed the substantive conflict resolution (historically 4288ae6 [ai-merge-resolve]) plus any residual non-whitespace changes required by the listed conflicting files.\n  confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: git merge-base confirms source SHA d4ed47ada2fcd1212bacb7ca765040d713f47965 is already an ancestor of HEAD; current PR diff (and LAST RUN DIFF) contains only whitespace/blank-line deletions in review_autofix.yml and orchestrate_poll_process.sh.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: .github/workflows/ci.yml\n  Line or code reference: lines 129-140 (last-run hunk now in LAST RUN DIFF)\n  Problem: The step name was changed to \"Integration-ahead-by gate regression tests\" but the run block executes only `tests/test_orchestrate_integration_ahead_by_gate.py`. The prior poller tests were moved into this step while the original dedicated poller step (lines ~520) was left untouched, creating duplicate execution of the poller tests and loss of dedicated attribution for the ahead-by gate.\n  Why it fails at runtime: CI logs and failure attribution will be confusing; the gate test no longer has a stable step name matching its purpose, and poller tests run twice per CI job.\n  ISSUE_CONFIDENCE: 5\n\n- File: .github/workflows/ci.yml\n  Line or code reference: step name at ~134 (\"Integration-ahead-by gate regression tests\")\n  Problem: Step name no longer accurately describes the commands it runs after the last-run reordering. This breaks the stable-log-prefix / observability contract that CI step names are expected to map 1:1 to test groups (see agents.md stable log prefixes section and prior editor summaries referencing it).\n  Why it fails at runtime: Workflow-log-analysis and operator troubleshooting lose traceability; grep on step name will no longer reliably surface ahead-by gate failures.\n  ISSUE_CONFIDENCE: 4\n\n- Requirement: \"Automated forward-merge of `stable` into `main` failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`.\" (plus explicit CAUTION about using \"Create a merge commit\").\n  Expected change site: The merge commit that landed the substantive conflict resolution (historically 4288ae6 [ai-merge-resolve]) plus any residual non-whitespace changes required by the listed conflicting files.\n  Evidence of absence: git merge-base confirms source SHA d4ed47ada2fcd1212bacb7ca765040d713f47965 is already an ancestor of HEAD; current PR diff (and LAST RUN DIFF) contains only whitespace/blank-line deletions in review_autofix.yml and orchestrate_poll_process.sh. No remaining substantive deltas from the original conflict list. The forward-merge intent is already satisfied in branch history.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "483e30bb3741c68788b9a6e333c31222c31d6a8bb309a1c8f24756836ac1ba04",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2972,
+    "run_id": "26536146619",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26536146619",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260527203028_eceb4e0d58",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2972,
+    "run_id": "26536146619"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-27T20:30:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

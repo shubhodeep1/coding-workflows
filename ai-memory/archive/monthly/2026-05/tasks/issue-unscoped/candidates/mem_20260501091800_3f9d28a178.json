@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:4 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The canary file contains a fourth bait-comment line, so it no longer matches the required exact three-line content.\n  WHY: All reviewers identified the same extra line at line 4 as a violation of issue #1877\u2019s exact-content requirement.\n- N/A:N/A | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The lint check-run failed on this PR.\n  WHY: Reviewers agree the CI lint check-run is failing, but disagree on causality: some consider it unrelated or pre-existing, while others think it is caused by the canary-file change.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  PROBLEM: The file contains a 4th line \u2014 a bait comment injected by the previous autofix run.\n  WHY: The linked issue #1877 explicitly requires the file to contain EXACTLY three lines: `status: ok`, `run_id: 25208710605`, and `updated-by: ai-pipeline` \u2014 no more, no less.\n- N/A (CI infrastructure):N/A | confidence=4\n  PROBLEM: The lint check-run (run 25208887468, job 73915025131) failed with conclusion=failure.\n  WHY: The CI lint job runs yamllint, actionlint, shellcheck, and Python unit tests \u2014 none of which read or operate on `tests/e2e_smoke_canary.txt`, so this failure is unrelated to the PR's changes.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:4 | severity=critical | confidence=5\n  PROBLEM: The file contains 4 lines instead of the required 3 lines.\n  WHY: Issue #1877 explicitly requires the file to contain exactly three lines with no extra content.\n- tests/e2e_smoke_canary.txt:N/A | severity=high | confidence=4\n  PROBLEM: The GitHub Actions lint check is failing.\n  WHY: The extra content in the file likely causes validation/lint rules to fail, blocking CI.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  PROBLEM: The last autofix run ADDED a bait comment line instead of ensuring the file contains exactly the three specified lines.\n  WHY: The task explicitly requires exactly three lines and forbids adding comments or extra content.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  PROBLEM: The last autofix run added a bait comment line to the canary file, resulting in 4 lines instead of the required 3.\n  WHY: Issue #1877 explicitly requires exactly the three lines `status: ok`, `run_id: 25208710605`, `updated-by: ai-pipeline` with no comments, headers, or extra content.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  PROBLEM: File contains 4 lines instead of the required exactly 3 lines specified in issue #1877.\n  WHY: Any validation script parsing this canary file expects precisely the three key-value lines with no trailing content.\n- N/A (CI check-run):N/A | confidence=5\n  PROBLEM: Lint job failed on this PR head SHA.\n  WHY: Lint enforces repo code style invariants; failure blocks the CI gate and prevents merge.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  PROBLEM: The file contains 4 lines instead of the required 3.\n  WHY: Issue #1877 explicitly requires the file content to be exactly three lines with no extra content.\n- tests/e2e_smoke_canary.txt (CI signal):N/A | confidence=4\n  PROBLEM: The lint check-run is failing.\n  WHY: The lint job in the CI pipeline has failed, and the failure blocks merge.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "6a95917730874a8f180cb65dd2542859c30a374f1cc0fdbb02cd0f5a81ab5bbb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1881,
+    "run_id": "25208887475",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25208887475",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260501091800_3f9d28a178",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1881,
+    "run_id": "25208887475"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-01T09:18:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:around line 536 (new params), lines 660-670 (store serialization), and main() lines 10099-10102 (unknown-test handling) | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The added parameters `compare_ahead_by` and `compare_ahead_by_force_error` pass through the test harness, but the underlying mock infrastructure in _run_poller does not implement the compare-ahead-by logic that is being tested.\n  WHY: The regression tests exercise only the shell-side override narrowing, not the full ahead-by re-check path, so a regression where the complete verdict incorrectly overrides `complete\u2192in_progress` despite integration drift could be missed.\n- tests/test_orchestrate_poll_process.py:main() lines 10099-10102 (unknown-test handling) | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: When an unknown test name is supplied via argv, the main() helper prints an error message and returns 1, but the preceding `sys.stdout.reconfigure` try/except could swallow failures, making targeted CI runs appear to pass even when the test selector found no tests.\n  WHY: Targeted workflow invocations that mistype a test name would report success/failure ambiguity in the stable gate.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Tests for the integration-ahead-by gate must exercise the actual polling behavior with ahead_by > 0, wave_complete=true, and validation_enabled=true, ensuring the deadlock cannot reoccur.\n  expected_change_site: orchestrate_lib.py functions called by _run_poller (cmd_check_wave_status and downstream validation logic)\n  confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The recent diff updates tests/test_orchestrate_poll_process.py\u2019s _run_poller harness and adds parameter plumbing, but does not integrate ahead-by simulation into the poller\u2019s mocked code path.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- tests/test_orchestrate_poll_process.py:around line 536 (new params), lines 660-670 (store serialization), and main() lines 10099-10102 (unknown-test handling) | confidence=4\n  PROBLEM: The added parameters `compare_ahead_by` and `compare_ahead_by_force_error` pass through the test harness, but the underlying mock infrastructure in _run_poller does not implement the compare-ahead-by logic that is being tested.\n  WHY: The three new regression tests exercise only the shell-side override narrowing, not the full ahead-by re-check path. This could mask a regression where the complete verdict incorrectly overrides `complete\u2192in_progress` despite integration drift.\n- tests/test_orchestrate_poll_process.py:main() lines 10099-10102 (unknown-test handling) | confidence=3\n  PROBLEM: When an unknown test name is supplied via argv, the main() helper prints an error message and returns 1, but the preceding `sys.stdout.reconfigure` try/except could swallow failures, making targeted CI runs appear to pass even when the test selector found no tests.\n  WHY: Targeted workflow invocations that mistype a test name would report success/failure ambiguity in the stable gate.\n- Requirement: Tests for the integration-ahead-by gate must exercise the actual polling behavior with ahead_by > 0, wave_complete=true, and validation_enabled=true, ensuring the deadlock cannot reoccur.\n  Expected change site: orchestrate_lib.py functions called by _run_poller (cmd_check_wave_status and downstream validation logic) should be extended to mock and simulate the real ahead-by check via a GitHub compare API or a fake function that respects the compare_ahead_by parameter and sets upstream state accordingly.\n  Evidence of absence: The recent diff updates tests/test_orchestrate_poll_process.py\u2019s _run_poller harness and adds parameter plumbing, but does not integrate ahead-by simulation into the poller\u2019s mocked code path.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "ead71af9f000f3091141e3a59a32723ef0a44d0e29a48250a8fd0cca2e0afadb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2817,
+    "run_id": "26167264786",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26167264786",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260520142648_b2c94bfd00",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2817,
+    "run_id": "26167264786"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-20T14:26:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_integration_ahead_by_gate.py:608-623 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, mistralai_mistral-small-2603, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok_4_20]\n  PROBLEM: When specific test names are passed on the command line and all requested names are valid, main() returns before reaching the test execution loop, so the selected tests never run.\n  WHY: All reviewers identified the same early-return path in main(); several noted this creates a silent false-pass because the command exits 0 without executing any selected tests.\n- tests/test_orchestrate_integration_ahead_by_gate.py:629 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The exit status from the test-execution loop is not propagated, so the runner can exit 0 even when tests fail.\n  WHY: This was reported only by one reviewer and is distinct from the early-return bug; it would mask genuine failures in CI and scripts.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_orchestrate_integration_ahead_by_gate.py:623 | confidence=5\n  PROBLEM: When specific test names are passed on the command line and all requested names are valid, main() returns 0 before ever reaching the test execution loop, so the selected tests never run.\n  WHY: Running `python3 tests/test_orchestrate_integration_ahead_by_gate.py test_finalize_returns_clean_when_pinned_merged_and_branch_contained` exits 0 instantly without executing any test, producing a silent false-pass.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_orchestrate_integration_ahead_by_gate.py:620-622 | confidence=5\n  PROBLEM: When specific test names are passed on the command line, main() returns after validating them and never reaches the test execution loop.\n  WHY: If the requested test name exists, the function returns 0 immediately without ever executing the test, so the command reports success while running zero tests.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- tests/test_orchestrate_integration_ahead_by_gate.py:617-623 | confidence=5\n  PROBLEM: When test names are passed as CLI arguments, main() validates them against selected and exits 0 if all are valid, never running the test execution loop.\n  WHY: Users expecting to run specific tests on the command line will get a 0 exit code and no tests executed, breaking the intended subset-run behavior.\n- tests/test_orchestrate_integration_ahead_by_gate.py:line 629 | confidence=4\n  PROBLEM: The main() function exits 0 via raise SystemExit(main()) regardless of whether any tests pass or fail, because the exit code from the test-execution loop is not propagated.\n  WHY: CI and scripts cannot distinguish between a passing and failing test run, masking genuine failures.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_orchestrate_integration_ahead_by_gate.py:617-623 | confidence=5\n  PROBLEM: When specific test names are passed on the command line, the main() function validates the test names but returns before executing them.\n  WHY: Running `python3 tests/test_orchestrate_integration_ahead_by_gate.py test_some_function` returns exit code 0 without actually running the test, creating a silent false positive.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_orchestrate_integration_ahead_by_gate.py:608-623 | confidence=5\n  PROBLEM: When the user passes specific test names on the command line and all names are valid, main() returns 0 before the test execution loop ever runs.\n  WHY: The code filters the list and then returns 0 when missing is empty, so the loop below is unreachable and no tests are actually invoked.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_orchestrate_integration_ahead_by_gate.py:610-623 | confidence=5\n  PROBLEM: When specific test names are supplied on the command line, main() validates them, prints any missing-name errors, then unconditionally returns, so no tests actually run.\n  WHY: The subsequent test execution loop is unreachable and the newly added direct-runner path exits cleanly with no PASS/FAIL output, breaking selective or smoke testing.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "6dc7dc184db2cec2dad117836e7c09000b7938e64acd907a9c06d4208d28a321",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2812,
+    "run_id": "26148342017",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26148342017",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260520080530_921792e6f3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2812,
+    "run_id": "26148342017"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-20T08:05:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/clarify.yml:500-532, 592 | severity=low | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: The Semble setup and index build steps run before `semantic_cache_lookup`, so on semantic-cache hits the workflow wastes CI time bootstrapping Semble before discovering Codex will be skipped.\n  WHY: Both reviewers flag the same pre-existing ordering issue; qwen notes that fixing it would require reordering existing setup/config steps, and the highest stated confidence is 4.\n- .github/workflows/orchestrate_clarify_respond.yml:504, 510, 516 | severity=low | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The new cache-hit guard avoids Semble bootstrap on cache hits, but the workflow still unconditionally defines `SEMBLE_AVAILABLE=false` / `SEMBLE_INDEX_PATH=...` / `SEMBLE_INDEX_AVAILABLE=false` earlier, so skipped runs still set unused Semble env vars.\n  WHY: The reviewer reports only minor overhead with no failure, and the stated confidence is 2.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/clarify.yml:500-512, 592 | severity=low | confidence=4\n  PROBLEM: The Semble setup and index build steps run before `semantic_cache_lookup`, so when semantic caching hits the workflow wastes CI time on Semble bootstrap work that will be unused because Codex is skipped.\n  WHY: The reviewer identifies the ordering as a pre-existing inefficiency in `clarify.yml`, and the review states confidence 4.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/clarify.yml:500-532, 592 | severity=low\n  PROBLEM: The Semble setup and index build steps run before `semantic_cache_lookup`, so on semantic-cache hits the workflow wastes CI time bootstrapping Semble before discovering Codex will be skipped.\n  WHY: The reviewer says the issue is valid but not in the last-run diff because fixing it would require reordering existing setup/config steps.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/orchestrate_clarify_respond.yml:504, 510, 516 | severity=low | confidence=2\n  PROBLEM: The added cache-hit guard avoids Semble bootstrap on cache hits, but the workflow still unconditionally defines `SEMBLE_AVAILABLE=false` / `SEMBLE_INDEX_PATH=...` / `SEMBLE_INDEX_AVAILABLE=false` in the earlier runtime-directory setup step.\n  WHY: The reviewer characterizes the impact as minor overhead with no failure, and the stated confidence is 2.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "7b826e8abf39f6c977fb1f49bd00e968d05e63582821f2de7afa8f587308b1fa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2386,
+    "run_id": "25605110751",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25605110751",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260509155859_f7d8fc7c68",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2386,
+    "run_id": "25605110751"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-09T15:58:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

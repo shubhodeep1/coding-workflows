@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":2571,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/2571\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/2575\",\"pr_number\":2575,\"branch\":\"ai/issue-2571\",\"run_id\":\"25839336925\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/25839336925\",\"changed_files\":[\"scripts/mcp_handshake_probe.py\",\"scripts/serena_stats_emit.py\",\"scripts/setup_serena.sh\",\"tests/e2e_smoke_canary.txt\"]}",
+  "fingerprint": "9c2b1386e65e5dff0345c55f98fadb7f736da5921c62583ce7d43774caf43cea",
+  "lineage": {
+    "issue_number": 2571,
+    "parent_ids": [],
+    "pr_number": 2575,
+    "run_id": "25839336925",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25839336925",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/2575"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260514031243_90ebb99454",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2571,
+    "level": "run",
+    "pr_number": 2575,
+    "run_id": "25839336925"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #2571: https://github.com/shubhodeep1/coding-workflows/pull/2575",
+  "timestamps": {
+    "created_at": "2026-05-14T03:12:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

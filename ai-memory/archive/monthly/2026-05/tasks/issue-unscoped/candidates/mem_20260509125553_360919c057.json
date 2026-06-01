@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:3299 | severity=low | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The orphan-workflows dispatch error text was flagged as stale/misleading after the job split.\n  WHY: One reviewer said it could confuse operators if GH_TOKEN is missing in the orphan-workflows path, while other reviewers said the wording is correct for the remaining dispatches.\n- .github/workflows/test-and-mark-stable.yml:3242-3477 | severity=high | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The workflow-log-analysis-test job was reported as a failing check run on the PR head.\n  WHY: The reviewer linked an actual failed GitHub Actions job and said it blocks merge until fixed; other reviewers said this failure is expected and non-gating by design.\n- scripts/orchestrate_poll_process.sh:1015-1031 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: Piping comment_body through printf to jq -Rs was flagged as potentially stalling on very large payloads.\n  WHY: One reviewer called it a low-priority theoretical stall and another suggested a tempfile for extra robustness, while other reviewers said the pipe behavior is standard and non-buggy.\n- .github/workflows/test-and-mark-stable.yml:5034-5055 | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: LOG_ANALYSIS handling in the notify message was flagged as inconsistent between the success and failure paths when the value is empty.\n  WHY: The reviewer said the success branch renders \"-\" while the failure loop may show the raw result, though other reviewers said the variable is always set and the code is consistent.\n- .github/workflows/test-and-mark-stable.yml:3303 | severity=low | confidence=4\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The checkout step comment refers to a non-existent run-soft-error-analyzer composite action in the isolated workflow-log-analysis-test job.\n  WHY: The reviewer said the comment is a carried-over no-op artifact that could mislead future editors about why the checkout exists.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/orchestrate_poll_process.sh:~1018 | severity=low | confidence=2\n  PROBLEM: The printf-to-jq pipeline could theoretically block on extremely large payloads if the pipe buffer fills.\n  WHY: The reviewer called it a minor edge case and suggested a tempfile alternative for more robustness.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/test-and-mark-stable.yml:3303 | severity=low | confidence=4\n  PROBLEM: The checkout step comment refers to a non-existent run-soft-error-analyzer composite action in the isolated workflow-log-analysis-test job.\n  WHY: The reviewer said the comment is a carried-over no-op artifact that could mislead future editors about why the checkout exists.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/test-and-mark-stable.yml:3242-3477 | severity=high | confidence=5\n  PROBLEM: The workflow-log-analysis-test job was reported as a failing check run on the PR head.\n  WHY: The reviewer linked an actual failed GitHub Actions job and said it blocks merge until fixed.\n- scripts/orchestrate_poll_process.sh:1015-1031 | severity=low | confidence=3\n  PROBLEM: printf pipe to jq -Rs may fill the pipe buffer on very large payloads and stall the poller cycle.\n  WHY: The reviewer said slow jq processing on large inputs could cause a hang risk and suggested a tempfile for robustness.\n- .github/workflows/test-and-mark-stable.yml:5034-5055 | severity=low | confidence=3\n  PROBLEM: LOG_ANALYSIS handling in the notify job was flagged as inconsistent if needs.workflow-log-analysis-test.result is unset.\n  WHY: The reviewer said the success path renders \"-\" while the failure loop may show the raw result.\n- .github/workflows/test-and-mark-stable.yml:3299 | severity=low | confidence=2\n  PROBLEM: The orphan-workflows error message was flagged as stale because it still uses the old orphan-workflow dispatch wording.\n  WHY: The reviewer said it may cause minor operator confusion in the orphan-workflows path.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "cc802b994cf2d8c1714a28650deaf1bcf16af00b36e94de54a403d361f18f6ad",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2380,
+    "run_id": "25601231775",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25601231775",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260509125553_360919c057",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2380,
+    "run_id": "25601231775"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-09T12:55:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

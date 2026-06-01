@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validate_process.sh:256-267 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: Redirecting the two Semble-related `::warning::` echoes to stderr prevents GitHub Actions from surfacing them as workflow annotations.\n  WHY: Four reviewers reported the loss of UI annotation visibility; deepseek and qwen disputed that it is a bug, but the only impact described is reduced operator visibility, so low severity fits the disagreement.\n- scripts/targeted_file_context.py:81-87 | severity=medium | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: `_log_semble_event` emits space-separated `key=value` fields without quoting, so values containing spaces become ambiguous to downstream parsers.\n  WHY: x-ai and z-ai both pointed to `reason`/`stderr_tail` content containing spaces, and z-ai also tied the same parsing bug to the `reason` construction at 350-353.\n- scripts/targeted_file_context.py:140-144 | severity=medium | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: `_log_semble_event` emits unquoted space-separated `key=value` fields, so multi-word telemetry values are ambiguous to downstream parsers.\n  WHY: Both reviewers identified the same structured-logging fragility at this location; moonshot assigned ISSUE_CONFIDENCE 3.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/validate_process.sh:259,265 | confidence=4\n  PROBLEM: The autofix added `>&2` to redirect `::warning::` messages to stderr, so the GitHub Actions workflow command no longer renders as a UI annotation.\n  WHY: `::warning::` annotations are now emitted only on stderr, reducing visibility in the GitHub Actions UI.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/validate_process.sh:259,265 | confidence=4\n  PROBLEM: The last run added `>&2` redirect to GitHub Actions workflow commands, so the `::warning::` messages no longer render as UI annotations.\n  WHY: GitHub Actions parses `::warning::` from stdout for visible annotations; sending them to stderr reduces operator visibility.\n- scripts/targeted_file_context.sh:140-144 | confidence=3\n  PROBLEM: The logging format uses unquoted space-separated key=value pairs, so any field value with spaces becomes ambiguous to downstream parsers.\n  WHY: A multi-word `reason=` value would be tokenized incorrectly in the emitted telemetry line.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/targeted_file_context.py:140-144\n  PROBLEM: The `_log_semble_event` function outputs space-separated `key=value` pairs without quoting values, but the `reason` field can contain spaces when `stderr_tail` has content.\n  WHY: A line like `reason=exit=1 failed to load index: no such file` cannot be parsed reliably by space-splitting consumers.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/validate_process.sh:256-267 | confidence=5\n  PROBLEM: `::warning::` messages redirected to stderr via `>&2`, so GitHub Actions does not render them as UI annotations.\n  WHY: GH Actions parses workflow commands from stdout for rich UI rendering; stderr is plain text, reducing operator visibility.\n- scripts/targeted_file_context.py:81-87 | confidence=5\n  PROBLEM: Space-separated key=value logging without quoting values; spaces in reason break downstream parsing.\n  WHY: Log analyzers misparse multi-word reason strings.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/targeted_file_context.py:81-87 and 350-353 | severity=medium | confidence=4\n  PROBLEM: The `_log_semble_event` function outputs space-separated `key=value` pairs without quoting, and the `reason` value from `_run_semble_query` can contain spaces, so telemetry becomes ambiguous.\n  WHY: The `reason` field can include `stderr_tail`, so the same formatter bug affects both the log function and its call site.\n- scripts/validate_process.sh:259,265 | confidence=4\n  PROBLEM: `>&2` causes the warning commands to go to stderr instead of the GitHub Actions annotation stream.\n  WHY: The Semble config warnings lose UI annotation visibility.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "c7eb4a601240cba097c449e4110086d520d998f388b221fc21aa71152d62914c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2388,
+    "run_id": "25605101549",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25605101549",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260509160741_f0189f4a6a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2388,
+    "run_id": "25605101549"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-09T16:07:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

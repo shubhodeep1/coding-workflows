@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":2555,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/2555\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/2556\",\"pr_number\":2556,\"branch\":\"ai/issue-2555\",\"run_id\":\"25770156319\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/25770156319\",\"changed_files\":[\".github/workflows/review_autofix.yml\",\"scripts/mcp_handshake_probe.py\",\"scripts/serena_stats_emit.py\",\"scripts/setup_serena.sh\",\"tests/test_review_autofix_reasoning_schedule.py\"]}",
+  "fingerprint": "81f0413dd0a404696a66c0c0e6046dc4f4cd7422bc2328cbd884648c3c49526e",
+  "lineage": {
+    "issue_number": 2555,
+    "parent_ids": [],
+    "pr_number": 2556,
+    "run_id": "25770156319",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25770156319",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/2556"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260513002552_b79249b666",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2555,
+    "level": "run",
+    "pr_number": 2556,
+    "run_id": "25770156319"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #2555: https://github.com/shubhodeep1/coding-workflows/pull/2556",
+  "timestamps": {
+    "created_at": "2026-05-13T00:25:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

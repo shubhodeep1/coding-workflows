@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/plans/integration-sync-resolver-self-heal-plan.md:65 | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, z-ai_glm-5]\n  PROBLEM: The context table points implementers to `scripts/orchestrate_poll_process.sh:2574-2592` instead of the actual `sync_default_into_integration_branch()` definition.\n  WHY: Following that reference sends readers to a comment region rather than the clean-sync code path, so they will edit the wrong location.\n- docs/plans/integration-sync-resolver-self-heal-plan.md:39-42 | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The \u201cWhat is wedged today\u201d narrative repeats stale `2724-2727` references for the merges-API call even though those lines are fingerprint-capture code.\n  WHY: A reader tracing the clean-sync path will land in the wrong region and miss the actual `sync_default_into_integration_branch()` call site.\n- docs/plans/integration-sync-resolver-self-heal-plan.md:383 | confidence=[4]\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: Phase 3 moves the escape valve to \u201cafter `warn_only` itself fails N consecutive times,\u201d but `warn_only` is defined to always pass, so the condition can never occur.\n  WHY: That makes the escape valve unreachable for fingerprint-only loops and breaks the ladder\u2019s terminus guarantee.\n- docs/plans/integration-sync-resolver-self-heal-plan.md:299-318 | confidence=[4]\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: The proposed `_verify_fingerprints_soft` replacement omits stdout redirection, violation extraction, and exit-code-2 fail-open handling, and it treats the intermediate and final verifier callsites as equivalent.\n  WHY: Implemented literally, intermediate retries will spam annotations, lose retry-prelude bullets, and hard-fail on plumbing errors.\n- docs/plans/integration-sync-resolver-self-heal-plan.md:376-380 | confidence=[3]\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: The tier semantics define only `must_contain` behavior and never say how `must_not_contain` violations should behave at each tier.\n  WHY: Implementers must guess whether those violations stay strict or relax with the tier, which changes safety materially.\n- docs/plans/integration-sync-resolver-self-heal-plan.md:311-317 | confidence=[3]\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: The compare-mode path does not define what happens when baseline capture succeeds but writes an empty, semantically valid baseline JSON.\n  WHY: An empty baseline can classify every current fingerprint as a resolver regression and hard-fail when the verifier should pass.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- docs/plans/integration-sync-resolver-self-heal-plan.md:65 | confidence=[5]\n  PROBLEM: The context table claims `sync_default_into_integration_branch` lives in the `scripts/orchestrate_poll_process.sh:2574-2592` region, but that range is only a docblock/comment block.\n  WHY: An implementer following the plan will inspect the wrong location instead of the actual function definition at line 3678.\n- docs/plans/integration-sync-resolver-self-heal-plan.md:39-42 | confidence=[5]\n  PROBLEM: The plan reuses stale `scripts/orchestrate_poll_process.sh:2724-2727` line numbers for the merges-API call even though those lines are fingerprint-capture code.\n  WHY: Readers will trace the clean-sync path to the wrong code and miss the actual merges API call inside `sync_default_into_integration_branch()`.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- docs/plans/integration-sync-resolver-self-heal-plan.md:65 | confidence=[5]\n  PROBLEM: The table says the current location is `scripts/orchestrate_poll_process.sh:2574-2592`, but those lines are a comment block rather than the `sync_default_into_integration_branch()` definition.\n  WHY: A reader will inspect the wrong region and miss the real function and its `gh_retry gh api \"repos/${GITHUB_REPOSITORY}/merges\"` call.\n- docs/plans/integration-sync-resolver-self-heal-plan.md:383 | confidence=[4]\n  PROBLEM: Phase 3 says the escape valve moves to \u201cafter `warn_only` itself fails N consecutive times,\u201d but `warn_only` is defined to always pass.\n  WHY: That makes the escape valve unreachable for fingerprint-only loops and voids the ladder\u2019s terminus guarantee.\n- docs/plans/integration-sync-resolver-self-heal-plan.md:299-318 | confidence=[4]\n  PROBLEM: The proposed replacement for `_verify_fingerprints_soft` omits stdout redirection, violation extraction, and exit-code-2 fail-open handling, and it treats the intermediate and final verifier callsites as identical.\n  WHY: As written, retries would spam annotations, break retry-prelude violation bullets, and hard-fail plumbing errors instead of failing open.\n- docs/plans/integration-sync-resolver-self-heal-plan.md:376-380 | confidence=[3]\n  PROBLEM: The tier descriptions only define `must_contain` behavior and do not specify what happens to `must_not_contain` violations.\n  WHY: Implementers must guess whether those violations remain strict or relax with the tier, which materially changes safety.\n- docs/plans/integration-sync-resolver-self-heal-plan.md:311-317 | confidence=[3]\n  PROBLEM: The compare-mode path handles missing or malformed baselines, but it does not say what to do with a semantically valid yet empty baseline JSON.\n  WHY: An empty baseline can cause every current fingerprint to be treated as a resolver regression and fail when the verifier should pass.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "aa11a3820a6005cf9b7da785764b604a964995e413b1f5f6d46f71a3551a07b9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26013112177",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26013112177",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260518042559_74a99e5847",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26013112177"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 6 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-18T04:25:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

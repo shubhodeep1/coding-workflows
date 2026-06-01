@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_judge_semble_prefetch_contract.py:91-136 | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The file mixes tab-indented Python blocks with space-indented code.\n  WHY: Multiple reviewers reported tab-indented test functions in the same file, making the indentation style inconsistent across blocks.\n- tests/test_judge_semble_prefetch_contract.py:124-128 | confidence=3\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The exact string match for `remainder` could false-fail if whitespace handling changes.\n  WHY: The assertion over-specifies the rendered Semble block and footer output rather than checking the intended contract.\n- tests/test_judge_semble_prefetch_contract.py:119-120 | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The workflow-line assertions only check substrings and can miss semantic drift in the policy text.\n  WHY: `startswith(\"- \")` and `\".github/workflows/\" in workflow_line` allow the test to pass even if the workflow restriction prose changes materially.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_judge_semble_prefetch_contract.py:110-129 | confidence=5\n  PROBLEM: The new test function uses tab indentation while other parts of the file use spaces.\n  WHY: The file mixes tab-indented test blocks with space-indented code.\n- tests/test_judge_semble_prefetch_contract.py:124-128 | confidence=3\n  PROBLEM: The exact string match for `remainder` could false-fail if whitespace handling differs.\n  WHY: The assertion is brittle against future render_prompt.sh output format changes.\n- tests/test_judge_semble_prefetch_contract.py:121-122 | confidence=2\n  PROBLEM: The assertions only check substrings (`startswith(\"- \")` and `\".github/workflows/\" in workflow_line`).\n  WHY: They can pass despite semantic drift if the markers remain present.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_judge_semble_prefetch_contract.py:91-100, 110-130, 133-136 | confidence=5\n  PROBLEM: Tab indentation mixed with space indentation in the same file\n  WHY: Python 3 does not allow mixing tabs and spaces for indentation. While the file may parse currently, any future edit that introduces space-indented lines within these tab-indented blocks will cause a TabError at import time.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/test_judge_semble_prefetch_contract.py:110-136 | confidence=5\n  PROBLEM: Functions use tab indentation while earlier functions use 4 spaces.\n  WHY: Python interpreter rejects mixed tabs/spaces per syntax rules when executing the test suite, raising IndentationError on affected blocks.\n- tests/test_judge_semble_prefetch_contract.py:119-120 | confidence=2\n  PROBLEM: Substring checks pass despite semantic drift in render_prompt.sh prose if markers are preserved.\n  WHY: The test can falsely pass after wording changes in `WORKFLOW_EDIT_RESTRICTION_LINE` because it only checks the prefix and path marker.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "4d6981c9cb90078fa37996a96f85cf89b81739a05649466134d6b6589b11ca15",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2413,
+    "run_id": "25615134621",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25615134621",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510001921_d8108fb907",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2413,
+    "run_id": "25615134621"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-10T00:19:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

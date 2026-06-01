@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:1015-1016 | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: `body_bytes` can become unset or empty when the `printf '%s' \"${comment_body}\" | wc -c | tr -d '[:space:]'` command substitution fails, which would bypass the intended size check.\n  WHY: x-ai_grok-4_1-fast reports an ARG_MAX-related `printf` failure path here, which no other reviewer endorses, but it is still a distinct body-bytes-computation failure claim tied to this line range.\n- scripts/orchestrate_poll_process.sh:1016-1018 | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: If `body_bytes` is empty or non-numeric, `[ \"${body_bytes}\" -gt 65536 ]` can skip the guard and let the function continue without the size-warning early return.\n  WHY: Moonshot and z-ai describe this same guard-bypass path via an empty `body_bytes`, and x-ai also flags the comparison as bypassable; the disagreement is only about the exact upstream failure mechanism.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_poll_process.sh:1017-1018 | confidence=3\n  PROBLEM: If the command substitution fails, `body_bytes` can be empty, and the integer test then bypasses the size guard instead of taking the early warning path.\n  WHY: The review says this is a robustness edge case rather than a fatal runtime failure because later `jq` error handling still fails safely.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/orchestrate_poll_process.sh:1015-1016 | confidence=4\n  PROBLEM: `printf '%s' \"${comment_body}\" | wc -c | tr -d '[:space:]'` can leave `body_bytes` unset or empty if the `printf` expansion fails on a very large comment body.\n  WHY: The review says that an ARG_MAX-sized input would make `printf` fail with \"Argument list too long\", and the subsequent guard check would then be bypassed.\n- scripts/orchestrate_poll_process.sh:1017 | confidence=3\n  PROBLEM: `[ \"${body_bytes}\" -gt 65536 ]` assumes `body_bytes` is numeric, so an empty or non-numeric value causes the size guard to be skipped.\n  WHY: The review says a failed `printf|wc|tr` pipeline could leave `body_bytes` empty or garbage, making the test evaluate false and letting execution continue.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/orchestrate_poll_process.sh:1016 | confidence=2\n  PROBLEM: The `body_bytes` value can be empty, which makes the `if [ \"${body_bytes}\" -gt 65536 ]` check skip the size guard.\n  WHY: The review treats this as a low-confidence residual edge case and notes that it would only matter if `wc` or `tr` were unavailable or otherwise failed.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "9dd561d4942420f9b84d5547adc6295a442afd61d274d7482c86281be9972176",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2366,
+    "run_id": "25601251233",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25601251233",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260509125940_3f231cb08a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2366,
+    "run_id": "25601251233"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-09T12:59:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

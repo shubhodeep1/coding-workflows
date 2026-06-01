@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:2286-2296 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `reviewer_health_dispatch_prepare` invokes `reviewer_log_health_transition` without a `log_dest`, so a health transition can print to stdout during `run_reviewer_pass` command substitution.\n  WHY: That extra line can be captured alongside the numeric success count; one reviewer says it can trip shell arithmetic, while others describe it as stdout contamination.\n- scripts/review_run_reviewers.sh:2903 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: The `open_until_epoch` test accepts non-numeric data without validation, so malformed health-state output can silently suppress the TTL-expiration diagnostic.\n  WHY: A malformed value makes the arithmetic test fail and skip the branch; reviewers disagree only on impact, with one calling it a crash risk and the others treating it as diagnostic loss.\n- scripts/review_run_reviewers.sh:2574-2598 | severity=low | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: The failure path appends `tmp_stderr` to `log_file` twice, once raw and once prefixed, duplicating reviewer stderr in logs.\n  WHY: This bloats artifacts and makes diagnostics harder to read, but it is cosmetic.\n- scripts/review_run_reviewers.sh:2556-2562 | severity=medium | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: `reviewer_log_health_transition` defaults to stdout when called with an empty `log_dest`, which lets dispatch-time health logs leak into `run_reviewer_pass` output.\n  WHY: The leaked line can corrupt command-substitution results; both reviewers describe the same stdout-vs-stderr bug.\n- scripts/review_run_reviewers.sh:3122-3148 | severity=medium | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: The zero-success fail-open guard counts only `skipped_unmapped|skipped_open`, so `pr_closed` statuses bypass the skip path.\n  WHY: When reviewers only emit `pr_closed`, the script falls into the hard-failure diagnostics instead of cleanly exiting with `REVIEWERS_SUCCESSFUL=0`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_run_reviewers.sh:2286-2296 | confidence=4\n  PROBLEM: `reviewer_health_dispatch_prepare` calls `reviewer_log_health_transition` without a `log_dest`, so health-transition output can land on stdout during `run_reviewer_pass`.\n  WHY: That stdout text can be captured by the surrounding command substitution along with the success count, which can corrupt downstream numeric handling.\n- scripts/review_run_reviewers.sh:2903 | confidence=1\n  PROBLEM: The integer comparison on `REVIEWER_HEALTH_DISPATCH_OPEN_UNTIL_EPOCH` lacks explicit numeric validation.\n  WHY: The current `2>/dev/null` suppresses the error and just skips the branch, so the worst case is only a missing TTL suffix in the diagnostic.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_run_reviewers.sh:3132-3138 | confidence=3\n  PROBLEM: The zero-success skip guard only counts `skipped_unmapped|skipped_open` statuses, but `pr_closed` statuses are not counted in either counter.\n  WHY: If all reviewers produce `pr_closed`, the guard fails to trigger and the code falls through to the hard-failure path instead of exiting cleanly.\n- scripts/review_run_reviewers.sh:2903 | confidence=3\n  PROBLEM: The `REVIEWER_HEALTH_DISPATCH_OPEN_UNTIL_EPOCH` arithmetic comparison uses `2>/dev/null` to suppress errors when the value is non-numeric.\n  WHY: Malformed health-state data can silently suppress the \"until epoch N\" diagnostic branch without any warning.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_run_reviewers.sh:2574-2598 | confidence=4\n  PROBLEM: In `execute_reviewer_attempt`, stderr is appended to `log_file` twice, once raw and once via the prefixed `tee -a` block.\n  WHY: This duplicates the same stderr content in per-reviewer logs and makes them unnecessarily bloated.\n- scripts/review_run_reviewers.sh:2556-2562 | confidence=4\n  PROBLEM: `reviewer_log_health_transition` writes to stdout when `log_dest` is empty, which happens when it is called from `reviewer_health_dispatch_prepare`.\n  WHY: The output can pollute the captured return value of `run_reviewer_pass` when results are collected via command substitution.\n- scripts/review_run_reviewers.sh:2903 | confidence=3\n  PROBLEM: The `REVIEWER_HEALTH_DISPATCH_OPEN_UNTIL_EPOCH` arithmetic comparison uses a potentially non-numeric value without explicit validation first.\n  WHY: If the helper emits a non-integer `open_until_epoch`, the comparison fails silently and the TTL information is omitted from the skip-reason message.\n- scripts/review_run_reviewers.sh:3145-3148 | confidence=4\n  PROBLEM: The zero-success fail-open guard only counts `skipped_unmapped` and `skipped_open` statuses, not `pr_closed`.\n  WHY: When a PR closes during reviewer execution, all reviewers can end up as `pr_closed`, and the code then takes the hard-failure diagnostics path instead of the skip-open path.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/review_run_reviewers.sh:3122-3146 | confidence=4\n  PROBLEM: The guard only tallies `skipped_unmapped|skipped_open` status files, so PR-close races that emit `pr_closed` are not counted.\n  WHY: With only `pr_closed` outcomes, `reviewers_successful` remains 0 and the code runs the failure diagnostics / hard-failure path instead of the intended skip-open behavior.\n- scripts/review_run_reviewers.sh:reviewer_health_dispatch_prepare + reviewer_health_state_action dispatch | confidence=3\n  PROBLEM: `REVIEWER_HEALTH_DISPATCH_OPEN_UNTIL_EPOCH` is captured from Python stdout without numeric validation before the arithmetic test.\n  WHY: A non-numeric value would make Bash treat the comparison as an integer-expression error, silently omitting the \"until epoch N\" diagnostic.\n- scripts/review_run_reviewers.sh:execute_reviewer_attempt | confidence=2\n  PROBLEM: The failure path logs stderr twice, once raw and once prefixed.\n  WHY: The duplicate logging is cosmetic but bloats reviewer logs and makes tail analysis harder.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "11ae1600e6d5487a09ce16196b3b603e8c858d73ceb983d45fa7ca8a848c4f02",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2994,
+    "run_id": "26639860956",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26639860956",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260529142206_96a700df7b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2994,
+    "run_id": "26639860956"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-29T14:22:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

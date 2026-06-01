@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:1335-1380 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: RB_HEAD_SHA can be accepted in uppercase but reused raw in the reissue-baseline branch name, so the consumer's lowercase-only regex rejects the branch and silently falls back to a redo.\n  WHY: The producer validates uppercase hex and constructs a branch from `${RB_HEAD_SHA:0:12}` without lowercasing, while the consumer only matches lowercase hex, so an uppercase SHA would break spot-fix preservation at runtime.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_rb_judge.sh:1335 and 1376 | ISSUE_CONFIDENCE: 5\n  PROBLEM: RB_HEAD_SHA is validated against ^[0-9a-fA-F]{40}$ (accepts uppercase hex) at line 1335, but at line 1376 the baseline branch name is constructed using the raw slice ${RB_HEAD_SHA:0:12} without lowercasing.\n  WHY: The consumer resolver in .github/workflows/implement.yml line 562 matches only lowercase hex with re.fullmatch(r\"ai/reissue-baseline/pr-(\\d+)-([0-9a-f]{12})-\\d+-\\d+\", branch), so an uppercase headRefOid would cause the pushed branch to be rejected as untrusted and the preserved spot-fix baseline to be silently discarded.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_rb_judge.sh:1376-1380 | ISSUE_CONFIDENCE: 5\n  PROBLEM: The `RB_HEAD_SHA` is validated against regex `[0-9a-fA-F]{40}` which accepts both upper and lowercase hex, but the baseline branch is constructed using `${RB_HEAD_SHA:0:12}` without lowercasing.\n  WHY: If GitHub API returns an uppercase SHA, the branch name becomes `ai/reissue-baseline/pr-42-ACDEFF123456-...`, and the consumer in `implement.yml` only matches lowercase hex, so the pushed baseline branch is rejected as untrusted and the spot-fix reissue silently falls back to redo mode.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/review_rb_judge.sh:1376-1380 | ISSUE_CONFIDENCE: 5\n  PROBLEM: RB_HEAD_SHA validation accepts uppercase hex (`^[0-9a-fA-F]{40}$`) but the baseline-branch name embeds the raw 12-character prefix `${RB_HEAD_SHA:0:12}` without lowercasing.\n  WHY: The consumer resolver in implement.yml:466-470 (`re.fullmatch(r\"ai/reissue-baseline/pr-(\\d+)-([0-9a-f]{12})-\\d+-\\d+\", branch)`) only matches lowercase hex, so an uppercase SHA would cause the pushed baseline branch to be rejected as `untrusted` and the spot-fix reissue to silently fall back to a full redo.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===",
+  "fingerprint": "17527d487fa63c95e677ce3d24109a1a5e4f3cb0753ebbb16da5bf6e31377eda",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2697,
+    "run_id": "25989764711",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25989764711",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517115659_2ee5382adf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2697,
+    "run_id": "25989764711"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-17T11:56:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

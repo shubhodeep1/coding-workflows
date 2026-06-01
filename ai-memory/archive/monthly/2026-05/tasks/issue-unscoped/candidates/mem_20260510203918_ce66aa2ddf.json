@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:110-135 | severity=low | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: Four existing Python test steps in ci.yml still omit the PYTHONDONTWRITEBYTECODE=1 prefix.\n  WHY: Those steps can emit __pycache__ artifacts during CI, creating the repo hygiene inconsistency described by both reviewers.\n- scripts/review_conflict_resolve.sh:884-937 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `rm -f \"${tmp_output}\"` is an unnecessary cleanup step after the tempfile has already been created.\n  WHY: The file is guaranteed to exist from the earlier `mktemp` call, so the extra removal is only a style/consistency issue.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/ci.yml:110-135 | severity=low | confidence=4\n  PROBLEM: Missing PYTHONDONTWRITEBYTECODE=1 in ci.yml unit-test invocations.\n  WHY: The existing Python test steps run without the repo hygiene prefix, so they may create __pycache__ artifacts during CI.\n- scripts/review_conflict_resolve.sh:884-937 | severity=low | confidence=2\n  PROBLEM: `rm -f \"${tmp_output}\"` is redundant cleanup before truncation.\n  WHY: `tmp_output` was created by `mktemp` earlier in the loop, so the file already exists and the `rm -f` adds no functional value.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/ci.yml:114, 119, 129, 134 | severity=low | confidence=4\n  PROBLEM: These four test invocations lack the PYTHONDONTWRITEBYTECODE=1 prefix.\n  WHY: Adjacent test steps in the same workflow already use the prefix, and without it Python can create __pycache__ directories during CI.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "a0c44f1831029f39978098976426a7d55ab4b7fc22416761e6750d70de471e33",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2449,
+    "run_id": "25638484004",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25638484004",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510203918_ce66aa2ddf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2449,
+    "run_id": "25638484004"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-10T20:39:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

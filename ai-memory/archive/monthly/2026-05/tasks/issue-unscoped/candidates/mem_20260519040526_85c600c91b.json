@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:fetch_log_tail function, lines ~2065-2108 | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: The code still downloads the full `gh run view --log` output for each failed check-run before truncating it to the tail.\n  WHY: The temp-file change bounds Python memory use, but it does not bound network I/O or wall time for fetching the complete log.\n- .github/workflows/review_autofix.yml:lines ~2082-2095 (the `with tempfile.TemporaryFile()` block and except clause) | confidence=2\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: `TemporaryFile()` is used in `fetch_log_tail()` without explicit manual cleanup handling for the platform-error path described in the review.\n  WHY: The reviewer reported a possible resource-cleanup issue on disk-full or similar OS errors; no other reviewer reported this issue.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/review_autofix.yml:fetch_log_tail function, lines ~2065-2108 | confidence=2\n  PROBLEM: The `gh run view --log` command downloads the entire job log before the code seeks the tail.\n  WHY: There is no built-in `gh` option to fetch only the last N bytes, so each failed check-run with an empty summary still incurs a full-log network download and can consume the step timeout budget.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/review_autofix.yml:fetch_log_tail() function, lines ~2076-2105 in LAST RUN DIFF | confidence=3\n  PROBLEM: The subprocess call to `gh run view --log --job <job_id>` fetches the complete job log from GitHub's API before any truncation occurs.\n  WHY: While the tempfile approach correctly bounds Python-side memory usage, the underlying `gh` CLI must still download and transmit the entire log content.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/review_autofix.yml (the `fetch_log_tail` function in LAST RUN DIFF): lines ~2082-2095 (the `with tempfile.TemporaryFile()` block and except clause) | confidence=2\n  PROBLEM: `TemporaryFile()` is used without an explicit `delete=False` or manual cleanup, and the context manager may not be properly finalized on certain platform errors.\n  WHY: In a long-running review_autofix job with many concurrent check-run failures, repeated tempfile creation and partial writes could leave dangling file descriptors or trigger OS-level cleanup delays.\n- .github/workflows/review_autofix.yml (LAST RUN DIFF changes to fetch_log_tail and the writer loop): fetch_log_tail() ~2065-2108 and the call site inside the `for i, r in enumerate(failed):` loop (~2124) | confidence=4\n  PROBLEM: Despite the temp-file tailing and the `if not raw_summary.strip():` guard, the code still unconditionally performs one `gh run view --log --job <id>` HTTP call per failed check-run.\n  WHY: The guard only prevents writing a large tail; it does not prevent the network call, so multiple failures still multiply API latency, runner time, and GH rate-limit pressure.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "090b188f5b89f4cc2a9e3c3e72097629fb9a3f151f7119ef7e58fe7d13e739f8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2775,
+    "run_id": "26074588924",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26074588924",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260519040526_85c600c91b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2775,
+    "run_id": "26074588924"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-19T04:05:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

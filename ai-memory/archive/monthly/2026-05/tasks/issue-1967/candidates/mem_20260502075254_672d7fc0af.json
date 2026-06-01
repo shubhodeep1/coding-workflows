@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: What repo area should this task target?**\nChoices:\n- **A** \u2014 One exact workflow, script, or file; name it in the `/answer` comment body (RECOMMENDED)\n- **B** \u2014 The issue-to-PR pipeline (`clarify`, `plan`, `implement`, `review_autofix`)\n- **C** \u2014 The orchestrator / poller / recovery path\n- **D** \u2014 Validation / memory / maintenance\n- **E** \u2014 Docs / setup / wrapper workflows\nReply: `Q1: A`\n**Q2: What kind of improvement do you want?**\nChoices:\n- **A** \u2014 Fix a concrete bug, regression, or failing workflow run (RECOMMENDED)\n- **B** \u2014 Improve reliability or safety without changing intended behavior\n- **C** \u2014 Improve performance or reduce GitHub/API/LLM cost\n- **D** \u2014 Improve documentation or operator clarity\nReply: `Q2: A`\n**Q3: What concrete success check should planning use?**\nChoices:\n- **A** \u2014 A specific workflow run, issue/PR, or log symptom should stop failing; include the identifier or symptom in the `/answer` comment body (RECOMMENDED)\n- **B** \u2014 A named workflow/script should behave differently in one specific before/after way; describe that before/after in the `/answer` comment body\n- **C** \u2014 A specific doc/setup gap should be closed; name the missing or incorrect step/document in the `/answer` comment body\nReply: `Q3: A`",
+  "fingerprint": "e507ac0b91072e3a51b27fa4f74626f45cec44b932e3c514ce497bf66cf56123",
+  "lineage": {
+    "issue_number": 1967,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25247217164",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25247217164",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260502075254_672d7fc0af",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1967,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25247217164"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #1967 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-02T07:52:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

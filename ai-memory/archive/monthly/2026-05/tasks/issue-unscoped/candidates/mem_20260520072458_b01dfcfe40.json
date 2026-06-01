@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_lib.py:1660-1683 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603, moonshotai_kimi-k2_5]\n  PROBLEM: Malformed ISO 8601 timestamps are swallowed and returned as None without logging, hiding parsing failures and forcing silent fallback behavior.\n  WHY: Both reviews report that `_parse_iso8601_to_epoch` suppresses parse errors, which makes debugging invalid API payloads difficult; severity is low because the impact is limited to observability/debuggability.\n- scripts/orchestrate_poll_process.sh:11582-11599 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603, moonshotai_kimi-k2_5]\n  PROBLEM: `jq` stderr is suppressed during `_head_pushed_at_json` extraction, masking extraction failures and making schema/API drift harder to diagnose.\n  WHY: Both reviews note the fallback to `{}` happens silently when `jq` fails, so incident root cause analysis loses the underlying error; severity is low because the behavior is fail-open and primarily affects diagnostics.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/orchestrate_lib.py:1665-1683 (_parse_iso8601_to_epoch function) | confidence=4\n  PROBLEM: Function accepts any input type but silently returns None on parse errors without logging, which hinders debugging when invalid timestamps are received from GitHub's API.\n  WHY: Malformed or unexpected timestamp data is converted to None, causing fallback behavior without diagnostic information to distinguish API issues from parsing failures.\n- scripts/orchestrate_poll_process.sh:11582-11599 (_head_pushed_at_json extraction jq block) | confidence=4\n  PROBLEM: `jq` stderr is completely suppressed with `2>/dev/null`, masking extraction failures from maintainer visibility.\n  WHY: When GraphQL schema drifts or API responses change, extraction failures silently fall back to an empty mapping, making root cause analysis difficult during incidents.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_poll_process.sh:11582-11599 (_head_pushed_at_json jq extraction)\n  PROBLEM: stderr suppressed with `2>/dev/null` hides legitimate parse errors during debugging.\n  WHY: The extraction falls back to an empty dict on jq failure, which makes legitimate parse errors harder to diagnose.\n- scripts/orchestrate_lib.py:1660-1662 (_parse_iso8601_to_epoch function)\n  PROBLEM: Malformed ISO 8601 inputs fail silently to None without debug logging.\n  WHY: Silent parse failure makes troubleshooting invalid timestamp inputs harder.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "c9ee0c0c79221df24d6f729b26d8aaca511e824f7e22e42f999a456a4203d130",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2799,
+    "run_id": "26145607995",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26145607995",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260520072458_b01dfcfe40",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2799,
+    "run_id": "26145607995"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-20T07:24:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

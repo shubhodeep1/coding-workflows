@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1. Which exact part of this repository should be changed?\nChoices:\nA. A workflow file under `.github/workflows/`; I will name the exact file in `/answer`\nB. A script/helper under `scripts/`; I will name the exact file and function/symbol in `/answer`\nC. Documentation/guidance only (`README.md`, `AGENTS.md`, or runbook prose); I will name the exact file in `/answer`\nD. Another specific file/path/function I will name explicitly in `/answer` (RECOMMENDED)\nQ2. What is the concrete problem with that target today?\nChoices:\nA. Something is broken or incorrect; I will describe the current behavior and the expected behavior (RECOMMENDED)\nB. Something is flaky, slow, or noisy; I will name the workflow/job/log symptom or metric that is bad\nC. Something is unclear or hard to maintain; I will name the exact pain point\nD. Something is missing; I will describe the desired end state\nQ3. What should count as \"done\" for this issue?\nChoices:\nA. A before/after scenario or reproduction I provide should pass after the change (RECOMMENDED)\nB. A specific workflow/job/log symptom should disappear\nC. A specific file/output/documentation change should exist afterward\nD. A short acceptance checklist I provide in `/answer`",
+  "fingerprint": "8c08c99f44b0cb97cb0399eb6365b77229b2ee8ce94bb36e5ab1cd2a963aac26",
+  "lineage": {
+    "issue_number": 2454,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25631701041",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25631701041",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260510145205_de041d15c9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2454,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25631701041"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #2454 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-10T14:52:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

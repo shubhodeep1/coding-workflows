@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:lines 1-6 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: The canary file contains corrupted values, extra lines, and a comment instead of the exact three-line spec required by issue #2753.\n  WHY: The smoke gate validates the exact content (`status: ok`, `run_id: 26039859964`, `updated-by: ai-pipeline`); the wrong values and extra content cause the release workflow to fail.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:lines 1-6 | severity=high | confidence=5\n  PROBLEM: The file has 6 lines of bait content instead of the required 3-line canary spec, including wrong values, two extra lines, and a comment.\n  WHY: The smoke gate expects the exact three-line structure and correct field values; any deviation fails validation, and the reviewer also noted the missing trailing newline.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:lines 1-6 | severity=high | confidence=5\n  PROBLEM: The file content does not match issue #2753: it uses corrupted values, plus two extra lines and a comment, instead of the required three lines.\n  WHY: The smoke gate reads this canary file for exact verification; the wrong values and extra content will fail validation and block the release pipeline.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:lines 1-6 | severity=high | confidence=5\n  PROBLEM: The file violates issue #2753 by using wrong values, extra lines, and a comment instead of the required three-line canary content.\n  WHY: The smoke gate validates exact content, and this corruption blocks the release pipeline.\n- tests/e2e_smoke_canary.txt:line 1 | severity=high | confidence=5\n  PROBLEM: The status field contains `BROKEN_BY_E2E_BAIT_26039859964` instead of `ok`.\n  WHY: The smoke gate expects `status: ok` to confirm successful canary completion.\n- tests/e2e_smoke_canary.txt:line 2 | severity=high | confidence=5\n  PROBLEM: The run_id field contains `WRONG_VALUE_SHOULD_BE_26039859964` instead of `26039859964`.\n  WHY: The smoke gate validates the run_id against the expected value for this test run.\n- tests/e2e_smoke_canary.txt:line 3 | severity=high | confidence=5\n  PROBLEM: The updated-by field contains `e2e-bait-injector` instead of `ai-pipeline`.\n  WHY: The smoke gate validates the updater identity to ensure the canary was written by the AI pipeline.\n- tests/e2e_smoke_canary.txt:lines 4-6 | severity=high | confidence=5\n  PROBLEM: Extra lines exist beyond the three-line specification: `extra: this line violates the issue spec`, `also: another line that must be removed`, and a comment line starting with `# E2E_EDITOR_BAIT_26039859964`.\n  WHY: Issue #2753 requires exactly the specified three lines with no comments or extra content, so these lines violate the structural contract.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:lines 1-6 | severity=high | confidence=5\n  PROBLEM: The file does not match the linked issue #2753 spec: it contains wrong field values, three extra lines, and a comment instead of exactly the required three lines.\n  WHY: The E2E smoke gate validates exact content, so the corrupted values and extra lines cause a structural and value mismatch that fails the release gate.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/e2e_smoke_canary.txt:lines 1-6 | severity=high | confidence=5\n  PROBLEM: The file contains corrupted bait content and a comment instead of exactly the 3-line spec required by issue #2753.\n  WHY: The E2E smoke gate reads this canary file, and any deviation from the exact expected content causes the gate to fail and block releases.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "93f08f7c2efd6b6a1c4d28dfdfa4744beda0933eed0d568b6c3740186f42f06f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2758,
+    "run_id": "26040297110",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26040297110",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260518144538_0f83dcb74e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2758,
+    "run_id": "26040297110"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-18T14:45:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

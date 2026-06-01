@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:line 3 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The file contains an extra line `run_id_alt: alt-25273372573`, so it has 4 lines instead of the required exactly 3.\n  WHY: The issue specification requires exactly three lines with no extra content, and the current file violates that contract; reviewers disagree only on phrasing, not severity.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:line 3 (`run_id_alt: alt-25273372573`) | severity=medium | confidence=5\n  PROBLEM: The file contains 4 lines, and `run_id_alt: alt-25273372573` is extraneous.\n  WHY: Issue #2024 explicitly requires exactly these three lines with no extra content, so the current 4-line file violates the contract and will fail validation.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:line 3 | severity=medium | confidence=5\n  PROBLEM: The file contains an extra line `run_id_alt: alt-25273372573` that violates the issue specification.\n  WHY: The issue explicitly requires \"exactly these three lines (no more, no less),\" so the 4-line file will fail canary validation.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:line 3 (`run_id_alt: alt-25273372573`) | severity=medium | confidence=5\n  PROBLEM: The file contains 4 lines but the issue contract requires exactly 3 lines.\n  WHY: The canary file must match the expected snapshot exactly, and the unexpected `run_id_alt` key plus line-count mismatch will fail validation.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:3 (content: `run_id_alt: alt-25273372573`) | severity=medium | confidence=5\n  PROBLEM: The file contains 4 lines instead of the required exactly 3 lines.\n  WHY: The smoke-test canary validation expects an exact 3-line snapshot, and the current file leaves a spurious `run_id_alt` line in place.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/e2e_smoke_canary.txt:entire content (4 lines: status: ok\\nrun_id: 25273372573\\nrun_id_alt: alt-25273372573\\nupdated-by: ai-pipeline) | severity=medium | confidence=5\n  PROBLEM: File contains an extra line \"run_id_alt: alt-25273372573\" making it 4 lines total instead of exactly 3 as specified.\n  WHY: The E2E smoke validation expects precisely the 3 listed lines with no extras, so this mismatch will cause validation failure.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:line 3 (the `run_id_alt: alt-25273372573` line) | severity=medium | confidence=5\n  PROBLEM: The file contains 4 lines but issue #2024 explicitly requires exactly 3 lines.\n  WHY: The task specification requires the file to be exactly these three lines, and any downstream validation that checks the file format or line count will fail.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "67a2a89c8aaf999c8be9170726b51a3cd4b46e4c6f26cfac664ada975f3a6f43",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2028,
+    "run_id": "25274022915",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25274022915",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260503083440_2cc4b9c3fd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2028,
+    "run_id": "25274022915"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-03T08:34:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

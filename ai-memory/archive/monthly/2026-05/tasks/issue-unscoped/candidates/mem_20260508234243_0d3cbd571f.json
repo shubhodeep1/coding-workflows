@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/render_prompt.sh:16-27 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: emit_semble_prefetch was reported as reading the Semble prefetch file without emitting its contents, which would leave {{SEMBLE_PREFETCH}} empty.\n  WHY: Every reviewer that mentioned it pointed out the printf inside the loop does emit each line; the finding was repeatedly classified as a false positive or verified-correct, so the only disagreement is about whether it is a bug at all.\n- .github/workflows/ci.yml:138-146 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, x-ai_grok-4_1-fast]\n  PROBLEM: test_orchestrate_poll_workflow_contract.py is grouped with the Semble prompt-contract tests in CI.\n  WHY: The reviewers described this as a maintainability-only placement inconsistency with no runtime impact.\n- .github/workflows/mark-stable.yml:217-225 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, x-ai_grok-4_1-fast]\n  PROBLEM: test_orchestrate_poll_workflow_contract.py is grouped with the Semble test list in mark-stable.\n  WHY: The reviewers described this as a maintainability-only placement inconsistency with no runtime impact.\n- .github/workflows/test-and-mark-stable.yml:2092-2100 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, x-ai_grok-4_1-fast]\n  PROBLEM: test_orchestrate_poll_workflow_contract.py is grouped under orchestrator script tests in test-and-mark-stable.\n  WHY: The reviewers described this as a maintainability-only placement inconsistency with no runtime impact.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/render_prompt.sh:16-27 | confidence=5\n  PROBLEM: emit_semble_prefetch reads but never emits\n  WHY: VERDICT: FALSE. The function at line 25 contains printf '%s\\n' \"${semble_line}\" inside the while loop body.\n- .github/workflows/ci.yml:138-146, .github/workflows/mark-stable.yml:217-225, .github/workflows/test-and-mark-stable.yml:2092-2100 | confidence=3\n  PROBLEM: test_orchestrate_poll_workflow_contract.py placement inconsistency\n  WHY: The reviewer said this is style-only / maintainability-only with no correctness issue.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/render_prompt.sh:16-27 | confidence=5\n  PROBLEM: The consensus finding about emit_semble_prefetch not emitting contents is a false positive.\n  WHY: The function clearly outputs file contents with printf, and the test in tests/test_render_prompt_semble.py confirms the behavior works.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/ci.yml:141-143 | confidence=3\n  PROBLEM: New Semble judge tests are correctly added to CI, but test_orchestrate_poll_workflow_contract.py validates workflow YAML structure rather than prompt contracts like the adjacent Semble prompt tests.\n  WHY: Runtime impact is none; the reviewer called this a maintainability risk only.\n- .github/workflows/mark-stable.yml:220-222 | confidence=3\n  PROBLEM: Identical grouping issue as ci.yml \u2014 test_orchestrate_poll_workflow_contract.py mixed with prompt tests.\n  WHY: Runtime impact is none; the reviewer called this a maintainability risk only.\n- .github/workflows/test-and-mark-stable.yml:2095-2097 | confidence=3\n  PROBLEM: Here grouped under Orchestrator script tests, consistent with content but differs from the other Semble test blocks.\n  WHY: Runtime impact is none; the reviewer called this a cross-workflow inconsistency only.\n- scripts/render_prompt.sh:22-27 | confidence=0\n  PROBLEM: Consensus flagged empty output, but code correctly printfs each line.\n  WHY: The reviewer verified it is correct and labeled the earlier finding a pass1 hallucination.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/render_prompt.sh:16-27 | confidence=5\n  PROBLEM: The high-confidence consensus finding that emit_semble_prefetch never emits its contents is false.\n  WHY: The reviewer quoted the printf loop and noted the corresponding test passes.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "f2f52dd4cfbf2f2c7b0633e6bd4b4716c61a20a0f63369c313c3b537b15ef4dc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2336,
+    "run_id": "25584465491",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25584465491",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260508234243_0d3cbd571f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2336,
+    "run_id": "25584465491"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-08T23:42:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

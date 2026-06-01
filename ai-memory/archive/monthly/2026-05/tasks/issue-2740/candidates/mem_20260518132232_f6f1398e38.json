@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1. Which part of this repository should be improved?\nChoices:\nA. Clarify / plan workflows\nB. Implement / review-autofix workflows\nC. Orchestrate / validate workflows\nD. Documentation / README / operator guidance\nE. Other \u2014 reply with the exact workflow, script, or file path you want changed (RECOMMENDED)\nQ2. What kind of improvement do you want in that area?\nChoices:\nA. Fix a bug / incorrect behavior\nB. Reduce flakiness / retries / stuck runs\nC. Improve speed / token cost / API efficiency\nD. Add or change functionality\nE. Improve logs / comments / docs\nF. Other \u2014 describe the exact before/after result you want (RECOMMENDED)\nQ3. What should count as success for this issue?\nChoices:\nA. A specific failing workflow run / PR / issue example is fixed\nB. A specific observable before/after behavior is achieved (RECOMMENDED)\nC. A named file/workflow is updated in a specific way\nD. Other \u2014 provide a short acceptance criterion or example",
+  "fingerprint": "84a0957b29138feed7864b84cb6be27b8a6d1dcac3cd8f837275c483b8c2e99c",
+  "lineage": {
+    "issue_number": 2740,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26036109253",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26036109253",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260518132232_f6f1398e38",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2740,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26036109253"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #2740 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-18T13:22:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

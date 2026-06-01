@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:3434-3435 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The comment says the pre-split timeout was 390m, but the actual pre-PR value was 360m.\n  WHY: All reviewers agree this is a documentation-only mismatch; the removed diff hunk shows `timeout-minutes: 360`, so the historical baseline in the comment is wrong.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/test-and-mark-stable.yml:3434 | confidence=4\n  PROBLEM: The comment claims the pre-split `orphan-workflows-test` timeout was 390m, but the actual stable-branch value was 360m.\n  WHY: The removed diff hunk in this PR shows `timeout-minutes: 360`, so the comment's historical baseline is incorrect.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/test-and-mark-stable.yml:3434 | confidence=5\n  PROBLEM: The comment states the previous timeout was \"390m\" but the actual pre-PR value was 360m.\n  WHY: The diff clearly shows the original `orphan-workflows-test` job had `timeout-minutes: 360` before the split.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/test-and-mark-stable.yml:3434 | confidence=5\n  PROBLEM: The comment incorrectly states the pre-split timeout was 390 minutes, but the actual pre-PR value was 360 minutes.\n  WHY: This is a documentation-only issue and won't cause runtime failures, but it could mislead future developers adjusting timeouts.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/test-and-mark-stable.yml:3434 | confidence=5\n  PROBLEM: The comment states the previous timeout was 390m, but the actual pre-PR value on the stable branch was 360m.\n  WHY: The PR diff clearly shows the removed `timeout-minutes: 360`, so the historical reference in the remaining comment is stale.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/test-and-mark-stable.yml:3434 | confidence=5\n  PROBLEM: Stale documentation claiming pre-split timeout-minutes was 390m.\n  WHY: No runtime impact, but it misleads maintainers on historical sizing and cap evolution; the original diff shows the actual pre-change value was `timeout-minutes: 360`.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/test-and-mark-stable.yml:3435 | confidence=5\n  PROBLEM: The comment incorrectly states the previous timeout was 390 minutes, but the PR diff shows the removed line `timeout-minutes: 360`.\n  WHY: This is a documentation correctness issue, not a runtime failure, but it could mislead future developers when adjusting timeouts.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "cfbcfea81ad5b2f375c2281058052e1bf4c52b9a5297becffa26d64ccfa189d6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2351,
+    "run_id": "25595263155",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25595263155",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260509074951_9e18ee7e49",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2351,
+    "run_id": "25595263155"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-09T07:49:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

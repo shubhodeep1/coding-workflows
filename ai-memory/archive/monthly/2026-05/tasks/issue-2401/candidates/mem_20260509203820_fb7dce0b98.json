@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":2401,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/2401\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/2403\",\"pr_number\":2403,\"branch\":\"ai/issue-2401\",\"run_id\":\"25611137315\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/25611137315\",\"changed_files\":[\"scripts/implement_diagnose_post_codex_failure.sh\",\"scripts/targeted_file_context.py\",\"tests/test_judge_semble_prefetch_contract.py\"]}",
+  "fingerprint": "d07811cfcc5bf244b765bcd5bca7fc00878e8daada87cd3279a3a009089ac4f3",
+  "lineage": {
+    "issue_number": 2401,
+    "parent_ids": [],
+    "pr_number": 2403,
+    "run_id": "25611137315",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25611137315",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/2403"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260509203820_fb7dce0b98",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2401,
+    "level": "run",
+    "pr_number": 2403,
+    "run_id": "25611137315"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #2401: https://github.com/shubhodeep1/coding-workflows/pull/2403",
+  "timestamps": {
+    "created_at": "2026-05-09T20:38:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

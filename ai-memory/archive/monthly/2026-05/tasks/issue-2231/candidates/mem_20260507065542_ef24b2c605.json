@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1. What specifically should be improved?\nChoices:\nA. A specific workflow or phase in this repo (RECOMMENDED) \u2014 name the workflow/phase and the problem to fix.\nB. A specific script or file (RECOMMENDED) \u2014 name the file/path and what is wrong with it.\nC. Repo-wide quality improvement \u2014 describe the exact improvement goal (for example reliability, speed, logging, or documentation).\nQ2. What type of change do you want?\nChoices:\nA. Bug fix (RECOMMENDED) \u2014 something is broken today; describe the current vs expected behavior.\nB. New behavior or enhancement \u2014 describe the new capability you want added.\nC. Documentation or clarity improvement \u2014 describe what is confusing or missing.\nQ3. How should we know the task is complete?\nChoices:\nA. A concrete expected behavior/result is enough (RECOMMENDED) \u2014 describe what should happen after the change.\nB. Specific files/components must be updated \u2014 list them.\nC. A measurable outcome is required \u2014 provide the metric or observable signal that should improve.",
+  "fingerprint": "6a8bc596a8bcee99b1aeefd8534e5716f5e9d95036ea7f0798d0ff7aeee83106",
+  "lineage": {
+    "issue_number": 2231,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25480823744",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25480823744",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260507065542_ef24b2c605",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2231,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25480823744"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #2231 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-07T06:55:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

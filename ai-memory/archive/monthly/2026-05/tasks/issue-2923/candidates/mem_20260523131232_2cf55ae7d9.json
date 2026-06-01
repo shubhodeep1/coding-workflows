@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.85,
+  "details": "The issue provided sufficient context for planning. Auto-posted /answer.",
+  "fingerprint": "465d87ec68cbe25b9257dc9de3be492cb56861d204f6d5b4ff4fff088715961f",
+  "lineage": {
+    "issue_number": 2923,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26333589940",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26333589940",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260523131232_2cf55ae7d9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2923,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26333589940"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #2923 is clear - no clarification needed",
+  "timestamps": {
+    "created_at": "2026-05-23T13:12:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

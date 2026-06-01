@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: Which part of this repository should be improved?**\nChoices:\n- **A** \u2014 The GitHub Actions workflows under `.github/workflows/` (RECOMMENDED)\n- **B** \u2014 The shell/Python automation under `scripts/`\n- **C** \u2014 The prompts under `prompts/`\n- **D** \u2014 Multiple areas; I will name the exact files or workflow(s)\nReply: `Q1: A`\n**Q2: What kind of improvement do you want?**\nChoices:\n- **A** \u2014 Fix a bug or broken behavior; I will describe the problem and expected result (RECOMMENDED)\n- **B** \u2014 Improve maintainability/refactor without changing behavior\n- **C** \u2014 Add a new capability or workflow behavior\n- **D** \u2014 Improve documentation only\nReply: `Q2: A`\n**Q3: What should count as success for this task?**\nChoices:\n- **A** \u2014 I will provide a concrete failing scenario or reproduction and the expected outcome (RECOMMENDED)\n- **B** \u2014 I will provide the exact file(s)/workflow(s) and the change I want\n- **C** \u2014 I want a general code review that identifies the highest-value improvement area\nReply: `Q3: A`",
+  "fingerprint": "849a22d2ebe8be46550c05eb0aff2483f7d690bcc9428be214a3172f41d2e4de",
+  "lineage": {
+    "issue_number": 2006,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25265928951",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25265928951",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260503004924_e5a0e4805e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2006,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25265928951"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #2006 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-03T00:49:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

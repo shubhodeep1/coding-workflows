@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1. Which single area of this repository should be improved?\nChoices:\nA. Clarify / plan / implement pipeline behavior\nB. Review / autofix / orchestrate / validate behavior\nC. Docs / README / runbooks only\nD. A specific workflow, script, or file path \u2014 please name it explicitly (RECOMMENDED)\nQ2. What outcome do you want for that area?\nChoices:\nA. Fix a bug or regression \u2014 include current behavior and expected behavior (RECOMMENDED)\nB. Add or extend functionality \u2014 describe the new behavior you want\nC. Improve reliability / performance / cost without changing behavior \u2014 describe the pain point\nD. Improve readability / docs / maintainability \u2014 describe the concrete deficiency\nQ3. What should planning use as the acceptance signal?\nChoices:\nA. A specific issue / PR / workflow run / log example that shows the problem (RECOMMENDED)\nB. A short before/after behavior example\nC. A precise acceptance criterion or checklist\nD. Best-effort improvement with no additional acceptance criteria",
+  "fingerprint": "ff76d50be67e89197b4404aa12f80d394a8b92211a4fc53fa189597ae9093936",
+  "lineage": {
+    "issue_number": 2754,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26039901674",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26039901674",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260518143128_bfc11553b6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2754,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26039901674"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #2754 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-18T14:31:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

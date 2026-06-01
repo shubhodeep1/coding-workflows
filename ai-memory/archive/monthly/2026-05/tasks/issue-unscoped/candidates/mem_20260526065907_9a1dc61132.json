@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:16817-16828 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Added comment explaining why `review / codex-agent` artifacts should be ignored.\n  WHY: The comment is informational only and does not change the sweep logic or runtime behavior.\n- tests/test_orchestrate_poll_noop_suspicious_recovery.py:lines added in last_run_diff | severity=low | confidence=4\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: Added test function `test_sweep_skips_forward_merge_fallback_branches` duplicates the existing `test_sweep_skips_forward_merge_fallback_prs` test.\n  WHY: Both tests assert the same two sweep conditions, so the new test is redundant and adds maintenance overhead.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR should add entries to three documentation files (agents.md, README.md, CHANGELOG.md) describing the step-scoped `PR_PROCESSED_ALERT_LEVEL` knob.\n  expected_change_site: agents.md, README.md, CHANGELOG.md\n  confidence=1\n  flagged_by: [minimax_minimax-m2_5]\n  EVIDENCE: All three files already contain PR_PROCESSED_ALERT_LEVEL documentation: agents.md:263 contains the row, README.md:152 contains the row, CHANGELOG.md:23 contains the changelog entry\n- requirement: Document the step-scoped `PR_PROCESSED_ALERT_LEVEL` knob in README.md and CHANGELOG.md so the published workflow contract matches the restored behavior.\n  expected_change_site: README.md and CHANGELOG.md\n  confidence=4\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  EVIDENCE: README.md and CHANGELOG.md are absent from the PR CHANGED FILES list (7 files total, none of which are README.md or CHANGELOG.md). The original_pr_diff.patch contains no hunks for either file.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- Requirement: The PR should add entries to three documentation files (agents.md, README.md, CHANGELOG.md) describing the step-scoped `PR_PROCESSED_ALERT_LEVEL` knob.\n  Expected change site: agents.md, README.md, CHANGELOG.md\n  Evidence of absence: All three files already contain PR_PROCESSED_ALERT_LEVEL documentation:\n- agents.md:263 contains the row\n- README.md:152 contains the row  \n- CHANGELOG.md:23 contains the changelog entry\nISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/orchestrate_poll_process.sh:16817-16828 | severity=low | confidence=4\n  PROBLEM: Documentation-heavy comment that doesn't change runtime behavior.\n  WHY: The comment is purely informational and doesn't affect the sweep logic's correctness or performance.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- Requirement: Document the step-scoped `PR_PROCESSED_ALERT_LEVEL` knob in README.md and CHANGELOG.md\n  Expected change site: README.md and CHANGELOG.md (agents.md already contains the entry per the symbol diff)\n  Evidence of absence: The symbol diff shows only `agents.md` was modified with the `PR_PROCESSED_ALERT_LEVEL` entry (lines 260-266). The PR CHANGED FILES list includes `agents.md` but not `README.md` or `CHANGELOG.md`. The agents.md entry at line 263 shows `PR_PROCESSED_ALERT_LEVEL | SILENT | Step-scoped override for the review_autofix.yml PR processed: #N DEBUG ping` but the same documentation is missing from the other two files that typically document environment variables.\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_orchestrate_poll_noop_suspicious_recovery.py:lines added in last_run_diff | severity=low | confidence=4\n  PROBLEM: The last_run introduced a new test function `test_sweep_skips_forward_merge_fallback_branches` that duplicates the existing `test_sweep_skips_forward_merge_fallback_prs` test from the original PR.\n  WHY: Both functions assert the same two conditions, so the new test is redundant and adds maintenance burden.\n- Requirement: Document the step-scoped `PR_PROCESSED_ALERT_LEVEL` knob in README.md and CHANGELOG.md so the published workflow contract matches the restored behavior. The original introduction of this knob (PR #2956 on main) added documentation to all three files (agents.md, README.md, CHANGELOG.md), and the editor summary in comment entry[15] confirms these docs were \"restored\" to match the forwarded changes.\n  Expected change site: README.md and CHANGELOG.md (repo root)\n  Evidence of absence: README.md and CHANGELOG.md are absent from the PR CHANGED FILES list (7 files total, none of which are README.md or CHANGELOG.md). The original_pr_diff.patch contains no hunks for either file. Both README.md and CHANGELOG.md were listed as conflicting files in the PR description's merge conflict set, and the `[ai-merge-merge-resolve]` commit likely resolved them in a way that dropped the documentation additions that were originally on stable. The agents.md row IS present (in the original PR diff), but its siblings README.md/CHANGELOG.md are not.\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "21dcdce10228b8183e934ee2439a2ee1be88f00bb8aa7997e5b5d7555dd5c2f6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2954,
+    "run_id": "26436793033",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26436793033",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260526065907_9a1dc61132",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2954,
+    "run_id": "26436793033"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-26T06:59:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

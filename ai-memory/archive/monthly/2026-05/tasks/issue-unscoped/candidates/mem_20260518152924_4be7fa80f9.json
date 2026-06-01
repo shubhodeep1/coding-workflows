@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:3328-3355 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: the merge-base guard can see an empty or errored `base_hash` and treat that path as a divergence skip without distinguishing lookup failure from a real unchanged-file case.\n  WHY: reviewers note `git rev-parse \"${merge_base}:${f}\"` can yield an empty `base_hash` or noisy stderr, which can incorrectly skip the refresh even when the deadlock-breaker path should still apply.\n- scripts/orchestrate_poll_process.sh:3341-3354 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: the `local` declarations and later use of `_int_short` / `_base_short` inside the conditional are flagged as potentially scoping-sensitive.\n  WHY: the reviewer explicitly called out the `echo` on line 3353 and the possibility of scoping issues in that block.\n- tests/test_orchestrate_poll_process.py:8088-8168 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, x-ai_grok-4_20]\n  PROBLEM: the regex-based `_extract_refresh_function_body` helper assumes a standalone `}` marks the function close, so extra braces or formatting changes inside the function can truncate the extracted body.\n  WHY: the reviewers note the `r\"^}\\s*$\"` pattern can match the wrong brace and make the static contract test fail misleadingly or stop enforcing the guard after innocuous formatting changes.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_orchestrate_poll_process.py: `_extract_refresh_function_body` function, line `close_re = re.compile(r\"^}\\s*$\", re.MULTILINE)` | confidence=2\n  PROBLEM: the helper extracts the function body by matching the first standalone `}` line after the opening marker, which can truncate the body if a future change adds an inner grouped block.\n  WHY: if the regex matches the wrong brace, the test can fail with a misleading assertion like \"git merge-base not found in fn_body\" instead of surfacing the real structural issue.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/orchestrate_poll_process.sh:3341-3354 | confidence=4\n  PROBLEM: the local variable declarations inside the if block could cause issues.\n  WHY: while `local` inside an if block works in bash, the variables `_int_short` and `_base_short` are used in the echo statement on line 3353 and may have scoping issues if the if block is not entered.\n- tests/test_orchestrate_poll_process.py:8159-8168 | confidence=3\n  PROBLEM: the `_extract_refresh_function_body` regex pattern `r\"^}\\s*$\"` with re.MULTILINE could incorrectly match a `}` that appears inside a string or `${...}` expansion within the function body.\n  WHY: the function contains `${...}` parameter expansions throughout, and the regex is brittle to formatting changes even though the closing brace currently appears on its own line at the end.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/orchestrate_poll_process.sh: approximately lines 3328-3355 | confidence=4\n  PROBLEM: the merge-base divergence guard is missing a check to ensure `base_hash` is not empty before comparison.\n  WHY: if `git rev-parse \"${merge_base}:${f}\"` returns an empty string, the `int_hash != base_hash` comparison can skip files incorrectly even when the integration branch legitimately needs the refresh.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/orchestrate_poll_process.sh:3339-3355 | confidence=4\n  PROBLEM: the guard computes `base_hash` inside the per-file loop after the early-continue on `main_hash == int_hash`, but if `git rev-parse \"${merge_base}:...\"` yields an empty result the guard treats it as a divergence and skips refresh.\n  WHY: the reviewer notes that the code never explicitly checks `-z \"${base_hash}\"`, so newly-added files or failed lookups are conflated with legitimate divergence cases.\n- tests/test_orchestrate_poll_process.py:8088-8093 | confidence=3\n  PROBLEM: the `diverge_skip_re` regex is brittle because it requires a very specific whitespace/newline pattern around the `if [ \"${int_hash}\" != \"${base_hash}\" ]; then` block.\n  WHY: a harmless formatting change, such as adding comments or changing indentation, could make the static regression test stop enforcing the guard.\n- scripts/orchestrate_poll_process.sh:3330-3335 and line 3349 | confidence=4\n  PROBLEM: the `base_hash` lookup does not capture stderr, so a transient `git rev-parse \"${merge_base}:...\"` failure can pollute logs and force the skip path.\n  WHY: in a noisy CI environment or during a fetch race, the refresh can silently skip files it should update and prolong the deadlock the mechanism is meant to break.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "c49288aeda061278028a57d72ab9498814256d3eed327dbd0d65577be459fe51",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26042542110",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26042542110",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260518152924_4be7fa80f9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26042542110"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-18T15:29:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

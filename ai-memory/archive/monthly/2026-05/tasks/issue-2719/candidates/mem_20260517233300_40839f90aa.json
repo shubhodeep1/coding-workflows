@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-2627` @ `a5ed4731e7a9065585c869a9174c20eddad662a7`\n\nClarification mapping\n- No `Q1`/`Q2` questions were asked in clarify, so `/answer [auto-answered-by-orchestrator]` just means the issue was already specific enough to plan.\n\n## 1. Files likely to change\n- `tests/test_review_pipeline_integration.py` \u2014 add the one dedicated integration-style pytest here (preferred: reuse the existing review-chain integration file instead of spreading the work across more test modules).\n- `README.md` \u2014 append review-autofix rollout docs under existing review-artifact / flag sections.\n- `agents.md` \u2014 append missing stable log prefixes in the existing \u201cStable log prefixes (contractual)\u201d section and add the `.ai/review_runtime/` persistence contract in the existing review-pipeline contract section.\n- `docs/plans/judge-loop-and-reissue-plan.md` \u2014 delete last, after the permanent docs/test coverage are in place.\n- No workflow or script logic changes should be needed for this issue.\n\n## 2. Functions / modules to implement\n- Use `tests/test_review_pipeline_integration.py::test_chain_happy_path_with_mocked_consolidator` as the chaining pattern.\n- Add one end-to-end pytest that shells the landed scripts against a temp repo with mocked binaries:\n  - round 1: run `scripts/review_run_judge_interim.sh` to produce `.ai/review_runtime/pr-4242/round-1/judge_interim.json`;\n  - run `scripts/review_reject_verify.sh` with typed rejection schema/verifier enabled and mocked `codex`/`timeout` so `.ai/review_runtime/.../verified_rejections.json` is written;\n  - run `scripts/review_synthesise_smoke.sh` against the round-1 judge artifact so the synth manifest/wrappers land under `.ai/review_runtime/.../synth/`;\n  - round 2: run `scripts/review_annotate_sticky.sh` (and, if needed, `review_reject_verify.sh` again) so the prior-round rejection is re-supported via sticky matching and the sticky priors are emitted.\n- For the `close_and_reissue` / `spot-fix` baseline case, reuse the existing harness patterns from:\n  - `tests/test_review_rb_judge_label_propagation.py::_run_close_and_reissue`\n  - `tests/test_review_rb_judge_reissue_baseline.py::test_resolver_accepts_real_spot_fix_issue_body_from_review_blocked_judge`\n- The test should prove producer/consumer alignment between `scripts/review_rb_judge.sh` and the implement-side `Resolve trusted prior PR baseline branch` step in `.github/workflows/implement.yml`.\n\n## 3. Data structures affected\n- `.ai/review_runtime/pr-<PR>/round-<N>/judge_interim.json`\n- `.ai/review_runtime/pr-<PR>/round-<N>/verified_rejections.json`\n- `.ai/review_runtime/pr-<PR>/round-<N>/sticky_findings.json`\n- `.ai/review_runtime/pr-<PR>/round-<N>/consolidator_parsed.txt` and sticky priors text\n- `.ai/review_runtime/pr-<PR>/round-<N>/synth/synth_round_<N>_manifest.json` plus cached wrapper scripts\n- Review-blocked reissue footer fields: `prior_pr_baseline_branch` and `files_touched`\n- Documentation contracts only; no runtime defaults or identifiers should change.\n\n## 4. API / interface changes\n- No production behavior change is planned.\n- `README.md` should document the already-landed opt-in flags as still default-off, at minimum:\n  - `CONSOLIDATOR_REJECT_SCHEMA_ENABLED=false`\n  - `CONSOLIDATOR_REJECT_VERIFIER_ENABLED=false`\n  - `STICKY_FINDINGS_ENABLED=false`\n  - `JUDGE_INTERIM_ENABLED=false`\n  - `BEHAVIOURAL_SMOKE_FROM_JUDGE_ENABLED=false`\n  - `REISSUE_PRESERVE_BASELINE_ENABLED=false`\n- Companion knobs (`*_REASONING`, `*_TIMEOUT_S`, `STICKY_LINE_BUCKET`, `CONSOLIDATOR_REJECT_VERIFIER_BATCH_MAX`, etc.) should be documented as secondary tuning only when the parent gate is enabled.\n- `agents.md` should append the missing sticky log-prefix contract(s) emitted by `scripts/review_annotate_sticky.sh`, plus the `.ai/review_runtime/` persistence/cache contract.\n\n## 5. Risks / edge cases\n- The planning context does not show an explicit `files_touched` footer, so the safe assumption is: keep edits to the integration-test file, `README.md`, `agents.md`, and the plan doc only.\n- `README.md` has multiple review-autofix doc surfaces; avoid contradictory defaults and do not imply a default-true rollout.\n- `agents.md` already documents reject/smoke/judge/reissue prefixes; append only the missing sticky additions rather than reshuffling the section.\n- The new pytest must genuinely cover two rounds and cross-round reuse under `.ai/review_runtime/`, not just isolated unit behaviors.\n- Delete `docs/plans/judge-loop-and-reissue-plan.md` only after docs/test updates are complete.\n- Do not recreate `docs/judge-loop-and-reissue-improvements.md` (it is already absent on this ref).\n\n## 6. Testing considerations\n- Run the new integration pytest directly and verify it covers:\n  - round-1 judge interim artifact creation,\n  - typed rejection verifier artifact creation,\n  - round-2 sticky promotion / prior-round rejection support,\n  - behavioural smoke manifest/wrapper synthesis,\n  - `close_and_reissue` + `spot-fix` baseline metadata accepted by the implement-side resolver.\n- If any nearby helper assertions are touched, rerun the focused baseline/reject-verifier suites that already pin those contracts.\n- Confirm the docs edits keep every new `*_ENABLED` flag defaulting to `false` in prose.\n\nAssumptions\n- No clarification was required.\n- This is a docs/tests cleanup issue only; no workflow/script runtime logic changes are needed.\n\nMissing-context notes\n- `files_touched` is not explicitly shown in the planning context; I assumed the intended touch set is the one integration test file plus `README.md`, `agents.md`, and the plan file.\n\nConflicts / repo-state notes\n- Branch metadata matches the checked-out ref; no integration-branch mismatch blocker.\n- `README.md` currently does not document the new judge-loop/reissue opt-in flags.\n- `agents.md` currently documents reject/smoke/judge/reissue prefixes but not the sticky additions, and it does not yet describe the `.ai/review_runtime/` persistence contract.\n- `docs/plans/judge-loop-and-reissue-plan.md` still exists and needs removal; `docs/judge-loop-and-reissue-improvements.md` is already absent.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "067074baea0ae3e9d80afa11dad071a5e0f081d149b35468afc6958d86c0930b",
+  "lineage": {
+    "issue_number": 2719,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26005766206",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26005766206",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2719"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260517233300_40839f90aa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2719,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26005766206"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2719",
+  "timestamps": {
+    "created_at": "2026-05-17T23:33:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

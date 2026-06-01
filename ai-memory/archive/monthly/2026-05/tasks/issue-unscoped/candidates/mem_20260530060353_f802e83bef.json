@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:246-376 | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: render_review_rb_prior_round_decisions_file fails open correctly but silently returns without any diagnostic when python3 is missing or the ledger parser exits non-zero.\n  WHY: The prior-decisions block can disappear from the judge prompt with no workflow-log evidence, so operators cannot tell empty ledger from parse failure; reviewers disagreed only on emphasis, not root cause.\n- scripts/review_rb_judge.sh:315-360 | confidence=4\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_20]\n  PROBLEM: The prior_decision heuristic only recognizes a narrow set of editor outcomes, so legitimate prior resolutions are often emitted as prior_decision=none.\n  WHY: The judge prompt then cannot suppress issues that should have been skipped, which violates the prior-decision contract and can cause re-raising of already-resolved findings.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_rb_judge.sh:270-272 and 362-368 | confidence=3\n  PROBLEM: render_review_rb_prior_round_decisions_file silently returns 0 without any diagnostic when python3 is missing or the Python ledger parser exits non-zero.\n  WHY: The fail-open behavior is correct, but when the prior-decisions block is absent from a judge prompt there is no workflow-log evidence to distinguish an empty ledger from a silent parse failure.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_rb_judge.sh:330-360 | confidence=4\n  PROBLEM: The prior_decision mapping is incomplete and only recognizes accepted-residual plus explicit won't-fix text, so other legitimate editor outcomes emit prior_decision=none.\n  WHY: The judge prompt instructions cannot apply suppression logic to entries parsed as none, causing re-raises of issues that should have been skipped.\n- scripts/review_rb_judge.sh:286-288 and 365-368 | confidence=3\n  PROBLEM: When python3 is not available, or when the Python ledger parser fails, the function returns 0 silently without any diagnostic log.\n  WHY: Operators debugging why the prior-decisions block did not appear in the judge prompt have no log evidence, even though the fail-open behavior itself is correct.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_rb_judge.sh:246-376 | confidence=4\n  PROBLEM: Silent failures when python3 is unavailable or ledger parsing fails leave no diagnostic logging to aid debugging.\n  WHY: The function returns 0 with an empty output file, so the prior-decisions block is silently omitted from the judge prompt and operators have no trace of the cause.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/review_rb_judge.sh:315-332 | confidence=4\n  PROBLEM: The parser sets prior_decision=\"won't-fix\" only via a limited substring match, so real ledger entries with other outcome strings produce prior_decision=none.\n  WHY: The judge prompt receives misleading or incomplete compact lines and may re-raise legitimately suppressed residuals or fail to suppress a real won't-fix.\n- scripts/review_rb_judge.sh:365-368 | confidence=4\n  PROBLEM: Python parse errors cause the render path to silently produce an empty output file with no diagnostic in the judge prompt, stderr, or workflow logs.\n  WHY: When a ledger exists but cannot be parsed, the -s guard skips the block entirely and the judge receives no prior-round context, making the degradation impossible to detect.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "508925f4d5810bb69a947822443a53fe3768e4dca74b9c57c41b716a2f0aa84c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3012,
+    "run_id": "26675333877",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26675333877",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260530060353_f802e83bef",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3012,
+    "run_id": "26675333877"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-30T06:03:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: What should be improved?**\nChoices:\n- **A** \u2014 A specific workflow or script in this repo, and you will name it (RECOMMENDED)\n- **B** \u2014 Repository-wide cleanup/refinement across multiple workflows\n- **C** \u2014 Documentation only (`README.md`, `agents.md`, or related docs)\nReply: `Q1: A`\n**Q2: What kind of improvement do you want most?**\nChoices:\n- **A** \u2014 Fix a concrete bug or broken behavior, and you will describe the current vs expected result (RECOMMENDED)\n- **B** \u2014 Improve reliability/maintainability without changing user-visible behavior\n- **C** \u2014 Add or change functionality\nReply: `Q2: A`\n**Q3: How should success be evaluated?**\nChoices:\n- **A** \u2014 By a specific acceptance criterion you provide (for example: exact behavior, log output, workflow result, or label/state transition) (RECOMMENDED)\n- **B** \u2014 By matching an existing issue/PR/workflow run you reference\n- **C** \u2014 By general code quality only, with no specific acceptance criterion\nReply: `Q3: A`",
+  "fingerprint": "63471cf425b6063743c9e97f0d3e0e02899b91730797eb596262b12d47a833de",
+  "lineage": {
+    "issue_number": 2079,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25310429160",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25310429160",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260504090445_c5321afd45",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2079,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25310429160"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #2079 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-04T09:04:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

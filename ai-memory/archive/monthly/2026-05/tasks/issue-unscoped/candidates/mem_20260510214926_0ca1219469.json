@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml:147-159 | severity=medium | confidence=5\n  flagged_by: [qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: The Site 1 safety-check uses a bare `gh api --paginate` lookup with `|| true`, so transient API failures can leave `${PR_EXISTS_FILE}` empty and skip duplicate-PR detection before `gh pr create`.\n  WHY: This widens the race window on 5xx/429s; one reviewer treated the fail-open/backstop behavior as intentional, but two reviewers flagged the retry gap.\n- .github/workflows/implement.yml:2864-2865 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: If `scripts/gh_helpers.sh` cannot be sourced, `gh_retry` degrades to a one-shot pass-through, removing retry/backoff from the recovery lookup.\n  WHY: A transient API blip in the `gh pr create` failure path can then miss an existing linked PR and force the workflow to exit 1; one reviewer viewed this as defensive fallback, but the others flagged the lost retry protection.\n- .github/workflows/implement.yml:2891-2911 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: The recovery timeline query redirects stderr to `/dev/null`, so API/JQ diagnostics are discarded and `EXISTING_PR=\"\"` is indistinguishable from a real \"no linked PR\" result.\n  WHY: This is an observability gap rather than a correctness issue, but it makes recovery failures opaque in workflow logs.\n- tests/test_stall_recovery_pr_lookup.py:567-579 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `_run_safety_check` only extracts and executes the Site 1 \"Safety check for existing PR\" step.\n  WHY: Site 2's recovery branch output contract (bare URL) is not exercised, so a regression there would not be caught by the current tests.\n- tests/test_stall_recovery_pr_lookup.py:540-548 | severity=low | confidence=2\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The `jq`-driven stub forwards whatever stdout/stderr `jq` produces, so malformed filter output or a jq incompatibility can leak partial results into assertions.\n  WHY: That makes the harness fragile: a failing filter can appear to find or miss a PR for the wrong reason.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/implement.yml:2864-2865 | confidence=2\n  PROBLEM: The recovery branch defines `gh_retry` as a bare pass-through if `scripts/gh_helpers.sh` cannot be sourced.\n  WHY: If the helper is unavailable, the recovery lookup loses retry/backoff protection and can fail to recover an existing linked PR on a transient API blip.\n- .github/workflows/implement.yml:2902 | confidence=2\n  PROBLEM: The recovery timeline query discards stderr diagnostics.\n  WHY: If the API call fails, the workflow only gets `EXISTING_PR=\"\"`, which makes post-mortem debugging of recovery failures harder.\n- tests/test_stall_recovery_pr_lookup.py:567-579 | confidence=2\n  PROBLEM: `_run_safety_check` only exercises the \"Safety check for existing PR\" step.\n  WHY: Site 2's slightly different output contract is not validated, so a regression there would be missed.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/implement.yml:2891-2906 | confidence=4\n  PROBLEM: The recovery path suppresses API error diagnostics.\n  WHY: `2>/dev/null` hides GitHub API failures in the logs, and `|| echo \"\"` makes those failures indistinguishable from \"no linked PR exists\".\n- .github/workflows/implement.yml:2861-2868 | confidence=3\n  PROBLEM: `gh_retry` falls back to a no-op pass-through if sourcing the helper fails.\n  WHY: That silently disables retry/backoff in the recovery path, so transient API errors can abort the workflow instead of recovering.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/implement.yml:147-158 | confidence=3\n  PROBLEM: The Site 1 safety-check uses a bare timeline lookup without `gh_retry`.\n  WHY: A transient GitHub API failure can leave the PR-exists file empty and send the workflow into an unnecessary `gh pr create` conflict/recovery cycle.\n- .github/workflows/implement.yml:2861-2865 | confidence=3\n  PROBLEM: The Site 2 recovery branch can silently degrade `gh_retry` to a pass-through.\n  WHY: If `scripts/gh_helpers.sh` is unavailable, the recovery lookup becomes single-shot and can miss the linked PR on a transient failure.\n- tests/test_stall_recovery_pr_lookup.py:567-579 | confidence=2\n  PROBLEM: The safety-check helper only runs the Site 1 branch of the extracted script.\n  WHY: Site 2's bare-URL output contract is not covered, so a regression in that branch would escape the current tests.\n- .github/workflows/implement.yml:2901-2911 | confidence=2\n  PROBLEM: The recovery query sends stderr to `/dev/null`.\n  WHY: That strips diagnostics from the workflow logs and makes recovery failures opaque even when the query itself fails.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/implement.yml:131-162 | confidence=5\n  PROBLEM: The Site 1 safety-check uses `gh api --paginate ... || true` without retry protection.\n  WHY: A transient GitHub API error can leave `${PR_EXISTS_FILE}` empty, so `existing_pr=false` and the workflow proceeds toward a duplicate `gh pr create --head` attempt.\n- .github/workflows/implement.yml:2861-2914 | confidence=4\n  PROBLEM: The Site 2 recovery path defines a no-op `gh_retry` fallback if sourcing the helper fails, then runs the lookup with stderr suppressed.\n  WHY: In that failure mode, a transient API error can block recovery to an existing linked PR and make the workflow exit 1 instead of exiting 0.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/implement.yml:2901 | confidence=3\n  PROBLEM: The recovery timeline query discards all stderr output.\n  WHY: When the GitHub API call fails, operators lose the diagnostics needed to tell whether recovery missed a PR or hit an API/JQ failure.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "ea49b5d5ce75172a4f6c0608df7db2b15ad6dd6093b42895d0cba9de9406f821",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2462,
+    "run_id": "25640038788",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25640038788",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510214926_0ca1219469",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2462,
+    "run_id": "25640038788"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-10T21:49:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

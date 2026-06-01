@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-2734` @ `0b73013a1608837b72416742476d706b705f2c81`  \nClarification mapping: no Q1/Q2 batch existed for this issue; `/answer [auto-answered-by-orchestrator]` only confirmed continuation. No integration-branch mismatch.\n\n## Implementation plan\n\n### 1. Files likely to change\n- `docs/plans/sub-issue-test-runs-spike.md` **[new]** \u2014 the only file to create/edit for this issue.\n- No workflow, script, test, or code files should change.\n- Use these as reference-only inputs (do not edit them):\n  - `docs/plans/integration-sync-resolver-self-heal-plan.md`\n  - `docs/integration-sync-resolver-self-heal.md`\n  - `scripts/orchestrate_poll_process.sh`\n  - `scripts/verify_integration_fingerprints.py`\n  - `.github/workflows/ci.yml`\n\n### 2. Functions/modules to implement\n- No production functions or modules are being implemented in this issue.\n- The work is to author a self-contained spike document that:\n  1. Restates the Phase 6 scope and the explicit non-goal that **G6.2 remains future work**.\n  2. Summarizes the current fingerprint baseline using one representative capture path and one representative verification path:\n     - `capture_intent_fingerprints_for_merged_subissue` in `scripts/orchestrate_poll_process.sh`\n     - `scripts/verify_integration_fingerprints.py`\n  3. Uses a bounded, explicit sample of merged orchestrator sub-issue PRs to answer the four G6.1 questions:\n     - fraction with runnable tests\n     - wall-clock cost on the integration tree\n     - false-positive / false-negative comparison vs fingerprint verification\n     - go/no-go recommendation\n  4. Ends with a clear recommendation and a short \u201cfuture follow-up\u201d section pointing to a separate G6.2 implementation-planning doc if the recommendation is go.\n- Representative pattern to follow for structure/tone: `docs/plans/integration-sync-resolver-self-heal-plan.md` plus the source rationale in `docs/integration-sync-resolver-self-heal.md`.\n\n### 3. Data structures affected\n- No repo/runtime data structures change.\n- The spike should describe the current comparison baseline:\n  - `merged_issue_fingerprints` keyed by issue number\n  - per-entry fields: `issue`, `pr`, `captured_at`, `must_contain`, `must_not_contain`\n- Recommended doc-local evidence table columns:\n  - sub-issue / PR\n  - whether tests were added or changed\n  - what makes them runnable\n  - command/path used or inferred from existing CI\n  - runtime estimate/observation\n  - fingerprint coverage/result notes\n  - conclusion\n\n### 4. API or interface changes\n- None in this issue.\n- No new env vars, workflow inputs, scripts, or public interfaces.\n- The doc may reference existing CI test entrypoints as evidence; current CI runs many tests as direct `python3 tests/...` invocations in `.github/workflows/ci.yml`, which is relevant when deciding what counts as \u201crunnable\u201d and how runtime should be estimated.\n- If the recommendation is go, any G6.2 interface/workflow changes belong in a separate follow-up plan (`docs/plans/sub-issue-test-runs-implementation-plan.md`), not this issue.\n\n### 5. Potential risks / edge cases\n- \u201cRunnable tests\u201d is ambiguous: some PRs may touch `tests/` without adding a standalone invocable check. The spike should define its classification rule up front.\n- Because current CI largely runs whole test files, not newly added individual cases, runtime estimates will often need to be at **file/test-target granularity**, not per-assertion granularity.\n- `merged_issue_fingerprints` is **going-forward only** and capture is limited to allowlisted file paths, so historical fingerprint coverage will be incomplete; the spike should call out sampling bias explicitly.\n- The current verifier fails open on missing/unparseable fingerprint input, so \u201cno fingerprint failure\u201d is not the same as \u201cintent definitely preserved.\u201d\n- A test-run-based gate can also miss intent when a PR adds no tests, modifies existing shared tests only, or depends on setup not available on the integration tree.\n- Keep the change append-only in practice: create the new doc, avoid reflowing unrelated plan/docs files.\n\n### 6. Testing considerations\n- Verify the final diff is docs-only and ideally limited to `docs/plans/sub-issue-test-runs-spike.md`.\n- Check the document against the four G6.1 questions verbatim from `docs/plans/integration-sync-resolver-self-heal-plan.md`.\n- Confirm the final section contains:\n  - a clear go/no-go recommendation\n  - explicit evidence/limitations\n  - an explicit statement that G6.2 implementation planning remains future work\n- Sanity-check all cited repo paths, function names, sample issue/PR IDs, and any workflow/run references used as evidence.\n\n## Assumptions\n- Since this is a discovery spike, a bounded representative sample is acceptable if the methodology and confidence limits are explicit.\n- Conflict check: none. The target file does not exist yet, and the current Phase 6 plan already expects it as the new discovery-report deliverable.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "44fe336e75b623a74c588e1d5fdd148fda10f2b4cce699c4c36c3810af3cf170",
+  "lineage": {
+    "issue_number": 2736,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26026093470",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26026093470",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2736"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260518095535_eaab19c41c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2736,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26026093470"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2736",
+  "timestamps": {
+    "created_at": "2026-05-18T09:55:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_semble_contract.py:54-58 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: `test_semble_repo_var_defaults_false` says the Semble repo var defaults to false, but the assertion checks for `vars.SEMBLE_ENABLED || 'true'`.\n  WHY: The test passes but its name misstates the contract, which can mislead maintainers and future edits.\n- README.md, probably_unnecessary_but_read_if_stuck.md, tests/test_*.py (6 files total per last_run_changed_files.txt):multiple | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The last autofix run modified 6 files outside issue #2475's stated `tests/e2e_smoke_canary.txt`-only scope.\n  WHY: The review outputs say the task boundary was expanded to docs and Semble contract tests instead of staying on the canary file.\n- tests/test_implement_semble_contract.py:54-62 | confidence=4\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The Semble contract tests cover the default-on path but do not assert the explicit `SEMBLE_ENABLED=false` opt-out path.\n  WHY: Without a test for the false override, a regression in opt-out wiring could slip through until consumer CI fails.\n- tests/e2e_smoke_canary.txt:3 | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The canary file may have a trailing newline after the third line, which would create a fourth empty line.\n  WHY: The issue requires exactly three lines, so an extra newline would violate the specification.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_implement_semble_contract.py:55,57 | confidence=4\n  PROBLEM: `test_semble_repo_var_defaults_false` is named for a false default, but its assertion checks the true default.\n  WHY: The workflow assertion and the test name disagree, so the test passes while documenting the wrong contract.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- README.md, probably_unnecessary_but_read_if_stuck.md, tests/test_implement_semble_contract.py, tests/test_judge_semble_prefetch_contract.py, tests/test_review_semble_contract.py, tests/test_semble_workflow_parity_contract.py:multiple | confidence=5\n  PROBLEM: The last autofix run modified files beyond issue #2475's stated `tests/e2e_smoke_canary.txt`-only scope.\n  WHY: The review says the task boundary expanded to docs and Semble contract tests instead of staying on the canary file.\n- tests/test_implement_semble_contract.py:55-57 | confidence=5\n  PROBLEM: `test_semble_repo_var_defaults_false` implies the default is false, but the assertion checks for `'true'`.\n  WHY: The name and body contradict each other, so the test communicates the wrong contract.\n- tests/test_implement_semble_contract.py:multiple | confidence=3\n  PROBLEM: There is no contract test covering the explicit `SEMBLE_ENABLED=false` opt-out path.\n  WHY: If a caller repo explicitly sets `SEMBLE_ENABLED=false`, the workflow should respect that setting, but this path is unverified.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_implement_semble_contract.py:54-56 | confidence=5\n  PROBLEM: The function name `test_semble_repo_var_defaults_false` explicitly states the default is false, but the assertion body checks that the default is `'true'`.\n  WHY: The semantic mismatch creates confusion for maintainers and obscures the actual test intent.\n- README.md, probably_unnecessary_but_read_if_stuck.md, tests/test_*.py (6 files total):multiple | confidence=4\n  PROBLEM: The autofix editor expanded scope to modify documentation and Semble contract tests.\n  WHY: The original issue explicitly constrained edits to only `tests/e2e_smoke_canary.txt`, so changing other files violates the task boundary.\n- tests/e2e_smoke_canary.txt:3 | confidence=3\n  PROBLEM: Per the Copilot review comment, the file may contain a trailing newline after the third line.\n  WHY: The issue spec requires exactly three lines, and a trailing newline would create a fourth empty line.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_implement_semble_contract.py:55-57 | confidence=5\n  PROBLEM: `test_semble_repo_var_defaults_false` says the repo var defaults to `false`, but the assertion checks for `'true'`.\n  WHY: The test passes, but the name misleads maintainers about the actual Semble default-on contract.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/test_implement_semble_contract.py:54 | confidence=5\n  PROBLEM: Test function name explicitly states \"defaults_false\" but the assertion on line 57 validates \"true\" workflow default.\n  WHY: No runtime failure, but the misleading name obscures the actual default-on behavior and confuses maintainers reading the test suite.\n- tests/test_implement_semble_contract.py:54-62 | confidence=4\n  PROBLEM: No assertion or subtest validates explicit SEMBLE_ENABLED=false repo-var opt-out path.\n  WHY: The tests cover default-on behavior but skip the non-empty \"false\" override, so a regression in opt-out wiring could go undetected.\n- README.md, probably_unnecessary_but_read_if_stuck.md, tests/test_*.py (6 files total per last_run_changed_files.txt):multiple | confidence=5\n  PROBLEM: The last autofix run modified 6 files outside issue #2475 scope.\n  WHY: The editor changed docs and Semble contract tests even though the issue explicitly said only modify `tests/e2e_smoke_canary.txt`.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/test_implement_semble_contract.py:54-58 | confidence=5\n  PROBLEM: The function name contradicts the assertion: the name implies the default is `false`, but the assertion checks for `'true'`.\n  WHY: The test passes today, but the misleading name creates maintenance debt and obscures the actual behavior.\n- README.md, probably_unnecessary_but_read_if_stuck.md, tests/test_*.py:multiple | confidence=5\n  PROBLEM: The last run diff modified 6 files outside the issue's explicitly stated scope.\n  WHY: Issue #2475 stated `Only modify tests/e2e_smoke_canary.txt`, so expanding to docs and contract tests violates the constraints.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "9c8d8a96c2b36e644064084165555075c508e59ec77e7e039dbe0b4456f24b3a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2480,
+    "run_id": "25644087975",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25644087975",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260511005130_087294a734",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2480,
+    "run_id": "25644087975"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-11T00:51:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

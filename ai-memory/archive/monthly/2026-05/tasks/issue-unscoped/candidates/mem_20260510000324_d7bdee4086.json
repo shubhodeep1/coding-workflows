@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_judge_semble_prefetch_contract.py:82-105 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The file mixes tab indentation and 4-space indentation in adjacent test functions.\n  WHY: This style inconsistency can trigger E111/E117 lint failures; reviewers noted it was pre-existing rather than introduced by the last run.\n- tests/test_judge_semble_prefetch_contract.py:85-95 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The expected multiline string was collapsed into a single literal with embedded `\\n` escapes.\n  WHY: The assertion remains functionally identical, but the embedded newlines are less scannable and harder to verify at a glance.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_judge_semble_prefetch_contract.py:97-105 | severity=low | confidence=3\n  PROBLEM: Mixed indentation in `test_render_prompt_injects_semble_prefetch_with_surrounding_whitespace` versus the surrounding 4-space-indented functions.\n  WHY: This is a style inconsistency that can trigger lint errors like E111/E117; it was pre-existing rather than introduced by the last run.\n- tests/test_judge_semble_prefetch_contract.py:92-95 | severity=low | confidence=2\n  PROBLEM: The expected multiline string literal was collapsed into a single line with embedded `\\n` sequences.\n  WHY: The runtime string is unchanged, but the test is less readable when verifying verbatim multiline preservation.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_judge_semble_prefetch_contract.py:85-105 | severity=low | confidence=4\n  PROBLEM: Mixed indentation remains in the test file.\n  WHY: `test_render_prompt_preserves_multiline_semble_prefetch_verbatim()` uses 4-space indentation while `test_render_prompt_injects_semble_prefetch_with_surrounding_whitespace()` uses TAB indentation, creating inconsistent style and possible E111/E117 lint issues.\n- tests/test_judge_semble_prefetch_contract.py:92-95 | severity=low | confidence=2\n  PROBLEM: The expected multiline string literal was collapsed into a single line with embedded `\\n` sequences.\n  WHY: This is functionally correct but reduces readability when checking that Semble content is preserved verbatim.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_judge_semble_prefetch_contract.py:97-105 | severity=low | confidence=3\n  PROBLEM: `test_render_prompt_injects_semble_prefetch_with_surrounding_whitespace()` uses tab indentation while surrounding functions use 4-space indentation.\n  WHY: This creates mixed indentation within the same file and may fail linting tools like ruff or flake8 that enforce E111/E117.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_judge_semble_prefetch_contract.py:85-93 | severity=low | confidence=4\n  PROBLEM: `test_render_prompt_preserves_multiline_semble_prefetch_verbatim()` was normalized to 4-space indentation while the adjacent `test_render_prompt_injects_semble_prefetch_with_surrounding_whitespace()` still uses tabs.\n  WHY: This leaves the file with mixed indentation, which is a pre-existing style inconsistency and more visible after the new function was normalized.\n- tests/test_judge_semble_prefetch_contract.py:91-92 | severity=low | confidence=2\n  PROBLEM: The expected string was collapsed into a single literal with embedded `\\n` sequences.\n  WHY: The assertion is functionally identical, but the compact form is less scannable than the original multiline structure.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/test_judge_semble_prefetch_contract.py:82-98 | severity=low | confidence=3\n  PROBLEM: Recent normalization to 4-space indentation creates inconsistency with the file head, which still uses tabs.\n  WHY: Python accepts this, but it is inconsistent style and can trigger E111/E117 in ruff/pyflakes.\n- tests/test_judge_semble_prefetch_contract.py:85-93 | severity=low | confidence=2\n  PROBLEM: Expected multiline output collapsed to a single-line `\\n`-escaped literal in the assertion.\n  WHY: The test still passes, but the `\\n` escapes reduce scannability for future maintenance.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/test_judge_semble_prefetch_contract.py:85-105 | severity=low | confidence=4\n  PROBLEM: The file now mixes tabs and 4-space indentation across adjacent test functions.\n  WHY: This is a style-only inconsistency with no semantic impact, but it can trigger lint rules and was pre-existing in the PR.\n- tests/test_judge_semble_prefetch_contract.py:91-92 | severity=low | confidence=2\n  PROBLEM: The expected string was collapsed into a single literal with embedded `\\n` sequences.\n  WHY: The assertion is semantically identical, but the escaped form is less readable than a multiline literal.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "de3c78de36a9fc43030b9e0de27ceace2589b17021daea53e7cc3b262064fb59",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2407,
+    "run_id": "25614871865",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25614871865",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510000324_d7bdee4086",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2407,
+    "run_id": "25614871865"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-10T00:03:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

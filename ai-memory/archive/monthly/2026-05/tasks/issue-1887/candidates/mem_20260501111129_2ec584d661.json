@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: Which area of this repository should this task target?**\nChoices:\n- **A** \u2014 PR review/autofix flow (`review_autofix.yml`, `scripts/review_*`)\n- **B** \u2014 Orchestrator / poller flow (`internal-orchestrate*.yml`, `scripts/orchestrate_*`)\n- **C** \u2014 Validation / harness flow (`validate.yml`, `scripts/validate_*`)\n- **D** \u2014 Docs / operational guidance only (`README.md`, `agents.md`)\n- **E** \u2014 Another specific workflow, script, or file (RECOMMENDED)\nReply: `Q1: E`\n**Q2: What kind of problem should the change address in that area?**\nChoices:\n- **A** \u2014 A specific bug, regression, or failing workflow/PR/issue (RECOMMENDED)\n- **B** \u2014 A recurring reliability / retry-loop / incorrect-automation problem\n- **C** \u2014 A docs / clarity / observability problem\nReply: `Q2: A`\n**Q3: What should count as \"done\" for this task?**\nChoices:\n- **A** \u2014 The specific problem is resolved with a scoped change and no unrelated cleanup (RECOMMENDED)\n- **B** \u2014 The selected area is broadly improved even if adjacent behavior/scripts also need changes\n- **C** \u2014 Documentation / operator guidance is improved without changing runtime behavior\nReply: `Q3: A`",
+  "fingerprint": "588bc06cce1e0405caa222a8d937eb36c1ee8d6e35e07f0086d32764d25df1fb",
+  "lineage": {
+    "issue_number": 1887,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25212189333",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25212189333",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260501111129_2ec584d661",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1887,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25212189333"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #1887 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-01T11:11:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

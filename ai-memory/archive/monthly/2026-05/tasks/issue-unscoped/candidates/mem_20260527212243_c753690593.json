@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Forward-merge stable into main \u2014 resolve merge conflicts. Source SHA d4ed47ada2fcd1212bacb7ca765040d713f47965 must be reachable from HEAD; conflicting files listed in the PR body must be resolved.\n  expected_change_site: Branch HEAD ancestry and residual diff.\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: Verified via git merge-base --is-ancestor: source SHA is already an ancestor of HEAD. Verified via git diff --stat origin/main...HEAD: only 3 blank-line deletions across .github/workflows/review_autofix.yml and scripts/orchestrate_poll_process.sh. The substantive merge resolution was handled by the earlier [ai-merge-resolve] commit 4288ae6. No missing code changes that would indicate incomplete forward-merge.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- Requirement: Forward-merge stable into main \u2014 resolve merge conflicts. Source SHA d4ed47ada2fcd1212bacb7ca765040d713f47965 must be reachable from HEAD; conflicting files listed in the PR body must be resolved.\n  Expected change site: Branch HEAD ancestry and residual diff.\n  Evidence of absence: Verified via git merge-base --is-ancestor: source SHA is already an ancestor of HEAD. Verified via git diff --stat origin/main...HEAD: only 3 blank-line deletions across .github/workflows/review_autofix.yml and scripts/orchestrate_poll_process.sh. The substantive merge resolution was handled by the earlier [ai-merge-resolve] commit 4288ae6. No missing code changes that would indicate incomplete forward-merge.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "1ab270d2322af9953f413c55c17a7454fb138e225df43f348036c382f4c04f66",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2972,
+    "run_id": "26538879851",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26538879851",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260527212243_c753690593",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2972,
+    "run_id": "26538879851"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-27T21:22:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

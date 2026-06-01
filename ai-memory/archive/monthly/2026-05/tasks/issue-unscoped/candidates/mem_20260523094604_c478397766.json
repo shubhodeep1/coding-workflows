@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update the existing `tests/e2e_smoke_canary.txt` canary for E2E smoke test run `26328466709` with exactly these three lines (no more, no less), preserving a trailing newline:\n- `status: ok`\n- `run_id: 26328466709`\n- `updated-by: ai-pipeline`\n  expected_change_site: tests/e2e_smoke_canary.txt (overwrite)\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: NONE \u2014 the linked issue's exact content was already implemented by a prior autofix iteration and remains unchanged on HEAD.\n- requirement: Keep the change strictly limited to this one existing file; do not create directories or modify anything else.\n  expected_change_site: repository root (no new files, no changes to other files)\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: PR diff and last_run_diff show exactly one file changed (`tests/e2e_smoke_canary.txt`); no other files were modified; file count and git status confirm exclusivity.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement: Update the existing `tests/e2e_smoke_canary.txt` canary for E2E smoke test run `26328466709` with exactly these three lines (no more, no less), preserving a trailing newline:\n- `status: ok`\n- `run_id: 26328466709`\n- `updated-by: ai-pipeline`\n  Expected change site: tests/e2e_smoke_canary.txt (overwrite)\n  Evidence of absence: NONE \u2014 the linked issue's exact content was already implemented by a prior autofix iteration and remains unchanged on HEAD.\n  ISSUE_CONFIDENCE: 5\n- Requirement: Keep the change strictly limited to this one existing file; do not create directories or modify anything else.\n  Expected change site: repository root (no new files, no changes to other files)\n  Evidence of absence: PR diff and last_run_diff show exactly one file changed (`tests/e2e_smoke_canary.txt`); no other files were modified; file count and git status confirm exclusivity.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "9667b83c99ca30999f0defb42e66e9e749e2b845580d7c36026cdd65e821adb8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2914,
+    "run_id": "26329093431",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26329093431",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260523094604_c478397766",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2914,
+    "run_id": "26329093431"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-23T09:46:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan\n\nPlanning ref\n- HEAD: `b60e32805bc2c88a4e9026d4a22ac0a72e6615e9`\n- Checked-out branch: `orchestrator/project-2548`\n- Integration branch metadata: `orchestrator/project-2548`\n- Branch mismatch: none\n\nClarification mapping\n- No Q1/Q2 clarification questions were asked.\n- `/answer [auto-answered-by-orchestrator]` is interpreted as \u201cproceed with the issue body as written; no extra constraints beyond the issue description.\u201d\n\nRepresentative implementation inspected\n- Existing check-run collector in `.github/workflows/review_autofix.yml`\n  - workflow env defaults: current lines `151-156`\n  - `Collect PR check-run failures (CI/lint autofix context)` step: current lines `1807-2020`\n  - inline fallback defaults: current lines `1857-1863`\n- Existing workflow validation path in `.github/workflows/ci.yml`\n  - `yamllint` / `actionlint` checks for workflow files: current lines `29-87`\n\nEstimated implementation budget\n- ~20-30 minutes for the edit\n- ~5-10 minutes for validation\n- Total comfortably within the planning phase\u2019s \u226460 minute target\n\n1. Files likely to change\n- `.github/workflows/review_autofix.yml`\n  - lower the default values for `CHECK_RUNS_WAIT_TIMEOUT_SECS` and `CHECK_RUNS_POLL_INTERVAL_SECS`\n  - lower the matching inline fallback literals inside the check-run collection step\n\nFiles that should stay unchanged in this issue\n- `README.md`\n- `probably_unnecessary_but_read_if_stuck.md`\n- `scripts/review_run_reviewers.sh`\n- `scripts/review_apply_fixes.sh`\n\nReason: the issue explicitly asks for the smallest safe change in the workflow path only, and explicitly defers README/runbook updates.\n\n2. Functions or modules to implement\nPrimary target:\n- The existing `Collect PR check-run failures (CI/lint autofix context)` logic in `.github/workflows/review_autofix.yml`\n\nPlanned change shape:\n- Keep the existing collector design.\n- Do not rewrite the loop, writer, or consumer contract.\n- Retune only the default wait/poll budget.\n\nRecommended concrete values:\n- `CHECK_RUNS_WAIT_TIMEOUT_SECS`: `1200` -> `120`\n- `CHECK_RUNS_POLL_INTERVAL_SECS`: `20` -> `30`\n\nMirror the same defaults in the inline shell fallback logic:\n- `_wait_timeout=\"${CHECK_RUNS_WAIT_TIMEOUT_SECS:-120}\"`\n- `_poll_interval=\"${CHECK_RUNS_POLL_INTERVAL_SECS:-30}\"`\n\nExplicitly preserve:\n- `gh_retry gh api --paginate --slurp \"repos/{repo}/commits/{sha}/check-runs?per_page=100\"`\n- the `SELF_RUN_ID` / `details_url` self-run exclusion\n- the fail-open sentinel paths\n- the Python snapshot writer\n- existing warning/log marker names\n- the current clamp ranges (`0..3600` for timeout, `5..300` for poll interval)\n\n3. Data structures affected\nAffected runtime knobs:\n- `CHECK_RUNS_WAIT_TIMEOUT_SECS`\n- `CHECK_RUNS_POLL_INTERVAL_SECS`\n\nAffected local shell variables:\n- `_wait_timeout`\n- `_poll_interval`\n\nUnaffected data contract:\n- `${PR_CHECK_RUNS_CONTEXT_FILE}` schema must remain exactly as-is:\n  - header: `PR_CHECK_RUNS_CONTEXT`\n  - `head_sha`\n  - `collection_status`\n  - `total_check_runs`\n  - `failed_count`\n  - `incomplete_count`\n  - existing `failed[i].*` fields\n  - existing `incomplete[i].*` fields\n\nNo new data structure or schema should be introduced.\n\n4. API or interface changes\nBehavioral change:\n- Only the default waiting behavior changes when the repo variables are unset.\n- Invalid values should now fall back to the new shorter defaults, not the old `1200/20` pair.\n\nNo interface breakage:\n- No env var renames\n- No new env vars\n- No endpoint changes\n- No log marker renames\n- No prompt file schema changes\n- No merge-gating semantics added\n\nBackward-compatibility note:\n- Consumer repos that already set `CHECK_RUNS_WAIT_TIMEOUT_SECS` and/or `CHECK_RUNS_POLL_INTERVAL_SECS` keep their explicit values unchanged.\n\n5. Risks, conflicts, and edge cases\nMain risk:\n- A shorter wait window will produce more `collection_status: timeout` snapshots while sibling checks are still running.\n\nWhy that is acceptable here:\n- This step is already advisory prompt context, not a merge gate.\n- The current downstream contract already treats non-`ready` status as \u201cunknown / no signal\u201d rather than \u201call green.\u201d\n\nImportant consistency edge case:\n- If only the workflow-level defaults are changed, but the inline fallback literals remain `1200/20`, then invalid or missing values in the step still revert to the old long wait behavior.\n- Therefore both locations in `.github/workflows/review_autofix.yml` must be updated together.\n\nBehavior that must remain intact:\n- `CHECK_RUNS_WAIT_TIMEOUT_SECS=0` still means \u201csnapshot immediately, do not wait\u201d\n- self-run exclusion still prevents `review / codex-agent` from waiting on its own in-progress check-run\n- `gh_retry` stays in place\n- fail-open writer-error/api-error/unavailable behavior remains unchanged\n\nIntentional temporary conflict to call out:\n- Current docs still describe the old defaults:\n  - `README.md` current lines `65-67`\n  - `probably_unnecessary_but_read_if_stuck.md` current lines `520-523`\n- Per the issue instructions, those docs should remain untouched in this implementation and will temporarily drift until the trailing docs/report issue updates them.\n\n6. Testing considerations\nValidation to run after the edit:\n- `yamllint` against `.github/workflows/review_autofix.yml`\n- `actionlint -shellcheck=` against workflow files, especially `.github/workflows/review_autofix.yml`\n\nTargeted review checks:\n- confirm both default-value sites changed together:\n  - workflow env defaults\n  - inline fallback literals\n- confirm no changes to:\n  - snapshot header fields\n  - `collection_status` values\n  - `failed[i].*` / `incomplete[i].*` layout\n  - `gh_retry` usage\n  - self-run exclusion\n  - warning marker `CHECK_RUNS_WAIT_TIMEOUT`\n\nBehavioral sanity checks to reason through:\n- unset vars -> new shorter defaults apply\n- invalid vars -> new shorter fallback defaults apply\n- explicit repo vars -> still override defaults\n- timeout `0` -> still skips waiting\n- disabled / missing-head-sha / api_error / writer_error paths stay unchanged\n\nAssumptions\n- \u201cSmallest safe change\u201d means tuning the existing collector rather than redesigning it.\n- A conservative but materially smaller default budget is preferred over a no-wait rewrite.\n- `120s` timeout and `30s` poll is the recommended balance here: a large reduction in worst-case delay and repeated API reads, while still allowing a brief wait for near-completing sibling checks.\n\nReply `/approved` to implement this plan or `/reclarify` if you want the default budget values adjusted before implementation.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "9755e4055d6cc7d318206264e32a2f4fc63dd3d1f77d9602dedfed6f915b1eb6",
+  "lineage": {
+    "issue_number": 2549,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25765102740",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25765102740",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2549"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260512221454_8e68738aa3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2549,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25765102740"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2549",
+  "timestamps": {
+    "created_at": "2026-05-12T22:14:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

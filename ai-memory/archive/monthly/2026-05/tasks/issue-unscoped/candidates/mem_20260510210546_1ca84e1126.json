@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:3783-3785 | severity=low | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The annotation pipeline flattens the `bash -n` stderr into a single line, which strips multi-line parse-error context.\n  WHY: The code intentionally targets a sanitized single-line message, but the reviewer reported that the whitespace collapse reduces debuggability.\n- .github/workflows/review_autofix.yml:3804 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The same whitespace-collapsing `sed` step is reported as destroying stderr structure.\n  WHY: The reviewer treated the one-line sanitization as reducing debuggability, even though it matches the existing pattern.\n- .github/workflows/review_autofix.yml:3792-3812 | severity=low | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: The fallback `bash -n` checks suppress stderr, so parse errors from fallback copies are not surfaced when the primary script fails.\n  WHY: In the triple-failure path, operators only see the primary error and cannot tell why the fallback copies were unavailable or unparseable.\n- .github/workflows/review_autofix.yml:3798 | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The warning message conflates missing-file and parse-failure cases under `unavailable/unparseable` without surfacing fallback-specific stderr.\n  WHY: The operator only gets the primary error context and cannot distinguish which fallback state occurred from the annotation alone.\n- .github/workflows/review_autofix.yml:3776-3822 | severity=low | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast, minimax_minimax-m2_5]\n  PROBLEM: The `bash -n` guard block has no timeout protection.\n  WHY: The reviewers raised a low-confidence hang risk around the syntax-check path, even though others judged it negligible.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/review_autofix.yml:3806-3812 | confidence=4\n  PROBLEM: The two fallback bash -n checks redirect stderr to `/dev/null`, so if the fallback copies also fail syntax validation, that error is never captured or surfaced to the operator.\n  WHY: In a triple-failure scenario (in-tree script has merge markers AND both fallback copies are corrupted/unparseable), the operator only sees the original in-tree error in the final `::error::` annotation.\n- .github/workflows/review_autofix.yml:3804 | confidence=3\n  PROBLEM: The sed command `sed 's/[[:space:]]\\+/ /g'` collapses multiple whitespace (including newlines) into a single space, destroying the line structure of bash -n stderr.\n  WHY: While the annotation still appears in GitHub Actions, the multi-line parse error context becomes a single compressed line, making it harder for operators to distinguish between different error types.\n- .github/workflows/review_autofix.yml:3803, 3807, 3811 | confidence=1\n  PROBLEM: No timeout or iteration limit around `bash -n` invocations.\n  WHY: The `bash -n` command is a syntax check that does not execute code, so the concern is low-confidence and mainly theoretical.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/review_autofix.yml:3806-3807, 3810-3811 | confidence=2\n  PROBLEM: The fallback bash -n checks (lines 3807 and 3811) redirect stderr to `/dev/null`, so if the primary script fails AND the first fallback also fails, the operator cannot diagnose why the fallback failed.\n  WHY: In a scenario where both fallback copies have syntax errors, the error annotation only shows the primary script's error and provides no visibility into why the fallback path was unavailable/unparseable.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/review_autofix.yml:3807 and 3811 | confidence=2\n  PROBLEM: Both fallback syntax checks silently discard stderr.\n  WHY: If the SCRIPT_REF copy fails to parse or `.codex-workflow-src-main` also fails, the `::error::` annotation only contains the primary in-tree error, so operators get no diagnostic signal from the fallback path.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/review_autofix.yml:3783-3785 | confidence=4\n  PROBLEM: `tr '\\n' ' '` followed by `sed 's/[[:space:]]\\+/ /g; ...'` turns bash -n multi-line stderr into a single dense line.\n  WHY: Parse errors like `/path: line 3: syntax error near unexpected token \\`<<<'` and the conflict-marker line are flattened together, obscuring line context and reducing annotation debug value.\n- .github/workflows/review_autofix.yml:3792-3793 and 3802-3803 | confidence=4\n  PROBLEM: The fallback bash -n checks discard stderr via `2>/dev/null`, suppressing secondary parse errors.\n  WHY: In a triple-failure scenario (primary plus both fallbacks unparseable), the workflow emits only the primary `_err_oneline`, leaving the fallback failures unreported.\n- .github/workflows/review_autofix.yml:3776-3822 | confidence=2\n  PROBLEM: `bash -n` invocations lack timeout protection.\n  WHY: The reviewer raised a hang risk for parser checks in this block, even though it is low-probability in practice.\n- .github/workflows/review_autofix.yml:3798 | confidence=3\n  PROBLEM: The warning message lumps missing-file and parse-fail cases under `unavailable/unparseable` without quoting the fallback-specific bash -n stderr.\n  WHY: Operators only see the primary error and cannot tell whether the SCRIPT_REF copy was absent or parse-broken from the annotation alone.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "e8932f87cb503a4b8435e92c7a49a006d1dbbf188ec276b9e20e5dcc0bd3ecd4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2467,
+    "run_id": "25639277610",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25639277610",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510210546_1ca84e1126",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2467,
+    "run_id": "25639277610"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-10T21:05:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

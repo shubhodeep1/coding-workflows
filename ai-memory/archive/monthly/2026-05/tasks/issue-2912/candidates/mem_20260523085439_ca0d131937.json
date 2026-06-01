@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for `orchestrator/project-2911` @ `04c9bbb632140327519c8b790256cf029a8ebbca`\n\nClarification status\n- No clarification questions were required.\n- `/answer [auto-answered-by-orchestrator]` is sufficient to proceed.\n\nAutomation / wiring\n- Change type: modify existing file only.\n- Scheduler / workflow wiring: none.\n- New script or supervisor: none.\n- DB / migration work: none.\n- `docs/scripts-pending-removal.md`: no entry needed.\n\nFiles likely to change\n- `tests/e2e_smoke_canary.txt` only.\n\nFunctions or modules to implement\n- None.\n- Make a minimal in-place text edit in `tests/e2e_smoke_canary.txt`:\n  - keep line 1 as `status: ok` (it is already correct on this ref)\n  - replace line 2 from `run_id: 26151428977` to `decompose-run: 26328466709`\n  - leave remaining content unchanged if possible (line 3 is currently `updated-by: ai-pipeline`)\n\nData structures affected\n- The line-oriented smoke-canary text contract in `tests/e2e_smoke_canary.txt`.\n- The second-line key changes from `run_id` to `decompose-run` for this issue.\n\nAPI or interface changes\n- No code/API surface changes.\n- The only observable contract change is the contents of `tests/e2e_smoke_canary.txt`, specifically line 2.\n\nConflicts / missing-context notes\n- There is a repo-level inconsistency: `.github/workflows/test-and-mark-stable.yml` still contains legacy `run_id:`-based \u201cexactly three lines\u201d instructions for `tests/e2e_smoke_canary.txt` (around lines 429-444 and 4472-4477), while the decomposed issue generator in that same file now emits `decompose-run:` for Issue 1 (around line 3865).\n- Because this issue explicitly restricts edits to `tests/e2e_smoke_canary.txt`, the plan keeps scope to that file and does not reconcile the broader legacy smoke-fixture references here.\n\nPotential risks or edge cases\n- Do not read from or modify `tests/e2e_smoke_canary_b.txt`.\n- Do not use a whole-file rewrite pattern that reintroduces `run_id:` or changes unrelated lines.\n- Preserve the existing trailing newline and unchanged third line if present.\n- If another smoke helper still expects `run_id:`, that mismatch is pre-existing and out of scope for this single-file issue.\n\nTesting considerations\n- Verify only `tests/e2e_smoke_canary.txt` is changed.\n- Verify line 1 is exactly `status: ok`.\n- Verify line 2 is exactly `decompose-run: 26328466709`.\n- Verify no other repository files appear in `git diff --stat` or `git status --short`.\n\nAssumptions\n- Since the issue constrains only lines 1-2 and asks for a minimal edit, the existing third line should remain unchanged.\n- Targeted file-content verification and diff verification are sufficient for this tiny smoke-canary change; no broader test run is required.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "5a0f303a31a89d9260a39af6d6b080e6ba3d596884a00e454e425b7baacbcb3d",
+  "lineage": {
+    "issue_number": 2912,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26328549158",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26328549158",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2912"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260523085439_ca0d131937",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2912,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26328549158"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2912",
+  "timestamps": {
+    "created_at": "2026-05-23T08:54:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

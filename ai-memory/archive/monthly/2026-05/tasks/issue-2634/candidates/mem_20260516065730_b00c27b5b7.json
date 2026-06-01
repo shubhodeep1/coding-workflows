@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-2627` @ `8ca3a4b54afe35e611cdf16dbd5cec97677ff441` (matches integration-branch metadata).\nClarification mapping: no Q-items were asked; `/answer [auto-answered-by-orchestrator]` just confirms planning can proceed.\n\nImplementation Plan\n\n1. Files likely to change\n- `prompts/mode-judge-review-blocked.txt`\n  - Add `reissue_mode` (`spot-fix` | `redo`) next to `action`.\n  - Keep `remaining_issues_summary`.\n  - Add sibling `remaining_issues[]` entries with `file`, `line_start`, `line_end`, `symptom`.\n  - Add brief guidance for when to choose `spot-fix` vs `redo`, with missing/invalid values degrading to `redo`.\n- `scripts/review_rb_judge.sh`\n  - Extend the `close_and_reissue)` branch to parse `reissue_mode` / structured `remaining_issues`.\n  - When `REISSUE_PRESERVE_BASELINE_ENABLED=true` and mode is valid `spot-fix`, validate the issue file list, re-fetch live `headRefOid`, create/push a baseline branch from a temporary `git worktree`, append `prior_pr_baseline_branch:` and scoped `files_touched:` metadata to the new issue body, and emit `REISSUE_MODE`, `REISSUE_BASELINE_PRESERVED`, `REISSUE_BASELINE_DISCARDED`.\n  - Any failure in that path must warn and fall back to the current redo flow.\n- `.github/workflows/review_autofix.yml`\n  - Pass `REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'false' }}` into the \u201cReview-blocked judge decision\u201d step.\n- `.github/workflows/implement.yml`\n  - Teach the checkout path to honor `prior_pr_baseline_branch:` from the issue body as a source-checkout override, while keeping `PR_BASE_BRANCH` on `steps.refctx.outputs.ref || github.event.repository.default_branch`.\n  - Preferred shape: resolve/fetch issue metadata before the main repo checkout, parse the branch hint, validate it, and compute an effective checkout ref before `actions/checkout`.\n- `agents.md`\n  - Add stable-prefix entries for:\n    - `JUDGE_INTERIM_PASS_OK`\n    - `JUDGE_INTERIM_PASS_FAIL`\n    - `JUDGE_INTERIM_PRIORS_MERGED`\n    - `REISSUE_BASELINE_PRESERVED`\n    - `REISSUE_BASELINE_DISCARDED`\n    - `REISSUE_MODE`\n- Tests (extend existing CI-covered files)\n  - `tests/test_review_rb_judge_label_propagation.py`\n  - `tests/test_implement_post_codex_recovery.py`\n  - `tests/test_workflow_checkout_integration_ref_audit.py`\n\n2. Functions/modules to implement\n- Judge prompt schema update in `mode-judge-review-blocked.txt`.\n- `review_rb_judge.sh` helpers for:\n  - normalizing `reissue_mode` with fail-open fallback,\n  - validating/deduping `remaining_issues[].file`,\n  - temporary worktree lifecycle + cleanup trap,\n  - baseline-branch push,\n  - issue-body metadata assembly.\n- Implement-workflow checkout resolver:\n  - parse `prior_pr_baseline_branch:` from issue-body metadata,\n  - validate branch-name shape and remote existence,\n  - emit effective checkout ref for the checkout/log steps.\n\nRepresentative patterns to follow:\n- Metadata parsing / branch existence: `scripts/resolve_integration_ref.sh`\n- Non-destructive worktree add/remove cleanup: `scripts/orchestrate_poll_process.sh`\n\n3. Data structures affected\n- Review-blocked judge JSON gains:\n  - `reissue_mode`\n  - `remaining_issues[]` as a sibling to `remaining_issues_summary`\n- Review-blocked reissue body footer gains:\n  - `prior_pr_baseline_branch: <branch>`\n  - `files_touched:` scoped to unique `remaining_issues[].file`\n- Workflow/env plumbing gains:\n  - `REISSUE_PRESERVE_BASELINE_ENABLED` in `review_autofix.yml`\n  - an effective checkout-ref output in `implement.yml`\n\n4. API / interface changes\n- No new workflow_call input is needed; this is repo-var plumbing only.\n- `review_rb_judge.sh` parsing remains backward-compatible because the new fields are additive and default to redo when absent/invalid.\n- `implement.yml` changes checkout source only; PR base stays the resolved integration/default branch.\n\n5. Risks / edge cases\n- Missing/invalid `reissue_mode` must downgrade to `redo`.\n- Missing, malformed, empty, duplicate, non-repo-relative, or non-existent `remaining_issues[].file` entries must downgrade to `redo`.\n- If live PR head SHA lookup, worktree creation, push, or cleanup fails, log discard and continue with today\u2019s redo behavior.\n- `prior_pr_baseline_branch` is untrusted text; validate strictly against branch-name rules and verify only under `refs/heads/...`.\n- Do not switch to the baseline branch after support files are staged; resolve the effective checkout ref before the main repo checkout.\n- `prompts/mode-judge-review-blocked.txt` has a CI line-cap of 200, so keep the prompt addition small.\n- Current-code conflict: `.github/workflows/internal-implement.yml` is only a thin wrapper, so the plan-doc reference to an \u201cinternal checkout step\u201d does not map 1:1 to the current ref.\n- Current-code conflict: `scripts/orchestrate_poll_process.sh` still contains a separate orchestrator-side review-blocked judge path using the same prompt; this issue does not name it, so I\u2019m treating it as out of scope unless implementation reveals a lockstep requirement.\n\n6. Testing considerations\n- Extend `tests/test_review_rb_judge_label_propagation.py` to cover:\n  - prompt schema strings for `reissue_mode` / `remaining_issues[]`,\n  - `REISSUE_PRESERVE_BASELINE_ENABLED` workflow wiring,\n  - `spot-fix` vs `redo`,\n  - invalid/missing `reissue_mode` downgrade,\n  - real `git worktree` baseline branch creation against a temp repo + bare remote,\n  - emitted `REISSUE_*` logs,\n  - proof the caller checkout/HEAD is unchanged.\n- Extend `tests/test_implement_post_codex_recovery.py` to run the new checkout-resolution step with mocked `gh api` responses:\n  - valid baseline branch -> override selected,\n  - missing/invalid/unavailable branch -> fallback to refctx/default,\n  - `PR_BASE_BRANCH` remains unchanged.\n- Extend `tests/test_workflow_checkout_integration_ref_audit.py` so it accepts the new precedence (`baseline override -> refctx -> default`) while still enforcing \u201cresolve integration ref before checkout\u201d.\n\nAssumptions\n- Keep `REISSUE_PRESERVE_BASELINE_ENABLED=false` by default in this issue.\n- No README/default-true bake-out changes are part of this scope.\n- No clarification gaps remain.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "2b7255d748d64c203d274c1a71a14e3d528052cb1673eca31b0e533beaf33b05",
+  "lineage": {
+    "issue_number": 2634,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25955325756",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25955325756",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2634"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260516065730_b00c27b5b7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2634,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25955325756"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2634",
+  "timestamps": {
+    "created_at": "2026-05-16T06:57:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

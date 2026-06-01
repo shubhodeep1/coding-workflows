@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/mcp_handshake_probe.py:mode change 100644 -> 100755 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The script\u2019s executable-bit flip is unrelated to the five targeted reusable workflows and expands the diff beyond scope.\n  WHY: All six reviewers identified this as a mode-only, harmless change that violates the issue\u2019s explicit minimal-diff scope.\n- scripts/serena_stats_emit.py:mode change 100644 -> 100755 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The script\u2019s executable-bit flip is unrelated to the five targeted reusable workflows and expands the diff beyond scope.\n  WHY: All six reviewers identified this as a mode-only, harmless change that violates the issue\u2019s explicit minimal-diff scope.\n- scripts/setup_serena.sh:mode change 100644 -> 100755 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The script\u2019s executable-bit flip is unrelated to the five targeted reusable workflows and expands the diff beyond scope.\n  WHY: All six reviewers identified this as a mode-only, harmless change that violates the issue\u2019s explicit minimal-diff scope.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh:mode change 100644 -> 100755 (zero content changes) | confidence=5\n  PROBLEM: These three files had their file mode changed from non-executable to executable with no content modifications.\n  WHY: The change is harmless at runtime but violates the explicit scope constraint to only modify the five reusable workflow files.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh:mode change 100644 -> 100755 (no content change) | confidence=5\n  PROBLEM: These three script files have their file mode changed from 644 to 755, but issue #2583 explicitly scopes changes to only the five reusable workflow files listed.\n  WHY: These mode changes are incidental artifacts unrelated to the Node24 bridge pattern and violate the minimal-diff constraint.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh:mode change 100644 -> 100755 (no content change) | confidence=5\n  PROBLEM: All three script files have their mode changed from 100644 to 100755, but issue #2583 explicitly scopes changes to only the five reusable workflow files.\n  WHY: While the permission changes are harmless at runtime, they violate the minimal-diff requirement and expand scope beyond what was requested.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh:mode change 100644 -> 100755 (no content changes) | confidence=5\n  PROBLEM: File mode changed from non-executable to executable, which is outside the scope of issue #2583.\n  WHY: The issue explicitly lists only the five workflow files to modify, so these permission changes are scope creep.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh:mode change 100644 -> 100755 (no content changes) | confidence=5\n  PROBLEM: File mode changed to executable despite zero content diff and no mention in issue #2583.\n  WHY: The mode flips violate the explicit scope and minimal-diff constraints even though they are harmless at runtime.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh:mode change 100644 -> 100755 | confidence=4\n  PROBLEM: File mode changed from non-executable to executable, which is outside the scope of issue #2583.\n  WHY: The issue explicitly lists only the five workflow files to modify, and the blob hashes are unchanged, confirming this is only a permission-bit flip.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "455ff987d7d8c8fd0e787a3e8ef28c417ada8ecee1c7220f81d3e37d30a9137d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2585,
+    "run_id": "25854670507",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25854670507",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260514102933_8894126516",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2585,
+    "run_id": "25854670507"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-14T10:29:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"E2E orchestrate smoke canary update 25480794077\",\"issues\":[{\"id\":\"issue-1-canary-a\",\"title\":\"Update primary E2E smoke canary file for run 25480794077\",\"priority\":1},{\"id\":\"issue-2-canary-b\",\"title\":\"Update secondary E2E smoke canary file for run 25480794077\",\"priority\":1}],\"dependency_edges\":[]}",
+  "fingerprint": "7b086962662847d0bf6e7e3b88a61362a5514d16a1f4045245751b2c1c2a21b9",
+  "lineage": {
+    "issue_number": 2234,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25480825340",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25480825340",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260507065653_7192226a66",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2234,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25480825340"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'E2E orchestrate smoke canary update 25480794077' into 2 issues (tracking #2234)",
+  "timestamps": {
+    "created_at": "2026-05-07T06:56:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

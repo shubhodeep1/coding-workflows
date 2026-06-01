@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":2293,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/2293\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/2295\",\"pr_number\":2295,\"branch\":\"ai/issue-2293\",\"run_id\":\"25552728644\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/25552728644\",\"changed_files\":[\".github/workflows/review_autofix.yml\",\"prompts/conflict-resolver.txt\",\"prompts/integration-sync-conflict-resolver.txt\",\"scripts/review_apply_fixes.sh\",\"scripts/review_conflict_prepare.sh\",\"scripts/review_conflict_resolve.sh\",\"scripts/review_run_reviewers.sh\",\"scripts/semble_helpers.sh\",\"tests/test_review_autofix_smoke_conflict_resolver_override.py\",\"tests/test_review_conflict_resolve_smoke_deterministic.py\",\"tests/test_review_reviewer_prompt_semble.py\",\"tests/test_semble_contracts.py\"]}",
+  "fingerprint": "37f83a1246eb91f3269f3dc78ee6fd438aa87af7f7bf895239b7bfcc493bcd0f",
+  "lineage": {
+    "issue_number": 2293,
+    "parent_ids": [],
+    "pr_number": 2295,
+    "run_id": "25552728644",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25552728644",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/2295"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260508113209_5812574391",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2293,
+    "level": "run",
+    "pr_number": 2295,
+    "run_id": "25552728644"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #2293: https://github.com/shubhodeep1/coding-workflows/pull/2295",
+  "timestamps": {
+    "created_at": "2026-05-08T11:32:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

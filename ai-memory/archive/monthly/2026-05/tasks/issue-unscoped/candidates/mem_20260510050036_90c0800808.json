@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_judge_semble_prefetch_contract.py:29-46, 133-135, 162-165, 169-173 | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The test file mixes tab and space indentation across several functions.\n  WHY: Multiple reviewers observed tab-indented blocks amid space-indented code; it parses today but is a style/maintainability risk and can trip stricter tooling.\n- tests/test_judge_semble_prefetch_contract.py:279-315 | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The contract test pins the exact `32768` query-bound value.\n  WHY: Reviewers flagged that legitimate tuning of the bound would fail the test; others treated it as acceptable contract enforcement, so the disagreement is about maintainability rather than correctness.\n- scripts/review_rb_judge.sh:35 | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The review-blocked judge uses a 32KB query cap while the poller path uses 12KB.\n  WHY: One reviewer treated the mismatch as a cross-path contract issue; others considered it an intentional design choice with no demonstrated failure.\n- scripts/review_rb_judge.sh:304-307 | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The `[ -s ... ]` check can race with the subsequent `head -c` read of the query file.\n  WHY: The finding claims the file could become empty between the check and the read, allowing an empty query to reach `semble_query_block`; other reviewers said no concrete failure path was shown.\n- scripts/orchestrate_poll_process.sh:2783-2810 | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `invoke_judge_for_integration_conflict` creates temp files without a RETURN trap for cleanup.\n  WHY: The reviewer said an unexpected exit could leak temp files in `${TMPDIR:-/tmp}`; others noted it appears pre-existing and not introduced by the last run.\n- scripts/review_rb_judge.sh:326-333 | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: If the `head -c` truncation path fails, the original untruncated context file is left intact.\n  WHY: The reviewer said the fallback only removes the `.tmp` file, so a later `cat` can feed an oversized Semble context into the prompt and risk truncation or failure.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_judge_semble_prefetch_contract.py:29-46 | confidence=4\n  PROBLEM: Mixed tab/space indentation in the `_run_render` function.\n  WHY: The file mixes tabs in `_run_render` with spaces elsewhere; this is a maintainability/style risk even though Python parses it successfully.\n- tests/test_judge_semble_prefetch_contract.py:307, 315 | confidence=4\n  PROBLEM: The test assertion pins the exact string `REVIEW_RB_SEMBLE_QUERY_MAX_BYTES=\"32768\"`.\n  WHY: If the bound is changed later for legitimate reasons, the test will fail even though the logic remains correct.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_judge_semble_prefetch_contract.py:29-46, 133-135, 162-165, 169-173 | confidence=4\n  PROBLEM: Mixed tab and space indentation in Python test functions.\n  WHY: `_run_render` and several test functions use tabs while the rest of the file uses spaces; this is a maintainability risk and can cause tooling or parser issues under stricter settings.\n- scripts/review_rb_judge.sh:35 | confidence=3\n  PROBLEM: `REVIEW_RB_SEMBLE_QUERY_MAX_BYTES=\"32768\"` is 2.7x larger than `JUDGE_SEMBLE_QUERY_MAX_BYTES=\"12000\"` in scripts/orchestrate_poll_process.sh.\n  WHY: Inconsistent query bounds between the review-blocked and poller judge paths could lead to different search behavior, performance characteristics, or context bloat.\n- scripts/orchestrate_poll_process.sh:2783-2810 | confidence=3\n  PROBLEM: The function creates `integration_semble_query_file` and `integration_semble_context_file` temp files but does not set up a RETURN trap for cleanup.\n  WHY: If the function exits unexpectedly, the temp files can leak in `${TMPDIR:-/tmp}` and accumulate across poll cycles.\n- tests/test_judge_semble_prefetch_contract.py:306 | confidence=4\n  PROBLEM: Test assertion `assert 'REVIEW_RB_SEMBLE_QUERY_MAX_BYTES=\"32768\"' in text` pins the exact numeric value.\n  WHY: Legitimate bound adjustments would break the test and create maintenance churn even when the logic remains correct.\n- scripts/review_rb_judge.sh:304-307 | confidence=2\n  PROBLEM: `$(head -c \"${REVIEW_RB_SEMBLE_QUERY_MAX_BYTES}\" \"${RB_JUDGE_SEMBLE_QUERY_FILE}\" 2>/dev/null || true)` passes file content directly to `semble_query_block` without empty-content validation.\n  WHY: If the file becomes empty between the size check and the read, an empty query may be passed and produce unexpected output or errors.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/review_rb_judge.sh:326-333 | confidence=4\n  PROBLEM: `head -c` truncation to `.tmp` succeeds only if the source file is readable and the output is writable; on failure, the original untruncated context file remains intact.\n  WHY: The reviewer said the fallback only removes `.tmp`, so a later `cat` can feed an oversized Semble context into the prompt and risk token-limit exhaustion or failure.\n- tests/test_judge_semble_prefetch_contract.py:279-312 | confidence=3\n  PROBLEM: The test pins the exact `head -c` string with the `REVIEW_RB_SEMBLE_QUERY_MAX_BYTES` reference.\n  WHY: Future bound tuning would break the test even if the logic stays correct, creating maintenance churn.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "356b1a51a3dc15c03a3eac06c1f11cbdbb7eb2a8171d4366ca46a9fb0a19a40c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2398,
+    "run_id": "25620027882",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25620027882",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510050036_90c0800808",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2398,
+    "run_id": "25620027882"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 6 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-10T05:00:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

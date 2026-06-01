@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:134-140 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, x-ai_grok-4_20]\n  PROBLEM: Renaming the CI step moves the ahead-by-gate test under a different step name, reducing observability for that regression.\n  WHY: The test still runs, but failures will be attributed to the \"Orchestrate lib unit tests\" step rather than a dedicated step; deepseek calls this a mild observability trade-off, while x-ai treats it as naming/attribution drift.\n- .github/workflows/ci.yml:129-141 | severity=low | confidence=[4]\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The poller regression step reruns `test_orchestrate_poll_process.py`, so one regression test file executes twice in the same CI job.\n  WHY: This adds unnecessary CI time and duplicate output, but does not change functional correctness.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Automated forward-merge of `stable` into `main` failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`.\" (plus the explicit CAUTION about using \"Create a merge commit\").\n  expected_change_site: .github/workflows/ci.yml, .github/workflows/review_autofix.yml, scripts/orchestrate_poll_process.sh (and the 10+ other files listed in the PR description's conflict list).\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The substantive conflict-resolution work was already performed by the earlier `[ai-merge-resolve]` commit (4288ae6); the residual LAST RUN DIFF only contains a CI step rename, a blank-line removal, and removal of a duplicate helper block that had already been addressed in prior autofix rounds. The forward-merge intent is satisfied on disk and in git history; no further code changes are required.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: .github/workflows/ci.yml\n  Line or code reference: lines 134-138\n  Problem: The step formerly named \"Integration-ahead-by gate regression tests\" (which exclusively ran the ahead-by-gate test) is renamed to \"Orchestrate poller regression tests\" and now runs only the two poller test files. The ahead-by-gate test was moved into the preceding \"Orchestrate lib unit tests\" step (lines 129-132) where it runs alongside test_orchestrate_lib.py. A CI failure in the ahead-by gate logic will now be reported under the \"Orchestrate lib unit tests\" step header rather than a dedicated observed step.\n  Why it fails at runtime: No runtime failure \u2014 the test still executes and still gates CI. This is a mild observability trade-off: the step name is technically accurate (test_orchestrate_integration_ahead_by_gate.py tests a function in orchestrate_lib.py, so \"lib unit tests\" is semantically correct), but the dedicated step name that operators previously used for triage is lost. The agents.md stable-log-prefix contract does not include CI step names, so this is not a contractual violation. Previous editor rounds have already validated and accepted this naming.\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- File: .github/workflows/ci.yml\n  Line or code reference: lines 129-141\n  Problem: The CI step \"Orchestrate poller regression tests\" runs `test_orchestrate_poll_process.py` and `test_orchestrate_poll_noop_suspicious_recovery.py`. The test `test_orchestrate_poll_process.py` is also executed in the preceding \"Orchestrate lib unit tests\" step (per the PR diff context around lines 129-132), meaning one regression test file runs twice in the same CI job. The step name accurately describes the current test set and the ahead-by gate test (`test_orchestrate_integration_ahead_by_gate.py`) runs in the preceding step's step, but one test file executes in two steps in this CI job\n  Why it fails at runtime: The duplicate test execution adds unnecessary time to the CI job and may produce duplicate test output, making job logs harder to read. No functional correctness regression, but redundant execution wastes CI minutes.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: .github/workflows/ci.yml\n  Line or code reference: lines 134-140 (last-run diff)\n  Problem: The CI step was renamed from \"Integration-ahead-by gate regression tests\" to \"Orchestrate poller regression tests\". The ahead-by-gate test (`test_orchestrate_integration_ahead_by_gate.py`) runs in the preceding \"Orchestrate lib unit tests\" step; the new step only runs the two poller tests.\n  Why it fails at runtime: A regression in the integration-ahead-by logic or `finalize_integration_merge_if_needed` path would be reported under the wrong step name in CI logs, breaking observability contracts used by workflow-log-analysis, operator triage, and the stable-log-prefixes contract in agents.md. This is the exact class of naming/attribution drift that the PR body auto-close lint and plan-archival lint tests were introduced to prevent.\n  ISSUE_CONFIDENCE: 4\n- Requirement: \"Automated forward-merge of `stable` into `main` failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`.\" (plus the explicit CAUTION about using \"Create a merge commit\").\n  Expected change site: .github/workflows/ci.yml, .github/workflows/review_autofix.yml, scripts/orchestrate_poll_process.sh (and the 10+ other files listed in the PR description's conflict list).\n  Evidence of absence: The substantive conflict-resolution work was already performed by the earlier `[ai-merge-resolve]` commit (4288ae6); the residual LAST RUN DIFF only contains a CI step rename, a blank-line removal, and removal of a duplicate helper block that had already been addressed in prior autofix rounds. The forward-merge intent is satisfied on disk and in git history; no further code changes are required.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "1055bded9801d4651e8eade6d9ca14efee7f42dfd906cfa8bbe8bca27577ec46",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2972,
+    "run_id": "26480885797",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26480885797",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260526233130_af04cb3aeb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2972,
+    "run_id": "26480885797"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-26T23:31:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

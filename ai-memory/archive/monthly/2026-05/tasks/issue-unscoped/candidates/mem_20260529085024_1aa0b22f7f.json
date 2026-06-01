@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_filter_uninteresting_files.sh: lines 80-92 + callers in detect_generated_marker() / detect_generated_marker_in_block() (and the last-run change that set GENERATED_MARKER_SCAN_LINES = 5) | severity=high | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The 5-line marker scan still over-matches legitimate source files when generated-looking substrings appear in the first lines of a header, causing real diffs to be hidden from reviewers.\n  WHY: With REVIEWER_FILTER_UNINTERESTING_ENABLED=true, a normal changed source file can be logged as REVIEWER_FILTER_SKIP and removed from every reviewer prompt, defeating the noise-reduction goal and hiding legitimate changes.\n- scripts/review_filter_uninteresting_files.sh: path_matches() (the recursive match_parts helper) and first_matching_glob() call sites | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The custom recursive glob matcher has edge cases around migration exemptions and pattern ordering that can produce incorrect skips or keeps.\n  WHY: A migration or contract file containing a generated marker can be stripped, or a low-signal file can slip through, breaking the deterministic pre-filter contract.\n- scripts/review_filter_uninteresting_files.sh: main() block that does \"if not marker and not (repo_root / path).is_file(): marker = detect_generated_marker_in_block(block)\" + the hunk_starts_at_file_top() guard (lines ~57-70 in last-run version) | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: When the workspace copy is absent and the first diff hunk does not start at line 1, the diff-block fallback is skipped.\n  WHY: Complex deleted or renamed generated files can leak into reviewer context or be falsely kept/stripped, violating the filter contract.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Extend prompts/review-reviewer-checklist.txt with explicit anti-rules per review lens so reviewers stop surfacing theoretical, style-only, or otherwise non-actionable nits.\" + \"Add scripts/review_filter_uninteresting_files.sh to strip lockfiles, generated files, minified assets, and similar low-signal inputs before reviewer prompt assembly, while preserving the plan's exemptions for db/contracts/** and migration paths.\" + \"The filter is flag-gated / fail-open, and tests cover both noisy-review suppression and the migration exemption.\"\n  expected_change_site: prompts/review-reviewer-checklist.txt, scripts/review_filter_uninteresting_files.sh (core filter + generated-marker boundary), scripts/review_run_reviewers.sh (artifact swap + REVIEWER_FILTER_CONTEXT_NOTE_BLOCK + COMMON ANTI-RULES), .github/workflows/review_autofix.yml (wiring/staging/preflight), plus the contract tests\n  confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The anti-rules text, wiring, staging, fail-open paths, fixtures, and most regression tests are present, but the live filter behavior still produces the false-positive behavior described on line-6 markers; the runtime path remains live.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/review_filter_uninteresting_files.sh: lines 80-92 + callers in detect_generated_marker() / detect_generated_marker_in_block() (and the last-run change that set GENERATED_MARKER_SCAN_LINES = 5) | severity=high | confidence=5\n  PROBLEM: The 5-line window still over-matches legitimate source files that contain generated-looking substrings in the header, so real diffs are removed from reviewer prompts.\n  WHY: With REVIEWER_FILTER_UNINTERESTING_ENABLED=true, a normal changed source file gets logged as REVIEWER_FILTER_SKIP and is hidden from every reviewer prompt, defeating the filter\u2019s purpose.\n- scripts/review_filter_uninteresting_files.sh: path_matches() (the recursive match_parts helper) and first_matching_glob() call sites | severity=medium | confidence=4\n  PROBLEM: The custom ** matcher has subtle edge cases around root-level migration exemptions, trailing slashes, and glob ordering.\n  WHY: Exempt files can be stripped or low-signal files can slip through, breaking the deterministic pre-filter contract.\n- scripts/review_filter_uninteresting_files.sh: main() block that does \"if not marker and not (repo_root / path).is_file(): marker = detect_generated_marker_in_block(block)\" + the hunk_starts_at_file_top() guard (lines ~57-70 in last-run version) | severity=medium | confidence=4\n  PROBLEM: When the workspace copy is absent and the first diff hunk does not start at line 1, the diff-block fallback is skipped.\n  WHY: Deleted or renamed generated files can leak into reviewer context, or a false-negative can occur, violating the acceptance criterion.\n- Requirement: \"Extend prompts/review-reviewer-checklist.txt with explicit anti-rules per review lens so reviewers stop surfacing theoretical, style-only, or otherwise non-actionable nits.\" + \"Add scripts/review_filter_uninteresting_files.sh to strip lockfiles, generated files, minified assets, and similar low-signal inputs before reviewer prompt assembly, while preserving the plan's exemptions for db/contracts/** and migration paths.\" + \"The filter is flag-gated / fail-open, and tests cover both noisy-review suppression and the migration exemption.\"\n  Expected change site: prompts/review-reviewer-checklist.txt, scripts/review_filter_uninteresting_files.sh (core filter + generated-marker boundary), scripts/review_run_reviewers.sh (artifact swap + REVIEWER_FILTER_CONTEXT_NOTE_BLOCK + COMMON ANTI-RULES), .github/workflows/review_autofix.yml (wiring/staging/preflight), plus the contract tests\n  Evidence of absence: The anti-rules text, wiring, staging, fail-open paths, fixtures, and most regression tests are present, but the live filter behavior still produces the false-positive behavior described on line-6 markers; the runtime path remains live.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "43d7798690b4ef31bc97cb16477863b6b6434994e80a91f41e1786939f42d643",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2980,
+    "run_id": "26624817222",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26624817222",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260529085024_1aa0b22f7f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2980,
+    "run_id": "26624817222"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-29T08:50:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_commit_changes.sh:101-115 | confidence=4\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The tracked-subtree guard around `rm -rf .serena` misclassifies partially tracked `.serena/` trees, either deleting consumer-owned tracked content or skipping cleanup of bootstrap noise.\n  WHY: Both reviewers flagged the same `git ls-files --error-unmatch -- .serena` check as the root cause of unsafe `.serena` cleanup behavior.\n- scripts/review_commit_changes.sh:313-320 | confidence=3\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The `':!.serena' ':!.serena/**'` staging exclusions can drop legitimate editor changes under `.serena/` from the consumer-repo untracked-file staging path.\n  WHY: Both reviewers reported the same unconditional exclusion of `.serena` pathspecs as overbroad for substantive changes.\n- .github/workflows/review_autofix.yml:2170 | confidence=4\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: When `.serena` is treated as preexisting, the bootstrap hash is not captured, so later cleanup logic is skipped and bootstrap-generated untracked files can persist.\n  WHY: Both reviewers identified the same workflow gating around `SERENA_PROJECT_PREEXISTED` / hash capture as the cause of leftover `.serena` bootstrap artifacts.\n- tests/test_review_semble_contract.py:136-140 | confidence=3\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The contract test only checks for string presence and does not simulate the partial-tracking `.serena/` case.\n  WHY: Both reviewers described this as a coverage gap that can let the runtime `.serena` cleanup issue slip through.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_commit_changes.sh:101-115 | confidence=4\n  PROBLEM: The `git ls-files --error-unmatch -- .serena` command succeeds only if `.serena` itself is a tracked path; if a consumer repo tracks files like `.serena/custom.yml` but not the `.serena` directory itself, `rm -rf .serena` deletes the entire tree including consumer-owned tracked files.\n  WHY: Consumer repos that track some `.serena/*` files but not `.serena` will have their tracked content deleted when bootstrap runs and hash matches.\n- scripts/review_commit_changes.sh:313-320 | confidence=3\n  PROBLEM: The staging exclusions are unconditional and exclude all `.serena` content regardless of whether it's bootstrap noise or legitimate editor changes.\n  WHY: Even when the editor legitimately modifies `.serena/project.yml` (hash mismatch detected by apply_fixes.sh), those changes are excluded from staging and never committed.\n- .github/workflows/review_autofix.yml:2170 | confidence=4\n  PROBLEM: When preexisting is detected (any tracked `.serena` or `.serena` on disk), the bootstrap hash is never captured and remains empty, which causes commit_changes.sh to skip cleanup entirely and allows untracked bootstrap files to be committed.\n  WHY: Consumer repos with existing `.serena` content will have bootstrap untracked files (cache, logs) staged and committed as autofix noise.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/review_commit_changes.sh:101-115 | confidence=4\n  PROBLEM: The added `git ls-files --error-unmatch -- .serena` check succeeds whenever any file under `.serena/` is tracked, so `!` is false and `rm -rf .serena` is skipped, leaving bootstrap-generated untracked files in the worktree.\n  WHY: The check misclassifies partially tracked `.serena/` trees and prevents cleanup of bootstrap noise.\n- scripts/review_commit_changes.sh:313 | confidence=3\n  PROBLEM: The new unconditional `':!.serena' ':!.serena/**'` pathspecs exclude all `.serena/**` files from `git add`, including legitimate editor mutations.\n  WHY: The staging path drops substantive `.serena/` changes even when the editor has made a real edit.\n- .github/workflows/review_autofix.yml:2170 | confidence=4\n  PROBLEM: The widened preexisting detection still lets Setup Serena populate `.serena/project.yml` and `cache/`, but because preexisting is true the bootstrap hash is never captured, so commit_changes skips cleanup and the untracked bootstrap artifacts persist.\n  WHY: The workflow path leaves bootstrap files in the worktree when `.serena` already exists.\n- tests/test_review_semble_contract.py:136-140 | confidence=3\n  PROBLEM: The new assertions validate string presence only and do not simulate the partial-tracking case, so the runtime `rm` skip leaves bootstrap artifacts untested.\n  WHY: The test can pass even when a repo with tracked `.serena/custom.yml` and untracked bootstrap files would still dirty the tree.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "bf2cde4163e62b5fffddbfdbdce121bf4f37d7d6db17dc3b40cec4aebc2c389f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2528,
+    "run_id": "25700159451",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25700159451",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260511223358_4d1c112beb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2528,
+    "run_id": "25700159451"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-11T22:33:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

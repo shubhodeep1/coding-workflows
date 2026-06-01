@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan\n\nPlanning ref: `orchestrator/project-2734` @ `0b73013a1608837b72416742476d706b705f2c81` (matches the integration-branch metadata).\n\nScope / conflict note\n- The full Phase 1 doc also includes resolver-wrapper, workflow-bootstrap, and docs updates, but this issue explicitly narrows to the verifier-side half only. Keep this change set to verifier logic plus tests/fixture.\n\n1. Files likely to change\n- `scripts/verify_integration_fingerprints.py`\n- `tests/test_verify_integration_fingerprints_baseline.py` `[new]`\n- `tests/fixtures/integration_fingerprints/pr1569_run_24872524074.json` `[new]`\n\nRepresentative pattern to follow\n- Reuse the existing verifier/test pattern from `scripts/verify_integration_fingerprints.py` and the temp-sandbox/import helpers around the current `test_verify_integration_fingerprints_*` coverage in `tests/test_orchestrate_poll_process.py`.\n- Prefer a new focused test module over expanding the existing 7k-line poller test file.\n\n2. Functions/modules to implement\n- Add one shared fingerprint-satisfaction helper used by:\n  - `verify()`\n  - `list_violated_files()`\n  - baseline capture mode\n  - baseline compare mode\n- Add capture-mode logic for `--baseline-fingerprints-state <out>`:\n  - walk the same deduped fingerprint set as `verify()`\n  - compute per-fingerprint satisfaction against the current cwd tree\n  - write schema-versioned baseline JSON\n  - warn-only on baseline-output write failure\n- Add compare-mode logic for `--compare-against-baseline <in>`:\n  - load/validate baseline\n  - compare current satisfaction vs baseline\n  - classify each fingerprint as `still_passing`, `newly_fixed`, `pre_existing_drift`, or `regressed_by_resolver`\n  - only feed `regressed_by_resolver` into the existing hard-fail block\n- Extend the current hand-rolled `main()` flag parsing (do not switch to `argparse`) to support the two new flags and the explicit mutual-exclusion exit-2 error.\n- Keep the no-flag path dispatching to the current default verifier behavior.\n\n3. Data structures affected\n- New baseline JSON schema (`schema_version = 1`) with:\n  - top-level metadata: `schema_version`, `captured_at`, `branch`, `head_sha`\n  - `fingerprints` map keyed by issue key\n  - per-kind lists of entries shaped like:\n    - `fp_key` (JSON array form of `(file, regex)`)\n    - `file`\n    - `regex`\n    - `satisfied`\n- In-memory compare bookkeeping keyed by `fp_key`/kind so baseline-only keys can be ignored and current-only keys can fall back to absolute checking.\n\n4. API / interface changes\n- Additive CLI only:\n  - `--baseline-fingerprints-state <out>`\n  - `--compare-against-baseline <in>`\n- Keep existing positional fingerprints path, env fallback, and `--list-violated-files` intact.\n- Both new flags supplied together should exit `2` with an explicit error.\n- Compare mode should emit `PRE_EXISTING_FINGERPRINT_DRIFT_V1` warning/notice markers and only hard-fail on resolver-introduced regressions.\n- No new GitHub API calls and no resolver/workflow wiring changes in this issue.\n\n5. Potential risks / edge cases\n- Preserve byte-compatible default behavior when no new flag is used, especially existing PASS/FAIL wording and exit codes.\n- `must_not_contain` satisfaction is the inverse of a regex match; the shared helper must not accidentally treat it like `must_contain`.\n- Preserve current regex-compile/read warning behavior during the helper refactor; list mode must keep its stdout-as-paths-only contract.\n- Run the existing dedup flow in capture and compare too, so #1519-style contradictory fingerprints are not reintroduced as fake regressions.\n- Handle asymmetric baseline membership correctly:\n  - baseline-only keys: ignore\n  - current-only keys: absolute-check them\n- Malformed baseline input should warn and fall back to absolute verification.\n- The PR #1569 run artifact is not present in-tree, so the new fixture will need to be reconstructed as the reduced subset described in the plan/doc.\n\n6. Testing considerations\n- Add focused regression coverage in `tests/test_verify_integration_fingerprints_baseline.py`, modeled on the current verifier sandbox/import pattern.\n- Cover at least:\n  - capture success -> writes schema_version=1 JSON\n  - capture warning-only path on unwritable baseline output\n  - compare: pre-existing drift passes with `PRE_EXISTING_FINGERPRINT_DRIFT_V1` warning\n  - compare: resolver-introduced regression fails with the existing hard-fail wording\n  - compare: newly fixed emits `PRE_EXISTING_FINGERPRINT_DRIFT_V1 fixed_by_resolver`\n  - compare: current fingerprint absent from baseline falls back to absolute check\n  - malformed baseline -> warning + absolute verification\n  - both new flags supplied -> exit 2 + explicit error\n  - PR #1569 regression fixture -> compare mode passes, legacy/default mode fails\n- Keep the existing verifier/list-mode tests as regression coverage for unchanged default behavior.\n\nAssumptions\n- \u201cVerifier-side half\u201d intentionally excludes the resolver-wrapper/bootstrap/docs changes in the broader Phase 1 document.\n- The warning-only capture requirement applies to the baseline-output path; the primary fingerprints-input plumbing should otherwise remain on the existing path unless the implementer intentionally imports the broader source-doc contract.\n- The PR #1569 regression fixture can be a reduced repro rather than the full archived payload, as long as it reproduces \u201ccompare passes, absolute mode fails.\u201d\n\nMissing-context notes\n- No clarification gaps remain.\n- The archived run payload for `24872524074` is not in this ref, so the fixture must be recreated from the documented subset.\n\nActions taken\n- Reviewed the Phase 1 plan/source-doc sections, `scripts/verify_integration_fingerprints.py`, and the existing verifier tests in `tests/test_orchestrate_poll_process.py`.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "eba80a19a247dd5657e5616e65e1b25938ec8f439c96ebbfaece8680b3e9a766",
+  "lineage": {
+    "issue_number": 2735,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26026096916",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26026096916",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2735"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260518095541_7120945633",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2735,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26026096916"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2735",
+  "timestamps": {
+    "created_at": "2026-05-18T09:55:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

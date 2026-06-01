@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:325-342 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: The diff-truncation command feeds `python3` both a pipe and a heredoc, so the heredoc overrides stdin and the diff never reaches the truncation code.\n  WHY: This triggers ShellCheck SC2259 and fails the lint job under `set -euo pipefail`, blocking the workflow; if it were allowed to run, the large diff would remain untruncated.\n- scripts/review_rb_judge.sh:555-575 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: The prompt-size diagnostic is computed before `sanitize_codex_prompt_file` runs, so it measures the raw prompt rather than what codex actually receives.\n  WHY: Because sanitization happens later inside the retry loop, the logged byte count and warning threshold can be misleading even though execution continues.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_rb_judge.sh:325-339 | confidence=5\n  PROBLEM: The truncation command uses both a pipe and a heredoc to feed stdin to `python3`, so the heredoc takes precedence and `sys.stdin.buffer.read()` does not receive the piped diff data.\n  WHY: When the diff exceeds `RB_JUDGE_PR_DIFF_MAX_BYTES`, the truncation block empties or corrupts `PR_DIFF`, the judge prompt gets an incorrect diff section, and ShellCheck SC2259 blocks the workflow.\n- scripts/review_rb_judge.sh:565-569 | confidence=4\n  PROBLEM: The prompt-size diagnostic measures `${RB_JUDGE_PROMPT}` before the retry loop, but `sanitize_codex_prompt_file \"${RB_JUDGE_PROMPT}\"` runs later inside the loop.\n  WHY: The logged byte count and warning threshold apply to the raw rendered prompt, not the sanitized file codex actually reads, so the diagnostic can be inaccurate.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_rb_judge.sh:325-342 | confidence=5\n  PROBLEM: The truncation command uses both a pipe and a heredoc for stdin, triggering ShellCheck SC2259 because the heredoc overrides the piped `PR_DIFF` input.\n  WHY: Under `set -euo pipefail`, this lint error aborts the workflow; even if it did not, the Python truncation step would read the wrong stdin and the large diff would still hit the codex input limit.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_rb_judge.sh:325-342 | confidence=5\n  PROBLEM: The Python truncation block at line 325 combines a pipe with a heredoc on the same stdin, so the heredoc takes precedence and Python reads its own source instead of the diff data.\n  WHY: ShellCheck reports SC2259, the lint job fails, and the intended truncation does not protect the judge prompt from the 1 MB codex stdin limit.\n- scripts/review_rb_judge.sh:555-573 | confidence=3\n  PROBLEM: The prompt-size diagnostic is computed before the retry loop, while `sanitize_codex_prompt_file \"${RB_JUDGE_PROMPT}\"` runs inside the loop.\n  WHY: The logged size and warning threshold can diverge from the sanitized prompt codex actually receives, so the diagnostic may misreport the real payload size.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/review_rb_judge.sh:325-328 | confidence=5\n  PROBLEM: The truncation command supplies stdin via both a pipe and a heredoc, and the heredoc overrides the pipe so `sys.stdin.buffer.read()` reads the Python source instead of the diff.\n  WHY: This triggers SC2259 and causes the shellcheck step to fail, so the lint job exits non-zero before the judge can run.\n- scripts/review_rb_judge.sh:325-342 | confidence=5\n  PROBLEM: The same pipe-plus-heredoc stdin conflict prevents the intended UTF-8-safe truncation logic from receiving `PR_DIFF`.\n  WHY: When the diff exceeds `RB_JUDGE_PR_DIFF_MAX_BYTES`, the heredoc consumes stdin, so the truncation block becomes ineffective and the judge prompt can still overflow the codex input limit.\n- scripts/review_rb_judge.sh:555-575 | confidence=4\n  PROBLEM: The prompt-size diagnostic is measured before `sanitize_codex_prompt_file` runs inside the retry loop, so it records the raw prompt rather than the sanitized payload.\n  WHY: The warning can therefore be below or above the real codex input size, which makes the diagnostic misleading when sanitization changes the prompt.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/review_rb_judge.sh:325 | confidence=5\n  PROBLEM: Pipe-to-`python3` combined with a heredoc on the same command triggers SC2259 because the heredoc overrides the piped `PR_DIFF` input.\n  WHY: The truncation logic is bypassed or fails under `set -euo pipefail`, so the original >1 MB diff still reaches the judge prompt and the lint job fails.\n- scripts/review_rb_judge.sh:555-573 | confidence=4\n  PROBLEM: `RB_JUDGE_PROMPT_BYTES` is measured from the raw prompt before `sanitize_codex_prompt_file \"${RB_JUDGE_PROMPT}\"` runs in the retry loop.\n  WHY: The logged size, warning threshold, and truncation note can be inaccurate after sanitization changes the prompt content.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "ae2650b952c9827d51191adab892534e71eba7f52b8b56b54801ff0a2c1d94d3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2789,
+    "run_id": "26096166544",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26096166544",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260519123415_6c5bf15936",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2789,
+    "run_id": "26096166544"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-19T12:34:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

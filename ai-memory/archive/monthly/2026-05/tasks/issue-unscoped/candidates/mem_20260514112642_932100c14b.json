@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/fixtures/selftest/node-hardhat-solidity/package-lock.json:Entire file | severity=medium | confidence=[4]\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Adds complete npm lockfile without evidence of `npm install` verification in the fixture workflow.\n  WHY: `npm ci` in Docker CI may fail if lockfile checksums mismatch resolved deps (e.g. transient registry changes) or if transitive deps introduce incompat/vulns.\n- tests/fixtures/selftest/node-hardhat-solidity/.ai/validate.yml:4-6 | severity=medium | confidence=[4]\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Overrides package.json scripts.test (\"hardhat test\") with `npx hardhat test`; npx prefers global/local hardhat over devDep (2.28.6).\n  WHY: Runs wrong hardhat version if global installed, breaking selftest reproducibility.\n- tests/fixtures/selftest/node-hardhat-solidity/tsconfig.json:12 | severity=medium | confidence=[3]\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Pins ignoreDeprecations to TS 6.0 exactly; fails on TS 6.1+ deprecations or if hardhat uses <6.0.\n  WHY: `npx hardhat compile` / tsc fails post-TS-upgrade without config bump.\n- workflow-templates/validation-harness/python-mongo-flask/tests/20_import_audit.sh.j2:9 | severity=medium | confidence=[5]\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Hard-codes container path assuming default output root; mismatches if COMPOSE_FILE points to custom harness dir.\n  WHY: `docker compose exec` 404s/fails on non-standard harnesses (e.g. python-repo-checks). Matches prior Copilot/consensus flag.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/fixtures/selftest/node-hardhat-solidity/package-lock.json:Entire file (new, 8113 lines added) | severity=medium | confidence=4\n  PROBLEM: Adds complete npm lockfile without evidence of `npm install` verification in the fixture workflow.\n  WHY: `npm ci` in Docker CI may fail if lockfile checksums mismatch resolved deps (e.g. transient registry changes) or if transitive deps introduce incompat/vulns.\n- tests/fixtures/selftest/node-hardhat-solidity/.ai/validate.yml:4-6 (env_overrides: HARDHAT_TEST_CMD: npx hardhat test) | severity=medium | confidence=4\n  PROBLEM: Overrides package.json scripts.test (\"hardhat test\") with `npx hardhat test`; npx prefers global/local hardhat over devDep (2.28.6).\n  WHY: Runs wrong hardhat version if global installed, breaking selftest reproducibility.\n- tests/fixtures/selftest/node-hardhat-solidity/tsconfig.json:12 (ignoreDeprecations: \"6.0\") | severity=medium | confidence=3\n  PROBLEM: Pins ignoreDeprecations to TS 6.0 exactly; fails on TS 6.1+ deprecations or if hardhat uses <6.0.\n  WHY: `npx hardhat compile` / tsc fails post-TS-upgrade without config bump.\n- workflow-templates/validation-harness/python-mongo-flask/tests/20_import_audit.sh.j2:9 (CONTAINER_IMPORT_AUDIT=\"/workspace/validation/tests/_lib/import_audit.py\") | severity=medium | confidence=5\n  PROBLEM: Hard-codes container path assuming default output root; mismatches if COMPOSE_FILE points to custom harness dir.\n  WHY: `docker compose exec` 404s/fails on non-standard harnesses (e.g. python-repo-checks). Matches prior Copilot/consensus flag.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===",
+  "fingerprint": "415c14893f1ff3dc0c8852a2bead0fb3c195a0d608ee1b9181492825777b89c3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2588,
+    "run_id": "25856755453",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25856755453",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260514112642_932100c14b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2588,
+    "run_id": "25856755453"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-14T11:26:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

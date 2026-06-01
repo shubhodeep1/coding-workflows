@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_apply_fixes.sh:1411-1685 | severity=medium | confidence=[4]\n  flagged_by: [mistralai_mistral-small-2603, moonshotai_kimi-k2_5]\n  PROBLEM: `_tmp_output_first_nonempty_line` is captured outside the `cmd_rc == 0` success guard, so refusal detection can observe an empty or stale capture.\n  WHY: Both reviewers flagged the same unguarded capture at lines 1411 and 1685; one notes the runtime impact is mitigated, but the structure still makes the retry path depend on a value computed outside the success gate.\n- probably_unnecessary_but_read_if_stuck.md:567-573 | severity=medium | confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The rollback paragraph still refers to the old full-output `grep -qiE \"I'?m sorry\u2026\"` form instead of the shipped first-non-empty-line capture.\n  WHY: An operator following the documented rollback steps would restore the misclassification bug this PR fixed, so the rollback note is out of sync with the implementation.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/review_apply_fixes.sh\n  Line or code reference: 1411 and 1685\n  Problem: first-non-empty-line capture `_tmp_output_first_nonempty_line=\"$(grep -m1 -vE '^[[:space:]]*$' \"${tmp_output}\" 2>/dev/null || true)\"` is performed unconditionally outside the `if [ \"${cmd_rc}\" -eq 0 ]` guard in both places.\n  Why it fails at runtime: If `tmp_output` is deleted, missing, or corrupted mid-run, the long-lived variable can cause the second capture (or any script logic that reads `${_tmp_output_first_nonempty_line}`) to read an empty value, alter refusal detection semantics, or silently misclassify valid output.\n  ISSUE_CONFIDENCE: 4\n- scripts/review_apply_fixes.sh\n  Line or code reference: 1685 (inside retry loop, unguarded)\n  Problem: The `grep -m1 -vE '^[[:space:]]*$'` can return nothing; the fail-open `|| true` preserves POSIX exit status, but `${_tmp_output_first_nonempty_line}` becomes empty/unset.\n  Why it fails at runtime: A prior editor attempt that killed its temp files can leave `tmp_output` gone; the same attempt\u2019s `_tmp_output_first_nonempty_line` survives and pollutes the next iteration\u2019s refusal check.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- File: scripts/review_apply_fixes.sh\n  Line or code reference: Line 1685: `_tmp_output_first_nonempty_line=\"$(grep -m1 -vE '^[[:space:]]*$' \"${tmp_output}\" 2>/dev/null || true)\"`\n  Problem: The second capture of `_tmp_output_first_nonempty_line` is performed outside the `if [ \"${cmd_rc}\" -eq 0 ]` structured-validation guard, unlike the first capture at line 1411 which is inside the success block.\n  Why it fails at runtime: When the editor fails (cmd_rc != 0), the first capture is skipped but the second capture at line 1685 still runs; while `|| true` prevents script failure, if `tmp_output` is deleted or empty, the variable becomes an empty string and refusal detection may behave differently for failed vs successful editor runs.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: probably_unnecessary_but_read_if_stuck.md:567-573\n  Line or code reference: rollback paragraph describing the old full-output `grep -qiE \"I'?m sorry\u2026\"` form\n  Problem: The documentation still refers to the pre-PR full-file grep instead of the shipped first-non-empty-line capture (`_tmp_output_first_nonempty_line` + `printf | grep`).\n  Why it fails at runtime: An operator following the documented rollback steps would restore the misclassification bug that this forward-merge PR was intended to fix, violating the \"keep rollback note in sync with the shipped code\" contract.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "f231dd3d053d95ba663096fbd7578b50af003386a3874ec23627b7b46545cb98",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2954,
+    "run_id": "26362569390",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26362569390",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260524134012_109c8373d2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2954,
+    "run_id": "26362569390"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-24T13:40:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

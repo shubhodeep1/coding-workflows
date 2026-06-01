@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_judge_semble_prefetch_contract.py:155-178 | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The test mutates global os.environ, so a crash or other failure before cleanup can leave ALLOW_WORKFLOW_EDITS set for later tests.\n  WHY: Both reviewers flagged that changing process-global environment state in this test can leak into subsequent tests or parallel execution if cleanup does not run.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_judge_semble_prefetch_contract.py:155-178 | confidence=2\n  PROBLEM: Global os.environ mutation is an anti-pattern that can cause test isolation issues, though the finally cleanup is technically correct per Python semantics.\n  WHY: If tests are run in parallel or if the process is killed (SIGKILL) mid-test, the environment pollution could affect other tests.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/test_judge_semble_prefetch_contract.py:155-178 | confidence=2\n  PROBLEM: Global os.environ mutation before entering try block; if exception during mutation line itself (though impossible for dict access) or interpreter-level crash before finally dispatches, pollution persists to sequential main() tests like test_render_prompt_preserves_workflow_edit_restriction_contract().\n  WHY: Rare but possible intermittent test suite failure where subsequent tests see ALLOW_WORKFLOW_EDITS=\"true\" and assert fails on wrong rendered restriction text (e.g., permitted edits vs. \"Do not change CI workflows.\").\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "a30300dad65f522ec0ef4b3b500aebcd3305415867d522fc9dd24a9402c045de",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2417,
+    "run_id": "25618392774",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25618392774",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510032433_284c3af47e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2417,
+    "run_id": "25618392774"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-10T03:24:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1\nWhich part of this repository should change? (If you know the exact workflow or file path, include it in your answer.)\nChoices:\nA. Clarify / plan / implement workflows or their scripts/prompts\nB. Review/autofix, conflict resolution, orchestrator, or validation workflows/scripts\nC. Documentation / README / operator/runbook content\nD. Another specific file or path. (RECOMMENDED)\nQ2\nWhat kind of improvement do you want in that area?\nChoices:\nA. Fix a broken behavior or regression \u2014 include current vs expected behavior and how to reproduce it. (RECOMMENDED)\nB. Add or change workflow behavior \u2014 describe the exact new behavior and any constraints.\nC. Improve reliability, observability, or performance \u2014 describe the current pain point and what \u201cbetter\u201d should look like.\nD. Update docs/text \u2014 quote the section/text to change and describe the desired wording or structure.\nQ3\nWhat should count as done for this issue?\nChoices:\nA. A specific workflow/job/script outcome should change \u2014 describe the expected result. (RECOMMENDED)\nB. A specific GitHub-side symptom should stop/change \u2014 name the label, comment, PR status, alert, or run outcome.\nC. A specific file/section should end up with new content \u2014 identify the file/section and the desired end state.",
+  "fingerprint": "64e0b8adbf6016c10ec916c480f45d38c0ed98c3686c1d187fcd9cfb0806e3da",
+  "lineage": {
+    "issue_number": 2487,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25646148331",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25646148331",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260511015323_fd3f882a4a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2487,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25646148331"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #2487 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-11T01:53:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:test step | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: `tests/test_cost_audit_semble_metrics.py` is present in the repo but omitted from the workflow\u2019s explicit Python test allowlist, so CI never runs it.\n  WHY: The workflow enumerates `python3 tests/...` entries individually, so leaving out this new test leaves Semble parser regressions with zero automated coverage.\n- scripts/targeted_file_context.py:141-149 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `_log_semble_event` preserves multi-word `reason=` text, but the existing field extractor only matches non-whitespace tokens, so a future `reason=` parse would truncate the value.\n  WHY: The current consumer only reads `target=` and `bytes=`, so this is a forward-compatibility gap rather than a current runtime failure.\n- scripts/targeted_file_context.py:445-474 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: `_log_semble_event` emits multi-word `reason=` values with spaces, but `_extract_log_field` uses `([^\\s]+)`, which would capture only the first token of a fallback reason.\n  WHY: The current parser does not extract `reason=`, so the bug is limited to future telemetry consumers and only affects diagnostic completeness.\n- scripts/implement_diagnose_post_codex_failure.sh:493 | severity=high | confidence=2\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: `semble_query_block \"$(cat \"${DIAGNOSE_SEMBLE_QUERY_FILE}\")\" 6 \"Implement Diagnose Context\" || true` passes file contents through command substitution before invoking `semble_query_block`.\n  WHY: The reported concern is that shell metacharacters in the query text could be evaluated before the helper receives the argument; one reviewer considered this safe, so confidence is low.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/ci.yml:test step | severity=high | confidence=5\n  PROBLEM: `tests/test_cost_audit_semble_metrics.py` is added to the repository but not listed in the CI workflow\u2019s explicit Python test allowlist, so CI never executes it.\n  WHY: The workflow enumerates `python3 tests/...` files individually, and omitting this new test leaves Semble parser regressions uncovered.\n- scripts/targeted_file_context.py:141-149 | severity=low | confidence=2\n  PROBLEM: `_log_semble_event` preserves multi-word `reason=` text, but the existing field extractor only matches non-whitespace tokens, so a future `reason=` parse would truncate the value.\n  WHY: The current consumer only reads `target=` and `bytes=`, so this is a forward-compatibility gap rather than a current runtime failure.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/ci.yml:test step | severity=high | confidence=5\n  PROBLEM: The new test file `tests/test_cost_audit_semble_metrics.py` is not included in the CI workflow's Python test allowlist, so the test never runs in CI.\n  WHY: The repo uses an explicit allowlist pattern where each test is listed in the workflow step, and this file is missing from that list.\n- scripts/targeted_file_context.py:457-461 | severity=low | confidence=3\n  PROBLEM: `_log_semble_event` normalizes whitespace in field values, so multi-word `reason=` values will be truncated by `_extract_log_field`\u2019s `([^\\s]+)` regex.\n  WHY: The current parser stops at whitespace and only extracts `target=` and `bytes=`, so `reason=` would be incomplete if parsed later.\n- scripts/implement_diagnose_post_codex_failure.sh:493 | severity=high | confidence=2\n  PROBLEM: `semble_query_block \"$(cat \"${DIAGNOSE_SEMBLE_QUERY_FILE}\")\" 6 \"Implement Diagnose Context\"` can pass file contents through command substitution before the helper sees them.\n  WHY: If the query file contained shell metacharacters, they could be interpreted by the shell before `semble_query_block` is called.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/ci.yml:test step | severity=high | confidence=5\n  PROBLEM: The new test file `tests/test_cost_audit_semble_metrics.py` is missing from the CI workflow\u2019s explicit test allowlist, so CI skips it.\n  WHY: The workflow runs named test files by explicit allowlist, and this file is not present there.\n- scripts/targeted_file_context.py:445-451 | severity=low | confidence=4\n  PROBLEM: `_log_semble_event` collapses whitespace in `reason=` values, but `_extract_log_field` only captures non-whitespace tokens, so multi-word reasons are truncated.\n  WHY: Multi-word fallback reasons like `reason=exit=7 raw failure from semble` would be parsed as only `exit=7`, losing diagnostic detail.\n- scripts/implement_diagnose_post_codex_failure.sh:493 | severity=high | confidence=2\n  PROBLEM: `semble_query_block \"$(cat \"${DIAGNOSE_SEMBLE_QUERY_FILE}\")\" 6 \"Implement Diagnose Context\" || true` evaluates command substitution before calling the helper.\n  WHY: If the query file ever contained backticks or `$()` sequences, they could be interpreted by the shell first.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/ci.yml:test step | severity=high | confidence=5\n  PROBLEM: `tests/test_cost_audit_semble_metrics.py` is absent from the workflow\u2019s explicit `python3 tests/...` allowlist, so the new test is skipped by CI.\n  WHY: The workflow only runs explicitly listed test files, and this file was not added to that list.\n- scripts/targeted_file_context.py:451-474 | severity=low | confidence=3\n  PROBLEM: `_log_semble_event` emits multi-word `reason=` values with spaces, but `_extract_log_field` captures only the first non-space token after `=`.\n  WHY: Future `reason=` parsing would truncate fallback reasons and lose observability detail, even though the current parser only reads `target=` and `bytes=`.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "a7265755bdcac9359084b9e0e3de27251a281118d34dffe0ec73a75ea40d375d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2442,
+    "run_id": "25622441117",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25622441117",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510072619_0a21e1ae94",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2442,
+    "run_id": "25622441117"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-10T07:26:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

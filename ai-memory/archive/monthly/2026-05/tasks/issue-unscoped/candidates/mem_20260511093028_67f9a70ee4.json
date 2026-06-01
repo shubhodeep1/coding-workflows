@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/workflow-log-analysis.yml:lines ~280, ~900, ~1320 post-change | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Assumes scripts/install_semble.sh sets SEMBLE_AVAILABLE=true on success, but if install_semble.sh fails silently or does not update GITHUB_ENV correctly, SEMBLE_AVAILABLE remains false even on successful install.\n  WHY: Runtime impact: Index build skips despite successful install (command -v check redundant but if PATH issue, full Semble skipped unnecessarily); prefetch empty despite available binary/index.\n- .github/workflows/workflow-log-analysis.yml:lines ~290-320, ~920-950, ~1330-1360 post-change | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: rm -rf on RUNNER_TEMP/.semble-index lacks check if path exists/is dir; if prior partial index or permissions oddity, rm succeeds but index fails if semble cannot recreate.\n  WHY: Runtime impact: Index build fails on transient runner state (rare), emitting warning and skipping prefetch; consistent with fail-soft but could be hardened with mkdir -p or ignore-errors on rm.\n- .github/workflows/workflow-log-analysis.yml:lines ~510-520, ~990-1000, ~1410-1420 post-change | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: head -c 6000 truncates bytes (mid-UTF8/multi-byte char possible); semble_query_block feeds raw bytes to Semble (semantic search likely tolerant but query garbled if non-ASCII).\n  WHY: Runtime impact: Prefetch degraded on logs with emoji/Unicode (common in GHA logs ::warning:: etc.); minor semantic loss, not crash.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/workflow-log-analysis.yml:lines ~280, ~900, ~1320 post-change\n  PROBLEM: Assumes scripts/install_semble.sh sets SEMBLE_AVAILABLE=true on success, but if install_semble.sh fails silently or does not update GITHUB_ENV correctly, SEMBLE_AVAILABLE remains false even on successful install.\n  WHY: Runtime impact: Index build skips despite successful install (command -v check redundant but if PATH issue, full Semble skipped unnecessarily); prefetch empty despite available binary/index.\n- .github/workflows/workflow-log-analysis.yml:lines ~290-320, ~920-950, ~1330-1360 post-change\n  PROBLEM: rm -rf on RUNNER_TEMP/.semble-index lacks check if path exists/is dir; if prior partial index or permissions oddity, rm succeeds but index fails if semble cannot recreate.\n  WHY: Runtime impact: Index build fails on transient runner state (rare), emitting warning and skipping prefetch; consistent with fail-soft but could be hardened with mkdir -p or ignore-errors on rm.\n- .github/workflows/workflow-log-analysis.yml:lines ~510-520, ~990-1000, ~1410-1420 post-change\n  PROBLEM: head -c 6000 truncates bytes (mid-UTF8/multi-byte char possible); semble_query_block feeds raw bytes to Semble (semantic search likely tolerant but query garbled if non-ASCII).\n  WHY: Runtime impact: Prefetch degraded on logs with emoji/Unicode (common in GHA logs ::warning:: etc.); minor semantic loss, not crash.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "fb76b2bf0227f9ef6eb1e03222c50309c774fd95e3de861e78a22f28becd555f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2509,
+    "run_id": "25660443272",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25660443272",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260511093028_67f9a70ee4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2509,
+    "run_id": "25660443272"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-11T09:30:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

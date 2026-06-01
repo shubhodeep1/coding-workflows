@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":2536,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/2536\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/2537\",\"pr_number\":2537,\"branch\":\"ai/issue-2536\",\"run_id\":\"25709700946\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/25709700946\",\"changed_files\":[\"CHANGELOG.md\",\"README.md\",\"probably_unnecessary_but_read_if_stuck.md\",\"prompts/mode-workflow-analysis.txt\",\"scripts/cost_audit.py\",\"scripts/implement_diagnose_post_codex_failure.sh\",\"scripts/render_prompt.sh\",\"tests/test_cost_audit_semble_metrics.py\"]}",
+  "fingerprint": "614d3e2ac5bc44f5d2295804d4722772db3726e99c8acf05f04089f879c76021",
+  "lineage": {
+    "issue_number": 2536,
+    "parent_ids": [],
+    "pr_number": 2537,
+    "run_id": "25709700946",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25709700946",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/2537"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260512025027_d4be5d5340",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2536,
+    "level": "run",
+    "pr_number": 2537,
+    "run_id": "25709700946"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #2536: https://github.com/shubhodeep1/coding-workflows/pull/2537",
+  "timestamps": {
+    "created_at": "2026-05-12T02:50:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

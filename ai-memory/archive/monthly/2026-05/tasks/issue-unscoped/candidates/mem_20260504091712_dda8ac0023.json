@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The file contains 4 lines instead of the required exactly 3 lines.\n  WHY: The task explicitly requires only the three specified lines with no extra content, comments, headers, or additional lines; the extra fourth bait-comment line violates that exact-match contract and will fail strict validation.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  PROBLEM: The file contains 4 lines instead of the required exactly 3 lines.\n  WHY: The task specification requires exactly 3 lines with no extra content, comments, headers, or additional lines, and the fourth bait comment line violates that contract.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  PROBLEM: The file contains 4 lines instead of the required exactly 3 lines.\n  WHY: The task explicitly requires exactly three lines with no extra content, and the implementation incorrectly included the editor bait comment as a fourth line.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  PROBLEM: The file contains 4 lines instead of the required exactly 3 lines.\n  WHY: The original issue explicitly requires the file content to be exactly three specified lines with no extra content, comments, headers, or additional lines, and the bait comment remains as an extra fourth line.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  PROBLEM: The file contains 4 lines instead of the required exactly 3 lines.\n  WHY: The original issue explicitly requires exactly three lines with no extra content, comments, headers, or additional lines, and the fourth bait comment line violates the exact-match assertion.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  PROBLEM: File contains 4 lines instead of exactly the required 3 lines.\n  WHY: Task mandates overwriting to precisely three lines with no extra content, and the extra line breaks exact-match validation in the E2E smoke gate.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  PROBLEM: The file contains 4 lines instead of the required exactly 3 lines.\n  WHY: The task specification explicitly requires exactly these three lines with no comments, headers, or any extra content, and any strict content/line-count validation will fail due to the extra fourth line.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "90636edec65be6ad193da7a9a118441c553a8884ba8802f990ac2e0099c5df5f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2085,
+    "run_id": "25310756938",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25310756938",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260504091712_dda8ac0023",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2085,
+    "run_id": "25310756938"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-04T09:17:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

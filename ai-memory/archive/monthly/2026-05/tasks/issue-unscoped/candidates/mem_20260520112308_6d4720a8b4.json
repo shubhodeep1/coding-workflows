@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:35-80 | confidence=[4]\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The fallback can return success even when both sanitization attempts fail, so malformed UTF-8 can still reach Codex and fail later with an opaque error.\n  WHY: The final `|| true` makes the sanitizer fail-open without any warning, which hides degraded-harness failures instead of surfacing them.\n- scripts/orchestrate_poll_process.sh:7144 | confidence=[5]\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: `_FRESH_PUSH_SUPPRESS_SECS` changed from 1800 to 3000 without an alongside-old-name shim, breaking downstream consumers that key off the old 30-minute contract.\n  WHY: The reviewer reports that dashboards, alerting rules, or log parsers matching the old value will stop matching after the change, and notes the public `STALL_SKIP ... reason=fresh_push` contract as the affected interface.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Automated forward-merge of stable into main failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on stable is also present on main. Conflicting files: .github/workflows/review_autofix.yml README.md scripts/orchestrate_poll_process.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh tests/test_orchestrate_integration_ahead_by_gate.py tests/test_orchestrate_poll_process.py tests/test_review_autofix_review_pipeline_contract.py\"\n  expected_change_site: .github/workflows/review_autofix.yml, tests/test_review_autofix_review_pipeline_contract.py\n  confidence=[3]\n  flagged_by: [minimax_minimax-m2_5]\n  EVIDENCE: The LAST RUN DIFF shows changes only to orchestrate_lib.py, orchestrate_poll_process.sh, test_orchestrate_*.py, review_rb_judge.sh, review_apply_fixes.sh, and docs. The conflicting files .github/workflows/review_autofix.yml and tests/test_review_autofix_review_pipeline_contract.py are NOT in the changed files list (pr_changed_files.txt shows them modified in the PR overall but the last run diff did not modify them). The forward-merge requires a true three-way merge to carry stable-side edits forward.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- File: scripts/review_rb_judge.sh\nLine or code reference: lines 35-80 (the new `sanitize_codex_prompt_file` fallback)\nProblem: The fallback function silently returns success (exit 0) even when both `iconv` and `python3` sanitization attempts fail. The code uses `|| true` after the final fallback, ensuring the function always returns 0 regardless of whether sanitization succeeded.\nWhy it fails at runtime: When a degraded harness (without gh_helpers.sh) invokes this fallback and the prompt file contains malformed UTF-8 that neither iconv nor python3 can handle, the function returns 0 (success) without any warning. The invalid UTF-8 prompt then reaches Codex, which may reject it with an opaque failure, making debugging difficult.\nISSUE_CONFIDENCE: 4\n\n- File: scripts/orchestrate_poll_process.sh\nLine or code reference: line 7144 (`_FRESH_PUSH_SUPPRESS_SECS=3000`)\nProblem: The public contract constant `_FRESH_PUSH_SUPPRESS_SECS` changed from 1800 to 3000 (30 to 50 minutes) without an alongside-old-name shim. The log prefix `STALL_SKIP` is a public contract per CLAUDE.md \u00a76, and downstream log analysis dashboards may query for the 30-minute window value.\nWhy it fails at runtime: Any dashboard, alerting rule, or log parser that looks for the hardcoded 1800 value (or 30-minute equivalent) in `STALL_SKIP reason=fresh_push` events will stop matching after this change. The rename violates the naming immutability contract.\nISSUE_CONFIDENCE: 5\n\n- Requirement: \"Automated forward-merge of stable into main failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on stable is also present on main. Conflicting files: .github/workflows/review_autofix.yml README.md scripts/orchestrate_poll_process.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh tests/test_orchestrate_integration_ahead_by_gate.py tests/test_orchestrate_poll_process.py tests/test_review_autofix_review_pipeline_contract.py\"\nExpected change site: .github/workflows/review_autofix.yml, tests/test_review_autofix_review_pipeline_contract.py (stable-side implementation that differs from main)\nEvidence of absence: The LAST RUN DIFF shows changes only to orchestrate_lib.py, orchestrate_poll_process.sh, test_orchestrate_*.py, review_rb_judge.sh, review_apply_fixes.sh, and docs. The conflicting files .github/workflows/review_autofix.yml and tests/test_review_autofix_review_pipeline_contract.py are NOT in the changed files list (pr_changed_files.txt shows them modified in the PR overall but the last run diff did not modify them). The forward-merge requires a true three-way merge to carry stable-side edits forward.\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "0c27ae73cdae5d52669fcb3e42555ff4bec5b5d422253e96a80fc420de562de3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2801,
+    "run_id": "26157621921",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26157621921",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260520112308_6d4720a8b4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2801,
+    "run_id": "26157621921"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-20T11:23:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_validate_semble_contract.py:90 | severity=high | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The new contract test is not wired into CI workflow test lists, so Semble wiring regressions are not enforced automatically.\n  WHY: Both reviewers verified that it passes locally but is not executed by the explicit workflow test lists, leaving a release-gate blind spot.\n- .github/workflows/validate.yml:658-704 | severity=medium | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The Semble index build walks the entire repository with no file-count, depth, or size guard before bm25s indexing.\n  WHY: Both reviewers reported the same unbounded walk, which can OOM, time out, or overrun the job on large repositories.\n- .github/workflows/validate.yml:709 | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `_print_version()` hardcodes `print(\"semble 0.1.3\")`, so version reporting can drift from the installed Semble version.\n  WHY: Moonshot reported that this can spuriously fail version checks if install_semble.sh is updated.\n- .github/workflows/validate.yml:725-770 | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: `_print_version()` hardcodes `print(\"semble 0.1.3\")`, so version reporting can drift from the installed Semble version.\n  WHY: x-ai reported the same mismatch against newer install_semble.sh pins; no severity was stated in that report.\n- scripts/targeted_file_context.py:140-149 | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: `repr()` on whitespace values may break downstream telemetry parsers expecting bare key=value atoms.\n  WHY: x-ai reported that log processors and tests extracting SEMBLE_QUERY/FALLBACK fields could fail on quoted values; no severity was stated in that report.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_validate_semble_contract.py:90 | severity=high | confidence=5\n  PROBLEM: The new contract test file exists and passes locally, but is NOT wired into any CI workflow.\n  WHY: Semble wiring regressions will not be caught in CI/release gates because the explicit workflow test lists do not include this file.\n- .github/workflows/validate.yml:668 | severity=medium | confidence=4\n  PROBLEM: `walk_files(repo_root, extensions, None)` walks the entire repository without file count bounds, depth limits, or size checks before calling `bm25s.index()`.\n  WHY: On large consumer repositories this can cause OOM, timeout, or job overrun because bm25s indexing scales poorly with unbounded chunks.\n- .github/workflows/validate.yml:709 | severity=low | confidence=3\n  PROBLEM: The wrapper hardcodes `print(\"semble 0.1.3\")` while `scripts/install_semble.sh` pins `SEMBLE_VERSION=\"0.1.3\"` via variable.\n  WHY: If install_semble.sh is updated to a newer version, the wrapper can report the wrong version and version checks may fail spuriously.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/test_validate_semble_contract.py: entire file | confidence=5\n  PROBLEM: New test verifies Semble bootstrap/fetch/install/index/prompt hooks across validate.yml / validate_process.sh / self_heal_validation.sh but is absent from explicit test lists in CI/release workflows.\n  WHY: Semble wiring regresses undetected in CI/release gates because the new contract is not enforced by the workflows that run fixed python3 tests/*.py lists.\n- .github/workflows/validate.yml:658-704 | confidence=5\n  PROBLEM: Unbounded full-repo walk_files(repo_root, extensions) + chunk_source(source) feeds every file/chunk into bm25s.BM25.index() with no file count/depth/size guards, progress=False, or early abort.\n  WHY: On large consumer repos this can OOM/timeout/job overrun because bm25s on very large chunk counts scales poorly in RAM/CPU.\n- .github/workflows/validate.yml:725-770 | confidence=4\n  PROBLEM: `_print_version()` hardcodes `print(\"semble 0.1.3\")` but index payload carries dynamic semble_version from import.\n  WHY: `semble_helpers.sh` version guards can reject a functional index spuriously if install_semble.sh pins a newer release.\n- scripts/targeted_file_context.py:140-149 | confidence=3\n  PROBLEM: `repr()` on whitespace values quotes `str(value)` indiscriminately, which this reviewer says can make downstream telemetry parsers expecting unquoted key=value split on spaces see escaped strings as untokable atoms.\n  WHY: Log processors and tests extracting ms=/reason= fields from SEMBLE_QUERY/FALLBACK events could fail on multiword payloads.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "050b83c2e6339674e1a668e70d4c1525640d4c3a20f3f5353ef22d9b6e2377ce",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2388,
+    "run_id": "25605999843",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25605999843",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260509164447_2fdff9f632",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2388,
+    "run_id": "25605999843"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-09T16:44:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

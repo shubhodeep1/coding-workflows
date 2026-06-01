@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/lint_plan_archival_completeness.py:~160 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The new `descope_level` calculation doesn't guard against `match.group(\"hashes\")` being `None`, which would raise a `TypeError` on malformed heading input.\n  WHY: If the capture group is absent, `len(None)` crashes the lint and can fail CI unexpectedly.\n- scripts/lint_plan_archival_completeness.py:line 140 | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The code doesn't defensively handle `match.group(\"hashes\")` being `None` before calling `len()`, risking a `TypeError`.\n  WHY: A future regex change or malformed match could make `len(None)` crash the lint instead of handling the input gracefully.\n- scripts/lint_plan_archival_completeness.py:lines 74-78, 135-148 | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `DESCOPE_HEADING_RE` requires `#{2,6}`, so a single `# De-scoped phases` heading is ignored and the lint reports a missing de-scope section.\n  WHY: The warning tells users to add `## De-scoped phases` even when a level-1 heading is present, which obscures the actual heading-level mismatch.\n- scripts/lint_plan_archival_completeness.py:lines 140-147 | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `pr_body[match.end():].splitlines()` creates a substring copy of the remaining PR body on every call.\n  WHY: This adds unnecessary memory churn for large PR descriptions, though it is only a micro-optimization concern.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/lint_plan_archival_completeness.py:~160 | confidence=5\n  PROBLEM: The new `descope_level` calculation doesn't guard against `match.group(\"hashes\")` being `None`, which would raise a `TypeError` on malformed heading input. (2 related items)\n  WHY: If the capture group is absent, `len(None)` crashes the lint and can fail CI unexpectedly.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/lint_plan_archival_completeness.py:lines 74-78, 135-148 | confidence=3\n  PROBLEM: `DESCOPE_HEADING_RE` requires `#{2,6}`, so a single `# De-scoped phases` heading is ignored and the lint reports a missing de-scope section.\n  WHY: The warning tells users to add `## De-scoped phases` even when a level-1 heading is present, which obscures the actual heading-level mismatch.\n- scripts/lint_plan_archival_completeness.py:line 140 | confidence=2\n  PROBLEM: The code doesn't defensively handle `match.group(\"hashes\")` being `None` before calling `len()`, risking a `TypeError`.\n  WHY: A future regex change or malformed match could make `len(None)` crash the lint instead of handling the input gracefully.\n- scripts/lint_plan_archival_completeness.py:lines 140-147 | confidence=2\n  PROBLEM: `pr_body[match.end():].splitlines()` creates a substring copy of the remaining PR body on every call.\n  WHY: This adds unnecessary memory churn for large PR descriptions, though it is only a micro-optimization concern.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "8c2f3254e324e6ef65ffa228e07f3413b2e2b1706a61ac2e24e1a1895fd7e1f2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2792,
+    "run_id": "26121384970",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26121384970",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260519201430_51bfbbe518",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2792,
+    "run_id": "26121384970"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-19T20:14:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

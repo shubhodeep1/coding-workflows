@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Process analysis recommendations, apply safe workflow fixes, and collapse processed analysis docs\",\"issues\":[{\"id\":\"triage-analysis-recommendations\",\"title\":\"Read and deduplicate the analysis backlog into one current triage ledger\",\"priority\":1},{\"id\":\"review-sweep-efficiency\",\"title\":\"Reduce review-autofix sweep API fanout and extend the review workflow\u2019s Node24 bridge\",\"priority\":2},{\"id\":\"implement-fail-fast-destructive-guard\",\"title\":\"Fail fast on destructive implement diffs without weakening the existing commit-time guard\",\"priority\":2},{\"id\":\"node24-bridge-reusable-workflows\",\"title\":\"Extend the Node24 bridge pattern to the remaining clarify/plan/orchestrate reusable workflows\",\"priority\":3},{\"id\":\"stabilize-nightly-validation-selftest\",\"title\":\"Make the nightly validation self-test green or explicitly quarantine only the truly broken runtime fixture path\",\"priority\":3},{\"id\":\"cleanup-analysis-report\",\"title\":\"Delete processed analysis docs and write one consolidated recommendation-processing report\",\"priority\":5}],\"dependency_edges\":[{\"from\":\"triage-analysis-recommendations\",\"to\":\"review-sweep-efficiency\"},{\"from\":\"triage-analysis-recommendations\",\"to\":\"implement-fail-fast-destructive-guard\"},{\"from\":\"triage-analysis-recommendations\",\"to\":\"node24-bridge-reusable-workflows\"},{\"from\":\"triage-analysis-recommendations\",\"to\":\"stabilize-nightly-validation-selftest\"},{\"from\":\"review-sweep-efficiency\",\"to\":\"cleanup-analysis-report\"},{\"from\":\"implement-fail-fast-destructive-guard\",\"to\":\"cleanup-analysis-report\"},{\"from\":\"node24-bridge-reusable-workflows\",\"to\":\"cleanup-analysis-report\"},{\"from\":\"stabilize-nightly-validation-selftest\",\"to\":\"cleanup-analysis-report\"}]}",
+  "fingerprint": "87f0ca468d5709530e9e6395e967b78d25fedbab4c16b0f96b6eddf3709f8a28",
+  "lineage": {
+    "issue_number": 2578,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25851619324",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25851619324",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260514091806_32cf784aa7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2578,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25851619324"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Process analysis recommendations, apply safe workflow fixes, and collapse processed analysis docs' into 6 issues (tracking #2578)",
+  "timestamps": {
+    "created_at": "2026-05-14T09:18:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

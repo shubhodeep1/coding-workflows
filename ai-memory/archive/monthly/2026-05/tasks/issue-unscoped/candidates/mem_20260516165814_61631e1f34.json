@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_synthesise_smoke.sh:46-50 | confidence=4\n  flagged_by: [minimax_minimax-m2_5, qwen_qwen3_6-plus]\n  PROBLEM: The invalid BEHAVIOURAL_SMOKE_LANG warning is emitted as a GitHub Actions workflow command on stderr, so it is logged but not surfaced as an annotation.\n  WHY: Both reviewers reported that the warning disappears from the Actions UI annotations pane even though the raw log still shows it.\n- scripts/review_synthesise_smoke.sh:~46 | confidence=2\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: `requested_language` is interpolated directly into the `::warning::` message without escaping `::` or newlines, which can break annotation parsing.\n  WHY: A malformed override can truncate or garble the warning annotation even though the raw log still shows the message.\n- scripts/review_synthesise_smoke.sh:~369-371 | confidence=5\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: A bare tab character remains on the blank line in the embedded Python block.\n  WHY: Python ignores whitespace-only lines at runtime, but the artifact is visible code hygiene debt in the new codepath.\n- scripts/review_synthesise_smoke.sh:393-395 | confidence=4\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The TAP wrapper always emits `ok 1` and exits with code 0, regardless of the synthesized test result.\n  WHY: A failing synthesized test is still recorded as passing in TAP output, so consumers cannot distinguish pass from fail.\n- scripts/review_synthesise_smoke.sh:516-530 | confidence=3\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: BEHAVIOURAL_SMOKE_TIMEOUT_CANONICAL is assigned without being declared local.\n  WHY: The variable can leak into wider shell scope and is easier to misuse or read stale values from if the script is refactored.\n- scripts/review_synthesise_smoke.sh:623-630 | confidence=4\n  flagged_by: [minimax_minimax-m2_5, qwen_qwen3_6-plus]\n  PROBLEM: The `::warning::` for a failed config rewrite is also sent to stderr instead of stdout.\n  WHY: GitHub Actions will not surface it as an annotation, reducing visibility when the reasoning-effort override fails.\n- scripts/review_synthesise_smoke.sh:643-646 | confidence=2\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: cmd_rc is assigned only inside the if/else branches and is not explicitly initialized beforehand.\n  WHY: The current flow is safe, but the variable is harder to reason about and more fragile under future refactoring.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_synthesise_smoke.sh:393-395 | confidence=4\n  PROBLEM: The TAP wrapper always emits \"ok 1\" and exits with code 0, regardless of whether the synthesized test passed or failed.\n  WHY: A test that detects a persistent defect (exits 1) will still be recorded as \"ok 1\" in TAP output and exit 0.\n- scripts/review_synthesise_smoke.sh:516-517 | confidence=3\n  PROBLEM: BEHAVIOURAL_SMOKE_TIMEOUT_CANONICAL is assigned but not declared with `local`.\n  WHY: This causes it to leak into the script's global scope.\n- scripts/review_synthesise_smoke.sh:643-646 | confidence=2\n  PROBLEM: cmd_rc is assigned inside the if/else branches but not explicitly initialized before.\n  WHY: Current flow is safe, but the lack of explicit initialization makes the code harder to maintain and could cause issues if the code structure changes.\n- scripts/review_synthesise_smoke.sh:46 and 628 | confidence=3\n  PROBLEM: GitHub Actions workflow commands (::warning::) are sent to stderr instead of stdout.\n  WHY: The warnings are visible in raw logs but will not appear as annotations in the GitHub Actions UI, reducing operator visibility into configuration issues.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_synthesise_smoke.sh:516-530 | confidence=3\n  PROBLEM: BEHAVIOURAL_SMOKE_TIMEOUT_CANONICAL is not declared local and leaks into script global scope\n  WHY: While harmless in current single-execution flow, a future refactoring could accidentally read stale values from prior execution paths if this function is called multiple times or in subshells.\n- scripts/review_synthesise_smoke.sh:644 | confidence=2\n  PROBLEM: cmd_rc is initialized only inside conditional branches, not explicitly before them\n  WHY: The current flow is safe because cmd_rc is set in both the success and failure branches, but explicit initialization would remove ambiguity and protect against future refactoring that might add early exit paths.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/review_synthesise_smoke.sh:~369-371 | confidence=5\n  PROBLEM: The line between `raw = load_raw(src)` and `validated_items = None` contains a bare tab character (an empty line that is not truly empty \u2014 it has a `\\t`).\n  WHY: This does not cause a runtime failure \u2014 Python ignores whitespace-only lines within a function body. However, it is a visible artifact of sloppy editing introduced by the last autofix pass and degrades code hygiene in a newly added codebase.\n- scripts/review_synthesise_smoke.sh:~46-50 | confidence=4\n  PROBLEM: The `::warning::` GitHub Actions workflow command is emitted to stderr (`>&2`) rather than stdout.\n  WHY: GitHub Actions only recognizes workflow commands (`::warning::`, `::error::`, `::notice::`) when they appear on stdout. When redirected to stderr the text is logged verbatim but never becomes a workflow annotation, so the operator UI shows no warning marker.\n- scripts/review_synthesise_smoke.sh:~623-630 | confidence=4\n  PROBLEM: The `::warning::` for a failed `sed -i` on `model_reasoning_effort` is also sent to stderr (`>&2`).\n  WHY: Same mechanism as the previous finding \u2014 GitHub Actions will not surface this as an annotation in the UI. If the config rewrite silently fails, the Codex invocation will proceed with whatever reasoning effort was already configured, potentially `xhigh` instead of `low`.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/review_synthesise_smoke.sh:~46 | confidence=2\n  PROBLEM: The `requested_language` value is interpolated directly into a `::warning::` workflow command without escaping `::` or newline characters.\n  WHY: A malformed `BEHAVIOURAL_SMOKE_LANG` value can cause the Actions runner to misparse the annotation delimiter and emit a truncated or garbled annotation.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "d1b37e31c169ff8e733c1e35661f3eb1b597f0d9faf13580faec99b5ddd049bf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2667,
+    "run_id": "25967061106",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25967061106",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260516165814_61631e1f34",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2667,
+    "run_id": "25967061106"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer finding(s) across 7 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-16T16:58:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

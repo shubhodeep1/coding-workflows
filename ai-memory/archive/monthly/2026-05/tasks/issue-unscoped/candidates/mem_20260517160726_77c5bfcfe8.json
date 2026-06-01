@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_floor_rules.sh:3-17 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, qwen_qwen3_6-plus]\n  PROBLEM: `export LC_ALL=C` is applied before `gh_helpers.sh` is sourced, so locale-sensitive helper code would inherit the forced C locale.\n  WHY: The reviewers agreed this is a maintainability/hardening issue rather than a current runtime bug; the highest reported confidence was 3, and one reviewer explicitly noted the current helper is locale-independent while others warned about future locale-sensitive changes.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_floor_rules.sh:line 3 (export LC_ALL=C) | severity=low | confidence=1\n  PROBLEM: `LC_ALL=C` is exported before `gh_helpers.sh` is sourced.\n  WHY: This is harmless today, but it would silently force any future locale-sensitive helper code to run under the C locale; moving the export to just before the awk invocation scopes it to the code that actually needs byte-based behavior.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- File: scripts/review_floor_rules.sh | severity=low | confidence=3\n  Line or code reference: lines 3 and 9-16\n  Problem: `export LC_ALL=C` (line 3) is executed before `gh_helpers.sh` is sourced (lines 9-16).\n  Why it fails at runtime: Not a current runtime failure - the function works correctly. This is a forward-looking hardening issue about code isolation and maintainability. The awk-specific `LC_ALL=C` requirement (needed for byte-based substring operations in the floor-rules logic) should be scoped only to that logic, not to sourced helpers.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- File: scripts/review_floor_rules.sh | severity=low | confidence=2\n  Line or code reference: 5\n  Problem: `export LC_ALL=C` fires before the `gh_helpers.sh` sourcing block (lines 9\u201317), so any locale-sensitive code paths in the helper inherit the C locale.\n  Why it fails at runtime: If a future change to `gh_helpers.sh` or `sanitize_codex_prompt_file` adds locale-aware formatting, the exported `LC_ALL=C` would silently alter behavior, making the helper produce different output than when run without that export.\n- File: scripts/review_floor_rules.sh | severity=low | confidence=1\n  Line or code reference: 3\n  Problem: `export LC_ALL=C` applies to the entire script including the gh_helpers.sh sourcing block.\n  Why it fails at runtime: The locale requirement should be scoped only to the awk/substr floor-rules logic that needs byte-oriented awk behavior.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "3185e316d5f9601e47775900dd58cb441f451380b5fcf9d40cfb2286dea90d62",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2702,
+    "run_id": "25995388931",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25995388931",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517160726_77c5bfcfe8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2702,
+    "run_id": "25995388931"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-17T16:07:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

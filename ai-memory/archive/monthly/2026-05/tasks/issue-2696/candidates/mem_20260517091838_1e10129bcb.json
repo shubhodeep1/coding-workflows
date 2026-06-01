@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":2696,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/2696\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/2697\",\"pr_number\":2697,\"branch\":\"ai/issue-2696\",\"run_id\":\"25986762409\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/25986762409\",\"changed_files\":[\".github/workflows/ci.yml\",\".github/workflows/implement.yml\",\".github/workflows/internal-validate.yml\",\".github/workflows/mark-stable.yml\",\".github/workflows/review_autofix.yml\",\".github/workflows/test-and-mark-stable.yml\",\".github/workflows/validate.yml\",\"agents.md\",\"prompts/behavioural-smoke-synthesise.txt\",\"prompts/mode-judge-interim.txt\",\"prompts/mode-judge-review-blocked.txt\",\"prompts/review-consolidator.txt\",\"scripts/review_apply_fixes.sh\",\"scripts/review_consolidate.sh\",\"scripts/review_parse_consolidator.sh\",\"scripts/review_rb_judge.sh\",\"scripts/review_reject_verify.sh\",\"scripts/review_run_judge_interim.sh\",\"scripts/review_synthesise_smoke.sh\",\"scripts/validate_driver.sh\",\"scripts/validate_process.sh\",\"tests/test_implement_post_codex_recovery.py\",\"tests/test_review_autofix_review_pipeline_contract.py\",\"tests/test_review_judge_interim_round_trip.py\",\"tests/test_review_rb_judge_label_propagation.py\",\"tests/test_review_rb_judge_reissue_baseline.py\",\"tests/test_review_reject_verify.py\",\"tests/test_review_synthesise_smoke.py\",\"tests/test_validate_driver_synthesised_filter.py\",\"tests/test_workflow_checkout_integration_ref_audit.py\"]}",
+  "fingerprint": "4a99613b459047458962988572b380b6523f17a79bc40cf491082d02e14792aa",
+  "lineage": {
+    "issue_number": 2696,
+    "parent_ids": [],
+    "pr_number": 2697,
+    "run_id": "25986762409",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25986762409",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/2697"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260517091838_1e10129bcb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2696,
+    "level": "run",
+    "pr_number": 2697,
+    "run_id": "25986762409"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #2696: https://github.com/shubhodeep1/coding-workflows/pull/2697",
+  "timestamps": {
+    "created_at": "2026-05-17T09:18:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

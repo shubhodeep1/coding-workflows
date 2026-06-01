@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for this issue\n\nActions taken:\n- Inspected `.github/workflows/review_autofix.yml`, `scripts/review_run_reviewers.sh`, and `tests/test_review_autofix_reasoning_schedule.py`.\n\nPlanning ref:\n- HEAD: `0a239a05c94899b4ad77e67778f82fce427b1825`\n- Branch: `orchestrator/project-2867`\n- Integration branch metadata matches the checked-out ref.\n\nClarification mapping:\n- No `Q1`/`Q2` clarification batch existed.\n- `/answer [auto-answered-by-orchestrator]` confirms clarify found the issue sufficiently specified.\n\nAutomation / wiring:\n- Change type: modify existing workflow + existing test only.\n- Entry point: existing `.github/workflows/review_autofix.yml` review/autofix flow, including its no-PR `claude/**` comment-only path.\n- New script/supervisor: none.\n- DB gate pattern: none.\n- `docs/scripts-pending-removal.md` entry: none.\n\nRepresentative pattern inspected:\n- Existing no-PR lightweight step: `Use lightweight reviewer profile for no-PR claude-branch-review`\n- Existing fan-out mechanism: `scripts/review_run_reviewers.sh` already iterates newline-separated `REVIEWER_MODELS`, so the roster reduction can stay in workflow env wiring instead of changing reviewer script logic.\n\nFiles likely to change:\n- `.github/workflows/review_autofix.yml`\n- `tests/test_review_autofix_reasoning_schedule.py`\n- `README.md` only if the missing `files_touched` list explicitly allows doc sync; otherwise leave it unchanged and note temporary doc drift.\n\nFunctions / modules / workflow areas to update:\n1. `.github/workflows/review_autofix.yml`\n   - Lower the workflow default for `CHECK_RUNS_WAIT_TIMEOUT_SECS` from `1200` to a conservative shorter default (recommended: `900`).\n   - Keep the runtime fallback/clamp in the check-run collection step aligned with that same new default, so \u201cmissing/invalid value falls back to default\u201d stays internally consistent.\n   - Extend `Use lightweight reviewer profile for no-PR claude-branch-review` so it also writes a reduced `REVIEWER_MODELS` roster into `$GITHUB_ENV`.\n   - Use the existing knob (`REVIEWER_MODELS`) rather than adding new workflow inputs/vars; safest shape is to truncate the current non-empty roster to the first 3 entries, preserving order, via multiline `GITHUB_ENV` export.\n   - Preserve the existing gate exactly: only `env.CLAUDE_BRANCH_REVIEW_MODE == 'true' && env.PR_NUMBER == ''` gets the cheaper roster. PR-backed `claude/**` branches must keep the full panel.\n\n2. `tests/test_review_autofix_reasoning_schedule.py`\n   - Add targeted assertions for the new timeout default/fallback.\n   - Expand the no-PR lightweight-profile test to assert the reduced reviewer-roster override is present, while the existing low-reasoning + single-pass assertions remain.\n\nData structures affected:\n- Workflow env values:\n  - `CHECK_RUNS_WAIT_TIMEOUT_SECS`\n  - `REVIEWER_MODELS`\n  - `ENABLE_REVIEWER_TWO_PASS`\n  - `REVIEWER_REASONING_EFFORT`\n- Runtime shell variable:\n  - `_wait_timeout`\n- Test string/step-block expectations in `tests/test_review_autofix_reasoning_schedule.py`\n\nAPI / interface changes:\n- No new public workflow inputs or env var names.\n- Existing operator override contract remains:\n  - valid `vars.CHECK_RUNS_WAIT_TIMEOUT_SECS` values still win over the default\n  - invalid/missing values should fall back to the new default, not the old `1200`\n- No intended behavior change for PR-backed reviewer/editor/autofix/merge-conflict flows beyond the globally shorter default wait budget.\n\nPotential risks / edge cases:\n- The reduced no-PR roster should still keep at least 2 reviewers; 3 is safer because repo floor rules rely on multi-reviewer signal.\n- `REVIEWER_MODELS` is multiline; use proper `GITHUB_ENV` multiline syntax so downstream scripts receive the full list.\n- If only the top-level default is changed and the runtime fallback remains `1200`, missing/invalid values will silently revert to the old budget.\n- README currently documents `1200`; if docs are out of scope because of `files_touched`, that becomes known doc drift.\n- Keep this local to the existing lightweight no-PR step; do not touch stale-run cancellation, diff ladders, model tiers, or other review_autofix behavior.\n\nTesting considerations:\n- Run `pytest tests/test_review_autofix_reasoning_schedule.py`\n- Targeted assertions should cover:\n  - new `CHECK_RUNS_WAIT_TIMEOUT_SECS` default\n  - aligned `_wait_timeout` fallback/clamp\n  - no-PR reviewer-roster reduction\n  - unchanged no-PR gating condition\n\nAssumptions:\n- The missing `files_touched` allowlist includes `.github/workflows/review_autofix.yml` and `tests/test_review_autofix_reasoning_schedule.py`.\n- A 3-reviewer no-PR roster is the safest \u201ccheaper than PR-backed review\u201d choice without collapsing multi-reviewer signal.\n\nMissing-context notes:\n- The issue references a `files_touched` list, but that list was not present in the planning context.\n\nConflicts detected:\n- No factual issue/code mismatch found.\n- Current code matches the issue description: the no-PR lightweight step currently only disables pass 2 and lowers reasoning, and the workflow default wait timeout is still `1200`.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "2d266a88a0996cec0ff094e7efa89df49f48cecbf80ecaebc6de92f6b94c8fd3",
+  "lineage": {
+    "issue_number": 2868,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26268306236",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26268306236",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2868"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260522043032_85c39e157e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2868,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26268306236"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2868",
+  "timestamps": {
+    "created_at": "2026-05-22T04:30:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

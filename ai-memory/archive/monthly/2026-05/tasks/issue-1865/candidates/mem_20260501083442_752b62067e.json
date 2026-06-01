@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: Which area of this repository should be improved?**\nChoices:\n- **A** \u2014 GitHub Actions workflows under `.github/workflows/` (RECOMMENDED)\n- **B** \u2014 Shell/Python support scripts under `scripts/`\n- **C** \u2014 Documentation only (`README.md`, `agents.md`, docs)\n- **D** \u2014 A specific file or feature you will name\nReply: `Q1: A`\n**Q2: What kind of improvement do you want?**\nChoices:\n- **A** \u2014 Fix a bug or broken behavior you observed (RECOMMENDED)\n- **B** \u2014 Add a small new feature\n- **C** \u2014 Improve reliability/performance without changing intended behavior\n- **D** \u2014 Clean up wording/docs only\nReply: `Q2: A`\n**Q3: How should the target be identified?**\nChoices:\n- **A** \u2014 I will provide the exact file path(s) or workflow/script name(s) (RECOMMENDED)\n- **B** \u2014 I will describe the specific behavior/symptom to trace\n- **C** \u2014 I want you to pick one area yourself\nReply: `Q3: A`",
+  "fingerprint": "c5d1ac8787b5498ca101d2369b658a4fd66c67605533aee40a9271d4e3704369",
+  "lineage": {
+    "issue_number": 1865,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25208156204",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25208156204",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260501083442_752b62067e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1865,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25208156204"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #1865 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-01T08:34:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

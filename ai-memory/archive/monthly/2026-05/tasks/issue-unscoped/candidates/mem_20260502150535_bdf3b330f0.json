@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:4 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The file has an extra 4th bait-comment line, but issue #1997 requires exactly three lines with no extra content.\n  WHY: Exact-content validation against the required three-line fixture will fail because the added comment violates the explicit no-extra-content constraint.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: tests/e2e_smoke_canary.txt\n  Line: 4\n  Problem: The file contains a 4th line (`# E2E_EDITOR_BAIT_25254380200: this line should be removed by the editor (smoke gate)`) that was added by the previous AI autofix run. Issue #1997 explicitly requires the file to contain exactly three lines (no more, no less):\n  ```\n  status: ok\n  run_id: 25254380200\n  updated-by: ai-pipeline\n  ```\n  No extra content \u2014 including comments, headers, or bait markers \u2014 is permitted.\n  Why it fails at runtime: Any consumer that validates the exact content of this smoke canary file (e.g., a CI smoke test gate checking for exactly 3 lines or an exact content hash) will fail. The bait comment line is not part of the spec and violates the \"no extra content\" constraint.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- File: tests/e2e_smoke_canary.txt\n  Line: 4\n  Problem: The file contains 4 lines, but the linked issue #1997 explicitly requires exactly three lines with no extra content.\n  Why it fails at runtime: The issue specification requires the file to contain exactly:\n  ```\n  status: ok\n  run_id: 25254380200\n  updated-by: ai-pipeline\n  ```\n  The extra comment line `# E2E_EDITOR_BAIT_25254380200: this line should be removed by the editor (smoke gate)` violates this requirement and will cause exact-content validation to fail.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- File: tests/e2e_smoke_canary.txt\n  Line: 4\n  Problem: The file contains 4 lines but the issue #1997 explicitly requires exactly 3 lines with no extra content. The last autofix run incorrectly added a 4th line containing a bait comment that was supposed to be removed by the editor.\n  Why it fails at runtime: The issue requirement states the file must contain \"exactly these three lines (no more, no less)\" and \"Do not add comments, headers, or any extra content.\" The presence of the 4th line violates this explicit constraint and will cause E2E smoke test verification to fail.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- File: tests/e2e_smoke_canary.txt\n  Line 4: `# E2E_EDITOR_BAIT_25254380200: this line should be removed by the editor (smoke gate)`\n  Problem: The last autofix run appended an extra 4th line (bait comment) to a file that must contain exactly three lines with no extra content per issue #1997.\n  Why it fails at runtime: The E2E smoke test performs an exact-content match against the expected three-line fixture (`status: ok\\nrun_id: 25254380200\\nupdated-by: ai-pipeline\\n`). The extra comment line causes the content check to fail.\n  ISSUE_CONFIDENCE: 5\n\n  HARDENING_SUGGESTIONS:\n\n  None \u2014 the target is a plain-text fixture file with no executable logic to harden.\n\n  HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- File: tests/e2e_smoke_canary.txt\n  Line: 4\n  Problem: File contains four lines including an extraneous comment, but issue #1997 requires exactly three specific lines with no extra content.\n  Why it fails at runtime: Any consumer script or test performing an exact content match (e.g., via `cat tests/e2e_smoke_canary.txt | wc -l == 3` or `grep -q '^status: ok$'`) will fail due to the line count mismatch and presence of the bait comment.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- File: tests/e2e_smoke_canary.txt\n  Line: 4\n  Problem: The file contains 4 lines instead of exactly 3 lines as required by issue #1997.\n  Why it fails at runtime: The smoke test verification expects exact content match with exactly 3 lines. The added bait comment line `# E2E_EDITOR_BAIT_25254380200: this line should be removed by the editor (smoke gate)` violates the explicit constraint \"no more, no less\" and \"Do not add comments, headers, or any extra content.\" The task specification is unambiguous: the file must contain ONLY the three specified lines. Any CI validation that checks exact file content will fail.\n  ISSUE_CONFIDENCE: 5\n\n  HARDENING_SUGGESTIONS:\n\n  None \u2014 this is a spec compliance issue, not a hardening opportunity.\n\n  SUMMARY:\n\n  The most recent AI autofix run introduced a critical spec violation by adding an extra line to `tests/e2e_smoke_canary.txt`. The linked issue #1997 explicitly requires exactly 3 lines with no additional content. The fix is straightforward: remove the 4th line (the bait comment), leaving only the three required lines.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "9c64c423151fa0dac4872ee75049e495e4e27e44bc737ca399d01289ec155e74",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2001,
+    "run_id": "25254525024",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25254525024",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260502150535_bdf3b330f0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2001,
+    "run_id": "25254525024"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-02T15:05:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

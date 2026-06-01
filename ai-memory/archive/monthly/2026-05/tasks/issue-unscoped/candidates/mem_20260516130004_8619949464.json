@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/plans/awesome-claude-code-learnings-plan.md:\"Files & Modules\" section, \"New files (19):\" heading through the totals summary | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, z-ai_glm-5]\n  PROBLEM: The heading and totals summary undercount the listed new files; the section lists 22 `[new]` entries, but the summary says 17 new non-plan files.\n  WHY: Both reviewers report an arithmetic mismatch between the counts and the enumerated file list, so the plan\u2019s scope summary is internally inconsistent.\n- docs/plans/awesome-claude-code-learnings-plan.md:\"Totals:\" summary line, near end of Files & Modules section | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The sentence says \"No new log prefixes\" and then immediately identifies `CLARIFY_INFORMAL_SCORE:` as a new log-prefix surface.\n  WHY: The summary is self-contradictory and can mislead readers about whether a new prefix is introduced.\n- docs/plans/awesome-claude-code-learnings-plan.md:Phase 5, line 617-618 | confidence=5\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: The plan misstates `sanitize_segment` as lowercasing to `[a-z0-9_]`, but the actual helper preserves case and allows dots/colons/hyphens, so the stated contract regex would reject valid IDs.\n  WHY: The documented behavior does not match `scripts/ai_memory_lib.py:110`, which makes the Phase 5 contract test fail for uppercase or dotted prefixes.\n- docs/plans/awesome-claude-code-learnings-plan.md:Phase 5, lines describing sanitize_segment behavior (~line 695-705 in the new file) | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The plan says `sanitize_segment` lowercases the prefix and turns `\"Mem.with.dots\"` into `\"memwithdots\"`, but the actual helper preserves case and internal dots.\n  WHY: This documentation mismatch would make the phase-5 contract and example expectations fail against the real `scripts/ai_memory_lib.py:110` behavior.\n- docs/plans/awesome-claude-code-learnings-plan.md:Phase 7, line 791-792 | confidence=5\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: The test expectation `\"Mem.with.dots\" becomes \"memwithdots\"` is wrong because `sanitize_segment(\"Mem.with.dots\", \"mem\")` does not lowercase or strip internal dots.\n  WHY: The asserted prefix segment would not match the actual output, so the specified test would fail.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- docs/plans/awesome-claude-code-learnings-plan.md:\"Files & Modules\" section, \"New files (19):\" heading through the totals summary | confidence=5\n  PROBLEM: The \"New files (19):\" heading is followed by 22 `[new]` items, and the totals summary also undercounts the listed files.\n  WHY: The counts are internally inconsistent with the enumerated file list in the same section.\n- docs/plans/awesome-claude-code-learnings-plan.md:\"Totals:\" summary line, near end of Files & Modules section | confidence=4\n  PROBLEM: The sentence says \"No new log prefixes\" and then immediately identifies `CLARIFY_INFORMAL_SCORE:` as a new log-prefix surface.\n  WHY: The summary contradicts itself and can mislead readers about whether a new prefix is introduced.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- docs/plans/awesome-claude-code-learnings-plan.md:Phase 5, lines describing sanitize_segment behavior (~line 695-705 in the new file) | confidence=5\n  PROBLEM: The plan says `sanitize_segment` lowercases the prefix and turns `\"Mem.with.dots\"` into `\"memwithdots\"`, but the actual helper preserves case and internal dots.\n  WHY: The documented behavior does not match `scripts/ai_memory_lib.py:110`, so the stated expectation would fail against the real implementation.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- docs/plans/awesome-claude-code-learnings-plan.md:Phase 5, line 617-618 | confidence=5\n  PROBLEM: The plan\u2019s description of `sanitize_segment` is factually wrong: it claims the function lowercases and restricts output to `[a-z0-9_]`, but the actual helper preserves case and allows dots/colons/hyphens.\n  WHY: Both the descriptive text and the contract regex `^[a-z0-9_]+_\\d{14}_[0-9a-f]{10}$` do not match the real `scripts/ai_memory_lib.py:110` behavior, so the specified test would fail.\n- docs/plans/awesome-claude-code-learnings-plan.md:Phase 5, line 617-618 | confidence=5\n  PROBLEM: The contract test regex is too narrow for the actual `make_record_id` output format because it only allows lowercase prefix characters.\n  WHY: Any prefix containing uppercase letters or dots would produce a valid ID that the regex would reject.\n- docs/plans/awesome-claude-code-learnings-plan.md:\"Files & Modules\" section: \"New files (19):\" and \"Totals: 2 plan/companion docs + 17 new code/doc/test/fixture files\" | confidence=4\n  PROBLEM: The file count is inconsistent with the listed entries.\n  WHY: The section lists 22 `[new]` entries, so the heading and totals summary undercount the actual new files.\n- docs/plans/awesome-claude-code-learnings-plan.md:Phase 7, line 791-792 | confidence=5\n  PROBLEM: The test expectation `\"Mem.with.dots\" becomes \"memwithdots\" in the prefix segment` is wrong.\n  WHY: `sanitize_segment(\"Mem.with.dots\", \"mem\")` preserves case and internal dots, so the asserted value would not match the real output.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "7c05308be4dfea143c25f5b234bd10aa96aed8a8d3f8834664ac6be7996c6711",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25962299889",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25962299889",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260516130004_8619949464",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25962299889"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-16T13:00:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

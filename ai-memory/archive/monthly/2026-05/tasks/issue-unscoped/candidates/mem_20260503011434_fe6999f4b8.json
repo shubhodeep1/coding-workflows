@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:1-4 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The file has an extra fourth editor-bait line, so it does not contain exactly the three lines required by issue #2005.\n  WHY: All reviewers report that the smoke gate expects an exact 3-line file (`status: ok`, `run_id: 25265920645`, `updated-by: ai-pipeline`), and the extra line will make validation fail.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:line 4 | confidence=5\n  PROBLEM: The file contains a fourth line `# E2E_EDITOR_BAIT_25265920645: this line should be removed by the editor (smoke gate)` that violates the exact-content specification in issue #2005.\n  WHY: The smoke validation gate checks for exact content match, so the extra fourth line will cause the check to fail.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:Lines: 1-4 (4 lines total) | confidence=5\n  PROBLEM: The file contains an extra fourth line that violates the exact-content requirement in issue #2005.\n  WHY: The issue explicitly requires the file to contain exactly the three specified lines with no extra content, so the fourth comment line will cause the smoke-test content validation to fail.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:Line 4 | confidence=5\n  PROBLEM: File contains an extra 4th line with editor-bait comment `# E2E_EDITOR_BAIT_25265920645: this line should be removed by the editor (smoke gate)`\n  WHY: Issue #2005 requires exactly 3 lines (`status: ok`, `run_id: 25265920645`, `updated-by: ai-pipeline`) with no extra content, so the 4th line will make validation fail.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:Line 4 \u2014 `# E2E_EDITOR_BAIT_25266085154-1-25935: this line should be removed by the editor (smoke gate)` | confidence=5\n  PROBLEM: The canary file contains 4 lines instead of the required exactly 3 lines.\n  WHY: The issue specification demands exactly `status: ok`, `run_id: 25265920645`, and `updated-by: ai-pipeline` with no comments, headers, or extra content, so the extra editor-bait comment line causes a mismatch.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/e2e_smoke_canary.txt:Line: 4 | confidence=5\n  PROBLEM: File contains 4 lines including the extra bait comment \"# E2E_EDITOR_BAIT_25265920645: this line should be removed by the editor (smoke gate)\"\n  WHY: Issue #2005 requires exactly 3 lines (`status: ok`, `run_id: 25265920645`, `updated-by: ai-pipeline`) with no more and no less, so the extra content will fail the smoke validation content check.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:Line 4 | confidence=5\n  PROBLEM: The file contains a 4th line (`# E2E_EDITOR_BAIT_25265920645: this line should be removed by the editor (smoke gate)`) that violates the explicit requirement from issue #2005 for exactly three lines with no comments or extra content.\n  WHY: The smoke validation will compare the file content against the expected three lines and fail because the file has 4 lines instead of 3 and the extra line does not match the spec.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "dcfa456221dbc78bacbdfbf4e911808fd792015217be0153bae8776c4b9d1918",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2010,
+    "run_id": "25266085154",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25266085154",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260503011434_fe6999f4b8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2010,
+    "run_id": "25266085154"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-03T01:14:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The file contains an extra fourth comment line instead of only the required three lines.\n  WHY: The task requires an exact 3-line file with no extra content, so the current 4-line file will fail the smoke-test exact-match validation.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  PROBLEM: The file contains a fourth line \u2014 a bait comment injected during implementation that the editor was supposed to remove.\n  WHY: Any smoke-test automation that checks for exact file content will fail because the specification requires exactly three lines with no extra content.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  PROBLEM: The last AI autofix run added a fourth comment line instead of removing it.\n  WHY: The task explicitly required replacing the file content completely with the three lines above and forbade comments or extra content, so exact-content validation will fail.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  PROBLEM: The file contains an extra comment line that violates the exact 3-line requirement.\n  WHY: The issue explicitly requires the file to contain exactly three lines with no more and no less, so the fourth comment line causes the smoke test validation to fail.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  PROBLEM: The autofix did not remove the intentionally-placed bait line.\n  WHY: The file now has 4 lines when the task requires exactly 3 lines and no extra content, so the e2e smoke canary exact-content check will fail.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  PROBLEM: Extra fourth line (comment) remains after the required three content lines.\n  WHY: The issue requires exactly three lines with no extra content or comments, so the current 4-line file fails validation.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:4 | confidence=5\n  PROBLEM: The file contains 4 lines instead of the required 3, and an extraneous comment line was added at the end.\n  WHY: The task explicitly requires exactly three lines with no comments or extra content, so the current file will fail the smoke test validation.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "e786bafd9443e0d813f462124be88c7f16056eac23a1ded04a4e6d271d50b964",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1955,
+    "run_id": "25246213166",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25246213166",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260502071546_2d6db31b53",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1955,
+    "run_id": "25246213166"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-02T07:15:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

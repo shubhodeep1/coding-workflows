@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/orchestrate.yml:22-664 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS is only set via the shell fallback inside the decomposer step, so reusable-workflow callers and repo vars cannot override the per-attempt timeout.\n  WHY: The workflow never exports the variable from job env or workflow_call inputs, so the documented override path is inert and the shell default always wins.\n- .github/workflows/orchestrate.yml:609-621 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: max_attempts is hardcoded to 3 in the decomposer retry loop, with no vars or input mapping.\n  WHY: This makes the decomposer retry cap non-configurable from repo settings and diverges from the repo's other vars-driven Codex knobs.\n- README.md:919-925 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The README row for the timeout variable mixes the timeout-setting story with the separate prompt-rebuild behavior for the too-few-issues path.\n  WHY: The prompt-rebuild wording is scoped to the too-few-issues retry flow, so placing it in the timeout row is misleading.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/orchestrate.yml:22-32 (global env block), 47-48 (job env block), 632-635 (shell default) | confidence=5\n  PROBLEM: ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS is only set via the shell default `:=3000`, so the workflow ignores repo vars and caller overrides.\n  WHY: The global env block does not export `${{ vars.ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS }}`, the workflow_call inputs only accept `project_description`, and the only caller passes no extra env vars.\n- .github/workflows/orchestrate.yml:621 | confidence=3\n  PROBLEM: `max_attempts=3` is hardcoded in the run block.\n  WHY: The repo documents `MAX_CODEX_ATTEMPTS` as a shared retry cap, but this decomposer does not consume it.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/orchestrate.yml:632-635 | confidence=5\n  PROBLEM: `ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS` is read via shell default `:=3000` but not exposed through workflow_call inputs or `env:` mapping from `vars.*`, so callers cannot override it.\n  WHY: There is no job-level `env:` import from `vars.ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS`.\n- .github/workflows/orchestrate.yml:609 | confidence=4\n  PROBLEM: `max_attempts=3` is hardcoded, inconsistent with other tunable knobs.\n  WHY: The variable is set directly as `max_attempts=3`.\n- README.md:922 | confidence=3\n  PROBLEM: The description conflates timeout behavior with prompt rebuild behavior.\n  WHY: It still mentions \"When the too-few-issues retry path appends corrective feedback, it rebuilds the prompt from the snapshotted base first\" in the timeout row.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/orchestrate.yml:22-32 (env block), 632 (shell default) | confidence=5\n  PROBLEM: `ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS` is read via shell default `:=3000` at line 632 but is not declared in the workflow's `env:` block.\n  WHY: Since this is a reusable workflow_call, callers cannot inject arbitrary environment variables into the callee's `run:` block, so the documented override path does not work.\n- .github/workflows/orchestrate.yml:618 | confidence=4\n  PROBLEM: `max_attempts=3` is hardcoded in the decomposer retry loop, inconsistent with other workflow knobs that are wired from `vars.*`.\n  WHY: Operators cannot tune retry behavior per-repository without modifying the workflow file.\n- README.md:922 | confidence=3\n  PROBLEM: The description ends with a prompt-rebuild explanation that conflates timeout-setting docs with the separate too-few-issues flow.\n  WHY: The rebuild wording is technically correct but belongs to a different context, which can mislead readers.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/orchestrate.yml:22-34 (env: block), 632 (shell default) | confidence=5\n  PROBLEM: `ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS` is not wired from `vars.*` into the workflow's global `env:` block.\n  WHY: The env block exports other configurable knobs from `vars.*`, but this variable is absent and only has the shell fallback `: \"${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS:=3000}\"`.\n- .github/workflows/orchestrate.yml:609 | confidence=3\n  PROBLEM: `max_attempts=3` is hardcoded in the decomposer retry loop with no variable override.\n  WHY: This breaks the repo's pattern of exposing retry caps as configurable knobs.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/orchestrate.yml:618-664 | confidence=5\n  PROBLEM: ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS defaults and validates inside the decomposer step's run block, but workflow_call callers and repo vars do not propagate to run steps without explicit job-level env mapping or workflow_call input.\n  WHY: Repo-level vars.ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS overrides are silently ignored because the shell `:=` always wins.\n- .github/workflows/orchestrate.yml:609-618 | confidence=5\n  PROBLEM: The decomposer retry loop hardcodes `max_attempts=3` locally in the step, with no linkage to repo vars or workflow inputs.\n  WHY: This makes the decomposer retry cap non-configurable per repo and inconsistent with other workflows' vars-driven retry knobs.\n- README.md:919-925 | confidence=5\n  PROBLEM: The README claims the timeout variable is overridable, but orchestrate.yml lacks the wiring needed for that override to work.\n  WHY: Operators attempting the documented override see no effect because the reusable workflow ignores the value.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/orchestrate.yml:632 and lines 22-34 (global env block) | confidence=5\n  PROBLEM: ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS is not wired through the reusable workflow's env block or workflow_call inputs, making repo-level overrides impossible.\n  WHY: The shell default `: \"${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS:=3000}\"` will always evaluate to 3000 because the variable is never exported from the workflow's global env block.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "50fa5616dc18709eba37e9775f98c711dd9ab6f0b21d5ddfca3779a6a63006d0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2547,
+    "run_id": "25749600372",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25749600372",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260512172718_06593e201f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2547,
+    "run_id": "25749600372"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-12T17:27:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_synthesise_smoke.sh:226-317 | severity=high | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The `coproc` bash control word is not recognized as a dangerous dispatcher in the shell content validation.\n  WHY: `normalize_content()` does not include `coproc` in `dangerous_command_tokens`, so payloads like `coproc eval \"$PAYLOAD\"` can pass validation and be wrapped/executed by bash.\n- agents.md:145-146 | severity=low | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The stable log-prefix list omits `BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL`.\n  WHY: The script emits this prefix on synthesis failures, so omitting it violates the documented contract.\n- tests/test_validate_driver_synthesised_filter.py:35-68 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The brace-counting extractor heuristic in `_extract_shell_function` is fragile.\n  WHY: It only increments on a line that is exactly `{` and decrements on lines starting with `}`, so inline braces or redirections can be miscounted even though the current target functions work.\n- tests/test_review_synthesise_smoke.py:160-197 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The same brace-counting extractor heuristic is fragile in this smoke-test helper.\n  WHY: The same pattern is reused here, so the same brace-counting limitation applies even though it currently works for the target shell functions.\n- tests/test_workflow_checkout_integration_ref_audit.py:35-62 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The cited YAML-indentation-based script extraction logic is not present at this location.\n  WHY: The file defines `_workflow_text` and `_checkout_workflow_files` instead, so the described extraction bug could not be reproduced there.\n- tests/test_validate_driver_synthesised_filter.py:44 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The missing-opening-brace assertion provides only limited diagnostic context.\n  WHY: The message names the function being sought but not the surrounding structure, so the failure is harder to debug.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_validate_driver_synthesised_filter.py:35-68 | severity=low | confidence=2\n  PROBLEM: The brace-counting extractor heuristic in `_extract_shell_function` is fragile.\n  WHY: It only increments on a line that is exactly `{` and decrements on lines starting with `}`, so inline braces or redirections can be miscounted even though the current target functions work.\n- tests/test_review_synthesise_smoke.py:160-197 | severity=low | confidence=2\n  PROBLEM: The same brace-counting extractor heuristic is fragile in this smoke-test helper.\n  WHY: The same pattern is reused here, so the same brace-counting limitation applies even though it currently works for the target shell functions.\n- tests/test_workflow_checkout_integration_ref_audit.py:35-62 | severity=low | confidence=5\n  PROBLEM: The cited YAML-indentation-based script extraction logic is not present at this location.\n  WHY: The file defines `_workflow_text` and `_checkout_workflow_files` instead, so the described extraction bug could not be reproduced there.\n- tests/test_validate_driver_synthesised_filter.py:44 | severity=low | confidence=2\n  PROBLEM: The missing-opening-brace assertion provides only limited diagnostic context.\n  WHY: The message names the function being sought but not the surrounding structure, so the failure is harder to debug.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_synthesise_smoke.sh:226-317 | confidence=5\n  PROBLEM: The `coproc` bash control word is not recognized as a dangerous dispatcher in the shell content validation.\n  WHY: The `normalize_content()` function validates backslash-continued lines but does not include `coproc` in `dangerous_command_tokens`, allowing payloads like `coproc eval \"$PAYLOAD\"` to pass validation and be wrapped/executed by bash.\n- scripts/review_synthesise_smoke.sh:270-289 | confidence=5\n  PROBLEM: The `coproc` token is missing from `dangerous_command_tokens` while other dangerous commands like `eval`, `exec`, `source` are included.\n  WHY: The validator is designed to reject shell constructs that could execute arbitrary code; `coproc` can spawn background processes with arbitrary commands, so the listed payloads would be accepted and later executed.\n- agents.md:145-146 | confidence=4\n  PROBLEM: The stable log-prefix list omits `BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL`.\n  WHY: The script emits this prefix on synthesis failures, so omitting it violates the documented contract.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===",
+  "fingerprint": "7106a79b4700ab2397a2763d1f741607a0180c9d69c45d2e8516c336b3972b0f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2697,
+    "run_id": "25989125618",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25989125618",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517112844_6f3f6a3056",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2697,
+    "run_id": "25989125618"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-17T11:28:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

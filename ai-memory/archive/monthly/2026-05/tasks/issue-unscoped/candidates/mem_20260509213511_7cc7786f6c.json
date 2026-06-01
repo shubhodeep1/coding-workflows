@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/implement_diagnose_post_codex_failure.sh:364-420 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: The filename-extraction regex requires a dot-separated extension, so dotless files like Makefile, Dockerfile, README, and Procfile are excluded from the Semble query.\n  WHY: Reviewers agree this reduces Semble retrieval quality for common build-failure tails; severity is disputed between minor signal loss and more significant context degradation.\n- scripts/implement_diagnose_post_codex_failure.sh:367-398 | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: `add_identifier(os.path.basename(match))` is redundant because the regex capture already yields just the basename.\n  WHY: This only adds unnecessary processing; the `seen` set prevents functional duplication, so reviewers describe it as a minor inefficiency.\n- scripts/targeted_file_context.py:140-150 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: `_log_semble_event` only applies `repr()` when a value contains whitespace, producing inconsistent bare versus quoted `key=value` log fields.\n  WHY: Reviewers say this can confuse downstream telemetry parsers for spaced values, but it is logging-only and low impact.\n- tests/test_judge_semble_prefetch_contract.py:81-95 | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The test asserts inline `{{SEMBLE_PREFETCH}}` text is preserved unchanged, which documents behavior that can let an inline placeholder reach the rendered prompt without tripping the unresolved-placeholder guard.\n  WHY: The renderer only substitutes standalone lines, so the test matches current intent, but it also preserves a path for malformed templates to leak placeholder text.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/implement_diagnose_post_codex_failure.sh:~395 | confidence=2\n  PROBLEM: The filename-extraction regex requires a dot-separated extension, so dotless files like Makefile, Dockerfile, or README mentioned in error tails are excluded from the Semble query.\n  WHY: Semble query misses relevant dotless file identifiers from failure tails, lowering the signal sent to the diagnose model; the `os.path.basename(match)` call is also redundant but harmless.\n- scripts/targeted_file_context.py:141-148 | confidence=1\n  PROBLEM: `_log_semble_event` only applies `repr()` when the rendered value contains whitespace, so fields like `reason=\"exit=1\"` are emitted as bare `reason=exit=1`.\n  WHY: This is telemetry-only, and parsers that split on the first `=` recover correctly.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/implement_diagnose_post_codex_failure.sh:~418 | confidence=4\n  PROBLEM: The file-identifier regex requires a dot, so common build files like Makefile, Dockerfile, BUILD, and README are not recognized as Semble file paths.\n  WHY: The fallback generic identifier regex can still capture them as words, but not as file paths for semantic search.\n- scripts/targeted_file_context.py:~141-150 | confidence=2\n  PROBLEM: `_log_semble_event` only quotes values when they contain whitespace, making the log format inconsistent for filenames with spaces.\n  WHY: This is a theoretical edge case and most repo paths do not contain spaces.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/implement_diagnose_post_codex_failure.sh:~395 | confidence=4\n  PROBLEM: The regex requires a dot-separated extension, so dotless files like Makefile, README, LICENSE, Dockerfile, and Procfile are missed when building the Semble query.\n  WHY: Failure tails such as \"Makefile: syntax error\" will not contribute those identifiers, reducing diagnosis context.\n- tests/test_judge_semble_prefetch_contract.py:84-91 | confidence=3\n  PROBLEM: The test asserts inline `{{SEMBLE_PREFETCH}}` text is preserved unchanged, which can let an inline placeholder reach the rendered prompt without tripping the unresolved-placeholder guard.\n  WHY: The renderer only substitutes standalone lines, so the test reflects current behavior but also documents a path for malformed templates to leak placeholder text.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/implement_diagnose_post_codex_failure.sh:~420 | confidence=4\n  PROBLEM: The filename-extraction regex requires a dot, so dotless files like Makefile, Dockerfile, README, and Procfile are excluded from Semble query identifiers.\n  WHY: This lowers retrieval signal for common build-failure tails, though the issue is framed as a quality regression rather than a correctness bug.\n- scripts/targeted_file_context.py:141-148 | confidence=2\n  PROBLEM: `_log_semble_event` only applies `repr()` when whitespace is present, producing inconsistent bare versus quoted `key=value` log fields.\n  WHY: Downstream scrapers that assume simple `key=value` parsing can misread quoted fields, but the practical blast radius is small.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/implement_diagnose_post_codex_failure.sh:364-365 | confidence=4\n  PROBLEM: Filename extraction regex mandates a dotted extension, omitting dotless basenames like Makefile or README from the identifiers list.\n  WHY: Semble_query_block receives incomplete context when the failure tail mentions dotless files, reducing relevance.\n- scripts/implement_diagnose_post_codex_failure.sh:367 | confidence=3\n  PROBLEM: `add_identifier(os.path.basename(match))` is redundant because the regex capture already isolates the basename.\n  WHY: It only adds unnecessary extraction work and the `seen` set prevents functional duplication.\n- scripts/targeted_file_context.py:140-150 | confidence=2\n  PROBLEM: `_log_semble_event` applies `repr()` only when `str(value)` contains spaces, so space-free paths are bare while spaced values are quoted.\n  WHY: This can break simple space-split log parsers for telemetry fields with spaces, obscuring fallback diagnostics.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/implement_diagnose_post_codex_failure.sh:~398 | confidence=2\n  PROBLEM: `add_identifier(os.path.basename(match))` is redundant because the regex capture group already yields just the basename.\n  WHY: The `seen` set deduplicates the same value, so there is no functional bug, only unnecessary processing.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "70be76a1db5af3db81e36f27c585d3b79c519978471c058c96a19548594f05f4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2403,
+    "run_id": "25612027380",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25612027380",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260509213511_7cc7786f6c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2403,
+    "run_id": "25612027380"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-09T21:35:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validate_driver.sh:697-704 | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: `discover_tests()` still defaults `include_synthesised` to true and uses the old falsy-check pattern, so an empty or missing `VALIDATION_INCLUDE_SYNTHESISED` can silently include synthesised tests.\n  WHY: The top-level normalization on line 118 masks this today, but the function is not self-contained and diverges from the opt-in pattern used in `validate.yml` and `validate_process.sh`.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/validate_driver.sh:697-703\n  PROBLEM: `discover_tests()` defaults `include_synthesised` to true and still uses the old falsy-check pattern, so an empty or missing `VALIDATION_INCLUDE_SYNTHESISED` can silently include synthesised tests.\n  WHY: The report notes this is currently masked by the top-level normalization, but the function is not self-contained and would revert to opt-out behavior if sourced independently.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/validate_driver.sh:698-704 | confidence=1\n  PROBLEM: The `discover_tests()` function still uses the old opt-out pattern and reads `${VALIDATION_INCLUDE_SYNTHESISED}` without a `:-false` fallback, so an empty string can make discovery include synth tests while materialization skips them.\n  WHY: The top-level default on line 118 currently masks this in normal operation, but the function diverges from the opt-in contract and can silently revert if used in isolation.\n- scripts/validate_driver.sh:698-704\n  PROBLEM: The function's local initialization and case pattern are inconsistent with the opt-in pattern adopted in `validate.yml` and `validate_process.sh`.\n  WHY: An empty-string value would cause divergent behavior between discovery and materialization.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/validate_driver.sh:698-704 | confidence=2\n  PROBLEM: `discover_tests()` still uses the old opt-out pattern (`local include_synthesised=\"true\"` + falsy-check case) while `validate.yml` and `validate_process.sh` now use the opt-in pattern.\n  WHY: The top-level default on line 118 makes this dormant in normal operation, but if the function is used in isolation or with `VALIDATION_INCLUDE_SYNTHESISED=\"\"`, discovery and materialization can diverge.\n- scripts/validate_driver.sh:698-704\n  PROBLEM: The function's local initialization and case pattern are inconsistent with the opt-in pattern adopted in `validate.yml` and `validate_process.sh`.\n  WHY: An empty-string value would cause divergent behavior between discovery and materialization.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "6b27686daa8b37abb8af5418a9d21cc59d36830a12610933e4349873faeb2af3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2705,
+    "run_id": "25996889300",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25996889300",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517170455_b2aee3bf56",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2705,
+    "run_id": "25996889300"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-17T17:04:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

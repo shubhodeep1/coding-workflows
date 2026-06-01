@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/targeted_file_context.py:~509-518 | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Summary unconditionally emits \", {semble_rendered} semble, {read_fallback_rendered} read\" in else branch even when both counters are 0 (no Semble/read retrieval occurred).\n  WHY: Non-Semble calls (no --semble-* flags or Semble fail-open) hit else branch (inlined < included due to overflow markers), producing e.g. \"(1 inlined, 1 marker-only, 0 semble, 0 read)\" instead of legacy \"(1 inlined, 1 marker-only)\"; violates issue #2302 \"preserve existing whole-file inlining behavior byte-for-byte\" and breaks callers/tests expecting unchanged non-Semble output shape.\n- tests/test_targeted_file_context.py:~330-364 | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Test asserts legacy \"Included 2 entries (1 inlined, 1 marker-only), \" but calls emit_context without Semble args (big.py overflows to marker, inlined=1 < included=2, semble_rendered=0, read_fallback_rendered=0).\n  WHY: Emits \"Included 2 entries (1 inlined, 1 marker-only, 0 semble, 0 read), ...\" mismatching assert; test fails on PYTHONDONTWRITEBYTECODE=1 python3 tests/test_targeted_file_context.py, blocking CI despite passing other paths.\n- scripts/targeted_file_context.py:~583 | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Passes _bounded_query_text(plan_text) without prior strip-or-None check.\n  WHY: plan_text=None/empty passes through as None (handled), but whitespace-only plan_text strips to empty (returns None correctly); no failure, but inconsistent with prior (plan_text.strip() or None) intent.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/targeted_file_context.py:~509-518 | confidence=5\n  PROBLEM: Summary unconditionally emits \", {semble_rendered} semble, {read_fallback_rendered} read\" in else branch even when both counters are 0 (no Semble/read retrieval occurred).\n  WHY: Non-Semble calls (no --semble-* flags or Semble fail-open) hit else branch (inlined < included due to overflow markers), producing e.g. \"(1 inlined, 1 marker-only, 0 semble, 0 read)\" instead of legacy \"(1 inlined, 1 marker-only)\"; violates issue #2302 \"preserve existing whole-file inlining behavior byte-for-byte\" and breaks callers/tests expecting unchanged non-Semble output shape.\n- tests/test_targeted_file_context.py:~330-364 | confidence=5\n  PROBLEM: Test asserts legacy \"Included 2 entries (1 inlined, 1 marker-only), \" but calls emit_context without Semble args (big.py overflows to marker, inlined=1 < included=2, semble_rendered=0, read_fallback_rendered=0).\n  WHY: Emits \"Included 2 entries (1 inlined, 1 marker-only, 0 semble, 0 read), ...\" mismatching assert; test fails on PYTHONDONTWRITEBYTECODE=1 python3 tests/test_targeted_file_context.py, blocking CI despite passing other paths.\n- scripts/targeted_file_context.py:~583 | confidence=2\n  PROBLEM: Passes _bounded_query_text(plan_text) without prior strip-or-None check.\n  WHY: plan_text=None/empty passes through as None (handled), but whitespace-only plan_text strips to empty (returns None correctly); no failure, but inconsistent with prior (plan_text.strip() or None) intent.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "29cd1c3b90d67fa45ebfae19d74bae6d19ca337067e2b64caee59a902a47bdfc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2310,
+    "run_id": "25566537982",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25566537982",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260508163925_f84d481434",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2310,
+    "run_id": "25566537982"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-08T16:39:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

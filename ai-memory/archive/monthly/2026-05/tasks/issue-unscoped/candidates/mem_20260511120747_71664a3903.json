@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/post_review_comment.sh:111 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The ledger log records pr=<none> before the race-recovery block, so a successful recovery still leaves a misleading pre-recovery log line.\n  WHY: The later log shows the resolved PR_NUMBER, but the earlier line can confuse operators correlating routing decisions; all reviewers treated it as an observability-only issue.\n- scripts/post_review_comment.sh:71-74 | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The REPOSITORY validation regex is stricter than the reviewer expected for owner/repo parsing.\n  WHY: GitHub REPOSITORY values are always owner/repo, so the regex is harmless and never triggers; the reviewer still flagged it as an issue.\n- scripts/post_review_comment.sh:126-127 | severity=low | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: If jq URL-encoding of HEAD_REF fails, encoded_head_ref becomes empty and the recovery query silently degrades to a malformed head=... request.\n  WHY: One reviewer treats this as possible wrong routing despite an open PR, while the others describe it as intended fail-open behavior and only suggest adding diagnostics.\n- scripts/post_review_comment.sh:140\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The miss path does not log API response details.\n  WHY: The reviewer suggested capturing more context on an empty recovery lookup for debugging, but this does not affect correctness.\n- scripts/post_review_comment.sh:79\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: HEAD_SHA is only checked for non-emptiness, so a malformed value could still reach the recovery lookup.\n  WHY: The reviewer suggested validating HEAD_SHA as a 40-hex SHA up front to catch misconfiguration earlier and produce a clearer operator error.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/post_review_comment.sh:111\n  PROBLEM: The log line prints pr=<none> before the race-recovery block, so a successful recovery still leaves a misleading earlier log entry.\n  WHY: This is a cosmetic observability issue only; the later log shows the resolved PR correctly.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/post_review_comment.sh:111\n  PROBLEM: The log line executes before the race recovery block, so a successful recovery still leaves the earlier entry showing <none>.\n  WHY: This can mislead operators debugging routing decisions, but it does not affect correctness.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/post_review_comment.sh:79\n  PROBLEM: HEAD_SHA is only checked for non-emptiness; a malformed value would still flow into the recovery lookup.\n  WHY: The review suggested validating HEAD_SHA as a 40-hex SHA to fail fast with a clearer operator error.\n- scripts/post_review_comment.sh:126-127\n  PROBLEM: jq URL-encoding failure leaves encoded_head_ref empty and produces a malformed head query with no diagnostic.\n  WHY: The review suggested warning when jq fails so operators can distinguish encoding failure from \"no matching PR\".\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/post_review_comment.sh:71-74\n  PROBLEM: REPOSITORY validation uses ^[^/]+/[^/]+$, which the reviewer considered overly strict.\n  WHY: The reviewer noted that GitHub REPOSITORY is always owner/repo, so the regex is harmless but still flagged.\n- scripts/post_review_comment.sh:126-127\n  PROBLEM: jq @uri on HEAD_REF assumes valid input; if jq exits non-zero, encoded_head_ref becomes empty and the recovery query misses a PR.\n  WHY: The reviewer said this could route to a commit comment despite an open PR, though the failure mode is rare.\n- scripts/post_review_comment.sh:111\n  PROBLEM: The pre-recovery log prints pr=<none> even when recovery later succeeds.\n  WHY: This is only a logging inconsistency, but it can confuse log readers tracing routing decisions.\n- scripts/post_review_comment.sh:140\n  PROBLEM: The miss path does not include API response details.\n  WHY: The reviewer suggested adding more context for debugging empty recovery lookups; this is observability-only.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/post_review_comment.sh:126-127\n  PROBLEM: If jq fails, encoded_head_ref becomes empty and the recovery lookup degrades without a diagnostic.\n  WHY: The review called this an acceptable fail-open path, but suggested warning operators when URL-encoding fails.\n- scripts/post_review_comment.sh:111\n  PROBLEM: The log line shows pr=<none> before the recovery block runs.\n  WHY: The review treated this as a minor logging inconsistency and suggested moving or duplicating the log after recovery.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "39b25a7bc75f3ee8589e1a3f657f8a6f8777128569ccb8f71eae98d3f17984db",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2520,
+    "run_id": "25667823002",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25667823002",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260511120747_71664a3903",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2520,
+    "run_id": "25667823002"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-11T12:07:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

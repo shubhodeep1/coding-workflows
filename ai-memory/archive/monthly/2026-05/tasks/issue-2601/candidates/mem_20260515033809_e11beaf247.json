@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1. Which part of this repository should be changed?\nChoices:\nA. One specific workflow, script, or file path - name the exact path(s) (RECOMMENDED)\nB. Clarify / plan / implement phase behavior - name the affected workflow or script if known\nC. Review/autofix / conflict-resolution behavior - name the affected workflow or script if known\nD. Orchestrator / validate / memory / other automation behavior - name the affected workflow or script if known\nQ2. What should \"better\" mean for that area?\nChoices:\nA. A concrete behavior fix - describe the current behavior, the expected behavior, and one example/log (RECOMMENDED)\nB. A new or changed workflow behavior - describe the trigger, inputs, and expected output\nC. A docs/comment/message update only - name the exact file/text and the desired change\nD. A performance/cost/noise improvement - state the measurable problem and the target improvement",
+  "fingerprint": "e1b5d8ed0c9ba3a6bf64895ca390587484c012b0decaa67aed5e8ab4bf74b5b6",
+  "lineage": {
+    "issue_number": 2601,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25898787303",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25898787303",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260515033809_e11beaf247",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2601,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25898787303"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #2601 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-15T03:38:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

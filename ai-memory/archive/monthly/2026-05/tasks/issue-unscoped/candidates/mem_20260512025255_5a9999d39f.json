@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:8600-8606 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The REVALIDATE_REQUESTED jq filter uses unanchored contains() to detect state-comment boundaries, so prose that merely mentions ORCHESTRATOR_STATE_V1/V2 can be misclassified as the latest state comment.\n  WHY: All six reviewers flagged the same root cause; the filter can advance $last_state_idx past a valid /revalidate command, causing it to be ignored.\n- scripts/orchestrate_poll_process.sh:8648-8654 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The JUDGE_RESUME_BODY jq filter uses unanchored contains() to detect state-comment boundaries, so prose that merely mentions ORCHESTRATOR_STATE_V1/V2 can be misclassified as the latest state comment.\n  WHY: All six reviewers flagged the same root cause; the filter can advance $last_state_idx past a valid /judge_resume command, causing it to be ignored.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:8603 and 8651 | confidence=4\n  PROBLEM: The jq filters at both locations use contains(\"ORCHESTRATOR_STATE_V1\") / contains(\"ORCHESTRATOR_STATE_V2\") to identify the latest state comment instead of anchored prefix matching.\n  WHY: A non-state comment mentioning the marker strings can advance $last_state_idx and cause /revalidate or /judge_resume commands to be silently ignored.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/orchestrate_poll_process.sh:8603 and 8651 | confidence=4\n  PROBLEM: The /revalidate and /judge_resume jq filters use contains(...) to identify state comment boundaries, inconsistent with the anchored startswith() pattern used elsewhere in the file.\n  WHY: A non-state comment that merely mentions the marker string can shift $last_state_idx forward and suppress valid operator commands.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_poll_process.sh:~8600 (REVALIDATE_REQUESTED jq filter) and ~8648 (JUDGE_RESUME_BODY jq filter) | confidence=4\n  PROBLEM: The jq filters use contains(\"ORCHESTRATOR_STATE_V1\") and contains(\"ORCHESTRATOR_STATE_V2\") to identify state comment boundaries when calculating $last_state_idx.\n  WHY: A prose comment mentioning these markers can be treated as a state snapshot boundary and cause /revalidate or /judge_resume commands posted after the real snapshot to be ignored.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/orchestrate_poll_process.sh:8603 and 8651 | confidence=4\n  PROBLEM: Both jq filters identify the most recent state comment boundary using contains(\"ORCHESTRATOR_STATE_V1\") or contains(\"ORCHESTRATOR_STATE_V2\"), which matches the marker substring anywhere in a comment body.\n  WHY: This can advance $last_state_idx past a legitimate operator command, causing /revalidate or /judge_resume comments to be filtered out and leaving the project stuck.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/orchestrate_poll_process.sh:8600-8606 | confidence=5\n  PROBLEM: jq filter uses contains() on body for state boundary detection, matching any substring occurrence rather than anchored header.\n  WHY: Operator comment like \"update ORCHESTRATOR_STATE_V2 handling\" can falsely advance $last_state_idx and ignore subsequent /revalidate commands.\n- scripts/orchestrate_poll_process.sh:8648-8654 | confidence=5\n  PROBLEM: Same unanchored contains() filter as REVALIDATE_REQUESTED.\n  WHY: Prose mention of markers in comment can shift $last_state_idx and suppress /judge_resume commands after the latest real state snapshot.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/orchestrate_poll_process.sh:8603 | confidence=4\n  PROBLEM: The REVALIDATE_REQUESTED jq filter uses contains() to identify state-comment boundaries, matching any occurrence of the marker strings anywhere in a comment body.\n  WHY: A prose comment can be incorrectly treated as a state snapshot boundary, shifting $last_state_idx forward and causing valid /revalidate commands to be ignored.\n- scripts/orchestrate_poll_process.sh:8651 | confidence=4\n  PROBLEM: The JUDGE_RESUME_BODY jq filter has the same contains() vulnerability.\n  WHY: A prose comment mentioning the state marker can suppress /judge_resume commands that should be processed.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "54abdcbb86358b53daeccbd41bca18efeda11a3af40d84c1eefb78854bdc8aae",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2532,
+    "run_id": "25709272628",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25709272628",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260512025255_5a9999d39f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2532,
+    "run_id": "25709272628"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-12T02:52:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

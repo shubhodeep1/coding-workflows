@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_judge_semble_prefetch_contract.py:85-103 | severity=low | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The new test function mixes tab indentation with the file's 4-space indentation.\n  WHY: This is a formatting inconsistency that violates the repository's Python style conventions and makes the file harder to maintain.\n- scripts/implement_diagnose_post_codex_failure.sh:417-423,430-436 | severity=medium | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The file-like and word-token extraction loops can both append tokens derived from the same input without cross-loop deduplication.\n  WHY: A repeated token can consume one of the 40 identifier slots and crowd out later unique identifiers.\n- scripts/targeted_file_context.py:145 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: `_log_semble_event` collapses all whitespace in `reason` values before logging them.\n  WHY: This destroys multiline structure and can turn structured error details into an ambiguous single-line message.\n- scripts/targeted_file_context.py:145 | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: `_log_semble_event` renders field values without any maximum length cap.\n  WHY: Very long values can produce oversized log lines that are truncated or mangled by downstream logging and parsing.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_judge_semble_prefetch_contract.py:85-103 | severity=low | confidence=4\n  PROBLEM: The new test function uses tab indentation while the rest of the file uses 4-space indentation.\n  WHY: It creates a style inconsistency that violates the repo's Python formatting conventions.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/implement_diagnose_post_codex_failure.sh:417-423,430-436 | severity=medium | confidence=5\n  PROBLEM: No deduplication across file-like and word-token extraction loops.\n  WHY: Input tail_text=\"foo.py\" can add both \"foo.py\" and \"foo\", consuming identifier budget with duplicates and reducing coverage of later unique identifiers.\n- scripts/targeted_file_context.py:145 | severity=medium | confidence=4\n  PROBLEM: `_log_semble_event` collapses newlines, tabs, and multiple spaces indiscriminately in `reason` fields.\n  WHY: A multiline reason such as `OSError\\n(no index)` is flattened into a single ambiguous line, which can break machine parsing.\n- scripts/targeted_file_context.py:145 | severity=low | confidence=3\n  PROBLEM: `_log_semble_event` has no length cap on rendered field values.\n  WHY: A very long reason can generate an oversized log line that GitHub Actions may truncate, losing the tail of the message.\n- tests/test_judge_semble_prefetch_contract.py:86-99 | severity=low | confidence=3\n  PROBLEM: The new test body uses tabs for indentation while prior tests use 4 spaces.\n  WHY: This creates an indentation inconsistency that conflicts with the file's established style.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "6c673a407e6142f229e9615b0815368c3067b7d5829ffffb27711dd504e1711d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2407,
+    "run_id": "25614367861",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25614367861",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260509233311_cbcb733b39",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2407,
+    "run_id": "25614367861"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-09T23:33:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

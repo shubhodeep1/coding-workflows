@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:378, 390, 394 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: Three remaining `echo \"${...}\" | jq '.'` patterns in the prompt-assembly section still expand backslash escapes under `shopt -s xpg_echo`.\n  WHY: Under `xpg_echo`, the JSON piped to `jq '.'` can be corrupted or rejected, so the PR metadata/comments shown to the judge may be wrong or missing, though the judge still runs.\n- tests/test_workflow_checkout_integration_ref_audit.py:85 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: The test expects `Resolved checkout ref` but `.github/workflows/implement.yml:654` logs `Resolved fallback ref` instead.\n  WHY: The assertion will fail because the literal string in the test does not appear in the workflow, causing a CI failure.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_rb_judge.sh:378, 390, 394 | severity=low | confidence=4\n  PROBLEM: Three `echo \"${...}\" | jq '.'` patterns remain unconverted in the prompt-assembly section.\n  WHY: Under `shopt -s xpg_echo`, `echo` can expand backslash sequences before piping to `jq`, corrupting the JSON shown to the judge.\n- tests/test_workflow_checkout_integration_ref_audit.py:85 | severity=high | confidence=5\n  PROBLEM: The test expects `Resolved checkout ref` while `.github/workflows/implement.yml:654` logs `Resolved fallback ref` instead.\n  WHY: The assertion will fail because the literal string in the test does not appear in the workflow.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_workflow_checkout_integration_ref_audit.py:85 | severity=high | confidence=5\n  PROBLEM: Test expects \"Resolved checkout ref\" but implement.yml uses \"Resolved fallback ref\"\n  WHY: The test assertion `assert resolved_ref_log in wf` will fail because it searches for the literal string `echo \"Resolved checkout ref: ...` but the actual workflow file at `.github/workflows/implement.yml:654` has `echo \"Resolved fallback ref: ...`.\n- scripts/review_rb_judge.sh:378, 390, 394 | severity=low | confidence=4\n  PROBLEM: Three `echo | jq` patterns remain unconverted in the prompt-assembly section.\n  WHY: Under `shopt -s xpg_echo` (which can be enabled in some bash environments), `echo` expands backslash escape sequences before piping to `jq`, causing parse failures or corrupted output.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_rb_judge.sh:378, 390, 394 | severity=low | confidence=4\n  PROBLEM: Three remaining `echo \"${...}\" | jq '.'` patterns in the prompt-assembly section were not converted to `printf '%s\\n'` in the last run.\n  WHY: Under bash xpg_echo mode, backslash sequences in JSON are expanded before jq sees them, producing invalid JSON output in the judge prompt.\n- tests/test_workflow_checkout_integration_ref_audit.py:85 | severity=high | confidence=5\n  PROBLEM: The test expects the literal string `echo \"Resolved checkout ref: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}\"` but the actual workflow file at `.github/workflows/implement.yml:654` uses `echo \"Resolved fallback ref: ...\"` instead.\n  WHY: This is a test-workflow mismatch that will cause `test_required_workflows_enforce_integration_ref_contract` to fail when run against the current implement.yml.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/test_workflow_checkout_integration_ref_audit.py:85 | severity=high | confidence=5\n  PROBLEM: The test expects the literal string `echo \"Resolved checkout ref: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}\"` but the workflow at `.github/workflows/implement.yml:654` contains `echo \"Resolved fallback ref: ...\"` instead.\n  WHY: The assertion `assert resolved_ref_log in wf` at line 100 will fail because the exact substring does not exist in the workflow file.\n- scripts/review_rb_judge.sh:378, 390, 394 | severity=low | confidence=4\n  PROBLEM: Three `echo \"${VAR}\" | jq '.'` patterns remain unconverted in the prompt-assembly section.\n  WHY: Under `shopt -s xpg_echo`, `echo` expands backslash escapes before `jq '.'` processes them, producing invalid JSON that `jq` cannot parse.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "20c1aec7cd1aa68efe31b67ec9a401333a1a6ac24600ed215b07c4315f60c0e7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2635,
+    "run_id": "25959082107",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25959082107",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260516101811_e7a403bda3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2635,
+    "run_id": "25959082107"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-16T10:18:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

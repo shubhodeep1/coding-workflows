@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:6924-7340 (standalone stall recovery conflict guard) | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: `_std_conflict_head_sha` falls back across GraphQL and REST shapes, but the standalone override-cap path emits no diagnostics when it has to use the fallback.\n  WHY: The logic still works, but operators cannot tell whether the fast path or fallback path was used during standalone override-cap evaluation, which is an observability gap.\n- tests/test_stall_loop_and_churn_fixes.py:test_list_integration_conflict_files_rc_handling (scenarios loop) | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The mock for `git merge-tree -h` does not verify `--write-tree` presence in the help output.\n  WHY: The test could keep passing even if future `git merge-tree -h` output changes in a way that breaks the production probe's version compatibility assumptions.\n- scripts/orchestrate_poll_process.sh:line ~5192+ | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: `_extract_standalone_state_json_from_comments` preserves `conflict_override_count // {}` but does not check `schema_version`.\n  WHY: Malformed legacy V1 comments could inject arbitrary maps, potentially bypassing `MAX_BUDGET_NEUTRAL_OVERRIDES`.\n- scripts/orchestrate_poll_process.sh:_extract_standalone_state_json_from_comments jq (add after conflict_override_count) | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The extracted `conflict_override_count` keys are not validated as hex SHA1/SHA256 values.\n  WHY: Invalid keys from malformed comments could be retained instead of being dropped.\n- scripts/orchestrate_lib.py:increment_stall_recovery phase_attempts parsing | confidence=1\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: `int(raw_phase_attempts.get(phase, 0) or 0)` only warns on malformed `phase_attempts` values.\n  WHY: Repeated malformed values can spam `::warning::` logs even though the counter is reset.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/orchestrate_poll_process.sh:6924-7340 (standalone stall recovery conflict guard) | confidence=2\n  PROBLEM: `_std_conflict_head_sha` extraction prefers GraphQL `.head_sha` but falls back to `.head.sha`, and the fallback path emits no diagnostics.\n  WHY: Operators cannot distinguish GraphQL fast-path vs REST fallback during standalone override-cap evaluation, leaving a minor observability gap.\n- tests/test_stall_loop_and_churn_fixes.py:test_list_integration_conflict_files_rc_handling (scenarios loop) | confidence=3\n  PROBLEM: The mock `git merge-tree -h` output is not checked for `--write-tree`.\n  WHY: The test can pass even if production `git merge-tree -h` changes format, silently missing future git-version incompatibility.\n- scripts/orchestrate_poll_process.sh:line ~5192+ | confidence=3\n  PROBLEM: `_extract_standalone_state_json_from_comments` preserves `conflict_override_count // {}` but lacks a `schema_version` check.\n  WHY: Malformed legacy V1 comments could inject arbitrary maps and potentially bypass `MAX_BUDGET_NEUTRAL_OVERRIDES` indefinitely.\n- scripts/orchestrate_poll_process.sh:_extract_standalone_state_json_from_comments jq (add after conflict_override_count) | confidence=2\n  PROBLEM: There is no validation that extracted `conflict_override_count` keys are valid hex SHA1/SHA256 values.\n  WHY: Invalid keys from malformed comments could be retained instead of dropped.\n- scripts/orchestrate_lib.py:increment_stall_recovery phase_attempts parsing | confidence=1\n  PROBLEM: `int(raw_phase_attempts.get(phase, 0) or 0)` swallows malformed `phase_attempts` values with only a warning.\n  WHY: Repeated malformed values can spam `::warning::` logs.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "04e69fe2df9de5a58c4695108515899d572a674d1631480f7ff390e5863f5d6f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2522,
+    "run_id": "25678053491",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25678053491",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260511153509_53e0a9b1d1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2522,
+    "run_id": "25678053491"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-11T15:35:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

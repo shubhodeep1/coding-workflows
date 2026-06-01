@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan\n\nPlanning ref: `orchestrator/project-2934` @ `9ff2ebbce868a6a89638fe28b2d90459dba9894d`\nClarification mapping: no `Q1`/`Q2` batch existed; `/answer [auto-answered-by-orchestrator]` only confirmed continuation.\n\nAutomation / wiring\n- Existing files only.\n- No scheduler, workflow-trigger, supervisor, or DB changes.\n- No `docs/scripts-pending-removal.md` entry is needed.\n\nRepresentative precedent\n- Mirror the existing additive/non-phase label pattern used by `ai:resolver-escalated` in `.github/ai/label_contract.v1.json`, `scripts/label_helpers.sh`, and `tests/test_ai_labels.py`.\n\nFiles likely to change\n- `.github/ai/label_contract.v1.json`\n- `scripts/label_helpers.sh`\n- `tests/test_ai_labels.py`\n\n1. Contract update\n- Add `ai:harness-broken`, `ai:force-merge`, and `ai:integration-backpressure` to the top-level `labels` map.\n- Keep this strictly additive: do not rename or edit existing labels/descriptions.\n- Leave `phase_groups` unchanged so the new labels stay non-phase/additive.\n\n2. Helper catalog update\n- Add matching entries for the three labels to `_AI_LABEL_COLORS` and `_AI_LABEL_DESCS` in `scripts/label_helpers.sh`.\n- Do **not** add them to `_AI_PHASE_LABELS`; that array is phase-only, and adding them there would make phase transitions strip the labels.\n\n3. Test update\n- Extend `tests/test_ai_labels.py` so contract/helper parity checks compare full metadata (`color` + `description`), not just label-key presence.\n- Add/expand additive-label coverage so each new label is verified to:\n  - exist in the contract,\n  - be absent from every `phase_groups[*].members`,\n  - survive `_repair(...)` alongside a normal phase label.\n\nFunctions/modules affected\n- Static label data only: contract JSON + shell helper catalog.\n- `scripts/ai_labels.py` should remain behaviorally unchanged; its current `phase_groups`-driven repair logic is what makes these labels additive.\n- Explicit non-goal: no edits to `scripts/orchestrate_poll_process.sh`, `scripts/orchestrate_lib.py`, or workflow YAMLs in this issue.\n\nData structures affected\n- `.github/ai/label_contract.v1.json` \u2192 `labels`\n- `scripts/label_helpers.sh` \u2192 `_AI_LABEL_COLORS`, `_AI_LABEL_DESCS`\n- Intentionally unchanged: `phase_groups`, `_AI_PHASE_LABELS`, and phase-priority logic\n\nAPI/interface changes\n- Additive only: the central label contract and `ensure_label_exists` helper will recognize three new label names.\n- No schema-version bump, no new CLI surface, and no orchestrator behavior change in this issue.\n\nRisks / edge cases\n- Main regression risk: accidentally treating these as phase labels by editing `phase_groups` or `_AI_PHASE_LABELS`.\n- Secondary risk: contract/helper drift if a label is added in only one catalog or metadata differs between them.\n- Preserve all existing labels/descriptions verbatim.\n\nTesting considerations\n- `pytest tests/test_ai_labels.py`\n- `python3 scripts/ai_labels.py contract-validate --contract-file .github/ai/label_contract.v1.json`\n- Expected result: full contract/helper parity passes, the three new labels exist, and none behaves like a mutually-exclusive phase label.\n\nAssumptions / missing context\n- The issue does not prescribe exact color codes or description strings for the three new labels; implementation should choose values consistent with the existing label taxonomy and keep JSON/helper entries identical.\n- No other missing context is blocking planning.\n\nConflict note\n- No integration-branch mismatch or codebase conflict found. The current repo simply does not register these three labels yet, which is the intended gap this foundation issue closes.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "6189fe3f8cc0cbc250bf3fdaf3d65271d92d60230efcd5e8ed3e1b59ab840350",
+  "lineage": {
+    "issue_number": 2936,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26337261645",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26337261645",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2936"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260523160704_3cffd66410",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2936,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26337261645"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2936",
+  "timestamps": {
+    "created_at": "2026-05-23T16:07:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

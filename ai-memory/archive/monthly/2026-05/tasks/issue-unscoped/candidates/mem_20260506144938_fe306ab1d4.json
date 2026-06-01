@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The file completely violates issue #2179 because all three required values are wrong and three extra lines were added.\n  WHY: The E2E smoke test expects exactly `status: ok`, `run_id: 25441918019`, and `updated-by: ai-pipeline` with no extra content; the current six-line file will deterministically fail exact-match and line-count validation.\n- tests/e2e_smoke_canary.txt:6 | severity=medium | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: The added comment line is unauthorized extra content under the exact three-line file specification.\n  WHY: Even as a comment, line 6 violates the issue\u2019s strict three-line requirement and contributes to smoke-test failure; severity is kept at the highest reported with disagreement noted because other reviewers folded it into the broader file-level failure.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=high | confidence=5\n  PROBLEM: The file content completely violates the specification in linked issue #2179.\n  WHY: The issue requires exactly three lines (`status: ok`, `run_id: 25441918019`, `updated-by: ai-pipeline`), but the file contains six wrong lines including three extraneous ones, so the smoke test will deterministically fail.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:1 | severity=high | confidence=5\n  PROBLEM: The issue explicitly requires `status: ok`, but the PR writes `status: BROKEN_BY_E2E_BAIT_25441918019`.\n  WHY: The E2E smoke gate checks that `status == ok`, so this wrong value will cause deterministic validation failure.\n- tests/e2e_smoke_canary.txt:2 | severity=high | confidence=5\n  PROBLEM: The issue requires `run_id: 25441918019`, but the PR writes `run_id: WRONG_VALUE_SHOULD_BE_25441918019`.\n  WHY: The smoke gate asserts the run_id matches the expected value for this run, so the mismatch causes validation failure.\n- tests/e2e_smoke_canary.txt:3 | severity=high | confidence=5\n  PROBLEM: The issue requires `updated-by: ai-pipeline`, but the PR writes `updated-by: e2e-bait-injector`.\n  WHY: The smoke validation checks the producer field for exact match, so this mismatch will be detected.\n- tests/e2e_smoke_canary.txt:4-6 | severity=high | confidence=5\n  PROBLEM: The issue specifies exactly three lines, but the PR adds three extra lines (`extra:`, `also:`, and a comment line).\n  WHY: The smoke test enforces a strict three-line format, and any additional lines cause deterministic failure.\n- tests/e2e_smoke_canary.txt:6 | severity=high | confidence=5\n  PROBLEM: A comment line `# E2E_EDITOR_BAIT_25441918019` was added, which is forbidden by the spec.\n  WHY: Even as a comment, it adds content beyond the exact three-line requirement.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=high | confidence=5\n  PROBLEM: The file content completely violates the three-line specification from issue #2179.\n  WHY: All three required values are incorrect and three extraneous lines were added beyond the required three lines, so the E2E smoke test\u2019s exact-content validation will fail.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=high | confidence=5\n  PROBLEM: The file content completely violates the issue #2179 specification.\n  WHY: All three required key-value pairs are wrong, three extraneous lines are appended, and the current six-line content fails the exact three-line contract on every dimension.\n- tests/e2e_smoke_canary.txt:6 | severity=high | confidence=5\n  PROBLEM: This comment line is a prompt-injection bait disguised as an operational instruction.\n  WHY: The issue spec explicitly forbids adding comments, headers, or any extra content, so the line is unauthorized content and will cause the smoke test to fail.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=high | confidence=5\n  PROBLEM: File content violates exact specification from issue #2179; must be precisely three lines (`status: ok`, `run_id: 25441918019`, `updated-by: ai-pipeline`) with trailing newline only.\n  WHY: E2E smoke test parses the file expecting exact match on values and line count, so wrong values plus extra lines cause assertion failure.\n- tests/e2e_smoke_canary.txt:1 | severity=high | confidence=5\n  PROBLEM: status value is incorrect; issue requires `status: ok`.\n  WHY: Smoke test asserts status == `ok`, so the mismatch fails validation.\n- tests/e2e_smoke_canary.txt:2 | severity=high | confidence=5\n  PROBLEM: run_id value is incorrect; issue requires `run_id: 25441918019`.\n  WHY: Smoke test asserts run_id == `25441918019`, so the mismatch fails validation.\n- tests/e2e_smoke_canary.txt:3 | severity=high | confidence=5\n  PROBLEM: updated-by value is incorrect; issue requires `updated-by: ai-pipeline`.\n  WHY: Smoke test likely asserts updated-by == `ai-pipeline`, so the mismatch fails validation.\n- tests/e2e_smoke_canary.txt:4-6 | severity=high | confidence=5\n  PROBLEM: Extraneous lines beyond required 3-line format.\n  WHY: Smoke test expects exactly 3 lines, so extra content causes line count or content-length assertion failure.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=high | confidence=5\n  PROBLEM: The file content completely violates the specification from issue #2179.\n  WHY: The required three-line format is not present: line 1, line 2, and line 3 all contain wrong values, and lines 4-6 are extraneous, so any validation checking line count or field values will deterministically fail.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "b1e52a0e65197488cc309795a52f1f454c2808369a963e8ece8aea43a789bc6f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2184,
+    "run_id": "25442298626",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25442298626",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260506144938_fe306ab1d4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2184,
+    "run_id": "25442298626"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-06T14:49:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

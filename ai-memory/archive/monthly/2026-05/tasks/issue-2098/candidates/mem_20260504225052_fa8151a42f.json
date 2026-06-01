@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: Which part of this repository should be improved?**\nChoices:\n- **A** \u2014 Clarify / Plan / Implement / Review automation workflows (RECOMMENDED)\n- **B** \u2014 Orchestrator / Polling / Validation / Issue-PR-status workflows\n- **C** \u2014 Documentation or another area not listed above\nReply: `Q1: A`\n**Q2: What kind of change do you want?**\nChoices:\n- **A** \u2014 Fix a specific bug or regression in existing behavior (RECOMMENDED)\n- **B** \u2014 Add or change workflow behavior/capabilities\n- **C** \u2014 Cleanup/refactor/docs only, with no intended behavior change\nReply: `Q2: A`\n**Q3: What should count as success for this task?**\nChoices:\n- **A** \u2014 Make a specific failing workflow run / issue / PR behave correctly (RECOMMENDED)\n- **B** \u2014 Achieve a specific new behavior you can describe precisely\n- **C** \u2014 Improve maintainability/readability only, with no measurable runtime behavior change\nReply: `Q3: A`\n**Q4: What concrete reference should planning use as the source of truth?**\nChoices:\n- **A** \u2014 A failing workflow run, issue number, or PR number that demonstrates the problem (RECOMMENDED)\n- **B** \u2014 A precise before/after behavior description\n- **C** \u2014 A file/path plus the exact weakness to address\nReply: `Q4: A`",
+  "fingerprint": "5c3f77bdd168a7b37a309f327d2a22c4df3ac5bcf762774add5c42dcfadb76ea",
+  "lineage": {
+    "issue_number": 2098,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25347798548",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25347798548",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260504225052_fa8151a42f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2098,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25347798548"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #2098 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-04T22:50:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

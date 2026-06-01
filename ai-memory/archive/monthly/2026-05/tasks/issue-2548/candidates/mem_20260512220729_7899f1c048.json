@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Apply validated analysis recommendations and retire processed analysis docs\",\"issues\":[{\"id\":\"review-autofix-check-run-budget\",\"title\":\"review_autofix: shorten advisory check-run wait budget\",\"priority\":1},{\"id\":\"review-cache-probe-gate\",\"title\":\"review_autofix reviewers: stop paying unconditional cache-probe calls\",\"priority\":1},{\"id\":\"ci-early-semble-contract-tests\",\"title\":\"CI: move Semble contract checks earlier for fast failure\",\"priority\":1},{\"id\":\"claude-branch-review-light-mode\",\"title\":\"review_autofix: cheapen no-PR claude branch comment-only review mode\",\"priority\":2},{\"id\":\"review-autofix-early-merge-precheck\",\"title\":\"review_autofix: run deterministic merge precheck before reviewer/editor spend\",\"priority\":2},{\"id\":\"analysis-docs-cleanup-and-report\",\"title\":\"Classify processed analysis docs, align docs to final repo state, and publish the final report\",\"priority\":3}],\"dependency_edges\":[{\"from\":\"review-autofix-check-run-budget\",\"to\":\"claude-branch-review-light-mode\"},{\"from\":\"claude-branch-review-light-mode\",\"to\":\"review-autofix-early-merge-precheck\"},{\"from\":\"review-cache-probe-gate\",\"to\":\"analysis-docs-cleanup-and-report\"},{\"from\":\"ci-early-semble-contract-tests\",\"to\":\"analysis-docs-cleanup-and-report\"},{\"from\":\"review-autofix-early-merge-precheck\",\"to\":\"analysis-docs-cleanup-and-report\"}]}",
+  "fingerprint": "4a146c6b6ffc3258eb51dde4204cbd0def6553f195738541f66077cb03d598c5",
+  "lineage": {
+    "issue_number": 2548,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25763195686",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25763195686",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260512220729_7899f1c048",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2548,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25763195686"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Apply validated analysis recommendations and retire processed analysis docs' into 6 issues (tracking #2548)",
+  "timestamps": {
+    "created_at": "2026-05-12T22:07:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

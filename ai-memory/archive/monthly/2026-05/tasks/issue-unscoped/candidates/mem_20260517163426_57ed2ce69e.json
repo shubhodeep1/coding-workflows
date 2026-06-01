@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:5343-5361 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: The 9 new Telegram MSG branches assign double-quoted strings containing literal `\\n`, so Telegram will display visible `\\n` text instead of line breaks.\n  WHY: All five reviewers identified the same root cause in the same set of branches; one reviewer explicitly marked it critical while the others reported the same runtime formatting bug with confidence 4-5.\n- tests/test_review_rb_judge_self_run_exclusion.py:396-420 | severity=medium | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The new regression test file lacks a `main()` entry point for direct CI execution.\n  WHY: The repository runs allowlisted tests via `python3 tests/<file>.py`, so without `main()` these tests will not execute automatically in CI.\n- tests/test_review_rb_judge_self_run_exclusion.py:127 (`test_workflow_preserves_max_iterations_fallback`) | severity=low | confidence=2\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The test checks the whole file for `\"maximum number of autofix iterations\"` instead of scoping the assertion to the `*)` default branch, so it can pass even if the fallback behavior is broken.\n  WHY: This is a false-negative risk in the regression test, because the string could appear elsewhere in the file without the actual fallback branch being correct.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/review_autofix.yml:5343-5358 | severity=critical | confidence=5\n  PROBLEM: All 9 new MSG branch assignments use double-quoted bash strings containing literal `\\n` instead of actual newlines.\n  WHY: In bash, `\\n` inside `\"...\"` is two literal characters, so Telegram will render visible `\\n` text instead of line breaks when these messages are sent.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/review_autofix.yml:5344, 5346, 5348, 5350, 5352, 5354, 5356, 5358, 5360 | severity=critical | confidence=4\n  PROBLEM: The 9 new Telegram MSG branches use double-quoted strings with literal `\\n` instead of `printf` to produce real newlines.\n  WHY: Bash treats `\\n` inside double quotes as a literal backslash-n sequence, so Telegram will display the message with visible `\\n` characters.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/review_autofix.yml:5343-5361 | severity=critical | confidence=5\n  PROBLEM: The 9 new Telegram MSG assignments use double-quoted strings with literal `\\n` instead of using `printf` to generate actual newlines.\n  WHY: In bash, double-quoted `\\n` is literal text, so the Telegram alert will show visible `\\n` characters instead of line breaks.\n- tests/test_review_rb_judge_self_run_exclusion.py:396-420 (end of file) | severity=medium | confidence=4\n  PROBLEM: The test file lacks a `main()` entry point with test discovery/execution.\n  WHY: This repository runs allowlisted tests via `python3 tests/<file>.py`, so without `main()` the regression tests will not execute automatically in CI.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/review_autofix.yml:5347-5358 | severity=critical | confidence=5\n  PROBLEM: All 9 new `MSG` assignments use double-quoted literals containing `\\n` rather than the `$(printf '...\\n...')` pattern used by the surrounding branches.\n  WHY: In bash, `\"text\\nmore text\"` stores a literal backslash-n sequence, so `tg_send_msg` will send Telegram visible `\\n` text instead of a line break.\n- tests/test_review_rb_judge_self_run_exclusion.py:127 (`test_workflow_preserves_max_iterations_fallback`) | severity=low | confidence=2\n  PROBLEM: The assertion checks the full file for `\"maximum number of autofix iterations\"` instead of scoping to the `*)` branch.\n  WHY: The test can falsely pass if the phrase exists elsewhere in the file while the fallback branch itself has been changed.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/review_autofix.yml:5344-5360 | severity=critical | confidence=5\n  PROBLEM: All 9 new `MSG` assignments use double-quoted strings containing `\\n`, which bash treats as literal backslash+n rather than a real newline.\n  WHY: When `tg_send_msg` URL-encodes these values, Telegram will render `%5Cn` as visible `\\n` text instead of a line break.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "c913352355cc73adf7d7af9af638ee064173d8857fd2739626a9081aee464025",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2703,
+    "run_id": "25996008774",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25996008774",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517163426_57ed2ce69e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2703,
+    "run_id": "25996008774"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-17T16:34:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

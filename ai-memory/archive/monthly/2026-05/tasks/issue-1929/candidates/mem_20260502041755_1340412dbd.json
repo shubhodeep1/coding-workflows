@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for issue #1929 on `main` at `d79c906931c810978d386888ac350907d73d655b`.\n\n1. Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n2. Functions or modules to implement\n- No code modules or functions need changes.\n- This is a direct content replacement in the existing smoke-canary text fixture.\n\n3. Data structures affected\n- The file remains the same 3-line key/value text shape:\n  - `status: ok`\n  - `run_id: alt-25243497108`\n  - `updated-by: ai-pipeline`\n- Current repo state already uses this format; only the `run_id` value differs.\n\n4. API or interface changes\n- None.\n- No workflow, script, env var, contract, or public interface changes are needed.\n\n5. Potential risks or edge cases\n- The file content must match the issue text exactly, with no extra lines, missing lines, or altered keys.\n- Only `tests/e2e_smoke_canary.txt` should be modified.\n- Preserve the existing plain-text format so any workflow reading this canary file continues to parse it the same way.\n\n6. Testing considerations\n- Verify the final file content is exactly:\n  - `status: ok`\n  - `run_id: alt-25243497108`\n  - `updated-by: ai-pipeline`\n- Confirm no other files changed in the worktree as part of this issue.\n\nConflict check:\n- No repo conflict found. The target file exists and already uses the expected 3-line format; the planned change is only to align its content with the requested exact values.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "f8a5cbd6d112da94cb3c4fc03394d9d6fb6b57f37bd5c60c06d8eb8aae9fc746",
+  "lineage": {
+    "issue_number": 1929,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25243532245",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25243532245",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/1929"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260502041755_1340412dbd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1929,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25243532245"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #1929",
+  "timestamps": {
+    "created_at": "2026-05-02T04:17:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

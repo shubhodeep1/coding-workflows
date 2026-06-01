@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/update_workflows.yml:70-79 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The sparse-checkout setup/comment is wrong for cone mode, so the root CLAUDE.md is not available alongside only the workflow-templates and scripts directory patterns.\n  WHY: The reviewers report that this leaves workflow-templates/CLAUDE.md pointing at a missing target and makes the later sync path fail; qwen disputed that cone mode excludes the toplevel file.\n- .github/workflows/update_workflows.yml:211-227 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: claude_md_sync dereferences workflow-templates/CLAUDE.md without ensuring the root CLAUDE.md target is present, so the cat guard fails on a dangling symlink and aborts the workflow.\n  WHY: The reviewers report that the sparse checkout leaves the symlink target missing, the `-L` guard still passes, and the step exits through the error path; qwen disputed that this is a bug.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/update_workflows.yml:73-77 | confidence=5\n  PROBLEM: The sparse-checkout command `git sparse-checkout set \"${TEMPLATES_DIR}\" \"${SCRIPTS_DIR}\"` does not include the root CLAUDE.md, so the comment claiming repo-root files remain present is factually incorrect and the workflow later fails when the symlink is read.\n  WHY: In cone mode, those directory patterns only check out the directories themselves, leaving `workflow-templates/CLAUDE.md` pointing at a missing `../CLAUDE.md` target and causing `cat` to exit 1.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/update_workflows.yml:71-77 and 226-227 | confidence=5\n  PROBLEM: Removing the bare CLAUDE.md sparse-checkout entry leaves `workflow-templates/CLAUDE.md` dangling, so the subsequent cat check fails and the workflow aborts.\n  WHY: `git sparse-checkout set workflow-templates scripts` only checks out those directories, not the repo-root file that the symlink targets.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/update_workflows.yml:73-77 | confidence=5\n  PROBLEM: The comment claims \"In cone mode, repo-root files remain present alongside these directory patterns\" but this is factually incorrect.\n  WHY: When using `git sparse-checkout set` in cone mode with only directory patterns like `\"${TEMPLATES_DIR}\" \"${SCRIPTS_DIR}\"`, root files are not included, so `workflow-templates/CLAUDE.md` dangles.\n- .github/workflows/update_workflows.yml:71-77 | confidence=5\n  PROBLEM: The sparse-checkout command only includes directory patterns but the workflow needs to read CLAUDE.md from the repo root via the symlink at `workflow-templates/CLAUDE.md`.\n  WHY: Without root CLAUDE.md being checked out, the symlink becomes dangling and `cat -- \"${UPSTREAM_CLAUDE_MD}\"` fails, causing the workflow to exit.\n- .github/workflows/update_workflows.yml:227 | confidence=3\n  PROBLEM: While not a runtime bug itself, the error message update is effectively dead code because the sparse-checkout setup as written prevents the root CLAUDE.md from ever being present.\n  WHY: This is a secondary effect of the sparse-checkout misconfiguration, so the error will always be taken until that is fixed.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/update_workflows.yml:73-77 | confidence=4\n  PROBLEM: This finding is incorrect.\n  WHY: Per cone-mode sparse-checkout semantics, the repository toplevel remains present, so the root CLAUDE.md is still available and the fix removing the bare file argument is correct.\n- .github/workflows/update_workflows.yml:226-227 | confidence=4\n  PROBLEM: This is an observation, not a bug.\n  WHY: The error path remains reachable for a genuinely missing or unreadable root CLAUDE.md, so the message is meaningful and not dead code.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/update_workflows.yml:70-79 | confidence=5\n  PROBLEM: The updated sparse-checkout comment claims repo-root files remain present alongside these directory patterns, but root CLAUDE.md is excluded when only directories are specified, leaving workflow-templates/CLAUDE.md dangling.\n  WHY: The fetch step skips root CLAUDE.md, so the later cat on `${UPSTREAM_DIR}/CLAUDE.md` fails and the workflow aborts early.\n- .github/workflows/update_workflows.yml:211-212, 223-227 | confidence=5\n  PROBLEM: claude_md_sync reads via the symlink-dependent path `UPSTREAM_CLAUDE_MD=\"${UPSTREAM_DIR}/CLAUDE.md\"` without ensuring the root file is checked out.\n  WHY: The sparse checkout excludes the root file, the `! -e && ! -L` guard passes, and `cat` fails with ENOENT instead of syncing.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/update_workflows.yml:71-77 | confidence=4\n  PROBLEM: The sparse-checkout change removes the bare CLAUDE.md argument, but that leaves the root CLAUDE.md absent and the symlink dangling.\n  WHY: If the root file is not checked out, `cat -- \"${UPSTREAM_CLAUDE_MD}\"` fails and the workflow aborts.\n- .github/workflows/update_workflows.yml:226-227 | confidence=3\n  PROBLEM: The error message update is a minor issue because it is only reached as a consequence of the sparse-checkout problem and does not address the root cause.\n  WHY: The workflow still cannot complete until the checkout includes the root CLAUDE.md.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "0d1fd0844492dfae8bd81dd3e213d8ba06b81907db4dbc850888c5bb4c1da0ad",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2546,
+    "run_id": "25751422109",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25751422109",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260512180546_88eac6157d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2546,
+    "run_id": "25751422109"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-12T18:05:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

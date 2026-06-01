@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:12156-12159 | severity=low | confidence=5\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The `grep -E '^::error::  -'` pattern leaves `_gate_violations` empty, so blocked waves never surface parsed violation lines in the tracking comment.\n  WHY: The gate still blocks correctly, but operators only see the fallback \"no violation lines parsed\" message and must inspect raw logs to diagnose the failure.\n- scripts/verify_integration_fingerprints.py:642 | severity=medium | confidence=4\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The unknown-option check only rejects leading `--` args, so a mistyped flag after the positional fingerprints path is treated as the path instead of an error.\n  WHY: A trailing unknown flag can produce a misleading file-open/plumbing error and misroute direct verifier invocations.\n- scripts/verify_integration_fingerprints.py:698-705 | severity=medium | confidence=3\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The unknown-flag validation does not catch flags placed after the positional fingerprints path, so they are silently ignored.\n  WHY: `verify.py fingerprints.json --unknown` runs against `fingerprints.json` and drops the extra flag, which can hide operator mistakes.\n- scripts/orchestrate_poll_process.sh:12138-12152 | severity=medium | confidence=4\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The EXIT trap is registered before `_gate_fp_file`/`_gate_log_file` are populated, so an early exit before `mktemp` leaves cleanup with no paths to remove.\n  WHY: Early termination in that window can leave `/tmp/wave_dispatch_*` artifacts behind instead of cleaning them up.\n- scripts/verify_integration_fingerprints.py:115-145 (_read_file / _path_exists ref-mode) | severity=high | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Git plumbing/permission/unknown-ref failures are collapsed to `content=None`/`exists=False`, which makes ref-mode look like an absent file.\n  WHY: The gate can silently dispatch on regressed integration state because the verifier treats infrastructure errors as satisfying absence checks.\n- scripts/verify_integration_fingerprints.py:103,156,401,502 | severity=medium | confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Adding `ref: str | None = None` changes the helper call signature, so old positional callers can be shifted into ref-mode.\n  WHY: External or stale callers may start producing spurious must_not_exist violations or mixed-signal results after the API shape change.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/verify_integration_fingerprints.py:698-705 | severity=medium | confidence=3\n  PROBLEM: The unknown flag validation only checks for unknown flags BEFORE the positional fingerprints path argument. Flags appearing AFTER the positional argument are silently ignored.\n  WHY: `verify.py fingerprints.json --unknown` uses `fingerprints.json` as `fp_path` and ignores `--unknown`, so a mistyped trailing flag does not trigger an explicit error.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/orchestrate_poll_process.sh:12156-12159 | severity=low | confidence=5\n  PROBLEM: The grep pattern `^::error::  -` does not match the verifier\u2019s actual violation output format, so `_gate_violations` stays empty.\n  WHY: The gate still blocks, but the tracking comment falls back to the generic message instead of showing the actual violation lines.\n- scripts/verify_integration_fingerprints.py:642 | severity=medium | confidence=4\n  PROBLEM: Unknown leading CLI options are detected only at the head of `args`, but a mistyped flag after the positional fingerprints path can still be consumed as the fingerprints path.\n  WHY: Direct invocation with a trailing mistyped flag produces a misleading file-open/plumbing error instead of an explicit unknown-option diagnostic.\n- scripts/orchestrate_poll_process.sh:12138-12152 | severity=medium | confidence=4\n  PROBLEM: The EXIT trap is registered before `_gate_fp_file`/`_gate_log_file` are populated, so an early exit before `mktemp` leaves cleanup with no paths to remove.\n  WHY: Early termination in that window can leave `/tmp/wave_dispatch_*` artifacts behind instead of cleaning them up.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/verify_integration_fingerprints.py:642 | severity=medium | confidence=4\n  PROBLEM: Flag after positional fp_path is consumed as fp_path; malformed invocation gives misleading file-open error instead of explicit unknown-option diagnostic.\n  WHY: Direct verifier call with a mistyped arg after the intended file name silently misroutes and can make the wave-gate misinterpret the path as valid fingerprint JSON.\n- scripts/orchestrate_poll_process.sh:12159 | severity=low | confidence=5\n  PROBLEM: Verifier violation lines start with `::error::  -` (no trailing space before the dash in current output) so grep never matches.\n  WHY: The blocked-wave comment hides the exact regression path and forces operators to hunt workflow logs, delaying stall recovery and escalation.\n- scripts/orchestrate_poll_process.sh:12145 | severity=medium | confidence=4\n  PROBLEM: Trap body uses `${_gate_fp_file:-}` before first mktemp; early exit before allocation leaves cleanup no-op.\n  WHY: Repeated gate blocks in a long-running poller can accumulate `/tmp/wave_dispatch_*` files because cleanup only happens on the clean path.\n- scripts/verify_integration_fingerprints.py:115-145 (_read_file / _path_exists ref-mode) | severity=high | confidence=5\n  PROBLEM: Plumbing/permission/unknown-ref failures are swallowed and treated as `absent` for `must_not_exist` / `must_contain`.\n  WHY: The wave-gate can silently dispatch on regressed integration state because there is no clear error for the operator.\n- scripts/verify_integration_fingerprints.py:103,156,401,502 | severity=medium | confidence=3\n  PROBLEM: Public helper signatures changed; positional callers expecting the old shape silently shift into ref-mode.\n  WHY: External or old bootstrap copies or tests may start producing spurious `must_not_exist` violations or mixed-signal results.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "165c0dd80c7631f25b7016f7cb7e5a6e7acbde5713754914cdada5d607a9386b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2739,
+    "run_id": "26032757513",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26032757513",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260518123613_415c99dcbf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2739,
+    "run_id": "26032757513"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 6 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-18T12:36:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

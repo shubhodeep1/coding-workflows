@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: What scope should this issue cover?**\nChoices:\n- **A** \u2014 One specific workflow/script/file only (RECOMMENDED)\n- **B** \u2014 One subsystem end-to-end\n- **C** \u2014 Repo-wide improvements across multiple subsystems\nReply: `Q1: A`\n**Q2: Which subsystem is in scope?**\nChoices:\n- **A** \u2014 Clarify / plan / implement pipeline\n- **B** \u2014 Review / autofix flow\n- **C** \u2014 Orchestrator / poller / validation\n- **D** \u2014 Docs / repository instructions only\nReply: `Q2: B`\n**Q3: What kind of improvement do you want?**\nChoices:\n- **A** \u2014 Fix a concrete bug or regression (RECOMMENDED)\n- **B** \u2014 Improve reliability / reduce stuck or duplicate runs\n- **C** \u2014 Reduce GitHub API / LLM cost or runtime\n- **D** \u2014 Improve documentation / operator clarity only\nReply: `Q3: A`\n**Q4: What should be treated as the success reference?**\nChoices:\n- **A** \u2014 A specific failing issue, PR, workflow run, or log excerpt; include that reference in your reply (RECOMMENDED)\n- **B** \u2014 No single failure exists; optimize generally within the chosen scope\n- **C** \u2014 Documentation/readability only; no behavior change\nReply: `Q4: A`",
+  "fingerprint": "c1a8c024fdbac3c4fc817e8827f1a1fe3bfbf4e910ae4ad81dfff873a33f144e",
+  "lineage": {
+    "issue_number": 2062,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25305557738",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25305557738",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260504070228_f7f5f53a6a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2062,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25305557738"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #2062 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-04T07:02:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

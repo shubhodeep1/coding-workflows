@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":2393,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/2393\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/2396\",\"pr_number\":2396,\"branch\":\"ai/issue-2393\",\"run_id\":\"25608911576\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/25608911576\",\"changed_files\":[\".github/workflows/orchestrate_poll.yml\",\"prompts/mode-judge-review-blocked.txt\",\"prompts/mode-judge-stall-recovery.txt\",\"prompts/mode-judge.txt\",\"scripts/implement_diagnose_post_codex_failure.sh\",\"scripts/orchestrate_poll_process.sh\",\"scripts/render_prompt.sh\",\"scripts/review_rb_judge.sh\",\"scripts/targeted_file_context.py\",\"tests/test_judge_semble_prefetch_contract.py\"]}",
+  "fingerprint": "014e190a84e2f4db4557548ca0fd71469f7377d58b1aca565fef26ba4492bf5b",
+  "lineage": {
+    "issue_number": 2393,
+    "parent_ids": [],
+    "pr_number": 2396,
+    "run_id": "25608911576",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25608911576",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/2396"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260509190445_ac1548f5ae",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2393,
+    "level": "run",
+    "pr_number": 2396,
+    "run_id": "25608911576"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #2393: https://github.com/shubhodeep1/coding-workflows/pull/2396",
+  "timestamps": {
+    "created_at": "2026-05-09T19:04:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

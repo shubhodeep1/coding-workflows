@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan\n\nPlanning ref\n- Branch: `orchestrator/project-2597`\n- Commit: `6bbd515c5efc90a411f92828f1511738a4493066`\n- Clarification mapping: no Q1/Q2 were asked; `/answer [auto-answered-by-orchestrator]` means proceed as written.\n\nRepresentative pattern reviewed\n- `scripts/cost_audit.py` current Semble path (`parse_log()` and `main()`)\n- `tests/test_cost_audit_semble_metrics.py` as the model for the new focused parser test\n- Serena emitters:\n  - `scripts/serena_stats_emit.py` emits `SERENA_QUERY ... tool=... calls=... response_bytes=...`\n  - `scripts/setup_serena.sh` emits `SERENA_FALLBACK ... reason=... [phase=...]`\n  - `scripts/mcp_handshake_probe.py` emits `SERENA_PROBE ... result=... [reason=...]`\n\n1. Files likely to change\n- `scripts/cost_audit.py`\n  - Add Serena regexes, generic `<NAME>_QUERY` / `<NAME>_FALLBACK` / `<NAME>_PROBE` regexes, and `KNOWN_MCP_SERVERS`\n  - Extend `parse_log()` return shape\n  - Extend `main()` aggregation, per-run JSON, stderr trace, and markdown output\n- `tests/test_cost_audit_serena_metrics.py` (new)\n  - Mirror the standalone style of `tests/test_cost_audit_semble_metrics.py`\n\n2. Functions/modules to implement\n- `parse_log(log)`\n  - Keep existing Codex/OpenRouter/Semble behavior\n  - Parse named Serena lines first\n  - Parse generic MCP lines after named Serena so known servers do not double-count\n  - Accumulate:\n    - Serena flat counters\n    - `serena_targets`\n    - `serena_tools`\n    - probe buckets\n    - `other_mcp`\n  - Fail open on missing fields: numeric \u2192 `0`, text \u2192 `unknown`\n  - Preserve emit-side naming: Serena uses `response_bytes`; Semble keeps `bytes`\n- `main()`\n  - Mirror the new `parse_log()` fields in workflow aggregates and `per_run`\n  - Include Serena/other-MCP signals in `runs_with_data`\n  - Extend the stderr per-run summary line\n  - Add conditional markdown sections:\n    - `## Serena telemetry breakdown`\n    - `## Other MCP servers observed`\n\n3. Data structures affected\n- `parse_log()` output\n- Per-workflow aggregate dict in `main()`\n- Per-run JSON payload\n- New nested structures:\n  - `serena_targets`: keyed by target\n  - `serena_tools`: keyed by tool\n  - `other_mcp`: compact per-server catch-all for unknown MCP prefixes\n- Existing Semble/OpenRouter/Codex fields stay intact\n\n4. API/interface changes\n- No CLI flag changes\n- JSON report schema expands with new Serena and `other_mcp` fields\n- Markdown stdout gains new conditional sections only when data exists\n- Existing Semble-only markdown must remain unchanged when no Serena data is present\n\n5. Risks / edge cases\n- Generic `_QUERY/_FALLBACK/_PROBE` regexes can also match `SERENA_*` and `SEMBLE_*`; guard/order must prevent double counting\n- Single-line multi-`_QUERY` input must be bounded so one event does not swallow another\n- Missing `target`, `tool`, `result`, or bytes fields must not break parsing\n- `response_bytes` vs `bytes` naming must remain server-specific\n- `other_mcp` is forward-looking: there are no non-Serena MCP emitters on this ref, so that path is mainly test-driven right now\n\n6. Testing considerations\nAdd `tests/test_cost_audit_serena_metrics.py` with these 8 cases:\n1. multi-target query aggregation\n2. fallback aggregation\n3. probe bucketing\n4. mixed-signal independence\n5. third-MCP catch-all routing\n6. known-server skip guard\n7. fail-open partial lines\n8. single-line multi-`_QUERY` boundedness\n\nRun exactly:\n- `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_cost_audit_serena_metrics.py`\n- `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_cost_audit_semble_metrics.py`\n- `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_semble_contract.py`\n- `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_semble_contract.py`\n- `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_semble_contract.py`\n\nConflict / codebase notes\n- Ref check passed; no integration-branch mismatch.\n- The issue matches the current code: `scripts/cost_audit.py` currently handles Semble but not Serena.\n- `tests/test_cost_audit_serena_metrics.py` does not exist yet on this ref; that is expected and it should be created.\n\nAssumptions / missing-context notes\n- No clarification answers were needed beyond the auto-confirmed continuation.\n- Per prompt, I did not read `docs/mcp-usage-monitoring-plan.md`; implementation should follow the issue\u2019s specified field/table names while reusing the current Semble cost-audit path as the pattern.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "576a3d7e8cec1f863e0dbc0475844f48924941009639533f0b08225c59ed7767",
+  "lineage": {
+    "issue_number": 2598,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25898402333",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25898402333",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2598"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260515032653_15235c2be7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2598,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25898402333"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2598",
+  "timestamps": {
+    "created_at": "2026-05-15T03:26:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

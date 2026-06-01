@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The file has an extra bait/comment line, so it contains 4 lines instead of the exactly 3 lines required by issue #1866.\n  WHY: The reviewers all report that line 4 is extra content and that the smoke validation expects an exact 3-line match with no additional lines.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  PROBLEM: The file contains an extra bait line, making it 4 lines instead of the exact 3 lines required by issue #1866.\n  WHY: The task explicitly requires exactly three lines and the added line 4 violates that specification, causing the expected content check to fail.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  PROBLEM: The previous AI autofix run added an extra line to the file instead of keeping it at exactly 3 lines.\n  WHY: Issue #1866 explicitly requires exactly three lines with no extra content, so the current 4-line file will fail validation.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  PROBLEM: The file contains 4 lines instead of the required exactly 3 lines, and the last line is an added bait/comment line.\n  WHY: Issue #1866 requires \"exactly these three lines (no more, no less)\", so the extra fourth line violates the specification.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  PROBLEM: The last autofix run added the bait line back to the file, resulting in 4 lines instead of the 3 required by issue #1866.\n  WHY: The expected 3-line content check will fail because the extra line causes both a content mismatch and a line-count mismatch.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  PROBLEM: The file contains 4 lines with an extra bait comment line instead of the required exact 3-line content.\n  WHY: Issue #1866 requires exactly 3 lines with no extras, so smoke test validation will reject the file due to the line-count mismatch and extra content.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  PROBLEM: The file contains 4 lines but issue #1866 explicitly requires exactly 3 lines with no comments or extra content.\n  WHY: The smoke validation compares the file against the expected 3-line specification and will reject any extra content.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "7864ef4e6c11abfecdab6b365de8120641e3f23035fe2731812c5bf4eb12f96b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1872,
+    "run_id": "25208312454",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25208312454",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260501085109_82951bfc3a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1872,
+    "run_id": "25208312454"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-01T08:51:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

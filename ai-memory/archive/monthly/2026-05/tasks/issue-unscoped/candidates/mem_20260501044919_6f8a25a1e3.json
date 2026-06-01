@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/workflow-log-analysis.yml:291-303 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: The new shell regex accepts negative values for WORKFLOW_LOG_SUMMARY_MAX_RUNS and WORKFLOW_LOG_SUMMARY_TOKEN_BUDGET, unlike the stricter numeric checks used elsewhere in the workflow.\n  WHY: Negative values pass shell validation and are only handled later by Python with a warning/skip or clamp, so the behavior is inconsistent and can surprise operators; one reviewer also noted the nearby comment is factually incorrect.\n- scripts/summarize_unselected_runs.py:270-287 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: Removing the early break causes every step block to be accumulated before the final truncation/join, increasing intermediate memory use.\n  WHY: The reviewers reported a bounded but higher peak-memory trade-off, though they also noted per-step truncation and tail-preserving output keep the practical risk low.\n- scripts/summarize_unselected_runs.py:~124 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: `_is_run_eligible()` treats whitespace-only `log_summary` values as already summarized, which can block re-summarization.\n  WHY: A run with only whitespace in `log_summary` is skipped on future runs even though downstream normalization drops blank summaries, so the summary state can become stuck.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/workflow-log-analysis.yml:291-292 and 295-299 | severity=low | confidence=3\n  PROBLEM: The comment says the new pattern matches `MAX_CODEX_ATTEMPTS` validation later in the workflow, but the new regex is different and accepts negative integers.\n  WHY: The workflow\u2019s existing numeric checks use `^[0-9]+$` plus a lower-bound guard, while the new validation uses `^-?[0-9]+$`, so the comment is factually incorrect and the check is looser than the established pattern.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/workflow-log-analysis.yml:293-301 | severity=low | confidence=4\n  PROBLEM: The shell validation regex `^-?[0-9]+$` allows negative integers for `WORKFLOW_LOG_SUMMARY_MAX_RUNS` and `WORKFLOW_LOG_SUMMARY_TOKEN_BUDGET`.\n  WHY: This is inconsistent with the stricter positive-integer checks elsewhere in the workflow, so values like `-5` pass shell validation and are only handled later by Python.\n- scripts/summarize_unselected_runs.py:~124 | confidence=3\n  PROBLEM: `_is_run_eligible()` treats any non-empty `log_summary` as already summarized, including whitespace-only strings.\n  WHY: A whitespace-only summary can permanently block re-summarization even though downstream normalization drops blank summaries.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/workflow-log-analysis.yml:293-301 | severity=low | confidence=3\n  PROBLEM: The regex `^-?[0-9]+$` allows negative integers to pass shell validation for `WORKFLOW_LOG_SUMMARY_MAX_RUNS` and `WORKFLOW_LOG_SUMMARY_TOKEN_BUDGET`.\n  WHY: Negative values are deferred to Python\u2019s handling path, so there is no crash, but the workflow\u2019s shell-level validation is inconsistent with the stricter pattern used elsewhere.\n- scripts/summarize_unselected_runs.py:270-287 | severity=low\n  PROBLEM: Removing the early `break` means all step blocks are accumulated into `parts` before truncation.\n  WHY: Each step is already bounded, and the change is an intentional trade-off to preserve late-step signal, but it does increase intermediate memory use.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/workflow-log-analysis.yml:295-301 | severity=low | confidence=3\n  PROBLEM: The regex `^-?[0-9]+$` accepts negative integers for `WORKFLOW_LOG_SUMMARY_MAX_RUNS` and `WORKFLOW_LOG_SUMMARY_TOKEN_BUDGET`.\n  WHY: This is inconsistent with the workflow\u2019s stricter positive-integer validation elsewhere, though Python later handles negatives safely with a warning/skip path.\n- scripts/summarize_unselected_runs.py:270-278 | severity=low | confidence=1\n  PROBLEM: Removing the early break can increase intermediate memory because all steps are accumulated before the final truncation.\n  WHY: The reviewer noted the per-step truncation bounds the cost and the design intentionally preserves late-step signal, so this is a theoretical trade-off rather than a correctness failure.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/workflow-log-analysis.yml:293-303 | severity=low | confidence=4\n  PROBLEM: Regex `^-?[0-9]+$` permits negative values for `WORKFLOW_LOG_SUMMARY_MAX_RUNS` and `WORKFLOW_LOG_SUMMARY_TOKEN_BUDGET`.\n  WHY: Shell validation passes but Python later clamps or warns, so positive configs can be unexpectedly reduced without a matching early validation rule.\n- scripts/summarize_unselected_runs.py:270-287 | severity=low | confidence=2\n  PROBLEM: The loop now accumulates all step parts into a list before final truncation/join instead of breaking early.\n  WHY: This raises peak memory use for large workflows, though the reviewer judged the practical risk low.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "0143c22f9da1b5e5ef337ae98a0d499f711094131e0745f644b419794683cc09",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1839,
+    "run_id": "25202152884",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25202152884",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260501044919_6f8a25a1e3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1839,
+    "run_id": "25202152884"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-01T04:49:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

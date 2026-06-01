@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_review_pipeline_contract.py:681-699 | severity=medium | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: Three new regression test functions are defined but never called from main(), so the contract checks they add will not run.\n  WHY: main() uses manual test-call dispatch rather than pytest autodiscovery, and the three new functions are not included in the dispatch list, so regressions in the new suppressor paths would pass silently.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_review_autofix_review_pipeline_contract.py:681-699 | severity=medium | confidence=5\n  PROBLEM: Three new test functions are defined in this PR \u2014 test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_codex_agent_path (line 385), test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_deterministic_skip_path (line 421), and test_gate_emits_head_ref_output_for_forward_merge_suppressor_reuse (line 448) \u2014 but none of them is called from main(). The existing test_auto_merge_guard_honours_configured_orchestrator_branch_pattern is called at line 685; the three new tests are not. main() uses manual test-call dispatch (no pytest autodiscovery). The result is dead code: the regression tests will never execute, and the CI will never catch a regression in either suppressor path.\n  WHY: If run via python3 tests/test_review_autofix_review_pipeline_contract.py, the three new test functions never execute. A future change that removes or damages the forward-merge suppressor on either path, or that removes the gate head_ref output, would pass CI silently \u2014 the tests that guard those invariants are unreachable. This defeats the purpose of a contract test suite.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "91a0873484f297307eed8c5b5eff9ac8280c3c9445f8ea2cf70ad57031a10afa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26337030998",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26337030998",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260523161238_60b005af87",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26337030998"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-23T16:12:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

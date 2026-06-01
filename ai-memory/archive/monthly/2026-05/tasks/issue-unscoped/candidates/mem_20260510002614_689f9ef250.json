@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/targeted_file_context.py:141-147 | severity=critical | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: `_log_semble_event` now emits whitespace-containing values unquoted in space-delimited telemetry lines, so fields like `reason=\"file not found\"` become ambiguous tokens.\n  WHY: Both reviewers report that the new normalization breaks log parseability for existing consumers that expect single token key=value pairs; one explicitly calls it a critical runtime correctness issue.\n- scripts/implement_diagnose_post_codex_failure.sh:404-412 | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: `file_like_exts` omits common non-source artifacts such as `.lock`, `.pyc`, `__pycache__`, and `.gitkeep`, so noisy paths can slip into the diagnose query.\n  WHY: Both reviewers say this broadens the retrieval input with irrelevant file-like paths and dilutes Semble relevance rather than causing a direct functional failure.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/targeted_file_context.py:141-147 | severity=critical | confidence=5\n  PROBLEM: The change from repr-based quoting to `\" \".join(str(value).split())` breaks log parseability because whitespace-containing values are emitted unquoted in space-delimited telemetry lines.\n  WHY: A value like `reason=\"file not found\"` becomes ambiguous to downstream parsers and monitoring that rely on a single-line key=value format.\n- scripts/implement_diagnose_post_codex_failure.sh:407-410\n  PROBLEM: `file_like_exts` omits common non-source artifacts like \".lock\", \".pyc\", \".gitkeep\" that appear in failure tails.\n  WHY: Noisy lockfile/bytecode paths can pass the filter and consume identifier budget, diluting Semble retrieval relevance for actual source files in diagnose context.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/targeted_file_context.py:141-147 | confidence=5\n  PROBLEM: `rendered = \" \".join(str(value).split())` collapses whitespace in field values but emits them unquoted in space-delimited log lines, so fields containing spaces (e.g. `reason=\"file not found\"`) split into multiple tokens.\n  WHY: Log consumers splitting on space cannot parse fields reliably (e.g. `SEMBLE_FALLBACK reason=file not found -> [\"SEMBLE_FALLBACK\", \"reason=file\", \"not\", \"found\"]`); breaks existing grep/awk/shell parsing and tests/docs expecting single-line key=value format.\n- scripts/implement_diagnose_post_codex_failure.sh:404-412 | confidence=3\n  PROBLEM: `file_like_exts` omits common non-source artifacts like \".lock\", \".pyc\", \"__pycache__\", \".gitkeep\" that appear in failure tails.\n  WHY: Noisy lockfile/bytecode paths pass the filter and consume identifier budget (up to 40), diluting Semble retrieval relevance for actual source files in diagnose context.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "96c006fc577aacd27e129c9fe332c78e3dd154d37de6757d6b47a013148a02ee",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2407,
+    "run_id": "25615242387",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25615242387",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510002614_689f9ef250",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2407,
+    "run_id": "25615242387"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-10T00:26:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

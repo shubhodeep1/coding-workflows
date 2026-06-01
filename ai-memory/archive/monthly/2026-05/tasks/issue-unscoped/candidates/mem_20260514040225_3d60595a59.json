@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/mcp_handshake_probe.py: LAST RUN DIFF: old mode 100755 new mode 100644 | confidence=5\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: File mode changed from 100755 to 100644 on a script outside the issue scope.\n  WHY: Issue #2570 explicitly constrained the PR to tests/e2e_smoke_canary.txt, and x-ai_grok-4_1-fast additionally warned direct execution could fail with EACCES permission denied.\n- scripts/serena_stats_emit.py: LAST RUN DIFF: old mode 100755 new mode 100644 | confidence=5\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: File mode changed from 100755 to 100644 on a script outside the issue scope.\n  WHY: Issue #2570 explicitly constrained the PR to tests/e2e_smoke_canary.txt, and x-ai_grok-4_1-fast additionally warned direct execution could fail with EACCES permission denied.\n- scripts/setup_serena.sh: LAST RUN DIFF: old mode 100755 new mode 100644 | confidence=5\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: File mode changed from 100755 to 100644 on a script outside the issue scope.\n  WHY: Issue #2570 explicitly constrained the PR to tests/e2e_smoke_canary.txt, and x-ai_grok-4_1-fast additionally warned direct execution could fail with EACCES permission denied.\n- commit ff58b79e473d0de7e54edfa88d08933e3e0a6c12: LAST COMMIT STAT / LAST RUN DIFF STAT: 3 files changed, 0 insertions/deletions | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Last autofix commit introduces scope violation by touching 3 unrelated scripts.\n  WHY: The review says the commit changed three script files that are not in the PR's allowed scope under issue #2570.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/mcp_handshake_probe.py: Line: N/A (mode-only) | confidence=5\n  PROBLEM: File mode changed from 100755 to 100644, violating issue scope constraint\n  WHY: PR includes changes to files explicitly excluded by the issue\n- scripts/serena_stats_emit.py: Line: N/A (mode-only) | confidence=5\n  PROBLEM: File mode changed from 100755 to 100644, violating issue scope constraint\n  WHY: PR includes changes to files explicitly excluded by the issue\n- scripts/setup_serena.sh: Line: N/A (mode-only) | confidence=5\n  PROBLEM: File mode changed from 100755 to 100644, violating issue scope constraint\n  WHY: PR includes changes to files explicitly excluded by the issue\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/mcp_handshake_probe.py: LAST RUN DIFF: old mode 100755 new mode 100644 | confidence=5\n  PROBLEM: Unnecessary mode change from executable to regular file on a script outside PR changed files scope.\n  WHY: If any workflow or script invokes this, it will fail with EACCES permission denied, and it violates issue #2570's constraint to ONLY modify tests/e2e_smoke_canary.txt.\n- scripts/serena_stats_emit.py: LAST RUN DIFF: old mode 100755 new mode 100644 | confidence=5\n  PROBLEM: Unnecessary mode change from executable to regular file on a script outside PR changed files scope.\n  WHY: Invocation as executable fails permission denied, and issue #2570 forbids changes beyond tests/e2e_smoke_canary.txt.\n- scripts/setup_serena.sh: LAST RUN DIFF: old mode 100755 new mode 100644 | confidence=5\n  PROBLEM: Unnecessary mode change from executable to regular file on a script outside PR changed files scope.\n  WHY: If sourced or executed directly, permission denied blocks execution, and this directly violates the single-file constraint in issue #2570.\n- commit ff58b79e473d0de7e54edfa88d08933e3e0a6c12: LAST COMMIT STAT / LAST RUN DIFF STAT: 3 files changed, 0 insertions/deletions | confidence=5\n  PROBLEM: Last autofix commit introduces scope violation by touching 3 unrelated scripts.\n  WHY: Pollutes PR history with off-topic metadata noise and risks breaking script execution in consumer workflows expecting executable Serena helpers.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "3eee218f3ac2ecba60d2b3a3eedf4982f43f564db8d8f9e0db9286c9962ac629",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2576,
+    "run_id": "25840435908",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25840435908",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260514040225_3d60595a59",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2576,
+    "run_id": "25840435908"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-14T04:02:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

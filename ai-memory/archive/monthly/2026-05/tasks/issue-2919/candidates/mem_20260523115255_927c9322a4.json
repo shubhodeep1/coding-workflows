@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlan for `35f7ffd3e24027ec5f4ccdc5be3b7e2eefc40da5` on `orchestrator/project-2867`\n\nClarification mapping\n- No clarification questions were asked in clarify.\n- `/answer [auto-answered-by-orchestrator]` is just the continuation signal, so planning can proceed.\n\nAutomation / wiring\n- Change type: modify existing workflow + existing report + delete processed docs only.\n- Existing entry point stays the same: `.github/workflows/comprehensive-test-and-release.yml` (`on: workflow_dispatch`).\n- New script/supervisor: none.\n- DB work/gates: not applicable.\n- `docs/scripts-pending-removal.md`: not applicable.\n\nFiles likely to change\n- `.github/workflows/comprehensive-test-and-release.yml`\n- `analysis/recommendation-processing-report.md`\n- Delete these 15 processed dated docs:\n  - `analysis/workflow-optimization-2026-05-15.md`\n  - `analysis/workflow-optimization-2026-05-16.md`\n  - `analysis/workflow-optimization-2026-05-16-2.md`\n  - `analysis/workflow-optimization-2026-05-17.md`\n  - `analysis/workflow-optimization-2026-05-17-2.md`\n  - `analysis/workflow-optimization-2026-05-17-3.md`\n  - `analysis/workflow-optimization-2026-05-18.md`\n  - `analysis/workflow-optimization-2026-05-18-2.md`\n  - `analysis/workflow-optimization-2026-05-18-3.md`\n  - `analysis/workflow-optimization-2026-05-18-4.md`\n  - `analysis/workflow-optimization-2026-05-19.md`\n  - `analysis/workflow-optimization-2026-05-20.md`\n  - `analysis/workflow-optimization-2026-05-20-2.md`\n  - `analysis/workflow-optimization-2026-05-20-3.md`\n  - `analysis/workflow-optimization-2026-05-21.md`\n- Explicitly unchanged:\n  - `analysis/validation-selftest-status.json`\n  - `analysis/last_collection_timestamp.txt`\n  - newer out-of-scope dated reports:\n    - `analysis/workflow-optimization-2026-05-22.md`\n    - `analysis/workflow-optimization-2026-05-22-2.md`\n    - `analysis/workflow-optimization-2026-05-23.md`\n\nImplementation plan\n1. Update report discovery in `.github/workflows/comprehensive-test-and-release.yml`.\n   - In `phase2-collect-and-analyze-logs`, keep the current \u201clatest `workflow-optimization-*.md`\u201d lookup as the first choice.\n   - Add a fallback to `analysis/recommendation-processing-report.md`.\n   - Only error if neither a dated report nor the consolidated report exists.\n   - Keep the `report_file` output contract unchanged so phase 3 can keep building `REPORT_URL` without any interface rename.\n\n2. Expand `analysis/recommendation-processing-report.md` to absorb the 15 in-scope docs.\n   - Update `## Processed source docs` from `66` to `81`.\n   - Append the 15 source-doc paths above to that list.\n   - Add a new outcome ledger/subsection for the 2026-05-15 through 2026-05-21 batch, using current repo state on this branch.\n   - For each source doc, record:\n     - which recommendations were implemented by already-landed sibling work on this integration branch,\n     - which were already satisfied on this ref,\n     - which were intentionally deferred, with a concrete reason.\n   - Key entries by **source doc + recommendation ID**, not bare IDs, because IDs like `MERGE-001` / `REUSE-001` repeat across different docs.\n   - Update the stale follow-up note that still says the comprehensive workflow fix is pending separately.\n\n3. Delete the 15 in-scope dated docs in the same change, but only after the report and workflow fallback are updated.\n\nFunctions / modules / data structures affected\n- Workflow shell logic in `.github/workflows/comprehensive-test-and-release.yml` that resolves `REPORT_FILE`.\n- Markdown processed-source-doc count and list in `analysis/recommendation-processing-report.md`.\n- New per-doc outcome matrix/subsections in `analysis/recommendation-processing-report.md`.\n- No JSON schema, env var, workflow input, or output names need to change.\n\nAPI / interface changes\n- Internal-only behavior change: `report_file` may now point to `analysis/recommendation-processing-report.md` when no dated report exists.\n- Phase 3 still consumes the same output variable.\n- No public interface rename/breaking change is needed.\n\nRisks / edge cases / conflicts\n- Conflict with current repo state: the issue acceptance talks about 15 current dated docs, but this branch now has 18 dated `workflow-optimization-*.md` files total. Conservative scope is to delete only the 15 files in the stated 2026-05-15 through 2026-05-21 range and leave 2026-05-22/23 docs alone.\n- Because newer dated docs remain, the fallback path will not naturally execute after this cleanup; it must be validated explicitly.\n- This issue is the \u201clast step\u201d cleanup, so deletion should only happen once the sibling fixes are already present on `orchestrator/project-2867`.\n- Some target docs end with \u201cNo SAFE_TO_MERGE findings in this pass\u201d (`2026-05-16-2`, `2026-05-17-3`, `2026-05-18`, `2026-05-21`), so their report coverage should be already-satisfied/deferred only, not forced into \u201cimplemented by sibling issues\u201d.\n- I did not find non-analysis references to these exact target filenames outside the workflow glob, so extra path updates are not expected.\n\nTesting considerations\n- Verify the phase-2 resolver still picks the newest dated report when one exists.\n- Verify a no-dated-report scenario falls back to `analysis/recommendation-processing-report.md` and phase 3 no longer errors on missing `workflow-optimization-*.md`.\n- Diff-check that only the workflow, the consolidated report, and the 15 deletions change.\n- Confirm `analysis/validation-selftest-status.json`, `analysis/last_collection_timestamp.txt`, and the 2026-05-22/23 dated reports stay untouched.\n- Confirm the consolidated report explicitly covers all 15 in-scope docs and its processed-source count/list is consistent.\n\nAssumptions / missing-context notes\n- The planning context did not include the explicit `files_touched` list; this plan assumes it is limited to the workflow, the consolidated report, and the 15 in-scope dated docs.\n- The planning context did not include a sibling-issue number list; actioned entries should therefore be grounded from code already present on this integration branch, using each source doc\u2019s handoff/findings plus repo evidence rather than unverified issue metadata.\n\nActions taken\n- Inspected `.github/workflows/comprehensive-test-and-release.yml`.\n- Inspected `analysis/recommendation-processing-report.md`.\n- Enumerated the current in-scope dated-doc set and newer out-of-scope dated docs.\n- Inspected representative target doc `analysis/workflow-optimization-2026-05-18-4.md` to confirm the shared summary-count / handoff pattern.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "8c8ddf306e5c35290a0e40f9ec278a88286e49806c6ed5d7eabfda86843874ff",
+  "lineage": {
+    "issue_number": 2919,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26331822650",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26331822650",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2919"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260523115255_927c9322a4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2919,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26331822650"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2919",
+  "timestamps": {
+    "created_at": "2026-05-23T11:52:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

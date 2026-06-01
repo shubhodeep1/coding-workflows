@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:5751-5756 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The jq filter uses invalid `endswith()` syntax in the in-flight run matcher.\n  WHY: jq will error at runtime, so the guard aborts and the empty-commit push can proceed.\n- tests/test_orchestrate_poll_process.py:1558-1574 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The new `--jq` branch exits after emitting filtered JSON, so the mock no longer preserves the full HTTP-response path.\n  WHY: `_load_actions_runs_cached` needs headers as well as body for the `-i`/ETag 304 path, and the early exit breaks that behavior in tests.\n- tests/test_orchestrate_poll_process.py:1558 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The `jq`-parameter check relies on a truthy/falsy test without validating string content.\n  WHY: Empty or whitespace-only values could be misrouted between raw HTTP and jq-filtered response handling.\n- scripts/orchestrate_poll_process.sh:5712-5775 | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `STALL_RECOVERY_EFFECTIVE_ACTION` is set for the in-flight guard, but the reviewer believes the caller never observes that update because the function returns immediately.\n  WHY: If the caller cannot see the short-circuit action, stall-recovery logging can miss the guard path.\n- scripts/orchestrate_poll_process.sh:5756 | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The timestamp normalization regex assumes GitHub always returns ISO timestamps with fractional seconds before `Z`.\n  WHY: If the format differs, `sub()`/`fromdateiso8601` can fail and the guard may fall through to the empty-commit path.\n- scripts/orchestrate_poll_process.sh:5737 | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: Missing or malformed `run_started_at`/`created_at` fields are coerced to `1970-01-01T00:00:00Z`.\n  WHY: That makes such runs look stale and eligible to be ignored, even if the underlying run is actually fresh.\n- scripts/orchestrate_poll_process.sh:5740-5742 | confidence=1\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The `_rtr_` local-variable prefix is used inconsistently with nearby names in the same function.\n  WHY: The naming inconsistency is maintainability-only, but it makes future refactoring error-prone.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/orchestrate_poll_process.sh:5751-5756 | confidence=5\n  PROBLEM: The jq filter uses invalid `endswith()` syntax in the in-flight run matcher.\n  WHY: jq will error at runtime with `endswith/0 is not a built-in function`, aborting the guard and allowing the empty-commit push it is meant to prevent.\n- tests/test_orchestrate_poll_process.py:1558-1574 | confidence=5\n  PROBLEM: The new `--jq` conditional handler calls `sys.exit(0)` after writing filtered JSON, truncating HTTP response header handling needed for 304 ETag caching.\n  WHY: The `gh api -i` path requires headers plus body for ETag parsing, and exiting early breaks the downstream cache mechanism.\n- tests/test_orchestrate_poll_process.py:1558 | confidence=4\n  PROBLEM: Input validation for the `jq` parameter uses a truthy/falsy check without type safety for empty or whitespace strings.\n  WHY: That can misroute between raw HTTP responses and jq-filtered outputs in edge cases.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_poll_process.sh:5712-5775 | confidence=3\n  PROBLEM: `STALL_RECOVERY_EFFECTIVE_ACTION` is set to `\"retrigger_review_skipped_inflight\"` in a path the reviewer believes the caller never observes because the function returns immediately.\n  WHY: The caller checks this variable to log what action was taken, so losing the update could cause the short-circuit path to be recorded incorrectly.\n- scripts/orchestrate_poll_process.sh:5756 | confidence=2\n  PROBLEM: The jq `sub(\"\\\\.[0-9]+Z$\"; \"Z\")` regex assumes timestamps always include fractional seconds before `Z`.\n  WHY: If GitHub returns a timestamp without that shape, the normalization can fail to match and the guard can fall through to the empty-commit path.\n- scripts/orchestrate_poll_process.sh:5737 | confidence=2\n  PROBLEM: Cached runs with missing `run_started_at` or `created_at` fields default to `1970-01-01T00:00:00Z`.\n  WHY: That makes such runs look like zombies and can let a fresh in-flight run be ignored.\n- scripts/orchestrate_poll_process.sh:5740-5742 | confidence=1\n  PROBLEM: The `_rtr_` local-variable prefix is applied inconsistently with other nearby names in the function.\n  WHY: This is maintainability-only, but the inconsistency can make future refactoring more error-prone.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "5430618f358cdb15cf187abbf47c2243f8989316c479e7137a20246d2f9dfcb7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26094394033",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26094394033",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260519121041_69126f310d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26094394033"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 7 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-19T12:10:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

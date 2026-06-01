@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Execute selected workflow optimizations and retire the processed analysis backlog\",\"issues\":[{\"id\":\"review-autofix-fast-path-tuning\",\"title\":\"Tighten review_autofix no-PR fast paths\",\"priority\":2},{\"id\":\"ci-fail-fast-ordering\",\"title\":\"Front-load cheap CI regression checks before long orchestrate tests\",\"priority\":3},{\"id\":\"stable-release-dispatch-ref-fix\",\"title\":\"Dispatch comprehensive stable-release smoke tests on the stable branch\",\"priority\":1},{\"id\":\"review-rb-judge-pr-metadata-reuse\",\"title\":\"Reuse cached PR metadata in review_rb_judge fallback paths\",\"priority\":3},{\"id\":\"implement-diagnose-issue-metadata-reuse\",\"title\":\"Fetch source issue metadata once in post-Codex diagnose recovery\",\"priority\":3},{\"id\":\"issue-pr-status-alert-reuse\",\"title\":\"Reuse orchestrator classification data in issue_pr_status merged alerts\",\"priority\":2},{\"id\":\"archive-processed-workflow-optimization-docs\",\"title\":\"Fold processed workflow-optimization backlog into the report and remove dated docs\",\"priority\":4}],\"dependency_edges\":[{\"from\":\"review-autofix-fast-path-tuning\",\"to\":\"archive-processed-workflow-optimization-docs\"},{\"from\":\"ci-fail-fast-ordering\",\"to\":\"archive-processed-workflow-optimization-docs\"},{\"from\":\"stable-release-dispatch-ref-fix\",\"to\":\"archive-processed-workflow-optimization-docs\"},{\"from\":\"review-rb-judge-pr-metadata-reuse\",\"to\":\"archive-processed-workflow-optimization-docs\"},{\"from\":\"implement-diagnose-issue-metadata-reuse\",\"to\":\"archive-processed-workflow-optimization-docs\"},{\"from\":\"issue-pr-status-alert-reuse\",\"to\":\"archive-processed-workflow-optimization-docs\"}]}",
+  "fingerprint": "202b9a3b864e2d2b78ab3c596d4fcccc028e78c33ffa4ee80e2133dae6253873",
+  "lineage": {
+    "issue_number": 2867,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26267728598",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26267728598",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260522042328_c1e2cc59b9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2867,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26267728598"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Execute selected workflow optimizations and retire the processed analysis backlog' into 7 issues (tracking #2867)",
+  "timestamps": {
+    "created_at": "2026-05-22T04:23:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

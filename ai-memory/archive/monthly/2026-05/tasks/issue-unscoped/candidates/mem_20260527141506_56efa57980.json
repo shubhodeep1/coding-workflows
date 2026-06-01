@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Automated forward-merge of `stable` into `main` resolving conflicts in the listed files.\n  expected_change_site: Files in PR description (resolved by prior merge commit 4288ae6 / [ai-merge-resolve] and subsequent autofix rounds).\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: N/A \u2014 `git merge-base` succeeds and residual diff is whitespace-only. Prior editor summaries already addressed test wiring, duplicate helpers, CI step names, and `_safe_gh_jq` claims.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- TASK_GAP\n  Requirement: Automated forward-merge of `stable` into `main` resolving conflicts in the listed files.\n  Expected change site: Files in PR description (resolved by prior merge commit 4288ae6 / [ai-merge-resolve] and subsequent autofix rounds).\n  Evidence of absence: N/A \u2014 `git merge-base` succeeds and residual diff is whitespace-only. Prior editor summaries already addressed test wiring, duplicate helpers, CI step names, and `_safe_gh_jq` claims.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "8ccb0cc9533f323b9202d369993d7243a7f02f2452415e855c38443473647f92",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2972,
+    "run_id": "26516244889",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26516244889",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260527141506_56efa57980",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2972,
+    "run_id": "26516244889"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-27T14:15:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

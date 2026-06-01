@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CLAUDE.md:615-616 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: Including \u201cPR title\u201d in the auto-close keyword ban is overly broad because GitHub does not parse PR titles for auto-close.\n  WHY: The reviewer called it a false-positive restriction with no runtime benefit, though the cost is only a minor precision nit.\n- CLAUDE.md:622-626 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, x-ai_grok-4_20]\n  PROBLEM: The label-verification instruction has no recovery path if `gh`/MCP label lookup is unavailable or fails.\n  WHY: The reviewers note there is no fallback for missing tools or lookup failures, so the PR-body drafting step can be blocked or forced to bypass the check.\n- CLAUDE.md:622-626 | severity=medium | confidence=5\n  flagged_by: [qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: The label-verification rule is advisory-only and not wired into the PR-body generation/enforcement path.\n  WHY: Both reviewers say the model can still draft a violating body unless a higher-level pre-write guard invokes the label check.\n- CLAUDE.md:627-629 | severity=medium | confidence=4\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: \u00a719\u2019s statement that the rule is \u201cnot superseded by \u00a712\u201d conflicts with \u00a712\u2019s own precedence language.\n  WHY: Qwen notes \u00a712.B only preserves explicit exceptions like \u00a76 and \u00a710, so \u00a719 introduces a cross-reference inconsistency.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- CLAUDE.md:615-616 | severity=low | confidence=2\n  PROBLEM: Including \u201cPR title\u201d in the auto-close keyword ban is overly broad because GitHub does not parse PR titles for auto-close.\n  WHY: This creates a false-positive restriction with no runtime benefit; the reviewer explicitly called it a minor precision nit.\n- CLAUDE.md:622-626 | severity=medium | confidence=2\n  PROBLEM: The label-verification step has no fallback if `gh` CLI or the MCP tool is unavailable.\n  WHY: A session without either tool cannot satisfy the verification instruction before drafting the PR body.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- CLAUDE.md:627-629 | severity=medium | confidence=4\n  PROBLEM: \u00a719\u2019s statement that the rule is \u201cnot superseded by \u00a712\u201d conflicts with \u00a712\u2019s own precedence language.\n  WHY: \u00a712.B only preserves explicit exceptions like \u00a76 and \u00a710, so \u00a719 introduces a cross-reference inconsistency.\n- CLAUDE.md:622-626 | severity=medium | confidence=3\n  PROBLEM: The label-verification step is presented as a manual pre-flight instruction but is not wired into the PR-body generation pipeline.\n  WHY: Without a pre-write guard, the model can bypass it and write the body without checking labels.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- CLAUDE.md:615-640 | severity=medium | confidence=5\n  PROBLEM: The new rule is only prose and has no corresponding enforcement in automated PR/commit/body generation paths.\n  WHY: Future sessions can still produce a violating body, so the safeguard remains advisory-only.\n- CLAUDE.md:622-626 | severity=medium | confidence=4\n  PROBLEM: No fallback or recovery path is specified when the label check itself fails.\n  WHY: A failure such as rate limiting, network error, missing GH_PAT, or a missing issue would leave the instruction blocking with no defined recovery.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "92f8615faf06237662af36f915b09fedbb5407d038ec542420c2e7abc152ae9c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26072636596",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26072636596",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260519024303_f8d5de4854",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26072636596"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-19T02:43:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

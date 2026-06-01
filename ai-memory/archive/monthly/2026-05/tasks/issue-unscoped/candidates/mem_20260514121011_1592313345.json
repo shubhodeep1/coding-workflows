@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_family_python_mongo_flask.py:138-152 | confidence=5\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: `test_python_mongo_flask_invariants_regression_guards` checks for `out/...` paths even though it renders with `output_root = temp_root / \"validation\"` and the templates now derive paths from `{{ output_root_name }}`.\n  WHY: The rendered scripts contain `validation/...` paths, so the `out/...` inclusion checks and the negative assertion about `/workspace/validation/tests/_lib/import_audit.py` are inconsistent with the configured output root.\n- tests/fixtures/validation_harness/python_mongo_flask/tests/20_import_audit.sh:6-8 | confidence=3\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The golden fixture is stale relative to the updated template because it does not include the `docker compose` exec behavior now emitted by `20_import_audit.sh.j2`.\n  WHY: If this fixture is used as the canonical baseline, its runtime behavior diverges from the template's behavior.\n- tests/fixtures/selftest/node-hardhat-solidity/package.json:9 | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Exact patch-level pin with no semver range (`^` or `~`).\n  WHY: Hardhat minor/patch updates can break the selftest until the fixture is manually bumped.\n- tests/fixtures/selftest/node-hardhat-solidity/.ai/validate.yml:6 | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Overrides the test command to `npx hardhat test`, assuming `npx` resolves correctly.\n  WHY: `npx hardhat test` may fail if Hardhat is not hoisted or resolvable in the Docker PATH.\n- tests/fixtures/selftest/node-hardhat-solidity/tsconfig.json:13 | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Hardcodes `ignoreDeprecations: \"6.0\"` without a TypeScript pin in `package.json`.\n  WHY: The fixture can drift from the TypeScript version actually used by the toolbox, making this setting fragile.\n- workflow-templates/validation-harness/python-mongo-flask/docker-compose.test.yml.j2:11 | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Assumes the renderer always produces `Dockerfile.app` at `{{ output_root_name }}/`.\n  WHY: Custom output-root compose runs can fail if the Dockerfile is absent or renamed at that exact location.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_family_python_mongo_flask.py:138-152 | confidence=5\n  PROBLEM: All the string-inclusion assertions in `test_python_mongo_flask_invariants_regression_guards` are checking `out/...` paths even though the test configures `output_root = temp_root / \"validation\"`.\n  WHY: The rendered scripts will contain `validation/...` paths, so the `out/...` checks and the negative assertion about `/workspace/validation/tests/_lib/import_audit.py` will fail.\n- tests/fixtures/validation_harness/python_mongo_flask/tests/20_import_audit.sh:6-8 | confidence=3\n  PROBLEM: The golden fixture is stale relative to the template pattern because it does not contain the `docker compose` invocation now present in `20_import_audit.sh.j2`.\n  WHY: The fixture's runtime behavior diverges from the updated template and no longer matches the added container-exec flow.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/fixtures/selftest/node-hardhat-solidity/package.json:9 | confidence=5\n  PROBLEM: Exact patch-level pin with no semver range.\n  WHY: Hardhat minor/patch updates will break the selftest until the fixture is manually updated.\n- tests/fixtures/selftest/node-hardhat-solidity/.ai/validate.yml:6 | confidence=4\n  PROBLEM: Overrides the test command to `npx hardhat test`, assuming `npx` resolves correctly.\n  WHY: `npx hardhat test` may fail if Hardhat is not resolvable in the container PATH.\n- tests/fixtures/selftest/node-hardhat-solidity/tsconfig.json:13 | confidence=4\n  PROBLEM: Hardcodes `ignoreDeprecations: \"6.0\"` without a TypeScript pin in `package.json`.\n  WHY: The setting can drift from the TypeScript version actually used by the toolchain.\n- workflow-templates/validation-harness/python-mongo-flask/docker-compose.test.yml.j2:11 | confidence=3\n  PROBLEM: Assumes the renderer always produces `Dockerfile.app` at `{{ output_root_name }}/`.\n  WHY: A custom output root can fail to build if the Dockerfile is not present at that exact path.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===",
+  "fingerprint": "d6f4f934ad5abdafe5e496adfe9c80acbe17872a123746c5e23c524e5624208f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2588,
+    "run_id": "25858201334",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25858201334",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260514121011_1592313345",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2588,
+    "run_id": "25858201334"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-14T12:10:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

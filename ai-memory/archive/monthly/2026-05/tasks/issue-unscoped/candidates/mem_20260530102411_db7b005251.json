@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/orchestrate_poll.yml (lines 544-546) and README.md (three table rows) | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The workflow defaults the env var to `20`, but the script still falls back to `5`, creating a documentation/runtime mismatch for repos that do not set the repo var.\n  WHY: Consumers relying on the documented workflow default can still hit the script's `5` fallback, so the backpressure gate does not behave as documented for the fix.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Raise the margin ... wired into the `orchestrate_poll` workflow env (overridable via repo var).\" + update README tables to document the new default + rationale while preserving the \"script-level fallback `5`\".\n  expected_change_site: `.github/workflows/orchestrate_poll.yml` (env block) + README.md tables + (implicitly) `scripts/orchestrate_poll_process.sh`\n  confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The workflow and README changes match the PR description, but because the script fallback is still 5 (as required), the effective runtime default for non-overridden consumers is still 5. No change was made to make the workflow var override guaranteed or to update the script's fallback comment/logic to match the new documented value.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: .github/workflows/orchestrate_poll.yml (lines 544-546) and README.md (three table rows)\n  Problem: The workflow now defaults the env var to `20`, but the script's parsing remains `ORCH_INTEGRATION_BACKPRESSURE_PROJECT_MARGIN=\"${ORCH_INTEGRATION_BACKPRESSURE_PROJECT_MARGIN:-5}\"`, creating a documentation/runtime mismatch for repos that do not set the repo var.\n  Why: Consumers relying on the documented workflow default will still see the script's fallback of 5, so the backpressure gate does not behave as documented for the fix.\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Raise the margin ... wired into the `orchestrate_poll` workflow env (overridable via repo var).\" + update README tables to document the new default + rationale while preserving the \"script-level fallback `5`\".\n  Expected change site: `.github/workflows/orchestrate_poll.yml` (env block) + README.md tables + (implicitly) `scripts/orchestrate_poll_process.sh`\n  Evidence of absence: The workflow and README changes match the PR description, but because the script fallback is still 5 (as required), the effective runtime default for non-overridden consumers is still 5. No change was made to make the workflow var override guaranteed or to update the script's fallback comment/logic to match the new documented value.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "63874c33bee2d4ba9d29e3ab05dc7fe60a92ca250353b3944d8753797a8f90fe",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3021,
+    "run_id": "26681205690",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26681205690",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260530102411_db7b005251",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3021,
+    "run_id": "26681205690"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-30T10:24:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

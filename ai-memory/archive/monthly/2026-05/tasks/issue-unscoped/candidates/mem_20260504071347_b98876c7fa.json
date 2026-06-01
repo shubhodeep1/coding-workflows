@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:4 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The file contains an extra fourth line that violates the requirement for exactly three lines.\n  WHY: All reviewers agree the added comment/bait line makes the file have 4 lines instead of the required 3, causing the exact-content smoke validation to fail.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:4 | severity=medium | confidence=5\n  PROBLEM: The file contains a fourth line that violates the task specification requiring exactly three lines with no extra content.\n  WHY: The task explicitly requires the file to contain exactly these three lines \u2014 `status: ok`, `run_id: 25305535590`, `updated-by: ai-pipeline` \u2014 with \"no more, no less\" and \"no comments, headers, or any extra content\"; the extra bait line causes a content mismatch and will fail the smoke validation.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:4 (the extra bait line) | severity=medium | confidence=5\n  PROBLEM: The file contains an extra fourth line that violates the explicit content contract for the smoke-test canary.\n  WHY: The issue explicitly requires \"exactly these three lines (no more, no less)\" and \"Do **not** add comments, headers, or any extra content\"; the E2E smoke test validation gate checks that this file has exactly the expected three lines, so the extra bait line causes validation to fail.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:4 | severity=medium | confidence=5\n  PROBLEM: The file contains an extra fourth line (a comment/bait line) that violates the explicit requirement for exactly three lines.\n  WHY: The issue #2060 explicitly requires the file to contain \"exactly these three lines (no more, no less)\" with no extra content; the comment line `# E2E_EDITOR_BAIT_25305535590: this line should be removed by the editor (smoke gate)` causes the file to have 4 lines instead of the required 3 and the E2E smoke test validation will fail.\n  - tests/e2e_smoke_canary.txt | action=Remove the fourth line (the bait comment line) so the file contains exactly the three required lines as specified in the issue.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:4 | severity=medium | confidence=5\n  PROBLEM: The file contains 4 lines instead of the exactly 3 lines required by the task specification.\n  WHY: The issue demands the file content be overwritten completely with only the three canonical lines: `status: ok`, `run_id: 25305535590`, and `updated-by: ai-pipeline`; the appended bait comment line violates the \"no more, no less\" and \"no extra content\" constraints and causes a smoke-test mismatch.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/e2e_smoke_canary.txt:4 | severity=medium | confidence=5\n  PROBLEM: File contains four lines instead of the required exactly three lines specified in issue #2060.\n  WHY: The E2E smoke test validates that the file matches exactly the three specified lines with no additional content; the extra bait comment line causes a content mismatch and validation failure, blocking the pipeline gate.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:4 | severity=medium | confidence=5\n  PROBLEM: The file contains a fourth line that violates the explicit task requirement for exactly three lines with no comments or extra content.\n  WHY: The E2E smoke test validation gate expects the file to contain exactly the three specified lines verbatim; the presence of a fourth line causes a content mismatch and the smoke test will fail.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "1169f302ea348a472b8758f3ba2cc94adb558210af6aed5406aaef389f8fd917",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2067,
+    "run_id": "25305733773",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25305733773",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260504071347_b98876c7fa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2067,
+    "run_id": "25305733773"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-04T07:13:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- n/a:CI lint job run 25981953573 / job 76372167558 | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: The lint check-run failed on the PR head SHA even though the only changed file is a plain-text canary file with no lintable content.\n  WHY: Each reviewer mapped the failure to a lint job that does not inspect the changed .txt file, so it appears unrelated to the PR diff and still blocks merge.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt (indirect \u2014 failure source is outside this file): CI lint job run 25981953573 job 76372167558, head SHA 0fc6fb67237821a70f77f7d5f1ebe6380010e1df, conclusion: failure, failed_count: 1 | confidence=3\n  PROBLEM: the lint check-run reports a concrete failure on the PR head SHA.\n  WHY: the lint job does not validate tests/e2e_smoke_canary.txt, so the failure is unlikely to be caused by this PR and will still block merge because the check-run concluded with failure.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- n/a (cannot be mapped to diff): CI lint job run 25981953573 / job 76372167558 | confidence=3\n  PROBLEM: lint check-run failed on the PR head SHA but the only changed file is a plain-text data file with no lintable content.\n  WHY: the failure cannot be mapped to any code change in this PR and is likely pre-existing.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- CI lint check-run failure (run 25981953573): not mapped to diff\n  PROBLEM: The lint check-run failed and blocks merge, but it is unrelated to the canary change.\n  WHY: The job runs yamllint/actionlint on YAML workflow files, not the changed .txt file.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "0004b4d48a703b1fd220a0b41922163fc2259a86303dcfc548c2ea86964671a8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2694,
+    "run_id": "25981953608",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25981953608",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517052412_c4e6fa52eb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2694,
+    "run_id": "25981953608"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-17T05:24:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

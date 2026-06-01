@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The release gate's `validate-scripts` job was the only one missing the pyyaml jsonschema jinja2 install, and the same dependency set used elsewhere should be added to the identical `validate-scripts` job in `.github/workflows/mark-stable.yml`.\n  expected_change_site: .github/workflows/mark-stable.yml validate-scripts job (around line 211)\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  EVIDENCE: mark-stable.yml lines 180-211 show only yamllint (line 182) and ruff (line 209) are installed. grep for pyyaml, jsonschema, and jinja2 across the entire file returns zero matches. The Unit tests step (line 212) runs test_validation_refresh_runner.py (line 244) and the other dependency-requiring tests. No diff hunk in either the PR diff or LAST RUN DIFF introduces this step to mark-stable.yml. No diff hunk (in original_pr_diff.patch, last_run_diff.patch, or PR_CHANGED_FILES) modifies mark-stable.yml. The PR only addressed test-and-mark-stable.yml.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- Requirement: The PR description states the root cause is that the \"release gate's validate-scripts job was the only one missing\" the pyyaml jsonschema jinja2 install. It claims to mirror the \"dependency set used elsewhere\" (ci.yml, validation-refresh.yml, nightly-validation-selftest.yml). The PR description Copilot review comment entry[4] explicitly identifies that .github/workflows/mark-stable.yml has an identical validate-scripts job running the same dependency-requiring tests (test_validation_refresh_runner.py, test_validation_discovery_bootstrap.py, test_family_node_runtime.py, test_validate_process_template_mode.py) but only installs yamllint and ruff before Unit tests, never pyyaml/jsonschema/jinja2.\n  Expected change site: .github/workflows/mark-stable.yml validate-scripts job, around line 211 (after the ruff lint step, before the Unit tests step)\n  Evidence of absence: Confirmed via grep and direct inspection. mark-stable.yml lines 180-211 show only yamllint (line 182) and ruff (line 209) are installed. grep for pyyaml, jsonschema, and jinja2 across the entire file returns zero matches. The Unit tests step (line 212) runs test_validation_refresh_runner.py (line 244) and the other dependency-requiring tests. No diff hunk in either the PR diff or LAST RUN DIFF introduces this step to mark-stable.yml. The fix in test-and-mark-stable.yml is correct and complete for that file, but the identical gap in its sibling workflow mark-stable.yml remains unaddressed.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- Requirement: Add an `Install Python test dependencies` step (`pip install pyyaml jsonschema jinja2`) before the Unit tests step in `.github/workflows/test-and-mark-stable.yml`, mirroring the dependency set used elsewhere.\n  Expected change site: .github/workflows/mark-stable.yml validate-scripts job (around line 211)\n  Evidence of absence: The PR description identifies \"the release gate's `validate-scripts` job was the only one missing\" the dependency. However, a Copilot review comment (entry[4] in PR comments) correctly flags that `.github/workflows/mark-stable.yml` has an identical `validate-scripts` job running the same tests (`tests/test_validation_refresh_runner.py`, `tests/test_validation_discovery_bootstrap.py`, `tests/test_family_node_runtime.py`, `tests/test_validate_process_template_mode.py` \u2014 see mark-stable.yml lines 238-252) but never installs `pyyaml`, `jsonschema`, or `jinja2` (only `yamllint` and `ruff` are installed before Unit tests at lines 182 and 209). The PR diff shows no changes to mark-stable.yml. The failure will reproduce when mark-stable.yml runs test_validation_refresh_runner.py since tests/test_validation_discovery_bootstrap.py imports yaml and tests/test_family_node_runtime.py also uses yaml/jsonschema. Confirmed by grep: both files import yaml.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- Requirement: Add an `Install Python test dependencies` step (`pip install pyyaml jsonschema jinja2`) before the Unit tests step in `.github/workflows/test-and-mark-stable.yml`, mirroring the dependency set used elsewhere.\n  Expected change site: `.github/workflows/mark-stable.yml` validate-scripts job (around line 211)\n  Evidence of absence: The sibling workflow `.github/workflows/mark-stable.yml` has an identical `validate-scripts` job that runs the same dependency-requiring tests (`tests/test_validation_refresh_runner.py`, `tests/test_validation_discovery_bootstrap.py`, `tests/test_family_node_runtime.py`, `tests/test_validate_process_template_mode.py` \u2014 see mark-stable.yml:244-247, :252) but never installs `pyyaml`, `jsonschema`, or `jinja2` (only `yamllint` and `ruff` are installed before Unit tests, mark-stable.yml:182, :209). The PR diff shows no changes to mark-stable.yml.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: Add an `Install Python test dependencies` step (`pip install pyyaml jsonschema jinja2`) before the Unit tests step in `.github/workflows/test-and-mark-stable.yml`, mirroring the dependency set used elsewhere (and also to the identical `validate-scripts` job in the sibling release workflow `mark-stable.yml`).\n  Expected change site: `.github/workflows/mark-stable.yml` (validate-scripts job, before the existing Unit tests step ~line 211; the PR description and Copilot review explicitly called out that the release gate's validate-scripts job was the only one missing it, yet the fix was not applied to the sibling workflow that runs the exact same test_validation_refresh_runner.py tests)\n  Evidence of absence: No diff hunk (in original_pr_diff.patch, last_run_diff.patch, or PR_CHANGED_FILES) modifies mark-stable.yml. The test_failure root cause (jsonschema_missing short-circuit desyncing FakeExecutor in unit tests) will reproduce the next time mark-stable.yml's validate-scripts runs. The PR only addressed test-and-mark-stable.yml.\n  ISSUE_CONFIDENCE: 5\n\nThe LAST RUN DIFF correctly resolved all prior reviewer findings on the analysis document (timestamp removal instead of ungrounded edit; canonical gh_retry_to_file + gh api syntax in the three quoted examples; rejection of out-of-scope pinning/retry changes). The core test-and-mark-stable.yml install step is present, correct, matches repo patterns, includes set -euo pipefail, and includes the explanatory comment. No new defects introduced in changed files. The only remaining gap is the incomplete application to the sibling workflow.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "90d82e844be250b879135662c6b9baecc3f50cc6c9ca8bb1a211d7cff9a6e918",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2999,
+    "run_id": "26660286677",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26660286677",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260529204351_a7d5da0f4a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2999,
+    "run_id": "26660286677"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-29T20:43:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/mark-stable.sh:9-15 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: The script pushes only the version tag and stable tag, so the major-version moving tag (e.g. v1) is never updated.\n  WHY: This creates a functional mismatch with the workflows, which push version, stable, and major-version tags, leaving major-version consumers on stale releases.\n- scripts/mark-stable.sh:6-15 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: The script fetches and tags from origin/main instead of the stable branch used by the workflows.\n  WHY: If main and stable diverge, the manual script can move the release tags to a different commit than the workflow path, which can point stable at the wrong release.\n- .github/workflows/mark-stable.yml:402-418 | severity=medium | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The workflow changes are not covered by contract tests or assertions that verify the use of refs/tags/ refspecs in git push commands.\n  WHY: A future regression back to bare refspecs could pass CI and only fail at release time with the original ambiguity error; severity is medium because this is a regression-risk gap, not an active runtime bug.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/mark-stable.sh:13-14 | severity=medium | confidence=3\n  PROBLEM: The script pushes only the version tag and stable tag, so the major-version moving tag is not updated.\n  WHY: Manual releases via the script leave refs/tags/v1-style pointers stale while the workflows update them; this is pre-existing and not introduced by the PR.\n- scripts/mark-stable.sh:9-10 | severity=medium | confidence=3\n  PROBLEM: The script fetches and tags from origin/main instead of the stable branch used by the workflows.\n  WHY: If main and stable diverge, the script can move the stable tag back to main\u2019s HEAD; this is pre-existing behavior and not introduced by the PR.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/mark-stable.sh:12-14 | severity=medium | confidence=5\n  PROBLEM: The script does not push the major-version moving tag (e.g., v1) that the workflows push, creating functional inconsistency.\n  WHY: When using the manual script, the major-version floating tag is never created or updated, so consumers pinned to that major version get stale releases.\n- scripts/mark-stable.sh:11 | severity=medium | confidence=5\n  PROBLEM: The script tags from origin/main rather than the stable branch used by workflows.\n  WHY: If stable and main have diverged, the manual script will tag the wrong commit and move the stable pointer to a commit not on the stable branch.\n- .github/workflows/mark-stable.yml and test-and-mark-stable.yml:402-418 (mark-stable.yml), 3913-3927 (test-and-mark-stable.yml) | severity=medium | confidence=4\n  PROBLEM: The workflows lack CI assertions or tests that verify the refs/tags/ refspec format is used.\n  WHY: A future change could revert to bare refspecs and CI would still pass, only failing later when the ambiguity error recurs.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/mark-stable.sh:10-11 | severity=medium | confidence=5\n  PROBLEM: The script tags the version from origin/main rather than from the checked-out stable branch.\n  WHY: When origin/main is ahead of or behind stable, the manually-created version tag points to a different commit than the workflow-created one, and the stable pointer can move to the wrong commit.\n- scripts/mark-stable.sh:9-15 | severity=medium | confidence=5\n  PROBLEM: The workflow pushes three tags (version, stable, major), but the script pushes only two (version, stable).\n  WHY: After a manual run, the major-version moving pointer is left stale, so consumers pinned to the major version receive an older release.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/mark-stable.sh:9-15 | severity=medium | confidence=5\n  PROBLEM: Script pushes only version tag and stable tag, omitting the major-version moving tag (e.g., v1) that workflows push.\n  WHY: Manual releases via script leave major-version pointers stale and desynchronized from workflow releases, breaking consumer expectations that all three tags update identically.\n- scripts/mark-stable.sh:6-8 | severity=medium | confidence=5\n  PROBLEM: Script fetches and tags from origin/main instead of the checked-out stable branch used by workflows.\n  WHY: Manual runs tag releases from main, which can diverge from the workflow path that releases from stable, and can move stable to the wrong commit.\n- .github/workflows/mark-stable.yml:402-418 | severity=medium | confidence=4\n  PROBLEM: No contract tests or assertions verify refs/tags/ refspecs are used correctly in git push commands.\n  WHY: A future regression to bare refspecs could pass static checks but recreate the push ambiguity error at release time.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "37fded9adad0f1f6c41b9878b5b6952b09550481e9e908c19f4fe93976e35161",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2031,
+    "run_id": "25276251365",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25276251365",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260503103014_fb274d1dbb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2031,
+    "run_id": "25276251365"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-03T10:30:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

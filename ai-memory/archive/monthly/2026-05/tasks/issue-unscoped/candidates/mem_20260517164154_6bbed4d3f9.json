@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/validate.yml:606-607 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: `include_synthesised` is initialized to `\"true\"` even though the new opt-in default is `false`.\n  WHY: The case statement/fallback corrects the runtime value, but reviewers agreed the inverted initialization contradicts the intended semantics and is misleading; severity is low across reviewers, with confidence highest at 3.\n- scripts/validate_process.sh:1287-1289 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: `include_synthesised` is initialized to `\"true\"` even though the new opt-in default is `false`.\n  WHY: The case statement/fallback corrects the runtime value, but reviewers agreed the inverted initialization contradicts the intended semantics and is misleading; severity is low across reviewers, with confidence highest at 3.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/validate.yml:606 | severity=low | confidence=1\n  PROBLEM: `include_synthesised=\"true\"` is initialized even though the new default is `false`.\n  WHY: The subsequent case statement with `:-false` fallback correctly overrides this, so runtime behavior is correct, but the initialization contradicts the new opt-in semantics and can confuse future readers.\n- scripts/validate_process.sh:1287 | severity=low | confidence=1\n  PROBLEM: `local include_synthesised=\"true\"` is initialized even though the new default is `false`.\n  WHY: The subsequent case statement correctly handles the new default, so runtime behavior is correct, but this is inconsistent with the pattern used for `VALIDATION_USE_TEMPLATES_ENABLED` in the same file and can confuse future readers.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/validate.yml:606 | severity=low | confidence=3\n  PROBLEM: `include_synthesised` is initialized to `\"true\"` even though the new default is `false`.\n  WHY: The case statement immediately overwrites the initial value, so runtime behavior is correct, but the initialization contradicts the new opt-in semantics and misleads future readers.\n- scripts/validate_process.sh:1287 | severity=low | confidence=3\n  PROBLEM: `include_synthesised` is initialized to `\"true\"` even though the new default is `false`.\n  WHY: The case statement correctly handles the new default, so runtime behavior is correct, but the misleading initialization makes the code harder to audit and maintain.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/validate.yml:607 | severity=low | confidence=1\n  PROBLEM: `include_synthesised` is initialized to `\"true\"` even though the new opt-in default is false.\n  WHY: The case statement on the next line corrects this at runtime, so there is no runtime bug, but the initialization contradicts the opt-in semantics and misleads future readers.\n- scripts/validate_process.sh:1289 | severity=low | confidence=1\n  PROBLEM: `include_synthesised` is initialized to `\"true\"` even though the new opt-in default is false.\n  WHY: The case statement corrects it at runtime, so there is no runtime bug, but the initialization contradicts the opt-in semantics and misleads future readers.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "b5faa314f0fa79e0ea6276e5889f7f8f4c29f946218e2f3d08656d001a8170c0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2705,
+    "run_id": "25996329750",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25996329750",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517164154_6bbed4d3f9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2705,
+    "run_id": "25996329750"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-17T16:41:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

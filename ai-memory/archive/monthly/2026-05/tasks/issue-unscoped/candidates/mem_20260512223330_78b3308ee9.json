@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/mcp_handshake_probe.py:mode change 100644 \u2192 100755 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: Unrelated executable-bit change outside the scoped workflow edit.\n  WHY: It does not affect runtime because the script is invoked via an explicit interpreter, but it violates the issue's guardrail to stay inside `.github/workflows/review_autofix.yml`.\n- scripts/serena_stats_emit.py:mode change 100644 \u2192 100755 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: Unrelated executable-bit change outside the scoped workflow edit.\n  WHY: It does not affect runtime because the script is invoked via an explicit interpreter, but it violates the issue's guardrail to stay inside `.github/workflows/review_autofix.yml`.\n- scripts/setup_serena.sh:mode change 100644 \u2192 100755 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: Unrelated executable-bit change outside the scoped workflow edit.\n  WHY: It does not affect runtime because the script is invoked via an explicit interpreter, but it violates the issue's guardrail to stay inside `.github/workflows/review_autofix.yml`.\n- README.md:66-67 | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: Stale documentation for the check-run wait and poll defaults.\n  WHY: The workflow now uses 120 and 30, so the README is out of sync until the deferred docs follow-up updates it.\n- probably_unnecessary_but_read_if_stuck.md:520 | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: Stale documentation for the check-run wait and poll defaults.\n  WHY: The workflow now uses 120 and 30, so the runbook is out of sync until the deferred docs follow-up updates it.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/mcp_handshake_probe.py:mode change 100644 \u2192 100755 | confidence=5\n  PROBLEM: Unrelated change outside the scoped workflow edit.\n  WHY: It does not fail at runtime, but it violates the issue's scope discipline and adds noise to the diff.\n- scripts/serena_stats_emit.py:mode change 100644 \u2192 100755 | confidence=5\n  PROBLEM: Unrelated change outside the scoped workflow edit.\n  WHY: It does not fail at runtime, but it violates the issue's scope discipline and adds noise to the diff.\n- scripts/setup_serena.sh:mode change 100644 \u2192 100755 | confidence=5\n  PROBLEM: Unrelated change outside the scoped workflow edit.\n  WHY: It does not fail at runtime, but it violates the issue's scope discipline and adds noise to the diff.\n- README.md:66-67 | confidence=4\n  PROBLEM: Stale documentation.\n  WHY: The defaults in the workflow YAML are now 120 and 30 respectively, so the README is misleading until the deferred docs update lands.\n- probably_unnecessary_but_read_if_stuck.md:520 | confidence=4\n  PROBLEM: Stale documentation.\n  WHY: The defaults are now 120 and 30, so the runbook is out of sync until the deferred docs update lands.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/mcp_handshake_probe.py:mode change (100644 \u2192 100755) | confidence=5\n  PROBLEM: Mode-only change unrelated to the check-run wait budget reduction in issue #2549.\n  WHY: It does not affect runtime behavior, but it violates the issue's scope guardrails.\n- scripts/serena_stats_emit.py:mode change (100644 \u2192 100755) | confidence=5\n  PROBLEM: Mode-only change unrelated to the check-run wait budget reduction in issue #2549.\n  WHY: It does not affect runtime behavior, but it violates the issue's scope guardrails.\n- scripts/setup_serena.sh:mode change (100644 \u2192 100755) | confidence=5\n  PROBLEM: Mode-only change unrelated to the check-run wait budget reduction in issue #2549.\n  WHY: It does not affect runtime behavior, but it violates the issue's scope guardrails.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh:mode changes (100644 \u2192 100755) | confidence=5\n  PROBLEM: These executable-bit changes are outside the scoped path `.github/workflows/review_autofix.yml` and violate the issue's \"smallest safe workflow-only change\" guardrail.\n  WHY: The scripts are invoked via explicit interpreters, so the mode change provides no functional benefit.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh:mode change from 100644 to 100755 | confidence=5\n  PROBLEM: Three script files have their execute bit added with no content changes.\n  WHY: These changes are outside the scope of issue #2549, which requests changes only to `.github/workflows/review_autofix.yml`.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/mcp_handshake_probe.py:old mode 100644 new mode 100755 | confidence=5\n  PROBLEM: Unnecessary executable bit flip unrelated to issue #2549 scope.\n  WHY: It does not fail at runtime; it is invoked via explicit python3 interpreter regardless of mode.\n- scripts/serena_stats_emit.py:old mode 100644 new mode 100755 | confidence=5\n  PROBLEM: Unnecessary executable bit flip unrelated to issue #2549 scope.\n  WHY: It does not fail at runtime; it is invoked via explicit python3 interpreter regardless of mode.\n- scripts/setup_serena.sh:old mode 100644 new mode 100755 | confidence=5\n  PROBLEM: Unnecessary executable bit flip unrelated to issue #2549 scope.\n  WHY: It does not fail at runtime; it is invoked via explicit bash shebang regardless of mode.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh:mode 100644 \u2192 100755 (executable bit added) | confidence=5\n  PROBLEM: Unrelated changes outside the scoped workflow file\n  WHY: There is no runtime failure, but the linked issue #2549 explicitly states \"stay inside the listed path, avoid unrelated workflow cleanup.\"\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "5a689f40f228570d483085926455a9f86d5f652c07cc219e2c27f91ce0445527",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2554,
+    "run_id": "25765517613",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25765517613",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260512223330_78b3308ee9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2554,
+    "run_id": "25765517613"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-12T22:33:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

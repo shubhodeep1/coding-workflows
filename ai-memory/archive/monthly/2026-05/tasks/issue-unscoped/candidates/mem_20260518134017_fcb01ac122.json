@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/scripts-pending-removal.md:Throughout the file (schema description, template, and all documentation) | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The registry requires removal preflight checks but provides no mechanism to validate or enforce them at removal time.\n  WHY: Without automated validation, the documented process is unenforceable and scripts can be removed prematurely.\n- CLAUDE.md:Throughout the file | flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The policy text mentions the preflight-check requirement but does not add any validation mechanism to prevent premature removal.\n  WHY: The same enforcement gap leaves compliance dependent on manual behavior rather than the registry system.\n- unattended_system_instructions.md:Throughout the file | flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The policy text mentions the preflight-check requirement but does not add any validation mechanism to prevent premature removal.\n  WHY: The same enforcement gap leaves compliance dependent on manual behavior rather than the registry system.\n- CLAUDE.md:Lines 585-586 (in diff) | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The \"permanent \u2014 review annually\" text is bolded here but not in the parallel registry and unattended docs.\n  WHY: The inconsistent formatting may confuse readers about whether the emphasis is intentional.\n- CLAUDE.md:Line 586 (in diff): \"These checks are what protects\" | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: Subject-verb agreement is wrong; \"checks\" should pair with \"protect\" not \"protects\".\n  WHY: The other two files use the grammatically correct \"These checks protect\".\n- CLAUDE.md:line 599 (\"\u00a76 (naming immutability) still applies\") | confidence=5\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: This cross-reference points to \u00a76, but the naming-immutability rule is in \u00a710.\n  WHY: Agents following the reference will consult the wrong section and miss the rename rules.\n- CLAUDE.md:lines 587-589 (renaming guidance) and the new \u00a718.F addition | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The new renaming guidance contains stale section-number references and contradictory instructions about ask flow, naming rules, and DB gate patterns.\n  WHY: The document now points agents at the wrong sections, causing plan/implementation mismatches.\n- unattended_system_instructions.md:lines 472-475 (cross-ref to \u00a720.C) and lines 480 (cross-ref to \u00a720.D) | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The \u00a720.F block still references outdated section numbers from the previous revision.\n  WHY: Plans generated against this file will point reviewers and implementers to the wrong place, breaking the registry surfacing contract.\n- docs/scripts-pending-removal.md:top of file and the template block | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The template does not faithfully match the policy-mandated bullet formatting and preflight-check syntax.\n  WHY: Copying it verbatim can produce entries that downstream parsing or review automation will reject or require cleanup.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- docs/scripts-pending-removal.md:Throughout the file (schema description, template, and all documentation) | confidence=5\n  PROBLEM: The registry defines removal preflight checks but provides no mechanism to validate or enforce them at removal time.\n  WHY: Without automated validation, scripts can be removed without proving the preflight checks passed, making the process unenforceable.\n- CLAUDE.md:Throughout the file\n  PROBLEM: The same preflight-check requirement is documented, but the review says the policy does not add validation to prevent premature removal.\n  WHY: The enforcement gap remains manual rather than enforced by the registry system.\n- unattended_system_instructions.md:Throughout the file\n  PROBLEM: Same as CLAUDE.md regarding the missing enforcement mechanism.\n  WHY: The same manual-compliance gap applies in unattended mode.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- CLAUDE.md:Lines 585-586 (in diff) | confidence=3\n  PROBLEM: The \"permanent \u2014 review annually\" text is bolded here but not in the parallel registry and unattended docs.\n  WHY: The inconsistent formatting may confuse readers about whether the emphasis is intentional.\n- CLAUDE.md:Line 586 (in diff): \"These checks are what protects\" | confidence=5\n  PROBLEM: Subject-verb agreement is wrong; \"checks\" should pair with \"protect\" not \"protects\".\n  WHY: The other two files use the grammatically correct \"These checks protect\".\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- CLAUDE.md:line 599 (\"\u00a76 (naming immutability) still applies\") | confidence=5\n  PROBLEM: This cross-reference points to \u00a76, but the naming-immutability rule is in \u00a710.\n  WHY: Agents following the reference will consult the wrong section and miss the rename rules.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- CLAUDE.md:lines 587-589 (renaming guidance) and the new \u00a718.F addition | confidence=5\n  PROBLEM: The new renaming guidance contains stale section-number references and contradictory instructions about ask flow, naming rules, and DB gate patterns.\n  WHY: The document now points agents at the wrong sections, causing plan/implementation mismatches.\n- unattended_system_instructions.md:lines 472-475 (cross-ref to \u00a720.C) and lines 480 (cross-ref to \u00a720.D) | confidence=5\n  PROBLEM: The \u00a720.F block still references outdated section numbers from the previous revision.\n  WHY: Plans generated against this file will point reviewers and implementers to the wrong place, breaking the registry surfacing contract.\n- docs/scripts-pending-removal.md:top of file and the template block | confidence=4\n  PROBLEM: The template does not faithfully match the policy-mandated bullet formatting and preflight-check syntax.\n  WHY: Copying it verbatim can produce entries that downstream parsing or review automation will reject or require cleanup.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "55b74ffe7b4f601fc50659dae9e2ea087391f57ca020259ee810b8e45276b0b4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26036693200",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26036693200",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260518134017_fcb01ac122",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26036693200"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 9 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-18T13:40:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

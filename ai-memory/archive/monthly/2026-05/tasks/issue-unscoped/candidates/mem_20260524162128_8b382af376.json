@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:5134 | confidence=[2]\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: `infer_validation_raw_status` can miss a bare `harness_error` reason string and misclassify a harness failure as a regular validation failure.\n  WHY: If the fallback grep does not match, the orchestrator will not set `ai:harness-broken` and can burn recovery budget on a harness error.\n- .github/workflows/orchestrate.yml:358 | confidence=[4]\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The schema-bootstrap loops still omit `validation_history.v1.json`, `operator_bypass_audit.v1.json`, and `revalidate_events.v1.json`.\n  WHY: Downstream orchestrator/decompose or dispatched workflows that need those memory schemas will fail when the staged `ai-memory/schemas/` directory lacks them.\n- scripts/orchestrate_poll_process.sh:12099-12117 | confidence=[2]\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The `/revalidate` dedupe check can fail to suppress repeats if `_iso8601_to_epoch` does not parse the stored timestamps as expected.\n  WHY: A failed or empty epoch conversion would prevent the 5-minute window comparison from firing, allowing duplicate validation resets and potentially concurrent runs.\n- scripts/ai_memory_lib.py:620 | confidence=[1]\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: `_normalize_optional_text()` returns `None` for boolean inputs, silently dropping those values.\n  WHY: Programmatic callers that pass `bool` instead of a string will persist `null` and lose the intended optional text without an error.\n- scripts/orchestrate_poll_process.sh:4333 | confidence=[3]\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: A failed `gh pr ready` inside `maybe_apply_force_merge_bypass()` is ignored by the caller, so the bypass state can persist and retry on later polls.\n  WHY: The next poll cycle can repeat the same bypass attempt against a closed or merged PR, generating duplicate failure comments and unnecessary API calls.\n- scripts/orchestrate_poll_process.sh:15117-15127 | confidence=[1]\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The new `JUDGE_*` exported shell variables are not covered by the stable-prefix contract discussion cited in `agents.md`.\n  WHY: This is a maintainability/documentation gap rather than a runtime bug, but future renames could break downstream prompt-builder consumption of the judge context.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/orchestrate_poll_process.sh:5134 | confidence=[2]\n  PROBLEM: The `infer_validation_raw_status` fallback can miss a bare `harness_error` reason string and misclassify it as a regular validation failure.\n  WHY: The grep only matches specific multi-word phrases, so a plain `harness_error` reason would not set `ai:harness-broken` and would instead consume normal validation recovery budget.\n- .github/workflows/orchestrate.yml:358 | confidence=[4]\n  PROBLEM: The two schema-bootstrap loops omit `validation_history.v1.json`, `operator_bypass_audit.v1.json`, and `revalidate_events.v1.json`.\n  WHY: If downstream workflows try to stage those schema files, validation will fail because the `ai-memory/schemas/` directory does not contain them.\n- scripts/orchestrate_poll_process.sh:12099-12117 | confidence=[2]\n  PROBLEM: The `/revalidate` dedupe path can fail if `_iso8601_to_epoch` does not parse the stored timestamps correctly.\n  WHY: If the epoch comparison does not work, duplicate `/revalidate` comments within the 5-minute window can trigger multiple resets and concurrent validation runs.\n- scripts/ai_memory_lib.py:620 | confidence=[1]\n  PROBLEM: `_normalize_optional_text()` returns `None` for boolean inputs, silently dropping the value.\n  WHY: Callers that pass a Python `bool` instead of a string will persist `null` in memory JSON and lose the intended text.\n- scripts/orchestrate_poll_process.sh:4333 | confidence=[3]\n  PROBLEM: `maybe_apply_force_merge_bypass()` surfaces a failure from `gh pr ready`, but the caller ignores that failure with `|| true`.\n  WHY: The force-merge bypass can be retried on later poll cycles against a closed or merged PR, producing repeated failure comments and unnecessary API calls.\n- scripts/orchestrate_poll_process.sh:15117-15127 | confidence=[1]\n  PROBLEM: The new `JUDGE_*` exported variables are not documented in the stable-prefix contract.\n  WHY: This is not a runtime issue today, but renames could break the downstream judge prompt builder\u2019s access to harness-error classification context.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "6bc07023320e09481370b135f388d01d4afbf4c9d5aa9d1d1cd09d79d5403fee",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2955,
+    "run_id": "26365725602",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26365725602",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260524162128_8b382af376",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2955,
+    "run_id": "26365725602"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-24T16:21:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

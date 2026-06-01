@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/detect_editor_changes_lost.sh:62-93 | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The reference-clause stripping regex only case-folds the first letter of each alternation, so all-caps variants can bypass stripping.\n  WHY: Reviewer reports that editor-summary clauses can survive and trigger false-positive EDITOR_CHANGES_LOST, blocking auto-merge.\n- .github/workflows/review_autofix.yml:3789-3938 | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The stderr sanitization flattens multi-line `bash -n` diagnostics into a single annotation line.\n  WHY: Reviewer reports that multi-line syntax errors lose structure in annotations, making unresolved-merge-marker failures harder to debug.\n- scripts/review_conflict_resolve.sh:608-799 | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: A codex exit 0 exactly at the timer boundary can send the next validation pass stale violation data from the prior attempt.\n  WHY: Reviewer reports the boundary case may use irrelevant prior data instead of decisive timeout guidance.\n- .github/workflows/mark-stable.yml:215-218\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: The unit-test step lacks `PYTHONDONTWRITEBYTECODE=1`, unlike the corresponding CI/test-and-mark-stable updates.\n  WHY: Reviewer reports Python may write `__pycache__` into `.git/`, violating repository hygiene.\n- .github/workflows/test-and-mark-stable.yml:2093-2197\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: Multiple Phase 5 test invocations lack `PYTHONDONTWRITEBYTECODE=1`.\n  WHY: Reviewer reports the same tests elsewhere now include it, so this phase can still write `__pycache__` into `.git/` and create inconsistent environments.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/detect_editor_changes_lost.sh:62-93 | confidence=3\n  PROBLEM: Verb alternation only case-folds the first letter, so all-caps words like \"mIrRoRs\" or \"rEfErEnCeS\" bypass stripping.\n  WHY: Editor summaries can then trigger false-positive EDITOR_CHANGES_LOST and block auto-merge.\n- .github/workflows/review_autofix.yml:3789-3938 | confidence=2\n  PROBLEM: `awk 'BEGIN{ORS=\"\"} NR>1{print \"%0A\"} {print}'` collapses multi-line `bash -n` stderr into a single annotation line.\n  WHY: Multi-line diagnostics lose structure in annotations, making unresolved-merge-marker failures harder to debug.\n- scripts/review_conflict_resolve.sh:608-799 | confidence=2\n  PROBLEM: A codex exit 0 exactly at the timer boundary can send the next validation pass stale violation data from the prior attempt.\n  WHY: The model may react to irrelevant prior data instead of timer-driven \"be decisive\" guidance.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/mark-stable.yml:215-218\n  PROBLEM: These test invocations lack `PYTHONDONTWRITEBYTECODE=1`, while `ci.yml` and `test-and-mark-stable.yml` have been updated to include it.\n  WHY: Python may write `__pycache__` into `.git/` during the mark-stable release workflow, violating repository hygiene rules.\n- .github/workflows/test-and-mark-stable.yml:2093-2197\n  PROBLEM: Multiple test invocations in Phase 5 lack `PYTHONDONTWRITEBYTECODE=1`.\n  WHY: The same tests elsewhere now include it, so this phase can still write `__pycache__` into `.git/` and create inconsistent test environments. (2 related items)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "e6714b8210027231e56310bace7d8f955a3344b0594981f1dc7c2bfecef98b0d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2481,
+    "run_id": "25646691771",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25646691771",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260511024659_e6535dfe4e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2481,
+    "run_id": "25646691771"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-11T02:46:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

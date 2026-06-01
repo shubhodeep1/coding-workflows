@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validate_editor_audit.sh:74-76 | confidence=[4]\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The audit section parser regex is too broad and can stop on standalone heading-like lines inside audit content, truncating later entries.\n  WHY: If an editor summary includes a line like \"Summary:\" followed by more audit entries, the parser stops there and loses the remaining content including the \"PR comment audit:\" section.\n- scripts/review_rb_judge.sh:140-200 | confidence=[3]\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: The shell fallback `head -c` can emit malformed UTF-8 after the Python truncation path fails.\n  WHY: `head -c` truncates raw bytes without UTF-8 boundary adjustment, so a multi-byte character can be split at the cut point and corrupt the prompt snippet.\n- scripts/review_rb_judge.sh:139-144 | confidence=[4]\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The prompt budget state is not updated when the file size cannot be determined.\n  WHY: The function returns early without setting `_emit_bytes`, leaving budget tracking stale for subsequent calls.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Automated forward-merge of `stable` into `main` failed due to merge conflicts on 9 files (including .github/workflows/*, README.md, several scripts and tests). Resolve conflicts so stable bug fixes reach main.\n  expected_change_site: All 9 originally conflicting files listed in the PR description.\n  confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: Current LAST_RUN_DIFF only touches 2 files; the full PR still carries forward-merge hunks from earlier passes. However, the specific duplicate-helper and indentation defects flagged in pass-1 reviews have been resolved in this iteration. No new gaps introduced.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/validate_editor_audit.sh:74-76 | confidence=[4]\n  PROBLEM: The audit section parser regex `/^[[:space:]]*[A-Za-z][A-Za-z ()-]*:[[:space:]]*$/` is too broad. It matches any standalone heading-like line (e.g., \"Summary:\", \"Note:\", \"Additional notes:\") even when such lines appear within the audit content, causing premature exit and loss of subsequent audit entries.\n  WHY: If an editor summary includes a line like \"Summary:\" followed by more audit entries, the parser stops at that line and loses the remaining content including the \"PR comment audit:\" section entirely.\n- scripts/review_rb_judge.sh:147-162 | confidence=[3]\n  PROBLEM: The UTF-8 truncation fallback uses `head -c` which does not handle multi-byte character boundaries. When the Python truncation path fails and falls back to `head -c`, the output can be malformed UTF-8.\n  WHY: If the Python path fails (e.g., Python unavailable or script error), the fallback emits potentially corrupted text that could confuse the LLM processing the prompt.\n- scripts/review_rb_judge.sh:139-144 | confidence=[4]\n  PROBLEM: The prompt budget state is not updated when the file size cannot be determined. The function returns early without setting `_emit_bytes`, leaving the budget tracking in an inconsistent state.\n  WHY: Subsequent calls to `_embed_input_file` will see stale budget state, potentially allowing large files to be retried when they should have been counted against the budget.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_rb_judge.sh:154-166 | confidence=[3]\n  PROBLEM: The shell fallback path when Python truncation fails uses `head -c` which reads raw bytes without UTF-8 boundary adjustment, potentially emitting malformed UTF-8.\n  WHY: If the Python truncation path fails (returns non-zero), the `|| head -c \"${_effective_cap}\" \"${_p}\"` fallback executes and can split a multi-byte UTF-8 character at the boundary, corrupting the prompt snippet that follows. While Python is the primary path, the fallback should also handle UTF-8 correctly for robustness.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/review_rb_judge.sh:140-200 | confidence=[3]\n  PROBLEM: The removed block contained the Python-based UTF-8 boundary truncation (the `while i > 0 and (data[i] & 0xC0) == 0x80` loop). The surviving shell fallback (`head -c`) can now emit malformed UTF-8.\n  WHY: When the Python heredoc path fails or is bypassed, a truncated multi-byte character can corrupt the prompt fed to the model, causing parse errors or incorrect reviewer/editor output.\n- Requirement: Automated forward-merge of `stable` into `main` failed due to merge conflicts on 9 files (including .github/workflows/*, README.md, several scripts and tests). Resolve conflicts so stable bug fixes reach main.\n  Expected change site: All 9 originally conflicting files listed in the PR description.\n  Evidence of absence: Current LAST_RUN_DIFF only touches 2 files; the full PR still carries forward-merge hunks from earlier passes. However, the specific duplicate-helper and indentation defects flagged in pass-1 reviews have been resolved in this iteration. No new gaps introduced.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "fab30a836910a300d58b6bd471de92194aa15cd59347b41db8b878f242fd5da8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2844,
+    "run_id": "26220709961",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26220709961",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260521110214_6a0a679d41",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2844,
+    "run_id": "26220709961"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-21T11:02:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

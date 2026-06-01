@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_merge_precheck.py:18-84 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The tests and docstrings describe the cleanup list as \"known CI-generated files\", but `FULL_RM_LINE` also includes `scripts/check_external_branch_advance.sh`, a tracked support script fetched at runtime, so the coverage description is misleading.\n  WHY: Multiple reviewers flagged the same documentation/naming mismatch across the `FULL_RM_LINE` definition and the affected docstrings; the assertions themselves are correct.\n- .github/workflows/review_autofix.yml:3967,4014 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The late \"Detect merge conflicts\" step still uses bare `mktemp -d`/`mktemp` instead of the fail-open pattern used in the new pre-review gate.\n  WHY: The reviewer treated this as an informational, pre-existing asymmetry rather than a regression, but it remains the only un-hardened mktemp call site in the workflow diff.\n- tests/test_review_autofix_merge_precheck.py:95-101 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: The test name `test_known_ci_artifacts_removed_in_resolve_step` is misleading because the workflow has no `resolve_step`; the test actually covers both the pre-review gate and the late \"Detect merge conflicts\" step.\n  WHY: The assertions are correct, but the name obscures the scope being verified.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_review_autofix_merge_precheck.py:18-23, 55-59, 82-84 | severity=low | confidence=4\n  PROBLEM: The test function name and docstrings refer to \"known CI-generated files,\" but `FULL_RM_LINE` includes `scripts/check_external_branch_advance.sh`, which is a tracked support script fetched at runtime rather than a transient CI-generated artifact.\n  WHY: This is a documentation/naming mismatch only; the `rm -f` behavior itself is correct, but the wording can mislead future maintainers about what kind of files the cleanup list covers.\n- .github/workflows/review_autofix.yml:3967, 4014 | severity=low | confidence=3\n  PROBLEM: The late \"Detect merge conflicts\" step still uses bare `mktemp -d`/`mktemp` without the fail-open handling added in the pre-review gate.\n  WHY: The reviewer explicitly marked this as informational and out of scope, so it is pre-existing rather than a regression, but the asymmetry remains.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_review_autofix_merge_precheck.py:18-27, 57-60, 83-84 | severity=low | confidence=3\n  PROBLEM: The `FULL_RM_LINE` variable and test docstrings refer to \"CI-generated files\" but include `scripts/check_external_branch_advance.sh`, which is a support script fetched from the repository rather than a transient CI-generated artifact.\n  WHY: This is a semantic mismatch in the test/docs only; the cleanup still works, but the description overstates the list as purely CI-generated.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/test_review_autofix_merge_precheck.py:18-23 | severity=low | confidence=4\n  PROBLEM: `FULL_RM_LINE` hardcodes `scripts/check_external_branch_advance.sh` in the rm -f list, but the pre-review gate fetches this script explicitly via `SUPPORT_SCRIPTS_DIR` before the rm, so it is not a transient untracked CI-generated artifact like `scripts/ai_memory.py`.\n  WHY: The test passes today but the naming/documentation around \"CI-generated files\" is misleading for this mixed cleanup list.\n- tests/test_review_autofix_merge_precheck.py:46 | severity=low | confidence=3\n  PROBLEM: The docstring for `test_known_ci_artifacts_removed_in_resolve_step` says the probes remove the same set of \"known CI-generated files,\" but the cleanup list includes `scripts/check_external_branch_advance.sh`, which is not CI-generated.\n  WHY: The assertions are correct, but the docstring erodes signal for maintainers reading the test.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/test_review_autofix_merge_precheck.py:95-101 | severity=low | confidence=3\n  PROBLEM: The test name `test_known_ci_artifacts_removed_in_resolve_step` is misleading because there is no `resolve_step`; the test actually verifies cleanup in both the pre-review gate and the late \"Detect merge conflicts\" step.\n  WHY: The assertions are correct, but the name obscures what scope is being tested.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "765ae516d9ee94d3cfe4825f4b3c18ad104a8139f629d4f33fb805e8f11701d1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2558,
+    "run_id": "25780853576",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25780853576",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260513064356_469558d719",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2558,
+    "run_id": "25780853576"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-13T06:43:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

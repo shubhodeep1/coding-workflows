@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `d2e081ad077195c8ceae76545d025259e5dc6d97` on `orchestrator/project-2042`  \nIntegration branch metadata matches the checked-out ref.\n\nImplementation plan\n\n1. Files likely to change\n- `.github/workflows/clarify.yml`\n- `.github/workflows/plan.yml`\n- `.github/workflows/orchestrate.yml`\n- `.github/workflows/orchestrate_clarify_respond.yml`\n- `prompts/mode-clarify.txt`\n- `prompts/mode-plan.txt`\n- `prompts/mode-orchestrate.txt`\n- `prompts/mode-clarify-respond.txt`\n\n2. Functions/modules/sections to update\n- Workflow bootstrap sections in the four YAML files:\n  Remove `Install uv for Serena` steps where present.\n  Remove `Setup Serena MCP server` steps and all related env passthrough (`SERENA_*`, `CONTEXT7_*`, `GIT_MCP_*`).\n- Workflow support-file staging sections:\n  Remove `setup_serena.sh` from staged script lists.\n  Remove staging of `prompts/serena-efficiency-block.txt`.\n- Prompt assembly sections:\n  Remove `{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}` placeholder usage from inline prompt templates in `clarify.yml` and `plan.yml`.\n  Keep `render_prompt.sh` usage intact so prompt rendering still flows through the existing shared renderer.\n- Prompt source files:\n  Remove Serena/Context7/Git MCP references and MCP-efficiency guidance from `mode-clarify.txt`, `mode-plan.txt`, and `mode-orchestrate.txt`.\n  Rewrite the inspection guidance in `mode-clarify-respond.txt` to use plain shell/apply_patch instructions instead of Serena-specific guidance.\n\n3. Data structures affected\n- No MongoDB collections, contracts, indexes, or runtime data structures should change.\n- Only workflow YAML step definitions, env blocks, and prompt-template text/placeholders are affected.\n\n4. API/interface changes\n- No user-facing workflow inputs/outputs should change.\n- Internal workflow environment setup changes:\n  The planning-side workflow family will stop bootstrapping optional MCP tooling.\n  Prompt content passed to Codex will no longer advertise MCP tools or MCP-efficiency rules.\n- Shared helper contract to preserve:\n  `scripts/render_prompt.sh` must continue to render the cleaned prompt files without requiring the removed placeholder file.\n\n5. Implementation notes\n- Start with the requested Phase 0 grep triplet across the four workflow files and four prompt files to confirm there are no additional active-file MCP references beyond the scoped files.\n- Apply minimal deletions only; avoid reflowing unrelated YAML or prompt prose.\n- In the workflow files, remove only the MCP-specific bootstrap/staging/prompt text, leaving unrelated support-file staging and Codex setup untouched.\n- In the prompt files, replace MCP guidance with generic repo-inspection guidance consistent with current planning/clarification behavior.\n\n6. Potential risks / edge cases\n- `render_prompt.sh` may expect missing placeholders to resolve cleanly; verify that deleting `{{SERENA_EFFICIENCY_BLOCK_READ_ONLY}}` from prompt sources and inline prompt blocks does not leave unresolved template markers.\n- `orchestrate.yml` stages prompt files from the workflow support source; removing `serena-efficiency-block.txt` staging must not affect the remaining prompt file staging path.\n- `mode-clarify-respond.txt` is used by the orchestrator auto-answer flow; replacement guidance must stay operational and not accidentally instruct tool usage that conflicts with the current execution environment.\n- Some acceptance text says \u201cfiles listed below,\u201d but the issue body does not provide a separate `files_touched` block beyond the explicit scope list above. No codebase conflict otherwise.\n\n7. Testing considerations\n- Before edits: run the Phase 0 grep triplet and capture matches in the scoped workflow family.\n- After edits:\n  Run `rg` on the eight scoped files to confirm no remaining references to `setup_serena.sh`, `serena-efficiency-block.txt`, `SERENA_`, `CONTEXT7_`, `GIT_MCP_`, `Serena`, `Context7`, `Git MCP`, or MCP-efficiency prose.\n- Validate YAML syntax for each edited workflow with:\n  `python3 -c \"import yaml; yaml.safe_load(open(path))\"`\n- Sanity-check prompt rendering by running the existing shared renderer against the edited prompt files or inline-render paths used by these workflows, confirming no unresolved placeholders remain.\n- If available, inspect the generated inline prompt blocks in `clarify.yml` and `plan.yml` after edit to ensure wording still reads coherently without the removed MCP section.\n\nImplementation-time estimate: 35 minutes\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "cf194dbc88543cf937ae6f131d14c917d0b5c3cb2c34b012d64d4703ecc2bbee",
+  "lineage": {
+    "issue_number": 2043,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25293861099",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25293861099",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2043"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260503232836_b90824e621",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2043,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25293861099"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2043",
+  "timestamps": {
+    "created_at": "2026-05-03T23:28:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

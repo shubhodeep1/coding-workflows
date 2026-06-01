@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/implement_diagnose_post_codex_failure.sh:262-282 | severity=medium | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The cached-body fallback re-parses metadata and can force a live GET for null or malformed bodies, and its zero-byte sentinel makes retries non-idempotent.\n  WHY: The same metadata file is already parsed earlier, null/missing bodies are treated as cache misses, and the retry path should not depend on an empty sentinel file.\n- scripts/implement_diagnose_post_codex_failure.sh:274 | severity=low | confidence=2\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Inlining the former `write_issue_body_from_meta` helper removes the single documented entry point for cached-body extraction.\n  WHY: The logic is now duplicated inline, so the cached-body contract is less explicit for future maintainers.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/implement_diagnose_post_codex_failure.sh:262-282 | confidence=4\n  PROBLEM: The newly introduced tracking flag correctly restores empty-string cache-hit behavior, but null/malformed cached metadata still forces an extra live GET on the common diagnose path.\n  WHY: Redundant API round-trip and extra jq parsing occur on cache-miss/null-body cases, including the common \u201cno validation errors\u201d path after a successful Codex run.\n- scripts/implement_diagnose_post_codex_failure.sh:274-276 | confidence=5\n  PROBLEM: When the cached metadata contains a literal null or absent `body` key, the jq invocation exits non-zero, the else branch writes a zero-byte sentinel, and the subsequent guard always falls back to the live API call.\n  WHY: This guarantees correctness for the null/missing case, but the zero-byte file write is not idempotent on retry and a second invocation will always take the live-GET path.\n- scripts/implement_diagnose_post_codex_failure.sh:262-282 | confidence=4\n  PROBLEM: The full newly-added post-prefetch block still performs extra jq parsing and a conditional live API call on every post-Codex diagnose invocation.\n  WHY: The same metadata file was already parsed for labels earlier in the script, so the structure adds unnecessary JSON-processing and potential API latency.\n- scripts/implement_diagnose_post_codex_failure.sh:274 | confidence=2\n  PROBLEM: Inlining the former `write_issue_body_from_meta` helper removes the single clear entry point that documented the cached-body extraction contract.\n  WHY: Future caching changes no longer have one obvious helper to update, so the review-autofix and implement-diagnose body-loading contracts are less explicit.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "d6f58c9676736607272cb9f450996f63256304e0eca13156fe11802fffb814d0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2971,
+    "run_id": "26463999966",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26463999966",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260526173938_886f6236c6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2971,
+    "run_id": "26463999966"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-26T17:39:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

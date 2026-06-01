@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Overwrite the entire file tests/e2e_smoke_canary.txt so it contains exactly these three lines (no more, no less, with a trailing newline after the final line per POSIX file convention): status: ok\\nrun_id: 26632368740\\nupdated-by: ai-pipeline (and only modify that one file)\n  expected_change_site: tests/e2e_smoke_canary.txt (full content replacement)\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The LAST_RUN_DIFF, current worktree (confirmed by direct read), original_pr_diff.patch, and pr_changed_files.txt all show the exact canonical 3-line content with no extra lines, no bait, no comments, and no other files touched.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: Overwrite the entire file tests/e2e_smoke_canary.txt so it contains exactly these three lines (no more, no less, with a trailing newline after the final line per POSIX file convention): status: ok\\nrun_id: 26632368740\\nupdated-by: ai-pipeline (and only modify that one file)\n  Expected change site: tests/e2e_smoke_canary.txt (full content replacement)\n  Evidence of absence: The LAST_RUN_DIFF, current worktree (confirmed by direct read), original_pr_diff.patch, and pr_changed_files.txt all show the exact canonical 3-line content with no extra lines, no bait, no comments, and no other files touched.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "509f559604ff1e5ca571174f5c105522728b7e3257b919d36593e5e81e266fa3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2990,
+    "run_id": "26633456376",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26633456376",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260529111453_a3358b1bea",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2990,
+    "run_id": "26633456376"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-29T11:14:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

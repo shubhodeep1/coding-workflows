@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:164-170 | confidence=[3]\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Test step name changed from \"STALL-loop and churn-fixes unit tests\" to \"STALL-loop and churn fixes unit tests\" by removing the hyphen from \"fixes\".\n  WHY: The reviewer noted it is cosmetic with no runtime impact, so the change is limited to the workflow label.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/ci.yml\nLines: 164-170 (PR diff hunk)\nProblem: Test step name changed from \"STALL-loop and churn-fixes unit tests\" to \"STALL-loop and churn fixes unit tests\" (removed hyphen from \"fixes\").\nRuntime impact: None; step names are cosmetic and do not affect execution or logging parsing.\nISSUE_CONFIDENCE: 3\n\n- .github/workflows/ci.yml\nLines: 202-206 (removed in last_run_diff)\nProblem: Duplicate \"Review autofix EDITOR_CHANGES_LOST shim regression tests\" step removed correctly, eliminating redundant `python3 tests/test_detect_editor_changes_lost.py` execution.\nRuntime impact: Prevents wasted runner time and duplicated logs in CI; prior state ran the same test twice consecutively.\nISSUE_CONFIDENCE: 5\n\n- scripts/orchestrate_poll_process.sh\nLines: 3444-3451 (last_run_diff hunk)\nProblem: Restored `tr -d '[:space:]'` trimming and `[[ \"${_ihb_conflict_count}\" =~ ^[0-9]+$ ]]` numeric validation before `[ -gt 0 ] && [ -le 3 ]` under `set -euo pipefail`.\nRuntime impact: Prevents \"integer expression expected\" bash error if `wc -l` outputs whitespace or non-numeric (e.g., sed/wc pipeline failure), which would abort the integration-branch hot-file short-circuit mid-poll cycle.\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "ab806e18a07baf9e9eebdb8b4172ee93bcaed3084ed1445e4de3a81cbd278f35",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2542,
+    "run_id": "25732488531",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25732488531",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260512120833_8cf33946c5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2542,
+    "run_id": "25732488531"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-12T12:08:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

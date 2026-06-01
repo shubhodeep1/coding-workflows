@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/implement_diagnose_post_codex_failure.sh:122-129 | severity=medium | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: issue_meta_matches_issue() can fall back to the API when cached metadata is non-empty but malformed JSON.\n  WHY: jq -er will fail on parse errors even though the file passes the size check, so corruption is treated like a cache miss.\n- scripts/targeted_file_context.py:315-322 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: _normalize_semble_max_chunks() caps SEMBLE_MAX_CHUNKS_CAP at 20, which can truncate context for overflow files in large repos.\n  WHY: clamping `--top-k` to 20 limits recall when a larger retrieval budget would be needed.\n- scripts/targeted_file_context.py:141-150 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: _log_semble_event() can wrap values in repr(), which may break downstream space-delimited key=value parsing.\n  WHY: fields containing spaces are rendered with quotes, so log consumers expecting simple tokenization can misparse them.\n- tests/test_judge_semble_prefetch_contract.py:81-91 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The removed placeholder-guard test leaves no behavioral coverage for an unresolved `{{SEMBLE_PREFETCH}}` reaching the rendered prompt.\n  WHY: the remaining tests cover inject/drop cases, but not the guard path that exits when the placeholder survives rendering.\n- scripts/implement_diagnose_post_codex_failure.sh, scripts/targeted_file_context.py:n/a | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m2_5, z-ai_glm-5]\n  PROBLEM: The autofix touched files outside issue #2408's stated file list.\n  WHY: both reviewers identified `scripts/implement_diagnose_post_codex_failure.sh` and `scripts/targeted_file_context.py` as outside the specified scope.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_judge_semble_prefetch_contract.py:(test removed) | severity=low | confidence=3\n  PROBLEM: The previous autofix removed `test_render_prompt_source_contains_semble_placeholder_resolution_and_guard()` and left no behavioral test for the unresolved-placeholder guard.\n  WHY: the remaining tests verify inject/drop behavior, but not that the guard actually fires when `{{SEMBLE_PREFETCH}}` remains unresolved.\n- scripts/implement_diagnose_post_codex_failure.sh, scripts/targeted_file_context.py:n/a | severity=low | confidence=5\n  PROBLEM: The last run modified files outside the issue #2408 \"Files likely to change\" list.\n  WHY: `scripts/implement_diagnose_post_codex_failure.sh` and `scripts/targeted_file_context.py` are not listed in the issue scope.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/implement_diagnose_post_codex_failure.sh:122-129 | severity=medium | confidence=3\n  PROBLEM: issue_meta_matches_issue() performs jq on potentially malformed JSON after only a size check, causing API fallback and masking cache corruption.\n  WHY: jq -er will fail on parse errors even when the file passes the size check, so malformed cached metadata is not distinguished from an absent cache entry.\n- scripts/targeted_file_context.py:315 | severity=medium | confidence=4\n  PROBLEM: _normalize_semble_max_chunks() hard-caps SEMBLE_MAX_CHUNKS_CAP at 20, which can truncate context for large repos.\n  WHY: clamping `--top-k` to 20 limits recall on overflow files in large monorepos.\n- scripts/targeted_file_context.py:141 | severity=medium | confidence=4\n  PROBLEM: _log_semble_event() renders some values with repr(), which can break downstream key=value parsing.\n  WHY: quoted or spaced values are not emitted uniformly, so telemetry extraction can misparse fields.\n- tests/test_judge_semble_prefetch_contract.py:81-91 | severity=low | confidence=3\n  PROBLEM: The removed test no longer checks that the unresolved-placeholder guard fires for `{{SEMBLE_PREFETCH}}`.\n  WHY: placeholder injection/removal cases are covered, but the explicit guard path is not behaviorally tested.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/implement_diagnose_post_codex_failure.sh, scripts/targeted_file_context.py:n/a | severity=low | confidence=5\n  PROBLEM: The autofix touched files outside issue #2408's stated file list.\n  WHY: `scripts/implement_diagnose_post_codex_failure.sh` and `scripts/targeted_file_context.py` are not in the issue's \"Files likely to change\" list.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "07502cf172b6aa22968943c8863e59d6279693520bc3323ad9549b08ee14e6d0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2409,
+    "run_id": "25613195746",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25613195746",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260509223729_1b448d2ae5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2409,
+    "run_id": "25613195746"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-09T22:37:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

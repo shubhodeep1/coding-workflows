@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:5508-5511 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The step-scoped `ALERT_MSG_LEVEL` assignment uses `vars.PR_PROCESSED_ALERT_LEVEL || 'SILENT'` without explicit validation of the variable value.\n  WHY: If a consumer repo sets an invalid value for `PR_PROCESSED_ALERT_LEVEL`, the shell fallback maps unknown values to DEBUG and can produce more alerts than intended; other reviewers considered this already safely handled/non-bug.\n- tests/test_review_autofix_editor_noop_cascade_contract.py:394-412 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The test `test_review_apply_fixes_scopes_refusal_regex_to_first_nonempty_line()` only checks for presence of the `grep -m1 -vE` and `_tmp_output_first_nonempty_line` patterns in the source code, not the actual functional behavior.\n  WHY: A syntactically valid implementation could still regress functionally while passing this contract-style check, though other tests in the suite cover the refusal behavior separately.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Automated forward-merge of stable into main failed due to merge conflicts in the listed files (including .github/workflows/review_autofix.yml, README.md, CHANGELOG.md, scripts/orchestrate_poll_process.sh, scripts/review_apply_fixes.sh, several test files, and probably_unnecessary_but_read_if_stuck.md). Resolve the conflicts so bug fixes on stable are present on main, while preserving the merge-commit ancestry (explicitly do not squash/rebase).\n  expected_change_site: The merge commit on this forward-merge branch (currently at HEAD with merge commit bc4f246) plus any clean-up in the 8 changed files listed in the PR description.\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: git_status.txt shows the branch is clean at HEAD (no uncommitted conflicts), git_diff_stat.txt is empty vs. the tracking branch, the PR DIFF and LAST RUN DIFF contain exactly the expected forward-merged delta (including the new PR_PROCESSED_ALERT_LEVEL handling, refusal-scoping first-non-empty-line capture, GraphQL head.sha caching, test coverage, runbook updates, and CHANGELOG entry), and the ancestry-preserving merge commit is present. No remaining conflict markers or missing forward content.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/review_autofix.yml:5508-5511 | severity=low | confidence=2\n  PROBLEM: The step-scoped `ALERT_MSG_LEVEL` assignment uses `vars.PR_PROCESSED_ALERT_LEVEL || 'SILENT'` without explicit validation of the variable value.\n  WHY: If a consumer repo sets an invalid value for `PR_PROCESSED_ALERT_LEVEL` (e.g., empty string or malformed value), the shell fallback in `tg_helpers.sh` defaults unknown values to DEBUG (0), which would cause more Telegram alerts rather than fewer; this is a minor hardening concern rather than a correctness bug.\n- tests/test_review_autofix_editor_noop_cascade_contract.py:394-412 | severity=low | confidence=3\n  PROBLEM: The test `test_review_apply_fixes_scopes_refusal_regex_to_first_nonempty_line()` only checks for presence of the `grep -m1 -vE` and `_tmp_output_first_nonempty_line` patterns in the source code, not the actual functional behavior.\n  WHY: A syntactically valid implementation could theoretically pass the presence check while the functional behavior regresses, though other tests in the suite cover the refusal behavior functionally.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: Automated forward-merge of stable into main failed due to merge conflicts in the listed files (including .github/workflows/review_autofix.yml, README.md, CHANGELOG.md, scripts/orchestrate_poll_process.sh, scripts/review_apply_fixes.sh, several test files, and probably_unnecessary_but_read_if_stuck.md). Resolve the conflicts so bug fixes on stable are present on main, while preserving the merge-commit ancestry (explicitly do not squash/rebase).\n  Expected change site: The merge commit on this forward-merge branch (currently at HEAD with merge commit bc4f246) plus any clean-up in the 8 changed files listed in the PR description.\n  Evidence of absence: git_status.txt shows the branch is clean at HEAD (no uncommitted conflicts), git_diff_stat.txt is empty vs. the tracking branch, the PR DIFF and LAST RUN DIFF contain exactly the expected forward-merged delta (including the new PR_PROCESSED_ALERT_LEVEL handling, refusal-scoping first-non-empty-line capture, GraphQL head.sha caching, test coverage, runbook updates, and CHANGELOG entry), and the ancestry-preserving merge commit is present. No remaining conflict markers or missing forward content.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "116e12edc8c54683361ee69eb480beb92333db626d4d1d6c06c91c409c8d12bd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2954,
+    "run_id": "26367763943",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26367763943",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260524173427_07619eab94",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2954,
+    "run_id": "26367763943"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-24T17:34:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

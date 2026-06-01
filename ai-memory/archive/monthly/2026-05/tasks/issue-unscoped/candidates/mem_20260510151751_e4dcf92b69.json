@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:1-6 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The canary file does not match issue #2456: the three required fields are wrong and three extra lines violate the exact three-line spec.\n  WHY: Byte-for-byte smoke-test validation expects the exact 3-line canary content, so the current 6-line bait content will fail validation.\n- CI check-run \"lint\" on head SHA cdd1e0d7fa45d04b2baac2ec8e3142109509ff8b:N/A | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The lint check-run concluded failure on the PR head SHA.\n  WHY: A failed required CI check-run blocks merge; the exact failing rule is not surfaced, but the failure itself is confirmed.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:1-6 | confidence=5\n  PROBLEM: The file contains 6 lines of bait/corrupted content instead of the 3 lines required by issue #2456.\n  WHY: The smoke test framework compares this canary file byte-for-byte against the expected 3-line spec, so the wrong values and extra lines will produce a spec mismatch.\n- CI check-run \"lint\" on head SHA cdd1e0d7fa45d04b2baac2ec8e3142109509ff8b:N/A | confidence=3\n  PROBLEM: The lint check-run concluded failure on the PR head SHA.\n  WHY: A failed CI check-run blocks merge, even though the exact cause of the lint failure is not established from the available data.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:1-6 | confidence=5\n  PROBLEM: The implementation contains wrong values for all three required fields and adds three extra lines that violate the explicit constraint.\n  WHY: The downstream smoke test does byte-for-byte validation, so the file will fail because it does not match the exact specification.\n- CI check-run on head SHA cdd1e0d7fa45d04b2baac2ec8e3142109509ff8b:N/A | confidence=4\n  PROBLEM: The lint check-run concluded with failure status, which blocks PR merge.\n  WHY: The CI gate failure is real and must be resolved, even if the lint failure appears to be pre-existing and not caused by the canary file.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:1-6 | confidence=5\n  PROBLEM: The canary file content does not match the exact specification from issue #2456.\n  WHY: The smoke test validation expects exactly three lines with the specified values, and the current file has wrong values plus extra content, which will fail byte-for-byte validation.\n- tests/e2e_smoke_canary.txt:1 | confidence=5\n  PROBLEM: The status value is \"BROKEN_BY_E2E_BAIT_25631690654\" but should be \"ok\" per the issue specification.\n  WHY: Downstream validation expects \"ok\" to indicate successful smoke test completion.\n- tests/e2e_smoke_canary.txt:2 | confidence=5\n  PROBLEM: The run_id value is \"WRONG_VALUE_SHOULD_BE_25631690654\" but should be \"25631690654\" per the issue specification.\n  WHY: The run_id must match the specific canary run ID for tracking purposes.\n- tests/e2e_smoke_canary.txt:3 | confidence=5\n  PROBLEM: The updated-by value is \"e2e-bait-injector\" but should be \"ai-pipeline\" per the issue specification.\n  WHY: The updated-by field identifies the automation pipeline that processed the canary.\n- tests/e2e_smoke_canary.txt:4-6 | confidence=5\n  PROBLEM: Three extra lines (\"extra:\", \"also:\", and the E2E_EDITOR_BAIT comment) violate the issue constraint that the file must contain exactly three lines with no extra content.\n  WHY: Any additional content beyond the three specified lines breaks the canary format contract and may cause parsing failures.\n- CI/LINT CHECK-RUN: lint:N/A | confidence=4\n  PROBLEM: The lint check-run failed on the PR head SHA cdd1e0d7fa45d04b2baac2ec8e3142109509ff8b.\n  WHY: A failed lint gate blocks merge and indicates the implementation does not pass required checks.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:1-6 | confidence=5\n  PROBLEM: The file contains 6 lines instead of the required 3 lines, with all three required fields having wrong values and three extra lines that violate the issue spec.\n  WHY: The E2E smoke test validation expects the exact canary content, so the current file will fail validation.\n- CI check-run named `lint` on head SHA `cdd1e0d7fa45d04b2baac2ec8e3142109509ff8b`:N/A | confidence=4\n  PROBLEM: The `lint` check-run concluded `failure` on the PR head SHA.\n  WHY: A failed lint gate blocks merge; the exact failing step was not surfaced, but the check-run failure is confirmed.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/e2e_smoke_canary.txt:1-6 | confidence=5\n  PROBLEM: File contents do not match the exact specification in issue #2456; required lines are `status: ok`, `run_id: 25631690654`, `updated-by: ai-pipeline` (exactly three lines with trailing newline), but current contents use bait values plus three extra lines.\n  WHY: Byte-for-byte validation in the smoke test will mismatch on values, line count, and extra content, blocking downstream CI/pipeline advancement and PR merge.\n- N/A (CI check-run):N/A | confidence=5\n  PROBLEM: Lint CI job failed on PR head.\n  WHY: Failed required check-run blocks GitHub auto-merge and PR progression.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:1-6 | confidence=5\n  PROBLEM: The file content completely violates the issue #2456 specification.\n  WHY: The smoke-test canary validation compares the file byte-for-byte against the expected three-line spec, and the current content has wrong required values plus three extra lines.\n- tests/e2e_smoke_canary.txt:4-6 | confidence=5\n  PROBLEM: Three extra lines were added that are not part of the required canary spec.\n  WHY: The issue explicitly requires exactly three lines with no extra content, so the additional lines will cause validation failure.\n- tests/e2e_smoke_canary.txt (CI check-run):N/A | confidence=5\n  PROBLEM: The lint CI check-run failed on the PR head SHA.\n  WHY: A failed lint gate blocks PR merge and indicates the implementation does not pass required CI checks.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "48d8244dd84334ad6f8810b9dc53b0442db1020752c07dc8420030f1d1fe67a2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2460,
+    "run_id": "25631840788",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25631840788",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510151751_e4dcf92b69",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2460,
+    "run_id": "25631840788"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-10T15:17:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

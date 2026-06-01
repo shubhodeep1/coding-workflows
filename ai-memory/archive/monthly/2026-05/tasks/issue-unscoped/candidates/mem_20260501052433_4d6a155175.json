@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/summarize_unselected_runs.py:161-173 | severity=high | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: `_parse_iso8601` assumes `created_at` is always a string, so malformed non-string values can raise `AttributeError` and abort summarization for the whole batch.\n  WHY: If `created_at` is `None` or another non-string type, `.strip()` fails during sorting and no runs in the window get summarized.\n- .github/workflows/workflow-log-analysis.yml:265-294 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The mini-summarize step uses `continue-on-error: true` without a downstream check, so summarizer failures can silently leave `log_summary` empty and widen analysis coverage loss.\n  WHY: When the step fails open, `analyze_workflow_logs.py` sees metadata-only runs and misses the log signal that was supposed to enrich the report.\n- scripts/summarize_unselected_runs.py:394-399 | severity=low | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: `_emit_telemetry` is missing an explicit `ensure_ascii=True`, so non-ASCII values may be escaped in telemetry output.\n  WHY: The review flags inconsistent log/telemetry encoding as a potential issue for downstream grep/extraction of emitted telemetry.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- (No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- (No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- (No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- (No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/summarize_unselected_runs.py:161-173 | severity=high | confidence=5\n  PROBLEM: `_parse_iso8601` assumes `created_at` is always a string, so malformed non-string values can raise `AttributeError` and abort summarization for the whole batch.\n  WHY: If `created_at` is `None` or another non-string type, `.strip()` fails during sorting and no runs in the window get summarized.\n- .github/workflows/workflow-log-analysis.yml:265-294 | severity=medium | confidence=4\n  PROBLEM: The mini-summarize step uses `continue-on-error: true` without a downstream check, so summarizer failures can silently leave `log_summary` empty and widen analysis coverage loss.\n  WHY: When the step fails open, `analyze_workflow_logs.py` sees metadata-only runs and misses the log signal that was supposed to enrich the report.\n- scripts/summarize_unselected_runs.py:394-399 | severity=low | confidence=2\n  PROBLEM: `_emit_telemetry` is missing an explicit `ensure_ascii=True`, so non-ASCII values may be escaped in telemetry output.\n  WHY: The review flags inconsistent log/telemetry encoding as a potential issue for downstream grep/extraction of emitted telemetry.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- (No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "be6ccd1a7fa414f389c11516ca34a59b47c6700f6ffc3c2383aa0309749c9d03",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 1839,
+    "run_id": "25202909051",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25202909051",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260501052433_4d6a155175",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 1839,
+    "run_id": "25202909051"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-01T05:24:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

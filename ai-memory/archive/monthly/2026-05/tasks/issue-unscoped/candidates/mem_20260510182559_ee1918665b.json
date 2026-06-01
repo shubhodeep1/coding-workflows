@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:195-205 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The new CI contract-test step does not install dependencies, so future non-stdlib additions would fail in CI.\n  WHY: Several reviewers said the current test is stdlib-only today, so this is a future-maintainability concern rather than a present failure.\n- scripts/review_conflict_resolve.sh:874-875 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: The retry warning banner for the non-timeout error path was reported to reference the timeout budget even though no timeout occurred.\n  WHY: Most reviewers called this a false positive because the current code only interpolates the budget in the timeout branch, so the finding is disputed.\n- scripts/review_conflict_resolve.sh:874-875 | severity=low | confidence=1\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The timeout-path banner was reported to use the raw timeout budget text directly, which could be misleading if the value is clamped or malformed.\n  WHY: This is a low-confidence logging-quality concern only; no functional break was reported.\n- tests/test_review_conflict_resolve_retry_prelude_render.py:44-52 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The heredoc-extraction regex only matches single-quoted heredoc tags, so refactoring the launcher heredoc form would break the test.\n  WHY: Reviewers agreed the current script uses `<<'PY'`, so this is a maintenance fragility rather than a current runtime bug.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/ci.yml:195-205 | severity=low | confidence=2\n  PROBLEM: CI test step lacks pip-install deps.\n  WHY: The test file currently uses only stdlib modules, so this was assessed as not an issue.\n- scripts/review_conflict_resolve.sh:874-875 | severity=low | confidence=2\n  PROBLEM: Banner mentions CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS on error path.\n  WHY: The reviewer marked this as a false positive after checking the actual branch text.\n- tests/test_review_conflict_resolve_retry_prelude_render.py:44-52 | severity=low | confidence=3\n  PROBLEM: Heredoc extraction regex requires single-quoted tag.\n  WHY: The reviewer called it accurate but very low severity because the current script uses the matching form.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/ci.yml:195-205 | severity=low\n  PROBLEM: CI step external dependency concern.\n  WHY: The test is stdlib-only today, so this was assessed as not an issue.\n- scripts/review_conflict_resolve.sh:874-875 | severity=low\n  PROBLEM: Banner shows timeout value on error outcomes.\n  WHY: The reviewer said the code correctly branches and only includes the timeout value on timeout paths.\n- tests/test_review_conflict_resolve_retry_prelude_render.py:44-52 | severity=low\n  PROBLEM: Heredoc extraction regex fragility.\n  WHY: The reviewer considered it a valid concern but not a current bug.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/ci.yml:195-205 | severity=low\n  PROBLEM: CI step assumes stdlib-only dependencies.\n  WHY: Verified; the current test uses only stdlib imports, so this is acceptable today.\n- scripts/review_conflict_resolve.sh:874-875 | severity=low\n  PROBLEM: Banner shows timeout value on error paths.\n  WHY: Verified as a false positive because the timeout seconds appear only in the timeout branch.\n- tests/test_review_conflict_resolve_retry_prelude_render.py:44-52 | severity=low\n  PROBLEM: Heredoc extraction regex fragility.\n  WHY: Verified; the regex matches the current script form, so this is a maintenance risk rather than a present failure.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/review_conflict_resolve.sh:874-875 | confidence=2\n  PROBLEM: The error-outcome banner interpolates ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS} into the log message even though the exit was not a timeout.\n  WHY: The reviewer explicitly noted that this is a cosmetic log-quality issue with no functional break, but operators may find the extra timeout text confusing.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/ci.yml:195-205 | confidence=2\n  PROBLEM: The new CI step runs the contract test directly but lacks explicit dependency installation for future non-stdlib test needs.\n  WHY: The reviewer said it passes now, but would fail with ImportError if the test later grows beyond stdlib-only imports.\n- scripts/review_conflict_resolve.sh:874-875 | confidence=1\n  PROBLEM: The timeout banner was reported to use the raw timeout value directly, which could be misleading if the environment value is clamped or malformed.\n  WHY: The reviewer described this as a minor logging inconsistency with no functional break.\n- tests/test_review_conflict_resolve_retry_prelude_render.py:44-52 | confidence=3\n  PROBLEM: The regex assumes a single-quoted heredoc and would break if the launcher switched to `<<PY` or `<<-PY`.\n  WHY: The reviewer said this would cause the test to fail on a launcher refactor even if the renderer logic stayed correct.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/ci.yml:195-205 | severity=low\n  PROBLEM: The CI step assumes the new contract test will remain stdlib-only.\n  WHY: The reviewer said this is currently fine because the test imports only stdlib modules.\n- scripts/review_conflict_resolve.sh:874-875 | severity=low\n  PROBLEM: The timeout/error banner split was judged not to have a real bug in the current code.\n  WHY: The reviewer said the timeout seconds only appear in the timeout branch, so the earlier concern was false.\n- tests/test_review_conflict_resolve_retry_prelude_render.py:44-52 | severity=low\n  PROBLEM: The heredoc extraction regex is intentionally coupled to the current single-quoted heredoc form.\n  WHY: The reviewer said this is acceptable by design, though it would need updates if the launcher form changed.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "6babb42fe110ddd6456e838f84309399ea27790e5fecedc04250c04ab9a820dd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2449,
+    "run_id": "25635747700",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25635747700",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510182559_ee1918665b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2449,
+    "run_id": "25635747700"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-10T18:25:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

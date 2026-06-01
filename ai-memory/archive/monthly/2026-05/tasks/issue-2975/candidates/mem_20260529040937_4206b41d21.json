@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":2975,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/2975\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/2980\",\"pr_number\":2980,\"branch\":\"ai/issue-2975\",\"run_id\":\"26616840188\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/26616840188\",\"changed_files\":[\".github/workflows/review_autofix.yml\",\"prompts/review-reviewer-checklist.txt\",\"scripts/fixtures/cloudflare-learnings/phase-a-anti-rules-noisy-pr.patch\",\"scripts/fixtures/cloudflare-learnings/phase-c-lockfile-and-generated.patch\",\"scripts/review_filter_uninteresting_files.sh\",\"scripts/review_run_reviewers.sh\",\"tests/test_review_autofix_review_pipeline_contract.py\",\"tests/test_review_semble_contract.py\"]}",
+  "fingerprint": "ccda89128fd8e224ae24fe7bf4bb5224fb690b41e522866b318a36db5c95fc4e",
+  "lineage": {
+    "issue_number": 2975,
+    "parent_ids": [],
+    "pr_number": 2980,
+    "run_id": "26616840188",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26616840188",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/2980"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260529040937_4206b41d21",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2975,
+    "level": "run",
+    "pr_number": 2980,
+    "run_id": "26616840188"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #2975: https://github.com/shubhodeep1/coding-workflows/pull/2980",
+  "timestamps": {
+    "created_at": "2026-05-29T04:09:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

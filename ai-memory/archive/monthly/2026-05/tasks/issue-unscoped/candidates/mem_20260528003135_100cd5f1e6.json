@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Automated forward-merge of `stable` into `main` failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`. Conflicting files: `.github/workflows/ci.yml`, `.github/workflows/mark-stable.yml`, `.github/workflows/review_autofix.yml`, `.github/workflows/test-and-mark-stable.yml`, `README.md`, and several scripts/tests (full list in PR description).\n  expected_change_site: The listed conflict files (especially the workflow YAMLs and orchestration scripts churned in the preceding stable\u2192main sync).\n  confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: LAST_RUN_DIFF and full PR_DIFF contain only whitespace/blank-line cleanups in `.github/workflows/review_autofix.yml` (line ~5128) and `scripts/orchestrate_poll_process.sh` (functions `_branch_head_sha` and `reconcile_integration_backpressure_label`). The substantive merge-resolution hunks from the conflict commit (4288ae6) are already ancestors of HEAD (`git merge-base --is-ancestor d4ed47ada2fcd1212bacb7ca765040d713f47965 HEAD` succeeds), but the residual diff does not reflect any remaining conflict-resolution work. The PR is effectively a forward-merge cleanup pass only.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: Automated forward-merge of `stable` into `main` failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`. Conflicting files: `.github/workflows/ci.yml`, `.github/workflows/mark-stable.yml`, `.github/workflows/review_autofix.yml`, `.github/workflows/test-and-mark-stable.yml`, `README.md`, and several scripts/tests (full list in PR description).\n  Expected change site: The listed conflict files (especially the workflow YAMLs and orchestration scripts churned in the preceding stable\u2192main sync).\n  Evidence of absence: LAST_RUN_DIFF and full PR_DIFF contain only whitespace/blank-line cleanups in `.github/workflows/review_autofix.yml` (line ~5128) and `scripts/orchestrate_poll_process.sh` (functions `_branch_head_sha` and `reconcile_integration_backpressure_label`). The substantive merge-resolution hunks from the conflict commit (4288ae6) are already ancestors of HEAD (`git merge-base --is-ancestor d4ed47ada2fcd1212bacb7ca765040d713f47965 HEAD` succeeds), but the residual diff does not reflect any remaining conflict-resolution work. The PR is effectively a forward-merge cleanup pass only.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "3d08ad9d1d9c80c00bd30d1c150718570729374e4d2eb56db47d09218adfba04",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2972,
+    "run_id": "26546634807",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26546634807",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260528003135_100cd5f1e6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2972,
+    "run_id": "26546634807"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-28T00:31:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

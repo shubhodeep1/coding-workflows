@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh:N/A | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: Three script files have uncommitted executable-bit mode changes in the working tree, leaving the checkout dirty.\n  WHY: Multiple reviewers observed 100644 -> 100755 mode-only changes that are visible in git status/diff but are not part of HEAD, so downstream steps can misread the tree state.\n- /tmp/codex-pr-25791351895-1-7302/original_pr_diff.patch:N/A | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The merge commit yields no reviewable PR patch, so the 19 conflict resolutions cannot be mechanically verified from line-level diff content.\n  WHY: `gh pr diff`, `git diff origin/<base>...HEAD`, and the generated diff artifacts are empty or placeholders for this merge commit, preventing standard diff-based validation.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh:N/A | confidence=4\n  PROBLEM: The working tree has mode-only executable-bit changes for these three scripts.\n  WHY: `install -m 0755` leaves the working tree at 100755 while HEAD stays at 100644, so the checkout is dirty and `git diff --stat HEAD` will always show these paths.\n- /tmp/codex-pr-25791351895-1-7302/original_pr_diff.patch:N/A | confidence=5\n  PROBLEM: No standard PR patch is available for this merge commit.\n  WHY: `gh pr diff` and `git diff origin/<base>...HEAD` produce no reviewable patch, so the 19 conflict resolutions described in the commit message cannot be verified line by line.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- working tree (uncommitted):N/A | confidence=4\n  PROBLEM: Three scripts have executable-bit mode changes in the working tree but not committed to HEAD.\n  WHY: This leaves the checkout dirty, so downstream steps that expect a clean git status may behave unexpectedly.\n- /tmp/codex-pr-25791351895-1-7302/original_pr_diff.patch:N/A | confidence=4\n  PROBLEM: The merge commit has no standard diff for review verification.\n  WHY: The PR diff is unavailable and the changed-files list is empty, so automated review tools cannot apply their usual differential analysis to the merged result.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh:N/A | confidence=5\n  PROBLEM: Three scripts have uncommitted executable-bit changes in the working tree.\n  WHY: The git status/diff evidence shows 100644 -> 100755 mode-only changes, and any direct execution by path would fail in the committed state because the executable bit is missing there.\n- /tmp/codex-pr-25791351895-1-7302/original_pr_diff.patch:N/A | confidence=4\n  PROBLEM: The merge commit does not provide a standard patch for review.\n  WHY: The generated diff artifacts are empty or placeholder-only, so reviewers cannot mechanically confirm the 19 conflict resolutions.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh:N/A | confidence=5\n  PROBLEM: Newly-added scripts have uncommitted executable-bit changes in the working tree.\n  WHY: `git status --short` shows the three modified paths and `ls -la` confirms `-rwxr-xr-x`, which leaves the checkout dirty and breaks clean-status expectations.\n- (working tree state):N/A | confidence=5\n  PROBLEM: The PR head shows no committed diff versus base even though the merge commit stat claims 112 changed files and 25k+ insertions.\n  WHY: `git diff --stat origin/main...HEAD` is empty and the artifact lists are empty, so autofix/review tooling sees an empty change set and cannot validate the merge content.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh:N/A | confidence=4\n  PROBLEM: Three scripts have executable-bit changes in the working tree that are not committed to HEAD.\n  WHY: The checkout is dirty with 100644 -> 100755 mode changes, which can cause CI or users expecting executable scripts after checkout to misbehave.\n- /tmp/codex-pr-25791351895-1-7302/original_pr_diff.patch:N/A | confidence=5\n  PROBLEM: The merge commit does not produce a standard PR diff for the review pipeline.\n  WHY: `gh pr diff` and `git diff origin/base...HEAD` do not produce patch content, and `pr_changed_files.txt` is empty, so automated reviewers cannot verify the conflict resolutions.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "8ec6539a5639c27e410046865ca3aa5359f528a0cf1650b56223bc9ccc30514f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25791351895",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25791351895",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260513101731_1483b712a2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25791351895"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-13T10:17:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

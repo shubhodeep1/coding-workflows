@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:3242-3477 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: `workflow-log-analysis-test` is documented as non-gating but lacks `continue-on-error: true`, so a failure still marks the workflow run failed.\n  WHY: The job is intentionally excluded from `validate.needs`, and the notify logic excludes `LOG_ANALYSIS` from the supplemental gate, but GitHub Actions still aggregates the failed job into the run conclusion.\n- .github/workflows/test-and-mark-stable.yml:3264 | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_6-plus]\n  PROBLEM: The job-level cap leaves only 15m for `run-soft-error-analyzer`, and the documented headroom does not match the actual step order.\n  WHY: The comment budgets ~20m after the in-script 230m deadline, but checkout and prerequisite work happen earlier, so the final analyzer step shares a smaller residual window.\n- .github/workflows/test-and-mark-stable.yml:3283 | confidence=2\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The 250-minute job timeout may be too tight for the remaining `run-soft-error-analyzer` step.\n  WHY: If the dispatch/watch step runs near its 235-minute cap, only about 15m remains for the last step and its external API latency.\n- .github/workflows/workflow-log-analysis.yml:1099-1102 | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The inline comment cites the wrong PR number for the split.\n  WHY: The #2347 reference is stale/misleading relative to the branch-specific split history and could mislead future readers.\n- .github/workflows/test-and-mark-stable.yml:4794 | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: `notify.needs` includes `workflow-log-analysis-test`, which means that job's failure still contributes to the overall run status.\n  WHY: The notify job can run with `if: always()`, but it cannot override the workflow conclusion inherited from a failed needed job.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/test-and-mark-stable.yml:3250 | confidence=4\n  PROBLEM: `workflow-log-analysis-test` lacks `continue-on-error: true`, so a failure still flips the workflow run to failed.\n  WHY: The job is documented as non-gating and excluded from `validate.needs`, but GitHub Actions still rolls the failed job into the overall conclusion.\n- .github/workflows/test-and-mark-stable.yml:3264 | confidence=2\n  PROBLEM: The job-level timeout margin may be too tight for the final `soft-error-analyzer` step.\n  WHY: The comment's 20-minute headroom is smaller in practice because the analyzer runs after the 235-minute step cap and competes with the remaining budget.\n- .github/workflows/workflow-log-analysis.yml:1099-1102 | confidence=2\n  PROBLEM: The inline comment references the wrong PR number.\n  WHY: The #2347 reference does not match the branch-specific split history and could mislead future readers.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/test-and-mark-stable.yml:3248-3283 | confidence=5\n  PROBLEM: `workflow-log-analysis-test` is documented as non-blocking but lacks `continue-on-error: true`, so its failure marks the run failed.\n  WHY: The job is intentionally excluded from `validate.needs`, but GitHub Actions still aggregates the failure into the workflow conclusion.\n- .github/workflows/test-and-mark-stable.yml:3283 | confidence=2\n  PROBLEM: The 250-minute timeout may be tight relative to the remaining analyzer work.\n  WHY: If dispatch/watch approaches its 235-minute limit, only about 15 minutes remain for the final composite action and external API latency.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/test-and-mark-stable.yml:3250 | confidence=5\n  PROBLEM: `workflow-log-analysis-test` lacks `continue-on-error: true`, so a failure still marks the workflow run failed.\n  WHY: The job is described as non-gating/non-blocking, but GitHub Actions still includes a failed needed job in the overall conclusion.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/test-and-mark-stable.yml:3250 | confidence=5\n  PROBLEM: `workflow-log-analysis-test` lacks `continue-on-error: true`, so a failure still marks the workflow run failed.\n  WHY: The job is explicitly called non-gating and excluded from `validate.needs`, but the workflow conclusion still becomes failure.\n- .github/workflows/test-and-mark-stable.yml:3264 | confidence=2\n  PROBLEM: The 250-minute job timeout may be too tight.\n  WHY: The reviewer rejected it as no change needed because the documented headroom was considered adequate and aligned with the derivation.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/test-and-mark-stable.yml:3242-3477 | confidence=5\n  PROBLEM: `workflow-log-analysis-test` lacks `continue-on-error: true` despite being documented as non-gating/non-blocking.\n  WHY: A failure in the needed job still makes the overall workflow run failed even though `notify` runs and the release succeeds.\n- .github/workflows/test-and-mark-stable.yml:4794 | confidence=5\n  PROBLEM: `notify.needs` includes `workflow-log-analysis-test`, so that job's failure still affects the run status.\n  WHY: `if: always()` lets notify execute, but it cannot override the aggregate conclusion from a failed dependency.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/test-and-mark-stable.yml:3250-3278 | confidence=5\n  PROBLEM: `workflow-log-analysis-test` lacks `continue-on-error: true` at the job level, despite comments explicitly stating it should be non-gating and non-blocking.\n  WHY: Without job-level `continue-on-error`, GitHub Actions marks the workflow run failed when this job fails, contradicting the documented intent.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "52ddb85fd713954ee3c31cfe48d86653752034080767cc5e11a20cee2d79a355",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2352,
+    "run_id": "25596928161",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25596928161",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260509092443_a0c98599b4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2352,
+    "run_id": "25596928161"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-09T09:24:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

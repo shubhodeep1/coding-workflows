@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nReviewed the live reviewer roster, failback lookup path, current mapping JSON, catalog family entries, and the existing failback contract tests on `02e63fb261c4a47c29c9bdedb6db0bd8315646cd` (`orchestrator/project-2974`), which matches the integration branch metadata.\n\nClarification mapping:\n- No clarification questions were asked.\n- `/answer [auto-answered-by-orchestrator]` adds no extra requirements beyond the issue body.\n\nAutomation / wiring summary:\n- Change type: modify existing config/data, docs, and tests only.\n- Existing entry point: no new scheduler or PR-push wiring; `.github/workflows/review_autofix.yml` already stages `scripts/reviewer_failback_chains.json`, and `scripts/review_run_reviewers.sh` already consumes it during reviewer runs.\n- New supervisor: none.\n- DB work/gates: none.\n- `docs/scripts-pending-removal.md`: no entry needed.\n\nRepresentative existing pattern to follow:\n- Reuse the current X-AI failback pattern: `scripts/reviewer_failback_chains.json` \u2192 `reviewer_failback_target_for_model()` / `run_reviewer()` in `scripts/review_run_reviewers.sh` \u2192 `_run_reviewer_failback_harness()` in `tests/test_review_autofix_review_pipeline_contract.py`.\n\nImplementation plan\n\n1. Files likely to change\n- `scripts/reviewer_failback_chains.json`\n  - Expand the mapping beyond the current X-AI-only entry.\n  - Add explicit same-family chains for the live reviewer families that already have alternate same-family slugs in `scripts/codex_model_catalog.json`:\n    - `deepseek/deepseek-v4-pro` \u2192 `deepseek/deepseek-v3.2`\n    - `qwen/qwen3.6-plus` \u2192 a Qwen backup slug already in the catalog (recommended primary: `qwen/qwen3-coder-plus`)\n    - keep `x-ai/grok-4.20` \u2192 `x-ai/grok-4.1-fast`\n  - Leave families with no same-family alternate slug intentionally unmapped so they still take the fail-open path:\n    - `minimax/minimax-m2.5`\n    - `moonshotai/kimi-k2.5`\n    - `mistralai/mistral-small-2603`\n- `tests/test_review_autofix_review_pipeline_contract.py`\n  - Update the failback fixture/harness and assertions so they reflect the expanded mapped set and the remaining intentionally unmapped set.\n  - Prefer deriving expectations from the live workflow roster helper (`_workflow_reviewer_models()`) plus the real mapping/catalog files, rather than hard-coding another partial matrix.\n- `agents.md`\n  - Update the reviewer circuit-breaker / failback documentation that currently says only the Grok family is mapped.\n\n2. Functions/modules to implement or touch\n- No runtime logic change is expected in `scripts/review_run_reviewers.sh`.\n  - `reviewer_failback_target_for_model()` already supports ordered list values in the JSON file.\n  - `run_reviewer()` already preserves the required retry order: primary attempt \u2192 cheaper-reasoning retry \u2192 single failback attempt.\n- Test-side touch points:\n  - Extend `_run_reviewer_failback_harness()` to seed/use the updated mapped vs unmapped family matrix.\n  - Update `test_reviewer_failback_harness_reuses_cached_open_state_and_skips_unmapped_models()` or split it into clearer mapped/unmapped coverage.\n  - Add a static contract test if needed to ensure live roster coverage stays aligned with the catalog and mapping file.\n\n3. Data structures affected\n- `scripts/reviewer_failback_chains.json`\n  - JSON object: live reviewer slug \u2192 ordered list of fallback candidate slugs.\n  - Keep the existing array shape; order matters because the helper returns the first declared candidate.\n- Reviewer health state expectations in tests\n  - Newly mapped families should now record a non-empty `effective_model` after failback.\n  - Intentionally unmapped families should continue to record `effective_model: \"\"`.\n- Documentation list in `agents.md`\n  - Update mapped families vs intentionally unmapped families.\n\n4. API/interface changes\n- No external API, env var, workflow input, or schema changes.\n- Preserve existing observable contracts:\n  - `REVIEWER_FAILBACK`\n  - `REVIEWER_FAILBACK_UNMAPPED`\n  - `REVIEWER_HEALTH`\n- Behavioral change is limited to which live reviewer families now emit `REVIEWER_FAILBACK` instead of `REVIEWER_FAILBACK_UNMAPPED` after retryable failures.\n\n5. Risks, edge cases, and conflicts\n- Conflict to call out explicitly:\n  - The issue text says \u201csupported same-family backup slug,\u201d but the current runtime gate only checks whether a slug is declared in `scripts/codex_model_catalog.json`; it does not inspect `supported_in_api`.\n  - That matters because the existing X-AI fallback target (`x-ai/grok-4.1-fast`) is still the shipped mapping, while its catalog entry is marked historical/unavailable.\n  - Recommended scope handling: keep runtime semantics unchanged for this issue, expand the JSON/tests/docs to match current behavior, and avoid adding new availability checks here.\n- Qwen has more than one same-family candidate in the catalog, so the chosen order in `reviewer_failback_chains.json` becomes the behavioral contract. Tests should lock that order.\n- Do not accidentally map Minimax/Moonshot/Mistral just because they are live reviewers; they currently have no alternate same-family catalog slug and must stay on the `REVIEWER_FAILBACK_UNMAPPED` path.\n- Do not change retry counts, cheaper-reasoning semantics, or health-cache open-state behavior.\n\n6. Testing considerations\n- Update targeted contract coverage in `tests/test_review_autofix_review_pipeline_contract.py` so it verifies:\n  - mapped families use same-family failback,\n  - intentionally unmapped families still skip cleanly,\n  - cached-open-state reuse still works,\n  - attempt sequencing remains exactly primary / cheaper reasoning / failback.\n- Add or extend a static roster-vs-catalog-vs-mapping assertion so future reviewer roster changes cannot silently drift past the mapping file.\n- Suggested targeted verification in implementation:\n  - `python -m pytest tests/test_review_autofix_review_pipeline_contract.py -k reviewer_failback`\n\nAssumptions\n- Treat \u201csupported backup slug\u201d as \u201csame-family fallback slug accepted by the current catalog-declared lookup path,\u201d because the issue explicitly asks to keep failback/health semantics unchanged and the existing X-AI mapping relies on that behavior.\n- No workflow YAML edits are needed unless a test proves otherwise.\n\nMissing-context notes\n- No missing repo context blocks planning.\n- The only ambiguity is the `supported_in_api` vs \u201cdeclared in catalog\u201d interpretation above; that should be documented in the implementation/review notes so reviewers do not mistake it for an accidental omission.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "6e2eccf64c65ad07e61dba523dc0581feaccb917201e19240e5f80dff88153f4",
+  "lineage": {
+    "issue_number": 3008,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26675038469",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26675038469",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3008"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260530050127_84921539e2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3008,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26675038469"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3008",
+  "timestamps": {
+    "created_at": "2026-05-30T05:01:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

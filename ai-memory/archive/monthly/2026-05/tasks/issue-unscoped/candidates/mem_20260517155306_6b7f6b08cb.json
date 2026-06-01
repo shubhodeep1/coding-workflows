@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:5304-5340 | confidence=[3]\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: The Telegram review-blocked judge decision step does not handle the 7 new `JUDGE_SKIP_REASON` values, so those cases fall through to the generic \"autofix exhausted\" message.\n  WHY: This makes the Telegram alert contradict the new reason-specific PR comment for the same merge-gate refusal; ISSUE_CONFIDENCE: 3.\n- scripts/review_rb_judge.sh:1069, 1123, 1126, 1154, 1158, 1163, 1166 | confidence=[0]\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: Multiple `>> \"$GITHUB_OUTPUT\"` appends for the same `judge_skip_reason` output name could become a duplicate-output footgun if the branching is refactored.\n  WHY: The current if/elif/else chain prevents duplicates and GitHub Actions uses the last value, so this is only a latent maintainability concern; HARDENING_RISK_SCORE: 0.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/review_autofix.yml\n  Lines 5304-5340, the \"Telegram review-blocked judge decision\" step\n  Problem: The Telegram step routes on `JUDGE_SKIP_REASON` via a `case` statement (lines 5326-5339) that has explicit branches for `disabled`, `not_writable`, `llm_failed*`, and `json_parse_failed*`, but has NO branches for the 7 new skip reasons introduced in this PR (`blocking_check_runs`, `check_runs_query_failed`, `unresolved_head_sha`, `sync_merge_failed`, `auto_merge_disabled`, `merge_conflict`, `mergeability_pending`). These all fall through to the generic `*)` branch which emits \"PR review blocked \u2014 autofix exhausted (N iterations) / Needs human intervention\" \u2014 the exact same misleading message this PR set out to fix on the PR comment channel.\n  Why: When the judge approves a merge_with_followup but the check-runs gate refuses it, the PR comment correctly says \"merge gated by in-flight check-runs\" while the Telegram alert says \"autofix exhausted (5 iterations)\" \u2014 actively misleading operators about the real cause. ISSUE_CONFIDENCE: 3.\n- scripts/review_rb_judge.sh\n  Location: Line 1069, 1123, 1126, 1154, 1158, 1163, 1166 \u2014 all `echo \"judge_skip_reason=...\" >> \"$GITHUB_OUTPUT\"` lines\n  Issue: Multiple `>> \"$GITHUB_OUTPUT\"` appends for the same output name across an if/elif/else chain. While the control flow ensures only one branch executes, using `>>` (append) means a future refactor that restructures the branching could inadvertently produce duplicate output lines.\n  Why: GitHub Actions takes the last value, so the blast radius is low, but it's a latent footgun. Suggested minimal fix: No change needed \u2014 the current if/elif/else structure is correct and `>>` is the standard Actions pattern. Flagging for awareness only. Estimated lines changed: 0. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "bc33e66410fec173c69d6ef3e6f2e3d926d0194769f9c946bf29e47facf6655d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25995197967",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25995197967",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517155306_6b7f6b08cb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25995197967"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-17T15:53:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

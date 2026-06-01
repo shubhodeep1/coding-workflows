@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:10545 | confidence=[5]\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The new `_std_cached_head_sha` variable is declared but can still contain an empty string when GraphQL payloads provide `null` or empty values for head SHA, leading to JSON serialization that omits the field even when the intent is to preserve it.\n  WHY: This will cause the cache to not differ between empty and legitimate SHAs, and downstream code that expects `head_sha` to be present when non-empty GraphQL data exists will incorrectly fall back to REST.\n- scripts/orchestrate_poll_process.sh:10554 | confidence=[5]\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The jq expression generating the cached JSON uses an object spread to conditionally include `sha`, but when `$hs` is empty or null, the object spread evaluates to an empty object `{}` instead of an explicit `null` or omitting the key entirely, which can cause downstream consumers to misinterpret the structure.\n  WHY: The generated JSON will have an inconsistent shape (`head:{}` vs `head:null` vs missing key) depending on whether the GraphQL payload supplied an empty value or true null, which breaks contract expectations in other parts of the codebase that grep for `\"head.sha\"` or `\"head_sha\"`.\n- scripts/orchestrate_poll_process.sh:10554 and 16794/16826 | confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The test suite exercises only the mock `gh` binary path and does not assert that a real `workflow_dispatch` review-autofix run with blank `head_branch` is correctly recognized as \"in-flight\" by the standalone-stall-recovery sweep when the subsequent REST `pulls/{n}` re-fetch genuinely fails.\n  WHY: A transient GitHub API error on the fallback REST call after a GraphQL-sourced cache miss would allow the empty-commit push race to fire again, defeating the exact race the `head.sha` seeding and `GET`-only mock guard were added to close.\n- tests/test_orchestrate_poll_process.py:~5518-5540 | confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The test hard-codes expectations for `pr_body_update_calls` and only exercises the mock `GET` failure; it never invokes the real review gate job, the full poller sweep, or asserts that no `git push` occurred and that the standalone state comment was left untouched.\n  WHY: The test can pass while the end-to-end noop-suspicious recovery path still races an in-flight review-autofix `workflow_dispatch` run (or silently updates the comment when it should not).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- File: scripts/orchestrate_poll_process.sh\n  Line: 10545\n  Code: `local _std_cached_head_sha=\"\"`\n\n  Problem: The new `_std_cached_head_sha` variable is declared but can still contain an empty string when GraphQL payloads provide `null` or empty values for head SHA, leading to JSON serialization that omits the field even when the intent is to preserve it.\n\n  Why it fails at runtime: This will cause the cache to not differ between empty and legitimate SHAs, and downstream code that expects `head_sha` to be present when non-empty GraphQL data exists will incorrectly fall back to REST.\n\n  ISSUE_CONFIDENCE: 5\n\n- File: scripts/orchestrate_poll_process.sh\n  Line: 10554\n  Code: `\"{if $hs != \"\" then {sha: $hs} else {} end}\"`\n\n  Problem: The jq expression generating the cached JSON uses an object spread to conditionally include `sha`, but when `$hs` is empty or null, the object spread evaluates to an empty object `{}` instead of an explicit `null` or omitting the key entirely, which can cause downstream consumers to misinterpret the structure.\n\n  Why it fails at runtime: The generated JSON will have an inconsistent shape (`head:{}` vs `head:null` vs missing key) depending on whether the GraphQL payload supplied an empty value or true null, which breaks contract expectations in other parts of the codebase that grep for `\"head.sha\"` or `\"head_sha\"`.\n\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: scripts/orchestrate_poll_process.sh\n  Line or code reference: lines 10554 (cached JSON construction with conditional hs addition) and 16794/16826 (`_is_retry_artifact` definitions in Gate D)\n  Problem: The test suite (including the new `test_standalone_retrigger_review_uses_graphql_head_sha_when_pulls_refetch_fails` and the mock `test_fail_pull_get_numbers_hook_is_get_only`) exercises only the mock `gh` binary path. It does not assert that a real `workflow_dispatch` review-autofix run with blank `head_branch` is correctly recognized as \"in-flight\" by the standalone-stall-recovery sweep when the subsequent REST `pulls/{n}` re-fetch genuinely fails.\n  Why it fails at runtime: A transient GitHub API error on the fallback REST call after a GraphQL-sourced cache miss would allow the empty-commit push race to fire again, defeating the exact race the `head.sha` seeding and `GET`-only mock guard were added to close.\n  ISSUE_CONFIDENCE: 4\n\n- File: tests/test_orchestrate_poll_process.py\n  Line or code reference: lines ~5518-5540 (`test_fail_pull_get_numbers_hook_is_get_only`)\n  Problem: The test hard-codes expectations for `pr_body_update_calls` and only exercises the mock `GET` failure; it never invokes the real review gate job, the full poller sweep, or asserts that no `git push` occurred and that the standalone state comment was left untouched.\n  Why it fails at runtime: The test can pass while the end-to-end noop-suspicious recovery path still races an in-flight review-autofix `workflow_dispatch` run (or silently updates the comment when it should not).\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "42270677e56b5a9d7bd7b30c97bad5b2a0a7a0aa1f9a549be5e17c80bd576a76",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2954,
+    "run_id": "26425544395",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26425544395",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260526005804_f65e81b63e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2954,
+    "run_id": "26425544395"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-26T00:58:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

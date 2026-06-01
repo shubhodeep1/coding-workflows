@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/targeted_file_context.py:approx lines 331-350 based on diff context | severity=low | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: `.strip(\"\\n\")` removes only trailing `\\n`, so a trailing `\\r\\n` can leave a dangling `\\r` in `chunk_text`.\n  WHY: This can leave mixed line endings or a trailing carriage return in the emitted chunk text, which is an observability/formatting issue but not a crash.\n- scripts/targeted_file_context.py:approx lines 490-510 based on diff context | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The extended summary can under-report category totals because binary skip paths contribute to `included` without a matching breakdown bucket.\n  WHY: This makes the summary math misleading for oversized-prompt debugging, but it does not affect runtime correctness.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/targeted_file_context.py:approx lines 331-350 based on diff context | severity=low | confidence=2\n  PROBLEM: .strip(\"\\n\") removes only trailing \\n characters, so a trailing \\r\\n (common in subprocess output from tools) leaves a trailing \\r artifact in the emitted chunk_text.\n  WHY: Prompts fed to LLM editors may contain inconsistent line endings (\\r\\n mixed with \\n or trailing \\r), potentially confusing tokenization, rendering, or model parsing of the chunk block (e.g., apply_patch hunk alignment or code block detection).\n- scripts/targeted_file_context.py:approx lines 490-510 based on diff context | severity=low | confidence=3\n  PROBLEM: Category subtotals do not sum to top-level \"Included {included} entr...\", e.g., binary skip adds to included/marker-only in legacy summary but appears uncounted in extended summary.\n  WHY: Operator debugging of oversized prompts (via summary inspection) gets misleading math; no functional crash but erodes observability when extended modes trigger.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "f3464277878458b890d2088c4fd43bde7b0b93c2ec1cf369c398f7a03d11c8f9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2298,
+    "run_id": "25560968940",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25560968940",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260508144952_475f7cea49",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2298,
+    "run_id": "25560968940"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-08T14:49:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

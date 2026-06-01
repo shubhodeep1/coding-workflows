@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:315-321 | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_6-plus]\n  PROBLEM: `RB_JUDGE_PR_DIFF_MAX_BYTES` is accepted without numeric validation, so a malformed override can make the truncation comparison fail or silently fall back to the default.\n  WHY: Both reviewers noted that a non-numeric value is not rejected before the arithmetic check.\n- scripts/review_rb_judge.sh:317-319 | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_6-plus]\n  PROBLEM: Bash character-counting and substring slicing are used for a byte-oriented cap, so the `BYTES`-named accounting can diverge on multi-byte diffs and the logged size can be misleading.\n  WHY: `${#PR_DIFF}` and `${PR_DIFF:0:...}` count characters under the locale, not bytes.\n- scripts/review_rb_judge.sh:307-321,408-422,540-554 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `PR_DIFF_BYTES_TOTAL` can be empty if `PR_DIFF` is empty, so the `-gt` comparison in the truncation block can fail or behave unpredictably.\n  WHY: The arithmetic comparison assumes a populated numeric operand.\n- scripts/review_rb_judge.sh:312-321,540-550 | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The diff cap is enforced outside the render path and the prompt-size warning is only a post-render check, so the same oversized prompt file can still be reused across retries and fail every attempt identically.\n  WHY: The guard is not self-contained inside prompt rendering.\n- scripts/review_rb_judge.sh:316-320 | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Byte-wise slicing can split a UTF-8 character mid-sequence and leave invalid UTF-8 in the prompt.\n  WHY: `${var:0:N}` counts bytes, and the script does not repair the truncated text.\n- scripts/review_rb_judge.sh:544 | confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The prompt-size check runs before `sanitize_codex_prompt_file`, so it can warn on a size that is not the final stdin size.\n  WHY: Sanitization can change the prompt after measurement.\n- scripts/review_rb_judge.sh:415 |\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: A non-numeric `RB_JUDGE_PR_DIFF_MAX_BYTES` can still be echoed in the truncation notice, making the prompt text misleading.\n  WHY: The invalid value is rendered even if the arithmetic comparison fails.\n- scripts/review_rb_judge.sh:543 |\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: If `wc -c` fails, the `|| echo 0` fallback treats the prompt as size 0 and suppresses the warning.\n  WHY: The measurement failure is hidden and the script proceeds as if the prompt were safely below threshold.\n- scripts/review_rb_judge.sh:547 |\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `wc -c` measures bytes, but the codex stdin cap is character-based, so the logged prompt size can diverge from the enforced limit on non-ASCII content.\n  WHY: The measurement unit differs from the limit codex enforces.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_rb_judge.sh:317 | confidence=2\n  PROBLEM: `PR_DIFF_BYTES_TOTAL` is a misleading name because `${#PR_DIFF}` counts characters, not bytes.\n  WHY: The truncation logic still works for ASCII, but the bytes-vs-characters mismatch can confuse future debugging and size comparisons.\n- scripts/review_rb_judge.sh:315-321\n  PROBLEM: `RB_JUDGE_PR_DIFF_MAX_BYTES` is accepted without numeric validation, so a non-numeric override can be ignored without feedback.\n  WHY: The arithmetic `-gt` check will fail open and the operator may think the override took effect.\n- scripts/review_rb_judge.sh:547\n  PROBLEM: `wc -c` measures bytes, but the codex cap is character-based, so the logged prompt size can diverge from the enforced limit on non-ASCII content.\n  WHY: A `wc -m` check would match the unit codex enforces.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/review_rb_judge.sh:307-321,408-422,540-554 | confidence=4\n  PROBLEM: `PR_DIFF_BYTES_TOTAL` can be empty when `PR_DIFF` is empty, causing the truncation comparison to fail or behave unpredictably.\n  WHY: The `-gt` check assumes a populated numeric value.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_rb_judge.sh:543\n  PROBLEM: If `wc -c` fails, the `|| echo 0` fallback suppresses the warning by treating the prompt as size 0.\n  WHY: The script continues silently even though the measurement failed.\n- scripts/review_rb_judge.sh:415\n  PROBLEM: A non-numeric `RB_JUDGE_PR_DIFF_MAX_BYTES` can still be echoed in the truncation notice, which can confuse diagnosis.\n  WHY: The invalid override is rendered even when the arithmetic check does not accept it.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/review_rb_judge.sh:317-319 | confidence=2\n  PROBLEM: Bash character counting and substring slicing are not byte-based, so the byte cap and the logged size can diverge on multi-byte diffs.\n  WHY: `${#PR_DIFF}` and `${PR_DIFF:0:...}` follow locale character semantics, not byte semantics.\n- scripts/review_rb_judge.sh:317\n  PROBLEM: `RB_JUDGE_PR_DIFF_MAX_BYTES` is not validated as a positive integer, so a non-numeric value can make the arithmetic comparison fail.\n  WHY: A numeric guard would prevent malformed overrides.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/review_rb_judge.sh:312-321,540-550 | confidence=4\n  PROBLEM: The diff cap is enforced before render_prompt.sh while the prompt-size warning is only post-render, so an oversized prompt can still be reused across retries and fail every attempt identically.\n  WHY: The guard is not embedded in the render path itself.\n- scripts/review_rb_judge.sh:316-320 | confidence=5\n  PROBLEM: Byte-wise truncation can split a UTF-8 character and leave invalid UTF-8 in the prompt.\n  WHY: `${var:0:N}` counts bytes and the script does not repair the cut string.\n- scripts/review_rb_judge.sh:544 | confidence=3\n  PROBLEM: The prompt-size check runs before `sanitize_codex_prompt_file`, so it may warn on a size that is not the final stdin size.\n  WHY: Sanitization can change the prompt after measurement.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "ce3866472212a24f05698e490a441af1f7eb3706d7067cbf45c4799adacd694f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26093910894",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26093910894",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260519115419_234aa489ff",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26093910894"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 9 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-19T11:54:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

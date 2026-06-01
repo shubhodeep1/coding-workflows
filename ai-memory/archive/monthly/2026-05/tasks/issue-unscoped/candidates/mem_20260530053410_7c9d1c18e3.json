@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:157 | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The workflow-level env block defaults REVIEW_REVIEWER_CHECKLIST_ENABLED to `false` instead of the documented `1`.\n  WHY: The job-level override still makes the reviewer job behave as expected, but any workflow-level code that reads the variable before that override will see the wrong default.\n- scripts/collect_workflow_logs.py:main() at line ~1463-1496 (old lines) \u2192 line ~1482 (new code) | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `main()` now unconditionally calls `_fetch_run_log_archive()` and drops the previous `list_run_log_excerpts()` fallback path.\n  WHY: The reviewer judged the new archive-based path functionally equivalent and noted the removed fallback is dead code, so this is a consolidation rather than a regression.\n- .github/workflows/review_autofix.yml:492-690 | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The embedded Python materiality classifier duplicates the logic from `review_agents_md_materiality.sh`.\n  WHY: If the standalone gate script changes and the workflow copy does not, the two classifiers can silently diverge and change skip behavior inconsistently.\n- .github/workflows/review_autofix.yml:60-67 | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The default reviewer model changed from `openai/gpt-5.4` to a third-party model roster without a fallback path for repos not configured for those models.\n  WHY: Consumer repos without the corresponding API keys may hit authentication failures or unexpected behavior when the new roster is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Complete Phase F (re-review awareness) by ensuring judge-side ledger ingestion as specified in ai-code-review-learnings-plan.md\"\n  expected_change_site: scripts/review_rb_judge.sh\n  confidence=4\n  flagged_by: [moonshotai_kimi-k2_5]\n  EVIDENCE: `review_rb_judge.sh` does not ingest a dedicated ledger-fed prior-decision block and does not consume `REVIEW_LEDGER_REREVIEW_ENABLED`; judge-side awareness remains limited to prior editor/PR comment context per the plan's own re-audit section dated 2026-05-30.\n- requirement: \"Complete Phase G by adding full reviewer roster failback mappings to reviewer_failback_chains.json\"\n  expected_change_site: scripts/reviewer_failback_chains.json\n  confidence=4\n  flagged_by: [moonshotai_kimi-k2_5]\n  EVIDENCE: The file only contains mapping for `x-ai/grok-4.20 -> x-ai/grok-4.1-fast`; other reviewer families (`minimax/minimax-m2.5`, `moonshotai/kimi-k2.5`, `deepseek/deepseek-v4-pro`, `mistralai/mistral-small-2603`, `qwen/qwen3.6-plus`) lack failback entries per the plan's re-audit.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/review_autofix.yml:157 | confidence=4\n  PROBLEM: The workflow-level env block sets `REVIEW_REVIEWER_CHECKLIST_ENABLED` default to `false` instead of the documented `1`.\n  WHY: The job-level override still makes the reviewer path behave as expected, but any workflow-level code that reads the env before that override will see the wrong default.\n- scripts/collect_workflow_logs.py:main() at line ~1463-1496 (old lines) \u2192 line ~1482 (new code) | confidence=2\n  PROBLEM: The old `main()` path had a `list_run_log_excerpts()` fallback when `log_archive_cache` was unavailable, but the new code unconditionally calls `_fetch_run_log_archive()` and then rebuilds excerpts from full logs.\n  WHY: The reviewer judged the new archive-based path equivalent and called the removed fallback dead code, so this is a consolidation rather than a correctness regression.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/review_autofix.yml:492-690 | confidence=3\n  PROBLEM: The embedded Python materiality classifier duplicates the logic from `review_agents_md_materiality.sh`.\n  WHY: If the standalone gate script changes and the workflow copy does not, the two classifiers can silently diverge and change skip behavior inconsistently.\n- scripts/codex_heartbeat.sh:113-115 | confidence=2\n  PROBLEM: The child process uses default signal handling, so it can become orphaned if the parent receives SIGTERM during startup.\n  WHY: In GitHub Actions cancellations, orphaned children could keep consuming resources until the runner times out.\n- scripts/review_agents_md_materiality.sh:35-70 | confidence=3\n  PROBLEM: The script lacks explicit error handling for `subprocess.run` exceptions such as `PermissionError` or `FileNotFoundError` when `git` is unavailable.\n  WHY: In minimal or containerized runners without `git`, the script would crash instead of failing open.\n- scripts/review_filter_uninteresting_files.sh:35-70 | confidence=2\n  PROBLEM: The `fnmatch` path matching does not handle case-insensitivity consistently across platforms.\n  WHY: On case-sensitive filesystems, files like `LOCKFILE` would not match patterns expecting `lockfile`, so they could escape filtering.\n- .github/workflows/review_autofix.yml:60-67 | confidence=4\n  PROBLEM: The default reviewer model changed from `openai/gpt-5.4` to a third-party model roster without a fallback for repos that are not configured for those models.\n  WHY: Consumer repos without the needed API keys may see authentication failures or unexpected behavior when the new roster is invoked.\n- Requirement: \"Complete Phase F (re-review awareness) by ensuring judge-side ledger ingestion as specified in ai-code-review-learnings-plan.md\"\n  Expected change site: scripts/review_rb_judge.sh\n  Evidence of absence: `review_rb_judge.sh` does not ingest a dedicated ledger-fed prior-decision block and does not consume `REVIEW_LEDGER_REREVIEW_ENABLED`; judge-side awareness remains limited to prior editor/PR comment context per the plan's own re-audit section dated 2026-05-30.\n  ISSUE_CONFIDENCE: 4\n- Requirement: \"Complete Phase G by adding full reviewer roster failback mappings to reviewer_failback_chains.json\"\n  Expected change site: scripts/reviewer_failback_chains.json\n  Evidence of absence: The file only contains mapping for `x-ai/grok-4.20 -> x-ai/grok-4.1-fast`; other reviewer families (`minimax/minimax-m2.5`, `moonshotai/kimi-k2.5`, `deepseek/deepseek-v4-pro`, `mistralai/mistral-small-2603`, `qwen/qwen3.6-plus`) lack failback entries per the plan's re-audit.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "70856e915163a50257502ba38b7baa716b8a848b308c8d3ccbce5821f538d7dc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26675349992",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26675349992",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260530053410_7c9d1c18e3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26675349992"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-30T05:34:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

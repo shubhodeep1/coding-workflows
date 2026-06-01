@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-2960` @ `b90a46ea613492036c61026414264dfd34e5d0a4`\n\nAutomation / wiring\n- Change type: modify existing workflow only; no new scripts.\n- Entry point: `.github/workflows/ci.yml` via existing `pull_request` and `push` triggers on `main` and `stable`.\n- New supervisor: none.\n- DB gate / migration: n/a.\n- Pending-removal registry entry: n/a.\n\nActions taken\n- Reviewed the current `lint` job in `.github/workflows/ci.yml` on this ref.\n- Verified the existing Python bootstrap step, `Python syntax check`, and the current late `Python lint (ruff)` step.\n- Verified integration branch metadata matches the checked-out ref.\n- Clarification mapping: no Q1/Q2 batch existed; `/answer [auto-answered-by-orchestrator]` confirms clarify found the issue clear enough to plan.\n\nConflicts detected\n- None. The current ruff command already matches the requested semantics (`ruff check --select E,F --ignore E501 scripts/*.py`); only ordering/bootstrap cleanup is needed.\n\nAssumptions\n- Conservative interpretation: keep YAML/actionlint ordering and all existing test commands intact; only move ruff to immediately after the existing `Python syntax check`.\n- Keep the current ruff rule set, target glob, and failure behavior unchanged.\n\nImplementation plan\n\n1. Files likely to change\n- `.github/workflows/ci.yml` only.\n\n2. Functions / modules / sections to update\n- `jobs.lint.steps` in `.github/workflows/ci.yml`:\n  - `Install Python CI dependencies` (currently near line 26): add `ruff` to the existing `python3 -m pip install ...` bootstrap list.\n  - `Python lint (ruff)` (currently near line 513): move this step up to immediately follow `Python syntax check` (currently near line 89 / before the long Python test sequence starts).\n  - Remove the step-local `pip install -q ruff` from the ruff step so the job no longer does a second pip install later.\n- Leave all other steps and test commands untouched.\n\n3. Data structures affected\n- The YAML step order under `jobs.lint.steps`.\n- The package list in the `Install Python CI dependencies` step\u2019s `run` block.\n- The `run` block of `Python lint (ruff)` (install line removed, lint command preserved verbatim).\n\n4. API / interface changes\n- No external API or public interface changes.\n- Operational CI behavior changes only: cheap Python E/F regressions surface earlier in the `lint` job, before the long test/lint tail.\n\n5. Potential risks / edge cases\n- Preserve the exact ruff flags and `scripts/*.py` target so failure semantics do not drift.\n- Avoid moving unrelated steps; the minimal safe reorder is \u201cafter `Python syntax check`,\u201d not a broader lint-job reshuffle.\n- Keep the step name stable unless YAML editing makes a trivial rename unavoidable; log readers should still clearly identify the ruff gate.\n\n6. Testing considerations\n- Validate the edited workflow YAML remains structurally valid.\n- Confirm in the diff that `Python lint (ruff)` now sits directly after `Python syntax check`.\n- Confirm the bootstrap step installs `ruff` once and the ruff step still runs the exact existing lint command.\n- Primary verification should be the next PR/push CI run: the ruff step should execute early and no longer show a separate pip install.\n- No obvious repo test currently asserts this specific step ordering, so workflow validation + an actual CI run are the important checks.\n\nMissing-context notes\n- None. The issue description and auto-answer were sufficient to produce a concrete plan.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "acf553bac12269570902cfc00c33856174587ad656dac237becdb94678b97c5c",
+  "lineage": {
+    "issue_number": 2963,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26451640675",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26451640675",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2963"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260526134522_b97fe4acea",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2963,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26451640675"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2963",
+  "timestamps": {
+    "created_at": "2026-05-26T13:45:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

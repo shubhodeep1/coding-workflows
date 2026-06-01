@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nGenerated a minimal implementation plan against planning ref `195cf7541a4254e994b3edf556f9af8cad4ab473` on branch `orchestrator/project-2548` (integration branch metadata matches the checked-out ref).\n\nClarification mapping\n- No `Q1`/`Q2` clarification items were issued in clarify.\n- The `/answer [auto-answered-by-orchestrator]` comment therefore adds no new requirements; it just confirms the issue should proceed as written.\n\nRepresentative pattern to follow\n- Reuse the existing smoke-test tuning pattern already present in `.github/workflows/review_autofix.yml`: a small guarded step writes overrides to `$GITHUB_ENV` and patches `~/.codex/config.toml` after `Create Codex config`.\n- Reuse the existing no-PR claude path already keyed by `CLAUDE_BRANCH_REVIEW_MODE`, plus the existing terminal `Post claude-branch-review consensus comment` step.\n- `scripts/review_run_reviewers.sh` already supports single-pass behavior when `ENABLE_REVIEWER_TWO_PASS=false` and still produces `REVIEWER_CONSENSUS_FILE`, so this can stay as one reviewer stack with lighter knobs rather than a forked implementation.\n\nImplementation plan\n\n1. Files likely to change\n- `.github/workflows/review_autofix.yml`\n- `tests/test_review_autofix_reasoning_schedule.py`\n\n2. Workflow/modules to implement\n- In `.github/workflows/review_autofix.yml`, add one narrowly-scoped reviewer-tuning step in the `codex-agent` job that runs only for the no-PR claude comment-only mode:\n  - guard on `CLAUDE_BRANCH_REVIEW_MODE == 'true'`\n  - also require the no-PR case (`PR_NUMBER` empty), so PR-backed `claude/**` branches keep the normal autofix path\n- In that step:\n  - set `ENABLE_REVIEWER_TWO_PASS=false`\n  - set `REVIEWER_REASONING_EFFORT=low`\n  - patch `~/.codex/config.toml` to `model_reasoning_effort = \"low\"` so the already-existing reviewer execution path inherits the lighter profile\n  - emit a concise log line documenting that no-PR claude review is using the lightweight profile\n- Keep the existing reviewer execution flow unchanged after that:\n  - same `review_run_reviewers.sh`\n  - same summariser behavior\n  - same `REVIEWER_CONSENSUS_FILE` contract\n  - same `Post claude-branch-review consensus comment` terminal step\n- Do not alter the editor / commit / push / retrigger / judge / auto-merge tail for PR-backed runs.\n\n3. Data structures affected\n- Runtime workflow env only:\n  - `CLAUDE_BRANCH_REVIEW_MODE`\n  - `PR_NUMBER`\n  - `ENABLE_REVIEWER_TWO_PASS`\n  - `REVIEWER_REASONING_EFFORT`\n- Runtime reviewer config only:\n  - `~/.codex/config.toml` reviewer `model_reasoning_effort` entry\n- Existing review artifacts must remain unchanged:\n  - `REVIEWER_CONSENSUS_FILE`\n  - per-reviewer output/status/log files under `PREVIOUS_REVIEWS_DIR`\n\n4. API or interface changes\n- No external API changes.\n- No new workflow inputs.\n- No new repo vars/settings needed.\n- No change to the consensus-file shape or the commit-comment posting path.\n- The behavior change should be strictly internal and limited to no-PR `claude/**` comment-only review runs.\n\n5. Potential risks and edge cases\n- The guard must key off the existing derived mode (`CLAUDE_BRANCH_REVIEW_MODE` plus empty `PR_NUMBER`), not a raw branch-name match, otherwise PR-backed `claude/**` branches could accidentally get the lighter profile.\n- Disabling two-pass is necessary. Lowering only `REVIEWER_REASONING_EFFORT` would not be enough, because `scripts/review_run_reviewers.sh` hard-codes pass 1 at `xhigh` whenever two-pass mode is enabled.\n- The override step must run after `Create Codex config` and before `Run reviewer models`; otherwise the reviewer subprocesses will still inherit the default xhigh config.\n- Do not touch `EDITOR_REASONING_EFFORT`; there is no editor phase in this no-PR mode, and the issue explicitly says to preserve PR-backed editor behavior.\n- Preserve `REVIEWER_CONSENSUS_FILE` generation exactly, because the terminal comment step already depends on that contract.\n- If a future run ever combines smoke-like conditions with no-PR claude mode, step ordering should make the claude-specific lightweight override deterministic and local to this mode.\n\n6. Testing considerations\n- Extend `tests/test_review_autofix_reasoning_schedule.py` with focused static contract coverage that asserts:\n  - the workflow contains a dedicated no-PR claude lightweight-review override block\n  - that block forces `ENABLE_REVIEWER_TWO_PASS=false`\n  - that block forces `REVIEWER_REASONING_EFFORT=low`\n  - that block patches reviewer config rather than introducing a separate reviewer execution path\n- Keep the current smoke/editor assertions intact; this issue should add to that contract, not replace it.\n- Targeted validation:\n  - `pytest tests/test_review_autofix_reasoning_schedule.py`\n\n7. Conflicts / codebase notes\n- No factual mismatch with the issue description was found.\n- Confirmed current state matches the problem statement: the no-PR `claude/**` path and terminal consensus-comment step already exist, but reviewer tuning still comes from the general defaults (`REVIEWER_REASONING_EFFORT=xhigh`, `ENABLE_REVIEWER_TWO_PASS=true`), so the expensive path is still active today.\n\nAssumptions\n- The intended lightweight profile is single-pass plus low reviewer reasoning for no-PR claude comment-only runs, because this path never edits or pushes code and the repo already has precedent for reviewers succeeding at `low`.\n- README/docs/report updates are intentionally out of scope for this issue; only inline workflow/test comments should be adjusted if needed.\n\nMissing context\n- None material for planning.\n\nEstimated implementation budget\n- Approximately 20\u201335 minutes, confined to the workflow file and the targeted static test.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "1e3e1169b39fe38080edc8ce7803d4055afb38ff403f4fc3073eb0d90a6a345c",
+  "lineage": {
+    "issue_number": 2555,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25769908880",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25769908880",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2555"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260513002018_fd9322c67e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2555,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25769908880"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2555",
+  "timestamps": {
+    "created_at": "2026-05-13T00:20:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

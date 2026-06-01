@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for issue #2985  \nPlanning ref: `main` @ `dbbfd85d49dbc4eab97ab59a3578d16271c01b44`\n\nClarification mapping:\n- Q1: none asked.\n- Answer interpretation: auto-answer indicates the task is fully specified and no clarification is required.\n\nAutomation / wiring summary:\n- Change type: modify an existing file only.\n- Scheduler / PR-push wiring: none; no workflow or automation changes required.\n- New supervisor: none.\n- DB gate pattern: not applicable.\n- Scripts pending removal entry: not applicable.\n\nRepresentative context inspected:\n- `tests/e2e_smoke_canary.txt` exists already and currently contains the same 3-line format with an older `run_id`, so this is a straight content replacement following the existing file pattern.\n\n1. Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n2. Functions or modules to implement\n- None. This is a direct file-content overwrite, not a code-path change.\n\n3. Data structures affected\n- Plain-text canary file contents only.\n- Final file content must be exactly:\n  - `status: ok`\n  - `run_id: 26632368740`\n  - `updated-by: ai-pipeline`\n- Preserve a trailing newline after the last line.\n\n4. API or interface changes\n- None.\n\n5. Potential risks or edge cases\n- Do not modify any file other than `tests/e2e_smoke_canary.txt`.\n- Replace the entire file body; do not append.\n- Ensure there are no extra blank lines, spaces, comments, or headers.\n- Ensure the final newline is present.\n- No repo/code conflict found: the file exists on the checked-out ref as described.\n\n6. Testing considerations\n- Verify the file still exists and contains exactly 3 lines.\n- Verify the content matches the specified text byte-for-byte, including the final trailing newline.\n- Verify `git diff --stat -- tests/e2e_smoke_canary.txt` shows only that file changed.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "e139ef0a9edcf0f3fabc138aee72f31365e70a53ce4092613c5f7f7c9b9d1890",
+  "lineage": {
+    "issue_number": 2985,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26632471395",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26632471395",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2985"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260529103847_3523cbc50e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2985,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26632471395"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2985",
+  "timestamps": {
+    "created_at": "2026-05-29T10:38:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

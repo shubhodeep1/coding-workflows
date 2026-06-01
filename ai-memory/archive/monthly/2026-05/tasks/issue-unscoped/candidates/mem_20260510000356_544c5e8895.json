@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_judge_semble_prefetch_contract.py:110-138\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Test enforces a blunt guard in scripts/render_prompt.sh that rejects any \"{{SEMBLE_PREFETCH}}\" in final rendered output, but Semble prefetch for judge prompts will inject chunks from prompts/mode-judge.txt (etc.) containing literal \"{{SEMBLE_PREFETCH}}\" (added by this PR), triggering false-positive rejection.\n  WHY: Runtime failure: scripts/render_prompt.sh fails judge prompt rendering (non-zero exit, \"Unresolved SEMBLE_PREFETCH placeholder\") even when Semble correctly prefetches relevant prompt templates, blocking all judge-family LLM invocations with Semble enabled.\n- scripts/render_prompt.sh:~50-60\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Guard scans entire rendered output for \"{{SEMBLE_PREFETCH}}\" without excluding injected SEMBLE_PREFETCH block, so Semble-retrieved judge prompt chunks (containing the placeholder) cause spurious failure despite correct top-level substitution.\n  WHY: Runtime failure: Judge prompts fail to render when SEMBLE_ENABLED=true and Semble retrieves indexed prompt templates (e.g., mode-judge.txt line with \"{{SEMBLE_PREFETCH}}\"), halting orchestrate_poll_process.sh run_judge() and review_rb_judge.sh.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- File: tests/test_judge_semble_prefetch_contract.py\n  Lines: 110-138 (test_render_prompt_rejects_unresolved_semble_prefetch_placeholder_output)\n  Problem: Test enforces a blunt guard in scripts/render_prompt.sh that rejects any \"{{SEMBLE_PREFETCH}}\" in final rendered output, but Semble prefetch for judge prompts will inject chunks from prompts/mode-judge.txt (etc.) containing literal \"{{SEMBLE_PREFETCH}}\" (added by this PR), triggering false-positive rejection.\n  Runtime failure: scripts/render_prompt.sh fails judge prompt rendering (non-zero exit, \"Unresolved SEMBLE_PREFETCH placeholder\") even when Semble correctly prefetches relevant prompt templates, blocking all judge-family LLM invocations with Semble enabled.\n  ISSUE_CONFIDENCE: 5\n\n- File: scripts/render_prompt.sh\n  Lines: ~50-60 (unresolved placeholder guard logic, e.g., grep/egrep for \"{{SEMBLE_PREFETCH}}\" post-substitution)\n  Problem: Guard scans entire rendered output for \"{{SEMBLE_PREFETCH}}\" without excluding injected SEMBLE_PREFETCH block, so Semble-retrieved judge prompt chunks (containing the placeholder) cause spurious failure despite correct top-level substitution.\n  Runtime failure: Judge prompts fail to render when SEMBLE_ENABLED=true and Semble retrieves indexed prompt templates (e.g., mode-judge.txt line with \"{{SEMBLE_PREFETCH}}\"), halting orchestrate_poll_process.sh run_judge() and review_rb_judge.sh.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "1ce1aecbf762a0c07bb47a49368ef5594b58dbe660f71dffe92e7052c8fc6304",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2411,
+    "run_id": "25614903348",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25614903348",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510000356_544c5e8895",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2411,
+    "run_id": "25614903348"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-10T00:03:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

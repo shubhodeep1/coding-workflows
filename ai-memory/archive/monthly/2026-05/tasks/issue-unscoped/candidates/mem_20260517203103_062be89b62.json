@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_reject_verify.sh:362-368 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: llm_batch_fail_results returns reason_text without applying the 200-character cap, so fail-open reasons from llm_prompt_missing_reason can exceed the verifier's reason-length contract.\n  WHY: Multiple reviewers reported the same output-bound violation; some characterize it as a minor pre-existing inconsistency, while others note it can produce overlong verified_rejections.json reasons on long workspace paths.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_reject_verify.sh:llm_batch_fail_results (line ~368) | severity=low | confidence=1\n  PROBLEM: Reason text from `llm_prompt_missing_reason` can exceed the 200-character cap enforced by `validate_llm_batch_output` for LLM-provided reasons.\n  WHY: Apply `squish(reason_text, LLM_VERIFIER_REASON_MAX_CHARS)` inside `llm_batch_fail_results` or at the single call site that passes `llm_prompt_missing_reason`; this was described as a minor inconsistency rather than a runtime correctness issue.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_reject_verify.sh:365-368 | confidence=4\n  PROBLEM: The `llm_batch_fail_results` function passes `reason_text` into the artifact JSON without applying the `LLM_VERIFIER_REASON_MAX_CHARS` (200) character cap.\n  WHY: Callers using `llm_prompt_missing_reason(PROMPT_TEMPLATE)` can produce reasons exceeding 200 characters on repositories with long workspace paths, creating an inconsistency with the prompt contract that requires reasons to be under 200 characters.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/review_reject_verify.sh:llm_batch_fail_results (lines ~362-367) | confidence=3\n  PROBLEM: llm_batch_fail_results returns reason_text directly without applying the LLM_VERIFIER_REASON_MAX_CHARS (200) cap, while validate_llm_batch_output applies squish(..., LLM_VERIFIER_REASON_MAX_CHARS) to LLM-provided reasons.\n  WHY: Fail-open reasons bypass the 200-character cap entirely, so verified_rejections.json can contain overlong reasons for long prompt-template paths and downstream consumers expect bounded strings.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/review_reject_verify.sh:llm_batch_fail_results (~line 365) | severity=low | confidence=1\n  PROBLEM: reason_text from fail-open paths propagates into the artifact JSON without the LLM_VERIFIER_REASON_MAX_CHARS cap.\n  WHY: This creates an inconsistency with LLM-validated reasons which are capped at 200 chars; the reviewer characterized it as pre-existing and minor, but still flagged the contract inconsistency.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "8c98b15097a910d43d402bc1c8883101c6e8045fb70898da6a3fadb1156506f3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2717,
+    "run_id": "26001477345",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26001477345",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517203103_062be89b62",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2717,
+    "run_id": "26001477345"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-17T20:31:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/codex_model_catalog.json:537-538 | severity=medium | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: The new codestral-2508 entry sets `truncation_policy` to `{\"mode\": \"bytes\", \"limit\": 256000}` while `context_window` is 256000 tokens.\n  WHY: This bytes-vs-tokens mismatch would truncate large prompts around ~64k tokens before auto-compaction can trigger; deepseek_deepseek-v4-pro explicitly called it a false positive, but the other reviewers independently flagged the same runtime issue.\n- agents.md:107-109 | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: The second reviewer-model enumeration in `agents.md` still omits `mistralai/codestral-2508` even though the earlier occurrence was updated to include it.\n  WHY: This leaves two conflicting model lists in the same file, so the documentation is internally inconsistent.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/codex_model_catalog.json:538 | confidence=5\n  PROBLEM: The `truncation_policy` uses `{\"mode\": \"bytes\", \"limit\": 256000}` while the `context_window` is 256000 tokens.\n  WHY: At ~4 bytes per token, this truncates the prompt around 64k tokens, far below the declared 256k token context window and the `auto_compact_token_limit` of 184k, so later sections of large review prompts are silently missed.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/codex_model_catalog.json:537-538 | confidence=5\n  PROBLEM: The truncation_policy uses \"bytes\" mode with a limit of 256000, but the context_window is defined as 256000 tokens.\n  WHY: With typical UTF-8 encoding averaging ~4 bytes per token, this causes premature truncation at approximately 64000 tokens instead of utilizing the full 256K token context window, so large review prompts lose context before auto_compact_token_limit can trigger.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/codex_model_catalog.json:538 | confidence=5\n  PROBLEM: The newly added codestral-2508 catalog entry uses `\"mode\": \"bytes\"` with a limit of 256000, while the declared `context_window` is 256000 tokens and `auto_compact_token_limit` is 184000.\n  WHY: A 256000-byte truncation threshold corresponds to roughly 64000 tokens, so codex CLI will prematurely truncate prompts before auto-compaction ever fires, causing incomplete large-review prompts.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/codex_model_catalog.json:538 | confidence=3\n  PROBLEM: The truncation_policy uses `bytes` mode with a limit of 256000, but the context_window is 256000 tokens.\n  WHY: If codex-cli interprets the byte limit literally, prompts are truncated at approximately 64k tokens, well before the auto_compact_token_limit of 184000 tokens fires, so large reviewer prompts are silently truncated.\n- agents.md:107-109 | confidence=5\n  PROBLEM: The second occurrence of the third-party reviewer list in agents.md was not updated to include `mistralai/codestral-2508`.\n  WHY: Lines 83-84 were updated, but lines 107-109 still list only the old five-model set, creating an internal inconsistency within the same file.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "cc271e0c27b8900280fd18b05fe0fda085eda127b47b0b32812c0c43d6b196f4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2731,
+    "run_id": "26012308770",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26012308770",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260518040335_f09ef45bea",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2731,
+    "run_id": "26012308770"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-18T04:03:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

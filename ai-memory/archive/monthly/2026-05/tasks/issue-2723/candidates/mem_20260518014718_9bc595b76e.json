@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlan for issue #2723 (planning ref: `main` @ `bf019c60e4a6c6dc08e901baaaa784fa858042b3`)\n\n1. Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n2. Functions or modules to implement\n- No code modules or functions need changes.\n- Overwrite `tests/e2e_smoke_canary.txt` in full so its contents are exactly:\n  - `status: ok`\n  - `run_id: 26009091997`\n  - `updated-by: ai-pipeline`\n- Preserve a trailing newline after the final line.\n\n3. Data structures affected\n- None beyond the plain-text 3-line canary file content.\n\n4. API or interface changes\n- None.\n\n5. Potential risks or edge cases\n- The issue requires a full-file replacement, not an in-place partial edit.\n- Must not modify any file other than `tests/e2e_smoke_canary.txt`.\n- Must not introduce extra blank lines, spaces, comments, or omit the final newline.\n- Codebase check confirms the file already exists on this ref and currently contains the same 3-line format with an older `run_id`, so this is a direct content update with no path conflict.\n\n6. Testing considerations\n- Verify the file content matches the requested three lines exactly.\n- Verify the file remains 3 lines total.\n- Verify only `tests/e2e_smoke_canary.txt` appears in `git diff --stat`.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "1e924649b73a983e09db0cf903d9d106bcca0ae950f3dc5295b17c162be6e70f",
+  "lineage": {
+    "issue_number": 2723,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26009149528",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26009149528",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2723"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260518014718_9bc595b76e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2723,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26009149528"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2723",
+  "timestamps": {
+    "created_at": "2026-05-18T01:47:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/issue_pr_status.yml:559-565 | severity=medium | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The \"Send PR merged Telegram alert\" step hardcodes ALERT_MSG_LEVEL=SILENT, but the else branch falls back to a raw curl call that sends the Telegram message without checking ALERT_MSG_LEVEL at all.\n  WHY: When tg_helpers.sh is unavailable, the declare -F tg_send_msg fallback bypasses the _tg_should_send threshold and still posts the DEBUG-level alert despite the SILENT setting.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/issue_pr_status.yml | Line or code reference: lines 559-565\n  PROBLEM: The \"Send PR merged Telegram alert\" step hardcodes ALERT_MSG_LEVEL=SILENT (line 469) to suppress the DEBUG-level tg_send_msg call on line 559, but the else branch (lines 561-565) falls back to a raw curl call that sends the Telegram message without checking ALERT_MSG_LEVEL at all. (2 related items)\n  WHY: The tg_helpers.sh sourcing code (lines 496-514) can fail if git clone of the coding-workflows repo fails from both stable and main branches, or if the consumer repo has network restrictions. In that edge case, declare -F tg_send_msg returns non-zero, the else branch runs, and curl posts the message directly to the Telegram API bypassing the _tg_should_send threshold entirely. The PR merged alert is sent when the intent is to suppress it.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "c3d3dfe9cac51eba27731e80b979f11a9156b591820f5ad8761f43e7ea1d7a59",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26337560264",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26337560264",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260523163659_be7e2a7b88",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26337560264"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-23T16:36:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

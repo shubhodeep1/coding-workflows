@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":2719,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/2719\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/2720\",\"pr_number\":2720,\"branch\":\"ai/issue-2719\",\"run_id\":\"26005951398\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/26005951398\",\"changed_files\":[\"README.md\",\"agents.md\",\"docs/plans/judge-loop-and-reissue-plan.md\",\"tests/test_review_pipeline_integration.py\"]}",
+  "fingerprint": "7bcd4e8e1435a93c360dc16eaa82500b93a569e1e28998df50a0bace35f9c2ca",
+  "lineage": {
+    "issue_number": 2719,
+    "parent_ids": [],
+    "pr_number": 2720,
+    "run_id": "26005951398",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26005951398",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/2720"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260517234349_70e9566420",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2719,
+    "level": "run",
+    "pr_number": 2720,
+    "run_id": "26005951398"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #2719: https://github.com/shubhodeep1/coding-workflows/pull/2720",
+  "timestamps": {
+    "created_at": "2026-05-17T23:43:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

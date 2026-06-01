@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_targeted_file_context_parser.py:entire deleted file | severity=medium | confidence=[4]\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Removes regression protection for plan parser logic; if targeted file context is reintroduced, parser bugs silently drop files from prompts without CI detection\n  WHY: The deleted 524-line parser test suite covered the targeted-file-context extraction logic that is now removed from implement.yml, so keeping this test would no longer be meaningful.\n- .github/workflows/review_autofix.yml:1211-1217 | severity=medium | confidence=[3]\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Editor prompt now appends full agents.md directly after UNATTENDED SYSTEM INSTRUCTIONS without naming overridden sections, risking the model prioritizing later pattern-matched ASK rules over the override on missing context files\n  WHY: The removed displacement note was the explicit cue that agents.md rules were overridden in this unattended run, and its absence could make the later agents.md content more salient.\n- scripts/build_static_context.sh:141-146 | severity=high | confidence=[4]\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Implement static context lacks concrete \"never STOP/ASK on missing files\" rules, so the model sees only codex/agents STOP-and-ASK references without override text\n  WHY: Removing the unattended_llm_system_instructions.md inlining deletes the concrete override block that previously governed missing-file behavior in the implement prompt.\n- scripts/build_static_context.sh:158-165 | severity=medium | confidence=[3]\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Implement prompt risks pattern-matching agents.md STOP/ASK over the override reference because the displacement note before agents_canonical.md/agents.md was removed\n  WHY: This is the same root issue as the review_autofix displacement-note finding, but applied to the implement prompt assembly path.\n- .github/workflows/implement.yml:443-449 | severity=medium | confidence=[3]\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Consumers without manual staging hit the build_static_context.sh omission above because unattended_llm_system_instructions.md is no longer staged\n  WHY: The staging loop removal is directly tied to the missing override block in the implement prompt path, so the concern is that the prompt now boots without that content.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/test_implement_targeted_file_context_parser.py (entire deleted file) | severity=medium | confidence=4\n  PROBLEM: Removes regression protection for plan parser logic; if targeted file context is reintroduced (likely followup), parser bugs silently drop files from prompts without CI detection\n  WHY: The deleted 524-line Python test suite covered parser extraction from implement.yml with 24 test cases, so deleting it removes automated coverage for that logic.\n- .github/workflows/review_autofix.yml (lines 1211-1217) | severity=medium | confidence=3\n  PROBLEM: Editor prompt now appends full agents.md directly after UNATTENDED SYSTEM INSTRUCTIONS without naming overridden sections (\u00a70/\u00a72/FINAL etc.), risking model prioritizing later pattern-matched ASK rules over override on missing context files\n  WHY: The removed explicit NOTE about agents.md being OVERRIDDEN was the only inline displacement cue before cat \"${SUPPORT_AGENTS_FILE}\".\n- scripts/build_static_context.sh (lines 141-146, implement case) | severity=high | confidence=4\n  PROBLEM: Implement static context lacks concrete \"never STOP/ASK on missing files\" rules (\u00a70-\u00a74), so model sees only codex/agents STOP-and-ASK references without override text\n  WHY: The removed if [ -f unattended_llm_system_instructions.md ]; then ... cat ... block previously inlined the UNATTENDED EXECUTION OVERRIDE into the implement prompt.\n- scripts/build_static_context.sh (lines 158-165, implement case) | severity=medium | confidence=3\n  PROBLEM: Identical to review_autofix.yml; implement prompt risks pattern-matching agents.md STOP/ASK over override reference\n  WHY: The displacement note before cat agents_canonical.md/agents.md was removed from the implement static context assembly.\n- .github/workflows/implement.yml (lines 443-449) | severity=medium | confidence=3\n  PROBLEM: Consumers without manual staging (common) hit build_static_context.sh omission above; no fallback warning \"::warning:: unattended_llm... missing\"\n  WHY: The staging loop drops unattended_llm_system_instructions.md, which this reviewer links to the missing override block in the implement prompt.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "a0a6e5491fa6d8af504dc530b8c5c48da57049fbf2ce69153508dc823087989b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2157,
+    "run_id": "25418754443",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25418754443",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260506061747_0f38905c5d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2157,
+    "run_id": "25418754443"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-06T06:17:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

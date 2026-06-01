@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml,.github/workflows/mark-stable.yml | severity=medium | confidence=5\n  flagged_by: [minimax_minimax-m2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: The new contract test `tests/test_review_autofix_smoke_conflict_resolver_override.py` is only wired into `.github/workflows/ci.yml` and is not included in the release promotion workflows.\n  WHY: This means smoke override regressions can be missed during release promotion; reviewers agreed this matches an existing pattern, but it still leaves the new test out of the release allowlist.\n- tests/test_review_autofix_smoke_conflict_resolver_override.py:230-321 | severity=low | confidence=4\n  flagged_by: [qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: The helper that renders the conflict-resolver prompt slices `scripts/review_conflict_prepare.sh` using exact line anchors, making the test fragile to refactors.\n  WHY: If the anchored lines move or nearby content changes, the slice can capture the wrong block and produce spurious test failures or false passes.\n- tests/test_review_autofix_smoke_conflict_resolver_override.py:79-92 | severity=low | confidence=3\n  flagged_by: [qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: The test checks for `echo \"IS_SMOKE_TEST=true\" >> \"$GITHUB_ENV\"` anywhere in the workflow file rather than scoping the assertion to the relevant step.\n  WHY: A relocation of that export line to an unrelated step could still satisfy the assertion while breaking the intended conditional scoping.\n- tests/test_review_autofix_smoke_conflict_resolver_override.py:295-325 | severity=low | confidence=4\n  flagged_by: [qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: The test uses `tempfile.TemporaryDirectory()`, which can fail in sandboxed environments without writable temp directories.\n  WHY: This is an environment limitation rather than a code defect, but it can prevent the test from running outside CI.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/test-and-mark-stable.yml,.github/workflows/mark-stable.yml | severity=medium | confidence=4\n  PROBLEM: The new contract test `tests/test_review_autofix_smoke_conflict_resolver_override.py` is only added to `.github/workflows/ci.yml` and is not included in the release promotion workflows.\n  WHY: Regression tests for the smoke conflict-resolver override will not run during release promotion, so bugs in this mechanism could be promoted to stable without detection.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_review_autofix_smoke_conflict_resolver_override.py:79-92 | severity=low | confidence=2\n  PROBLEM: The test checks for `echo \"IS_SMOKE_TEST=true\" >> \"$GITHUB_ENV\"` in the entire workflow file rather than specifically within the smoke-detect step text.\n  WHY: If the export line were moved to a different step that unconditionally runs, the test would still pass even though the conditional scoping would be broken.\n- tests/test_review_autofix_smoke_conflict_resolver_override.py:230-321 | severity=low | confidence=3\n  PROBLEM: Script slicing uses stable line anchors (`PROMPT_TPL=\"${PROMPT_TPL}\" \\` through `fi` with `_smoke_override_tmp` check), making the helper fragile to script restructuring.\n  WHY: If anchors move or `_smoke_override_tmp` handling changes, the slice could capture the wrong content and break the test.\n- .github/workflows/ci.yml:165-169 | severity=medium | confidence=3\n  PROBLEM: The new test is wired into `ci.yml` but not into `test-and-mark-stable.yml` or `mark-stable.yml`.\n  WHY: Stable-promotion runs would skip this new smoke contract test, so regressions in the override mechanism could be missed by release gates.\n- tests/test_review_autofix_smoke_conflict_resolver_override.py:293-310 | severity=medium | confidence=4\n  PROBLEM: The test uses `tempfile.TemporaryDirectory()` which requires `/tmp` filesystem access.\n  WHY: It can fail in sandboxed environments without `/tmp`, preventing the test from running there.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/review_conflict_prepare.sh | severity=high | confidence=5\n  PROBLEM: Consensus finding claims regex mismatch with Git markers, but Git inserts a space after markers (`<<<<<<< HEAD`), matching exactly.\n  WHY: The guard triggers correctly on real conflicts, so the claimed regex bug is a false positive.\n- tests/test_review_autofix_smoke_conflict_resolver_override.py | severity=high | confidence=5\n  PROBLEM: Consensus claims the simulated markers mismatch real Git format, but Git uses a space after the markers.\n  WHY: The test markers match real Git conflict markers, so the claimed mismatch is a false positive.\n- .github/workflows/mark-stable.yml | severity=medium | confidence=5\n  PROBLEM: The new contract test `tests/test_review_autofix_smoke_conflict_resolver_override.py` is added to `ci.yml` only and is skipped by the release gate.\n  WHY: Smoke override regressions could pass PR CI and later be promoted to stable without detection.\n- .github/workflows/test-and-mark-stable.yml | severity=medium | confidence=5\n  PROBLEM: The new contract test `tests/test_review_autofix_smoke_conflict_resolver_override.py` is added to `ci.yml` only and is skipped by the release gate.\n  WHY: Smoke override regressions could pass PR CI and later be promoted to stable without detection.\n- tests/test_review_autofix_smoke_conflict_resolver_override.py:230-321 | severity=low | confidence=4\n  PROBLEM: Script slicing is anchored on exact line content and substring searches across the block.\n  WHY: Script refactors could shift the anchors and cause the helper to render the wrong slice.\n- tests/test_review_autofix_smoke_conflict_resolver_override.py:79-92 | severity=low | confidence=3\n  PROBLEM: The workflow assertion searches the entire YAML file for the export line.\n  WHY: If the export is moved or rewritten while preserving the text, the test could false-pass and miss broken env inheritance.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/test_review_autofix_smoke_conflict_resolver_override.py:295,325 | severity=low | confidence=2\n  PROBLEM: The test uses `tempfile.TemporaryDirectory()`, which fails in sandboxed environments without writable temp directories.\n  WHY: This is a sandbox limitation rather than a code issue, but it prevents the test from running in restricted environments.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "a26b7da4d2afb9e04502c85f0e66781d182c3714c49acd7b6234a003b1227ea2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2095,
+    "run_id": "25327045933",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25327045933",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260504154048_d0c3cb2b28",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2095,
+    "run_id": "25327045933"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-04T15:40:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

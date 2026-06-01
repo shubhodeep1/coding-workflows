@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The file contains an extra fourth comment line that violates the requirement to contain exactly three lines with no extra content.\n  WHY: Issue #2069 explicitly requires exactly three lines and forbids comments or any extra content; the extra line will cause exact-match or line-count validation to fail.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  PROBLEM: The file contains 4 lines; the linked issue #2069 mandates exactly 3 lines. Line 4 (`# E2E_EDITOR_BAIT_25308071039: this line should be removed by the editor (smoke gate)`) is a comment appended by the implement phase that violates the explicit constraint: \"Do **not** add comments, headers, or any extra content.\"\n  WHY: Any consumer of this file that does exact-match or line-count validation (including the E2E smoke gate that this canary was designed for) will see 4 lines instead of 3 and fail. The bait comment itself states \"this line should be removed by the editor (smoke gate)\" \u2014 confirming it is not part of the intended payload.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  PROBLEM: The file contains an extra fourth comment line that violates the explicit task requirement in issue #2069, which states the file must contain exactly three lines with no more, no less, and no comments or extra content.\n  WHY: The E2E smoke test validation expects exactly the three specified lines. The fourth line will cause the exact-match validation to fail.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt | severity=high | confidence=5\n  PROBLEM: The file contains 4 lines instead of the required exactly 3 lines. The 4th line is a test bait comment that violates the explicit requirements.\n  WHY: The issue requirements explicitly state the file must contain exactly three lines (no more, no less) and do not add comments, headers, or any extra content; the extra comment line violates both constraints and will cause exact-match validation to fail.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  PROBLEM: The file contains an extra 4th comment line appended after the three required content lines. Issue #2069 explicitly requires the file to contain exactly these three lines \u2014 `status: ok`, `run_id: 25308071039`, `updated-by: ai-pipeline` \u2014 with \"no more, no less\" and a specific prohibition against adding comments or extra content.\n  WHY: Any exact-match or line-count validation in the E2E smoke gate will reject this file because the content does not match the canonical three-line specification. The smoke test will report a failure even though the core data lines are correct.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  PROBLEM: File contains four lines including an extra comment \"# E2E_EDITOR_BAIT_25308071039: this line should be removed by the editor (smoke gate)\".\n  WHY: Issue #2069 requires exactly three lines with no more, no less, and no comments or extra content; the bait line causes exact-match smoke test validation to fail.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  PROBLEM: The file contains 4 lines but issue #2069 explicitly requires exactly 3 lines with \"no more, no less\" and explicitly forbids adding \"comments, headers, or any extra content\".\n  WHY: The E2E smoke test validation expects exact match with the three specified lines. The 4th line `# E2E_EDITOR_BAIT_25308071039: this line should be removed by the editor (smoke gate)` will cause validation to fail because the file content does not match the canonical specification.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "84a34f7ffb3ac9da3f76885625043999694aa24c7b4b3f0f20cef2f68d2b3ece",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2076,
+    "run_id": "25308327160",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25308327160",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260504083307_b060a47c94",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2076,
+    "run_id": "25308327160"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-04T08:33:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

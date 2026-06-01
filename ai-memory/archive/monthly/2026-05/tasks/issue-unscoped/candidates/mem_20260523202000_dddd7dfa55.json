@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_family_node_runtime.py:55-88 | severity=medium | confidence=[4]\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_20]\n  PROBLEM: `subprocess.run(..., timeout=300)` has no explicit `TimeoutExpired` handling, so a renderer or lint timeout is reported only as a generic error.\n  WHY: Both reviewers flagged missing timeout-specific handling; one called out the lack of a clear timeout message, and the other noted the outer exception path only catches it generically.\n- tests/test_family_node_runtime.py:60-88 | severity=medium | confidence=[5]\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The test only checks `returncode == 0` and never inspects stdout/stderr or uses `check=True`/`check_returncode()` on the renderer and lint subprocesses.\n  WHY: A subprocess that emits warnings or incomplete output while still exiting 0 could let the test pass even though the rendered harness is broken.\n- tests/test_family_node_runtime.py:140-170 | severity=medium | confidence=[5]\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The same hardcoded `npm run lint --if-present` entry appears in both `custom_tests` and `skip_tests`, and the test asserts it in both JSON arrays.\n  WHY: This can hide renderer bugs around deduplication or skip-list handling because the duplicated entry is treated as expected.\n- tests/test_family_node_runtime.py:176-190 | severity=medium | confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The example-manifest test only asserts a subset of fields/slots/env.\n  WHY: Future fixture changes could still pass this test while breaking the bootstrap contract the issue requires.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Extend `.github/workflows/validate.yml` bootstrap asset copying so consumer repos receive every new `node-runtime` template file.\"\n  expected_change_site: .github/workflows/validate.yml (the copy_from_ref_or_local block near line 354)\n  confidence=[5]\n  flagged_by: [minimax_minimax-m2_5]\n  EVIDENCE: The PR DIFF includes all 11 node-runtime *.j2 paths; no gap.\n- requirement: \"Add direct-run Python regression coverage (not `scripts/dev/*.sh`) that renders the new family into a temp directory and asserts the important invariants.\"\n  expected_change_site: tests/test_family_node_runtime.py + ci.yml/mark-stable.yml/test-and-mark-stable.yml\n  confidence=[5]\n  flagged_by: [minimax_minimax-m2_5]\n  EVIDENCE: The test file exists, exercises all invariants, and all three workflows now list both new tests. The last run specifically added the stable workflow wiring. No gap.\n- requirement: \"Update the README validation-harness documentation.\"\n  expected_change_site: README.md (near line 1600)\n  confidence=[5]\n  flagged_by: [minimax_minimax-m2_5]\n  EVIDENCE: The PR DIFF added the exact documentation. No gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_family_node_runtime.py:55-88 | confidence=3\n  PROBLEM: While `timeout=300` was added, there is no explicit handling for `subprocess.TimeoutExpired`.\n  WHY: A timeout would be surfaced only through the generic `Exception` handler in `main()`, without a clear timeout-specific failure message.\n- tests/test_family_node_runtime.py:55-88 | confidence=3\n  PROBLEM: The `timeout=300` addition still has no explicit `try/except` around `subprocess.run` to catch `TimeoutExpired` and provide a meaningful failure message.\n  WHY: The generic `Exception` handler in `main()` will catch it, but the failure will not distinguish timeout from other errors.\n- Requirement: \"Extend `.github/workflows/validate.yml` bootstrap asset copying so consumer repos receive every new `node-runtime` template file.\"\n  Expected change site: .github/workflows/validate.yml (the copy_from_ref_or_local block near line 354)\n  Evidence of absence: The PR DIFF includes all 11 node-runtime *.j2 paths; no gap.\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Add direct-run Python regression coverage (not `scripts/dev/*.sh`) that renders the new family into a temp directory and asserts the important invariants.\"\n  Expected change site: tests/test_family_node_runtime.py + ci.yml/mark-stable.yml/test-and-mark-stable.yml\n  Evidence of absence: The test file exists, exercises all invariants, and all three workflows now list both new tests. The last run specifically added the stable workflow wiring. No gap.\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Update the README validation-harness documentation.\"\n  Expected change site: README.md (near line 1600)\n  Evidence of absence: The PR DIFF added the exact documentation. No gap.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- tests/test_family_node_runtime.py:60-88 | confidence=4\n  PROBLEM: Captured output is asserted only on `returncode == 0`; stderr is never inspected on the success path and no explicit `check=True` or `result.check_returncode()` is used.\n  WHY: Silent partial renderer failures that still exit 0 could let the test pass while producing a broken harness for consumers.\n- tests/test_family_node_runtime.py:140-170 | confidence=5\n  PROBLEM: Hardcoded `\"npm run lint --if-present\"` appears in both `custom_tests` and `skip_tests`, and the test asserts its presence in both JSON arrays.\n  WHY: This can mask bugs where the renderer should deduplicate or honor the skip list.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_family_node_runtime.py:60-88, 92-95, 140-170 | confidence=5\n  PROBLEM: `assert result.returncode == 0, result.stderr` only checks exit code; stdout/stderr from renderer or validation_lint are never inspected on the success path, and the test also hardcodes duplicate `\"npm run lint --if-present\"` in both `custom_tests` and `skip_tests`.\n  WHY: Partial renderer failures or incorrect skip-test deduplication could produce a broken validation harness while the test still passes.\n- tests/test_family_node_runtime.py:55-88, 176-190 | confidence=4\n  PROBLEM: No explicit `try/except` for `subprocess.TimeoutExpired` surrounds either `subprocess.run`, and the example-manifest test only asserts a subset of fields/slots/env.\n  WHY: A timeout leaves the test in ERROR state without reaching lint or full scaffold assertions, and future fixture changes could still pass the example test while breaking bootstrap.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "f49bce14109f714f5251f45742730a93e66b2caef76769bcfe18d560e82b2937",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2944,
+    "run_id": "26342380602",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26342380602",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260523202000_dddd7dfa55",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2944,
+    "run_id": "26342380602"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 7 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-23T20:20:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/mcp_handshake_probe.py:old mode 100644 \u2192 new mode 100755 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: Executable-bit change to a runtime script is outside issue scope.\n  WHY: Issue #2579 explicitly states \"Do not edit workflow/runtime code in this issue\" and \"Stay inside `files_touched`\"; this is a tracked permission-only edit to a runtime script.\n- scripts/serena_stats_emit.py:old mode 100644 \u2192 new mode 100755 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: Executable-bit change to a runtime script is outside issue scope.\n  WHY: Issue #2579 explicitly states \"Do not edit workflow/runtime code in this issue\" and \"Stay inside `files_touched`\"; this is a tracked permission-only edit to a runtime script.\n- scripts/setup_serena.sh:old mode 100644 \u2192 new mode 100755 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: Executable-bit change to a runtime script is outside issue scope.\n  WHY: Issue #2579 explicitly states \"Do not edit workflow/runtime code in this issue\" and \"Stay inside `files_touched`\"; this is a tracked permission-only edit to a runtime script.\n- analysis/recommendation-triage.md:20 | severity=low | confidence=5\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The header count is inconsistent with the enumerated inventory.\n  WHY: The header says 66 reviewed documents, but the listed inventory totals 65 items.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh:old mode 100644 \u2192 new mode 100755 | severity=medium | confidence=5\n  PROBLEM: Mode-only executable-bit changes were made to runtime scripts outside the issue scope.\n  WHY: The issue explicitly forbids editing workflow/runtime code and says to stay inside `files_touched`; these are tracked edits to three runtime scripts.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh:old mode 100644 \u2192 new mode 100755 | severity=medium | confidence=5\n  PROBLEM: Mode-only executable-bit changes were made to runtime scripts outside the issue scope.\n  WHY: The issue's scope is limited to the triage ledger file, and these permission-only changes touch runtime scripts that were explicitly out of bounds.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh:Mode change 100644 \u2192 100755 on all three files | severity=medium | confidence=5\n  PROBLEM: Executable-bit changes were added to three runtime scripts outside the scope of issue #2579.\n  WHY: Issue #2579 states \"Do not edit workflow/runtime code in this issue\" and \"Stay inside `files_touched`\"; the mode-only edits modify runtime files even though no content changed.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh:diff hunk `old mode 100644` / `new mode 100755` (execute bit added, no content changes) | severity=medium | confidence=5\n  PROBLEM: The PR modifies three runtime script files by adding the executable permission bit, which is outside the scope of issue #2579.\n  WHY: Issue #2579 explicitly states \"Do not edit workflow/runtime code in this issue\" and \"Stay inside `files_touched`.\"\n- analysis/recommendation-triage.md:20 (\"Reviewed 66 required docs on this ref\") | severity=low | confidence=5\n  PROBLEM: The header count does not match the enumerated inventory.\n  WHY: The header says 66 reviewed documents, but the listed inventory totals 65 items.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/mcp_handshake_probe.py:old mode 100644 \u2192 new mode 100755 (diff header) | severity=medium | confidence=5\n  PROBLEM: Unnecessary executable bit flip on a runtime script.\n  WHY: It violates explicit issue #2579 scope: \"Do not edit workflow/runtime code in this issue\" and \"Stay inside `files_touched`.\"\n- scripts/serena_stats_emit.py:old mode 100644 \u2192 new mode 100755 (diff header) | severity=medium | confidence=5\n  PROBLEM: Unnecessary executable bit flip on a runtime script.\n  WHY: It violates explicit issue #2579 scope: \"Do not edit workflow/runtime code in this issue\" and \"Stay inside `files_touched`.\"\n- scripts/setup_serena.sh:old mode 100644 \u2192 new mode 100755 (diff header) | severity=medium | confidence=5\n  PROBLEM: Unnecessary executable bit flip on a runtime script.\n  WHY: It violates explicit issue #2579 scope: \"Do not edit workflow/runtime code in this issue\" and \"Stay inside `files_touched`.\"\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh:old mode 100644 -> new mode 100755 (all three files) | severity=medium | confidence=5\n  PROBLEM: The PR adds executable-bit changes to three runtime scripts that are outside the scope of issue #2579.\n  WHY: Issue #2579 explicitly states \"Do not edit workflow/runtime code in this issue\" and \"Stay inside `files_touched`\"; the mode-only diff hunks modify tracked runtime files.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "a875ee2a450d47c4567a2c6911a8b1c214658f37211beae78bad6a6126331ea3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2580,
+    "run_id": "25853181400",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25853181400",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260514095910_debb9cf0aa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2580,
+    "run_id": "25853181400"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-14T09:59:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

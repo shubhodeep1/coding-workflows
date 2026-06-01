@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:11883-11908 | severity=medium | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The jq diagnostics assume `_diag_blob` always has a top-level `workflow_runs` array, so malformed or differently shaped cache/API responses collapse to generic `?` values.\n  WHY: The block is meant to provide stall-detection provenance, but on parse/mismatch failures it only records `parse_error=true` and placeholders instead of the concrete cache state.\n- scripts/orchestrate_poll_process.sh:11890-11906 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The diagnostic subshell swallows jq errors and does not surface the concrete failing JSON when parsing fails.\n  WHY: With stderr discarded and no stricter error handling inside the subshell, maintainers only get `parse_error=true` and `?` counters, which makes the diagnostic output nearly unusable for debugging.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/orchestrate_poll_process.sh:11883-11908 | severity=medium | confidence=5\n  PROBLEM: The jq queries inside the diagnostic subshell assume `_diag_blob` always yields a JSON object with a top-level `workflow_runs` array, so malformed or differently shaped cache/API responses collapse to generic `?` values.\n  WHY: The block is intended to provide stall-detection provenance, but parse failures only produce `parse_error=true` and placeholder counters instead of the concrete cache state.\n- scripts/orchestrate_poll_process.sh:11890-11906 | severity=medium | confidence=4\n  PROBLEM: The diagnostic subshell swallows jq stderr and does not surface the concrete failing JSON when parsing fails.\n  WHY: With stderr discarded and no stricter error handling inside the subshell, maintainers only get `parse_error=true` and `?` counters, which makes the diagnostic output nearly unusable for debugging.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "893a4ef3bf35e0bcb14f62947b883dfa9f894d23ad526adde1f6595adcea2c0a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2815,
+    "run_id": "26155354336",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26155354336",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260520102204_77c15cdee6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2815,
+    "run_id": "26155354336"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-20T10:22:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

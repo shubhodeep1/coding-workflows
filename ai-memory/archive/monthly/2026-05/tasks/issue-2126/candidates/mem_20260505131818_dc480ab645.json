@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: Which part of this repository should be changed?**\nChoices:\n- **A** \u2014 The issue-to-PR pipeline (`clarify` / `plan` / `implement`) (RECOMMENDED)\n- **B** \u2014 PR review / autofix behavior (`review_autofix`, merge/conflict handling)\n- **C** \u2014 Orchestrator / validation / polling behavior (`orchestrate*`, `validate`)\n- **D** \u2014 Repository docs / wrapper workflow maintenance / another area\nReply: `Q1: A`\n**Q2: What kind of improvement do you want?**\nChoices:\n- **A** \u2014 Fix a concrete bug or regression (RECOMMENDED)\n- **B** \u2014 Reduce operational noise / API usage / duplicate work without changing intended behavior\n- **C** \u2014 Add or change workflow behavior / automation rules\n- **D** \u2014 Improve documentation / readability / maintainability only\nReply: `Q2: A`\n**Q3: What should count as success for this issue?**\nChoices:\n- **A** \u2014 Match or fix a specific failing issue, PR, or workflow run; include that reference in your reply (RECOMMENDED)\n- **B** \u2014 Solve a recurring operational problem; describe the exact symptom in your reply\n- **C** \u2014 Make a docs/config cleanup; name the exact file(s) or workflow(s) in your reply\nReply: `Q3: A`",
+  "fingerprint": "fa1d97f7646b7aeac58010ea8b19148a21ab695d9a06023f3146309bcc8a16e6",
+  "lineage": {
+    "issue_number": 2126,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25378689751",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25378689751",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260505131818_dc480ab645",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2126,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25378689751"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #2126 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-05T13:18:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

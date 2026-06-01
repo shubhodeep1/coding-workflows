@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/targeted_file_context.py:141-150 | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: `_log_semble_event` uses `repr()` for whitespace-containing values, which breaks flat space-separated `key=value` telemetry parsing.\n  WHY: downstream parsers split on spaces, so quoted/escaped values like `reason='connection reset'` are not recoverable as a single field.\n- scripts/implement_diagnose_post_codex_failure.sh:419-421 | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The first `re.findall(...)` loop adds dotted tokens like `error.message` and `step.name` to the Semble query, even when they are not file paths.\n  WHY: those pseudo-filenames pollute the query with irrelevant identifiers and can crowd out useful context before the 40-item truncation.\n- scripts/implement_diagnose_post_codex_failure.sh:402-406 | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, x-ai_grok-4_1-fast]\n  PROBLEM: The first regex loop has no early `len(identifiers) >= 40` cap, so it can consume the identifier budget before the second loop runs.\n  WHY: verbose tails with many dotted matches can starve the plain-word identifier pass, reducing Semble query quality.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/targeted_file_context.py:141-150 | confidence=4\n  PROBLEM: `_log_semble_event` uses `repr()` on whitespace-containing values, which breaks flat key=value log parsing.\n  WHY: A flat `key=value` parser splitting on spaces cannot extract quoted/escaped values correctly.\n- scripts/implement_diagnose_post_codex_failure.sh:402-406 | confidence=3\n  PROBLEM: The first regex loop in `build_diagnose_semble_query` has no early cap, so dotted tokens can fill the identifier budget before the second loop runs.\n  WHY: If the tail has many dotted matches, plain-word identifiers get crowded out and the query quality drops.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/targeted_file_context.py:141-149 | confidence=4\n  PROBLEM: When a value contains whitespace, `_log_semble_event` uses `repr()`, producing quoted output that breaks flat `key=value` parsing.\n  WHY: Downstream telemetry consumers expect unquoted key=value fields, and the repr fallback emits values that are not parseable the same way.\n- scripts/implement_diagnose_post_codex_failure.sh:419-421 | confidence=3\n  PROBLEM: The regex matches dotted identifiers such as `error.message` and `step.name`, even though they are not actual file paths.\n  WHY: These pseudo-filenames pollute the Semble query and can crowd out real identifiers before the 40-item cap.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/implement_diagnose_post_codex_failure.sh:419-421 | confidence=4\n  PROBLEM: The regex pattern captures dot-separated tokens like `error.message` and `step.name`, not just file paths.\n  WHY: Those non-file identifiers pollute the Semble query with irrelevant chunks and can crowd out meaningful identifiers before the 40-item cap.\n- scripts/targeted_file_context.py:141-150 | confidence=4\n  PROBLEM: `_log_semble_event` wraps whitespace-containing field values with `repr()`, producing Python-style quoted output.\n  WHY: Space-separated `key=value` log parsers cannot reliably extract quoted or escaped values from the resulting telemetry lines.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/targeted_file_context.py:141-150 | confidence=4\n  PROBLEM: `_log_semble_event` applies `repr()` to field values containing whitespace, which breaks the expected flat `key=value` stderr telemetry format.\n  WHY: A simple split-on-space parser cannot reliably recover the original `reason` value once it is quoted or escaped.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/implement_diagnose_post_codex_failure.sh:419-421 | confidence=4\n  PROBLEM: `re.findall(r\"(?:[A-Za-z0-9_.-]+/)*([A-Za-z0-9_.-]+\\.[A-Za-z0-9_.-]+)\", tail_text)` captures non-file dotted identifiers like `error.message` or `step.name`.\n  WHY: Irrelevant pseudo-filenames dominate the Semble query and degrade diagnostic context quality.\n- scripts/implement_diagnose_post_codex_failure.sh:419-421 | confidence=3\n  PROBLEM: The first regex loop has no per-loop cap before the final `identifiers[:40]` slice.\n  WHY: Excess dotted matches can fill the list early and crowd out word-based identifiers from the second loop.\n- scripts/targeted_file_context.py:141-150 | confidence=4\n  PROBLEM: `_log_semble_event()` uses `repr()` for whitespace-containing values, emitting non-flat `key=value` telemetry like quoted or escaped strings.\n  WHY: Space-separated log parsers used by workflow analysis expect unquoted values and lose metrics when the format changes.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/targeted_file_context.py:141-150 | confidence=4\n  PROBLEM: `_log_semble_event` produces inconsistent log format when error messages contain whitespace, using Python `repr()` quoting.\n  WHY: That breaks flat `key=value` log parsing for telemetry consumers.\n- scripts/implement_diagnose_post_codex_failure.sh:419-421 | confidence=3\n  PROBLEM: The regex in `build_diagnose_semble_query` captures non-file dotted identifiers like `error.message` and `step.name`.\n  WHY: Those identifiers pollute Semble queries with irrelevant chunks and reduce query quality.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "b4ea3914b8fcc202b3d8dd02eb60cca4fc05771023719952b2b4d57acb46d053",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2407,
+    "run_id": "25612981784",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25612981784",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260509222320_d96685540e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2407,
+    "run_id": "25612981784"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-09T22:23:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

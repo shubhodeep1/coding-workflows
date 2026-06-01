@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:1854-1927 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The wait loop sleeps the full `_poll_interval` before rechecking the deadline, so actual wait can exceed `CHECK_RUNS_WAIT_TIMEOUT_SECS` by up to one poll interval.\n  WHY: Multiple reviewers verified the loop can reach about 150s with the new 120s/30s defaults; one reviewer called it pre-existing/advisory-fail-open, while others noted the reduced budget makes the overshoot more material.\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh:old mode 100755 new mode 100644 | severity=low | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The last autofix run changed only executable bits on three unrelated scripts, which was outside issue #2549's workflow-only scope.\n  WHY: The scripts are invoked via explicit interpreters, so the mode flip is runtime-safe, but the reviewers agreed it was an out-of-scope change.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/review_autofix.yml:1892-1926\n  PROBLEM: The wait loop checks the deadline before sleeping, then sleeps the full `_poll_interval`, so actual wall-clock wait can overshoot the timeout.\n  WHY: At `_now` close to `_deadline`, the loop can sleep 30s and only detect timeout on the next iteration, yielding about 150s actual wait with the new defaults.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/review_autofix.yml:1919-1926 | severity=medium | confidence=4\n  PROBLEM: The wait loop can exceed `CHECK_RUNS_WAIT_TIMEOUT_SECS` by up to one poll interval because it sleeps for the full `_poll_interval` after checking the deadline.\n  WHY: With the new 120s timeout and 30s poll interval, the worst case is about 150s actual wait; the reviewer called this pre-existing, advisory, fail-open behavior.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/review_autofix.yml:~1904-1927 | confidence=4\n  PROBLEM: The wait loop sleeps the full `_poll_interval` before rechecking the deadline, so the actual wait can exceed `CHECK_RUNS_WAIT_TIMEOUT_SECS` by up to one poll interval.\n  WHY: The reviewer measured a worst case of about 150s with the new 120s/30s defaults and noted the issue is pre-existing but materially more visible after the change.\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh | confidence=5\n  PROBLEM: The last autofix commit removed execute bits from three unrelated scripts, which was outside the scope of issue #2549.\n  WHY: The reviewer said the changes are non-functional because the scripts are invoked via explicit interpreters and that the working tree had already reverted them.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh:old mode 100755 new mode 100644 | confidence=5\n  PROBLEM: Last autofix run modified only executable bits on three unrelated scripts.\n  WHY: The reviewer said the scripts are invoked via explicit `python3`/`bash`, so the mode change is runtime-safe but a scoping violation for issue #2549.\n- .github/workflows/review_autofix.yml:1854-1927 | confidence=5\n  PROBLEM: Fixed-interval sleep before the deadline recheck allows the wait to exceed `CHECK_RUNS_WAIT_TIMEOUT_SECS` by up to about 30 seconds plus API time.\n  WHY: With the new 120s default, the reviewer estimated worst-case actual wait of about 150s, which partially defeats the budget reduction.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh:mode 100755 -> 100644 | confidence=5\n  PROBLEM: These mode-only changes are out of scope for linked issue #2549, which explicitly requests workflow-only changes.\n  WHY: All three scripts are invoked through explicit interpreters throughout the repo, so the mode flip is cosmetic and does not change behavior.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "a4de3b2524720a9137d15d8c9618174704f2ace00b5f88826bf1cec2a34820f0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2554,
+    "run_id": "25766502785",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25766502785",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260512225540_ded6006efb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2554,
+    "run_id": "25766502785"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-12T22:55:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

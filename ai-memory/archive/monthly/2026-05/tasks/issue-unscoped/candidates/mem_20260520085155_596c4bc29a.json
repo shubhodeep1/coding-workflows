@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:lines 440, 458 | confidence=2\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The warning that `sanitize_codex_prompt_file` will strip invalid trailing bytes can be misleading when `gh_helpers.sh` failed to source and cleanup is a no-op.\n  WHY: In that misconfigured failure path, the warning overstates the cleanup guarantee in the Python-unavailable/raw-byte truncation path.\n- scripts/review_rb_judge.sh:37-51 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: Fallback budget-helper stubs can leave degraded harnesses without the prompt-budget lifecycle, causing command-not-found during prompt assembly.\n  WHY: Reviewers observed paths where `_embed_input_file` is stubbed while budget-helper calls still execute, so the later prompt/render flow can abort before `codex` runs.\n- scripts/review_rb_judge.sh:443-470 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The `head -c` truncation fallback can produce invalid UTF-8 when Python or temp-file creation is unavailable.\n  WHY: That can corrupt the prompt file and make `sanitize_codex_prompt_file`/`codex` reject it.\n- tests/test_orchestrate_integration_ahead_by_gate.py:590-632 | confidence=3\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The `main()` test runner path depends on `jq`/shell-stub behavior that may be absent or altered in minimal CI.\n  WHY: Reviewers noted explicit workflow invocations can fail non-zero when those tools or stubs are missing.\n- tests/test_orchestrate_integration_ahead_by_gate.py:module import | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: A duplicate module-level `import sys` remains as merge noise.\n  WHY: It's harmless at runtime but unnecessary and violates style expectations.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_rb_judge.sh:lines 440, 458 | confidence=2\n  PROBLEM: The warning message \"sanitize_codex_prompt_file will strip any invalid trailing bytes\" is potentially misleading.\n  WHY: If SUPPORT_SCRIPTS_DIR is misconfigured or gh_helpers.sh fails to source, sanitize_codex_prompt_file may be a no-op, so the warning overstates cleanup in the Python-unavailable/raw-byte truncation path.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/review_rb_judge.sh:lines 37-51 | confidence=4\n  PROBLEM: Fallbacks only define `_init_prompt_budget` and `_cleanup_prompt_budget` when helpers are absent, but downstream prompt assembly uses `_embed_input_file` which may itself be stubbed in degraded harnesses.\n  WHY: In minimal/legacy harnesses that only stub `_embed_input_file`, later prompt assembly attempts that rely on `_init_prompt_budget`/`_cleanup_prompt_budget` will fail with a \"command not found\" error, aborting the review-blocked judge flow before codex can run.\n- scripts/review_rb_judge.sh:PR_DIFF truncation cleanup | confidence=4\n  PROBLEM: The second copy of PR_DIFF truncation logic was removed, but the fallback continues to re-implement UTF-8 unsafe truncation via `head -c` when Python is unavailable or temp-file creation fails.\n  WHY: The fallback does not guarantee valid UTF-8 and may produce a prompt file that `sanitize_codex_prompt_file`/`codex` rejects, breaking the review-blocked judge pipeline on large diffs in environments where Python is not available.\n- tests/test_orchestrate_integration_ahead_by_gate.py:lines 590-632 | confidence=3\n  PROBLEM: The test runner\u2019s `main()` entrypoint depends on external tools such as `jq` and shell scripts that may be absent in minimal CI environments used for workflow gate runs.\n  WHY: In CI jobs that don\u2019t globally install `jq` or specific stub scripts, the test run will fail or exit non-zero, breaking the workflow that runs this file explicitly.\n- tests/test_orchestrate_integration_ahead_by_gate.py:module import | confidence=4\n  PROBLEM: The previous AI autofix left behind a duplicate module-level `import sys` statement in the merge resolution.\n  WHY: Duplicate `import sys` artifacts are harmless but violate Python style expectations; they clutter the tree and are unnecessary merge noise.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/review_rb_judge.sh:lines 443-470 | confidence=4\n  PROBLEM: When Python is unavailable or temp-file creation fails, raw `head -c` (or byte slicing without proper UTF-8 boundary handling in all branches) can produce invalid UTF-8.\n  WHY: The `sanitize_codex_prompt_file` call later in the script (and `codex exec`) assumes clean input, so a corrupted prompt file can make codex reject the run.\n- scripts/review_rb_judge.sh:lines 37-51 | confidence=4\n  PROBLEM: Stubs are installed only if `command -v` fails, but degraded harnesses that stub only `_embed_input_file` still reach unconditional calls to budget helpers during truncation/prompt rendering.\n  WHY: In test harnesses or minimal environments, `command not found` aborts before `codex exec`, skipping the judge and preventing merge of the final integration PR.\n- tests/test_orchestrate_integration_ahead_by_gate.py:lines 604-632 | confidence=3\n  PROBLEM: Runner discovers tests via `globals()` but relies on `_make_gh_stub` + `jq` (called inside `_run_shell`); no explicit import/guard for `jq` or stub presence.\n  WHY: In minimal CI (no `jq`, or `_make_gh_stub` altered), the test can exit non-zero and break explicit workflow calls.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "46e86f3c1ec7b89ebde942a331decdc19d851d7e1d9383121686c4d520397422",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2801,
+    "run_id": "26150453603",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26150453603",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260520085155_596c4bc29a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2801,
+    "run_id": "26150453603"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-20T08:51:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

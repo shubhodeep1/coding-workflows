@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/render_prompt.sh:70-73 | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The placeholder guard only matches exact standalone `{{SERENA_TOOL_HINTS}}` lines, so embedded or multi-line occurrences can evade detection.\n  WHY: Malformed prompt templates could leave literal `{{SERENA_TOOL_HINTS}}` in codex input instead of failing the unresolved-placeholder check.\n- scripts/implement_diagnose_post_codex_failure.sh:98-150 | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The Python patcher silently preserves duplicate top-level `model_reasoning_effort` keys by only replacing/skipping the first match.\n  WHY: Malformed `config.toml` with duplicate top-level keys can cause codex to inherit the first value without any warning or normalization.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/implement_diagnose_post_codex_failure.sh:98-150 | confidence=3\n  PROBLEM: Python patcher replaces/skips only first top-level model_reasoning_effort match; duplicate top-level keys silently preserved without warning or normalization to single key\n  WHY: Malformed config.toml with duplicate top-level model_reasoning_effort (possible from manual edits or prior buggy patchers) results in codex inheriting first key's value; later duplicates ignored, no error logged before codex exec\n- scripts/render_prompt.sh:70-73 | confidence=2\n  PROBLEM: Guard matches only exact/standalone lines; embedded or multi-line {{SERENA_TOOL_HINTS}} (e.g., refactored prompts concatenating placeholders) evade detection\n  WHY: Malformed prompt templates render partial literal {{SERENA_TOOL_HINTS}} into codex input; model misreads as instructions or unresolved placeholder silently passed through\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "566995d4dc2b5e7fb34de7d028f476e3744c513b647ab936dbbd4f68a872c5e3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2535,
+    "run_id": "25706730805",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25706730805",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260512012315_732a4a9cbf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2535,
+    "run_id": "25706730805"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-12T01:23:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

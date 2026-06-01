@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_resolve.sh:229-236 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The post-rewrite verification uses an `elif` chain, so if both checks fail only the first warning is emitted and the second mismatch is hidden.\n  WHY: Multiple reviewers identified this as a real observability gap; it does not change runtime behavior, but it can mask the full failure mode. Severity is low across reviewers.\n- scripts/review_conflict_resolve.sh:223-236 | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The verification greps use exact-match patterns that can miss indented or differently formatted TOML, producing a spurious warning even when the rewrite succeeded.\n  WHY: Two reviewers reported the same false-positive warning risk tied to the strict verification patterns versus whitespace-tolerant rewrite patterns; severity was called low, with one reviewer higher confidence than the other.\n- scripts/review_conflict_resolve.sh:228-230 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The appended `model_reasoning_summary = \"auto\"` line is written without preserving indentation, which can make the TOML formatting visually inconsistent.\n  WHY: This was reported as cosmetic only and does not affect parsing or runtime behavior.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_conflict_resolve.sh:230-236 | severity=low | confidence=2\n  PROBLEM: The `elif` chain short-circuits, so if both verifications fail only the first warning is emitted and the second mismatch is never reported.\n  WHY: This is an observability gap, not a correctness failure; the rewrite itself completed, but in a debug situation the operator sees only one of the two mismatches.\n- scripts/review_conflict_resolve.sh:232, 234 | severity=low | confidence=1\n  PROBLEM: `grep -qE` exit code 2 (error) is treated the same as exit code 1 (no match), so a real read error is reported as a missing pattern.\n  WHY: This is unlikely in practice because the file is guarded by existence checks and the rewrite/verification run in the same shell, but a filesystem issue or race could make the warning misleading.\n- scripts/review_conflict_resolve.sh:232, 234 | severity=1\n  PROBLEM: The strict exact-match verification patterns are not a bug because the rewrite writes exact-match output, so there is no false-warning risk in practice.\n  WHY: The rewrite commands produce the exact canonical lines checked by `grep`; a false warning would require external edits between rewrite and verification, which cannot happen in the same process.\n- scripts/review_conflict_resolve.sh:221 | severity=1\n  PROBLEM: The `printf` format string is correctly quoted; single quotes do not prevent `\\n` from being interpreted by `printf`.\n  WHY: Bash `printf` interprets backslash escapes in the format string regardless of shell quoting, so this is a false positive.\n- scripts/review_conflict_resolve.sh:226 | severity=1\n  PROBLEM: The `sed` append syntax is consistent with existing codebase usage and is not fragile in this context.\n  WHY: The same pattern exists in the editor step, and the resolver\u2019s version is more robust; no issue was found.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_conflict_resolve.sh:230-234 | severity=low | confidence=2-3\n  PROBLEM: The verification patterns are strict exact matches and do not tolerate trailing whitespace or comments.\n  WHY: The rewrite uses tolerant patterns, so this is only defense-in-depth and the reviewer considered it non-blocking.\n- scripts/review_conflict_resolve.sh:228 | severity=low | confidence=2\n  PROBLEM: The `model_reasoning_summary = \"auto\"` line is appended without preserving indentation.\n  WHY: TOML parsers tolerate this; the issue is cosmetic only.\n- scripts/review_conflict_resolve.sh:229-234 | severity=low | confidence=2\n  PROBLEM: The `elif` chain short-circuits, so if both verification checks fail only one warning is emitted.\n  WHY: Both warnings are non-fatal, so this has no runtime impact; it only reduces observability in an edge case.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_conflict_resolve.sh:223-236 | severity=low | confidence=3\n  PROBLEM: The sed rewrite tolerates leading whitespace, but the verification grep patterns do not, so indented configs can trigger a spurious warning after a successful rewrite.\n  WHY: If `model_reasoning_effort` is indented, sed updates it but the exact-match grep fails, producing a false-positive warning with no functional failure.\n- scripts/review_conflict_resolve.sh:230 | severity=low | confidence=2\n  PROBLEM: The `sed -i ... a model_reasoning_summary = \"auto\"` command appends the new line without preserving indentation structure.\n  WHY: This may look visually inconsistent in TOML files, but parsers tolerate it and runtime behavior is unaffected.\n- scripts/review_conflict_resolve.sh:228-236 | severity=low | confidence=2\n  PROBLEM: The `elif` chain short-circuits, so if both rewrites fail validation only the first warning is logged.\n  WHY: This reduces observability in the edge case where both `model_reasoning_effort` and `model_reasoning_summary` fail verification, but it does not change runtime correctness.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/review_conflict_resolve.sh:229-236 | severity=low | confidence=2\n  PROBLEM: Post-rewrite verification uses an `elif` chain that short-circuits, so if the effort grep fails the summary check is skipped and both warnings never surface together.\n  WHY: There is no runtime failure because the resolver proceeds regardless, but the single warning masks the full failure mode.\n- scripts/review_conflict_resolve.sh:223, 230 | severity=low | confidence=1\n  PROBLEM: The rewritten/printed lines use a fixed no-indent format, while the verification greps assume an exact no-space prefix/postfix, and the appended summary inherits no indent from the effort line.\n  WHY: TOML parsers ignore whitespace/indentation, so this is only a cosmetic inconsistency if manual edits add indent or comments.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "06b45481032f255ecce8a2492ad3975bb39c6a6e77ee6a31460b7c510dd9c2fb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2059,
+    "run_id": "25302806251",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25302806251",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260504060039_97d0c735da",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2059,
+    "run_id": "25302806251"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-04T06:00:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/update_workflows.yml:79 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: `upstream_root` is written to `$GITHUB_OUTPUT` but never consumed downstream.\n  WHY: All six reviewers said it has no readers and only adds unused step-output noise.\n- .github/workflows/update_workflows.yml:218-228 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: `[ ! -e \"${UPSTREAM_CLAUDE_MD}\" ]` exits before the `cat` guard, so a dangling symlink silently skips sync instead of failing loudly.\n  WHY: Five reviewers flagged the short-circuit; they disagreed on practical impact from low/minor to critical, and z-ai explicitly called it critical.\n- .github/workflows/update_workflows.yml:382-393 | severity=medium | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: `CLAUDE_MD_CHANGED_LIST` is appended with literal `\\n` characters instead of newlines.\n  WHY: x-ai said the rendered output would show visible `\\n` literals.\n- .github/workflows/update_workflows.yml:423-523 | severity=medium | confidence=4\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: `CLAUDE_MD_CHANGED_LIST` is appended with literal `\\n` characters, which then show up in the Telegram message.\n  WHY: minimax reported the formatting bug affects the commit/Telegram output and shows visible `\\n` instead of line breaks.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/update_workflows.yml:79 | confidence=5\n  PROBLEM: `upstream_root` is written to `$GITHUB_OUTPUT` but never consumed downstream.\n  WHY: It has zero downstream readers and only adds unused step-output noise.\n- .github/workflows/update_workflows.yml:218-228 | confidence=3\n  PROBLEM: `[ ! -e \"${UPSTREAM_CLAUDE_MD}\" ]` exits before the `cat` guard, so a dangling symlink silently skips sync instead of failing loudly.\n  WHY: The current sparse-checkout makes it unreachable now, but the comment's fail-loud contract would be violated if `CLAUDE.md` were omitted later.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/update_workflows.yml:79 | confidence=5\n  PROBLEM: The fetch step outputs `upstream_root=${TMPDIR}/upstream` to `$GITHUB_OUTPUT`, but no downstream step ever references `steps.fetch.outputs.upstream_root`.\n  WHY: Grep confirms only `upstream_dir` is used, never `upstream_root`.\n- .github/workflows/update_workflows.yml:218-221 | confidence=4\n  PROBLEM: The code checks `[ ! -e \"${UPSTREAM_CLAUDE_MD}\" ]` first, so a broken symlink exits early with \"nothing to sync\" instead of reaching the `cat` guard.\n  WHY: This defeats the explicit error path for a dangling symlink and turns the failure into a silent skip.\n- .github/workflows/update_workflows.yml:423 and 519-523 | confidence=4\n  PROBLEM: `CLAUDE_MD_CHANGED_LIST` is built with literal `\\n` and the Telegram message shows visible `\\n` instead of line breaks.\n  WHY: minimax said the list is polluted and the notification renders the backslash-n sequences literally.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/update_workflows.yml:79 | confidence=5\n  PROBLEM: The `upstream_root` output is written but never consumed by any downstream step.\n  WHY: Grepping the workflow shows zero references to `steps.fetch.outputs.upstream_root`.\n- .github/workflows/update_workflows.yml:218-221 | confidence=3\n  PROBLEM: The `-e` test returns false for dangling symlinks, so the step exits 0 instead of reaching the `cat` guard that would fail loudly.\n  WHY: This can mask a sparse-checkout or git error and silently skip sync instead of alerting the operator.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/update_workflows.yml:79 | confidence=5\n  PROBLEM: The `upstream_root` step output is defined but never consumed anywhere downstream.\n  WHY: A search of the file shows exactly one occurrence, so the output is dead code.\n- .github/workflows/update_workflows.yml:218-227 | confidence=3\n  PROBLEM: The `[ ! -e \"${UPSTREAM_CLAUDE_MD}\" ]` test exits silently before the `cat` guard can detect a dangling symlink.\n  WHY: If the symlink target were missing, the step would return \"nothing to sync\" instead of failing loudly as the comment intends.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/update_workflows.yml:79 | confidence=5\n  PROBLEM: Outputs `upstream_root` to GITHUB_OUTPUT but no downstream step references `steps.fetch.outputs.upstream_root`.\n  WHY: No runtime failure, but the output is unused step-artifact noise.\n- .github/workflows/update_workflows.yml:382-393 | confidence=5\n  PROBLEM: Appends literal \"\\n\" characters to `CLAUDE_MD_CHANGED_LIST` instead of newlines.\n  WHY: The rendered message would show visible `\\n` literals rather than line breaks.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/update_workflows.yml:218-227 | confidence=5\n  PROBLEM: The `[ ! -e \"${UPSTREAM_CLAUDE_MD}\" ]` test exits silently before the `cat` guard can detect a dangling symlink.\n  WHY: The code does not fulfill the comment's stated intent to fail loudly when the symlink target was not pulled by sparse-checkout.\n- .github/workflows/update_workflows.yml:79 | confidence=4\n  PROBLEM: The `upstream_root` output is written but never consumed by any subsequent step.\n  WHY: This is dead code that adds noise to step outputs and has no runtime effect.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "01ddf1c6bed27424606cbfe3d63970d9d06e4b365f1abfd0a005c2198c9d591f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2546,
+    "run_id": "25746491391",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25746491391",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260512163829_5f501a9992",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2546,
+    "run_id": "25746491391"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-12T16:38:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

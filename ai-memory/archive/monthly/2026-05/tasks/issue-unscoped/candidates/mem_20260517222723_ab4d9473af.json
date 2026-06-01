@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_reject_verify.sh:388-395 | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: When the prompt file path exceeds 200 characters, `squish()` can truncate the diagnostic reason mid-directory-component, making the logged failure harder to interpret.\n  WHY: This is a cosmetic readability issue only; it does not affect verifier correctness, but it can make debugging unusually deep prompt paths harder.\n- scripts/review_reject_verify.sh:line ~160\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: The regex `r\"[.!?][\\\"')\\]]?\\s+(?=[A-Z0-9\\\"'(])\"` can false-positive on abbreviations like \"no. 42\" or \"e.g. The\", causing an entire batch to fail open even when the verifier returned a genuinely single-sentence reason.\n  WHY: This is a conservative hardening concern; the fail-open behavior is safe, but it may trigger unnecessary verifier retries on benign output.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_reject_verify.sh:388-395 | confidence=2\n  PROBLEM: When the prompt file path exceeds 200 characters, `squish()` can truncate the diagnostic reason mid-directory-component, making the logged failure harder to interpret.\n  WHY: This does not affect correctness, but it can make debugging unusually deep prompt paths harder.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/review_reject_verify.sh:line ~160\n  PROBLEM: The regex `r\"[.!?][\\\"')\\]]?\\s+(?=[A-Z0-9\\\"'(])\"` can false-positive on abbreviations like \"no. 42\" or \"e.g. The\", causing an entire batch to fail open even when the verifier returned a genuinely single-sentence reason.\n  WHY: This is safe and conservative, but it can cause unnecessary verifier retries on benign output.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "3ce9d0f4d24edd0a90965c361b0f5446976c207c69a38e776ee2c2ea14518453",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2717,
+    "run_id": "26004221867",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26004221867",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517222723_ab4d9473af",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2717,
+    "run_id": "26004221867"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-17T22:27:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref\n- HEAD: `b60e32805bc2c88a4e9026d4a22ac0a72e6615e9`\n- Checked-out branch: `orchestrator/project-2548`\n- Integration branch metadata: `orchestrator/project-2548`\n- Integration branch mismatch: false\n\nClarification interpretation\n- No `Q1`/`Q2` clarification batch was issued for this issue.\n- The `/answer [auto-answered-by-orchestrator]` comment therefore means the issue was already considered clear, and planning should proceed with the issue body as written.\n\nActions taken for planning\n- Inspected `.github/workflows/ci.yml` around the `lint` job and the two named Semble-related steps.\n- Inspected the representative Semble contract tests `tests/test_review_semble_contract.py` and `tests/test_judge_semble_prefetch_contract.py` to understand what the moved steps depend on and whether there is an existing CI-order contract to preserve.\n- Searched for repo tests that assert `.github/workflows/ci.yml` ordering for these Semble steps.\n- No tests were executed in the planning phase.\n\nImplementation plan\n\n1. Files likely to change\n- `.github/workflows/ci.yml`\n- No other file changes are currently planned.\n- Explicitly out of scope for this issue: README/runbook/report updates, sibling workflow reordering (`mark-stable.yml`, `test-and-mark-stable.yml`), or new CI contract coverage.\n\n2. Functions or modules to implement\n- No new functions or modules are needed.\n- This is a workflow sequencing edit inside `.github/workflows/ci.yml`, specifically within `jobs.lint.steps`.\n- Reorder the existing step blocks so these steps run earlier:\n  - `Review Semble contract test`\n  - `Judge Semble prefetch contract test`\n- Safest placement: move both blocks to immediately after `Python syntax check`, and before the longer Python unit-test sequence beginning with `Orchestrate lib unit tests`.\n- Preserve the existing step names if possible.\n- Preserve each step\u2019s `run:` body exactly as-is, including the full command list already bundled under `Judge Semble prefetch contract test`.\n\n3. Data structures affected\n- The YAML step list under `.github/workflows/ci.yml`:\n  - `jobs`\n  - `lint`\n  - `steps`\n- No data model, schema, artifact format, environment variable, output, or runtime state changes are expected.\n- No Python code path or production behavior changes are part of this issue.\n\n4. API or interface changes\n- No external API or user-facing interface changes.\n- Internal CI behavior change only:\n  - same tests\n  - same coverage\n  - same commands\n  - earlier execution/failure point in the `lint` job\n- Do not add, remove, rename, or repurpose workflow inputs/outputs/env vars as part of this task.\n\n5. Potential risks or edge cases\n- The step named `Judge Semble prefetch contract test` is broader than its name suggests: it currently runs multiple related contract scripts, not just the judge-prefetch test. The implementation should move the entire step block intact rather than splitting it or trimming commands.\n- Keep the moved Semble steps after the prerequisite bootstrap/lint steps that make the change low-risk:\n  - checkout\n  - Python setup\n  - Python CI dependency install\n  - YAML lint\n  - actionlint\n  - Python syntax check\n- Avoid unrelated cleanup or reformatting in the workflow file; this should remain a narrow reordering edit.\n- There are comment-only references elsewhere to `ci.yml` line numbers, but targeted inspection did not reveal an existing contract test tied to the current Semble-step position. Do not broaden scope to chase comment line drift unless an actual failing assertion requires it.\n\n6. Testing considerations\n- Primary validation should be the existing CI job itself after the reorder.\n- At minimum, confirm the moved Semble steps still run with the exact current commands:\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_semble_contract.py`\n  - the full existing command list under `Judge Semble prefetch contract test`\n- Also confirm the workflow file remains valid YAML / actionlint input after the move.\n- No new tests should be added for this issue; the guardrail is to preserve existing contract coverage, not expand it.\n- Coverage gates later in `ci.yml` should remain untouched.\n\nConflicts / codebase nuances\n- Minor codebase/issue wording nuance: the issue refers to two Semble contract steps, but one of those steps currently bundles several related Semble/Serena contract tests. That is not a blocker; it just means the implementation should relocate the whole block unchanged.\n- No file-path conflict was found: `.github/workflows/ci.yml` exists on the current ref, and the checked-out ref matches the orchestrator metadata.\n\nAssumptions\n- \u201cRun earlier\u201d means earlier than the long Python unit-test blocks, not earlier than foundational lint/setup steps.\n- The intended result is fail-fast CI ordering only, with no change to test coverage or runtime behavior.\n\nMissing-context notes\n- None blocking. The issue is sufficiently specified for implementation planning.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "354939bdf66228af86b3f413e520a1b147358c0fbe1f7fb47592fefc9102751a",
+  "lineage": {
+    "issue_number": 2551,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25765100321",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25765100321",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2551"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260512221337_3024b27bc4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2551,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25765100321"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2551",
+  "timestamps": {
+    "created_at": "2026-05-12T22:13:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

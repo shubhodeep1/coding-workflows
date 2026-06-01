@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:4140-4149 (Mark linked issues ready to merge comment) | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The comment does not mention that STRICT is always exported, even though it explains why STRICT should replace the loose flag.\n  WHY: Runtime impact is none because the flag is always available, but the documentation omits the export-path verification.\n- .github/workflows/review_autofix.yml:4376-4392 (Enable auto-merge on PR comment) | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The comment describes the PR #2542 race but does not cross-reference the verified gate-job logic showing the skip only occurs when AUTOFIX_SKIP_SELF_TRIGGERED=true.\n  WHY: Runtime impact is none because the default is false, but the comment does not point readers to the gate-job condition that enforces the behavior.\n- .github/workflows/review_autofix.yml:4788 (Telegram success comment) | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The comment notes alignment with siblings but does not include the PR #2542 evidence or STRICT rationale found in the auto-merge block.\n  WHY: Telegram is advisory only and the condition matches the functional siblings, but the comment omits the shared rationale.\n- .github/workflows/review_autofix.yml:new ~4389 (Enable auto-merge on PR comment block)\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The comment cites :327 for the AUTOFIX_SKIP_SELF_TRIGGERED default, but after this change the line numbers have shifted.\n  WHY: The reference points to a stale line number rather than the current shell-default expression or updated line.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/review_autofix.yml:new ~4389 (Enable auto-merge on PR comment block)\n  PROBLEM: The comment cites :327 for the AUTOFIX_SKIP_SELF_TRIGGERED default, but after this change the line numbers have shifted.\n  WHY: The reference should point to the actual shell-default expression or the updated line number.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/review_autofix.yml:4140-4149 (Mark linked issues ready to merge comment) | confidence=2\n  PROBLEM: Comment correctly cites rationale for STRICT over loose flag and references script docstring + EDITOR_CHANGES_LOST precedent, but does not mention that STRICT is always exported (defaults false; set explicitly in ledger-only path at scripts/review_commit_changes.sh:537-539 and audit-convergence at 594).\n  WHY: Runtime impact: None \u2014 flag is always available so step condition evaluates correctly.\n- .github/workflows/review_autofix.yml:4376-4392 (Enable auto-merge on PR comment) | confidence=2\n  PROBLEM: Comment accurately describes the PR #2542 race and synchronize retrigger (gate-job at ~320 uses AUTOFIX_SKIP_SELF_TRIGGERED=false default per env vars), but lacks cross-reference to verified gate-job logic (sed -n '320,340' confirms skip only if var=true).\n  WHY: Runtime impact: None \u2014 default=false ensures loop continues on productive [ai-autofix] synchronizes.\n- .github/workflows/review_autofix.yml:4788 (Telegram success comment) | confidence=2\n  PROBLEM: Comment notes alignment with siblings but lacks PR #2542 evidence or STRICT rationale (unlike detailed sibling comments); reader must infer from context.\n  WHY: Runtime impact: None \u2014 Telegram advisory only; condition identical to functional siblings.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "8095e10d1d811437ac44fae8787076747fda17ba05c551f40acc133036ee538c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2544,
+    "run_id": "25737631575",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25737631575",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260512140402_3c21997527",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2544,
+    "run_id": "25737631575"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-12T14:04:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

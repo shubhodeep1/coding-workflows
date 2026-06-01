@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_annotate_sticky.sh:336-397 | confidence=3\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The script repeatedly casts values to int() even though they are already integers.\n  WHY: The reviewer said this is functionally correct but redundant, harder to maintain, and deviates from Python idioms; no runtime failure was reported.\n- scripts/review_annotate_sticky.sh:43-45 | confidence=4\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The STICKY_LINE_BUCKET default is only used in the regex guard, so the script can pass validation with the variable unset and then crash when Python receives an empty value.\n  WHY: The reviewer said direct shell invocation without STICKY_LINE_BUCKET makes the annotator call int(''), exit 0, and silently produce no sticky priors instead of using the documented default of 5.\n- scripts/review_apply_fixes.sh:421 | \n  flagged_by: [z-ai_glm-5]\n  PROBLEM: A failing cp would abort the review pipeline under set -euo pipefail instead of failing open.\n  WHY: The reviewer said the consolidator parsed cache is advisory, so the cp should be guarded to preserve the script\u2019s fail-open behavior.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- File: scripts/review_annotate_sticky.sh\n  Line or code reference: lines 336-397 (matching and aggregation logic)\n  Problem: The Python script contains redundant type conversions. Variables like `finding_start`, `finding_end` are already integers (set at lines 340-341 as `finding_start = int(finding['line_start'])`), yet subsequent accesses repeatedly call `int()` on them (e.g., `int(finding['line_start'])` at line 374, `int(row['line_start'])` at line 422). Similarly, values stored in dictionaries are already typed but are cast again during sorting (lines 419-420).\n  Why it fails at runtime: No runtime failure - the code is functionally correct. However, the redundancy makes the code harder to maintain and deviates from Python idioms. When values are already integers or strings from the parsing stage, repeated `int()`/`str()` calls are unnecessary.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- File: scripts/review_annotate_sticky.sh\n  Line or code reference: lines 43-45 (the `if ! [[ \"${STICKY_LINE_BUCKET:-5}\" =~ ^[0-9]+$ ]]` block)\n  Problem: The `:-5` default is applied only for the regex guard, not for the variable itself. When `STICKY_LINE_BUCKET` is unset, the `:-5` substitution yields \"5\" which matches `^[0-9]+$`, so the guard passes, but the variable remains unset. Later the Python invoked with `\"${STICKY_LINE_BUCKET}\"` receives an empty string and `int('')` raises `ValueError`, crashing the annotator. The `|| { rm -f ...; exit 0; }` trap then swallows the failure and exits silently.\n  Why it fails at runtime: Direct shell invocation of the script (outside the workflow job) without `STICKY_LINE_BUCKET` set in the environment causes the Python subprocess to crash on `int(line_bucket_s)`, the annotator exits with code 0 (no-op), and the feature silently produces no sticky priors instead of using the documented default of 5. In the workflow path the YAML always sets this env var so the bug is masked, but the script's own fail-open contract for standalone use is broken.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- File: scripts/review_apply_fixes.sh\n  Line or code reference: line 421, `cp \"${REVIEW_ISSUES_FILE}\" \"${CONSOLIDATOR_PARSED_CACHE_FILE}\"`\n  Issue: Under `set -euo pipefail`, a `cp` failure inside the if-body would abort the entire review pipeline, preventing the editor from running. This is inconsistent with the script's established fail-open convention (30 `|| true` guards elsewhere) and the issue's acceptance criteria for fail-open behavior on missing prior artifacts. The consolidator parsed cache is advisory \u2014 the next round's sticky annotator simply no-ops if the file is absent.\n  Suggested minimal fix: Append `|| true` to the cp command: `cp \"${REVIEW_ISSUES_FILE}\" \"${CONSOLIDATOR_PARSED_CACHE_FILE}\" || true`\n  Estimated lines changed: 1\n  HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "a62548327fc2b53a5670cee45a045785f49209951bd863a81bf8e306c11f5753",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2718,
+    "run_id": "25999703905",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25999703905",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517191110_35c028328a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2718,
+    "run_id": "25999703905"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-17T19:11:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:around line 4394 (resolver step env block) and line 5657/5715 (failure handling steps) | severity=high | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: The failure-handling steps gate on env.RESOLVER_ESCALATED even though the resolver path does not reliably export it, so escalated runs can still take the review-blocked path.\n  WHY: Both reviewers report that the later failure steps still see RESOLVER_ESCALATED unset, which lets the generic failure comment/label path fire after escalation.\n- scripts/drift_audit.sh:484-535 | severity=medium | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: _cluster_resolved_by_pr_files can lose the marker kind for fixed_by_resolver entries, so it may skip the must_not_exist/must_not_contain checks and misclassify resolution status.\n  WHY: The function only populates kind for unchanged markers, and when the first marker in a cluster is fixed_by_resolver cluster[\"kind\"] can stay empty.\n- scripts/drift_audit.sh:493-534 | severity=high | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The patch matcher normalizes added and removed lines together, so it cannot distinguish removals from additions when deciding whether a fingerprint is resolved.\n  WHY: The combined `+`/`-` handling makes deletions look like additions and vice versa, which can falsely close or keep open PRE_EXISTING_FINGERPRINT_DRIFT_V1 clusters.\n- scripts/review_conflict_resolve.sh:1419 (and surrounding resolver step) | severity=medium | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The resolver retry-state/escalation helpers rely on GH_TOKEN, but the step only supplies GH_PAT.\n  WHY: Without GH_TOKEN the gh CLI runs unauthenticated and the retry-state block and escalation label/comment path can fail to write.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cAdd the new test suites (test_drift_audit_job.py, test_fingerprint_quarantine.py, test_review_conflict_resolve_retry_state.py, test_verify_integration_fingerprints_tiers.py) to the CI, mark-stable, and test-and-mark-stable allowlists.\u201d\n  expected_change_site: .github/workflows/ci.yml:191-200, mark-stable.yml:244-253, test-and-mark-stable.yml:3304-3313\n  confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The last-run diff still leaves test_verify_integration_fingerprints_tiers.py absent from the two stable workflows, so the new suite is not fully wired into all allowlists.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/review_autofix.yml:around line 4394 (resolver step env block) and line 5657/5715 (failure handling steps) | confidence=3\n  PROBLEM: The workflow conditional `env.RESOLVER_ESCALATED != 'true'` in the failure handling steps checks for an environment variable that may not be visible from the resolver step's execution.\n  WHY: If the resolver step runs but fails before exporting, or if the GitHub Actions environment doesn't propagate the GITHUB_ENV write correctly across step boundaries in this specific workflow structure, the subsequent \"Mark linked issues review-blocked\" step will see `env.RESOLVER_ESCALATED` as empty/unset and proceed to mark the issue as review-blocked even when the resolver has already escalated it.\n- scripts/drift_audit.sh:line 484-535 (_cluster_resolved_by_pr_files function) | confidence=4\n  PROBLEM: The `kind` field extraction in `_parse_pre_existing_marker` only populates `kind` for status \"unchanged\", not for \"fixed_by_resolver\". When `_build_clusters` aggregates markers, it sets `cluster[\"kind\"]` from the first occurrence found. If the first occurrence is \"fixed_by_resolver\", `kind` remains None.\n  WHY: Later in `_cluster_resolved_by_pr_files`, `kind = str(cluster.get(\"kind\") or \"\")` results in an empty string, causing the logic to skip the `must_not_exist` and `must_not_contain` specific checks and potentially return incorrect resolution status.\n- scripts/drift_audit.sh | HARDENING_SUGGESTION\n  ISSUE: Missing validation of required GH_TOKEN environment variable.\n  WHY: Add `if [ -z \"${GH_TOKEN:-}\" ]; then echo \"::error::GH_TOKEN is required\"; exit 1; fi` near the start of the script.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/review_autofix.yml:4436;5657 | confidence=5\n  PROBLEM: The failure-gating guard on `env.RESOLVER_ESCALATED` is duplicated, but the resolver path does not reliably export that variable, so escalated runs still hit the review-blocked comment path. (2 related items)\n  WHY: The \"mark linked issues review-blocked\" and \"post review-blocked comment\" steps still fire because `RESOLVER_ESCALATED` stays unset, which defeats the escape-valve.\n- scripts/drift_audit.sh:493-534 | confidence=5\n  PROBLEM: The patch matcher cannot distinguish additions from removals, so `must_contain` and `must_not_contain` fingerprints can be misclassified.\n  WHY: The combined `+`/`-` normalization makes deletions look like additions and vice versa, causing false resolution verdicts.\n- scripts/review_conflict_resolve.sh:1419 (and surrounding resolver step) | confidence=5\n  PROBLEM: The resolver retry-state/escalation helpers rely on `GH_TOKEN`, but the step only supplies `GH_PAT`.\n  WHY: Without `GH_TOKEN` the `gh` CLI runs unauthenticated and the retry-state block and escalation label/comment are never written.\n- Requirement: \u201cAdd the new test suites (test_drift_audit_job.py, test_fingerprint_quarantine.py, test_review_conflict_resolve_retry_state.py, test_verify_integration_fingerprints_tiers.py) to the CI, mark-stable, and test-and-mark-stable allowlists.\u201d\n  Expected change site: .github/workflows/ci.yml:191-200, mark-stable.yml:244-253, test-and-mark-stable.yml:3304-3313\n  Evidence of absence: The three workflow files contain the new test lines, but the last-run diff only updated the runner tests in one place, leaving the other two workflows missing the tier test.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "1d9f3dfb089ea568185a2d46ea9331d72214cb38f0d29edfdf0708f4c59e43b0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2865,
+    "run_id": "26248621568",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26248621568",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260521200931_cefcfcd5cc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2865,
+    "run_id": "26248621568"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-21T20:09:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

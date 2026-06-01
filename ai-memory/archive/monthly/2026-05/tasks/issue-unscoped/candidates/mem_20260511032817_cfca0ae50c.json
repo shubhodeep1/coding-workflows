@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_stall_recovery_pr_lookup.py:~576-580 | confidence=5\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The RuntimeError message says \"CI has jq via the workflow prerequisite check\" even though no such CI prerequisite-check step exists.\n  WHY: The message is factually wrong and can mislead local contributors about how jq is provided.\n- tests/test_review_conflict_resolve_retry_prelude_render.py:~117-170 | confidence=4\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The test comment says the renderer's placeholder regex is uppercase-only, but the actual runtime regex is permissive and accepts lowercase and mixed-case placeholders.\n  WHY: The test is enforcing a stricter UPPER_SNAKE_CASE contract than the script, so the comment misdescribes the behavior.\n- .github/workflows/mark-stable.yml:212-224 | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: Not all Python test invocations in the unit-tests step have PYTHONDONTWRITEBYTECODE=1.\n  WHY: The reviewer says the final three test commands still lack the prefix, allowing __pycache__ pollution.\n- .github/workflows/test-and-mark-stable.yml:3201-3213 | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The final three Python test invocations in the unit-tests block are missing PYTHONDONTWRITEBYTECODE=1.\n  WHY: Without the prefix, those tests can still emit __pycache__ into .git/ during the release-gate phase.\n- scripts/review_conflict_resolve.sh:608-799 | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: A codex exit=0 at the timer boundary can skip timeout classification and fall through to validation classification.\n  WHY: The reviewer says this reuses stale prior violations for the next prelude and gives misleading retry guidance after a timer-killed attempt.\n- .github/workflows/review_autofix.yml:3825-3938 | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The awk formatter collapses empty or one-line stderr instead of preserving multi-line structure as described in the comment.\n  WHY: The reviewer says `%0A` is only inserted for lines after the first, so triple-failure annotations lose parse-error structure.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_stall_recovery_pr_lookup.py:~576-580 | ISSUE_CONFIDENCE: 5\n  PROBLEM: The RuntimeError message says \"CI has jq via the workflow prerequisite check\" but no CI prerequisite-check step guarantees jq is installed on ubuntu-latest runners for this test file.\n  WHY: Contributors running these tests locally without jq see a misleading error that points to a nonexistent CI guard, wasting debugging time.\n- tests/test_review_conflict_resolve_retry_prelude_render.py:~117-170 | ISSUE_CONFIDENCE: 4\n  PROBLEM: The test comment states the renderer's placeholder regex is `[A-Z_][A-Z0-9_]*`, but the runtime regex in scripts/review_conflict_resolve.sh is permissive and accepts lowercase, mixed-case, and interior-whitespace placeholders.\n  WHY: The test intentionally enforces a stricter UPPER_SNAKE_CASE style contract, but the comment describes the renderer as if it shared that constraint.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/mark-stable.yml:212-224 | ISSUE_CONFIDENCE: 4\n  PROBLEM: PYTHONDONTWRITEBYTECODE=1 is added to all python3 invocations except the final three: test_cost_audit_semble_metrics.py, test_review_semble_contract.py, and test_judge_semble_prefetch_contract.py.\n  WHY: Those tests can still write __pycache__ into .git/, violating repository hygiene.\n- .github/workflows/test-and-mark-stable.yml:3201-3213 | ISSUE_CONFIDENCE: 4\n  PROBLEM: PYTHONDONTWRITEBYTECODE=1 is added to the first four python3 invocations but missing from the final three: test_cost_audit_semble_metrics.py, test_review_semble_contract.py, and test_judge_semble_prefetch_contract.py.\n  WHY: The same __pycache__ pollution can occur during the release-gate phase.\n- scripts/review_conflict_resolve.sh:608-799 | ISSUE_CONFIDENCE: 3\n  PROBLEM: A graceful codex exit=0 at the exact timer boundary skips timeout classification and falls through to validation classification.\n  WHY: The reviewer says the next prelude can reuse stale prior violations and give misleading guidance after a timer-killed attempt.\n- .github/workflows/review_autofix.yml:3825-3938 | ISSUE_CONFIDENCE: 3\n  PROBLEM: The awk formatting step collapses empty or one-line stderr instead of preserving multi-line structure as the comment claims.\n  WHY: The reviewer says `%0A` is only inserted for lines after the first, so triple-failure annotations lose parse-error structure.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "c0af29b47d2e984229e41bc0e9902efc6fe4785925d82f9e35f3498e89da9388",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2481,
+    "run_id": "25647826760",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25647826760",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260511032817_cfca0ae50c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2481,
+    "run_id": "25647826760"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-11T03:28:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

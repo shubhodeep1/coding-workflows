@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:lines 134-140 (Integration-ahead-by gate regression tests step) + lines ~520-524 (Orchestrate poll process unit tests step) | severity=low | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The step name \u201cIntegration-ahead-by gate regression tests\u201d now only runs the ahead-by gate test (as restored by the last-run change), while the later dedicated \u201cOrchestrate poll process unit tests\u201d step runs the two poller tests.\n  WHY: This matches the current test grouping and eliminates the duplicate-execution regression introduced in a prior autofix pass.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Automated forward-merge of stable into main (resolve merge conflicts on the listed files: .github/workflows/ci.yml, review_autofix.yml, mark-stable.yml, test-and-mark-stable.yml, README.md, several scripts/*.py + tests/*.py, etc.) so that bug fixes on stable reach main while preserving ancestry (must use \u201cCreate a merge commit\u201d).\n  expected_change_site: The files listed in the PR description\u2019s conflicting-files block (or their functional equivalents after conflict resolution)\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  EVIDENCE: Current PR diff shows only 3 blank-line deletions in review_autofix.yml and orchestrate_poll_process.sh; the substantive conflict-resolution work was performed by the earlier merge commit (4288ae6 / similar [ai-merge-resolve] commit); git merge-base --is-ancestor confirms the stable source SHA is already present on this branch.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/ci.yml:lines 134-140 (Integration-ahead-by gate regression tests step) + lines ~520-524 (Orchestrate poll process unit tests step) | severity=low | confidence=5\n  PROBLEM: The step name \u201cIntegration-ahead-by gate regression tests\u201d now only runs the ahead-by gate test (as restored by the last-run change), while the later dedicated \u201cOrchestrate poll process unit tests\u201d step runs the two poller tests.\n  WHY: This matches the current test grouping and eliminates the duplicate-execution regression introduced in a prior autofix pass.\n- Requirement: Automated forward-merge of stable into main (resolve merge conflicts on the listed files: .github/workflows/ci.yml, review_autofix.yml, mark-stable.yml, test-and-mark-stable.yml, README.md, several scripts/*.py + tests/*.py, etc.) so that bug fixes on stable reach main while preserving ancestry (must use \u201cCreate a merge commit\u201d).\n  Expected change site: The files listed in the PR description\u2019s conflicting-files block (or their functional equivalents after conflict resolution).\n  Evidence of absence: Current PR diff (both full and last-run) contains only 3 blank-line deletions in review_autofix.yml and orchestrate_poll_process.sh; all substantive conflict-resolution work was performed by the earlier merge commit (4288ae6 / similar [ai-merge-resolve] commit); git merge-base --is-ancestor confirms the stable source SHA is already present on this branch.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "007999cf164a9a52dc21b89f34364cf84273644c5f668234df220b0d554064f1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2972,
+    "run_id": "26495606821",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26495606821",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260527065746_610815d0f7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2972,
+    "run_id": "26495606821"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-27T06:57:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

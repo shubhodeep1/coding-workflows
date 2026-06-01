@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:1269-1276 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: If `git worktree remove --force` fails and the `rm -rf` fallback runs, the parent repo\u2019s `.git/worktrees/` administrative metadata is left stale/orphaned.\n  WHY: The fallback removes the worktree contents but does not prune the worktree registration, which is harmless in ephemeral CI but leaves residual metadata in non-ephemeral environments.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_rb_judge.sh:1272-1276 | confidence=2\n  PROBLEM: When `git worktree remove --force` fails and the `rm -rf` fallback executes, the parent repo\u2019s `.git/worktrees/` administrative metadata is not pruned.\n  WHY: The fallback removes the worktree contents but leaves an orphaned worktree registration; this is harmless in CI but accumulates stale metadata outside ephemeral environments.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_rb_judge.sh:1270-1272 | confidence=4\n  PROBLEM: The worktree cleanup function does not prune the `.git/worktrees/` administrative directory after removing a worktree with `rm -rf`.\n  WHY: When `git worktree remove --force` fails and the fallback `rm -rf` is used, the git administrative files in `.git/worktrees/` remain stale; this is harmless in ephemeral CI environments but leaves residual metadata in non-ephemeral contexts.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_rb_judge.sh:1272 | severity=low\n  PROBLEM: After `git worktree remove --force` fails and `rm -rf` fallback runs, the `.git/worktrees/` administrative directory for the worktree may not be pruned from the main repository\u2019s git metadata.\n  WHY: Adding `git worktree prune >/dev/null 2>&1 || true` after the fallback would ensure clean administrative state in non-ephemeral environments.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/review_rb_judge.sh:~1269 | severity=low\n  PROBLEM: After `cd \"${wt}\"`, if `git worktree remove --force` fails and the `rm -rf` fallback runs, the parent repo\u2019s `.git/worktrees/` administrative entry for the worktree is left stale.\n  WHY: The cleanup function is invoked from inside the worktree, so the fallback only removes file contents and does not prune the administrative metadata; adding `cd - >/dev/null 2>&1 || true` and `git worktree prune` would clean it up.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "063bed705f59bea88ae5e68eded98cedddb6d448a28e86574a8dd6c292b2ef84",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2631,
+    "run_id": "25953204787",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25953204787",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260516052447_4735c4db8d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2631,
+    "run_id": "25953204787"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-16T05:24:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

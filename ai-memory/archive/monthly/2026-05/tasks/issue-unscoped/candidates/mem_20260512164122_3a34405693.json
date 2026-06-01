@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/update_workflows.yml:207-212 | severity=critical | confidence=5\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, z-ai_glm-5]\n  PROBLEM: `claude_md_sync` resolves `CLAUDE.md` via `upstream_dir/workflow-templates/CLAUDE.md` instead of the root `upstream_root/CLAUDE.md`.\n  WHY: those reviewers reported the sync step should use the root sparse-checkout file, while other reviewers disputed that the symlinked path is sufficient.\n- .github/workflows/update_workflows.yml:79-80 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: `upstream_root` is set but never read.\n  WHY: no downstream step or script consumes the output; one reviewer noted it would become useful only if the CLAUDE.md path were rewired.\n- .github/workflows/update_workflows.yml:216-218 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: `claude_md_sync` creates `/tmp/claude_md_changed_file.txt` before it knows whether any sync is needed.\n  WHY: on no-op runs the file remains empty, though downstream checks tolerate it.\n- .github/workflows/update_workflows.yml:218-226 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: the `cat` readability guard is effectively unreachable after the preceding `-e` test on a symlink.\n  WHY: the existing `-e` check already handles the dangling-symlink case; only a narrow TOCTOU race would reach the `cat` failure.\n- .github/workflows/update_workflows.yml:223-227 | severity=low | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: the unreadable-symlink error message names `workflow-templates/CLAUDE.md` even though the intended sync target is the root `CLAUDE.md`.\n  WHY: the message no longer matches the path the step is supposed to mirror.\n- .github/workflows/update_workflows.yml:76 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: the sparse-checkout path list is not hardened against space-containing path values.\n  WHY: the reviewer flagged the unquoted path handling as potentially breaking shell splitting.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/update_workflows.yml:79 | severity=low | confidence=5\n  PROBLEM: `upstream_root` is defined but never read.\n  WHY: no downstream step, script, or file in the repository consumes `steps.fetch.outputs.upstream_root`, so it is dead code.\n- .github/workflows/update_workflows.yml:218-226 | severity=low | confidence=2\n  PROBLEM: the `cat` guard after `[ ! -e ]` is practically unreachable.\n  WHY: `-e` already follows the symlink case the guard is meant to cover, so only a narrow TOCTOU race would make `cat` fail.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/update_workflows.yml:207-212 | severity=critical | confidence=5\n  PROBLEM: the `claude_md_sync` step uses the wrong path variable.\n  WHY: `upstream_dir` points at `${TMPDIR}/upstream/workflow-templates`, so `UPSTREAM_CLAUDE_MD` becomes `${TMPDIR}/upstream/workflow-templates/CLAUDE.md` instead of the root file.\n- .github/workflows/update_workflows.yml:79 | severity=low | confidence=5\n  PROBLEM: `upstream_root` is defined but never used.\n  WHY: the output is set but never consumed by any downstream step.\n- .github/workflows/update_workflows.yml:216 | severity=low\n  PROBLEM: `/tmp/claude_md_changed_file.txt` is created unconditionally before checking if there is anything to sync.\n  WHY: this leaves an empty marker file on no-op runs.\n- .github/workflows/update_workflows.yml:76 | severity=low\n  PROBLEM: the sparse-checkout path handling is fragile for paths containing spaces.\n  WHY: the reviewer flagged the path list as potentially breaking shell splitting.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/update_workflows.yml:207-211 | severity=critical | confidence=5\n  PROBLEM: the sync step uses the wrong path to locate the upstream CLAUDE.md file.\n  WHY: `upstream_dir` points to `${TMPDIR}/upstream/workflow-templates`, while the root `CLAUDE.md` is sparse-checked out at `${TMPDIR}/upstream/CLAUDE.md`.\n- .github/workflows/update_workflows.yml:218 | severity=low | confidence=3\n  PROBLEM: the empty temp file `/tmp/claude_md_changed_file.txt` is created unconditionally before checking whether anything needs syncing.\n  WHY: on no-op runs the file still exists empty.\n- .github/workflows/update_workflows.yml:223-226 | severity=low | confidence=4\n  PROBLEM: the error message says `workflow-templates/CLAUDE.md is unreadable` even though the intended sync target is the root `CLAUDE.md`.\n  WHY: the message does not match the file the step is meant to mirror.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/update_workflows.yml:79 | severity=low | confidence=5\n  PROBLEM: `upstream_root` is defined but not consumed.\n  WHY: the workflow sets the output and nothing reads it.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/update_workflows.yml:78-79 | severity=low | confidence=5\n  PROBLEM: `upstream_root` is defined but never read by any downstream step.\n  WHY: no other reference uses `steps.fetch.outputs.upstream_root`, so the output is dead code.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/update_workflows.yml:211 | severity=critical | confidence=5\n  PROBLEM: the sync step reads `CLAUDE.md` from the wrong path.\n  WHY: `upstream_dir` resolves to `${TMPDIR}/upstream/workflow-templates`, so `UPSTREAM_CLAUDE_MD` points at the template symlink path instead of the root file.\n- .github/workflows/update_workflows.yml:79 | severity=low | confidence=5\n  PROBLEM: `upstream_root` is defined but never consumed anywhere in the workflow.\n  WHY: the output is unused dead code in the current implementation.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "7852d90c9569509b9c39be583cda213c3633511b8bf6428edd68efb8b3796695",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25746470453",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25746470453",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260512164122_3a34405693",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25746470453"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 6 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-12T16:41:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

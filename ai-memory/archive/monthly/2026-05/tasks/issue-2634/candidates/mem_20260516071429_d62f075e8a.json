@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":2634,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/2634\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/2635\",\"pr_number\":2635,\"branch\":\"ai/issue-2634\",\"run_id\":\"25955565450\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/25955565450\",\"changed_files\":[\".github/workflows/implement.yml\",\".github/workflows/review_autofix.yml\",\"agents.md\",\"prompts/mode-judge-review-blocked.txt\",\"scripts/review_rb_judge.sh\",\"tests/test_implement_post_codex_recovery.py\",\"tests/test_review_rb_judge_label_propagation.py\",\"tests/test_workflow_checkout_integration_ref_audit.py\"]}",
+  "fingerprint": "f4db3e43a75cbd2d0922b5fa86f235aa30db122eff588cab9c007d1bb5781076",
+  "lineage": {
+    "issue_number": 2634,
+    "parent_ids": [],
+    "pr_number": 2635,
+    "run_id": "25955565450",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25955565450",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/2635"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260516071429_d62f075e8a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2634,
+    "level": "run",
+    "pr_number": 2635,
+    "run_id": "25955565450"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #2634: https://github.com/shubhodeep1/coding-workflows/pull/2635",
+  "timestamps": {
+    "created_at": "2026-05-16T07:14:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

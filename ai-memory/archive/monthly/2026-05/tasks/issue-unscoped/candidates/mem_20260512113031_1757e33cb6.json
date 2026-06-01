@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:200-212 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The workflow defines the Review autofix EDITOR_CHANGES_LOST shim regression tests step twice, so tests/test_detect_editor_changes_lost.py runs twice.\n  WHY: Multiple reviewers independently reported the same duplicate step, and the cited line ranges overlap or abut.\n- scripts/orchestrate_poll_process.sh:3446-3448 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, z-ai_glm-5]\n  PROBLEM: The merge resolution dropped the _ihb_conflict_count hardening, so raw wc -l output is compared as an integer without trimming or numeric validation.\n  WHY: Multiple reviewers independently reported the same reverted fix, and one reviewer explicitly marked it critical.\n- .github/workflows/review_autofix_sweep.yml:74-86 | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The paginated gh api --paginate --slurp plus jq '(add // []) | map(...)' aggregation could drop data if page schemas differ.\n  WHY: Only x-ai_grok-4_1-fast flagged this possible data-loss issue at the cited range.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:3446-3448 | severity=critical | confidence=5\n  PROBLEM: The merge resolution dropped the _ihb_conflict_count hardening, so raw wc -l output is compared as an integer without trimming or numeric validation.\n  WHY: The reviewer says the autofix fix was reverted and the unguarded comparison can trigger integer expression expected under set -e.\n- .github/workflows/ci.yml:201-209 | confidence=5\n  PROBLEM: The workflow defines the Review autofix EDITOR_CHANGES_LOST shim regression tests step twice, so tests/test_detect_editor_changes_lost.py runs twice.\n  WHY: The reviewer reports two identical CI steps in the same job, causing duplicate execution and logs.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/ci.yml:201-209 | confidence=5\n  PROBLEM: The workflow defines the Review autofix EDITOR_CHANGES_LOST shim regression tests step twice, so tests/test_detect_editor_changes_lost.py runs twice.\n  WHY: The reviewer reports two consecutive identical CI steps and says it wastes runner time.\n- scripts/orchestrate_poll_process.sh:3447-3448 | confidence=5\n  PROBLEM: _ihb_conflict_count is compared as an integer without trimming wc -l whitespace or validating that the value is numeric.\n  WHY: The reviewer says the hardening fix is absent and the raw comparison can fail with integer expression expected.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/ci.yml:203-208 | confidence=5\n  PROBLEM: The workflow defines the Review autofix EDITOR_CHANGES_LOST shim regression tests step twice, so tests/test_detect_editor_changes_lost.py runs twice.\n  WHY: The reviewer reports two identical copies of the same CI step in one job.\n- scripts/orchestrate_poll_process.sh:3446-3448 | confidence=5\n  PROBLEM: _ihb_conflict_count is compared as an integer without trimming wc -l whitespace or validating that the value is numeric.\n  WHY: The reviewer says the raw wc -l output can trigger integer expression expected and abort the shell script.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/ci.yml:200-205\n  PROBLEM: The EDITOR_CHANGES_LOST regression test step appears twice, running the same test file twice consecutively.\n  WHY: The reviewer says the two consecutive workflow blocks are identical and waste CI time.\n- scripts/orchestrate_poll_process.sh:3447-3448\n  PROBLEM: _ihb_conflict_count uses raw wc -l output in integer comparisons without whitespace trimming or numeric validation.\n  WHY: The reviewer says the merge lost the hardening fix and the comparison can crash with integer expression expected.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/ci.yml:202-212 | confidence=5\n  PROBLEM: Duplicate Review autofix EDITOR_CHANGES_LOST shim regression tests step runs tests/test_detect_editor_changes_lost.py a second time.\n  WHY: The reviewer reports identical steps in the same CI job, causing redundant work and duplicate logs.\n- .github/workflows/review_autofix_sweep.yml:74-86 | confidence=3\n  PROBLEM: The paginated gh api --paginate --slurp plus jq '(add // []) | map(...)' aggregation could drop data if page schemas differ.\n  WHY: The reviewer flags a possible schema-drift data-loss risk in the paginated PR fetch.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/ci.yml:200-208 | confidence=5\n  PROBLEM: The workflow defines the Review autofix EDITOR_CHANGES_LOST shim regression tests step twice, so tests/test_detect_editor_changes_lost.py runs twice.\n  WHY: The reviewer says the two step blocks are identical and waste CI runner time.\n- scripts/orchestrate_poll_process.sh:3447-3448 | confidence=5\n  PROBLEM: _ihb_conflict_count is compared as an integer without trimming wc -l whitespace or validating that the value is numeric.\n  WHY: The reviewer says the merge-resolution left the old vulnerable code in place and it can fail with integer expression expected.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "f27459cc136ae1516a0cec5f656eb95370060ebda413aa38e6c88d777a3a20c4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2542,
+    "run_id": "25730416329",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25730416329",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260512113031_1757e33cb6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2542,
+    "run_id": "25730416329"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-12T11:30:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

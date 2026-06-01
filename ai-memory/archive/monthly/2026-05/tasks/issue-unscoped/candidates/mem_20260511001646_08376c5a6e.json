@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:1-3 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The claimed extra blank 4th line is not present in `tests/e2e_smoke_canary.txt`.\n  WHY: Byte-level checks (`wc -l`, `xxd`, `cat -A`, `hexdump`) show exactly three lines with a single trailing newline, so the Copilot claim is false.\n- N/A:N/A | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The lint CI check-run failed on the PR head SHA.\n  WHY: Reviewers traced the failure to repository workflow linting rather than the changed text file, so it appears unrelated to this PR.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:N/A | confidence=5\n  PROBLEM: The claimed extra blank 4th line is not present in `tests/e2e_smoke_canary.txt`.\n  WHY: Verified at byte level; the file has exactly three lines and a single trailing newline.\n- N/A:N/A | confidence=5\n  PROBLEM: The lint CI check-run failed on the PR head SHA.\n  WHY: The lint job only scans workflow/action YAML files, so this failure is unrelated to the PR change and was pre-existing.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:N/A | confidence=5\n  PROBLEM: The claimed extra blank 4th line is not present in `tests/e2e_smoke_canary.txt`.\n  WHY: `wc -l`, `cat -A`, and file content checks confirm exactly 3 lines with a single trailing newline.\n- N/A:N/A | confidence=5\n  PROBLEM: The lint CI check-run failed on the PR head SHA.\n  WHY: The lint workflow targets YAML/workflow files, while this PR only changes `tests/e2e_smoke_canary.txt`, so the failure is unrelated and pre-existing.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:2 | confidence=5\n  PROBLEM: The file content is correct per issue #2475 specification.\n  WHY: `wc -l` reports 3 lines and `hexdump -C` confirms a single trailing newline with no extra blank 4th line.\n- N/A:N/A | confidence=4\n  PROBLEM: CI lint check-run failed on the PR head SHA.\n  WHY: The changed file is plain text and is not covered by the YAML lint workflow, so the failure appears unrelated to this PR.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- N/A:N/A | confidence=5\n  PROBLEM: The lint CI check-run failed on the PR head SHA.\n  WHY: The PR only changes `tests/e2e_smoke_canary.txt`, so the lint failure is unlikely to be caused by this change and should be investigated separately.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- N/A:N/A | confidence=5\n  PROBLEM: Lint CI check-run completed with conclusion: failure.\n  WHY: The changed file is `tests/e2e_smoke_canary.txt`, which is unrelated to the lint workflow, so the failure is likely pre-existing or transient.\n- tests/e2e_smoke_canary.txt:1-3 | confidence=5\n  PROBLEM: None; the file exactly matches issue #2475 spec and has no extra blank 4th line.\n  WHY: `cat -n`, `wc -l=3`, and `hexdump -C` confirm the exact content and single trailing newline.\n- tests/e2e_smoke_canary.txt:N/A | confidence=5\n  PROBLEM: The Copilot inline review comment claiming an extra blank 4th line is factually incorrect.\n  WHY: The file ends after `ai-pipeline\\n` with no additional blank line.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:N/A | confidence=5\n  PROBLEM: The file matches issue #2475 exactly.\n  WHY: Byte-level inspection confirms exactly 3 lines and standard POSIX trailing newline.\n- tests/e2e_smoke_canary.txt:N/A | confidence=5\n  PROBLEM: The Copilot inline review comment claiming an extra blank 4th line is false.\n  WHY: `wc -l` and `xxd` show the file ends cleanly after `ai-pipeline\\n`.\n- N/A:N/A | confidence=5\n  PROBLEM: The lint CI check-run failed on the PR head SHA.\n  WHY: The lint workflow checks YAML/Actions files, not `.txt` files, so the failure is unrelated to this change.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "1f9219961fb91c43c0da3f493e2f6265c8da304b7b1e344916813924c3a2be3a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2480,
+    "run_id": "25643282531",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25643282531",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260511001646_08376c5a6e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2480,
+    "run_id": "25643282531"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 2 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-11T00:16:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

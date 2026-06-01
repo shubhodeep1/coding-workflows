@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:4969-5007 | confidence=5\n  flagged_by: [minimax_minimax-m2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: The PR-body tracking-number check only matches a leading `refs #N`, so bodies that use `Closes #N` or `Fixes #N` no longer trigger the mismatch warning.\n  WHY: Reviewers disagreed on impact from documentation-only inconsistency to a runtime blind spot, but all traced it to the same regex narrowing in `.github/workflows/review_autofix.yml`.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/review_autofix.yml:4970 vs PR description | confidence=3\n  PROBLEM: The code comment at line 4970 says \"look for a `Refs #<N>` in the PR body\" which accurately describes the current implementation. However, the PR description in the issue states it checks for \"Refs/Closes/Fixes #N\" when it now only checks `Refs #N`. This is a documentation discrepancy, not a runtime bug.\n  WHY: The auto-merge suppression works correctly regardless \u2014 it triggers on head-ref pattern match alone. The body cross-check is purely informational, so the narrower implementation is a deliberate design choice.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/review_autofix.yml:4969-4972 vs 5007 | confidence=4\n  PROBLEM: The long-form comment documents that the PR-body cross-check looks for `Refs #<N>` in the body, but the implementation only matches a standalone leading `refs #N` line, so `Closes #N` or `Fixes #N` bodies are ignored.\n  WHY: The auto-merge suppression itself is head-ref-based and unaffected, but the informational mismatch warning will not fire for standard closing keywords, leaving that discrepancy unreported.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/review_autofix.yml:~4973-4980 and line 5007 | confidence=5\n  PROBLEM: The comment describes a `Refs #<N>` body check, but the implemented regex only matches a standalone leading `refs #N` line, so standard GitHub closing keywords like `Closes #N` and `Fixes #N` are ignored.\n  WHY: The suppression logic still keys off the head ref, but the intended anomaly warning will not fire for bodies that use those standard keywords, so the documented defense-in-depth signal is absent.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "860e1e7718e9da47adae26e06c9a3c9e9d2f75367d4d0df87ea25916d5f011ba",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2778,
+    "run_id": "26090831540",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26090831540",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260519104229_15785e00a6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2778,
+    "run_id": "26090831540"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-19T10:42:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

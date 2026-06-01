@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nReviewed the current reviewer prompt/wiring/tests on `dbbfd85d49dbc4eab97ab59a3578d16271c01b44` (`orchestrator/project-2974`) and the ref matches the integration-branch metadata.\n\nClarification mapping\n- No `Q<ID>` clarification questions were issued for this issue.\n- `/answer [auto-answered-by-orchestrator]` therefore just confirms continuation; there are no unresolved answer dependencies.\n\nAutomation / wiring summary\n- Change type: extend existing reviewer pipeline logic and add one workflow-invoked helper script.\n- Entry point: existing reviewer path in `.github/workflows/review_autofix.yml`, specifically the support-file staging + `Run reviewer models` flow.\n- Scheduler / trigger: no new scheduler; this stays on the current PR/open/synchronize/workflow-dispatch review_autofix path.\n- Long-running supervisor: none.\n- DB gate pattern: none.\n- `docs/scripts-pending-removal.md`: no entry needed; the new script is a permanent pipeline helper, not a single-use or long-running manual script.\n\nScope / conflict notes\n- The source plan\u2019s broader Phase A/C text also mentions `prompts/review-consolidator.txt`, but this issue explicitly excludes that file. Keep this PR reviewer-only.\n- `scripts/fixtures/cloudflare-learnings/` does not exist on this ref; the two smoke fixtures will need to create that directory.\n- `REVIEW_REVIEWER_CHECKLIST_ENABLED` is currently false by default in `review_autofix.yml`, so checklist text alone would not change default reviewer behavior. The always-on prompt body in `scripts/review_run_reviewers.sh` also needs the anti-rules.\n\nImplementation plan\n\n1. Files likely to change\n- `prompts/review-reviewer-checklist.txt`\n- `scripts/review_run_reviewers.sh`\n- new `scripts/review_filter_uninteresting_files.sh`\n- `.github/workflows/review_autofix.yml`\n- `tests/test_review_semble_contract.py`\n- `tests/test_review_autofix_review_pipeline_contract.py`\n- one new focused regression test, most likely `tests/test_review_filter_uninteresting_files.py`\n- new smoke fixtures:\n  - `scripts/fixtures/cloudflare-learnings/phase-a-anti-rules-noisy-pr.patch`\n  - `scripts/fixtures/cloudflare-learnings/phase-c-lockfile-and-generated.patch`\n\n2. Functions / modules to implement\n- In `prompts/review-reviewer-checklist.txt`, add explicit \u201cwhat not to flag\u201d guidance per lens while preserving:\n  - the exact heading order,\n  - the standard issue format,\n  - the `TASK_GAP` format and existing deferred-work carve-out.\n- In `scripts/review_run_reviewers.sh`, add an always-on common anti-rules block near the existing reviewer instructions so default runs benefit even when the checklist prompt stays gated off.\n- Add a new reviewer-only filtering helper in `scripts/review_filter_uninteresting_files.sh` that:\n  - strips lockfiles, generated files, minified assets, sourcemaps, tsbuildinfo, etc.,\n  - uses content-marker checks for generated files,\n  - preserves exemptions for `db/contracts/**`, `**/migrations/**`, and `**/migrate/**`,\n  - emits stable `REVIEWER_FILTER_SKIP:` log lines with deterministic reasons,\n  - fails open to the unfiltered inputs on parse/read errors.\n- In `scripts/review_run_reviewers.sh`, invoke the filter before scoped-context prep and prompt assembly, and thread reviewer-only filtered artifacts through:\n  - full/scoped prompt context sections,\n  - changed-file lists,\n  - symbol-summary generation/selection,\n  - Semble query seeds,\n  - pass-2 diff-size counting.\n- In `.github/workflows/review_autofix.yml`, wire the new env flags through the workflow and stage/bootstrap the helper in a flag-aware fail-open way, following the existing reviewer-checklist gating pattern rather than changing unrelated workflow behavior.\n\n3. Data structures / artifacts affected\n- New reviewer-only filtered runtime artifacts under `RUNTIME_DIR` (filtered full PR diff, filtered original PR diff, filtered last-run diff, filtered changed-file lists, and likely a filtered symbol summary).\n- New workflow env / repo-var surface:\n  - `REVIEWER_FILTER_UNINTERESTING_ENABLED` (default off)\n  - `REVIEWER_FILTER_EXTRA_GLOBS`\n  - `REVIEWER_FILTER_EXEMPT_GLOBS`\n- Prompt content only; no downstream reviewer-bundle / consensus / ledger schema change.\n\n4. API / interface changes\n- No external API changes.\n- Internal review-pipeline interface change only:\n  - reviewer preparation gains an optional deterministic pre-filter layer,\n  - controlled entirely by workflow env vars,\n  - no change to the `=== ISSUE NNN ===` or `TASK_GAP` output contract.\n\n5. Risks / edge cases\n- Do not overwrite shared raw diff artifacts; the editor, reject verifier, and consolidator still use the existing raw files. Use reviewer-only filtered copies.\n- Exemptions must win before generic skip heuristics, or migrations / contract paths will get hidden accidentally.\n- If filtering removes every file from a reviewer-visible diff, the reviewer prompt still needs valid placeholder artifacts rather than missing files.\n- Generated-marker checks should fail open when a file is unreadable/missing on disk.\n- Anti-rules must suppress theoretical/style-only/non-actionable noise without suppressing real blocker/high runtime issues.\n- Keep reviewer bundle / consensus format unchanged; no parser or ledger contract drift.\n\n6. Testing considerations\n- Extend `tests/test_review_semble_contract.py` to assert the new checklist anti-rules are present without changing heading/order contracts.\n- Extend `tests/test_review_autofix_review_pipeline_contract.py` to assert the new filter env vars and workflow wiring are exported.\n- Add one focused regression test around the new filter helper using the Phase C fixture to prove:\n  - lock/generated/minified inputs are removed,\n  - migration exemption survives,\n  - `REVIEWER_FILTER_SKIP:` lines are emitted,\n  - disabled/missing-helper/error paths fail open.\n- Keep existing review-pipeline contract tests green to prove the reviewer bundle shape is unchanged.\n\nAssumptions\n- Keep the filter disabled by default for now; this issue is laying the gated plumbing plus tests.\n- Do not change `prompts/review-consolidator.txt`, `agents.md`, or `README.md`.\n- Smoke fixtures are fixture assets only in this issue; no separate workflow automation is required for them yet.\n\nMissing-context notes\n- No blocker.\n- The exempt `db/contracts/**` / migration paths are not present on this ref, so the exemption behavior needs to be covered by synthetic fixtures/tests rather than repo-local examples.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "b539d5925f6af1217564bb580195b3f742fdaa511a32c15f5631c8c8ce8cd986",
+  "lineage": {
+    "issue_number": 2975,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26616546990",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26616546990",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2975"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260529035029_5b8bb6136d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2975,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26616546990"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2975",
+  "timestamps": {
+    "created_at": "2026-05-29T03:50:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

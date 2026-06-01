@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_judge_semble_prefetch_contract.py:99-118 | severity=low | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The test checks for placeholder resolution and footer presence, but does not verify block ordering or full output completeness.\n  WHY: A regression that swaps or interleaves the workflow restriction and Semble blocks could still pass this test while producing the wrong judge prompt.\n- scripts/targeted_file_context.py:412-472 | severity=low | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast, deepseek_deepseek-v4-pro]\n  PROBLEM: The SEMBLE_QUERY and SEMBLE_FALLBACK telemetry report only the clamped chunk count and do not indicate that clamping occurred.\n  WHY: Operators cannot distinguish a requested high chunk count from a clamped value without cross-referencing the original input; the reviewers disagree on whether this is a bug or an observability hardening issue.\n- scripts/implement_diagnose_post_codex_failure.sh:351-476 | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast, deepseek_deepseek-v4-pro]\n  PROBLEM: Identifiers extracted into the Semble query are capped at 40 items, but individual identifier strings are not length-bounded before being joined into the query text.\n  WHY: A pathologically long identifier could bloat the query and reduce retrieval quality; the reviewers disagree on whether this is a runtime bug or a hardening concern.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/implement_diagnose_post_codex_failure.sh:395-402 | severity=low | confidence=2\n  PROBLEM: Individual identifier strings extracted from CI capture output are appended to the query text without per-identifier length bounding.\n  WHY: A very long identifier could bloat the Semble query text; the reviewer frames this as a hardening concern rather than a correctness defect.\n- scripts/targeted_file_context.py:454-454 | severity=low | confidence=1\n  PROBLEM: When `_normalize_semble_max_chunks()` clamps the requested chunk count, the telemetry reports only the clamped value and does not indicate that clamping occurred.\n  WHY: Operators cannot distinguish a deliberately low chunk count from a clamped-high request without cross-referencing the CLI argument.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/test_judge_semble_prefetch_contract.py:99-118 | severity=low | confidence=4\n  PROBLEM: Test asserts substring presence and footer termination, but does not verify block order or completeness.\n  WHY: A regression that swaps or interleaves the workflow restriction and Semble blocks could still pass spuriously while producing the wrong prompt for judge LLMs.\n- scripts/targeted_file_context.py:412-447 | severity=low | confidence=2\n  PROBLEM: SEMBLE_QUERY and SEMBLE_FALLBACK logs report only the post-clamp chunk count and do not include a clamped flag or original input value.\n  WHY: Operators cannot distinguish intentional low-chunk requests from values clamped down from >20.\n- scripts/implement_diagnose_post_codex_failure.sh:351-476 | severity=low | confidence=3\n  PROBLEM: Identifiers are joined into the Semble query with no per-identifier length cap.\n  WHY: An overlong query can reduce retrieval relevance and lead to irrelevant diagnose context, causing bad downstream prompt outputs.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "1a6f16ae108f4d0164abbef5d41fb29ff7ab1ad952c0de1370bcd5790e91d541",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2413,
+    "run_id": "25614089104",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25614089104",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260509232454_0d2f4b8752",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2413,
+    "run_id": "25614089104"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-09T23:24:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

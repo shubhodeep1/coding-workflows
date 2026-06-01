@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update the `dispatch_comprehensive_release_workflow()` so that the `gh workflow run test-and-mark-stable.yml ...` invocation always includes `--ref stable`.\n  expected_change_site: scripts/orchestrate_poll_process.sh near dispatch_comprehensive_release_workflow (line ~5509)\n  confidence=[5]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: PR diff and last_run_diff both show the exact addition of \"--ref stable\" at the correct location in scripts/orchestrate_poll_process.sh. No absence remains.\n- requirement: Add or update targeted coverage in tests/test_orchestrate_poll_process.py so the stable-ref dispatch contract is locked in.\n  expected_change_site: tests/test_orchestrate_poll_process.py parser and test functions covering dispatch_comprehensive_release_workflow\n  confidence=[5]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: PR diff and last_run_diff both show parser extension in tests/test_orchestrate_poll_process.py (parse_api capture for --ref) and new assertions in three test functions (test_comprehensive_pending_complete_dispatches_release_with_metadata, test_comprehensive_pending_complete_dispatches_release_without_optional_metadata, test_comprehensive_pending_already_complete_dispatches_release). No absence remains.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement: Update the `dispatch_comprehensive_release_workflow()` so that the `gh workflow run test-and-mark-stable.yml ...` invocation always includes `--ref stable`.\n  Expected change site: scripts/orchestrate_poll_process.sh near dispatch_comprehensive_release_workflow (line ~5509)\n  Evidence of absence: PR diff and last_run_diff both show the exact addition of \"--ref stable\" at the correct location in scripts/orchestrate_poll_process.sh. No absence remains.\n  ISSUE_CONFIDENCE: 5\n- Requirement: Add or update targeted coverage in tests/test_orchestrate_poll_process.py so the stable-ref dispatch contract is locked in.\n  Expected change site: tests/test_orchestrate_poll_process.py parser and test functions covering dispatch_comprehensive_release_workflow\n  Evidence of absence: PR diff and last_run_diff both show parser extension in tests/test_orchestrate_poll_process.py (parse_api capture for --ref) and new assertions in three test functions (test_comprehensive_pending_complete_dispatches_release_with_metadata, test_comprehensive_pending_complete_dispatches_release_without_optional_metadata, test_comprehensive_pending_already_complete_dispatches_release). No absence remains.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "f62f70976b3e6d9cb18e5be0f1b048b2328ef03c4524ba5bb650ee9f137d7dcd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2876,
+    "run_id": "26268540491",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26268540491",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260522044058_025c99f704",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2876,
+    "run_id": "26268540491"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-22T04:40:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

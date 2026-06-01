@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:Lines 1203, 1698 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Promoted environment variables could shadow existing GitHub Actions context variables like PR_NUMBER and change behavior unpredictably.\n  WHY: The workflow uses PR_NUMBER and ISSUE_NUMBER as output step values; promoting those outputs into environment variables can shadow the context and lead to undefined or incorrect dereferences in interpolations or script logic.\n- .github/workflows/test-and-mark-stable.yml:Line 1203 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Environment variable name ISSUE_NUMBER matches a common GitHub issue variable, risking collision with upstream value or causing confusion in script body.\n  WHY: Scripts that inherit the full GitHub context and also interpolate `${ISSUE_NUMBER}` can resolve to the wrong value if this env var shadows an older context reference.\n- .github/workflows/test-and-mark-stable.yml:Lines 462-494 | confidence=1\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: Phase 1 still contains an inline `${{ steps.create-issue.outputs.created_after }}` expression in `capture_run_id`.\n  WHY: At ~6.9k chars it is under the 21,000-char limit today, but if the script grows by ~14k chars it can trip the same failure mode.\n- .github/workflows/test-and-mark-stable.yml:lines 1267, 1698, surrounding wait-review / verify-bait-removed blocks | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The edit removed the original inline `${{ steps... }}` without updating the later reference to `PRIOR_REVIEW_RUN` in the Phase 4b retry-dispatch block.\n  WHY: In `verify-bait-removed`, the `if ! [[ \"${PRIOR_REVIEW_RUN}\" =~ ^[0-9]+$ ]]` check can be empty or stale on a re-run of the step, causing the failure path (`status=retry_dispatch_failed`) to fire incorrectly on legitimate retries.\n- .github/workflows/test-and-mark-stable.yml:Lines 1693-1703, ~1984 | confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The Phase 4b error path/comment was not updated after moving `PRIOR_REVIEW_RUN` into the env block.\n  WHY: When `steps.wait-review.outputs.review_run_id` is missing or non-numeric, the printed error message is stale while the actual value tested comes from the env var, which can mislead operators about the source of the bad run id.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- File: .github/workflows/test-and-mark-stable.yml\n  Line or code reference: Lines 1203, 1698\n  Problem: Promoted environment variables could shadow existing GitHub Actions context variables like PR_NUMBER and change behavior unpredictably\n  Why: The workflow uses PR_NUMBER and ISSUE_NUMBER as output step values. Promoting the GitHub Actions expression outputs into environment variables makes them available in the script's run block. If the script uses the same names as GitHub context variables, it can shadow the context, leading to undefined or incorrect dereferences in interpolations or script logic\n  ISSUE_CONFIDENCE: 4\n- File: .github/workflows/test-and-mark-stable.yml\n  Line or code reference: Line 1203\n  Problem: Environment variable name ISSUE_NUMBER matches a common GitHub issue variable, risking collision with upstream value or causing confusion in script body\n  Why: Scripts that inherit the full GitHub context and also interpolate a value like ${ISSUE_NUMBER} into commands could resolve to the wrong value if this env var shadows an older context reference. Additionally, it duplicates the output step name, making maintainers think there is a new output while the env var actually comes from an output step\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- File: .github/workflows/test-and-mark-stable.yml\n  Line: 462-494\n  Problem: Phase 1 still contains an inline `${{ steps.create-issue.outputs.created_after }}` expression in `capture_run_id`.\n  Why: At ~6.9k chars this is well under the 21,000-char limit today, but if the script grows by ~14k chars it could trip the same failure mode.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: .github/workflows/test-and-mark-stable.yml\n  Line or code reference: lines 1267 (PR_BRANCH=...), 1698 (BRANCH=...), and the surrounding wait-review / verify-bait-removed blocks (post-change)\n  Problem: The env var promotion (`ISSUE_NUMBER` / `PRIOR_REVIEW_RUN`) and subsequent shell substitution works for the GitHub expression-length limit, but the change removed the original inline `${{ steps... }}` without updating the later reference to `PRIOR_REVIEW_RUN` in the Phase 4b retry-dispatch block.\n  Why: In the `verify-bait-removed` step, `if ! [[ \"${PRIOR_REVIEW_RUN}\" =~ ^[0-9]+$ ]]` would be empty or stale on a re-run of the step, causing the failure path (`status=retry_dispatch_failed`) to fire incorrectly on legitimate retries.\n  ISSUE_CONFIDENCE: 4\n- File: .github/workflows/test-and-mark-stable.yml\n  Line or code reference: lines 1693-1703 and subsequent test at ~1984\n  Problem: `PRIOR_REVIEW_RUN` is now defined via env from a step output, but the step `if` condition that runs this job still references the old step output name in some paths, and the comment on lines 1974-1983 was not updated to reflect that the variable is now always populated from the env block.\n  Why: When `steps.wait-review.outputs.review_run_id` is missing or non-numeric, the error message printed will be stale (`wait-review.outputs.review_run_id`) while the actual value tested comes from the env var, which can mislead operators and mask the true source of a bad run-id.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "dfc3d72cb35fb4b6d06a04b747d0d8b93dd98418a5103f3871aafe35ad798904",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26140912111",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26140912111",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260520044558_8a4cfe9015",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26140912111"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-20T04:45:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

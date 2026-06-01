@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-2578` @ `e6eb960354538468537fee582590722c8f231d17` (matches the orchestrator integration branch metadata).\n\nClarification mapping: no Q1/Q2/etc. were asked; `/answer [auto-answered-by-orchestrator]` means proceed with the issue as written.\n\nAction taken: inspected the five target workflow headers, the existing reusable-workflow bridge example in `.github/workflows/update_workflows.yml`, the already-bridged `.github/workflows/workflow-log-analysis.yml`, and the repo\u2019s YAML/workflow lint steps in `.github/workflows/ci.yml`.\n\nRepresentative pattern to copy: the top-level\n`env:\n  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true`\nplacement already used in `.github/workflows/update_workflows.yml` (same bridge also exists in `.github/workflows/workflow-log-analysis.yml`).\n\nRepo/issue consistency check: no conflict found. All five target files exist on this ref. `workflow-log-analysis.yml` already has the bridge, and `validate.yml` is intentionally out of scope.\n\nImplementation plan\n\n1. Files likely to change\n- `.github/workflows/clarify.yml`\n  - Add a new top-level `env` block between `\"on\"` and `jobs` containing only `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true`.\n- `.github/workflows/plan.yml`\n  - Add a new top-level `env` block between `on` and `jobs` containing only `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true`.\n- `.github/workflows/orchestrate.yml`\n  - Add `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true` to the existing top-level `env` map.\n- `.github/workflows/orchestrate_poll.yml`\n  - Add `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true` to the existing top-level `env` map.\n- `.github/workflows/orchestrate_clarify_respond.yml`\n  - Add a new top-level `env` block between `\"on\"` and `jobs` containing only `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true`.\n\n2. Functions or modules to implement\n- No script/function/module logic changes.\n- This is a YAML-only rollout of the existing Node 24 bridge flag to the remaining listed reusable workflows.\n\n3. Data structures affected\n- Only the workflow-level GitHub Actions `env` mappings.\n- No changes to `workflow_call` inputs, secrets, job-level env maps, prompts, scripts, labels, or state files.\n\n4. API or interface changes\n- None.\n- Triggers, job ordering, action pins, workflow names, prompt content, and caller contracts remain unchanged.\n\n5. Potential risks or edge cases\n- Preserve existing file style exactly:\n  - keep `---` where present,\n  - keep quoted `\"on\"` vs plain `on` unchanged,\n  - keep 2-space YAML indentation.\n- In `orchestrate.yml` and `orchestrate_poll.yml`, only prepend/append the new env key inside the existing top-level `env` map; do not reorder or rewrite existing expressions.\n- Do not expand scope into `workflow-log-analysis.yml`, `validate.yml`, `internal-*` workflows, or workflow templates.\n- Avoid duplicate bridge entries by confirming each target file still lacks the key before editing.\n\n6. Testing considerations\n- Run the repo\u2019s existing YAML/workflow validation commands from `.github/workflows/ci.yml`:\n  - `yamllint -s .github/workflows/*.yml .github/actions/*/action.yml`\n  - `actionlint -shellcheck= .github/workflows/*.yml workflow-templates/*.yml`\n- Run a scope check such as:\n  - `rg -n \"FORCE_JAVASCRIPT_ACTIONS_TO_NODE24\" .github/workflows/*.yml`\n  to confirm the five target workflows now include the bridge and exempt files were not edited.\n- Review the final diff to ensure there are no non-env changes.\n\nAssumptions\n- \u201cApply the existing pattern, and only that pattern\u201d means adding only the exact top-level `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true` bridge entry and nothing else.\n\nMissing context\n- None blocking.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "b3c4a062675d05b2270ab4ff4327f25dc6e131c6731ba0fee7abc7b90a1761ae",
+  "lineage": {
+    "issue_number": 2583,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25854365785",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25854365785",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2583"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260514101416_01238cf801",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2583,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25854365785"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2583",
+  "timestamps": {
+    "created_at": "2026-05-14T10:14:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

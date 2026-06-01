@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "**Q1: What is the intended scope of \"better\"?**\nChoices:\n- **A** \u2014 One specific workflow file or helper script; include its path/name in your reply. (RECOMMENDED)\n- **B** \u2014 One pipeline stage; include the stage name (`clarify`, `plan`, `implement`, `review_autofix`, `orchestrate`, `orchestrate_poll`, or `validate`) in your reply.\n- **C** \u2014 A repository-wide change spanning multiple stages; include the exact cross-cutting problem in your reply.\nReply: `Q1: A`\n**Q2: What concrete outcome should define success for that scope?**\nChoices:\n- **A** \u2014 Fix a current failure or flaky behavior; include the failing symptom or issue/PR/run reference in your reply. (RECOMMENDED)\n- **B** \u2014 Reduce runtime/cost/API usage without changing behavior; include the current pain point or metric in your reply.\n- **C** \u2014 Add or change behavior; include the exact before/after expectation in your reply.\nReply: `Q2: A`",
+  "fingerprint": "d988997540957f94397ede178197cd0f2fe5100043531408e39fcfaa78640abc",
+  "lineage": {
+    "issue_number": 1976,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25249181122",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25249181122",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260502094839_dff08efca4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 1976,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25249181122"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #1976 needs clarification",
+  "timestamps": {
+    "created_at": "2026-05-02T09:48:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:776-946 | severity=low | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: The added helper block defines multiple query-builder functions that have no call sites anywhere in the live script.\n  WHY: Each reviewer verified that the active judge paths still use the existing render_judge_semble_prefetch_from_query_file flow, so this block is unused maintenance debt rather than runtime code.\n- tests/test_judge_semble_prefetch_contract.py:178-196 | severity=medium | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The new assertions rely on exact internal shell-text matches for legacy wiring patterns, making the test brittle to cosmetic refactors.\n  WHY: The reported checks would fail on harmless spacing or variable-name changes even if the live Semble-prefetch wiring remains correct.\n- scripts/review_rb_judge.sh:40-47, 71-77 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The helpers file is sourced before the Semble availability guard, and source failures are suppressed.\n  WHY: This adds unnecessary work and can hide staging problems even when Semble processing is unavailable.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_poll_process.sh:779-940 | severity=low | confidence=5\n  PROBLEM: The PR adds multiple structured query-builder helper functions that are never invoked anywhere in the script.\n  WHY: The live judge paths still use the existing append_judge_semble_query_text() and render_judge_semble_prefetch_from_query_file() flow, so the added block is dead code and maintenance debt.\n- scripts/review_rb_judge.sh:40-47, 71-77 | severity=low | confidence=2\n  PROBLEM: The script sources `${SUPPORT_SCRIPTS_DIR}/semble_helpers.sh` before the availability guard inside render_review_rb_semble_prefetch(), with source failures suppressed.\n  WHY: This causes unnecessary file-system work and can hide Semble helper staging issues even when Semble is unavailable.\n- tests/test_judge_semble_prefetch_contract.py:178-196 | severity=medium | confidence=4\n  PROBLEM: The new negative assertions use exact string matches on internal legacy shell text, which is brittle.\n  WHY: Cosmetic refactors such as spacing or renaming would make the test fail even if the live wiring behavior stays correct.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/orchestrate_poll_process.sh:779-942 | severity=low | confidence=5\n  PROBLEM: Several functions are defined but never called anywhere in the script.\n  WHY: The active integration-conflict, stall, review-blocked, and wave-judge paths still use append_judge_semble_query_text() and render_judge_semble_prefetch_from_query_file(), so the added helpers are dead code and maintenance confusion.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/orchestrate_poll_process.sh:776-946 | severity=low | confidence=5\n  PROBLEM: The PR defines about 170 lines of helper functions that have no call sites anywhere in the repo.\n  WHY: The live paths still use append_judge_semble_query_text() plus render_judge_semble_prefetch_from_query_file(), so the new block has no runtime effect and adds maintenance overhead.\n- tests/test_judge_semble_prefetch_contract.py:178-196 | severity=medium | confidence=4\n  PROBLEM: The test asserts exact internal string sequences for legacy wiring, which is brittle.\n  WHY: Harmless refactors or whitespace changes would cause false failures even if the Semble-prefetch behavior stays unchanged.\n- scripts/review_rb_judge.sh:40-47 | severity=low | confidence=2\n  PROBLEM: The helpers script is sourced unconditionally before the availability check, with errors suppressed.\n  WHY: This can hide source failures and adds unnecessary work when Semble is unavailable.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "b08156df7572502dc1fd5412e029d45085d68032b8d50d0b4162a1e9a257a310",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2400,
+    "run_id": "25616195911",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25616195911",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510012416_085d95a103",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2400,
+    "run_id": "25616195911"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-10T01:24:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

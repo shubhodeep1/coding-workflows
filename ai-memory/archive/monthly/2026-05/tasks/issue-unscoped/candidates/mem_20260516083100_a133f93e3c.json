@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:1240-1256 | confidence=3\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: `_rb_valid_repo_relative_path()` may allow multi-sequence upward traversals like `dir/../../file`.\n  WHY: The current guard does not rule out every mid-path `../` form, so a malformed `remaining_issues[].file` could still reach unintended files.\n- scripts/review_rb_judge.sh:1240-1256 | confidence=4\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: `_rb_valid_repo_relative_path()` does not block `.git/` or `.git/*` path components.\n  WHY: A `.git/...` path could pass validation and be used when creating a baseline branch that references internal repository state.\n- scripts/review_rb_judge.sh:1307-1311 | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: Piping `JUDGE_JSON` through `echo` before `jq` can corrupt backslash escapes and make JSON extraction fail.\n  WHY: Under shells where `echo` interprets escapes, values containing sequences like `\\\"`, `\\n`, or `\\t` may be transformed before `jq` parses them, yielding empty reissue/new_issue fields.\n- scripts/review_rb_judge.sh:1355 | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `git ls-tree | grep` is a less reliable existence check than `git cat-file -e`.\n  WHY: The extra pipe/grep path can produce false negatives and unnecessarily force the redo fallback for valid files.\n- .github/workflows/implement.yml:345-367 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: `gh_api_with_retry()` suppresses `gh api` stderr on every attempt, so the final fallback warning hides the underlying failure.\n  WHY: When retries are exhausted, logs show only a generic checkout-ref warning instead of the actionable rate-limit/auth/network error, making failures hard to debug.\n- .github/workflows/implement.yml:356 | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `printf '%s' \"${output}\"` can mis-handle outputs that begin with `-`.\n  WHY: A GitHub API error response starting with a dash could be treated as an option/invalid format input, breaking the retry helper's output capture.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_rb_judge.sh:1308-1311 | confidence=3\n  PROBLEM: The three `echo \"${JUDGE_JSON}\" | jq ...` extraction lines can corrupt JSON under shells where `echo` interprets backslash escapes.\n  WHY: If the judge JSON contains escaped quotes or other backslashes, `echo` can alter the payload before `jq` parses it, causing the extracted fields to come back empty.\n- .github/workflows/implement.yml:353-355 | confidence=2\n  PROBLEM: `gh_api_with_retry()` suppresses stderr from `gh api` on every attempt.\n  WHY: When all retries fail, the workflow only emits a generic fallback warning and hides the actionable API error details needed for debugging.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_rb_judge.sh:1240-1256 | confidence=3\n  PROBLEM: The `_rb_valid_repo_relative_path` function may allow multi-sequence upward traversals like `dir/../../file`.\n  WHY: A malicious or malformed `remaining_issues[].file` entry could slip through and cause the baseline branch creation to operate on unintended files.\n- .github/workflows/implement.yml:356 | confidence=2\n  PROBLEM: The retry helper suppresses stderr from `gh api` on every attempt with `2>/dev/null`.\n  WHY: When the function exhausts retries and falls back to the default checkout ref, the warning message lacks the underlying API error details.\n- scripts/review_rb_judge.sh:1308 | confidence=2\n  PROBLEM: Using `echo \"${JUDGE_JSON}\"` for JSON extraction can mishandle backslash escapes if shell `xpg_echo` mode is enabled.\n  WHY: On systems where `echo` interprets escape sequences, JSON containing backslashes could be corrupted before `jq` parsing.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_rb_judge.sh:1307-1308 | confidence=3\n  PROBLEM: Using `echo` to pipe JSON into `jq` can corrupt backslash-containing strings due to shell echo escape interpretation.\n  WHY: If the judge JSON contains backslash sequences, `echo` may interpret them as escape characters and alter the payload before `jq` parses it.\n- scripts/review_rb_judge.sh:1307, 1309, 1355 | confidence=3\n  PROBLEM: The same `echo \"${JUDGE_JSON}\"` pattern is used for extracting `new_issue.title` and `new_issue.body`.\n  WHY: Issue titles or bodies containing backslashes, such as file paths or regex patterns, could be corrupted during extraction and create malformed reissue issues.\n- .github/workflows/implement.yml:356 | confidence=2\n  PROBLEM: `printf '%s' \"${output}\"` without `--` can interpret a leading dash in output as format options.\n  WHY: If the GitHub API returns an error response starting with `-`, `printf` could fail or produce wrong output and break the retry logic's output capture.\n- scripts/review_rb_judge.sh:1355 | confidence=2\n  PROBLEM: Using `git ls-tree | grep` is less reliable than `git cat-file -e` for checking file existence at a specific commit.\n  WHY: The pipe introduces an extra process and quoting surface, which can produce false negatives and incorrectly reject valid files.\n- .github/workflows/implement.yml:345-367 | confidence=3\n  PROBLEM: The retry wrapper suppresses stderr from failed `gh api` calls on all attempts via `2>/dev/null`.\n  WHY: When all three retry attempts fail, the final warning only shows a generic failure and hides the underlying rate-limit, auth, or network error details.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/review_rb_judge.sh:1240-1256 | confidence=4\n  PROBLEM: `_rb_valid_repo_relative_path()` does not guard against `.git/` or `.git/*` path components.\n  WHY: A `.git/...` path could pass validation and be used to create a baseline branch that references internal repository state.\n- scripts/review_rb_judge.sh:1307 | confidence=2\n  PROBLEM: `echo \"${JUDGE_JSON}\" | jq -r ...` can corrupt backslash escapes before parsing.\n  WHY: If the JSON output contains `\\n` or `\\t` inside string values, `echo` can transform them before `jq`, causing field extraction to return empty.\n- .github/workflows/implement.yml:345-367 | confidence=3\n  PROBLEM: `gh_api_with_retry` suppresses stderr from failed `gh api` calls on every attempt.\n  WHY: When the wrapper exhausts retries, the caller only sees a generic warning with no diagnostic context about the underlying API failure.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "a8afc5495b1467cd525bbc8f8b4beea6154e073d07ea16caeac23ed230431bed",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2635,
+    "run_id": "25956871437",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25956871437",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260516083100_a133f93e3c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2635,
+    "run_id": "25956871437"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 6 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-16T08:31:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

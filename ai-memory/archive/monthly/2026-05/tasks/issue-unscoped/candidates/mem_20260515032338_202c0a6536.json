@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/write-plan.md (and mirror at workflow-templates/.claude/commands/write-plan.md):17-19 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, x-ai_grok-4_1-fast]\n  PROBLEM: The commit/PR subject uses `<topic>` but the command only defines `<slug>`, so the subject can be ambiguous or placeholder-like.\n  WHY: Both reviewers flagged the same step-6 wording, and the command never states how to derive a human-readable topic distinct from the slug.\n- .claude/commands/write-plan.md (and mirror at workflow-templates/.claude/commands/write-plan.md):17-18 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The push instruction refers to \"the project's git policy\" even though no such policy document is defined in the repo.\n  WHY: The retry behavior is already fully described inline, so the dangling policy reference adds confusion without extra actionable guidance.\n- .claude/commands/write-plan.md:17-21 | severity=medium | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The PR-opening step hardcodes `mcp__github__create_pull_request` without a `gh pr create` fallback.\n  WHY: The tool-access section says `gh` is available in some sessions, so this step can fail when MCP GitHub tools are unavailable.\n- CHANGELOG.md:11 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, x-ai_grok-4_1-fast]\n  PROBLEM: The new changelog entry is a single very long bullet, making the addition hard to scan in diffs and the GitHub UI.\n  WHY: Both reviewers noted the entry is readable as Markdown but unnecessarily monolithic for review and maintenance.\n- CHANGELOG.md:11 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The propagation timing claim implies a simpler sync path than the repository actually uses.\n  WHY: The update depends on the stable-promotion/sync chain and consumer pinning, so \"after this merges to `main`\" is imprecise.\n- .claude/commands/write-plan.md:149 | severity=medium | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The `gh auth status` guard assumes a bash/nounset-safe shell context and can misbehave outside that environment.\n  WHY: The auth probe depends on shell expansion semantics, so the tool-access check is brittle if the session shell differs.\n- workflow-templates/.claude/commands/write-plan.md (and identical .claude/commands/write-plan.md):163 | severity=low | confidence=1\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The line 163 \"when in doubt, ask\" guidance is informational rather than a defect.\n  WHY: The reviewer explicitly marked it as \"informational only, not a bug\" with risk score 0.\n\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/commands/write-plan.md (and mirror at workflow-templates/.claude/commands/write-plan.md):17-19 | confidence=3\n  PROBLEM: The commit message template uses `<topic>` without defining how it relates to the confirmed slug.\n  WHY: The command only defines `<slug>`, so the commit/PR subject can become ambiguous or placeholder-like.\n- .claude/commands/write-plan.md (and mirror at workflow-templates/.claude/commands/write-plan.md):17-18 | confidence=3\n  PROBLEM: The push instruction refers to \"the project's git policy\" even though no such policy document is defined in the repo.\n  WHY: The retry behavior is already fully described inline, so the dangling policy reference adds confusion without extra actionable guidance.\n- .claude/commands/write-plan.md:17-21 | confidence=3\n  PROBLEM: The PR-opening step hardcodes `mcp__github__create_pull_request` without a `gh pr create` fallback.\n  WHY: The tool-access section says `gh` is available in some sessions, so this step can fail when MCP GitHub tools are unavailable.\n- CHANGELOG.md:11 | confidence=2\n  PROBLEM: The new changelog entry is a single very long bullet, making the addition hard to scan in diffs and the GitHub UI.\n  WHY: The entry is valid Markdown but unnecessarily monolithic for review and maintenance.\n- CHANGELOG.md:11 | confidence=2\n  PROBLEM: The propagation timing claim implies a simpler sync path than the repository actually uses.\n  WHY: The update depends on the stable-promotion/sync chain and consumer pinning, so \"after this merges to `main`\" is imprecise.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- workflow-templates/.claude/commands/write-plan.md (and identical .claude/commands/write-plan.md):163 | confidence=1\n  PROBLEM: The line 163 \"when in doubt, ask\" guidance is informational rather than a defect.\n  WHY: The reviewer explicitly marked it as \"informational only, not a bug\" with risk score 0.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- CHANGELOG.md:11 | confidence=5\n  PROBLEM: The new changelog entry is a single very long bullet, causing horizontal scrolling and reduced readability.\n  WHY: The bullet is valid Markdown but overly monolithic for scannability in diffs and the GitHub UI.\n- .claude/commands/write-plan.md:17-19 | confidence=4\n  PROBLEM: The commit message uses `<topic>` without guidance on how to choose it relative to the slug.\n  WHY: This can lead to placeholder-like or inconsistent commit subjects instead of a human-readable title.\n- workflow-templates/.claude/commands/write-plan.md:17-19 | confidence=4\n  PROBLEM: The commit message uses `<topic>` without guidance on how to choose it relative to the slug.\n  WHY: This propagates the same ambiguity into the template copy consumed by downstream repos.\n- .claude/commands/write-plan.md:149 | confidence=3\n  PROBLEM: The auth check `{ [ -n \"${GH_TOKEN:-}\" ] || [ -n \"${GITHUB_TOKEN:-}\" ]; } && gh auth status` assumes a bash/nounset-safe shell context.\n  WHY: It can misbehave or fail silently when the session shell or variable-expansion behavior differs.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "3c7699d9c059c626d13f97aadcc28892f4a620e65a495228da83d46f30ecc826",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25898098684",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25898098684",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260515032338_202c0a6536",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25898098684"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 7 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-15T03:23:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

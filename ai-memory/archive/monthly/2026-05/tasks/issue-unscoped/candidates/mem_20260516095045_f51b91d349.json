@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:Lines 211-212, 655, 733-734, 999-1006, 1011 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5]\n  PROBLEM: Remaining `echo \"${var}\" | jq` pipelines for GitHub API PR metadata can still be corrupted under `shopt -s xpg_echo`.\n  WHY: Both reviewers report the same xpg_echo backslash-expansion failure in the same file; the practical risk is low because the affected API fields are usually simple values and the paths fail open.\n- scripts/review_rb_judge.sh:line 159 (`_resilient_phase_swap` helper) | severity=low | confidence=1\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `_resilient_phase_swap` still feeds a label-array JSON through `echo` into `jq`, so `xpg_echo` can corrupt it.\n  WHY: This is the same echo-to-jq pattern as the other findings, with very low practical risk even under `xpg_echo`.\n- tests/test_review_rb_judge_label_propagation.py:Lines 367-370 (in `_run_close_and_reissue` function) | severity=low | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: When `precreate_baseline_branch=True`, the test creates a local branch with hardcoded name `ai/reissue-baseline/pr-42-{head[:12]}-777-1`, but the real script at lines 1305+ constructs the baseline branch using environment variables `GITHUB_RUN_ID` and `GITHUB_RUN_ATTEMPT` (format: `ai/reissue-baseline/pr-${PR_NUMBER}-${RB_HEAD_SHA:0:12}-${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-0}`).\n  WHY: This name mismatch means the pre-created branch won't match what the script attempts to create, causing `git checkout -b` inside `_rb_push_reissue_baseline_branch` to fail with \"fatal: a branch named ... already exists\".\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_rb_judge.sh:lines 211-212, 655, 733-734, 999-1000, 1006, 1011 | severity=low | confidence=2\n  PROBLEM: Several `echo \"${_pr_meta}\" | jq` and `echo \"${_pr_json}\" | jq` pipelines that feed GitHub API PR metadata through bash `echo` remain in the script.\n  WHY: Under `shopt -s xpg_echo`, `echo` can reinterpret JSON escape sequences before `jq` parses them, which can corrupt the payload and break the poll's mergeability guard.\n- scripts/review_rb_judge.sh:line 159 (`_resilient_phase_swap` helper) | severity=low | confidence=1\n  PROBLEM: `_resilient_phase_swap` still feeds a label-array JSON through `echo` into `jq`.\n  WHY: Under `xpg_echo`, that JSON can be corrupted before parsing, though practical risk is very low.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_rb_judge.sh:Lines 211-212, 655, 733-734, 999-1006, 1011 | severity=low | confidence=2\n  PROBLEM: Multiple remaining `echo \"${var}\" | jq` pipelines were NOT converted to `printf '%s\\n'` in the last run.\n  WHY: Under bash `xpg_echo`, these pipelines would interpret backslash escape sequences in GitHub API JSON responses before `jq` parses them.\n- tests/test_review_rb_judge_label_propagation.py:Lines 367-370 (in `_run_close_and_reissue` function) | severity=low | confidence=4\n  PROBLEM: When `precreate_baseline_branch=True`, the test creates a local branch with hardcoded name `ai/reissue-baseline/pr-42-{head[:12]}-777-1`, but the real script at lines 1305+ constructs the baseline branch using environment variables `GITHUB_RUN_ID` and `GITHUB_RUN_ATTEMPT` (format: `ai/reissue-baseline/pr-${PR_NUMBER}-${RB_HEAD_SHA:0:12}-${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-0}`).\n  WHY: This name mismatch means the pre-created branch won't match what the script attempts to create, causing `git checkout -b` inside `_rb_push_reissue_baseline_branch` to fail with \"fatal: a branch named ... already exists\".\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "ba7946af69fbd06ba4a3e4fd28d85ef4db66c1f5302830030d3a25b2537fa8e8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2635,
+    "run_id": "25958488125",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25958488125",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260516095045_f51b91d349",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2635,
+    "run_id": "25958488125"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-16T09:50:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

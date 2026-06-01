@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:lines 133-136 | severity=low | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The CI step name no longer matches the test group it runs, so failure attribution in logs is misleading.\n  WHY: This is an observability/maintainability issue only; runtime behavior is unchanged.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`.\"\n  expected_change_site: The primary conflict-resolution files (especially those carrying substantive stable\u2192main bug fixes)\n  confidence=5\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_20]\n  EVIDENCE: The current diff shows only 3 blank line deletions in `.github/workflows/review_autofix.yml` and `scripts/orchestrate_poll_process.sh`; the substantive merge work was already done in commit `4288ae6 [ai-merge-resolve] resolve merge conflicts`; and `git merge-base --is-ancestor d4ed47ada2fcd1212bacb7ca765040d713f47965 HEAD` succeeds.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- Requirement: From PR description - \"Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`.\"\n  Expected change site: Substantive changes from the stable branch merge should appear in the diff\n  Evidence of absence: The current diff shows only 3 blank line deletions (in `.github/workflows/review_autofix.yml` and `scripts/orchestrate_poll_process.sh`). However, git history shows commit `4288ae6 [ai-merge-resolve] resolve merge conflicts` already carried the substantive stable\u2192main resolution. The PR's forward-merge task is satisfied by that merge commit - the residual diff is cosmetic cleanup from the merge resolution process.\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/ci.yml:lines 133-136 | severity=low | confidence=4\n  PROBLEM: The step is now named \"Integration-ahead-by gate regression tests\" but runs only the ahead-by-gate test; the poller regression tests were relocated to a later dedicated step (\"Orchestrate poll process unit tests\" at ~520-524).\n  WHY: Purely an observability/maintainability issue \u2014 CI logs and failure attribution no longer map cleanly to test groups. No runtime breakage.\n- Requirement: \"Automated forward-merge of `stable` into `main` failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`.\" (with explicit list of conflicting files including review_autofix.yml, orchestrate_poll_process.sh, ci.yml, multiple test files, library scripts, README.md).\n  Expected change site: The primary conflict-resolution files (especially those carrying substantive stable\u2192main bug fixes).\n  Evidence of absence: The current PR diff (and last-run diff) contains only three blank-line deletions in `.github/workflows/review_autofix.yml` and `scripts/orchestrate_poll_process.sh`. The substantive merge work was performed in an earlier `[ai-merge-resolve]` commit that is already an ancestor of HEAD (`git merge-base --is-ancestor d4ed47ada2fcd1212bacb7ca765040d713f47965 HEAD` succeeds). The PR description's conflict list is merge-context, not a requirement that every listed file retain a visible delta after resolution. No unmet deliverable remains.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "4dafbba519f07014edab9f45745cf8aeff309563adac1d97033f5d7c53c43f57",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2972,
+    "run_id": "26548623951",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26548623951",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260528012858_44459730b3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2972,
+    "run_id": "26548623951"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-28T01:28:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

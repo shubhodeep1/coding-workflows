@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:1927-1929 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: When `_remaining` is 0, the new cap sets `_sleep` to 0, so `sleep 0` runs and the loop performs one extra check-run poll before the next deadline check.\n  WHY: This is the same `_remaining == 0` edge case reported by three reviewers; the highest-confidence reports treat it as an unnecessary extra iteration/API poll, while other reviewers called it false-positive or benign.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/review_autofix.yml:1927-1929 | severity=low | confidence=4\n  PROBLEM: `_remaining` can become 0, so `_sleep` is capped to 0 and `sleep 0` causes one busy-loop iteration before the next deadline check.\n  WHY: Second-level `date +%s` granularity can align `_now` with `_deadline`, producing an unnecessary no-op sleep and extra loop; a guard on `_remaining <= 0` would avoid it.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/review_autofix.yml:1927-1929 | severity=low | confidence=2\n  PROBLEM: `_remaining == 0` can make the loop take one extra instantaneous iteration before the top-of-loop deadline guard fires.\n  WHY: The reviewer judged the code path technically reachable but benign, because `sleep 0` returns immediately and the next loop iteration is almost certain to hit the deadline check.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/review_autofix.yml:1927-1929 | severity=low | confidence=4\n  PROBLEM: If `_remaining <= 0`, the loop still executes `sleep 0` and an unnecessary extra API poll before breaking on the next iteration.\n  WHY: `date +%s` second granularity can hit `_now == _deadline` during the cap calculation, so one wasted check-run poll can occur.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "3271b60af0b785096083064108d3886350b8d35b3888f7bcd020d8e5ef60e2fb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2554,
+    "run_id": "25767446389",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25767446389",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260512231732_13908f3e21",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2554,
+    "run_id": "25767446389"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-12T23:17:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

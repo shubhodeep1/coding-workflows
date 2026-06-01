@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:(implicit) | severity=low | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The duplicate fallback definition (72-line block) that was present in the previous LAST RUN DIFF has been removed, leaving only the live implementation supplied by gh_helpers.sh and the script's existing EXIT trap that calls `_cleanup_prompt_budget`.\n  WHY: N/A \u2014 this change eliminates a maintenance drift risk that could have caused prompt-budget accounting to double-count or leak temporary state files across repeated review_rb_judge invocations.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/review_rb_judge.sh (post-removal state): (implicit \u2014 absence of the removed block at the location that previously duplicated `_embed_input_file` / `_init_prompt_budget` / `_cleanup_prompt_budget` from gh_helpers.sh) | severity=low | confidence=5\n  PROBLEM: The duplicate fallback definition (72-line block) that was present in the previous LAST RUN DIFF has been removed, leaving only the live implementation supplied by gh_helpers.sh (sourced via MAIN_PRIMARY_BOOTSTRAP_SCRIPTS) plus the script's existing EXIT trap that calls `_cleanup_prompt_budget`.\n  WHY: N/A \u2014 this change eliminates a maintenance drift risk that could have caused prompt-budget accounting to double-count or leak temporary state files across repeated review_rb_judge invocations.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "95edef7523868e158740fa25a0fd38815c6775801048c8e6a0f56d49d504be10",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2954,
+    "run_id": "26358790563",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26358790563",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260524104051_2dfcae2e46",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2954,
+    "run_id": "26358790563"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-24T10:40:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Automated forward-merge of `stable` into `main` failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`.\n  expected_change_site: Substantive conflict-resolution changes in the originally-listed conflicting files\n  confidence=[5]\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_20]\n  EVIDENCE: Current PR diff contains only 3 blank line deletions in `.github/workflows/review_autofix.yml` and `scripts/orchestrate_poll_process.sh`. No substantive hunks remain from the original merge conflict resolution - the functional forward-merge was already resolved in prior commits (commit 4288ae6 `[ai-merge-resolve] resolve merge conflicts`), and `git merge-base --is-ancestor d4ed47ada2fcd1212bacb7ca765040d713f47965 HEAD` confirms the source SHA is already an ancestor. LAST_RUN_DIFF and PR_DIFF contain *only* three blank-line deletions (in `.github/workflows/review_autofix.yml:5128` and two similar sites in `scripts/orchestrate_poll_process.sh`). The substantive merge-resolution commit (4288ae6) already landed earlier; `git merge-base --is-ancestor d4ed47ada2fcd1212bacb7ca765040d713f47965 HEAD` confirms the stable source SHA is present.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- Requirement: \"Automated forward-merge of `stable` into `main` failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`.\"\n  Expected change site: Substantive conflict-resolution changes in the originally-listed conflicting files\n  Evidence of absence: Current PR diff contains only 3 blank line deletions in `.github/workflows/review_autofix.yml` and `scripts/orchestrate_poll_process.sh`. No substantive hunks remain from the original merge conflict resolution - the functional forward-merge was already resolved in prior commits (commit 4288ae6 `[ai-merge-resolve] resolve merge conflicts`), and `git merge-base --is-ancestor d4ed47ada2fcd1212bacb7ca765040d713f47965 HEAD` confirms the source SHA is already an ancestor.\n  ISSUE_CONFIDENCE: 5\n- File: .github/workflows/review_autofix.yml\n  Location: line 5128 (and scripts/orchestrate_poll_process.sh:3139,3320)\n  Issue: Removing the blank line after `fi` serves no functional purpose and violates the minimal-change principle.\n  Suggested minimal fix: Restore the blank lines that were removed.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: Automated forward-merge of `stable` into `main` failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`. (Explicit CAUTION: must use \"Create a merge commit\" to preserve ancestry for promote-main-to-stable.yml pre-flight check.)\n  Expected change site: The conflict-resolution hunks that were originally present in `.github/workflows/ci.yml`, `.github/workflows/mark-stable.yml`, `.github/workflows/test-and-mark-stable.yml`, `scripts/orchestrate_lib.py`, `scripts/review_apply_fixes.sh`, `tests/test_orchestrate_integration_ahead_by_gate.py` and the other files listed in the PR body.\n  Evidence of absence: LAST_RUN_DIFF and PR_DIFF contain *only* three blank-line deletions (in `.github/workflows/review_autofix.yml:5128` and two similar sites in `scripts/orchestrate_poll_process.sh`). The substantive merge-resolution commit (4288ae6) already landed earlier; `git merge-base --is-ancestor d4ed47ada2fcd1212bacb7ca765040d713f47965 HEAD` confirms the stable source SHA is present. The current PR is now purely cosmetic whitespace cleanup that survived many previous editor passes.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "e786ee580430b7fb0cea9bd03e23b1dfd55d624e2b39df6e7248c20f2b576a2f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2972,
+    "run_id": "26590027158",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26590027158",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260528172805_4c1347f4bf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2972,
+    "run_id": "26590027158"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-28T17:28:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

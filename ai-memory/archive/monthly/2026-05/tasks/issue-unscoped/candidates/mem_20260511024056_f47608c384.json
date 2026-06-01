@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:3 | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The current file has an extra blank line at the end (shows up as a 4th line).\n  WHY: The file is verified by other reviewers to have exactly 3 lines with a single trailing newline, so the reported blank-line issue is a false positive.\n- tests/e2e_smoke_canary.txt:N/A | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The lint check-run failed on the PR head SHA.\n  WHY: The available check-run context has empty title/summary, so reviewers could not map the failure to the changed file.\n- N/A:N/A | confidence=3\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: The lint check-run failed but title and summary are empty in check_runs_context.\n  WHY: The available context does not identify a root cause or a changed-file mapping.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:3 | confidence=4\n  PROBLEM: The file contains an extra blank 4th line.\n  WHY: According to the issue specification, the file must contain exactly three lines with a single trailing newline after the final line.\n- tests/e2e_smoke_canary.txt:N/A | confidence=5\n  PROBLEM: The lint check-run failed on the PR head SHA.\n  WHY: The PR_CHECK_RUNS_CONTEXT shows failed[0].name: \"lint\" with conclusion: \"failure\"; the failure is likely related to the extra blank line issue reported above.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/e2e_smoke_canary.txt:3 | confidence=5\n  PROBLEM: Copilot inline review claims \"extra blank line at the end (shows up as a 4th line)\" but cat -e / wc -l / hexdump confirm exactly 3 lines each ending in single \\n (no \\n\\n blank line)\n  WHY: cosmetic false positive; file exactly matches issue #2488 spec but CI lint failure remains\n- tests/e2e_smoke_canary.txt:N/A | confidence=5\n  PROBLEM: GitHub check-run \"lint\" failed (completed with conclusion=failure; details: https://github.com/shubhodeep1/coding-workflows/actions/runs/25646929447/job/75277504214)\n  WHY: blocks merge; unclear mapping to diff as title/summary empty but only changed file is this one \u2014 may flag trailing newline, whitespace, or encoding (hexdump confirms exact 3-line POSIX spec with \\n terminators, 55 bytes, no BOM/extra \\n)\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:3 | confidence=5\n  PROBLEM: Copilot claims \"The current file has an extra blank line at the end (shows up as a 4th line)\" but this is demonstrably false\n  WHY: The file has exactly 3 lines with exactly one trailing newline.\n- N/A:N/A | confidence=3\n  PROBLEM: The lint check-run failed but title and summary are empty in check_runs_context.\n  WHY: Cannot determine root cause from available context; the lint job runs yamllint/actionlint on YAML files and various Python unit tests - none of which process the `tests/e2e_smoke_canary.txt` text file modified in this PR.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "37a315ebb33ddac390f8f740fabb0821d5ce58fa8efbf6cb36d08d10c4fdf87f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2492,
+    "run_id": "25646936100",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25646936100",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260511024056_f47608c384",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2492,
+    "run_id": "25646936100"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-11T02:40:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

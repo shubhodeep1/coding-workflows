@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for `codex-heartbeat-logging`\n\nPlanning ref: `88630610a776bb2dbc1235b2718c86f2f0a4697c` on `orchestrator/project-2974`  \nClarification mapping: none; no Q1/Q2 batch was needed, and `/answer [auto-answered-by-orchestrator]` confirms proceed-as-written.\n\nAutomation / wiring summary\n- Change type: **new shared script + edits to existing scripts/workflows**.\n- Existing entry points to extend:\n  - `.github/workflows/review_autofix.yml` \u2014 existing PR review/autofix path.\n  - `.github/workflows/validate.yml` \u2014 existing runtime validation path.\n- New supervisor: **none**.\n- DB / migration work: **none**.\n- Removal-registry entry: **none**; `scripts/codex_heartbeat.sh` is a permanent shared helper, not a manual one-off or long-running supervisor.\n\nRepresentative pattern inspected\n- Use `scripts/review_apply_fixes.sh` as the reference pattern: it already has a non-invasive heartbeat/watchdog structure that preserves existing timeout behavior. The new helper should follow that spirit rather than redesigning watchdogs/timeouts.\n\nConflicts detected\n- The issue names `scripts/validate_driver.sh`, but on this ref the validation workflow actually runs `scripts/validate_process.sh`, and the real `codex exec` callsites are in `validate_process.sh` plus `self_heal_validation.sh`. `validate_driver.sh` itself has no Codex callsite on this ref.  \n  - Plan impact: target `scripts/validate_process.sh` for the validation-path heartbeat wiring unless a later clarification explicitly requires a no-op `validate_driver.sh` edit.\n\nFiles likely to change\n- `scripts/codex_heartbeat.sh` **(new)**\n- `scripts/review_run_reviewers.sh`\n- `scripts/review_consolidate.sh`\n- `scripts/review_rb_judge.sh`\n- `scripts/review_conflict_resolve.sh`\n- `scripts/validate_process.sh`\n- `scripts/self_heal_validation.sh`\n- `.github/workflows/review_autofix.yml`\n- `.github/workflows/validate.yml`\n- `tests/test_codex_heartbeat.py` (or equivalent new focused helper test)\n\nFunctions / modules to implement\n- `scripts/codex_heartbeat.sh`\n  - New reusable wrapper/helper for long-running Codex commands.\n  - Responsibilities:\n    - run a wrapped command without changing its exit status,\n    - detect idle periods with no child output,\n    - emit stable `CODEX_HEARTBEAT: phase=<phase> elapsed_secs=<n>` lines at the configured interval,\n    - fail open when disabled/misconfigured,\n    - forward signals cleanly so existing kill/timeout paths still work.\n\n- `scripts/review_run_reviewers.sh`\n  - Update `execute_reviewer_attempt()` to run reviewer Codex calls through the helper.\n  - Preserve existing `hb_file`, idle/max-wall watchdog, PR-close polling, retry logic, and background wait behavior.\n\n- `scripts/review_consolidate.sh`\n  - Wrap the existing `timeout ... codex exec` consolidator invocation.\n  - Keep current fail-open behavior unchanged.\n\n- `scripts/review_rb_judge.sh`\n  - Wrap both Codex callsites:\n    - read-only judge decision loop,\n    - danger-full-access fix path.\n  - Keep current retry/degradation behavior intact.\n\n- `scripts/review_conflict_resolve.sh`\n  - Wrap each per-attempt `timeout --signal=TERM ... codex exec`.\n  - Preserve current timeout classification (`124`/`137` vs other failures) and retry logic.\n\n- `scripts/validate_process.sh`\n  - Wrap the validation-path Codex loops that actually exist on this ref:\n    - discover\n    - diagnose\n  - Keep reasoning overrides, retry/backoff, and result classification unchanged.\n\n- `scripts/self_heal_validation.sh`\n  - Wrap the self-heal LLM call inside its 2-attempt JSON-parse loop.\n\nWorkflow / config changes\n- `.github/workflows/review_autofix.yml`\n  - Export repo vars for:\n    - `CODEX_HEARTBEAT_ENABLED`\n    - `CODEX_HEARTBEAT_INTERVAL_SECS`\n  - Add `codex_heartbeat.sh` to `REQUIRED_BOOTSTRAP_SCRIPTS` so consumer repos stage it into `SUPPORT_SCRIPTS_DIR`.\n\n- `.github/workflows/validate.yml`\n  - Export the same repo vars into the validation run environment.\n  - Copy `scripts/codex_heartbeat.sh` into the bootstrapped workspace alongside the other validation support scripts.\n\nData structures affected\n- New env/config surface:\n  - `CODEX_HEARTBEAT_ENABLED` (default enabled)\n  - `CODEX_HEARTBEAT_INTERVAL_SECS` (default `30`)\n- New stable log line format:\n  - `CODEX_HEARTBEAT: phase=<phase> elapsed_secs=<n>`\n- No DB/schema/API payload changes.\n\nAPI / interface changes\n- Internal-only interface change: review/validate scripts gain a dependency on the shared heartbeat helper.\n- No user-facing workflow inputs need to change.\n\nRisks / edge cases\n- Heartbeat lines must **not** reset existing idle watchdogs.\n  - Important: if the helper writes heartbeats onto the same stderr path that updates `hb_file`, reviewer timeout behavior changes.\n- Heartbeat lines must **not** pollute captured model stdout.\n- Wrapped command exit codes must be preserved exactly, especially where `timeout` return codes drive retry classification.\n- Background/signal behavior must stay safe: no orphaned Codex children when watchdogs send TERM/KILL.\n- `review_rb_judge.sh` currently has a fix path with stderr discarded; heartbeat logging must still reach workflow logs.\n- Invalid/empty heartbeat config should degrade safely.\n- Out of scope remains unchanged: no `agents.md`, no `README.md`, no workflow-log-analysis wiring in this issue.\n\nTesting considerations\n- Add one focused regression test for the helper itself:\n  - wrap a deterministic shell command that sleeps longer than the configured interval,\n  - assert `CODEX_HEARTBEAT` lines are emitted at the configured cadence,\n  - assert the wrapped command\u2019s exit code is preserved,\n  - assert wrapped stdout/stderr remain intact.\n- Re-run existing workflow/script contract tests most likely to be touched by the wiring:\n  - review workflow bootstrap coverage,\n  - validate workflow bootstrap coverage.\n\nAssumptions\n- Use the already-documented Phase I repo-var names: `CODEX_HEARTBEAT_ENABLED` and `CODEX_HEARTBEAT_INTERVAL_SECS`.\n- Heartbeat lines are intended for GitHub Actions logs, not for any persisted artifact schema.\n\nMissing-context note\n- No blocking missing context beyond the `validate_driver.sh` vs `validate_process.sh` mismatch called out above.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "09b92b5119d61cbc0554ec1f8a17acfba5849e329bcf33c4fbcd32b084eace9b",
+  "lineage": {
+    "issue_number": 3000,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26659472504",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26659472504",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3000"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260529201556_1af9588dcf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3000,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26659472504"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3000",
+  "timestamps": {
+    "created_at": "2026-05-29T20:15:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

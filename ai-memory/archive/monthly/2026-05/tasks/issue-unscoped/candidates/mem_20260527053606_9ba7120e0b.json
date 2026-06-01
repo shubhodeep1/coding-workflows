@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:lines 133-140 (current) and the hunk at 129-140 in LAST RUN DIFF | confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The CI step name \"Integration-ahead-by gate regression tests\" is now accurate for the command executed, but the surrounding history and consensus ledger still carry stale references to a previous rename that temporarily duplicated poller test execution.\n  WHY: No runtime failure \u2013 the tests now execute exactly once under a correctly-named step. The prior editor pass already resolved the misleading-name regression.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: CI step names should accurately describe the tests they execute (best practice throughout repository)\n  expected_change_site: .github/workflows/ci.yml step at lines 129-140\n  confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The step is named \"Integration-ahead-by gate regression tests\" but executes only `tests/test_orchestrate_integration_ahead_by_gate.py`, while the poller regression tests (`tests/test_orchestrate_poll_process.py`, `tests/test_orchestrate_poll_noop_suspicious_recovery.py`) were removed from this step\n- requirement: Automated forward-merge of stable into main after merge conflict on files including .github/workflows/ci.yml, review_autofix.yml, orchestrate_poll_process.sh, test files, README.md, and several scripts.\n  expected_change_site: The residual diff after conflict resolution (LAST RUN DIFF + PR DIFF).\n  confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: LAST RUN DIFF only touches .github/workflows/ci.yml (step-name normalization). The PR DIFF shows only whitespace/blank-line cleanups in review_autofix.yml and orchestrate_poll_process.sh. The substantive merge-resolution work was performed in the earlier `[ai-merge-resolve]` commit (verified via git ancestry of source SHA d4ed47ada2fcd1212bacb7ca765040d713f47965). No remaining task gap exists.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement: CI step names should accurately describe the tests they execute (best practice throughout repository)\n  Expected change site: `.github/workflows/ci.yml` step at lines 129-140\n  Evidence of absence: The step is named \"Integration-ahead-by gate regression tests\" but executes only `tests/test_orchestrate_integration_ahead_by_gate.py`, while the poller regression tests (`tests/test_orchestrate_poll_process.py`, `tests/test_orchestrate_poll_noop_suspicious_recovery.py`) were removed from this step\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: .github/workflows/ci.yml\n  Line or code reference: lines 133-140 (current) and the hunk at 129-140 in LAST RUN DIFF\n  Problem: The CI step name \"Integration-ahead-by gate regression tests\" is now accurate for the command executed, but the surrounding history and consensus ledger still carry stale references to a previous rename that temporarily duplicated poller test execution.\n  Why: No runtime failure \u2013 the tests now execute exactly once under a correctly-named step. The prior editor pass already resolved the misleading-name regression.\n  ISSUE_CONFIDENCE: 3\n- Requirement: Automated forward-merge of stable into main after merge conflict on files including .github/workflows/ci.yml, review_autofix.yml, orchestrate_poll_process.sh, test files, README.md, and several scripts.\n  Expected change site: The residual diff after conflict resolution (LAST RUN DIFF + PR DIFF).\n  Evidence of absence: LAST RUN DIFF only touches .github/workflows/ci.yml (step-name normalization). The PR DIFF shows only whitespace/blank-line cleanups in review_autofix.yml and orchestrate_poll_process.sh. The substantive merge-resolution work was performed in the earlier `[ai-merge-resolve]` commit (verified via git ancestry of source SHA d4ed47ada2fcd1212bacb7ca765040d713f47965). No remaining task gap exists.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "cdd76cc830a237a44d81d82abf132b538858f46d8d4e0056691c6c7b2f8780a8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2972,
+    "run_id": "26492597552",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26492597552",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260527053606_9ba7120e0b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2972,
+    "run_id": "26492597552"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-27T05:36:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

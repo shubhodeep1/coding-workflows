@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for issue #2320\n\nPlanning ref context\n- Commit: `35effffc4d70ceb4f9097edfa256afda3d029d98`\n- Checked-out branch: `main`\n- Integration branch metadata: not present in the planning context, so there is no concrete branch-mismatch signal to act on.\n\nClarification interpretation\n- No clarification questions were asked.\n- The auto-posted `/answer [auto-answered-by-clarify]` means the clarify phase determined the task was already fully specified and ready for planning.\n\n1. Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n2. Functions or modules to implement\n- None.\n- This is a direct content replacement in an existing plain-text fixture/canary file.\n\n3. Data structures affected\n- The only affected artifact is the text payload inside `tests/e2e_smoke_canary.txt`.\n- Target content must be exactly these three logical lines:\n  1. `status: ok`\n  2. `run_id: alt-25568050819`\n  3. `updated-by: ai-pipeline`\n\n4. API or interface changes\n- None.\n- No code paths, exported interfaces, workflow inputs, or schema contracts should change.\n\n5. Potential risks or edge cases\n- The file already exists on the current ref and currently contains a different `run_id`; the implementation should overwrite that value with the exact requested literal, including the `alt-` prefix.\n- Do not add or modify any other files; the issue explicitly constrains the change to `tests/e2e_smoke_canary.txt` only.\n- Preserve exact formatting: no extra blank lines, no extra whitespace, and no accidental content reordering.\n- Use the smallest possible edit path so no unrelated repo files are touched.\n\n6. Testing considerations\n- Verify `git diff --stat` shows only `tests/e2e_smoke_canary.txt` changed.\n- Verify the file content matches the requested three lines exactly after the edit.\n- A simple content check is sufficient; no broader test suite or workflow changes are needed for this task.\n\nAssumptions\n- \u201cExactly these three lines\u201d means the file should contain only those three entries in that order, with no additional content.\n- No additional clarification is needed because the task is fully specified and the clarify phase already confirmed that.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "a73e7a49457c47e294c70bbcd5f860a83867e472beaeb7b9febf37e45c060d4b",
+  "lineage": {
+    "issue_number": 2320,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25568144549",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25568144549",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2320"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260508165615_0272103fc5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2320,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25568144549"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2320",
+  "timestamps": {
+    "created_at": "2026-05-08T16:56:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

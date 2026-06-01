@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:168-171 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: Trailing whitespace appears after the final pipe delimiter in the THINKING_LEVEL_CONFLICT_RESOLVER table row.\n  WHY: Both reviewers reported the same markdown whitespace artifact, which can trigger lint or whitespace checks.\n- tests/test_review_conflict_resolve_retry_prelude_render.py:44-52 | severity=medium | confidence=4\n  flagged_by: [minimax_minimax-m2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The heredoc extraction regex depends on the exact `python3 - > \"${_retry_tmp}\" <<'PY'` launcher syntax.\n  WHY: Both reviewers flagged that a launcher refactor would break the test without exercising the renderer logic.\n- tests/test_review_conflict_resolve_retry_prelude_render.py:109 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: `tempfile.TemporaryDirectory()` can fail in restricted sandboxed environments.\n  WHY: The reviewer said the test may not run in sandboxed CI even though the logic is sound.\n- scripts/review_conflict_resolve.sh:448-516 | severity=low | confidence=2\n  flagged_by: [qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: The `printf -v` call suppresses SC2059 without an adjacent comment explaining why the static format string is safe.\n  WHY: Both reviewers flagged the same maintainability risk around future `%` literals corrupting the retry notice text.\n- scripts/review_conflict_resolve.sh:498-523 | severity=medium | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: The marker regex is limited to space/tab whitespace and line-start markers, so indented or non-ASCII whitespace markers can evade suppression.\n  WHY: All three reviewers identified the same regex brittleness on the violation-strip path.\n- prompts/integration-sync-conflict-resolver-retry-prelude.txt:1-2 | severity=low | confidence=1\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: `{{PREVIOUS_OUTCOME_NOTICE}}` is placed directly after the header, which can create a run-on header/body transition when the notice is empty.\n  WHY: Both reviewers reported the same formatting edge case in the retry prelude prompt.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_review_conflict_resolve_retry_prelude_render.py:44-52 | confidence=4\n  PROBLEM: The test extracts the python3 heredoc body using a regex that assumes the exact launch syntax.\n  WHY: If the shell script's `python3` invocation changes, the extraction will fail and the test will stop validating the renderer logic.\n- tests/test_review_conflict_resolve_retry_prelude_render.py:109 | confidence=2\n  PROBLEM: `tempfile.TemporaryDirectory()` can fail in restricted sandboxed environments.\n  WHY: The test may not run in sandboxed CI or restricted containers even though the underlying logic is sound.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- README.md:168-169\n  PROBLEM: The THINKING_LEVEL_CONFLICT_RESOLVER table row has trailing whitespace after the final pipe delimiter.\n  WHY: This is a markdown whitespace artifact that may trigger lint or whitespace checks.\n- scripts/review_conflict_resolve.sh:498-512\n  PROBLEM: The marker regex requires the opening marker to be at the start of a line, so indented template markers could fail to strip the violations block.\n  WHY: The review called out that an indented `{{#IF_VIOLATIONS}}` marker would not match even though the current template does not use one.\n- prompts/integration-sync-conflict-resolver-retry-prelude.txt:1-2\n  PROBLEM: The template places `{{PREVIOUS_OUTCOME_NOTICE}}` immediately after the header, which can leave the header glued to the body on the empty-notice path.\n  WHY: The review noted there is no blank line between the header and body when the notice is empty, which is a formatting inconsistency.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- README.md:171 | confidence=2\n  PROBLEM: Trailing whitespace appears after the pipe delimiter before the \"Tool call budgets\" header line.\n  WHY: The same README whitespace issue was reported twice and may trigger markdown-lint or whitespace-check CI failures.\n- scripts/review_conflict_resolve.sh:467-475 | confidence=2\n  PROBLEM: The `printf -v` usage is safe with the current static template, but the SC2059 suppression disables format-string warnings entirely for this line.\n  WHY: A future edit that introduces another `%` literal without escaping it could corrupt the retry prompt text.\n- scripts/review_conflict_resolve.sh:498-523 | confidence=3\n  PROBLEM: The marker regexes only tolerate space and tab characters for whitespace flexibility.\n  WHY: Template edits that introduce other whitespace characters could leave the conditional violations body unstripped on timeout/error paths.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/review_conflict_resolve.sh:448-516 | confidence=2\n  PROBLEM: `printf -v _outcome_notice` uses an SC2059-suppressed format string without an adjacent comment explaining the safety invariant.\n  WHY: Future maintenance that adds unescaped `%` literals could silently corrupt the notice text passed to codex exec.\n- prompts/integration-sync-conflict-resolver-retry-prelude.txt:1 | confidence=1\n  PROBLEM: `{{PREVIOUS_OUTCOME_NOTICE}}` substitutes directly after the `===` header without an intervening newline in the template.\n  WHY: The rendered prompt can have a run-on header/body transition on the ran path.\n- tests/test_review_conflict_resolve_retry_prelude_render.py:44-52 | confidence=4\n  PROBLEM: The heredoc extraction regex is tightly coupled to the exact `python3 - > \"${_retry_tmp}\" <<'PY'` launcher syntax.\n  WHY: A launcher refactor would break extraction and stop the test from exercising `_build_retry_prompt` regressions.\n- scripts/review_conflict_resolve.sh:498-523 | confidence=2\n  PROBLEM: The marker regex only tolerates ASCII space and tab whitespace around the `IF_VIOLATIONS` markers.\n  WHY: Indented markers, BOMs, or other unicode whitespace would prevent suppression and could leave a misleading violations body in the prompt.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "dbbf2edb3fa53134435cefdd0c9aebd4d40f261534d6e10169d91659b1df57da",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2449,
+    "run_id": "25634889470",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25634889470",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510174835_2376ae0f04",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2449,
+    "run_id": "25634889470"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 5 multi-reviewer finding(s) across 6 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-10T17:48:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

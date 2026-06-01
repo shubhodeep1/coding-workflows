@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_review_pipeline_contract.py:1311-1315 | confidence=[4]\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The test scans the entire model catalog for any slug sharing a provider prefix, so new same-family catalog entries that are not live reviewers will spuriously fail the contract test.\n  WHY: pytest will fail on future catalog additions that match a provider prefix but are not live reviewers, breaking CI for unrelated catalog updates.\n- tests/test_review_autofix_review_pipeline_contract.py:1324-1348 | confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The test derives \"mapped\" status by scanning the entire model catalog for any slug sharing a provider prefix, then requires an explicit chain entry for every live REVIEWER_MODELS entry that has at least one alternate.\n  WHY: Adding a new same-provider slug to the catalog, even if it is not used by reviewers, can fail CI even though the runtime failback logic only consults declared slugs for models that actually appear in REVIEWER_MODELS.\n- tests/test_review_autofix_review_pipeline_contract.py:165-178 | confidence=[3]\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: _catalog_declared_model_slugs() does not filter catalog entries by supported_in_api, priority, or other usability flags, so unusable declared models can be treated as mapped candidates.\n  WHY: A declared-but-unusable catalog entry could incorrectly flip a live reviewer into the \"mapped\" list, causing the test to demand a failback chain that the production reviewer_failback_target_for_model() path never exercises.\n- scripts/reviewer_failback_chains.json:entire file | confidence=[3]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The JSON file documents the mapped families but gives no schema, comments, or explicit list of intentionally unmapped families.\n  WHY: Future maintainers extending the reviewer roster or catalog may leave a same-family reviewer unmapped and only discover it via REVIEWER_FAILBACK_UNMAPPED and the test, because the configuration file itself gives no guidance.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_review_autofix_review_pipeline_contract.py:1311-1315 | confidence=4\n  PROBLEM: The test scans the entire model catalog for any slug sharing a provider prefix, so new same-family catalog entries that are not live reviewers will spuriously fail the contract test.\n  WHY: pytest will fail on any future catalog addition that matches a provider prefix but is not a live reviewer, breaking CI for unrelated catalog updates.\n- tests/test_review_autofix_review_pipeline_contract.py:165-178 | confidence=3\n  PROBLEM: The helper only extracts declared slugs without filtering catalog entries by supported_in_api or priority, so unusable declared models can be treated as mapped candidates.\n  WHY: A catalog entry that is declared but not supported_in_api could incorrectly drive a \"mapped\" classification, causing the test to demand a failback chain that the runtime never attempts.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_review_autofix_review_pipeline_contract.py:1324-1348 | confidence=4\n  PROBLEM: The test derives \"mapped\" status by scanning the entire model catalog for any slug sharing a provider prefix, then requires an explicit chain entry for every live REVIEWER_MODELS entry that has at least one alternate.\n  WHY: Adding a new same-provider slug to the catalog, even if it is priority=0, deprecated, or not used by reviewers, can fail CI even though the runtime failback logic only consults declared slugs for models that actually appear in REVIEWER_MODELS.\n- tests/test_review_autofix_review_pipeline_contract.py:165-178 | confidence=3\n  PROBLEM: Helper only checks for a top-level \"models\" key (or falls back to the whole payload) and collects every slug; it performs no filtering on support_in_api, priority, reviewer-specific flags, apply_patch_tool_type, or support_verbosity.\n  WHY: A catalog entry that is declared but never used by reviewers, or unusable, can incorrectly flip a live reviewer into the \"mapped\" list, forcing the test to demand a chain entry that the production reviewer_failback_target_for_model() path will never exercise.\n- scripts/reviewer_failback_chains.json:entire file | confidence=3\n  PROBLEM: The JSON now includes the three mapped families but contains no schema, comments, or explicit list of intentionally-unmapped families.\n  WHY: Future maintainers extending the reviewer roster or catalog may add a new live reviewer with catalog alternates yet leave it unmapped, causing the REVIEWER_FAILBACK_UNMAPPED path instead of a same-family retry.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "ff77d337fc6f14040e2f06b68e138cd653af1987cf4148d406035b8fe527ce5e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3011,
+    "run_id": "26675909966",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26675909966",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260530054815_4f39f5a0b2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3011,
+    "run_id": "26675909966"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-30T05:48:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:~3260-3269 | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The refresh-files allowlist now includes `scripts/targeted_file_context.py`, which changes the maintained contract without the corresponding consumer cleanup or documentation update.\n  WHY: x-ai warns that repos applying the existing allowlist cleanup rules may now leave the new file behind or delete it incorrectly on later maint runs.\n- scripts/orchestrate_poll_process.sh:3314 | confidence=4\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: `git merge-base` can return multiple hashes, leaving `merge_base` multi-line and breaking the downstream tree-path lookup.\n  WHY: qwen says criss-cross merge histories can make `git rev-parse \"${merge_base}:${f}\"` fail-open into an empty `base_hash`, and suggests selecting a single base with `head -n 1`.\n- scripts/orchestrate_poll_process.sh:3314-3359 | confidence=5\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: An empty `base_hash` is reported to make the divergence guard skip refreshing files added only on main/default_branch.\n  WHY: mistralai and x-ai flag a false-skip for main-only resolver files, while deepseek and minimax explicitly validated the empty-hash path as correct and covered by tests.\n- scripts/orchestrate_poll_process.sh:3351-3355 | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: Declaring `_int_short` and `_base_short` inside the divergence-check conditional makes the skip-path logging/flow fragile and harder to maintain.\n  WHY: x-ai warns this can become an unbound-variable hazard under `set -u` if the structure changes, while moonshot flags the readability/maintenance issue and recommends hoisting the locals.\n- tests/test_orchestrate_poll_process.py:8081\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The helper\u2019s exact-string search for the function header is brittle to indentation changes.\n  WHY: qwen says `line == open_marker` will raise `StopIteration` if the shell function definition is ever indented.\n- tests/test_orchestrate_poll_process.py:~8088-8115\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The brace-depth based `_extract_refresh_function_body` helper is brittle to changes in the shell function structure.\n  WHY: moonshot says nested function definitions or grouped commands could break the extractor and suggests a more robust method like `declare -f`.\n- tests/test_orchestrate_poll_process.py:8117,8325 | confidence=4\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The tests inspect the final repository state without asserting the generated runner script succeeded first.\n  WHY: qwen says a shell failure could be masked if later `git show` assertions happen to pass anyway.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/orchestrate_poll_process.sh:3350-3359 | confidence=4\n  PROBLEM: The comparison treats an empty `base_hash` as divergence, so files added only on main can be skipped instead of installed.\n  WHY: This breaks the deadlock-breaker path for new resolver files and prevents main-side tooling additions from propagating to integration branches.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_orchestrate_poll_process.py:~8088-8115\n  PROBLEM: The brace-depth based `_extract_refresh_function_body` helper is brittle to changes in the shell function structure.\n  WHY: moonshot says nested function definitions or grouped commands could break the extractor and suggests a more robust method like `declare -f`.\n- scripts/orchestrate_poll_process.sh:3353-3355\n  PROBLEM: The `local _int_short` / `_base_short` declarations sit inside the conditional that emits the skip log.\n  WHY: moonshot says moving them with the other locals would improve readability and avoid future confusion.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_orchestrate_poll_process.py:8117,8325 | confidence=4\n  PROBLEM: The tests do not assert the generated runner script succeeded before checking the final repository state.\n  WHY: If the runner script fails early, later `git show` assertions can still pass and hide the real shell error.\n- scripts/orchestrate_poll_process.sh:3314 | confidence=4\n  PROBLEM: `git merge-base` can return multiple hashes, leaving `merge_base` multi-line and breaking the downstream tree-path lookup.\n  WHY: qwen says criss-cross merge histories can make `git rev-parse \"${merge_base}:${f}\"` fail-open into an empty `base_hash`, and suggests selecting a single base with `head -n 1`.\n- tests/test_orchestrate_poll_process.py:8081\n  PROBLEM: The helper\u2019s exact-string search for the function header is brittle to indentation changes.\n  WHY: qwen says `line == open_marker` will raise `StopIteration` if the shell function definition is ever indented.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/orchestrate_poll_process.sh:~3314, ~3341-3343, ~3349 | confidence=5\n  PROBLEM: The divergence guard can treat main-only resolver files as divergent and skip refreshing them.\n  WHY: x-ai reports that the empty-hash comparison breaks the deadlock-breaker path for files added only on the main/default branch, while other reviewers said the current behavior is intentional.\n- scripts/orchestrate_poll_process.sh:~3351-3354 | confidence=4\n  PROBLEM: Declaring `_int_short` and `_base_short` inside the conditional makes the skip-path logging/flow fragile and confusing.\n  WHY: x-ai warns this can become an unbound-variable hazard under `set -u` if the structure changes.\n- scripts/orchestrate_poll_process.sh:~3260-3269 | confidence=4\n  PROBLEM: The refresh-files allowlist now includes `scripts/targeted_file_context.py`, which changes the maintained contract without the corresponding consumer cleanup or documentation update.\n  WHY: x-ai warns that repos applying the existing allowlist cleanup rules may now leave the new file behind or delete it incorrectly on later maint runs.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "77e70434d056f0f6dc641813dcfa1ff95335b798e8eb13f48b0de25a58fc1c80",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2760,
+    "run_id": "26044573064",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26044573064",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260518170114_43109b65e0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2760,
+    "run_id": "26044573064"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 7 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-18T17:01:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

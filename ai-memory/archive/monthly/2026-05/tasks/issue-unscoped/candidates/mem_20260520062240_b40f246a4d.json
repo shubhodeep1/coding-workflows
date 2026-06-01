@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/post_review_comment.sh:Lines 254-290 (is_safe_split function) | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The opening sentinel `=== CONSENSUS FINDINGS ===` is not a safe-split point, while `=== CONSENSUS TASK GAPS ===` (opening) IS a safe-split point.\n  WHY: This asymmetry contradicts the stated intent in the code comment and could surprise future maintainers, even though it is not a functional bug today.\n- prompts/review-reviewer-checklist.txt:Original 7 lens headings + \"Under each non-empty heading from the first seven lenses...\" | confidence=[3]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The checklist contract relies on the exact original seven headings in order, so adding or reordering headings could silently break the pinned contract test.\n  WHY: The current change is backward-compatible because the original seven headings and six ISSUE REPORT FORMAT literals are preserved, but the contract is fragile if future edits alter their order.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/post_review_comment.sh:Lines 254-290 (is_safe_split function) | confidence=[2]\n  PROBLEM: The opening sentinel `=== CONSENSUS FINDINGS ===` is not a safe-split point, while `=== CONSENSUS TASK GAPS ===` (opening) IS a safe-split point.\n  WHY: This asymmetry means a chunk that overflows exactly at the CONSENSUS FINDINGS opening sentinel will carry the sentinel into the previous chunk without splitting, whereas the TASK GAPS opening sentinel would force a new chunk.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- prompts/review-reviewer-checklist.txt:Original 7 lens headings + \"Under each non-empty heading from the first seven lenses...\" | confidence=[3]\n  PROBLEM: The checklist contract test pins the exact 7 headings in order, so adding a 9th lens or reordering headings could silently break the test.\n  WHY: The current change preserves the original 7 headings and 6 ISSUE REPORT FORMAT literals, but a future change that only updates the new lens could invalidate the contract.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "2b9fb8600e0a6760cc2d1d9f06305cda3e74e7b47a3eb7cb8743f312eeeaed03",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26144179074",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26144179074",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260520062240_b40f246a4d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26144179074"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-20T06:22:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

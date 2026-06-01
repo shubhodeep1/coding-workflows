@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/mcp_handshake_probe.py:4-5 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: This Serena helper script was included in the diff with its executable bit removed.\n  WHY: Most reviewers describe this as unrelated scope creep or a reversion to base state, while x-ai_grok-4_1-fast says direct invocation can fail with Permission denied.\n- scripts/serena_stats_emit.py:6-7 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: This Serena helper script was included in the diff with its executable bit removed.\n  WHY: Most reviewers describe this as unrelated scope creep or a reversion to base state, while x-ai_grok-4_1-fast says direct invocation can fail with Permission denied.\n- scripts/setup_serena.sh:8-9 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast]\n  PROBLEM: This Serena helper script was included in the diff with its executable bit removed.\n  WHY: Most reviewers describe this as unrelated scope creep or a reversion to base state, while x-ai_grok-4_1-fast says direct invocation can fail with Permission denied.\n- tests/test_implement_post_codex_recovery.py:724-736 | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The test simulates empty SERENA_PROJECT_BOOTSTRAP_HASH=\"\" skipping drop_bootstrap_serena conditional.\n  WHY: This leaves no coverage for bootstrap-Serena deletion projection; if SERENA_PROJECT_BOOTSTRAP_HASH matches .serena/project.yml and .serena untracked, preflight may over-delete vs commit path (mismatch in virtual cleanup).\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh:4-12 | confidence=5\n  PROBLEM: Three Serena helper scripts had their executable bit cleared in this autofix run.\n  WHY: These files are not in the PR scope, and the autofix editor claims they were \"reverted\" from a prior unrelated change.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh:4-12 | severity=low | confidence=5\n  PROBLEM: These three files have mode-only changes (executable bit removed) that are unrelated to issue #2581.\n  WHY: The reviewer says they were bundled by a prior autofix pass as scope expansion, not introduced by this autofix run.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh:4-12\n  PROBLEM: Mode changes from 100755 to 100644 (executable bit removed).\n  WHY: These are unrelated to issue #2581 and were bundled in a prior autofix run; the current last run correctly reverted these changes per the PR comments.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/mcp_handshake_probe.py, scripts/serena_stats_emit.py, scripts/setup_serena.sh:4-12 | confidence=5\n  PROBLEM: Three Serena helper scripts were included in this autofix commit with only executable-bit-only changes from 100755 to 100644.\n  WHY: These changes are entirely unrelated to issue #2581 and violate scope discipline.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/setup_serena.sh:8-9 | confidence=5\n  PROBLEM: shell script staged without executable bit\n  WHY: bash scripts/setup_serena.sh fails with \"Permission denied\" if invoked directly (e.g. from workflow steps like those in validate.yml or memory workflows)\n- scripts/mcp_handshake_probe.py:4-5 | confidence=5\n  PROBLEM: Python probe script (likely shebang /usr/bin/env python3) staged without executable bit\n  WHY: direct invocation during Serena bootstrap (setup_serena.sh line invoking probe) fails with \"Permission denied\"\n- scripts/serena_stats_emit.py:6-7 | confidence=4\n  PROBLEM: Python stats emitter staged without executable bit\n  WHY: direct invocation during workflow log analysis or validation rollups fails with \"Permission denied\"\n- tests/test_implement_post_codex_recovery.py:724-736 | confidence=3\n  PROBLEM: test simulates empty SERENA_PROJECT_BOOTSTRAP_HASH=\"\" skipping drop_bootstrap_serena conditional\n  WHY: no coverage for bootstrap-Serena deletion projection; if SERENA_PROJECT_BOOTSTRAP_HASH matches .serena/project.yml and .serena untracked, preflight may over-delete vs commit path (mismatch in virtual cleanup)\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "c080651d1086fa400f73e4c1457eca8b3be054ca54a545d8021a4c139f10fb1d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2587,
+    "run_id": "25856885764",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25856885764",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260514113554_d57a2cbdc9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2587,
+    "run_id": "25856885764"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 4 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-14T11:35:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

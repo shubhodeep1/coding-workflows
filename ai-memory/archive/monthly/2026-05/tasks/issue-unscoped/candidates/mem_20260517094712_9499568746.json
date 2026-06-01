@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_synthesise_smoke.sh:227-313 | severity=high | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5]\n  PROBLEM: The line-by-line shell validator does not normalize backslash continuations, so `coproc` can be split across lines and evade validation or depend on parser error handling.\n  WHY: Both reviewers identified the same parser limitation; deepseek_deepseek-v4-pro says current behavior fails closed via `shlex` raising `ValueError` and only misclassifies the rejection reason, while moonshotai_kimi-k2_5 says the split can bypass the dangerous-token check.\n- scripts/review_synthesise_smoke.sh:228-229 | severity=high | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: Multi-line backtick command substitution can evade detection because the checks run per line.\n  WHY: A backtick opener and closer on different lines are not seen as one complete construct by the line-by-line scanner.\n- scripts/review_rb_judge.sh:948, 1308-1309 | severity=medium | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The extra `sed 's/\\\\n/\\n/g'` transform can corrupt literal `\\n` text in the extracted issue body.\n  WHY: `jq -r` already decodes JSON newline escapes, so the additional substitution can turn legitimate backslash-n text into actual newlines.\n- scripts/review_reject_verify.sh:170-260, 220-260 | severity=medium | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: Deleted-file evidence lookup can miss when the consolidator cites a path variant such as a `b/` prefix.\n  WHY: `parse_patch` keys deletions by the old path, but `verify_already_fixed()` looks up the evidence path verbatim, so a mismatch reports `does-not-support` for a genuinely deleted file.\n- scripts/validate_process.sh:1285-1414 | severity=medium | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: When `_safe_target` rejects the manifest path, wrapper scripts are still copied even though the manifest JSON is skipped.\n  WHY: That leaves `validation/tests/` with incomplete materialization, so downstream tooling loses the manifest-to-wrapper traceability the function is supposed to preserve.\n- scripts/review_run_judge_interim.sh:265-340 | severity=low | confidence=1\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The cleanup trap can leave behind a stale temp directory if `rmdir` cannot remove the root, though the guards suppress any failure.\n  WHY: The source explicitly says no runtime failure is expected and the leftover directory is benign because runner temp space is ephemeral.\n- scripts/review_rb_judge.sh:1268-1294 | severity=low | confidence=1\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The worktree cleanup trap may run after a partially created worktree, but `git worktree remove --force` should still clean it up.\n  WHY: The source says the `|| true` guard makes this fail-safe and no practical issue was identified.\n- .github/workflows/implement.yml:337-413 | severity=low | confidence=1\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The \"Resolve checkout ref\" step name is misleading because it always returns the default integration ref and never resolves a baseline branch.\n  WHY: The source says the separation is correct and tested, but the step can still block for up to 14 seconds on API retries.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_synthesise_smoke.sh:227-313 | severity=high | confidence=3\n  PROBLEM: The line-by-line validator does not normalize backslash continuations, so `coproc` split across lines can be mishandled by validation.\n  WHY: The review notes `shlex` may raise on trailing backslashes now, but the check depends on parser behavior instead of explicit continuation handling.\n- scripts/review_rb_judge.sh:948, 1308-1309 | severity=medium | confidence=3\n  PROBLEM: `sed 's/\\\\n/\\n/g'` can corrupt literal `\\n` text in both the new-issue body and follow-up body extraction paths.\n  WHY: `jq -r` already decodes JSON newlines, so the extra substitution can turn legitimate backslash-n text into actual newlines.\n- scripts/review_reject_verify.sh:170-260, 220-260 | severity=medium | confidence=2\n  PROBLEM: Deleted-file evidence lookup can miss when the consolidator cites a path variant such as a `b/` prefix.\n  WHY: `parse_patch` keys deletions by the old path, but `verify_already_fixed()` looks up the evidence path verbatim, so a mismatch reports `does-not-support` for a genuinely deleted file.\n- scripts/validate_process.sh:1285-1414 | severity=medium | confidence=2\n  PROBLEM: When `_safe_target` rejects the manifest path, the function still copies wrapper scripts but skips the manifest JSON.\n  WHY: The result is an incomplete `validation/tests/` materialization that breaks traceability from the wrappers back to the originating findings.\n- scripts/review_run_judge_interim.sh:265-340 | severity=low | confidence=1\n  PROBLEM: The cleanup trap can leave the temp root behind in some cases, although the guards prevent a real failure.\n  WHY: The review explicitly says this is benign and the stale directory is expected to disappear when runner temp space is recycled.\n- scripts/review_rb_judge.sh:1268-1294 | severity=low | confidence=1\n  PROBLEM: The baseline worktree cleanup path may encounter a partially created worktree, but the force-remove trap should still clean it up.\n  WHY: The source says the `|| true` guard makes the trap safe and no practical issue was identified.\n- .github/workflows/implement.yml:337-413 | severity=low | confidence=1\n  PROBLEM: The \"Resolve checkout ref\" step name is misleading because it always returns the default integration ref.\n  WHY: The source says the separation is correct and tested, but the retry path can still block for up to 14 seconds on GitHub API errors.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_synthesise_smoke.sh:245-251 | severity=high | confidence=3\n  PROBLEM: The line-by-line parser can miss `coproc` when it is split across lines with a trailing backslash continuation.\n  WHY: The escaped token is not normalized before the dangerous-token check, so the validator can be bypassed by a backslash-continued `coproc` command.\n- scripts/review_synthesise_smoke.sh:228-229 | severity=high | confidence=2\n  PROBLEM: Multi-line backtick command substitution can evade detection because the checks are scoped to individual lines.\n  WHY: A backtick opener and closer on separate lines are not recognized as a complete dangerous construct by the per-line parser.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===",
+  "fingerprint": "671614144df8fb9edda2af4dffb1d7c0b84886cab11e531e8bb424dddede4ce3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2697,
+    "run_id": "25986904692",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25986904692",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517094712_9499568746",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2697,
+    "run_id": "25986904692"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 8 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-17T09:47:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_resolve.sh:~418 | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The comment says `Not yet observed enough to warrant a tailored hint; the standard reflexion is used.` but the code at lines 457-458 actually generates a tailored `*** PREVIOUS ATTEMPT EXITED NON-ZERO \u2014 read this FIRST ***` notice for the `error` outcome.\n  WHY: The comment is stale and contradicts the implemented behavior, so a future reader could be misled about whether a tailored hint exists.\n- scripts/review_conflict_resolve.sh:633-673 | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The timeout wrapper can misclassify a hung child that is SIGKILLed after SIGTERM as `error` instead of `timeout`.\n  WHY: That sends the retry down the wrong notice path and can weaken the guidance for the next attempt.\n- prompts/integration-sync-conflict-resolver-retry-prelude.txt:1 | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: `{{PREVIOUS_OUTCOME_NOTICE}}` is substituted directly after the header, so the template relies on the notice always including a leading newline.\n  WHY: If future notice text lacks that newline, the `***` text can glue to the header and hurt readability.\n- scripts/review_conflict_resolve.sh:591-602\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: `CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS` lacks integer validation.\n  WHY: A malformed env value can break timeout handling or later arithmetic and leave the retry path in a bad state.\n- scripts/review_conflict_resolve.sh:633\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The fail-open truncation hides filesystem or I/O errors when clearing violation files.\n  WHY: If truncation fails, stale violation data can leak into the next retry while the prompt claims the lists are empty.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_conflict_resolve.sh:~418 | confidence=3\n  PROBLEM: The comment says `Not yet observed enough to warrant a tailored hint; the standard reflexion is used.` but the code at lines 457-458 actually generates a tailored `*** PREVIOUS ATTEMPT EXITED NON-ZERO \u2014 read this FIRST ***` notice for the `error` outcome.\n  WHY: The comment is stale and contradicts the implemented behavior, so a future reader could be misled about whether a tailored hint exists.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/review_conflict_resolve.sh:633-673 | confidence=2\n  PROBLEM: The timeout wrapper can misclassify a hung child that is SIGKILLed after SIGTERM as `error` instead of `timeout`.\n  WHY: That sends the retry down the wrong notice path and can weaken the guidance for the next attempt.\n- prompts/integration-sync-conflict-resolver-retry-prelude.txt:1 | confidence=3\n  PROBLEM: `{{PREVIOUS_OUTCOME_NOTICE}}` is substituted directly after the header, so the template relies on the notice always including a leading newline.\n  WHY: If future notice text lacks that newline, the `***` text can glue to the header and hurt readability.\n- scripts/review_conflict_resolve.sh:591-602\n  PROBLEM: `CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS` lacks integer validation.\n  WHY: A malformed env value can break timeout handling or later arithmetic and leave the retry path in a bad state.\n- scripts/review_conflict_resolve.sh:633\n  PROBLEM: The fail-open truncation hides filesystem or I/O errors when clearing violation files.\n  WHY: If truncation fails, stale violation data can leak into the next retry while the prompt claims the lists are empty.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "9f3660121f16ca335a668da3482fb039f27438478510bd8bb691d175b1815b08",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2449,
+    "run_id": "25630994302",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25630994302",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510144025_7f8027fa98",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2449,
+    "run_id": "25630994302"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-10T14:40:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

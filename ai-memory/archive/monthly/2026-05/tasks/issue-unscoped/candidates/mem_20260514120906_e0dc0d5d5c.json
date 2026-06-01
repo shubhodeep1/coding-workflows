@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml:2058-2601 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, x-ai_grok-4_1-fast]\n  PROBLEM: `git cat-file -e HEAD:.github/workflows` can skip the restore/reset blocks when HEAD lacks a `.github/workflows` tree.\n  WHY: Both reviewers report the same HEAD-absent edge case at the preflight and protect steps; deepseek calls it theoretical/not actionable, while x-ai says it leaks workflow files into staging/commit.\n- tests/test_implement_post_codex_recovery.py:846-881 | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, x-ai_grok-4_1-fast]\n  PROBLEM: `test_protect_workflow_files_restores_deleted_workflow_directory` only covers deleting a tracked `.github/workflows` directory from the worktree and does not exercise the HEAD-absent case.\n  WHY: Both reviewers identify the same coverage gap; deepseek says it is non-actionable, while x-ai says it masks the leak into commit.\n- .github/workflows/implement.yml:~2062-~2129 | confidence=1\n  flagged_by: [deepseek_deepseek-v4-pro, x-ai_grok-4_1-fast]\n  PROBLEM: `git reset -q HEAD -- .github/workflows` on the temp index may not recurse into subdirs if `.github` exists but `workflows` was deleted.\n  WHY: Both reviewers raised this concern, but deepseek and qwen reject it as a misunderstanding of git reset pathspec behavior while x-ai reports it with low confidence.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/implement.yml:2061 and 2601 | confidence=2\n  PROBLEM: `git cat-file -e HEAD:.github/workflows` fails when HEAD has no `.github/workflows` tree, skipping the restore/clean block and letting unintended workflow commits through.\n  WHY: The reviewer verified the behavior but judged it practically impossible and not actionable because repositories using these workflows already have `.github/workflows` in HEAD.\n- tests/test_implement_post_codex_recovery.py:846-881 | confidence=2\n  PROBLEM: `test_protect_workflow_files_restores_deleted_workflow_directory` only covers the case where `.github/workflows` exists in HEAD and is deleted from the worktree, not the case where HEAD never had it.\n  WHY: The reviewer says the test covers the confirmed regression path but not the synthetic HEAD-absent path, which they judge non-actionable.\n- .github/workflows/implement.yml:line ~2062\n  PROBLEM: `git reset -q HEAD -- .github/workflows` on the temp index does not recurse into subdirs if `.github` exists but `workflows` was deleted.\n  WHY: The reviewer says this claim is incorrect because `git reset` with a directory pathspec resets all matching index entries and the temp index is seeded from HEAD.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/implement.yml:lines 2058 and 2598 | confidence=5\n  PROBLEM: The `git cat-file -e HEAD:.github/workflows` check false-negatives when HEAD lacks a `.github/workflows` tree object, skipping the `git reset`/`git restore` blocks entirely.\n  WHY: The reviewer says this would let Codex-added or -modified workflow files leak into staging/commit when `ALLOW_WORKFLOW_EDITS=false`.\n- tests/test_implement_post_codex_recovery.py:846-881 | confidence=5\n  PROBLEM: The regression test only covers deleting an existing tracked `.github/workflows` dir from the worktree and does not exercise the HEAD-lacking case.\n  WHY: The reviewer says the test passes despite protect/preflight skipping discard on valid empty-HEAD repos, masking the leak into commit.\n- .github/workflows/implement.yml:preflight guard ~2129 | confidence=1\n  PROBLEM: `git reset -q HEAD -- .github/workflows 2>/dev/null || true` on the preflight temp index may not recurse into subdirs if `.github` exists but `workflows` was deleted.\n  WHY: The reviewer frames this as a possible temp-index recursion issue, but says it has no impact because staged workflow deletions are still correctly reset/removed from the temp index.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "09b86f176c1f4e3adf68d5d20b9049609e4a98939f4f45289611d77bb451d978",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2587,
+    "run_id": "25856876392",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25856876392",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260514120906_e0dc0d5d5c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2587,
+    "run_id": "25856876392"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer finding(s) across 3 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-14T12:09:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

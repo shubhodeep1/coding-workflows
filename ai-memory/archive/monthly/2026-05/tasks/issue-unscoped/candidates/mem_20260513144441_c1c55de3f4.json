@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/forward-merge-stable-to-main.yml:267-283 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The fallback PR body continuation text is indented by 10 spaces in both merge-strategy-warning insertions, making the rendered PR body inconsistently indented.\n  WHY: The reviewer observed the banner at column 0 with the rest of the message indented, unlike the original formatting.\n- .github/workflows/promote-main-to-stable.yml:110-127 | confidence=3\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The ahead-count diagnostic can be misleading when the branches have unrelated histories.\n  WHY: The reviewer noted `git merge-base` fails for unrelated histories and the later `rev-list --count origin/main..HEAD` may then report an inaccurate ahead count.\n- .github/workflows/forward-merge-stable-to-main.yml:244-289 | confidence=2\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The multi-line PR body construction can render broken markdown if unexpected input reaches the interpolated values.\n  WHY: The reviewer said the body is built via an unquoted here-string expansion and malformed inputs could garble the caution banner or PR description rendering.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/forward-merge-stable-to-main.yml (lines 267-269 and 281-283) | severity=low | confidence=4\n  PROBLEM: The fallback PR body continuation lines are indented by 10 spaces in both merge-strategy-warning insertions, making the rendered PR body inconsistently indented.\n  WHY: The reviewer observed the banner at column 0 while the subsequent text is indented, unlike the original formatting.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/promote-main-to-stable.yml (Line: 110-127 (validation shell block)) | confidence=3\n  PROBLEM: The ahead-count diagnostic can be misleading when `git merge-base` reports unrelated histories.\n  WHY: The reviewer said `git merge-base` exits 1 on unrelated histories, and the later `rev-list --count origin/main..HEAD` may then report an inaccurate ahead count for diverged branches.\n- .github/workflows/forward-merge-stable-to-main.yml (Lines: 244-289 (fallback PR body construction)) | confidence=2\n  PROBLEM: The multi-line PR body assignment can produce broken markdown if unexpected newline-containing input reaches the interpolated values.\n  WHY: The reviewer said the body is built via unquoted here-string expansion and that malformed input could garble the caution banner or shell expansion.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "b919f4a4caf66d0c33602891726a892f3bc227895bf823326ec0747f19f120c0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2568,
+    "run_id": "25805360210",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25805360210",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260513144441_c1c55de3f4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2568,
+    "run_id": "25805360210"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-13T14:44:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

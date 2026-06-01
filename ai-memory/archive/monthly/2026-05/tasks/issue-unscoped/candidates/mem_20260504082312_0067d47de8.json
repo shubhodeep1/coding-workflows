@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:4 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The file contains an extraneous fourth comment line, so it has 4 lines instead of the required exactly 3 lines.\n  WHY: The task explicitly requires exactly three lines and forbids comments or extra content; all reviewers agree the added line will cause validation to fail.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:4 | severity=medium | confidence=5\n  PROBLEM: The file contains 4 lines. The linked issue #2069 explicitly requires exactly three lines: `status: ok`, `run_id: 25308071039`, and `updated-by: ai-pipeline`.\n  WHY: Any consumer or validation step that expects the canary file to be exactly 3 lines will fail. The `wc -l` output confirms 4 lines. The file content does not match the task specification.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:4 | severity=medium | confidence=5\n  PROBLEM: The file contains 4 lines instead of the required exactly 3 lines. Line 4 is a comment (`# E2E_EDITOR_BAIT_25308071039: this line should be removed by the editor (smoke gate)`) that violates the task requirements.\n  WHY: Issue #2069 explicitly requires:\n- \"exactly these three lines (no more, no less)\"\n- \"Do **not** add comments, headers, or any extra content\"\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:4 | severity=medium | confidence=5\n  PROBLEM: Extraneous comment line violates the \"exactly 3 lines\" requirement\n  WHY: The E2E smoke test expects the file content to match the precise specification in issue #2069. The task explicitly requires \"exactly these three lines (no more, no less)\" and states \"Do not add comments, headers, or any extra content.\" The presence of the 4th line (`# E2E_EDITOR_BAIT_25308071039: this line should be removed by the editor (smoke gate)`) will cause the smoke test validation to fail because the file content does not match the expected three-line format.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:4 | severity=medium | confidence=5\n  PROBLEM: The file contains 4 lines instead of the required exactly 3 lines. The implementation added an extraneous comment line that violates the explicit task constraints.\n  WHY: Issue #2069 mandates the file be \"exactly these three lines (no more, no less)\" and explicitly states \"Do not add comments, headers, or any extra content.\" The smoke test validation will fail because the file content does not match the canonical 3-line specification.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/e2e_smoke_canary.txt:4 | severity=medium | confidence=5\n  PROBLEM: File contains 4 lines including an extraneous comment \"# E2E_EDITOR_BAIT_25308071039: this line should be removed by the editor (smoke gate)\"\n  WHY: Task requires exactly 3 lines with no more, no less, and explicitly forbids comments, headers, or extra content; validation will mismatch expecting precise 3-line content\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:4 | severity=medium | confidence=5\n  PROBLEM: The file contains 4 lines but the task explicitly requires exactly 3 lines with no comments, headers, or extra content.\n  WHY: The file will fail validation against the expected exact content. Issue #2069 states: \"The file... should be exactly these three lines (no more, no less)\" and \"Do not add comments, headers, or any extra content.\" The added line `# E2E_EDITOR_BAIT_25308071039: this line should be removed by the editor (smoke gate)` violates this constraint.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "e08ff187806eba17519682b66cbc6fce08a6f037a9f97daefebb6797c4cba7ab",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2076,
+    "run_id": "25308285783",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25308285783",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260504082312_0067d47de8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2076,
+    "run_id": "25308285783"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-04T08:23:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

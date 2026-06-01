@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_pipeline_integration.py:745 | confidence=[2]\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The test accesses `creates[0][creates[0].index(\"--body\") + 1]` without checking that `--body` exists or that it has a following value.\n  WHY: If the mock `gh issue create` invocation changes, `list.index()` can raise `ValueError` and the `+ 1` access can raise `IndexError`.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_review_pipeline_integration.py:745 | confidence=[2]\n  PROBLEM: The test accesses `creates[0][creates[0].index(\"--body\") + 1]` without validating that `--body` exists in the argument list or that it has a subsequent value.\n  WHY: If the mock `gh issue create` behavior changes or the `review_rb_judge.sh` script modifies its invocation pattern, this can raise `ValueError` or `IndexError`.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "15675fb06b0f467f1091d1d2c95276b3912e7a19d1d6adce83cfc537ae082c5d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2720,
+    "run_id": "26008673346",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26008673346",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260518014026_5c349f6517",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2720,
+    "run_id": "26008673346"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-18T01:40:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

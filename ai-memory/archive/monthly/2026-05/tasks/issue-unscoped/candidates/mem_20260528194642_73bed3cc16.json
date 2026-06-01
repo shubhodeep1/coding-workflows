@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:5128-5132 | confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: A stray blank line was inserted immediately before the jq parsing of the PR body.\n  WHY: No runtime failure \u2014 it is cosmetic only; however, repeated blank-line churn increases diff noise and can mask real logic changes in future merges.\n- scripts/orchestrate_poll_process.sh:3142,3322 | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Two blank lines were inserted after _branch_head_sha() and after reconcile_integration_backpressure_label().\n  WHY: Pure whitespace; no behavioral change, but it conflicts with the repo's general preference for minimal diffs on forward-merge reconciliation PRs.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Forward-merge stable into main - resolve conflicts from automated merge failure\n  expected_change_site: Files in conflict list (ci.yml, mark-stable.yml, review_autofix.yml, test-and-mark-stable.yml, README.md, scripts/*.py, tests/*.py)\n  confidence=5\n  flagged_by: [minimax_minimax-m2_5]\n  EVIDENCE: Prior run summaries confirm `git merge-base --is-ancestor d4ed47ada2fcd1212bacb7ca765040d713f47965 HEAD` returned success; merge commit 4288ae6 already carried the substantive conflict resolution\n- requirement: Automated forward-merge of stable into main failed due to merge conflicts in the listed files (.github/workflows/ci.yml, mark-stable.yml, review_autofix.yml, test-and-mark-stable.yml, README.md, several scripts and test files). Resolve the conflicts and merge this PR so the bug fixes on stable are also present on main.\n  expected_change_site: The substantive conflict-resolution hunks for all files listed in the PR description (especially the workflow, orchestrator_lib.py, review scripts, and test files) plus the CAUTION banner and merge-strategy instructions.\n  confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: LAST RUN DIFF and the current pr_changed_files.txt / last_run_changed_files.txt contain only three added blank lines in two files. git merge-base confirms the source SHA is already an ancestor, and the earlier [ai-merge-resolve] commit carried the real work; the residual diff is pure whitespace churn from repeated autofix passes.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- Requirement: Forward-merge stable into main - resolve conflicts from automated merge failure\n  Expected change site: Files in conflict list (ci.yml, mark-stable.yml, review_autofix.yml, test-and-mark-stable.yml, README.md, scripts/*.py, tests/*.py)\n  Evidence of absence: Prior run summaries confirm `git merge-base --is-ancestor d4ed47ada2fcd1212bacb7ca765040d713f47965 HEAD` returned success; merge commit 4288ae6 already carried the substantive conflict resolution\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/review_autofix.yml:5128-5132 | confidence=3\n  PROBLEM: A stray blank line was inserted immediately before the jq parsing of the PR body.\n  WHY: No runtime failure \u2014 it is cosmetic only. However, repeated blank-line churn increases diff noise and can mask real logic changes in future merges.\n- scripts/orchestrate_poll_process.sh:3142,3322 | confidence=4\n  PROBLEM: Two blank lines were inserted after _branch_head_sha() and after reconcile_integration_backpressure_label().\n  WHY: Pure whitespace; no behavioral change. However, it conflicts with the repo's general preference for minimal diffs on forward-merge reconciliation PRs.\n- Requirement: Automated forward-merge of stable into main failed due to merge conflicts in the listed files (.github/workflows/ci.yml, mark-stable.yml, review_autofix.yml, test-and-mark-stable.yml, README.md, several scripts and test files). Resolve the conflicts and merge this PR so the bug fixes on stable are also present on main.\n  Expected change site: The substantive conflict-resolution hunks for all files listed in the PR description (especially the workflow, orchestrator_lib.py, review scripts, and test files) plus the CAUTION banner and merge-strategy instructions.\n  Evidence of absence: LAST RUN DIFF and the current pr_changed_files.txt / last_run_changed_files.txt contain only three added blank lines in two files. git merge-base confirms the source SHA is already an ancestor, and the earlier [ai-merge-resolve] commit carried the real work; the residual diff is pure whitespace churn from repeated autofix passes.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "c6027fb4d513299c8a70058473cb0bef576e73bfc19f393ce0e8f6a1a9b7b9ed",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2972,
+    "run_id": "26596927665",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26596927665",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260528194642_73bed3cc16",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2972,
+    "run_id": "26596927665"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-28T19:46:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

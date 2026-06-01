@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/implement_diagnose_post_codex_failure.sh:268-272 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: `jq -er '.body // \"\"'` writes a newline for missing/null cached issue bodies, so the empty-body check never triggers the GitHub API fallback.\n  WHY: A 1-byte `ISSUE_BODY_FILE` makes `[ ! -s ... ]` false, leaving downstream issue parsing on empty content instead of the real body; reviewers characterized the impact as high to critical.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/implement_diagnose_post_codex_failure.sh:268-269 | confidence=5\n  PROBLEM: `jq -er '.body // \"\"'` writes a literal newline byte when the cached issue metadata has no body field or a null body, so the fallback path never runs.\n  WHY: The file is never zero-byte, `[ ! -s \"${ISSUE_BODY_FILE}\" ]` does not trigger the GitHub API fallback, and downstream tracking-issue extraction can use the wrong issue body.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/implement_diagnose_post_codex_failure.sh:268-272 | confidence=5\n  PROBLEM: `jq -er '.body // \"\"' \"${ISSUE_META_FILE}\" > \"${ISSUE_BODY_FILE}\" 2>/dev/null || : > \"${ISSUE_BODY_FILE}\"` leaves `ISSUE_BODY_FILE` non-empty for missing/null bodies, so the API fallback is skipped. (2 related items)\n  WHY: Cached issues without a body silently proceed with empty content instead of fetching from the API, leaving downstream processing with incorrect empty data.\n\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/implement_diagnose_post_codex_failure.sh:269 | severity=critical | confidence=5\n  PROBLEM: The jq expression `.body // \"\"` always exits 0 when the body key is absent or null, which causes `ISSUE_BODY_FILE` to contain a newline and prevents the GitHub API fallback from fetching the real issue body.\n  WHY: Missing-body cached metadata leaves downstream issue-body extraction and diagnoser logic operating on an empty newline body instead of the actual GitHub content.\n\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/implement_diagnose_post_codex_failure.sh:268-269 | confidence=5\n  PROBLEM: `jq -er '.body // \"\"' \"${ISSUE_META_FILE}\" > \"${ISSUE_BODY_FILE}\" 2>/dev/null || : > \"${ISSUE_BODY_FILE}\"` always writes a newline to `ISSUE_BODY_FILE` even when the cached JSON body is null or absent.\n  WHY: The file becomes 1 byte long, `[ ! -s \"${ISSUE_BODY_FILE}\" ]` evaluates false, and the GitHub API fallback never runs, so downstream issue-body extraction uses empty content.\n\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/implement_diagnose_post_codex_failure.sh:268-272 | severity=high | confidence=5\n  PROBLEM: `jq -er '.body // \"\"'` always exits with code 0 and writes a newline to `${ISSUE_BODY_FILE}`, so the GitHub API fallback is skipped.\n  WHY: Cached metadata without a body leaves the diagnoser working from empty or wrong issue-body state, which breaks downstream parsing and comment handling.\n\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "c4042619fbf1d7848091fa05bc13e3d1107e004b0586c565e7f61a5d6c626b72",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2971,
+    "run_id": "26461839280",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26461839280",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260526165607_a18ab775b7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2971,
+    "run_id": "26461839280"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-26T16:56:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

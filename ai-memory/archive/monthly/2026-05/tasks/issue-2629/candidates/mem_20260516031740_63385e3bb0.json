@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation Plan\n\nPlanning ref\n- HEAD: `82fd9392aa0239a991dde93a45b28e8a10f52051`\n- Ref: `orchestrator/project-2627`\n- Integration metadata: `orchestrator/project-2627` (matches; no blocker)\n\nClarification mapping\n- No Q1/Q2 batch existed. `/answer [auto-answered-by-orchestrator]` only confirmed continuation, so there is no unresolved clarification input.\n\nRepresentative patterns to follow\n- `tests/test_review_rb_judge_label_propagation.py` for extracting/exercising the real `close_and_reissue)` case arm in a temp harness.\n- `scripts/orchestrate_poll_process.sh` (`_refresh_integration_resolver_tooling`) for non-destructive `git worktree` add/remove + cleanup.\n\nFiles likely to change\n- `prompts/mode-judge-review-blocked.txt`\n- `scripts/review_rb_judge.sh`\n- `.github/workflows/implement.yml`\n- `tests/test_review_rb_judge_reissue_baseline.py`\n- Likely minimal plumbing:\n  - `.github/workflows/review_autofix.yml` if `REISSUE_PRESERVE_BASELINE_ENABLED` must be repo-configurable\n  - `.github/workflows/ci.yml` if the new test is not written in the repo\u2019s existing direct-`python3` style\n- No change needed to `.github/workflows/internal-implement.yml`; it only delegates to `implement.yml`.\n\nFunctions / modules to implement\n1. **Prompt contract**\n   - Add additive `reissue_mode: \"spot-fix\" | \"redo\"` next to `action`.\n   - Add additive `remaining_issues[]` sibling to `remaining_issues_summary`, with `{file, line_start, line_end, symptom}`.\n   - Add guidance to choose `spot-fix` only for localized remaining defects; default missing/invalid data to `redo`.\n\n2. **`scripts/review_rb_judge.sh`**\n   - Extend `close_and_reissue)` to parse `reissue_mode` and validate `remaining_issues[].file`.\n   - Gate spot-fix with `REISSUE_PRESERVE_BASELINE_ENABLED`, default `false`.\n   - For valid `spot-fix`: capture the PR head SHA, create a throwaway worktree, create/push a deterministic baseline branch from that SHA, then add `prior_pr_baseline_branch:` plus deduped `files_touched:` to the replacement issue body.\n   - On any bad input or git failure, fall back to the current redo flow and still create the replacement issue.\n   - Preserve the existing reissue footer and do not clobber the script\u2019s existing EXIT trap.\n\n3. **`.github/workflows/implement.yml`**\n   - Keep `PR_BASE_BRANCH` on the resolved integration/default branch.\n   - Add checkout-ref selection so a valid `prior_pr_baseline_branch:` in the issue body becomes the Codex starting point.\n   - If absent/invalid/unfetchable, fail open to the current integration/default checkout behavior.\n\nData structures affected\n- Judge JSON:\n  - `reissue_mode`\n  - `remaining_issues[]`\n- Replacement issue body:\n  - optional `prior_pr_baseline_branch: <branch>`\n  - optional scoped `files_touched:`\n- Env/repo var:\n  - `REISSUE_PRESERVE_BASELINE_ENABLED=false`\n\nAPI / interface changes\n- Additive only; no existing field removal/rename.\n- `close_and_reissue` issue bodies gain optional baseline metadata only when the spot-fix path succeeds.\n- Implement workflow behavior changes only when that field is present.\n\nRisks / edge cases\n- `scripts/review_rb_judge.sh` already has an EXIT trap; naive trap replacement will break cleanup.\n- Branch naming is unspecified in the issue; use a safe deterministic bot-owned name and validate it.\n- `tests/test_review_rb_judge_label_propagation.py` regex-extracts the `close_and_reissue)` arm, so large refactors there may break existing tests.\n- Scope tension: making `REISSUE_PRESERVE_BASELINE_ENABLED` truly operator-settable likely requires a tiny `review_autofix.yml` env plumb beyond the three core logic files.\n- Conflict: the repo\u2019s CI runs explicit `python3 tests/...py` files and does not install pytest globally, so the requested \u201cdedicated pytest file\u201d needs either a direct-run `main()` fallback or a small CI step change.\n\nTesting considerations\n- New dedicated Phase E test file covering:\n  - spot-fix happy path\n  - redo path\n  - fail-open fallback path\n  - caller checkout unchanged\n  - temp worktree cleanup\n- Add a small static assertion for implement checkout-ref preference if not covered in that new file.\n\nScope notes\n- `internal-implement.yml` does not need a parallel edit because it only `uses` `implement.yml@main`.\n- README and `agents.md` are explicitly deferred; avoid documentation-only churn here.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "f4f88f21ff4ce8b5ff47d9e557c6c563eb3972c4e1974838c068aaebd70ce9e8",
+  "lineage": {
+    "issue_number": 2629,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25951227632",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25951227632",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2629"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260516031740_63385e3bb0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2629,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25951227632"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2629",
+  "timestamps": {
+    "created_at": "2026-05-16T03:17:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

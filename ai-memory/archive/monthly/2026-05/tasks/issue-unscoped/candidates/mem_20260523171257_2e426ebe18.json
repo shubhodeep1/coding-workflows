@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/memory_helpers.sh:150-280 | severity=medium | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The new `memory_validation_history_*`, `memory_operator_bypass_audit_*`, and `memory_revalidate_events_*` shell helpers are defined but not exported, so downstream callers that expect exported shell functions cannot invoke them.\n  WHY: One reviewer says the repo intentionally uses sourced shell helpers without `export -f`, so the impact is disputed, but the reported behavior would make external consumers unable to call the new wrappers.\n- scripts/ai_memory_lib.py:941-1067 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m2_5, mistralai_mistral-small-2603, moonshotai_kimi-k2_5]\n  PROBLEM: Each append helper normalizes the payload twice, repeating the normalize/sort/validate work on every append.\n  WHY: Multiple reviewers report the second normalize/sort pass as redundant; one reviewer argues the pre-append normalize is necessary, so the inefficiency is disputed but still repeatedly reported.\n- scripts/ai_memory_lib.py:817-855 | severity=low | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: `_stable_sort_entries_by_field` is applied during payload normalization on every write, so append operations pay repeated O(N log N) sorting cost as histories grow.\n  WHY: The helper preserves equal-timestamp order correctly, but both reviewers who flagged it treated the repeated sort as avoidable overhead.\n- scripts/ai_memory_lib.py:618-626 | severity=medium | confidence=4\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: Malformed ISO datetimes in `_normalize_datetime_utc` are reported inconsistently, with reviewers saying they can surface as raw exceptions instead of a structured `MemoryValidationError`.\n  WHY: One reviewer says the helper wraps `ValueError`, but others still reported malformed timestamps escaping the intended fail-open validation path.\n- scripts/ai_memory.py:863-874,975-991,1110-1125,1230-1245,1350-1365 | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The append commands catch validation, JSON, I/O, `ValueError`, and `MemoryGitError` together and always emit generic fail-open warnings, so callers cannot distinguish the failure class and append-side responses lack the `warning_code` metadata used on get-side fallbacks.\n  WHY: This collapses distinct causes into one path and hides whether the failure was bad entry data, corruption, or a git problem.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/ai_memory_lib.py:954-960, 1001-1007, 1053-1059 | severity=low | confidence=4\n  PROBLEM: Each append function normalizes the payload twice, which repeats the normalize/sort/validate work on every append.\n  WHY: The first normalization is reported as redundant because the corresponding `get_*` functions already return normalized payloads.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/memory_helpers.sh:147-284 | severity=medium | confidence=5\n  PROBLEM: The new memory helpers are defined with `memory_*_get` and `memory_*_append` functions but are not exported, making them unavailable to downstream callers that rely on exported shell functions.\n  WHY: The reviewer reports that sourcing callers cannot invoke the new helpers unless they are exported.\n- scripts/ai_memory_lib.py:618-626 | severity=medium | confidence=4\n  PROBLEM: Malformed datetime values passed into entry normalizers can bubble raw Python exceptions instead of a structured `MemoryValidationError`.\n  WHY: The reviewer says the code assumes ISO-formatted datetime strings and allows malformed values to escape the expected fail-open path.\n- scripts/ai_memory_lib.py:981-1363 | severity=low | confidence=4\n  PROBLEM: The append helpers redundantly call normalizers and validators twice per append, causing extra work as the histories grow.\n  WHY: Calling `get_*()` or default creation, then normalizing again after appending the new entry, repeats the same payload work without changing the result.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/ai_memory_lib.py:1014,1031,1049,1066,1102,1119 | severity=low | confidence=4\n  PROBLEM: Redundant double normalization of payload in append functions.\n  WHY: The payload is normalized, a new entry is appended, then the payload is normalized again on every append.\n- scripts/ai_memory_lib.py:817-855 | severity=low | confidence=3\n  PROBLEM: O(N log N) stable sort performed on every append operation.\n  WHY: As history entries accumulate, each append re-sorts the full payload, which becomes increasingly expensive.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/ai_memory_lib.py:817-855 | severity=low | confidence=4\n  PROBLEM: The stable-sort helper is applied again on every append even though the per-entry normalizers already produce a correctly ordered list.\n  WHY: This adds unnecessary O(N log N) work on every append and duplicates the ordering pass.\n- scripts/ai_memory_lib.py:618-626 | severity=medium | confidence=4\n  PROBLEM: A malformed ISO datetime can raise a raw `ValueError` before `MemoryValidationError` is raised, and the caller only sees a coarse append fallback warning.\n  WHY: The reviewer reports that callers lose actionable diagnostics because the warning path does not preserve the underlying datetime failure cleanly.\n- scripts/ai_memory.py:863-874,975-991,1110-1125,1230-1245,1350-1365 | severity=low | confidence=3\n  PROBLEM: The append command `except` blocks are too broad and flatten git, validation, JSON, and I/O failures into the same generic warning path.\n  WHY: Downstream orchestration cannot reliably distinguish a temporary memory-branch problem from bad entry data without parsing the free-form warning string.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "551973401987600b9d8c9ffd593ebda6705f09204d875098654b30d97ee59ac6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2940,
+    "run_id": "26338393846",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26338393846",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260523171257_2e426ebe18",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2940,
+    "run_id": "26338393846"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-23T17:12:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

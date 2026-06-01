@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml:~line 425-429 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: ISSUE_BODY_FILE is read from os.environ in the baseline-branch step without being explicitly declared in that step's env block.\n  WHY: The step depends on implicit GITHUB_ENV propagation from the prior step, which works but makes the dependency easy to shadow later.\n- .github/workflows/implement.yml:433-439 | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: Path.read_text() in the fallback handler can raise UnicodeDecodeError, which is not caught by except OSError.\n  WHY: A non-UTF-8 cached ISSUE_BODY_FILE would crash the step before it can emit the fallback notice, although the case is unlikely and the workflow still fails open.\n- .github/workflows/implement.yml:436-439 | severity=low | confidence=1\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5]\n  PROBLEM: The fallback notice is emitted with print() instead of the existing notice() helper.\n  WHY: This is only a consistency/hardening concern because the printed ::notice:: command still works as a GitHub Actions workflow notice.\n- .github/workflows/implement.yml:~line 453-475 | severity=medium | confidence=3\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The metadata-footer regex captures everything to the end of the issue body, so any trailing signature or comment after the footer causes baseline resolution to fail.\n  WHY: Because the parsed block includes all post-footer text, the trusted resolver rejects it and the workflow falls back to the integration/default branch.\n- .github/workflows/implement.yml:~line 497-508 | severity=medium | confidence=3\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The metadata-line parser only accepts non-blank lines that start with \"- \", so any formatting variation in the footer is treated as metadata-missing.\n  WHY: A future producer that emits a differently formatted key line will cause trusted baseline resolution to fail closed and fall back.\n- .github/workflows/implement.yml:~line 698 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m2_5, qwen_qwen3_6-plus]\n  PROBLEM: The checkout_ref step still writes dead outputs such as source=integration/default and ref=....\n  WHY: No downstream step reads checkout_ref.outputs.source or checkout_ref.outputs.ref, so the writes are vestigial and only add maintenance noise.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/implement.yml:line 439 (Resolve trusted prior PR baseline branch step) | severity=low | confidence=1\n  PROBLEM: The unreadable-ISSUE_BODY_FILE fallback prints the notice inline instead of using the notice() helper.\n  WHY: This makes notice emission inconsistent with the helper defined above, but the printed ::notice:: command still works.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/implement.yml:436-439 | severity=low | confidence=1\n  PROBLEM: The fallback notice is emitted with print() instead of the GitHub Actions notice format used elsewhere.\n  WHY: It is only a cosmetic consistency issue because the ::notice:: command is still valid on stdout.\n- .github/workflows/implement.yml:~line 698 | severity=low | confidence=4\n  PROBLEM: The checkout_ref step still writes dead outputs such as source=integration/default.\n  WHY: No downstream step consumes those outputs anymore, so they are vestigial and harmless at runtime.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/implement.yml:~line 425-429 | severity=low | confidence=2\n  PROBLEM: ISSUE_BODY_FILE is read from os.environ in the baseline-branch step without being explicitly declared in that step's env block.\n  WHY: The step relies on implicit GITHUB_ENV propagation from the prior step, which works but makes the dependency easy to shadow later.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- .github/workflows/implement.yml:~line 453-475 | severity=medium | confidence=3\n  PROBLEM: The metadata-footer regex captures everything to the end of the issue body, so any trailing signature or comment after the footer causes baseline resolution to fail.\n  WHY: Because the parsed block includes all post-footer text, the trusted resolver rejects it and the workflow falls back to the integration/default branch.\n- .github/workflows/implement.yml:~line 497-508 | severity=medium | confidence=3\n  PROBLEM: The metadata-line parser only accepts non-blank lines that start with \"- \", so any formatting variation in the footer is treated as metadata-missing.\n  WHY: A future producer that emits a differently formatted key line will cause trusted baseline resolution to fail closed and fall back.\n- .github/workflows/implement.yml:~line 698 | severity=low | confidence=4\n  PROBLEM: The checkout_ref step still writes dead outputs such as source=integration/default and ref=....\n  WHY: No downstream step reads those outputs anymore, so they are vestigial and only add maintenance noise.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/implement.yml:433-439 | severity=low | confidence=2\n  PROBLEM: Path.read_text() in the fallback handler can raise UnicodeDecodeError, which is not caught by except OSError.\n  WHY: A non-UTF-8 cached ISSUE_BODY_FILE would crash the step before it can emit the fallback notice, although the case is unlikely and the workflow still fails open.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "ec8324cc40b452b547f62b89330b12ad640660bacb02d8ed27cc3f4e06bd16fa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2658,
+    "run_id": "25963123128",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25963123128",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260516135723_7818df4fbc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2658,
+    "run_id": "25963123128"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer finding(s) across 6 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-16T13:57:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

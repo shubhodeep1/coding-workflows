@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- prompts/review-consolidator.txt: approximately lines 51-66 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The added UNTRUSTED_DATA transport-prefix documentation pushed `prompts/review-consolidator.txt` past the 150-line budget.\n  WHY: CI lint rejects `prompts/review-consolidator.txt = 153 lines (cap 150)`, so every run fails until the file is slimmed back under budget.\n- scripts/review_consolidate.sh: ~386 | severity=high | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: `cmd_rc` is captured from the negated `timeout` result instead of the actual consolidator exit code, so failures can be treated as success.\n  WHY: A non-zero consolidator run leaves `cmd_rc=0`, which bypasses the fail-open path and can let stale or partial output pass as successful.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR title states \"Implement the AI code review learnings plan and archive it only after a full completion audit\" \u2014 the original task required shipping all ten Cloudflare-derived phases (A-J) and then archiving the plan under docs/completed/ only after the tracking-issue task list was fully checked.\n  expected_change_site: docs/completed/ai-code-review-learnings-plan.md (the archived plan), plus the shipped artifacts in workflow files, scripts/, agents.md, and README.md\n  confidence=5\n  flagged_by: [minimax_minimax-m2_5]\n  EVIDENCE: The archived plan in docs/completed/ai-code-review-learnings-plan.md now contains a completed closeout table (lines 17-64), a live evidence snapshot referencing the tracking issue #2974 and integration PR #2981, and all phase rows are marked Complete/Complete with drift. No remaining blockers are listed. The lint_plan_archival_completeness.py gate passes on real tracker state. All requirements have been delivered.\n- requirement: The review-consolidator prompt must stay within its 150-line budget (per `.github/workflows/ci.yml:462-493` and the explicit 150-line entry in the `CAPS` array).\n  expected_change_site: prompts/review-consolidator.txt (specifically the `=== BEGIN PRIOR ROUND DECISIONS ===` transport-fencing addition inserted by the last autofix)\n  confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The LAST RUN DIFF added three lines (the `UNTRUSTED_DATA:` transport note plus re-review rules) pushing the file from 150 to 153 lines. The CI \u201clint\u201d check-run failed with `::error::Prompt length budget exceeded: prompts/review-consolidator.txt = 153 lines (cap 150)`. The PR_CHECK_RUNS_CONTEXT confirms `failed_count: 1` on the lint job.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- prompts/review-consolidator.txt: approximately lines 52-54 | severity=critical | confidence=5\n  PROBLEM: The last autofix run added 3 lines of UNTRUSTED_DATA transport-prefix documentation at the PRIOR ROUND DECISIONS section, pushing the file from 150 to 153 lines and exceeding the per-prompt line budget.\n  WHY: The CI lint step checks every prompt file against its cap and emits an error for any prompt that exceeds its budget, which blocks CI and merge.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- prompts/review-consolidator.txt: lines 54-66 | severity=critical | confidence=5\n  PROBLEM: The file exceeds the 150-line budget cap enforced by CI lint.\n  WHY: The CI \"lint\" job fails with `::error::Prompt length budget exceeded: prompts/review-consolidator.txt = 153 lines (cap 150)`, blocking every CI run and preventing merges.\n- Requirement: The PR title states \"Implement the AI code review learnings plan and archive it only after a full completion audit\" \u2014 the original task required shipping all ten Cloudflare-derived phases (A-J) and then archiving the plan under docs/completed/ only after the tracking-issue task list was fully checked.\n  Expected change site: docs/completed/ai-code-review-learnings-plan.md (the archived plan), plus the shipped artifacts in workflow files, scripts/, agents.md, and README.md\n  Evidence of absence: The archived plan in docs/completed/ai-code-review-learnings-plan.md now contains a completed closeout table (lines 17-64), a live evidence snapshot referencing the tracking issue #2974 and integration PR #2981, and all phase rows are marked Complete/Complete with drift. No remaining blockers are listed. The lint_plan_archival_completeness.py gate passes on real tracker state. All requirements have been delivered.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- prompts/review-consolidator.txt: Lines 51-53 | severity=critical | confidence=5\n  PROBLEM: The file now has 153 lines, exceeding the 150-line cap enforced by CI lint.\n  WHY: CI checks fail with `Prompt length budget exceeded: prompts/review-consolidator.txt = 153 lines (cap 150)`, blocking all CI runs.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/review_consolidate.sh: ~386 | severity=high | confidence=5\n  PROBLEM: `cmd_rc` is set to the status of the negated `timeout` instead of the actual exit code of the Codex/heartbeat invocation.\n  WHY: A non-zero consolidator run leaves `cmd_rc=0`, so the fail-open path is never taken and stale/partial output is treated as success.\n- Requirement: The review-consolidator prompt must stay within its 150-line budget (per `.github/workflows/ci.yml:462-493` and the explicit 150-line entry in the `CAPS` array).\n  Expected change site: prompts/review-consolidator.txt (specifically the `=== BEGIN PRIOR ROUND DECISIONS ===` transport-fencing addition inserted by the last autofix).\n  Evidence of absence: The LAST RUN DIFF added three lines (the `UNTRUSTED_DATA:` transport note plus re-review rules) pushing the file from 150 to 153 lines. The CI \u201clint\u201d check-run failed with `::error::Prompt length budget exceeded: prompts/review-consolidator.txt = 153 lines (cap 150)`. The PR_CHECK_RUNS_CONTEXT confirms `failed_count: 1` on the lint job.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "c15cf35b2aee912546b87b8a55ba110a5daf695918e49eb787c04d676022dc2c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2981,
+    "run_id": "26686361372",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26686361372",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260530145830_e715465de2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2981,
+    "run_id": "26686361372"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-30T14:58:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

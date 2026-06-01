@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":2584,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/2584\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/2588\",\"pr_number\":2588,\"branch\":\"ai/issue-2584\",\"run_id\":\"25854817949\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/25854817949\",\"changed_files\":[\"scripts/mcp_handshake_probe.py\",\"scripts/serena_stats_emit.py\",\"scripts/setup_serena.sh\",\"tests/fixtures/selftest/node-hardhat-solidity/.ai/validate.yml\",\"tests/fixtures/selftest/node-hardhat-solidity/package-lock.json\",\"tests/fixtures/selftest/node-hardhat-solidity/package.json\",\"tests/fixtures/selftest/node-hardhat-solidity/tsconfig.json\",\"tests/fixtures/validation_harness/python_mongo_flask/tests/20_import_audit.sh\",\"tests/fixtures/validation_harness/python_mongo_flask/tests/_lib/graceful_shutdown.py\",\"tests/test_family_python_mongo_flask.py\",\"workflow-templates/validation-harness/python-mongo-flask/tests/20_import_audit.sh.j2\",\"workflow-templates/validation-harness/python-mongo-flask/tests/_lib/graceful_shutdown.py.j2\"]}",
+  "fingerprint": "056feac08103cf048e0bc8d61bdd16cd47dddc1cbaed3b932a74bf95e20af56b",
+  "lineage": {
+    "issue_number": 2584,
+    "parent_ids": [],
+    "pr_number": 2588,
+    "run_id": "25854817949",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25854817949",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/2588"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260514103742_d8b815be51",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2584,
+    "level": "run",
+    "pr_number": 2588,
+    "run_id": "25854817949"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #2584: https://github.com/shubhodeep1/coding-workflows/pull/2588",
+  "timestamps": {
+    "created_at": "2026-05-14T10:37:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

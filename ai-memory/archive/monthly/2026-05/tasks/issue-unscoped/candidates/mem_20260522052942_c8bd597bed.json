@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Overwrite the entire file tests/e2e_smoke_canary.txt so it contains exactly these three lines (status: ok; run_id: 26268664618; updated-by: ai-pipeline) with a trailing newline after the final line per POSIX file convention. Only modify this one file; do not touch any other file, add comments, headers, or extra content.\n  expected_change_site: tests/e2e_smoke_canary.txt (full-file replacement)\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: LAST_RUN_DIFF shows complete removal of prior bait/corruption lines and insertion of the exact three-line payload; current file (verified via cat -e) matches the literal spec with POSIX trailing newline and no extras. Prior editor summary, consensus ledger, and all reviewer outputs confirm the overwrite.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: Overwrite the entire file tests/e2e_smoke_canary.txt so it contains exactly these three lines (status: ok; run_id: 26268664618; updated-by: ai-pipeline) with a trailing newline after the final line per POSIX file convention. Only modify this one file; do not touch any other file, add comments, headers, or extra content.\n  Expected change site: tests/e2e_smoke_canary.txt (full-file replacement)\n  Evidence of absence: None \u2014 LAST_RUN_DIFF shows complete removal of prior bait/corruption lines and insertion of the exact three-line payload; current file (verified via cat -e) matches the literal spec with POSIX trailing newline and no extras. Prior editor summary, consensus ledger, and all reviewer outputs confirm the overwrite.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "e36a90b50d1844338f294f2de8e518fe6b9fcd1b1c217b0a1b9dc00e326fb3fc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2888,
+    "run_id": "26269682086",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26269682086",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260522052942_c8bd597bed",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2888,
+    "run_id": "26269682086"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-22T05:29:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

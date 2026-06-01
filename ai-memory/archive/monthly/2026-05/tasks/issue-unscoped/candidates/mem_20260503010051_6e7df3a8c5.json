@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:Line 4 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: The file contains an extraneous fourth comment line instead of exactly the three required lines.\n  WHY: The task explicitly requires `tests/e2e_smoke_canary.txt` to contain only the three specified lines with no comments or extra content, so the current content will fail exact-match smoke validation.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/e2e_smoke_canary.txt:Line 4 | severity=high | confidence=5\n  PROBLEM: The file contains a fourth line (a comment) when the task specification explicitly requires exactly three lines with no comments, headers, or extra content.\n  WHY: Any downstream smoke validation that performs an exact content check will detect the extra fourth line and fail.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  PROBLEM: The 4th line (comment) violates the explicit task requirement.\n  WHY: The task explicitly requires exactly three lines with no extra content, and the extra comment line will cause downstream smoke test validation to fail.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  PROBLEM: The file contains a 4th line with a comment that was not part of the task requirements.\n  WHY: The issue explicitly states the file must contain exactly these three lines, so the smoke test validation will fail because the content does not match the expected exact three-line format.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/e2e_smoke_canary.txt:4 | severity=high | confidence=5\n  PROBLEM: The PR adds the file with four lines instead of the required three.\n  WHY: The issue specification requires exactly three lines and explicitly forbids comments or extra content, so downstream exact-match validation will fail.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/e2e_smoke_canary.txt:Line 4 | severity=high | confidence=5\n  PROBLEM: The file contains four lines instead of exactly three as required by issue #2005.\n  WHY: Downstream smoke validation expects an exact match to the three specified lines with no additional content, so the extra comment line will cause a content mismatch failure.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- tests/e2e_smoke_canary.txt:Line 4 | severity=high | confidence=5\n  PROBLEM: The file contains four lines instead of exactly three lines as required by issue #2005.\n  WHY: Any smoke test validation that checks for an exact match against the three-line format will fail because the file must contain only the three specified lines and nothing else.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "f6278eb90a9768a42ecf79df68963d0e7215b55d8107e1a2fd2600b2cb5b0884",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2010,
+    "run_id": "25266046688",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25266046688",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260503010051_6e7df3a8c5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2010,
+    "run_id": "25266046688"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 1 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-03T01:00:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

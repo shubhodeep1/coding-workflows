@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/mark-stable.yml:212 | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Unconditional `pip install` of three packages on every invocation of the `validate-scripts` job.\n  WHY: Every CI run incurs repeated network lookup / index resolution / wheel download; the same block also exists at `.github/workflows/test-and-mark-stable.yml:3272`, and the reviewer called it a performance concern.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/mark-stable.yml:212 | confidence=4\n  PROBLEM: Unconditional `pip install` of three packages on every invocation of the `validate-scripts` job.\n  WHY: Every CI run incurs repeated network lookup / index resolution / wheel download; identical block also exists at `.github/workflows/test-and-mark-stable.yml:3272`.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "a68183f241f2968f921f8259c05a8029a3097d005930c16779503c31622a499a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3002,
+    "run_id": "26675403727",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26675403727",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260530052001_6b3a34fc86",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3002,
+    "run_id": "26675403727"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-30T05:20:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

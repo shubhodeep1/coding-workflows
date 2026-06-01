@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_stall_recovery_pr_lookup.py:555-561 | confidence=[3]\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The stub only simulates a single canned `gh pr create` failure message, so the recovery tests are coupled to one failure shape.\n  WHY: The helper hardcodes a default stderr string and forced non-zero exit, leaving other real `gh pr create` failure modes untested.\n- tests/test_stall_recovery_pr_lookup.py:835-903 | confidence=[3]\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The four new recovery tests each use a single-event timeline, so they do not exercise behavior when multiple cross-referenced open PRs are present.\n  WHY: The current cases validate only isolated happy-path and rejection scenarios, leaving first-match behavior on multi-PR timelines untested.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- tests/test_stall_recovery_pr_lookup.py:555-561 | confidence=[3]\n  PROBLEM: The stub only simulates a single canned `gh pr create` failure message, so the recovery tests are coupled to one failure shape.\n  WHY: The helper hardcodes a default stderr string and forced non-zero exit, leaving other real `gh pr create` failure modes untested.\n- tests/test_stall_recovery_pr_lookup.py:835-903 | confidence=[3]\n  PROBLEM: The four new recovery tests each use a single-event timeline, so they do not exercise behavior when multiple cross-referenced open PRs are present.\n  WHY: The current cases validate only isolated happy-path and rejection scenarios, leaving first-match behavior on multi-PR timelines untested.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "a42a310b5f33910732f387f5bb2e828a0ac6c5c70ab9c19329891f850da2ec16",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2470,
+    "run_id": "25641900135",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25641900135",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510231503_33d6cdf78f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2470,
+    "run_id": "25641900135"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-10T23:15:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

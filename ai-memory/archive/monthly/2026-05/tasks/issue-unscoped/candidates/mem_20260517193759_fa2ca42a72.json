@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_apply_fixes.sh:277-285 | severity=medium | confidence=3\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: an unhandled mktemp/cat/mv failure in prepare_sticky_finding_priors can abort the whole script under set -e instead of failing open.\n  WHY: The function is meant to degrade gracefully on advisory-cache failures, but the merge block lacks error handling and can terminate review_apply_fixes.sh.\n- scripts/review_annotate_sticky.sh:39 | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5]\n  PROBLEM: STICKY_LINE_BUCKET=0 is accepted and effectively reduces matching to exact overlap only, which is a surprising edge case.\n  WHY: The regex permits 0, but the downstream matching logic treats it as a zero-distance threshold rather than disabling sticky matching.\n- scripts/review_annotate_sticky.sh:Python heredoc (inline, ~lines 68-465 of the script body); e.g. `int(row['file'])` is not actually present but the pattern of redundant casts appears throughout \u2014 `str(best['file'])`, `str(finding['symptom'])`, `str(best['issue_id'])`, `int(best['line_start'])` in the aggregation loop (around lines 350-380), and `str(row['identity_key'])`, `int(entry['current_line'])` in the final matches serialization (around lines 385-420). | severity=low | confidence=1\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: redundant str()/int() casts on already-typed values obscure intent.\n  WHY: The casts are no-ops on values already normalized by parsing, so the only effect is maintenance burden.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/review_annotate_sticky.sh:Python heredoc (inline, ~lines 68-465 of the script body); e.g. `int(row['file'])` is not actually present but the pattern of redundant casts appears throughout \u2014 `str(best['file'])`, `str(finding['symptom'])`, `str(best['issue_id'])`, `int(best['line_start'])` in the aggregation loop (around lines 350-380), and `str(row['identity_key'])`, `int(entry['current_line'])` in the final matches serialization (around lines 385-420). | confidence=1\n  PROBLEM: Redundant str()/int() calls on already-typed values add no safety and obscure intent.\n  WHY: It does not \u2014 these are zero-cost no-ops on already-typed values. Maintenance burden only.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- scripts/review_apply_fixes.sh:line 277 \u2014 `sticky_tmp=\"$(mktemp)\"` | confidence=3\n  PROBLEM: The fail-open prepare_sticky_finding_priors merge block can still abort the whole script if mktemp, cat, or mv fails under set -e.\n  WHY: This function is intended to degrade gracefully on advisory-cache failures, but the merge block lacks error handling and can terminate review_apply_fixes.sh instead of continuing.\n- scripts/review_annotate_sticky.sh:line 39 \u2014 `STICKY_LINE_BUCKET` validation `^[0-9]+$` | confidence=2\n  PROBLEM: STICKY_LINE_BUCKET=0 is accepted and silently changes matching behavior to exact overlap only.\n  WHY: The regex permits 0, but the downstream matching logic treats it as a zero-distance threshold rather than disabling sticky matching.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "8e9d7ca1800587508d8fbce95e392436e6191e0098d3f5cc987c65c27928a5fd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2718,
+    "run_id": "26000263251",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26000263251",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260517193759_fa2ca42a72",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2718,
+    "run_id": "26000263251"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 finding(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-05-17T19:37:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

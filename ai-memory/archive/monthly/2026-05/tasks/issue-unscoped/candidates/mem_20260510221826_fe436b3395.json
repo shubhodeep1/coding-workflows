@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml:131-162 | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: Site 1's safety check uses bare `gh api --paginate` with only `|| true`, so transient API failures can be treated as \"no linked PR\" and allow duplicate-PR creation attempts.\n  WHY: Both reviewers reported the lack of retry/backoff on the timeline lookup, and the later `gh pr create --head` fallback only helps after the race has already occurred.\n- .github/workflows/implement.yml:2861-2868 | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: If `scripts/gh_helpers.sh` cannot be sourced, `gh_retry` degrades to a single-shot pass-through in the recovery path after `gh pr create` fails.\n  WHY: Both reviewers reported that the fallback preserves execution but removes retry/backoff, so a transient timeline lookup failure can still miss the linked PR and exit 1.\n- tests/test_stall_recovery_pr_lookup.py:567-579 | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: `_run_safety_check` only exercises the Site 1 \"Safety check for existing PR\" step, leaving the Site 2 recovery branch untested.\n  WHY: All three reviewers identified that the current test helper does not execute the Site 2 path, so regressions in its different jq/output shape would not be caught.\n- .github/workflows/ci.yml:160-170 | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_1-fast, z-ai_glm-5]\n  PROBLEM: `test_stall_recovery_pr_lookup.py` is added to PR CI but not to the explicit release-gate allowlists, so it may not run in stable/release validation.\n  WHY: All three reviewers reported that the new regression test is wired into CI only, leaving release-gate workflows without this safeguard.\n- tests/test_stall_recovery_pr_lookup.py:481-545 | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: `_GH_STUB_TIMELINE` shells out to host `jq`, so the stub depends on a binary that may be unavailable in some environments.\n  WHY: Both reviewers reported the direct `jq` subprocess call and the lack of a mock/fallback inside the stub.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_stall_recovery_pr_lookup.py:567-579 | severity=low | confidence=1\n  PROBLEM: `_run_safety_check` at `test_stall_recovery_pr_lookup.py:567-579` extracts only the \"Safety check for existing PR\" step (Site 1).\n  WHY: Site 2 uses a different jq filter/output contract, so the current behavioral test does not exercise that recovery branch.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/implement.yml:147-158 | confidence=4\n  PROBLEM: The `gh api --paginate` call in the Site 1 safety check lacks a `gh_retry` wrapper.\n  WHY: A transient GitHub API 5xx/429 can produce empty output, setting `existing_pr=false` even when linked PRs exist and widening the duplicate-PR race window.\n- .github/workflows/implement.yml:2861-2868 | confidence=3\n  PROBLEM: The recovery path defines `gh_retry` as a bare pass-through if `scripts/gh_helpers.sh` cannot be sourced.\n  WHY: In that case the timeline query runs once without retry/backoff, so a transient API blip can still miss the linked PR and exit 1.\n- tests/test_stall_recovery_pr_lookup.py:567-579 | confidence=4\n  PROBLEM: `_run_safety_check` only tests the Site 1 safety-check step.\n  WHY: Site 2 uses a different jq filter/output shape, so a Site 2 regression would not be caught by the current suite.\n- .github/workflows/ci.yml:166 | confidence=4\n  PROBLEM: The new regression test is allowlisted in PR CI but not in the release-gate workflow allowlists.\n  WHY: A future revert could evade release validation because those workflows use separate explicit test allowlists.\n- tests/test_stall_recovery_pr_lookup.py:481-545 | confidence=3\n  PROBLEM: The timeline stub shells out to host `jq` without an in-stub fallback.\n  WHY: Minimal or local environments without `jq` can cause the stub or test run to fail instead of exercising the regression suite.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- .github/workflows/implement.yml:131-162 | confidence=5\n  PROBLEM: Timeline query uses bare `gh api --paginate ... || true` with no `gh_retry` wrapper or equivalent retry logic.\n  WHY: Transient GitHub API errors can return empty output and falsely set `existing_pr=false`, leading to duplicate `gh pr create --head` attempts.\n- .github/workflows/implement.yml:2861-2868 | confidence=4\n  PROBLEM: `source scripts/gh_helpers.sh 2>/dev/null || true` followed by `type gh_retry &>/dev/null || gh_retry() { \"$@\"; }` defines a no-op pass-through if sourcing fails or `gh_retry` is undefined.\n  WHY: If `gh_helpers.sh` is unavailable, the recovery timeline query runs single-shot without retry/backoff and can miss the linked PR.\n- tests/test_stall_recovery_pr_lookup.py:567-579 | confidence=4\n  PROBLEM: `_run_safety_check` extracts and executes only Site 1 \"Safety check for existing PR\"; Site 2 recovery branch is unexercised.\n  WHY: A Site 2 regression would not be caught by the current test path.\n- tests/test_stall_recovery_pr_lookup.py:481-545 | confidence=3\n  PROBLEM: `_GH_STUB_TIMELINE` shells out to host `jq` via `subprocess.run([\"jq\", ...])` with no fallback inside the stub.\n  WHY: Environments without `jq` can make the stub fail and prevent the regression tests from running normally.\n- .github/workflows/ci.yml:160-170 | confidence=4\n  PROBLEM: The new regression test is added to PR CI but not to the explicit release-gate allowlists.\n  WHY: Separate release workflows can miss the test, allowing a future revert to escape stable validation.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n- .github/workflows/ci.yml:166 | confidence=5\n  PROBLEM: The new regression test `test_stall_recovery_pr_lookup.py` is only added to `ci.yml` but not to the release-gate workflows (`test-and-mark-stable.yml` and `mark-stable.yml`).\n  WHY: Those release workflows use explicit allowlists, so a regression that slips past PR CI would not be caught there.\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "df3e5f502926d7f7391ff6b806b880126120e47d63828b9b9bbee8ab845da0e6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2462,
+    "run_id": "25640722972",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25640722972",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260510221826_fe436b3395",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2462,
+    "run_id": "25640722972"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 5 multi-reviewer finding(s) across 5 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-10T22:18:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

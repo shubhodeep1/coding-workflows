@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:941-946 | severity=high | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The `=== BEGIN PRIOR ROUND DECISIONS ===` block inlines ledger content without the `UNTRUSTED_DATA:` transport prefix used by other author-controlled prompt sections.\n  WHY: Without an untrusted-data marker, fence-like text in ledger entries can spoof section boundaries and inject instructions into the judge prompt.\n- scripts/review_rb_judge.sh:287-359 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The prior-decision renderer emits fields with `; ` separators while passing `editor_outcomes` through unescaped, so semicolons inside that value make compact ledger lines ambiguous.\n  WHY: A semicolon in `editor_outcomes` can be misread as a field delimiter, shifting downstream parsing of the prior-decision block.\n- scripts/review_rb_judge.sh:251-267 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: `render_review_rb_prior_round_decisions_file()` re-implements truthy-flag parsing with `tr` + `case` instead of using the shared `flag_enabled()` helper.\n  WHY: If `flag_enabled()` is extended later, this local copy can silently diverge and produce inconsistent gating behavior for the ledger-related flags.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: scripts/review_rb_judge.sh\n  Line or code reference: 942-945\n  Problem: The `=== BEGIN PRIOR ROUND DECISIONS ===` block inlines the parsed ledger via bare `_embed_input_file` without the `UNTRUSTED_DATA:` transport prefix that every other author-controlled prompt section uses.\n  Why it fails at runtime: A field value containing section-boundary text would prematurely close the PRIOR ROUND DECISIONS block and inject arbitrary text outside the fence boundary, defeating the prompt injection guard in the judge template.\n  ISSUE_CONFIDENCE: 2\n\n- File: scripts/review_rb_judge.sh\n  Line or code reference: 288-289 and 357-359\n  Problem: The `clean()` function only collapses whitespace and replaces tabs, but the rendered output uses `\"; \"` as the field separator, so semicolons in `EDITOR_OUTCOMES` make the line ambiguous.\n  Why it fails at runtime: A value containing `\"; \"` will be split into phantom fields by the judge prompt reader or a future parser, mis-tokenizing the compact prior-decision entry.\n  ISSUE_CONFIDENCE: 3\n\n- File: scripts/review_rb_judge.sh\n  Line or code reference: 251-266\n  Problem: The function duplicates the `tr '[:upper:]' '[:lower:]'` + `case` truthy-flag gating pattern instead of reusing `flag_enabled()`.\n  Why it fails at runtime: The gating for prior-decision injection can diverge from other ledger-dependent features if the shared helper's truthy set changes in the future.\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- File: scripts/review_rb_judge.sh\n  Line or code reference: lines 941-946\n  Problem: The `=== BEGIN PRIOR ROUND DECISIONS ===` section inlines ledger content directly via `_embed_input_file` without the `UNTRUSTED_DATA:` transport prefix that `emit_review_rb_untrusted_file` uses.\n  Why it fails at runtime: User-controlled ledger entries could contain fence-like lines (`=== BEGIN ...`) or prompt-injection text that blurs into structural markers, defeating the prompt injection guard.\n  ISSUE_CONFIDENCE: 4\n\n- File: scripts/review_rb_judge.sh\n  Line or code reference: lines 350-357\n  Problem: The rendered format uses `; ` as the field separator, but `editor_outcomes` values can contain semicolons, making the key/value list ambiguous.\n  Why it fails at runtime: When the judge parses the prior_decision block, a semicolon in `editor_outcomes` could be misread as a field delimiter, causing the compact entry format to be misparsed.\n  ISSUE_CONFIDENCE: 4\n\n- File: scripts/review_rb_judge.sh\n  Line or code reference: lines 252-267\n  Problem: `render_review_rb_prior_round_decisions_file()` re-implements truthy parsing with `tr` + `case` instead of using the existing `flag_enabled()` helper.\n  Why it fails at runtime: If `flag_enabled()` is updated to handle additional truthy values, the local copy in this function will become inconsistent, leading to different gating behavior between this function and other call sites.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- File: scripts/review_rb_judge.sh\n  Line or code reference: 941-946\n  Problem: The `=== BEGIN PRIOR ROUND DECISIONS ===` section inlines ledger content without the `UNTRUSTED_DATA:` transport prefix used elsewhere.\n  Why it fails at runtime: Without an explicit untrusted-data marker, user-controlled ledger content blurs with structural markers, and an adversary can craft a ledger entry with `=== END PRIOR ROUND DECISIONS ===` to prematurely terminate the section.\n  ISSUE_CONFIDENCE: 4\n\n- File: scripts/review_rb_judge.sh\n  Line or code reference: 252-267\n  Problem: The `render_review_rb_prior_round_decisions_file()` function re-implements truthy parsing with `tr` + `case` instead of using the existing `flag_enabled()` helper.\n  Why it fails at runtime: If the helper's accepted truthy values are extended later, this local copy will silently diverge, causing inconsistent gating behavior for `REVIEW_LEDGER_ENABLED` and `REVIEW_LEDGER_REREVIEW_ENABLED`.\n  ISSUE_CONFIDENCE: 4\n\n- File: scripts/review_rb_judge.sh\n  Line or code reference: 334-338\n  Problem: `editor_outcomes` lines in the ledger can contain semicolons, but the rendered format at lines 334-338 uses `; ` as the field separator, creating ambiguity.\n  Why it fails at runtime: When the judge parses the prior-decision block, a semicolon inside an `editor_outcome` value is interpreted as a field delimiter, causing the record to be misparsed downstream.\n  ISSUE_CONFIDENCE: 4\n\n- File: scripts/review_rb_judge.sh\n  Line or code reference: 287-302\n  Problem: The Python heredoc emitting ledger entries uses a `; ` delimited format, and the `editor_outcomes` value is included as a raw field without escaping delimiters.\n  Why it fails at runtime: Downstream consumers expecting a fixed-field format will receive shifted columns if the `editor_outcomes` field itself contains semicolons, breaking automated parsing of the prior-decision block.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "28641eec3e2cf66da4fe4b8427883dc45c9493e5ca6a620e1a4b890665d446ac",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3012,
+    "run_id": "26676504530",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26676504530",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260530062448_8923bd1b42",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3012,
+    "run_id": "26676504530"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-30T06:24:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_reviewer_prompt_semble.py:33-43 | severity=medium | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_1-fast]\n  PROBLEM: The test relies on exact string/byte matches for shell source and the heredoc terminator, so harmless refactors or whitespace changes can break or evade it.\n  WHY: Moonshot flagged brittle string-index assertions, and x-ai_grok flagged exact-byte matching on the closing delimiter; both describe the same over-specific parsing.\n- scripts/review_run_reviewers.sh:315-318 | severity=medium | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: head -c can truncate UTF-8 in the middle of a multibyte character, producing invalid query text for Semble.\n  WHY: The truncated context files may contain non-ASCII content, so byte-count slicing can silently degrade or break search input.\n- scripts/review_conflict_prepare.sh:454 | severity=high | confidence=5\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: sed 's/,/, /g' rewrites every comma in the joined file list, corrupting names that legitimately contain commas.\n  WHY: The post-processing is applied to the concatenated path list, so comma-bearing filenames or symbols are mangled before Semble sees them.\n- .github/workflows/ci.yml:143 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The new Semble contract test runs directly under set -euo pipefail without a fail-open wrapper, so transient Python failures abort the whole step.\n  WHY: The reviewer reported the new invocation as a CI-flakiness risk; other reviewers considered the lack of || true intentional, so this is disputed.\n- .github/workflows/mark-stable.yml:222 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The new Semble contract test runs directly under set -euo pipefail without a fail-open wrapper, so transient Python failures abort the whole step.\n  WHY: The reviewer reported the new invocation as a CI-flakiness risk; other reviewers considered the lack of || true intentional, so this is disputed.\n- .github/workflows/test-and-mark-stable.yml:2097 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_1-fast]\n  PROBLEM: The new Semble contract test runs directly under set -euo pipefail without a fail-open wrapper, so transient Python failures abort the whole step.\n  WHY: The reviewer reported the new invocation as a CI-flakiness risk; other reviewers considered the lack of || true intentional, so this is disputed.\n- scripts/review_conflict_prepare.sh:487-492 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The Semble context is appended after template rendering, so it can end up after the smoke override and weaken that directive.\n  WHY: The reviewer noted that prepending smoke mode later leaves extra prompt content after the override, which may dilute the intended instruction.\n=== END CONSENSUS FINDINGS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_review_reviewer_prompt_semble.py:33-38, 41-43 | confidence=3\n  PROBLEM: The test uses .index() string searches to verify ordering assertions, making it brittle to harmless refactors and exact prompt text changes.\n  WHY: A legitimate rewrite of the shell script's variable names, quoting, or whitespace would raise ValueError even if behavior stayed correct.\n- scripts/review_run_reviewers.sh:315-318 | confidence=3\n  PROBLEM: head -c truncates by byte count and can split multibyte UTF-8 characters in the Semble query context.\n  WHY: Truncated non-ASCII issue or file text can become invalid UTF-8 and silently degrade query quality.\n- scripts/review_conflict_prepare.sh:487-492 | confidence=2\n  PROBLEM: The Semble context is appended after the template rendering step, so it may come after the smoke override.\n  WHY: If smoke mode prepends its override later, additional content follows the directive and may dilute it.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_1-fast ===\n- scripts/review_conflict_prepare.sh:454 | confidence=5\n  PROBLEM: The sed replacement blindly inserts a space after every comma in the joined file list, corrupting filenames that legitimately contain commas.\n  WHY: Paths or symbols with commas are rewritten before Semble receives them, which can degrade retrieval.\n- .github/workflows/ci.yml:143 | confidence=4\n  PROBLEM: The new test invocation runs directly under set -euo pipefail without || true isolation, so any transient Python runtime error aborts the whole Semble contracts block.\n  WHY: The reviewer reported CI-flakiness risk from a plain invocation in a failure-sensitive step.\n- .github/workflows/mark-stable.yml:222 | confidence=4\n  PROBLEM: The new test invocation runs directly under set -euo pipefail without || true isolation, so any transient Python runtime error aborts the whole Semble contracts block.\n  WHY: The reviewer reported CI-flakiness risk from a plain invocation in a failure-sensitive step.\n- .github/workflows/test-and-mark-stable.yml:2097 | confidence=4\n  PROBLEM: The new test invocation runs directly under set -euo pipefail without || true isolation, so any transient Python runtime error aborts the whole Semble contracts block.\n  WHY: The reviewer reported CI-flakiness risk from a plain invocation in a failure-sensitive step.\n- tests/test_review_reviewer_prompt_semble.py:42 | confidence=4\n  PROBLEM: str.index requires an exact byte match, so trailing whitespace or tabs on the heredoc closing line can make the slice miss prompt-body leakage.\n  WHY: A whitespace-tolerant edit of the shell file could cause the contract test to slice too short and miss SEMBLE_QUERY leakage.\n=== END FINDINGS FROM x-ai_grok-4_1-fast ===\n\n=== FINDINGS FROM z-ai_glm-5 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5 ===",
+  "fingerprint": "43857a976d1ac2e93843159af393d9d2fc54f74e0c2504eb907333c0544e4c76",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 2295,
+    "run_id": "25556068837",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25556068837",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260508125935_b8fd909814",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 2295,
+    "run_id": "25556068837"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer finding(s) across 7 total consensus finding(s)",
+  "timestamps": {
+    "created_at": "2026-05-08T12:59:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

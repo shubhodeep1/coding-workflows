@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:515 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The Layer 2 alert tracking comment body says \"has been in the orchestrator's budget-ineligible deferral path for at least ${alert_hours}h\" where `alert_hours` is the threshold, not the actual elapsed time.\n  WHY: The heading already reports the real duration via `${elapsed_hours}h+`; using the threshold in the body understates how long the PR has been stuck and can mislead operators.\n- scripts/orchestrate_poll_process.sh:539-567 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `_summarize_final_merge_blockers` returns all non-acceptable check-runs instead of filtering to the required set.\n  WHY: Advisory failures that do not actually block the orchestrator gate can be reported as \"Blocking check-runs,\" which misleads operators and does not match Layer 1 behavior.\n- scripts/orchestrate_poll_process.sh:571-577, 6447-6455 | severity=low | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5]\n  PROBLEM: `_clear_final_merge_ineligibility_state` is defined but never called; the merge-success path duplicates the same jq cleanup inline.\n  WHY: This is dead code and a maintenance hazard because the helper can drift from the inline state-clearing logic.\n- scripts/orchestrate_poll_process.sh:541 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The first positional parameter `final_pr` in `_summarize_final_merge_blockers` is captured but never used.\n  WHY: It is dead code and suggests the function was expected to use the PR number but never implemented that path.\n- scripts/orchestrate_poll_process.sh:9665, 11320, 11806, 12632, 12686, 12950, 13041 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: Existing `_pr_checks_completed` call sites that do not pass the new optional `base_ref` argument now trigger an extra PR-metadata fetch.\n  WHY: This introduces avoidable GitHub API round-trips on existing polling paths, which is a performance regression even though behavior remains correct.\n- scripts/orchestrate_poll_process.sh:515, 518 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The label \"Blocking check-runs:\" is semantically inaccurate because the helper returns all non-acceptable check-runs, not only those that actually block the gate.\n  WHY: Operators may read advisory failures as blockers and incorrectly conclude the orchestrator gate is broken or misconfigured.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:515 | severity=low | confidence=5\n  PROBLEM: The Layer 2 alert tracking comment body says \"has been in the orchestrator's budget-ineligible deferral path for at least ${alert_hours}h\" where `alert_hours` is the threshold (default 6), not the actual elapsed time.\n  WHY: The heading on line 513 correctly uses `${elapsed_hours}h+`, and the body should match the real elapsed duration so operators are not misled.\n- scripts/orchestrate_poll_process.sh:539-567 | severity=medium | confidence=4\n  PROBLEM: The function's doc says it provides a \"best-effort short summary of which check-runs would block the orchestrator gate,\" but the jq filter selects all non-acceptable check-runs regardless of whether they are in the required set.\n  WHY: Advisory failures such as `copilot-pull-request-reviewer` can appear as \"Blocking check-runs\" even though Layer 1 ignores them, which misleads operators.\n- scripts/orchestrate_poll_process.sh:571-577 | severity=low | confidence=4\n  PROBLEM: `_clear_final_merge_ineligibility_state` is defined but never called anywhere in the script, and the merge-success path clears the same ineligibility state keys inline instead.\n  WHY: This is dead code that creates a maintenance hazard if the tracked keys change and only the inline jq logic is updated.\n- scripts/orchestrate_poll_process.sh:541 | severity=low | confidence=3\n  PROBLEM: The first positional parameter `final_pr` in `_summarize_final_merge_blockers` is captured as a local variable but never referenced in the function body.\n  WHY: No runtime failure occurs, but it is dead code and suggests the function was meant to use the PR number for filtering or lookup and never did.\n- scripts/orchestrate_poll_process.sh:9665, 11320, 11806, 12632, 12686, 12950, 13041 | severity=low | confidence=3\n  PROBLEM: Seven existing call sites of `_pr_checks_completed` do not pass the new optional 3rd `base_ref` argument, so the function now fetches PR metadata to recover it.\n  WHY: This adds an extra GitHub API round-trip on existing polling paths and increases API consumption even though the code still works correctly.\n- scripts/orchestrate_poll_process.sh:515, 518 | severity=low | confidence=3\n  PROBLEM: The label \"Blocking check-runs:\" is semantically inaccurate.\n  WHY: The helper returns all non-acceptable check-runs, not just the ones that actually block the orchestrator gate, so operators may misread advisory failures as blockers.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- File: scripts/orchestrate_poll_process.sh\n  Location: Lines 571-576 (function _clear_final_merge_ineligibility_state)\n  Issue: The helper function _clear_final_merge_ineligibility_state is defined and tested but not used in the actual code path. Lines 6453-6455 inline the same jq operations instead of calling this helper.\n  Suggested minimal fix: Replace the inline jq operations at lines 6453-6455 with a call to _clear_final_merge_ineligibility_state to reduce code duplication and ensure the helper is actually exercised in production.\n  Estimated lines changed: 3 (replace 3 lines with 1 function call)\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "d5c40e8c18bd6b0afae592863a3479941de324c4581e88a105c49371422ebe59",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26364715430",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26364715430",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260524152726_4b6dc67696",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26364715430"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 6 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-05-24T15:27:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nClarification mapping: no Q1/Q2 batch was issued; `/answer [auto-answered-by-orchestrator]` means \u201cproceed with the issue as written.\u201d\n\nPlanning ref: `bd5472cae309f5af2d1254288c0fb9673134a7ed` on `main`.\n\nConflicts detected (expected for a review-blocked reissue, but important):\n- The issue\u2019s file/line references are from closed PR #2675, not the current ref.\n- Current `main` does **not** contain `scripts/review_synthesise_smoke.sh`, `tests/test_review_synthesise_smoke.py`, or the behavioural-smoke prompt/template path that PR #2675\u2019s script expects.\n- Current `agents.md` also lacks the behavioural-smoke prefix block entirely.\n- PR #2675 targeted `orchestrator/project-2627`, so this is a true spot-fix only if implement checks out the trusted prior-PR baseline; otherwise the closed-PR behavioural-smoke stack must be restored first.\n\n1. Files likely to change\n- Primary spot-fix files on the #2675 baseline:\n  - `scripts/review_synthesise_smoke.sh`\n  - `tests/test_review_synthesise_smoke.py`\n  - `agents.md`\n- Conditional restore files if the trusted prior-PR baseline is not available during implement:\n  - restore/recreate the behavioural-smoke support files from #2675 before applying the coproc fix (at minimum the synth script/test and prompt/template; likely also the related CI/validation hook coverage from that stack).\n\n2. Functions or modules to implement\n- Harden `normalize_content()` inside `scripts/review_synthesise_smoke.sh` so `coproc` cannot hide the real command word.\n  - Lowest-risk path: reject `coproc` outright at command position.\n  - Keep the existing fail-open behavior: invalid synthesized content should be rejected before manifest/wrapper creation.\n- Leave `normalize_generated_items()` and manifest generation behavior unchanged except that `coproc` payloads now fail validation.\n- Extend `test_review_synthesise_smoke_rejects_unsafe_shell_constructs()` with the new `coproc` cases.\n- Update the stable-prefix section in `agents.md` to include `BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL`.\n\n3. Data structures affected\n- The command-token classification inside `normalize_content()` (`separator_tokens`, `dangerous_command_tokens`, passthrough handling).\n- The unsafe-shell regression matrix in `tests/test_review_synthesise_smoke.py`.\n- The stable log-prefix list in `agents.md`.\n- No manifest JSON schema or wrapper metadata shape should change.\n\n4. API or interface changes\n- No public API/workflow/env-var contract change intended.\n- Internal validation becomes stricter: `coproc`-prefixed synthesized shell bodies are rejected and follow the existing synthesis-failure path.\n- Cache-copy/materialization design and workflow wiring should stay as-is.\n\n5. Potential risks or edge cases\n- Do not treat `coproc` as merely a separator unless all `coproc` forms are still rejected; explicit rejection is safer.\n- Preserve currently intended safe snippets, especially interpreter-backed `python3` and `node` bodies.\n- Preserve existing wrapper-aware handling for non-`coproc` inputs (`env`, `time`, `timeout`, `command`, `builtin`).\n- Ensure `/bin/bash` basename matching and `env eval` wrapper parsing still cannot bypass the guard.\n- Maintain fail-open cleanup semantics: rejected synthesis must not leave a manifest or cached wrapper behind.\n- If implement runs directly on `main` without baseline restoration, scope expands beyond a 3-file hardening fix.\n\n6. Testing considerations\n- Extend the unsafe-shell regression loop with:\n  - `coproc eval \"$PAYLOAD\"`\n  - `coproc /bin/bash -c \"printf unsafe\"`\n  - preferably `coproc env eval \"$PAYLOAD\"` as well, to match the acceptance criteria explicitly\n- Run `python3 tests/test_review_synthesise_smoke.py`.\n- Re-run the behavioural-smoke/validation integration coverage from the #2675 stack so cache materialization remains unchanged.\n- Verify the happy-path manifest-writing test still passes for safe interpreter snippets.\n- Verify each `coproc` payload:\n  - returns via the fail-open path,\n  - logs a synthesis failure,\n  - writes no synth manifest/wrapper.\n\nAssumptions / missing-context notes\n- No additional clarification is needed beyond the auto `/answer`.\n- The planning context does not confirm whether implement will receive the trusted prior-PR baseline checkout metadata. If it does, this is a surgical 3-file hardening change; if it does not, restoring the missing #2675 behavioural-smoke baseline is prerequisite work rather than a redesign.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "1488ea5e4c1c960fafd4243174c1a9adef582044f470ff7adb200200794ec2d8",
+  "lineage": {
+    "issue_number": 2696,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "25986619041",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "25986619041",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/2696"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260517091104_0c35abefee",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 2696,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "25986619041"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #2696",
+  "timestamps": {
+    "created_at": "2026-05-17T09:11:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
