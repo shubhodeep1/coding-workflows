@@ -254,7 +254,13 @@ def _normalize_concurrency_cap_state(raw_state: Any) -> str | None:
 def _normalize_concurrency_cap_value(raw_value: Any, *, field_name: str) -> int | None:
 	if raw_value is None:
 		return None
-	if isinstance(raw_value, bool) or not isinstance(raw_value, int):
+	if isinstance(raw_value, bool):
+		raise OrchestrateError(f"{field_name} must be an integer")
+	if isinstance(raw_value, float):
+		if not raw_value.is_integer():
+			raise OrchestrateError(f"{field_name} must be an integer")
+		raw_value = int(raw_value)
+	if not isinstance(raw_value, int):
 		raise OrchestrateError(f"{field_name} must be an integer")
 	if raw_value < -1:
 		raise OrchestrateError(f"{field_name} must be >= -1")
@@ -270,12 +276,6 @@ def load_concurrency_caps(path: str | Path | None = None) -> dict[str, Any]:
 	or semantically invalid files disable caps instead of raising.
 	"""
 	target = Path(path) if path else Path(DEFAULT_CONCURRENCY_CAPS_PATH)
-	if yaml is None:
-		return _disabled_concurrency_caps(
-			target,
-			status="yaml_unavailable",
-			error="PyYAML is unavailable",
-		)
 	try:
 		raw_text = target.read_text(encoding="utf-8")
 	except FileNotFoundError:
@@ -285,6 +285,12 @@ def load_concurrency_caps(path: str | Path | None = None) -> dict[str, Any]:
 
 	if not raw_text.strip():
 		return _disabled_concurrency_caps(target, status="empty")
+	if yaml is None:
+		return _disabled_concurrency_caps(
+			target,
+			status="yaml_unavailable",
+			error="PyYAML is unavailable",
+		)
 
 	try:
 		data = yaml.safe_load(raw_text)

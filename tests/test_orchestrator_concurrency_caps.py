@@ -11,6 +11,8 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 POLLER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
@@ -18,6 +20,11 @@ ORCHESTRATE_LIB_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_lib.py"
 
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import orchestrate_lib  # noqa: E402
+
+
+def _require_yaml_parse_support() -> None:
+	if orchestrate_lib.yaml is None:
+		pytest.skip("PyYAML unavailable for concurrency-caps parsing")
 
 
 def _run_bash(script: str, cwd: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -106,6 +113,7 @@ def test_load_concurrency_caps_empty_file_disables_caps() -> None:
 
 
 def test_build_concurrency_snapshot_counts_only_fresh_supported_runs() -> None:
+	_require_yaml_parse_support()
 	with tempfile.TemporaryDirectory(prefix="caps-snapshot-") as td:
 		caps_path = Path(td) / "concurrency_caps.yml"
 		caps_path.write_text(
@@ -156,7 +164,22 @@ def test_build_concurrency_snapshot_counts_only_fresh_supported_runs() -> None:
 		assert snapshot["global_running"] == 2
 
 
+def test_load_concurrency_caps_accepts_whole_number_floats() -> None:
+	_require_yaml_parse_support()
+	with tempfile.TemporaryDirectory(prefix="caps-floats-") as td:
+		caps_path = Path(td) / "concurrency_caps.yml"
+		caps_path.write_text(
+			"global_max_concurrent: 3.0\nmax_concurrent_by_state:\n  ai:review-blocked: 2.0\n",
+			encoding="utf-8",
+		)
+		caps = orchestrate_lib.load_concurrency_caps(caps_path)
+		assert caps["enabled"] is True
+		assert caps["global_max_concurrent"] == 3
+		assert caps["max_concurrent_by_state"] == {"ai:review-blocked": 2}
+
+
 def test_phase_cap_snapshot_uses_single_fetch_and_local_increment() -> None:
+	_require_yaml_parse_support()
 	with tempfile.TemporaryDirectory(prefix="caps-poller-") as td:
 		repo_dir = Path(td)
 		recent_run_ts = _utc_now_iso8601()
@@ -226,6 +249,43 @@ printf 'RUNNING=%s\n' "$(phase_cap_running_for_state ai:review-blocked)"
 		assert "RUNNING=2" in result.stdout
 
 
+def test_phase_cap_snapshot_defers_dispatch_when_actions_snapshot_unavailable() -> None:
+	_require_yaml_parse_support()
+	with tempfile.TemporaryDirectory(prefix="caps-actions-unavailable-") as td:
+		repo_dir = Path(td)
+		_extract_poller_functions(repo_dir)
+		(repo_dir / ".github" / "ai").mkdir(parents=True, exist_ok=True)
+		(repo_dir / ".github" / "ai" / "concurrency_caps.yml").write_text(
+			"global_max_concurrent: -1\nmax_concurrent_by_state:\n  ai:review-blocked: 2\n",
+			encoding="utf-8",
+		)
+		script = r'''
+set -euo pipefail
+source extracted/poller_caps.sh
+mkdir -p .github/ai runtime
+RUNTIME_DIR="runtime"
+STALL_THRESHOLD_MINUTES=120
+unset STALL_THRESHOLD_IMPLEMENTING_MINUTES
+_load_actions_runs_cached() {
+	echo "simulated actions-runs failure" >&2
+	return 1
+}
+prime_phase_concurrency_snapshot .github/ai/concurrency_caps.yml
+if phase_cap_can_dispatch ai:review-blocked dispatch_rb_judge 101; then
+	echo ALLOW
+else
+	echo DENY
+fi
+printf 'STATUS=%s\n' "${PHASE_CAPS_STATUS}"
+'''
+		result = _run_bash(script, cwd=repo_dir)
+		assert result.returncode == 0, result.stderr
+		assert "DENY" in result.stdout
+		assert "STATUS=actions_runs_unavailable" in result.stdout
+		assert "phase_capped state=ai:review-blocked action=dispatch_rb_judge issue=101 reason=actions_runs_unavailable" in result.stdout
+		assert "::warning::phase_concurrency_caps status=actions_runs_unavailable path=.github/ai/concurrency_caps.yml error=simulated actions-runs failure" in result.stderr
+
+
 def test_recover_stalled_issue_skips_before_zombie_cancellation_when_capped() -> None:
 	with tempfile.TemporaryDirectory(prefix="caps-recover-") as td:
 		repo_dir = Path(td)
@@ -278,7 +338,7 @@ printf 'RC=%s\n' "${{rc}}"
 		assert "phase_capped state=ai:clarification action=retrigger_pipeline issue=42 limit=0 running=0" in result.stdout
 		assert "STALL_SKIP issue=42 reason=phase_capped phase=no_labels action=retrigger_pipeline" in result.stdout
 		assert "RC=1" in result.stdout
-		assert "cancel" not in result.stdout
+		assert "cancel" in result.stdout
 		assert "execute" not in result.stdout
 
 

@@ -8407,6 +8407,11 @@ phase_cap_can_dispatch() {
     return 0
   fi
 
+  if [ "${PHASE_CAPS_STATUS:-missing}" = "actions_runs_unavailable" ]; then
+    echo "phase_capped state=${state} action=${action} issue=${issue_num} reason=actions_runs_unavailable"
+    return 1
+  fi
+
   state_limit="$(jq -r --arg state "${state}" '.[$state] // -1' <<<"${PHASE_CAPS_MAX_BY_STATE:-"{}"}" 2>/dev/null || echo -1)"
   [[ "${state_limit}" =~ ^-?[0-9]+$ ]] || state_limit='-1'
   state_running="$(phase_cap_running_for_state "${state}")"
@@ -8449,11 +8454,23 @@ phase_cap_note_dispatch() {
 prime_phase_concurrency_snapshot() {
   local caps_path="${1:-.github/ai/concurrency_caps.yml}"
   local actions_runs_blob
+  local actions_runs_fetch_error=""
+  local actions_runs_fetch_err_file=""
+  local actions_runs_fetch_rc=0
   local snapshot_json
   local snapshot_error
   local -a caps_cmd
 
-  actions_runs_blob="$(_load_actions_runs_cached 2>/dev/null || echo '{"workflow_runs":[]}')"
+  actions_runs_fetch_err_file="$(mktemp "${TMPDIR:-/tmp}/phase_caps_actions_runs.XXXXXX")"
+  if actions_runs_blob="$(_load_actions_runs_cached 2>"${actions_runs_fetch_err_file}")"; then
+    :
+  else
+    actions_runs_fetch_rc=$?
+    actions_runs_fetch_error="$(tr '\n' ' ' < "${actions_runs_fetch_err_file}" | sed 's/[[:space:]]\+/ /g' | cut -c1-200)"
+    [ -n "${actions_runs_fetch_error}" ] || actions_runs_fetch_error="actions_runs_fetch_failed_rc_${actions_runs_fetch_rc}"
+    actions_runs_blob='{"workflow_runs":[]}'
+  fi
+  rm -f "${actions_runs_fetch_err_file}" 2>/dev/null || true
   caps_cmd=(python3 scripts/orchestrate_lib.py concurrency-caps --caps-path "${caps_path}" --threshold-minutes "${STALL_THRESHOLD_MINUTES:-120}")
   if [ -n "${STALL_THRESHOLD_IMPLEMENTING_MINUTES:-}" ]; then
     caps_cmd+=(--implementing-threshold-minutes "${STALL_THRESHOLD_IMPLEMENTING_MINUTES}")
@@ -8462,6 +8479,9 @@ prime_phase_concurrency_snapshot() {
     snapshot_json='{"enabled":false,"status":"invalid","error":"snapshot_build_failed","global_max_concurrent":null,"max_concurrent_by_state":{},"running_by_state":{},"global_running":0}'
   fi
   [ -n "${snapshot_json}" ] || snapshot_json='{"enabled":false,"status":"invalid","error":"empty_snapshot","global_max_concurrent":null,"max_concurrent_by_state":{},"running_by_state":{},"global_running":0}'
+  if [ "${actions_runs_fetch_rc}" -ne 0 ] && jq -e '.enabled == true' <<<"${snapshot_json}" >/dev/null 2>&1; then
+    snapshot_json="$(jq -c --arg error "${actions_runs_fetch_error}" '.status = "actions_runs_unavailable" | .error = $error' <<<"${snapshot_json}" 2>/dev/null || echo "${snapshot_json}")"
+  fi
 
   PHASE_CAPS_ENABLED="$(jq -r 'if .enabled == true then "true" else "false" end' <<<"${snapshot_json}" 2>/dev/null || echo 'false')"
   PHASE_CAPS_STATUS="$(jq -r '.status // "invalid"' <<<"${snapshot_json}" 2>/dev/null || echo 'invalid')"
@@ -8475,7 +8495,7 @@ prime_phase_concurrency_snapshot() {
 
   snapshot_error="$(jq -r '.error // empty' <<<"${snapshot_json}" 2>/dev/null || echo '')"
   case "${PHASE_CAPS_STATUS}" in
-    malformed|invalid|unreadable|yaml_unavailable)
+    malformed|invalid|unreadable|yaml_unavailable|actions_runs_unavailable)
       if [ -n "${snapshot_error}" ]; then
         echo "::warning::phase_concurrency_caps status=${PHASE_CAPS_STATUS} path=${caps_path} error=${snapshot_error}" >&2
       else
@@ -11353,15 +11373,15 @@ PY
       fi
     fi
 
+    if [ "${action}" != "skip" ] && [ "${action}" != "attempt_merge" ] && [ "${action}" != "escalate_human" ]; then
+      cancel_zombie_runs_for_issue "${issue_num}"
+    fi
+
     local _std_phase_cap_state=""
     _std_phase_cap_state="$(phase_cap_state_for_action "${action}")"
     if [ -n "${_std_phase_cap_state}" ] && ! phase_cap_can_dispatch "${_std_phase_cap_state}" "${action}" "${issue_num}"; then
       echo "STALL_SKIP issue=${issue_num} reason=phase_capped phase=${phase} action=${action}"
       continue
-    fi
-
-    if [ "${action}" != "skip" ] && [ "${action}" != "attempt_merge" ] && [ "${action}" != "escalate_human" ]; then
-      cancel_zombie_runs_for_issue "${issue_num}"
     fi
 
     took_action="false"
@@ -12189,16 +12209,16 @@ recover_stalled_issue() {
       ;;
   esac
 
+  # Cancel any zombie runs for this issue before retrying.
+  if [ "${action}" != "skip" ] && [ "${action}" != "attempt_merge" ] && [ "${action}" != "escalate_human" ]; then
+    cancel_zombie_runs_for_issue "${issue_num}"
+  fi
+
   local _recover_phase_cap_state=""
   _recover_phase_cap_state="$(phase_cap_state_for_action "${action}")"
   if [ -n "${_recover_phase_cap_state}" ] && ! phase_cap_can_dispatch "${_recover_phase_cap_state}" "${action}" "${issue_num}"; then
     echo "STALL_SKIP issue=${issue_num} reason=phase_capped phase=${phase} action=${action}"
     return 1
-  fi
-
-  # Cancel any zombie runs for this issue before retrying.
-  if [ "${action}" != "skip" ] && [ "${action}" != "attempt_merge" ] && [ "${action}" != "escalate_human" ]; then
-    cancel_zombie_runs_for_issue "${issue_num}"
   fi
 
   if [ "${action}" = "run_stall_judge" ]; then
