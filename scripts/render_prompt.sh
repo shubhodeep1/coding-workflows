@@ -56,16 +56,10 @@ MODE_NAME="${PROMPT_BASENAME%.*}"
 resolve_render_prompt_py()
 {
 	local candidate=""
-	local prompt_root=""
 	local -a candidates=()
 
-	if [ "$(basename -- "$(dirname -- "${PROMPT_FILE}")")" = "prompts" ]; then
-		prompt_root="$(dirname -- "$(dirname -- "${PROMPT_FILE}")")"
-		candidates+=("${prompt_root}/scripts/render_prompt.py")
-	fi
-
+	# Only trust renderer backends shipped with the workflow source itself.
 	candidates+=(
-		"$(pwd)/scripts/render_prompt.py"
 		"${SCRIPT_DIR}/render_prompt.py"
 		"$(pwd)/.codex-workflow-src/scripts/render_prompt.py"
 		"$(pwd)/.codex-workflow-src-main/scripts/render_prompt.py"

@@ -21,6 +21,7 @@ PLACEHOLDER_PATTERN = re.compile(r"\{\{([A-Za-z0-9_]+)\}\}")
 STANDALONE_PLACEHOLDER_PATTERN = re.compile(r"^[ \t]*\{\{([A-Za-z0-9_]+)\}\}[ \t]*$")
 VARIABLE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_]+$")
 CONTRACT_TOP_LEVEL_KEYS = {"required_vars", "optional_vars", "forbidden_vars"}
+LEGACY_STANDALONE_ONLY_VARS = frozenset({"WORKFLOW_EDIT_RESTRICTION", "SEMBLE_PREFETCH", "SERENA_TOOL_HINTS"})
 
 
 class RenderPromptError(Exception):
@@ -376,6 +377,10 @@ def _coerce_optional_vars(value: Any, *, contract_path: Path) -> dict[str, str]:
 			default_value = ""
 		elif isinstance(raw_default, str):
 			default_value = raw_default
+		elif isinstance(raw_default, bool):
+			default_value = "true" if raw_default else "false"
+		elif isinstance(raw_default, (int, float)):
+			default_value = str(raw_default)
 		else:
 			raise ContractLoadError(
 				f"Field 'optional_vars.{name}' in '{contract_path}' must be a string default"
@@ -451,18 +456,26 @@ def _render_replacement(value: str) -> str:
 	return value + "\n"
 
 
+def _render_inline_placeholders(line: str, values: dict[str, str]) -> str:
+	def replace_match(match: re.Match[str]) -> str:
+		placeholder_name = match.group(1)
+		if placeholder_name in LEGACY_STANDALONE_ONLY_VARS:
+			return match.group(0)
+		return values.get(placeholder_name, match.group(0))
+
+	return PLACEHOLDER_PATTERN.sub(replace_match, line)
+
+
 def render_prompt_text(prompt_text: str, values: dict[str, str]) -> str:
 	rendered_lines: list[str] = []
 	for line in prompt_text.splitlines():
 		match = STANDALONE_PLACEHOLDER_PATTERN.fullmatch(line)
-		if match is None:
-			rendered_lines.append(f"{line}\n")
-			continue
-		placeholder_name = match.group(1)
-		if placeholder_name not in values:
-			rendered_lines.append(f"{line}\n")
-			continue
-		rendered_lines.append(_render_replacement(values[placeholder_name]))
+		if match is not None:
+			placeholder_name = match.group(1)
+			if placeholder_name in values:
+				rendered_lines.append(_render_replacement(values[placeholder_name]))
+				continue
+		rendered_lines.append(f"{_render_inline_placeholders(line, values)}\n")
 	return "".join(rendered_lines)
 
 
