@@ -64,3 +64,14 @@ Copy this block when adding a new entry:
   - `gh pr list --repo <consumer> --label automation:validate-bootstrap --state open` returns an empty list for every consumer (no open discovery PRs pending reviewer action).
   - Removing this code path means daily discovery dispatch stops; ensure consumers' committed manifests are correct and stable before doing so.
 - **Owner:** @shubhodeep1
+
+### `scripts/render_prompt.sh`
+
+- **Introduced in:** issue #3043 (2026-06-02)
+- **Type:** long-running
+- **Removal trigger:** when automated callers have moved to explicit `scripts/render_prompt.py` mode selection and no live workflow or script path still invokes `scripts/render_prompt.sh`.
+- **Removal preflight checks:**
+  - `rg -n 'render_prompt\.sh' .github/workflows scripts --glob '!scripts/render_prompt.sh'` returns no live caller matches.
+  - `python3 -m pytest tests/test_render_prompt_foundation.py tests/test_judge_semble_prefetch_contract.py -k render_prompt` returns `passed` for every selected test.
+  - `rg -n 'prompts/contracts/mode-(implement|plan)\.yml|render_prompt\.py' .github/workflows scripts` shows the live callers now reference the Python backend and mode-specific contracts directly.
+- **Owner:** @shubhodeep1
