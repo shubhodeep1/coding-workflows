@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:lines ~11396-11469 | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The `local` declarations were added, but the formatting of the `if` / `elif` blocks following `_dispatch_rb_judge_for_pr` calls and the `_skip_redirect_rc` branch uses inconsistent indentation.\n  WHY: Bash tolerates it, but it hurts readability/maintainability and deviates from the repo's established style; the reviewer rated it low-severity.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: scripts/orchestrate_poll_process.sh  \n  Line or code reference: lines ~11396-11469 (the five `_std_*_rc` blocks inside `run_standalone_stall_recovery`)  \n  Problem: The `local` declarations were added, but the formatting of the `if` / `elif` blocks following `_dispatch_rb_judge_for_pr` calls (and the `_skip_redirect_rc` branch in `execute_stall_recovery_action`) uses inconsistent indentation (mixed tabs/spaces, over-indented continuation lines).  \n  Why it fails at runtime: Bash tolerates it, but it makes the shell function harder to read/maintain and can silently break when someone adds more statements; it also deviates from the repo's established style seen elsewhere in the same file.  \n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "6e3542f108339e663a20e09eeb10a0c9a16ff0ba2b62bdedecd53c9cdd954b0c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3061,
+    "run_id": "26839551969",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26839551969",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260602183619_7c0e6a0697",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3061,
+    "run_id": "26839551969"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-02T18:36:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
