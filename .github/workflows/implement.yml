@@ -823,7 +823,7 @@ jobs:
 
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh render_prompt.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh build_static_context.sh targeted_file_context.py write_codex_config.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh render_prompt.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_stall_guard.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -1425,8 +1425,16 @@ jobs:
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_IMPLEMENT || '50' }}
+          # Legacy idle-time knob retained for backward compatibility; when a
+          # repo still only sets EDITOR_IDLE_TIMEOUT, the shared stall guard
+          # timeout below continues to honor it.
           EDITOR_IDLE_TIMEOUT: ${{ vars.EDITOR_IDLE_TIMEOUT || '1200' }}
           EDITOR_MAX_WALL: ${{ vars.EDITOR_MAX_WALL || '7800' }}
+          CODEX_HEARTBEAT_ENABLED: ${{ vars.CODEX_HEARTBEAT_ENABLED || '1' }}
+          CODEX_HEARTBEAT_INTERVAL_SECS: ${{ vars.CODEX_HEARTBEAT_INTERVAL_SECS || '30' }}
+          CODEX_STALL_GUARD_ENABLED: ${{ vars.CODEX_STALL_GUARD_ENABLED || 'false' }}
+          CODEX_STALL_TIMEOUT_SECONDS: ${{ vars.CODEX_STALL_TIMEOUT_SECONDS || vars.EDITOR_IDLE_TIMEOUT || '600' }}
+          CODEX_STALL_KILL_GRACE_SECONDS: ${{ vars.CODEX_STALL_KILL_GRACE_SECONDS || '30' }}
           # Targeted-file-context inlining (scripts/targeted_file_context.py).
           # Pre-loads target files named in the plan into the prompt so the
           # editor's first turn is a write, not a read. Files that would
@@ -1449,6 +1457,12 @@ jobs:
           # piping is the cheapest insurance.
           # shellcheck source=/dev/null
           source scripts/gh_helpers.sh 2>/dev/null || true
+
+          CODEX_STALL_GUARD_HELPER="scripts/codex_stall_guard.sh"
+          if [ ! -x "${CODEX_STALL_GUARD_HELPER}" ]; then
+            echo "::error::Missing required support script ${CODEX_STALL_GUARD_HELPER}"
+            exit 1
+          fi
 
           PROMPT_TEMPLATE_FILE="${RUNTIME_DIR}/mode-implement-inline.txt"
           cat > "${PROMPT_TEMPLATE_FILE}" <<'EOF'
@@ -1576,16 +1590,13 @@ jobs:
             cat "${IMPLEMENTATION_CONTEXT_FILE}"
           } > "${CODEX_PROMPT_FILE}"
 
-          # ── Adaptive progress-aware watchdog for the implement editor ──
-          # The Codex process is run in the background with stderr-based
-          # heartbeat tracking.  A watchdog monitors idle time (no stderr
-          # output) and wall-clock time per attempt.  Before killing an idle
-          # process the watchdog probes /proc/<pid>/fd for active network
-          # sockets — if connections exist the process is likely waiting on
-          # an API response and the idle window is extended.
+          # ── Shared event-idle stall guard for the implement editor ──
+          # scripts/codex_stall_guard.sh owns per-pid heartbeats and the
+          # event-idle kill/observe logic. This step retains only the outer
+          # attempt wall-clock cap so a wedged wrapper still cannot exceed the
+          # overall job budget.
           # ────────────────────────────────────────────────────────────────
 
-          IMPLEMENT_IDLE_TIMEOUT="${EDITOR_IDLE_TIMEOUT:-1200}"   # 20 min default
           IMPLEMENT_MAX_WALL="${EDITOR_MAX_WALL:-7800}"            # 130 min default
           JOB_TIMEOUT_SECS=$((180 * 60))
           JOB_DEADLINE=$(( ${JOB_START_EPOCH:-$(date +%s)} + JOB_TIMEOUT_SECS ))
@@ -1766,6 +1777,25 @@ jobs:
             return 1
           }
 
+          read_codex_stall_guard_state() {
+            local status_file="$1"
+
+            [ -s "${status_file}" ] || return 1
+            sed -n 's/^state=//p' "${status_file}" | head -n 1
+          }
+
+          codex_stall_guard_kill_detected() {
+            local rc="${1:-0}"
+            local stall_state="${2:-}"
+
+            if [ "${stall_state}" = "killed" ]; then
+              return 0
+            fi
+
+            [ -x "${CODEX_STALL_GUARD_HELPER}" ] || return 1
+            [ "${rc}" -eq 137 ]
+          }
+
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex implement attempt ${attempt}/${max_attempts}..."
 
@@ -1868,82 +1898,55 @@ jobs:
               } > "${PROMPT_FILE_TO_USE}"
             fi
 
-            # ── Heartbeat file for progress tracking ──
-            hb_file="$(mktemp /tmp/heartbeat_implement.XXXXXX)"
-            printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}"
-            impl_start="$(date +%s)"
-            codex_pid_file="$(mktemp /tmp/codex_pid_implement.XXXXXX)"
-
-            # ── Background watchdog ──
-            (
-              while true; do
-                sleep 15
-                wd_now="$(date +%s)"
-                last="$(cat "${hb_file}" 2>/dev/null || echo "${wd_now}")"
-                if ! [[ "${last}" =~ ^[0-9]+$ ]]; then last="${wd_now}"; fi
-                idle_secs=$(( wd_now - last ))
-                wall_secs=$(( wd_now - impl_start ))
-
-                # Hard wall-time limit (budget-aware)
-                if [ "${wall_secs}" -ge "${attempt_wall}" ]; then
-                  echo "Codex killed — wall time ${attempt_wall}s exceeded (attempt ${attempt})." >&2
-                  cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
-                  if [ -n "${cpid}" ]; then kill -TERM "${cpid}" 2>/dev/null; sleep 5; kill -KILL "${cpid}" 2>/dev/null; fi
-                  rm -f "${hb_file}"
-                  exit 143
-                fi
-
-                # Idle check with network-activity probe
-                if [ "${idle_secs}" -ge "${IMPLEMENT_IDLE_TIMEOUT}" ]; then
-                  cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
-                  net_active=false
-                  if [ -n "${cpid}" ] && [ -d "/proc/${cpid}/fd" ]; then
-                    sock_count="$(ls -l "/proc/${cpid}/fd" 2>/dev/null | grep -c ' socket:' || true)"
-                    if [ "${sock_count}" -gt 0 ]; then
-                      net_active=true
-                    fi
-                  fi
-                  if [ "${net_active}" = true ]; then
-                    echo "Codex idle for ${idle_secs}s but has ${sock_count} active socket(s) — extending idle window (attempt ${attempt})." >&2
-                    printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}" 2>/dev/null
-                  else
-                    echo "Codex killed — no output for ${idle_secs}s and no active network connections (idle limit: ${IMPLEMENT_IDLE_TIMEOUT}s, attempt ${attempt})." >&2
-                    if [ -n "${cpid}" ]; then kill -TERM "${cpid}" 2>/dev/null; sleep 5; kill -KILL "${cpid}" 2>/dev/null; fi
-                    rm -f "${hb_file}"
-                    exit 142
-                  fi
-                fi
-              done
-            ) &
-            wd_pid=$!
-
-            # Run codex in background with stderr-based heartbeat tracking.
-            # The per-attempt `codex_log_attempt_<N>.txt` file is a `tee`
-            # branch alongside the cumulative `codex_log.txt`, so on
-            # final-failure (Fix #5) we can post the last 40 lines of
-            # each attempt's stderr to the issue without having to slice
-            # the cumulative log by line offset.
+            # Run codex through the shared stall-guard wrapper. The
+            # per-attempt `codex_log_attempt_<N>.txt` file is still preserved,
+            # and a FIFO keeps the cumulative `codex_log.txt` plus the live
+            # Actions stderr stream in lockstep with the wrapper's output.
             attempt_log_file="${RUNTIME_DIR}/codex_log_attempt_${attempt}.txt"
             : > "${attempt_log_file}"
+            attempt_stall_status_file="$(mktemp /tmp/codex_stall_status_implement.XXXXXX)"
+            attempt_stall_state=""
+            attempt_log_pipe_dir="$(mktemp -d /tmp/codex_log_pipe_implement.XXXXXX)"
+            attempt_log_pipe="${attempt_log_pipe_dir}/stderr.pipe"
+            mkfifo "${attempt_log_pipe}"
+            tee -a "${RUNTIME_DIR}/codex_log.txt" "${attempt_log_file}" < "${attempt_log_pipe}" >&2 &
+            attempt_log_tee_pid=$!
             if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
               sanitize_codex_prompt_file "${PROMPT_FILE_TO_USE}"
             fi
-            (
-              exec codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${PROMPT_FILE_TO_USE}"
-            ) > "${CODEX_OUTPUT_FILE}" 2> >(
-              while IFS= read -r line || [ -n "$line" ]; do
-                printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}" 2>/dev/null
-                printf '%s\n' "$line"
-              done | tee -a "${RUNTIME_DIR}/codex_log.txt" "${attempt_log_file}" >&2
-            ) &
-            codex_bg_pid=$!
-            echo "${codex_bg_pid}" > "${codex_pid_file}"
             cmd_rc=0
-            wait "${codex_bg_pid}" 2>/dev/null || cmd_rc=$?
+            timeout_cmd=()
+            if command -v timeout >/dev/null 2>&1; then
+              timeout_cmd=(timeout --signal=TERM --kill-after=5s "${attempt_wall}s")
+            else
+              echo "::warning::timeout unavailable; implement attempt ${attempt} will rely on the job timeout plus codex stall guard."
+            fi
+            if ! "${timeout_cmd[@]}" "${CODEX_STALL_GUARD_HELPER}" \
+              --phase implement \
+              --stdout-file "${CODEX_OUTPUT_FILE}" \
+              --stderr-file "${attempt_log_pipe}" \
+              --status-file "${attempt_stall_status_file}" \
+              -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${PROMPT_FILE_TO_USE}"; then
+              cmd_rc=$?
+            fi
+            wait "${attempt_log_tee_pid}" 2>/dev/null || true
+            rm -rf "${attempt_log_pipe_dir}"
 
-            # Clean up watchdog
-            kill "${wd_pid}" 2>/dev/null || true; wait "${wd_pid}" 2>/dev/null || true
-            rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}"
+            if attempt_stall_state="$(read_codex_stall_guard_state "${attempt_stall_status_file}" 2>/dev/null)"; then
+              case "${attempt_stall_state}" in
+                observed)
+                  echo "Codex implement attempt ${attempt} recorded codex_stall_observed (observe-only mode)."
+                  ;;
+                killed)
+                  echo "::warning::Codex implement attempt ${attempt} recorded codex_stall_killed."
+                  ;;
+              esac
+            fi
+            rm -f "${attempt_stall_status_file}"
+
+            if [ "${cmd_rc}" -eq 124 ]; then
+              echo "::warning::Codex implement attempt ${attempt} hit the outer wall-clock limit (${attempt_wall}s)."
+            fi
 
             attempt_was_empty=false
             if [ "${cmd_rc}" -eq 0 ]; then
@@ -2038,11 +2041,15 @@ jobs:
                 attempt_was_empty=true
               fi
             else
-              # Watchdog kill (wall-time/idle) or other non-zero exit. Salvage
-              # any file changes Codex managed to write before being killed —
+              # Stall-guard kill, outer timeout, or other non-zero exit.
+              # Salvage any file changes Codex managed to write before being
+              # interrupted —
               # otherwise long attempts that produce real partial work get
               # discarded and the loop wastes its remaining budget restarting
               # from scratch (see analyze-log run 24989488561).
+              if codex_stall_guard_kill_detected "${cmd_rc}" "${attempt_stall_state}"; then
+                echo "::warning::Codex exited with code $cmd_rc on attempt ${attempt} after a codex stall-guard kill."
+              fi
               codex_delta="$(git status --porcelain -uall | filter_runtime_status_noise | grep -vxFf "${CODEX_PRE_BASELINE}" || true)"
               if delta_is_substantive "${codex_delta}"; then
                 echo "::warning::Codex exited with code $cmd_rc on attempt ${attempt} but produced file changes; salvaging partial work."
@@ -2051,10 +2058,10 @@ jobs:
               elif [ -n "${codex_delta}" ]; then
                 echo "::warning::Codex exited with code $cmd_rc on attempt ${attempt} and only made whitespace-only worktree changes — refusing to salvage; treating as empty."
               fi
-              # Watchdog-kill / non-zero-exit + empty stdout is the same
+              # Stall-guard-kill / timeout / non-zero-exit + empty stdout is the same
               # stuck/no-output failure mode as the cmd_rc==0 + empty
               # branch above; count it toward the empty-streak so a
-              # series of watchdog kills also trips the Fix #2 bail.
+              # series of interrupted attempts also trips the Fix #2 bail.
               # Use the same whitespace-stripped emptiness check as the
               # cmd_rc==0 branch (`grep -q '[^[:space:]]'`) so the
               # streak treats both branches identically — otherwise a
@@ -2064,7 +2071,7 @@ jobs:
               if ! grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}" 2>/dev/null; then
                 # Mirror the cmd_rc==0 + empty-stdout branch: surface a
                 # stderr-side announce-edit phrase in the diagnostic so
-                # watchdog-killed runs that left an announce-and-stop
+                # interrupted runs that left an announce-and-stop
                 # narrative on stderr don't get mis-classified as a
                 # plain empty-output failure.
                 if [ -f "${attempt_log_file}" ] && grep -qEi "${ANNOUNCE_EDIT_REGEX}" "${attempt_log_file}" 2>/dev/null; then

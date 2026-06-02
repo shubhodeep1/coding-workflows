@@ -1204,6 +1204,25 @@ _validate_phase_threshold STALL_THRESHOLD_DONE_MINUTES
 _validate_phase_threshold STALL_THRESHOLD_READY_TO_MERGE_MINUTES
 _validate_phase_threshold STALL_THRESHOLD_REVIEW_BLOCKED_MINUTES
 
+# S2 event-idle kill mode makes the implement-phase run-age threshold an outer
+# safety net (90 minutes by default) only when kill mode is actually active.
+# Observe-only mode preserves the legacy global window unless an explicit
+# implement override was provided.
+normalize_stall_guard_thresholds() {
+  CODEX_STALL_GUARD_ENABLED="${CODEX_STALL_GUARD_ENABLED:-false}"
+  if is_truthy "${CODEX_STALL_GUARD_ENABLED}"; then
+    CODEX_STALL_GUARD_ENABLED="true"
+  else
+    CODEX_STALL_GUARD_ENABLED="false"
+  fi
+
+  if [ -z "${STALL_THRESHOLD_IMPLEMENTING_MINUTES:-}" ] && [ "${CODEX_STALL_GUARD_ENABLED}" = "true" ]; then
+    STALL_THRESHOLD_IMPLEMENTING_MINUTES="90"
+  fi
+}
+
+normalize_stall_guard_thresholds
+
 # Build the JSON dict for per-phase overrides (only include vars that are set).
 _build_phase_thresholds_json() {
   local parts=()
@@ -8345,15 +8364,83 @@ _load_actions_runs_cached() {
 # queued) workflow runs — i.e., runs that started recently enough that they
 # could still be making progress.
 #
-# Runs that have been in_progress for longer than STALL_THRESHOLD_MINUTES
-# are treated as zombie/hung runs and excluded. This prevents a stuck
-# Actions runner from blocking stall recovery indefinitely.
+# Runs that have been active longer than their effective phase threshold are
+# treated as zombie/hung runs and excluded. Implement runs can use the tighter
+# STALL_THRESHOLD_IMPLEMENTING_MINUTES backstop when S2 kill mode is active.
 #
 # Outputs a newline-separated list of issue numbers.
+workflow_run_is_implement() {
+  local run_json="$1"
+  local workflow_name workflow_path
+
+  workflow_name="$(printf '%s' "${run_json}" | jq -r '.name // ""' 2>/dev/null || echo '')"
+  workflow_path="$(printf '%s' "${run_json}" | jq -r '.path // ""' 2>/dev/null || echo '')"
+
+  case "${workflow_path}" in
+    */implement.yml|*/internal-implement.yml|implement.yml|internal-implement.yml)
+      return 0
+      ;;
+  esac
+
+  case "${workflow_name}" in
+    *AI\ Implement*|*Internal\ Implement*)
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
+workflow_run_is_review_family() {
+  local run_json="$1"
+  local workflow_name workflow_path
+
+  workflow_name="$(printf '%s' "${run_json}" | jq -r '.name // ""' 2>/dev/null || echo '')"
+  workflow_path="$(printf '%s' "${run_json}" | jq -r '.path // ""' 2>/dev/null || echo '')"
+
+  case "${workflow_path}" in
+    */ai-review.yml|*/internal-review.yml|*/review_autofix.yml|ai-review.yml|internal-review.yml|review_autofix.yml)
+      return 0
+      ;;
+  esac
+
+  case "${workflow_name}" in
+    AI\ Review|Internal\ Review|Review\ Autofix)
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
+workflow_run_stall_threshold_seconds() {
+  local run_json="$1"
+  local stall_minutes="${STALL_THRESHOLD_MINUTES:-120}"
+
+  if [ -n "${STALL_THRESHOLD_IMPLEMENTING_MINUTES:-}" ] && workflow_run_is_implement "${run_json}"; then
+    stall_minutes="${STALL_THRESHOLD_IMPLEMENTING_MINUTES}"
+  fi
+
+  printf '%s' "$(( stall_minutes * 60 ))"
+}
+
+workflow_run_is_fresh() {
+  local run_json="$1"
+  local now_epoch="$2"
+  local start_epoch threshold_secs
+
+  start_epoch="$(printf '%s' "${run_json}" | jq -r '(.run_started_at // .created_at // "1970-01-01T00:00:00Z") | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601? // 0' 2>/dev/null || echo '0')"
+  [[ "${start_epoch}" =~ ^[0-9]+$ ]] || start_epoch=0
+
+  threshold_secs="$(workflow_run_stall_threshold_seconds "${run_json}")"
+  [[ "${threshold_secs}" =~ ^[0-9]+$ ]] || threshold_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))
+
+  [ $(( now_epoch - start_epoch )) -lt "${threshold_secs}" ]
+}
+
 build_active_issue_set() {
   local now_epoch
   now_epoch="$(date +%s)"
-  local stall_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))
 
   # Fetch active runs from the shared per-tick actions-runs loader.
   # This preserves one conditional API retrieval per tick.
@@ -8374,25 +8461,27 @@ build_active_issue_set() {
   local all_runs
   all_runs="$(echo "${runs_json}" "${queued_json}" | jq -s 'add // []' 2>/dev/null || echo '[]')"
 
-  # Filter out zombie runs: any run that has been active for longer than
-  # the stall threshold is considered hung and should not block recovery.
-  # Uses run_started_at (actual execution start) with created_at as fallback.
-  local fresh_runs
-  fresh_runs="$(echo "${all_runs}" | jq --argjson now "${now_epoch}" --argjson threshold "${stall_secs}" '
-    [.[] |
-     # Parse the start timestamp (ISO 8601 → epoch)
-     (.run_started_at // .created_at // "1970-01-01T00:00:00Z") as $ts |
-     ($ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) as $start_epoch |
-     select(($now - $start_epoch) < $threshold)
-    ]
-  ' 2>/dev/null || echo '[]')"
+  # Filter out zombie runs using the effective per-run threshold.
+  local fresh_runs='[]'
+  local -a fresh_run_rows=()
+  local run_json
+  while IFS= read -r run_json; do
+    [ -n "${run_json}" ] || continue
+    if workflow_run_is_fresh "${run_json}" "${now_epoch}"; then
+      fresh_run_rows+=("${run_json}")
+    fi
+  done < <(printf '%s' "${all_runs}" | jq -c '.[]?' 2>/dev/null || true)
+
+  if [ "${#fresh_run_rows[@]}" -gt 0 ]; then
+    fresh_runs="$(printf '%s\n' "${fresh_run_rows[@]}" | jq -s '.' 2>/dev/null || echo '[]')"
+  fi
 
   local fresh_count
-  fresh_count="$(echo "${fresh_runs}" | jq 'length')"
+  fresh_count="${#fresh_run_rows[@]}"
   local total_count
   total_count="$(echo "${all_runs}" | jq 'length')"
   if [ "${total_count}" -gt "${fresh_count}" ]; then
-    echo "  Active runs: ${total_count} total, ${fresh_count} fresh ($(( total_count - fresh_count )) zombie runs excluded as >$(( stall_secs / 60 ))m old)." >&2
+    echo "  Active runs: ${total_count} total, ${fresh_count} fresh ($(( total_count - fresh_count )) zombie runs excluded by stall thresholds)." >&2
   fi
 
   # Extract issue numbers from fresh runs via head_branch patterns.
@@ -8429,7 +8518,7 @@ issue_has_active_workflow() {
 
 # Cancel zombie workflow runs for a specific issue.
 # A zombie is a pipeline run (clarify, plan, implement, orchestrate, etc.)
-# that has been in_progress for longer than the stall threshold.
+# that has been in_progress for longer than its effective stall threshold.
 # Cancelling prevents resource waste and avoids conflicts with the recovery
 # action (e.g., two implement runs on the same branch).
 #
@@ -8445,7 +8534,6 @@ cancel_zombie_runs_for_issue() {
   local issue_num="$1"
   local now_epoch
   now_epoch="$(date +%s)"
-  local stall_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))
 
   # Reuse the shared actions-runs blob and preserve prior in_progress+50 scope.
   local actions_runs_blob
@@ -8455,27 +8543,31 @@ cancel_zombie_runs_for_issue() {
   runs_json="$(printf '%s' "${actions_runs_blob}" | jq -c '[.workflow_runs[]? | select((.status // "") == "in_progress")] | .[:50]' 2>/dev/null || echo '[]')"
   [ -n "${runs_json}" ] || runs_json='[]'
 
-  local zombie_run_ids
-  zombie_run_ids="$(echo "${runs_json}" | jq -r --argjson now "${now_epoch}" --argjson threshold "${stall_secs}" --arg issue "${issue_num}" '
-    [.[] |
-     (.run_started_at // .created_at // "1970-01-01T00:00:00Z") as $ts |
-     ($ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) as $start_epoch |
-     select(($now - $start_epoch) >= $threshold) |
-     select(.head_branch // "" | test("(^|/)(?:ai/(?:issue-)?|ai-(?:implement-)?)" + $issue + "(?:[^0-9]|$)")) |
-     select((
-       (.name // "") == "AI Review"
-       or (.name // "") == "Internal Review"
-       or (.name // "") == "Review Autofix"
-       or ((.path // "") | endswith("ai-review.yml"))
-       or ((.path // "") | endswith("internal-review.yml"))
-       or ((.path // "") | endswith("review_autofix.yml"))
-     ) | not) |
-     .id
-    ] | .[]
-  ' 2>/dev/null || true)"
+  local -a zombie_run_ids=()
+  local run_json run_id head_branch
+  while IFS= read -r run_json; do
+    [ -n "${run_json}" ] || continue
+    if workflow_run_is_fresh "${run_json}" "${now_epoch}"; then
+      continue
+    fi
 
-  if [ -n "${zombie_run_ids}" ]; then
-    for run_id in ${zombie_run_ids}; do
+    head_branch="$(printf '%s' "${run_json}" | jq -r '.head_branch // ""' 2>/dev/null || echo '')"
+    if ! printf '%s\n' "${head_branch}" | grep -Eq "(^|/)(ai/(issue-)?|ai-(implement-)?)${issue_num}([^0-9]|$)"; then
+      continue
+    fi
+
+    if workflow_run_is_review_family "${run_json}"; then
+      continue
+    fi
+
+    run_id="$(printf '%s' "${run_json}" | jq -r '.id // empty' 2>/dev/null || echo '')"
+    if [[ "${run_id}" =~ ^[0-9]+$ ]]; then
+      zombie_run_ids+=("${run_id}")
+    fi
+  done < <(printf '%s' "${runs_json}" | jq -c '.[]?' 2>/dev/null || true)
+
+  if [ "${#zombie_run_ids[@]}" -gt 0 ]; then
+    for run_id in "${zombie_run_ids[@]}"; do
       echo "  Cancelling zombie workflow run ${run_id} for issue #${issue_num}..."
       gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/cancel" -X POST 2>/dev/null || true
     done
