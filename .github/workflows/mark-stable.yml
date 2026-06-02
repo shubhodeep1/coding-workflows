@@ -262,6 +262,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_refresh_runner.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_discovery_bootstrap.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_workflow_validate_bootstrap.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_init.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_family_node_runtime.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_workflow_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mcp_handshake_probe.py

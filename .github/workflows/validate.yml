@@ -64,6 +64,7 @@ env:
   CODEX_HEARTBEAT_ENABLED: ${{ vars.CODEX_HEARTBEAT_ENABLED || '1' }}
   CODEX_HEARTBEAT_INTERVAL_SECS: ${{ vars.CODEX_HEARTBEAT_INTERVAL_SECS || '30' }}
   SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}
+  WORKSPACE_REUSE_ENABLED: ${{ vars.WORKSPACE_REUSE_ENABLED || 'false' }}
 
 jobs:
   validate:
@@ -159,21 +160,6 @@ jobs:
           ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
-
-      - name: Initialize Serena runtime state
-        run: |
-          set -euo pipefail
-
-          serena_project_preexisted="false"
-          if git ls-files --error-unmatch -- .serena/project.yml >/dev/null 2>&1 || [ -e .serena/project.yml ]; then
-            serena_project_preexisted="true"
-          fi
-
-          {
-            echo "SERENA_AVAILABLE=false"
-            echo "SERENA_PROJECT_PREEXISTED=${serena_project_preexisted}"
-            echo "SERENA_PROJECT_BOOTSTRAP_HASH="
-          } >> "$GITHUB_ENV"
 
       - name: Log checkout ref
         run: |
@@ -306,7 +292,7 @@ jobs:
           }
 
           _fetched_scripts=()
-          for f in gh_helpers.sh ai_labels.py render_prompt.sh render_prompt.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py write_codex_config.sh orchestrate_force_tick.sh; do
+          for f in gh_helpers.sh ai_labels.py render_prompt.sh render_prompt.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py write_codex_config.sh orchestrate_force_tick.sh workspace_init.sh; do
             copy_from_ref_or_local "scripts/${f}" "scripts/${f}"
             chmod +x "scripts/${f}"
             _fetched_scripts+=("${f}")
@@ -634,6 +620,87 @@ jobs:
             copy_from_ref_or_local ".github/ai/label_contract.v1.json" ".github/ai/label_contract.v1.json" "false" "true" || true
           fi
 
+      - name: Initialize workspace metadata
+        id: workspace_meta
+        run: |
+          set -euo pipefail
+
+          workspace_reuse_enabled="${WORKSPACE_REUSE_ENABLED:-false}"
+          workspace_identifier=""
+          if [[ "${{ inputs.tracking_issue }}" =~ ^[0-9]+$ ]] && [ "${{ inputs.tracking_issue }}" -gt 0 ]; then
+            workspace_identifier="${{ inputs.tracking_issue }}"
+          else
+            workspace_reuse_enabled="false"
+          fi
+
+          WORKSPACE_REUSE_ENABLED="${workspace_reuse_enabled}" \
+          WORKSPACE_REQUIRE_STABLE_IDENTIFIER_FOR_REUSE="true" \
+          WORKSPACE_ISSUE_IDENTIFIER="${workspace_identifier}" \
+          WORKSPACE_SOURCE_PATH="${GITHUB_WORKSPACE}" \
+            bash scripts/workspace_init.sh metadata
+
+      - name: Restore reusable workspace cache
+        if: steps.workspace_meta.outputs.workspace_reuse_enabled == 'true'
+        id: workspace_cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ steps.workspace_meta.outputs.workspace_path }}
+          key: ${{ steps.workspace_meta.outputs.workspace_cache_key }}
+          restore-keys: |
+            ${{ steps.workspace_meta.outputs.workspace_cache_restore_prefix_exact }}
+            ${{ steps.workspace_meta.outputs.workspace_cache_restore_prefix_issue }}
+
+      - name: Finalize workspace metadata
+        id: workspace_state
+        run: |
+          set -euo pipefail
+          WORKSPACE_REUSE_ENABLED="${{ steps.workspace_meta.outputs.workspace_reuse_enabled }}" \
+          WORKSPACE_REQUIRE_STABLE_IDENTIFIER_FOR_REUSE="true" \
+          WORKSPACE_ISSUE_IDENTIFIER="${{ steps.workspace_meta.outputs.workspace_issue_identifier }}" \
+          WORKSPACE_SOURCE_PATH="${GITHUB_WORKSPACE}" \
+          WORKSPACE_FINGERPRINT="${{ steps.workspace_meta.outputs.workspace_fingerprint }}" \
+          WORKSPACE_CACHE_MATCHED_KEY="${{ steps.workspace_cache.outputs.cache-matched-key || '' }}" \
+            bash scripts/workspace_init.sh metadata
+
+      - name: Finalize workspace contents
+        run: |
+          set -euo pipefail
+          WORKSPACE_SOURCE_PATH="${GITHUB_WORKSPACE}" \
+          WORKSPACE_PATH="${{ steps.workspace_state.outputs.workspace_path }}" \
+          WORKSPACE_REUSE_ENABLED="${{ steps.workspace_state.outputs.workspace_reuse_enabled }}" \
+          WORKSPACE_CACHE_RESTORE_STATE="${{ steps.workspace_state.outputs.workspace_cache_restore_state }}" \
+            bash scripts/workspace_init.sh finalize
+
+      - name: Activate workspace shell context
+        run: |
+          set -euo pipefail
+          workspace_shell_env="${{ steps.runtime.outputs.runtime_dir }}/workspace-shell.env"
+          cat > "${workspace_shell_env}" <<'EOF'
+          if [ -n "${WORKSPACE_PATH:-}" ] && [ -d "${WORKSPACE_PATH}" ]; then
+            cd "${WORKSPACE_PATH}"
+          fi
+          EOF
+          {
+            echo "BASH_ENV=${workspace_shell_env}"
+            echo "GIT_DIR=${GITHUB_WORKSPACE}/.git"
+            echo "GIT_WORK_TREE=${WORKSPACE_PATH}"
+          } >> "$GITHUB_ENV"
+
+      - name: Initialize Serena runtime state
+        run: |
+          set -euo pipefail
+
+          serena_project_preexisted="false"
+          if git ls-files --error-unmatch -- .serena/project.yml >/dev/null 2>&1 || [ -e .serena/project.yml ]; then
+            serena_project_preexisted="true"
+          fi
+
+          {
+            echo "SERENA_AVAILABLE=false"
+            echo "SERENA_PROJECT_PREEXISTED=${serena_project_preexisted}"
+            echo "SERENA_PROJECT_BOOTSTRAP_HASH="
+          } >> "$GITHUB_ENV"
+
       - name: Restore validate hints cache
         # Reuse .ai/validate-hints-cache/hints.yml from a prior successful
         # run in the same repo with a matching cache key so
@@ -648,7 +715,7 @@ jobs:
         id: validate_hints_cache
         uses: actions/cache@v5
         with:
-          path: .ai/validate-hints-cache
+          path: ${{ steps.workspace_state.outputs.workspace_path }}/.ai/validate-hints-cache
           key: validate-hints-v1-${{ hashFiles('docker-compose*.yml', 'compose*.yml', '**/Dockerfile', '**/Dockerfile.*', '**/package.json', '**/pyproject.toml', '**/requirements*.txt', '**/go.mod', '**/Cargo.toml') }}
 
       - name: Normalize behavioural smoke include flag
@@ -721,7 +788,7 @@ jobs:
         continue-on-error: true
         uses: actions/cache/restore@v4
         with:
-          path: .ai/review_runtime/
+          path: ${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_runtime/
           key: review-ledger-${{ github.repository }}-pr-${{ steps.behavioural_smoke_pr.outputs.pr_number }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             review-ledger-${{ github.repository }}-pr-${{ steps.behavioural_smoke_pr.outputs.pr_number }}-
@@ -1091,7 +1158,7 @@ jobs:
           retention-days: 14
           path: |
             ${{ steps.runtime.outputs.runtime_dir }}/
-            validation/
+            ${{ steps.workspace_state.outputs.workspace_path }}/validation/
 
       - name: Write run summary
         if: always()
