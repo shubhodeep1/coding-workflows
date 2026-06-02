@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-3042` @ `f57c0e83adae82a604dd0fd5e56425c1b7516bdb`\n\nClarification status: no open questions; `/answer [auto-answered-by-orchestrator]` is sufficient to plan.\n\nRepresentative patterns to follow:\n- Dispatch precedent: `scripts/review_conflict_resolve.sh`\u2019s current immediate poller dispatch block.\n- Tracking-parent extraction: `scripts/resolve_integration_ref.sh` / `.github/workflows/orchestrate_clarify_respond.yml` parsing `Tracking issue: #N`.\n- Fail-open memory wrapper style: `scripts/memory_helpers.sh`.\n\n## Files likely to change\nPrimary:\n- `scripts/orchestrate_force_tick.sh` (new)\n- `scripts/memory_helpers.sh`\n- `.github/workflows/implement.yml`\n- `.github/workflows/review_autofix.yml`\n- `.github/workflows/validate.yml`\n- `scripts/review_conflict_resolve.sh`\n- `tests/test_orchestrate_force_tick.py` (new)\n\nScoped parity check / likely only if signature changes are needed:\n- `workflow-templates/ai-implement.yml`\n- `workflow-templates/ai-review.yml`\n- `workflow-templates/ai-validate.yml`\n\n## Plan\n1. **Add the shared force-tick helper**\n   - Create `scripts/orchestrate_force_tick.sh`.\n   - Make it:\n     - resolve the tracking issue from an explicit arg when available, otherwise from orchestrator child-issue metadata (`Tracking issue: #N`);\n     - honor `FORCE_TICK_ENABLED` (default `true`);\n     - honor `FORCE_TICK_COOLDOWN_SECONDS` (default `30`);\n     - dispatch the poller workflow selected by `ORCHESTRATE_POLL_WORKFLOW_FILE` (default `internal-orchestrate-poll.yml`);\n     - fail open when memory or dispatch fails, leaving cron as fallback.\n\n2. **Persist cooldown state via `scripts/memory_helpers.sh`**\n   - Add force-tick-specific read/write helpers in `scripts/memory_helpers.sh`.\n   - Store the last dispatch record at `runs/force_tick/<tracking_issue>.json` on the `ai-memory` branch.\n   - Persist at least:\n     - tracking issue number,\n     - last dispatch timestamp,\n     - last dispatch payload (`reason`, `source_workflow`, `issue`, `run_id`).\n   - Keep the shell-wrapper behavior consistent with existing helpers: telemetry + fail-open fallback.\n\n3. **Replace / centralize phase-end poller nudges**\n   - `scripts/review_conflict_resolve.sh`\n     - remove the inline `_dispatch_integration_judge_now` `gh workflow run` implementation;\n     - delegate to `scripts/orchestrate_force_tick.sh`.\n   - `.github/workflows/implement.yml`\n     - bootstrap the new script;\n     - call the helper on the successful PR-created tail, after PR metadata exists and the issue is moved to `ai:done`.\n   - `.github/workflows/review_autofix.yml`\n     - bootstrap the new script;\n     - call the helper from merged-PR/post-merge handling;\n     - call it after `ai:review-blocked` labeling paths.\n   - `.github/workflows/validate.yml`\n     - bootstrap the new script;\n     - call it after validation status is finalized for tracked runs (`tracking_issue > 0`), before the final exit code is enforced.\n\n4. **Keep consumer bootstrap/parity intact**\n   - Add `orchestrate_force_tick.sh` to each workflow\u2019s staged support-script list.\n   - In `implement.yml`, also add it to the post-commit restage block, because late steps run after cleanup.\n   - Re-check the listed `workflow-templates/*` wrappers and update only if the reusable-workflow surface actually changes.\n\n## Data structures affected\n- New ai-memory JSON record per tracking issue at:\n  - `runs/force_tick/<tracking_issue>.json`\n- New stable dispatch payload shape:\n  - `reason`\n  - `source_workflow`\n  - `issue`\n  - `run_id`\n\n## API / interface changes\n- New script interface in `scripts/orchestrate_force_tick.sh` (likely explicit args for tracking issue / reason / source / issue / run id).\n- New env vars:\n  - `FORCE_TICK_ENABLED` (default `true`)\n  - `FORCE_TICK_COOLDOWN_SECONDS` (default `30`)\n- Reuse existing:\n  - `ORCHESTRATE_POLL_WORKFLOW_FILE`\n\n## Risks / edge cases / codebase conflicts\n- **Conflict:** `.github/workflows/internal-orchestrate-poll.yml` and `workflow-templates/ai-orchestrate-poll.yml` currently declare `workflow_dispatch: {}` with **no inputs**, so the Symphony-plan payload `{reason, source_workflow, issue, run_id}` cannot be delivered as real workflow inputs without widening scope.\n- **Conflict:** `validate.yml` does not currently set final pass/fail labels itself; the force-tick hook should run after validation status/run-event finalization, not after a non-existent label step.\n- `ai-implement.yml` is only an `issue_comment` wrapper today; if the design unexpectedly requires wrapper dispatchability, that is another out-of-scope surface.\n- Parallel phase completions for the same tracking issue can race; the cooldown write path must re-read/update safely enough to avoid duplicate dispatches.\n- Non-orchestrator / standalone paths must cleanly no-op when no tracking issue can be resolved.\n- Preserve existing cron poller behavior; helper failure must never block progression.\n\n## Testing considerations\nAdd `tests/test_orchestrate_force_tick.py` to cover:\n- first call dispatches and writes cooldown state;\n- second call inside cooldown no-ops;\n- call after cooldown dispatches again;\n- tracking-issue extraction from child-issue metadata;\n- fail-open/no-op behavior when tracking issue is absent;\n- dispatch payload shape construction.\n\nAlso include static contract assertions that:\n- `implement.yml`, `review_autofix.yml`, `validate.yml`, and `review_conflict_resolve.sh` call the shared helper;\n- the required bootstrap lists include `orchestrate_force_tick.sh`;\n- the resolver no longer owns a bespoke raw `gh workflow run internal-orchestrate-poll.yml` block.\n\nAssumptions:\n- This change only fast-tracks the existing poller; it does not replace cron.\n- Cooldown state should remain shell-managed inside `memory_helpers.sh` rather than widening `ai_memory.py` / `ai_memory_lib.py` scope.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "ec580a3963b93cb10d4072461edf2b4c1bc94e47232f53e51fee16ddd2082ff7",
+  "lineage": {
+    "issue_number": 3058,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26834541537",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26834541537",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3058"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260602165705_847e42ca2f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3058,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26834541537"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3058",
+  "timestamps": {
+    "created_at": "2026-06-02T16:57:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
