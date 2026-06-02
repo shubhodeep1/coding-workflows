@@ -15582,26 +15582,37 @@ fi
     # Layer-2 branch fallback: the re-anchor map above is built solely from
     # the issue→PR cross-reference timeline in _current_wave_details_json —
     # the same brittle source the Layer-1 fresh-push guard uses.  When that
-    # cross-reference is transiently empty for an ai:done / ai:ready-to-merge
-    # issue, its headPushedAt is absent and detect_stalls falls back to the
+    # cross-reference is transiently empty or malformed for an ai:done issue,
+    # its headPushedAt is unusable and detect_stalls falls back to the
     # status_since-only clock, re-flagging a PR that was just pushed.  Re-
     # resolve those (and only those) issues by their deterministic
     # ai/issue-<n> head branch so the re-anchor is not blinded in lock-step
-    # with the fresh-push guard.  Bounded by design: fires only for PR-bearing
-    # -phase issues MISSING a primary headPushedAt, which on the happy path
-    # (cross-reference present) is zero, so this adds 0 API calls per tick in
-    # steady state (§15).  Fail-open: any resolution failure leaves the legacy
-    # status_since anchor in place for that issue.
+    # with the fresh-push guard while preserving the intentionally narrow
+    # ai:done-only re-anchor scope.  Bounded by design: fires only for ai:done
+    # issues whose primary headPushedAt is missing, empty, or unparseable,
+    # which on the happy path (cross-reference present and parseable) is zero,
+    # so this adds 0 API calls per tick in steady state (§15).  Fail-open: any
+    # resolution failure leaves the legacy status_since anchor in place for
+    # that issue.
     if [ -n "${_current_wave_details_json:-}" ] && [ "${_current_wave_details_json}" != "{}" ]; then
       _reanchor_fallback_issues="$(printf '%s' "${_current_wave_details_json}" | jq -r '
         to_entries[]
-        | select((.value.labels // []) | any(. == "ai:done" or . == "ai:ready-to-merge"))
+        | select((.value.labels // []) | any(. == "ai:done"))
+        | .value.linked_pr as $linked_pr
         | select(
-            (.value.linked_pr == null)
-            or ((.value.linked_pr | type) != "object")
-            or (.value.linked_pr.headPushedAt == null)
-            or ((.value.linked_pr.headPushedAt | type) != "string")
-            or ((.value.linked_pr.headPushedAt | length) == 0)
+            if ($linked_pr == null) then
+              true
+            elif (($linked_pr | type) != "object") then
+              true
+            elif ($linked_pr.headPushedAt == null) then
+              true
+            elif (($linked_pr.headPushedAt | type) != "string") then
+              true
+            elif (($linked_pr.headPushedAt | length) == 0) then
+              true
+            else
+              ((try ($linked_pr.headPushedAt | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch null) == null)
+            end
           )
         | .key
       ' 2>/dev/null || true)"

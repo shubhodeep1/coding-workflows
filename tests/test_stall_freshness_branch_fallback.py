@@ -13,8 +13,8 @@ The fix adds a deterministic ``ai/issue-<n>`` head-branch fallback —
 ``_resolve_linked_pr_fresh_by_branch`` — and wires it into:
   - Layer 1 via ``_check_fresh_push_guard_with_fallback`` (used by both
     ``recover_stalled_issue`` and ``run_standalone_stall_recovery``), and
-  - Layer 2 via a selection filter that re-resolves only the ai:done /
-    ai:ready-to-merge wave issues whose primary headPushedAt is missing.
+  - Layer 2 via a selection filter that re-resolves only the ai:done
+    wave issues whose primary headPushedAt is unusable.
 
 Uses the same function-extraction-plus-stub pattern as
 ``test_stall_recovery_pr_lookup.py``: pull the helper definitions out of
@@ -382,13 +382,22 @@ def test_wrapper_ready_to_merge_phase_eligible():
 
 _REANCHOR_SELECT_FILTER = r"""
 to_entries[]
-| select((.value.labels // []) | any(. == "ai:done" or . == "ai:ready-to-merge"))
+| select((.value.labels // []) | any(. == "ai:done"))
+| .value.linked_pr as $linked_pr
 | select(
-    (.value.linked_pr == null)
-    or ((.value.linked_pr | type) != "object")
-    or (.value.linked_pr.headPushedAt == null)
-    or ((.value.linked_pr.headPushedAt | type) != "string")
-    or ((.value.linked_pr.headPushedAt | length) == 0)
+    if ($linked_pr == null) then
+      true
+    elif (($linked_pr | type) != "object") then
+      true
+    elif ($linked_pr.headPushedAt == null) then
+      true
+    elif (($linked_pr.headPushedAt | type) != "string") then
+      true
+    elif (($linked_pr.headPushedAt | length) == 0) then
+      true
+    else
+      ((try ($linked_pr.headPushedAt | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch null) == null)
+    end
   )
 | .key
 """
@@ -403,20 +412,20 @@ def test_reanchor_selection_filter_picks_only_missing_pr_bearing_issues():
 			'"101":{"labels":["ai:done"],"linked_pr":{"headPushedAt":"2026-06-01T00:00:00Z"}},'
 			'"102":{"labels":["ai:ready-to-merge"],"linked_pr":{"headPushedAt":null}},'
 			'"103":{"labels":["ai:implementing"],"linked_pr":null},'
-			'"104":{"labels":["ai:done"],"linked_pr":{"headPushedAt":""}}'
+			'"104":{"labels":["ai:done"],"linked_pr":{"headPushedAt":""}},'
+			'"105":{"labels":["ai:done"],"linked_pr":{"headPushedAt":"not-a-timestamp"}}'
 			'}'
 		)
-		filt = _REANCHOR_SELECT_FILTER.replace('"', r'\"')
 		r = _invoke(
 			body=f"""
 			WAVE='{wave}'
-			printf '%s' "$WAVE" | jq -r "{filt}" | sort | tr '\\n' ' '
+			printf '%s' "$WAVE" | jq -r '{_REANCHOR_SELECT_FILTER}' | sort | tr '\\n' ' '
 			""",
 			cwd=tmp,
 		)
 		assert r.returncode == 0, r.stderr
 		selected = r.stdout.split()
-		assert selected == ["100", "102", "104"], f"got {selected}\n{r.stdout}\n{r.stderr}"
+		assert selected == ["100", "104", "105"], f"got {selected}\n{r.stdout}\n{r.stderr}"
 
 
 def test_resolver_prefers_freshest_open_pr_when_multiple_prs_share_branch():
