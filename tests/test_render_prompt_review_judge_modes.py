@@ -12,6 +12,7 @@ import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+RENDER_PROMPT_SH = REPO_ROOT / "scripts" / "render_prompt.sh"
 RENDER_PROMPT_PY = REPO_ROOT / "scripts" / "render_prompt.py"
 PROMPTS_DIR = REPO_ROOT / "prompts"
 CONTRACTS_DIR = PROMPTS_DIR / "contracts"
@@ -64,6 +65,28 @@ def _run_render(
 	)
 
 
+def _run_render_sh(
+	prompt_path: Path,
+	*,
+	env_overrides: dict[str, str | None] | None = None,
+	workdir: Path = REPO_ROOT,
+) -> subprocess.CompletedProcess[str]:
+	env = _base_env()
+	for name, value in (env_overrides or {}).items():
+		if value is None:
+			env.pop(name, None)
+		else:
+			env[name] = value
+	return subprocess.run(
+		["bash", str(RENDER_PROMPT_SH), str(prompt_path)],
+		cwd=str(workdir),
+		env=env,
+		text=True,
+		capture_output=True,
+		timeout=60,
+	)
+
+
 def _assert_success(proc: subprocess.CompletedProcess[str]) -> None:
 	assert proc.returncode == 0, proc.stderr
 	assert proc.stderr == ""
@@ -97,6 +120,17 @@ def test_judge_prompts_render_under_current_contracts() -> None:
 	_assert_success(mode_judge_stall)
 	assert stall_prefetch + "\n" in mode_judge_stall.stdout
 	assert "{{SEMBLE_PREFETCH}}" not in mode_judge_stall.stdout
+
+
+def test_shell_wrapper_renders_review_blocked_judge_under_current_contracts() -> None:
+	review_blocked_prefetch = "=== SEMBLE: Review-Blocked Judge Context ===\nchunk"
+	proc = _run_render_sh(
+		PROMPTS_DIR / "mode-judge-review-blocked.txt",
+		env_overrides={"SEMBLE_PREFETCH": review_blocked_prefetch},
+	)
+	_assert_success(proc)
+	assert review_blocked_prefetch + "\n" in proc.stdout
+	assert "{{SEMBLE_PREFETCH}}" not in proc.stdout
 
 
 @pytest.mark.parametrize(
@@ -196,6 +230,16 @@ def test_conflict_resolver_reports_missing_required_contract_violation() -> None
 	assert proc.returncode == 1
 	assert proc.stdout == ""
 	assert "missing_required" in proc.stderr
+	assert "CONFLICTED_FILES_LIST" in proc.stderr
+
+
+def test_shell_wrapper_reports_missing_required_contract_violation() -> None:
+	proc = _run_render_sh(PROMPTS_DIR / "conflict-resolver.txt")
+
+	assert proc.returncode == 1
+	assert proc.stdout == ""
+	assert "missing_required" in proc.stderr
+	assert "CONFLICTED_FILES_COUNT" in proc.stderr
 	assert "CONFLICTED_FILES_LIST" in proc.stderr
 
 
