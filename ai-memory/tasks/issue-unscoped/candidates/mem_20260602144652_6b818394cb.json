@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_render_prompt_validate_analytics_modes.py:195-221 | severity=high | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: The loop reassigns `prompt_file` inside the iteration, so the contract-failure test only exercises the final mode\u2019s fixture.\n  WHY: Both reviewers identified the same bug; a regression in any of the earlier modes\u2019 contract rejection paths would not be caught.\n- tests/test_render_prompt_validate_analytics_modes.py:28-73,107-115 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The test coverage around `optional_vars: {}` does not verify that the loader normalizes that shape consistently across modes.\n  WHY: The reviewer says this leaves one contract shape unchecked under strict-rendering / normalization logic, so one mode can behave differently from the others.\n- prompts/contracts/mode-validate-generate.yml:3 | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: Uses `optional_vars: {}` while sibling contracts use a keyed mapping for `optional_vars`.\n  WHY: This creates a structural inconsistency across the contract set even though the YAML parses correctly.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_render_prompt_validate_analytics_modes.py:195-214 | severity=high | confidence=5\n  PROBLEM: The test overwrites the `prompt_file` variable in each loop iteration, causing only the last mode's fixture to persist on disk.\n  WHY: Regression in the other 7 contracts' `unknown_in_template` rejection logic would not be caught.\n- prompts/contracts/mode-validate-generate.yml:3 | severity=medium | confidence=3\n  PROBLEM: Uses `optional_vars: {}` (empty inline mapping) while all 7 sibling contracts use `optional_vars:\\n  VAR_NAME: \"\"` format with a populated key.\n  WHY: While the YAML loader may parse both shapes, this creates structural inconsistency across the contract set.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_render_prompt_validate_analytics_modes.py:195-221 | severity=high | confidence=5\n  PROBLEM: The test reuses and overwrites the same `prompt_file` Path object inside the loop, so contract-failure behavior is only exercised for the last entry in `ALL_MODE_NAMES`.\n  WHY: A regression allowing an unknown placeholder to survive in any of the other seven contracts would not be caught by CI or the test suite; the `forbidden_present` sibling test has the identical bug.\n- tests/test_render_prompt_validate_analytics_modes.py:28-73,107-115 | severity=medium | confidence=4\n  PROBLEM: `mode-validate-generate` uses `optional_vars: {}` while the test suite does not verify that this shape normalizes identically to the keyed `optional_vars` mappings used by the other contracts.\n  WHY: The reviewer says strict rendering / normalization logic can treat the two shapes differently, leaving one mode with inconsistent placeholder substitution, error messaging, or validation behavior.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "aa0cbc4514966ec75d8956085742be76dc23879396407dcec59bbf26d9039742",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3055,
+    "run_id": "26826841881",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26826841881",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260602144652_6b818394cb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3055,
+    "run_id": "26826841881"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-02T14:46:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
