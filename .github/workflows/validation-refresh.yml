@@ -100,6 +100,14 @@ jobs:
           VALIDATION_DISCOVERY_DRY_RUN: ${{ github.event.inputs.discovery_dry_run || vars.VALIDATION_DISCOVERY_DRY_RUN || 'false' }}
           VALIDATION_DISCOVERY_DEDUP_DAYS: ${{ vars.VALIDATION_DISCOVERY_DEDUP_DAYS || '7' }}
           VALIDATION_DISCOVERY_MAX_ATTEMPTS: ${{ vars.VALIDATION_DISCOVERY_MAX_ATTEMPTS || '3' }}
+          # Aggregate wall-clock budget (seconds) for the codex discovery phase
+          # across all consumer repos. The runner stops invoking codex once the
+          # remaining budget can no longer cover one repo's worst case
+          # (MAX_ATTEMPTS * 300s) and degrades the rest to drift-monitoring only,
+          # so discovery cannot exceed this job's `timeout-minutes` (60). Default
+          # 2100s (35m) leaves >=20m for clone + render/lint/self-test across all
+          # repos. See scripts/validation_refresh_runner.py.
+          VALIDATION_DISCOVERY_BUDGET_SECS: ${{ vars.VALIDATION_DISCOVERY_BUDGET_SECS || '2100' }}
           VALIDATION_DISCOVERY_MODEL: ${{ vars.VALIDATION_DISCOVERY_MODEL || 'openai/gpt-5.4' }}
           VALIDATION_DISCOVERY_REASONING_EFFORT: ${{ vars.VALIDATION_DISCOVERY_REASONING_EFFORT || 'xhigh' }}
           VALIDATION_DISCOVERY_PR_BRANCH_PREFIX: ${{ vars.VALIDATION_DISCOVERY_PR_BRANCH_PREFIX || 'automation/validate-discovery' }}
@@ -213,7 +221,7 @@ jobs:
               reused = [d for d in discovery_pr_lines if d[1] in ("pr_reused",)]
               agreed = [d for d in discovery_pr_lines if d[1] in ("agree",)]
               failed = [d for d in discovery_pr_lines if d[1] in ("failed", "push_denied")]
-              skipped = [d for d in discovery_pr_lines if d[1] in ("skipped_dedup", "disabled", "dry_run")]
+              skipped = [d for d in discovery_pr_lines if d[1] in ("skipped_dedup", "disabled", "dry_run", "skipped_budget")]
               lines.append("")
               lines.append("### Discovery dispatch")
               lines.append("")

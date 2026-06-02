@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,6 +43,14 @@ except ModuleNotFoundError:
 
 
 REPO_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+
+# Per-`codex exec` wall-clock cap (seconds) for the discovery dispatch. This
+# is the unit the aggregate discovery budget (VALIDATION_DISCOVERY_BUDGET_SECS)
+# reasons about: a single repo's discovery can consume at most
+# `codex_attempts * DISCOVERY_CODEX_CALL_TIMEOUT_SECS`, so the runner only
+# starts a repo's discovery while that much budget remains. Matches the
+# CommandExecutor default so the explicit cap and the budget math agree.
+DISCOVERY_CODEX_CALL_TIMEOUT_SECS = 300
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -201,8 +210,26 @@ class ValidationRefreshRunner:
 		self.pr_title = pr_title
 		self.executor = executor or CommandExecutor()
 		self.discovery_ctx = discovery_ctx if discovery_ctx is not None else _build_default_discovery_ctx(source_root)
+		# Aggregate discovery wall-clock deadline (monotonic seconds), set at
+		# the start of `run_repositories`. None disables the per-repo budget
+		# gate — e.g. direct `process_repository` calls in tests, or a
+		# non-positive configured budget (explicit unbounded opt-out).
+		self._discovery_deadline: float | None = None
 
 	def run_repositories(self, repositories: list[str], workspace_root: Path) -> list[RefreshResult]:
+		# Establish the aggregate discovery deadline for this cycle so the
+		# codex dispatch phase cannot run away across many consumer repos and
+		# trip the job's `timeout-minutes` cap. Discovery is gated per-repo
+		# against this deadline and degrades to drift-monitoring only once the
+		# budget is exhausted (the "discovery must never block drift
+		# monitoring" contract — runner Q4:A).
+		ctx = self.discovery_ctx
+		budget = ctx.discovery_budget_secs if ctx is not None else 0
+		self._discovery_deadline = (
+			time.monotonic() + budget
+			if ctx is not None and ctx.enabled and budget > 0
+			else None
+		)
 		results: list[RefreshResult] = []
 		for repository in repositories:
 			try:
@@ -431,6 +458,28 @@ class ValidationRefreshRunner:
 			print(f"VALIDATION_DISCOVERY_SKIPPED_DISABLED repository={repository}")
 			return
 
+		# Aggregate wall-clock budget gate (VALIDATION_DISCOVERY_BUDGET_SECS).
+		# Only start this repo's codex discovery while enough budget remains to
+		# cover its worst case (`codex_attempts * DISCOVERY_CODEX_CALL_TIMEOUT_SECS`),
+		# so the dispatch phase cannot overrun the deadline. Past that point the
+		# remaining repos skip codex but still flow through drift monitoring
+		# below — discovery must never block the refresh job (runner Q4:A).
+		if self._discovery_deadline is not None:
+			remaining = self._discovery_deadline - time.monotonic()
+			worst_case_single = ctx.codex_attempts * DISCOVERY_CODEX_CALL_TIMEOUT_SECS
+			if remaining < worst_case_single:
+				result.discovery_outcome = "skipped_budget"
+				result.discovery_diagnostics.append(
+					f"discovery_budget_exhausted: remaining={int(remaining)}s "
+					f"worst_case_single={worst_case_single}s budget={ctx.discovery_budget_secs}s"
+				)
+				print(
+					"VALIDATION_DISCOVERY_SKIPPED_BUDGET "
+					f"repository={repository} remaining_secs={int(remaining)} "
+					f"budget_secs={ctx.discovery_budget_secs}"
+				)
+				return
+
 		# Q5:A dedup — skip when a successful discovery is recorded within window.
 		if _dedup_skip(repository=repository, repo_root=self.source_root, dedup_days=ctx.dedup_days):
 			result.discovery_outcome = "skipped_dedup"
@@ -471,6 +520,7 @@ class ValidationRefreshRunner:
 				reasoning_effort=ctx.codex_reasoning_effort,
 				attempts=ctx.codex_attempts,
 				executor=self.executor,
+				per_call_timeout_secs=DISCOVERY_CODEX_CALL_TIMEOUT_SECS,
 			)
 			codex_attempts_used = discovery_result.attempts_used
 
@@ -780,6 +830,7 @@ def _build_default_discovery_ctx(source_root: Path) -> "discovery_module.Discove
 	- VALIDATION_DISCOVERY_PR_BRANCH_PREFIX   (default: automation/validate-discovery)
 	- VALIDATION_DISCOVERY_PR_LABEL           (default: automation:validate-bootstrap)
 	- VALIDATION_DISCOVERY_DRY_RUN            (default: false)
+	- VALIDATION_DISCOVERY_BUDGET_SECS        (default: 2100)
 	"""
 
 	return discovery_module.DiscoveryRunContext(
@@ -798,6 +849,7 @@ def _build_default_discovery_ctx(source_root: Path) -> "discovery_module.Discove
 		),
 		pr_label=_env_str("VALIDATION_DISCOVERY_PR_LABEL", "automation:validate-bootstrap") or None,
 		dedup_days=_env_int("VALIDATION_DISCOVERY_DEDUP_DAYS", 7),
+		discovery_budget_secs=_env_int("VALIDATION_DISCOVERY_BUDGET_SECS", 2100, minimum=-sys.maxsize),
 		enabled=_env_bool("VALIDATION_DISCOVERY_ENABLED", True),
 		dry_run=_env_bool("VALIDATION_DISCOVERY_DRY_RUN", False),
 	)
