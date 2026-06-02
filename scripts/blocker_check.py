@@ -48,8 +48,10 @@ def _wave_entries_by_local_id(state: dict[str, Any]) -> dict[str, dict[str, Any]
 
 def _incoming_blocker_local_ids(state: dict[str, Any], local_id: str) -> tuple[bool, list[str]]:
 	edges = state.get("dependency_edges")
-	if not isinstance(edges, list) or not edges:
+	if not isinstance(edges, list):
 		return False, []
+	if not edges:
+		return True, []
 
 	blockers: list[str] = []
 	seen: set[str] = set()
@@ -248,7 +250,7 @@ def main(argv: list[str] | None = None) -> int:
 			field_name="--candidate-details-json",
 		)
 	except (OSError, ValueError, json.JSONDecodeError) as exc:
-		print(f"blocker_check error: {exc}", file=sys.stderr)
+		print(f"blocker_check error: {type(exc).__name__}: {exc}", file=sys.stderr)
 		return 1
 	result = evaluate_blocker_eligibility(
 		state,

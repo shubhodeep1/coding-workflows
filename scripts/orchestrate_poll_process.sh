@@ -12438,7 +12438,14 @@ _runtime_blocker_dispatch_eligible()
 		' 2>/dev/null || echo '{}')"
 	fi
 
-	blocker_err_file="$(mktemp "${TMPDIR:-/tmp}/runtime-blocker.XXXXXX")"
+	if ! blocker_err_file="$(mktemp "${TMPDIR:-/tmp}/runtime-blocker.XXXXXX" 2>/dev/null)"; then
+		echo "::warning::[runtime-blocker] failed to create temp file for ${local_id}; failing open."
+		return 0
+	fi
+	if [ -z "${blocker_err_file}" ]; then
+		echo "::warning::[runtime-blocker] failed to create temp file for ${local_id}; failing open."
+		return 0
+	fi
 	if ! blocker_result="$(python3 scripts/blocker_check.py \
 		--state-file "${STATE_FILE}" \
 		--local-id "${local_id}" \

@@ -53,7 +53,7 @@ def _blocker_state() -> dict:
 
 def test_evaluate_blocker_eligibility_fails_open_without_dependency_metadata():
 	state = _blocker_state()
-	state["dependency_edges"] = []
+	state.pop("dependency_edges")
 
 	result = blocker_check.evaluate_blocker_eligibility(state, local_id="issue-2")
 
@@ -61,6 +61,19 @@ def test_evaluate_blocker_eligibility_fails_open_without_dependency_metadata():
 	assert result["signal"] == "dispatch_eligible"
 	assert result["reason"] == "no_dependency_metadata"
 	assert result["metadata_present"] is False
+	assert result["blockers"] == []
+
+
+def test_evaluate_blocker_eligibility_allows_explicit_empty_dependency_metadata():
+	state = _blocker_state()
+	state["dependency_edges"] = []
+
+	result = blocker_check.evaluate_blocker_eligibility(state, local_id="issue-2")
+
+	assert result["eligible"] is True
+	assert result["signal"] == "dispatch_eligible"
+	assert result["reason"] == "no_incoming_blockers"
+	assert result["metadata_present"] is True
 	assert result["blockers"] == []
 
 
