@@ -1263,7 +1263,20 @@ jobs:
           # that depend on these must themselves tolerate absence.  Keep
           # this list empty unless a genuinely optional helper is added;
           # the default should always be "required".
-          OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh"
+          #
+          # render_prompt.py is the Python backend for the render_prompt.sh
+          # shim adopted by branches that took the issue #3043 refactor.  main
+          # ships a self-contained bash render_prompt.sh that needs no backend,
+          # so render_prompt.py does not exist on main and MUST stay optional
+          # here: this workflow runs pinned @main (internal-review.yml), so it
+          # is main's bootstrap list — not the branch's — that decides what
+          # gets staged from the branch checkout.  Staging it required would
+          # break every normal main-based PR (where the file is absent from
+          # both refs); staging it optionally lets shim-adopting branches
+          # resolve their backend (the shim looks for render_prompt.py beside
+          # itself in SUPPORT_SCRIPTS_DIR) while non-shim branches bootstrap
+          # cleanly.
+          OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh render_prompt.py"
           for f in ${REQUIRED_BOOTSTRAP_SCRIPTS}; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
@@ -2867,7 +2880,7 @@ jobs:
 
           leaked_paths="$(git ls-files -- \
             'scripts/gh_helpers.sh' 'scripts/git_ref_health_check.sh' \
-            'scripts/render_prompt.sh' 'scripts/validate_changed_files_syntax.sh' \
+            'scripts/render_prompt.sh' 'scripts/render_prompt.py' 'scripts/validate_changed_files_syntax.sh' \
             'scripts/tg_helpers.sh' 'scripts/label_helpers.sh' 'scripts/memory_helpers.sh' \
             'scripts/ai_memory.py' 'scripts/ai_memory_lib.py' 'scripts/openrouter_prompt_cache.py' \
             'scripts/codex_model_catalog.json' \
