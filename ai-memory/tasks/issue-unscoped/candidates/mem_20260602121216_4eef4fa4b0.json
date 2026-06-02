@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/render_prompt.py:423 vs 459-466 | severity=medium | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: validate_contract accepts legacy standalone-only vars in inline placeholders, but _render_inline_placeholders leaves them unresolved.\n  WHY: This validation/rendering mismatch can ship raw {{...}} text into rendered prompts for future templates that use a legacy var inline.\n- scripts/render_prompt.py:27, 480-488 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Inline placeholders for legacy block-only vars are explicitly preserved as literal {{VAR}} text, so inline uses of WORKFLOW_EDIT_RESTRICTION, SEMBLE_PREFETCH, or SERENA_TOOL_HINTS stay unresolved.\n  WHY: This leaves a behavioral inconsistency versus the general renderer goal and can emit literal placeholders to the LLM.\n- scripts/render_prompt.py:104-122 | severity=medium | confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Contract discovery walks overlapping candidate roots without a clear preference boundary, so an unexpected overlay directory can supply the contract.\n  WHY: In repos with both .codex-workflow-src and local overrides, the wrong or stale contract may load silently.\n- scripts/render_prompt.py:200-280 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The minimal YAML parser rejects indented blocks and rich scalars, so valid contracts can fail to load when PyYAML is unavailable.\n  WHY: A consumer without PyYAML may get parse errors on contracts the implementation expects to accept.\n- scripts/render_prompt.sh:52-70 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The shim is still a backward-compatibility risk because it hard-codes trusted backends and no longer preserves the earlier temp-file/trap behavior.\n  WHY: Callers expecting prior shell-wrapper behavior may see output/side-effect differences while the removal preflight is not yet satisfiable.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"A focused renderer test covers both a passing render and a contract violation\" plus the shim-transition preflight still needs a satisfiable test/CI path.\n  expected_change_site: tests/test_render_prompt_foundation.py\n  confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The test file only exercises implement + a synthetic inline contract; no coverage of mode-plan.yml forbidden vars or judge_semble_prefetch_contract test updates mentioned in the removal preflight; no CI wiring for the renderer test.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: scripts/render_prompt.py\n  Line or code reference: validate_contract at line 423 vs _render_inline_placeholders at line 459-466\n  Problem: validate_contract uses collect_placeholders for all inline {{...}} patterns, but _render_inline_placeholders skips LEGACY_STANDALONE_ONLY_VARS and leaves the placeholder unresolved.\n  Why it fails at runtime: A future template using a legacy standalone-only var inline will validate successfully yet render raw {{...}} text into the prompt.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: scripts/render_prompt.py\n  Code: lines 480-488 (_render_inline_placeholders + render_prompt_text) + LEGACY_STANDALONE_ONLY_VARS at line 27\n  Problem: Inline placeholders for legacy block-only vars are explicitly preserved as literal {{VAR}} text, so inline uses of WORKFLOW_EDIT_RESTRICTION, SEMBLE_PREFETCH, or SERENA_TOOL_HINTS stay unresolved.\n  Why it fails at runtime: A prompt containing an inline legacy var outputs the literal placeholder instead of the resolved value, violating the general renderer intent.\n  ISSUE_CONFIDENCE: 4\n- File: scripts/render_prompt.py\n  Code: discover_contract_path (lines 104-122) + resolve_render_prompt_py in shim\n  Problem: Contract discovery walks overlapping candidate roots without a clear preference boundary, so an unexpected overlay directory can supply the contract.\n  Why it fails at runtime: In repos with both .codex-workflow-src and local overrides, the wrong or stale contract may load silently.\n  ISSUE_CONFIDENCE: 3\n- File: scripts/render_prompt.py\n  Code: _parse_minimal_contract_yaml (lines 200-280) and _load_contract_payload fallback\n  Problem: The minimal YAML parser rejects indented blocks and rich scalars, so valid contracts can fail to load when PyYAML is unavailable.\n  Why it fails at runtime: A consumer without PyYAML may get unsupported-indentation or parse errors on contracts the implementation expects to accept.\n  ISSUE_CONFIDENCE: 4\n- File: scripts/render_prompt.sh\n  Code: resolve_render_prompt_py (lines 52-70 after last_run autofix)\n  Problem: The shim is still a backward-compatibility risk because it hard-codes trusted backends and no longer preserves the earlier temp-file/trap behavior.\n  Why it fails at runtime: Callers expecting prior shell-wrapper behavior may see output/side-effect differences while the removal preflight is not yet satisfiable.\n  ISSUE_CONFIDENCE: 4\n- Requirement: \"Land the first contract files for the plan and implement modes.\" + \"A focused renderer test covers both a passing render and a contract violation.\" + \"Add the required docs/scripts-pending-removal.md entry for the shim transition.\" + \"Keep the render_prompt.sh change minimal and shim-only.\" + \"Do not edit README.md or agents.md here.\"\n  Expected change site: prompts/contracts/mode-plan.yml, mode-implement.yml (present but incomplete), tests/test_render_prompt_foundation.py, docs/scripts-pending-removal.md\n  Evidence of absence: The test file only exercises implement + a synthetic inline contract; no coverage of mode-plan.yml forbidden vars or judge_semble_prefetch_contract test updates mentioned in the removal preflight; no CI wiring for the renderer test.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "58eb4418e5a153e8e194bb488b38927a01c685705883fe929e29d86eeb8f57bb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3045,
+    "run_id": "26817991902",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26817991902",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260602121216_4eef4fa4b0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3045,
+    "run_id": "26817991902"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-02T12:12:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
