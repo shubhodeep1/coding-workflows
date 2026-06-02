@@ -1,0 +1,7 @@
+required_vars: []
+optional_vars:
+  SEMBLE_PREFETCH: ""
+forbidden_vars:
+  - WORKFLOW_EDIT_RESTRICTION
+  - SERENA_TOOL_HINTS
+  - SERENA_TOOL_HINTS_RESOLVER
