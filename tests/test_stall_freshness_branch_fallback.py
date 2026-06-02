@@ -417,3 +417,79 @@ def test_reanchor_selection_filter_picks_only_missing_pr_bearing_issues():
 		assert r.returncode == 0, r.stderr
 		selected = r.stdout.split()
 		assert selected == ["100", "102", "104"], f"got {selected}\n{r.stdout}\n{r.stderr}"
+
+
+def test_resolver_prefers_freshest_open_pr_when_multiple_prs_share_branch():
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		_bootstrap(tmp)
+		older_iso = _iso_utc_minutes_ago(30)
+		newer_iso = _iso_utc_minutes_ago(5)
+		r = _invoke(
+			body=r"""
+			export GH_PR_LIST_HEAD_JSON="$(jq -cn --arg older "$OLDER_ISO" --arg newer "$NEWER_ISO" \
+				'[{number:88,commits:[{committedDate:$older}]},{number:99,commits:[{committedDate:$newer}]}]')"
+			out="$(_resolve_linked_pr_fresh_by_branch 4242)"
+			echo "OUT=${out}"
+			""",
+			cwd=tmp,
+			extra_env={
+				"OLDER_ISO": older_iso,
+				"NEWER_ISO": newer_iso,
+			},
+		)
+		assert r.returncode == 0, r.stderr
+		assert '"number":99' in r.stdout, r.stdout
+		assert newer_iso in r.stdout, r.stdout
+
+
+def test_wrapper_primary_unparseable_branch_fresh_suppresses_via_branch_fallback():
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		_bootstrap(tmp)
+		r = _invoke(
+			body=r"""
+			entry='{"number":78,"state":"OPEN","merged":false,"headPushedAt":"not-a-timestamp"}'
+			export GH_PR_LIST_HEAD_JSON="$(jq -cn --arg d "$FRESH_ISO" '[{number:78,commits:[{committedDate:$d}]}]')"
+			if _check_fresh_push_guard_with_fallback 78 "$entry" "ai:done"; then echo "RC=0"; else echo "RC=1"; fi
+			echo "SRC=${FRESH_PUSH_SOURCE}"
+			echo "PR=${FRESH_PUSH_PR_NUM}"
+			""",
+			cwd=tmp,
+			extra_env={"FRESH_ISO": _iso_utc_minutes_ago(5)},
+		)
+		assert r.returncode == 0, r.stderr
+		assert "RC=0" in r.stdout, r.stdout
+		assert "SRC=branch_fallback" in r.stdout, r.stdout
+		assert "PR=78" in r.stdout, r.stdout
+		assert "STALL_FRESH_PUSH_FALLBACK issue=78 phase=ai:done source=branch_name resolved=" in r.stdout, r.stdout
+
+
+# ---------------------------------------------------------------------------
+# Direct-invocation entrypoint
+#
+# `.github/workflows/*.yml` runs this test as `python3 tests/<file>.py` from
+# explicit allowlists (no pytest discovery). Without this block, the file would
+# import successfully and exit 0 without running any test_* functions.
+# ---------------------------------------------------------------------------
+
+
+def main() -> int:
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	passed = 0
+	failed = 0
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			func()
+			print(f"  PASS  {name}")
+			passed += 1
+		except Exception as e:
+			print(f"  FAIL  {name}: {e}")
+			failed += 1
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

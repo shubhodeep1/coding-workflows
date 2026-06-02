@@ -2746,7 +2746,8 @@ _resolve_linked_pr_fresh_by_branch()
 			}
 		)
 		| map(select(.headPushedAt != null))
-		| first // empty
+		| sort_by(.headPushedAt, .number)
+		| last // empty
 	' 2>/dev/null || true
 }
 
@@ -10466,14 +10467,18 @@ _check_fresh_push_guard_with_fallback() {
     "ai:done"|"ai:ready-to-merge") ;;
     *) return 1 ;;
   esac
-  # Only re-resolve when the primary entry lacked a usable headPushedAt; if it
-  # carried one and was simply not fresh (a genuine stall), the branch lookup
-  # would resolve the same PR and burn an API call for no benefit.
+  # Only re-resolve when the primary entry lacked a parseable headPushedAt; if
+  # it carried one and was simply not fresh (a genuine stall), the branch
+  # lookup would resolve the same PR and burn an API call for no benefit.
   local _primary_iso=""
   if [ -n "${linked_json}" ] && [ "${linked_json}" != "null" ] && [ "${linked_json}" != "{}" ]; then
     _primary_iso="$(printf '%s' "${linked_json}" | jq -r '.headPushedAt // empty' 2>/dev/null || echo "")"
   fi
-  [ -z "${_primary_iso}" ] || return 1
+  local _primary_epoch=""
+  if [ -n "${_primary_iso}" ]; then
+    _primary_epoch="$(date -d "${_primary_iso}" +%s 2>/dev/null || echo "")"
+  fi
+  [[ "${_primary_epoch}" =~ ^[0-9]+$ ]] && return 1
   local _fb_entry=""
   _fb_entry="$(_resolve_linked_pr_fresh_by_branch "${issue_num}")"
   local _fb_iso=""
