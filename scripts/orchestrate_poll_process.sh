@@ -11396,7 +11396,7 @@ PY
         fi
         ;;
       retrigger_pipeline)
-        _std_retrigger_pipeline_rc=0
+        local _std_retrigger_pipeline_rc=0
         gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="$(cat <<'STALL_EOF'
 /reclarify
 
@@ -11426,7 +11426,7 @@ ${rec_answers}"
 
 _Standalone stall recovery: clarification stalled. Proceeding with available context._"
         fi
-        _std_auto_respond_rc=0
+        local _std_auto_respond_rc=0
         gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${answer_body}" >/dev/null 2>&1 || _std_auto_respond_rc=$?
         if [ "${_std_auto_respond_rc}" -eq 0 ]; then
           phase_cap_note_dispatch "ai:planning"
@@ -11436,7 +11436,7 @@ _Standalone stall recovery: clarification stalled. Proceeding with available con
         took_action="true"
         ;;
       retrigger_plan)
-        _std_retrigger_plan_rc=0
+        local _std_retrigger_plan_rc=0
         gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="$(cat <<'STALL_EOF'
 /answer
 
@@ -11451,7 +11451,7 @@ STALL_EOF
         took_action="true"
         ;;
       auto_approve)
-        _std_auto_approve_rc=0
+        local _std_auto_approve_rc=0
         gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="$(cat <<'STALL_EOF'
 /approved
 
@@ -11466,7 +11466,7 @@ STALL_EOF
         took_action="true"
         ;;
       retrigger_implement)
-        _std_retrigger_implement_rc=0
+        local _std_retrigger_implement_rc=0
         gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="$(cat <<'STALL_EOF'
 /approved
 
