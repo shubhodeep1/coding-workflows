@@ -8369,12 +8369,52 @@ _load_actions_runs_cached() {
 # STALL_THRESHOLD_IMPLEMENTING_MINUTES backstop when S2 kill mode is active.
 #
 # Outputs a newline-separated list of issue numbers.
+workflow_run_cache_load() {
+  local run_json="$1"
+  local parsed workflow_name workflow_path head_branch run_id start_epoch
+
+  if [ "${WORKFLOW_RUN_CACHE_KEY:-}" = "${run_json}" ]; then
+    return 0
+  fi
+
+  parsed="$(printf '%s' "${run_json}" | jq -r '
+    def parse_epoch(value):
+      ((value // empty | tostring | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601?) // empty);
+    [
+      (.name // ""),
+      (.path // ""),
+      (.head_branch // ""),
+      ((.id // "") | tostring),
+      ((parse_epoch(.run_started_at) // parse_epoch(.created_at) // "") | tostring)
+    ] | @tsv
+  ' 2>/dev/null || true)"
+  if [ -z "${parsed}" ]; then
+    WORKFLOW_RUN_CACHE_KEY=""
+    WORKFLOW_RUN_CACHE_NAME=""
+    WORKFLOW_RUN_CACHE_PATH=""
+    WORKFLOW_RUN_CACHE_HEAD_BRANCH=""
+    WORKFLOW_RUN_CACHE_ID=""
+    WORKFLOW_RUN_CACHE_START_EPOCH=""
+    return 1
+  fi
+
+  IFS=$'\t' read -r workflow_name workflow_path head_branch run_id start_epoch <<< "${parsed}"
+  WORKFLOW_RUN_CACHE_KEY="${run_json}"
+  WORKFLOW_RUN_CACHE_NAME="${workflow_name}"
+  WORKFLOW_RUN_CACHE_PATH="${workflow_path}"
+  WORKFLOW_RUN_CACHE_HEAD_BRANCH="${head_branch}"
+  WORKFLOW_RUN_CACHE_ID="${run_id}"
+  WORKFLOW_RUN_CACHE_START_EPOCH="${start_epoch}"
+  return 0
+}
+
 workflow_run_is_implement() {
   local run_json="$1"
   local workflow_name workflow_path
 
-  workflow_name="$(printf '%s' "${run_json}" | jq -r '.name // ""' 2>/dev/null || echo '')"
-  workflow_path="$(printf '%s' "${run_json}" | jq -r '.path // ""' 2>/dev/null || echo '')"
+  workflow_run_cache_load "${run_json}" || return 1
+  workflow_name="${WORKFLOW_RUN_CACHE_NAME:-}"
+  workflow_path="${WORKFLOW_RUN_CACHE_PATH:-}"
 
   case "${workflow_path}" in
     */implement.yml|*/internal-implement.yml|implement.yml|internal-implement.yml)
@@ -8395,8 +8435,9 @@ workflow_run_is_review_family() {
   local run_json="$1"
   local workflow_name workflow_path
 
-  workflow_name="$(printf '%s' "${run_json}" | jq -r '.name // ""' 2>/dev/null || echo '')"
-  workflow_path="$(printf '%s' "${run_json}" | jq -r '.path // ""' 2>/dev/null || echo '')"
+  workflow_run_cache_load "${run_json}" || return 1
+  workflow_name="${WORKFLOW_RUN_CACHE_NAME:-}"
+  workflow_path="${WORKFLOW_RUN_CACHE_PATH:-}"
 
   case "${workflow_path}" in
     */ai-review.yml|*/internal-review.yml|*/review_autofix.yml|ai-review.yml|internal-review.yml|review_autofix.yml)
@@ -8417,6 +8458,11 @@ workflow_run_stall_threshold_seconds() {
   local run_json="$1"
   local stall_minutes="${STALL_THRESHOLD_MINUTES:-120}"
 
+  workflow_run_cache_load "${run_json}" || {
+    printf '%s' "$(( stall_minutes * 60 ))"
+    return 0
+  }
+
   if [ -n "${STALL_THRESHOLD_IMPLEMENTING_MINUTES:-}" ] && workflow_run_is_implement "${run_json}"; then
     stall_minutes="${STALL_THRESHOLD_IMPLEMENTING_MINUTES}"
   fi
@@ -8429,8 +8475,9 @@ workflow_run_is_fresh() {
   local now_epoch="$2"
   local start_epoch threshold_secs
 
-  start_epoch="$(printf '%s' "${run_json}" | jq -r '(.run_started_at // .created_at // "1970-01-01T00:00:00Z") | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601? // 0' 2>/dev/null || echo '0')"
-  [[ "${start_epoch}" =~ ^[0-9]+$ ]] || start_epoch=0
+  workflow_run_cache_load "${run_json}" || return 1
+  start_epoch="${WORKFLOW_RUN_CACHE_START_EPOCH:-}"
+  [[ "${start_epoch}" =~ ^[0-9]+$ ]] || return 1
 
   threshold_secs="$(workflow_run_stall_threshold_seconds "${run_json}")"
   [[ "${threshold_secs}" =~ ^[0-9]+$ ]] || threshold_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))
@@ -8479,7 +8526,8 @@ build_active_issue_set() {
   local fresh_count
   fresh_count="${#fresh_run_rows[@]}"
   local total_count
-  total_count="$(echo "${all_runs}" | jq 'length')"
+  total_count="$(printf '%s' "${all_runs}" | jq 'length' 2>/dev/null || echo '0')"
+  [[ "${total_count}" =~ ^[0-9]+$ ]] || total_count=0
   if [ "${total_count}" -gt "${fresh_count}" ]; then
     echo "  Active runs: ${total_count} total, ${fresh_count} fresh ($(( total_count - fresh_count )) zombie runs excluded by stall thresholds)." >&2
   fi
@@ -8551,7 +8599,8 @@ cancel_zombie_runs_for_issue() {
       continue
     fi
 
-    head_branch="$(printf '%s' "${run_json}" | jq -r '.head_branch // ""' 2>/dev/null || echo '')"
+    workflow_run_cache_load "${run_json}" || continue
+    head_branch="${WORKFLOW_RUN_CACHE_HEAD_BRANCH:-}"
     if ! printf '%s\n' "${head_branch}" | grep -Eq "(^|/)(ai/(issue-)?|ai-(implement-)?)${issue_num}([^0-9]|$)"; then
       continue
     fi
@@ -8560,7 +8609,7 @@ cancel_zombie_runs_for_issue() {
       continue
     fi
 
-    run_id="$(printf '%s' "${run_json}" | jq -r '.id // empty' 2>/dev/null || echo '')"
+    run_id="${WORKFLOW_RUN_CACHE_ID:-}"
     if [[ "${run_id}" =~ ^[0-9]+$ ]]; then
       zombie_run_ids+=("${run_id}")
     fi

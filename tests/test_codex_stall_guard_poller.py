@@ -57,6 +57,8 @@ mkdir -p extracted
 	echo
 	extract_fn 'normalize_stall_guard_thresholds'
 	echo
+	extract_fn 'workflow_run_cache_load'
+	echo
 	extract_fn 'workflow_run_is_implement'
 	echo
 	extract_fn 'workflow_run_is_review_family'
@@ -147,6 +149,8 @@ def test_implement_workflow_uses_shared_stall_guard_path() -> None:
 		"timeout --signal=TERM --kill-after=5s",
 		"--phase implement",
 		"--status-file \"${attempt_stall_status_file}\"",
+		"observed|killed)",
+		"[ \"${stall_state}\" = \"killed\" ]",
 	]:
 		assert snippet in text, f"missing {snippet!r} in {IMPLEMENT_WORKFLOW}"
 
@@ -222,6 +226,27 @@ def test_observe_only_mode_keeps_legacy_implement_window() -> None:
 		assert result.returncode == 0, f"bash failed: {result.stderr}"
 		assert _active_issues_from_stdout(result.stdout) == ["42"], result.stdout
 		assert cancelled == [], cancelled
+
+
+def test_invalid_run_started_at_falls_back_to_created_at() -> None:
+	with tempfile.TemporaryDirectory(prefix="stall-guard-poller-") as td:
+		repo_dir = Path(td)
+		_extract_poller_functions(repo_dir)
+		runs = [
+			{
+				"id": 404,
+				"status": "in_progress",
+				"name": "AI Implement",
+				"path": ".github/workflows/implement.yml",
+				"head_branch": "ai/issue-42",
+				"run_started_at": "not-a-timestamp",
+				"created_at": _iso_timestamp_minutes_ago(95),
+			}
+		]
+		result, cancelled = _run_poller_contract(repo_dir, runs=runs, stall_guard_enabled=True)
+		assert result.returncode == 0, f"bash failed: {result.stderr}"
+		assert _active_issues_from_stdout(result.stdout) == [], result.stdout
+		assert cancelled == ["repos/octo/example/actions/runs/404/cancel"], cancelled
 
 
 def main() -> int:

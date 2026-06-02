@@ -1779,21 +1779,25 @@ jobs:
 
           read_codex_stall_guard_state() {
             local status_file="$1"
+            local state=""
 
             [ -s "${status_file}" ] || return 1
-            sed -n 's/^state=//p' "${status_file}" | head -n 1
+            state="$(sed -n 's/^state=//p' "${status_file}" | head -n 1)"
+            case "${state}" in
+              observed|killed)
+                printf '%s\n' "${state}"
+                return 0
+                ;;
+            esac
+
+            return 1
           }
 
           codex_stall_guard_kill_detected() {
-            local rc="${1:-0}"
+            local _rc="${1:-0}"
             local stall_state="${2:-}"
 
-            if [ "${stall_state}" = "killed" ]; then
-              return 0
-            fi
-
-            [ -x "${CODEX_STALL_GUARD_HELPER}" ] || return 1
-            [ "${rc}" -eq 137 ]
+            [ "${stall_state}" = "killed" ]
           }
 
           for attempt in $(seq 1 "${max_attempts}"); do
@@ -1932,7 +1936,7 @@ jobs:
             wait "${attempt_log_tee_pid}" 2>/dev/null || true
             rm -rf "${attempt_log_pipe_dir}"
 
-            if attempt_stall_state="$(read_codex_stall_guard_state "${attempt_stall_status_file}" 2>/dev/null)"; then
+            if attempt_stall_state="$(read_codex_stall_guard_state "${attempt_stall_status_file}")"; then
               case "${attempt_stall_state}" in
                 observed)
                   echo "Codex implement attempt ${attempt} recorded codex_stall_observed (observe-only mode)."
@@ -1941,6 +1945,8 @@ jobs:
                   echo "::warning::Codex implement attempt ${attempt} recorded codex_stall_killed."
                   ;;
               esac
+            elif [ -s "${attempt_stall_status_file}" ]; then
+              echo "::warning::Codex implement attempt ${attempt} recorded an unrecognized codex stall guard state."
             fi
             rm -f "${attempt_stall_status_file}"
 
