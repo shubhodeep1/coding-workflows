@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:2696-2755 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The `gh pr list` branch fallback can pick the wrong open PR if multiple open PRs exist for the same `ai/issue-N` branch.\n  WHY: In rare race/API-lag cases with more than one matching open PR, `first` may resolve a different PR and feed the wrong commit timestamp into freshness checks.\n- scripts/orchestrate_poll_process.sh:2720-2721 | severity=low | confidence=1\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The jq sort used to choose the latest commit timestamp may be non-deterministic when commits share identical `committedDate` values.\n  WHY: If multiple commits have the same timestamp, freshness results could vary across runs because the sort order is unstable.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_poll_process.sh:2696-2755 | severity=low | confidence=2\n  PROBLEM: The `gh pr list` branch fallback can pick the wrong open PR if multiple open PRs exist for the same `ai/issue-N` branch.\n  WHY: In rare cases with multiple open PRs on the same branch, `first` may resolve a different PR and use its commit date for freshness calculations.\n- scripts/orchestrate_poll_process.sh:2720-2721 | severity=low | confidence=1\n  PROBLEM: The jq sort used to choose the latest commit timestamp may be non-deterministic when commits share identical `committedDate` values.\n  WHY: If multiple commits have the same timestamp, freshness results could vary across runs because the sort order is unstable.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "9780456100bfa33d67ab9f8d2c7a151c143cf1c606b36a04df56a9718d37d120",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26795498420",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26795498420",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260602030951_4d7375a855",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26795498420"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-02T03:09:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
