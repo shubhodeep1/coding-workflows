@@ -7717,7 +7717,12 @@ dispatch_validation_if_needed() {
     echo "No active validation runs found. Redispatching..."
   fi
 
+  if ! phase_cap_can_dispatch "ai:validating" "dispatch_validation" "${TRACKING_NUM:-validation}"; then
+    return 0
+  fi
+
   if dispatch_validation_workflow "${validation_cycle}" "${integration_branch}"; then
+    phase_cap_note_dispatch "ai:validating"
     jq --argjson cycle "${validation_cycle}" --argjson ts "$(date +%s)" \
       '.validation_last_dispatch_cycle = $cycle | .validation_last_dispatch_ts = $ts' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
@@ -8196,6 +8201,12 @@ sync_validation_fix_issues_from_comments() {
 
 declare -g _ACTIONS_RUNS_BLOB_CACHE=''
 declare -g _ACTIONS_RUNS_BLOB_READY='false'
+declare -g PHASE_CAPS_ENABLED='false'
+declare -g PHASE_CAPS_STATUS='missing'
+declare -g PHASE_CAPS_GLOBAL_MAX='-1'
+declare -g PHASE_CAPS_GLOBAL_RUNNING='0'
+declare -g PHASE_CAPS_MAX_BY_STATE='{}'
+declare -g PHASE_CAPS_RUNNING_BY_STATE='{}'
 
 _load_actions_runs_cached() {
   local empty_blob='{"workflow_runs":[]}'
@@ -8358,6 +8369,140 @@ _load_actions_runs_cached() {
   rm -f "${response_file}" "${response_body_file}" "${response_err}"
   printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE}"
   return 0
+}
+
+phase_cap_state_for_action() {
+  local action="$1"
+  case "${action}" in
+    retrigger_pipeline)
+      echo "ai:clarification"
+      ;;
+    auto_respond_clarify|retrigger_plan)
+      echo "ai:planning"
+      ;;
+    auto_approve|retrigger_implement)
+      echo "ai:implementing"
+      ;;
+    *)
+      echo ""
+      ;;
+  esac
+}
+
+phase_cap_running_for_state() {
+  local state="$1"
+  jq -r --arg state "${state}" '.[$state] // 0' <<<"${PHASE_CAPS_RUNNING_BY_STATE:-"{}"}" 2>/dev/null || echo 0
+}
+
+phase_cap_can_dispatch() {
+  local state="$1"
+  local action="$2"
+  local issue_num="$3"
+  local state_limit
+  local state_running
+  local global_limit
+  local global_running
+
+  if [ "${PHASE_CAPS_ENABLED:-false}" != "true" ]; then
+    return 0
+  fi
+
+  if [ "${PHASE_CAPS_STATUS:-missing}" = "actions_runs_unavailable" ]; then
+    echo "phase_capped state=${state} action=${action} issue=${issue_num} reason=actions_runs_unavailable"
+    return 1
+  fi
+
+  state_limit="$(jq -r --arg state "${state}" '.[$state] // -1' <<<"${PHASE_CAPS_MAX_BY_STATE:-"{}"}" 2>/dev/null || echo -1)"
+  [[ "${state_limit}" =~ ^-?[0-9]+$ ]] || state_limit='-1'
+  state_running="$(phase_cap_running_for_state "${state}")"
+  [[ "${state_running}" =~ ^[0-9]+$ ]] || state_running='0'
+  if [ "${state_limit}" -ge 0 ] && [ "${state_running}" -ge "${state_limit}" ]; then
+    echo "phase_capped state=${state} action=${action} issue=${issue_num} limit=${state_limit} running=${state_running}"
+    return 1
+  fi
+
+  global_limit="${PHASE_CAPS_GLOBAL_MAX:--1}"
+  [[ "${global_limit}" =~ ^-?[0-9]+$ ]] || global_limit='-1'
+  global_running="${PHASE_CAPS_GLOBAL_RUNNING:-0}"
+  [[ "${global_running}" =~ ^[0-9]+$ ]] || global_running='0'
+  if [ "${global_limit}" -ge 0 ] && [ "${global_running}" -ge "${global_limit}" ]; then
+    echo "phase_capped state=${state} action=${action} issue=${issue_num} limit=${global_limit} running=${global_running} scope=global"
+    return 1
+  fi
+
+  return 0
+}
+
+phase_cap_note_dispatch() {
+  local state="$1"
+  local global_running
+  local updated_running_by_state
+
+  if [ "${PHASE_CAPS_ENABLED:-false}" != "true" ] || [ -z "${state}" ]; then
+    return 0
+  fi
+
+  if updated_running_by_state="$(jq -c --arg state "${state}" '.[$state] = ((.[$state] // 0) + 1)' <<<"${PHASE_CAPS_RUNNING_BY_STATE:-"{}"}" 2>/dev/null)"; then
+    PHASE_CAPS_RUNNING_BY_STATE="${updated_running_by_state}"
+  fi
+  global_running="${PHASE_CAPS_GLOBAL_RUNNING:-0}"
+  [[ "${global_running}" =~ ^[0-9]+$ ]] || global_running='0'
+  PHASE_CAPS_GLOBAL_RUNNING="$(( global_running + 1 ))"
+  return 0
+}
+
+prime_phase_concurrency_snapshot() {
+  local caps_path="${1:-.github/ai/concurrency_caps.yml}"
+  local actions_runs_blob
+  local actions_runs_fetch_error=""
+  local actions_runs_fetch_err_file=""
+  local actions_runs_fetch_rc=0
+  local snapshot_json
+  local snapshot_error
+  local -a caps_cmd
+
+  actions_runs_fetch_err_file="$(mktemp "${TMPDIR:-/tmp}/phase_caps_actions_runs.XXXXXX")"
+  if actions_runs_blob="$(_load_actions_runs_cached 2>"${actions_runs_fetch_err_file}")"; then
+    :
+  else
+    actions_runs_fetch_rc=$?
+    actions_runs_fetch_error="$(tr '\n' ' ' < "${actions_runs_fetch_err_file}" | sed 's/[[:space:]]\+/ /g' | cut -c1-200)"
+    [ -n "${actions_runs_fetch_error}" ] || actions_runs_fetch_error="actions_runs_fetch_failed_rc_${actions_runs_fetch_rc}"
+    actions_runs_blob='{"workflow_runs":[]}'
+  fi
+  rm -f "${actions_runs_fetch_err_file}" 2>/dev/null || true
+  caps_cmd=(python3 scripts/orchestrate_lib.py concurrency-caps --caps-path "${caps_path}" --threshold-minutes "${STALL_THRESHOLD_MINUTES:-120}")
+  if [ -n "${STALL_THRESHOLD_IMPLEMENTING_MINUTES:-}" ]; then
+    caps_cmd+=(--implementing-threshold-minutes "${STALL_THRESHOLD_IMPLEMENTING_MINUTES}")
+  fi
+  if ! snapshot_json="$("${caps_cmd[@]}" 2>/dev/null <<<"${actions_runs_blob}")"; then
+    snapshot_json='{"enabled":false,"status":"invalid","error":"snapshot_build_failed","global_max_concurrent":null,"max_concurrent_by_state":{},"running_by_state":{},"global_running":0}'
+  fi
+  [ -n "${snapshot_json}" ] || snapshot_json='{"enabled":false,"status":"invalid","error":"empty_snapshot","global_max_concurrent":null,"max_concurrent_by_state":{},"running_by_state":{},"global_running":0}'
+  if [ "${actions_runs_fetch_rc}" -ne 0 ] && jq -e '.enabled == true' <<<"${snapshot_json}" >/dev/null 2>&1; then
+    snapshot_json="$(jq -c --arg error "${actions_runs_fetch_error}" '.status = "actions_runs_unavailable" | .error = $error' <<<"${snapshot_json}" 2>/dev/null || echo "${snapshot_json}")"
+  fi
+
+  PHASE_CAPS_ENABLED="$(jq -r 'if .enabled == true then "true" else "false" end' <<<"${snapshot_json}" 2>/dev/null || echo 'false')"
+  PHASE_CAPS_STATUS="$(jq -r '.status // "invalid"' <<<"${snapshot_json}" 2>/dev/null || echo 'invalid')"
+  PHASE_CAPS_GLOBAL_MAX="$(jq -r 'if .global_max_concurrent == null then -1 else .global_max_concurrent end' <<<"${snapshot_json}" 2>/dev/null || echo '-1')"
+  PHASE_CAPS_GLOBAL_RUNNING="$(jq -r '.global_running // 0' <<<"${snapshot_json}" 2>/dev/null || echo '0')"
+  PHASE_CAPS_MAX_BY_STATE="$(jq -c '.max_concurrent_by_state // {}' <<<"${snapshot_json}" 2>/dev/null || echo '{}')"
+  PHASE_CAPS_RUNNING_BY_STATE="$(jq -c '.running_by_state // {}' <<<"${snapshot_json}" 2>/dev/null || echo '{}')"
+  if [ -n "${RUNTIME_DIR:-}" ]; then
+    printf '%s\n' "${snapshot_json}" > "${RUNTIME_DIR}/running_runs_by_state.json" 2>/dev/null || true
+  fi
+
+  snapshot_error="$(jq -r '.error // empty' <<<"${snapshot_json}" 2>/dev/null || echo '')"
+  case "${PHASE_CAPS_STATUS}" in
+    malformed|invalid|unreadable|yaml_unavailable|actions_runs_unavailable)
+      if [ -n "${snapshot_error}" ]; then
+        echo "::warning::phase_concurrency_caps status=${PHASE_CAPS_STATUS} path=${caps_path} error=${snapshot_error}" >&2
+      else
+        echo "::warning::phase_concurrency_caps status=${PHASE_CAPS_STATUS} path=${caps_path}" >&2
+      fi
+      ;;
+  esac
 }
 
 # Build a set of issue numbers that have *genuinely active* (in_progress or
@@ -9054,13 +9199,21 @@ execute_stall_recovery_action() {
   local recovery_count="$4"
   local local_id="$5"
   local stall_minutes="$6"
+  local phase_cap_state=""
 
   STALL_RECOVERY_SHOULD_INCREMENT="false"
   STALL_RECOVERY_EFFECTIVE_ACTION="${action}"
 
+  phase_cap_state="$(phase_cap_state_for_action "${action}")"
+  if [ -n "${phase_cap_state}" ] && ! phase_cap_can_dispatch "${phase_cap_state}" "${action}" "${issue_num}"; then
+    echo "STALL_SKIP issue=${issue_num} reason=phase_capped phase=${phase} action=${action}"
+    return 1
+  fi
+
   case "${action}" in
     retrigger_pipeline)
       echo "  Re-triggering pipeline for issue #${issue_num}..."
+      local _retrigger_pipeline_rc=0
       gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
         -f body="$(cat <<'STALL_EOF'
 /reclarify
@@ -9069,7 +9222,10 @@ _Orchestrator stall recovery: this issue never entered the AI pipeline.
 Re-triggering the clarification phase. If the issue description is
 sufficient, proceed directly to planning and implementation._
 STALL_EOF
-)" >/dev/null 2>&1 || true
+)" >/dev/null 2>&1 || _retrigger_pipeline_rc=$?
+      if [ "${_retrigger_pipeline_rc}" -eq 0 ]; then
+        phase_cap_note_dispatch "ai:clarification"
+      fi
       tg_notify "Stall recovery: re-triggered pipeline for issue #${issue_num} (stuck ${stall_minutes}m with no labels, attempt $((recovery_count + 1)))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
       STALL_RECOVERY_SHOULD_INCREMENT="true"
       ;;
@@ -9095,14 +9251,19 @@ too long. No recommended answers could be extracted — the issue
 description is deemed sufficient. Proceed with planning and
 implementation._"
       fi
+      local _auto_respond_rc=0
       gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
-        -f body="${answer_body}" >/dev/null 2>&1 || true
+        -f body="${answer_body}" >/dev/null 2>&1 || _auto_respond_rc=$?
+      if [ "${_auto_respond_rc}" -eq 0 ]; then
+        phase_cap_note_dispatch "ai:planning"
+      fi
       tg_notify "Stall recovery: auto-responded to clarification on issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
       STALL_RECOVERY_SHOULD_INCREMENT="true"
       ;;
 
     retrigger_plan)
       echo "  Re-triggering plan for issue #${issue_num}..."
+      local _retrigger_plan_rc=0
       gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
         -f body="$(cat <<'STALL_EOF'
 /answer
@@ -9110,7 +9271,10 @@ implementation._"
 _Orchestrator stall recovery: planning phase stalled. Re-triggering
 plan generation._
 STALL_EOF
-)" >/dev/null 2>&1 || true
+)" >/dev/null 2>&1 || _retrigger_plan_rc=$?
+      if [ "${_retrigger_plan_rc}" -eq 0 ]; then
+        phase_cap_note_dispatch "ai:planning"
+      fi
       tg_notify "Stall recovery: re-triggered planning for issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
       STALL_RECOVERY_SHOULD_INCREMENT="true"
       ;;
@@ -9129,6 +9293,7 @@ STALL_EOF
         return 0
       fi
       echo "  Auto-approving plan for issue #${issue_num}..."
+      local _auto_approve_rc=0
       gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
         -f body="$(cat <<'STALL_EOF'
 /approved
@@ -9136,7 +9301,10 @@ STALL_EOF
 _Orchestrator stall recovery: auto-approving plan. This is an
 orchestrator-managed issue that does not require human approval._
 STALL_EOF
-)" >/dev/null 2>&1 || true
+)" >/dev/null 2>&1 || _auto_approve_rc=$?
+      if [ "${_auto_approve_rc}" -eq 0 ]; then
+        phase_cap_note_dispatch "ai:implementing"
+      fi
       tg_notify "Stall recovery: auto-approved plan for issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
       STALL_RECOVERY_SHOULD_INCREMENT="true"
       ;;
@@ -9166,6 +9334,7 @@ STALL_EOF
         --remove-label 'ai:implementing' --add-label 'ai:awaiting-approval' >/dev/null 2>&1; then
         echo "::warning::Failed to swap ai:implementing → ai:awaiting-approval for issue #${issue_num}; /approved retrigger may no-op if label state is unchanged."
       fi
+      local _retrigger_implement_rc=0
       gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
         -f body="$(cat <<'STALL_EOF'
 /approved
@@ -9174,7 +9343,10 @@ _Orchestrator stall recovery: implementation phase appears stalled.
 Re-triggering implementation. If a previous attempt crashed or timed
 out, start fresh from the approved plan._
 STALL_EOF
-)" >/dev/null 2>&1 || true
+)" >/dev/null 2>&1 || _retrigger_implement_rc=$?
+      if [ "${_retrigger_implement_rc}" -eq 0 ]; then
+        phase_cap_note_dispatch "ai:implementing"
+      fi
       tg_notify "Stall recovery: re-triggered implementation for issue #${issue_num} (stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
       STALL_RECOVERY_SHOULD_INCREMENT="true"
       ;;
@@ -9552,13 +9724,13 @@ REISSUE_EOF
           echo "  skip→dispatch_rb_judge: PR #${_skip_pr_num} has ${_skip_recent_autofix} productive autofix commit(s) in the last ${_skip_lookback_hours}h; routing to dispatch_rb_judge instead of hard-closing."
           tg_notify "Stall recovery: deferring skip for issue #${issue_num} — linked PR #${_skip_pr_num} has ${_skip_recent_autofix} productive autofix commit(s) in last ${_skip_lookback_hours}h; routing to dispatch_rb_judge."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"$'\n'"PR: $(_gh_url "pull/${_skip_pr_num}")" "WARNING"
           local _skip_redirect_rc=0
-          _dispatch_rb_judge_for_pr "${_skip_pr_num}" || _skip_redirect_rc=$?
-          if [ "${_skip_redirect_rc}" -eq 1 ]; then
-            return 1
-          fi
-          if [ "${_skip_redirect_rc}" -eq 2 ]; then
-            return 0
-          fi
+		  _dispatch_rb_judge_for_pr "${_skip_pr_num}" "${issue_num}" || _skip_redirect_rc=$?
+		  if [ "${_skip_redirect_rc}" -eq 1 ]; then
+		    return 1
+		  fi
+		  if [ "${_skip_redirect_rc}" -eq 2 ] || [ "${_skip_redirect_rc}" -eq 3 ]; then
+		    return 0
+		  fi
           STALL_RECOVERY_SHOULD_INCREMENT="true"
           return 0
         fi
@@ -9652,16 +9824,16 @@ The judge will evaluate this gap when the wave completes and decide whether to r
         return 0
       fi
       local rb_dispatch_rc=0
-      _dispatch_rb_judge_for_pr "${rb_pr_num}" || rb_dispatch_rc=$?
-      if [ "${rb_dispatch_rc}" -eq 1 ]; then
-        return 1
-      fi
-      if [ "${rb_dispatch_rc}" -eq 2 ]; then
-        # Already dispatched this cycle.  Don't increment recovery
-        # count — let the next cycle re-check; the judge run is in
-        # flight.
-        return 0
-      fi
+	      _dispatch_rb_judge_for_pr "${rb_pr_num}" "${issue_num}" || rb_dispatch_rc=$?
+	      if [ "${rb_dispatch_rc}" -eq 1 ]; then
+	        return 1
+	      fi
+	      if [ "${rb_dispatch_rc}" -eq 2 ] || [ "${rb_dispatch_rc}" -eq 3 ]; then
+	        # Already dispatched this cycle.  Don't increment recovery
+	        # count — let the next cycle re-check; the judge run is in
+	        # flight or the phase cap deferred a fresh dispatch.
+	        return 0
+	      fi
       tg_notify "Stall recovery: dispatched review-blocked judge for issue #${issue_num} (PR #${rb_pr_num}, stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"$'\n'"PR: $(_gh_url "pull/${rb_pr_num}")" "WARNING"
       STALL_RECOVERY_SHOULD_INCREMENT="true"
       ;;
@@ -11205,6 +11377,13 @@ PY
       cancel_zombie_runs_for_issue "${issue_num}"
     fi
 
+    local _std_phase_cap_state=""
+    _std_phase_cap_state="$(phase_cap_state_for_action "${action}")"
+    if [ -n "${_std_phase_cap_state}" ] && ! phase_cap_can_dispatch "${_std_phase_cap_state}" "${action}" "${issue_num}"; then
+      echo "STALL_SKIP issue=${issue_num} reason=phase_capped phase=${phase} action=${action}"
+      continue
+    fi
+
     took_action="false"
     STALL_RECOVERY_SHOULD_INCREMENT="false"
     STALL_RECOVERY_EFFECTIVE_ACTION="${action}"
@@ -11217,13 +11396,17 @@ PY
         fi
         ;;
       retrigger_pipeline)
+        local _std_retrigger_pipeline_rc=0
         gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="$(cat <<'STALL_EOF'
 /reclarify
 
 _Standalone stall recovery: this issue did not enter the AI pipeline.
 Re-triggering clarification._
 STALL_EOF
-)" >/dev/null 2>&1 || true
+)" >/dev/null 2>&1 || _std_retrigger_pipeline_rc=$?
+        if [ "${_std_retrigger_pipeline_rc}" -eq 0 ]; then
+          phase_cap_note_dispatch "ai:clarification"
+        fi
         tg_notify_issue "${issue_num}" "Standalone stall recovery: re-triggered pipeline (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "WARNING"
         STALL_RECOVERY_SHOULD_INCREMENT="true"
         took_action="true"
@@ -11243,40 +11426,56 @@ ${rec_answers}"
 
 _Standalone stall recovery: clarification stalled. Proceeding with available context._"
         fi
-        gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${answer_body}" >/dev/null 2>&1 || true
+        local _std_auto_respond_rc=0
+        gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${answer_body}" >/dev/null 2>&1 || _std_auto_respond_rc=$?
+        if [ "${_std_auto_respond_rc}" -eq 0 ]; then
+          phase_cap_note_dispatch "ai:planning"
+        fi
         tg_notify_issue "${issue_num}" "Standalone stall recovery: auto-responded to clarification (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "WARNING"
         STALL_RECOVERY_SHOULD_INCREMENT="true"
         took_action="true"
         ;;
       retrigger_plan)
+        local _std_retrigger_plan_rc=0
         gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="$(cat <<'STALL_EOF'
 /answer
 
 _Standalone stall recovery: planning stalled. Re-triggering plan generation._
 STALL_EOF
-)" >/dev/null 2>&1 || true
+)" >/dev/null 2>&1 || _std_retrigger_plan_rc=$?
+        if [ "${_std_retrigger_plan_rc}" -eq 0 ]; then
+          phase_cap_note_dispatch "ai:planning"
+        fi
         tg_notify_issue "${issue_num}" "Standalone stall recovery: re-triggered planning (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "WARNING"
         STALL_RECOVERY_SHOULD_INCREMENT="true"
         took_action="true"
         ;;
       auto_approve)
+        local _std_auto_approve_rc=0
         gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="$(cat <<'STALL_EOF'
 /approved
 
 _Standalone stall recovery: plan approval stalled. Auto-approving to proceed._
 STALL_EOF
-)" >/dev/null 2>&1 || true
+)" >/dev/null 2>&1 || _std_auto_approve_rc=$?
+        if [ "${_std_auto_approve_rc}" -eq 0 ]; then
+          phase_cap_note_dispatch "ai:implementing"
+        fi
         tg_notify_issue "${issue_num}" "Standalone stall recovery: auto-approved plan (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "WARNING"
         STALL_RECOVERY_SHOULD_INCREMENT="true"
         took_action="true"
         ;;
       retrigger_implement)
+        local _std_retrigger_implement_rc=0
         gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="$(cat <<'STALL_EOF'
 /approved
 
 _Standalone stall recovery: implementation stalled. Re-triggering implementation._
 STALL_EOF
-)" >/dev/null 2>&1 || true
+)" >/dev/null 2>&1 || _std_retrigger_implement_rc=$?
+        if [ "${_std_retrigger_implement_rc}" -eq 0 ]; then
+          phase_cap_note_dispatch "ai:implementing"
+        fi
         tg_notify_issue "${issue_num}" "Standalone stall recovery: re-triggered implementation (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "WARNING"
         STALL_RECOVERY_SHOULD_INCREMENT="true"
         took_action="true"
@@ -11576,18 +11775,21 @@ REISSUE_EOF
           STALL_RECOVERY_SHOULD_INCREMENT="true"
         else
           local _std_rb_rc=0
-          _dispatch_rb_judge_for_pr "${_std_rb_pr_num}" || _std_rb_rc=$?
-          if [ "${_std_rb_rc}" -eq 0 ]; then
-            echo "STALL_RECOVERY issue=${issue_num} reason=ai_review_blocked pr=${_std_rb_pr_num} phase=${phase} action=dispatch_rb_judge"
-            tg_notify_issue "${issue_num}" "Standalone stall recovery: dispatched review-blocked judge for PR #${_std_rb_pr_num} (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "WARNING"
-            STALL_RECOVERY_SHOULD_INCREMENT="true"
-          elif [ "${_std_rb_rc}" -eq 2 ]; then
-            # Already dispatched this cycle — judge is in flight.
-            echo "STALL_SKIP issue=${issue_num} reason=rb_judge_dispatch_deduped pr=${_std_rb_pr_num} phase=${phase} action=dispatch_rb_judge"
-            STALL_RECOVERY_SHOULD_INCREMENT="false"
-          else
-            echo "::warning::[standalone-stall] dispatch_rb_judge for issue #${issue_num} PR #${_std_rb_pr_num} failed (rc=${_std_rb_rc})."
-            STALL_RECOVERY_SHOULD_INCREMENT="false"
+	          _dispatch_rb_judge_for_pr "${_std_rb_pr_num}" "${issue_num}" || _std_rb_rc=$?
+	          if [ "${_std_rb_rc}" -eq 0 ]; then
+	            echo "STALL_RECOVERY issue=${issue_num} reason=ai_review_blocked pr=${_std_rb_pr_num} phase=${phase} action=dispatch_rb_judge"
+	            tg_notify_issue "${issue_num}" "Standalone stall recovery: dispatched review-blocked judge for PR #${_std_rb_pr_num} (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "WARNING"
+	            STALL_RECOVERY_SHOULD_INCREMENT="true"
+	          elif [ "${_std_rb_rc}" -eq 2 ]; then
+	            # Already dispatched this cycle — judge is in flight.
+	            echo "STALL_SKIP issue=${issue_num} reason=rb_judge_dispatch_deduped pr=${_std_rb_pr_num} phase=${phase} action=dispatch_rb_judge"
+	            STALL_RECOVERY_SHOULD_INCREMENT="false"
+	          elif [ "${_std_rb_rc}" -eq 3 ]; then
+	            echo "STALL_SKIP issue=${issue_num} reason=phase_capped pr=${_std_rb_pr_num} phase=${phase} action=dispatch_rb_judge"
+	            STALL_RECOVERY_SHOULD_INCREMENT="false"
+	          else
+	            echo "::warning::[standalone-stall] dispatch_rb_judge for issue #${issue_num} PR #${_std_rb_pr_num} failed (rc=${_std_rb_rc})."
+	            STALL_RECOVERY_SHOULD_INCREMENT="false"
           fi
         fi
         took_action="true"
@@ -12012,6 +12214,13 @@ recover_stalled_issue() {
     cancel_zombie_runs_for_issue "${issue_num}"
   fi
 
+  local _recover_phase_cap_state=""
+  _recover_phase_cap_state="$(phase_cap_state_for_action "${action}")"
+  if [ -n "${_recover_phase_cap_state}" ] && ! phase_cap_can_dispatch "${_recover_phase_cap_state}" "${action}" "${issue_num}"; then
+    echo "STALL_SKIP issue=${issue_num} reason=phase_capped phase=${phase} action=${action}"
+    return 1
+  fi
+
   if [ "${action}" = "run_stall_judge" ]; then
     invoke_stall_judge "${issue_num}" "${phase}" "${recovery_count}" "${stall_minutes}" "${local_id}"
     return $?
@@ -12126,7 +12335,7 @@ _dispatch_review_for_conflicts()
 	return 1
 }
 
-# _dispatch_rb_judge_for_pr <pr_number>
+# _dispatch_rb_judge_for_pr <pr_number> [issue_number]
 #
 # Trigger review_rb_judge_dispatch.yml via workflow_dispatch for the
 # given PR.  That workflow calls review_autofix.yml with
@@ -12143,6 +12352,9 @@ _dispatch_review_for_conflicts()
 #       already had a judge dispatch queued earlier this tick).  Callers
 #       must treat this as an in-flight success — do NOT increment the
 #       stall recovery count, and do NOT re-attempt in the same tick.
+#   3 — skipped by the optional ai:review-blocked concurrency cap for
+#       this tick. Callers must treat this as a benign deferral and leave
+#       the recovery count unchanged.
 #
 # API hygiene: reuses the cycle-local _CONFLICT_DISPATCH_TRACKER to
 # prevent duplicate dispatches within the same poll cycle, same as
@@ -12152,6 +12364,7 @@ _dispatch_review_for_conflicts()
 _dispatch_rb_judge_for_pr()
 {
 	local pr_number="$1"
+	local issue_num="${2:-${pr_number}}"
 	local log_prefix="[rb-judge-dispatch] PR #${pr_number}"
 
 	if ! [[ "${pr_number}" =~ ^[0-9]+$ ]]; then
@@ -12168,11 +12381,16 @@ _dispatch_rb_judge_for_pr()
 		return 2
 	fi
 
+	if ! phase_cap_can_dispatch "ai:review-blocked" "dispatch_rb_judge" "${issue_num}"; then
+		return 3
+	fi
+
 	echo "  ${log_prefix} Dispatching review_rb_judge_dispatch.yml..."
 	if gh_retry gh workflow run review_rb_judge_dispatch.yml \
 		--repo "${GITHUB_REPOSITORY}" \
 		-f pr_number="${pr_number}" 2>/dev/null; then
 		echo "  ${log_prefix} Dispatched review_rb_judge_dispatch.yml."
+		phase_cap_note_dispatch "ai:review-blocked"
 		echo "rb-judge:${pr_number}" >> "${_CONFLICT_DISPATCH_TRACKER}"
 		return 0
 	fi
@@ -12207,6 +12425,7 @@ fi
 TRACKING_ISSUES="$(cat "${RUNTIME_DIR}/tracking_issues.json")"
 COUNT="$(echo "${TRACKING_ISSUES}" | jq 'length')"
 FEATURE_SWEEP_DONE="false"
+prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"
 
 for ((tidx=0; tidx<COUNT; tidx++)); do
   TRACKING_NUM="$(echo "${TRACKING_ISSUES}" | jq -r ".[${tidx}].number")"
@@ -13319,6 +13538,10 @@ The poller will resume processing on the next cycle."
 - Priority: ${DEF_PRIORITY}
 - Managed by: AI Orchestrator"
 
+      if ! phase_cap_can_dispatch "ai:clarification" "create_issue" "${local_id}"; then
+        continue
+      fi
+
       ensure_label_exists "ai:clarification"
       ensure_label_exists "ai:orchestrator-managed"
       NEW_URL="$(gh_retry gh issue create \
@@ -13341,6 +13564,7 @@ The poller will resume processing on the next cycle."
       fi
 
       echo "  Created #${NEW_NUM}: ${DEF_TITLE} (${local_id})"
+      phase_cap_note_dispatch "ai:clarification"
       ISSUE_NUMS="${ISSUE_NUMS} ${NEW_NUM}"
       DEFERRED_CREATED_NUMS="${DEFERRED_CREATED_NUMS} ${NEW_NUM}"
 
@@ -16885,6 +17109,10 @@ ${_gate_violations:-(no violation lines parsed — see workflow run log for the 
 - Priority: ${DEF_PRIORITY}
 - Managed by: AI Orchestrator"
 
+          if ! phase_cap_can_dispatch "ai:clarification" "create_issue" "${local_id}"; then
+            continue
+          fi
+
           ensure_label_exists "ai:clarification"
           ensure_label_exists "ai:orchestrator-managed"
           NEW_URL="$(gh_retry gh issue create \
@@ -16901,6 +17129,7 @@ ${_gate_violations:-(no violation lines parsed — see workflow run log for the 
             continue
           fi
           echo "  Created #${NEW_NUM}: ${DEF_TITLE} (${local_id})"
+          phase_cap_note_dispatch "ai:clarification"
           CREATED_NUMS="${CREATED_NUMS} ${NEW_NUM}"
           ACTUALLY_CREATED_COUNT=$(( ACTUALLY_CREATED_COUNT + 1 ))
 
