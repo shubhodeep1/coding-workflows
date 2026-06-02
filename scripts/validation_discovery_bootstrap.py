@@ -267,6 +267,7 @@ def discover_manifest_via_codex(
 	reasoning_effort: str,
 	attempts: int,
 	executor: CommandExecutor | None = None,
+	per_call_timeout_secs: int | None = None,
 	retry_backoff_base_secs: float = 5.0,
 	sleep_fn: Callable[[float], None] = time.sleep,
 ) -> DiscoveryResult:
@@ -275,6 +276,12 @@ def discover_manifest_via_codex(
 	Retries up to `attempts` times on validator rejection, with exponential
 	backoff between attempts (mirrors validate_process.sh). Returns the
 	first valid YAML or a failure with the last attempt's reason.
+
+	`per_call_timeout_secs` caps the wall-clock of each individual `codex
+	exec` invocation. When None (default) the executor's own default timeout
+	applies — preserving the standalone behaviour. The refresh runner passes
+	an explicit value so its aggregate discovery budget can reason about a
+	single repo's worst-case cost (`attempts * per_call_timeout_secs`).
 	"""
 
 	if attempts < 1:
@@ -309,13 +316,17 @@ def discover_manifest_via_codex(
 			"danger-full-access",
 		]
 		try:
-			proc = executor.run(
-				command,
-				cwd=clone_dir,
-				check=False,
-				input_text=prompt_text,
-				env_overrides={"CODEX_DISABLE_TELEMETRY": "1"},
-			)
+			run_kwargs: dict[str, Any] = {
+				"cwd": clone_dir,
+				"check": False,
+				"input_text": prompt_text,
+				"env_overrides": {"CODEX_DISABLE_TELEMETRY": "1"},
+			}
+			# Cap each codex attempt when the caller supplies a per-call
+			# budget; when None, defer to the executor's own default timeout.
+			if per_call_timeout_secs is not None:
+				run_kwargs["timeout"] = per_call_timeout_secs
+			proc = executor.run(command, **run_kwargs)
 		except Exception as exc:
 			if isinstance(exc, subprocess.TimeoutExpired) or (
 				_wrapped_command_failure(exc) and _command_exception_returncode(exc) == 124
@@ -831,4 +842,10 @@ class DiscoveryRunContext:
 	dedup_days: int
 	enabled: bool
 	dry_run: bool
+	# Aggregate wall-clock budget (seconds) for the codex discovery phase
+	# across all consumer repos in one refresh cycle. The runner stops
+	# invoking codex once the remaining budget can no longer cover a single
+	# repo's worst case and degrades the rest to drift-monitoring only.
+	# Default mirrors VALIDATION_DISCOVERY_BUDGET_SECS in the workflow.
+	discovery_budget_secs: int = 2100
 	supported_families: tuple[str, ...] = field(default_factory=lambda: SUPPORTED_FAMILIES)

@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -769,6 +770,82 @@ def test_discovery_dispatch_records_failed_when_codex_exhausts() -> None:
 		assert recorded["outcome"] == "failed"
 		assert recorded["failure_reason"] is not None
 		executor.assert_consumed()
+
+
+def test_dispatch_discovery_skips_codex_when_budget_exhausted() -> None:
+	# When the aggregate discovery budget is exhausted, the per-repo gate must
+	# skip codex entirely (no dedup, no codex, no memory write) and record
+	# `skipped_budget` so drift monitoring still proceeds. This is the fix for
+	# the validation-refresh job timing out (runs 26733609724 / 26734252770)
+	# once real codex discovery ran across all 11 consumer repos.
+	with tempfile.TemporaryDirectory(prefix="discovery-budget-") as td, _StubMemory() as stub:
+		repo_dir = Path(td) / "octo__demo-repo"
+		repo_dir.mkdir(parents=True, exist_ok=True)
+		branch = "ai/validation-refresh"
+		executor = FakeExecutor([])  # gate must short-circuit before any command
+		runner = _make_runner(executor, branch, discovery_ctx=_enabled_discovery_ctx())
+		runner._discovery_deadline = time.monotonic() - 1.0  # already exhausted
+		result = refresh_runner.RefreshResult(
+			repository="octo/demo-repo", outcome="error", branch=branch
+		)
+		runner._dispatch_discovery(
+			result=result,
+			repo_dir=repo_dir,
+			repository="octo/demo-repo",
+			default_branch="main",
+		)
+		assert result.discovery_outcome == "skipped_budget"
+		assert result.discovery_pr_url is None
+		assert any("discovery_budget_exhausted" in d for d in result.discovery_diagnostics)
+		assert stub.dedup_calls == []  # gate short-circuits before the dedup check
+		assert stub.appended == []  # ...and before any memory write
+		executor.assert_consumed()  # no codex/git/gh calls were issued
+
+
+def test_dispatch_discovery_runs_when_budget_remaining() -> None:
+	# A healthy remaining budget must let the gate fall through to the normal
+	# discovery path — proven here by reaching the dedup check, which we stub
+	# to hit so no real codex/network call is made.
+	with tempfile.TemporaryDirectory(prefix="discovery-budget-ok-") as td, _StubMemory(
+		dedup_returns=True
+	) as stub:
+		repo_dir = Path(td) / "octo__demo-repo"
+		repo_dir.mkdir(parents=True, exist_ok=True)
+		branch = "ai/validation-refresh"
+		executor = FakeExecutor([])  # dedup-hit short-circuits before codex
+		runner = _make_runner(executor, branch, discovery_ctx=_enabled_discovery_ctx())
+		runner._discovery_deadline = time.monotonic() + 100000.0  # plenty remaining
+		result = refresh_runner.RefreshResult(
+			repository="octo/demo-repo", outcome="error", branch=branch
+		)
+		runner._dispatch_discovery(
+			result=result,
+			repo_dir=repo_dir,
+			repository="octo/demo-repo",
+			default_branch="main",
+		)
+		assert result.discovery_outcome == "skipped_dedup"  # gate passed -> dedup ran
+		assert stub.dedup_calls == ["octo/demo-repo"]
+		executor.assert_consumed()
+
+
+def test_run_repositories_arms_discovery_deadline_per_enablement() -> None:
+	# `run_repositories` arms the aggregate deadline when discovery is enabled
+	# with a positive budget, and leaves it disarmed otherwise.
+	with tempfile.TemporaryDirectory(prefix="discovery-deadline-") as td:
+		workspace = Path(td) / "work"
+		workspace.mkdir(parents=True, exist_ok=True)
+
+		enabled = _make_runner(
+			FakeExecutor([]), "ai/validation-refresh", discovery_ctx=_enabled_discovery_ctx()
+		)
+		assert enabled._discovery_deadline is None  # not armed until run_repositories
+		enabled.run_repositories([], workspace)
+		assert enabled._discovery_deadline is not None
+
+		disabled = _make_runner(FakeExecutor([]), "ai/validation-refresh")  # discovery disabled
+		disabled.run_repositories([], workspace)
+		assert disabled._discovery_deadline is None
 
 
 # ---------------------------------------------------------------------------

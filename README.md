@@ -1696,6 +1696,7 @@ The refresh runner ALSO runs codex-driven discovery against each consumer's clon
 - **Per-PR idempotency:** branch name `automation/validate-discovery/<short_sha>/<type>` is deterministic; an existing open PR on that branch is reused, never churned. When the consumer's default-branch HEAD advances, a fresh branch with the new SHA is computed and a new PR is opened.
 - **Cross-cycle dedup:** discovery outcomes are recorded on the `ai-memory` branch under [`ai-memory/schemas/validation_discovery.v1.json`](ai-memory/schemas/validation_discovery.v1.json) (path: `orchestrator/validation_discovery/<owner>__<repo>/history.json`). A consumer with a `success_*` entry within `VALIDATION_DISCOVERY_DEDUP_DAYS` (default `7`) is skipped on the next cycle; failures do NOT block re-attempts.
 - **Operator opt-out:** set `discovery_enabled=false` on `workflow_dispatch` to skip an individual run; set `VALIDATION_DISCOVERY_ENABLED=false` as a repo `var` to disable the feature globally. `discovery_dry_run=true` exercises the dedup + memory plumbing without invoking codex or opening PRs.
+- **Time budget (timeout protection):** the codex discovery phase is bounded by `VALIDATION_DISCOVERY_BUDGET_SECS` (default `2100`, ~35m). Consumers are processed sequentially and the runner stops invoking codex once the remaining budget can no longer cover one consumer's worst case (`VALIDATION_DISCOVERY_MAX_ATTEMPTS × 300s`); remaining consumers record `skipped_budget` and fall through to drift monitoring only. This keeps the job within its 60-minute `timeout-minutes` cap regardless of consumer count or per-call codex latency — failed/skipped outcomes do not dedup, so they are retried on the next cycle.
 - **Required PAT scopes:** `GH_PAT` must have `repo` scope on every consumer in [`.github/ai/consumer_repos.json`](.github/ai/consumer_repos.json) (same scope already required for `mark-stable.sh` dispatch).
 
 | Env var | Default | Description |
@@ -1703,6 +1704,7 @@ The refresh runner ALSO runs codex-driven discovery against each consumer's clon
 | `VALIDATION_DISCOVERY_ENABLED` | `true` | Master gate. `false` skips the discovery dispatch entirely (drift monitoring still runs). |
 | `VALIDATION_DISCOVERY_DEDUP_DAYS` | `7` | Days to skip a consumer after a successful discovery outcome is recorded on `ai-memory`. |
 | `VALIDATION_DISCOVERY_MAX_ATTEMPTS` | `3` | Codex invocation retries before giving up on a consumer. |
+| `VALIDATION_DISCOVERY_BUDGET_SECS` | `2100` | Aggregate wall-clock budget (seconds) for the codex discovery phase across all consumers. Once the remaining budget can no longer cover one consumer's worst case (`MAX_ATTEMPTS × 300s`), the rest record `skipped_budget` and fall through to drift monitoring only, keeping the job under its 60-minute `timeout-minutes` cap. A non-positive value disables the gate (unbounded). |
 | `VALIDATION_DISCOVERY_MODEL` | `openai/gpt-5.4` | Codex model id. |
 | `VALIDATION_DISCOVERY_REASONING_EFFORT` | `xhigh` | Codex reasoning effort. |
 | `VALIDATION_DISCOVERY_PR_BRANCH_PREFIX` | `automation/validate-discovery` | Branch prefix for proposed PRs. |

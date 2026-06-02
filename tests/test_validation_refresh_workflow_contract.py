@@ -50,6 +50,17 @@ def test_validation_refresh_workflow_wires_codex_provider_auth() -> None:
 	assert "CODEX_HOME" in content
 
 
+def test_validation_refresh_workflow_bounds_discovery_with_budget() -> None:
+	# Regression guard for runs 26733609724 / 26734252770: PR #3023 wired
+	# OpenRouter auth so `codex exec` stopped failing fast and began doing real
+	# per-repo work. With no aggregate budget the discovery phase ran 11 repos
+	# x up to 3 attempts x 300s and tripped `timeout-minutes: 60`. Keep both
+	# the budget knob and the cap it protects wired so this can't regress.
+	content = WORKFLOW_PATH.read_text(encoding="utf-8")
+	assert "VALIDATION_DISCOVERY_BUDGET_SECS" in content
+	assert "timeout-minutes: 60" in content
+
+
 def test_validation_refresh_workflow_summarizes_and_notifies_on_failure() -> None:
 	content = WORKFLOW_PATH.read_text(encoding="utf-8")
 	assert "GITHUB_STEP_SUMMARY" in content
