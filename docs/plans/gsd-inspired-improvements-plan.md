@@ -43,7 +43,7 @@ through the gsd-build root, `docs/ARCHITECTURE.md`, `docs/INVENTORY.md`,
 The closest precedents in this repo are
 [`docs/plans/apply-ai-tools-learnings-plan.md`](./apply-ai-tools-learnings-plan.md)
 and
-[`docs/symphony-inspired-improvements.md`](../symphony-inspired-improvements.md).
+[`docs/plans/symphony-inspired-improvements-plan.md`](symphony-inspired-improvements-plan.md).
 This plan reuses their template — each adopted item names a source file, a
 target file in this repo, the wording or wiring, and any §6/§10/§14/§15
 constraints it triggers.
@@ -614,7 +614,7 @@ required.
   `npx get-shit-done-cc@latest`.
 - This repo: `docs/plans/apply-ai-tools-learnings-plan.md`,
   `docs/ai-tools-future-improvements.md`,
-  `docs/symphony-inspired-improvements.md` — template precedents.
+  `docs/plans/symphony-inspired-improvements-plan.md` — template precedents.
 - This repo: `CLAUDE.md` §§ 5, 6, 10, 14, 15 — binding constraints.
 - This repo: `README.md` §"Memory System", §"Telemetry" — memory
   contract that item 5 must preserve.

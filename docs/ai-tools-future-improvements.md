@@ -755,6 +755,6 @@ PRs in any order.
 - **External source**: <https://github.com/x1xhlol/system-prompts-and-models-of-ai-tools>
 - **Companion plan**: `docs/completed/apply-ai-tools-learnings-plan.md`
   (the implementation plan for the items adopted now).
-- **In-repo precedent**: `docs/symphony-inspired-improvements.md` —
+- **In-repo precedent**: `docs/plans/symphony-inspired-improvements-plan.md` —
   similar structure for "borrow from external system, drop the
   parts that conflict with our values" analysis.
