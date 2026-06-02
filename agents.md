@@ -316,7 +316,7 @@ it is intentionally large.
 | `REVIEWER_FAILBACK_MAX_RETRIES` | `1` | Retryable-failure budget before a reviewer slot consults the failback chain. |
 | `REVIEWER_HEALTH_OPEN_THRESHOLD` | `3` | Consecutive retryable failures required to mark a reviewer slot `open` in the health cache. |
 | `REVIEWER_HEALTH_OPEN_TTL_SECS` | `1800` | Seconds an `open` reviewer-health entry suppresses dispatch before automatic expiry. |
-| `AGENTS_MD_MATERIALITY_ENABLED` | `0` | Enable the deterministic AGENTS.md materiality advisory. |
+| `AGENTS_MD_MATERIALITY_ENABLED` | `1` | Post the deterministic, non-blocking AGENTS.md materiality advisory when a material change omits an agents.md update (on by default; set `0` to disable). |
 | `AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED` | `0` | Reserved only; deterministic v1 still makes no materiality model call when this flag is on. |
 | `AGENTS_MD_MATERIALITY_MODEL` | `openai/gpt-5.4-mini` | Reserved future materiality fallback model slug. |
 | `AGENTS_MD_MATERIALITY_REASONING` | `medium` | Reserved future materiality fallback reasoning effort. |
