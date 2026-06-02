@@ -6,9 +6,8 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
-
-import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -92,9 +91,9 @@ def _assert_success(proc: subprocess.CompletedProcess[str]) -> None:
 	assert proc.stderr == ""
 
 
-@pytest.mark.parametrize("contract_name", CONTRACT_NAMES)
-def test_contract_files_exist(contract_name: str) -> None:
-	assert (CONTRACTS_DIR / contract_name).is_file()
+def test_contract_files_exist() -> None:
+	for contract_name in CONTRACT_NAMES:
+		assert (CONTRACTS_DIR / contract_name).is_file(), contract_name
 
 
 def test_judge_prompts_render_under_current_contracts() -> None:
@@ -133,50 +132,43 @@ def test_shell_wrapper_renders_review_blocked_judge_under_current_contracts() ->
 	assert "{{SEMBLE_PREFETCH}}" not in proc.stdout
 
 
-@pytest.mark.parametrize(
-	"prompt_name",
-	(
+def test_no_placeholder_review_and_judge_prompts_round_trip() -> None:
+	for prompt_name in (
 		"mode-judge-interim.txt",
 		"mode-orchestrate-poll-judge.txt",
 		"review-consolidator.txt",
 		"review-reviewer-checklist.txt",
-	),
-)
-def test_no_placeholder_review_and_judge_prompts_round_trip(prompt_name: str) -> None:
-	prompt_path = PROMPTS_DIR / prompt_name
-	proc = _run_render(prompt_path)
-	_assert_success(proc)
-	assert proc.stdout == _normalized_text(prompt_path)
+	):
+		prompt_path = PROMPTS_DIR / prompt_name
+		proc = _run_render(prompt_path)
+		_assert_success(proc)
+		assert proc.stdout == _normalized_text(prompt_path), prompt_name
 
 
-@pytest.mark.parametrize(
-	"resolver_hints",
-	(
+def test_conflict_resolver_renders_required_values_and_optional_hints(
+) -> None:
+	for resolver_hints in (
 		None,
 		"Resolver Serena hints:\n- use find_symbol",
-	),
-)
-def test_conflict_resolver_renders_required_values_and_optional_hints(
-	resolver_hints: str | None,
-) -> None:
-	variables = {
-		"CONFLICTED_FILES_COUNT": "2",
-		"CONFLICTED_FILES_LIST": "- prompts/conflict-resolver.txt\n- tests/test_render_prompt_review_judge_modes.py",
-	}
-	if resolver_hints is not None:
-		variables["SERENA_TOOL_HINTS_RESOLVER"] = resolver_hints
+	):
+		variables = {
+			"CONFLICTED_FILES_COUNT": "2",
+			"CONFLICTED_FILES_LIST": "- prompts/conflict-resolver.txt\n- tests/test_render_prompt_review_judge_modes.py",
+		}
+		if resolver_hints is not None:
+			variables["SERENA_TOOL_HINTS_RESOLVER"] = resolver_hints
 
-	proc = _run_render(PROMPTS_DIR / "conflict-resolver.txt", variables=variables)
-	_assert_success(proc)
-	assert "Conflicted files reported by `git diff --name-only --diff-filter=U` (2 total):" in proc.stdout
-	assert variables["CONFLICTED_FILES_LIST"] in proc.stdout
-	assert "{{CONFLICTED_FILES_COUNT}}" not in proc.stdout
-	assert "{{CONFLICTED_FILES_LIST}}" not in proc.stdout
-	assert "{{SERENA_TOOL_HINTS_RESOLVER}}" not in proc.stdout
-	if resolver_hints is None:
-		assert "Resolver Serena hints:" not in proc.stdout
-	else:
-		assert resolver_hints + "\n" in proc.stdout
+		proc = _run_render(PROMPTS_DIR / "conflict-resolver.txt", variables=variables)
+		_assert_success(proc)
+		assert "Conflicted files reported by `git diff --name-only --diff-filter=U` (2 total):" in proc.stdout
+		assert variables["CONFLICTED_FILES_LIST"] in proc.stdout
+		assert "{{CONFLICTED_FILES_COUNT}}" not in proc.stdout
+		assert "{{CONFLICTED_FILES_LIST}}" not in proc.stdout
+		assert "{{SERENA_TOOL_HINTS_RESOLVER}}" not in proc.stdout
+		if resolver_hints is None:
+			assert "Resolver Serena hints:" not in proc.stdout
+		else:
+			assert resolver_hints + "\n" in proc.stdout
 
 
 def test_integration_sync_conflict_resolver_renders_all_expected_values() -> None:
@@ -243,16 +235,40 @@ def test_shell_wrapper_reports_missing_required_contract_violation() -> None:
 	assert "CONFLICTED_FILES_LIST" in proc.stderr
 
 
-def test_review_consolidator_contract_reports_forbidden_placeholder(tmp_path: Path) -> None:
-	prompt_path = tmp_path / "review-consolidator-fixture.txt"
-	prompt_path.write_text("Header\n{{SEMBLE_PREFETCH}}\nFooter\n", encoding="utf-8")
+def test_review_consolidator_contract_reports_forbidden_placeholder() -> None:
+	with tempfile.TemporaryDirectory(prefix="review_consolidator_contract_") as td:
+		prompt_path = Path(td) / "review-consolidator-fixture.txt"
+		prompt_path.write_text("Header\n{{SEMBLE_PREFETCH}}\nFooter\n", encoding="utf-8")
 
-	proc = _run_render(
-		prompt_path,
-		legacy_mode_name="review-consolidator",
-	)
+		proc = _run_render(
+			prompt_path,
+			legacy_mode_name="review-consolidator",
+		)
 
 	assert proc.returncode == 1
 	assert proc.stdout == ""
 	assert "forbidden_present" in proc.stderr
 	assert "SEMBLE_PREFETCH" in proc.stderr
+
+
+def main() -> int:
+	"""Keep this file runnable via `python3 tests/<file>.py`.
+
+	The repo's CI uses explicit direct-run allowlists rather than pytest
+	discovery, so this module must not require pytest to import or execute.
+	"""
+	test_contract_files_exist()
+	test_judge_prompts_render_under_current_contracts()
+	test_shell_wrapper_renders_review_blocked_judge_under_current_contracts()
+	test_no_placeholder_review_and_judge_prompts_round_trip()
+	test_conflict_resolver_renders_required_values_and_optional_hints()
+	test_integration_sync_conflict_resolver_renders_all_expected_values()
+	test_conflict_resolver_reports_missing_required_contract_violation()
+	test_shell_wrapper_reports_missing_required_contract_violation()
+	test_review_consolidator_contract_reports_forbidden_placeholder()
+	print("OK: review/judge/conflict prompt contracts render and reject invalid inputs")
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
