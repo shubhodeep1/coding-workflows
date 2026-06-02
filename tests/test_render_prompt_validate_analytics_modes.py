@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,7 +12,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_DIR = REPO_ROOT / "prompts"
-RENDER_PROMPT_PY = REPO_ROOT / "scripts" / "render_prompt.py"
+RENDER_PROMPT_SH = REPO_ROOT / "scripts" / "render_prompt.sh"
 FORBIDDEN_PLACEHOLDER = "WORKFLOW_EDIT_RESTRICTION"
 
 
@@ -74,6 +73,9 @@ ALL_MODE_NAMES = tuple(case.mode_name for case in PASS_CASES)
 def _base_env() -> dict[str, str]:
 	env = os.environ.copy()
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	env.pop("ALLOW_WORKFLOW_EDITS", None)
+	env.pop("SEMBLE_PREFETCH", None)
+	env.pop("SERENA_TOOL_HINTS", None)
 	return env
 
 
@@ -91,18 +93,15 @@ def _normalized_text(path: Path) -> str:
 def _run_render(
 	prompt_file: Path,
 	*,
-	legacy_mode_name: str | None = None,
 	variables: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-	cmd = [sys.executable, str(RENDER_PROMPT_PY), str(prompt_file)]
-	if legacy_mode_name is not None:
-		cmd.extend(["--legacy-mode-name", legacy_mode_name])
+	env = _base_env()
 	for name, value in sorted((variables or {}).items()):
-		cmd.extend(["--var", f"{name}={value}"])
+		env[name] = value
 	return subprocess.run(
-		cmd,
+		["bash", str(RENDER_PROMPT_SH), str(prompt_file)],
 		cwd=str(REPO_ROOT),
-		env=_base_env(),
+		env=env,
 		text=True,
 		capture_output=True,
 		timeout=60,
@@ -111,7 +110,7 @@ def _run_render(
 
 def _assert_success(proc: subprocess.CompletedProcess[str]) -> None:
 	assert proc.returncode == 0, (
-		f"render_prompt.py failed with {proc.returncode}\n"
+		f"render_prompt.sh failed with {proc.returncode}\n"
 		f"stdout:\n{proc.stdout}\n\n"
 		f"stderr:\n{proc.stderr}"
 	)
@@ -181,13 +180,14 @@ def test_validate_self_heal_handles_standalone_and_literal_serena_markers() -> N
 def test_contracts_reject_forbidden_placeholder_for_all_validate_and_workflow_modes() -> None:
 	with tempfile.TemporaryDirectory(prefix="render_prompt_validate_analytics_modes_") as td:
 		prompt_file = Path(td) / "prompt.txt"
-		prompt_file.write_text(
-			f"Header\n{{{{{FORBIDDEN_PLACEHOLDER}}}}}\nFooter\n",
-			encoding="utf-8",
-		)
 
 		for mode_name in ALL_MODE_NAMES:
-			proc = _run_render(prompt_file, legacy_mode_name=mode_name)
+			prompt_file = Path(td) / f"{mode_name}.txt"
+			prompt_file.write_text(
+				f"Header\n{{{{{FORBIDDEN_PLACEHOLDER}}}}}\nFooter\n",
+				encoding="utf-8",
+			)
+			proc = _run_render(prompt_file)
 			_assert_contract_failure(proc, category="forbidden_present", name=FORBIDDEN_PLACEHOLDER)
 
 
