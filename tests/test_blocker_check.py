@@ -235,6 +235,30 @@ def test_evaluate_blocker_eligibility_allows_not_created_dependency():
 	]
 
 
+def test_evaluate_blocker_eligibility_blocks_dependency_not_yet_created():
+	state = _blocker_state()
+	state["waves"][0]["issues"][0] = {
+		"id": "issue-1",
+		"github_issue": None,
+		"status": "pending",
+	}
+
+	result = blocker_check.evaluate_blocker_eligibility(state, local_id="issue-2")
+
+	assert result["eligible"] is False
+	assert result["signal"] == "dispatch_deferred_blocker"
+	assert result["reason"] == "blocked_by_dependency"
+	assert result["blockers"] == [
+		{
+			"local_id": "issue-1",
+			"github_issue": None,
+			"terminal": False,
+			"status": "not_created",
+			"source": "no_github_issue",
+		}
+	]
+
+
 def test_main_returns_structured_state_load_failure():
 	missing_state = REPO_ROOT / "tests" / "missing-blocker-state.json"
 	stdout = io.StringIO()

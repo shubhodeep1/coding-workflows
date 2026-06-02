@@ -2153,7 +2153,10 @@ def is_terminal_wave_issue(
 		pr_state=pr_state,
 		pr_merged=pr_merged,
 	)
-	return is_terminal_wave_issue_status(status), status, source
+	terminal = is_terminal_wave_issue_status(status)
+	if status == "not_created" and source == "no_github_issue":
+		terminal = False
+	return terminal, status, source
 
 
 # Phases whose stall clock is re-anchored to
