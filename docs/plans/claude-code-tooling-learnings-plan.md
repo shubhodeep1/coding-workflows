@@ -712,7 +712,7 @@ text or documentation edits.
 - `docs/plans/apply-ai-tools-learnings-plan.md` — Closest
   in-repo precedent; structurally identical adoption pattern
   applied to a different source repo (x1xhlol).
-- `docs/symphony-inspired-improvements.md` — Earlier "borrow
+- `docs/plans/symphony-inspired-improvements-plan.md` — Earlier "borrow
   mechanisms from an external system" exercise in this repo.
 - `CLAUDE.md` (current monolithic version, 489 lines) — extraction
   source for Layer 1.

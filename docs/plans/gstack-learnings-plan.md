@@ -153,7 +153,7 @@ than re-litigate.
   `prompts/mode-judge.txt`), different aim (this one writes to
   `ai-memory`, that one writes to the ledger), so the two changes
   can land independently but should share an env-var prefix.
-- `docs/symphony-inspired-improvements.md` — sibling plan
+- `docs/plans/symphony-inspired-improvements-plan.md` — sibling plan
   applying Symphony's lessons. Phase O here (skill modularity
   refactor of `prompts/`) overlaps Symphony's "strict prompt
   rendering" item — Symphony focuses on the templating engine; this
@@ -1313,7 +1313,7 @@ BLOCKED: emission rules) into a single template file that all
 mode prompts include at assembly time. Reduces drift (today, the
 Q-ID format guidance lives in 3+ prompts and they have already
 diverged slightly). Inspired by gstack's `scripts/resolvers/preamble.ts`
-shared prelude. Pairs with `docs/symphony-inspired-improvements.md`
+shared prelude. Pairs with `docs/plans/symphony-inspired-improvements-plan.md`
 Phase S1 (strict prompt rendering).
 
 **Status.** **Gap.** Each `prompts/mode-*.txt` is a flat file. Some
@@ -1346,7 +1346,7 @@ preludes have diverged.
 4. `scripts/assemble_prompt.sh` renders the final prompt using
    strict template rendering (Jinja2 with `undefined=StrictUndefined`)
    — unknown variables and unknown filters fail rendering. Aligns
-   with `docs/symphony-inspired-improvements.md` Phase S1.
+   with `docs/plans/symphony-inspired-improvements-plan.md` Phase S1.
 5. CI gate: `tests/test_assemble_prompt.py` verifies every
    `mode-*.txt` renders to a byte-stable output across renders
    (golden-file pinning).
@@ -1554,7 +1554,7 @@ implementation starts.
   benchmark `high` against the same diff and flip to `high` if
   there's no meaningful finding regression.
 - **OQ-4: Phase O — strict template engine choice.** Jinja2 is the
-  Python ecosystem default and the natural fit; `docs/symphony-inspired-improvements.md`
+  Python ecosystem default and the natural fit; `docs/plans/symphony-inspired-improvements-plan.md`
   Phase S1 also picks Jinja2. Should the two phases share a
   single template engine implementation, or implement
   independently for shipping speed? My recommendation: **share —
@@ -1609,7 +1609,7 @@ implementation starts.
 - `docs/completed/judge-loop-and-reissue-plan.md` (shipped) — covers
   judge-in-loop, sticky findings, typed rejections
   (overlaps Phase H here).
-- `docs/symphony-inspired-improvements.md` — sibling plan
+- `docs/plans/symphony-inspired-improvements-plan.md` — sibling plan
   applying Symphony's lessons (overlaps Phase O here on strict
   prompt rendering).
 - `agents.md:130-147` — stable log prefixes (contractual under

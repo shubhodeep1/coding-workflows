@@ -65,7 +65,7 @@ user elected to adopt the first two tiers as a concrete implementation plan
 future-considerations doc (`docs/ai-tools-future-improvements.md`, shipped
 in the same PR).
 
-The closest precedent in this repo is `docs/symphony-inspired-improvements.md`
+The closest precedent in this repo is `docs/plans/symphony-inspired-improvements-plan.md`
 — a similarly-structured "borrow mechanisms from an external system, drop
 the parts that conflict with our values" plan. This plan follows the same
 template: each adopted item names a source prompt, a target file in this
@@ -710,7 +710,7 @@ duplicate those here.
   - `Windsurf/Prompt Wave 11.txt` — goal #9 (planning-update
     semantics).
 - **In-repo precedent**:
-  - `docs/symphony-inspired-improvements.md` — structurally similar
+  - `docs/plans/symphony-inspired-improvements-plan.md` — structurally similar
     "borrow mechanisms from an external system, drop the parts that
     conflict with our values" plan; used as the template for this
     plan's `Cross-Cutting Goals` / `Cross-Cutting Non-Goals` framing.

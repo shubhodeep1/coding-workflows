@@ -53,7 +53,7 @@ Closest precedents in this repo:
   — same source-file → target-file enumeration shape.
 - [`docs/plans/apply-ai-tools-learnings-plan.md`](./apply-ai-tools-learnings-plan.md)
   — same phase-per-theme commit grouping.
-- [`docs/symphony-inspired-improvements.md`](../symphony-inspired-improvements.md)
+- [`docs/plans/symphony-inspired-improvements-plan.md`](symphony-inspired-improvements-plan.md)
   — same "mechanisms not policy" framing.
 
 CLAUDE.md sections that bind this work (cited verbatim where they
@@ -640,7 +640,7 @@ business invariant is touched. §10 does not bind.
   - [`docs/plans/awesome-claude-code-learnings-plan.md`](./awesome-claude-code-learnings-plan.md)
   - [`docs/plans/gsd-inspired-improvements-plan.md`](./gsd-inspired-improvements-plan.md)
   - [`docs/plans/apply-ai-tools-learnings-plan.md`](./apply-ai-tools-learnings-plan.md)
-  - [`docs/symphony-inspired-improvements.md`](../symphony-inspired-improvements.md)
+  - [`docs/plans/symphony-inspired-improvements-plan.md`](symphony-inspired-improvements-plan.md)
 - Project constraints cited:
   [`CLAUDE.md`](../../CLAUDE.md) §5, §6, §9, §10, §13, §14, §15, §16.
 - Repo architecture facts:
