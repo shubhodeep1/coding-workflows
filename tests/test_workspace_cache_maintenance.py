@@ -14,6 +14,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REVIEW_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 MAINTENANCE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "workspace-cache-maintenance.yml"
+REVIEW_TEMPLATE = REPO_ROOT / "workflow-templates" / "ai-review.yml"
 REMOVAL_REGISTRY = REPO_ROOT / "docs" / "scripts-pending-removal.md"
 
 
@@ -72,8 +73,9 @@ def test_workspace_cache_maintenance_workflow_uses_gh_pat_cache_surfaces_and_sum
 	assert 'issueOrPullRequest' in workflow
 	assert 'GITHUB_STEP_SUMMARY' in workflow
 	assert 'Workspace Cache Maintenance Summary' in workflow
-	assert 'Issue/PR lookup failures' in workflow
-	assert 'if delete_failures or lookup_failures:' in workflow
+	assert 'Issue/PR lookup warnings (retention-only fallback)' in workflow
+	assert 'Issue/PR lookup errors' in workflow
+	assert 'if delete_failures or lookup_errors:' in workflow
 
 
 def test_review_autofix_stages_and_activates_workspace_reuse_before_reviewers() -> None:
@@ -100,6 +102,12 @@ def test_review_autofix_stages_and_activates_workspace_reuse_before_reviewers() 
 	assert 'echo "GIT_WORK_TREE=${WORKSPACE_PATH}"' in activate_block
 	assert workflow.index('- name: Activate workspace shell context') < workflow.index('- name: Restore review-issue ledger')
 	assert workflow.index('- name: Activate workspace shell context') < workflow.index('- name: Run reviewer models')
+
+
+def test_review_wrapper_template_documents_workspace_reuse_contract() -> None:
+	workflow = _workflow_text(REVIEW_TEMPLATE)
+	assert 'uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@stable' in workflow
+	assert 'vars.WORKSPACE_REUSE_ENABLED' in workflow
 
 
 def test_workspace_init_keeps_reuse_enabled_for_explicit_review_identifier() -> None:
@@ -160,6 +168,7 @@ def main() -> int:
 	test_workspace_cache_maintenance_workflow_has_required_triggers_and_concurrency()
 	test_workspace_cache_maintenance_workflow_uses_gh_pat_cache_surfaces_and_summary()
 	test_review_autofix_stages_and_activates_workspace_reuse_before_reviewers()
+	test_review_wrapper_template_documents_workspace_reuse_contract()
 	test_workspace_init_keeps_reuse_enabled_for_explicit_review_identifier()
 	test_review_autofix_retargets_review_runtime_cache_into_workspace()
 	test_removal_registry_documents_workspace_cache_maintenance_workflow()

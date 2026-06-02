@@ -88,9 +88,10 @@ jobs:
             return [entry for entry in parsed if isinstance(entry, dict)]
 
 
-          def fetch_issue_or_pr_states(owner: str, repo: str, numbers: list[str]) -> tuple[dict[str, str], list[str]]:
+          def fetch_issue_or_pr_states(owner: str, repo: str, numbers: list[str]) -> tuple[dict[str, str], list[str], list[str]]:
             states: dict[str, str] = {}
-            lookup_failures: list[str] = []
+            lookup_warnings: list[str] = []
+            lookup_errors: list[str] = []
             for start in range(0, len(numbers), GRAPHQL_BATCH_SIZE):
               batch = numbers[start:start + GRAPHQL_BATCH_SIZE]
               query_lines = [
@@ -118,18 +119,18 @@ jobs:
               )
               if result.returncode != 0:
                 stderr = (result.stderr or result.stdout or "graphql lookup failed").strip()
-                lookup_failures.append(f"batch {batch}: {stderr}")
+                lookup_warnings.append(f"batch {batch}: {stderr}")
                 print(f"::warning::workspace-cache-maintenance issue-state lookup failed for batch {batch}: {stderr}")
                 continue
               try:
                 payload = json.loads(result.stdout)
               except json.JSONDecodeError as exc:
-                lookup_failures.append(f"batch {batch}: invalid JSON payload ({exc})")
+                lookup_errors.append(f"batch {batch}: invalid JSON payload ({exc})")
                 print(f"::warning::workspace-cache-maintenance could not parse issue-state lookup payload for batch {batch}: {exc}")
                 continue
               repo_payload = payload.get("data", {}).get("repository", {})
               if not isinstance(repo_payload, dict):
-                lookup_failures.append(f"batch {batch}: missing repository payload")
+                lookup_errors.append(f"batch {batch}: missing repository payload")
                 print(f"::warning::workspace-cache-maintenance missing repository payload for batch {batch}")
                 continue
               for alias, number in alias_to_number.items():
@@ -138,7 +139,7 @@ jobs:
                   state = node.get("state")
                   if isinstance(state, str) and state:
                     states[number] = state
-            return states, lookup_failures
+            return states, lookup_warnings, lookup_errors
 
 
           def write_summary(path: Path, lines: list[str]) -> None:
@@ -169,7 +170,7 @@ jobs:
               family_numeric_keys.setdefault(family, match.group(1))
 
           numeric_keys = sorted({value for value in family_numeric_keys.values()}, key=int)
-          issue_states, lookup_failures = fetch_issue_or_pr_states(owner, repo, numeric_keys)
+          issue_states, lookup_warnings, lookup_errors = fetch_issue_or_pr_states(owner, repo, numeric_keys)
 
           deleted_count = 0
           retained_count = 0
@@ -219,17 +220,25 @@ jobs:
             f"- Numeric keys checked: {len(numeric_keys)}",
             f"- Closed numeric keys: {len(closed_numeric_keys)}",
             f"- Unknown numeric keys (retention-only fallback): {len(unknown_numeric_keys)}",
-            f"- Issue/PR lookup failures: {len(lookup_failures)}",
+            f"- Issue/PR lookup warnings (retention-only fallback): {len(lookup_warnings)}",
+            f"- Issue/PR lookup errors: {len(lookup_errors)}",
             f"- Keep newest {keep_latest_per_family}: enabled per workspace family",
             f"- Delete failures: {len(delete_failures)}",
           ]
-          if lookup_failures:
+          if lookup_warnings:
             summary_lines.append("")
-            summary_lines.append("### Issue/PR lookup failures")
-            for failure in lookup_failures[:20]:
+            summary_lines.append("### Issue/PR lookup warnings (retention-only fallback)")
+            for failure in lookup_warnings[:20]:
               summary_lines.append(f"- {failure}")
-            if len(lookup_failures) > 20:
-              summary_lines.append(f"- ... {len(lookup_failures) - 20} more")
+            if len(lookup_warnings) > 20:
+              summary_lines.append(f"- ... {len(lookup_warnings) - 20} more")
+          if lookup_errors:
+            summary_lines.append("")
+            summary_lines.append("### Issue/PR lookup errors")
+            for failure in lookup_errors[:20]:
+              summary_lines.append(f"- {failure}")
+            if len(lookup_errors) > 20:
+              summary_lines.append(f"- ... {len(lookup_errors) - 20} more")
           if delete_failures:
             summary_lines.append("")
             summary_lines.append("### Delete failures")
@@ -239,6 +248,6 @@ jobs:
               summary_lines.append(f"- ... {len(delete_failures) - 20} more")
 
           write_summary(summary_path, summary_lines)
-          if delete_failures or lookup_failures:
+          if delete_failures or lookup_errors:
             raise SystemExit(1)
           PY
