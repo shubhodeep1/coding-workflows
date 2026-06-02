@@ -2694,6 +2694,63 @@ _find_all_linked_prs()
 	} | grep -E '^[0-9]+$' | sort -u
 }
 
+# _resolve_linked_pr_fresh_by_branch — Deterministic fallback for a linked
+# PR's head-commit timestamp when the issue→PR cross-reference timeline (the
+# single source that feeds BOTH stall-freshness guards: the detect_stalls
+# ai:done clock re-anchor and _check_fresh_push_guard) comes back empty.
+#
+# The cross-reference event is brittle — edits, Actions-bot-authored PRs, and
+# certain merge-queue interactions have all been observed to suppress it (see
+# _linked_prs_by_branch_name / issue #2552, PR #2568).  When it is missing the
+# linked-PR entry carries no headPushedAt and BOTH guards fail open in
+# lock-step, producing a false-positive ai:done stall recovery even though the
+# PR was just pushed.  This helper re-resolves the PR by the orchestrator's
+# conventional `ai/issue-<n>` head branch (the same deterministic lookup
+# close_linked_pr uses via _linked_prs_by_branch_name) and reads the head
+# commit's date from the SAME `gh pr list` response, so a suppressed
+# cross-reference can no longer blind the freshness signal.
+#
+# §15 audit: the cross-ref caches (STALL_MANAGED_LINKED_PR_CACHE,
+# _current_wave_details_json) are exactly what is empty in this failure mode,
+# so they cannot supply the data.  _linked_prs_by_branch_name returns only PR
+# numbers and would need a second call for the commit date; folding
+# number+commits into one `gh pr list --head` request is the minimal call
+# (1 REST request) and reuses the existing branch-lookup pattern.  Callers
+# gate this to stalled PR-bearing-phase issues whose primary headPushedAt is
+# already missing, so the steady-state (cross-ref present) path adds 0 calls.
+#
+# Output: compact JSON `{"number":N,"headPushedAt":"<ISO8601>"}` for the
+# freshest open `ai/issue-<n>` PR, or empty string when none resolves.
+# headPushedAt is the head commit's committedDate — GitHub exposes the true
+# pushedDate only over GraphQL, and committedDate is the same field the
+# cross-ref fetchers coalesce to (`pushedDate // committedDate`); for autofix
+# commits (created and pushed together) the two are equal.
+# Fail-open: any error yields empty output and the caller proceeds unchanged.
+_resolve_linked_pr_fresh_by_branch()
+{
+	local issue_num="$1"
+	[[ "${issue_num}" =~ ^[0-9]+$ ]] || return 0
+	local prs_json
+	prs_json="$(gh_retry gh pr list --repo "${GITHUB_REPOSITORY}" \
+		--head "ai/issue-${issue_num}" --state open \
+		--json number,commits 2>/dev/null || echo '[]')"
+	printf '%s' "${prs_json}" | jq -c '
+		(. // [])
+		| map(
+			select(.number? != null)
+			| {
+				number: .number,
+				headPushedAt: (
+					((.commits // []) | map(.committedDate) | map(select(. != null)) | sort | last) // null
+				)
+			}
+		)
+		| map(select(.headPushedAt != null))
+		| sort_by(.headPushedAt, .number)
+		| last // empty
+	' 2>/dev/null || true
+}
+
 # _timeline_jq — Paginated timeline query with jq filter.
 # Fetches ALL pages of the timeline API (via _issue_timeline_with_cross_refs_json,
 # which is GraphQL-first with REST fallback) and applies a jq filter.
@@ -10375,6 +10432,69 @@ _check_fresh_push_guard() {
   return 1
 }
 
+# _check_fresh_push_guard_with_fallback — _check_fresh_push_guard hardened
+# against a transiently empty issue→PR cross-reference.  Returns 0 (suppress
+# the stall recovery for this cycle) when EITHER the primary cross-ref entry
+# OR a deterministic `ai/issue-<n>` branch re-resolution shows the linked PR's
+# head commit was pushed within the fresh-push window; returns 1 otherwise.
+#
+# Both stall paths feed this guard from the cross-reference timeline only,
+# which can be suppressed (issue #2552 / PR #2568).  When that happens the
+# primary entry has no headPushedAt and the inner guard fails open — the exact
+# lock-step blindness that produced the false-positive ai:done recovery.  This
+# wrapper adds the branch-name fallback (Layer 1 of the two-layer freshness
+# fix; the detect_stalls re-anchor is Layer 2) so a missing cross-reference no
+# longer blinds the guard.
+#
+# Sets the same FRESH_PUSH_PR_NUM / FRESH_PUSH_AGE_SECS exports as the inner
+# guard, plus FRESH_PUSH_SOURCE ("cross_ref" | "branch_fallback") so callers
+# can annotate their STALL_SKIP line.  The branch re-resolution (1 REST call)
+# fires only for ai:done / ai:ready-to-merge issues whose primary entry lacked
+# a usable headPushedAt, so the cache-hit path adds zero API calls (§15).
+# Fail-open preserved end to end: any resolution failure leaves the recovery
+# free to proceed exactly as before.
+#
+# Args: $1 issue number, $2 linked_pr JSON entry (or "null"/empty), $3 phase.
+_check_fresh_push_guard_with_fallback() {
+  local issue_num="$1"
+  local linked_json="$2"
+  local phase="$3"
+  FRESH_PUSH_SOURCE="cross_ref"
+  if _check_fresh_push_guard "${issue_num}" "${linked_json}" "${phase}"; then
+    return 0
+  fi
+  case "${phase}" in
+    "ai:done"|"ai:ready-to-merge") ;;
+    *) return 1 ;;
+  esac
+  # Only re-resolve when the primary entry lacked a parseable headPushedAt; if
+  # it carried one and was simply not fresh (a genuine stall), the branch
+  # lookup would resolve the same PR and burn an API call for no benefit.
+  local _primary_iso=""
+  if [ -n "${linked_json}" ] && [ "${linked_json}" != "null" ] && [ "${linked_json}" != "{}" ]; then
+    _primary_iso="$(printf '%s' "${linked_json}" | jq -r '.headPushedAt // empty' 2>/dev/null || echo "")"
+  fi
+  local _primary_epoch=""
+  if [ -n "${_primary_iso}" ]; then
+    _primary_epoch="$(date -d "${_primary_iso}" +%s 2>/dev/null || echo "")"
+  fi
+  [[ "${_primary_epoch}" =~ ^[0-9]+$ ]] && return 1
+  local _fb_entry=""
+  _fb_entry="$(_resolve_linked_pr_fresh_by_branch "${issue_num}")"
+  local _fb_iso=""
+  if [ -n "${_fb_entry}" ]; then
+    _fb_iso="$(printf '%s' "${_fb_entry}" | jq -r '.headPushedAt // empty' 2>/dev/null || echo "")"
+  fi
+  # Non-silenced diagnostic so a recurrence is traceable — the primary cross-
+  # ref fetch swallows its own failures via 2>/dev/null upstream.
+  echo "STALL_FRESH_PUSH_FALLBACK issue=${issue_num} phase=${phase} source=branch_name resolved=${_fb_iso:-none}"
+  if [ -n "${_fb_entry}" ] && _check_fresh_push_guard "${issue_num}" "${_fb_entry}" "${phase}"; then
+    FRESH_PUSH_SOURCE="branch_fallback"
+    return 0
+  fi
+  return 1
+}
+
 # _check_open_pr_conflict_guard — Detect whether the latest linked PR of a
 # stalled issue is in a merge-conflict state (mergeable=false OR
 # mergeStateStatus=DIRTY per Q2:A).  Used by run_standalone_stall_recovery
@@ -10707,9 +10827,11 @@ PY
     # Fresh-push guard complements issue_has_active_workflow above; see
     # _check_fresh_push_guard for rationale. Consumes linked_pr already
     # populated in _candidate_details_json (0 additional API calls).
-    if _check_fresh_push_guard "${issue_num}" "${_std_linked_json}" "${phase}"; then
+    if _check_fresh_push_guard_with_fallback "${issue_num}" "${_std_linked_json}" "${phase}"; then
+      local _fp_src_suffix=""
+      [ "${FRESH_PUSH_SOURCE:-cross_ref}" = "branch_fallback" ] && _fp_src_suffix=" source=branch_fallback"
       echo "  [standalone-stall] Issue #${issue_num} linked PR #${FRESH_PUSH_PR_NUM} was pushed ${FRESH_PUSH_AGE_SECS}s ago — skipping recovery (fresh push)."
-      echo "STALL_SKIP issue=${issue_num} reason=fresh_push pr=${FRESH_PUSH_PR_NUM} pushed_age_secs=${FRESH_PUSH_AGE_SECS} phase=${phase} action=${action}"
+      echo "STALL_SKIP issue=${issue_num} reason=fresh_push pr=${FRESH_PUSH_PR_NUM} pushed_age_secs=${FRESH_PUSH_AGE_SECS} phase=${phase} action=${action}${_fp_src_suffix}"
       if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
         write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
       fi
@@ -11558,8 +11680,10 @@ recover_stalled_issue() {
     STALL_HEALING_CHANGED=true
     return 1  # Signal: no action taken (caller should not increment counter)
   fi
-  if _check_fresh_push_guard "${issue_num}" "${_fresh_lpr_entry}" "${phase}"; then
-    echo "STALL_SKIP issue=${issue_num} reason=fresh_push pr=${FRESH_PUSH_PR_NUM} pushed_age_secs=${FRESH_PUSH_AGE_SECS} phase=${phase} action=${action}"
+  if _check_fresh_push_guard_with_fallback "${issue_num}" "${_fresh_lpr_entry}" "${phase}"; then
+    local _fp_src_suffix=""
+    [ "${FRESH_PUSH_SOURCE:-cross_ref}" = "branch_fallback" ] && _fp_src_suffix=" source=branch_fallback"
+    echo "STALL_SKIP issue=${issue_num} reason=fresh_push pr=${FRESH_PUSH_PR_NUM} pushed_age_secs=${FRESH_PUSH_AGE_SECS} phase=${phase} action=${action}${_fp_src_suffix}"
     return 1  # Signal: no action taken (caller should not increment counter)
   fi
 
@@ -15453,6 +15577,58 @@ fi
         if [[ "${_head_pushed_at_candidate_count}" =~ ^[0-9]+$ ]] && [ "${_head_pushed_at_candidate_count}" -gt 0 ]; then
           echo "::warning::headPushedAt extraction produced an empty mapping for ${_head_pushed_at_candidate_count} linked PR candidate(s); using legacy stall-clock fallback." >&2
         fi
+      fi
+    fi
+    # Layer-2 branch fallback: the re-anchor map above is built solely from
+    # the issue→PR cross-reference timeline in _current_wave_details_json —
+    # the same brittle source the Layer-1 fresh-push guard uses.  When that
+    # cross-reference is transiently empty or malformed for an ai:done issue,
+    # its headPushedAt is unusable and detect_stalls falls back to the
+    # status_since-only clock, re-flagging a PR that was just pushed.  Re-
+    # resolve those (and only those) issues by their deterministic
+    # ai/issue-<n> head branch so the re-anchor is not blinded in lock-step
+    # with the fresh-push guard while preserving the intentionally narrow
+    # ai:done-only re-anchor scope.  Bounded by design: fires only for ai:done
+    # issues whose primary headPushedAt is missing, empty, or unparseable,
+    # which on the happy path (cross-reference present and parseable) is zero,
+    # so this adds 0 API calls per tick in steady state (§15).  Fail-open: any
+    # resolution failure leaves the legacy status_since anchor in place for
+    # that issue.
+    if [ -n "${_current_wave_details_json:-}" ] && [ "${_current_wave_details_json}" != "{}" ]; then
+      _reanchor_fallback_issues="$(printf '%s' "${_current_wave_details_json}" | jq -r '
+        to_entries[]
+        | select((.value.labels // []) | any(. == "ai:done"))
+        | .value.linked_pr as $linked_pr
+        | select(
+            if ($linked_pr == null) then
+              true
+            elif (($linked_pr | type) != "object") then
+              true
+            elif ($linked_pr.headPushedAt == null) then
+              true
+            elif (($linked_pr.headPushedAt | type) != "string") then
+              true
+            elif (($linked_pr.headPushedAt | length) == 0) then
+              true
+            else
+              ((try ($linked_pr.headPushedAt | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch null) == null)
+            end
+          )
+        | .key
+      ' 2>/dev/null || true)"
+      if [ -n "${_reanchor_fallback_issues}" ]; then
+        while IFS= read -r _rf_issue; do
+          [[ "${_rf_issue}" =~ ^[0-9]+$ ]] || continue
+          _rf_entry="$(_resolve_linked_pr_fresh_by_branch "${_rf_issue}")"
+          [ -n "${_rf_entry}" ] || continue
+          _rf_iso="$(printf '%s' "${_rf_entry}" | jq -r '.headPushedAt // empty' 2>/dev/null || echo "")"
+          [ -n "${_rf_iso}" ] || continue
+          # Always-visible (not ::debug::) so a recovered tick leaves a trace
+          # even though the issue is no longer flagged and the Layer-1
+          # STALL_FRESH_PUSH_FALLBACK line therefore never fires for it.
+          echo "STALL_REANCHOR_FALLBACK issue=${_rf_issue} source=branch_name resolved=${_rf_iso}"
+          _head_pushed_at_json="$(printf '%s' "${_head_pushed_at_json}" | jq -c --arg k "${_rf_issue}" --arg v "${_rf_iso}" '. + {($k): $v}' 2>/dev/null || printf '%s' "${_head_pushed_at_json}")"
+        done <<< "${_reanchor_fallback_issues}"
       fi
     fi
     _stall_check_args+=(--head-pushed-at-json "${_head_pushed_at_json}")
