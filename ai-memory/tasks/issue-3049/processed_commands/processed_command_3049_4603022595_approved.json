@@ -5,13 +5,29 @@
   "entry_id": "processed_command_3049_4603022595_approved",
   "issue_number": 3049,
   "metadata": {
+    "branch": "ai/issue-3049",
+    "changed_files": [
+      "prompts/contracts/mode-clarify-respond.yml",
+      "prompts/contracts/mode-clarify.yml",
+      "prompts/contracts/mode-implement-diagnose.yml",
+      "prompts/contracts/mode-implement-repair-syntax.yml",
+      "prompts/contracts/mode-implement-repair.yml",
+      "prompts/contracts/mode-orchestrate.yml",
+      "scripts/render_prompt.sh",
+      "tests/test_render_prompt_core_modes.py"
+    ],
+    "issue_number": 3049,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/3049",
+    "pr_number": 3053,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/3053",
+    "run_attempt": "1",
+    "run_id": "26823995931",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/26823995931"
   },
   "run_attempt": 1,
   "run_id": "26823995931",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-06-02T13:48:41Z",
+  "status": "completed",
+  "timestamp": "2026-06-02T13:53:26Z",
   "workflow": "implement"
 }
