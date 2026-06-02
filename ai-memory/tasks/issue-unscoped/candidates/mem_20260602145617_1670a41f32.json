@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add this new test file to `.github/workflows/*.yml` allowlists (ci.yml / mark-stable.yml / test-and-mark-stable.yml)\"\n  expected_change_site: `.github/workflows/ci.yml`, `.github/workflows/test-and-mark-stable.yml` (and any other explicit `python3 tests/...` allowlist)\n  confidence=[5]\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  EVIDENCE: tests/test_render_prompt_review_judge_modes.py exists and has a main() entrypoint, but it is not referenced in any CI workflow files; grep -r \"test_render_prompt_review_judge_modes\" .github/workflows/ returns no results; the test file is not added to any CI/test workflow allowlist.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- Requirement: The linked issue #3050 acceptance criteria states: \"At least one unresolved-variable or forbidden-variable path is tested.\"\n  Expected change site: tests/test_render_prompt_review_judge_modes.py\n  Evidence of absence: While the test module contains tests for missing_required and forbidden_present contract violations, the test file is not added to any CI allowlist in .github/workflows/*.yml. The cross-pollination summary confirms this gap: minimax_minimax-m2_5 identified that \"The test module should be added to CI allowlists (e.g., `.github/workflows/ci.yml`, `.github/workflows/test-and-mark-stable.yml`) so it actually executes in CI/release workflows.\"\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- Requirement: \"Add a focused test module covering representative review/judge/conflict render receipts and failures.\"\n  Expected change site: The test module must be added to CI allowlists (e.g., .github/workflows/ci.yml, .github/workflows/test-and-mark-stable.yml) so it actually executes in CI/release workflows\n  Evidence of absence: The test file tests/test_render_prompt_review_judge_modes.py exists and has a main() entrypoint, but it is not referenced in any CI workflow files. Running grep -r \"test_render_prompt_review_judge_modes\" .github/workflows/ returns no results. The repo's CI uses explicit direct-run allowlists rather than pytest discovery, so without adding this file to the allowlists, the contract tests that verify strict rendering and contract-violation detection will never execute in automation.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: \"Add this new test file to `.github/workflows/*.yml` allowlists (ci.yml / mark-stable.yml / test-and-mark-stable.yml)\" (explicitly called out in the Copilot review comment that the editor deliberately ignored as out-of-scope).\n  Expected change site: `.github/workflows/ci.yml`, `.github/workflows/test-and-mark-stable.yml` (and any other explicit `python3 tests/...` allowlist).\n  Evidence of absence: `tests/test_render_prompt_review_judge_modes.py` does not appear in any CI/test workflow allowlist; the test module therefore never runs under the repo's explicit direct-run harness (it is only exercised manually). The linked issue scoped changes to contracts/tests, but a test that cannot run in CI does not fulfill the acceptance criteria for \"strict rendering succeeds\" + \"contract-violation paths are tested\".\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "eef3d0a4d202ecce76443bdc6b82d75f98225216c4bf40b5601c4f4935db5241",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3054,
+    "run_id": "26827536783",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26827536783",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260602145617_1670a41f32",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3054,
+    "run_id": "26827536783"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-02T14:56:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
