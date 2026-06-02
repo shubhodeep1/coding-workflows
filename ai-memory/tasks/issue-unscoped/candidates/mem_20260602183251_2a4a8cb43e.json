@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_force_tick.sh:172-175 | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: Two json.loads() calls in _force_tick_render_record_file lack JSONDecodeError handling.\n  WHY: Malformed wrapper_json or payload_json will raise and abort the shell script instead of failing open, matching the same hardened pattern used elsewhere in the file.\n- scripts/memory_helpers.sh:546-550 | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: _load() in _memory_force_tick_collision_wrapper calls json.loads() without JSONDecodeError handling.\n  WHY: A corrupted existing force-tick record will raise during parsing instead of returning None and letting the collision check fail open.\n- scripts/memory_helpers.sh:567 | confidence=4\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  PROBLEM: The cooldown_seconds int() conversion lacks ValueError handling.\n  WHY: A non-numeric cooldown_seconds argument will abort the collision check instead of defaulting to 30 seconds.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Keep the matching listed workflow-template wrappers in sync where this issue already names them.\"\n  expected_change_site: workflow-templates/ai-implement.yml, workflow-templates/ai-review.yml, workflow-templates/ai-validate.yml\n  confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The templates are thin delegation wrappers (`uses: shubhodeep1/coding-workflows/...@stable`). No byte change needed; changes to the concrete workflows automatically apply. Explicitly called out as already-satisfied in prior editor summary.\n- requirement: \"Tests cover cooldown/no-op behavior and the dispatch payload shape.\" + full CI wiring for the new test.\n  expected_change_site: tests/test_orchestrate_force_tick.py (and CI allowlist update)\n  confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The contract test fully exercises the fixed behaviors (cooldown window, disabled state preservation, disabled\u2192re-enabled path, branch/PR tracking extraction, failure recording, memory_put collision). The issue's guardrails and prior editor notes explicitly exclude broader CI/test wiring changes. No runtime gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_force_tick.sh: lines 172 and 175 inside _force_tick_render_record_file | confidence=4\n  PROBLEM: Two json.loads() calls lack try/except error handling.\n  WHY: If wrapper_json or payload_json contain malformed JSON, the inner Python process raises an unhandled JSONDecodeError, and the shell script aborts instead of failing open with a warning.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/orchestrate_force_tick.sh: lines 172 and 175 in `_force_tick_render_record_file` function | confidence=4\n  PROBLEM: Two json.loads() calls lack error handling.\n  WHY: If wrapper_json or payload_json arguments contain invalid JSON, the script aborts instead of failing open gracefully.\n- scripts/memory_helpers.sh: lines 543-548 in `_memory_force_tick_collision_wrapper` function | confidence=4\n  PROBLEM: The `_load` helper function calls json.loads(path.read_text(encoding=\"utf-8\")) without a try/except wrapper.\n  WHY: Corrupted JSON files in the ai-memory branch would cause the collision detection to fail with an unhandled exception rather than gracefully returning None.\n- scripts/memory_helpers.sh: line 566 in `_memory_force_tick_collision_wrapper` function | confidence=3\n  PROBLEM: The collision wrapper's int(sys.argv[3]) call lacks a ValueError guard.\n  WHY: If the cooldown_seconds parameter is passed as a non-integer string, the script will raise ValueError and abort instead of gracefully defaulting to 30 seconds.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_force_tick.sh: _force_tick_render_record_file function, lines ~169-176 (embedded Python heredoc) | confidence=4\n  PROBLEM: Unhandled JSONDecodeError in json.loads() calls for wrapper_json and payload_json arguments.\n  WHY: If wrapper_json (sys.argv[2]) or payload_json (sys.argv[5]) contains malformed JSON, the Python embedded heredoc raises JSONDecodeError and aborts the script instead of failing open gracefully.\n- scripts/memory_helpers.sh: _memory_force_tick_collision_wrapper function, line ~542 (embedded Python heredoc: cooldown = int(sys.argv[3])) | confidence=4\n  PROBLEM: Unhandled ValueError when parsing cooldown_seconds argument.\n  WHY: If the cooldown_seconds argument (sys.argv[3]) contains non-numeric characters, the int() conversion raises ValueError and aborts the collision check.\n- scripts/memory_helpers.sh: _memory_force_tick_collision_wrapper function, lines ~526-531 (_load helper inside embedded Python) | confidence=3\n  PROBLEM: Unhandled JSONDecodeError in _load helper when reading existing force-tick records.\n  WHY: If an existing force-tick record file on the ai-memory branch contains corrupted/invalid JSON, json.loads() raises JSONDecodeError. The exception propagates out of _load, is caught by the || true in the caller, and fails open, but the error handling is implicit rather than explicit and could mask other unexpected failures.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: \"Keep the matching listed workflow-template wrappers in sync where this issue already names them.\"\n  Expected change site: workflow-templates/ai-implement.yml, workflow-templates/ai-review.yml, workflow-templates/ai-validate.yml\n  Evidence of absence: The templates are thin delegation wrappers (`uses: shubhodeep1/coding-workflows/...@stable`). No byte change needed; changes to the concrete workflows automatically apply. Explicitly called out as already-satisfied in prior editor summary.\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Tests cover cooldown/no-op behavior and the dispatch payload shape.\" + full CI wiring for the new test.\n  Expected change site: tests/test_orchestrate_force_tick.py (and CI allowlist update)\n  Evidence of absence: The contract test fully exercises the fixed behaviors (cooldown window, disabled state preservation, disabled\u2192re-enabled path, branch/PR tracking extraction, failure recording, memory_put collision). The issue's guardrails and prior editor notes explicitly exclude broader CI/test wiring changes. No runtime gap.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "e0aa487be4d03a9df9afacb7db87bf62c8080a84c89804fe8a67b0154ee91875",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3060,
+    "run_id": "26838872161",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26838872161",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260602183251_2a4a8cb43e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3060,
+    "run_id": "26838872161"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-02T18:32:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
