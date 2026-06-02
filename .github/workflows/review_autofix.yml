@@ -1252,7 +1252,7 @@ jobs:
             echo "SUPPORT_AGENTS_FILE=${SUPPORT_ROOT_DIR}/agents.md"
           } >> "$GITHUB_ENV"
 
-          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py cost_audit.py codex_heartbeat.sh review_run_reviewers.sh review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh"
+          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh render_prompt.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py cost_audit.py codex_heartbeat.sh review_run_reviewers.sh review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh"
           # Main-primary bootstrap scripts: prefer the fresh main snapshot so
           # wedged integration branches still pick up resolver safety fixes
           # shipped on main. Missing from both refs remains fail-open so older
@@ -2867,7 +2867,7 @@ jobs:
 
           leaked_paths="$(git ls-files -- \
             'scripts/gh_helpers.sh' 'scripts/git_ref_health_check.sh' \
-            'scripts/render_prompt.sh' 'scripts/validate_changed_files_syntax.sh' \
+            'scripts/render_prompt.sh' 'scripts/render_prompt.py' 'scripts/validate_changed_files_syntax.sh' \
             'scripts/tg_helpers.sh' 'scripts/label_helpers.sh' 'scripts/memory_helpers.sh' \
             'scripts/ai_memory.py' 'scripts/ai_memory_lib.py' 'scripts/openrouter_prompt_cache.py' \
             'scripts/codex_model_catalog.json' \
@@ -3368,6 +3368,7 @@ jobs:
 
           check_required_file "${SUPPORT_SCRIPTS_DIR}/review_run_reviewers.sh"
           check_required_file "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh"
+          check_required_file "${SUPPORT_SCRIPTS_DIR}/render_prompt.py"
           check_required_nonempty_file "${SUPPORT_INSTRUCTIONS_FILE}"
           check_required_file "./pre_assembled_static.txt"
           check_required_file "${PR_DIFF_FILE}"
