@@ -256,6 +256,36 @@ def test_before_run_failure_is_fatal_and_emits_bounded_tail(tmp_path: Path) -> N
 	assert "BEGIN-MARKER" not in result.stderr
 
 
+def test_before_run_sigkill_timeout_reports_timeout(tmp_path: Path) -> None:
+	repo_root, helper_path, workspace_path, runner_temp = _prepare_case(tmp_path)
+	timeout_dir = tmp_path / "bin"
+	timeout_dir.mkdir()
+	fake_timeout = timeout_dir / "timeout"
+	fake_timeout.write_text(
+		"#!/usr/bin/env bash\n"
+		"sleep 2\n"
+		"printf 'simulated timeout\\n'\n"
+		"exit 137\n",
+		encoding="utf-8",
+	)
+	fake_timeout.chmod(0o755)
+	_write_hook(repo_root, "implement", "before_run", "#!/usr/bin/env bash\nexit 0\n")
+
+	result = _run_helper(
+		repo_root,
+		helper_path,
+		workspace_path,
+		runner_temp,
+		"implement",
+		"before_run",
+		PATH=f"{timeout_dir}:{os.environ['PATH']}",
+		WORKSPACE_HOOK_TIMEOUT_SECONDS="1",
+	)
+	assert result.returncode == 137
+	assert "timed out after 1 seconds" in result.stderr
+	assert "failed with exit code 137" not in result.stderr
+
+
 def test_nonfatal_hooks_log_and_continue(tmp_path: Path) -> None:
 	repo_root, helper_path, workspace_path, runner_temp = _prepare_case(tmp_path)
 	for hook_name in ("after_run", "before_remove"):
@@ -308,6 +338,7 @@ def main() -> int:
 		test_after_create_skips_when_created_now_false,
 		test_hook_executes_in_workspace_path,
 		test_before_run_failure_is_fatal_and_emits_bounded_tail,
+		test_before_run_sigkill_timeout_reports_timeout,
 		test_nonfatal_hooks_log_and_continue,
 	):
 		_run_tmp_path_case(case_fn)

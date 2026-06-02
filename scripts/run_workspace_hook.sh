@@ -98,6 +98,8 @@ main()
 	local timeout_seconds="${WORKSPACE_HOOK_TIMEOUT_SECONDS:-600}"
 	local script_dir repo_root hook_path runner_temp workspace_path log_dir log_file
 	local run_status="0"
+	local run_started_at="0"
+	local run_elapsed="0"
 	local status_text
 
 	case "${phase}" in
@@ -144,6 +146,7 @@ main()
 	mkdir -p "${log_dir}"
 	: > "${log_file}"
 
+	run_started_at="$(date +%s)"
 	set +e
 	(
 		cd "${workspace_path}" && \
@@ -151,6 +154,7 @@ main()
 	) >"${log_file}" 2>&1
 	run_status="$?"
 	set -e
+	run_elapsed=$(( $(date +%s) - run_started_at ))
 
 	if [ "${run_status}" -eq 0 ]; then
 		exit 0
@@ -159,6 +163,8 @@ main()
 	status_text="failed with exit code ${run_status}. Log: ${log_file}."
 	if [ "${run_status}" -eq 124 ]; then
 		status_text="timed out after ${timeout_seconds} seconds. Log: ${log_file}."
+	elif [ "${run_status}" -eq 137 ] && [ "${run_elapsed}" -ge "${timeout_seconds}" ]; then
+		status_text="timed out after ${timeout_seconds} seconds (SIGKILL after grace period). Log: ${log_file}."
 	fi
 	report_hook_failure "${phase}" "${hook}" "${status_text}" "${log_file}" "${run_status}"
 }
