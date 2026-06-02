@@ -312,6 +312,28 @@ jobs:
             _fetched_scripts+=("${f}")
           done
 
+          # render_prompt.py is the optional Python backend for the
+          # render_prompt.sh shim adopted by branches that took the issue
+          # #3043 refactor.  main ships a self-contained bash render_prompt.sh
+          # that needs no backend, so the file is absent on main and is staged
+          # only when the branch under processing actually carries it.  Absence
+          # is expected (non-shim branches, incl. main) and must not fail the
+          # bootstrap; presence stages it beside the shim so the shim resolves
+          # ${SCRIPT_DIR}/render_prompt.py.
+          if [ ! -f "scripts/render_prompt.py" ]; then
+            if copy_from_ref_or_local "scripts/render_prompt.py" "scripts/render_prompt.py.tmp" "false" "true"; then
+              mv "scripts/render_prompt.py.tmp" "scripts/render_prompt.py"
+              chmod +x "scripts/render_prompt.py"
+              _fetched_scripts+=(render_prompt.py)
+            else
+              rm -f "scripts/render_prompt.py.tmp"
+              echo "render_prompt.py backend not on ${script_ref} yet; render_prompt.sh shim (if present) resolves it elsewhere or the bundled bash renderer is used."
+            fi
+          else
+            chmod +x "scripts/render_prompt.py"
+            _fetched_scripts+=(render_prompt.py)
+          fi
+
           if [ ! -f "scripts/render_validation_templates.py" ]; then
             if copy_from_ref_or_local "scripts/render_validation_templates.py" "scripts/render_validation_templates.py.tmp" "false" "true"; then
               mv "scripts/render_validation_templates.py.tmp" "scripts/render_validation_templates.py"
