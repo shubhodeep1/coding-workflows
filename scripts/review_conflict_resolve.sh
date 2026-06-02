@@ -44,6 +44,7 @@ set -euo pipefail
 SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"
 CODEX_HEARTBEAT_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
+ORCHESTRATE_FORCE_TICK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/orchestrate_force_tick.sh"
 
 # Source gh_helpers.sh for sanitize_codex_prompt_file (and the broader
 # gh_retry / rate-limit helpers if they are needed later in this
@@ -76,37 +77,6 @@ RESOLVER_SERENA_TOOL_HINTS="$({
   fi
 }; )"
 
-# ----------------------------------------------------------------------
-# Immediate orchestrator-poll dispatch on resolver bail (Q3: A).
-#
-# When the resolver path cannot deliver a clean [ai-merge-resolve]
-# commit (loop exhaustion, no-progress detection, allowlist guard
-# failure, check_resolver_diff rejection), the integration-sync
-# unattended escalation is the orchestrator integration judge,
-# which lives inside scripts/orchestrate_poll_process.sh and is
-# invoked on each */5 cron tick of internal-orchestrate-poll.yml.
-# Cron lag is up to 5 min; for an integration branch already
-# blocked on a contradictory merge, that is 5 min of wasted human
-# attention if alerts fired.  Fire a workflow_dispatch immediately
-# instead so the judge picks up on the next available scheduling
-# slot.
-#
-# Concurrency: orchestrate_poll.yml has
-# `concurrency.group: ai-orchestrate-poll-${{ github.repository }}`
-# with `cancel-in-progress: false`, so a dispatched run queues
-# behind any active cron-tick run rather than racing it.  To avoid
-# stacking dispatches when several PRs bail at once, dedup against
-# already in_progress / queued poller runs before firing.
-#
-# Fail-open: any failure in the dispatch path (missing GH_PAT,
-# rate limit, unknown workflow name on a consumer repo) is a
-# warning, not a hard failure — the cron tick remains the safety
-# net so unattendedness is preserved either way.
-#
-# Gate on IS_INTEGRATION_SYNC=true: the integration judge only
-# applies to orchestrator/project-* branches.  Non-integration
-# resolver failures continue along the existing path
-# (synchronize-event re-trigger of the review pipeline).
 _RESOLVER_DISPATCH_FIRED=0
 _dispatch_integration_judge_now() {
   [ "${_RESOLVER_DISPATCH_FIRED}" -eq 1 ] && return 0
@@ -115,51 +85,20 @@ _dispatch_integration_judge_now() {
   if [ "${IS_INTEGRATION_SYNC:-false}" != "true" ]; then
     return 0
   fi
-  if [ -z "${GH_PAT:-}" ] || [ -z "${GITHUB_REPOSITORY:-}" ]; then
-    echo "::warning::Skipping immediate orchestrator-poll dispatch: GH_PAT or GITHUB_REPOSITORY unset. Cron tick will pick up the integration-sync stall within 5 min."
+  if [ ! -f "${ORCHESTRATE_FORCE_TICK_HELPER}" ]; then
+    echo "::warning::Skipping immediate orchestrator-poll dispatch: ${ORCHESTRATE_FORCE_TICK_HELPER} is unavailable. Cron tick will pick up the integration-sync stall within 5 min."
     return 0
   fi
 
-  local _poll_workflow="${ORCHESTRATE_POLL_WORKFLOW_FILE:-internal-orchestrate-poll.yml}"
-
-  # Dedup: the poller's per-repo concurrency group already
-  # serialises runs, but firing while one is queued/active just
-  # adds to the queue.  Skip when an existing run will pick up
-  # the new state on the next slot.  Uses gh's built-in --jq
-  # for consistency with the rest of the codebase (no embedded
-  # python3 -c snippet) and so a non-JSON / empty response from
-  # gh falls open via the trailing `|| echo 0` rather than
-  # silently miscounting.
-  local _active_count
-  _active_count="$(GH_TOKEN="${GH_PAT}" gh run list \
-      --workflow="${_poll_workflow}" \
-      --repo "${GITHUB_REPOSITORY}" \
-      --status in_progress \
-      --limit 1 \
-      --json databaseId \
-      --jq 'length' 2>/dev/null || echo 0)"
-  if [ "${_active_count}" != "0" ]; then
-    echo "Skipping immediate orchestrator-poll dispatch: a poller run is already in_progress (will scan integration-sync state on the next concurrency slot)."
-    return 0
-  fi
-  _active_count="$(GH_TOKEN="${GH_PAT}" gh run list \
-      --workflow="${_poll_workflow}" \
-      --repo "${GITHUB_REPOSITORY}" \
-      --status queued \
-      --limit 1 \
-      --json databaseId \
-      --jq 'length' 2>/dev/null || echo 0)"
-  if [ "${_active_count}" != "0" ]; then
-    echo "Skipping immediate orchestrator-poll dispatch: a poller run is already queued (will scan integration-sync state when it starts)."
-    return 0
-  fi
-
-  if GH_TOKEN="${GH_PAT}" gh workflow run "${_poll_workflow}" \
-       --repo "${GITHUB_REPOSITORY}" 2>/dev/null; then
-    echo "Dispatched ${_poll_workflow} on ${GITHUB_REPOSITORY} to fast-track integration-judge escalation (resolver could not produce a clean commit)."
-  else
-    echo "::warning::Failed to dispatch ${_poll_workflow}; cron tick will pick up the integration-sync stall within 5 min."
-  fi
+  GH_PAT="${GH_PAT:-${GH_TOKEN:-}}" \
+  GH_TOKEN="${GH_PAT:-${GH_TOKEN:-}}" \
+  GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-}" \
+  bash "${ORCHESTRATE_FORCE_TICK_HELPER}" \
+    --repo "${GITHUB_REPOSITORY:-}" \
+    --issue "${PR_NUMBER:-}" \
+    --reason "resolver-failed" \
+    --source-workflow "review_conflict_resolve" \
+    --run-id "${GITHUB_RUN_ID:-}" || echo "::warning::Immediate orchestrator-poll dispatch helper failed; cron tick will pick up the integration-sync stall within 5 min."
 }
 
 # EXIT trap — fires the dispatch on any non-zero exit from this
