@@ -1126,7 +1126,7 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
       --stdout-file "${RB_JUDGE_OUTPUT}" \
       --stderr-file "${JUDGE_STDERR_FILE}" \
       --status-file "${judge_stall_status_file}" \
-      -- "${judge_codex_cmd[@]}" < "${RB_JUDGE_PROMPT}" 2>>"${JUDGE_STDERR_FILE}"; then
+      -- "${judge_codex_cmd[@]}" < "${RB_JUDGE_PROMPT}"; then
       if judge_stall_state="$(read_codex_stall_guard_state_with_warning "${judge_stall_status_file}" "Review-blocked judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT}" )"; then
         :
       fi
@@ -1617,7 +1617,7 @@ __EDIT_DISCIPLINE__
           --stdout-file "${RB_FIX_OUTPUT}" \
           --stderr-file "${RB_FIX_STDERR}" \
           --status-file "${rb_fix_stall_status_file}" \
-          -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${RB_FIX_PROMPT}" 2>>"${RB_FIX_STDERR}"; then
+          -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${RB_FIX_PROMPT}"; then
           if rb_fix_stall_state="$(read_codex_stall_guard_state_with_warning "${rb_fix_stall_status_file}" "Review-blocked fix codex" )"; then
             :
           fi

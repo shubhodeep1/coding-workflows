@@ -2613,7 +2613,7 @@ execute_reviewer_attempt() {
       --stderr-file "${tmp_stderr}" \
       --activity-file "${hb_file}" \
       --status-file "${stall_status_file}" \
-      -- "${reviewer_codex_cmd[@]}" < "${prompt_file}" 2>> "${tmp_stderr}" &
+      -- "${reviewer_codex_cmd[@]}" < "${prompt_file}" &
   elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
     "${CODEX_HEARTBEAT_HELPER}" \
       --phase review_run_reviewers \

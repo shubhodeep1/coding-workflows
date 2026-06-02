@@ -443,6 +443,15 @@ def test_stall_guard_script_and_callers_keep_the_expected_contract() -> None:
 		for snippet in snippets:
 			assert snippet in text, f"missing {snippet!r} in {relative_path}"
 
+	forbidden_snippets = {
+		"scripts/review_run_reviewers.sh": ['2>> "${tmp_stderr}"'],
+		"scripts/review_rb_judge.sh": ['2>>"${JUDGE_STDERR_FILE}"', '2>>"${RB_FIX_STDERR}"'],
+	}
+	for relative_path, snippets in forbidden_snippets.items():
+		text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+		for snippet in snippets:
+			assert snippet not in text, f"unexpected {snippet!r} in {relative_path}"
+
 
 def main() -> int:
 	test_codex_stall_guard_observe_only_records_event_idle_without_killing_child()
