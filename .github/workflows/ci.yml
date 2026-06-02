@@ -134,6 +134,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_lib.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_blocker_check.py
 
       - name: Integration-ahead-by gate regression tests
         run: |
