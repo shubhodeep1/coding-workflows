@@ -144,6 +144,40 @@ def test_after_create_runs_when_created_now_true(tmp_path: Path) -> None:
 	assert marker.read_text(encoding="utf-8") == "ran\n"
 
 
+def test_after_create_runs_once_per_workspace_lifetime(tmp_path: Path) -> None:
+	repo_root, helper_path, workspace_path, runner_temp = _prepare_case(tmp_path)
+	marker = workspace_path / "after_create.txt"
+	_write_hook(
+		repo_root,
+		"implement",
+		"after_create",
+		"#!/usr/bin/env bash\nprintf 'ran\\n' >> after_create.txt\n",
+	)
+
+	first = _run_helper(
+		repo_root,
+		helper_path,
+		workspace_path,
+		runner_temp,
+		"implement",
+		"after_create",
+		CREATED_NOW="true",
+	)
+	second = _run_helper(
+		repo_root,
+		helper_path,
+		workspace_path,
+		runner_temp,
+		"implement",
+		"after_create",
+		CREATED_NOW="false",
+	)
+
+	assert first.returncode == 0, first.stderr
+	assert second.returncode == 0, second.stderr
+	assert marker.read_text(encoding="utf-8") == "ran\n"
+
+
 def test_after_create_treats_unset_created_now_as_true(tmp_path: Path) -> None:
 	repo_root, helper_path, workspace_path, runner_temp = _prepare_case(tmp_path)
 	marker = workspace_path / "after_create.txt"
@@ -269,6 +303,7 @@ def main() -> int:
 	for case_fn in (
 		test_missing_and_empty_hooks_are_noop,
 		test_after_create_runs_when_created_now_true,
+		test_after_create_runs_once_per_workspace_lifetime,
 		test_after_create_treats_unset_created_now_as_true,
 		test_after_create_skips_when_created_now_false,
 		test_hook_executes_in_workspace_path,

@@ -51,7 +51,9 @@ emit_log_tail()
 		return 0
 	fi
 
-	total_bytes="$(wc -c < "${log_file}" | tr -d ' ')"
+	if ! total_bytes="$(wc -c < "${log_file}" 2>/dev/null | tr -d '[:space:]')" || ! [[ "${total_bytes}" =~ ^[0-9]+$ ]]; then
+		total_bytes="0"
+	fi
 	if [ "${total_bytes}" -gt "${max_bytes}" ]; then
 		printf '%s\n' "--- last ${max_bytes} bytes of ${log_file} (${total_bytes} total bytes) ---" >&2
 	else
