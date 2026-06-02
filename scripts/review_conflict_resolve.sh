@@ -98,7 +98,7 @@ _dispatch_integration_judge_now() {
     --issue "${PR_NUMBER:-}" \
     --reason "resolver-failed" \
     --source-workflow "review_conflict_resolve" \
-    --run-id "${GITHUB_RUN_ID:-}" || true
+    --run-id "${GITHUB_RUN_ID:-}" || echo "::warning::Immediate orchestrator-poll dispatch helper failed; cron tick will pick up the integration-sync stall within 5 min."
 }
 
 # EXIT trap — fires the dispatch on any non-zero exit from this

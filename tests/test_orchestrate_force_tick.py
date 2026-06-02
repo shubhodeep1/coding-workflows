@@ -85,9 +85,13 @@ def main() -> int:
 	issues = json.loads(pathlib.Path(os.environ["GH_MOCK_ISSUES_FILE"]).read_text(encoding="utf-8"))
 	pulls = json.loads(pathlib.Path(os.environ["GH_MOCK_PULL_REQUESTS_FILE"]).read_text(encoding="utf-8"))
 	runs_file = pathlib.Path(os.environ["GH_MOCK_WORKFLOW_RUNS_FILE"])
+	fail_issues = os.environ.get("GH_MOCK_FAIL_ISSUES") == "1"
+	fail_pulls = os.environ.get("GH_MOCK_FAIL_PULLS") == "1"
 	if len(args) >= 2 and args[0] == "api":
 		endpoint = args[1]
 		if endpoint.startswith("repos/") and "/issues/" in endpoint:
+			if fail_issues:
+				return 1
 			issue_number = endpoint.rsplit("/issues/", 1)[1]
 			body = issues.get(issue_number, "")
 			if "--jq" in args:
@@ -96,6 +100,8 @@ def main() -> int:
 				print(json.dumps({"body": body}))
 			return 0
 		if endpoint.startswith("repos/") and "/pulls/" in endpoint:
+			if fail_pulls:
+				return 1
 			pr_number = endpoint.rsplit("/pulls/", 1)[1]
 			pr = pulls.get(pr_number)
 			if pr is None:
@@ -393,6 +399,20 @@ def test_force_tick_noops_when_tracking_issue_is_absent() -> None:
 	)
 	assert result.returncode == 0, result.stderr
 	assert _workflow_runs(runs_file) == []
+	assert "GitHub metadata lookup failed" not in result.stdout
+
+
+def test_force_tick_warns_when_tracking_issue_lookups_fail() -> None:
+	_, work_repo = _create_repo()
+	result, runs_file = _run_force_tick(
+		work_repo,
+		{501: "- Tracking issue: #3042\n- Managed by: AI Orchestrator\n"},
+		args=["--issue", "501", "--reason", "review-blocked", "--source-workflow", "review_autofix", "--run-id", "9001"],
+		env={"GH_MOCK_FAIL_PULLS": "1", "GH_MOCK_FAIL_ISSUES": "1"},
+	)
+	assert result.returncode == 0, result.stderr
+	assert _workflow_runs(runs_file) == []
+	assert "GitHub metadata lookup failed" in result.stdout
 
 
 def test_memory_force_tick_put_refuses_same_window_overwrite_for_new_attempt() -> None:
@@ -465,6 +485,7 @@ def test_phase_end_paths_call_shared_force_tick_helper() -> None:
 	assert "bash scripts/orchestrate_force_tick.sh" in validate_text
 	assert "orchestrate_force_tick.sh" in resolver_text
 	assert 'gh workflow run "${_poll_workflow}"' not in resolver_text
+	assert "Immediate orchestrator-poll dispatch helper failed" in resolver_text
 
 
 def main() -> int:

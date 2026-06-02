@@ -550,6 +550,7 @@ def _load(path_str: str):
 	try:
 		return json.loads(path.read_text(encoding="utf-8"))
 	except json.JSONDecodeError:
+		print("force_tick_collision: unparseable record", file=sys.stderr)
 		return None
 
 
@@ -564,7 +565,11 @@ def _latest(record):
 def _parse(ts: str):
 	if not ts:
 		return None
-	return dt.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+	try:
+		return dt.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+	except ValueError:
+		print("force_tick_collision: unparseable timestamp", file=sys.stderr)
+		return None
 
 
 current = _load(sys.argv[1])

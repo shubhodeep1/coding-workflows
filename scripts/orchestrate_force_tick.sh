@@ -147,6 +147,7 @@ if candidate:
 		age = str(age_value)
 		within = age_value < cooldown
 	except ValueError:
+		print("force_tick_latest_gate_tsv: unparseable timestamp", file=sys.stderr)
 		candidate = ""
 		age = ""
 print(f"{'true' if within else 'false'}\t{candidate}\t{age}")
@@ -223,6 +224,8 @@ ISSUE_NUMBER=""
 REASON="force-tick"
 SOURCE_WORKFLOW="${GITHUB_WORKFLOW:-orchestrate_force_tick}"
 RUN_ID="${GITHUB_RUN_ID:-}"
+pr_lookup_failed="false"
+issue_lookup_failed="false"
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -269,7 +272,11 @@ if ! [[ "${ISSUE_NUMBER:-}" =~ ^[0-9]+$ ]] || [ "${ISSUE_NUMBER:-0}" -le 0 ]; th
 fi
 
 if [ -z "${TRACKING_ISSUE}" ] && [ -n "${ISSUE_NUMBER}" ]; then
-	pr_json="$(_force_tick_fetch_pull_request_json "${REPOSITORY}" "${ISSUE_NUMBER}" || true)"
+	pr_json=""
+	if ! pr_json="$(_force_tick_fetch_pull_request_json "${REPOSITORY}" "${ISSUE_NUMBER}")"; then
+		pr_lookup_failed="true"
+		pr_json=""
+	fi
 	TRACKING_ISSUE="$(_force_tick_extract_tracking_issue_from_pull_request_json "${pr_json}")"
 	if ! [[ "${TRACKING_ISSUE:-}" =~ ^[0-9]+$ ]] || [ "${TRACKING_ISSUE:-0}" -le 0 ]; then
 		TRACKING_ISSUE=""
@@ -277,7 +284,11 @@ if [ -z "${TRACKING_ISSUE}" ] && [ -n "${ISSUE_NUMBER}" ]; then
 fi
 
 if [ -z "${TRACKING_ISSUE}" ] && [ -n "${ISSUE_NUMBER}" ]; then
-	issue_body="$(_force_tick_fetch_issue_body "${REPOSITORY}" "${ISSUE_NUMBER}" || true)"
+	issue_body=""
+	if ! issue_body="$(_force_tick_fetch_issue_body "${REPOSITORY}" "${ISSUE_NUMBER}")"; then
+		issue_lookup_failed="true"
+		issue_body=""
+	fi
 	TRACKING_ISSUE="$(_force_tick_extract_tracking_issue "${issue_body}")"
 	if ! [[ "${TRACKING_ISSUE:-}" =~ ^[0-9]+$ ]] || [ "${TRACKING_ISSUE:-0}" -le 0 ]; then
 		TRACKING_ISSUE=""
@@ -285,7 +296,11 @@ if [ -z "${TRACKING_ISSUE}" ] && [ -n "${ISSUE_NUMBER}" ]; then
 fi
 
 if [ -z "${TRACKING_ISSUE}" ]; then
-	echo "No tracking issue resolved for force-tick dispatch; skipping."
+	if [ "${pr_lookup_failed}" = "true" ] && [ "${issue_lookup_failed}" = "true" ]; then
+		echo "::warning::No tracking issue resolved for force-tick dispatch after GitHub metadata lookup failed; skipping fast-follow tick."
+	else
+		echo "No tracking issue resolved for force-tick dispatch; skipping."
+	fi
 	exit 0
 fi
 
