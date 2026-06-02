@@ -67,6 +67,22 @@ def _incoming_blocker_local_ids(state: dict[str, Any], local_id: str) -> tuple[b
 	return True, blockers
 
 
+def _issue_number_map_entry(state: dict[str, Any], local_id: str) -> int | None:
+	raw_issue_number_map = state.get("issue_number_map")
+	if not isinstance(raw_issue_number_map, dict):
+		return None
+
+	raw_number = raw_issue_number_map.get(local_id)
+	if isinstance(raw_number, bool):
+		return None
+	if isinstance(raw_number, int):
+		return raw_number if raw_number > 0 else None
+	if isinstance(raw_number, str) and raw_number.isdigit():
+		number = int(raw_number)
+		return number if number > 0 else None
+	return None
+
+
 def _candidate_entry(candidate_details: dict[str, Any], github_issue: Any) -> dict[str, Any]:
 	if github_issue is None:
 		return {}
@@ -154,17 +170,20 @@ def evaluate_blocker_eligibility(
 	for blocker_local_id in blocker_local_ids:
 		entry = entries_by_local_id.get(blocker_local_id)
 		if entry is None:
-			missing_blocker_entry = True
-			blockers.append(
-				{
-					"local_id": blocker_local_id,
-					"github_issue": None,
-					"terminal": False,
-					"status": "missing",
-					"source": "missing_wave_entry",
-				}
-			)
-			continue
+			mapped_github_issue = _issue_number_map_entry(state, blocker_local_id)
+			if mapped_github_issue is None:
+				missing_blocker_entry = True
+				blockers.append(
+					{
+						"local_id": blocker_local_id,
+						"github_issue": None,
+						"terminal": False,
+						"status": "missing",
+						"source": "missing_wave_entry",
+					}
+				)
+				continue
+			entry = {"id": blocker_local_id, "github_issue": mapped_github_issue}
 
 		github_issue = entry.get("github_issue")
 		candidate = _candidate_entry(candidate_details, github_issue)
@@ -222,11 +241,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
 	args = build_parser().parse_args(argv)
-	state = _load_state(Path(args.state_file))
-	candidate_details = _parse_optional_json_object(
-		args.candidate_details_json,
-		field_name="--candidate-details-json",
-	)
+	try:
+		state = _load_state(Path(args.state_file))
+		candidate_details = _parse_optional_json_object(
+			args.candidate_details_json,
+			field_name="--candidate-details-json",
+		)
+	except (OSError, ValueError, json.JSONDecodeError) as exc:
+		print(f"blocker_check error: {exc}", file=sys.stderr)
+		return 1
 	result = evaluate_blocker_eligibility(
 		state,
 		local_id=args.local_id,

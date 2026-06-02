@@ -125,6 +125,86 @@ def test_evaluate_blocker_eligibility_allows_terminal_merged_dependency():
 	]
 
 
+def test_evaluate_blocker_eligibility_uses_issue_number_map_when_wave_entry_missing():
+	state = _blocker_state()
+	state["waves"][0]["issues"] = [
+		{"id": "issue-2", "github_issue": 11, "status": "pending"},
+	]
+	state["issue_number_map"] = {"issue-1": 10, "issue-2": 11}
+
+	result = blocker_check.evaluate_blocker_eligibility(
+		state,
+		local_id="issue-2",
+		candidate_details={
+			"10": {
+				"state": "open",
+				"labels": ["ai:merged"],
+				"linked_pr": None,
+			}
+		},
+	)
+
+	assert result["eligible"] is True
+	assert result["signal"] == "dispatch_eligible"
+	assert result["reason"] == "all_blockers_terminal"
+	assert result["blockers"] == [
+		{
+			"local_id": "issue-1",
+			"github_issue": 10,
+			"terminal": True,
+			"status": "merged",
+			"source": "label_ai_merged",
+		}
+	]
+
+
+def test_evaluate_blocker_eligibility_defers_when_blocker_mapping_is_missing():
+	state = _blocker_state()
+	state["waves"][0]["issues"] = [
+		{"id": "issue-2", "github_issue": 11, "status": "pending"},
+	]
+	state["issue_number_map"] = {"issue-2": 11}
+
+	result = blocker_check.evaluate_blocker_eligibility(state, local_id="issue-2")
+
+	assert result["eligible"] is False
+	assert result["signal"] == "dispatch_deferred_blocker"
+	assert result["reason"] == "unresolved_blocker_mapping"
+	assert result["blockers"] == [
+		{
+			"local_id": "issue-1",
+			"github_issue": None,
+			"terminal": False,
+			"status": "missing",
+			"source": "missing_wave_entry",
+		}
+	]
+
+
+def test_evaluate_blocker_eligibility_allows_not_created_dependency():
+	state = _blocker_state()
+	state["waves"][0]["issues"][0] = {
+		"id": "issue-1",
+		"github_issue": None,
+		"status": "not_created",
+	}
+
+	result = blocker_check.evaluate_blocker_eligibility(state, local_id="issue-2")
+
+	assert result["eligible"] is True
+	assert result["signal"] == "dispatch_eligible"
+	assert result["reason"] == "all_blockers_terminal"
+	assert result["blockers"] == [
+		{
+			"local_id": "issue-1",
+			"github_issue": None,
+			"terminal": True,
+			"status": "not_created",
+			"source": "stored_terminal",
+		}
+	]
+
+
 def test_next_wave_dispatch_defers_blocked_issue_until_future_tick():
 	state = {
 		"schema_version": "orchestrate_state.v1",

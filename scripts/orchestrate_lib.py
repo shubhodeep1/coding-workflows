@@ -1357,7 +1357,7 @@ TERMINAL_PHASES: set[str] = {
 	"ai:memory-maintenance-failed",
 }
 TERMINAL_WAVE_STATUSES: set[str] = {"merged", "closed", "skipped", "not_created"}
-BLOCKER_TERMINAL_WAVE_STATUSES: set[str] = {"merged", "closed", "skipped"}
+BLOCKER_TERMINAL_WAVE_STATUSES: set[str] = {"merged", "closed", "skipped", "not_created"}
 
 # Phases already handled by dedicated logic in the poller — stall detector
 # should not double-act on these.
