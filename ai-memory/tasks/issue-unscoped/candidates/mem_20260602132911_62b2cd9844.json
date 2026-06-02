@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"A focused renderer test covers both a passing render and a contract violation.\"\n  expected_change_site: .github/workflows/ci.yml, .github/workflows/mark-stable.yml, or .github/workflows/test-and-mark-stable.yml\n  confidence=[4]\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  EVIDENCE: `tests/test_render_prompt_foundation.py` exists with render and contract-violation coverage, but no diff hunk adds it to any workflow allowlist; the repo uses explicit `python3 tests/<file>.py` runners without discovery; the LAST RUN DIFF only touched `docs/scripts-pending-removal.md`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- Requirement: \"A focused renderer test covers both a passing render and a contract violation.\"\n  Expected change site: .github/workflows/ci.yml, .github/workflows/mark-stable.yml, or .github/workflows/test-and-mark-stable.yml\n  Evidence of absence: The CI allowlist gap was noted but falls outside the issue's guardrail-restricted file scope. The repo uses explicit `python3 tests/<file>.py` allowlists without discovery, and `tests/test_render_prompt_foundation.py` is present.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- Requirement: \"A focused renderer test covers both a passing render and a contract violation.\"\n  Expected change site: .github/workflows/ci.yml, .github/workflows/mark-stable.yml, or .github/workflows/test-and-mark-stable.yml (CI test allowlists)\n  Evidence of absence: The repo runs tests via explicit `python3 tests/<file>.py` allowlists without discovery. While `tests/test_render_prompt_foundation.py` exists and contains 4 test functions (covering passing renders, inline placeholders, trusted backend resolution, and contract violations), NO diff hunks in LAST RUN DIFF or PR DIFF add this test file to any CI workflow allowlist. The test file will not execute in CI despite being present in the PR file set. The LAST RUN DIFF only touched `docs/scripts-pending-removal.md`, and the PR DIFF shows workflow files only adding `render_prompt.py` to bootstrap fetch lists, not updating test allowlists.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: \"A focused renderer test covers both a passing render and a contract violation.\" (from linked issue #3043 acceptance criteria) + CI coverage implied by test addition in PR scope.\n  Expected change site: .github/workflows/ci.yml (and/or mark-stable.yml, test-and-mark-stable.yml) \u2014 the explicit test allowlist.\n  Evidence of absence: LAST_RUN_CHANGED_FILES = docs/scripts-pending-removal.md only; no diff hunk adds `tests/test_render_prompt_foundation.py` to any workflow test runner. PR_CHANGED_FILES confirms the test was added in the original PR but remains unexecuted in CI (repo uses explicit `python3 tests/<file>.py` with no discovery).\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "e3ee0738cac138a99e0e42932cdada2c6830d4d18087c0216078c18f53be1479",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3045,
+    "run_id": "26822559219",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26822559219",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260602132911_62b2cd9844",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3045,
+    "run_id": "26822559219"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-02T13:29:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
