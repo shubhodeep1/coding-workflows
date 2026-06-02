@@ -2688,7 +2688,11 @@ else
   run_validate_codex_attempt "validate_discover" "${DISCOVER_PROMPT_FILE}" "${DISCOVER_OUTPUT_FILE}" "${DISCOVER_LOG_FILE}" "${discover_stall_status_file}"
   DISCOVER_EXIT=$?
   set -e
-  discover_stall_state="$(read_validate_codex_stall_guard_state "${discover_stall_status_file}" || true)"
+  if discover_stall_state="$(read_validate_codex_stall_guard_state "${discover_stall_status_file}" 2>/dev/null)"; then
+    :
+  elif [ -s "${discover_stall_status_file}" ]; then
+    echo "::warning::Validation hint discovery attempt ${attempt}/${MAX_CODEX_ATTEMPTS}: could not parse codex stall guard status from ${discover_stall_status_file}."
+  fi
   rm -f "${discover_stall_status_file}"
   case "${discover_stall_state}" in
     observed)
@@ -3398,7 +3402,11 @@ for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
   run_validate_codex_attempt "validate_diagnose" "${DIAGNOSE_PROMPT_FILE}" "${DIAGNOSE_OUTPUT_FILE}" "${DIAGNOSE_LOG_FILE}" "${diagnose_stall_status_file}"
   DIAGNOSE_EXIT=$?
   set -e
-  diagnose_stall_state="$(read_validate_codex_stall_guard_state "${diagnose_stall_status_file}" || true)"
+  if diagnose_stall_state="$(read_validate_codex_stall_guard_state "${diagnose_stall_status_file}" 2>/dev/null)"; then
+    :
+  elif [ -s "${diagnose_stall_status_file}" ]; then
+    echo "::warning::Validation diagnosis attempt ${attempt}/${MAX_CODEX_ATTEMPTS}: could not parse codex stall guard status from ${diagnose_stall_status_file}."
+  fi
   rm -f "${diagnose_stall_status_file}"
   case "${diagnose_stall_state}" in
     observed)

@@ -179,14 +179,15 @@ if not COMMAND:
 	raise SystemExit(2)
 
 
-def _safe_write_text_atomic(path: Path, content: str) -> None:
+def _safe_write_text_atomic(path: Path, content: str) -> bool:
 	try:
 		path.parent.mkdir(parents=True, exist_ok=True)
 		tmp_path = path.with_name(f".{path.name}.tmp.{os.getpid()}.{time.time_ns()}")
 		tmp_path.write_text(content, encoding="utf-8")
 		os.replace(tmp_path, path)
+		return True
 	except OSError:
-		return
+		return False
 
 
 def _open_output(path: str, fallback):
@@ -269,7 +270,8 @@ def _write_status(state: str, idle_secs: int, signal_name: str = "") -> None:
 	]
 	if signal_name:
 		rows.append(f"signal={signal_name}")
-	_safe_write_text_atomic(status_path, "\n".join(rows) + "\n")
+	if not _safe_write_text_atomic(status_path, "\n".join(rows) + "\n"):
+		_emit_wrapper_stderr(f"::warning::codex_stall_guard failed to write status file {status_path}\n")
 
 
 def _kill_child_group_if_running() -> None:
