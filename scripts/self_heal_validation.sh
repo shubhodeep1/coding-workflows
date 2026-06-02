@@ -85,6 +85,8 @@ SELF_HEAL_DECISION_FILE="${RUNTIME_DIR}/validate_self_heal_decision.json"
 SELF_HEAL_PATCH_TMP="${RUNTIME_DIR}/validate_self_heal_patch.diff"
 SELF_HEAL_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODEX_HEARTBEAT_HELPER="${SELF_HEAL_SCRIPT_DIR}/codex_heartbeat.sh"
+CODEX_STALL_GUARD_HELPER="${SELF_HEAL_SCRIPT_DIR}/codex_stall_guard.sh"
+SELF_HEAL_STALL_STATE=""
 
 ALLOWED_TARGETS=(
 	"mode-validate-discover.txt"
@@ -236,8 +238,26 @@ build_self_heal_serena_tool_hints()
 run_self_heal_codex()
 {
 	local stderr_tmp="$1"
+	local stall_status_file=""
+	local rc=0
 
-	if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
+	SELF_HEAL_STALL_STATE=""
+	if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
+		stall_status_file="$(mktemp /tmp/self_heal_stall_status.XXXXXX)"
+		set +e
+		"${CODEX_STALL_GUARD_HELPER}" \
+			--phase validate_self_heal \
+			--stdout-file "${SELF_HEAL_OUTPUT_FILE}" \
+			--status-file "${stall_status_file}" \
+			-- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${SELF_HEAL_PROMPT_FILE}" 2> "${stderr_tmp}"
+		rc=$?
+		set -e
+		if [ -s "${stall_status_file}" ]; then
+			SELF_HEAL_STALL_STATE="$(sed -n 's/^state=//p' "${stall_status_file}" | head -n 1)"
+		fi
+		rm -f "${stall_status_file}"
+		return "${rc}"
+	elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
 		"${CODEX_HEARTBEAT_HELPER}" \
 			--phase validate_self_heal \
 			--stdout-file "${SELF_HEAL_OUTPUT_FILE}" \
@@ -314,6 +334,14 @@ for _llm_attempt in 1 2; do
 	_self_heal_stderr_tmp="$(mktemp)"
 	if run_self_heal_codex "${_self_heal_stderr_tmp}"; then
 		cat "${_self_heal_stderr_tmp}" >> "${SELF_HEAL_LOG_FILE}" 2>/dev/null || true
+		case "${SELF_HEAL_STALL_STATE}" in
+			observed)
+				echo "self-heal: codex_stall_observed recorded (observe-only mode)" >> "${SELF_HEAL_LOG_FILE}"
+				;;
+			killed)
+				echo "self-heal: codex_stall_killed recorded despite zero exit; treating output with caution" >> "${SELF_HEAL_LOG_FILE}"
+				;;
+		esac
 		rm -f "${_self_heal_stderr_tmp}"
 		# Extract the last JSON object that contains a "target_prompt" key.
 		# Use json.JSONDecoder.raw_decode() which is string/escape-aware
@@ -366,6 +394,14 @@ PY
 		fi
 	else
 		cat "${_self_heal_stderr_tmp}" >> "${SELF_HEAL_LOG_FILE}" 2>/dev/null || true
+		case "${SELF_HEAL_STALL_STATE}" in
+			observed)
+				echo "self-heal: codex_stall_observed recorded before non-zero exit" >> "${SELF_HEAL_LOG_FILE}"
+				;;
+			killed)
+				echo "self-heal: codex_stall_killed recorded; preserving non-zero exit" >> "${SELF_HEAL_LOG_FILE}"
+				;;
+		esac
 	fi
 	rm -f "${_self_heal_stderr_tmp}"
 	if [ "${_llm_attempt}" -lt 2 ]; then

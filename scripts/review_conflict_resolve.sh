@@ -43,6 +43,7 @@ set -euo pipefail
 
 SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"
 CODEX_HEARTBEAT_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_heartbeat.sh"
+CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
 
 # Source gh_helpers.sh for sanitize_codex_prompt_file (and the broader
 # gh_retry / rate-limit helpers if they are needed later in this
@@ -1716,6 +1717,8 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   fi
 
   tmp_output="$(mktemp)"
+  _stall_status_file="$(mktemp)"
+  _stall_state=""
   # Pass the prompt via stdin (consistent with every other codex
   # invocation in this repo) rather than as a single positional argv
   # string. The `"$(cat …)"` shape risks ARG_MAX truncation on large
@@ -1739,7 +1742,15 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
     sanitize_codex_prompt_file "${_effective_prompt_file}"
   fi
-  if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
+  if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
+    timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
+      "${CODEX_STALL_GUARD_HELPER}" \
+      --phase review_conflict_resolve \
+      --stdout-file "${tmp_output}" \
+      --status-file "${_stall_status_file}" \
+      -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" \
+      || _codex_exit=$?
+  elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
     timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
       "${CODEX_HEARTBEAT_HELPER}" \
       --phase review_conflict_resolve \
@@ -1752,6 +1763,13 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
       || _codex_exit=$?
   fi
   _attempt_elapsed=$(( $(date +%s) - _attempt_started_at ))
+  if [ -s "${_stall_status_file}" ]; then
+    _stall_state="$(sed -n 's/^state=//p' "${_stall_status_file}" | head -n 1)"
+  fi
+  rm -f "${_stall_status_file}"
+  if [ "${_stall_state}" = "observed" ]; then
+    echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: codex_stall_observed recorded (observe-only mode)."
+  fi
   # Graceful-SIGTERM-at-timer-boundary diagnostic.  If codex installs
   # a SIGTERM handler that completes cleanup and exits 0 within the
   # 30s `--kill-after` window, `timeout` propagates the child's 0
@@ -1815,28 +1833,35 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     #     hand back; falling back to the original prompt verbatim
     #     is the conservative choice — same handling as a missing
     #     prelude template.
-    case "${_codex_exit}" in
-      124)
-        _prev_attempt_failure_kind="timeout"
-        echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} killed by per-attempt timer (timeout exit 124 = SIGTERM after ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s; elapsed ${_attempt_elapsed}s)."
-        ;;
-      137)
-        if [ "${_attempt_elapsed}" -ge "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" ]; then
+    if [ "${_stall_state}" = "killed" ]; then
+      _prev_attempt_failure_kind="stall_guard"
+      echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} recorded codex_stall_killed (exit ${_codex_exit}; elapsed ${_attempt_elapsed}s; per-attempt timer budget ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s)."
+    else
+      case "${_codex_exit}" in
+        124)
           _prev_attempt_failure_kind="timeout"
-          echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} killed by per-attempt timer (timeout exit 137 = SIGKILL after kill-after backstop; elapsed ${_attempt_elapsed}s ≥ budget ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s)."
-        else
+          echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} killed by per-attempt timer (timeout exit 124 = SIGTERM after ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s; elapsed ${_attempt_elapsed}s)."
+          ;;
+        137)
+          if [ "${_attempt_elapsed}" -ge "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" ]; then
+            _prev_attempt_failure_kind="timeout"
+            echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} killed by per-attempt timer (timeout exit 137 = SIGKILL after kill-after backstop; elapsed ${_attempt_elapsed}s ≥ budget ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s)."
+          else
+            _prev_attempt_failure_kind="exec_error"
+            echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} crashed (SIGKILL exit 137 but elapsed ${_attempt_elapsed}s < budget ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s — likely OOM kill or external SIGKILL, not the per-attempt timer)."
+          fi
+          ;;
+        *)
           _prev_attempt_failure_kind="exec_error"
-          echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} crashed (SIGKILL exit 137 but elapsed ${_attempt_elapsed}s < budget ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s — likely OOM kill or external SIGKILL, not the per-attempt timer)."
-        fi
-        ;;
-      *)
-        _prev_attempt_failure_kind="exec_error"
-        echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} failed with non-timeout exit ${_codex_exit} (codex itself returned non-zero; elapsed ${_attempt_elapsed}s)."
-        ;;
-    esac
+          echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} failed with non-timeout exit ${_codex_exit} (codex itself returned non-zero; elapsed ${_attempt_elapsed}s)."
+          ;;
+      esac
+    fi
     if [ "${attempt}" -eq "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; then
       if [ "${_prev_attempt_failure_kind}" = "timeout" ]; then
         echo "Conflict resolver failed after retries (final attempt killed by per-attempt timer)."
+      elif [ "${_prev_attempt_failure_kind}" = "stall_guard" ]; then
+        echo "Conflict resolver failed after retries (final attempt killed by codex stall guard)."
       else
         echo "Conflict resolver failed after retries (final attempt: codex non-zero exit ${_codex_exit})."
       fi

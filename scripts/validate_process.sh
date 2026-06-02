@@ -2460,10 +2460,45 @@ trap cleanup_runtime_containers EXIT
 # still picks up the catalog shipped next to validate_process.sh.
 _validate_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODEX_HEARTBEAT_HELPER="${_validate_script_dir}/codex_heartbeat.sh"
+CODEX_STALL_GUARD_HELPER="${_validate_script_dir}/codex_stall_guard.sh"
 bash "${_validate_script_dir}/write_codex_config.sh" \
   --model "${MODEL_EDITOR}" \
   --reasoning "${MODEL_REASONING_EFFORT}" \
   --catalog-path "${_validate_script_dir}/codex_model_catalog.json"
+
+read_validate_codex_stall_guard_state() {
+  local status_file="$1"
+
+  [ -s "${status_file}" ] || return 1
+  sed -n 's/^state=//p' "${status_file}" | head -n 1
+}
+
+run_validate_codex_attempt() {
+  local phase_name="$1"
+  local prompt_file="$2"
+  local output_file="$3"
+  local log_file="$4"
+  local status_file="$5"
+
+  if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
+    "${CODEX_STALL_GUARD_HELPER}" \
+      --phase "${phase_name}" \
+      --stdout-file "${output_file}" \
+      --status-file "${status_file}" \
+      -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" 2> >(tee -a "${log_file}" >&2)
+    return $?
+  fi
+
+  if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
+    "${CODEX_HEARTBEAT_HELPER}" \
+      --phase "${phase_name}" \
+      --stdout-file "${output_file}" \
+      -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" 2> >(tee -a "${log_file}" >&2)
+    return $?
+  fi
+
+  codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" > "${output_file}" 2> >(tee -a "${log_file}" >&2)
+}
 
 export PATH="${HOME}/.local/bin:${PATH}"
 
@@ -2647,20 +2682,29 @@ else
   DISCOVER_ATTEMPTS_USED="${attempt}"
   echo "Validation hint discovery attempt ${attempt}/${MAX_CODEX_ATTEMPTS}"
   sanitize_codex_prompt_file "${DISCOVER_PROMPT_FILE}"
+  discover_stall_status_file="$(mktemp /tmp/validate_discover_stall_status.XXXXXX)"
+  discover_stall_state=""
   set +e
-  if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
-    "${CODEX_HEARTBEAT_HELPER}" \
-      --phase validate_discover \
-      --stdout-file "${DISCOVER_OUTPUT_FILE}" \
-      -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${DISCOVER_PROMPT_FILE}" 2> >(tee -a "${DISCOVER_LOG_FILE}" >&2)
-  else
-    codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${DISCOVER_PROMPT_FILE}" > "${DISCOVER_OUTPUT_FILE}" 2> >(tee -a "${DISCOVER_LOG_FILE}" >&2)
-  fi
+  run_validate_codex_attempt "validate_discover" "${DISCOVER_PROMPT_FILE}" "${DISCOVER_OUTPUT_FILE}" "${DISCOVER_LOG_FILE}" "${discover_stall_status_file}"
   DISCOVER_EXIT=$?
   set -e
+  discover_stall_state="$(read_validate_codex_stall_guard_state "${discover_stall_status_file}" || true)"
+  rm -f "${discover_stall_status_file}"
+  case "${discover_stall_state}" in
+    observed)
+      echo "Validation hint discovery attempt ${attempt}/${MAX_CODEX_ATTEMPTS}: codex_stall_observed recorded (observe-only mode)."
+      ;;
+    killed)
+      echo "::warning::Validation hint discovery attempt ${attempt}/${MAX_CODEX_ATTEMPTS}: codex_stall_killed recorded."
+      ;;
+  esac
 
     if [ "${DISCOVER_EXIT}" -ne 0 ]; then
-      DISCOVER_FAILURE_MODE="codex_rc_nonzero"
+      if [ "${discover_stall_state}" = "killed" ]; then
+        DISCOVER_FAILURE_MODE="codex_stall_killed"
+      else
+        DISCOVER_FAILURE_MODE="codex_rc_nonzero"
+      fi
     elif ! grep -q '[^[:space:]]' "${DISCOVER_OUTPUT_FILE}"; then
       DISCOVER_FAILURE_MODE="codex_empty_output"
     elif python3 - "${DISCOVER_OUTPUT_FILE}" "${VALIDATE_HINTS_FILE}" <<'PY'
@@ -3348,20 +3392,29 @@ for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
   DIAGNOSE_ATTEMPTS_USED="${attempt}"
   echo "Validation diagnosis attempt ${attempt}/${MAX_CODEX_ATTEMPTS}"
   sanitize_codex_prompt_file "${DIAGNOSE_PROMPT_FILE}"
+  diagnose_stall_status_file="$(mktemp /tmp/validate_diagnose_stall_status.XXXXXX)"
+  diagnose_stall_state=""
   set +e
-  if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
-    "${CODEX_HEARTBEAT_HELPER}" \
-      --phase validate_diagnose \
-      --stdout-file "${DIAGNOSE_OUTPUT_FILE}" \
-      -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${DIAGNOSE_PROMPT_FILE}" 2> >(tee -a "${DIAGNOSE_LOG_FILE}" >&2)
-  else
-    codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${DIAGNOSE_PROMPT_FILE}" > "${DIAGNOSE_OUTPUT_FILE}" 2> >(tee -a "${DIAGNOSE_LOG_FILE}" >&2)
-  fi
+  run_validate_codex_attempt "validate_diagnose" "${DIAGNOSE_PROMPT_FILE}" "${DIAGNOSE_OUTPUT_FILE}" "${DIAGNOSE_LOG_FILE}" "${diagnose_stall_status_file}"
   DIAGNOSE_EXIT=$?
   set -e
+  diagnose_stall_state="$(read_validate_codex_stall_guard_state "${diagnose_stall_status_file}" || true)"
+  rm -f "${diagnose_stall_status_file}"
+  case "${diagnose_stall_state}" in
+    observed)
+      echo "Validation diagnosis attempt ${attempt}/${MAX_CODEX_ATTEMPTS}: codex_stall_observed recorded (observe-only mode)."
+      ;;
+    killed)
+      echo "::warning::Validation diagnosis attempt ${attempt}/${MAX_CODEX_ATTEMPTS}: codex_stall_killed recorded."
+      ;;
+  esac
 
   if [ "${DIAGNOSE_EXIT}" -ne 0 ]; then
-    DIAGNOSE_FAILURE_MODE="codex_rc_nonzero"
+    if [ "${diagnose_stall_state}" = "killed" ]; then
+      DIAGNOSE_FAILURE_MODE="codex_stall_killed"
+    else
+      DIAGNOSE_FAILURE_MODE="codex_rc_nonzero"
+    fi
   elif ! grep -q '[^[:space:]]' "${DIAGNOSE_OUTPUT_FILE}"; then
     DIAGNOSE_FAILURE_MODE="codex_empty_output"
   elif extract_last_json_with_key "${DIAGNOSE_OUTPUT_FILE}" "status" "${DIAGNOSE_RESULT_FILE}"; then
