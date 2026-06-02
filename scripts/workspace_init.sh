@@ -58,6 +58,7 @@ append_kv()
 }
 
 WORKSPACE_IDENTIFIER_SOURCE="default"
+WORKSPACE_IDENTIFIER_VALUE=""
 resolve_issue_identifier()
 {
 	local raw_identifier="${WORKSPACE_ISSUE_IDENTIFIER:-}"
@@ -65,17 +66,18 @@ resolve_issue_identifier()
 	local default_identifier="${WORKSPACE_DEFAULT_IDENTIFIER:-run-${GITHUB_RUN_ID:-unknown}}"
 
 	WORKSPACE_IDENTIFIER_SOURCE="default"
+	WORKSPACE_IDENTIFIER_VALUE="${default_identifier}"
 	if [ -n "${raw_identifier}" ]; then
 		WORKSPACE_IDENTIFIER_SOURCE="explicit"
-		printf '%s\n' "${raw_identifier}"
+		WORKSPACE_IDENTIFIER_VALUE="${raw_identifier}"
 		return 0
 	fi
 	if [ -n "${fallback_identifier}" ]; then
 		WORKSPACE_IDENTIFIER_SOURCE="fallback"
-		printf '%s\n' "${fallback_identifier}"
+		WORKSPACE_IDENTIFIER_VALUE="${fallback_identifier}"
 		return 0
 	fi
-	printf '%s\n' "${default_identifier}"
+	return 0
 }
 
 resolve_workspace_root()
@@ -174,8 +176,8 @@ command_metadata()
 		workspace_reuse_enabled="true"
 	fi
 
-	local issue_identifier
-	issue_identifier="$(resolve_issue_identifier)"
+	resolve_issue_identifier
+	local issue_identifier="${WORKSPACE_IDENTIFIER_VALUE}"
 	if [ "${workspace_reuse_enabled}" = "true" ] && \
 	   truthy "${WORKSPACE_REQUIRE_STABLE_IDENTIFIER_FOR_REUSE:-false}" && \
 	   [ "${WORKSPACE_IDENTIFIER_SOURCE}" != "explicit" ]; then

@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import subprocess
+import tempfile
 
 import yaml
 
@@ -69,6 +72,8 @@ def test_workspace_cache_maintenance_workflow_uses_gh_pat_cache_surfaces_and_sum
 	assert 'issueOrPullRequest' in workflow
 	assert 'GITHUB_STEP_SUMMARY' in workflow
 	assert 'Workspace Cache Maintenance Summary' in workflow
+	assert 'Issue/PR lookup failures' in workflow
+	assert 'if delete_failures or lookup_failures:' in workflow
 
 
 def test_review_autofix_stages_and_activates_workspace_reuse_before_reviewers() -> None:
@@ -97,6 +102,38 @@ def test_review_autofix_stages_and_activates_workspace_reuse_before_reviewers() 
 	assert workflow.index('- name: Activate workspace shell context') < workflow.index('- name: Run reviewer models')
 
 
+def test_workspace_init_keeps_reuse_enabled_for_explicit_review_identifier() -> None:
+	with tempfile.TemporaryDirectory() as tmpdir:
+		output_path = Path(tmpdir) / 'github_output'
+		env_path = Path(tmpdir) / 'github_env'
+		env = os.environ.copy()
+		env.update(
+			{
+				'GITHUB_OUTPUT': str(output_path),
+				'GITHUB_ENV': str(env_path),
+				'GITHUB_RUN_ID': '1',
+				'GITHUB_RUN_ATTEMPT': '1',
+				'GITHUB_WORKSPACE': str(REPO_ROOT),
+				'RUNNER_TEMP': tmpdir,
+				'WORKSPACE_REUSE_ENABLED': 'true',
+				'WORKSPACE_REQUIRE_STABLE_IDENTIFIER_FOR_REUSE': 'true',
+				'WORKSPACE_ISSUE_IDENTIFIER': '123',
+				'WORKSPACE_SOURCE_PATH': str(REPO_ROOT),
+			}
+		)
+		subprocess.run(
+			['bash', str(REPO_ROOT / 'scripts' / 'workspace_init.sh'), 'metadata'],
+			check=True,
+			cwd=REPO_ROOT,
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+		output = output_path.read_text(encoding='utf-8')
+		assert 'workspace_identifier_source=explicit' in output
+		assert 'workspace_reuse_enabled=true' in output
+
+
 def test_review_autofix_retargets_review_runtime_cache_into_workspace() -> None:
 	restore_step = _step(REVIEW_WORKFLOW, 'Restore review-issue ledger')
 	save_step = _step(REVIEW_WORKFLOW, 'Save review-issue ledger')
@@ -123,6 +160,7 @@ def main() -> int:
 	test_workspace_cache_maintenance_workflow_has_required_triggers_and_concurrency()
 	test_workspace_cache_maintenance_workflow_uses_gh_pat_cache_surfaces_and_summary()
 	test_review_autofix_stages_and_activates_workspace_reuse_before_reviewers()
+	test_workspace_init_keeps_reuse_enabled_for_explicit_review_identifier()
 	test_review_autofix_retargets_review_runtime_cache_into_workspace()
 	test_removal_registry_documents_workspace_cache_maintenance_workflow()
 	return 0
