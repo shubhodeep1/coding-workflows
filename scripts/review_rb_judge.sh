@@ -27,6 +27,7 @@ if [ -z "${SUPPORT_ROOT_DIR:-}" ]; then
 fi
 SUPPORT_PROMPTS_DIR="${SUPPORT_PROMPTS_DIR:-${SUPPORT_ROOT_DIR}/prompts}"
 CODEX_HEARTBEAT_HELPER="${SUPPORT_SCRIPTS_DIR}/codex_heartbeat.sh"
+CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR}/codex_stall_guard.sh"
 source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 # Fallback: if gh_helpers.sh was not sourced (missing file), define a
 # pass-through so subsequent `gh_retry gh ...` calls still execute —
@@ -84,6 +85,41 @@ PY
     return 0
   }
 fi
+
+read_codex_stall_guard_state() {
+  local status_file="$1"
+
+  [ -s "${status_file}" ] || return 1
+  sed -n 's/^state=//p' "${status_file}" | head -n 1
+}
+
+codex_stall_guard_kill_detected() {
+  local rc="${1:-0}"
+  local stall_state="${2:-}"
+
+  if [ "${stall_state}" = "killed" ]; then
+    return 0
+  fi
+
+  [ -x "${CODEX_STALL_GUARD_HELPER}" ] || return 1
+  [ "${rc}" -eq 137 ]
+}
+
+read_codex_stall_guard_state_with_warning() {
+  local status_file="$1"
+  local context="$2"
+  local state=""
+
+  if state="$(read_codex_stall_guard_state "${status_file}" 2>/dev/null)"; then
+    printf '%s\n' "${state}"
+    return 0
+  fi
+
+  if [ -s "${status_file}" ]; then
+    echo "::warning::${context}: could not parse codex stall guard status from ${status_file}."
+  fi
+  return 1
+}
 # Some harnesses stub only `_embed_input_file`; keep prompt-budget lifecycle
 # helpers safe in that degraded mode so prompt assembly / EXIT cleanup do not
 # fail when budgeting support is unavailable.
@@ -1082,7 +1118,78 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
     emit_context_budget_warn_for_prompt "review_blocked_judge" "${RB_JUDGE_PROMPT}" "${MODEL_EDITOR}"
     RB_JUDGE_PROMPT_SIZE_LOGGED=true
   fi
-  if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
+  judge_stall_status_file="$(mktemp /tmp/rb_judge_stall_status.XXXXXX)"
+  judge_stall_state=""
+  if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
+    if "${CODEX_STALL_GUARD_HELPER}" \
+      --phase review_rb_judge \
+      --stdout-file "${RB_JUDGE_OUTPUT}" \
+      --stderr-file "${JUDGE_STDERR_FILE}" \
+      --status-file "${judge_stall_status_file}" \
+      -- "${judge_codex_cmd[@]}" < "${RB_JUDGE_PROMPT}"; then
+      if judge_stall_state="$(read_codex_stall_guard_state_with_warning "${judge_stall_status_file}" "Review-blocked judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT}" )"; then
+        :
+      fi
+      if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT}"; then
+        JUDGE_EFFECTIVE_REASONING_EFFORT="${level}"
+        JUDGE_SUCCESS=true
+        rm -f "${judge_stall_status_file}"
+        case "${judge_stall_state}" in
+          observed)
+            echo "Review-blocked judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} recorded codex_stall_observed (observe-only mode)."
+            ;;
+          killed)
+            echo "::warning::Review-blocked judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} recorded codex_stall_killed."
+            ;;
+        esac
+        break
+      fi
+      echo "::warning::Judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} produced empty stdout (reasoning=${level})."
+      if _recover_judge_json "${JUDGE_STDERR_FILE}" "${RB_JUDGE_OUTPUT}"; then
+        echo "Recovered judge JSON from stderr (attempt ${attempt}, reasoning=${level}) — proceeding."
+        JUDGE_EFFECTIVE_REASONING_EFFORT="${level}"
+        JUDGE_SUCCESS=true
+        rm -f "${judge_stall_status_file}"
+        case "${judge_stall_state}" in
+          observed)
+            echo "Review-blocked judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} recorded codex_stall_observed (observe-only mode)."
+            ;;
+          killed)
+            echo "::warning::Review-blocked judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} recorded codex_stall_killed."
+            ;;
+        esac
+        break
+      fi
+    else
+      rc=$?
+      if judge_stall_state="$(read_codex_stall_guard_state_with_warning "${judge_stall_status_file}" "Review-blocked judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT}" )"; then
+        :
+      fi
+      echo "::warning::Judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} codex exec failed (rc=${rc}, reasoning=${level})."
+      if [ -s "${JUDGE_STDERR_FILE}" ]; then
+        echo "--- judge stderr (attempt ${attempt}) ---"
+        cat "${JUDGE_STDERR_FILE}"
+        echo "---"
+      fi
+      if codex_stall_guard_kill_detected "${rc}" "${judge_stall_state}"; then
+        echo "::warning::Judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} was killed by codex stall guard; not attempting stderr JSON recovery."
+      elif _recover_judge_json "${JUDGE_STDERR_FILE}" "${RB_JUDGE_OUTPUT}"; then
+        echo "Recovered judge JSON from stderr (attempt ${attempt}, reasoning=${level}) — proceeding despite codex rc=${rc}."
+        JUDGE_EFFECTIVE_REASONING_EFFORT="${level}"
+        JUDGE_SUCCESS=true
+        rm -f "${judge_stall_status_file}"
+        case "${judge_stall_state}" in
+          observed)
+            echo "Review-blocked judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} recorded codex_stall_observed (observe-only mode)."
+            ;;
+          killed)
+            echo "::warning::Review-blocked judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} recorded codex_stall_killed."
+            ;;
+        esac
+        break
+      fi
+    fi
+  elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
     if "${CODEX_HEARTBEAT_HELPER}" \
       --phase review_rb_judge \
       --stdout-file "${RB_JUDGE_OUTPUT}" \
@@ -1091,6 +1198,7 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
       if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT}"; then
         JUDGE_EFFECTIVE_REASONING_EFFORT="${level}"
         JUDGE_SUCCESS=true
+        rm -f "${judge_stall_status_file}"
         break
       fi
       echo "::warning::Judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} produced empty stdout (reasoning=${level})."
@@ -1098,6 +1206,7 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
         echo "Recovered judge JSON from stderr (attempt ${attempt}, reasoning=${level}) — proceeding."
         JUDGE_EFFECTIVE_REASONING_EFFORT="${level}"
         JUDGE_SUCCESS=true
+        rm -f "${judge_stall_status_file}"
         break
       fi
     else
@@ -1112,6 +1221,7 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
         echo "Recovered judge JSON from stderr (attempt ${attempt}, reasoning=${level}) — proceeding despite codex rc=${rc}."
         JUDGE_EFFECTIVE_REASONING_EFFORT="${level}"
         JUDGE_SUCCESS=true
+        rm -f "${judge_stall_status_file}"
         break
       fi
     fi
@@ -1119,6 +1229,7 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
     if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT}"; then
       JUDGE_EFFECTIVE_REASONING_EFFORT="${level}"
       JUDGE_SUCCESS=true
+      rm -f "${judge_stall_status_file}"
       break
     fi
     echo "::warning::Judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} produced empty stdout (reasoning=${level})."
@@ -1126,6 +1237,7 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
       echo "Recovered judge JSON from stderr (attempt ${attempt}, reasoning=${level}) — proceeding."
       JUDGE_EFFECTIVE_REASONING_EFFORT="${level}"
       JUDGE_SUCCESS=true
+      rm -f "${judge_stall_status_file}"
       break
     fi
   else
@@ -1140,9 +1252,19 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
       echo "Recovered judge JSON from stderr (attempt ${attempt}, reasoning=${level}) — proceeding despite codex rc=${rc}."
       JUDGE_EFFECTIVE_REASONING_EFFORT="${level}"
       JUDGE_SUCCESS=true
+      rm -f "${judge_stall_status_file}"
       break
     fi
   fi
+  rm -f "${judge_stall_status_file}"
+  case "${judge_stall_state}" in
+    observed)
+      echo "Review-blocked judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} recorded codex_stall_observed (observe-only mode)."
+      ;;
+    killed)
+      echo "::warning::Review-blocked judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} recorded codex_stall_killed."
+      ;;
+  esac
   if [ "${attempt}" -lt "${JUDGE_ATTEMPT_COUNT}" ]; then
     sleep 10
   fi
@@ -1485,21 +1607,54 @@ __EDIT_DISCIPLINE__
       fi
 
       sanitize_codex_prompt_file "${RB_FIX_PROMPT}"
-      if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
+      RB_FIX_STDERR="$(mktemp /tmp/rb_fix_stderr.XXXXXX)"
+      rb_fix_stall_status_file="$(mktemp /tmp/rb_fix_stall_status.XXXXXX)"
+      rb_fix_stall_state=""
+      rb_fix_rc=0
+      if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
+        if "${CODEX_STALL_GUARD_HELPER}" \
+          --phase review_rb_fix \
+          --stdout-file "${RB_FIX_OUTPUT}" \
+          --stderr-file "${RB_FIX_STDERR}" \
+          --status-file "${rb_fix_stall_status_file}" \
+          -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${RB_FIX_PROMPT}"; then
+          if rb_fix_stall_state="$(read_codex_stall_guard_state_with_warning "${rb_fix_stall_status_file}" "Review-blocked fix codex" )"; then
+            :
+          fi
+          echo "Fix codex completed."
+        else
+          rb_fix_rc=$?
+          if rb_fix_stall_state="$(read_codex_stall_guard_state_with_warning "${rb_fix_stall_status_file}" "Review-blocked fix codex" )"; then
+            :
+          fi
+          echo "::warning::Fix codex failed for PR #${PR_NUMBER}."
+        fi
+      elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
         if "${CODEX_HEARTBEAT_HELPER}" \
           --phase review_rb_fix \
           --stdout-file "${RB_FIX_OUTPUT}" \
-          --stderr-file /dev/null \
+          --stderr-file "${RB_FIX_STDERR}" \
           -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${RB_FIX_PROMPT}"; then
           echo "Fix codex completed."
         else
+          rb_fix_rc=$?
           echo "::warning::Fix codex failed for PR #${PR_NUMBER}."
         fi
       elif codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${RB_FIX_PROMPT}" > "${RB_FIX_OUTPUT}" 2>/dev/null; then
         echo "Fix codex completed."
       else
+        rb_fix_rc=$?
         echo "::warning::Fix codex failed for PR #${PR_NUMBER}."
       fi
+      case "${rb_fix_stall_state}" in
+        observed)
+          echo "Review-blocked fix codex recorded codex_stall_observed (observe-only mode)."
+          ;;
+        killed)
+          echo "::warning::Review-blocked fix codex recorded codex_stall_killed."
+          ;;
+      esac
+      rm -f "${RB_FIX_STDERR}" "${rb_fix_stall_status_file}"
 
       # Restore editor reasoning effort
       if [ -f "${HOME}/.codex/config.toml" ]; then
@@ -1507,7 +1662,9 @@ __EDIT_DISCIPLINE__
       fi
 
       # Check for changes and commit
-      if [ -n "$(git status --porcelain)" ]; then
+      if codex_stall_guard_kill_detected "${rb_fix_rc}" "${rb_fix_stall_state}"; then
+        echo "::warning::Review-blocked fix codex was killed by codex stall guard; skipping commit/merge and falling back to manual intervention."
+      elif [ -n "$(git status --porcelain)" ]; then
         git config user.name "codex-bot"
         git config user.email "codex@users.noreply.github.com"
 

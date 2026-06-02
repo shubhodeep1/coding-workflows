@@ -73,6 +73,7 @@ PY
 }
 
 CODEX_HEARTBEAT_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_heartbeat.sh"
+CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
 
 if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh" ]; then
   # shellcheck source=/dev/null
@@ -2478,6 +2479,8 @@ execute_reviewer_attempt() {
   local tmp_output=""
   local tmp_stderr=""
   local hb_file=""
+  local stall_status_file=""
+  local stall_state=""
   local start_time=""
   local codex_pid_file=""
   local wd_reason_file=""
@@ -2523,6 +2526,7 @@ execute_reviewer_attempt() {
   tmp_stderr="$(mktemp)"
   hb_file="$(mktemp /tmp/heartbeat_reviewer.XXXXXX)"
   printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}"
+  stall_status_file="$(mktemp /tmp/reviewer_stall_status.XXXXXX)"
   start_time="$(date +%s)"
   codex_pid_file="$(mktemp /tmp/codex_pid_reviewer.XXXXXX)"
   wd_reason_file="$(mktemp /tmp/reviewer_wd_reason.XXXXXX)"
@@ -2602,7 +2606,15 @@ execute_reviewer_attempt() {
     --model "${effective_model}"
     --sandbox read-only
   )
-  if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
+  if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
+    "${CODEX_STALL_GUARD_HELPER}" \
+      --phase review_run_reviewers \
+      --stdout-file "${tmp_output}" \
+      --stderr-file "${tmp_stderr}" \
+      --activity-file "${hb_file}" \
+      --status-file "${stall_status_file}" \
+      -- "${reviewer_codex_cmd[@]}" < "${prompt_file}" &
+  elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
     "${CODEX_HEARTBEAT_HELPER}" \
       --phase review_run_reviewers \
       --stdout-file "${tmp_output}" \
@@ -2630,6 +2642,10 @@ execute_reviewer_attempt() {
     wd_reason="$(cat "${wd_reason_file}" 2>/dev/null || true)"
   fi
   rm -f "${wd_reason_file}"
+  if [ -s "${stall_status_file}" ]; then
+    stall_state="$(sed -n 's/^state=//p' "${stall_status_file}" | head -n 1)"
+  fi
+  rm -f "${stall_status_file}"
 
   case "${wd_reason}" in
     pr_closed_sentinel|pr_closed_api)
@@ -2639,6 +2655,15 @@ execute_reviewer_attempt() {
       REVIEWER_ATTEMPT_OUTCOME="pr_closed"
       REVIEWER_ATTEMPT_WD_REASON="${wd_reason}"
       return 0
+      ;;
+  esac
+
+  case "${stall_state}" in
+    observed)
+      echo "Reviewer slot ${slot_model} (${effective_model}) recorded codex_stall_observed on ${attempt_label} (observe-only mode)." | tee -a "${log_file}"
+      ;;
+    killed)
+      echo "Reviewer slot ${slot_model} (${effective_model}) recorded codex_stall_killed on ${attempt_label} (exit=${cmd_rc})." | tee -a "${log_file}"
       ;;
   esac
 
@@ -2664,17 +2689,21 @@ execute_reviewer_attempt() {
       echo "Reviewer slot ${slot_model} (${effective_model}) ${attempt_label}: codex-cli stderr was also empty (no diagnostic available)." | tee -a "${log_file}" >&2
     fi
   else
-    case "${wd_reason}" in
-      idle_timeout)
-        echo "Reviewer slot ${slot_model} (${effective_model}) killed by watchdog on ${attempt_label} (idle timeout ${reviewer_idle_timeout}s, exit=${cmd_rc})." | tee -a "${log_file}"
-        ;;
-      max_wall)
-        echo "Reviewer slot ${slot_model} (${effective_model}) killed by watchdog on ${attempt_label} (max wall ${reviewer_max_wall}s, exit=${cmd_rc})." | tee -a "${log_file}"
-        ;;
-      *)
-        echo "Reviewer slot ${slot_model} (${effective_model}) execution failed on ${attempt_label} (exit=${cmd_rc})." | tee -a "${log_file}"
-        ;;
-    esac
+    if [ "${stall_state}" = "killed" ]; then
+      echo "Reviewer slot ${slot_model} (${effective_model}) killed by codex stall guard on ${attempt_label} (exit=${cmd_rc})." | tee -a "${log_file}"
+    else
+      case "${wd_reason}" in
+        idle_timeout)
+          echo "Reviewer slot ${slot_model} (${effective_model}) killed by watchdog on ${attempt_label} (idle timeout ${reviewer_idle_timeout}s, exit=${cmd_rc})." | tee -a "${log_file}"
+          ;;
+        max_wall)
+          echo "Reviewer slot ${slot_model} (${effective_model}) killed by watchdog on ${attempt_label} (max wall ${reviewer_max_wall}s, exit=${cmd_rc})." | tee -a "${log_file}"
+          ;;
+        *)
+          echo "Reviewer slot ${slot_model} (${effective_model}) execution failed on ${attempt_label} (exit=${cmd_rc})." | tee -a "${log_file}"
+          ;;
+      esac
+    fi
   fi
 
   if [ -s "${tmp_stderr}" ]; then

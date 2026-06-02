@@ -35,6 +35,47 @@ if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   sanitize_codex_prompt_file() { :; }
 fi
 
+CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
+
+read_codex_stall_guard_state() {
+  local status_file="$1"
+
+  [ -s "${status_file}" ] || return 1
+  sed -n 's/^state=//p' "${status_file}" | head -n 1
+}
+
+resolve_editor_network_probe_pid() {
+  local wrapper_pid="$1"
+  local child_pid=""
+
+  [ -n "${wrapper_pid}" ] || return 1
+  child_pid="$(ps -o pid= --ppid "${wrapper_pid}" 2>/dev/null | awk 'NR==1 { print $1; exit }' || true)"
+  if [ -n "${child_pid}" ]; then
+    printf '%s\n' "${child_pid}"
+  else
+    printf '%s\n' "${wrapper_pid}"
+  fi
+}
+
+run_editor_codex_attempt() {
+  local prompt_file="$1"
+  local stdout_file="$2"
+  local stderr_target="$3"
+  local activity_file="$4"
+  local status_file="$5"
+
+  if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
+    exec "${CODEX_STALL_GUARD_HELPER}" \
+      --phase review_apply_fixes \
+      --stdout-file "${stdout_file}" \
+      --activity-file "${activity_file}" \
+      --status-file "${status_file}" \
+      -- codex --ask-for-approval never -c model_verbosity="${EDITOR_VERBOSITY}" -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" 2>"${stderr_target}"
+  fi
+
+  exec codex --ask-for-approval never -c model_verbosity="${EDITOR_VERBOSITY}" -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" > "${stdout_file}" 2>"${stderr_target}"
+}
+
 emit_context_budget_warn_for_prompt() {
   local phase="$1"
   local prompt_path="$2"
@@ -1331,6 +1372,7 @@ while [ "${attempt}" -le 3 ]; do
   printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}"
   editor_start="$(date +%s)"
   codex_pid_file="$(mktemp /tmp/codex_pid_editor.XXXXXX)"
+  stall_status_file="$(mktemp /tmp/editor_stall_status.XXXXXX)"
 
   # ── Background watchdog: heartbeat + network-activity aware ──
   (
@@ -1356,8 +1398,9 @@ while [ "${attempt}" -le 3 ]; do
       if [ "${idle_secs}" -ge "${EDITOR_IDLE_TIMEOUT}" ]; then
         cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
         net_active=false
-        if [ -n "${cpid}" ] && [ -d "/proc/${cpid}/fd" ]; then
-          sock_count="$(find "/proc/${cpid}/fd" -lname 'socket:*' 2>/dev/null | head -20 | wc -l || echo 0)"
+        probe_pid="$(resolve_editor_network_probe_pid "${cpid}" || true)"
+        if [ -n "${probe_pid}" ] && [ -d "/proc/${probe_pid}/fd" ]; then
+          sock_count="$(find "/proc/${probe_pid}/fd" -lname 'socket:*' 2>/dev/null | head -20 | wc -l || echo 0)"
           if [ "${sock_count}" -gt 0 ]; then
             net_active=true
           fi
@@ -1431,8 +1474,8 @@ while [ "${attempt}" -le 3 ]; do
   # Run codex: stdout → tmp_output, stderr → FIFO (heartbeat reader).
   (
     trap '' PIPE
-    exec codex --ask-for-approval never -c model_verbosity="${EDITOR_VERBOSITY}" -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${attempt_prompt_file}" 2>"${_hb_fifo}"
-  ) > "${tmp_output}" &
+    run_editor_codex_attempt "${attempt_prompt_file}" "${tmp_output}" "${_hb_fifo}" "${hb_file}" "${stall_status_file}"
+  ) &
   codex_bg_pid=$!
   echo "${codex_bg_pid}" > "${codex_pid_file}"
   cmd_rc=0
@@ -1445,6 +1488,23 @@ while [ "${attempt}" -le 3 ]; do
 
   kill "${wd_pid}" 2>/dev/null; wait "${wd_pid}" 2>/dev/null || true
   rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}"
+
+  stall_state=""
+  if stall_state="$(read_codex_stall_guard_state "${stall_status_file}" 2>/dev/null)"; then
+    :
+  elif [ -s "${stall_status_file}" ]; then
+    echo "::warning::Editor attempt ${attempt}: could not parse codex stall guard status from ${stall_status_file}."
+  fi
+  rm -f "${stall_status_file}"
+
+  case "${stall_state}" in
+    observed)
+      echo "Editor attempt ${attempt}: codex_stall_observed marker recorded (observe-only mode)."
+      ;;
+    killed)
+      echo "Editor attempt ${attempt}: codex_stall_killed marker recorded (exit=${cmd_rc})."
+      ;;
+  esac
 
   if [ "${cmd_rc}" -eq 0 ]; then
     cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
