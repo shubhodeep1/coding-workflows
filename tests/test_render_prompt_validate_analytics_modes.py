@@ -14,6 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_DIR = REPO_ROOT / "prompts"
 RENDER_PROMPT_SH = REPO_ROOT / "scripts" / "render_prompt.sh"
 FORBIDDEN_PLACEHOLDER = "WORKFLOW_EDIT_RESTRICTION"
+UNKNOWN_PLACEHOLDER = "UNKNOWN_VALIDATE_ANALYTICS_VAR"
 
 
 @dataclass(frozen=True)
@@ -191,12 +192,27 @@ def test_contracts_reject_forbidden_placeholder_for_all_validate_and_workflow_mo
 			_assert_contract_failure(proc, category="forbidden_present", name=FORBIDDEN_PLACEHOLDER)
 
 
+def test_contracts_reject_unknown_placeholder_for_all_validate_and_workflow_modes() -> None:
+	with tempfile.TemporaryDirectory(prefix="render_prompt_validate_analytics_modes_") as td:
+		prompt_file = Path(td) / "prompt.txt"
+
+		for mode_name in ALL_MODE_NAMES:
+			prompt_file = Path(td) / f"{mode_name}.txt"
+			prompt_file.write_text(
+				f"Header\n{{{{{UNKNOWN_PLACEHOLDER}}}}}\nFooter\n",
+				encoding="utf-8",
+			)
+			proc = _run_render(prompt_file)
+			_assert_contract_failure(proc, category="unknown_in_template", name=UNKNOWN_PLACEHOLDER)
+
+
 def main() -> int:
 	test_real_prompts_render_with_contract_defaults()
 	test_serena_optional_placeholder_substitution_for_validation_modes()
 	test_semble_optional_placeholder_substitution_for_workflow_analysis_modes()
 	test_validate_self_heal_handles_standalone_and_literal_serena_markers()
 	test_contracts_reject_forbidden_placeholder_for_all_validate_and_workflow_modes()
+	test_contracts_reject_unknown_placeholder_for_all_validate_and_workflow_modes()
 	print("OK: validate/workflow-analysis prompt contracts render correctly")
 	return 0
 
