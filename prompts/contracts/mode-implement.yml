@@ -1,0 +1,6 @@
+required_vars: []
+optional_vars:
+  WORKFLOW_EDIT_RESTRICTION: "- Do not change CI workflows."
+  SERENA_TOOL_HINTS: ""
+forbidden_vars:
+  - SEMBLE_PREFETCH
