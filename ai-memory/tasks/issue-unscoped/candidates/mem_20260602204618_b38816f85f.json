@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Add tests/test_workspace_init.py to CI test allowlists.\n  expected_change_site: .github/workflows/ci.yml (or equivalent test workflow)\n  confidence=[5]\n  flagged_by: [minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  EVIDENCE: The Copilot review comment (entry[4]) explicitly states this repo uses explicit allowlists for Python tests and test_workspace_init.py is not currently referenced. Searching .github/workflows/ci.yml shows zero occurrences of \"test_workspace_init\". The test file exists at tests/test_workspace_init.py but will not run in CI unless added to the allowlist. The new test file tests/test_workspace_init.py was added in the PR, but neither the original PR diff nor the last run diff modify .github/workflows/ci.yml or any other CI workflow to include this test in the allowlist. The ci.yml runs explicit python3 tests/<file>.py commands for other tests but does not reference test_workspace_init.py.\n- requirement: Keep the matching listed wrapper files in sync (workflow-templates/ai-implement.yml and workflow-templates/ai-validate.yml).\n  expected_change_site: workflow-templates/ai-implement.yml, workflow-templates/ai-validate.yml\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The linked issue explicitly lists these two files in \"Files in scope (stay inside this set)\" and says \"Keep the matching listed wrapper files in sync.\" The original_pr_diff.patch, last_run_diff.patch, pr_changed_files.txt, and last_run_changed_files.txt contain zero hunks or references to either template. The reusable .github/workflows/* files were updated (workspace_init steps, cache paths, shell context activation), but the templates that consumers call were not touched. This leaves a mismatch for any consumer that invokes via the template (WORKSPACE_REUSE_ENABLED and tracking_issue forwarding would not flow through). The editor summary acknowledges this as \"already satisfied by the existing reusable-workflow wiring\" but that does not address the explicit \"keep templates in sync\" acceptance criterion.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- (No findings reported.)\n- TASK_GAP\n  Requirement: Add tests/test_workspace_init.py to CI test allowlists.\n  Expected change site: .github/workflows/ci.yml or equivalent CI workflow that defines the explicit python3 tests/<file>.py allowlist.\n  Evidence of absence: The Copilot review comment (entry[4]) explicitly states this repo uses explicit allowlists for Python tests and test_workspace_init.py is not currently referenced. Searching .github/workflows/ci.yml shows zero occurrences of \"test_workspace_init\". The test file exists at tests/test_workspace_init.py but will not run in CI unless added to the allowlist.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- (No findings reported.)\n- TASK_GAP\n  Requirement: Add tests/test_workspace_init.py to CI test allowlists (this repo uses explicit python3 tests/<file>.py allowlists per the Copilot review comment).\n  Expected change site: .github/workflows/ci.yml (or equivalent test workflow)\n  Evidence of absence: The new test file tests/test_workspace_init.py was added in the PR, but neither the original PR diff nor the last run diff modify .github/workflows/ci.yml or any other CI workflow to include this test in the allowlist. The ci.yml runs explicit python3 tests/<file>.py commands for other tests but does not reference test_workspace_init.py.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- (No findings reported.)\n- TASK_GAP\n  Requirement: Keep the matching listed wrapper files in sync (workflow-templates/ai-implement.yml and workflow-templates/ai-validate.yml).\n  Expected change site: workflow-templates/ai-implement.yml, workflow-templates/ai-validate.yml\n  Evidence of absence: The linked issue explicitly lists these two files in \"Files in scope (stay inside this set)\" and says \"Keep the matching listed wrapper files in sync.\" The original_pr_diff.patch, last_run_diff.patch, pr_changed_files.txt, and last_run_changed_files.txt contain zero hunks or references to either template. The reusable .github/workflows/* files were updated (workspace_init steps, cache paths, shell context activation), but the templates that consumers call were not touched. This leaves a mismatch for any consumer that invokes via the template (WORKSPACE_REUSE_ENABLED and tracking_issue forwarding would not flow through). The editor summary acknowledges this as \"already satisfied by the existing reusable-workflow wiring\" but that does not address the explicit \"keep templates in sync\" acceptance criterion.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "1af0c1e91ddeb863b69dae4bcd3a11f1fcafb1c93c2f5a6e07d39590814b62f4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3065,
+    "run_id": "26846255748",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26846255748",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260602204618_b38816f85f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3065,
+    "run_id": "26846255748"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-02T20:46:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
