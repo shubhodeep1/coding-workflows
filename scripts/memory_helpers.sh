@@ -547,12 +547,17 @@ def _load(path_str: str):
 	path = pathlib.Path(path_str)
 	if not path.is_file():
 		return None
-	return json.loads(path.read_text(encoding="utf-8"))
+	try:
+		return json.loads(path.read_text(encoding="utf-8"))
+	except json.JSONDecodeError:
+		return None
 
 
 def _latest(record):
 	if not isinstance(record, dict):
 		return ""
+	if record.get("dispatch_status") == "disabled":
+		return record.get("last_dispatch_timestamp") or ""
 	return record.get("last_attempted_timestamp") or record.get("last_dispatch_timestamp") or ""
 
 
@@ -564,7 +569,10 @@ def _parse(ts: str):
 
 current = _load(sys.argv[1])
 incoming = _load(sys.argv[2])
-cooldown = int(sys.argv[3]) if sys.argv[3] else 30
+try:
+	cooldown = int(sys.argv[3]) if sys.argv[3] else 30
+except ValueError:
+	cooldown = 30
 if not current or not incoming:
 	raise SystemExit(0)
 

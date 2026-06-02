@@ -169,10 +169,16 @@ import pathlib
 import sys
 
 output_file = pathlib.Path(sys.argv[1])
-wrapper = json.loads(sys.argv[2]) if sys.argv[2] else {}
+try:
+	wrapper = json.loads(sys.argv[2]) if sys.argv[2] else {}
+except json.JSONDecodeError:
+	wrapper = {}
 tracking_issue = int(sys.argv[3])
 attempt_timestamp = sys.argv[4]
-payload = json.loads(sys.argv[5])
+try:
+	payload = json.loads(sys.argv[5])
+except json.JSONDecodeError:
+	payload = {}
 dispatch_status = sys.argv[6]
 update_dispatch = sys.argv[7].lower() == "true"
 
