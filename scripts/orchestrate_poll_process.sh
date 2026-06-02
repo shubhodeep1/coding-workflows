@@ -12403,8 +12403,9 @@ _dispatch_rb_judge_for_pr()
 #
 # Evaluate whether a managed issue may be dispatched this tick based on the
 # orchestrator state's dependency_edges. Returns 0 when dispatch may proceed,
-# 1 when the issue should be deferred, and fails open (0 + warning) on helper
-# invocation/parsing failures so the poller does not deadlock on checker faults.
+# 1 when the issue should be deferred, and fails open (0 + warning) only on
+# helper invocation/JSON-shape faults so the poller does not deadlock on
+# checker infrastructure failures.
 _runtime_blocker_dispatch_eligible()
 {
 	local local_id="$1"
@@ -12417,6 +12418,7 @@ _runtime_blocker_dispatch_eligible()
 	local eligible=""
 	local signal="dispatch_deferred_blocker"
 	local reason="blocked_by_dependency"
+	local detail=""
 	local blocker_summary=""
 
 	[ "${RUNTIME_BLOCKER_CHECK_ENABLED:-false}" = "true" ] || return 0
@@ -12469,9 +12471,10 @@ _runtime_blocker_dispatch_eligible()
 
 	signal="$(printf '%s' "${blocker_result}" | jq -r '.signal // "dispatch_deferred_blocker"' 2>/dev/null || echo 'dispatch_deferred_blocker')"
 	reason="$(printf '%s' "${blocker_result}" | jq -r '.reason // "blocked_by_dependency"' 2>/dev/null || echo 'blocked_by_dependency')"
+	detail="$(printf '%s' "${blocker_result}" | jq -r '.detail // empty' 2>/dev/null || echo '')"
 	blocker_summary="$(printf '%s' "${blocker_result}" | jq -r '[.blockers[]? | "\(.local_id):\(.status):\(.source)"] | join(",")' 2>/dev/null || echo '')"
 	[ -n "${blocker_summary}" ] || blocker_summary="(none)"
-	echo "${signal} local_id=${local_id} wave=${wave_num} reason=${reason} blockers=${blocker_summary}"
+	echo "${signal} local_id=${local_id} wave=${wave_num} reason=${reason} blockers=${blocker_summary}${detail:+ detail=${detail}}"
 	return 1
 }
 

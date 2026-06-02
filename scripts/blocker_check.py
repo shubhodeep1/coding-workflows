@@ -32,6 +32,28 @@ def _parse_optional_json_object(raw: str | None, *, field_name: str) -> dict[str
 	return parsed
 
 
+def _deferred_result(
+	*,
+	local_id: str,
+	reason: str,
+	metadata_present: bool,
+	blockers: list[dict[str, Any]] | None = None,
+	detail: str | None = None,
+) -> dict[str, Any]:
+	result = {
+		"local_id": local_id,
+		"eligible": False,
+		"signal": "dispatch_deferred_blocker",
+		"reason": reason,
+		"metadata_present": metadata_present,
+		"blocker_count": len(blockers or []),
+		"blockers": blockers or [],
+	}
+	if detail:
+		result["detail"] = detail
+	return result
+
+
 def _wave_entries_by_local_id(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
 	entries: dict[str, dict[str, Any]] = {}
 	for wave in state.get("waves", []) or []:
@@ -46,12 +68,14 @@ def _wave_entries_by_local_id(state: dict[str, Any]) -> dict[str, dict[str, Any]
 	return entries
 
 
-def _incoming_blocker_local_ids(state: dict[str, Any], local_id: str) -> tuple[bool, list[str]]:
+def _incoming_blocker_local_ids(state: dict[str, Any], local_id: str) -> tuple[str, list[str]]:
+	if "dependency_edges" not in state:
+		return "missing", []
 	edges = state.get("dependency_edges")
 	if not isinstance(edges, list):
-		return False, []
+		return "invalid", []
 	if not edges:
-		return True, []
+		return "present", []
 
 	blockers: list[str] = []
 	seen: set[str] = set()
@@ -66,7 +90,7 @@ def _incoming_blocker_local_ids(state: dict[str, Any], local_id: str) -> tuple[b
 			continue
 		seen.add(from_id)
 		blockers.append(from_id)
-	return True, blockers
+	return "present", blockers
 
 
 def _issue_number_map_entry(state: dict[str, Any], local_id: str) -> int | None:
@@ -141,9 +165,9 @@ def evaluate_blocker_eligibility(
 ) -> dict[str, Any]:
 	candidate_details = candidate_details or {}
 	entries_by_local_id = _wave_entries_by_local_id(state)
-	metadata_present, blocker_local_ids = _incoming_blocker_local_ids(state, local_id)
+	metadata_status, blocker_local_ids = _incoming_blocker_local_ids(state, local_id)
 
-	if not metadata_present:
+	if metadata_status == "missing":
 		return {
 			"local_id": local_id,
 			"eligible": True,
@@ -153,6 +177,13 @@ def evaluate_blocker_eligibility(
 			"blocker_count": 0,
 			"blockers": [],
 		}
+
+	if metadata_status == "invalid":
+		return _deferred_result(
+			local_id=local_id,
+			reason="invalid_dependency_metadata",
+			metadata_present=True,
+		)
 
 	if not blocker_local_ids:
 		return {
@@ -222,10 +253,18 @@ def evaluate_blocker_eligibility(
 		reason = "all_blockers_terminal"
 		eligible = True
 
+	if not eligible:
+		return _deferred_result(
+			local_id=local_id,
+			reason=reason,
+			metadata_present=True,
+			blockers=blockers,
+		)
+
 	return {
 		"local_id": local_id,
-		"eligible": eligible,
-		"signal": "dispatch_eligible" if eligible else "dispatch_deferred_blocker",
+		"eligible": True,
+		"signal": "dispatch_eligible",
 		"reason": reason,
 		"metadata_present": True,
 		"blocker_count": len(blockers),
@@ -245,13 +284,39 @@ def main(argv: list[str] | None = None) -> int:
 	args = build_parser().parse_args(argv)
 	try:
 		state = _load_state(Path(args.state_file))
+	except (OSError, ValueError, json.JSONDecodeError) as exc:
+		print(
+			json.dumps(
+				_deferred_result(
+					local_id=args.local_id,
+					reason="state_load_failed",
+					metadata_present=False,
+					detail=f"{type(exc).__name__}: {exc}",
+				),
+				separators=(",", ":"),
+				sort_keys=True,
+			)
+		)
+		return 0
+	try:
 		candidate_details = _parse_optional_json_object(
 			args.candidate_details_json,
 			field_name="--candidate-details-json",
 		)
 	except (OSError, ValueError, json.JSONDecodeError) as exc:
-		print(f"blocker_check error: {type(exc).__name__}: {exc}", file=sys.stderr)
-		return 1
+		print(
+			json.dumps(
+				_deferred_result(
+					local_id=args.local_id,
+					reason="candidate_details_invalid",
+					metadata_present=False,
+					detail=f"{type(exc).__name__}: {exc}",
+				),
+				separators=(",", ":"),
+				sort_keys=True,
+			)
+		)
+		return 0
 	result = evaluate_blocker_eligibility(
 		state,
 		local_id=args.local_id,

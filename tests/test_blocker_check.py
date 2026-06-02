@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import io
 import importlib.util
+import json
 import sys
+import tempfile
+from contextlib import redirect_stdout
 from pathlib import Path
 
 
@@ -73,6 +77,19 @@ def test_evaluate_blocker_eligibility_allows_explicit_empty_dependency_metadata(
 	assert result["eligible"] is True
 	assert result["signal"] == "dispatch_eligible"
 	assert result["reason"] == "no_incoming_blockers"
+	assert result["metadata_present"] is True
+	assert result["blockers"] == []
+
+
+def test_evaluate_blocker_eligibility_defers_invalid_dependency_metadata():
+	state = _blocker_state()
+	state["dependency_edges"] = {"from": "issue-1", "to": "issue-2"}
+
+	result = blocker_check.evaluate_blocker_eligibility(state, local_id="issue-2")
+
+	assert result["eligible"] is False
+	assert result["signal"] == "dispatch_deferred_blocker"
+	assert result["reason"] == "invalid_dependency_metadata"
 	assert result["metadata_present"] is True
 	assert result["blockers"] == []
 
@@ -218,6 +235,51 @@ def test_evaluate_blocker_eligibility_allows_not_created_dependency():
 	]
 
 
+def test_main_returns_structured_state_load_failure():
+	missing_state = REPO_ROOT / "tests" / "missing-blocker-state.json"
+	stdout = io.StringIO()
+
+	with redirect_stdout(stdout):
+		rc = blocker_check.main(["--state-file", str(missing_state), "--local-id", "issue-2"])
+
+	result = json.loads(stdout.getvalue())
+	assert rc == 0
+	assert result["eligible"] is False
+	assert result["signal"] == "dispatch_deferred_blocker"
+	assert result["reason"] == "state_load_failed"
+	assert result["metadata_present"] is False
+	assert "FileNotFoundError:" in result["detail"]
+
+
+def test_main_returns_structured_candidate_details_error():
+	state = _blocker_state()
+	stdout = io.StringIO()
+
+	with tempfile.TemporaryDirectory() as td:
+		state_file = Path(td) / "state.json"
+		state_file.write_text(json.dumps(state), encoding="utf-8")
+
+		with redirect_stdout(stdout):
+			rc = blocker_check.main(
+				[
+					"--state-file",
+					str(state_file),
+					"--local-id",
+					"issue-2",
+					"--candidate-details-json",
+					"[]",
+				]
+			)
+
+	result = json.loads(stdout.getvalue())
+	assert rc == 0
+	assert result["eligible"] is False
+	assert result["signal"] == "dispatch_deferred_blocker"
+	assert result["reason"] == "candidate_details_invalid"
+	assert result["metadata_present"] is False
+	assert "ValueError:" in result["detail"]
+
+
 def test_next_wave_dispatch_defers_blocked_issue_until_future_tick():
 	state = {
 		"schema_version": "orchestrate_state.v1",
@@ -325,3 +387,40 @@ def test_current_wave_deferred_creation_uses_live_blocker_truth():
 			"labels": ["ai:clarification", "ai:orchestrator-managed"],
 		}
 	]
+
+
+def main() -> int:
+	selected_names = list(sys.argv[1:])
+	tests_by_name = {
+		name: func
+		for name, func in sorted(globals().items())
+		if name.startswith("test_") and callable(func)
+	}
+	if selected_names:
+		missing = [name for name in selected_names if name not in tests_by_name]
+		for name in missing:
+			print(f"  FAIL  {name}: unknown test name", flush=True)
+		if missing:
+			return 1
+		test_funcs = [tests_by_name[name] for name in selected_names]
+	else:
+		test_funcs = list(tests_by_name.values())
+
+	passed = 0
+	failed = 0
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			func()
+			print(f"  PASS  {name}", flush=True)
+			passed += 1
+		except Exception as exc:
+			print(f"  FAIL  {name}: {exc}", flush=True)
+			failed += 1
+
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total", flush=True)
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
