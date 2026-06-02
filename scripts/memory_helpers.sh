@@ -530,6 +530,60 @@ _memory_force_tick_ensure_branch()
 	rm -rf "${tmp_dir}"
 }
 
+_memory_force_tick_collision_wrapper()
+{
+	local current_file="${1:?current file required}"
+	local incoming_file="${2:?incoming file required}"
+	local cooldown_seconds="${3:-30}"
+
+	python3 - <<'PY' "${current_file}" "${incoming_file}" "${cooldown_seconds}"
+import datetime as dt
+import json
+import pathlib
+import sys
+
+
+def _load(path_str: str):
+	path = pathlib.Path(path_str)
+	if not path.is_file():
+		return None
+	return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _latest(record):
+	if not isinstance(record, dict):
+		return ""
+	return record.get("last_attempted_timestamp") or record.get("last_dispatch_timestamp") or ""
+
+
+def _parse(ts: str):
+	if not ts:
+		return None
+	return dt.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+
+
+current = _load(sys.argv[1])
+incoming = _load(sys.argv[2])
+cooldown = int(sys.argv[3]) if sys.argv[3] else 30
+if not current or not incoming:
+	raise SystemExit(0)
+
+current_ts = _latest(current)
+incoming_ts = _latest(incoming)
+if not current_ts or not incoming_ts or current_ts == incoming_ts:
+	raise SystemExit(0)
+
+current_dt = _parse(current_ts)
+incoming_dt = _parse(incoming_ts)
+if current_dt is None or incoming_dt is None:
+	raise SystemExit(0)
+
+age_seconds = max(0, int((incoming_dt - current_dt).total_seconds()))
+if age_seconds < cooldown:
+	print(json.dumps({"ok": True, "enabled": True, "stored": False, "record": current}))
+PY
+}
+
 memory_force_tick_get()
 {
 	if ! _memory_enabled; then
@@ -572,7 +626,7 @@ memory_force_tick_get()
 			*)
 				_memory_warn "force-tick-get unknown arg: $1"
 				_memory_telemetry '{"op":"force-tick-get","ok":false,"fail_open":true,"source":"shell"}' >&2
-				echo '{"ok": true, "enabled": true, "hit": false, "record": null}'
+				echo '{"ok": false, "enabled": true, "hit": false, "record": null}'
 				return 0
 				;;
 		esac
@@ -587,7 +641,7 @@ memory_force_tick_get()
 	if ! remote_url="$(_memory_force_tick_remote_url --repo-root "${repo_root}" --repo "${repository}")"; then
 		_memory_warn "force-tick-get could not resolve remote URL (fail-open)"
 		_memory_telemetry '{"op":"force-tick-get","ok":false,"fail_open":true,"source":"shell"}' >&2
-		echo '{"ok": true, "enabled": true, "hit": false, "record": null}'
+		echo '{"ok": false, "enabled": true, "hit": false, "record": null}'
 		return 0
 	fi
 
@@ -602,7 +656,7 @@ memory_force_tick_get()
 		rm -rf "${tmp_dir}"
 		_memory_warn "force-tick-get failed to clone ${memory_branch} (fail-open)"
 		_memory_telemetry '{"op":"force-tick-get","ok":false,"fail_open":true,"source":"shell"}' >&2
-		echo '{"ok": true, "enabled": true, "hit": false, "record": null}'
+		echo '{"ok": false, "enabled": true, "hit": false, "record": null}'
 		return 0
 	fi
 
@@ -623,11 +677,11 @@ import sys
 record = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 print(json.dumps({"ok": True, "enabled": True, "hit": True, "record": record}))
 PY
-	)"; then
+		)"; then
 		rm -rf "${tmp_dir}"
 		_memory_warn "force-tick-get could not decode ${record_path} (fail-open)"
 		_memory_telemetry '{"op":"force-tick-get","ok":false,"fail_open":true,"source":"shell"}' >&2
-		echo '{"ok": true, "enabled": true, "hit": false, "record": null}'
+		echo '{"ok": false, "enabled": true, "hit": false, "record": null}'
 		return 0
 	fi
 
@@ -652,6 +706,7 @@ memory_force_tick_put()
 	local remote_url=""
 	local tmp_dir=""
 	local target_path=""
+	local cooldown_seconds="${FORCE_TICK_COOLDOWN_SECONDS:-30}"
 
 	while [ $# -gt 0 ]; do
 		case "$1" in
@@ -682,7 +737,7 @@ memory_force_tick_put()
 			*)
 				_memory_warn "force-tick-put unknown arg: $1"
 				_memory_telemetry '{"op":"force-tick-put","ok":false,"fail_open":true,"source":"shell"}' >&2
-				echo '{"ok": true, "enabled": true, "stored": false, "record": null}'
+				echo '{"ok": false, "enabled": true, "stored": false, "record": null}'
 				return 0
 				;;
 		esac
@@ -697,15 +752,19 @@ memory_force_tick_put()
 	if ! remote_url="$(_memory_force_tick_remote_url --repo-root "${repo_root}" --repo "${repository}")"; then
 		_memory_warn "force-tick-put could not resolve remote URL (fail-open)"
 		_memory_telemetry '{"op":"force-tick-put","ok":false,"fail_open":true,"source":"shell"}' >&2
-		echo '{"ok": true, "enabled": true, "stored": false, "record": null}'
+		echo '{"ok": false, "enabled": true, "stored": false, "record": null}'
 		return 0
 	fi
 
 	if ! _memory_force_tick_ensure_branch "${remote_url}" "${memory_branch}" "${memory_root}"; then
 		_memory_warn "force-tick-put could not ensure ${memory_branch} (fail-open)"
 		_memory_telemetry '{"op":"force-tick-put","ok":false,"fail_open":true,"source":"shell"}' >&2
-		echo '{"ok": true, "enabled": true, "stored": false, "record": null}'
+		echo '{"ok": false, "enabled": true, "stored": false, "record": null}'
 		return 0
+	fi
+
+	if ! [[ "${cooldown_seconds}" =~ ^[0-9]+$ ]]; then
+		cooldown_seconds=30
 	fi
 
 	tmp_dir="$(mktemp -d)"
@@ -713,16 +772,26 @@ memory_force_tick_put()
 		rm -rf "${tmp_dir}"
 		_memory_warn "force-tick-put failed to clone ${memory_branch} (fail-open)"
 		_memory_telemetry '{"op":"force-tick-put","ok":false,"fail_open":true,"source":"shell"}' >&2
-		echo '{"ok": true, "enabled": true, "stored": false, "record": null}'
+		echo '{"ok": false, "enabled": true, "stored": false, "record": null}'
 		return 0
 	fi
 
 	target_path="${tmp_dir}/${memory_root}/runs/force_tick/${tracking_issue}.json"
+	if [ -f "${target_path}" ]; then
+		local collision_wrapper=""
+		collision_wrapper="$(_memory_force_tick_collision_wrapper "${target_path}" "${record_file}" "${cooldown_seconds}" || true)"
+		if [ -n "${collision_wrapper}" ]; then
+			rm -rf "${tmp_dir}"
+			printf '%s\n' "${collision_wrapper}"
+			return 0
+		fi
+	fi
+
 	if ! mkdir -p "$(dirname "${target_path}")" || ! cp "${record_file}" "${target_path}"; then
 		rm -rf "${tmp_dir}"
 		_memory_warn "force-tick-put failed to stage ${target_path} (fail-open)"
 		_memory_telemetry '{"op":"force-tick-put","ok":false,"fail_open":true,"source":"shell"}' >&2
-		echo '{"ok": true, "enabled": true, "stored": false, "record": null}'
+		echo '{"ok": false, "enabled": true, "stored": false, "record": null}'
 		return 0
 	fi
 
@@ -741,7 +810,7 @@ memory_force_tick_put()
 		rm -rf "${tmp_dir}"
 		_memory_warn "force-tick-put failed to commit/push (fail-open)"
 		_memory_telemetry '{"op":"force-tick-put","ok":false,"fail_open":true,"source":"shell"}' >&2
-		echo '{"ok": true, "enabled": true, "stored": false, "record": null}'
+		echo '{"ok": false, "enabled": true, "stored": false, "record": null}'
 		return 0
 	}
 
@@ -754,11 +823,11 @@ import sys
 record = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 print(json.dumps({"ok": True, "enabled": True, "stored": True, "record": record}))
 PY
-	)"; then
+		)"; then
 		rm -rf "${tmp_dir}"
 		_memory_warn "force-tick-put could not decode ${target_path} after push (fail-open)"
 		_memory_telemetry '{"op":"force-tick-put","ok":false,"fail_open":true,"source":"shell"}' >&2
-		echo '{"ok": true, "enabled": true, "stored": false, "record": null}'
+		echo '{"ok": false, "enabled": true, "stored": false, "record": null}'
 		return 0
 	fi
 

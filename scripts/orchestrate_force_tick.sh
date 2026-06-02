@@ -32,6 +32,14 @@ print(datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00
 PY
 }
 
+_force_tick_tracking_issue_from_ref()
+{
+	local ref="${1:-}"
+	if [[ "${ref}" =~ ^orchestrator/project-([0-9]+)$ ]]; then
+		printf '%s\n' "${BASH_REMATCH[1]}"
+	fi
+}
+
 _force_tick_extract_tracking_issue()
 {
 	local body="${1:-}"
@@ -40,7 +48,53 @@ import re
 import sys
 
 body = sys.argv[1]
-match = re.search(r"^\s*(?:-\s*)?(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+)\s*$", body, re.MULTILINE)
+match = re.search(r"(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+)", body, re.MULTILINE)
+if match:
+	print(match.group(1))
+PY
+}
+
+_force_tick_fetch_pull_request_json()
+{
+	local repository="${1:-}"
+	local pr_number="${2:-}"
+
+	if [ -z "${repository}" ] || [ -z "${pr_number}" ]; then
+		return 1
+	fi
+
+	GH_TOKEN="${GH_PAT:-${GH_TOKEN:-}}" gh api "repos/${repository}/pulls/${pr_number}" 2>/dev/null
+}
+
+_force_tick_extract_tracking_issue_from_pull_request_json()
+{
+	local pr_json="${1:-}"
+	python3 - <<'PY' "${pr_json}"
+import json
+import re
+import sys
+
+payload = {}
+if sys.argv[1]:
+	try:
+		payload = json.loads(sys.argv[1])
+	except json.JSONDecodeError:
+		payload = {}
+
+branch_re = re.compile(r"^orchestrator/project-(\d+)$")
+body_re = re.compile(r"(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+)")
+
+for ref in (
+	((payload.get("head") or {}).get("ref") or "").strip(),
+	((payload.get("base") or {}).get("ref") or "").strip(),
+):
+	match = branch_re.fullmatch(ref)
+	if match:
+		print(match.group(1))
+		raise SystemExit(0)
+
+body = payload.get("body") or ""
+match = body_re.search(body)
 if match:
 	print(match.group(1))
 PY
@@ -185,19 +239,22 @@ while [ $# -gt 0 ]; do
 			echo "::error::Unknown orchestrate_force_tick.sh argument: $1" >&2
 			exit 2
 			;;
-	esac
-done
-
-if ! _force_tick_truthy "${FORCE_TICK_ENABLED:-true}"; then
-	echo "Force-tick dispatch is disabled; skipping."
-	exit 0
-fi
+		esac
+	done
 
 if ! [[ "${TRACKING_ISSUE:-}" =~ ^[0-9]+$ ]] || [ "${TRACKING_ISSUE:-0}" -le 0 ]; then
 	TRACKING_ISSUE=""
 fi
 if ! [[ "${ISSUE_NUMBER:-}" =~ ^[0-9]+$ ]] || [ "${ISSUE_NUMBER:-0}" -le 0 ]; then
 	ISSUE_NUMBER=""
+fi
+
+if [ -z "${TRACKING_ISSUE}" ] && [ -n "${ISSUE_NUMBER}" ]; then
+	pr_json="$(_force_tick_fetch_pull_request_json "${REPOSITORY}" "${ISSUE_NUMBER}" || true)"
+	TRACKING_ISSUE="$(_force_tick_extract_tracking_issue_from_pull_request_json "${pr_json}")"
+	if ! [[ "${TRACKING_ISSUE:-}" =~ ^[0-9]+$ ]] || [ "${TRACKING_ISSUE:-0}" -le 0 ]; then
+		TRACKING_ISSUE=""
+	fi
 fi
 
 if [ -z "${TRACKING_ISSUE}" ] && [ -n "${ISSUE_NUMBER}" ]; then
@@ -258,6 +315,36 @@ if [ "${within_cooldown}" = "true" ]; then
 fi
 
 attempt_timestamp="$(_force_tick_now_utc)"
+pending_record_file=""
+final_record_file=""
+
+cleanup_force_tick_files()
+{
+	rm -f "${pending_record_file:-}" "${final_record_file:-}"
+}
+trap cleanup_force_tick_files EXIT
+
+if ! _force_tick_truthy "${FORCE_TICK_ENABLED:-true}"; then
+	final_record_file="$(mktemp)"
+	_force_tick_render_record_file \
+		"${final_record_file}" \
+		"${record_wrapper}" \
+		"${TRACKING_ISSUE}" \
+		"${attempt_timestamp}" \
+		"${payload_json}" \
+		"disabled" \
+		"false"
+	if declare -F memory_force_tick_put >/dev/null 2>&1; then
+		memory_force_tick_put \
+			--repo-root "${REPO_ROOT}" \
+			--repo "${REPOSITORY}" \
+			--tracking-issue "${TRACKING_ISSUE}" \
+			--record-file "${final_record_file}" >/dev/null || true
+	fi
+	echo "Force-tick dispatch is disabled; skipping."
+	exit 0
+fi
+
 pending_record_file="$(mktemp)"
 _force_tick_render_record_file \
 	"${pending_record_file}" \
@@ -267,12 +354,6 @@ _force_tick_render_record_file \
 	"${payload_json}" \
 	"pending" \
 	"false"
-
-cleanup_force_tick_files()
-{
-	rm -f "${pending_record_file:-}" "${final_record_file:-}"
-}
-trap cleanup_force_tick_files EXIT
 
 claim_stored="false"
 if declare -F memory_force_tick_put >/dev/null 2>&1; then

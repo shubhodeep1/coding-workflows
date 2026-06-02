@@ -5455,7 +5455,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          bash "${SUPPORT_SCRIPTS_DIR}/orchestrate_force_tick.sh" \
+          HELPER="${SUPPORT_SCRIPTS_DIR}/orchestrate_force_tick.sh"
+          if [ ! -f "${HELPER}" ]; then
+            echo "::warning::orchestrate_force_tick.sh unavailable; skipping review-blocked force tick."
+            exit 0
+          fi
+          bash "${HELPER}" \
             --repo "${REPOSITORY}" \
             --issue "${PR_NUMBER}" \
             --reason "review-blocked" \
@@ -6457,7 +6462,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-          bash "${SUPPORT_SCRIPTS_DIR}/orchestrate_force_tick.sh" \
+          HELPER="${SUPPORT_SCRIPTS_DIR}/orchestrate_force_tick.sh"
+          if [ ! -f "${HELPER}" ]; then
+            echo "::warning::orchestrate_force_tick.sh unavailable; skipping workflow-failure force tick."
+            exit 0
+          fi
+          bash "${HELPER}" \
             --repo "${REPOSITORY}" \
             --issue "${PR_NUMBER}" \
             --reason "review-blocked" \

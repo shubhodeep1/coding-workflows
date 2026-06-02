@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -55,12 +56,19 @@ def _create_repo() -> tuple[Path, Path]:
 	return tmp_root, work
 
 
-def _make_gh_mock(tmp_root: Path, issue_bodies: dict[int, str]) -> tuple[Path, Path]:
+def _make_gh_mock(
+	tmp_root: Path,
+	issue_bodies: dict[int, str],
+	*,
+	pull_requests: dict[int, dict[str, str]] | None = None,
+) -> tuple[Path, Path]:
 	mock_dir = tmp_root / "mock-bin"
 	mock_dir.mkdir(parents=True, exist_ok=True)
 	issues_file = tmp_root / "issues.json"
+	pulls_file = tmp_root / "pulls.json"
 	workflow_runs_file = tmp_root / "workflow_runs.jsonl"
 	issues_file.write_text(json.dumps({str(k): v for k, v in issue_bodies.items()}), encoding="utf-8")
+	pulls_file.write_text(json.dumps({str(k): v for k, v in (pull_requests or {}).items()}), encoding="utf-8")
 	if not workflow_runs_file.exists():
 		workflow_runs_file.write_text("", encoding="utf-8")
 	gh_path = mock_dir / "gh"
@@ -75,6 +83,7 @@ import sys
 def main() -> int:
 	args = sys.argv[1:]
 	issues = json.loads(pathlib.Path(os.environ["GH_MOCK_ISSUES_FILE"]).read_text(encoding="utf-8"))
+	pulls = json.loads(pathlib.Path(os.environ["GH_MOCK_PULL_REQUESTS_FILE"]).read_text(encoding="utf-8"))
 	runs_file = pathlib.Path(os.environ["GH_MOCK_WORKFLOW_RUNS_FILE"])
 	if len(args) >= 2 and args[0] == "api":
 		endpoint = args[1]
@@ -86,16 +95,29 @@ def main() -> int:
 			else:
 				print(json.dumps({"body": body}))
 			return 0
+		if endpoint.startswith("repos/") and "/pulls/" in endpoint:
+			pr_number = endpoint.rsplit("/pulls/", 1)[1]
+			pr = pulls.get(pr_number)
+			if pr is None:
+				return 1
+			print(json.dumps({
+				"body": pr.get("body", ""),
+				"head": {"ref": pr.get("head_ref", "")},
+				"base": {"ref": pr.get("base_ref", "")},
+			}))
+			return 0
 		print(f"unsupported gh api endpoint: {endpoint}", file=sys.stderr)
 		return 2
 	if len(args) >= 3 and args[0] == "workflow" and args[1] == "run":
 		workflow = args[2]
 		repo = ""
+		exit_code = int(os.environ.get("GH_MOCK_WORKFLOW_RUN_EXIT_CODE", "0"))
 		if "--repo" in args:
 			repo = args[args.index("--repo") + 1]
-		with runs_file.open("a", encoding="utf-8") as fh:
-			fh.write(json.dumps({"workflow": workflow, "repo": repo}) + "\\n")
-		return 0
+		if exit_code == 0:
+			with runs_file.open("a", encoding="utf-8") as fh:
+				fh.write(json.dumps({"workflow": workflow, "repo": repo}) + "\\n")
+		return exit_code
 	print(f"unsupported gh invocation: {' '.join(args)}", file=sys.stderr)
 	return 2
 
@@ -114,9 +136,11 @@ def _run_force_tick(
 	issue_bodies: dict[int, str],
 	*,
 	args: list[str],
+	pull_requests: dict[int, dict[str, str]] | None = None,
+	workflow_run_exit_code: int = 0,
 	env: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
-	mock_dir, runs_file = _make_gh_mock(work_repo.parent, issue_bodies)
+	mock_dir, runs_file = _make_gh_mock(work_repo.parent, issue_bodies, pull_requests=pull_requests)
 	result = _run(
 		[
 			"bash",
@@ -128,18 +152,40 @@ def _run_force_tick(
 			*args,
 		],
 		cwd=REPO_ROOT,
-		env={
-			"PATH": f"{mock_dir}:{os.environ['PATH']}",
-			"GITHUB_REPOSITORY": "owner/repo",
-			"GITHUB_RUN_ID": "9001",
-			"GH_PAT": "test-token",
-			"GH_TOKEN": "test-token",
-			"GH_MOCK_ISSUES_FILE": str(work_repo.parent / "issues.json"),
-			"GH_MOCK_WORKFLOW_RUNS_FILE": str(runs_file),
-			**(env or {}),
-		},
-	)
+			env={
+				"PATH": f"{mock_dir}:{os.environ['PATH']}",
+				"GITHUB_REPOSITORY": "owner/repo",
+				"GITHUB_RUN_ID": "9001",
+				"GH_PAT": "test-token",
+				"GH_TOKEN": "test-token",
+				"GH_MOCK_ISSUES_FILE": str(work_repo.parent / "issues.json"),
+				"GH_MOCK_PULL_REQUESTS_FILE": str(work_repo.parent / "pulls.json"),
+				"GH_MOCK_WORKFLOW_RUNS_FILE": str(runs_file),
+				"GH_MOCK_WORKFLOW_RUN_EXIT_CODE": str(workflow_run_exit_code),
+				**(env or {}),
+			},
+		)
 	return result, runs_file
+
+
+def _run_memory_force_tick_put(
+	work_repo: Path,
+	*,
+	tracking_issue: int,
+	record: dict[str, object],
+) -> subprocess.CompletedProcess[str]:
+	record_file = work_repo.parent / f"incoming-force-tick-{tracking_issue}.json"
+	record_file.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
+	command = (
+		f"source {shlex.quote(str(MEMORY_HELPERS))}; "
+		f"memory_force_tick_put --repo-root {shlex.quote(str(work_repo))} "
+		f"--repo owner/repo --tracking-issue {tracking_issue} --record-file {shlex.quote(str(record_file))}"
+	)
+	return _run(
+		["bash", "-lc", command],
+		cwd=REPO_ROOT,
+		env={"GH_PAT": "test-token", "GH_TOKEN": "test-token"},
+	)
 
 
 def _workflow_runs(path: Path) -> list[dict[str, object]]:
@@ -224,6 +270,27 @@ def test_force_tick_dispatches_and_writes_state() -> None:
 	}
 
 
+def test_force_tick_resolves_tracking_issue_from_pr_branch_refs() -> None:
+	_, work_repo = _create_repo()
+	result, runs_file = _run_force_tick(
+		work_repo,
+		{88: "Automated implementation. Closes #3058\n"},
+		pull_requests={
+			88: {
+				"body": "Automated implementation. Closes #3058\n",
+				"head_ref": "ai/issue-3058",
+				"base_ref": "orchestrator/project-3042",
+			}
+		},
+		args=["--issue", "88", "--reason", "review-post-merge", "--source-workflow", "review_autofix", "--run-id", "9001"],
+	)
+	assert result.returncode == 0, result.stderr
+	assert _workflow_runs(runs_file) == [{"workflow": "internal-orchestrate-poll.yml", "repo": "owner/repo"}]
+	record = _read_force_tick_record(work_repo, 3042)
+	assert record["last_dispatch_payload"]["issue"] == 88
+	assert record["dispatch_status"] == "sent"
+
+
 def test_force_tick_second_call_inside_cooldown_noops() -> None:
 	_, work_repo = _create_repo()
 	issue_bodies = {
@@ -272,6 +339,48 @@ def test_force_tick_dispatches_again_after_cooldown() -> None:
 	assert updated["last_dispatch_payload"]["run_id"] == 9002
 
 
+def test_force_tick_disabled_persists_same_window_suppression() -> None:
+	_, work_repo = _create_repo()
+	issue_bodies = {
+		501: "- Tracking issue: #3042\n- Managed by: AI Orchestrator\n",
+	}
+	disabled, runs_file = _run_force_tick(
+		work_repo,
+		issue_bodies,
+		args=["--issue", "501", "--reason", "review-blocked", "--source-workflow", "review_autofix", "--run-id", "9001"],
+		env={"FORCE_TICK_ENABLED": "false"},
+	)
+	assert disabled.returncode == 0, disabled.stderr
+	assert _workflow_runs(runs_file) == []
+	record = _read_force_tick_record(work_repo, 3042)
+	assert record["dispatch_status"] == "disabled"
+
+	reenabled, _ = _run_force_tick(
+		work_repo,
+		issue_bodies,
+		args=["--issue", "501", "--reason", "review-blocked", "--source-workflow", "review_autofix", "--run-id", "9002"],
+	)
+	assert reenabled.returncode == 0, reenabled.stderr
+	assert _workflow_runs(runs_file) == []
+
+
+def test_force_tick_records_dispatch_failure_status() -> None:
+	_, work_repo = _create_repo()
+	issue_bodies = {
+		501: "- Tracking issue: #3042\n- Managed by: AI Orchestrator\n",
+	}
+	result, runs_file = _run_force_tick(
+		work_repo,
+		issue_bodies,
+		args=["--issue", "501", "--reason", "validation-finalized", "--source-workflow", "validate", "--run-id", "9001"],
+		workflow_run_exit_code=1,
+	)
+	assert result.returncode == 0, result.stderr
+	assert _workflow_runs(runs_file) == []
+	record = _read_force_tick_record(work_repo, 3042)
+	assert record["dispatch_status"] == "failed"
+
+
 def test_force_tick_noops_when_tracking_issue_is_absent() -> None:
 	_, work_repo = _create_repo()
 	result, runs_file = _run_force_tick(
@@ -281,6 +390,57 @@ def test_force_tick_noops_when_tracking_issue_is_absent() -> None:
 	)
 	assert result.returncode == 0, result.stderr
 	assert _workflow_runs(runs_file) == []
+
+
+def test_memory_force_tick_put_refuses_same_window_overwrite_for_new_attempt() -> None:
+	_, work_repo = _create_repo()
+	issue_bodies = {
+		501: "- Tracking issue: #3042\n- Managed by: AI Orchestrator\n",
+	}
+	seed, _ = _run_force_tick(
+		work_repo,
+		issue_bodies,
+		args=["--issue", "501", "--reason", "implement-pr-created", "--source-workflow", "implement", "--run-id", "9001"],
+	)
+	assert seed.returncode == 0, seed.stderr
+
+	current_record = {
+		"schema_version": "force_tick.v1",
+		"tracking_issue": 3042,
+		"last_attempted_timestamp": _iso_seconds_ago(1),
+		"last_attempt_payload": {
+			"issue": 501,
+			"reason": "review-blocked",
+			"run_id": 9001,
+			"source_workflow": "review_autofix",
+		},
+		"dispatch_status": "pending",
+		"last_dispatch_timestamp": None,
+		"last_dispatch_payload": None,
+	}
+	_write_force_tick_record(work_repo, 3042, current_record)
+
+	incoming_record = {
+		"schema_version": "force_tick.v1",
+		"tracking_issue": 3042,
+		"last_attempted_timestamp": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+		"last_attempt_payload": {
+			"issue": 501,
+			"reason": "review-blocked",
+			"run_id": 9002,
+			"source_workflow": "review_autofix",
+		},
+		"dispatch_status": "pending",
+		"last_dispatch_timestamp": None,
+		"last_dispatch_payload": None,
+	}
+	put = _run_memory_force_tick_put(work_repo, tracking_issue=3042, record=incoming_record)
+	assert put.returncode == 0, put.stderr
+	payload = json.loads(put.stdout)
+	assert payload["stored"] is False
+	assert payload["record"]["last_attempted_timestamp"] == current_record["last_attempted_timestamp"]
+	stored = _read_force_tick_record(work_repo, 3042)
+	assert stored["last_attempted_timestamp"] == current_record["last_attempted_timestamp"]
 
 
 def test_memory_helpers_export_force_tick_wrappers() -> None:
