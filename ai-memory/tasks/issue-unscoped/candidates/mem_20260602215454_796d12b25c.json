@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/blocker_check.py | Line or code reference: _incoming_blocker_local_ids + evaluate_blocker_eligibility (~lines 80\u2013130 and ~195\u2013240) | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The issue-number-map fallback can short-circuit terminality evaluation and defer dispatch even when the blocker is already terminal.\n  WHY: x-ai reports this can leave an `unresolved_blocker_mapping` deferral in place; the other reviewers in this batch said the path is working as designed.\n- scripts/blocker_check.py | Line or code reference: main() (~lines 290\u2013320) | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Structured error results surface exception-detail text that x-ai says leaks traceback-like output into logs/comments.\n  WHY: x-ai says the `detail` field carries noisy Python exception text; the other reviewers in this batch said the code emits concise exception messages rather than a traceback.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add scripts/blocker_check.py. Consult dependency-edge blocker state before the poller dispatches a managed issue. Reuse existing cycle-local issue/PR state instead of adding per-issue API fan-out. Fail open when the legacy issue/body has no dependency metadata. A blocked issue is deferred with a structured blocker/defer signal. When blockers reach terminal merged/closed state, the next tick can dispatch the issue. Tests cover both blocker deferral and the no-metadata fail-open path. Files in scope: scripts/blocker_check.py, scripts/orchestrate_lib.py, scripts/orchestrate_poll_process.sh, tests/test_blocker_check.py.\"\n  expected_change_site: scripts/blocker_check.py (evaluate_blocker_eligibility and integration with is_terminal_wave_issue) + tests/test_blocker_check.py (full regression coverage for unresolved_mapping + not_created edge cases)\n  confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The unresolved_blocker_mapping path short-circuits before calling is_terminal_wave_issue when mapping succeeds (last_run_diff only touched the not_created handling in orchestrate_lib.py); the test for unresolved mapping uses a synthetic state that cannot exercise live terminal truth from candidate_details, and the consensus finding from x-ai/grok-4.20 pass-1 is not fixed in the LAST RUN DIFF.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: scripts/blocker_check.py\n  Line or code reference: _incoming_blocker_local_ids + evaluate_blocker_eligibility (~lines 80\u2013130 and ~195\u2013240)\n  Problem: The function returns a metadata_status tuple (\"missing\"/\"present\"/\"invalid\") but the docstring and call sites treat the first element as a boolean in several places (including the consensus finding from pass-1). The early-return logic for missing_wave_entry sets terminal=False without calling is_terminal_wave_issue when mapping fallback is used.\n  Why it fails at runtime: Legacy/migrated states with dangling local_ids (or transient GraphQL cache misses) can produce spurious \"unresolved_blocker_mapping\" deferrals even after the blocker reaches a terminal label/PR state via issue_number_map path, stalling downstream dispatch indefinitely. The test `test_evaluate_blocker_eligibility_uses_issue_number_map_when_wave_entry_missing` only exercises the happy mapping path; the unresolved case is not exercised with live terminal truth.\n  ISSUE_CONFIDENCE: 4\n- File: scripts/blocker_check.py\n  Line or code reference: main() (~lines 290\u2013320)\n  Problem: State load / candidate parse failures emit structured JSON with a full Python traceback in the \"detail\" field; _runtime_blocker_dispatch_eligible truncates it but still logs the traceback string into orchestrator comments/Telegram. The shell wrapper fails-open on any non-zero exit from the Python script, yet the structured error path returns rc=0.\n  Why it fails at runtime: Transient JSON corruption, permission error on STATE_FILE, or malformed candidate_details_json produces noisy traceback in production logs and tracking-issue comments, violating operational hygiene and making triage harder; no clean separation between \"expected legacy\" errors and true infrastructure faults.\n  ISSUE_CONFIDENCE: 4\n- Requirement: \"Add scripts/blocker_check.py. Consult dependency-edge blocker state before the poller dispatches a managed issue. Reuse existing cycle-local issue/PR state instead of adding per-issue API fan-out. Fail open when the legacy issue/body has no dependency metadata. A blocked issue is deferred with a structured blocker/defer signal. When blockers reach terminal merged/closed state, the next tick can dispatch the issue. Tests cover both blocker deferral and the no-metadata fail-open path. Files in scope: scripts/blocker_check.py, scripts/orchestrate_lib.py, scripts/orchestrate_poll_process.sh, tests/test_blocker_check.py.\"\n  Expected change site: scripts/blocker_check.py (evaluate_blocker_eligibility and integration with is_terminal_wave_issue) + tests/test_blocker_check.py (full regression coverage for unresolved_mapping + not_created edge cases)\n  Evidence of absence: The unresolved_blocker_mapping path short-circuits before calling is_terminal_wave_issue when mapping succeeds (last_run_diff only touched the not_created handling in orchestrate_lib.py); the test for unresolved mapping uses a synthetic state that cannot exercise live terminal truth from candidate_details, and the consensus finding from x-ai/grok-4.20 pass-1 is not fixed in the LAST RUN DIFF.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "b4790e301c2e4036e20ceb2223b1f41e890ca9038a117b99427906949536f466",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3064,
+    "run_id": "26849857179",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26849857179",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260602215454_796d12b25c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3064,
+    "run_id": "26849857179"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-02T21:54:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
