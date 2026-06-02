@@ -848,6 +848,34 @@ def test_run_repositories_arms_discovery_deadline_per_enablement() -> None:
 		assert disabled._discovery_deadline is None
 
 
+def test_run_repositories_keeps_deadline_disarmed_for_non_positive_budget_env() -> None:
+	# `VALIDATION_DISCOVERY_BUDGET_SECS<=0` is the documented opt-out for the
+	# aggregate budget gate, so the env parsing path must preserve that value
+	# instead of clamping it back to the 2100s default.
+	with tempfile.TemporaryDirectory(prefix="discovery-deadline-env-") as td:
+		workspace = Path(td) / "work"
+		workspace.mkdir(parents=True, exist_ok=True)
+
+		previous_budget = os.environ.get("VALIDATION_DISCOVERY_BUDGET_SECS")
+		try:
+			for raw_value in ("0", "-7"):
+				os.environ["VALIDATION_DISCOVERY_BUDGET_SECS"] = raw_value
+				runner = refresh_runner.ValidationRefreshRunner(
+					source_root=REPO_ROOT,
+					branch_name="ai/validation-refresh",
+					executor=FakeExecutor([]),
+					discovery_ctx=refresh_runner._build_default_discovery_ctx(REPO_ROOT),
+				)
+				assert runner.discovery_ctx.discovery_budget_secs == int(raw_value)
+				runner.run_repositories([], workspace)
+				assert runner._discovery_deadline is None
+		finally:
+			if previous_budget is None:
+				os.environ.pop("VALIDATION_DISCOVERY_BUDGET_SECS", None)
+			else:
+				os.environ["VALIDATION_DISCOVERY_BUDGET_SECS"] = previous_budget
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------

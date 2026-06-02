@@ -849,7 +849,7 @@ def _build_default_discovery_ctx(source_root: Path) -> "discovery_module.Discove
 		),
 		pr_label=_env_str("VALIDATION_DISCOVERY_PR_LABEL", "automation:validate-bootstrap") or None,
 		dedup_days=_env_int("VALIDATION_DISCOVERY_DEDUP_DAYS", 7),
-		discovery_budget_secs=_env_int("VALIDATION_DISCOVERY_BUDGET_SECS", 2100),
+		discovery_budget_secs=_env_int("VALIDATION_DISCOVERY_BUDGET_SECS", 2100, minimum=-sys.maxsize),
 		enabled=_env_bool("VALIDATION_DISCOVERY_ENABLED", True),
 		dry_run=_env_bool("VALIDATION_DISCOVERY_DRY_RUN", False),
 	)
