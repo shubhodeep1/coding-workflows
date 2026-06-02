@@ -98,7 +98,7 @@ resolve_workspace_fingerprint()
 
 	local fingerprint_file="${WORKSPACE_FINGERPRINT_FILE:-}"
 	if [ -n "${fingerprint_file}" ] && [ -f "${fingerprint_file}" ]; then
-		fingerprint="$(tr -d '\n' < "${fingerprint_file}")"
+		fingerprint="$(tr -d '\r\n' < "${fingerprint_file}")"
 		if [ -n "${fingerprint}" ]; then
 			printf '%s\n' "${fingerprint}"
 			return 0

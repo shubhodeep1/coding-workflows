@@ -103,6 +103,25 @@ def test_metadata_sanitizes_key_and_derives_workspace_path(tmp_path: Path) -> No
 	assert outputs["workspace_cache_key"] == "workspace-v1-Issue_42_alpha-fingerprint-1-12345"
 
 
+def test_metadata_strips_crlf_from_fingerprint_file(tmp_path: Path) -> None:
+	source_path = tmp_path / "source"
+	source_path.mkdir()
+	fingerprint_file = tmp_path / "fingerprint.txt"
+	fingerprint_file.write_text("tree-abc\r\n", encoding="utf-8")
+	result = _run_helper(
+		"metadata",
+		tmp_path,
+		WORKSPACE_REUSE_ENABLED="true",
+		WORKSPACE_ISSUE_IDENTIFIER="issue-7",
+		WORKSPACE_FINGERPRINT_FILE=str(fingerprint_file),
+		WORKSPACE_SOURCE_PATH=str(source_path),
+	)
+	assert result.returncode == 0, result.stderr
+	outputs = _parse_kv_file(tmp_path / "github_output.txt")
+	assert outputs["workspace_fingerprint"] == "tree-abc"
+	assert outputs["workspace_cache_key"] == "workspace-v1-issue-7-tree-abc-12345"
+
+
 def test_metadata_exact_restore_sets_created_now_false(tmp_path: Path) -> None:
 	source_path = tmp_path / "source"
 	source_path.mkdir()
