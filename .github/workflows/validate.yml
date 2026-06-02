@@ -64,6 +64,7 @@ env:
   CODEX_HEARTBEAT_ENABLED: ${{ vars.CODEX_HEARTBEAT_ENABLED || '1' }}
   CODEX_HEARTBEAT_INTERVAL_SECS: ${{ vars.CODEX_HEARTBEAT_INTERVAL_SECS || '30' }}
   SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}
+  WORKSPACE_HOOK_TIMEOUT_SECONDS: ${{ vars.WORKSPACE_HOOK_TIMEOUT_SECONDS || '600' }}
   WORKSPACE_REUSE_ENABLED: ${{ vars.WORKSPACE_REUSE_ENABLED || 'false' }}
 
 jobs:
@@ -292,7 +293,7 @@ jobs:
           }
 
           _fetched_scripts=()
-          for f in gh_helpers.sh ai_labels.py render_prompt.sh render_prompt.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py write_codex_config.sh orchestrate_force_tick.sh workspace_init.sh; do
+          for f in gh_helpers.sh ai_labels.py render_prompt.sh render_prompt.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py write_codex_config.sh orchestrate_force_tick.sh workspace_init.sh run_workspace_hook.sh; do
             copy_from_ref_or_local "scripts/${f}" "scripts/${f}"
             chmod +x "scripts/${f}"
             _fetched_scripts+=("${f}")
@@ -686,6 +687,12 @@ jobs:
             echo "GIT_WORK_TREE=${WORKSPACE_PATH}"
           } >> "$GITHUB_ENV"
 
+      - name: Run workspace after_create hook
+        id: workspace_after_create_hook
+        run: |
+          set -euo pipefail
+          bash scripts/run_workspace_hook.sh validate after_create
+
       - name: Initialize Serena runtime state
         run: |
           set -euo pipefail
@@ -963,9 +970,15 @@ jobs:
             } >> "$GITHUB_ENV"
           fi
 
+      - name: Run workspace before_run hook
+        id: workspace_before_run_hook
+        run: |
+          set -euo pipefail
+          bash scripts/run_workspace_hook.sh validate before_run
+
       - name: Run validation process
         id: validate_run
-        if: always()
+        if: always() && steps.workspace_after_create_hook.outcome != 'failure' && steps.workspace_before_run_hook.outcome != 'failure'
         continue-on-error: true
         env:
           RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
@@ -988,6 +1001,12 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/validate_process.sh
+
+      - name: Run workspace after_run hook
+        if: always() && steps.validate_run.outcome != 'skipped'
+        run: |
+          set -euo pipefail
+          bash scripts/run_workspace_hook.sh validate after_run
 
       - name: Collect validation status
         id: collect_status
@@ -1271,6 +1290,12 @@ jobs:
             --reason "validation-finalized" \
             --source-workflow "validate" \
             --run-id "${{ github.run_id }}"
+
+      - name: Run workspace before_remove hook
+        if: always()
+        run: |
+          set -euo pipefail
+          bash scripts/run_workspace_hook.sh validate before_remove
 
       - name: Enforce validation outcome
         if: always()

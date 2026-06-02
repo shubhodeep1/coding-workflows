@@ -18,6 +18,7 @@ env:
   REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'false' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
   SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}
+  WORKSPACE_HOOK_TIMEOUT_SECONDS: ${{ vars.WORKSPACE_HOOK_TIMEOUT_SECONDS || '600' }}
   WORKSPACE_REUSE_ENABLED: ${{ vars.WORKSPACE_REUSE_ENABLED || 'false' }}
   # MODEL_DIAGNOSE drives the post-Codex diagnose step
   # (scripts/implement_diagnose_post_codex_failure.sh). Per the OpenAI
@@ -785,7 +786,7 @@ jobs:
 
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh render_prompt.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_stall_guard.sh orchestrate_force_tick.sh workspace_init.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh render_prompt.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_stall_guard.sh orchestrate_force_tick.sh workspace_init.sh run_workspace_hook.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -1037,6 +1038,13 @@ jobs:
             echo "GIT_DIR=${GITHUB_WORKSPACE}/.git"
             echo "GIT_WORK_TREE=${WORKSPACE_PATH}"
           } >> "$GITHUB_ENV"
+
+      - name: Run workspace after_create hook
+        if: env.SKIP_IMPLEMENT != 'true'
+        id: workspace_after_create_hook
+        run: |
+          set -euo pipefail
+          bash scripts/run_workspace_hook.sh implement after_create
 
       - name: Detect preexisting Serena project config
         if: env.SKIP_IMPLEMENT != 'true'
@@ -1503,8 +1511,16 @@ jobs:
             --issue-title "${ISSUE_TITLE_JSON}" \
             --issue-body-file "${ISSUE_BODY_FILE}"
 
+      - name: Run workspace before_run hook
+        if: env.SKIP_IMPLEMENT != 'true'
+        id: workspace_before_run_hook
+        run: |
+          set -euo pipefail
+          bash scripts/run_workspace_hook.sh implement before_run
+
       - name: Run Codex implementation
         if: env.SKIP_IMPLEMENT != 'true'
+        id: implement_run
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_IMPLEMENT || '50' }}
@@ -2379,6 +2395,12 @@ jobs:
             echo "::error::${diag_reason}."
             exit 1
           fi
+
+      - name: Run workspace after_run hook
+        if: always() && env.SKIP_IMPLEMENT != 'true' && steps.implement_run.outcome != 'skipped'
+        run: |
+          set -euo pipefail
+          bash scripts/run_workspace_hook.sh implement after_run
 
       - name: Write run summary
         if: env.SKIP_IMPLEMENT != 'true' && always()
@@ -4730,6 +4752,12 @@ jobs:
           fi
 
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/serena_stats_emit.py "${serena_stat_args[@]}"
+
+      - name: Run workspace before_remove hook
+        if: always() && env.SKIP_IMPLEMENT != 'true'
+        run: |
+          set -euo pipefail
+          bash scripts/run_workspace_hook.sh implement before_remove
 
       - name: Cleanup temporary artifacts
         if: always()
