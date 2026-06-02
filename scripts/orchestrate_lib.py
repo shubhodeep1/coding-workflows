@@ -1357,6 +1357,7 @@ TERMINAL_PHASES: set[str] = {
 	"ai:memory-maintenance-failed",
 }
 TERMINAL_WAVE_STATUSES: set[str] = {"merged", "closed", "skipped", "not_created"}
+BLOCKER_TERMINAL_WAVE_STATUSES: set[str] = {"merged", "closed", "skipped"}
 
 # Phases already handled by dedicated logic in the poller — stall detector
 # should not double-act on these.
@@ -2126,6 +2127,33 @@ def reconcile_wave_issue_status(
 	if determine_phase(labels) in TERMINAL_PHASES:
 		return "closed", "label_terminal_phase"
 	return "in_progress", "default_in_progress"
+
+
+def is_terminal_wave_issue_status(status: str | None) -> bool:
+	"""Return whether a wave issue status is terminal for dependency gating."""
+	return str(status or "").strip() in BLOCKER_TERMINAL_WAVE_STATUSES
+
+
+def is_terminal_wave_issue(
+	issue: dict[str, Any],
+	labels: list[str],
+	issue_state: str | None = None,
+	pr_state: str | None = None,
+	pr_merged: bool | None = None,
+) -> tuple[bool, str, str]:
+	"""Return blocker-terminality using the shared reconciliation model.
+
+	The returned tuple is ``(terminal, status, source)`` where ``status`` and
+	``source`` come from :func:`reconcile_wave_issue_status`.
+	"""
+	status, source = reconcile_wave_issue_status(
+		issue,
+		labels,
+		issue_state=issue_state,
+		pr_state=pr_state,
+		pr_merged=pr_merged,
+	)
+	return is_terminal_wave_issue_status(status), status, source
 
 
 # Phases whose stall clock is re-anchored to

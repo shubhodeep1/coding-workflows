@@ -12399,6 +12399,75 @@ _dispatch_rb_judge_for_pr()
 	return 1
 }
 
+# _runtime_blocker_dispatch_eligible <local_id> <wave_num> [candidate_details_json]
+#
+# Evaluate whether a managed issue may be dispatched this tick based on the
+# orchestrator state's dependency_edges. Returns 0 when dispatch may proceed,
+# 1 when the issue should be deferred, and fails open (0 + warning) on helper
+# invocation/parsing failures so the poller does not deadlock on checker faults.
+_runtime_blocker_dispatch_eligible()
+{
+	local local_id="$1"
+	local wave_num="$2"
+	local candidate_details_json="${3:-}"
+	local candidate_truth_json='{}'
+	local blocker_result=""
+	local blocker_stderr=""
+	local blocker_err_file=""
+	local eligible=""
+	local signal="dispatch_deferred_blocker"
+	local reason="blocked_by_dependency"
+	local blocker_summary=""
+
+	[ "${RUNTIME_BLOCKER_CHECK_ENABLED:-false}" = "true" ] || return 0
+
+	if [ -n "${candidate_details_json}" ] && [ "${candidate_details_json}" != "{}" ]; then
+		candidate_truth_json="$(printf '%s' "${candidate_details_json}" | jq -c '
+			with_entries(
+				.value |= (
+					if type == "object"
+						then {
+							state: (.state // null),
+							labels: (.labels // []),
+							linked_pr: (.linked_pr // null)
+						}
+						else {}
+					end
+				)
+			)
+		' 2>/dev/null || echo '{}')"
+	fi
+
+	blocker_err_file="$(mktemp "${TMPDIR:-/tmp}/runtime-blocker.XXXXXX")"
+	if ! blocker_result="$(python3 scripts/blocker_check.py \
+		--state-file "${STATE_FILE}" \
+		--local-id "${local_id}" \
+		--candidate-details-json "${candidate_truth_json}" 2>"${blocker_err_file}")"; then
+			blocker_stderr="$(tr '\n' ' ' < "${blocker_err_file}" | sed 's/[[:space:]]\+/ /g' | cut -c1-300)"
+		rm -f "${blocker_err_file}"
+		echo "::warning::[runtime-blocker] blocker_check.py failed for ${local_id}; failing open.${blocker_stderr:+ stderr=${blocker_stderr}}"
+		return 0
+	fi
+	rm -f "${blocker_err_file}"
+
+	if ! printf '%s' "${blocker_result}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+		echo "::warning::[runtime-blocker] blocker_check.py returned invalid JSON for ${local_id}; failing open."
+		return 0
+	fi
+
+	eligible="$(printf '%s' "${blocker_result}" | jq -r '.eligible // false' 2>/dev/null || echo 'false')"
+	if [ "${eligible}" = "true" ]; then
+		return 0
+	fi
+
+	signal="$(printf '%s' "${blocker_result}" | jq -r '.signal // "dispatch_deferred_blocker"' 2>/dev/null || echo 'dispatch_deferred_blocker')"
+	reason="$(printf '%s' "${blocker_result}" | jq -r '.reason // "blocked_by_dependency"' 2>/dev/null || echo 'blocked_by_dependency')"
+	blocker_summary="$(printf '%s' "${blocker_result}" | jq -r '[.blockers[]? | "\(.local_id):\(.status):\(.source)"] | join(",")' 2>/dev/null || echo '')"
+	[ -n "${blocker_summary}" ] || blocker_summary="(none)"
+	echo "${signal} local_id=${local_id} wave=${wave_num} reason=${reason} blockers=${blocker_summary}"
+	return 1
+}
+
 # ---------------------------------------------------------------
 # Normalize truthy env vars (case-insensitive 1/true/yes/on)
 # ---------------------------------------------------------------
@@ -12412,6 +12481,12 @@ if _is_truthy "${ENABLE_VALIDATION:-true}"; then
   ENABLE_VALIDATION="true"
 else
   ENABLE_VALIDATION="false"
+fi
+
+if _is_truthy "${RUNTIME_BLOCKER_CHECK_ENABLED:-true}"; then
+  RUNTIME_BLOCKER_CHECK_ENABLED="true"
+else
+  RUNTIME_BLOCKER_CHECK_ENABLED="false"
 fi
 
 # Sanitize MAX_VALIDATE_CYCLES
@@ -13502,6 +13577,19 @@ The poller will resume processing on the next cycle."
     echo "Detected uncreated issues in wave ${CURRENT_WAVE}. Creating GitHub issues..."
     DEFERRED_STATE_CHANGED=false
     DEFERRED_CREATED_NUMS=""
+    DEFERRED_BLOCKER_DETAILS_JSON='{}'
+    if [ "${RUNTIME_BLOCKER_CHECK_ENABLED}" = "true" ] \
+      && jq -e '.dependency_edges | type == "array" and length > 0' "${STATE_FILE}" >/dev/null 2>&1; then
+      _deferred_wave_issue_nums_json="$(jq -c ".waves[${WAVE_IDX}].issues | [.[].github_issue | select(type == \"number\")]" "${STATE_FILE}" 2>/dev/null || echo '[]')"
+      # Current-wave deferred creation runs before the later
+      # _current_wave_details_json cache population. Prefetch once here so
+      # blocker gating sees live labels/linked-PR truth and does not lag an
+      # extra poll tick when a blocker terminalized between cycles.
+      DEFERRED_BLOCKER_DETAILS_JSON="$(_fetch_candidate_issue_details_graphql "${_deferred_wave_issue_nums_json}")"
+      if ! printf '%s' "${DEFERRED_BLOCKER_DETAILS_JSON}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+        DEFERRED_BLOCKER_DETAILS_JSON='{}'
+      fi
+    fi
     while IFS= read -r local_id; do
       [ -n "${local_id}" ] || continue
 
@@ -13521,6 +13609,10 @@ The poller will resume processing on the next cycle."
       ISSUE_DEF="$(jq -c ".pending_issue_defs[\"${local_id}\"] // empty" "${STATE_FILE}")"
       if [ -z "${ISSUE_DEF}" ]; then
         echo "::warning::No pending definition for ${local_id} in wave ${CURRENT_WAVE}, skipping."
+        continue
+      fi
+
+      if ! _runtime_blocker_dispatch_eligible "${local_id}" "${CURRENT_WAVE}" "${DEFERRED_BLOCKER_DETAILS_JSON}"; then
         continue
       fi
 
@@ -17092,6 +17184,10 @@ ${_gate_violations:-(no violation lines parsed — see workflow run log for the 
           ISSUE_DEF="$(jq -c ".pending_issue_defs[\"${local_id}\"] // empty" "${STATE_FILE}")"
           if [ -z "${ISSUE_DEF}" ]; then
             echo "::warning::No pending definition for ${local_id}, skipping."
+            continue
+          fi
+
+	if ! _runtime_blocker_dispatch_eligible "${local_id}" "${NEXT_WAVE}" "${_current_wave_details_json:-}"; then
             continue
           fi
 
