@@ -18,6 +18,7 @@ env:
   REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'false' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
   SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}
+  WORKSPACE_REUSE_ENABLED: ${{ vars.WORKSPACE_REUSE_ENABLED || 'false' }}
   # MODEL_DIAGNOSE drives the post-Codex diagnose step
   # (scripts/implement_diagnose_post_codex_failure.sh). Per the OpenAI
   # prompt guide that step is research/synthesis, not coding. The implement
@@ -702,45 +703,6 @@ jobs:
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
 
-      - name: Detect preexisting Serena project config
-        if: env.SKIP_IMPLEMENT != 'true'
-        run: |
-          set -euo pipefail
-          if git ls-files --error-unmatch -- .serena/project.yml >/dev/null 2>&1 || [ -e .serena/project.yml ]; then
-            echo "SERENA_PROJECT_PREEXISTED=true" >> "$GITHUB_ENV"
-          else
-            echo "SERENA_PROJECT_PREEXISTED=false" >> "$GITHUB_ENV"
-          fi
-
-      - name: Log checkout ref
-        if: env.SKIP_IMPLEMENT != 'true'
-        run: |
-          set -euo pipefail
-          echo "Resolved fallback ref: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}"
-          baseline_status="${{ steps.baseline_refctx.outputs.status }}"
-          if [ -z "${baseline_status}" ]; then
-            baseline_status="step-no-output"
-          fi
-          resolved_checkout_source="integration/default"
-          if [ "${baseline_status}" = "accepted" ] && [ "${{ steps.checkout_baseline.outcome }}" = "success" ]; then
-            resolved_checkout_source="${{ steps.baseline_refctx.outputs.branch }}"
-          fi
-          echo "Resolved checkout source: ${resolved_checkout_source}"
-          echo "PR base ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
-          if [ "${{ steps.baseline_refctx.outputs.status }}" = "accepted" ] && [ "${{ steps.checkout_baseline.outcome }}" = "success" ]; then
-            echo "Baseline override: accepted ${{ steps.baseline_refctx.outputs.branch }}"
-          elif [ "${{ steps.baseline_refctx.outputs.status }}" = "accepted" ]; then
-            echo "Baseline override: fallback to resolved ref after checkout failure for ${{ steps.baseline_refctx.outputs.branch }}"
-          else
-            echo "Baseline override: ignored (${baseline_status})"
-          fi
-          echo "HEAD commit: $(git rev-parse HEAD)"
-          if branch_name="$(git symbolic-ref --short HEAD 2>/dev/null)"; then
-            echo "HEAD branch: ${branch_name}"
-          else
-            echo "HEAD branch: DETACHED"
-          fi
-
       - name: Configure git auth for memory helper clones
         if: env.SKIP_IMPLEMENT != 'true'
         env:
@@ -823,7 +785,7 @@ jobs:
 
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh render_prompt.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_stall_guard.sh orchestrate_force_tick.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh render_prompt.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_stall_guard.sh orchestrate_force_tick.sh workspace_init.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -1015,6 +977,106 @@ jobs:
               # workflow artifact.
               echo "probably_unnecessary_but_read_if_stuck.md" >> "${FETCHED_MANIFEST}"
             fi
+          fi
+
+      - name: Initialize workspace metadata
+        if: env.SKIP_IMPLEMENT != 'true'
+        id: workspace_meta
+        run: |
+          set -euo pipefail
+          WORKSPACE_REUSE_ENABLED="${WORKSPACE_REUSE_ENABLED:-false}" \
+          WORKSPACE_ISSUE_IDENTIFIER="${ISSUE_NUMBER}" \
+          WORKSPACE_SOURCE_PATH="${GITHUB_WORKSPACE}" \
+            bash scripts/workspace_init.sh metadata
+
+      - name: Restore reusable workspace cache
+        if: env.SKIP_IMPLEMENT != 'true' && steps.workspace_meta.outputs.workspace_reuse_enabled == 'true'
+        id: workspace_cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ steps.workspace_meta.outputs.workspace_path }}
+          key: ${{ steps.workspace_meta.outputs.workspace_cache_key }}
+          restore-keys: |
+            ${{ steps.workspace_meta.outputs.workspace_cache_restore_prefix_exact }}
+            ${{ steps.workspace_meta.outputs.workspace_cache_restore_prefix_issue }}
+
+      - name: Finalize workspace metadata
+        if: env.SKIP_IMPLEMENT != 'true'
+        id: workspace_state
+        run: |
+          set -euo pipefail
+          WORKSPACE_REUSE_ENABLED="${{ steps.workspace_meta.outputs.workspace_reuse_enabled }}" \
+          WORKSPACE_ISSUE_IDENTIFIER="${{ steps.workspace_meta.outputs.workspace_issue_identifier }}" \
+          WORKSPACE_SOURCE_PATH="${GITHUB_WORKSPACE}" \
+          WORKSPACE_FINGERPRINT="${{ steps.workspace_meta.outputs.workspace_fingerprint }}" \
+          WORKSPACE_CACHE_MATCHED_KEY="${{ steps.workspace_cache.outputs.cache-matched-key || '' }}" \
+            bash scripts/workspace_init.sh metadata
+
+      - name: Finalize workspace contents
+        if: env.SKIP_IMPLEMENT != 'true'
+        run: |
+          set -euo pipefail
+          WORKSPACE_SOURCE_PATH="${GITHUB_WORKSPACE}" \
+          WORKSPACE_PATH="${{ steps.workspace_state.outputs.workspace_path }}" \
+          WORKSPACE_REUSE_ENABLED="${{ steps.workspace_state.outputs.workspace_reuse_enabled }}" \
+          WORKSPACE_CACHE_RESTORE_STATE="${{ steps.workspace_state.outputs.workspace_cache_restore_state }}" \
+            bash scripts/workspace_init.sh finalize
+
+      - name: Activate workspace shell context
+        if: env.SKIP_IMPLEMENT != 'true'
+        run: |
+          set -euo pipefail
+          workspace_shell_env="${RUNTIME_DIR}/workspace-shell.env"
+          cat > "${workspace_shell_env}" <<'EOF'
+          if [ -n "${WORKSPACE_PATH:-}" ] && [ -d "${WORKSPACE_PATH}" ]; then
+            cd "${WORKSPACE_PATH}"
+          fi
+          EOF
+          {
+            echo "BASH_ENV=${workspace_shell_env}"
+            echo "GIT_DIR=${GITHUB_WORKSPACE}/.git"
+            echo "GIT_WORK_TREE=${WORKSPACE_PATH}"
+          } >> "$GITHUB_ENV"
+
+      - name: Detect preexisting Serena project config
+        if: env.SKIP_IMPLEMENT != 'true'
+        run: |
+          set -euo pipefail
+          if git ls-files --error-unmatch -- .serena/project.yml >/dev/null 2>&1 || [ -e .serena/project.yml ]; then
+            echo "SERENA_PROJECT_PREEXISTED=true" >> "$GITHUB_ENV"
+          else
+            echo "SERENA_PROJECT_PREEXISTED=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: Log checkout ref
+        if: env.SKIP_IMPLEMENT != 'true'
+        run: |
+          set -euo pipefail
+          echo "Resolved fallback ref: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+          baseline_status="${{ steps.baseline_refctx.outputs.status }}"
+          if [ -z "${baseline_status}" ]; then
+            baseline_status="step-no-output"
+          fi
+          resolved_checkout_source="integration/default"
+          if [ "${baseline_status}" = "accepted" ] && [ "${{ steps.checkout_baseline.outcome }}" = "success" ]; then
+            resolved_checkout_source="${{ steps.baseline_refctx.outputs.branch }}"
+          fi
+          echo "Resolved checkout source: ${resolved_checkout_source}"
+          echo "PR base ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+          if [ "${{ steps.baseline_refctx.outputs.status }}" = "accepted" ] && [ "${{ steps.checkout_baseline.outcome }}" = "success" ]; then
+            echo "Baseline override: accepted ${{ steps.baseline_refctx.outputs.branch }}"
+          elif [ "${{ steps.baseline_refctx.outputs.status }}" = "accepted" ]; then
+            echo "Baseline override: fallback to resolved ref after checkout failure for ${{ steps.baseline_refctx.outputs.branch }}"
+          else
+            echo "Baseline override: ignored (${baseline_status})"
+          fi
+          echo "Workspace path: ${WORKSPACE_PATH}"
+          echo "Workspace cache restore state: ${WORKSPACE_CACHE_RESTORE_STATE:-unknown}"
+          echo "HEAD commit: $(git rev-parse HEAD)"
+          if branch_name="$(git symbolic-ref --short HEAD 2>/dev/null)"; then
+            echo "HEAD branch: ${branch_name}"
+          else
+            echo "HEAD branch: DETACHED"
           fi
 
       - name: setup-uv
@@ -3685,6 +3747,9 @@ jobs:
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
 
+          support_checkout_root="${GITHUB_WORKSPACE}/.codex-workflow-src"
+          support_checkout_main_root="${GITHUB_WORKSPACE}/.codex-workflow-src-main"
+
           git remote set-url origin "https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}"
 
           # Stage git_ref_health_check.sh from the already-checked-out support
@@ -3699,13 +3764,13 @@ jobs:
           # ("error: cannot rebase: You have unstaged changes").  The temp
           # path keeps the working tree clean in both canonical and consumer
           # repos.
-          if [ ! -d .codex-workflow-src ]; then
+          if [ ! -d "${support_checkout_root}" ]; then
             echo "::error::Support source checkout missing; cannot stage git_ref_health_check.sh"
             exit 1
           fi
-          src=".codex-workflow-src/scripts/git_ref_health_check.sh"
-          if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/git_ref_health_check.sh" ]; then
-            src=".codex-workflow-src-main/scripts/git_ref_health_check.sh"
+          src="${support_checkout_root}/scripts/git_ref_health_check.sh"
+          if [ ! -f "${src}" ] && [ -f "${support_checkout_main_root}/scripts/git_ref_health_check.sh" ]; then
+            src="${support_checkout_main_root}/scripts/git_ref_health_check.sh"
           fi
           if [ ! -f "${src}" ]; then
             echo "::error::Missing required support script git_ref_health_check.sh in staged support source"
@@ -4069,15 +4134,18 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ ! -d .codex-workflow-src ]; then
+          support_checkout_root="${GITHUB_WORKSPACE}/.codex-workflow-src"
+          support_checkout_main_root="${GITHUB_WORKSPACE}/.codex-workflow-src-main"
+
+          if [ ! -d "${support_checkout_root}" ]; then
             echo "::warning::Support source checkout missing; skipping helper restage"
             exit 0
           fi
           mkdir -p scripts
           for f in gh_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py orchestrate_force_tick.sh; do
-            src=".codex-workflow-src/scripts/${f}"
-            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
-              src=".codex-workflow-src-main/scripts/${f}"
+            src="${support_checkout_root}/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f "${support_checkout_main_root}/scripts/${f}" ]; then
+              src="${support_checkout_main_root}/scripts/${f}"
             fi
             if [ ! -f "${src}" ]; then
               echo "::warning::Support source missing ${f}; keeping existing local copy if present"
@@ -4533,17 +4601,19 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          support_checkout_root="${GITHUB_WORKSPACE}/.codex-workflow-src"
+          support_checkout_main_root="${GITHUB_WORKSPACE}/.codex-workflow-src-main"
           if [ -f scripts/memory_helpers.sh ]; then
             source scripts/memory_helpers.sh
           else
-            if [ ! -d .codex-workflow-src ]; then
+            if [ ! -d "${support_checkout_root}" ]; then
               exit 0
             fi
             mkdir -p scripts
             for f in gh_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py; do
-              src=".codex-workflow-src/scripts/${f}"
-              if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
-                src=".codex-workflow-src-main/scripts/${f}"
+              src="${support_checkout_root}/scripts/${f}"
+              if [ ! -f "${src}" ] && [ -f "${support_checkout_main_root}/scripts/${f}" ]; then
+                src="${support_checkout_main_root}/scripts/${f}"
               fi
               if [ ! -f "${src}" ]; then
                 continue
@@ -4665,7 +4735,7 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
-          rm -rf .codex-workflow-src-main
+          rm -rf "${GITHUB_WORKSPACE}/.codex-workflow-src-main"
           if [[ "${RUNTIME_DIR:-}" =~ ^/tmp/codex-implement-[0-9]+$ ]]; then
             rm -rf "${RUNTIME_DIR}"
           else
