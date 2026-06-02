@@ -434,3 +434,334 @@ memory_processed_command_complete()
 		return 0
 	}
 }
+
+_memory_force_tick_remote_url()
+{
+	local repo_root=""
+	local repository=""
+	local origin_url=""
+	local token=""
+	local server_url="${GITHUB_SERVER_URL:-https://github.com}"
+	local server_host=""
+
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--repo-root)
+				repo_root="${2:-}"
+				shift 2
+				;;
+			--repo)
+				repository="${2:-}"
+				shift 2
+				;;
+			*)
+				break
+				;;
+		esac
+	done
+
+	if [ -n "${repo_root}" ] && [ -d "${repo_root}/.git" ]; then
+		origin_url="$(git -C "${repo_root}" remote get-url origin 2>/dev/null || echo "")"
+	fi
+
+	token="${GH_PAT:-${GH_TOKEN:-}}"
+	if [ -n "${origin_url}" ]; then
+		case "${origin_url}" in
+			/*|./*|../*|file://*)
+				printf '%s\n' "${origin_url}"
+				return 0
+				;;
+			*)
+				;;
+		esac
+	fi
+
+	if [ -n "${token}" ] && [ -n "${repository}" ]; then
+		server_host="${server_url#https://}"
+		server_host="${server_host#http://}"
+		server_host="${server_host%/}"
+		printf 'https://x-access-token:%s@%s/%s\n' "${token}" "${server_host}" "${repository}"
+		return 0
+	fi
+
+	if [ -n "${origin_url}" ]; then
+		printf '%s\n' "${origin_url}"
+		return 0
+	fi
+
+	return 1
+}
+
+_memory_force_tick_remote_branch_exists()
+{
+	local remote_url="${1:?remote url required}"
+	local branch="${2:?branch required}"
+	git ls-remote --heads "${remote_url}" "${branch}" 2>/dev/null | grep -q "${branch}"
+}
+
+_memory_force_tick_ensure_branch()
+{
+	local remote_url="${1:?remote url required}"
+	local branch="${2:?branch required}"
+	local memory_root="${3:?memory root required}"
+	local tmp_dir=""
+
+	if _memory_force_tick_remote_branch_exists "${remote_url}" "${branch}"; then
+		return 0
+	fi
+
+	tmp_dir="$(mktemp -d)"
+	(
+		cd "${tmp_dir}"
+		git init --quiet
+		git config user.name "codex-bot"
+		git config user.email "codex@users.noreply.github.com"
+		git checkout --orphan "${branch}" >/dev/null 2>&1
+		mkdir -p "${memory_root}"
+		echo "AI memory branch — created automatically." > "${memory_root}/README.md"
+		git add "${memory_root}/README.md"
+		git commit --quiet -m "Initialize ${branch}"
+		git remote add origin "${remote_url}"
+		git push origin "${branch}" >/dev/null 2>&1
+	) || {
+		rm -rf "${tmp_dir}"
+		return 1
+	}
+	rm -rf "${tmp_dir}"
+}
+
+memory_force_tick_get()
+{
+	if ! _memory_enabled; then
+		echo '{"ok": true, "enabled": false, "hit": false, "record": null}'
+		_memory_telemetry '{"op":"force-tick-get","ok":true,"enabled":false,"source":"shell"}' >&2
+		return 0
+	fi
+
+	local repo_root=""
+	local repository=""
+	local tracking_issue=""
+	local memory_branch="${AI_MEMORY_BRANCH:-ai-memory}"
+	local memory_root="${AI_MEMORY_ROOT:-ai-memory}"
+	local remote_url=""
+	local tmp_dir=""
+	local record_path=""
+
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--repo-root)
+				repo_root="${2:-}"
+				shift 2
+				;;
+			--repo)
+				repository="${2:-}"
+				shift 2
+				;;
+			--tracking-issue)
+				tracking_issue="${2:-}"
+				shift 2
+				;;
+			--memory-branch)
+				memory_branch="${2:-}"
+				shift 2
+				;;
+			--memory-root)
+				memory_root="${2:-}"
+				shift 2
+				;;
+			*)
+				_memory_warn "force-tick-get unknown arg: $1"
+				_memory_telemetry '{"op":"force-tick-get","ok":false,"fail_open":true,"source":"shell"}' >&2
+				echo '{"ok": true, "enabled": true, "hit": false, "record": null}'
+				return 0
+				;;
+		esac
+	done
+
+	if ! [[ "${tracking_issue:-}" =~ ^[0-9]+$ ]] || [ "${tracking_issue:-0}" -le 0 ]; then
+		echo '{"ok": true, "enabled": true, "hit": false, "record": null}'
+		_memory_telemetry '{"op":"force-tick-get","ok":true,"enabled":true,"source":"shell","hit":false}' >&2
+		return 0
+	fi
+
+	if ! remote_url="$(_memory_force_tick_remote_url --repo-root "${repo_root}" --repo "${repository}")"; then
+		_memory_warn "force-tick-get could not resolve remote URL (fail-open)"
+		_memory_telemetry '{"op":"force-tick-get","ok":false,"fail_open":true,"source":"shell"}' >&2
+		echo '{"ok": true, "enabled": true, "hit": false, "record": null}'
+		return 0
+	fi
+
+	if ! _memory_force_tick_remote_branch_exists "${remote_url}" "${memory_branch}"; then
+		echo '{"ok": true, "enabled": true, "hit": false, "record": null}'
+		_memory_telemetry '{"op":"force-tick-get","ok":true,"enabled":true,"source":"shell","hit":false}' >&2
+		return 0
+	fi
+
+	tmp_dir="$(mktemp -d)"
+	if ! git clone --quiet --depth 1 --branch "${memory_branch}" "${remote_url}" "${tmp_dir}" >/dev/null 2>&1; then
+		rm -rf "${tmp_dir}"
+		_memory_warn "force-tick-get failed to clone ${memory_branch} (fail-open)"
+		_memory_telemetry '{"op":"force-tick-get","ok":false,"fail_open":true,"source":"shell"}' >&2
+		echo '{"ok": true, "enabled": true, "hit": false, "record": null}'
+		return 0
+	fi
+
+	record_path="${tmp_dir}/${memory_root}/runs/force_tick/${tracking_issue}.json"
+	if [ ! -f "${record_path}" ]; then
+		rm -rf "${tmp_dir}"
+		echo '{"ok": true, "enabled": true, "hit": false, "record": null}'
+		_memory_telemetry '{"op":"force-tick-get","ok":true,"enabled":true,"source":"shell","hit":false}' >&2
+		return 0
+	fi
+
+	local record_wrapper=""
+	if ! record_wrapper="$(python3 - <<'PY' "${record_path}"
+import json
+import pathlib
+import sys
+
+record = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(json.dumps({"ok": True, "enabled": True, "hit": True, "record": record}))
+PY
+	)"; then
+		rm -rf "${tmp_dir}"
+		_memory_warn "force-tick-get could not decode ${record_path} (fail-open)"
+		_memory_telemetry '{"op":"force-tick-get","ok":false,"fail_open":true,"source":"shell"}' >&2
+		echo '{"ok": true, "enabled": true, "hit": false, "record": null}'
+		return 0
+	fi
+
+	printf '%s\n' "${record_wrapper}"
+	rm -rf "${tmp_dir}"
+}
+
+memory_force_tick_put()
+{
+	if ! _memory_enabled; then
+		echo '{"ok": true, "enabled": false, "stored": false, "record": null}'
+		_memory_telemetry '{"op":"force-tick-put","ok":true,"enabled":false,"source":"shell"}' >&2
+		return 0
+	fi
+
+	local repo_root=""
+	local repository=""
+	local tracking_issue=""
+	local record_file=""
+	local memory_branch="${AI_MEMORY_BRANCH:-ai-memory}"
+	local memory_root="${AI_MEMORY_ROOT:-ai-memory}"
+	local remote_url=""
+	local tmp_dir=""
+	local target_path=""
+
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--repo-root)
+				repo_root="${2:-}"
+				shift 2
+				;;
+			--repo)
+				repository="${2:-}"
+				shift 2
+				;;
+			--tracking-issue)
+				tracking_issue="${2:-}"
+				shift 2
+				;;
+			--record-file)
+				record_file="${2:-}"
+				shift 2
+				;;
+			--memory-branch)
+				memory_branch="${2:-}"
+				shift 2
+				;;
+			--memory-root)
+				memory_root="${2:-}"
+				shift 2
+				;;
+			*)
+				_memory_warn "force-tick-put unknown arg: $1"
+				_memory_telemetry '{"op":"force-tick-put","ok":false,"fail_open":true,"source":"shell"}' >&2
+				echo '{"ok": true, "enabled": true, "stored": false, "record": null}'
+				return 0
+				;;
+		esac
+	done
+
+	if ! [[ "${tracking_issue:-}" =~ ^[0-9]+$ ]] || [ "${tracking_issue:-0}" -le 0 ] || [ -z "${record_file}" ] || [ ! -f "${record_file}" ]; then
+		echo '{"ok": true, "enabled": true, "stored": false, "record": null}'
+		_memory_telemetry '{"op":"force-tick-put","ok":true,"enabled":true,"source":"shell","stored":false}' >&2
+		return 0
+	fi
+
+	if ! remote_url="$(_memory_force_tick_remote_url --repo-root "${repo_root}" --repo "${repository}")"; then
+		_memory_warn "force-tick-put could not resolve remote URL (fail-open)"
+		_memory_telemetry '{"op":"force-tick-put","ok":false,"fail_open":true,"source":"shell"}' >&2
+		echo '{"ok": true, "enabled": true, "stored": false, "record": null}'
+		return 0
+	fi
+
+	if ! _memory_force_tick_ensure_branch "${remote_url}" "${memory_branch}" "${memory_root}"; then
+		_memory_warn "force-tick-put could not ensure ${memory_branch} (fail-open)"
+		_memory_telemetry '{"op":"force-tick-put","ok":false,"fail_open":true,"source":"shell"}' >&2
+		echo '{"ok": true, "enabled": true, "stored": false, "record": null}'
+		return 0
+	fi
+
+	tmp_dir="$(mktemp -d)"
+	if ! git clone --quiet --depth 1 --branch "${memory_branch}" "${remote_url}" "${tmp_dir}" >/dev/null 2>&1; then
+		rm -rf "${tmp_dir}"
+		_memory_warn "force-tick-put failed to clone ${memory_branch} (fail-open)"
+		_memory_telemetry '{"op":"force-tick-put","ok":false,"fail_open":true,"source":"shell"}' >&2
+		echo '{"ok": true, "enabled": true, "stored": false, "record": null}'
+		return 0
+	fi
+
+	target_path="${tmp_dir}/${memory_root}/runs/force_tick/${tracking_issue}.json"
+	if ! mkdir -p "$(dirname "${target_path}")" || ! cp "${record_file}" "${target_path}"; then
+		rm -rf "${tmp_dir}"
+		_memory_warn "force-tick-put failed to stage ${target_path} (fail-open)"
+		_memory_telemetry '{"op":"force-tick-put","ok":false,"fail_open":true,"source":"shell"}' >&2
+		echo '{"ok": true, "enabled": true, "stored": false, "record": null}'
+		return 0
+	fi
+
+	(
+		cd "${tmp_dir}"
+		git config user.name "codex-bot"
+		git config user.email "codex@users.noreply.github.com"
+		git add "${memory_root}/runs/force_tick/${tracking_issue}.json"
+		if git diff --cached --quiet; then
+			:
+		else
+			git commit --quiet -m "ai-memory: update force tick #${tracking_issue}"
+			git push origin "${memory_branch}" >/dev/null 2>&1
+		fi
+	) || {
+		rm -rf "${tmp_dir}"
+		_memory_warn "force-tick-put failed to commit/push (fail-open)"
+		_memory_telemetry '{"op":"force-tick-put","ok":false,"fail_open":true,"source":"shell"}' >&2
+		echo '{"ok": true, "enabled": true, "stored": false, "record": null}'
+		return 0
+	}
+
+	local stored_wrapper=""
+	if ! stored_wrapper="$(python3 - <<'PY' "${target_path}"
+import json
+import pathlib
+import sys
+
+record = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(json.dumps({"ok": True, "enabled": True, "stored": True, "record": record}))
+PY
+	)"; then
+		rm -rf "${tmp_dir}"
+		_memory_warn "force-tick-put could not decode ${target_path} after push (fail-open)"
+		_memory_telemetry '{"op":"force-tick-put","ok":false,"fail_open":true,"source":"shell"}' >&2
+		echo '{"ok": true, "enabled": true, "stored": false, "record": null}'
+		return 0
+	fi
+
+	printf '%s\n' "${stored_wrapper}"
+	rm -rf "${tmp_dir}"
+}

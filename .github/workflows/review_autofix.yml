@@ -754,7 +754,18 @@ jobs:
       REPOSITORY: ${{ github.repository }}
       PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
       VALIDATE_WORKFLOW_NAME: ${{ vars.VALIDATE_WORKFLOW_NAME || 'ai-validate.yml' }}
+      WORKFLOW_SUPPORT_REF: ${{ github.repository == 'shubhodeep1/coding-workflows' && github.sha || 'stable' }}
     steps:
+      - name: Checkout workflow support source
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ env.WORKFLOW_SUPPORT_REF }}
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+
       - name: Dispatch standalone validate for orchestrator short-circuit issues
         run: |
           set -euo pipefail
@@ -821,6 +832,24 @@ jobs:
           if [ "${validation_dispatched}" = "false" ]; then
             echo "::warning::No standalone validation workflow could be dispatched for merged PR #${PR_NUMBER}."
           fi
+
+      - name: Force orchestrate poll after merged PR handling
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          HELPER=".codex-workflow-src/scripts/orchestrate_force_tick.sh"
+          if [ ! -f "${HELPER}" ]; then
+            echo "::warning::orchestrate_force_tick.sh unavailable; skipping post-merge force tick."
+            exit 0
+          fi
+          bash "${HELPER}" \
+            --repo "${REPOSITORY}" \
+            --issue "${PR_NUMBER}" \
+            --reason "review-post-merge" \
+            --source-workflow "review_autofix" \
+            --run-id "${{ github.run_id }}"
 
   # Deterministic skip path: fires when the gate detects a doc-only PR or a
   # PR under the +/- LOC threshold. Mirrors the labeler + auto-merge tail of
@@ -1252,7 +1281,7 @@ jobs:
             echo "SUPPORT_AGENTS_FILE=${SUPPORT_ROOT_DIR}/agents.md"
           } >> "$GITHUB_ENV"
 
-          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh render_prompt.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py cost_audit.py codex_heartbeat.sh review_run_reviewers.sh review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh"
+          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh render_prompt.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py cost_audit.py codex_heartbeat.sh review_run_reviewers.sh review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh orchestrate_force_tick.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh"
           # Main-primary bootstrap scripts: prefer the fresh main snapshot so
           # wedged integration branches still pick up resolver safety fixes
           # shipped on main. Missing from both refs remains fail-open so older
@@ -5419,6 +5448,20 @@ jobs:
             set_issue_phase_label_resilient "${issue_number}" "ai:review-blocked" "${REPOSITORY}"
           done <<< "${ISSUE_NUMBERS}"
 
+      - name: Force orchestrate poll after review-blocked exhaustion
+        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          bash "${SUPPORT_SCRIPTS_DIR}/orchestrate_force_tick.sh" \
+            --repo "${REPOSITORY}" \
+            --issue "${PR_NUMBER}" \
+            --reason "review-blocked" \
+            --source-workflow "review_autofix" \
+            --run-id "${{ github.run_id }}"
+
       - name: Post review-blocked comment on PR (autofix exhaustion)
         if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         env:
@@ -6406,6 +6449,20 @@ jobs:
             echo "Setting ai:review-blocked on issue #${issue_number} (workflow failure)"
             set_issue_phase_label_resilient "${issue_number}" "ai:review-blocked" "${REPOSITORY}"
           done <<< "${ISSUE_NUMBERS}"
+
+      - name: Force orchestrate poll after workflow failure review-blocked label
+        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true'
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          bash "${SUPPORT_SCRIPTS_DIR}/orchestrate_force_tick.sh" \
+            --repo "${REPOSITORY}" \
+            --issue "${PR_NUMBER}" \
+            --reason "review-blocked" \
+            --source-workflow "review_autofix" \
+            --run-id "${{ github.run_id }}"
 
       - name: Post review-blocked comment on PR (workflow failure)
         if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true'
