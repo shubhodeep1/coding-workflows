@@ -496,7 +496,7 @@ _memory_force_tick_remote_branch_exists()
 {
 	local remote_url="${1:?remote url required}"
 	local branch="${2:?branch required}"
-	git ls-remote --heads "${remote_url}" "${branch}" 2>/dev/null | grep -q "${branch}"
+	git ls-remote --heads "${remote_url}" "${branch}" 2>/dev/null | awk '{print $2}' | grep -Fxq "refs/heads/${branch}"
 }
 
 _memory_force_tick_ensure_branch()

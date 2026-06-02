@@ -339,7 +339,7 @@ def test_force_tick_dispatches_again_after_cooldown() -> None:
 	assert updated["last_dispatch_payload"]["run_id"] == 9002
 
 
-def test_force_tick_disabled_persists_same_window_suppression() -> None:
+def test_force_tick_disabled_run_does_not_consume_reenabled_window() -> None:
 	_, work_repo = _create_repo()
 	issue_bodies = {
 		501: "- Tracking issue: #3042\n- Managed by: AI Orchestrator\n",
@@ -361,7 +361,10 @@ def test_force_tick_disabled_persists_same_window_suppression() -> None:
 		args=["--issue", "501", "--reason", "review-blocked", "--source-workflow", "review_autofix", "--run-id", "9002"],
 	)
 	assert reenabled.returncode == 0, reenabled.stderr
-	assert _workflow_runs(runs_file) == []
+	assert _workflow_runs(runs_file) == [{"workflow": "internal-orchestrate-poll.yml", "repo": "owner/repo"}]
+	updated = _read_force_tick_record(work_repo, 3042)
+	assert updated["dispatch_status"] == "sent"
+	assert updated["last_dispatch_payload"]["run_id"] == 9002
 
 
 def test_force_tick_records_dispatch_failure_status() -> None:

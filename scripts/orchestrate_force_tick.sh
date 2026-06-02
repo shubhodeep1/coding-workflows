@@ -124,10 +124,20 @@ import datetime as dt
 import json
 import sys
 
-wrapper = json.loads(sys.argv[1]) if sys.argv[1] else {}
-cooldown = int(sys.argv[2]) if sys.argv[2] else 30
+try:
+	wrapper = json.loads(sys.argv[1]) if sys.argv[1] else {}
+except json.JSONDecodeError:
+	wrapper = {}
+try:
+	cooldown = int(sys.argv[2]) if sys.argv[2] else 30
+except ValueError:
+	cooldown = 30
 record = wrapper.get("record") or {}
-candidate = record.get("last_attempted_timestamp") or record.get("last_dispatch_timestamp") or ""
+status = record.get("dispatch_status") or ""
+if status == "disabled":
+	candidate = record.get("last_dispatch_timestamp") or ""
+else:
+	candidate = record.get("last_attempted_timestamp") or record.get("last_dispatch_timestamp") or ""
 within = False
 age = ""
 if candidate:
@@ -192,7 +202,10 @@ _force_tick_json_bool()
 import json
 import sys
 
-payload = json.loads(sys.argv[1]) if sys.argv[1] else {}
+try:
+	payload = json.loads(sys.argv[1]) if sys.argv[1] else {}
+except json.JSONDecodeError:
+	payload = {}
 print("true" if payload.get(sys.argv[2]) is True else "false")
 PY
 }
