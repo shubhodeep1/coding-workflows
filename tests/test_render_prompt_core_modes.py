@@ -11,6 +11,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+RENDER_PROMPT_SH = REPO_ROOT / "scripts" / "render_prompt.sh"
 RENDER_PROMPT_PY = REPO_ROOT / "scripts" / "render_prompt.py"
 
 ZERO_PLACEHOLDER_PROMPTS = (
@@ -61,6 +62,24 @@ def _run_render_prompt(
 	)
 
 
+def _run_render_prompt_sh(
+	prompt_file: Path,
+	*,
+	env_overrides: dict[str, str] | None = None,
+	cwd: Path = REPO_ROOT,
+) -> subprocess.CompletedProcess[str]:
+	env = _base_env()
+	env.update(env_overrides or {})
+	return subprocess.run(
+		["bash", str(RENDER_PROMPT_SH), str(prompt_file)],
+		cwd=str(cwd),
+		env=env,
+		text=True,
+		capture_output=True,
+		timeout=60,
+	)
+
+
 def test_zero_placeholder_core_modes_render_under_strict_contracts() -> None:
 	for mode_name, prompt_file in ZERO_PLACEHOLDER_PROMPTS:
 		proc = _run_render_prompt(prompt_file)
@@ -104,10 +123,26 @@ def test_zero_placeholder_core_mode_contract_rejects_forbidden_placeholder() -> 
 	assert "mode-clarify.yml" in proc.stderr
 
 
+def test_render_prompt_sh_enforces_core_mode_contracts_in_production_path() -> None:
+	with tempfile.TemporaryDirectory(prefix="render_prompt_core_modes_sh_") as td:
+		prompt_file = Path(td) / "prompts" / "mode-clarify.txt"
+		prompt_file.parent.mkdir(parents=True, exist_ok=True)
+		prompt_file.write_text("Before\n{{SERENA_TOOL_HINTS}}\nAfter\n", encoding="utf-8")
+
+		proc = _run_render_prompt_sh(prompt_file)
+
+	assert proc.returncode == 1
+	assert proc.stdout == ""
+	assert "forbidden_present" in proc.stderr
+	assert "SERENA_TOOL_HINTS" in proc.stderr
+	assert "mode-clarify.yml" in proc.stderr
+
+
 def main() -> int:
 	test_zero_placeholder_core_modes_render_under_strict_contracts()
 	test_serena_core_modes_render_with_default_and_explicit_optional_hints()
 	test_zero_placeholder_core_mode_contract_rejects_forbidden_placeholder()
+	test_render_prompt_sh_enforces_core_mode_contracts_in_production_path()
 	print("OK: core mode prompt contracts render as expected")
 	return 0
 
