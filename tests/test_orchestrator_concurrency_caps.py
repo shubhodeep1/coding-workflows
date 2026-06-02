@@ -11,8 +11,6 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-import pytest
-
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 POLLER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
@@ -20,11 +18,6 @@ ORCHESTRATE_LIB_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_lib.py"
 
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import orchestrate_lib  # noqa: E402
-
-
-def _require_yaml_parse_support() -> None:
-	if orchestrate_lib.yaml is None:
-		pytest.skip("PyYAML unavailable for concurrency-caps parsing")
 
 
 def _run_bash(script: str, cwd: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -113,7 +106,6 @@ def test_load_concurrency_caps_empty_file_disables_caps() -> None:
 
 
 def test_build_concurrency_snapshot_counts_only_fresh_supported_runs() -> None:
-	_require_yaml_parse_support()
 	with tempfile.TemporaryDirectory(prefix="caps-snapshot-") as td:
 		caps_path = Path(td) / "concurrency_caps.yml"
 		caps_path.write_text(
@@ -165,7 +157,6 @@ def test_build_concurrency_snapshot_counts_only_fresh_supported_runs() -> None:
 
 
 def test_load_concurrency_caps_accepts_whole_number_floats() -> None:
-	_require_yaml_parse_support()
 	with tempfile.TemporaryDirectory(prefix="caps-floats-") as td:
 		caps_path = Path(td) / "concurrency_caps.yml"
 		caps_path.write_text(
@@ -178,8 +169,26 @@ def test_load_concurrency_caps_accepts_whole_number_floats() -> None:
 		assert caps["max_concurrent_by_state"] == {"ai:review-blocked": 2}
 
 
+def test_load_concurrency_caps_falls_back_without_pyyaml() -> None:
+	with tempfile.TemporaryDirectory(prefix="caps-no-yaml-") as td:
+		caps_path = Path(td) / "concurrency_caps.yml"
+		caps_path.write_text(
+			"global_max_concurrent: 3.0\nmax_concurrent_by_state:\n  ai:review-blocked: 2\n",
+			encoding="utf-8",
+		)
+		original_yaml = orchestrate_lib.yaml
+		try:
+			orchestrate_lib.yaml = None
+			caps = orchestrate_lib.load_concurrency_caps(caps_path)
+		finally:
+			orchestrate_lib.yaml = original_yaml
+		assert caps["enabled"] is True
+		assert caps["status"] == "enabled"
+		assert caps["global_max_concurrent"] == 3
+		assert caps["max_concurrent_by_state"] == {"ai:review-blocked": 2}
+
+
 def test_phase_cap_snapshot_uses_single_fetch_and_local_increment() -> None:
-	_require_yaml_parse_support()
 	with tempfile.TemporaryDirectory(prefix="caps-poller-") as td:
 		repo_dir = Path(td)
 		recent_run_ts = _utc_now_iso8601()
@@ -250,7 +259,6 @@ printf 'RUNNING=%s\n' "$(phase_cap_running_for_state ai:review-blocked)"
 
 
 def test_phase_cap_snapshot_defers_dispatch_when_actions_snapshot_unavailable() -> None:
-	_require_yaml_parse_support()
 	with tempfile.TemporaryDirectory(prefix="caps-actions-unavailable-") as td:
 		repo_dir = Path(td)
 		_extract_poller_functions(repo_dir)
@@ -373,3 +381,30 @@ printf 'RC=%s\n' "${rc}"
 		assert "phase_capped state=ai:review-blocked action=dispatch_rb_judge issue=99 limit=0 running=0" in result.stdout
 		assert "RC=3" in result.stdout
 		assert "workflow run" not in result.stdout
+
+
+def main() -> int:
+	try:
+		sys.stdout.reconfigure(line_buffering=True)
+	except Exception:
+		pass
+
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+	passed = 0
+	failed = 0
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			func()
+			print(f"  PASS  {name}", flush=True)
+			passed += 1
+		except Exception as exc:
+			print(f"  FAIL  {name}: {exc}", flush=True)
+			failed += 1
+
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total", flush=True)
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

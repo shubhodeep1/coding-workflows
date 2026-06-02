@@ -269,6 +269,114 @@ def _normalize_concurrency_cap_value(raw_value: Any, *, field_name: str) -> int 
 	return raw_value
 
 
+def _parse_minimal_concurrency_cap_scalar(
+	raw_value: str,
+	*,
+	field_name: str,
+	path: Path,
+	line_number: int,
+) -> int | float | None:
+	if raw_value in {"", "null", "~"}:
+		return None
+	if re.fullmatch(r"-?[0-9]+", raw_value):
+		return int(raw_value)
+	if re.fullmatch(r"-?[0-9]+\.0+", raw_value):
+		return float(raw_value)
+	raise OrchestrateError(
+		f"Unsupported scalar for {field_name} at {path}:{line_number}; install PyYAML for richer caps syntax"
+	)
+
+
+def _parse_minimal_concurrency_caps_yaml(text: str, path: Path) -> dict[str, Any]:
+	stripped = text.strip()
+	if not stripped:
+		return {}
+	if stripped.startswith("{"):
+		try:
+			loaded = json.loads(stripped)
+		except json.JSONDecodeError as exc:
+			raise OrchestrateError(
+				f"Invalid JSON-formatted caps file '{path}' at line {exc.lineno}, column {exc.colno}: {exc.msg}"
+			) from exc
+		if not isinstance(loaded, dict):
+			raise OrchestrateError("caps file must be a YAML mapping")
+		return loaded
+
+	data: dict[str, Any] = {}
+	lines = text.splitlines()
+	index = 0
+	while index < len(lines):
+		raw_line = lines[index]
+		line_number = index + 1
+		stripped_line = raw_line.strip()
+		if not stripped_line or stripped_line.startswith("#"):
+			index += 1
+			continue
+		if raw_line.startswith((" ", "\t")):
+			raise OrchestrateError(
+				f"Unsupported indentation at {path}:{line_number}; install PyYAML for richer caps syntax"
+			)
+		key, separator, remainder = raw_line.partition(":")
+		if separator != ":":
+			raise OrchestrateError(f"Invalid caps line at {path}:{line_number}: {raw_line!r}")
+		key = key.strip()
+		remainder = remainder.strip()
+		if key == "global_max_concurrent":
+			data[key] = _parse_minimal_concurrency_cap_scalar(
+				remainder,
+				field_name=key,
+				path=path,
+				line_number=line_number,
+			)
+			index += 1
+			continue
+		if key != "max_concurrent_by_state":
+			raise OrchestrateError(
+				f"Unknown concurrency-caps key '{key}' in '{path}'; supported keys: ['global_max_concurrent', 'max_concurrent_by_state']"
+			)
+		if remainder:
+			if remainder == "{}":
+				data[key] = {}
+				index += 1
+				continue
+			raise OrchestrateError(
+				f"Unsupported inline mapping syntax for {key} at {path}:{line_number}; install PyYAML for richer caps syntax"
+			)
+
+		mapping: dict[str, int | float | None] = {}
+		index += 1
+		while index < len(lines):
+			child_raw = lines[index]
+			child_line_number = index + 1
+			child_stripped = child_raw.strip()
+			if not child_stripped or child_stripped.startswith("#"):
+				index += 1
+				continue
+			if not child_raw.startswith("  "):
+				break
+			if child_raw.startswith("   ") or child_raw.startswith("  \t"):
+				raise OrchestrateError(
+					f"Unsupported indentation at {path}:{child_line_number}; install PyYAML for richer caps syntax"
+				)
+			child_payload = child_raw[2:]
+			child_key, child_separator, child_remainder = child_payload.rpartition(":")
+			if child_separator != ":":
+				raise OrchestrateError(
+					f"Expected key/value mapping under max_concurrent_by_state at {path}:{child_line_number}"
+				)
+			child_key = child_key.strip()
+			mapping[child_key] = _parse_minimal_concurrency_cap_scalar(
+				child_remainder.strip(),
+				field_name=f"max_concurrent_by_state.{child_key}",
+				path=path,
+				line_number=child_line_number,
+			)
+			index += 1
+		data[key] = mapping
+
+	return data
+
+
 def load_concurrency_caps(path: str | Path | None = None) -> dict[str, Any]:
 	"""Load the optional per-state workflow concurrency caps.
 
@@ -285,15 +393,14 @@ def load_concurrency_caps(path: str | Path | None = None) -> dict[str, Any]:
 
 	if not raw_text.strip():
 		return _disabled_concurrency_caps(target, status="empty")
-	if yaml is None:
-		return _disabled_concurrency_caps(
-			target,
-			status="yaml_unavailable",
-			error="PyYAML is unavailable",
-		)
 
 	try:
-		data = yaml.safe_load(raw_text)
+		if yaml is None:
+			data = _parse_minimal_concurrency_caps_yaml(raw_text, target)
+		else:
+			data = yaml.safe_load(raw_text)
+	except OrchestrateError as exc:
+		return _disabled_concurrency_caps(target, status="yaml_unavailable", error=str(exc))
 	except Exception as exc:
 		return _disabled_concurrency_caps(target, status="malformed", error=str(exc))
 
