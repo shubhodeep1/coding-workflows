@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `b46935242fb7b15db2bc5ae11ac75531578a2fdc` on `orchestrator/project-3042` (matches integration-branch metadata).\n\nClarification mapping:\n- No clarification questions were asked for this issue.\n- The `/answer [auto-answered-by-orchestrator]` comment only confirms continuation; it does not add scope beyond the issue body.\n\nRepresentative existing pattern to follow:\n- `scripts/workspace_init.sh`\n- workspace setup blocks in `.github/workflows/implement.yml` and `.github/workflows/validate.yml`\n- `tests/test_workspace_init.py`\n\nImplementation plan\n\n1. Files likely to change\n- `scripts/run_workspace_hook.sh` **[new]**\n- `.github/workflows/implement.yml`\n- `.github/workflows/validate.yml`\n- `tests/test_workspace_hooks.py` **[new]**\n- `workflow-templates/ai-implement.yml` and `workflow-templates/ai-validate.yml` only if the reusable-workflow interface is widened; if hook support stays internal, these may remain unchanged after sync verification.\n\n2. Functions / modules to implement\n- Add `scripts/run_workspace_hook.sh` as the hook runner for:\n  - `.github/ai/workspace_hooks/implement/{after_create,before_run,after_run,before_remove}.sh`\n  - `.github/ai/workspace_hooks/validate/{after_create,before_run,after_run,before_remove}.sh`\n- Helper responsibilities:\n  - treat missing or empty hook files as no-op\n  - run hooks with `bash -lc`\n  - use `WORKSPACE_PATH` as cwd\n  - honor `WORKSPACE_HOOK_TIMEOUT_SECONDS` with default `600`\n  - write per-hook logs under `${RUNNER_TEMP}/workspace-hooks/`\n  - surface only a bounded tail on failures/warnings\n  - enforce fatal vs nonfatal behavior by hook type\n  - gate `after_create` on `CREATED_NOW=true`, with unset treated as true\n- Wire the helper into `implement.yml`:\n  - stage `run_workspace_hook.sh` with the other support scripts\n  - call `after_create` after workspace materialization/activation\n  - call `before_run` immediately before `Run Codex implementation`\n  - call `after_run` in an `always()` path after the main implement step\n  - call `before_remove` in the final cleanup/finalization path\n- Wire the helper into `validate.yml`:\n  - fetch/stage `run_workspace_hook.sh`\n  - call `after_create` after workspace materialization/activation\n  - call `before_run` immediately before `Run validation process`\n  - call `after_run` before `Collect validation status`\n  - call `before_remove` in a late `always()` cleanup/finalization path\n\n3. Data structures affected\n- New consumer hook tree contract:\n  - `.github/ai/workspace_hooks/<phase>/<hook>.sh`\n- Existing env/state reused:\n  - `WORKSPACE_PATH`\n  - `CREATED_NOW`\n  - `RUNNER_TEMP`\n- Likely new internal env contract:\n  - `WORKSPACE_HOOK_TIMEOUT_SECONDS` defaulting to `600`\n\n4. API / interface changes\n- Expected to be internal-only.\n- No `workflow_call`/wrapper input change is required if timeout stays an env default/read-from-vars pattern.\n- Wrapper templates only need edits if the reusable workflow interface changes.\n\n5. Risks / edge cases / conflicts\n- `tests/test_workspace_hooks.py` does not exist on the current ref; it must be created.\n- The Symphony plan also mentions adding placeholder `.github/ai/workspace_hooks/` files, but that path is outside this issue\u2019s allowed file set. The implementation should therefore fail open on absent/empty hook files rather than adding placeholders here.\n- Source-plan conflict to note: the W2 plan says `after_create` is fatal, while the issue text explicitly mentions only its once-per-workspace gating. Because acceptance says \u201cexactly as the plan describes,\u201d the safer interpretation is to keep `after_create` fatal too unless told otherwise.\n- Current workflows do not explicitly remove `WORKSPACE_PATH`, and existing tests in `tests/test_workspace_init.py` lock in the current `actions/cache@v5` pattern. `before_remove` must be wired without breaking cache/save behavior or broadening into W3.\n- Do not add filesystem-safety enforcement here; keep W3 out of scope.\n- Do not touch review/autofix.\n\n6. Testing considerations\n- Create `tests/test_workspace_hooks.py` covering:\n  - helper existence/executability\n  - missing/empty hook => no-op\n  - `after_create` runs when `CREATED_NOW=true`\n  - unset `CREATED_NOW` is treated as true\n  - `CREATED_NOW=false` skips `after_create`\n  - hook executes in `WORKSPACE_PATH`\n  - failing `before_run` is fatal\n  - failing `after_run` and `before_remove` are logged but nonfatal\n  - bounded failure output / log capture behavior\n- Add workflow contract assertions similar to `tests/test_workspace_init.py`:\n  - support-file staging/fetch includes `run_workspace_hook.sh`\n  - hook steps are present and correctly ordered around the main implement/validate run steps\n- Re-run `tests/test_workspace_init.py` alongside the new hook tests to ensure W1 behavior remains intact.\n\nAssumptions\n- Hook support should remain internal to the reusable workflows.\n- No consumer-facing wrapper input is needed for this issue.\n- Missing hook files are normal and should keep the workflows as no-op.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "d8722eb6773a8f7edd031591dba86f8cd62f86897711e57429afc3e566da8fcc",
+  "lineage": {
+    "issue_number": 3067,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26851855174",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26851855174",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3067"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260602223809_e6444a475b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3067,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26851855174"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3067",
+  "timestamps": {
+    "created_at": "2026-06-02T22:38:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
