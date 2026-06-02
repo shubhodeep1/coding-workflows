@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import subprocess
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import yaml
 
@@ -278,3 +279,31 @@ def test_validate_workspace_metadata_disables_reuse_without_numeric_tracking_iss
 	assert 'if [[ "${{ inputs.tracking_issue }}" =~ ^[0-9]+$ ]] && [ "${{ inputs.tracking_issue }}" -gt 0 ]; then' in metadata_block
 	assert 'workspace_reuse_enabled="false"' in metadata_block
 	assert 'WORKSPACE_REQUIRE_STABLE_IDENTIFIER_FOR_REUSE="true"' in metadata_block
+
+
+def _run_tmp_path_case(case_fn) -> None:
+	with TemporaryDirectory() as tmp_dir:
+		case_fn(Path(tmp_dir))
+
+
+def main() -> int:
+	test_helper_script_exists_and_is_executable()
+	for case_fn in (
+		test_metadata_sanitizes_key_and_derives_workspace_path,
+		test_metadata_strips_crlf_from_fingerprint_file,
+		test_metadata_exact_restore_sets_created_now_false,
+		test_metadata_prefix_restore_sets_created_now_true,
+		test_metadata_miss_sets_created_now_true,
+		test_metadata_rejects_workspace_escape_key,
+		test_finalize_refreshes_source_tree_and_preserves_extra_state,
+	):
+		_run_tmp_path_case(case_fn)
+	test_implement_workflow_stages_workspace_helper_and_orders_restore_keys()
+	test_validate_workflow_stages_workspace_helper_and_uses_workspace_paths()
+	test_workspace_shell_context_activates_before_repo_sensitive_steps()
+	test_validate_workspace_metadata_disables_reuse_without_numeric_tracking_issue()
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
