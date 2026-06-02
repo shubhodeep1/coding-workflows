@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_semble_contract.py:102 | severity=medium | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5]\n  PROBLEM: The contract test still asserts the old `OPTIONAL_BOOTSTRAP_SCRIPTS` value and does not include `render_prompt.py`.\n  WHY: `.github/workflows/review_autofix.yml` was changed to add `render_prompt.py`, so the literal substring assertion now fails with `AssertionError`.\n- tests/test_orchestrate_poll_process.py:12553 | severity=medium | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The orchestrator poll process test still asserts the old `OPTIONAL_BOOTSTRAP_SCRIPTS` value and does not include `render_prompt.py`.\n  WHY: The workflow string changed in `.github/workflows/review_autofix.yml`, so the substring match no longer succeeds and the unit test fails.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR updates the OPTIONAL_BOOTSTRAP_SCRIPTS variable in review_autofix.yml to include \"render_prompt.py\" as an optional script. The test file that validates workflow contract consistency must be updated to reflect this change.\n  expected_change_site: tests/test_review_semble_contract.py at line 102 (in test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena function)\n  confidence=[5]\n  flagged_by: [moonshotai_kimi-k2_5]\n  EVIDENCE: The assertion at line 102 still checks for the old value: 'OPTIONAL_BOOTSTRAP_SCRIPTS=\"install_semble.sh build_semble_wrapper.sh semble_helpers.sh\"' but the PR changed the workflow to: 'OPTIONAL_BOOTSTRAP_SCRIPTS=\"install_semble.sh build_semble_wrapper.sh semble_helpers.sh render_prompt.py\"'.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_review_semble_contract.py:102 | severity=medium | confidence=5\n  PROBLEM: The assertion still hardcodes the old `OPTIONAL_BOOTSTRAP_SCRIPTS` value and does not include `render_prompt.py`.\n  WHY: `.github/workflows/review_autofix.yml` now adds `render_prompt.py`, so the literal assertion fails with `AssertionError` in CI.\n- tests/test_orchestrate_poll_process.py:12553 | severity=medium | confidence=5\n  PROBLEM: The orchestrator poll process test still hardcodes the old `OPTIONAL_BOOTSTRAP_SCRIPTS` value and does not include `render_prompt.py`.\n  WHY: The workflow string changed, so the substring assertion no longer matches and the unit test fails.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_review_semble_contract.py:102 | severity=medium | confidence=5\n  PROBLEM: The test asserts the exact `OPTIONAL_BOOTSTRAP_SCRIPTS` string, but the PR adds `render_prompt.py` to that list.\n  WHY: The literal string match fails when the updated workflow value is not found, causing an `AssertionError` and CI failure.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "1f39c59409fa45823d558037cbe4112cd02be50ab0b1dad837900aab64d1520a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26829286179",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26829286179",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260602152808_4b5b28a098",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26829286179"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-02T15:28:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
