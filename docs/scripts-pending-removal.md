@@ -67,11 +67,11 @@ Copy this block when adding a new entry:
 
 ### `scripts/render_prompt.sh`
 
-- **Introduced in:** issue #3043 (2026-06-02)
-- **Type:** long-running
-- **Removal trigger:** when automated callers have moved to explicit `scripts/render_prompt.py` mode selection and no live workflow or script path still invokes `scripts/render_prompt.sh`.
+- **Introduced in:** #3045 (2026-06-02)
+- **Type:** single-use
+- **Removal trigger:** when automated callers invoke `scripts/render_prompt.py` directly and no live workflow or script path still invokes `scripts/render_prompt.sh`.
 - **Removal preflight checks:**
   - `rg -n 'render_prompt\.sh' .github/workflows scripts --glob '!scripts/render_prompt.sh'` returns no live caller matches.
-  - `python3 -m pytest tests/test_render_prompt_foundation.py tests/test_judge_semble_prefetch_contract.py -k render_prompt` returns `passed` for every selected test.
-  - `rg -n 'prompts/contracts/mode-(implement|plan)\.yml|render_prompt\.py' .github/workflows scripts` shows the live callers now reference the Python backend and mode-specific contracts directly.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_foundation.py` returns `OK: render prompt foundation assertions hold`.
+  - `rg -n 'render_prompt\.py' .github/workflows scripts --glob '!scripts/render_prompt.sh'` shows the direct Python-renderer callers or staging references that replace the shim path.
 - **Owner:** @shubhodeep1
