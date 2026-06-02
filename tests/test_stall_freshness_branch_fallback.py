@@ -24,6 +24,7 @@ controlled ``gh`` / ``gh_retry`` environment.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import os
 import subprocess
 import tempfile
@@ -33,6 +34,10 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 POLLER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
+
+
+def _iso_utc_minutes_ago(minutes: int) -> str:
+	return (datetime.now(timezone.utc) - timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _run_bash(script: str, cwd: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
@@ -146,14 +151,14 @@ def test_resolver_returns_number_and_max_committed_date():
 		_bootstrap(tmp)
 		r = _invoke(
 			body=r"""
-			fresh_iso="$(date -u -d '-10 minutes' +%Y-%m-%dT%H:%M:%SZ)"
-			export GH_PR_LIST_HEAD_JSON="$(jq -cn --arg d "$fresh_iso" \
+			export GH_PR_LIST_HEAD_JSON="$(jq -cn --arg d "$FRESH_ISO" \
 				'[{number:4242,commits:[{committedDate:"2020-01-01T00:00:00Z"},{committedDate:$d}]}]')"
 			out="$(_resolve_linked_pr_fresh_by_branch 4242)"
 			echo "OUT=${out}"
-			echo "WANT_ISO=${fresh_iso}"
+			echo "WANT_ISO=${FRESH_ISO}"
 			""",
 			cwd=tmp,
+			extra_env={"FRESH_ISO": _iso_utc_minutes_ago(10)},
 		)
 		assert r.returncode == 0, r.stderr
 		lines = dict(ln.split("=", 1) for ln in r.stdout.splitlines() if "=" in ln)
@@ -223,8 +228,7 @@ def test_wrapper_primary_fresh_suppresses_via_cross_ref_without_branch_lookup():
 		_bootstrap(tmp)
 		r = _invoke(
 			body=r"""
-			fresh_iso="$(date -u -d '-5 minutes' +%Y-%m-%dT%H:%M:%SZ)"
-			entry="$(jq -cn --arg d "$fresh_iso" '{number:11,state:"OPEN",merged:false,headPushedAt:$d}')"
+			entry="$(jq -cn --arg d "$FRESH_ISO" '{number:11,state:"OPEN",merged:false,headPushedAt:$d}')"
 			# Branch would resolve nothing; it must NOT be consulted.
 			export GH_PR_LIST_HEAD_JSON='[]'
 			if _check_fresh_push_guard_with_fallback 11 "$entry" "ai:done"; then echo "RC=0"; else echo "RC=1"; fi
@@ -232,6 +236,7 @@ def test_wrapper_primary_fresh_suppresses_via_cross_ref_without_branch_lookup():
 			echo "PR=${FRESH_PUSH_PR_NUM}"
 			""",
 			cwd=tmp,
+			extra_env={"FRESH_ISO": _iso_utc_minutes_ago(5)},
 		)
 		assert r.returncode == 0, r.stderr
 		assert "RC=0" in r.stdout, r.stdout
@@ -249,13 +254,13 @@ def test_wrapper_primary_null_branch_fresh_suppresses_via_branch_fallback():
 		_bootstrap(tmp)
 		r = _invoke(
 			body=r"""
-			fresh_iso="$(date -u -d '-5 minutes' +%Y-%m-%dT%H:%M:%SZ)"
-			export GH_PR_LIST_HEAD_JSON="$(jq -cn --arg d "$fresh_iso" '[{number:22,commits:[{committedDate:$d}]}]')"
+			export GH_PR_LIST_HEAD_JSON="$(jq -cn --arg d "$FRESH_ISO" '[{number:22,commits:[{committedDate:$d}]}]')"
 			if _check_fresh_push_guard_with_fallback 22 "null" "ai:done"; then echo "RC=0"; else echo "RC=1"; fi
 			echo "SRC=${FRESH_PUSH_SOURCE}"
 			echo "PR=${FRESH_PUSH_PR_NUM}"
 			""",
 			cwd=tmp,
+			extra_env={"FRESH_ISO": _iso_utc_minutes_ago(5)},
 		)
 		assert r.returncode == 0, r.stderr
 		assert "RC=0" in r.stdout, r.stdout
@@ -273,11 +278,11 @@ def test_wrapper_primary_null_branch_stale_does_not_suppress():
 		_bootstrap(tmp)
 		r = _invoke(
 			body=r"""
-			stale_iso="$(date -u -d '-120 minutes' +%Y-%m-%dT%H:%M:%SZ)"
-			export GH_PR_LIST_HEAD_JSON="$(jq -cn --arg d "$stale_iso" '[{number:33,commits:[{committedDate:$d}]}]')"
+			export GH_PR_LIST_HEAD_JSON="$(jq -cn --arg d "$STALE_ISO" '[{number:33,commits:[{committedDate:$d}]}]')"
 			if _check_fresh_push_guard_with_fallback 33 "null" "ai:done"; then echo "RC=0"; else echo "RC=1"; fi
 			""",
 			cwd=tmp,
+			extra_env={"STALE_ISO": _iso_utc_minutes_ago(120)},
 		)
 		assert r.returncode == 0, r.stderr
 		assert "RC=1" in r.stdout, r.stdout
@@ -310,11 +315,11 @@ def test_wrapper_ineligible_phase_skips_fallback():
 		_bootstrap(tmp)
 		r = _invoke(
 			body=r"""
-			fresh_iso="$(date -u -d '-5 minutes' +%Y-%m-%dT%H:%M:%SZ)"
-			export GH_PR_LIST_HEAD_JSON="$(jq -cn --arg d "$fresh_iso" '[{number:55,commits:[{committedDate:$d}]}]')"
+			export GH_PR_LIST_HEAD_JSON="$(jq -cn --arg d "$FRESH_ISO" '[{number:55,commits:[{committedDate:$d}]}]')"
 			if _check_fresh_push_guard_with_fallback 55 "null" "ai:implementing"; then echo "RC=0"; else echo "RC=1"; fi
 			""",
 			cwd=tmp,
+			extra_env={"FRESH_ISO": _iso_utc_minutes_ago(5)},
 		)
 		assert r.returncode == 0, r.stderr
 		assert "RC=1" in r.stdout, r.stdout
@@ -331,16 +336,18 @@ def test_wrapper_primary_present_but_stale_does_not_trigger_branch_lookup():
 		_bootstrap(tmp)
 		r = _invoke(
 			body=r"""
-			stale_iso="$(date -u -d '-200 minutes' +%Y-%m-%dT%H:%M:%SZ)"
-			fresh_iso="$(date -u -d '-2 minutes' +%Y-%m-%dT%H:%M:%SZ)"
-			entry="$(jq -cn --arg d "$stale_iso" '{number:66,state:"OPEN",merged:false,headPushedAt:$d}')"
+			entry="$(jq -cn --arg d "$STALE_ISO" '{number:66,state:"OPEN",merged:false,headPushedAt:$d}')"
 			# Branch is fresh — but must be ignored because the primary entry
 			# already carried a (stale) headPushedAt.
-			export GH_PR_LIST_HEAD_JSON="$(jq -cn --arg d "$fresh_iso" '[{number:66,commits:[{committedDate:$d}]}]')"
+			export GH_PR_LIST_HEAD_JSON="$(jq -cn --arg d "$FRESH_ISO" '[{number:66,commits:[{committedDate:$d}]}]')"
 			if _check_fresh_push_guard_with_fallback 66 "$entry" "ai:done"; then echo "RC=0"; else echo "RC=1"; fi
 			echo "SRC=${FRESH_PUSH_SOURCE}"
 			""",
 			cwd=tmp,
+			extra_env={
+				"STALE_ISO": _iso_utc_minutes_ago(200),
+				"FRESH_ISO": _iso_utc_minutes_ago(2),
+			},
 		)
 		assert r.returncode == 0, r.stderr
 		assert "RC=1" in r.stdout, r.stdout
@@ -355,12 +362,12 @@ def test_wrapper_ready_to_merge_phase_eligible():
 		_bootstrap(tmp)
 		r = _invoke(
 			body=r"""
-			fresh_iso="$(date -u -d '-5 minutes' +%Y-%m-%dT%H:%M:%SZ)"
-			export GH_PR_LIST_HEAD_JSON="$(jq -cn --arg d "$fresh_iso" '[{number:77,commits:[{committedDate:$d}]}]')"
+			export GH_PR_LIST_HEAD_JSON="$(jq -cn --arg d "$FRESH_ISO" '[{number:77,commits:[{committedDate:$d}]}]')"
 			if _check_fresh_push_guard_with_fallback 77 "null" "ai:ready-to-merge"; then echo "RC=0"; else echo "RC=1"; fi
 			echo "SRC=${FRESH_PUSH_SOURCE}"
 			""",
 			cwd=tmp,
+			extra_env={"FRESH_ISO": _iso_utc_minutes_ago(5)},
 		)
 		assert r.returncode == 0, r.stderr
 		assert "RC=0" in r.stdout, r.stdout
