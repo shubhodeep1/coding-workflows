@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref\n\n- HEAD: `13e1844799412040561b832f15b33d9b5f8ce5f6`\n- Checked-out branch: `orchestrator/project-3042`\n- Integration branch metadata matches checkout: `orchestrator/project-3042`\n\nActions taken\n\n- Reviewed `scripts/orchestrate_lib.py` for state/dependency storage and status reconciliation.\n- Reviewed `scripts/orchestrate_poll_process.sh` for:\n  - prior-wave reconciliation,\n  - current-wave deferred issue creation,\n  - next-wave issue creation,\n  - existing blocker/defer patterns.\n- Reviewed the U2 section of `docs/plans/symphony-inspired-improvements-plan.md`.\n\nRepresentative pattern to follow\n\n- Use the existing post-Codex implementation-failed blocker deferral flow in `scripts/orchestrate_poll_process.sh` as the closest model for:\n  - grep-friendly structured defer logging,\n  - fail-open behavior when metadata is absent,\n  - \u201cskip this tick, retry next tick\u201d control flow.\n\nFiles likely to change\n\n1. `scripts/blocker_check.py` **[new]**\n   - Add a small blocker-eligibility evaluator with a CLI JSON output.\n2. `scripts/orchestrate_lib.py`\n   - Add/factor shared blocker-status helpers so blocker terminality uses the same truth rules as the rest of the orchestrator.\n3. `scripts/orchestrate_poll_process.sh`\n   - Invoke the blocker check before wave-driven managed-issue dispatch.\n   - Emit the structured defer signal when blocked.\n4. `tests/test_blocker_check.py` **[new]**\n   - Add focused unit/integration-style coverage for blocker deferral and fail-open behavior.\n\nFunctions / modules to implement\n\n1. `scripts/blocker_check.py`\n   - Pure evaluation logic:\n     - read orchestrator dependency metadata from existing state (`dependency_edges`, `issue_number_map`, wave issue entries),\n     - resolve incoming blockers for a target `local_id`,\n     - decide whether each blocker is terminal using stored state plus already-reconciled issue/PR truth,\n     - return JSON such as `eligible`, `reason`, `signal`, and blocker details.\n   - CLI entry point for shell use from the poller.\n\n2. `scripts/orchestrate_lib.py`\n   - Shared helper(s) for blocker terminality, likely built on `reconcile_wave_issue_status(...)`, so blocker checks do not invent a second status model.\n   - Keep changes minimal; no schema rewrite needed.\n\n3. `scripts/orchestrate_poll_process.sh`\n   - Add a small wrapper/helper that calls `scripts/blocker_check.py` and interprets its JSON.\n   - Wire that helper into the two wave-dispatch paths:\n     - current-wave deferred issue creation (`github_issue == null` + `pending_issue_defs`),\n     - next-wave issue creation when advancing waves.\n   - On blocked result:\n     - emit a grep-friendly `dispatch_deferred_blocker ...` line,\n     - leave `pending_issue_defs` / `github_issue` untouched,\n     - continue so the next poll tick re-evaluates eligibility.\n   - On eligible result:\n     - fall through to the existing `gh issue create` path unchanged.\n\nData structures affected\n\n- Existing orchestrator state only:\n  - `.dependency_edges`\n  - `.issue_number_map`\n  - `.waves[].issues[].id`\n  - `.waves[].issues[].github_issue`\n  - `.waves[].issues[].status`\n  - `.pending_issue_defs`\n- Existing cycle-local truth inputs already built by the poller:\n  - current-wave label / issue-state / PR-state reconciliation,\n  - prior-wave backward-scan state updates.\n- No new persistent state fields should be required for acceptance.\n\nAPI / interface changes\n\n- New internal CLI:\n  - `scripts/blocker_check.py` invoked by the poller.\n- Expected shape:\n  - machine-readable JSON result for shell parsing.\n- No GitHub workflow/template/API changes are required in this issue.\n\nPotential risks / edge cases\n\n- **Legacy metadata absent:** if `dependency_edges` is missing/empty, the check must fail open and allow dispatch.\n- **Blocker state source:** use already-reconciled state/truth data; do not add per-blocker GitHub API calls.\n- **Unmapped blocker local IDs:** if dependency metadata exists but a blocker cannot be resolved to a tracked issue, treat that as blocked or at least explicit/observable, not silent success.\n- **Terminal semantics:** confirm whether stored `skipped` should count as terminal for blocker satisfaction; align with current orchestrator terminal-state semantics to avoid deadlocks.\n- **Scope control:** keep this limited to runtime eligibility before managed-issue dispatch; do not expand into snapshot publication or overlay parsing.\n\nTesting considerations\n\n1. `tests/test_blocker_check.py` unit coverage\n   - blocker open/non-terminal => `eligible=false`\n   - no dependency metadata => `eligible=true` (fail open)\n   - blocker terminal via merged/closed truth => `eligible=true`\n\n2. `tests/test_blocker_check.py` poller integration-style coverage\n   - stale/inconsistent state where a current-wave uncreated issue still has an unresolved dependency:\n     - no issue is created,\n     - stdout contains `dispatch_deferred_blocker`\n   - same setup after blocker reaches terminal merged/closed state:\n     - next tick creates the issue normally\n\n3. Optional low-cost coverage if implemented\n   - flag-off bypass path for `RUNTIME_BLOCKER_CHECK_ENABLED`\n\nConflicts / implementation notes\n\n- The Symphony plan names `RUNTIME_BLOCKER_CHECK_ENABLED`, but the allowed file set does **not** include README/workflow/template updates. If that flag is added here, it should be a local shell default/read in `scripts/orchestrate_poll_process.sh` only; repo docs/wrapper exposure is out of scope for this issue.\n- The design note talks about tracking-body dependency metadata, but the current code already persists `dependency_edges` into orchestrator state and refreshes blocker statuses via existing poller reconciliation. Using state as the primary source is the lowest-risk, no-fanout implementation.\n\nAssumptions\n\n- \u201cDispatches a managed issue\u201d here means the wave-based creation of orchestrator-managed child issues into `ai:clarification`, not unrelated standalone reissue/follow-up helpers.\n- Acceptance can be satisfied without adding any new persistent state schema.\n\nMissing context notes\n\n- No blocking context gap found.\n- The only semantic detail worth pinning in implementation/tests is whether `skipped` should unblock dependents; current code review suggests this should be aligned deliberately rather than guessed.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "af05ae835194e3aa9d9ac88bbaf6f346ff49ea60dc7cc84b62b215dcbefd1023",
+  "lineage": {
+    "issue_number": 3063,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26843332063",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26843332063",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3063"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260602194356_c584c565c2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3063,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26843332063"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3063",
+  "timestamps": {
+    "created_at": "2026-06-02T19:43:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
