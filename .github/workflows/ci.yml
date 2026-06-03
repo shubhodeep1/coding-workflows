@@ -257,6 +257,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_retrigger_inflight_direct_fallback.py
 
+      - name: Actions-runs fetch-unconfirmed diagnostic unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_actions_runs_fetch_unconfirmed_warning.py
+
       - name: Codex config writer contract tests
         run: |
           set -euo pipefail
