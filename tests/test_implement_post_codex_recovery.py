@@ -1102,6 +1102,27 @@ def test_destructive_guard_path_does_not_set_implementation_failed_or_fixup_flow
 		"needs_fixes handling must tolerate non-array fix_issues without aborting"
 	)
 
+def test_destructive_guard_knobs_wired_from_repo_variables() -> None:
+	# RC-1 regression guard: both destructive-guard shells read these knobs
+	# as bare ${VAR:-default}, so they only take effect when bound at the
+	# workflow env level (vars.* resolving to the caller/consumer repo).
+	# Mirrors the MAX_POST_CODEX_REPAIR_ATTEMPTS wiring assertion above.
+	wf = _workflow_text()
+	assert "ALLOW_BULK_DELETE: ${{ vars.ALLOW_BULK_DELETE || 'false' }}" in wf
+	assert "BULK_DELETE_THRESHOLD: ${{ vars.BULK_DELETE_THRESHOLD || '3' }}" in wf
+	assert "BULK_DELETE_THRESHOLD_MD: ${{ vars.BULK_DELETE_THRESHOLD_MD || '100' }}" in wf
+
+
+def test_destructive_guard_latch_verifies_label_applied() -> None:
+	# RC-2 regression guard: the latch must confirm ai:destructive-blocked
+	# actually applied and surface ::error:: otherwise, instead of the old
+	# fire-and-forget `2>/dev/null || true` that left the redispatch block
+	# silently disengaged.
+	destructive_block = _step_block_text("Destructive-commit guard — label + alert on rejection")
+	assert "--json labels" in destructive_block
+	assert "::error::FAILED to latch ai:destructive-blocked" in destructive_block
+
+
 def test_scope_guard_allowlist_and_workflow_rollback_contracts_present() -> None:
 	commit_block = _step_block_text("Commit changes")
 	assert "canonical_deletions" in commit_block
