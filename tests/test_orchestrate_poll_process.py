@@ -12550,7 +12550,9 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	assert 'SUPPORT_ROOT_DIR="${RUNNER_TEMP}/coding-workflows-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in wf_body
 	assert 'SUPPORT_SCRIPTS_DIR="${SUPPORT_ROOT_DIR}/scripts"' in wf_body
 	assert 'SUPPORT_SCRIPTS_DIR="scripts"' not in wf_body
-	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh"' in wf_body
+	# render_prompt.py is staged optionally on main so shim branches resolve
+	# their backend (PR #3057); keep this list in sync with review_autofix.yml.
+	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh render_prompt.py"' in wf_body
 	assert "for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do" in wf_body
 	assert "Bootstrapped ${f} from main snapshot (branch copy ignored)." in wf_body
 	# The bootstrap still enumerates the script name in review_autofix.yml
