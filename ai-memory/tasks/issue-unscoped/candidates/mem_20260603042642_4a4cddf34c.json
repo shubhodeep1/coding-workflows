@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add --skip-git-repo-check to every codex exec invocation that runs inside the workspace context\" (PR description, problem statement section)\n  expected_change_site: scripts/review_conflict_resolve.sh (lines 1690, 1697, 1701), scripts/review_run_judge_interim.sh (line 325), scripts/review_synthesise_smoke.sh (line 777)\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: scripts/review_conflict_resolve.sh has 3 codex exec calls (lines 1690, 1697, 1701 in the codex_heartbeat/codex_stall_guard/bare fallback paths), scripts/review_run_judge_interim.sh has 1 codex exec call (line 325), scripts/review_synthesise_smoke.sh has 1 codex exec call (line 777); none carry --skip-git-repo-check in the current tree.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- Requirement: \"Add --skip-git-repo-check to every codex exec invocation that runs inside the workspace context\" (PR description, problem statement section)\n  Expected change site: scripts/review_conflict_resolve.sh (lines 1690, 1697, 1701), scripts/review_run_judge_interim.sh (line 325), scripts/review_synthesise_smoke.sh (line 777)\n  Evidence of absence: All three scripts are bootstrapped into the workspace (listed in REQUIRED_BOOTSTRAP_SCRIPTS at review_autofix.yml line 1285), run after the \"Activate workspace shell context\" step (which cd's into WORKSPACE_PATH where .git is excluded), and each calls `codex exec` without --skip-git-repo-check:\n  - review_conflict_resolve.sh: 3 codex exec calls (lines 1690, 1697, 1701 in the codex_heartbeat/codex_stall_guard/bare fallback paths)\n  - review_run_judge_interim.sh: 1 codex exec call (line 325)\n  - review_synthesise_smoke.sh: 1 codex exec call (line 777)\n  None of these calls appear in the PR diff; none carry --skip-git-repo-check in the current tree. They will fail with the same \"Not inside a trusted directory and --skip-git-repo-check was not specified\" error documented in the PR description when workspace reuse is enabled.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "8ae12db5dc3c8fcd8f3f36db15400149d5073a1ec1e24129435054c6c68da48b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3076,
+    "run_id": "26863056666",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26863056666",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260603042642_4a4cddf34c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3076,
+    "run_id": "26863056666"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-03T04:26:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
