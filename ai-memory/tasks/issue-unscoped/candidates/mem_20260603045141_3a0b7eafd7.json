@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml:3432 | severity=medium | confidence=[4]\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The issue comment says the issue is now labeled `ai:destructive-blocked` and redispatch will be refused, but the verification step can still fail or return unknown state.\n  WHY: If label creation/editing or issue editing fails, the comment still claims the latch succeeded, which misleads operators about the redispatch block state.\n- tests/test_review_semble_contract.py:99-106 | severity=medium | confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The assertion still expects a stale OPTIONAL_BOOTSTRAP_SCRIPTS string that omits `render_prompt.py`.\n  WHY: The edited workflow contract no longer matches the hardcoded string literal, so the CI lint check-run fails against the live bootstrap loop.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: add regression tests (env wiring; latch verification) and reach \"Test suite: 38 \u2192 40 passed\"\n  expected_change_site: tests/test_review_semble_contract.py\n  confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The semble test still contains the pre-edit comment+string, and no diff hunk updated the OPTIONAL_BOOTSTRAP_SCRIPTS assertion itself; the reviewer also pointed to tests/test_implement_post_codex_recovery.py and test_review_autofix_review_pipeline_contract.py as related contract sites.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/implement.yml:3432 | severity=medium | confidence=[4]\n  PROBLEM: The issue comment asserts the issue \"is now labeled `ai:destructive-blocked`\" and that redispatch \"will be refused,\" but the verification logic can still fail or end in unknown state.\n  WHY: If `gh label create/edit` or `gh issue edit` fails, the comment still claims the latch succeeded, which can mislead operators about whether the redispatch block is active.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_review_semble_contract.py:99-106 | severity=medium | confidence=[5]\n  PROBLEM: The assertion still expects a stale OPTIONAL_BOOTSTRAP_SCRIPTS string that omits `render_prompt.py`.\n  WHY: The edited bootstrap contract no longer matches the string literal, so the lint job fails when it checks the exact bootstrap loop.\n- Requirement: add regression tests (env wiring; latch verification) and reach \"Test suite: 38 \u2192 40 passed\"\n  Expected change site: tests/test_review_semble_contract.py\n  Evidence of absence: The semble test still contains the pre-edit comment+string, and no diff hunk updated the OPTIONAL_BOOTSTRAP_SCRIPTS assertion itself.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "aad99fd913d32f2756555f4fc879b83a05f3d8b96e9102d745df2a2ce3de69a7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3075,
+    "run_id": "26864003236",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26864003236",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260603045141_3a0b7eafd7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3075,
+    "run_id": "26864003236"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-03T04:51:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
