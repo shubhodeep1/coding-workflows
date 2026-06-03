@@ -2652,9 +2652,9 @@ else
     "${CODEX_HEARTBEAT_HELPER}" \
       --phase validate_discover \
       --stdout-file "${DISCOVER_OUTPUT_FILE}" \
-      -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${DISCOVER_PROMPT_FILE}" 2> >(tee -a "${DISCOVER_LOG_FILE}" >&2)
+      -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${DISCOVER_PROMPT_FILE}" 2> >(tee -a "${DISCOVER_LOG_FILE}" >&2)
   else
-    codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${DISCOVER_PROMPT_FILE}" > "${DISCOVER_OUTPUT_FILE}" 2> >(tee -a "${DISCOVER_LOG_FILE}" >&2)
+    codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${DISCOVER_PROMPT_FILE}" > "${DISCOVER_OUTPUT_FILE}" 2> >(tee -a "${DISCOVER_LOG_FILE}" >&2)
   fi
   DISCOVER_EXIT=$?
   set -e
@@ -3353,9 +3353,9 @@ for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
     "${CODEX_HEARTBEAT_HELPER}" \
       --phase validate_diagnose \
       --stdout-file "${DIAGNOSE_OUTPUT_FILE}" \
-      -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${DIAGNOSE_PROMPT_FILE}" 2> >(tee -a "${DIAGNOSE_LOG_FILE}" >&2)
+      -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${DIAGNOSE_PROMPT_FILE}" 2> >(tee -a "${DIAGNOSE_LOG_FILE}" >&2)
   else
-    codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${DIAGNOSE_PROMPT_FILE}" > "${DIAGNOSE_OUTPUT_FILE}" 2> >(tee -a "${DIAGNOSE_LOG_FILE}" >&2)
+    codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${DIAGNOSE_PROMPT_FILE}" > "${DIAGNOSE_OUTPUT_FILE}" 2> >(tee -a "${DIAGNOSE_LOG_FILE}" >&2)
   fi
   DIAGNOSE_EXIT=$?
   set -e
