@@ -3430,7 +3430,7 @@ jobs:
             echo "- Staged deletions: **${DCB_COUNT}**"
             echo "- Workflow run: ${RUN_URL}"
             echo
-            echo "The commit was **not** created and **not** pushed. This issue is now labeled \`ai:destructive-blocked\` and will be refused by the \`Validate approval phase\` step on any future redispatch of issue #${ISSUE_NUMBER} until a human removes the label."
+            echo "The commit was **not** created and **not** pushed. The workflow attempted to apply \`ai:destructive-blocked\`; verify that the label is present before relying on the \`Validate approval phase\` redispatch block. Once present, future redispatches of issue #${ISSUE_NUMBER} will be refused until a human removes the label."
             echo
             echo "Staged deletion list:"
             echo
@@ -3438,7 +3438,7 @@ jobs:
             printf '%s\n' "${DCB_DELETIONS}" | sed '/^$/d'
             echo '```'
             echo
-            echo "If these deletions are legitimate, set the repository variable \`ALLOW_WORKFLOW_EDITS=true\` (for canonical-source deletions) or \`ALLOW_BULK_DELETE=true\` (for threshold-triggered rejections) under Settings → Secrets and variables → Actions, then remove \`ai:destructive-blocked\` from the issue and redispatch. **Note:** the orchestrator judge may still regenerate this task under a different issue number — the per-issue block does not cover judge-cycle regeneration (see PRs #917/#931 for context)."
+            echo "If these deletions are legitimate, set the repository variable \`ALLOW_WORKFLOW_EDITS=true\` (for canonical-source deletions) or \`ALLOW_BULK_DELETE=true\` (for threshold-triggered rejections) under Settings → Secrets and variables → Actions, then remove \`ai:destructive-blocked\` from the issue if it is present and redispatch. **Note:** the orchestrator judge may still regenerate this task under a different issue number — the per-issue block does not cover judge-cycle regeneration (see PRs #917/#931 for context)."
           } > /tmp/destructive_comment.md
           gh issue comment "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
             --body-file /tmp/destructive_comment.md 2>/dev/null || true

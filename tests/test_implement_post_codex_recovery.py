@@ -1123,6 +1123,8 @@ def test_destructive_guard_latch_verifies_label_applied() -> None:
 	assert "gh issue view \"${ISSUE_NUMBER}\" --repo \"${{ github.repository }}\" --json labels -q '.labels[].name' 2>/dev/null || true" not in destructive_block
 	assert "::warning::Could not verify ai:destructive-blocked" in destructive_block
 	assert "::error::FAILED to latch ai:destructive-blocked" in destructive_block
+	assert "The workflow attempted to apply \\`ai:destructive-blocked\\`; verify that the label is present before relying on the \\`Validate approval phase\\` redispatch block." in destructive_block
+	assert "remove \\`ai:destructive-blocked\\` from the issue if it is present and redispatch" in destructive_block
 	assert destructive_block.count(
 		"--description 'Implementation commit was refused for mass/destructive deletions — redispatch of this issue ID is blocked pending human review'"
 	) == 4
