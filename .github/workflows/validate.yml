@@ -669,12 +669,22 @@ jobs:
         id: workspace_state
         run: |
           set -euo pipefail
+          workspace_cache_matched_key=""
+          workspace_cache_path="${{ steps.workspace_meta.outputs.workspace_path }}"
+          workspace_cache_key="${{ steps.workspace_meta.outputs.workspace_cache_key }}"
+          workspace_cache_restore_prefix_issue="${{ steps.workspace_meta.outputs.workspace_cache_restore_prefix_issue }}"
+          workspace_cache_hit="${{ steps.workspace_cache.outputs.cache-hit || '' }}"
+          if [ "${workspace_cache_hit}" = "true" ]; then
+            workspace_cache_matched_key="${workspace_cache_key}"
+          elif [ -d "${workspace_cache_path}" ] && [ -n "$(find "${workspace_cache_path}" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
+            workspace_cache_matched_key="${workspace_cache_restore_prefix_issue}restored"
+          fi
           WORKSPACE_REUSE_ENABLED="${{ steps.workspace_meta.outputs.workspace_reuse_enabled }}" \
           WORKSPACE_REQUIRE_STABLE_IDENTIFIER_FOR_REUSE="true" \
           WORKSPACE_ISSUE_IDENTIFIER="${{ steps.workspace_meta.outputs.workspace_issue_identifier }}" \
           WORKSPACE_SOURCE_PATH="${GITHUB_WORKSPACE}" \
           WORKSPACE_FINGERPRINT="${{ steps.workspace_meta.outputs.workspace_fingerprint }}" \
-          WORKSPACE_CACHE_MATCHED_KEY="${{ steps.workspace_cache.outputs.cache-matched-key || '' }}" \
+          WORKSPACE_CACHE_MATCHED_KEY="${workspace_cache_matched_key}" \
             bash scripts/workspace_init.sh metadata
 
       - name: Finalize workspace contents
