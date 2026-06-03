@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_semble_contract.py:102 | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The lint CI check-run fails because the test asserts `OPTIONAL_BOOTSTRAP_SCRIPTS=\"install_semble.sh build_semble_wrapper.sh semble_helpers.sh\"` without `render_prompt.py`, but the workflow now includes `render_prompt.py`.\n  WHY: The actual workflow at .github/workflows/review_autofix.yml line 1279 includes `render_prompt.py`, so this is a pre-existing contract mismatch unrelated to the PR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_review_semble_contract.py:line 102 | confidence=5\n  PROBLEM: The lint CI check-run (failed[0]) reports an AssertionError at test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena.\n  WHY: The test asserts `OPTIONAL_BOOTSTRAP_SCRIPTS=\"install_semble.sh build_semble_wrapper.sh semble_helpers.sh\"` without `render_prompt.py`, but the actual workflow at .github/workflows/review_autofix.yml line 1279 includes `render_prompt.py` in the variable value; the test was not updated when the workflow variable was extended.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "3c366fdcdf71e5e5b35d879e12f721daf8ff77bfaa4d2b48d09a9ad41c817b0d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26863106271",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26863106271",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260603041824_9ac561001e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26863106271"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-03T04:18:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
