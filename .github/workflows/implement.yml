@@ -786,7 +786,7 @@ jobs:
 
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh render_prompt.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_stall_guard.sh orchestrate_force_tick.sh workspace_init.sh run_workspace_hook.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh render_prompt.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_stall_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh run_workspace_hook.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -1562,6 +1562,43 @@ jobs:
             echo "::error::Missing required support script ${CODEX_STALL_GUARD_HELPER}"
             exit 1
           fi
+          LEDGER_SUBSTATE_HELPER="scripts/ledger_emit_substate.sh"
+
+          emit_implement_substate() {
+            local phase_name="$1"
+            local mode_name="$2"
+            local event_or_substate="$3"
+            local attempt_number="$4"
+            local tokens_log_file="${5:-}"
+            local args=()
+
+            [ -f "${LEDGER_SUBSTATE_HELPER}" ] || return 0
+
+            args=(
+              --run-id "${GITHUB_RUN_ID}"
+              --workflow "implement"
+              --phase "${phase_name}"
+              --mode "${mode_name}"
+              --attempt "${attempt_number}"
+              --model "${MODEL_EDITOR:-}"
+              --issue-number "${ISSUE_NUMBER:-}"
+              --actor "${GITHUB_ACTOR:-codex-bot}"
+              --repo-root "${GITHUB_WORKSPACE:-$(pwd)}"
+            )
+            case "${event_or_substate}" in
+              codex_stall_observed|codex_stall_killed)
+                args+=(--event-type "${event_or_substate}")
+                ;;
+              *)
+                args+=(--substate "${event_or_substate}")
+                ;;
+            esac
+            if [ -n "${tokens_log_file}" ]; then
+              args+=(--tokens-log-file "${tokens_log_file}")
+            fi
+
+            bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" >/dev/null 2>&1 || true
+          }
 
           PROMPT_TEMPLATE_FILE="${RUNTIME_DIR}/mode-implement-inline.txt"
           cat > "${PROMPT_TEMPLATE_FILE}" <<'EOF'
@@ -1920,6 +1957,7 @@ jobs:
               attempt_wall="${budget_cap}"
               echo "Implement attempt ${attempt}: capping wall time to ${attempt_wall}s (budget-limited, ${remaining}s remain)."
             fi
+            emit_implement_substate "implement" "implement" "PreparingWorkspace" "${attempt}"
 
             # On retries after a no-op (Codex succeeded but made no file
             # changes), prepend a nudge so the model knows it must actually
@@ -2000,6 +2038,7 @@ jobs:
                 cat "${CODEX_PROMPT_FILE}"
               } > "${PROMPT_FILE_TO_USE}"
             fi
+            emit_implement_substate "implement" "implement" "BuildingPrompt" "${attempt}"
 
             # Run codex through the shared stall-guard wrapper. The
             # per-attempt `codex_log_attempt_<N>.txt` file is still preserved,
@@ -2017,6 +2056,9 @@ jobs:
             if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
               sanitize_codex_prompt_file "${PROMPT_FILE_TO_USE}"
             fi
+            emit_implement_substate "implement" "implement" "LaunchingAgentProcess" "${attempt}" "${attempt_log_file}"
+            emit_implement_substate "implement" "implement" "InitializingSession" "${attempt}" "${attempt_log_file}"
+            emit_implement_substate "implement" "implement" "StreamingTurn" "${attempt}" "${attempt_log_file}"
             cmd_rc=0
             timeout_cmd=()
             if command -v timeout >/dev/null 2>&1; then
@@ -2035,13 +2077,17 @@ jobs:
             wait "${attempt_log_tee_pid}" 2>/dev/null || true
             rm -rf "${attempt_log_pipe_dir}"
 
+            emit_implement_substate "implement" "implement" "Finishing" "${attempt}" "${attempt_log_file}"
+
             if attempt_stall_state="$(read_codex_stall_guard_state "${attempt_stall_status_file}")"; then
               case "${attempt_stall_state}" in
                 observed)
                   echo "Codex implement attempt ${attempt} recorded codex_stall_observed (observe-only mode)."
+                  emit_implement_substate "implement" "implement" "codex_stall_observed" "${attempt}" "${attempt_log_file}"
                   ;;
                 killed)
                   echo "::warning::Codex implement attempt ${attempt} recorded codex_stall_killed."
+                  emit_implement_substate "implement" "implement" "codex_stall_killed" "${attempt}" "${attempt_log_file}"
                   ;;
               esac
             elif [ -s "${attempt_stall_status_file}" ]; then
@@ -2064,6 +2110,7 @@ jobs:
                 if [ -n "${codex_delta}" ]; then
                   echo "Codex implement succeeded with file changes on attempt ${attempt}."
                   implement_succeeded=true
+                  emit_implement_substate "implement" "implement" "Succeeded" "${attempt}" "${attempt_log_file}"
                   break
                 fi
                 # Baseline-relative delta is empty — Codex produced no new
@@ -2077,6 +2124,7 @@ jobs:
                   echo "Codex implement reported success-no-op on attempt ${attempt} (model says the requested work is already present)."
                   : > "${RUNTIME_DIR}/codex_success_noop.flag"
                   implement_succeeded=true
+                  emit_implement_substate "implement" "implement" "Succeeded" "${attempt}" "${attempt_log_file}"
                   break
                 fi
                 # Stuck-intent detection (run 25206967321 issue #1860,
@@ -2119,6 +2167,7 @@ jobs:
                 if delta_is_substantive "${codex_delta}"; then
                   echo "::warning::Codex returned empty output on attempt ${attempt} but produced file changes; salvaging partial work."
                   implement_succeeded=true
+                  emit_implement_substate "implement" "implement" "Succeeded" "${attempt}" "${attempt_log_file}"
                   break
                 elif [ -n "${codex_delta}" ]; then
                   echo "::warning::Codex returned empty output on attempt ${attempt} and only made whitespace-only worktree changes — refusing to salvage; treating as empty."
@@ -2159,6 +2208,7 @@ jobs:
               if delta_is_substantive "${codex_delta}"; then
                 echo "::warning::Codex exited with code $cmd_rc on attempt ${attempt} but produced file changes; salvaging partial work."
                 implement_succeeded=true
+                emit_implement_substate "implement" "implement" "Succeeded" "${attempt}" "${attempt_log_file}"
                 break
               elif [ -n "${codex_delta}" ]; then
                 echo "::warning::Codex exited with code $cmd_rc on attempt ${attempt} and only made whitespace-only worktree changes — refusing to salvage; treating as empty."
@@ -2214,6 +2264,7 @@ jobs:
                   "${attempt_log_file}"; then
               echo "::error::Codex emitted request_user_input in exec mode (issue/plan ambiguity). Aborting retry loop and routing back to clarify."
               : > "${RUNTIME_DIR}/codex_request_user_input.flag"
+              emit_implement_substate "implement" "implement" "Failed" "${attempt}" "${attempt_log_file}"
               break
             fi
 
@@ -2245,11 +2296,24 @@ jobs:
               if [ "${empty_streak}" -ge "${empty_streak_threshold}" ]; then
                 echo "::error::Codex produced no actionable output ${empty_streak} attempts in a row (empty-output and/or announced-edit-without-changes) — agent loop is stuck in exploration. Aborting retry loop."
                 : > "${RUNTIME_DIR}/codex_stuck_in_exploration.flag"
+                emit_implement_substate "implement" "implement" "Failed" "${attempt}" "${attempt_log_file}"
                 break
               fi
             else
               empty_streak=0
             fi
+
+            case "${attempt_stall_state}:${cmd_rc}" in
+              killed:*|*:137)
+                emit_implement_substate "implement" "implement" "Stalled" "${attempt}" "${attempt_log_file}"
+                ;;
+              *:124)
+                emit_implement_substate "implement" "implement" "TimedOut" "${attempt}" "${attempt_log_file}"
+                ;;
+              *)
+                emit_implement_substate "implement" "implement" "Failed" "${attempt}" "${attempt_log_file}"
+                ;;
+            esac
 
             if [ "${attempt}" -lt "${max_attempts}" ]; then
               sleep_secs=$((10 * (2 ** (attempt - 1))))
@@ -2667,6 +2731,42 @@ jobs:
 
           REPAIR_PROMPT_TEMPLATE="prompts/mode-implement-repair.txt"
           REPAIR_VALIDATOR_SCRIPT="scripts/validate_changed_files_syntax.sh"
+          LEDGER_SUBSTATE_HELPER="scripts/ledger_emit_substate.sh"
+          emit_implement_substate() {
+            local phase_name="$1"
+            local mode_name="$2"
+            local event_or_substate="$3"
+            local attempt_number="$4"
+            local tokens_log_file="${5:-}"
+            local args=()
+
+            [ -f "${LEDGER_SUBSTATE_HELPER}" ] || return 0
+
+            args=(
+              --run-id "${GITHUB_RUN_ID}"
+              --workflow "implement"
+              --phase "${phase_name}"
+              --mode "${mode_name}"
+              --attempt "${attempt_number}"
+              --model "${MODEL_EDITOR:-}"
+              --issue-number "${ISSUE_NUMBER:-}"
+              --actor "${GITHUB_ACTOR:-codex-bot}"
+              --repo-root "${GITHUB_WORKSPACE:-$(pwd)}"
+            )
+            case "${event_or_substate}" in
+              codex_stall_observed|codex_stall_killed)
+                args+=(--event-type "${event_or_substate}")
+                ;;
+              *)
+                args+=(--substate "${event_or_substate}")
+                ;;
+            esac
+            if [ -n "${tokens_log_file}" ]; then
+              args+=(--tokens-log-file "${tokens_log_file}")
+            fi
+
+            bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" >/dev/null 2>&1 || true
+          }
           CAPTURE_FILE="${RUNTIME_DIR}/post_codex_validation_errors.txt"
           INITIAL_CHANGED_FILE="${RUNTIME_DIR}/post_codex_initial_changed_files.txt"
           CAPTURED_FILES_FILE="${RUNTIME_DIR}/post_codex_captured_files.txt"
@@ -2916,6 +3016,7 @@ jobs:
           repair_succeeded=false
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Post-Codex syntax repair attempt ${attempt}/${max_attempts}"
+            emit_implement_substate "implement_repair" "implement_repair" "PreparingWorkspace" "${attempt}"
 
             BASELINE_COMMIT="$(git stash create "post-codex-repair-attempt-${attempt}" || true)"
             if [ -z "${BASELINE_COMMIT}" ]; then
@@ -2976,16 +3077,23 @@ jobs:
                 semble_query_block "$(cat "${REPAIR_SEMBLE_QUERY_FILE}")" 6 "Implement Repair Context" || true
               fi
             } > "${REPAIR_PROMPT_FILE}"
+            emit_implement_substate "implement_repair" "implement_repair" "BuildingPrompt" "${attempt}"
 
             REPAIR_OUTPUT_FILE="${RUNTIME_DIR}/post_codex_repair_output_attempt_${attempt}.txt"
             REPAIR_LOG_FILE="${RUNTIME_DIR}/post_codex_repair_log_attempt_${attempt}.txt"
             if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
               sanitize_codex_prompt_file "${REPAIR_PROMPT_FILE}"
             fi
+            emit_implement_substate "implement_repair" "implement_repair" "LaunchingAgentProcess" "${attempt}" "${REPAIR_LOG_FILE}"
+            emit_implement_substate "implement_repair" "implement_repair" "InitializingSession" "${attempt}" "${REPAIR_LOG_FILE}"
+            emit_implement_substate "implement_repair" "implement_repair" "StreamingTurn" "${attempt}" "${REPAIR_LOG_FILE}"
             if ! codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${REPAIR_PROMPT_FILE}" > "${REPAIR_OUTPUT_FILE}" 2> >(tee -a "${REPAIR_LOG_FILE}" >&2); then
+              emit_implement_substate "implement_repair" "implement_repair" "Finishing" "${attempt}" "${REPAIR_LOG_FILE}"
               echo "::warning::Post-Codex repair attempt ${attempt} failed while invoking Codex."
+              emit_implement_substate "implement_repair" "implement_repair" "Failed" "${attempt}" "${REPAIR_LOG_FILE}"
               continue
             fi
+            emit_implement_substate "implement_repair" "implement_repair" "Finishing" "${attempt}" "${REPAIR_LOG_FILE}"
 
             tracked_strays=()
             while IFS= read -r -d '' changed_path; do
@@ -3048,14 +3156,17 @@ jobs:
                   rm -rf -- "${safe_untracked[@]}"
                 fi
               fi
+              emit_implement_substate "implement_repair" "implement_repair" "Failed" "${attempt}" "${REPAIR_LOG_FILE}"
               continue
             fi
 
             rm -f "${CAPTURE_FILE}"
             if CAPTURE_FILE="${CAPTURE_FILE}" RUNTIME_DIR="${RUNTIME_DIR}" bash "${REPAIR_VALIDATOR_SCRIPT}"; then
               repair_succeeded=true
+              emit_implement_substate "implement_repair" "implement_repair" "Succeeded" "${attempt}" "${REPAIR_LOG_FILE}"
               break
             fi
+            emit_implement_substate "implement_repair" "implement_repair" "Failed" "${attempt}" "${REPAIR_LOG_FILE}"
           done
 
           if [ "${repair_succeeded}" != 'true' ]; then

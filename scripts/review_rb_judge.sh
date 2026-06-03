@@ -28,6 +28,17 @@ fi
 SUPPORT_PROMPTS_DIR="${SUPPORT_PROMPTS_DIR:-${SUPPORT_ROOT_DIR}/prompts}"
 CODEX_HEARTBEAT_HELPER="${SUPPORT_SCRIPTS_DIR}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR}/codex_stall_guard.sh"
+LEDGER_SUBSTATE_HELPER=""
+for _ledger_candidate in \
+  "${SUPPORT_SCRIPTS_DIR}/ledger_emit_substate.sh" \
+  ".codex-workflow-src/scripts/ledger_emit_substate.sh" \
+  ".codex-workflow-src-main/scripts/ledger_emit_substate.sh" \
+  "scripts/ledger_emit_substate.sh"; do
+  if [ -f "${_ledger_candidate}" ]; then
+    LEDGER_SUBSTATE_HELPER="${_ledger_candidate}"
+    break
+  fi
+done
 source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 # Fallback: if gh_helpers.sh was not sourced (missing file), define a
 # pass-through so subsequent `gh_retry gh ...` calls still execute —
@@ -119,6 +130,42 @@ read_codex_stall_guard_state_with_warning() {
     echo "::warning::${context}: could not parse codex stall guard status from ${status_file}."
   fi
   return 1
+}
+
+emit_review_rb_substate() {
+  local phase_name="$1"
+  local mode_name="$2"
+  local event_or_substate="$3"
+  local attempt_number="$4"
+  local tokens_log_file="${5:-}"
+  local args=()
+
+  [ -f "${LEDGER_SUBSTATE_HELPER:-}" ] || return 0
+
+  args=(
+    --run-id "${GITHUB_RUN_ID:-}"
+    --workflow "review_autofix"
+    --phase "${phase_name}"
+    --mode "${mode_name}"
+    --attempt "${attempt_number}"
+    --model "${MODEL_EDITOR:-}"
+    --pr-number "${PR_NUMBER:-}"
+    --actor "${GITHUB_ACTOR:-codex-bot}"
+    --repo-root "$(pwd)"
+  )
+  case "${event_or_substate}" in
+    codex_stall_observed|codex_stall_killed)
+      args+=(--event-type "${event_or_substate}")
+      ;;
+    *)
+      args+=(--substate "${event_or_substate}")
+      ;;
+  esac
+  if [ -n "${tokens_log_file}" ]; then
+    args+=(--tokens-log-file "${tokens_log_file}")
+  fi
+
+  bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" >/dev/null 2>&1 || true
 }
 # Some harnesses stub only `_embed_input_file`; keep prompt-budget lifecycle
 # helpers safe in that degraded mode so prompt assembly / EXIT cleanup do not
@@ -1103,11 +1150,14 @@ judge_codex_cmd=(
 for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
   attempt="$((attempt_idx + 1))"
   level="${JUDGE_ATTEMPT_LEVELS[$attempt_idx]}"
+  rc=0
   echo "Review-blocked judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} (reasoning=${level})..."
+  emit_review_rb_substate "review_rb_judge" "judge" "PreparingWorkspace" "${attempt}"
   if [ -f "${HOME}/.codex/config.toml" ]; then
     sed -i "s/model_reasoning_effort = \".*\"/model_reasoning_effort = \"${level}\"/" "${HOME}/.codex/config.toml"
   fi
   sanitize_codex_prompt_file "${RB_JUDGE_PROMPT}"
+  emit_review_rb_substate "review_rb_judge" "judge" "BuildingPrompt" "${attempt}"
   if [ "${RB_JUDGE_PROMPT_SIZE_LOGGED}" != "true" ]; then
     RB_JUDGE_PROMPT_BYTES="$(wc -c < "${RB_JUDGE_PROMPT}" 2>/dev/null | tr -cd '0-9' || true)"
     [[ "${RB_JUDGE_PROMPT_BYTES}" =~ ^[0-9]+$ ]] || RB_JUDGE_PROMPT_BYTES=0
@@ -1120,6 +1170,9 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
   fi
   judge_stall_status_file="$(mktemp /tmp/rb_judge_stall_status.XXXXXX)"
   judge_stall_state=""
+  emit_review_rb_substate "review_rb_judge" "judge" "LaunchingAgentProcess" "${attempt}" "${JUDGE_STDERR_FILE}"
+  emit_review_rb_substate "review_rb_judge" "judge" "InitializingSession" "${attempt}" "${JUDGE_STDERR_FILE}"
+  emit_review_rb_substate "review_rb_judge" "judge" "StreamingTurn" "${attempt}" "${JUDGE_STDERR_FILE}"
   if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
     if "${CODEX_STALL_GUARD_HELPER}" \
       --phase review_rb_judge \
@@ -1130,6 +1183,7 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
       if judge_stall_state="$(read_codex_stall_guard_state_with_warning "${judge_stall_status_file}" "Review-blocked judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT}" )"; then
         :
       fi
+      emit_review_rb_substate "review_rb_judge" "judge" "Finishing" "${attempt}" "${JUDGE_STDERR_FILE}"
       if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT}"; then
         JUDGE_EFFECTIVE_REASONING_EFFORT="${level}"
         JUDGE_SUCCESS=true
@@ -1137,11 +1191,14 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
         case "${judge_stall_state}" in
           observed)
             echo "Review-blocked judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} recorded codex_stall_observed (observe-only mode)."
+            emit_review_rb_substate "review_rb_judge" "judge" "codex_stall_observed" "${attempt}" "${JUDGE_STDERR_FILE}"
             ;;
           killed)
             echo "::warning::Review-blocked judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} recorded codex_stall_killed."
+            emit_review_rb_substate "review_rb_judge" "judge" "codex_stall_killed" "${attempt}" "${JUDGE_STDERR_FILE}"
             ;;
         esac
+        emit_review_rb_substate "review_rb_judge" "judge" "Succeeded" "${attempt}" "${JUDGE_STDERR_FILE}"
         break
       fi
       echo "::warning::Judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} produced empty stdout (reasoning=${level})."
@@ -1153,11 +1210,14 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
         case "${judge_stall_state}" in
           observed)
             echo "Review-blocked judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} recorded codex_stall_observed (observe-only mode)."
+            emit_review_rb_substate "review_rb_judge" "judge" "codex_stall_observed" "${attempt}" "${JUDGE_STDERR_FILE}"
             ;;
           killed)
             echo "::warning::Review-blocked judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} recorded codex_stall_killed."
+            emit_review_rb_substate "review_rb_judge" "judge" "codex_stall_killed" "${attempt}" "${JUDGE_STDERR_FILE}"
             ;;
         esac
+        emit_review_rb_substate "review_rb_judge" "judge" "Succeeded" "${attempt}" "${JUDGE_STDERR_FILE}"
         break
       fi
     else
@@ -1165,6 +1225,7 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
       if judge_stall_state="$(read_codex_stall_guard_state_with_warning "${judge_stall_status_file}" "Review-blocked judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT}" )"; then
         :
       fi
+      emit_review_rb_substate "review_rb_judge" "judge" "Finishing" "${attempt}" "${JUDGE_STDERR_FILE}"
       echo "::warning::Judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} codex exec failed (rc=${rc}, reasoning=${level})."
       if [ -s "${JUDGE_STDERR_FILE}" ]; then
         echo "--- judge stderr (attempt ${attempt}) ---"
@@ -1181,11 +1242,14 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
         case "${judge_stall_state}" in
           observed)
             echo "Review-blocked judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} recorded codex_stall_observed (observe-only mode)."
+            emit_review_rb_substate "review_rb_judge" "judge" "codex_stall_observed" "${attempt}" "${JUDGE_STDERR_FILE}"
             ;;
           killed)
             echo "::warning::Review-blocked judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} recorded codex_stall_killed."
+            emit_review_rb_substate "review_rb_judge" "judge" "codex_stall_killed" "${attempt}" "${JUDGE_STDERR_FILE}"
             ;;
         esac
+        emit_review_rb_substate "review_rb_judge" "judge" "Succeeded" "${attempt}" "${JUDGE_STDERR_FILE}"
         break
       fi
     fi
@@ -1195,10 +1259,12 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
       --stdout-file "${RB_JUDGE_OUTPUT}" \
       --stderr-file "${JUDGE_STDERR_FILE}" \
       -- "${judge_codex_cmd[@]}" < "${RB_JUDGE_PROMPT}"; then
+      emit_review_rb_substate "review_rb_judge" "judge" "Finishing" "${attempt}" "${JUDGE_STDERR_FILE}"
       if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT}"; then
         JUDGE_EFFECTIVE_REASONING_EFFORT="${level}"
         JUDGE_SUCCESS=true
         rm -f "${judge_stall_status_file}"
+        emit_review_rb_substate "review_rb_judge" "judge" "Succeeded" "${attempt}" "${JUDGE_STDERR_FILE}"
         break
       fi
       echo "::warning::Judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} produced empty stdout (reasoning=${level})."
@@ -1207,10 +1273,12 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
         JUDGE_EFFECTIVE_REASONING_EFFORT="${level}"
         JUDGE_SUCCESS=true
         rm -f "${judge_stall_status_file}"
+        emit_review_rb_substate "review_rb_judge" "judge" "Succeeded" "${attempt}" "${JUDGE_STDERR_FILE}"
         break
       fi
     else
       rc=$?
+      emit_review_rb_substate "review_rb_judge" "judge" "Finishing" "${attempt}" "${JUDGE_STDERR_FILE}"
       echo "::warning::Judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} codex exec failed (rc=${rc}, reasoning=${level})."
       if [ -s "${JUDGE_STDERR_FILE}" ]; then
         echo "--- judge stderr (attempt ${attempt}) ---"
@@ -1222,14 +1290,17 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
         JUDGE_EFFECTIVE_REASONING_EFFORT="${level}"
         JUDGE_SUCCESS=true
         rm -f "${judge_stall_status_file}"
+        emit_review_rb_substate "review_rb_judge" "judge" "Succeeded" "${attempt}" "${JUDGE_STDERR_FILE}"
         break
       fi
     fi
   elif codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox read-only < "${RB_JUDGE_PROMPT}" > "${RB_JUDGE_OUTPUT}" 2>"${JUDGE_STDERR_FILE}"; then
+    emit_review_rb_substate "review_rb_judge" "judge" "Finishing" "${attempt}" "${JUDGE_STDERR_FILE}"
     if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT}"; then
       JUDGE_EFFECTIVE_REASONING_EFFORT="${level}"
       JUDGE_SUCCESS=true
       rm -f "${judge_stall_status_file}"
+      emit_review_rb_substate "review_rb_judge" "judge" "Succeeded" "${attempt}" "${JUDGE_STDERR_FILE}"
       break
     fi
     echo "::warning::Judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} produced empty stdout (reasoning=${level})."
@@ -1238,10 +1309,12 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
       JUDGE_EFFECTIVE_REASONING_EFFORT="${level}"
       JUDGE_SUCCESS=true
       rm -f "${judge_stall_status_file}"
+      emit_review_rb_substate "review_rb_judge" "judge" "Succeeded" "${attempt}" "${JUDGE_STDERR_FILE}"
       break
     fi
   else
     rc=$?
+    emit_review_rb_substate "review_rb_judge" "judge" "Finishing" "${attempt}" "${JUDGE_STDERR_FILE}"
     echo "::warning::Judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} codex exec failed (rc=${rc}, reasoning=${level})."
     if [ -s "${JUDGE_STDERR_FILE}" ]; then
       echo "--- judge stderr (attempt ${attempt}) ---"
@@ -1253,6 +1326,7 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
       JUDGE_EFFECTIVE_REASONING_EFFORT="${level}"
       JUDGE_SUCCESS=true
       rm -f "${judge_stall_status_file}"
+      emit_review_rb_substate "review_rb_judge" "judge" "Succeeded" "${attempt}" "${JUDGE_STDERR_FILE}"
       break
     fi
   fi
@@ -1260,11 +1334,18 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
   case "${judge_stall_state}" in
     observed)
       echo "Review-blocked judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} recorded codex_stall_observed (observe-only mode)."
+      emit_review_rb_substate "review_rb_judge" "judge" "codex_stall_observed" "${attempt}" "${JUDGE_STDERR_FILE}"
       ;;
     killed)
       echo "::warning::Review-blocked judge attempt ${attempt}/${JUDGE_ATTEMPT_COUNT} recorded codex_stall_killed."
+      emit_review_rb_substate "review_rb_judge" "judge" "codex_stall_killed" "${attempt}" "${JUDGE_STDERR_FILE}"
       ;;
   esac
+  if codex_stall_guard_kill_detected "${rc:-0}" "${judge_stall_state}"; then
+    emit_review_rb_substate "review_rb_judge" "judge" "Stalled" "${attempt}" "${JUDGE_STDERR_FILE}"
+  else
+    emit_review_rb_substate "review_rb_judge" "judge" "Failed" "${attempt}" "${JUDGE_STDERR_FILE}"
+  fi
   if [ "${attempt}" -lt "${JUDGE_ATTEMPT_COUNT}" ]; then
     sleep 10
   fi
@@ -1606,11 +1687,17 @@ __EDIT_DISCIPLINE__
         sed -i "s/model_reasoning_effort = \".*\"/model_reasoning_effort = \"${JUDGE_EFFECTIVE_REASONING_EFFORT}\"/" "${HOME}/.codex/config.toml"
       fi
 
+      rb_fix_attempt="$((RETRY_COUNT + 1))"
+      emit_review_rb_substate "review_rb_fix" "judge_fix" "PreparingWorkspace" "${rb_fix_attempt}"
       sanitize_codex_prompt_file "${RB_FIX_PROMPT}"
+      emit_review_rb_substate "review_rb_fix" "judge_fix" "BuildingPrompt" "${rb_fix_attempt}"
       RB_FIX_STDERR="$(mktemp /tmp/rb_fix_stderr.XXXXXX)"
       rb_fix_stall_status_file="$(mktemp /tmp/rb_fix_stall_status.XXXXXX)"
       rb_fix_stall_state=""
       rb_fix_rc=0
+      emit_review_rb_substate "review_rb_fix" "judge_fix" "LaunchingAgentProcess" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
+      emit_review_rb_substate "review_rb_fix" "judge_fix" "InitializingSession" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
+      emit_review_rb_substate "review_rb_fix" "judge_fix" "StreamingTurn" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
       if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
         if "${CODEX_STALL_GUARD_HELPER}" \
           --phase review_rb_fix \
@@ -1621,12 +1708,14 @@ __EDIT_DISCIPLINE__
           if rb_fix_stall_state="$(read_codex_stall_guard_state_with_warning "${rb_fix_stall_status_file}" "Review-blocked fix codex" )"; then
             :
           fi
+          emit_review_rb_substate "review_rb_fix" "judge_fix" "Finishing" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
           echo "Fix codex completed."
         else
           rb_fix_rc=$?
           if rb_fix_stall_state="$(read_codex_stall_guard_state_with_warning "${rb_fix_stall_status_file}" "Review-blocked fix codex" )"; then
             :
           fi
+          emit_review_rb_substate "review_rb_fix" "judge_fix" "Finishing" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
           echo "::warning::Fix codex failed for PR #${PR_NUMBER}."
         fi
       elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
@@ -1635,25 +1724,38 @@ __EDIT_DISCIPLINE__
           --stdout-file "${RB_FIX_OUTPUT}" \
           --stderr-file "${RB_FIX_STDERR}" \
           -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${RB_FIX_PROMPT}"; then
+          emit_review_rb_substate "review_rb_fix" "judge_fix" "Finishing" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
           echo "Fix codex completed."
         else
           rb_fix_rc=$?
+          emit_review_rb_substate "review_rb_fix" "judge_fix" "Finishing" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
           echo "::warning::Fix codex failed for PR #${PR_NUMBER}."
         fi
       elif codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${RB_FIX_PROMPT}" > "${RB_FIX_OUTPUT}" 2>/dev/null; then
+        emit_review_rb_substate "review_rb_fix" "judge_fix" "Finishing" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
         echo "Fix codex completed."
       else
         rb_fix_rc=$?
+        emit_review_rb_substate "review_rb_fix" "judge_fix" "Finishing" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
         echo "::warning::Fix codex failed for PR #${PR_NUMBER}."
       fi
       case "${rb_fix_stall_state}" in
         observed)
           echo "Review-blocked fix codex recorded codex_stall_observed (observe-only mode)."
+          emit_review_rb_substate "review_rb_fix" "judge_fix" "codex_stall_observed" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
           ;;
         killed)
           echo "::warning::Review-blocked fix codex recorded codex_stall_killed."
+          emit_review_rb_substate "review_rb_fix" "judge_fix" "codex_stall_killed" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
           ;;
       esac
+      if codex_stall_guard_kill_detected "${rb_fix_rc}" "${rb_fix_stall_state}"; then
+        emit_review_rb_substate "review_rb_fix" "judge_fix" "Stalled" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
+      elif [ "${rb_fix_rc}" -eq 0 ]; then
+        emit_review_rb_substate "review_rb_fix" "judge_fix" "Succeeded" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
+      else
+        emit_review_rb_substate "review_rb_fix" "judge_fix" "Failed" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
+      fi
       rm -f "${RB_FIX_STDERR}" "${rb_fix_stall_status_file}"
 
       # Restore editor reasoning effort

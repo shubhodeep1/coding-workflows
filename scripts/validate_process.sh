@@ -2461,6 +2461,17 @@ trap cleanup_runtime_containers EXIT
 _validate_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODEX_HEARTBEAT_HELPER="${_validate_script_dir}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${_validate_script_dir}/codex_stall_guard.sh"
+LEDGER_SUBSTATE_HELPER=""
+for _ledger_candidate in \
+  "${_validate_script_dir}/ledger_emit_substate.sh" \
+  "scripts/ledger_emit_substate.sh" \
+  ".codex-workflow-src/scripts/ledger_emit_substate.sh" \
+  ".codex-workflow-src-main/scripts/ledger_emit_substate.sh"; do
+  if [ -f "${_ledger_candidate}" ]; then
+    LEDGER_SUBSTATE_HELPER="${_ledger_candidate}"
+    break
+  fi
+done
 bash "${_validate_script_dir}/write_codex_config.sh" \
   --model "${MODEL_EDITOR}" \
   --reasoning "${MODEL_REASONING_EFFORT}" \
@@ -2471,6 +2482,42 @@ read_validate_codex_stall_guard_state() {
 
   [ -s "${status_file}" ] || return 1
   sed -n 's/^state=//p' "${status_file}" | head -n 1
+}
+
+emit_validate_substate() {
+  local phase_name="$1"
+  local mode_name="$2"
+  local event_or_substate="$3"
+  local attempt_number="$4"
+  local tokens_log_file="${5:-}"
+  local args=()
+
+  [ -f "${LEDGER_SUBSTATE_HELPER:-}" ] || return 0
+
+  args=(
+    --run-id "${GITHUB_RUN_ID:-}"
+    --workflow "validate"
+    --phase "${phase_name}"
+    --mode "${mode_name}"
+    --attempt "${attempt_number}"
+    --model "${MODEL_EDITOR:-}"
+    --issue-number "${TRACKING_ISSUE_NUM:-}"
+    --actor "${GITHUB_ACTOR:-codex-bot}"
+    --repo-root "$(pwd)"
+  )
+  case "${event_or_substate}" in
+    codex_stall_observed|codex_stall_killed)
+      args+=(--event-type "${event_or_substate}")
+      ;;
+    *)
+      args+=(--substate "${event_or_substate}")
+      ;;
+  esac
+  if [ -n "${tokens_log_file}" ]; then
+    args+=(--tokens-log-file "${tokens_log_file}")
+  fi
+
+  bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" >/dev/null 2>&1 || true
 }
 
 run_validate_codex_attempt() {
@@ -2681,13 +2728,19 @@ else
   for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
   DISCOVER_ATTEMPTS_USED="${attempt}"
   echo "Validation hint discovery attempt ${attempt}/${MAX_CODEX_ATTEMPTS}"
+  emit_validate_substate "validate_discover" "discover" "PreparingWorkspace" "${attempt}"
+  emit_validate_substate "validate_discover" "discover" "BuildingPrompt" "${attempt}"
   sanitize_codex_prompt_file "${DISCOVER_PROMPT_FILE}"
   discover_stall_status_file="$(mktemp /tmp/validate_discover_stall_status.XXXXXX)"
   discover_stall_state=""
+  emit_validate_substate "validate_discover" "discover" "LaunchingAgentProcess" "${attempt}"
+  emit_validate_substate "validate_discover" "discover" "InitializingSession" "${attempt}"
+  emit_validate_substate "validate_discover" "discover" "StreamingTurn" "${attempt}"
   set +e
   run_validate_codex_attempt "validate_discover" "${DISCOVER_PROMPT_FILE}" "${DISCOVER_OUTPUT_FILE}" "${DISCOVER_LOG_FILE}" "${discover_stall_status_file}"
   DISCOVER_EXIT=$?
   set -e
+  emit_validate_substate "validate_discover" "discover" "Finishing" "${attempt}" "${DISCOVER_LOG_FILE}"
   if discover_stall_state="$(read_validate_codex_stall_guard_state "${discover_stall_status_file}" 2>/dev/null)"; then
     :
   elif [ -s "${discover_stall_status_file}" ]; then
@@ -2697,9 +2750,11 @@ else
   case "${discover_stall_state}" in
     observed)
       echo "Validation hint discovery attempt ${attempt}/${MAX_CODEX_ATTEMPTS}: codex_stall_observed recorded (observe-only mode)."
+      emit_validate_substate "validate_discover" "discover" "codex_stall_observed" "${attempt}" "${DISCOVER_LOG_FILE}"
       ;;
     killed)
       echo "::warning::Validation hint discovery attempt ${attempt}/${MAX_CODEX_ATTEMPTS}: codex_stall_killed recorded."
+      emit_validate_substate "validate_discover" "discover" "codex_stall_killed" "${attempt}" "${DISCOVER_LOG_FILE}"
       ;;
   esac
 
@@ -2758,9 +2813,16 @@ PY
     then
       DISCOVER_SUCCESS=true
       HINTS_SOURCE="discovered"
+      emit_validate_substate "validate_discover" "discover" "Succeeded" "${attempt}" "${DISCOVER_LOG_FILE}"
       break
     else
       DISCOVER_FAILURE_MODE="validator_rejected"
+    fi
+
+    if [ "${discover_stall_state}" = "killed" ]; then
+      emit_validate_substate "validate_discover" "discover" "Stalled" "${attempt}" "${DISCOVER_LOG_FILE}"
+    else
+      emit_validate_substate "validate_discover" "discover" "Failed" "${attempt}" "${DISCOVER_LOG_FILE}"
     fi
 
     if [ "${attempt}" -lt "${MAX_CODEX_ATTEMPTS}" ]; then
@@ -3395,13 +3457,19 @@ DIAGNOSE_ATTEMPTS_USED=0
 for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
   DIAGNOSE_ATTEMPTS_USED="${attempt}"
   echo "Validation diagnosis attempt ${attempt}/${MAX_CODEX_ATTEMPTS}"
+  emit_validate_substate "validate_diagnose" "diagnose" "PreparingWorkspace" "${attempt}"
+  emit_validate_substate "validate_diagnose" "diagnose" "BuildingPrompt" "${attempt}"
   sanitize_codex_prompt_file "${DIAGNOSE_PROMPT_FILE}"
   diagnose_stall_status_file="$(mktemp /tmp/validate_diagnose_stall_status.XXXXXX)"
   diagnose_stall_state=""
+  emit_validate_substate "validate_diagnose" "diagnose" "LaunchingAgentProcess" "${attempt}"
+  emit_validate_substate "validate_diagnose" "diagnose" "InitializingSession" "${attempt}"
+  emit_validate_substate "validate_diagnose" "diagnose" "StreamingTurn" "${attempt}"
   set +e
   run_validate_codex_attempt "validate_diagnose" "${DIAGNOSE_PROMPT_FILE}" "${DIAGNOSE_OUTPUT_FILE}" "${DIAGNOSE_LOG_FILE}" "${diagnose_stall_status_file}"
   DIAGNOSE_EXIT=$?
   set -e
+  emit_validate_substate "validate_diagnose" "diagnose" "Finishing" "${attempt}" "${DIAGNOSE_LOG_FILE}"
   if diagnose_stall_state="$(read_validate_codex_stall_guard_state "${diagnose_stall_status_file}" 2>/dev/null)"; then
     :
   elif [ -s "${diagnose_stall_status_file}" ]; then
@@ -3411,9 +3479,11 @@ for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
   case "${diagnose_stall_state}" in
     observed)
       echo "Validation diagnosis attempt ${attempt}/${MAX_CODEX_ATTEMPTS}: codex_stall_observed recorded (observe-only mode)."
+      emit_validate_substate "validate_diagnose" "diagnose" "codex_stall_observed" "${attempt}" "${DIAGNOSE_LOG_FILE}"
       ;;
     killed)
       echo "::warning::Validation diagnosis attempt ${attempt}/${MAX_CODEX_ATTEMPTS}: codex_stall_killed recorded."
+      emit_validate_substate "validate_diagnose" "diagnose" "codex_stall_killed" "${attempt}" "${DIAGNOSE_LOG_FILE}"
       ;;
   esac
 
@@ -3427,9 +3497,16 @@ for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
     DIAGNOSE_FAILURE_MODE="codex_empty_output"
   elif extract_last_json_with_key "${DIAGNOSE_OUTPUT_FILE}" "status" "${DIAGNOSE_RESULT_FILE}"; then
     DIAGNOSE_SUCCESS=true
+    emit_validate_substate "validate_diagnose" "diagnose" "Succeeded" "${attempt}" "${DIAGNOSE_LOG_FILE}"
     break
   else
     DIAGNOSE_FAILURE_MODE="validator_rejected"
+  fi
+
+  if [ "${diagnose_stall_state}" = "killed" ]; then
+    emit_validate_substate "validate_diagnose" "diagnose" "Stalled" "${attempt}" "${DIAGNOSE_LOG_FILE}"
+  else
+    emit_validate_substate "validate_diagnose" "diagnose" "Failed" "${attempt}" "${DIAGNOSE_LOG_FILE}"
   fi
 
   if [ "${attempt}" -lt "${MAX_CODEX_ATTEMPTS}" ]; then
