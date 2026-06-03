@@ -3383,6 +3383,7 @@ jobs:
             && ! gh label edit 'ai:destructive-blocked' \
             --repo "${{ github.repository }}" \
             --color 'b60205' \
+            --description 'Implementation commit was refused for mass/destructive deletions — redispatch of this issue ID is blocked pending human review' \
             2>/dev/null; then
             echo "::warning::Could not ensure the ai:destructive-blocked label exists on ${{ github.repository }} — the GH_PAT may lack issues:write. The follow-up read below reports whether the issue itself ended up latched."
           fi

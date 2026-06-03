@@ -97,9 +97,11 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 		'review_conflict_prepare.sh"'
 	) in stage_block
 	# build_semble_wrapper.sh added once the BM25 wrapper was extracted to a
-	# shared script (semble 0.1.3 ships no index/query CLI). Kept in the same
-	# optional-bootstrap loop so callers without it still fail-soft.
-	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh"' in stage_block
+	# shared script (semble 0.1.3 ships no index/query CLI). render_prompt.py
+	# joined the same optional-bootstrap loop once shim-adopting branches
+	# needed the Python backend staged beside render_prompt.sh, while main
+	# still bootstraps cleanly without it.
+	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh render_prompt.py"' in stage_block
 	assert "for f in setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py; do" in stage_block
 	assert 'Optional Serena support asset ${f} is unavailable in checked-out support sources; Serena bootstrap remains disabled.' in stage_block
 	assert 'mkdir -p "${SUPPORT_SCRIPTS_DIR}/templates"' in stage_block
