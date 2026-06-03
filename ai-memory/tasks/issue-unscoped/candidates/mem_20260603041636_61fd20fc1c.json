@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml:3412-3422 | severity=high | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: When `gh issue view` fails, the verification block emits only a warning, so latch verification does not hard-fail on unreadable state.\n  WHY: This weakens the RC-2 redispatch guard because transient API/read failures become indistinguishable from unknown state; deepseek_deepseek-v4-pro and minimax_minimax-m2_5 argued the branch is already correct.\n- .github/workflows/implement.yml:3378-3386 | severity=low | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: `gh label edit` updates only the color and never restores the label description.\n  WHY: Existing `ai:destructive-blocked` labels with stale or incorrect descriptions remain out of sync with the intended contract; deepseek_deepseek-v4-pro called this cosmetic, but the other reviewers still flagged drift.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/implement.yml:3409-3422 | confidence=2\n  PROBLEM: The consensus finding claims verification read failures are treated as \"unknown\" instead of hard latch failure, leaving RC-2 guard broken.\n  WHY: The code correctly distinguishes read success + missing label from read failure; the `::error::FAILED to latch` path is still reachable when the label is absent.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- File: .github/workflows/implement.yml\n  Location: Lines 3383-3386 (gh label edit block)\n  Issue: The `gh label edit` command only updates the color but not the description, creating a minor inconsistency with the contract comment at lines 3367-3370.\n  Suggested minimal fix: Add `--description 'Implementation commit was refused for mass/destructive deletions \u2014 redispatch of this issue ID is blocked pending human review'` to the `gh label edit` command to ensure both color and description are consistent.\n  Estimated lines changed: 1\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- .github/workflows/implement.yml:3412-3422 | ISSUE_CONFIDENCE: 5\n  PROBLEM: When `gh issue view` fails (non-zero exit, e.g. transient network/rate-limit/permission error), the `if` condition is false, `latched_labels` remains unset/empty, the inner grep is skipped, and only a `::warning::` (\"Could not verify... latch state is unknown\") is emitted.\n  WHY: The RC-2 intent was to make the latch hard and observable; the redispatch guard therefore remains softly ineffective on read failures.\n- .github/workflows/implement.yml:3378-3386 | ISSUE_CONFIDENCE: 4\n  PROBLEM: The edit command only passes `--color` and never restores the full `--description` that the create command sets.\n  WHY: Existing labels in consumer repos with stale or incorrect descriptions will never be corrected, causing drift from `.github/ai/label_contract.v1.json` and the hardcoded description used in the rejection comment/TG alert.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "a66ea3bcb4296741bb394d6eb6f1d0dd652eb8787508f45b573a45cea2ef12c9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3075,
+    "run_id": "26863100331",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26863100331",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260603041636_61fd20fc1c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3075,
+    "run_id": "26863100331"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-03T04:16:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
