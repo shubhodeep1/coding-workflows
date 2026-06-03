@@ -774,7 +774,7 @@ fi
 
 if CODEX_HOME="${smoke_codex_home}" \
 	timeout --signal=TERM --kill-after=30s -- "${BEHAVIOURAL_SMOKE_TIMEOUT_S}" \
-	"${codex_bin}" --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${BEHAVIOURAL_SMOKE_MODEL}" --sandbox read-only \
+	"${codex_bin}" --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${BEHAVIOURAL_SMOKE_MODEL}" --sandbox read-only \
 	< "${PROMPT_FILE}" > "${RAW_OUTPUT_FILE}" 2> "${STDERR_FILE}"; then
 	cmd_rc=0
 else
