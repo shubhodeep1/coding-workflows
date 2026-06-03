@@ -5,13 +5,33 @@
   "entry_id": "processed_command_3070_4608360496_approved",
   "issue_number": 3070,
   "metadata": {
+    "branch": "ai/issue-3070",
+    "changed_files": [
+      ".github/workflows/implement.yml",
+      "ai-memory/schemas/run_ledger_entry.v1.json",
+      "scripts/ledger_emit_substate.sh",
+      "scripts/memory_helpers.sh",
+      "scripts/render_prompt.sh",
+      "scripts/review_apply_fixes.sh",
+      "scripts/review_conflict_resolve.sh",
+      "scripts/review_rb_judge.sh",
+      "scripts/review_run_reviewers.sh",
+      "scripts/self_heal_validation.sh",
+      "scripts/validate_process.sh",
+      "tests/test_run_substate_ledger.py"
+    ],
+    "issue_number": 3070,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/3070",
+    "pr_number": 3071,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/3071",
+    "run_attempt": "1",
+    "run_id": "26858517903",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/26858517903"
   },
   "run_attempt": 1,
   "run_id": "26858517903",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-06-03T01:40:47Z",
+  "status": "completed",
+  "timestamp": "2026-06-03T02:07:54Z",
   "workflow": "implement"
 }
