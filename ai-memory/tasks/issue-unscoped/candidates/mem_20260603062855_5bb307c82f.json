@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ledger_emit_substate.sh:228-277 | severity=low | confidence=1\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The previously reported race condition in `emit_deduped_run_event` is not present.\n  WHY: The lock spans the duplicate check, subprocess call, and state write, so `state_path.write_text()` does not run after the lock is released.\n- scripts/ledger_emit_substate.sh:444-475 | severity=critical | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The dedupe state file is written after the file lock is released, creating a race that can emit duplicate ledger events.\n  WHY: Concurrent invocations can both pass the duplicate check before either writes the marker, resulting in duplicate ledger entries.\n- scripts/ledger_emit_substate.sh:319 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The JSON parsing logic in `parse_usage_from_text` re-parses from every `{`, making large logs quadratic.\n  WHY: Scanning the file character-by-character and attempting JSON decoding at each brace repeatedly revisits the same bytes.\n- scripts/ledger_emit_substate.sh:485-520 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The argument parser shifts past the available parameters without checking that a value exists for `$2`.\n  WHY: Malformed invocations with an odd number of arguments can cause the loop to consume beyond the remaining inputs and behave unexpectedly.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/ledger_emit_substate.sh:228-277 | severity=low | confidence=1\n  PROBLEM: The reported race condition in `emit_deduped_run_event` is not present.\n  WHY: The lock spans the duplicate check, subprocess call, and state write, so `state_path.write_text()` does not run after the lock is released.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/ledger_emit_substate.sh:444-475 | severity=critical | confidence=4\n  PROBLEM: The dedupe state file is written after the file lock is released, creating a race that can emit duplicate ledger events.\n  WHY: Concurrent invocations can both pass the duplicate check before either writes the marker, resulting in duplicate ledger entries.\n- scripts/ledger_emit_substate.sh:319 | severity=low | confidence=2\n  PROBLEM: The JSON parsing logic in `parse_usage_from_text` re-parses from every `{`, making large logs quadratic.\n  WHY: Scanning the file character-by-character and attempting JSON decoding at each brace repeatedly revisits the same bytes.\n- scripts/ledger_emit_substate.sh:485-520 | severity=low | confidence=2\n  PROBLEM: The argument parser shifts past the available parameters without checking that a value exists for `$2`.\n  WHY: Malformed invocations with an odd number of arguments can cause the loop to consume beyond the remaining inputs and behave unexpectedly.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "a34cccf8d0f0669bdabaf4d42ddee107293e2f318b21dcd629326dbf0ce50736",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3071,
+    "run_id": "26865316472",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26865316472",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260603062855_5bb307c82f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3071,
+    "run_id": "26865316472"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-03T06:28:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
