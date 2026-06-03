@@ -105,7 +105,12 @@ emit_self_heal_substate()
 	local llm_attempt="$2"
 	local tokens_log_file="${3:-}"
 	local lane="self-heal-attempt-$((SELF_HEAL_ATTEMPT + 1))"
+	local issue_number=""
 	local args=()
+
+	if [[ "${TRACKING_ISSUE:-}" =~ ^[0-9]+$ ]] && [ "${TRACKING_ISSUE}" -gt 0 ]; then
+		issue_number="${TRACKING_ISSUE}"
+	fi
 
 	[ -f "${LEDGER_SUBSTATE_HELPER:-}" ] || return 0
 
@@ -117,7 +122,7 @@ emit_self_heal_substate()
 		--attempt "${llm_attempt}"
 		--lane "${lane}"
 		--model "${MODEL_EDITOR:-}"
-		--issue-number "${TRACKING_ISSUE_NUM:-}"
+		--issue-number "${issue_number}"
 		--actor "${GITHUB_ACTOR:-codex-bot}"
 		--repo-root "$(pwd)"
 	)

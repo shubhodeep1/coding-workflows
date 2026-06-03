@@ -1826,7 +1826,7 @@ while [ "${attempt}" -le 3 ]; do
       cat "${tmp_err}"
     fi
   fi
-  if [ ! -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+  if [ -z "${PR_NUMBER:-}" ] || [ ! -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
     case "${stall_state}:${cmd_rc}" in
       killed:*|*:137|*:142)
         emit_editor_substate "Stalled" "${attempt}" "${tmp_err}"

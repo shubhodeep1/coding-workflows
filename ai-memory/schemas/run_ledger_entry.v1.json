@@ -108,7 +108,7 @@
         },
         "tokens": {
           "type": "object",
-          "additionalProperties": false,
+          "description": "Open token-count bag for additive usage fields.",
           "properties": {
             "input": {
               "type": ["integer", "null"],

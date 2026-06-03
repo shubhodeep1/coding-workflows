@@ -1,17 +1,27 @@
 #!/usr/bin/env python3
-"""Contract tests for the run-substate ledger helper, schema, and wiring."""
+"""Contract tests for the run-substate ledger helper, schema, and wiring.
+
+Repo CI runs tests via explicit `python3 tests/<file>.py` allowlists rather
+than pytest discovery, so this file keeps zero-arg test functions plus a small
+manual runner.
+"""
 
 from __future__ import annotations
 
 import json
 import os
 import subprocess
+import tempfile
+import unittest
 from pathlib import Path
 
-import pytest
-
-
-jsonschema = pytest.importorskip("jsonschema")
+try:
+	import jsonschema
+except ModuleNotFoundError as exc:  # pragma: no cover - direct-run fallback only.
+	jsonschema = None
+	_JSONSCHEMA_IMPORT_ERROR = exc
+else:
+	_JSONSCHEMA_IMPORT_ERROR = None
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HELPER_SCRIPT = REPO_ROOT / "scripts" / "ledger_emit_substate.sh"
@@ -92,6 +102,11 @@ def main() -> int:
 	payload[\"metadata\"] = metadata
 	payload.pop(\"metadata_json\", None)
 	out_path = Path(os.environ[\"LEDGER_TEST_OUTPUT\"])
+	fail_first = os.environ.get(\"LEDGER_TEST_FAIL_FIRST\") == \"1\"
+	fail_marker = Path(os.environ.get("LEDGER_TEST_FAIL_MARKER", str(out_path) + ".fail-first"))
+	if fail_first and not fail_marker.exists():
+		fail_marker.write_text(\"1\", encoding=\"utf-8\")
+		return 1
 	if out_path.exists():
 		events = json.loads(out_path.read_text(encoding=\"utf-8\"))
 	else:
@@ -108,7 +123,12 @@ if __name__ == \"__main__\":
 	)
 
 
-def _run_helper(tmp_path: Path, *extra_args: str) -> list[dict[str, object]]:
+def _run_helper(
+	tmp_path: Path,
+	*extra_args: str,
+	extra_env: dict[str, str] | None = None,
+	allow_stderr: bool = False,
+) -> list[dict[str, object]]:
 	stub_path = tmp_path / "ai_memory_stub.py"
 	events_path = tmp_path / "events.json"
 	seen_path = tmp_path / "seen.txt"
@@ -125,6 +145,8 @@ def _run_helper(tmp_path: Path, *extra_args: str) -> list[dict[str, object]]:
 			"GITHUB_ACTOR": "codex-bot",
 		}
 	)
+	if extra_env:
+		env.update(extra_env)
 
 	base_args = [
 		"bash",
@@ -150,10 +172,10 @@ def _run_helper(tmp_path: Path, *extra_args: str) -> list[dict[str, object]]:
 		check=True,
 	)
 	assert result.stdout == ""
-	assert result.stderr == ""
+	if not allow_stderr:
+		assert result.stderr == ""
 	if not events_path.exists():
 		return []
-		
 	return json.loads(events_path.read_text(encoding="utf-8"))
 
 
@@ -178,121 +200,156 @@ def _base_entry(*, event_type: str, status: str, metadata: dict[str, object]) ->
 	}
 
 
-def test_helper_suppresses_duplicates_within_one_attempt_but_allows_new_attempt_and_lane(tmp_path: Path) -> None:
-	events = _run_helper(
-		tmp_path,
-		"--substate",
-		"PreparingWorkspace",
-		"--attempt",
-		"1",
-	)
-	assert len(events) == 1
-
-	events = _run_helper(
-		tmp_path,
-		"--substate",
-		"PreparingWorkspace",
-		"--attempt",
-		"1",
-	)
-	assert len(events) == 1, events
-
-	events = _run_helper(
-		tmp_path,
-		"--substate",
-		"PreparingWorkspace",
-		"--attempt",
-		"2",
-	)
-	events = _run_helper(
-		tmp_path,
-		"--substate",
-		"PreparingWorkspace",
-		"--attempt",
-		"1",
-		"--lane",
-		"reviewer-b",
-	)
-
-	assert len(events) == 3, events
-	assert [event["metadata"].get("attempt") for event in events] == [1, 2, 1]
-	assert [event["metadata"].get("lane") for event in events] == [None, None, "reviewer-b"]
+def _require_jsonschema() -> None:
+	if jsonschema is None:
+		raise unittest.SkipTest(f"jsonschema unavailable: {_JSONSCHEMA_IMPORT_ERROR}")
 
 
-def test_helper_maps_terminal_substates_and_token_payloads(tmp_path: Path) -> None:
-	usage_log = tmp_path / "usage.log"
-	usage_log.write_text(
-		"INFO: openrouter usage phase=validate call=1 model=openai/gpt-5.4 prompt_tokens=8 completion_tokens=2 total_tokens=10\n",
-		encoding="utf-8",
-	)
-	tokens_used_log = tmp_path / "tokens-used.log"
-	tokens_used_log.write_text("tokens used\n1,234\n", encoding="utf-8")
+def test_helper_suppresses_duplicates_within_one_attempt_but_allows_new_attempt_and_lane() -> None:
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		tmp_path = Path(tmp_dir)
+		events = _run_helper(
+			tmp_path,
+			"--substate",
+			"PreparingWorkspace",
+			"--attempt",
+			"1",
+		)
+		assert len(events) == 1
 
-	events = _run_helper(
-		tmp_path,
-		"--substate",
-		"Succeeded",
-		"--attempt",
-		"1",
-		"--tokens-input",
-		"11",
-		"--tokens-output",
-		"13",
-	)
-	events = _run_helper(
-		tmp_path,
-		"--substate",
-		"Failed",
-		"--attempt",
-		"2",
-		"--tokens-total",
-		"5",
-	)
-	events = _run_helper(
-		tmp_path,
-		"--substate",
-		"TimedOut",
-		"--attempt",
-		"3",
-		"--tokens-log-file",
-		str(usage_log),
-	)
-	events = _run_helper(
-		tmp_path,
-		"--substate",
-		"Stalled",
-		"--attempt",
-		"4",
-		"--tokens-log-file",
-		str(tokens_used_log),
-	)
-	events = _run_helper(
-		tmp_path,
-		"--event-type",
-		"codex_stall_killed",
-		"--attempt",
-		"5",
-	)
+		events = _run_helper(
+			tmp_path,
+			"--substate",
+			"PreparingWorkspace",
+			"--attempt",
+			"1",
+		)
+		assert len(events) == 1, events
 
-	by_attempt = {int(event["metadata"].get("attempt", 0)): event for event in events}
-	assert by_attempt[1]["status"] == "ok"
-	assert by_attempt[1]["metadata"]["tokens"] == {"input": 11, "output": 13, "total": 24}
+		events = _run_helper(
+			tmp_path,
+			"--substate",
+			"PreparingWorkspace",
+			"--attempt",
+			"2",
+		)
+		events = _run_helper(
+			tmp_path,
+			"--substate",
+			"PreparingWorkspace",
+			"--attempt",
+			"1",
+			"--lane",
+			"reviewer-b",
+		)
 
-	assert by_attempt[2]["status"] == "error"
-	assert by_attempt[2]["metadata"]["tokens"] == {"total": 5}
+		assert len(events) == 3, events
+		assert [event["metadata"].get("attempt") for event in events] == [1, 2, 1]
+		assert [event["metadata"].get("lane") for event in events] == [None, None, "reviewer-b"]
 
-	assert by_attempt[3]["status"] == "timeout"
-	assert by_attempt[3]["metadata"]["tokens"] == {"input": 8, "output": 2, "total": 10}
 
-	assert by_attempt[4]["status"] == "stalled"
-	assert by_attempt[4]["metadata"]["tokens"] == {"total": 1234}
+def test_failed_emit_does_not_consume_dedupe_key() -> None:
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		tmp_path = Path(tmp_dir)
+		events = _run_helper(
+			tmp_path,
+			"--substate",
+			"PreparingWorkspace",
+			"--attempt",
+			"1",
+			extra_env={"LEDGER_TEST_FAIL_FIRST": "1"},
+			allow_stderr=True,
+		)
+		assert events == []
 
-	assert by_attempt[5]["event_type"] == "codex_stall_killed"
-	assert by_attempt[5]["status"] == "stalled"
-	assert "run_substate" not in by_attempt[5]["metadata"]
+		events = _run_helper(
+			tmp_path,
+			"--substate",
+			"PreparingWorkspace",
+			"--attempt",
+			"1",
+		)
+		assert len(events) == 1
+		assert events[0]["metadata"]["run_substate"] == "PreparingWorkspace"
+
+
+def test_helper_maps_terminal_substates_and_token_payloads() -> None:
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		tmp_path = Path(tmp_dir)
+		usage_log = tmp_path / "usage.log"
+		usage_log.write_text(
+			"INFO: openrouter usage phase=validate call=1 model=openai/gpt-5.4 prompt_tokens=8 completion_tokens=2 total_tokens=10\n",
+			encoding="utf-8",
+		)
+		tokens_used_log = tmp_path / "tokens-used.log"
+		tokens_used_log.write_text("tokens used\n1,234\n", encoding="utf-8")
+
+		events = _run_helper(
+			tmp_path,
+			"--substate",
+			"Succeeded",
+			"--attempt",
+			"1",
+			"--tokens-input",
+			"11",
+			"--tokens-output",
+			"13",
+		)
+		events = _run_helper(
+			tmp_path,
+			"--substate",
+			"Failed",
+			"--attempt",
+			"2",
+			"--tokens-total",
+			"5",
+		)
+		events = _run_helper(
+			tmp_path,
+			"--substate",
+			"TimedOut",
+			"--attempt",
+			"3",
+			"--tokens-log-file",
+			str(usage_log),
+		)
+		events = _run_helper(
+			tmp_path,
+			"--substate",
+			"Stalled",
+			"--attempt",
+			"4",
+			"--tokens-log-file",
+			str(tokens_used_log),
+		)
+		events = _run_helper(
+			tmp_path,
+			"--event-type",
+			"codex_stall_killed",
+			"--attempt",
+			"5",
+		)
+
+		by_attempt = {int(event["metadata"].get("attempt", 0)): event for event in events}
+		assert by_attempt[1]["status"] == "ok"
+		assert by_attempt[1]["metadata"]["tokens"] == {"input": 11, "output": 13, "total": 24}
+
+		assert by_attempt[2]["status"] == "error"
+		assert by_attempt[2]["metadata"]["tokens"] == {"total": 5}
+
+		assert by_attempt[3]["status"] == "timeout"
+		assert by_attempt[3]["metadata"]["tokens"] == {"input": 8, "output": 2, "total": 10}
+
+		assert by_attempt[4]["status"] == "stalled"
+		assert by_attempt[4]["metadata"]["tokens"] == {"total": 1234}
+
+		assert by_attempt[5]["event_type"] == "codex_stall_killed"
+		assert by_attempt[5]["status"] == "stalled"
+		assert "run_substate" not in by_attempt[5]["metadata"]
 
 
 def test_schema_accepts_legacy_and_new_substate_entries_additively() -> None:
+	_require_jsonschema()
 	validator = jsonschema.Draft202012Validator(_schema())
 	legacy_entry = _base_entry(
 		event_type="phase_started",
@@ -309,7 +366,7 @@ def test_schema_accepts_legacy_and_new_substate_entries_additively() -> None:
 			"attempt": 2,
 			"lane": "reviewer-b",
 			"model": "openai/gpt-5.4",
-			"tokens": {"input": 3, "output": 4, "total": 7},
+			"tokens": {"input": 3, "output": 4, "total": 7, "cached_input": 1},
 			"future_key": "still-open",
 		},
 	)
@@ -320,7 +377,7 @@ def test_schema_accepts_legacy_and_new_substate_entries_additively() -> None:
 			"phase": "review_rb_judge",
 			"mode": "judge",
 			"attempt": 1,
-			"tokens": {"total": 12},
+			"tokens": {"total": 12, "provider_total": 12},
 		},
 	)
 
@@ -334,3 +391,28 @@ def test_scoped_callsites_reference_the_run_substate_helper() -> None:
 		text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
 		for snippet in required_snippets:
 			assert snippet in text, (relative_path, snippet)
+
+
+def main() -> int:
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	passed = 0
+	skipped = 0
+	failed = 0
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			func()
+			print(f"  PASS  {name}")
+			passed += 1
+		except unittest.SkipTest as exc:
+			print(f"  SKIP  {name}: {exc}")
+			skipped += 1
+		except Exception as exc:
+			print(f"  FAIL  {name}: {exc}")
+			failed += 1
+	print(f"\n{passed} passed, {skipped} skipped, {failed} failed, {passed + skipped + failed} total")
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
