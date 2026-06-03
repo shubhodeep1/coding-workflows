@@ -90,7 +90,7 @@ emit_conflict_resolver_substate() {
       ;;
   esac
 
-  bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" >/dev/null 2>&1 || true
+  bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" || true
 }
 
 # Source gh_helpers.sh for sanitize_codex_prompt_file (and the broader

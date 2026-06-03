@@ -2517,7 +2517,7 @@ emit_validate_substate() {
     args+=(--tokens-log-file "${tokens_log_file}")
   fi
 
-  bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" >/dev/null 2>&1 || true
+  bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" || true
 }
 
 run_validate_codex_attempt() {

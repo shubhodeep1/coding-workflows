@@ -1597,7 +1597,7 @@ jobs:
               args+=(--tokens-log-file "${tokens_log_file}")
             fi
 
-            bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" >/dev/null 2>&1 || true
+            bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" || true
           }
 
           PROMPT_TEMPLATE_FILE="${RUNTIME_DIR}/mode-implement-inline.txt"
@@ -2765,7 +2765,7 @@ jobs:
               args+=(--tokens-log-file "${tokens_log_file}")
             fi
 
-            bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" >/dev/null 2>&1 || true
+            bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" || true
           }
           CAPTURE_FILE="${RUNTIME_DIR}/post_codex_validation_errors.txt"
           INITIAL_CHANGED_FILE="${RUNTIME_DIR}/post_codex_initial_changed_files.txt"

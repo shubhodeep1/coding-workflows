@@ -409,7 +409,7 @@ emit_editor_substate() {
     args+=(--tokens-log-file "${tokens_log_file}")
   fi
 
-  bash "${ledger_substate_script}" "${args[@]}" >/dev/null 2>&1 || true
+  bash "${ledger_substate_script}" "${args[@]}" || true
 }
 
 AUTOFIX_ITERATION="${AUTOFIX_ITERATION:-}"

@@ -165,7 +165,7 @@ emit_review_rb_substate() {
     args+=(--tokens-log-file "${tokens_log_file}")
   fi
 
-  bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" >/dev/null 2>&1 || true
+  bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" || true
 }
 # Some harnesses stub only `_embed_input_file`; keep prompt-budget lifecycle
 # helpers safe in that degraded mode so prompt assembly / EXIT cleanup do not

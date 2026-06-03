@@ -74,6 +74,16 @@ STATIC_WIRING_CONTRACTS = {
 	),
 }
 
+FORBIDDEN_STDERR_SUPPRESSION = {
+	"scripts/review_run_reviewers.sh": 'bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" >/dev/null 2>&1 || true',
+	"scripts/review_apply_fixes.sh": 'bash "${ledger_substate_script}" "${args[@]}" >/dev/null 2>&1 || true',
+	"scripts/review_conflict_resolve.sh": 'bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" >/dev/null 2>&1 || true',
+	"scripts/self_heal_validation.sh": 'bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" >/dev/null 2>&1 || true',
+	"scripts/review_rb_judge.sh": 'bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" >/dev/null 2>&1 || true',
+	"scripts/validate_process.sh": 'bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" >/dev/null 2>&1 || true',
+	".github/workflows/implement.yml": 'bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" >/dev/null 2>&1 || true',
+}
+
 
 def _write_ai_memory_stub(path: Path) -> None:
 	path.write_text(
@@ -391,6 +401,9 @@ def test_scoped_callsites_reference_the_run_substate_helper() -> None:
 		text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
 		for snippet in required_snippets:
 			assert snippet in text, (relative_path, snippet)
+		forbidden = FORBIDDEN_STDERR_SUPPRESSION.get(relative_path)
+		if forbidden is not None:
+			assert forbidden not in text, (relative_path, forbidden)
 
 
 def main() -> int:

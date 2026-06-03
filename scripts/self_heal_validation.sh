@@ -138,7 +138,7 @@ emit_self_heal_substate()
 		args+=(--tokens-log-file "${tokens_log_file}")
 	fi
 
-	bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" >/dev/null 2>&1 || true
+	bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" || true
 }
 
 ALLOWED_TARGETS=(
