@@ -1115,11 +1115,13 @@ def test_destructive_guard_knobs_wired_from_repo_variables() -> None:
 
 def test_destructive_guard_latch_verifies_label_applied() -> None:
 	# RC-2 regression guard: the latch must confirm ai:destructive-blocked
-	# actually applied and surface ::error:: otherwise, instead of the old
-	# fire-and-forget `2>/dev/null || true` that left the redispatch block
-	# silently disengaged.
+	# actually applied, distinguish a failed verification read from a
+	# genuinely missing label, and avoid the old fire-and-forget
+	# `gh issue view ... || true` false-negative path.
 	destructive_block = _step_block_text("Destructive-commit guard — label + alert on rejection")
-	assert "--json labels" in destructive_block
+	assert "if latched_labels=\"$(gh issue view \"${ISSUE_NUMBER}\" --repo \"${{ github.repository }}\" --json labels -q '.labels[].name' 2>/dev/null)\"; then" in destructive_block
+	assert "gh issue view \"${ISSUE_NUMBER}\" --repo \"${{ github.repository }}\" --json labels -q '.labels[].name' 2>/dev/null || true" not in destructive_block
+	assert "::warning::Could not verify ai:destructive-blocked" in destructive_block
 	assert "::error::FAILED to latch ai:destructive-blocked" in destructive_block
 
 
