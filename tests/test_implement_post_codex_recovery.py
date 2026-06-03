@@ -1125,7 +1125,10 @@ def test_destructive_guard_latch_verifies_label_applied() -> None:
 	assert "::error::FAILED to latch ai:destructive-blocked" in destructive_block
 	assert destructive_block.count(
 		"--description 'Implementation commit was refused for mass/destructive deletions — redispatch of this issue ID is blocked pending human review'"
-	) == 2
+	) == 4
+	assert "(gh label edit ai:destructive-blocked --repo ${{ github.repository }} --color b60205" in destructive_block
+	assert "|| gh label create ai:destructive-blocked --repo ${{ github.repository }} --color b60205" in destructive_block
+	assert ") && gh issue edit ${ISSUE_NUMBER} --repo ${{ github.repository }} --add-label ai:destructive-blocked" in destructive_block
 
 
 def test_scope_guard_allowlist_and_workflow_rollback_contracts_present() -> None:
