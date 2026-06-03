@@ -1687,18 +1687,18 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
       --phase review_conflict_resolve \
       --stdout-file "${tmp_output}" \
       --status-file "${_stall_status_file}" \
-      -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" \
+      -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" \
       || _codex_exit=$?
   elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
     timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
       "${CODEX_HEARTBEAT_HELPER}" \
       --phase review_conflict_resolve \
       --stdout-file "${tmp_output}" \
-      -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" \
+      -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" \
       || _codex_exit=$?
   else
     timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
-      codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" > "${tmp_output}" \
+      codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" > "${tmp_output}" \
       || _codex_exit=$?
   fi
   _attempt_elapsed=$(( $(date +%s) - _attempt_started_at ))
