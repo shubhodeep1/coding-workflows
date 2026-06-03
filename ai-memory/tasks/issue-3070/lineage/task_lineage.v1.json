@@ -7,7 +7,7 @@
   "prs": [
     {
       "pr_number": 3071,
-      "state": "in_progress",
+      "state": "merged",
       "url": "https://github.com/shubhodeep1/coding-workflows/pull/3071"
     }
   ],
@@ -18,9 +18,16 @@
       "status": "in_progress",
       "timestamp": "2026-06-03T02:08:11Z",
       "workflow": "implement"
+    },
+    {
+      "run_attempt": 1,
+      "run_id": "26869137764",
+      "status": "merged",
+      "timestamp": "2026-06-03T07:04:14Z",
+      "workflow": "Internal: Issue-PR Status Sync"
     }
   ],
   "schema_version": "task_lineage.v1",
-  "state": "in_progress",
-  "updated_at": "2026-06-03T02:08:11Z"
+  "state": "merged",
+  "updated_at": "2026-06-03T07:04:14Z"
 }
