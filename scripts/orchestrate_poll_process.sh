@@ -8347,7 +8347,7 @@ _load_actions_runs_cached() {
   # single-line ::warning:: contract.
   _fetch_err_line="$(head -n 1 "${response_err}" 2>/dev/null | tr -d '\r' | cut -c1-200 || true)"
   _fetch_status="$(printf '%s' "${status_line:-none}" | tr -d '\r' | cut -c1-80 || true)"
-  echo "::warning::rate_limit_audit_fallback helper=_load_actions_runs_cached reason=fetch_unconfirmed repo=${repo} api_rc=${api_rc} status='${_fetch_status:-none}' cache_hit=${cache_hit} err='${_fetch_err_line}'" >&2
+  printf '%s\n' "::warning::rate_limit_audit_fallback helper=_load_actions_runs_cached reason=fetch_unconfirmed repo=${repo} api_rc=${api_rc} status='${_fetch_status:-none}' cache_hit=${cache_hit} err='${_fetch_err_line}'" >&2
   if [ "${cache_hit}" = "true" ]; then
     _ACTIONS_RUNS_BLOB_CACHE="$(jq -cn --argjson runs "${cached_runs}" '{workflow_runs: $runs}' 2>/dev/null || echo "${empty_blob}")"
   else
