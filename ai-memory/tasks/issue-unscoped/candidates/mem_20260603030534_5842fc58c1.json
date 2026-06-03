@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_semble_contract.py:102 | severity=medium | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The assertion still expects the old OPTIONAL_BOOTSTRAP_SCRIPTS string without render_prompt.py.\n  WHY: The test asserts `'OPTIONAL_BOOTSTRAP_SCRIPTS=\"install_semble.sh build_semble_wrapper.sh semble_helpers.sh\"' in stage_block`, while the workflow already includes render_prompt.py, so the assertion fails.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update the test to include `render_prompt.py` in `OPTIONAL_BOOTSTRAP_SCRIPTS` to match the workflow in `review_autofix.yml` (PR #3057)\n  expected_change_site: tests/test_review_semble_contract.py line 102\n  confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5]\n  EVIDENCE: tests/test_review_semble_contract.py:102 still asserts the old string `OPTIONAL_BOOTSTRAP_SCRIPTS=\"install_semble.sh build_semble_wrapper.sh semble_helpers.sh\"` without `render_prompt.py`; the PR only modified `tests/test_orchestrate_poll_process.py`, leaving this second test file with the same assertion unchanged.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- Requirement: Sync OPTIONAL_BOOTSTRAP_SCRIPTS assertion with render_prompt.py \u2014 PR #3057 added render_prompt.py to OPTIONAL_BOOTSTRAP_SCRIPTS in review_autofix.yml; the corresponding test assertions must match the shipped workflow.\n  Expected change site: tests/test_review_semble_contract.py line 102\n  Evidence of absence: tests/test_review_semble_contract.py:102 still asserts the old string `OPTIONAL_BOOTSTRAP_SCRIPTS=\"install_semble.sh build_semble_wrapper.sh semble_helpers.sh\"` without `render_prompt.py`. The CI lint failure on this exact assertion (log_tail shows `test_review_semble_contract.py`, line 102, `AssertionError`) confirms the test is actively failing because review_autofix.yml:1279 now includes `render_prompt.py`. The PR updated only test_orchestrate_poll_process.py:12555 but missed this second test file with the same assertion.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- Requirement: Update the test to include `render_prompt.py` in `OPTIONAL_BOOTSTRAP_SCRIPTS` to match the workflow in `review_autofix.yml` (PR #3057)\n  Expected change site: `tests/test_review_semble_contract.py` line 102\n  Evidence of absence: The grep shows `tests/test_review_semble_contract.py:102` still asserts the old string without `render_prompt.py`. The CI failure context confirms this test is failing:\n\n  ```\n  File: tests/test_review_semble_contract.py\n  Line 102: assert 'OPTIONAL_BOOTSTRAP_SCRIPTS=\"install_semble.sh build_semble_wrapper.sh semble_helpers.sh\"' in stage_block\n  ```\n\n  The current PR only modified `tests/test_orchestrate_poll_process.py` but the same assertion at `tests/test_review_semble_contract.py:102` still expects the old value without `render_prompt.py`, causing CI failure. Both tests verify the same `OPTIONAL_BOOTSTRAP_SCRIPTS` workflow string and should be kept in sync.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_review_semble_contract.py:102 | confidence=5\n  PROBLEM: Assertion expects old OPTIONAL_BOOTSTRAP_SCRIPTS string without render_prompt.py, but workflow already includes it\n  WHY: The test asserts `'OPTIONAL_BOOTSTRAP_SCRIPTS=\"install_semble.sh build_semble_wrapper.sh semble_helpers.sh\"' in stage_block`, but the actual workflow now includes render_prompt.py in this list. This causes the assertion to fail because the expected string doesn't match the actual workflow content.\n- Requirement: Keep test assertions in sync with OPTIONAL_BOOTSTRAP_SCRIPTS changes in review_autofix.yml (PR #3057 adds render_prompt.py)\n  Expected change site: tests/test_review_semble_contract.py at line 102\n  Evidence of absence: The PR updates test_orchestrate_poll_process.py but does NOT update test_review_semble_contract.py line 102, which still asserts the old string without render_prompt.py. The CI failure log confirms test_review_semble_contract.py fails at line 102.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "c8321fa5e0961e45ea228d509edbed21c009ce50875ae0c6eae40412413468a4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26860884612",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26860884612",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260603030534_5842fc58c1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26860884612"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-03T03:05:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
