@@ -46,6 +46,52 @@ CODEX_HEARTBEAT_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
 ORCHESTRATE_FORCE_TICK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/orchestrate_force_tick.sh"
 
+resolve_ledger_substate_helper() {
+  local candidate
+  for candidate in \
+    "${SUPPORT_SCRIPTS_DIR:-scripts}/ledger_emit_substate.sh" \
+    ".codex-workflow-src/scripts/ledger_emit_substate.sh" \
+    "scripts/ledger_emit_substate.sh"; do
+    if [ -f "${candidate}" ]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+LEDGER_SUBSTATE_HELPER="$(resolve_ledger_substate_helper || true)"
+
+emit_conflict_resolver_substate() {
+  local event_or_substate="$1"
+  local attempt_number="$2"
+  local args=()
+
+  [ -f "${LEDGER_SUBSTATE_HELPER:-}" ] || return 0
+
+  args=(
+    --run-id "${GITHUB_RUN_ID:-}"
+    --workflow "review_autofix"
+    --phase "review_conflict_resolve"
+    --mode "resolver"
+    --attempt "${attempt_number}"
+    --model "${MODEL_EDITOR:-}"
+    --pr-number "${PR_NUMBER:-}"
+    --actor "${GITHUB_ACTOR:-codex-bot}"
+    --repo-root "$(pwd)"
+  )
+  case "${event_or_substate}" in
+    codex_stall_observed|codex_stall_killed)
+      args+=(--event-type "${event_or_substate}")
+      ;;
+    *)
+      args+=(--substate "${event_or_substate}")
+      ;;
+  esac
+
+  bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" || true
+}
+
 read_codex_stall_guard_state() {
   local status_file="$1"
   local state=""
@@ -1576,6 +1622,7 @@ fi
 
 attempt=1
 while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
+  emit_conflict_resolver_substate "PreparingWorkspace" "${attempt}"
   # On retries: restore the working tree to its post-merge-replay
   # state (so retries don't compound the previous attempt's bad
   # edits) and build a reflexion prompt naming the previous
@@ -1673,6 +1720,8 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     _effective_prompt_file="${CONFLICT_RESOLVER_PROMPT_FILE}"
   fi
 
+  emit_conflict_resolver_substate "BuildingPrompt" "${attempt}"
+
   tmp_output="$(mktemp)"
   _stall_status_file="$(mktemp)"
   _stall_state=""
@@ -1699,6 +1748,9 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
     sanitize_codex_prompt_file "${_effective_prompt_file}"
   fi
+  emit_conflict_resolver_substate "LaunchingAgentProcess" "${attempt}"
+  emit_conflict_resolver_substate "InitializingSession" "${attempt}"
+  emit_conflict_resolver_substate "StreamingTurn" "${attempt}"
   if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
     timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
       "${CODEX_STALL_GUARD_HELPER}" \
@@ -1720,6 +1772,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
       || _codex_exit=$?
   fi
   _attempt_elapsed=$(( $(date +%s) - _attempt_started_at ))
+  emit_conflict_resolver_substate "Finishing" "${attempt}"
   if _stall_state="$(read_codex_stall_guard_state "${_stall_status_file}" 2>/dev/null)"; then
     :
   elif [ -s "${_stall_status_file}" ]; then
@@ -1728,6 +1781,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   rm -f "${_stall_status_file}"
   if [ "${_stall_state}" = "observed" ]; then
     echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: codex_stall_observed recorded (observe-only mode)."
+    emit_conflict_resolver_substate "codex_stall_observed" "${attempt}"
   fi
   # Graceful-SIGTERM-at-timer-boundary diagnostic.  If codex installs
   # a SIGTERM handler that completes cleanup and exits 0 within the
@@ -1795,6 +1849,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     if [ "${_stall_state}" = "killed" ]; then
       _prev_attempt_failure_kind="stall_guard"
       echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} recorded codex_stall_killed (exit ${_codex_exit}; elapsed ${_attempt_elapsed}s; per-attempt timer budget ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s)."
+      emit_conflict_resolver_substate "codex_stall_killed" "${attempt}"
     else
       case "${_codex_exit}" in
         124)
@@ -1814,8 +1869,19 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
           _prev_attempt_failure_kind="exec_error"
           echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} failed with non-timeout exit ${_codex_exit} (codex itself returned non-zero; elapsed ${_attempt_elapsed}s)."
           ;;
-      esac
+        esac
     fi
+    case "${_prev_attempt_failure_kind}" in
+      stall_guard)
+        emit_conflict_resolver_substate "Stalled" "${attempt}"
+        ;;
+      timeout)
+        emit_conflict_resolver_substate "TimedOut" "${attempt}"
+        ;;
+      *)
+        emit_conflict_resolver_substate "Failed" "${attempt}"
+        ;;
+    esac
     if [ "${attempt}" -eq "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; then
       if [ "${_prev_attempt_failure_kind}" = "timeout" ]; then
         echo "Conflict resolver failed after retries (final attempt killed by per-attempt timer)."
@@ -1879,6 +1945,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   # worth retrying against.
   if [ "${_marker_count}" -eq 0 ] && { [ "${RESOLVER_FP_EXIT}" -eq 0 ] || [ "${RESOLVER_FP_EXIT}" -eq 2 ]; }; then
     echo "Conflict resolver succeeded on attempt ${attempt} (soft validation passed)."
+    emit_conflict_resolver_substate "Succeeded" "${attempt}"
     # Re-emit the verifier's info line at normal verbosity so
     # operators see the "must_contain satisfied N/M" summary
     # that exists today.  Plumbing-exit (2) was not a soft
@@ -1903,6 +1970,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     echo "Fingerprint violations (first 10):"
     head -10 "${RESOLVER_FP_VIOLATIONS_FILE}" | sed 's/^/  - /' || true
   fi
+  emit_conflict_resolver_substate "Failed" "${attempt}"
 
   # No-progress detection: if attempt N's fingerprint violation set
   # is identical to attempt N-1's, the model has already seen the

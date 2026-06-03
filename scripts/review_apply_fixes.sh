@@ -385,6 +385,42 @@ resolve_support_script() {
   return 1
 }
 
+ledger_substate_script="$(resolve_support_script ledger_emit_substate.sh || true)"
+
+emit_editor_substate() {
+  local event_or_substate="$1"
+  local attempt_number="$2"
+  local tokens_log_file="${3:-}"
+  local args=()
+
+  [ -f "${ledger_substate_script:-}" ] || return 0
+
+  args=(
+    --run-id "${GITHUB_RUN_ID:-}"
+    --workflow "review_autofix"
+    --phase "review_apply_fixes"
+    --mode "editor"
+    --attempt "${attempt_number}"
+    --model "${MODEL_EDITOR:-}"
+    --pr-number "${PR_NUMBER:-}"
+    --actor "${GITHUB_ACTOR:-codex-bot}"
+    --repo-root "$(pwd)"
+  )
+  case "${event_or_substate}" in
+    codex_stall_observed|codex_stall_killed)
+      args+=(--event-type "${event_or_substate}")
+      ;;
+    *)
+      args+=(--substate "${event_or_substate}")
+      ;;
+  esac
+  if [ -n "${tokens_log_file}" ]; then
+    args+=(--tokens-log-file "${tokens_log_file}")
+  fi
+
+  bash "${ledger_substate_script}" "${args[@]}" || true
+}
+
 AUTOFIX_ITERATION="${AUTOFIX_ITERATION:-}"
 if [ -z "${AUTOFIX_ITERATION}" ]; then
   autofix_count=0
@@ -1364,6 +1400,7 @@ while [ "${attempt}" -le 3 ]; do
     echo "Skipping editor attempt ${attempt}: only ${remaining}s remain before job deadline (need ${EDITOR_MIN_ATTEMPT_SECS}s minimum)."
     break
   fi
+  emit_editor_substate "PreparingWorkspace" "${attempt}"
   # Cap this attempt's wall time to the lesser of EDITOR_MAX_WALL
   # and the remaining budget minus a 2-min buffer for cleanup steps.
   attempt_wall="${EDITOR_MAX_WALL}"
@@ -1480,7 +1517,11 @@ while [ "${attempt}" -le 3 ]; do
       "$(date +%s)" \
       "$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
   } >> "${attempt_prompt_file}"
+  emit_editor_substate "BuildingPrompt" "${attempt}"
   # Run codex: stdout → tmp_output, stderr → FIFO (heartbeat reader).
+  emit_editor_substate "LaunchingAgentProcess" "${attempt}"
+  emit_editor_substate "InitializingSession" "${attempt}"
+  emit_editor_substate "StreamingTurn" "${attempt}"
   (
     trap '' PIPE
     run_editor_codex_attempt "${attempt_prompt_file}" "${tmp_output}" "${_hb_fifo}" "${hb_file}" "${stall_status_file}"
@@ -1506,12 +1547,16 @@ while [ "${attempt}" -le 3 ]; do
   fi
   rm -f "${stall_status_file}"
 
+  emit_editor_substate "Finishing" "${attempt}" "${tmp_err}"
+
   case "${stall_state}" in
     observed)
       echo "Editor attempt ${attempt}: codex_stall_observed marker recorded (observe-only mode)."
+      emit_editor_substate "codex_stall_observed" "${attempt}" "${tmp_err}"
       ;;
     killed)
       echo "Editor attempt ${attempt}: codex_stall_killed marker recorded (exit=${cmd_rc})."
+      emit_editor_substate "codex_stall_killed" "${attempt}" "${tmp_err}"
       ;;
   esac
 
@@ -1739,6 +1784,7 @@ while [ "${attempt}" -le 3 ]; do
           rm -f "${tmp_err}"
           rm -f "${attempt_prompt_file}"
           echo "Editor succeeded on attempt ${attempt}."
+          emit_editor_substate "Succeeded" "${attempt}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err"
           # Diagnostic: capture working tree state at the very last moment
           # before this script exits.  Combined with checkpoints at the
           # start of the Commit step and just before the touched-file
@@ -1788,6 +1834,19 @@ while [ "${attempt}" -le 3 ]; do
       echo "Editor stderr on attempt ${attempt}:"
       cat "${tmp_err}"
     fi
+  fi
+  if [ -z "${PR_NUMBER:-}" ] || [ ! -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+    case "${stall_state}:${cmd_rc}" in
+      killed:*|*:137|*:142)
+        emit_editor_substate "Stalled" "${attempt}" "${tmp_err}"
+        ;;
+      *:124|*:143)
+        emit_editor_substate "TimedOut" "${attempt}" "${tmp_err}"
+        ;;
+      *)
+        emit_editor_substate "Failed" "${attempt}" "${tmp_err}"
+        ;;
+    esac
   fi
   cp "${tmp_output}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.txt" || true
   cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
