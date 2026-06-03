@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:8350 | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: `echo` is used to emit the warning while interpolating potentially arbitrary stderr content, which can produce malformed `::warning::` output.\n  WHY: `echo` parsing of leading hyphens, `-n`/`-e`, and backslashes is not portable, so the diagnostic can be truncated or reformatted instead of preserving the warning payload.\n- tests/test_review_autofix_review_pipeline_contract.py:1111,1137 | severity=medium | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: `test_review_pipeline_knobs_are_wired_into_codex_agent_env` still expects `AGENTS_MD_MATERIALITY_ENABLED` to default to `'0'`, but the workflow now uses `'1'`.\n  WHY: The lint job runs this contract test and fails with `AssertionError`, so the stale assertion blocks CI until the expected default is updated.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Registered in ci.yml / mark-stable.yml / test-and-mark-stable.yml\"\n  expected_change_site: tests/test_review_autofix_review_pipeline_contract.py\n  confidence=5\n  flagged_by: [moonshotai_kimi-k2_5]\n  EVIDENCE: The PR registers the new test `test_actions_runs_fetch_unconfirmed_warning.py` in CI workflows (ci.yml:252, mark-stable.yml:251, test-and-mark-stable.yml:3311) but does NOT update the test file's assertions for `AGENTS_MD_MATERIALITY_ENABLED`. The test at lines 1111 and 1137 expects the default to be `'0'` but the workflow uses `'1'` (matching agents.md line 320 which documents the default as `1`).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_poll_process.sh:8350 | severity=not stated | confidence=3\n  PROBLEM: Using `echo` to output a warning line that interpolates potentially arbitrary stderr content (`err='${_fetch_err_line}'`).\n  WHY: If the captured stderr line starts with `-n` or contains backslash sequences, the warning line may be malformed, truncated, or have incorrect field formatting, defeating the diagnostic purpose.\n- Requirement: \"Registered in ci.yml / mark-stable.yml / test-and-mark-stable.yml\"\n  Expected change site: tests/test_review_autofix_review_pipeline_contract.py\n  Evidence of absence: The PR registers the new test `test_actions_runs_fetch_unconfirmed_warning.py` in CI workflows (ci.yml:252, mark-stable.yml:251, test-and-mark-stable.yml:3311) but does NOT update the test file's assertions for `AGENTS_MD_MATERIALITY_ENABLED`. The test at lines 1111 and 1137 expects the default to be `'0'` but the workflow uses `'1'` (matching agents.md line 320 which documents the default as `1`).\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_review_autofix_review_pipeline_contract.py:1116 (approx.) | severity=not stated | confidence=not stated\n  PROBLEM: The test `test_review_pipeline_knobs_are_wired_into_codex_agent_env` asserts for a default of `'0'` (and matching LLM fallback values) in `.github/workflows/review_autofix.yml`, but the workflow now uses `'1'` for `AGENTS_MD_MATERIALITY_ENABLED`.\n  WHY: The lint job executes this test and fails with `AssertionError`, blocking CI until the expectation is updated to match the workflow's current default.\n- scripts/orchestrate_poll_process.sh:8350 | severity=not stated | confidence=not stated\n  PROBLEM: The new diagnostic warning uses `echo` to interpolate a sanitized but still potentially arbitrary stderr line (`_fetch_err_line`).\n  WHY: Bash `echo` behavior for leading hyphens, `-n`/`-e`, or backslashes is not portable and can produce malformed `::warning::` output or incorrect field values.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "e43f47fe63f4df0101316f105b416a21b2dacdbf47b2912f4472cfd0f8ba0a08",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3074,
+    "run_id": "26862890043",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26862890043",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260603041006_24b68f0296",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3074,
+    "run_id": "26862890043"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-03T04:10:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
