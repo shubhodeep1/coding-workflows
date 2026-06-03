@@ -8341,6 +8341,78 @@ _load_actions_runs_cached() {
   return 0
 }
 
+# _direct_inflight_review_run_on_branch — authoritative cache-miss fallback for
+# the retrigger_review empty-commit guard's in-flight-review check.
+#
+# The primary in-flight check at both push sites (execute_stall_recovery_action
+# and run_standalone_stall_recovery) reads the per-tick _load_actions_runs_cached
+# blob.  That blob is the same source build_active_issue_set consumes, and the
+# active-set guard comment already documents it can miss a live run (cache TTL /
+# 304-reuse of empty cached_runs, the per-status 50-item listing window,
+# pagination, or head_branch=null on workflow_dispatch).  A false negative is
+# uniquely destructive at this one call site: the empty-commit push advances the
+# branch under a still-editing review_autofix run, tripping its
+# AUTOFIX_PRE_EDITOR_STALE_BASE -> soft_exit and discarding a full review pass.
+#
+# §15 audit: this is NOT a new unconditional per-issue call.  Callers invoke it
+# only when the cached scan already returned no live review run AND they are
+# about to perform the destructive empty-commit push — the fail-open cache-miss
+# fallback §15 explicitly sanctions ("fall back to the smallest safe legacy
+# call").  Audited alternatives and why they cannot supply the data: (a)
+# _load_actions_runs_cached is the very blob that just missed the run, so
+# re-reading it is futile; (b) the adjacent failed-autofix-redispatch loop
+# fetches `--limit 1` completed-only runs per workflow, so it structurally
+# cannot observe an in_progress/queued run.  This therefore issues a single
+# branch-scoped `gh run list` (server-side --branch filter, so it is NOT subject
+# to the global 50-item listing cap the cached blob is) rather than the 3-call
+# per-workflow loop, keeping the added cost to one REST request on the rare
+# recovery-push path.
+#
+# Args: $1 = head branch.  Echoes the databaseId of the freshest matching
+# in_progress/queued review run younger than STALL_THRESHOLD_MINUTES, else
+# nothing.  Freshness mirrors the cached scan so a genuinely hung run older than
+# the threshold does not block recovery forever.  Limitation: `gh run list
+# --json` exposes workflowName/name but not the workflow file path, so a
+# consumer that renamed the review workflow's display name away from the
+# canonical names ("AI Review" / "Internal Review" / "Review Autofix") is matched
+# only if workflowName still resolves; on a miss the guard fails open (push
+# proceeds) — no worse than the pre-fix behaviour, and the cached scan's own
+# path-based match still covers that case whenever the cache itself hits (in
+# which case this fallback is never reached).  Fails open (echoes nothing) on any
+# gh/jq/date error so a transient API failure never blocks recovery.
+_direct_inflight_review_run_on_branch()
+{
+	local _di_branch="$1"
+	local _di_now_epoch _di_stall_secs _di_runs_json
+	[ -n "${_di_branch}" ] || return 0
+	_di_now_epoch="$(date +%s 2>/dev/null || echo "")"
+	[[ "${_di_now_epoch}" =~ ^[0-9]+$ ]] || return 0
+	_di_stall_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))
+	_di_runs_json="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
+		--branch "${_di_branch}" \
+		--limit 30 \
+		--json databaseId,status,name,workflowName,startedAt,createdAt \
+		2>/dev/null || echo "")"
+	[ -n "${_di_runs_json}" ] || return 0
+	printf '%s' "${_di_runs_json}" | jq -r \
+		--argjson now "${_di_now_epoch}" \
+		--argjson threshold "${_di_stall_secs}" '
+		(if type == "array" then . else [] end)
+		| [ .[]?
+			| select((.status // "") == "in_progress" or (.status // "") == "queued")
+			| select(
+				((.name // "") == "AI Review" or (.name // "") == "Internal Review" or (.name // "") == "Review Autofix")
+				or ((.workflowName // "") == "AI Review" or (.workflowName // "") == "Internal Review" or (.workflowName // "") == "Review Autofix")
+			  )
+			| ([.startedAt, .createdAt] | map(select(type == "string" and . != ""))[0] // "") as $ts
+			| (if $ts != ""
+			   then (try ($ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch $now)
+			   else $now end) as $start_epoch
+			| select(($now - $start_epoch) < $threshold)
+		  ] | (.[0].databaseId // empty)
+	' 2>/dev/null || echo ""
+}
+
 # Build a set of issue numbers that have *genuinely active* (in_progress or
 # queued) workflow runs — i.e., runs that started recently enough that they
 # could still be making progress.
@@ -9181,7 +9253,7 @@ STALL_EOF
           # autofix pass.  Other jq/cache errors still fail open, and
           # if date +%s is unavailable we skip the guard entirely:
           # empty result falls through to the legacy empty-commit path.
-          local _rtr_inflight_blob _rtr_inflight_id _rtr_now_epoch _rtr_stall_secs _rtr_origin_head_sha _rtr_push_succeeded
+          local _rtr_inflight_blob _rtr_inflight_id _rtr_direct_inflight_id _rtr_now_epoch _rtr_stall_secs _rtr_origin_head_sha _rtr_push_succeeded
           _rtr_inflight_blob="$(_load_actions_runs_cached 2>/dev/null || echo '{"workflow_runs":[]}')"
           _rtr_now_epoch="$(date +%s 2>/dev/null || echo "")"
           _rtr_stall_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))
@@ -9220,6 +9292,18 @@ STALL_EOF
           fi
           if [ -n "${_rtr_inflight_id}" ]; then
             echo "  Issue #${issue_num} PR #${pr_num} has in-flight review run #${_rtr_inflight_id} on ${head_ref} (fresh, <${STALL_THRESHOLD_MINUTES}m); skipping empty-commit push to avoid invalidating its stale-base gate."
+            STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
+            return 1
+          fi
+          # Cache-miss fallback (CLAUDE.md §15 fail-open): the cached scan above
+          # found no live review run, but it reads the same blob the active-set
+          # guard can miss (cache TTL / 50-item window / head_branch=null).
+          # Before the destructive empty-commit push, confirm against an
+          # authoritative branch-scoped run listing; a false negative here
+          # discards a full in-flight review pass (RC1 of the #11/#12 incident).
+          _rtr_direct_inflight_id="$(_direct_inflight_review_run_on_branch "${head_ref}")"
+          if [ -n "${_rtr_direct_inflight_id}" ]; then
+            echo "  Issue #${issue_num} PR #${pr_num} has in-flight review run #${_rtr_direct_inflight_id} on ${head_ref} (direct check — cached scan missed it); skipping empty-commit push to avoid invalidating its stale-base gate."
             STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
             return 1
           fi
@@ -11146,7 +11230,7 @@ STALL_EOF
         local head_ref
         local head_sha
         local pr_json
-        local _std_rtr_inflight_blob _std_rtr_inflight_id _std_rtr_now_epoch _std_rtr_stall_secs _std_rtr_origin_head_sha _std_rtr_push_succeeded
+        local _std_rtr_inflight_blob _std_rtr_inflight_id _std_rtr_direct_inflight_id _std_rtr_now_epoch _std_rtr_stall_secs _std_rtr_origin_head_sha _std_rtr_push_succeeded
         _std_rtr_push_succeeded="false"
         if [[ "${_STD_ITER_PR_NUM_CACHED:-}" =~ ^[0-9]+$ ]]; then
           pr_num="${_STD_ITER_PR_NUM_CACHED}"
@@ -11223,8 +11307,20 @@ STALL_EOF
             else
               _std_rtr_inflight_id=""
             fi
+            # Cache-miss fallback (CLAUDE.md §15 fail-open): mirror
+            # execute_stall_recovery_action — when the cached scan finds no live
+            # review run, confirm against an authoritative branch-scoped listing
+            # before the destructive empty-commit push.  Computed only on the
+            # cache-miss path so the steady state adds zero API calls.
+            _std_rtr_direct_inflight_id=""
+            if [ -z "${_std_rtr_inflight_id}" ]; then
+              _std_rtr_direct_inflight_id="$(_direct_inflight_review_run_on_branch "${head_ref}")"
+            fi
             if [ -n "${_std_rtr_inflight_id}" ]; then
               echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} has in-flight review run #${_std_rtr_inflight_id} on ${head_ref} (fresh, <${STALL_THRESHOLD_MINUTES}m); skipping empty-commit push to avoid invalidating its stale-base gate."
+              STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
+            elif [ -n "${_std_rtr_direct_inflight_id}" ]; then
+              echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} has in-flight review run #${_std_rtr_direct_inflight_id} on ${head_ref} (direct check — cached scan missed it); skipping empty-commit push to avoid invalidating its stale-base gate."
               STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
             elif git fetch origin "${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
               _std_rtr_origin_head_sha="$(git rev-parse --verify "refs/remotes/origin/${head_ref}" 2>/dev/null || echo "")"
