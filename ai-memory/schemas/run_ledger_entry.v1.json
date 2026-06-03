@@ -52,7 +52,8 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 120,
-      "pattern": "^[A-Za-z0-9_.:-]+$"
+      "pattern": "^[A-Za-z0-9_.:-]+$",
+      "description": "Open-set event type. New values are added additively without a schema version bump."
     },
     "status": {
       "type": "string",
@@ -71,7 +72,59 @@
       "maxLength": 120
     },
     "metadata": {
-      "type": "object"
+      "type": "object",
+      "description": "Open metadata bag for additive per-event fields.",
+      "properties": {
+        "run_substate": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "phase": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "mode": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "attempt": {
+          "type": ["integer", "null"],
+          "minimum": 1
+        },
+        "lane": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "tokens": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "input": {
+              "type": ["integer", "null"],
+              "minimum": 0
+            },
+            "output": {
+              "type": ["integer", "null"],
+              "minimum": 0
+            },
+            "total": {
+              "type": ["integer", "null"],
+              "minimum": 0
+            }
+          }
+        }
+      }
     },
     "timestamp": {
       "type": "string",
