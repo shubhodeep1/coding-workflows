@@ -39,9 +39,18 @@ CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
 
 read_codex_stall_guard_state() {
   local status_file="$1"
+  local state=""
 
   [ -s "${status_file}" ] || return 1
-  sed -n 's/^state=//p' "${status_file}" | head -n 1
+  state="$(sed -n 's/^state=//p' "${status_file}" | head -n 1)"
+  case "${state}" in
+    observed|killed)
+      printf '%s\n' "${state}"
+      return 0
+      ;;
+  esac
+
+  return 1
 }
 
 resolve_editor_network_probe_pid() {
@@ -1438,7 +1447,7 @@ while [ "${attempt}" -le 3 ]; do
         probe_pid="$(resolve_editor_network_probe_pid "${cpid}" || true)"
         if [ -n "${probe_pid}" ] && [ -d "/proc/${probe_pid}/fd" ]; then
           sock_count="$(find "/proc/${probe_pid}/fd" -lname 'socket:*' 2>/dev/null | head -20 | wc -l || echo 0)"
-          if [ "${sock_count}" -gt 0 ]; then
+          if [[ "${sock_count}" =~ ^[0-9]+$ ]] && [ "${sock_count}" -gt 0 ]; then
             net_active=true
           fi
         fi

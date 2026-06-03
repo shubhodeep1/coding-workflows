@@ -51,7 +51,6 @@ resolve_ledger_substate_helper() {
   for candidate in \
     "${SUPPORT_SCRIPTS_DIR:-scripts}/ledger_emit_substate.sh" \
     ".codex-workflow-src/scripts/ledger_emit_substate.sh" \
-    ".codex-workflow-src-main/scripts/ledger_emit_substate.sh" \
     "scripts/ledger_emit_substate.sh"; do
     if [ -f "${candidate}" ]; then
       printf '%s\n' "${candidate}"
@@ -91,6 +90,22 @@ emit_conflict_resolver_substate() {
   esac
 
   bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" || true
+}
+
+read_codex_stall_guard_state() {
+  local status_file="$1"
+  local state=""
+
+  [ -s "${status_file}" ] || return 1
+  state="$(sed -n 's/^state=//p' "${status_file}" | head -n 1)"
+  case "${state}" in
+    observed|killed)
+      printf '%s\n' "${state}"
+      return 0
+      ;;
+  esac
+
+  return 1
 }
 
 # Source gh_helpers.sh for sanitize_codex_prompt_file (and the broader
@@ -137,8 +152,10 @@ _dispatch_integration_judge_now() {
     return 0
   fi
 
-  GH_PAT="${GH_PAT:-${GH_TOKEN:-}}" \
-  GH_TOKEN="${GH_PAT:-${GH_TOKEN:-}}" \
+  local dispatch_token="${GH_PAT:-${GH_TOKEN:-}}"
+
+  GH_PAT="${dispatch_token}" \
+  GH_TOKEN="${dispatch_token}" \
   GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-}" \
   bash "${ORCHESTRATE_FORCE_TICK_HELPER}" \
     --repo "${GITHUB_REPOSITORY:-}" \
@@ -1756,8 +1773,10 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   fi
   _attempt_elapsed=$(( $(date +%s) - _attempt_started_at ))
   emit_conflict_resolver_substate "Finishing" "${attempt}"
-  if [ -s "${_stall_status_file}" ]; then
-    _stall_state="$(sed -n 's/^state=//p' "${_stall_status_file}" | head -n 1)"
+  if _stall_state="$(read_codex_stall_guard_state "${_stall_status_file}" 2>/dev/null)"; then
+    :
+  elif [ -s "${_stall_status_file}" ]; then
+    echo "::warning::Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: could not parse codex stall guard status from ${_stall_status_file}."
   fi
   rm -f "${_stall_status_file}"
   if [ "${_stall_state}" = "observed" ]; then

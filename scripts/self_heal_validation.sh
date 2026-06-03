@@ -90,8 +90,7 @@ LEDGER_SUBSTATE_HELPER=""
 for _ledger_candidate in \
 	"${SELF_HEAL_SCRIPT_DIR}/ledger_emit_substate.sh" \
 	"scripts/ledger_emit_substate.sh" \
-	".codex-workflow-src/scripts/ledger_emit_substate.sh" \
-	".codex-workflow-src-main/scripts/ledger_emit_substate.sh"; do
+	".codex-workflow-src/scripts/ledger_emit_substate.sh"; do
 	if [ -f "${_ledger_candidate}" ]; then
 		LEDGER_SUBSTATE_HELPER="${_ledger_candidate}"
 		break
@@ -139,6 +138,23 @@ emit_self_heal_substate()
 	fi
 
 	bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" || true
+}
+
+read_codex_stall_guard_state()
+{
+	local status_file="$1"
+	local state=""
+
+	[ -s "${status_file}" ] || return 1
+	state="$(sed -n 's/^state=//p' "${status_file}" | head -n 1)"
+	case "${state}" in
+		observed|killed)
+			printf '%s\n' "${state}"
+			return 0
+			;;
+	esac
+
+	return 1
 }
 
 ALLOWED_TARGETS=(
@@ -305,8 +321,10 @@ run_self_heal_codex()
 			-- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${SELF_HEAL_PROMPT_FILE}" 2> "${stderr_tmp}"
 		rc=$?
 		set -e
-		if [ -s "${stall_status_file}" ]; then
-			SELF_HEAL_STALL_STATE="$(sed -n 's/^state=//p' "${stall_status_file}" | head -n 1)"
+		if SELF_HEAL_STALL_STATE="$(read_codex_stall_guard_state "${stall_status_file}" 2>/dev/null)"; then
+			:
+		elif [ -s "${stall_status_file}" ]; then
+			echo "self-heal: could not parse codex stall guard status from ${stall_status_file}" >&2
 		fi
 		rm -f "${stall_status_file}"
 		return "${rc}"

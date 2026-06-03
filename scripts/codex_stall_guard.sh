@@ -442,6 +442,8 @@ finally:
 	selector.close()
 	if kill_timer is not None:
 		kill_timer.cancel()
+	if child.poll() is None:
+		_kill_child_group_if_running()
 	if close_stdout:
 		stdout_handle.close()
 	if close_stderr:
