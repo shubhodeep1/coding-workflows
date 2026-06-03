@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:11307-11327 | severity=medium | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The standalone stall-recovery path logs a detected in-flight review run but does not immediately return, so later push logic can still run.\n  WHY: Without a short-circuit return after setting `STALL_RECOVERY_EFFECTIVE_ACTION`, the standalone path can fall through to `git fetch` and empty-commit push attempts, defeating the guard\u2019s purpose.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Wired into both push sites \u2014 execute_stall_recovery_action and run_standalone_stall_recovery\"\n  expected_change_site: `scripts/orchestrate_poll_process.sh` in function `run_standalone_stall_recovery` around line 11319-11323\n  confidence=4\n  flagged_by: [moonshotai_kimi-k2_5]\n  EVIDENCE: The direct in-flight check is present but lacks the `return` statement that would prevent subsequent push logic; the orchestrator path has `return 1` after detection.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- Requirement: \"Wired into both push sites \u2014 execute_stall_recovery_action and run_standalone_stall_recovery\"\n  Expected change site: `scripts/orchestrate_poll_process.sh` in both functions\n  Evidence of absence: Both sites contain the new fallback logic (verified via diff)\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"New helper `_direct_inflight_review_run_on_branch`\"\n  Expected change site: `scripts/orchestrate_poll_process.sh`\n  Evidence of absence: Helper function added at line ~8344 with proper implementation\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/orchestrate_poll_process.sh:11307-11327 | severity=medium | confidence=4\n  PROBLEM: Missing `return` statement after direct in-flight detection in standalone stall recovery path.\n  WHY: After logging the detection and setting `STALL_RECOVERY_EFFECTIVE_ACTION`, the code falls through to subsequent logic including `git fetch` and empty-commit push attempts, so the detected in-flight review run may still be pushed.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "d36e421928e1ccaf5c3b2fea1170da41a25fc8dab2727ad1ff88b41e8facd0b1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3072,
+    "run_id": "26859727014",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26859727014",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260603023257_ed3b92bc14",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3072,
+    "run_id": "26859727014"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-03T02:32:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
