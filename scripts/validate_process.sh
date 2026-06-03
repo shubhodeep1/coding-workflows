@@ -2468,9 +2468,18 @@ bash "${_validate_script_dir}/write_codex_config.sh" \
 
 read_validate_codex_stall_guard_state() {
   local status_file="$1"
+  local state=""
 
   [ -s "${status_file}" ] || return 1
-  sed -n 's/^state=//p' "${status_file}" | head -n 1
+  state="$(sed -n 's/^state=//p' "${status_file}" | head -n 1)"
+  case "${state}" in
+    observed|killed)
+      printf '%s\n' "${state}"
+      return 0
+      ;;
+  esac
+
+  return 1
 }
 
 run_validate_codex_attempt() {

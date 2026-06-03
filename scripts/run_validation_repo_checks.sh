@@ -7,7 +7,12 @@ CHECK_TIMEOUT_SECS=600
 CHECK_COMMANDS=(
 	"python3 tests/test_render_validation_templates.py"
 	"python3 tests/test_family_python_repo_checks.py"
+	"python3 tests/test_codex_stall_guard_poller.py"
 	"python3 tests/test_codex_stall_guard_scripts.py"
+	"python3 tests/test_render_prompt_foundation.py"
+	"python3 tests/test_render_prompt_core_modes.py"
+	"python3 tests/test_render_prompt_review_judge_modes.py"
+	"python3 tests/test_render_prompt_validate_analytics_modes.py"
 	"python3 tests/test_validate_process_template_mode.py"
 	"python3 tests/test_validate_workflow_validate_bootstrap.py"
 )

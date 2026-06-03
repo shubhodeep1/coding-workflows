@@ -75,6 +75,22 @@ PY
 CODEX_HEARTBEAT_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
 
+read_codex_stall_guard_state() {
+  local status_file="$1"
+  local state=""
+
+  [ -s "${status_file}" ] || return 1
+  state="$(sed -n 's/^state=//p' "${status_file}" | head -n 1)"
+  case "${state}" in
+    observed|killed)
+      printf '%s\n' "${state}"
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
 if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh" ]; then
   # shellcheck source=/dev/null
   source "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh"
@@ -2643,8 +2659,10 @@ execute_reviewer_attempt() {
     wd_reason="$(cat "${wd_reason_file}" 2>/dev/null || true)"
   fi
   rm -f "${wd_reason_file}"
-  if [ -s "${stall_status_file}" ]; then
-    stall_state="$(sed -n 's/^state=//p' "${stall_status_file}" | head -n 1)"
+  if stall_state="$(read_codex_stall_guard_state "${stall_status_file}" 2>/dev/null)"; then
+    :
+  elif [ -s "${stall_status_file}" ]; then
+    echo "Reviewer slot ${slot_model} (${effective_model}) could not parse codex stall guard status from ${stall_status_file}." | tee -a "${log_file}"
   fi
   rm -f "${stall_status_file}"
 

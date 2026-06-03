@@ -487,6 +487,20 @@ jobs:
             _fetched_scripts+=(codex_heartbeat.sh)
           fi
 
+          if [ ! -f "scripts/codex_stall_guard.sh" ]; then
+            if copy_from_ref_or_local "scripts/codex_stall_guard.sh" "scripts/codex_stall_guard.sh.tmp" "false" "true"; then
+              mv "scripts/codex_stall_guard.sh.tmp" "scripts/codex_stall_guard.sh"
+              chmod +x "scripts/codex_stall_guard.sh"
+              _fetched_scripts+=(codex_stall_guard.sh)
+            else
+              rm -f "scripts/codex_stall_guard.sh.tmp"
+              echo "Codex stall guard helper not on ${script_ref} yet; validation will continue without idle-kill wrapping."
+            fi
+          else
+            chmod +x "scripts/codex_stall_guard.sh"
+            _fetched_scripts+=(codex_stall_guard.sh)
+          fi
+
           # Semble bootstrap helpers (optional; validation falls back if
           # absent on the selected script_ref to preserve compatibility
           # with older stable tags during rollout).
