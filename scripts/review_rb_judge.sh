@@ -1061,6 +1061,7 @@ judge_codex_cmd=(
   -c model_verbosity=low
   -c include_apply_patch_tool=true
   exec
+  --skip-git-repo-check
   --model "${MODEL_EDITOR}"
   --sandbox read-only
 )
@@ -1115,7 +1116,7 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
         break
       fi
     fi
-  elif codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox read-only < "${RB_JUDGE_PROMPT}" > "${RB_JUDGE_OUTPUT}" 2>"${JUDGE_STDERR_FILE}"; then
+  elif codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox read-only < "${RB_JUDGE_PROMPT}" > "${RB_JUDGE_OUTPUT}" 2>"${JUDGE_STDERR_FILE}"; then
     if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT}"; then
       JUDGE_EFFECTIVE_REASONING_EFFORT="${level}"
       JUDGE_SUCCESS=true
@@ -1490,12 +1491,12 @@ __EDIT_DISCIPLINE__
           --phase review_rb_fix \
           --stdout-file "${RB_FIX_OUTPUT}" \
           --stderr-file /dev/null \
-          -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${RB_FIX_PROMPT}"; then
+          -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${RB_FIX_PROMPT}"; then
           echo "Fix codex completed."
         else
           echo "::warning::Fix codex failed for PR #${PR_NUMBER}."
         fi
-      elif codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${RB_FIX_PROMPT}" > "${RB_FIX_OUTPUT}" 2>/dev/null; then
+      elif codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${RB_FIX_PROMPT}" > "${RB_FIX_OUTPUT}" 2>/dev/null; then
         echo "Fix codex completed."
       else
         echo "::warning::Fix codex failed for PR #${PR_NUMBER}."
