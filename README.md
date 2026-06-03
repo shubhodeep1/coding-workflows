@@ -1456,6 +1456,7 @@ Historical note: `orchestrate_poll.yml` previously carried a "Check rate-limit c
   - `actions-runs-cache put --repo <owner/repo> --runs-file <path> --etag <string>`
 - New env var `ACTIONS_RUNS_CACHE_TTL_SECONDS` (default `60`) controls freshness; invalid values fail-open to default with a warning.
 - Cache corruption/schema mismatch is fail-open and treated as cache miss with structured warning key `rate_limit_audit_fallback`.
+- A fetch the poller could not confirm — the `gh api` actions-runs call failed (auth/transient) or returned an unparseable body — also fails open (to the stale cache if present, else an empty blob) and emits `::warning::rate_limit_audit_fallback helper=_load_actions_runs_cached reason=fetch_unconfirmed repo=<owner/repo> api_rc=<code> status='<http-status|none>' cache_hit=<bool> err='<first-stderr-line>'`. A genuine-empty **success** (a confirmed fetch with zero in-flight runs) is silent, so the presence of this line distinguishes "the fetch never succeeded" from a real `total=0` — the ambiguity that otherwise makes an `Active issue set is empty (... total=0 ...)` poll unattributable (perms vs poisoned/empty TTL cache vs transient). `api_rc` is captured with `cmd || api_rc=$?` so it reflects the real fetch exit code.
 
 ## Runtime Validation Phase
 
