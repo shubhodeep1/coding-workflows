@@ -75,3 +75,14 @@ Copy this block when adding a new entry:
   - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_foundation.py` returns `OK: render prompt foundation assertions hold`.
   - `rg -n 'render_prompt\.py' .github/workflows scripts --glob '!scripts/render_prompt.sh'` shows the direct Python-renderer callers or staging references that replace the shim path.
 - **Owner:** @shubhodeep1
+
+### `.github/workflows/workspace-cache-maintenance.yml`
+
+- **Introduced in:** #3066 (2026-06-02)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `gh workflow view workspace-cache-maintenance.yml -R shubhodeep1/coding-workflows` confirms the workflow still exists and still has a scheduled nightly cron.
+  - `gh run list --workflow workspace-cache-maintenance.yml --limit 5 -R shubhodeep1/coding-workflows` shows recent scheduled/manual runs completing with `success`.
+  - `gh cache list --repo shubhodeep1/coding-workflows --limit 100 --key workspace-v1- --sort created_at --order desc` still shows bounded workspace cache families (newest 3 retained per family) so the maintenance job remains operationally useful.
+- **Owner:** @shubhodeep1

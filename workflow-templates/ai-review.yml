@@ -28,6 +28,9 @@ permissions:
 jobs:
   review:
     if: ${{ github.event.action != 'closed' || github.event.pull_request.merged == true }}
+    # Review workspace reuse is controlled centrally by the called workflow via
+    # vars.WORKSPACE_REUSE_ENABLED from the caller repository; the wrapper
+    # interface stays unchanged because no extra workflow_call input is needed.
     uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@stable
     with:
       pr_number: ${{ github.event.inputs.pr_number || github.event.pull_request.number || '' }}
