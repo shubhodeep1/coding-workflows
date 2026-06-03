@@ -70,10 +70,10 @@ run_editor_codex_attempt() {
       --stdout-file "${stdout_file}" \
       --activity-file "${activity_file}" \
       --status-file "${status_file}" \
-      -- codex --ask-for-approval never -c model_verbosity="${EDITOR_VERBOSITY}" -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" 2>"${stderr_target}"
+      -- codex --ask-for-approval never -c model_verbosity="${EDITOR_VERBOSITY}" -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" 2>"${stderr_target}"
   fi
 
-  exec codex --ask-for-approval never -c model_verbosity="${EDITOR_VERBOSITY}" -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" > "${stdout_file}" 2>"${stderr_target}"
+  exec codex --ask-for-approval never -c model_verbosity="${EDITOR_VERBOSITY}" -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" > "${stdout_file}" 2>"${stderr_target}"
 }
 
 emit_context_budget_warn_for_prompt() {

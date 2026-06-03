@@ -258,8 +258,8 @@ EOF
   fi
   export CODEX_HOME="${probe_home}"
 
-  codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${probe_model}" --sandbox read-only < "${probe_out}" >/dev/null 2>"${probe_log_one}" || true
-  codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${probe_model}" --sandbox read-only < "${probe_out}" >/dev/null 2>"${probe_log_two}" || true
+  codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${probe_model}" --sandbox read-only < "${probe_out}" >/dev/null 2>"${probe_log_one}" || true
+  codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${probe_model}" --sandbox read-only < "${probe_out}" >/dev/null 2>"${probe_log_two}" || true
 
   normalize_openrouter_usage "${probe_log_one}" "1" "${probe_model}" || true
   normalize_openrouter_usage "${probe_log_two}" "2" "${probe_model}" || true
@@ -2662,6 +2662,7 @@ execute_reviewer_attempt() {
     -c model_verbosity=low
     -c include_apply_patch_tool=true
     exec
+    --skip-git-repo-check
     --model "${effective_model}"
     --sandbox read-only
   )
