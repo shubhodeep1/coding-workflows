@@ -8259,9 +8259,12 @@ _load_actions_runs_cached() {
   fi
 
   local api_rc=0
-  if ! "${api_cmd[@]}" >"${response_file}" 2>"${response_err}"; then
-    api_rc=$?
-  fi
+  # Capture the real exit code via `|| api_rc=$?`: the `if ! cmd; then api_rc=$?`
+  # idiom records the exit status of the negated condition (always 0), not the
+  # failing fetch's, which would make the fail-open diagnostic below always
+  # report api_rc=0 and unable to separate a transient failure from an HTTP/auth
+  # error.
+  "${api_cmd[@]}" >"${response_file}" 2>"${response_err}" || api_rc=$?
 
   if [ -s "${response_file}" ] && head -n 1 "${response_file}" | grep -q '^HTTP/'; then
     status_line="$(head -n 1 "${response_file}")"
@@ -8330,6 +8333,21 @@ _load_actions_runs_cached() {
     return 0
   fi
 
+  # Reaching here means the per-tick actions-runs fetch was NOT confirmed: the
+  # `gh api` call failed (auth/transient) or returned an unparseable body, so we
+  # fail open to the stale cache (if any) or an empty blob. Emit one structured
+  # diagnostic (CLAUDE.md §8) so an investigation can tell a genuine "zero
+  # in-flight runs" from "the fetch never succeeded" — the ambiguity behind an
+  # unattributable `Active issue set is empty: total=0`. A genuine-empty SUCCESS
+  # returns earlier and never reaches this line, so the warning fires only on an
+  # unconfirmed fetch. Fail-open behaviour itself is unchanged.
+  local _fetch_err_line='' _fetch_status=''
+  # Sanitize both fields: the HTTP status line carries a trailing CR (CRLF) and
+  # gh stderr can be multi-line; an unstripped CR/newline would garble this
+  # single-line ::warning:: contract.
+  _fetch_err_line="$(head -n 1 "${response_err}" 2>/dev/null | tr -d '\r' | cut -c1-200 || true)"
+  _fetch_status="$(printf '%s' "${status_line:-none}" | tr -d '\r' | cut -c1-80 || true)"
+  echo "::warning::rate_limit_audit_fallback helper=_load_actions_runs_cached reason=fetch_unconfirmed repo=${repo} api_rc=${api_rc} status='${_fetch_status:-none}' cache_hit=${cache_hit} err='${_fetch_err_line}'" >&2
   if [ "${cache_hit}" = "true" ]; then
     _ACTIONS_RUNS_BLOB_CACHE="$(jq -cn --argjson runs "${cached_runs}" '{workflow_runs: $runs}' 2>/dev/null || echo "${empty_blob}")"
   else
