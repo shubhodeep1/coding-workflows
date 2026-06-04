@@ -5033,6 +5033,28 @@ def test_integration_stale_alert_window_clears_when_branch_catches_up():
 	assert "INTEGRATION_STALE_ALERT_SENT tracking_issue=192 integration_branch=orchestrator/project-192 default_branch=main ahead_by=5" in (second["stdout"] + second["stderr"])
 
 
+def test_integration_stale_alert_disabled_when_hours_zero():
+	now_epoch = int(time.time())
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	# 20h ahead — well past the 6h default; would alert if the path were enabled.
+	state["last_main_squash_at_utc"] = now_epoch - (20 * 3600)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: []},
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		env_overrides={"ORCH_INTEGRATION_STALE_ALERT_HOURS": "0"},
+	)
+	assert "INTEGRATION_STALE_ALERT_SENT" not in (result["stdout"] + result["stderr"])
+	# Disabled path is a true no-op: it neither starts the dedup window nor
+	# rewrites the squash anchor.
+	assert result["state_on_disk"].get("integration_stale_last_alerted_at_utc") is None
+	assert result["state_on_disk"]["last_main_squash_at_utc"] == state["last_main_squash_at_utc"]
+
+
 def test_integration_backpressure_blocks_merges_at_threshold_and_clears_below_it():
 	state = _base_state(status="in_progress")
 	state["integration_branch"] = "orchestrator/project-192"

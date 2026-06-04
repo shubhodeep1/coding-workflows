@@ -568,6 +568,16 @@ jobs:
           # max(10, 10+20)=30, leaving headroom for that sync/judge/fix-up overhead while
           # still tripping on genuinely anomalous over-drift. Override via repo var.
           ORCH_INTEGRATION_BACKPRESSURE_PROJECT_MARGIN: ${{ vars.ORCH_INTEGRATION_BACKPRESSURE_PROJECT_MARGIN || '20' }}
+          # Stale-integration alert (scripts/orchestrate_poll_process.sh
+          # check_integration_branch_staleness). Defaulted to 0 = DISABLED.
+          # `main` only catches up to a project's integration branch at the
+          # single end-of-project squash, so this alert otherwise fires for the
+          # entire lifetime of every multi-wave project — healthy progress, not
+          # a stall. The genuinely-actionable "final merge jammed" case is
+          # already covered by ORCH_FINAL_MERGE_INELIGIBLE_ALERT_HOURS plus
+          # integration backpressure (ORCH_INTEGRATION_MAX_AHEAD_COMMITS). Set
+          # the repo variable to a positive integer (e.g. 6) to re-enable.
+          ORCH_INTEGRATION_STALE_ALERT_HOURS: ${{ vars.ORCH_INTEGRATION_STALE_ALERT_HOURS || '0' }}
           MODEL_CONFLICT_RESOLVER: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
           # Default lowered from 'xhigh' to 'high' in lockstep with
           # review_autofix.yml's CONFLICT_RESOLVER_REASONING_EFFORT (see the
