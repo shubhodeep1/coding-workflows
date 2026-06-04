@@ -34,6 +34,15 @@ env:
   MODEL_REPAIR_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_IMPLEMENT_REPAIR || 'xhigh' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+  # files_touched scope-enforcement guard (see the preflight + commit-time
+  # scope guards in this workflow and scripts/files_touched_scope_guard.py).
+  # ENFORCE_FILES_TOUCHED is the master toggle — set 'false' to globally
+  # downgrade the guard to a logged skip. ALLOW_OUT_OF_SCOPE_FILES is the
+  # per-run escape hatch — set 'true' to warn but allow, mirroring
+  # ALLOW_BULK_DELETE / ALLOW_WORKFLOW_EDITS. Both are mapped here (like
+  # ALLOW_WORKFLOW_EDITS) because vars.* are not auto-exposed to the shell.
+  ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
+  ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
   # Destructive-commit guard knobs. Both guard shells (Preflight
   # destructive-commit guard + Commit changes) read these as bare
   # ${VAR:-default}, so they must be bound at workflow-env level to reach
@@ -812,6 +821,25 @@ jobs:
             # see the persistence note above the loop.
           done
 
+          # Optional: files_touched scope-enforcement guard helper. Fail-open —
+          # if it is unavailable on ${SCRIPT_REF} (e.g. ref skew during a
+          # rollout) the scope guard steps degrade to a logged skip rather than
+          # blocking implementation. Added to _fetched_scripts so the generated
+          # scripts/.gitignore keeps it out of consumer-repo commits (and out of
+          # the staged set the scope guard inspects).
+          for f in files_touched_scope_guard.py; do
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              src=".codex-workflow-src-main/scripts/${f}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::notice::Optional files_touched scope guard ${f} is unavailable on ${SCRIPT_REF}; scope enforcement will fail open this run."
+              continue
+            fi
+            install -m 0755 "${src}" "scripts/${f}"
+            _fetched_scripts+=("${f}")
+          done
+
           # render_prompt.py is the optional Python backend for the
           # render_prompt.sh shim adopted by branches that took the issue
           # #3043 refactor.  main ships a self-contained bash render_prompt.sh
@@ -1323,6 +1351,16 @@ jobs:
           # the label is applied.
           if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:destructive-blocked") != null' >/dev/null; then
             echo "::warning::Issue #${ISSUE_NUMBER} carries ai:destructive-blocked from a previous run — refusing to redispatch implementation. A human must inspect the earlier rejection, remove the label, and reapprove before this issue can run again."
+            echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          # Same circuit breaker for the files_touched scope guard: a prior
+          # out-of-scope rejection latches ai:scope-blocked onto the issue, and
+          # a human must remove it after auditing the earlier drift. See the
+          # "Destructive-commit guard — label + alert on rejection" step below
+          # for where the label is applied.
+          if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:scope-blocked") != null' >/dev/null; then
+            echo "::warning::Issue #${ISSUE_NUMBER} carries ai:scope-blocked from a previous run — refusing to redispatch implementation. A human must inspect the earlier out-of-scope rejection, remove the label, and reapprove before this issue can run again."
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
             exit 0
           fi
@@ -2723,6 +2761,75 @@ jobs:
             fi
           fi
 
+          # >>> files_touched scope-enforcement guard (preflight) >>>
+          # Mirror of the destructive-commit guard above, for scope drift:
+          # reject when the staged change set includes paths the issue's
+          # files_touched allowlist does not cover. Shares the same projected
+          # staged index the destructive guard just inspected (GIT_INDEX_FILE
+          # is still the temp index here). Fails OPEN — no allowlist, master
+          # toggle off, or a missing helper all log-and-allow, matching the
+          # missing-allowlist posture used elsewhere in this workflow.
+          if [ "${ENFORCE_FILES_TOUCHED:-true}" != "true" ]; then
+            echo "::notice::files_touched scope guard disabled (ENFORCE_FILES_TOUCHED='${ENFORCE_FILES_TOUCHED:-true}')."
+          else
+            scope_staged="$(git diff --cached --name-only --diff-filter=ACMRD || true)"
+            if [ -n "${scope_staged}" ]; then
+              scope_staged_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-staged.XXXXXX")"
+              scope_allowlist_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-allowlist.XXXXXX")"
+              printf '%s\n' "${scope_staged}" > "${scope_staged_file}"
+              scope_violations=""
+              scope_rc=0
+              if [ -f scripts/files_touched_scope_guard.py ]; then
+                set +e
+                scope_violations="$(python3 scripts/files_touched_scope_guard.py \
+                  --issue-body-file "${ISSUE_BODY_FILE:-}" \
+                  --staged-file "${scope_staged_file}" \
+                  --allowlist-out "${scope_allowlist_file}")"
+                scope_rc=$?
+                set -e
+              else
+                scope_rc=127
+              fi
+              rm -f "${scope_staged_file}"
+              case "${scope_rc}" in
+                0)
+                  echo "files_touched scope guard: all staged paths fall within the issue allowlist."
+                  ;;
+                10)
+                  echo "::notice::files_touched scope guard skipped: issue declares no files_touched allowlist."
+                  ;;
+                20)
+                  scope_count="$(printf '%s\n' "${scope_violations}" | sed '/^$/d' | wc -l | tr -d ' ')"
+                  scope_allowlist="$(sed '/^$/d' "${scope_allowlist_file}" 2>/dev/null || true)"
+                  if [ "${ALLOW_OUT_OF_SCOPE_FILES:-false}" = "true" ]; then
+                    echo "::warning::files_touched scope guard: ${scope_count} staged path(s) outside the allowlist, but ALLOW_OUT_OF_SCOPE_FILES=true — allowing."
+                    printf '%s\n' "${scope_violations}" | sed '/^$/d;s/^/  - /'
+                  else
+                    echo "::error::Refusing to commit: ${scope_count} staged path(s) fall outside the issue's files_touched allowlist and ALLOW_OUT_OF_SCOPE_FILES is not 'true'."
+                    printf '%s\n' "${scope_violations}" | sed '/^$/d;s/^/  - /'
+                    {
+                      echo "scope_violation_blocked=out-of-scope"
+                      echo "scope_violation_count=${scope_count}"
+                      echo 'scope_violation_files<<__SVF_EOF__'
+                      printf '%s\n' "${scope_violations}" | sed '/^$/d'
+                      echo '__SVF_EOF__'
+                      echo 'scope_violation_allowlist<<__SVA_EOF__'
+                      printf '%s\n' "${scope_allowlist}" | sed '/^$/d'
+                      echo '__SVA_EOF__'
+                    } >> "$GITHUB_OUTPUT"
+                    rm -f "${scope_allowlist_file}"
+                    exit 1
+                  fi
+                  ;;
+                *)
+                  echo "::warning::files_touched scope guard failed open (helper exit ${scope_rc}); staged change set not scope-checked this run."
+                  ;;
+              esac
+              rm -f "${scope_allowlist_file}"
+            fi
+          fi
+          # <<< files_touched scope-enforcement guard (preflight) <<<
+
       - name: Validate syntax of changed files
         if: env.SKIP_IMPLEMENT != 'true'
         id: validate_syntax_changed_files
@@ -3508,6 +3615,77 @@ jobs:
               exit 1
             fi
           fi
+
+          # >>> files_touched scope-enforcement guard (commit) >>>
+          # Mirror of the destructive-commit guard above, for scope drift:
+          # reject when the staged change set includes paths the issue's
+          # files_touched allowlist does not cover. Operates on the same real
+          # index that was just staged for the destructive guard. Fails OPEN —
+          # no allowlist, master toggle off, or a missing helper all
+          # log-and-allow. On a violation the commit is neither created nor
+          # pushed; the "Destructive-commit guard — label + alert on rejection"
+          # step labels the issue ai:scope-blocked and alerts.
+          if [ "${ENFORCE_FILES_TOUCHED:-true}" != "true" ]; then
+            echo "::notice::files_touched scope guard disabled (ENFORCE_FILES_TOUCHED='${ENFORCE_FILES_TOUCHED:-true}')."
+          else
+            scope_staged="$(git diff --cached --name-only --diff-filter=ACMRD || true)"
+            if [ -n "${scope_staged}" ]; then
+              scope_staged_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-staged.XXXXXX")"
+              scope_allowlist_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-allowlist.XXXXXX")"
+              printf '%s\n' "${scope_staged}" > "${scope_staged_file}"
+              scope_violations=""
+              scope_rc=0
+              if [ -f scripts/files_touched_scope_guard.py ]; then
+                set +e
+                scope_violations="$(python3 scripts/files_touched_scope_guard.py \
+                  --issue-body-file "${ISSUE_BODY_FILE:-}" \
+                  --staged-file "${scope_staged_file}" \
+                  --allowlist-out "${scope_allowlist_file}")"
+                scope_rc=$?
+                set -e
+              else
+                scope_rc=127
+              fi
+              rm -f "${scope_staged_file}"
+              case "${scope_rc}" in
+                0)
+                  echo "files_touched scope guard: all staged paths fall within the issue allowlist."
+                  ;;
+                10)
+                  echo "::notice::files_touched scope guard skipped: issue declares no files_touched allowlist."
+                  ;;
+                20)
+                  scope_count="$(printf '%s\n' "${scope_violations}" | sed '/^$/d' | wc -l | tr -d ' ')"
+                  scope_allowlist="$(sed '/^$/d' "${scope_allowlist_file}" 2>/dev/null || true)"
+                  if [ "${ALLOW_OUT_OF_SCOPE_FILES:-false}" = "true" ]; then
+                    echo "::warning::files_touched scope guard: ${scope_count} staged path(s) outside the allowlist, but ALLOW_OUT_OF_SCOPE_FILES=true — allowing."
+                    printf '%s\n' "${scope_violations}" | sed '/^$/d;s/^/  - /'
+                  else
+                    echo "::error::Refusing to commit: ${scope_count} staged path(s) fall outside the issue's files_touched allowlist and ALLOW_OUT_OF_SCOPE_FILES is not 'true'."
+                    printf '%s\n' "${scope_violations}" | sed '/^$/d;s/^/  - /'
+                    {
+                      echo "scope_violation_blocked=out-of-scope"
+                      echo "scope_violation_count=${scope_count}"
+                      echo 'scope_violation_files<<__SVF_EOF__'
+                      printf '%s\n' "${scope_violations}" | sed '/^$/d'
+                      echo '__SVF_EOF__'
+                      echo 'scope_violation_allowlist<<__SVA_EOF__'
+                      printf '%s\n' "${scope_allowlist}" | sed '/^$/d'
+                      echo '__SVA_EOF__'
+                    } >> "$GITHUB_OUTPUT"
+                    rm -f "${scope_allowlist_file}"
+                    exit 1
+                  fi
+                  ;;
+                *)
+                  echo "::warning::files_touched scope guard failed open (helper exit ${scope_rc}); staged change set not scope-checked this run."
+                  ;;
+              esac
+              rm -f "${scope_allowlist_file}"
+            fi
+          fi
+          # <<< files_touched scope-enforcement guard (commit) <<<
+
           # If every Codex-produced change was filtered out by the path exclusions
           # above (or stripped by the fetched-manifest cleanup earlier in this step),
           # there is nothing to commit.  Treat this as a no-op rather than letting
@@ -3552,7 +3730,13 @@ jobs:
         # sourcing label_helpers.sh / tg_helpers.sh, because the
         # fetched-manifest cleanup earlier in the commit step may have
         # already removed those helper scripts in consumer-repo runs.
-        if: env.SKIP_IMPLEMENT != 'true' && (failure() || cancelled()) && (steps.preflight_destructive_guard.outputs.destructive_commit_blocked != '' || steps.commit_changes.outputs.destructive_commit_blocked != '')
+        #
+        # This step also handles files_touched scope-guard rejections
+        # (scope_violation_blocked): it latches the distinct ai:scope-blocked
+        # label and posts a scope-specific comment/alert. The destructive and
+        # scope branches are mutually exclusive — each guard exits on the first
+        # tripped condition — so at most one fires per run.
+        if: env.SKIP_IMPLEMENT != 'true' && (failure() || cancelled()) && (steps.preflight_destructive_guard.outputs.destructive_commit_blocked != '' || steps.commit_changes.outputs.destructive_commit_blocked != '' || steps.preflight_destructive_guard.outputs.scope_violation_blocked != '' || steps.commit_changes.outputs.scope_violation_blocked != '')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
@@ -3562,10 +3746,77 @@ jobs:
           DCB_THRESHOLD_LABEL: ${{ steps.preflight_destructive_guard.outputs.destructive_commit_threshold_label || steps.commit_changes.outputs.destructive_commit_threshold_label }}
           DCB_EFFECTIVE_THRESHOLD: ${{ steps.preflight_destructive_guard.outputs.destructive_commit_effective_threshold || steps.commit_changes.outputs.destructive_commit_effective_threshold }}
           DCB_DELETIONS: ${{ steps.preflight_destructive_guard.outputs.destructive_commit_deletions || steps.commit_changes.outputs.destructive_commit_deletions }}
+          SVB_REASON: ${{ steps.preflight_destructive_guard.outputs.scope_violation_blocked || steps.commit_changes.outputs.scope_violation_blocked }}
+          SVB_COUNT: ${{ steps.preflight_destructive_guard.outputs.scope_violation_count || steps.commit_changes.outputs.scope_violation_count }}
+          SVB_FILES: ${{ steps.preflight_destructive_guard.outputs.scope_violation_files || steps.commit_changes.outputs.scope_violation_files }}
+          SVB_ALLOWLIST: ${{ steps.preflight_destructive_guard.outputs.scope_violation_allowlist || steps.commit_changes.outputs.scope_violation_allowlist }}
         run: |
           set -euo pipefail
 
           RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          # files_touched scope-block branch. When the scope guard (preflight or
+          # commit-time) latched scope_violation_blocked, handle it here with a
+          # distinct ai:scope-blocked label + scope-specific comment/alert, then
+          # exit. The destructive-deletion branch below is unchanged and runs
+          # only when this was not a scope block.
+          if [ -n "${SVB_REASON:-}" ]; then
+            gh label create 'ai:scope-blocked' \
+              --repo "${{ github.repository }}" \
+              --color 'b60205' \
+              --description 'Implementation blocked: staged files fell outside files_touched scope; human review required' \
+              2>/dev/null || true
+            gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+              --add-label 'ai:scope-blocked' \
+              --remove-label 'ai:implementing' 2>/dev/null || \
+            gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+              --add-label 'ai:scope-blocked' 2>/dev/null || true
+            {
+              echo "🚨 **files_touched scope guard rejected this implementation run.**"
+              echo
+              echo "- Out-of-scope staged paths: **${SVB_COUNT}**"
+              echo "- Workflow run: ${RUN_URL}"
+              echo
+              echo "The commit was **not** created and **not** pushed. This issue is now labeled \`ai:scope-blocked\` and will be refused by the \`Validate approval phase\` step on any future redispatch of issue #${ISSUE_NUMBER} until a human removes the label."
+              echo
+              echo "Staged paths outside the issue's \`files_touched\` allowlist:"
+              echo
+              echo '```'
+              printf '%s\n' "${SVB_FILES}" | sed '/^$/d'
+              echo '```'
+              echo
+              echo "Declared \`files_touched\` allowlist:"
+              echo
+              echo '```'
+              printf '%s\n' "${SVB_ALLOWLIST}" | sed '/^$/d'
+              echo '```'
+              echo
+              echo "If these paths are legitimately in scope, add them to the issue's \`files_touched\` list (or rerun with \`ALLOW_OUT_OF_SCOPE_FILES=true\`) and remove \`ai:scope-blocked\`. **Note:** the orchestrator judge may still regenerate this task under a different issue number — the per-issue block does not cover judge-cycle regeneration."
+            } > /tmp/scope_comment.md
+            gh issue comment "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+              --body-file /tmp/scope_comment.md 2>/dev/null || true
+            if [ -n "${TG_BOT_SECRET:-}" ] && [ -n "${TG_ADMIN_CHAT_ID:-}" ]; then
+              TG_MSG="$(printf '%s\n' \
+                "🚨 CRITICAL: files_touched scope guard blocked implementation" \
+                "repo: ${{ github.repository }}" \
+                "issue: #${ISSUE_NUMBER}" \
+                "out-of-scope paths: ${SVB_COUNT}" \
+                "run: ${RUN_URL}" \
+                "" \
+                "Issue is now ai:scope-blocked. A human must review and remove the label before this exact issue ID can be redispatched. The orchestrator judge may still regenerate this task under a different issue number.")"
+              curl -s -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+                -d "chat_id=${TG_ADMIN_CHAT_ID}" \
+                -d "disable_web_page_preview=true" \
+                --data-urlencode "text=${TG_MSG}" >/dev/null 2>&1 || \
+                echo "::warning::Telegram alert send failed for scope rejection on issue #${ISSUE_NUMBER}"
+            else
+              echo "::warning::TG_BOT_SECRET or TG_ADMIN_CHAT_ID unset; scope rejection was not sent to Telegram."
+            fi
+            # Preserve the non-zero exit — keep the job red and skip the
+            # downstream push/PR steps, exactly like the destructive branch.
+            exit 1
+          fi
+
           REASON_HUMAN="${DCB_REASON}"
           case "${DCB_REASON}" in
             canonical-source)
@@ -3692,7 +3943,7 @@ jobs:
           exit 1
 
       - name: Handle no-op implementation
-        if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'false' && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == ''
+        if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'false' && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.preflight_destructive_guard.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.scope_violation_blocked == ''
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
@@ -4604,7 +4855,7 @@ jobs:
             --add-label 'ai:awaiting-approval' --remove-label 'ai:implementing' >/dev/null 2>&1 || true
 
       - name: Capture post-Codex validation errors
-        if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == ''
+        if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.preflight_destructive_guard.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.scope_violation_blocked == ''
         id: capture_post_codex_validation_errors
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -4700,7 +4951,7 @@ jobs:
           fi
 
       - name: Diagnose post-Codex failure and create fix-up issues
-        if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == ''
+        if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.preflight_destructive_guard.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.scope_violation_blocked == ''
         id: diagnose_post_codex_failure
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -4721,7 +4972,7 @@ jobs:
           bash scripts/implement_diagnose_post_codex_failure.sh
 
       - name: Comment on issue failure
-        if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.diagnose_post_codex_failure.outputs.handled != 'true'
+        if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.diagnose_post_codex_failure.outputs.handled != 'true' && steps.preflight_destructive_guard.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.scope_violation_blocked == ''
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -4755,7 +5006,7 @@ jobs:
             -f body="${REASON}"
 
       - name: Telegram failure notification
-        if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == ''
+        if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.preflight_destructive_guard.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.scope_violation_blocked == ''
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
