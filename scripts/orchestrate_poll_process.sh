@@ -1386,9 +1386,13 @@ if ! [[ "${ORCH_FINAL_MERGE_INELIGIBLE_ALERT_HOURS}" =~ ^[0-9]+$ ]]; then
   ORCH_FINAL_MERGE_INELIGIBLE_ALERT_HOURS="6"
 fi
 
+# A value of 0 disables the stale-integration alert path entirely (parity
+# with ORCH_FINAL_MERGE_INELIGIBLE_ALERT_HOURS=0); 0 is the workflow default
+# (see .github/workflows/orchestrate_poll.yml). Any non-numeric value is
+# rejected and falls back to the default 6.
 ORCH_INTEGRATION_STALE_ALERT_HOURS="${ORCH_INTEGRATION_STALE_ALERT_HOURS:-6}"
-if ! [[ "${ORCH_INTEGRATION_STALE_ALERT_HOURS}" =~ ^[0-9]+$ ]] || [ "${ORCH_INTEGRATION_STALE_ALERT_HOURS}" -lt 1 ]; then
-  echo "::warning::ORCH_INTEGRATION_STALE_ALERT_HOURS must be a positive integer; defaulting to 6"
+if ! [[ "${ORCH_INTEGRATION_STALE_ALERT_HOURS}" =~ ^[0-9]+$ ]]; then
+  echo "::warning::ORCH_INTEGRATION_STALE_ALERT_HOURS must be a non-negative integer; defaulting to 6"
   ORCH_INTEGRATION_STALE_ALERT_HOURS="6"
 fi
 
@@ -5909,6 +5913,14 @@ check_integration_branch_staleness() {
 	local now_epoch="$(date +%s)"
 	local last_main_squash_at_utc=""
 	local integration_stale_last_alerted_at_utc=""
+
+	# ORCH_INTEGRATION_STALE_ALERT_HOURS=0 disables this alert entirely
+	# (parity with ORCH_FINAL_MERGE_INELIGIBLE_ALERT_HOURS=0). Return before
+	# touching state so the disabled path is a true no-op.
+	if [ "${ORCH_INTEGRATION_STALE_ALERT_HOURS}" -eq 0 ]; then
+		return 0
+	fi
+
 	local stale_threshold_secs=$(( ORCH_INTEGRATION_STALE_ALERT_HOURS * 3600 ))
 	local stale_realert_secs=$(( ORCH_INTEGRATION_STALE_REALERT_HOURS * 3600 ))
 	local stale_age_secs=0
