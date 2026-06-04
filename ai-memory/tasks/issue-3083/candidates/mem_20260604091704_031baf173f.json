@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1. Which area of this repository should be improved?\nChoices:\nA. One pipeline phase/workflow (RECOMMENDED) \u2014 specify the exact phase or file, such as `clarify`, `plan`, `implement`, `review_autofix`, `orchestrate`, or `validate`.\nB. Documentation/prompts only \u2014 specify the exact file or page.\nC. Another area \u2014 specify the exact path(s) or feature name.\nQ2. What kind of improvement do you want?\nChoices:\nA. Fix a bug or incorrect behavior (RECOMMENDED) \u2014 describe the current behavior and the expected behavior.\nB. Improve reliability/performance \u2014 describe what is flaky, slow, or noisy and what should improve.\nC. Improve usability/maintainability/docs \u2014 describe what is confusing or hard to use today.\nQ3. What should planning use as the source of truth for \u201cdone\u201d?\nChoices:\nA. A concrete reproduction or failing log/output (RECOMMENDED) \u2014 paste steps, error text, or a workflow run link.\nB. A short acceptance checklist \u2014 2\u20135 bullets describing what \u201cdone\u201d looks like.\nC. A specific existing issue, PR, or file section that shows the problem.",
+  "fingerprint": "79ba4eb0716d8f5ef40edb01a4cfc5c4c4f95055544bba73fbee7bdb614e232b",
+  "lineage": {
+    "issue_number": 3083,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26942554405",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26942554405",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260604091704_031baf173f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3083,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26942554405"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #3083 needs clarification",
+  "timestamps": {
+    "created_at": "2026-06-04T09:17:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
