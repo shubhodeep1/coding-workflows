@@ -3479,8 +3479,47 @@ jobs:
             else
               echo "No staged changes after fetched-manifest cleanup; nothing to commit."
             fi
-            # Log what Codex created that didn't make it past filters
-            remaining_changes="$(git status --porcelain 2>/dev/null || true)"
+            # Log what Codex created that didn't make it past the staging
+            # filters, for the no-op handler and the pathspec hard-fail (Guard
+            # 1) further below.
+            #
+            # The setup steps clone the runtime support checkout into the
+            # worktree as untracked, gitignore-free directories, so a raw
+            # `git status --porcelain` ALWAYS lists
+            #   ?? .codex-workflow-src/
+            #   ?? .codex-workflow-src-main/
+            # on every consumer-repo run, whether or not Codex touched them. (In
+            # this repo those paths are gitignored and never appear, which is why
+            # the false-positive only ever bit consumer repos.) Those bare
+            # untracked entries are the normal every-run state: they must NOT be
+            # reported as "excluded changes" here, nor trip Guard 1 below —
+            # doing so produced false ai:needs-human escalations on genuine
+            # no-ops (e.g. a task where Codex edited a file then reverted it).
+            # Strip exactly those whole-line entries at the source so
+            # remaining_changes carries only real survivors.
+            #
+            # The support-source directories are nested Git checkouts, so the
+            # outer repo's porcelain never descends into them: even after Codex
+            # edits a file inside .codex-workflow-src/, the outer status still
+            # shows only "?? .codex-workflow-src/". After stripping those benign
+            # top-level markers, query each support checkout's own Git status and
+            # splice any dirty inner paths back into remaining_changes so Guard 1
+            # still trips on real writes inside the runtime-fetched checkout.
+            remaining_changes="$(git status --porcelain 2>/dev/null \
+              | grep -vxE '\?\? \.codex-workflow-src(-main)?/?' || true)"
+            for support_checkout in .codex-workflow-src .codex-workflow-src-main; do
+              if [ -e "${support_checkout}/.git" ]; then
+                if support_checkout_changes="$(git -C "${support_checkout}" status --porcelain 2>/dev/null)"; then
+                  support_checkout_changes="$(printf '%s\n' "${support_checkout_changes}" | sed "s#^\\(..\\) #\\1 ${support_checkout}/#")"
+                else
+                  echo "::warning::Failed to query nested support checkout status for ${support_checkout}; treating it as clean."
+                  support_checkout_changes=""
+                fi
+                if [ -n "${support_checkout_changes}" ]; then
+                  remaining_changes="${remaining_changes}${remaining_changes:+$'\n'}${support_checkout_changes}"
+                fi
+              fi
+            done
             if [ -n "${remaining_changes}" ]; then
               echo "::warning::Files present in worktree but excluded from staging:"
               echo "${remaining_changes}" | sed 's/^/  /'
@@ -3796,7 +3835,7 @@ jobs:
           # ai:needs-human with a CRITICAL Telegram alert so a human
           # reviews the pathspec exclusions before automation resumes.
           # -------------------------------------------------------------
-          if printf '%s' "${remaining_changes}" | grep -qE '\.codex-workflow-src(-main)?\b'; then
+          if printf '%s' "${remaining_changes}" | grep -qE '\.codex-workflow-src(-main)?(/|$)'; then
             echo "::error::Implementation produced edits inside the runtime-fetched support checkout (.codex-workflow-src*) which the commit pathspec excludes. This is the known silent-filter bug — escalating to ai:needs-human instead of re-issuing."
 
             pathspec_body="$(printf '%s\n' \
