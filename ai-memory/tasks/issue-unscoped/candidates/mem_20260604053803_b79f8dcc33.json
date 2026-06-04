@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/files_touched_scope_guard.py:152-156 | severity=high | confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Directory-prefix entries like `frontend/` can incorrectly match sibling paths via a naive `startswith` check.\n  WHY: A staged file from an adjacent directory can be treated as in-scope, which defeats the scope guard and allows unintended files through.\n- scripts/files_touched_scope_guard.py:190-194 | severity=medium | confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Missing or unreadable `--issue-body-file` is silently treated as \"no allowlist\" instead of surfacing an error.\n  WHY: Callers cannot distinguish a genuinely empty allowlist from a misconfiguration or IO/parse failure, so the guard fails open without diagnostics.\n- scripts/files_touched_scope_guard.py:206-209 | severity=medium | confidence=[3]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Lockfile and glob path handling still assumes Unix-style separators and can misclassify paths in mixed Windows/backslash cases.\n  WHY: Backslash-formed paths can produce false in-scope or out-of-scope decisions, especially on Windows or mixed-environment inputs.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The label description exceeds GitHub's 100 character limit... now shortened consistently\"\n  expected_change_site: .github/ai/label_contract.v1.json (primary contract), synchronized in label_helpers.sh, implement.yml label creation, and test assertions\n  confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: LAST_RUN_DIFF and PR diff show shortened description in label_helpers.sh + implement.yml + test, but label_contract.v1.json still carries the original longer description that triggered the consensus finding.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/files_touched_scope_guard.py:152-156 | severity=high | confidence=[5]\n  PROBLEM: Directory-prefix entries (`frontend/`) incorrectly match sibling directory names that merely share the prefix string.\n  WHY: A staged file from an adjacent sibling directory would be erroneously considered inside the allowlist, defeating the guard's purpose and allowing the kind of scope drift the feature was added to block.\n- scripts/files_touched_scope_guard.py:190-194 | severity=medium | confidence=[4]\n  PROBLEM: Missing/unreadable `--issue-body-file` or parse failure silently downgrades to \"no allowlist\" (`EXIT_SKIP_NO_ALLOWLIST`).\n  WHY: Workflow callers in implement.yml cannot distinguish genuine \"no files_touched declared\" from a helper misconfiguration or IO error; the guard fails open silently with no visible diagnostic.\n- scripts/files_touched_scope_guard.py:206-209 | severity=medium | confidence=[3]\n  PROBLEM: While `splitlines()` is good, the Windows-backslash normalization in `is_lockfile` still uses only `/` `rsplit` and `fnmatchcase` assumes Unix semantics.\n  WHY: On a Windows runner or if git ever surfaces backslashes, lockfile auto-allow and glob/directory matching can produce false-positive or false-negative in-scope decisions.\n- Requirement: \"The label description exceeds GitHub's 100 character limit... now shortened consistently\"\n  Expected change site: .github/ai/label_contract.v1.json (primary contract), synchronized in label_helpers.sh, implement.yml label creation, and test assertions\n  Evidence of absence: LAST_RUN_DIFF and PR diff show shortened description in label_helpers.sh + implement.yml + test, but label_contract.v1.json still carries the original longer description that triggered the consensus finding.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "2875925fc390add1f3ed3a97192efd8b0d5f82cd113358c94080853a4fb68a58",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3078,
+    "run_id": "26932667084",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26932667084",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260604053803_b79f8dcc33",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3078,
+    "run_id": "26932667084"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-04T05:38:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
