@@ -304,9 +304,22 @@ jobs:
         run: |
           set -euo pipefail
           echo "Verifying all scripts referenced by workflows exist..."
+          # Scripts intentionally absent on main: optional backends that shim
+          # branches stage at runtime (see #3057). They appear as literal
+          # scripts/<name> tokens in workflow YAML (e.g. validate.yml stages
+          # render_prompt.py conditionally; review_autofix.yml's leaked-path
+          # guard lists it), but main ships a self-contained alternative
+          # (render_prompt.sh), so their absence here is expected and must not
+          # fail the cross-reference gate. Keep this list in sync with the
+          # optional-bootstrap handling in the consumer-facing workflows.
+          OPTIONAL_SCRIPTS=("scripts/render_prompt.py")
           MISSING=0
           for ref in $(grep -rhoE 'scripts/[a-zA-Z0-9_.-]+\.(sh|py|json)' .github/workflows/ | sort -u); do
             if [ ! -f "$ref" ]; then
+              if printf '%s\n' "${OPTIONAL_SCRIPTS[@]}" | grep -qxF "$ref"; then
+                echo "OPTIONAL (absent on main, staged by shim branches): $ref"
+                continue
+              fi
               echo "FAIL: $ref referenced in workflows but does not exist"
               MISSING=$((MISSING + 1))
             else
