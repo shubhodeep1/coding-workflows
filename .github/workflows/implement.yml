@@ -3509,11 +3509,14 @@ jobs:
               | grep -vxE '\?\? \.codex-workflow-src(-main)?/?' || true)"
             for support_checkout in .codex-workflow-src .codex-workflow-src-main; do
               if [ -e "${support_checkout}/.git" ]; then
-                support_checkout_changes="$(git -C "${support_checkout}" status --porcelain 2>/dev/null \
-                  | sed "s#^\\(..\\) #\\1 ${support_checkout}/#" || true)"
+                if support_checkout_changes="$(git -C "${support_checkout}" status --porcelain 2>/dev/null)"; then
+                  support_checkout_changes="$(printf '%s\n' "${support_checkout_changes}" | sed "s#^\\(..\\) #\\1 ${support_checkout}/#")"
+                else
+                  echo "::warning::Failed to query nested support checkout status for ${support_checkout}; treating it as clean."
+                  support_checkout_changes=""
+                fi
                 if [ -n "${support_checkout_changes}" ]; then
-                  remaining_changes="${remaining_changes:+${remaining_changes}
-}${support_checkout_changes}"
+                  remaining_changes="${remaining_changes}${remaining_changes:+$'\n'}${support_checkout_changes}"
                 fi
               fi
             done
@@ -3832,7 +3835,7 @@ jobs:
           # ai:needs-human with a CRITICAL Telegram alert so a human
           # reviews the pathspec exclusions before automation resumes.
           # -------------------------------------------------------------
-          if printf '%s' "${remaining_changes}" | grep -qE '\.codex-workflow-src(-main)?\b'; then
+          if printf '%s' "${remaining_changes}" | grep -qE '\.codex-workflow-src(-main)?(/|$)'; then
             echo "::error::Implementation produced edits inside the runtime-fetched support checkout (.codex-workflow-src*) which the commit pathspec excludes. This is the known silent-filter bug — escalating to ai:needs-human instead of re-issuing."
 
             pathspec_body="$(printf '%s\n' \
