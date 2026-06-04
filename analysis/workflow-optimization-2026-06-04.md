@@ -480,3 +480,133 @@ Positive hygiene already present:
 | Code modularization | 10+ | Large |
 | Expression size reduction | 3–4 | Medium |
 | Medium/Low fixes | 6–8 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-06-04)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the consolidation can be applied directly without changing endpoint/filter/retry/concurrency semantics. `NEEDS_VERIFICATION` means the overlap is real, but static review did not fully prove the safe-merge preconditions. `RISKY_SKIP` means the overlap exists, but the call sits in a retry/race/stall-recovery or otherwise safety-sensitive path and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+- **ID** — `MERGE-001`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — `.github/workflows/clarify.yml:418-423`  
+  **Current call count** — `2` when `SEMANTIC_CACHE_BACKEND != none`  
+  **Proposed call count** — `1`  
+  **Endpoint(s)** — `GET /repos/{repo}/issues/{issue_number}/comments` with `sort=created&direction=asc` (`per_page=50` once; then paginated `per_page=100`).  
+  **Evidence** — the same step fetches comments once for bounded prompt context, then re-fetches the same comment thread for semantic-cache history; `ISSUE_COMMENTS_FILE` is later consumed as a plain JSON array at `.github/workflows/clarify.yml:521-522`.
+  ```sh
+  gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=50" > "${ISSUE_COMMENTS_FILE}"
+
+  if [ "${SEMANTIC_CACHE_BACKEND}" != "none" ]; then
+    if ! gh_retry gh api --paginate --slurp "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=100" \
+  ```
+  **Proposed fix** — in the `Fetch issue comments` step, fetch the full paginated comment array once into a temp file, write `ISSUE_COMMENTS_FILE` from the first 50 flattened elements, and derive `THREAD_HISTORY_FILE` from the same flattened array.  
+  **Safety rationale** — same workflow step and no intervening mutation make the overlap real, but the merged version would change pagination and response-shape semantics, so the `SAFE_TO_MERGE` pagination precondition is not fully satisfied.  
+  **Downstream signal** — Verify on issues with `0`, `<50`, `50+`, and `100+` comments that slicing the flattened paginated response reproduces the exact chronological JSON shape currently consumed from `ISSUE_COMMENTS_FILE`, and confirm `THREAD_HISTORY_FILE` ordering is unchanged.
+
+- **ID** — `MERGE-002`  
+  **Safety tag** — `RISKY_SKIP`  
+  **File path and line ranges** — `scripts/orchestrate_poll_process.sh:9420-9421`, `scripts/orchestrate_poll_process.sh:11470-11471`, `scripts/orchestrate_poll_process.sh:15513-15514`  
+  **Current call count** — `2` per path (`6` total across the three paths)  
+  **Proposed call count** — `1` per path (`3` total)  
+  **Endpoint(s)** — `GET /repos/{repo}/issues/{issue_number}` via `_safe_gh_jq` / `gh_retry`.  
+  **Evidence** — each reissue path reads the same issue twice only to split `title` and `body`.
+  ```sh
+  orig_title="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.title // ""' || echo "")"
+  orig_body="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.body // ""' || echo "")"
+  ```
+  ```sh
+  IF_TITLE="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.title' || echo "")"
+  IF_BODY="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.body' || echo "")"
+  ```
+  **Proposed fix** — add a local helper in `scripts/orchestrate_poll_process.sh` that fetches `{title, body}` once and unpacks both fields for these three callers.  
+  **Safety rationale** — `RISKY_SKIP` because the calls are inside `scripts/orchestrate_poll_process.sh` stall-recovery/reissue paths, which this audit contract explicitly treats as manual-review-only.  
+  **Downstream signal** — Do not auto-implement; manually test normal stall-reissue, no-op ancestry reissue, and implementation-failed reissue paths to prove one-call extraction preserves fail-open behavior, emitted comments, and grep-stable log output.
+
+- **ID** — `MERGE-003`  
+  **Safety tag** — `RISKY_SKIP`  
+  **File path and line ranges** — `scripts/review_conflict_resolve.sh:133-150`  
+  **Current call count** — `2`  
+  **Proposed call count** — `1`  
+  **Endpoint(s)** — `gh run list` for `${_poll_workflow}` in `${GITHUB_REPOSITORY}` (Actions workflow-run listing), filtered once for `in_progress` and once for `queued`.  
+  **Evidence** — `_dispatch_integration_judge_now()` checks the same workflow twice, differing only by status filter.
+  ```sh
+  _active_count="$(GH_TOKEN="${GH_PAT}" gh run list \
+      --workflow="${_poll_workflow}" \
+      --repo "${GITHUB_REPOSITORY}" \
+      --status in_progress \
+      --limit 1 \
+      --json databaseId \
+      --jq 'length' 2>/dev/null || echo 0)"
+  ...
+  _active_count="$(GH_TOKEN="${GH_PAT}" gh run list \
+      --workflow="${_poll_workflow}" \
+      --repo "${GITHUB_REPOSITORY}" \
+      --status queued \
+      --limit 1 \
+      --json databaseId \
+      --jq 'length' 2>/dev/null || echo 0)"
+  ```
+  **Proposed fix** — fetch one small mixed-status snapshot (for example `--json databaseId,status --limit <small N>`) and branch locally on `queued` vs `in_progress` so the function keeps the same two skip messages.  
+  **Safety rationale** — `RISKY_SKIP` because this is a queue/race-defense dedup gate immediately before `gh workflow run`, so changing its observation window is not safe to auto-merge.  
+  **Downstream signal** — Do not auto-implement; manually replay both scenarios (queued poller already present, in-progress poller already present) and confirm a single listing call still suppresses dispatch without missing freshly queued runs or changing observable skip logs.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID** — `REUSE-001`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — `.github/workflows/implement.yml:100-100`, `.github/workflows/implement.yml:411-411`, `.github/workflows/implement.yml:1115-1116`  
+  **Current call count** — `3` on the normal non-skipped path before the first issue write  
+  **Proposed call count** — `1`  
+  **Endpoint(s)** — `GET /repos/{repo}/issues/{issue_number}`.  
+  **Evidence** — the workflow reads the same issue payload for precheck, checkout-ref resolution, and then a persisted metadata file; the file-backed step explicitly fetches only because earlier steps never filled `ISSUE_META_FILE`.
+  ```sh
+  ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '{state: (.state // "open"), labels: [.labels[].name]}')"
+  if ! issue_meta_json="$(gh_api_with_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"; then
+  if [ ! -s "${ISSUE_META_FILE}" ]; then
+    gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
+  fi
+  ```
+  **Proposed fix** — move to one early full-payload fetch that writes `ISSUE_META_FILE`, derive the precheck state/labels from that file, and have `Resolve checkout ref` read the cached JSON before falling back to `gh_api_with_retry` only if the cache is missing/invalid.  
+  **Safety rationale** — the overlap is strong, but it spans multiple workflow steps and currently mixes plain `gh api`, `gh_api_with_retry`, and `gh_retry`, so the `SAFE_TO_MERGE` error-handling requirement is not proven.  
+  **Downstream signal** — Verify there is no issue mutation before `.github/workflows/implement.yml:1116`, then diff the early cached JSON against the later live response on both a normal implement run and an E2E-smoke run; only consolidate if payloads match and fallback/retry behavior stays equivalent.
+
+- **ID** — `REUSE-002`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — `.github/workflows/orchestrate_clarify_respond.yml:68-83`, `.github/workflows/orchestrate_clarify_respond.yml:429-441`  
+  **Current call count** — `4` on the orchestrator-managed path with a tracking parent (`2` child-issue GETs + `2` tracking-issue GETs)  
+  **Proposed call count** — `2`  
+  **Endpoint(s)** — `GET /repos/{repo}/issues/{ISSUE_NUMBER}` and `GET /repos/{repo}/issues/{TRACKING_NUM}`.  
+  **Evidence** — `Check orchestrator metadata` already fetches the child issue and optional tracking issue, then `Fetch issue and tracking context` re-fetches both.
+  ```sh
+  ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  TRACKING_TITLE="$(gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.title // ""' 2>/dev/null || echo "")"
+  ...
+  ISSUE_META="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  TRACKING_BODY="$(gh_retry gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.body // ""')"
+  ```
+  **Proposed fix** — in `Check orchestrator metadata`, switch the reads to `gh_retry gh api`, persist the child-issue JSON plus optional tracking-issue JSON/number to a temp file or env file, and have `Fetch issue and tracking context` consume that cache before any live fallback.  
+  **Safety rationale** — same job and same issue scope, but this crosses workflow steps and the first step currently lacks `gh_retry`, so retry/failure semantics are not identical enough for `SAFE_TO_MERGE`.  
+  **Downstream signal** — Verify no step before `.github/workflows/orchestrate_clarify_respond.yml:429-441` mutates the child or tracking issue body/title, then compare persisted first-step payloads against the later live responses on an orchestrator-managed issue both with and without a tracking parent.
+
+### Dead Calls (DEAD-API-###)
+No findings.
+
+### Cross-References to Deep Audit Section
+- `API-001`: `NEEDS_VERIFICATION` — same-step overlap is real, but replacing four paginated REST reads with one GraphQL shape changes transport, pagination, and failure surfaces.
+- `API-002`: `NEEDS_VERIFICATION` — extending the existing `closingIssuesReferences` query is sound in principle, but first-usable-issue/body/label behavior must be matched exactly.
+- `API-003`: `NEEDS_VERIFICATION` — batching fallback issue-label fetches should help, but validate-dispatch fail-open behavior and label-removal semantics still need proof.
+- `API-004`: `RISKY_SKIP` — this is a spoof-defense path in `scripts/check_external_branch_advance.sh`; batching commit-attribution checks changes a security-sensitive decision point.
+- `API-005`: `RISKY_SKIP` — the target code is itself retry/backoff logic, so auto-rewriting it risks changing permanent-failure handling and rate-limit logging.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 3 | MERGE-001, REUSE-001, REUSE-002 |
+| RISKY_SKIP | 2 | MERGE-002, MERGE-003 |
+
+### Implement-Stage Handoff
+No SAFE_TO_MERGE findings in this pass.
