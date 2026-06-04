@@ -125,6 +125,10 @@
       "color": "b60205",
       "description": "Implementation commit was refused for mass/destructive deletions — redispatch of this issue ID is blocked pending human review"
     },
+    "ai:scope-blocked": {
+      "color": "b60205",
+      "description": "Implementation commit was refused for staging files outside the declared files_touched allowlist — redispatch of this issue ID is blocked pending human review"
+    },
     "ai:closed": {
       "color": "6a737d",
       "description": "Linked PR closed without merge"
