@@ -44,6 +44,7 @@ set -euo pipefail
 SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"
 CODEX_HEARTBEAT_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
+WORKSPACE_SAFETY_CHECK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/workspace_safety_check.sh"
 ORCHESTRATE_FORCE_TICK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/orchestrate_force_tick.sh"
 
 resolve_ledger_substate_helper() {
@@ -1748,28 +1749,32 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
     sanitize_codex_prompt_file "${_effective_prompt_file}"
   fi
-  emit_conflict_resolver_substate "LaunchingAgentProcess" "${attempt}"
-  emit_conflict_resolver_substate "InitializingSession" "${attempt}"
-  emit_conflict_resolver_substate "StreamingTurn" "${attempt}"
-  if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
-    timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
-      "${CODEX_STALL_GUARD_HELPER}" \
-      --phase review_conflict_resolve \
-      --stdout-file "${tmp_output}" \
-      --status-file "${_stall_status_file}" \
-      -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" \
-      || _codex_exit=$?
-  elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
-    timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
-      "${CODEX_HEARTBEAT_HELPER}" \
-      --phase review_conflict_resolve \
-      --stdout-file "${tmp_output}" \
-      -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" \
-      || _codex_exit=$?
+  if ! bash "${WORKSPACE_SAFETY_CHECK_HELPER}"; then
+    _codex_exit=$?
   else
-    timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
-      codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" > "${tmp_output}" \
-      || _codex_exit=$?
+    emit_conflict_resolver_substate "LaunchingAgentProcess" "${attempt}"
+    emit_conflict_resolver_substate "InitializingSession" "${attempt}"
+    emit_conflict_resolver_substate "StreamingTurn" "${attempt}"
+    if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
+      timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
+        "${CODEX_STALL_GUARD_HELPER}" \
+        --phase review_conflict_resolve \
+        --stdout-file "${tmp_output}" \
+        --status-file "${_stall_status_file}" \
+        -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" \
+        || _codex_exit=$?
+    elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
+      timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
+        "${CODEX_HEARTBEAT_HELPER}" \
+        --phase review_conflict_resolve \
+        --stdout-file "${tmp_output}" \
+        -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" \
+        || _codex_exit=$?
+    else
+      timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
+        codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" > "${tmp_output}" \
+        || _codex_exit=$?
+    fi
   fi
   _attempt_elapsed=$(( $(date +%s) - _attempt_started_at ))
   emit_conflict_resolver_substate "Finishing" "${attempt}"
@@ -1782,6 +1787,11 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   if [ "${_stall_state}" = "observed" ]; then
     echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: codex_stall_observed recorded (observe-only mode)."
     emit_conflict_resolver_substate "codex_stall_observed" "${attempt}"
+  fi
+  if [ "${_codex_exit}" -eq 78 ]; then
+    echo "::error::Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: workspace_safety_violation."
+    emit_conflict_resolver_substate "Failed" "${attempt}"
+    exit 78
   fi
   # Graceful-SIGTERM-at-timer-boundary diagnostic.  If codex installs
   # a SIGTERM handler that completes cleanup and exits 0 within the

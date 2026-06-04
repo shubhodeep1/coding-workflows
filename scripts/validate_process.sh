@@ -2461,6 +2461,7 @@ trap cleanup_runtime_containers EXIT
 _validate_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODEX_HEARTBEAT_HELPER="${_validate_script_dir}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${_validate_script_dir}/codex_stall_guard.sh"
+WORKSPACE_SAFETY_CHECK_HELPER="${_validate_script_dir}/workspace_safety_check.sh"
 LEDGER_SUBSTATE_HELPER=""
 for _ledger_candidate in \
   "${_validate_script_dir}/ledger_emit_substate.sh" \
@@ -2535,6 +2536,10 @@ run_validate_codex_attempt() {
   local output_file="$3"
   local log_file="$4"
   local status_file="$5"
+
+  if [ -x "${WORKSPACE_SAFETY_CHECK_HELPER}" ]; then
+    bash "${WORKSPACE_SAFETY_CHECK_HELPER}" || return $?
+  fi
 
   if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
     "${CODEX_STALL_GUARD_HELPER}" \
@@ -2766,6 +2771,15 @@ else
       emit_validate_substate "validate_discover" "discover" "codex_stall_killed" "${attempt}" "${DISCOVER_LOG_FILE}"
       ;;
   esac
+
+  if [ "${DISCOVER_EXIT}" -eq 78 ]; then
+    emit_validate_substate "validate_discover" "discover" "Failed" "${attempt}" "${DISCOVER_LOG_FILE}"
+    fail_validate_codex_phase \
+      "validation_discovery" \
+      "workspace_safety_violation" \
+      "${DISCOVER_ATTEMPTS_USED:-${attempt}}" \
+      "Workspace safety preflight failed before validation hint discovery could launch Codex."
+  fi
 
     if [ "${DISCOVER_EXIT}" -ne 0 ]; then
       if [ "${discover_stall_state}" = "killed" ]; then
@@ -3495,6 +3509,15 @@ for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
       emit_validate_substate "validate_diagnose" "diagnose" "codex_stall_killed" "${attempt}" "${DIAGNOSE_LOG_FILE}"
       ;;
   esac
+
+  if [ "${DIAGNOSE_EXIT}" -eq 78 ]; then
+    emit_validate_substate "validate_diagnose" "diagnose" "Failed" "${attempt}" "${DIAGNOSE_LOG_FILE}"
+    fail_validate_codex_phase \
+      "validation_diagnosis" \
+      "workspace_safety_violation" \
+      "${DIAGNOSE_ATTEMPTS_USED:-${attempt}}" \
+      "Workspace safety preflight failed before validation diagnosis could launch Codex."
+  fi
 
   if [ "${DIAGNOSE_EXIT}" -ne 0 ]; then
     if [ "${diagnose_stall_state}" = "killed" ]; then
