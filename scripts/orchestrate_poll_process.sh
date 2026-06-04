@@ -5913,16 +5913,17 @@ check_integration_branch_staleness() {
 	local now_epoch="$(date +%s)"
 	local last_main_squash_at_utc=""
 	local integration_stale_last_alerted_at_utc=""
-	local stale_threshold_secs=$(( ORCH_INTEGRATION_STALE_ALERT_HOURS * 3600 ))
-	local stale_realert_secs=$(( ORCH_INTEGRATION_STALE_REALERT_HOURS * 3600 ))
-	local stale_age_secs=0
 
 	# ORCH_INTEGRATION_STALE_ALERT_HOURS=0 disables this alert entirely
 	# (parity with ORCH_FINAL_MERGE_INELIGIBLE_ALERT_HOURS=0). Return before
 	# touching state so the disabled path is a true no-op.
-	if [ "${ORCH_INTEGRATION_STALE_ALERT_HOURS:-6}" -eq 0 ]; then
+	if [ "${ORCH_INTEGRATION_STALE_ALERT_HOURS}" -eq 0 ]; then
 		return 0
 	fi
+
+	local stale_threshold_secs=$(( ORCH_INTEGRATION_STALE_ALERT_HOURS * 3600 ))
+	local stale_realert_secs=$(( ORCH_INTEGRATION_STALE_REALERT_HOURS * 3600 ))
+	local stale_age_secs=0
 
 	[ -f "${STATE_FILE}" ] || return 0
 	[ -n "${integration_branch}" ] || return 0
