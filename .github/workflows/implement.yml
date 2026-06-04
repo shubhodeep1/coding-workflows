@@ -3498,15 +3498,25 @@ jobs:
             # Strip exactly those whole-line entries at the source so
             # remaining_changes carries only real survivors.
             #
-            # A *modified/tracked* support-checkout path — the original
-            # " M .codex-workflow-src" gitlink signature from the #1292
-            # infinite-reissue bug, or any " M .codex-workflow-src/<file>" — does
-            # NOT match this `?? `-anchored whole-line pattern, so it survives the
-            # strip and still trips Guard 1. (Relies on plain porcelain collapsing
-            # a wholly-untracked dir to one "?? dir/" line; a future switch to
-            # `-uall` would need a path-prefix strip instead.)
+            # The support-source directories are nested Git checkouts, so the
+            # outer repo's porcelain never descends into them: even after Codex
+            # edits a file inside .codex-workflow-src/, the outer status still
+            # shows only "?? .codex-workflow-src/". After stripping those benign
+            # top-level markers, query each support checkout's own Git status and
+            # splice any dirty inner paths back into remaining_changes so Guard 1
+            # still trips on real writes inside the runtime-fetched checkout.
             remaining_changes="$(git status --porcelain 2>/dev/null \
               | grep -vxE '\?\? \.codex-workflow-src(-main)?/?' || true)"
+            for support_checkout in .codex-workflow-src .codex-workflow-src-main; do
+              if [ -e "${support_checkout}/.git" ]; then
+                support_checkout_changes="$(git -C "${support_checkout}" status --porcelain 2>/dev/null \
+                  | sed "s#^\\(..\\) #\\1 ${support_checkout}/#" || true)"
+                if [ -n "${support_checkout_changes}" ]; then
+                  remaining_changes="${remaining_changes:+${remaining_changes}
+}${support_checkout_changes}"
+                fi
+              fi
+            done
             if [ -n "${remaining_changes}" ]; then
               echo "::warning::Files present in worktree but excluded from staging:"
               echo "${remaining_changes}" | sed 's/^/  /'
