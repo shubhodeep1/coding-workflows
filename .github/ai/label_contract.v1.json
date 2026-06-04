@@ -127,7 +127,7 @@
     },
     "ai:scope-blocked": {
       "color": "b60205",
-      "description": "Implementation commit was refused for staging files outside the declared files_touched allowlist — redispatch of this issue ID is blocked pending human review"
+      "description": "Implementation blocked: staged files fell outside files_touched scope; human review required"
     },
     "ai:closed": {
       "color": "6a737d",

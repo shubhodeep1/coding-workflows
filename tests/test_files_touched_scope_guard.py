@@ -82,8 +82,11 @@ def test_empty_files_touched_block_skips() -> None:
 
 
 def test_directory_prefix_entry_matches() -> None:
-	status, _allow, oos = guard.evaluate(_body("frontend/"), ["frontend/a/b/c.ts", "frontend"])
+	status, _allow, oos = guard.evaluate(_body("frontend/"), ["frontend/a/b/c.ts"])
 	assert status == guard.STATUS_IN_SCOPE, oos
+	status, _allow, oos = guard.evaluate(_body("frontend/"), ["frontend"])
+	assert status == guard.STATUS_OUT_OF_SCOPE
+	assert oos == ["frontend"]
 	# A sibling that merely shares the prefix string is NOT under the directory.
 	status, _allow, oos = guard.evaluate(_body("frontend/"), ["frontend-build/x.ts"])
 	assert status == guard.STATUS_OUT_OF_SCOPE
@@ -140,6 +143,11 @@ def test_incident_project_244_issue_254() -> None:
 def test_leading_dot_slash_normalized_both_sides() -> None:
 	status, _allow, _oos = guard.evaluate(_body("./src/"), ["./src/x.ts"])
 	assert status == guard.STATUS_IN_SCOPE
+
+
+def test_bare_entry_matches_exact_path_and_descendants() -> None:
+	status, _allow, oos = guard.evaluate(_body("frontend"), ["frontend", "frontend/a/b/c.ts"])
+	assert status == guard.STATUS_IN_SCOPE, oos
 
 
 # --------------------------------------------------------------------------
@@ -356,9 +364,11 @@ def test_label_contract_and_helper_have_scope_blocked() -> None:
 	contract = json.loads(LABEL_CONTRACT.read_text(encoding="utf-8"))
 	assert "ai:scope-blocked" in contract["labels"]
 	desc = contract["labels"]["ai:scope-blocked"]["description"]
+	assert len(desc) <= 100
 	helper = LABEL_HELPERS.read_text(encoding="utf-8")
 	assert '["ai:scope-blocked"]="b60205"' in helper
 	assert f'["ai:scope-blocked"]="{desc}"' in helper
+	assert f"--description '{desc}'" in _implement_text()
 	# It is a latch label, not a phase label.
 	for group in contract.get("phase_groups", []):
 		assert "ai:scope-blocked" not in group.get("members", [])

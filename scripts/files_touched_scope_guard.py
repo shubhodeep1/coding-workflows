@@ -151,8 +151,7 @@ def entry_matches(entry: str, path: str) -> bool:
 		# fnmatchcase keeps matching deterministic across runner OSes.
 		return fnmatch.fnmatchcase(path, entry)
 	if entry.endswith("/"):
-		prefix = entry[:-1]
-		return path == prefix or path.startswith(entry)
+		return path.startswith(entry)
 	return path == entry or path.startswith(entry + "/")
 
 
@@ -203,7 +202,7 @@ def _read_staged(path: str | None) -> list[str]:
 		text = _read_text_file(path)
 	else:
 		text = sys.stdin.read()
-	return [line for line in text.replace("\r\n", "\n").split("\n") if line.strip()]
+	return [line for line in text.splitlines() if line.strip()]
 
 
 def main(argv: list[str] | None = None) -> int:

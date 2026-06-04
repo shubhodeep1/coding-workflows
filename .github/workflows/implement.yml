@@ -3535,7 +3535,7 @@ jobs:
             gh label create 'ai:scope-blocked' \
               --repo "${{ github.repository }}" \
               --color 'b60205' \
-              --description 'Implementation commit was refused for staging files outside the declared files_touched allowlist — redispatch of this issue ID is blocked pending human review' \
+              --description 'Implementation blocked: staged files fell outside files_touched scope; human review required' \
               2>/dev/null || true
             gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
               --add-label 'ai:scope-blocked' \
