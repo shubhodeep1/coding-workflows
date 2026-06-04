@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml:3508-3510 | severity=medium | confidence=5\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The `grep -vxE '\\?\\? \\.codex-workflow-src(-main)?/?'` filter only strips exact top-level untracked directory entries and does not strip `?? .codex-workflow-src/scripts/foo.sh`, so such entries survive and trigger Guard 1.\n  WHY: If Codex writes an untracked file inside the support checkout directory, it incorrectly triggers Guard 1 and the `ai:needs-human` escalation, contradicting the README's promise that the guard fires only when a modified/tracked support-checkout path survives the strip.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Strip the bare untracked support-dir lines from `remaining_changes` at the source with a whole-line, status-anchored filter\" + \"The guard fires only when a modified/tracked support-checkout path survives that strip\"\n  expected_change_site: .github/workflows/implement.yml:3508-3510\n  confidence=5\n  flagged_by: [minimax_minimax-m2_5]\n  EVIDENCE: The grep pattern `\\?\\? \\.codex-workflow-src(-main)?/?` with `-x` does not match `?? .codex-workflow-src/scripts/foo.sh`, so the code does not implement the promised contract.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- .github/workflows/implement.yml:3508-3510 | severity=medium | confidence=5\n  PROBLEM: The grep filter `grep -vxE '\\?\\? \\.codex-workflow-src(-main)?/?'` uses whole-line matching (`-x`) which only strips exact top-level untracked directory entries (`?? .codex-workflow-src/`), but does NOT strip untracked files inside those directories (`?? .codex-workflow-src/scripts/foo.sh`).\n  WHY: Such entries survive the filter, reach Guard 1 (line 3825), and trigger the false escalation the PR intends to prevent.\n- Requirement: \"Strip the bare untracked support-dir lines from `remaining_changes` at the source with a whole-line, status-anchored filter\" + \"The guard fires only when a modified/tracked support-checkout path survives that strip\" (from PR description and README)\n  Expected change site: .github/workflows/implement.yml:3508-3510\n  Evidence of absence: The grep pattern `\\?\\? \\.codex-workflow-src(-main)?/?` with `-x` (whole-line) only matches lines that END with the support-dir path. Lines with additional path components (`?? .codex-workflow-src/scripts/foo.sh`) are not matched and survive to trigger Guard 1.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "ac34a167e94a969801ef8e84192bcc02ca0965202ba7db3660fbdab1957db38f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3092,
+    "run_id": "26952058478",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26952058478",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260604125220_600e5f166f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3092,
+    "run_id": "26952058478"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-04T12:52:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
