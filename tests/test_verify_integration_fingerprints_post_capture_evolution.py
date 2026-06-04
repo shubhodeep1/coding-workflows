@@ -13,18 +13,19 @@ This reproduces the project #3042 wave-7 incident, where PR #3076 inserted
 ``--skip-git-repo-check`` into issue #3044's codex-exec lines (a normal
 squash-merge, not an ``[ai-merge-resolve]`` resolver commit). The gate's
 sole purpose is catching the integration-sync conflict resolver reverting
-intent, so a must_contain miss is only a genuine regression when an
-``[ai-merge-resolve]`` commit touched the file after capture.
+intent, so a must_contain miss is only a genuine regression when the
+pickaxe-identified commit that removed the captured line is an
+``[ai-merge-resolve]`` commit after capture.
 
 Asserts that:
 
   * the verifier's ``_is_must_contain_post_capture_evolution_false_positive``
     helper returns the superseding non-resolver commit SHA when the line was
     modified after capture by a non-resolver commit;
-  * it fails CLOSED (returns None) when a resolver commit touched the file
-    after capture, when ``captured_at`` is missing/unparseable, in
-    working-tree mode (no ref), and when the file was not modified after
-    capture at all;
+  * it fails CLOSED (returns None) when the pickaxe-identified line-removal
+    commit is an ``[ai-merge-resolve]`` resolver commit, when ``captured_at``
+    is missing/unparseable, in working-tree mode (no ref), and when the file
+    was not modified after capture at all;
   * end-to-end ``main(['--ref', <sha>, fingerprints.json])`` exits 0 (the
     violation is skipped) and emits the
     ``FINGERPRINT_POST_CAPTURE_EVOLUTION_FALSE_POSITIVE_V1`` marker;
@@ -329,12 +330,12 @@ def test_verifier_still_fails_on_genuine_resolver_regression():
 		head = _run_git(repo, "rev-parse", "HEAD").strip()
 		fp_path = repo / "fingerprints.json"
 		fp_path.write_text(json.dumps(_fingerprint_state(_CAPTURED_AT)), encoding="utf-8")
-		rc, out, _err = _run_verifier(mod, ["--ref", head, str(fp_path)], repo)
+		rc, out, err = _run_verifier(mod, ["--ref", head, str(fp_path)], repo)
 	assert rc == 1, (
 		"verifier MUST still fail when an [ai-merge-resolve] commit dropped the "
 		f"line after capture (genuine regression). Got rc={rc}, stdout=\n{out}"
 	)
-	assert "FINGERPRINT_POST_CAPTURE_EVOLUTION_FALSE_POSITIVE_V1" not in out
+	assert "FINGERPRINT_POST_CAPTURE_EVOLUTION_FALSE_POSITIVE_V1" not in err
 	assert "must_contain pattern missing" in out
 
 

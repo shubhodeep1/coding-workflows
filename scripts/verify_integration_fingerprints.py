@@ -603,6 +603,7 @@ def _is_must_contain_post_capture_evolution_false_positive(
 				"git", "log",
 				"-S" + literal,
 				"--first-parent",
+				"--max-count=1",
 				"--format=%H%x00%ct%x00%s",
 				effective_ref,
 				"--",
@@ -1216,9 +1217,9 @@ def _evaluate_fp_state(
 			print(
 				f"::warning::issue #{issue_num} (PR #{pr_num}): must_contain pattern missing from '{path}' "
 				"classified as post-capture evolution false positive — the fingerprinted line was modified "
-				f"after capture by non-resolver commit {evolution_sha[:12]} on the verified ref, and no "
-				"[ai-merge-resolve] commit touched the file in that window, so the resolver did not revert "
-				f"it. Skipping violation. Pattern (first 200 chars): {regex_src[:200]}",
+				f"after capture by non-resolver commit {evolution_sha[:12]} on the verified ref; the "
+				"pickaxe-identified line-removal commit is not an [ai-merge-resolve] commit, so this "
+				f"miss is not attributable to the resolver. Skipping violation. Pattern (first 200 chars): {regex_src[:200]}",
 				flush=True,
 				file=sys.stderr,
 			)
