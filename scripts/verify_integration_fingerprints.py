@@ -321,6 +321,23 @@ _PR_MERGE_COMMIT_CACHE: dict[tuple[str, str, str], str | None] = {}
 # for the same (merge_commit, path) pair across issues / patterns.
 _PARTIAL_REMOVAL_POST_MERGE_CACHE: dict[tuple[str, str], str | None] = {}
 
+# Subject prefix the orchestrator's integration-sync conflict resolver
+# stamps on the commits it creates (back-merges of `main`, conflict
+# resolutions). The wave-dispatch fingerprint gate exists solely to catch
+# THESE commits silently reverting merged sub-issue intent, so a
+# must_contain miss is only a genuine regression when a resolver commit is
+# implicated — see _is_must_contain_post_capture_evolution_false_positive.
+_AI_MERGE_RESOLVE_SUBJECT_PREFIX = "[ai-merge-resolve]"
+
+# Cache for the must_contain post-capture-evolution false-positive defense,
+# keyed on (ref, normalized_path, regex_src, captured_at). Value is the
+# commit SHA that removed the captured line when the miss is attributable to
+# legitimate post-capture evolution, or None when the defense does not apply
+# (working-tree mode, non-re.escape regex, line removed by a resolver commit
+# or before capture, no attributable commit, or any plumbing/parse error —
+# the defense fails CLOSED so genuine resolver regressions still fail).
+_POST_CAPTURE_EVOLUTION_CACHE: dict[tuple[str, str, str, str], str | None] = {}
+
 
 def _find_pr_merge_commit_for_path(ref: str | None, pr_num: Any, path: str) -> str | None:
 	"""Find the commit on ``ref`` (or HEAD) that merged PR #pr_num and touched ``path``.
@@ -474,6 +491,153 @@ def _is_must_not_contain_partial_removal_false_positive(
 	except Exception:  # noqa: BLE001 — defense check must stay fail-open
 		return None
 	return merge_commit if matched else None
+
+
+def _captured_at_to_epoch(captured_at: Any) -> int | None:
+	"""Parse an ISO-8601 ``captured_at`` (e.g. ``2026-06-02T13:38:28Z``)
+	into a UTC unix timestamp.
+
+	Returns None on any missing / blank / unparseable value so the
+	post-capture-evolution defense fails closed (surfaces the violation)
+	rather than guessing a window.
+	"""
+	if not isinstance(captured_at, str):
+		return None
+	text = captured_at.strip()
+	if not text:
+		return None
+	# datetime.fromisoformat only learned to accept a trailing 'Z' in
+	# Python 3.11; normalise it so the defense works on the 3.10 runners too.
+	if text.endswith("Z"):
+		text = text[:-1] + "+00:00"
+	try:
+		parsed = datetime.fromisoformat(text)
+	except ValueError:
+		return None
+	if parsed.tzinfo is None:
+		parsed = parsed.replace(tzinfo=timezone.utc)
+	try:
+		return int(parsed.timestamp())
+	except (OverflowError, OSError, ValueError):
+		return None
+
+
+def _is_must_contain_post_capture_evolution_false_positive(
+	ref: str | None,
+	captured_at: Any,
+	path: str,
+	regex_src: str,
+) -> str | None:
+	"""Detect must_contain misses caused by legitimate post-capture evolution.
+
+	The wave-dispatch gate captures each merged sub-issue's added lines as
+	exact (``re.escape``) ``must_contain`` regexes at merge time. A line that
+	is legitimately modified *after* that capture — by a later sub-issue PR
+	squash-merge, an ``[ai-autofix]`` commit, an out-of-band fix PR merged
+	onto the integration branch, or any other non-resolver commit — no longer
+	matches the stale exact regex, so the verifier reports a fake "intent
+	silently reverted" violation that wrongly blocks the next wave's dispatch
+	(observed on project #3042 wave 7: PR #3076 inserted
+	``--skip-git-repo-check`` into issue #3044's codex-exec lines; an
+	``[ai-autofix]`` commit refactored issue #3058's GH_PAT/GH_TOKEN block
+	into a ``dispatch_token`` local; later waves extended issue #3066's
+	``REQUIRED_BOOTSTRAP_SCRIPTS`` list).
+
+	The gate's sole purpose is catching the integration-sync conflict
+	resolver (commits subject-prefixed ``[ai-merge-resolve]``) silently
+	reverting intent. Routine resolver back-merges of ``main`` legitimately
+	touch many files without reverting any specific line, so a file-level
+	"did a resolver commit touch this file after capture" check is too coarse
+	— it would re-block every project that ever back-merged ``main``. Instead
+	this attributes the captured line's *disappearance* to a single commit:
+	walk the integration branch's first-parent history with a fixed-string
+	pickaxe (``git log -S<line> --first-parent``) for the exact captured line.
+	The newest hit is the commit that removed the line's last occurrence (the
+	line is absent at HEAD, hence the miss). The miss is legitimate
+	post-capture evolution — NOT a resolver regression — exactly when that
+	commit is dated after ``captured_at`` AND is not an ``[ai-merge-resolve]``
+	resolver commit.
+
+	Returns that superseding non-resolver commit SHA when the miss is
+	confirmed as post-capture evolution (caller should skip the violation);
+	None otherwise. Fails CLOSED — working-tree mode (no ref to walk), a
+	missing/unparseable ``captured_at``, a non-``re.escape`` ``regex_src``
+	(cannot be safely literalized for a fixed-string pickaxe), the line
+	removed by a resolver commit or at/before capture, no attributable
+	commit, or any git plumbing/encoding error all return None so genuine
+	resolver regressions still hard-fail the gate.
+
+	API call count: zero (local ``git log`` only). Cached per
+	(ref, normalized_path, regex_src, captured_at).
+	"""
+	effective_ref = _normalize_ref(ref)
+	if effective_ref is None:
+		# Working-tree mode (the conflict resolver's pre-commit self-check)
+		# has no single committed ref to attribute changes to, and must stay
+		# strict about preserving merged intent — the defense is scoped to
+		# the ref-mode wave-dispatch gate only.
+		return None
+	captured_epoch = _captured_at_to_epoch(captured_at)
+	if captured_epoch is None:
+		return None
+	normalized_path, path_error = _normalize_repo_path(path)
+	if path_error is not None or normalized_path is None:
+		return None
+	if not isinstance(regex_src, str) or not regex_src:
+		return None
+	# Only pure re.escape captures (the orchestrator's only producer) can be
+	# safely un-escaped to a literal for a fixed-string pickaxe; a real-regex
+	# fingerprint is surfaced rather than risk an unsafe literalization that
+	# could mask a genuine regression.
+	if not _looks_like_re_escape_output(regex_src):
+		return None
+	literal = re.sub(r"\\(.)", r"\1", regex_src)
+	if not literal:
+		return None
+	cache_key = (effective_ref, normalized_path, regex_src, str(captured_at).strip())
+	if cache_key in _POST_CAPTURE_EVOLUTION_CACHE:
+		return _POST_CAPTURE_EVOLUTION_CACHE[cache_key]
+	try:
+		git_result = subprocess.run(
+			[
+				"git", "log",
+				"-S" + literal,
+				"--first-parent",
+				"--format=%H%x00%ct%x00%s",
+				effective_ref,
+				"--",
+				normalized_path,
+			],
+			capture_output=True,
+			check=False,
+			timeout=GIT_COMMAND_TIMEOUT_SECS,
+		)
+	except Exception:  # noqa: BLE001 — defense must stay fail-closed
+		_POST_CAPTURE_EVOLUTION_CACHE[cache_key] = None
+		return None
+	if git_result.returncode != 0:
+		_POST_CAPTURE_EVOLUTION_CACHE[cache_key] = None
+		return None
+	result: str | None = None
+	for raw_line in git_result.stdout.decode("utf-8", errors="replace").splitlines():
+		sha, _sep1, rest = raw_line.partition("\x00")
+		ct_text, _sep2, subject = rest.partition("\x00")
+		if not sha or not ct_text:
+			continue
+		try:
+			commit_epoch = int(ct_text)
+		except ValueError:
+			continue
+		# Newest-first: the first well-formed pickaxe hit is the commit that
+		# removed the captured line's last occurrence (it is absent at HEAD);
+		# that commit alone decides the verdict.
+		if commit_epoch > captured_epoch and not subject.lstrip().startswith(
+			_AI_MERGE_RESOLVE_SUBJECT_PREFIX
+		):
+			result = sha.strip() or None
+		break
+	_POST_CAPTURE_EVOLUTION_CACHE[cache_key] = result
+	return result
 
 
 def _fp_key(fp: Any) -> tuple[str, str] | None:
@@ -930,6 +1094,7 @@ def _evaluate_fp_state(
 	file_cache: dict[str, tuple[str | None, str | None]],
 	exists_cache: dict[str, tuple[bool, str | None]],
 	ref: str | None = None,
+	captured_at: Any = None,
 ) -> dict[str, Any] | None:
 	if not isinstance(fp, dict):
 		return None
@@ -1020,6 +1185,43 @@ def _evaluate_fp_state(
 				),
 			}
 		if pattern.search(content):
+			return {
+				"kind": kind,
+				"path": path,
+				"regex": regex_src,
+				"fp_key": fp_key,
+				"satisfied": True,
+				"check_error": None,
+				"violation": None,
+			}
+		# must_contain miss: before flagging a silent regression, check
+		# whether the fingerprinted line was legitimately modified after
+		# capture by a non-resolver commit (a later sub-issue PR, an
+		# [ai-autofix] commit, an out-of-band fix merged onto the
+		# integration branch, …). The gate only guards against the
+		# integration-sync resolver reverting intent, so post-capture
+		# evolution by anything else is expected drift, not a regression.
+		evolution_sha = _is_must_contain_post_capture_evolution_false_positive(
+			ref, captured_at, path, regex_src,
+		)
+		if evolution_sha:
+			print(
+				f"::warning::FINGERPRINT_POST_CAPTURE_EVOLUTION_FALSE_POSITIVE_V1 "
+				f"issue=#{issue_num} pr=#{pr_num} file={path} "
+				f"superseding_commit={evolution_sha[:12]} "
+				f"reason=must_contain_line_modified_after_capture_by_non_resolver_commit",
+				flush=True,
+				file=sys.stderr,
+			)
+			print(
+				f"::warning::issue #{issue_num} (PR #{pr_num}): must_contain pattern missing from '{path}' "
+				"classified as post-capture evolution false positive — the fingerprinted line was modified "
+				f"after capture by non-resolver commit {evolution_sha[:12]} on the verified ref, and no "
+				"[ai-merge-resolve] commit touched the file in that window, so the resolver did not revert "
+				f"it. Skipping violation. Pattern (first 200 chars): {regex_src[:200]}",
+				flush=True,
+				file=sys.stderr,
+			)
 			return {
 				"kind": kind,
 				"path": path,
@@ -1173,6 +1375,7 @@ def _deduped_issue_entries(fingerprints: dict[str, Any]) -> list[dict[str, Any]]
 				"issue_key": issue_key,
 				"issue_num": issue_num,
 				"pr_num": pr_num,
+				"captured_at": entry.get("captured_at"),
 				"must_contain": must_contain,
 				"must_not_contain": must_not_contain,
 				"must_not_exist": entry.get("must_not_exist", []) or [],
@@ -1340,7 +1543,10 @@ def verify_with_tier(
 		issue_must_contain_states: list[dict[str, Any]] = []
 
 		for fp in issue_entry["must_contain"]:
-			state = _evaluate_fp_state(fp, "must_contain", issue_num, pr_num, file_cache, exists_cache, ref=ref)
+			state = _evaluate_fp_state(
+				fp, "must_contain", issue_num, pr_num, file_cache, exists_cache,
+				ref=ref, captured_at=issue_entry.get("captured_at"),
+			)
 			if state is None:
 				continue
 			issue_must_contain_states.append(state)
@@ -1582,7 +1788,7 @@ def list_violated_files(fingerprints: dict[str, Any], ref: str | None = None) ->
 		must_not_exist = entry.get("must_not_exist", []) or []
 
 		for fp in must_contain:
-			state = _evaluate_fp_state(fp, "must_contain", issue_num=issue_num, pr_num=pr_num, file_cache=file_cache, exists_cache=exists_cache, ref=ref)
+			state = _evaluate_fp_state(fp, "must_contain", issue_num=issue_num, pr_num=pr_num, file_cache=file_cache, exists_cache=exists_cache, ref=ref, captured_at=entry.get("captured_at"))
 			if state is None:
 				continue
 			if state["check_error"] is not None:
@@ -1666,7 +1872,10 @@ def verify(fingerprints: dict[str, Any], branch: str, ref: str | None = None) ->
 				print(warning, flush=True)
 
 		for fp in must_contain:
-			state = _evaluate_fp_state(fp, "must_contain", issue_num, pr_num, file_cache, exists_cache, ref=ref)
+			state = _evaluate_fp_state(
+				fp, "must_contain", issue_num, pr_num, file_cache, exists_cache,
+				ref=ref, captured_at=entry.get("captured_at"),
+			)
 			if state is None:
 				continue
 			mc_total_expected += 1
