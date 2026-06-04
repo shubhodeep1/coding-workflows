@@ -41,6 +41,17 @@ env:
   # ALLOW_WORKFLOW_EDITS) because vars.* are not auto-exposed to the shell.
   ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
   ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
+  # Destructive-commit guard knobs. Both guard shells (Preflight
+  # destructive-commit guard + Commit changes) read these as bare
+  # ${VAR:-default}, so they must be bound at workflow-env level to reach
+  # those steps — the same wiring ALLOW_WORKFLOW_EDITS above relies on.
+  # vars.* resolves to the caller (consumer) repository, making them
+  # configurable via the README "Variables" table; the defaults match the
+  # in-shell fallbacks (false / 3 / 100) so unset variables preserve the
+  # current behaviour exactly.
+  ALLOW_BULK_DELETE: ${{ vars.ALLOW_BULK_DELETE || 'false' }}
+  BULK_DELETE_THRESHOLD: ${{ vars.BULK_DELETE_THRESHOLD || '3' }}
+  BULK_DELETE_THRESHOLD_MD: ${{ vars.BULK_DELETE_THRESHOLD_MD || '100' }}
   MAX_POST_CODEX_REPAIR_ATTEMPTS: ${{ vars.MAX_POST_CODEX_REPAIR_ATTEMPTS || '3' }}
 
 jobs:
@@ -3604,14 +3615,29 @@ jobs:
               ;;
           esac
 
-          # 1. Ensure label exists (idempotent). Hardcoded color/desc to
-          #    avoid depending on scripts/label_helpers.sh which may be
-          #    gone after consumer-repo cleanup.
-          gh label create 'ai:destructive-blocked' \
+          # 1. Ensure the latch label exists. Color/description are
+          #    hardcoded to mirror scripts/label_helpers.sh and
+          #    .github/ai/label_contract.v1.json without sourcing them —
+          #    that helper may be gone after consumer-repo cleanup.
+          #    `gh label create` exits non-zero (and prints to stderr) when
+          #    the label already exists — the normal idempotent case — so
+          #    fall back to `gh label edit`; only a genuine double-failure
+          #    (e.g. the GH_PAT lacks issues:write) reaches the warning.
+          #    The old `2>/dev/null || true` swallowed exactly that failure;
+          #    the follow-up read in step (2b) confirms the issue-level latch
+          #    when GitHub accepts the verification read.
+          if ! gh label create 'ai:destructive-blocked' \
             --repo "${{ github.repository }}" \
             --color 'b60205' \
             --description 'Implementation commit was refused for mass/destructive deletions — redispatch of this issue ID is blocked pending human review' \
-            2>/dev/null || true
+            2>/dev/null \
+            && ! gh label edit 'ai:destructive-blocked' \
+            --repo "${{ github.repository }}" \
+            --color 'b60205' \
+            --description 'Implementation commit was refused for mass/destructive deletions — redispatch of this issue ID is blocked pending human review' \
+            2>/dev/null; then
+            echo "::warning::Could not ensure the ai:destructive-blocked label exists on ${{ github.repository }} — the GH_PAT may lack issues:write. The follow-up read below reports whether the issue itself ended up latched."
+          fi
 
           # 2. Apply ai:destructive-blocked, clear ai:implementing so the
           #    issue is visibly in a halt state rather than a transient
@@ -3622,6 +3648,27 @@ jobs:
             --remove-label 'ai:implementing' 2>/dev/null || \
           gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
             --add-label 'ai:destructive-blocked' 2>/dev/null || true
+
+          # 2b. Verify the latch actually engaged. The best-effort edits
+          #     above swallow their errors so the comment + TG alert still
+          #     fire, but a silent miss means the `Validate approval phase`
+          #     redispatch refusal never takes effect — the exact failure
+          #     seen on a consumer repo where the label was never created.
+          #     Read the post-write label set (a dedicated call: no earlier
+          #     step in this handler fetches it). A successful read can prove
+          #     the latch is present or missing; if the read itself fails,
+          #     warn that the state is unknown instead of falsely claiming
+          #     the label is absent. grep reads a here-string (not a
+          #     pipeline) so set -o pipefail cannot misfire on -q's early exit.
+          if latched_labels="$(gh issue view "${ISSUE_NUMBER}" --repo "${{ github.repository }}" --json labels -q '.labels[].name' 2>/dev/null)"; then
+            if grep -qxF 'ai:destructive-blocked' <<< "${latched_labels}"; then
+              echo "Confirmed ai:destructive-blocked is latched on #${ISSUE_NUMBER}; redispatch will be refused until a human removes it."
+            else
+              echo "::error::FAILED to latch ai:destructive-blocked on #${ISSUE_NUMBER}; the redispatch block is NOT in effect. Apply it manually: (gh label edit ai:destructive-blocked --repo ${{ github.repository }} --color b60205 --description 'Implementation commit was refused for mass/destructive deletions — redispatch of this issue ID is blocked pending human review' || gh label create ai:destructive-blocked --repo ${{ github.repository }} --color b60205 --description 'Implementation commit was refused for mass/destructive deletions — redispatch of this issue ID is blocked pending human review') && gh issue edit ${ISSUE_NUMBER} --repo ${{ github.repository }} --add-label ai:destructive-blocked"
+            fi
+          else
+            echo "::warning::Could not verify ai:destructive-blocked on #${ISSUE_NUMBER}; gh issue view failed, so the latch state is unknown. Re-check manually: gh issue view ${ISSUE_NUMBER} --repo ${{ github.repository }} --json labels -q '.labels[].name'"
+          fi
 
           # 3. Post a visible issue comment describing what was rejected
           #    and what the operator needs to do. Embeds the deletion
@@ -3634,7 +3681,7 @@ jobs:
             echo "- Staged deletions: **${DCB_COUNT}**"
             echo "- Workflow run: ${RUN_URL}"
             echo
-            echo "The commit was **not** created and **not** pushed. This issue is now labeled \`ai:destructive-blocked\` and will be refused by the \`Validate approval phase\` step on any future redispatch of issue #${ISSUE_NUMBER} until a human removes the label."
+            echo "The commit was **not** created and **not** pushed. The workflow attempted to apply \`ai:destructive-blocked\`; verify that the label is present before relying on the \`Validate approval phase\` redispatch block. Once present, future redispatches of issue #${ISSUE_NUMBER} will be refused until a human removes the label."
             echo
             echo "Staged deletion list:"
             echo
@@ -3642,7 +3689,7 @@ jobs:
             printf '%s\n' "${DCB_DELETIONS}" | sed '/^$/d'
             echo '```'
             echo
-            echo "If these deletions are legitimate, rerun with \`ALLOW_WORKFLOW_EDITS=true\` (for canonical-source deletions) or \`ALLOW_BULK_DELETE=true\` (for threshold-triggered rejections) and remove \`ai:destructive-blocked\` from the issue. **Note:** the orchestrator judge may still regenerate this task under a different issue number — the per-issue block does not cover judge-cycle regeneration (see PRs #917/#931 for context)."
+            echo "If these deletions are legitimate, set the repository variable \`ALLOW_WORKFLOW_EDITS=true\` (for canonical-source deletions) or \`ALLOW_BULK_DELETE=true\` (for threshold-triggered rejections) under Settings → Secrets and variables → Actions, then remove \`ai:destructive-blocked\` from the issue if it is present and redispatch. **Note:** the orchestrator judge may still regenerate this task under a different issue number — the per-issue block does not cover judge-cycle regeneration (see PRs #917/#931 for context)."
           } > /tmp/destructive_comment.md
           gh issue comment "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
             --body-file /tmp/destructive_comment.md 2>/dev/null || true
