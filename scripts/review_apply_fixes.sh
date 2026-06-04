@@ -36,6 +36,7 @@ if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
 fi
 
 CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
+WORKSPACE_SAFETY_CHECK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/workspace_safety_check.sh"
 
 read_codex_stall_guard_state() {
   local status_file="$1"
@@ -72,6 +73,8 @@ run_editor_codex_attempt() {
   local stderr_target="$3"
   local activity_file="$4"
   local status_file="$5"
+
+  bash "${WORKSPACE_SAFETY_CHECK_HELPER}"
 
   if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
     exec "${CODEX_STALL_GUARD_HELPER}" \

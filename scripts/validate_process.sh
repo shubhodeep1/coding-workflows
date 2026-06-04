@@ -2461,6 +2461,7 @@ trap cleanup_runtime_containers EXIT
 _validate_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODEX_HEARTBEAT_HELPER="${_validate_script_dir}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${_validate_script_dir}/codex_stall_guard.sh"
+WORKSPACE_SAFETY_CHECK_HELPER="${_validate_script_dir}/workspace_safety_check.sh"
 LEDGER_SUBSTATE_HELPER=""
 for _ledger_candidate in \
   "${_validate_script_dir}/ledger_emit_substate.sh" \
@@ -2535,6 +2536,8 @@ run_validate_codex_attempt() {
   local output_file="$3"
   local log_file="$4"
   local status_file="$5"
+
+  bash "${WORKSPACE_SAFETY_CHECK_HELPER}"
 
   if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
     "${CODEX_STALL_GUARD_HELPER}" \

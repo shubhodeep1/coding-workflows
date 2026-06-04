@@ -44,6 +44,7 @@ set -euo pipefail
 SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"
 CODEX_HEARTBEAT_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
+WORKSPACE_SAFETY_CHECK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/workspace_safety_check.sh"
 ORCHESTRATE_FORCE_TICK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/orchestrate_force_tick.sh"
 
 resolve_ledger_substate_helper() {
@@ -1751,6 +1752,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   emit_conflict_resolver_substate "LaunchingAgentProcess" "${attempt}"
   emit_conflict_resolver_substate "InitializingSession" "${attempt}"
   emit_conflict_resolver_substate "StreamingTurn" "${attempt}"
+  bash "${WORKSPACE_SAFETY_CHECK_HELPER}"
   if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
     timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
       "${CODEX_STALL_GUARD_HELPER}" \
