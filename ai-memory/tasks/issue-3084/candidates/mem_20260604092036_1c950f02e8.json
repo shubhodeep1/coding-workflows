@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlan for issue #3084\n\nPlanning ref\n- Commit: `cf0c62fe8ce477104dac11b2d12aae32f77365ea`\n- Branch: `main`\n- Integration metadata: none provided; no mismatch indicated\n\nClarification mapping\n- No `Q1`/`Q2` questions were asked.\n- The auto-answer (`/answer [auto-answered-by-clarify]`) confirms the issue is fully specified.\n\nActions taken\n- Verified `tests/e2e_smoke_canary.txt` exists on the planning ref and is already a simple 3-line ASCII canary file.\n- Checked the existing alt-model smoke template in `.github/workflows/test-and-mark-stable.yml`; it already uses the `run_id: alt-<GITHUB_RUN_ID>` pattern from this issue.\n- Checked the existing canary verifier/spec files to confirm this remains a plain text fixture update, not a code-path change.\n\nAutomation impact\n- Existing file update only.\n- No new script, scheduler wiring, supervisor, or DB work.\n\n1. Files likely to change\n- `tests/e2e_smoke_canary.txt` only.\n\nTarget content:\n```text\nstatus: ok\nrun_id: alt-26942520644\nupdated-by: ai-pipeline\n```\n\n2. Functions or modules to implement\n- None. This is an in-place text fixture overwrite.\n\n3. Data structures affected\n- The 3-line smoke-canary text record in `tests/e2e_smoke_canary.txt`.\n- Effective field change: `run_id` changes from `26151428977` to `alt-26942520644`; the other two lines remain the same.\n\n4. API or interface changes\n- None.\n\n5. Potential risks / edge cases\n- Preserve the file as exactly the requested 3-line plain-text content with no extra lines or stray whitespace.\n- Do not modify related files such as `tests/e2e_smoke_canary_spec.txt`, tests, or workflows; the issue scope explicitly forbids that.\n- Conflict check: none found. The referenced file exists, and the requested `alt-...` run-id format matches the repo\u2019s alt-model smoke issue template.\n\n6. Testing considerations\n- Verify the final file content matches the requested three lines exactly.\n- Verify only `tests/e2e_smoke_canary.txt` is changed.\n- No broader lint/typecheck/test expansion is needed for this scoped `.txt` update unless the implementation workflow enforces it automatically.\n\nAssumptions\n- The `alt-26942520644` value is intentional for this alt-model smoke scenario.\n- The change should preserve the file\u2019s existing plain-text encoding/format aside from the requested content replacement.\n\nMissing-context notes\n- None. The task is fully specified.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "157e962ee1b8c63a2892a6bb8577854e600e16bbd795493a9164222ad4f27f15",
+  "lineage": {
+    "issue_number": 3084,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26942650235",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26942650235",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3084"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260604092036_1c950f02e8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3084,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26942650235"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3084",
+  "timestamps": {
+    "created_at": "2026-06-04T09:20:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
