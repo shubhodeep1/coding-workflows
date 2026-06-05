@@ -1165,6 +1165,37 @@ if ! [[ "${STALL_THRESHOLD_MINUTES}" =~ ^[0-9]+$ ]] || [ "${STALL_THRESHOLD_MINU
   STALL_THRESHOLD_MINUTES="120"
 fi
 
+# Review-run freshness window for the in-flight / zombie guards.
+#
+# A review_autofix run legitimately stays in_progress far longer than the
+# generic STALL_THRESHOLD_MINUTES: the codex-agent job in review_autofix.yml
+# has timeout-minutes:240, and the editor's own budget
+# (review_apply_fixes.sh JOB_TIMEOUT_SECS) is 180 min while its watchdog keeps
+# extending idle windows whenever the model is still holding an API socket.
+# A review running between STALL_THRESHOLD_MINUTES and that ceiling is still
+# making progress, but the freshness gates in build_active_issue_set, the
+# retrigger_review inline guard, and _direct_inflight_review_run_on_branch
+# previously used STALL_THRESHOLD_MINUTES (120) as the cutoff — so they
+# misclassified such a run as a hung zombie, dropped it from the active set,
+# and let stall recovery push a destructive empty commit that trips the live
+# run's AUTOFIX_PRE_EDITOR_STALE_BASE -> soft_exit and discards the whole
+# review pass (the PR #3082 / issue #3081 "stuck 169m, attempt 2" loop).
+#
+# Default 250 ≈ the 240-min codex-agent job hard timeout plus a small buffer,
+# so the window expires right around when GitHub force-terminates a genuinely
+# hung job (after which the run is no longer in_progress and naturally stops
+# blocking recovery).  Floored at STALL_THRESHOLD_MINUTES so it can never be
+# *shorter* than the generic window and reintroduce the bug.
+REVIEW_RUN_MAX_RUNTIME_MINUTES="${REVIEW_RUN_MAX_RUNTIME_MINUTES:-250}"
+if ! [[ "${REVIEW_RUN_MAX_RUNTIME_MINUTES}" =~ ^[0-9]+$ ]] || [ "${REVIEW_RUN_MAX_RUNTIME_MINUTES}" -lt 1 ]; then
+  echo "::warning::REVIEW_RUN_MAX_RUNTIME_MINUTES must be a positive integer; defaulting to 250"
+  REVIEW_RUN_MAX_RUNTIME_MINUTES="250"
+fi
+if [ "${REVIEW_RUN_MAX_RUNTIME_MINUTES}" -lt "${STALL_THRESHOLD_MINUTES}" ]; then
+  echo "::warning::REVIEW_RUN_MAX_RUNTIME_MINUTES (${REVIEW_RUN_MAX_RUNTIME_MINUTES}) is below STALL_THRESHOLD_MINUTES (${STALL_THRESHOLD_MINUTES}); raising it to the stall threshold so review runs are never treated as zombies sooner than other runs."
+  REVIEW_RUN_MAX_RUNTIME_MINUTES="${STALL_THRESHOLD_MINUTES}"
+fi
+
 ACTIONS_RUNS_CACHE_TTL_SECONDS="${ACTIONS_RUNS_CACHE_TTL_SECONDS:-60}"
 if ! [[ "${ACTIONS_RUNS_CACHE_TTL_SECONDS}" =~ ^[0-9]+$ ]] || [ "${ACTIONS_RUNS_CACHE_TTL_SECONDS}" -lt 1 ]; then
   echo "::warning::ACTIONS_RUNS_CACHE_TTL_SECONDS must be a positive integer; defaulting to 60"
@@ -8399,9 +8430,11 @@ _load_actions_runs_cached() {
 # recovery-push path.
 #
 # Args: $1 = head branch.  Echoes the databaseId of the freshest matching
-# in_progress/queued review run younger than STALL_THRESHOLD_MINUTES, else
-# nothing.  Freshness mirrors the cached scan so a genuinely hung run older than
-# the threshold does not block recovery forever.  Limitation: `gh run list
+# in_progress/queued review run younger than REVIEW_RUN_MAX_RUNTIME_MINUTES,
+# else nothing.  Freshness mirrors build_active_issue_set's review-run window
+# so a review still legitimately editing past STALL_THRESHOLD_MINUTES is not
+# clobbered, while a genuinely hung run older than the review budget does not
+# block recovery forever.  Limitation: `gh run list
 # --json` exposes workflowName/name but not the workflow file path, so a
 # consumer that renamed the review workflow's display name away from the
 # canonical names ("AI Review" / "Internal Review" / "Review Autofix") is matched
@@ -8417,7 +8450,11 @@ _direct_inflight_review_run_on_branch()
 	[ -n "${_di_branch}" ] || return 0
 	_di_now_epoch="$(date +%s 2>/dev/null || echo "")"
 	[[ "${_di_now_epoch}" =~ ^[0-9]+$ ]] || return 0
-	_di_stall_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))
+	# This helper only ever matches review-family runs (AI Review /
+	# Internal Review / Review Autofix; name filter below),
+	# so its freshness window is the review-run budget, not the generic stall
+	# threshold — see REVIEW_RUN_MAX_RUNTIME_MINUTES.
+	_di_stall_secs=$(( REVIEW_RUN_MAX_RUNTIME_MINUTES * 60 ))
 	_di_runs_json="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
 		--branch "${_di_branch}" \
 		--limit 30 \
@@ -8451,11 +8488,19 @@ _direct_inflight_review_run_on_branch()
 # are treated as zombie/hung runs and excluded. This prevents a stuck
 # Actions runner from blocking stall recovery indefinitely.
 #
+# Exception: review-family runs (AI Review / Internal Review / Review
+# Autofix, matched by canonical name or caller-workflow path) use the longer
+# REVIEW_RUN_MAX_RUNTIME_MINUTES window, because they can legitimately run well
+# past STALL_THRESHOLD_MINUTES (up to the codex-agent job timeout).  Without
+# this, a review still editing at 120-240 min was dropped from the active set
+# and re-triggered with a destructive empty commit — the PR #3082 stall loop.
+#
 # Outputs a newline-separated list of issue numbers.
 build_active_issue_set() {
   local now_epoch
   now_epoch="$(date +%s)"
   local stall_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))
+  local review_stall_secs=$(( REVIEW_RUN_MAX_RUNTIME_MINUTES * 60 ))
 
   # Fetch active runs from the shared per-tick actions-runs loader.
   # This preserves one conditional API retrieval per tick.
@@ -8479,13 +8524,28 @@ build_active_issue_set() {
   # Filter out zombie runs: any run that has been active for longer than
   # the stall threshold is considered hung and should not block recovery.
   # Uses run_started_at (actual execution start) with created_at as fallback.
+  # Review-family runs get the longer REVIEW_RUN_MAX_RUNTIME_MINUTES window
+  # (detection mirrors the retrigger_review inline guard: canonical run names
+  # plus caller-workflow file paths, so a consumer repo that renames the
+  # display name is still caught via .path).
   local fresh_runs
-  fresh_runs="$(echo "${all_runs}" | jq --argjson now "${now_epoch}" --argjson threshold "${stall_secs}" '
+  fresh_runs="$(echo "${all_runs}" | jq \
+    --argjson now "${now_epoch}" \
+    --argjson threshold "${stall_secs}" \
+    --argjson review_threshold "${review_stall_secs}" '
     [.[] |
      # Parse the start timestamp (ISO 8601 → epoch)
      (.run_started_at // .created_at // "1970-01-01T00:00:00Z") as $ts |
      ($ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) as $start_epoch |
-     select(($now - $start_epoch) < $threshold)
+     # Review runs are allowed a longer freshness window than other runs.
+     (if ((.name // "") == "AI Review"
+          or (.name // "") == "Internal Review"
+          or (.name // "") == "Review Autofix"
+          or ((.path // "") | endswith("ai-review.yml"))
+          or ((.path // "") | endswith("internal-review.yml"))
+          or ((.path // "") | endswith("review_autofix.yml")))
+      then $review_threshold else $threshold end) as $run_threshold |
+     select(($now - $start_epoch) < $run_threshold)
     ]
   ' 2>/dev/null || echo '[]')"
 
@@ -8494,7 +8554,7 @@ build_active_issue_set() {
   local total_count
   total_count="$(echo "${all_runs}" | jq 'length')"
   if [ "${total_count}" -gt "${fresh_count}" ]; then
-    echo "  Active runs: ${total_count} total, ${fresh_count} fresh ($(( total_count - fresh_count )) zombie runs excluded as >$(( stall_secs / 60 ))m old)." >&2
+    echo "  Active runs: ${total_count} total, ${fresh_count} fresh ($(( total_count - fresh_count )) zombie runs excluded; general stale cutoff >$(( stall_secs / 60 ))m, review-family cutoff >$(( review_stall_secs / 60 ))m)." >&2
   fi
 
   # Extract issue numbers from fresh runs via head_branch patterns.
@@ -9275,9 +9335,11 @@ STALL_EOF
           # consumer-repo caller workflows that rename the display name
           # are still caught.  Run matching prefers head_branch, with a
           # blank-head_branch head_sha fallback for workflow_dispatch
-          # runs.  Zombie filter (STALL_THRESHOLD_MINUTES) mirrors
-          # build_active_issue_set so a genuinely hung run does not
-          # block recovery indefinitely.  Malformed or blank timestamps
+          # runs.  Zombie filter (REVIEW_RUN_MAX_RUNTIME_MINUTES) mirrors
+          # build_active_issue_set's review-run window so a genuinely hung
+          # run does not block recovery indefinitely while a review that is
+          # still legitimately editing (past STALL_THRESHOLD_MINUTES but
+          # within its job budget) is not clobbered.  Malformed or blank timestamps
           # on a matching review run are treated as fresh so we
           # conservatively avoid invalidating a potentially live
           # autofix pass.  Other jq/cache errors still fail open, and
@@ -9286,7 +9348,10 @@ STALL_EOF
           local _rtr_inflight_blob _rtr_inflight_id _rtr_direct_inflight_id _rtr_now_epoch _rtr_stall_secs _rtr_origin_head_sha _rtr_push_succeeded
           _rtr_inflight_blob="$(_load_actions_runs_cached 2>/dev/null || echo '{"workflow_runs":[]}')"
           _rtr_now_epoch="$(date +%s 2>/dev/null || echo "")"
-          _rtr_stall_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))
+          # This block selects only review-family runs (name/path filter
+          # below), so the freshness window is the review-run budget, not the
+          # generic stall threshold — see REVIEW_RUN_MAX_RUNTIME_MINUTES.
+          _rtr_stall_secs=$(( REVIEW_RUN_MAX_RUNTIME_MINUTES * 60 ))
           _rtr_push_succeeded="false"
           if [[ "${_rtr_now_epoch}" =~ ^[0-9]+$ ]]; then
             _rtr_inflight_id="$(printf '%s' "${_rtr_inflight_blob}" | jq -r \
@@ -9321,7 +9386,7 @@ STALL_EOF
             _rtr_inflight_id=""
           fi
           if [ -n "${_rtr_inflight_id}" ]; then
-            echo "  Issue #${issue_num} PR #${pr_num} has in-flight review run #${_rtr_inflight_id} on ${head_ref} (fresh, <${STALL_THRESHOLD_MINUTES}m); skipping empty-commit push to avoid invalidating its stale-base gate."
+            echo "  Issue #${issue_num} PR #${pr_num} has in-flight review run #${_rtr_inflight_id} on ${head_ref} (fresh, <${REVIEW_RUN_MAX_RUNTIME_MINUTES}m); skipping empty-commit push to avoid invalidating its stale-base gate."
             STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
             return 1
           fi
@@ -11302,12 +11367,12 @@ STALL_EOF
             # if issue_has_active_workflow misses a live review run on
             # this PR, an empty-commit push here can still trip the
             # stale-base gate and discard in-flight editor work.
-            _std_rtr_inflight_blob="$(_load_actions_runs_cached 2>/dev/null || echo '{"workflow_runs":[]}')"
-            _std_rtr_now_epoch="$(date +%s 2>/dev/null || echo "")"
-            _std_rtr_stall_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))
-            if [[ "${_std_rtr_now_epoch}" =~ ^[0-9]+$ ]]; then
-              _std_rtr_inflight_id="$(printf '%s' "${_std_rtr_inflight_blob}" | jq -r \
-                --arg br "${head_ref}" \
+			_std_rtr_inflight_blob="$(_load_actions_runs_cached 2>/dev/null || echo '{"workflow_runs":[]}')"
+			_std_rtr_now_epoch="$(date +%s 2>/dev/null || echo "")"
+			_std_rtr_stall_secs=$(( REVIEW_RUN_MAX_RUNTIME_MINUTES * 60 ))
+			if [[ "${_std_rtr_now_epoch}" =~ ^[0-9]+$ ]]; then
+			  _std_rtr_inflight_id="$(printf '%s' "${_std_rtr_inflight_blob}" | jq -r \
+			    --arg br "${head_ref}" \
                 --arg sha "${head_sha}" \
                 --argjson now "${_std_rtr_now_epoch}" \
                 --argjson threshold "${_std_rtr_stall_secs}" '
@@ -11346,10 +11411,10 @@ STALL_EOF
             if [ -z "${_std_rtr_inflight_id}" ]; then
               _std_rtr_direct_inflight_id="$(_direct_inflight_review_run_on_branch "${head_ref}")"
             fi
-            if [ -n "${_std_rtr_inflight_id}" ]; then
-              echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} has in-flight review run #${_std_rtr_inflight_id} on ${head_ref} (fresh, <${STALL_THRESHOLD_MINUTES}m); skipping empty-commit push to avoid invalidating its stale-base gate."
-              STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
-            elif [ -n "${_std_rtr_direct_inflight_id}" ]; then
+			if [ -n "${_std_rtr_inflight_id}" ]; then
+			  echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} has in-flight review run #${_std_rtr_inflight_id} on ${head_ref} (fresh, <${REVIEW_RUN_MAX_RUNTIME_MINUTES}m); skipping empty-commit push to avoid invalidating its stale-base gate."
+			  STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
+			elif [ -n "${_std_rtr_direct_inflight_id}" ]; then
               echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} has in-flight review run #${_std_rtr_direct_inflight_id} on ${head_ref} (direct check — cached scan missed it); skipping empty-commit push to avoid invalidating its stale-base gate."
               STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
             elif git fetch origin "${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then
