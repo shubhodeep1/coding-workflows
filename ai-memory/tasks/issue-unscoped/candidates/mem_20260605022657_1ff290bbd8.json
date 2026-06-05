@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: scripts/review_apply_fixes.sh\n  Location: line 1284 (`EDITOR_DRAIN_GRACE_SECS=\"${EDITOR_DRAIN_GRACE_SECS:-60}\"`)\n  Issue: No validation that `EDITOR_DRAIN_GRACE_SECS` is a positive integer. A non-numeric value would cause a bash arithmetic syntax error in `$(( $(date +%s) + EDITOR_DRAIN_GRACE_SECS ))`. A value of 0 would cause immediate timeout on every drain.\n  Suggested minimal fix: Add a one-line validation block after the default assignment, matching the pattern used for `EDITOR_VERBOSITY` on lines 1287-1292. Clamp to a reasonable range (e.g., 1..3600) and warn on invalid values.\n  Estimated lines changed: 5\n  HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "aa0b681ddcf66a3d1d844c44f2d47d8b8b8c756dadf8ed529055314e17c365a8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26991208910",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26991208910",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260605022657_1ff290bbd8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26991208910"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-05T02:26:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
