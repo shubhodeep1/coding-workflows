@@ -1595,9 +1595,12 @@ if [ -s "${RESOLVER_ALLOWLIST_FILE:-}" ] && [ -f "${TARGETED_FILE_CONTEXT_SCRIPT
 fi
 # Append the targeted-context block to the rendered prompt once, so
 # every retry (which copies CONFLICT_RESOLVER_PROMPT_FILE into
-# RESOLVER_RETRY_PROMPT_FILE at the loop top) inherits it.
+# RESOLVER_RETRY_PROMPT_FILE at the loop top) inherits it. The
+# thread-reuse marker itself is only needed when the feature is on.
 CONFLICT_RESOLVER_THREAD_REUSE_MARKER="=== THREAD REUSE LIVE CONTEXT ==="
-printf '\n%s\n' "${CONFLICT_RESOLVER_THREAD_REUSE_MARKER}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
+if conflict_thread_reuse_enabled; then
+  printf '\n%s\n' "${CONFLICT_RESOLVER_THREAD_REUSE_MARKER}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
+fi
 if [ -s "${TARGETED_FILES_CONTEXT_FILE}" ]; then
   printf '\n' >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
   cat "${TARGETED_FILES_CONTEXT_FILE}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"

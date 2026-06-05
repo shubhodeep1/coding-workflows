@@ -13,6 +13,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HELPER = REPO_ROOT / "scripts" / "codex_thread_reuse.sh"
+RENDER_PROMPT_SH = REPO_ROOT / "scripts" / "render_prompt.sh"
 RENDER_PROMPT_PY = REPO_ROOT / "scripts" / "render_prompt.py"
 REVIEW_APPLY_FIXES = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
 REVIEW_CONFLICT_RESOLVE = REPO_ROOT / "scripts" / "review_conflict_resolve.sh"
@@ -50,13 +51,12 @@ def _run_helper(args: list[str], *, env: dict[str, str]) -> subprocess.Completed
 
 
 def _render_prompt(prompt_path: Path, *, values: dict[str, str]) -> str:
-	args = [sys.executable, str(RENDER_PROMPT_PY), str(prompt_path)]
-	for name, value in values.items():
-		args.extend(["--var", f"{name}={value}"])
+	env = _base_env()
+	env.update(values)
 	proc = subprocess.run(
-		args,
+		["bash", str(RENDER_PROMPT_SH), str(prompt_path)],
 		cwd=str(REPO_ROOT),
-		env=_base_env(),
+		env=env,
 		capture_output=True,
 		text=True,
 		check=False,
@@ -92,6 +92,11 @@ def test_render_prompt_autodiscovers_review_continuation_contracts() -> None:
 		assert contract_path == expected_contract.resolve()
 		rendered = _render_prompt(prompt_path, values=env_updates)
 		assert "{{" not in rendered
+		if prompt_path == REVIEW_CONFLICT_CONTINUATION:
+			assert "Previous attempt: 1 of 3" in rendered
+			assert "Failure kind: validation" in rendered
+			assert "Remaining conflict-marker files (1):" in rendered
+			assert "Resolver Serena hint." in rendered
 
 
 def test_transform_prompt_replace_prefix_preserves_review_editor_response_schema_and_shrinks_prompt() -> None:
