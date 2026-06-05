@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3125,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3125\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3127\",\"pr_number\":3127,\"branch\":\"ai/issue-3125\",\"run_id\":\"27011358732\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/27011358732\",\"changed_files\":[\"prompts/contracts/mode-review-apply-fixes-continuation.yml\",\"prompts/contracts/mode-review-conflict-resolver-continuation.yml\",\"prompts/mode-review-apply-fixes-continuation.txt\",\"prompts/mode-review-conflict-resolver-continuation.txt\",\"scripts/files_touched_scope_guard.py\",\"scripts/memory_helpers.sh\",\"scripts/render_prompt.sh\",\"scripts/review_apply_fixes.sh\",\"scripts/review_conflict_resolve.sh\",\"tests/test_codex_thread_reuse_review.py\"]}",
+  "fingerprint": "7cc297481c644134d3ef76dabc741727ac6ecd16ddf1817ce1951e77ebf14a95",
+  "lineage": {
+    "issue_number": 3125,
+    "parent_ids": [],
+    "pr_number": 3127,
+    "run_id": "27011358732",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27011358732",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3127"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260605112020_ddc5fb5c40",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3125,
+    "level": "run",
+    "pr_number": 3127,
+    "run_id": "27011358732"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3125: https://github.com/shubhodeep1/coding-workflows/pull/3127",
+  "timestamps": {
+    "created_at": "2026-06-05T11:20:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
