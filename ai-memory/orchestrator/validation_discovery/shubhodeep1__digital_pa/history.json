@@ -155,6 +155,18 @@
       "pr_branch": null,
       "pr_url": null,
       "recorded_at": "2026-06-04T09:31:06Z"
+    },
+    {
+      "codex_attempts_used": 2,
+      "committed_type": "python-repo-checks",
+      "consumer_default_branch": "main",
+      "consumer_head_sha": "cdc928e0dd69ffe76528c880b4da086942691b58",
+      "discovered_type": "node-runtime",
+      "failure_reason": null,
+      "outcome": "success_disagree",
+      "pr_branch": "automation/validate-discovery/cdc928e0dd69/node-runtime",
+      "pr_url": "https://github.com/shubhodeep1/digital_pa/pull/133",
+      "recorded_at": "2026-06-05T01:29:45Z"
     }
   ],
   "repository": "shubhodeep1/digital_pa",
