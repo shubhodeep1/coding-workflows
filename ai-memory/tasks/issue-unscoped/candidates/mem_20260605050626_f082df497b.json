@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validation_refresh_runner.py:process_repository() lines 333-344 | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The comment now says \u201crender, lint, or self_test\u201d but the test coverage shown in the LAST RUN DIFF only exercises the self_test stage.\n  WHY: No runtime failure; the code path is exercised and the classification is correct, but the comment is broader than the concrete test coverage.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cscripts/validation_refresh_runner.py \u2014 reclassify the no-drift pipeline-failure branch to red; document the exit-code gate contract in main() \u2026 tests/test_validation_refresh_runner.py \u2014 regression test asserting a no-drift consumer self-test failure is red (not error)\u201d\n  expected_change_site: scripts/validation_refresh_runner.py:process_repository + main(), tests/test_validation_refresh_runner.py\n  confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The changes are present in both the LAST RUN DIFF and the full PR DIFF (including the newly-added test `test_process_repository_pipeline_failure_no_drift_is_red_not_error`), and the README.md updates also match the PR description.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/validation_refresh_runner.py:process_repository() lines 333-344 | severity=low | confidence=3\n  PROBLEM: The comment now correctly says \u201crender, lint, or self_test\u201d but the test that exercises this exact path only triggers the self_test stage.\n  WHY: No runtime failure \u2014 the code path is exercised and the classification is correct, but the comment is slightly broader than the concrete test coverage shown in the LAST RUN DIFF.\n- Requirement: \u201cscripts/validation_refresh_runner.py \u2014 reclassify the no-drift pipeline-failure branch to red; document the exit-code gate contract in main() \u2026 tests/test_validation_refresh_runner.py \u2014 regression test asserting a no-drift consumer self-test failure is red (not error)\u201d\n  Expected change site: scripts/validation_refresh_runner.py:process_repository + main(), tests/test_validation_refresh_runner.py\n  Evidence of absence: The changes are present in both the LAST RUN DIFF and the full PR DIFF (including the newly-added test `test_process_repository_pipeline_failure_no_drift_is_red_not_error`).\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "7332c32b1b7843e04cd4dbb5371a76c5768c42d0d504fa2f4690e1d6f74b109d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3121,
+    "run_id": "26996196619",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26996196619",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260605050626_f082df497b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3121,
+    "run_id": "26996196619"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-05T05:06:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
