@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -44,6 +45,10 @@ class ContractViolationError(RenderPromptError):
 	"""Raised when a prompt violates an applicable contract."""
 
 
+class WorkflowOverlayError(RenderPromptError):
+	"""Raised when workflow-overlay prompt overrides are invalid."""
+
+
 @dataclass(frozen=True)
 class PromptContract:
 	"""Strict-mode contract for a prompt mode."""
@@ -57,6 +62,23 @@ class PromptContract:
 	@property
 	def allowed_vars(self) -> set[str]:
 		return set(self.required_vars) | set(self.optional_vars.keys())
+
+
+@dataclass(frozen=True)
+class PromptOverride:
+	"""One workflow-overlay prompt override entry."""
+
+	mode_name: str
+	append_path: str | None
+	replace_path: str | None
+
+
+@dataclass(frozen=True)
+class WorkflowOverlay:
+	"""Runtime workflow overlay exported via environment variables."""
+
+	repo_root: Path
+	overrides: tuple[PromptOverride, ...]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -456,6 +478,140 @@ def _render_replacement(value: str) -> str:
 	return value + "\n"
 
 
+def _workflow_edit_restriction_value() -> str:
+	if os.environ.get("ALLOW_WORKFLOW_EDITS", "false") == "true":
+		return "- CI workflow edits under .github/workflows/ are permitted when required by the approved plan; keep changes inside the plan's stated file scope."
+	return "- Do not change CI workflows."
+
+
+def collect_legacy_env_values() -> dict[str, str]:
+	values = {"WORKFLOW_EDIT_RESTRICTION": _workflow_edit_restriction_value()}
+	if "SEMBLE_PREFETCH" in os.environ:
+		values["SEMBLE_PREFETCH"] = os.environ.get("SEMBLE_PREFETCH", "")
+	if "SERENA_TOOL_HINTS" in os.environ:
+		values["SERENA_TOOL_HINTS"] = os.environ.get("SERENA_TOOL_HINTS", "")
+	return values
+
+
+def _coerce_overlay_mode_name(raw_value: Any, *, field_name: str) -> str:
+	if not isinstance(raw_value, str):
+		raise WorkflowOverlayError(f"Field '{field_name}' must be a string")
+	mode_name = raw_value.strip()
+	if not mode_name:
+		raise WorkflowOverlayError(f"Field '{field_name}' must not be empty")
+	if VARIABLE_NAME_PATTERN.fullmatch(mode_name.replace("-", "_")) is None:
+		raise WorkflowOverlayError(
+			f"Field '{field_name}' contains invalid mode name '{mode_name}'"
+		)
+	return mode_name
+
+
+def _coerce_overlay_path(raw_value: Any, *, field_name: str) -> str | None:
+	if raw_value is None:
+		return None
+	if not isinstance(raw_value, str):
+		raise WorkflowOverlayError(f"Field '{field_name}' must be a string when present")
+	path_value = raw_value.strip()
+	if not path_value:
+		raise WorkflowOverlayError(f"Field '{field_name}' must not be empty when present")
+	return path_value
+
+
+def load_workflow_overlay_from_env() -> WorkflowOverlay | None:
+	raw_payload = os.environ.get("WORKFLOW_OVERLAY_PROMPT_OVERRIDES_JSON", "").strip()
+	if not raw_payload:
+		return None
+
+	try:
+		payload = json.loads(raw_payload)
+	except json.JSONDecodeError as exc:
+		raise WorkflowOverlayError(
+			f"Invalid WORKFLOW_OVERLAY_PROMPT_OVERRIDES_JSON payload: {exc.msg}"
+		) from exc
+
+	if not isinstance(payload, list):
+		raise WorkflowOverlayError("WORKFLOW_OVERLAY_PROMPT_OVERRIDES_JSON must decode to a list")
+
+	repo_root_raw = os.environ.get("WORKFLOW_OVERLAY_REPO_ROOT", "").strip()
+	repo_root = Path(repo_root_raw).resolve() if repo_root_raw else Path.cwd().resolve()
+	overrides: list[PromptOverride] = []
+	for index, item in enumerate(payload):
+		if not isinstance(item, dict):
+			raise WorkflowOverlayError(
+				f"Prompt override entry #{index + 1} must be an object"
+			)
+		unknown_keys = sorted(set(item.keys()) - {"mode", "append_path", "replace_path"})
+		if unknown_keys:
+			raise WorkflowOverlayError(
+				f"Prompt override entry #{index + 1} contains unknown keys: {', '.join(unknown_keys)}"
+			)
+		mode_name = _coerce_overlay_mode_name(item.get("mode"), field_name=f"prompt_overrides[{index}].mode")
+		append_path = _coerce_overlay_path(
+			item.get("append_path"),
+			field_name=f"prompt_overrides[{index}].append_path",
+		)
+		replace_path = _coerce_overlay_path(
+			item.get("replace_path"),
+			field_name=f"prompt_overrides[{index}].replace_path",
+		)
+		if (append_path is None) == (replace_path is None):
+			raise WorkflowOverlayError(
+				f"Prompt override entry #{index + 1} must set exactly one of append_path or replace_path"
+			)
+		overrides.append(
+			PromptOverride(
+				mode_name=mode_name,
+				append_path=append_path,
+				replace_path=replace_path,
+			)
+		)
+
+	return WorkflowOverlay(repo_root=repo_root, overrides=tuple(overrides))
+
+
+def _resolve_overlay_fragment_path(repo_root: Path, raw_path: str) -> Path:
+	fragment_path = Path(raw_path)
+	if not fragment_path.is_absolute():
+		fragment_path = (repo_root / fragment_path).resolve()
+	else:
+		fragment_path = fragment_path.resolve()
+	try:
+		fragment_path.relative_to(repo_root)
+	except ValueError as exc:
+		raise WorkflowOverlayError(
+			f"Overlay fragment path escapes repo root '{repo_root}': {raw_path}"
+		) from exc
+	if not fragment_path.is_file():
+		raise WorkflowOverlayError(f"Overlay fragment not found: {fragment_path}")
+	return fragment_path
+
+
+def apply_workflow_overlay(prompt_text: str, *, mode_name: str) -> str:
+	overlay = load_workflow_overlay_from_env()
+	if overlay is None or not overlay.overrides:
+		return prompt_text
+
+	matches = [override for override in overlay.overrides if override.mode_name == mode_name]
+	if not matches:
+		return prompt_text
+	if len(matches) > 1:
+		raise WorkflowOverlayError(
+			f"Multiple workflow-overlay prompt overrides matched mode '{mode_name}'"
+		)
+
+	match = matches[0]
+	if match.replace_path is not None:
+		replacement_path = _resolve_overlay_fragment_path(overlay.repo_root, match.replace_path)
+		return load_prompt(replacement_path)
+
+	if match.append_path is None:
+		raise WorkflowOverlayError(
+			f"Workflow-overlay prompt override for mode '{mode_name}' is missing append/replace path"
+		)
+	append_path = _resolve_overlay_fragment_path(overlay.repo_root, match.append_path)
+	return prompt_text + load_prompt(append_path)
+
+
 def _render_inline_placeholders(line: str, values: dict[str, str]) -> str:
 	def replace_match(match: re.Match[str]) -> str:
 		placeholder_name = match.group(1)
@@ -486,15 +642,19 @@ def main(argv: list[str] | None = None) -> int:
 	try:
 		prompt_text = load_prompt(prompt_path)
 		mode_name = resolve_mode_name(prompt_path, args.legacy_mode_name)
+		prompt_text = apply_workflow_overlay(prompt_text, mode_name=mode_name)
 		provided_values = parse_cli_variables(args.variables)
+		legacy_env_values = collect_legacy_env_values()
 		contract_path = discover_contract_path(prompt_path, mode_name)
 		if contract_path is not None:
 			contract = load_contract(contract_path, mode_name)
 			effective_values = dict(contract.optional_vars)
+			effective_values.update(legacy_env_values)
 			effective_values.update(provided_values)
 			validate_contract(contract, prompt_text, effective_values)
 		else:
-			effective_values = dict(provided_values)
+			effective_values = dict(legacy_env_values)
+			effective_values.update(provided_values)
 		sys.stdout.write(render_prompt_text(prompt_text, effective_values))
 	except RenderPromptError as exc:
 		print(f"ERROR: {exc}", file=sys.stderr)
