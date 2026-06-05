@@ -59,6 +59,7 @@ env:
   MODEL_EDITOR: ${{ vars.WORKFLOW_VALIDATE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_VALIDATE || 'xhigh' }}
   MODEL_VERBOSITY: ${{ vars.VERBOSITY_VALIDATE || 'low' }}
+  CODEX_THREAD_REUSE_ENABLED: ${{ vars.CODEX_THREAD_REUSE_ENABLED || 'false' }}
   VALIDATION_INCLUDE_SYNTHESISED: ${{ vars.VALIDATION_INCLUDE_SYNTHESISED || 'true' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   CODEX_HEARTBEAT_ENABLED: ${{ vars.CODEX_HEARTBEAT_ENABLED || '1' }}
@@ -207,7 +208,7 @@ jobs:
           else
             script_ref="stable"
           fi
-          mkdir -p scripts prompts .github/ai
+          mkdir -p scripts prompts prompts/contracts .github/ai
 
           SERVER_HOST="${GITHUB_SERVER_URL#https://}"
           SERVER_HOST="${SERVER_HOST#http://}"
@@ -501,6 +502,20 @@ jobs:
             _fetched_scripts+=(codex_stall_guard.sh)
           fi
 
+          if [ ! -f "scripts/codex_thread_reuse.sh" ]; then
+            if copy_from_ref_or_local "scripts/codex_thread_reuse.sh" "scripts/codex_thread_reuse.sh.tmp" "false" "true"; then
+              mv "scripts/codex_thread_reuse.sh.tmp" "scripts/codex_thread_reuse.sh"
+              chmod +x "scripts/codex_thread_reuse.sh"
+              _fetched_scripts+=(codex_thread_reuse.sh)
+            else
+              rm -f "scripts/codex_thread_reuse.sh.tmp"
+              echo "Codex thread reuse helper not on ${script_ref} yet; validation will continue without same-run thread reuse."
+            fi
+          else
+            chmod +x "scripts/codex_thread_reuse.sh"
+            _fetched_scripts+=(codex_thread_reuse.sh)
+          fi
+
           # Semble bootstrap helpers (optional; validation falls back if
           # absent on the selected script_ref to preserve compatibility
           # with older stable tags during rollout).
@@ -622,6 +637,24 @@ jobs:
             else
               rm -f "prompts/mode-validate-self-heal.txt.tmp"
               echo "Self-heal prompt not on ${script_ref} yet; self-heal will be a no-op."
+            fi
+          fi
+
+          if [ ! -f "prompts/mode-validate-self-heal-continuation.txt" ]; then
+            if copy_from_ref_or_local "prompts/mode-validate-self-heal-continuation.txt" "prompts/mode-validate-self-heal-continuation.txt.tmp" "false" "true"; then
+              mv "prompts/mode-validate-self-heal-continuation.txt.tmp" "prompts/mode-validate-self-heal-continuation.txt"
+            else
+              rm -f "prompts/mode-validate-self-heal-continuation.txt.tmp"
+              echo "Self-heal continuation prompt not on ${script_ref} yet; validation will continue with the full prompt path."
+            fi
+          fi
+
+          if [ ! -f "prompts/contracts/mode-validate-self-heal-continuation.yml" ]; then
+            if copy_from_ref_or_local "prompts/contracts/mode-validate-self-heal-continuation.yml" "prompts/contracts/mode-validate-self-heal-continuation.yml.tmp" "false" "true"; then
+              mv "prompts/contracts/mode-validate-self-heal-continuation.yml.tmp" "prompts/contracts/mode-validate-self-heal-continuation.yml"
+            else
+              rm -f "prompts/contracts/mode-validate-self-heal-continuation.yml.tmp"
+              echo "Self-heal continuation contract not on ${script_ref} yet; validation will continue with the full prompt path."
             fi
           fi
 

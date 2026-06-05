@@ -60,11 +60,13 @@ case "${MODEL_REASONING_EFFORT_DISCOVER}" in
     MODEL_REASONING_EFFORT_DISCOVER="xhigh"
     ;;
 esac
+CODEX_THREAD_REUSE_ENABLED="${CODEX_THREAD_REUSE_ENABLED:-false}"
 # Export MODEL_EDITOR so child processes (notably scripts/self_heal_validation.sh)
 # see it even when the caller relied on our default fallback. In CI the workflow
 # env: block already exports MODEL_EDITOR, but standalone/local invocations
 # would otherwise lose the default at the env boundary.
 export MODEL_EDITOR
+export CODEX_THREAD_REUSE_ENABLED
 VALIDATION_TIMEOUT="${VALIDATION_TIMEOUT:-15}"
 if ! [[ "${VALIDATION_TIMEOUT}" =~ ^[0-9]+$ ]] || [ "${VALIDATION_TIMEOUT}" -le 0 ]; then
   echo "VALIDATION_TIMEOUT must be a positive integer (got: ${VALIDATION_TIMEOUT})" >&2
@@ -684,8 +686,34 @@ attempt_self_heal_and_reexec()
 
   ensure_serena_bootstrap "${phase}"
 
+  local heal_path="${PATH}"
+  local self_heal_continuation_source=""
+  local self_heal_continuation_rendered=""
+  local self_heal_wrapper_dir=""
+  if validate_thread_reuse_enabled; then
+    self_heal_continuation_source="$(resolve_validate_thread_reuse_asset 'prompts/mode-validate-self-heal-continuation.txt' 2>/dev/null || true)"
+    if [ -n "${self_heal_continuation_source}" ]; then
+      self_heal_continuation_rendered="${RUNTIME_DIR}/mode-validate-self-heal-continuation.rendered.txt"
+      if SERENA_TOOL_HINTS='' bash scripts/render_prompt.sh "${self_heal_continuation_source}" > "${self_heal_continuation_rendered}"; then
+        if self_heal_wrapper_dir="$(codex_thread_reuse_install_wrapper \
+          'validate-self-heal' \
+          "${self_heal_continuation_rendered}" \
+          'replace-between' \
+          '=== SELF-HEAL TASK ===' \
+          '=== SELF-HEAL ATTEMPT ===')"; then
+          heal_path="${self_heal_wrapper_dir}:${PATH}"
+        else
+          echo "::warning::Failed to install validate self-heal thread-reuse wrapper; using the full prompt path." >&2
+        fi
+      else
+        echo "::warning::Failed to render validate self-heal continuation prompt; using the full prompt path." >&2
+      fi
+    fi
+  fi
+
   local heal_exit=0
-  SELF_HEAL_FAILURE_PHASE="${phase}" \
+  PATH="${heal_path}" \
+    SELF_HEAL_FAILURE_PHASE="${phase}" \
     STATIC_CONTEXT_FILE="${STATIC_CONTEXT_FILE}" \
     VALIDATION_RESULT_FILE="${VALIDATION_RESULT_FILE}" \
     DIAGNOSE_RESULT_FILE="${DIAGNOSE_RESULT_FILE}" \
@@ -2461,6 +2489,22 @@ trap cleanup_runtime_containers EXIT
 _validate_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODEX_HEARTBEAT_HELPER="${_validate_script_dir}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${_validate_script_dir}/codex_stall_guard.sh"
+CODEX_THREAD_REUSE_HELPER=""
+for _thread_reuse_candidate in \
+  "${_validate_script_dir}/codex_thread_reuse.sh" \
+  "scripts/codex_thread_reuse.sh" \
+  ".codex-workflow-src/scripts/codex_thread_reuse.sh" \
+  ".codex-workflow-src-main/scripts/codex_thread_reuse.sh"; do
+  if [ -f "${_thread_reuse_candidate}" ]; then
+    CODEX_THREAD_REUSE_HELPER="${_thread_reuse_candidate}"
+    break
+  fi
+done
+export CODEX_THREAD_REUSE_RUNTIME_DIR="${CODEX_THREAD_REUSE_RUNTIME_DIR:-${RUNTIME_DIR}}"
+if [ -n "${CODEX_THREAD_REUSE_HELPER}" ]; then
+  # shellcheck disable=SC1090
+  source "${CODEX_THREAD_REUSE_HELPER}"
+fi
 LEDGER_SUBSTATE_HELPER=""
 for _ledger_candidate in \
   "${_validate_script_dir}/ledger_emit_substate.sh" \
@@ -2529,12 +2573,50 @@ emit_validate_substate() {
   bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" || true
 }
 
+resolve_validate_thread_reuse_asset() {
+	local repo_path="$1"
+	local candidate=""
+
+	for candidate in \
+	  "${repo_path}" \
+	  ".codex-workflow-src/${repo_path}" \
+	  ".codex-workflow-src-main/${repo_path}"; do
+		if [ -f "${candidate}" ]; then
+			printf '%s\n' "${candidate}"
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+validate_thread_reuse_enabled() {
+	[ -n "${CODEX_THREAD_REUSE_HELPER:-}" ] || return 1
+	declare -F codex_thread_reuse_truthy >/dev/null 2>&1 || return 1
+	codex_thread_reuse_truthy "${CODEX_THREAD_REUSE_ENABLED:-false}"
+}
+
 run_validate_codex_attempt() {
   local phase_name="$1"
   local prompt_file="$2"
   local output_file="$3"
   local log_file="$4"
   local status_file="$5"
+
+	if validate_thread_reuse_enabled; then
+		CODEX_THREAD_REUSE_STATE_KEY="${phase_name}" \
+		  CODEX_THREAD_REUSE_PROMPT_FILE="${prompt_file}" \
+		  CODEX_THREAD_REUSE_OUTPUT_FILE="${output_file}" \
+		  CODEX_THREAD_REUSE_PHASE="${phase_name}" \
+		  CODEX_THREAD_REUSE_MODEL="${MODEL_EDITOR}" \
+		  CODEX_THREAD_REUSE_LOG_FILE="${log_file}" \
+		  CODEX_THREAD_REUSE_STATUS_FILE="${status_file}" \
+		  CODEX_THREAD_REUSE_STALL_GUARD_HELPER="${CODEX_STALL_GUARD_HELPER}" \
+		  CODEX_THREAD_REUSE_HEARTBEAT_HELPER="${CODEX_HEARTBEAT_HELPER}" \
+		  CODEX_THREAD_REUSE_SKIP_GIT_REPO_CHECK="true" \
+		  bash "${CODEX_THREAD_REUSE_HELPER}" direct-run
+		return $?
+	fi
 
   if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
     "${CODEX_STALL_GUARD_HELPER}" \
