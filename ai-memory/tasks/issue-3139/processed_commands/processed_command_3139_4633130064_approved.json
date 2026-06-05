@@ -5,13 +5,25 @@
   "entry_id": "processed_command_3139_4633130064_approved",
   "issue_number": 3139,
   "metadata": {
+    "branch": "ai/issue-3139",
+    "changed_files": [
+      ".github/workflows/implement.yml",
+      "scripts/memory_helpers.sh",
+      "scripts/render_prompt.sh",
+      "tests/test_implement_pr_body_tracking_refs.py"
+    ],
+    "issue_number": 3139,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/3139",
+    "pr_number": 3140,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/3140",
+    "run_attempt": "1",
+    "run_id": "27024302112",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/27024302112"
   },
   "run_attempt": 1,
   "run_id": "27024302112",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-06-05T15:36:21Z",
+  "status": "completed",
+  "timestamp": "2026-06-05T15:41:59Z",
   "workflow": "implement"
 }
