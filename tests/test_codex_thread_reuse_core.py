@@ -15,6 +15,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HELPER = REPO_ROOT / "scripts" / "codex_thread_reuse.sh"
 RENDER_PROMPT_PY = REPO_ROOT / "scripts" / "render_prompt.py"
+RENDER_PROMPT_SH = REPO_ROOT / "scripts" / "render_prompt.sh"
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 VALIDATE_PROCESS = REPO_ROOT / "scripts" / "validate_process.sh"
 
@@ -83,6 +84,10 @@ with log_path.open("a", encoding="utf-8") as handle:
 if mode == "resume" and os.environ.get("FAKE_CODEX_FAIL_RESUME", "false") == "true":
     print("resume failed", file=sys.stderr)
     raise SystemExit(42)
+
+if mode == "exec" and os.environ.get("FAKE_CODEX_FAIL_EXEC", "false") == "true":
+    print("exec failed", file=sys.stderr)
+    raise SystemExit(43)
 
 session_root = Path(os.environ["CODEX_THREAD_REUSE_SESSION_ROOT"])
 session_root.mkdir(parents=True, exist_ok=True)
@@ -246,9 +251,54 @@ def test_resume_failure_falls_back_to_exec() -> None:
 		resume_fail_env["FAKE_CODEX_FAIL_RESUME"] = "true"
 		second_proc, _ = _run_direct(resume_fail_env, state_key="fallback", prompt_text="second prompt\n", phase="implement")
 		assert second_proc.returncode == 0, second_proc.stderr
+		session_get = _run_helper(["session-get", "fallback"], env=env)
+		assert session_get.returncode == 0
+		assert session_get.stdout.strip() == "session-3"
 
 		modes = [entry["mode"] for entry in _read_fake_codex_log(env)]
 		assert modes == ["exec", "resume", "exec"]
+
+
+def test_resume_and_fallback_exec_failure_clears_saved_session() -> None:
+	with tempfile.TemporaryDirectory(prefix="codex_thread_clear_stale_") as td:
+		tmp_path = Path(td)
+		env = _helper_env(tmp_path)
+		first_proc, _ = _run_direct(env, state_key="stale", prompt_text="first prompt\n", phase="implement")
+		assert first_proc.returncode == 0, first_proc.stderr
+
+		failed_env = env.copy()
+		failed_env["FAKE_CODEX_FAIL_RESUME"] = "true"
+		failed_env["FAKE_CODEX_FAIL_EXEC"] = "true"
+		second_proc, _ = _run_direct(failed_env, state_key="stale", prompt_text="second prompt\n", phase="implement")
+		assert second_proc.returncode != 0
+
+		session_get = _run_helper(["session-get", "stale"], env=env)
+		assert session_get.returncode != 0 or not session_get.stdout.strip()
+
+		third_proc, _ = _run_direct(env, state_key="stale", prompt_text="third prompt\n", phase="implement")
+		assert third_proc.returncode == 0, third_proc.stderr
+
+		modes = [entry["mode"] for entry in _read_fake_codex_log(env)]
+		assert modes == ["exec", "resume", "exec", "exec"]
+
+
+def test_invalid_saved_session_id_falls_back_to_exec() -> None:
+	with tempfile.TemporaryDirectory(prefix="codex_thread_invalid_state_") as td:
+		tmp_path = Path(td)
+		env = _helper_env(tmp_path)
+		state_dir = Path(env["CODEX_THREAD_REUSE_RUNTIME_DIR"]) / "codex-thread-reuse" / "states"
+		state_dir.mkdir(parents=True, exist_ok=True)
+		(state_dir / "invalid.session_id").write_text("bad id\n", encoding="utf-8")
+
+		proc, _ = _run_direct(env, state_key="invalid", prompt_text="prompt\n", phase="implement")
+		assert proc.returncode == 0, proc.stderr
+
+		modes = [entry["mode"] for entry in _read_fake_codex_log(env)]
+		assert modes == ["exec"]
+
+		session_get = _run_helper(["session-get", "invalid"], env=env)
+		assert session_get.returncode == 0
+		assert session_get.stdout.strip() == "session-1"
 
 
 def test_transform_prompt_replace_prefix_preserves_repair_context() -> None:
@@ -359,6 +409,33 @@ def test_render_prompt_autodiscovers_continuation_contracts_and_accepts_serena_h
 		)
 		assert proc.returncode == 0, proc.stderr
 		assert "{{SERENA_TOOL_HINTS}}" not in proc.stdout
+
+
+def test_render_prompt_shell_shim_enforces_prompt_contracts() -> None:
+	with tempfile.TemporaryDirectory(prefix="render_prompt_contract_") as td:
+		tmp_path = Path(td)
+		prompts_dir = tmp_path / "prompts"
+		contracts_dir = prompts_dir / "contracts"
+		contracts_dir.mkdir(parents=True, exist_ok=True)
+
+		prompt_path = prompts_dir / "contract-check.txt"
+		contract_path = contracts_dir / "contract-check.yml"
+		prompt_path.write_text("Header\n{{UNDECLARED}}\n", encoding="utf-8")
+		contract_path.write_text(
+			"required_vars: []\noptional_vars: {}\nforbidden_vars: []\n",
+			encoding="utf-8",
+		)
+
+		proc = subprocess.run(
+			["bash", str(RENDER_PROMPT_SH), str(prompt_path)],
+			cwd=str(REPO_ROOT),
+			env=_base_env(),
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+		assert proc.returncode != 0
+		assert "unknown_in_template" in proc.stderr
 
 
 def test_implement_workflow_contains_thread_reuse_wiring() -> None:

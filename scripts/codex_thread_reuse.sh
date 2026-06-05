@@ -54,6 +54,29 @@ codex_thread_reuse_state_file()
 		"$(codex_thread_reuse_safe_key "${state_key}")"
 }
 
+codex_thread_reuse_session_id_is_valid()
+{
+	local session_id="${1:-}"
+
+	[ -n "${session_id}" ] || return 1
+	case "${session_id}" in
+		*[![:graph:]]*)
+			return 1
+			;;
+	esac
+
+	return 0
+}
+
+codex_thread_reuse_clear_session_id()
+{
+	local state_key="${1:?state key required}"
+	local state_file=""
+
+	state_file="$(codex_thread_reuse_state_file "${state_key}")"
+	rm -f "${state_file}"
+}
+
 codex_thread_reuse_helper_path()
 {
 	python3 - "${BASH_SOURCE[0]:-$0}" <<'PY'
@@ -202,6 +225,7 @@ codex_thread_reuse_set_session_id()
 	local session_id="${2:?session id required}"
 	local state_file
 
+	codex_thread_reuse_session_id_is_valid "${session_id}" || return 1
 	state_file="$(codex_thread_reuse_state_file "${state_key}")"
 	printf '%s\n' "${session_id}" > "${state_file}"
 }
@@ -210,11 +234,16 @@ codex_thread_reuse_get_session_id()
 {
 	local state_key="${1:?state key required}"
 	local state_file
+	local session_id=""
 
 	state_file="$(codex_thread_reuse_state_file "${state_key}")"
-	if [ -s "${state_file}" ]; then
-		cat "${state_file}"
-	fi
+	[ -s "${state_file}" ] || return 1
+	IFS= read -r session_id < "${state_file}" || true
+	codex_thread_reuse_session_id_is_valid "${session_id}" || {
+		codex_thread_reuse_clear_session_id "${state_key}"
+		return 1
+	}
+	printf '%s\n' "${session_id}"
 }
 
 codex_thread_reuse_record_session_from_marker()
@@ -284,8 +313,8 @@ print(candidates[-1][1])
 PY
 )" || return 1
 
-	[ -n "${session_id}" ] || return 1
-	codex_thread_reuse_set_session_id "${state_key}" "${session_id}"
+	codex_thread_reuse_session_id_is_valid "${session_id}" || return 1
+	codex_thread_reuse_set_session_id "${state_key}" "${session_id}" || return 1
 	printf '%s\n' "${session_id}"
 }
 
@@ -587,6 +616,7 @@ codex_thread_reuse_direct_run()
 		else
 			rc=$?
 			echo "::warning::Codex thread reuse failed for ${state_key}; falling back to fresh exec." >&2
+			codex_thread_reuse_clear_session_id "${state_key}"
 			capture_marker="$(codex_thread_reuse_begin_capture "${state_key}")"
 			if codex_thread_reuse_run_once \
 				"${real_codex}" \
@@ -707,6 +737,7 @@ codex_thread_reuse_wrapper_main()
 				exit 0
 			fi
 			echo "::warning::Codex thread reuse failed for ${state_key}; falling back to fresh exec." >&2
+			codex_thread_reuse_clear_session_id "${state_key}"
 		else
 			echo "::warning::Thread-reuse prompt transformation failed for ${state_key}; falling back to fresh exec." >&2
 		fi
