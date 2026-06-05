@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1\nWhich area should this issue target?\nChoices:\nA. Clarify / plan / implement workflows\nB. Review/autofix / conflict-resolution logic\nC. Orchestrator / judge / validation / polling\nD. Documentation / README / setup guidance\nE. A specific workflow, script, or file path you will name (RECOMMENDED)\nQ2\nWhat kind of improvement do you want?\nChoices:\nA. Fix incorrect or flaky current behavior (RECOMMENDED)\nB. Add a new capability\nC. Improve reliability / performance / cost without changing intended behavior (RECOMMENDED)\nD. Improve docs / wording / usability only\nQ3\nWhat should planning use as the concrete success target?\nChoices:\nA. A specific issue / PR / workflow run / error example to resolve (RECOMMENDED)\nB. A specific file / workflow / script path to change\nC. A short before/after acceptance criterion describing what \u201cbetter\u201d means (RECOMMENDED)",
+  "fingerprint": "4f70f43991d6ffcc3fb4cf41937d3137f3ccc4c606b2d169a9210a18cd50bbc4",
+  "lineage": {
+    "issue_number": 3097,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26989501557",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26989501557",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260605012148_cd85e1c1d5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3097,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26989501557"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #3097 needs clarification",
+  "timestamps": {
+    "created_at": "2026-06-05T01:21:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
