@@ -116,13 +116,22 @@ def _run_id(
 	run_list_json: str,
 	branch: str = "ai/issue-11",
 	threshold_minutes: str = "120",
+	review_threshold_minutes: str = "250",
 	extra_env: dict[str, str] | None = None,
 ) -> str:
 	"""Source the extracted helper and return its stdout for the given payload."""
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
 		_bootstrap(tmp)
-		full_env = {"GH_RUN_LIST_JSON": run_list_json, "STALL_THRESHOLD_MINUTES": threshold_minutes}
+		# The helper scopes itself to review-family runs, so its freshness
+		# window is REVIEW_RUN_MAX_RUNTIME_MINUTES (not the generic stall
+		# threshold).  STALL_THRESHOLD_MINUTES is still exported because the
+		# production init floors the review window at it.
+		full_env = {
+			"GH_RUN_LIST_JSON": run_list_json,
+			"STALL_THRESHOLD_MINUTES": threshold_minutes,
+			"REVIEW_RUN_MAX_RUNTIME_MINUTES": review_threshold_minutes,
+		}
 		if extra_env:
 			full_env.update(extra_env)
 		body = textwrap.dedent(f"""
@@ -165,10 +174,23 @@ def test_completed_runs_are_ignored():
 	assert _run_id(payload) == ""
 
 
+def test_review_run_within_review_window_still_blocks_recovery():
+	"""A review run older than STALL_THRESHOLD_MINUTES (120m) but within the
+	review budget (REVIEW_RUN_MAX_RUNTIME_MINUTES, 250m) is still legitimately
+	editing and MUST block the destructive empty-commit push.  This is the
+	PR #3082 / issue #3081 regression: a review at 169m was previously
+	misclassified as a zombie and clobbered."""
+	mid = _iso_utc_minutes_ago(169)
+	payload = json.dumps([_run("AI Review", databaseId=3082, startedAt=mid, createdAt=mid)])
+	assert _run_id(payload) == "3082"
+
+
 def test_stale_in_progress_run_does_not_block_recovery():
-	"""A matching run older than STALL_THRESHOLD_MINUTES is treated as hung and
-	must not block recovery forever (mirrors the cached scan's freshness gate)."""
-	old = _iso_utc_minutes_ago(200)
+	"""A matching run older than the review window (REVIEW_RUN_MAX_RUNTIME_MINUTES,
+	250m) is treated as hung and must not block recovery forever (mirrors the
+	cached scan's freshness gate; GitHub force-terminates the job at its
+	240-min timeout, so a run past the window is genuinely dead)."""
+	old = _iso_utc_minutes_ago(300)
 	payload = json.dumps([_run("AI Review", databaseId=2, startedAt=old, createdAt=old)])
 	assert _run_id(payload) == ""
 
