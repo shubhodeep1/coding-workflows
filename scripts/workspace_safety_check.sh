@@ -46,9 +46,7 @@ path = Path(sys.argv[2]).resolve(strict=False)
 print(root)
 print(path)
 
-try:
-	path.relative_to(root)
-except ValueError:
+if root not in path.parents:
 	raise SystemExit(1)
 PY
 })" || fail "WORKSPACE_PATH escapes ${runner_temp}/workspaces: ${workspace_path}"

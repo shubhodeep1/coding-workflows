@@ -74,7 +74,9 @@ run_editor_codex_attempt() {
   local activity_file="$4"
   local status_file="$5"
 
-  bash "${WORKSPACE_SAFETY_CHECK_HELPER}"
+  if [ -x "${WORKSPACE_SAFETY_CHECK_HELPER}" ]; then
+    bash "${WORKSPACE_SAFETY_CHECK_HELPER}" || return $?
+  fi
 
   if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
     exec "${CODEX_STALL_GUARD_HELPER}" \

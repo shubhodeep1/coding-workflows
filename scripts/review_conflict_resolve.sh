@@ -1749,9 +1749,14 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
     sanitize_codex_prompt_file "${_effective_prompt_file}"
   fi
-  if ! bash "${WORKSPACE_SAFETY_CHECK_HELPER}"; then
-    _codex_exit=$?
-  else
+  _run_codex=true
+  if [ -x "${WORKSPACE_SAFETY_CHECK_HELPER}" ]; then
+    if ! bash "${WORKSPACE_SAFETY_CHECK_HELPER}"; then
+      _codex_exit=$?
+      _run_codex=false
+    fi
+  fi
+  if [ "${_run_codex}" = "true" ]; then
     emit_conflict_resolver_substate "LaunchingAgentProcess" "${attempt}"
     emit_conflict_resolver_substate "InitializingSession" "${attempt}"
     emit_conflict_resolver_substate "StreamingTurn" "${attempt}"

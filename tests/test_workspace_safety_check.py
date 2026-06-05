@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 import yaml
@@ -10,6 +11,8 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HELPER = REPO_ROOT / "scripts" / "workspace_safety_check.sh"
+CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+TEST_AND_MARK_STABLE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 REVIEW_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 VALIDATE_PROCESS = REPO_ROOT / "scripts" / "validate_process.sh"
@@ -73,48 +76,68 @@ def test_helper_script_exists_and_is_executable() -> None:
 	assert HELPER.stat().st_mode & 0o111
 
 
-def test_helper_is_noop_when_workspace_reuse_is_disabled(tmp_path: Path) -> None:
-	result = _run_helper(
-		tmp_path,
-		REPO_ROOT,
-		WORKSPACE_REUSE_ENABLED="false",
-		WORKSPACE_KEY="bad/key",
-		WORKSPACE_PATH=str(tmp_path / "escape"),
-	)
-	assert result.returncode == 0, result.stderr
+def test_helper_is_noop_when_workspace_reuse_is_disabled() -> None:
+	with tempfile.TemporaryDirectory(prefix="workspace-safety-check-") as td:
+		tmp_path = Path(td)
+		result = _run_helper(
+			tmp_path,
+			REPO_ROOT,
+			WORKSPACE_REUSE_ENABLED="false",
+			WORKSPACE_KEY="bad/key",
+			WORKSPACE_PATH=str(tmp_path / "escape"),
+		)
+		assert result.returncode == 0, result.stderr
 
 
-def test_helper_accepts_valid_reused_workspace(tmp_path: Path) -> None:
-	workspace_path = tmp_path / "runner-temp" / "workspaces" / "issue-42"
-	workspace_path.mkdir(parents=True)
-	result = _run_helper(tmp_path, workspace_path)
-	assert result.returncode == 0, result.stderr
+def test_helper_accepts_valid_reused_workspace() -> None:
+	with tempfile.TemporaryDirectory(prefix="workspace-safety-check-") as td:
+		tmp_path = Path(td)
+		workspace_path = tmp_path / "runner-temp" / "workspaces" / "issue-42"
+		workspace_path.mkdir(parents=True)
+		result = _run_helper(tmp_path, workspace_path)
+		assert result.returncode == 0, result.stderr
 
 
-def test_helper_rejects_workspace_root_escape(tmp_path: Path) -> None:
-	escape_path = tmp_path / "escape"
-	escape_path.mkdir()
-	result = _run_helper(tmp_path, escape_path, WORKSPACE_PATH=str(escape_path))
-	assert result.returncode == 78
-	assert "workspace_safety_violation" in result.stderr
+def test_helper_rejects_workspace_root_escape() -> None:
+	with tempfile.TemporaryDirectory(prefix="workspace-safety-check-") as td:
+		tmp_path = Path(td)
+		escape_path = tmp_path / "escape"
+		escape_path.mkdir()
+		result = _run_helper(tmp_path, escape_path, WORKSPACE_PATH=str(escape_path))
+		assert result.returncode == 78
+		assert "workspace_safety_violation" in result.stderr
 
 
-def test_helper_rejects_invalid_workspace_key(tmp_path: Path) -> None:
-	workspace_path = tmp_path / "runner-temp" / "workspaces" / "issue-42"
-	workspace_path.mkdir(parents=True)
-	result = _run_helper(tmp_path, workspace_path, WORKSPACE_KEY="bad/key")
-	assert result.returncode == 78
-	assert "workspace_safety_violation" in result.stderr
+def test_helper_rejects_workspace_root_itself() -> None:
+	with tempfile.TemporaryDirectory(prefix="workspace-safety-check-") as td:
+		tmp_path = Path(td)
+		root_path = tmp_path / "runner-temp" / "workspaces"
+		root_path.mkdir(parents=True)
+		result = _run_helper(tmp_path, root_path, WORKSPACE_PATH=str(root_path))
+		assert result.returncode == 78
+		assert "workspace_safety_violation" in result.stderr
 
 
-def test_helper_rejects_pwd_mismatch(tmp_path: Path) -> None:
-	workspace_path = tmp_path / "runner-temp" / "workspaces" / "issue-42"
-	other_path = tmp_path / "runner-temp" / "workspaces" / "issue-99"
-	workspace_path.mkdir(parents=True)
-	other_path.mkdir(parents=True)
-	result = _run_helper(tmp_path, other_path, WORKSPACE_PATH=str(workspace_path))
-	assert result.returncode == 78
-	assert "workspace_safety_violation" in result.stderr
+def test_helper_rejects_invalid_workspace_key() -> None:
+	with tempfile.TemporaryDirectory(prefix="workspace-safety-check-") as td:
+		tmp_path = Path(td)
+		workspace_path = tmp_path / "runner-temp" / "workspaces" / "issue-42"
+		workspace_path.mkdir(parents=True)
+		result = _run_helper(tmp_path, workspace_path, WORKSPACE_KEY="bad/key")
+		assert result.returncode == 78
+		assert "workspace_safety_violation" in result.stderr
+
+
+def test_helper_rejects_pwd_mismatch() -> None:
+	with tempfile.TemporaryDirectory(prefix="workspace-safety-check-") as td:
+		tmp_path = Path(td)
+		workspace_path = tmp_path / "runner-temp" / "workspaces" / "issue-42"
+		other_path = tmp_path / "runner-temp" / "workspaces" / "issue-99"
+		workspace_path.mkdir(parents=True)
+		other_path.mkdir(parents=True)
+		result = _run_helper(tmp_path, other_path, WORKSPACE_PATH=str(workspace_path))
+		assert result.returncode == 78
+		assert "workspace_safety_violation" in result.stderr
 
 
 def test_implement_workflow_stages_and_guards_all_codex_launches() -> None:
@@ -127,6 +150,13 @@ def test_implement_workflow_stages_and_guards_all_codex_launches() -> None:
 	assert "bash scripts/workspace_safety_check.sh" in implement_block
 	assert "bash scripts/workspace_safety_check.sh" in repair_block
 	assert "bash scripts/workspace_safety_check.sh" in summary_block
+
+
+def test_ci_and_release_gate_run_workspace_safety_check_tests() -> None:
+	ci_text = CI_WORKFLOW.read_text(encoding="utf-8")
+	release_text = TEST_AND_MARK_STABLE_WORKFLOW.read_text(encoding="utf-8")
+	assert "tests/test_workspace_safety_check.py" in ci_text
+	assert "tests/test_workspace_safety_check.py" in release_text
 
 
 def test_review_workflow_bootstraps_and_restages_workspace_safety_helper() -> None:
@@ -149,7 +179,9 @@ def test_validate_process_guards_codex_attempts_and_short_circuits_exit_78() -> 
 def test_review_apply_fixes_guards_editor_and_aborts_on_exit_78() -> None:
 	text = REVIEW_APPLY_FIXES.read_text(encoding="utf-8")
 	assert 'WORKSPACE_SAFETY_CHECK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/workspace_safety_check.sh"' in text
+	assert 'if [ -x "${WORKSPACE_SAFETY_CHECK_HELPER}" ]; then' in text
 	assert 'bash "${WORKSPACE_SAFETY_CHECK_HELPER}"' in text
+	assert 'bash "${WORKSPACE_SAFETY_CHECK_HELPER}" || return $?' in text
 	assert '[ "${cmd_rc}" -eq 78 ]' in text
 	assert 'workspace_safety_violation; aborting without retry.' in text
 
@@ -157,13 +189,19 @@ def test_review_apply_fixes_guards_editor_and_aborts_on_exit_78() -> None:
 def test_review_conflict_resolve_guards_resolver_and_aborts_on_exit_78() -> None:
 	text = REVIEW_CONFLICT_RESOLVE.read_text(encoding="utf-8")
 	assert 'WORKSPACE_SAFETY_CHECK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/workspace_safety_check.sh"' in text
+	assert 'if [ -x "${WORKSPACE_SAFETY_CHECK_HELPER}" ]; then' in text
 	assert 'if ! bash "${WORKSPACE_SAFETY_CHECK_HELPER}"; then' in text
 	assert '[ "${_codex_exit}" -eq 78 ]' in text
 	assert 'workspace_safety_violation.' in text
 
 
 def main() -> int:
-	test_helper_script_exists_and_is_executable()
+	test_functions = [value for key, value in sorted(globals().items()) if key.startswith("test_")]
+	passed = 0
+	for func in test_functions:
+		func()
+		passed += 1
+	print(f"OK: {passed} workspace safety checks passed")
 	return 0
 
 

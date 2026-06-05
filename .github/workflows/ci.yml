@@ -207,6 +207,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_workflow_validate_bootstrap.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_scripts.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_init.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_safety_check.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_hooks.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_cache_maintenance.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_family_node_runtime.py
