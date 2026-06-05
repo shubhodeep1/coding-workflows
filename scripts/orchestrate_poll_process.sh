@@ -11366,12 +11366,12 @@ STALL_EOF
             # if issue_has_active_workflow misses a live review run on
             # this PR, an empty-commit push here can still trip the
             # stale-base gate and discard in-flight editor work.
-            _std_rtr_inflight_blob="$(_load_actions_runs_cached 2>/dev/null || echo '{"workflow_runs":[]}')"
-            _std_rtr_now_epoch="$(date +%s 2>/dev/null || echo "")"
-            _std_rtr_stall_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))
-            if [[ "${_std_rtr_now_epoch}" =~ ^[0-9]+$ ]]; then
-              _std_rtr_inflight_id="$(printf '%s' "${_std_rtr_inflight_blob}" | jq -r \
-                --arg br "${head_ref}" \
+			_std_rtr_inflight_blob="$(_load_actions_runs_cached 2>/dev/null || echo '{"workflow_runs":[]}')"
+			_std_rtr_now_epoch="$(date +%s 2>/dev/null || echo "")"
+			_std_rtr_stall_secs=$(( REVIEW_RUN_MAX_RUNTIME_MINUTES * 60 ))
+			if [[ "${_std_rtr_now_epoch}" =~ ^[0-9]+$ ]]; then
+			  _std_rtr_inflight_id="$(printf '%s' "${_std_rtr_inflight_blob}" | jq -r \
+			    --arg br "${head_ref}" \
                 --arg sha "${head_sha}" \
                 --argjson now "${_std_rtr_now_epoch}" \
                 --argjson threshold "${_std_rtr_stall_secs}" '
@@ -11410,10 +11410,10 @@ STALL_EOF
             if [ -z "${_std_rtr_inflight_id}" ]; then
               _std_rtr_direct_inflight_id="$(_direct_inflight_review_run_on_branch "${head_ref}")"
             fi
-            if [ -n "${_std_rtr_inflight_id}" ]; then
-              echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} has in-flight review run #${_std_rtr_inflight_id} on ${head_ref} (fresh, <${STALL_THRESHOLD_MINUTES}m); skipping empty-commit push to avoid invalidating its stale-base gate."
-              STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
-            elif [ -n "${_std_rtr_direct_inflight_id}" ]; then
+			if [ -n "${_std_rtr_inflight_id}" ]; then
+			  echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} has in-flight review run #${_std_rtr_inflight_id} on ${head_ref} (fresh, <${REVIEW_RUN_MAX_RUNTIME_MINUTES}m); skipping empty-commit push to avoid invalidating its stale-base gate."
+			  STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
+			elif [ -n "${_std_rtr_direct_inflight_id}" ]; then
               echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} has in-flight review run #${_std_rtr_direct_inflight_id} on ${head_ref} (direct check — cached scan missed it); skipping empty-commit push to avoid invalidating its stale-base gate."
               STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
             elif git fetch origin "${head_ref}:refs/remotes/origin/${head_ref}" 2>/dev/null; then

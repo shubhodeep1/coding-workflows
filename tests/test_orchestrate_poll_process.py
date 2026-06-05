@@ -6038,6 +6038,71 @@ def test_standalone_retrigger_review_skips_empty_commit_when_review_run_has_blan
 	)
 
 
+def test_standalone_retrigger_review_skips_empty_commit_for_review_run_past_stall_threshold_but_within_budget():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:done",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	head_ref = "claude/issue-501"
+	started_169m_ago = time.strftime(
+		"%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 169 * 60)
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:done"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: 416},
+		mock_gh_issue_list_label_filter=True,
+		prs=[
+			{
+				"number": 416,
+				"state": "open",
+				"baseRefName": "main",
+				"headRefName": head_ref,
+				"headRefFromApi": head_ref,
+				"headSha": "sha416",
+				"mergeable": True,
+				"mergeable_state": "clean",
+			},
+		],
+		# Seed only the cached runs blob: the branch-scoped `gh run list`
+		# fallback is backed by `active_autofix_runs` in this harness, so leaving
+		# that empty proves the standalone inline guard itself uses the longer
+		# review window and blocks the destructive empty-commit push.
+		actions_runs_workflow_runs=[
+			{
+				"id": 26944643043,
+				"name": "Internal: AI Review & Autofix",
+				"path": ".github/workflows/internal-review.yml",
+				"status": "in_progress",
+				"head_branch": head_ref,
+				"run_started_at": started_169m_ago,
+			},
+		],
+		mock_git_push_success=True,
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is not None
+	assert standalone_state["stall_recovery_count"] == 0, (
+		f"expected standalone stall_recovery_count to stay at 0 when a review run past "
+		f"the stall threshold but within its budget blocks the empty-commit push; "
+		f"got {standalone_state['stall_recovery_count']}"
+	)
+	assert result.get("git_push_calls", []) == [], (
+		f"expected no standalone empty-commit push when an in-budget review run blocks recovery; "
+		f"got push calls {result.get('git_push_calls', [])}"
+	)
+
+
 def test_standalone_stall_recovery_skips_when_phase_attempts_exhausted():
 	state = _base_state(status="complete")
 	standalone_state_comment = (
