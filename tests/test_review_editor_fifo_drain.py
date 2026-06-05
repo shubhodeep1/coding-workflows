@@ -75,6 +75,8 @@ def test_reaper_function_is_targeted_and_has_proc_fallback() -> None:
 	assert "fuser -k" in body
 	# Fallback scans /proc fds when fuser is unavailable or ineffective.
 	assert "/proc/" in body and "readlink -f" in body
+	# Unexpected /proc paths are ignored before kill is attempted.
+	assert 'case "${pid}" in' in body and "*[!0-9]*) continue" in body
 	# Never signal the orchestrating shell itself.
 	assert '"${pid}" = "$$"' in body
 
@@ -239,16 +241,20 @@ def test_editor_loop_bounds_the_drain_and_wires_the_reaper() -> None:
 	text = SCRIPT.read_text(encoding="utf-8")
 	# Grace bound is configurable with a safe default.
 	assert 'EDITOR_DRAIN_GRACE_SECS="${EDITOR_DRAIN_GRACE_SECS:-60}"' in text
+	assert 'Invalid EDITOR_DRAIN_GRACE_SECS=' in text
 	# Reader signals a clean drain via the done-marker.
 	assert '_hb_reader_done="${_hb_tmpdir}/reader.done"' in text
 	assert ': > "${_hb_reader_done}"' in text
 	# Drain is deadline-bounded and polls the done-marker instead of an
 	# unbounded `wait`.
+	assert '_skip_hb_reader_wait=false' in text
 	assert "_drain_deadline=$(( $(date +%s) + EDITOR_DRAIN_GRACE_SECS ))" in text
 	assert 'while [ ! -e "${_hb_reader_done}" ]; do' in text
 	# On timeout it reaps FIFO holders (TERM then KILL).
 	assert '_reap_editor_fifo_holders "${_hb_fifo}" TERM' in text
 	assert '_reap_editor_fifo_holders "${_hb_fifo}" KILL' in text
+	assert 'kill -KILL "${_hb_reader_pid}" 2>/dev/null || true' in text
+	assert 'skipping blocking wait' in text
 
 
 def test_review_apply_fixes_script_syntax_is_valid() -> None:
