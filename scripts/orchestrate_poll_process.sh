@@ -8450,7 +8450,8 @@ _direct_inflight_review_run_on_branch()
 	[ -n "${_di_branch}" ] || return 0
 	_di_now_epoch="$(date +%s 2>/dev/null || echo "")"
 	[[ "${_di_now_epoch}" =~ ^[0-9]+$ ]] || return 0
-	# This helper only ever matches review_autofix runs (name filter below),
+	# This helper only ever matches review-family runs (AI Review /
+	# Internal Review / Review Autofix; name filter below),
 	# so its freshness window is the review-run budget, not the generic stall
 	# threshold — see REVIEW_RUN_MAX_RUNTIME_MINUTES.
 	_di_stall_secs=$(( REVIEW_RUN_MAX_RUNTIME_MINUTES * 60 ))
@@ -8487,12 +8488,12 @@ _direct_inflight_review_run_on_branch()
 # are treated as zombie/hung runs and excluded. This prevents a stuck
 # Actions runner from blocking stall recovery indefinitely.
 #
-# Exception: review_autofix runs (matched by canonical name or caller-workflow
-# path) use the longer REVIEW_RUN_MAX_RUNTIME_MINUTES window, because they
-# legitimately run well past STALL_THRESHOLD_MINUTES (up to the codex-agent job
-# timeout).  Without this, a review still editing at 120-240 min was dropped
-# from the active set and re-triggered with a destructive empty commit — the
-# PR #3082 stall loop.
+# Exception: review-family runs (AI Review / Internal Review / Review
+# Autofix, matched by canonical name or caller-workflow path) use the longer
+# REVIEW_RUN_MAX_RUNTIME_MINUTES window, because they can legitimately run well
+# past STALL_THRESHOLD_MINUTES (up to the codex-agent job timeout).  Without
+# this, a review still editing at 120-240 min was dropped from the active set
+# and re-triggered with a destructive empty commit — the PR #3082 stall loop.
 #
 # Outputs a newline-separated list of issue numbers.
 build_active_issue_set() {
@@ -8523,7 +8524,7 @@ build_active_issue_set() {
   # Filter out zombie runs: any run that has been active for longer than
   # the stall threshold is considered hung and should not block recovery.
   # Uses run_started_at (actual execution start) with created_at as fallback.
-  # Review_autofix runs get the longer REVIEW_RUN_MAX_RUNTIME_MINUTES window
+  # Review-family runs get the longer REVIEW_RUN_MAX_RUNTIME_MINUTES window
   # (detection mirrors the retrigger_review inline guard: canonical run names
   # plus caller-workflow file paths, so a consumer repo that renames the
   # display name is still caught via .path).
@@ -8553,7 +8554,7 @@ build_active_issue_set() {
   local total_count
   total_count="$(echo "${all_runs}" | jq 'length')"
   if [ "${total_count}" -gt "${fresh_count}" ]; then
-    echo "  Active runs: ${total_count} total, ${fresh_count} fresh ($(( total_count - fresh_count )) zombie runs excluded as >$(( stall_secs / 60 ))m old)." >&2
+    echo "  Active runs: ${total_count} total, ${fresh_count} fresh ($(( total_count - fresh_count )) zombie runs excluded; general stale cutoff >$(( stall_secs / 60 ))m, review-family cutoff >$(( review_stall_secs / 60 ))m)." >&2
   fi
 
   # Extract issue numbers from fresh runs via head_branch patterns.
@@ -9347,7 +9348,7 @@ STALL_EOF
           local _rtr_inflight_blob _rtr_inflight_id _rtr_direct_inflight_id _rtr_now_epoch _rtr_stall_secs _rtr_origin_head_sha _rtr_push_succeeded
           _rtr_inflight_blob="$(_load_actions_runs_cached 2>/dev/null || echo '{"workflow_runs":[]}')"
           _rtr_now_epoch="$(date +%s 2>/dev/null || echo "")"
-          # This block selects only review_autofix runs (name/path filter
+          # This block selects only review-family runs (name/path filter
           # below), so the freshness window is the review-run budget, not the
           # generic stall threshold — see REVIEW_RUN_MAX_RUNTIME_MINUTES.
           _rtr_stall_secs=$(( REVIEW_RUN_MAX_RUNTIME_MINUTES * 60 ))

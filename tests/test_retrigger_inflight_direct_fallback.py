@@ -123,7 +123,7 @@ def _run_id(
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
 		_bootstrap(tmp)
-		# The helper scopes itself to review_autofix runs, so its freshness
+		# The helper scopes itself to review-family runs, so its freshness
 		# window is REVIEW_RUN_MAX_RUNTIME_MINUTES (not the generic stall
 		# threshold).  STALL_THRESHOLD_MINUTES is still exported because the
 		# production init floors the review window at it.
