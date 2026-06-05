@@ -159,6 +159,11 @@ def test_implement_workflow_delegates_stall_guard_launch_to_thread_reuse_helper(
 		assert snippet in text, f"missing {snippet!r} in {IMPLEMENT_WORKFLOW}"
 
 
+# Preserve the legacy test name for any name-targeted invocations.
+def test_implement_workflow_uses_shared_stall_guard_path() -> None:
+	test_implement_workflow_delegates_stall_guard_launch_to_thread_reuse_helper()
+
+
 def test_thread_reuse_helper_owns_timeout_and_stall_guard_wrapper() -> None:
 	text = THREAD_REUSE_HELPER.read_text(encoding="utf-8")
 	for snippet in [

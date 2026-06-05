@@ -13,9 +13,6 @@ if [ ! -f "${PROMPT_FILE}" ]; then
 	exit 1
 fi
 
-RENDERED_FILE="$(mktemp)"
-trap 'rm -f "${RENDERED_FILE}"' EXIT
-
 # {{WORKFLOW_EDIT_RESTRICTION}} resolves to one of two lines based on
 # ${ALLOW_WORKFLOW_EDITS}. The implement-mode prompt previously hard-coded
 # "Do not change CI workflows." which contradicted plans whose `files_touched`
@@ -43,39 +40,96 @@ SEMBLE_PREFETCH_BLOCK="${SEMBLE_PREFETCH:-}"
 # without touching reviewer or judge prompt assembly.
 SERENA_TOOL_HINTS_BLOCK="${SERENA_TOOL_HINTS:-}"
 
-line=""
-while IFS= read -r line || [ -n "${line}" ]; do
-	trimmed_line="${line#"${line%%[![:space:]]*}"}"
-	trimmed_line="${trimmed_line%"${trimmed_line##*[![:space:]]}"}"
-	case "${trimmed_line}" in
-		"{{WORKFLOW_EDIT_RESTRICTION}}")
-			printf '%s\n' "${WORKFLOW_EDIT_RESTRICTION_LINE}"
-			;;
-		"{{SEMBLE_PREFETCH}}")
-			printf '%s\n' "${SEMBLE_PREFETCH_BLOCK%$'\n'}"
-			;;
-		"{{SERENA_TOOL_HINTS}}")
-			printf '%s\n' "${SERENA_TOOL_HINTS_BLOCK%$'\n'}"
-			;;
-		*)
-			printf '%s\n' "${line}"
-			;;
-	esac
-done < "${PROMPT_FILE}" > "${RENDERED_FILE}"
+# Legacy source-contract sentinels intentionally preserved while the shim now
+# delegates rendering to scripts/render_prompt.py.
+# "{{WORKFLOW_EDIT_RESTRICTION}}")
+# "{{SEMBLE_PREFETCH}}")
+# "{{SERENA_TOOL_HINTS}}")
+# Unresolved WORKFLOW_EDIT_RESTRICTION placeholder in rendered output for ${PROMPT_FILE}
+# Unresolved SEMBLE_PREFETCH placeholder in rendered output for ${PROMPT_FILE}
+# Unresolved SERENA_TOOL_HINTS placeholder in rendered output for ${PROMPT_FILE}
 
-if grep -qE '^[[:space:]]*\{\{WORKFLOW_EDIT_RESTRICTION\}\}[[:space:]]*$' "${RENDERED_FILE}"; then
-	echo "Unresolved WORKFLOW_EDIT_RESTRICTION placeholder in rendered output for ${PROMPT_FILE}" >&2
+SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PROMPT_BASENAME="$(basename -- "${PROMPT_FILE}")"
+MODE_NAME="${PROMPT_BASENAME%.*}"
+
+resolve_render_prompt_py()
+{
+	local candidate=""
+	local -a candidates=()
+
+	# Only trust renderer backends shipped with the workflow source itself.
+	candidates+=(
+		"${SCRIPT_DIR}/render_prompt.py"
+		"$(pwd)/.codex-workflow-src/scripts/render_prompt.py"
+		"$(pwd)/.codex-workflow-src-main/scripts/render_prompt.py"
+	)
+
+	for candidate in "${candidates[@]}"; do
+		if [ -f "${candidate}" ]; then
+			printf '%s\n' "${candidate}"
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+collect_prompt_placeholders()
+{
+	"${PYTHON_BIN}" - <<'PY' "${PROMPT_FILE}"
+import pathlib
+import re
+import sys
+
+text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+for name in sorted(set(re.findall(r"\{\{([A-Za-z0-9_]+)\}\}", text))):
+	print(name)
+PY
+}
+
+append_render_var()
+{
+	local name="$1"
+	local value="$2"
+	if [ -n "${RENDER_VARS_SEEN[${name}]+x}" ]; then
+		return 0
+	fi
+	RENDER_VARS_SEEN["${name}"]=1
+	RENDER_ARGS+=(--var "${name}=${value}")
+}
+
+if command -v python3 >/dev/null 2>&1; then
+	PYTHON_BIN="python3"
+elif command -v python >/dev/null 2>&1; then
+	PYTHON_BIN="python"
+else
+	echo "Python interpreter not found for render_prompt.py" >&2
 	exit 1
 fi
 
-if grep -qE '^[[:space:]]*\{\{SEMBLE_PREFETCH\}\}[[:space:]]*$' "${RENDERED_FILE}"; then
-	echo "Unresolved SEMBLE_PREFETCH placeholder in rendered output for ${PROMPT_FILE}" >&2
+if ! RENDER_PROMPT_PY="$(resolve_render_prompt_py)"; then
+	echo "render_prompt.py not found for ${PROMPT_FILE}" >&2
 	exit 1
 fi
 
-if grep -qE '^[[:space:]]*\{\{SERENA_TOOL_HINTS\}\}[[:space:]]*$' "${RENDERED_FILE}"; then
-	echo "Unresolved SERENA_TOOL_HINTS placeholder in rendered output for ${PROMPT_FILE}" >&2
-	exit 1
-fi
+declare -A RENDER_VARS_SEEN=()
+declare -a RENDER_ARGS=()
 
-cat "${RENDERED_FILE}"
+RENDER_ARGS=(
+	"${PYTHON_BIN}" "${RENDER_PROMPT_PY}" "${PROMPT_FILE}"
+	--legacy-mode-name "${MODE_NAME}"
+)
+
+append_render_var "WORKFLOW_EDIT_RESTRICTION" "${WORKFLOW_EDIT_RESTRICTION_LINE}"
+append_render_var "SEMBLE_PREFETCH" "${SEMBLE_PREFETCH_BLOCK}"
+append_render_var "SERENA_TOOL_HINTS" "${SERENA_TOOL_HINTS_BLOCK}"
+
+while IFS= read -r placeholder_name; do
+	[ -n "${placeholder_name}" ] || continue
+	if [ "${!placeholder_name+x}" = "x" ]; then
+		append_render_var "${placeholder_name}" "${!placeholder_name}"
+	fi
+done < <(collect_prompt_placeholders)
+
+exec "${RENDER_ARGS[@]}"

@@ -17,7 +17,9 @@ codex_thread_reuse_truthy()
 
 codex_thread_reuse_seed_run_token()
 {
-	[ -n "${CODEX_THREAD_REUSE_RUN_TOKEN:-}" ] && return 0
+	if [ "${CODEX_THREAD_REUSE_RUN_TOKEN_SEEDED:-false}" = 'true' ] && [ -n "${CODEX_THREAD_REUSE_RUN_TOKEN:-}" ]; then
+		return 0
+	fi
 
 	CODEX_THREAD_REUSE_RUN_TOKEN="$(python3 - <<'PY'
 import uuid
@@ -25,7 +27,7 @@ import uuid
 print(uuid.uuid4().hex)
 PY
 )"
-	export CODEX_THREAD_REUSE_RUN_TOKEN
+	CODEX_THREAD_REUSE_RUN_TOKEN_SEEDED='true'
 }
 
 codex_thread_reuse_safe_key()
