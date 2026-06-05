@@ -75,6 +75,30 @@ resolve_render_prompt_py()
 	return 1
 }
 
+collect_prompt_placeholders()
+{
+	"${PYTHON_BIN}" - <<'PY' "${PROMPT_FILE}"
+import pathlib
+import re
+import sys
+
+text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+for name in sorted(set(re.findall(r"\{\{([A-Za-z0-9_]+)\}\}", text))):
+	print(name)
+PY
+}
+
+append_render_var()
+{
+	local name="$1"
+	local value="$2"
+	if [ -n "${RENDER_VARS_SEEN[${name}]+x}" ]; then
+		return 0
+	fi
+	RENDER_VARS_SEEN["${name}"]=1
+	RENDER_ARGS+=(--var "${name}=${value}")
+}
+
 if command -v python3 >/dev/null 2>&1; then
 	PYTHON_BIN="python3"
 elif command -v python >/dev/null 2>&1; then
@@ -89,8 +113,23 @@ if ! RENDER_PROMPT_PY="$(resolve_render_prompt_py)"; then
 	exit 1
 fi
 
-exec "${PYTHON_BIN}" "${RENDER_PROMPT_PY}" "${PROMPT_FILE}" \
-	--legacy-mode-name "${MODE_NAME}" \
-	--var "WORKFLOW_EDIT_RESTRICTION=${WORKFLOW_EDIT_RESTRICTION_LINE}" \
-	--var "SEMBLE_PREFETCH=${SEMBLE_PREFETCH_BLOCK}" \
-	--var "SERENA_TOOL_HINTS=${SERENA_TOOL_HINTS_BLOCK}"
+declare -A RENDER_VARS_SEEN=()
+declare -a RENDER_ARGS=()
+
+RENDER_ARGS=(
+	"${PYTHON_BIN}" "${RENDER_PROMPT_PY}" "${PROMPT_FILE}"
+	--legacy-mode-name "${MODE_NAME}"
+)
+
+append_render_var "WORKFLOW_EDIT_RESTRICTION" "${WORKFLOW_EDIT_RESTRICTION_LINE}"
+append_render_var "SEMBLE_PREFETCH" "${SEMBLE_PREFETCH_BLOCK}"
+append_render_var "SERENA_TOOL_HINTS" "${SERENA_TOOL_HINTS_BLOCK}"
+
+while IFS= read -r placeholder_name; do
+	[ -n "${placeholder_name}" ] || continue
+	if [ "${!placeholder_name+x}" = "x" ]; then
+		append_render_var "${placeholder_name}" "${!placeholder_name}"
+	fi
+done < <(collect_prompt_placeholders)
+
+exec "${RENDER_ARGS[@]}"

@@ -36,6 +36,7 @@ if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
 fi
 
 CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
+WORKSPACE_SAFETY_CHECK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/workspace_safety_check.sh"
 
 read_codex_stall_guard_state() {
   local status_file="$1"
@@ -72,6 +73,10 @@ run_editor_codex_attempt() {
   local stderr_target="$3"
   local activity_file="$4"
   local status_file="$5"
+
+  if [ -x "${WORKSPACE_SAFETY_CHECK_HELPER}" ]; then
+    bash "${WORKSPACE_SAFETY_CHECK_HELPER}" || return $?
+  fi
 
   if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
     exec "${CODEX_STALL_GUARD_HELPER}" \
@@ -383,6 +388,38 @@ resolve_support_script() {
     fi
   done
   return 1
+}
+
+resolve_review_thread_reuse_asset() {
+  local repo_path="$1"
+  local candidate=""
+
+  for candidate in \
+    "${repo_path}" \
+    ".codex-workflow-src/${repo_path}" \
+    ".codex-workflow-src-main/${repo_path}"; do
+    if [ -f "${candidate}" ]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+CODEX_THREAD_REUSE_ENABLED="${CODEX_THREAD_REUSE_ENABLED:-false}"
+CODEX_THREAD_REUSE_HELPER="$(resolve_support_script codex_thread_reuse.sh || true)"
+export CODEX_THREAD_REUSE_ENABLED
+export CODEX_THREAD_REUSE_RUNTIME_DIR="${CODEX_THREAD_REUSE_RUNTIME_DIR:-${RUNTIME_DIR}}"
+if [ -n "${CODEX_THREAD_REUSE_HELPER}" ]; then
+  # shellcheck disable=SC1090
+  source "${CODEX_THREAD_REUSE_HELPER}"
+fi
+
+review_thread_reuse_enabled() {
+  [ -n "${CODEX_THREAD_REUSE_HELPER:-}" ] || return 1
+  declare -F codex_thread_reuse_truthy >/dev/null 2>&1 || return 1
+  codex_thread_reuse_truthy "${CODEX_THREAD_REUSE_ENABLED:-false}"
 }
 
 ledger_substate_script="$(resolve_support_script ledger_emit_substate.sh || true)"
@@ -1225,6 +1262,33 @@ if [ "${SERENA_AVAILABLE:-false}" = "true" ]; then
     '- Keep apply_patch as the primary write path for repository edits; use Serena for discovery/navigation, not as a replacement for minimal patches.')"
 fi
 
+EDITOR_CODEX_PATH="${PATH}"
+editor_continuation_source=""
+editor_wrapper_dir=""
+if review_thread_reuse_enabled; then
+  editor_continuation_source="$(resolve_review_thread_reuse_asset 'prompts/mode-review-apply-fixes-continuation.txt' 2>/dev/null || true)"
+  if [ -z "${editor_continuation_source}" ]; then
+    echo "::warning::Review apply-fixes continuation prompt not found; editor will use the full prompt path."
+  elif [ ! -f "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" ]; then
+    echo "::warning::render_prompt.sh unavailable; editor will use the full prompt path."
+  else
+    EDITOR_CONTINUATION_RENDERED_FILE="${RUNTIME_DIR}/mode-review-apply-fixes-continuation.rendered.txt"
+    if SERENA_TOOL_HINTS="${EDITOR_SERENA_TOOL_HINTS}" bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${editor_continuation_source}" > "${EDITOR_CONTINUATION_RENDERED_FILE}"; then
+      if editor_wrapper_dir="$(codex_thread_reuse_install_wrapper \
+        'review-apply-fixes-editor' \
+        "${EDITOR_CONTINUATION_RENDERED_FILE}" \
+        'replace-prefix' \
+        'FINAL RESPONSE FORMAT')"; then
+        EDITOR_CODEX_PATH="${editor_wrapper_dir}:${PATH}"
+      else
+        echo "::warning::Failed to install review apply-fixes thread-reuse wrapper; editor will use the full prompt path."
+      fi
+    else
+      echo "::warning::Failed to render review apply-fixes continuation prompt; editor will use the full prompt path."
+    fi
+  fi
+fi
+
 editor_prompt_rendered="$(mktemp)"
 (
   cd "${SUPPORT_ROOT_DIR}"
@@ -1573,7 +1637,7 @@ while [ "${attempt}" -le 3 ]; do
   emit_editor_substate "StreamingTurn" "${attempt}"
   (
     trap '' PIPE
-    run_editor_codex_attempt "${attempt_prompt_file}" "${tmp_output}" "${_hb_fifo}" "${hb_file}" "${stall_status_file}"
+    PATH="${EDITOR_CODEX_PATH}" run_editor_codex_attempt "${attempt_prompt_file}" "${tmp_output}" "${_hb_fifo}" "${hb_file}" "${stall_status_file}"
   ) &
   codex_bg_pid=$!
   echo "${codex_bg_pid}" > "${codex_pid_file}"
@@ -1637,6 +1701,21 @@ while [ "${attempt}" -le 3 ]; do
       emit_editor_substate "codex_stall_killed" "${attempt}" "${tmp_err}"
       ;;
   esac
+
+  if [ "${cmd_rc}" -eq 78 ]; then
+    echo "Editor attempt ${attempt}: workspace_safety_violation; aborting without retry."
+    if [ -z "${PR_NUMBER:-}" ] || [ ! -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+      emit_editor_substate "Failed" "${attempt}" "${tmp_err}"
+    fi
+    cp "${tmp_output}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.txt" || true
+    cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
+    if [ -s "${tmp_err}" ]; then
+      echo "Editor stderr on attempt ${attempt}:"
+      cat "${tmp_err}"
+    fi
+    rm -f "${tmp_output}" "${tmp_err}" "${attempt_prompt_file}"
+    exit 78
+  fi
 
   if [ "${cmd_rc}" -eq 0 ]; then
     cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true

@@ -44,7 +44,85 @@ set -euo pipefail
 SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"
 CODEX_HEARTBEAT_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
+WORKSPACE_SAFETY_CHECK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/workspace_safety_check.sh"
 ORCHESTRATE_FORCE_TICK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/orchestrate_force_tick.sh"
+CODEX_THREAD_REUSE_ENABLED="${CODEX_THREAD_REUSE_ENABLED:-false}"
+CODEX_THREAD_REUSE_HELPER=""
+for _thread_reuse_candidate in \
+  "${SUPPORT_SCRIPTS_DIR:-scripts}/codex_thread_reuse.sh" \
+  "scripts/codex_thread_reuse.sh" \
+  ".codex-workflow-src/scripts/codex_thread_reuse.sh" \
+  ".codex-workflow-src-main/scripts/codex_thread_reuse.sh"; do
+  if [ -f "${_thread_reuse_candidate}" ]; then
+    CODEX_THREAD_REUSE_HELPER="${_thread_reuse_candidate}"
+    break
+  fi
+done
+export CODEX_THREAD_REUSE_ENABLED
+export CODEX_THREAD_REUSE_RUNTIME_DIR="${CODEX_THREAD_REUSE_RUNTIME_DIR:-${RUNTIME_DIR}}"
+if [ -n "${CODEX_THREAD_REUSE_HELPER}" ]; then
+  # shellcheck disable=SC1090
+  source "${CODEX_THREAD_REUSE_HELPER}"
+fi
+
+resolve_conflict_thread_reuse_asset() {
+  local repo_path="$1"
+  local candidate=""
+
+  for candidate in \
+    "${repo_path}" \
+    ".codex-workflow-src/${repo_path}" \
+    ".codex-workflow-src-main/${repo_path}"; do
+    if [ -f "${candidate}" ]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+conflict_thread_reuse_enabled() {
+  [ -n "${CODEX_THREAD_REUSE_HELPER:-}" ] || return 1
+  declare -F codex_thread_reuse_truthy >/dev/null 2>&1 || return 1
+  codex_thread_reuse_truthy "${CODEX_THREAD_REUSE_ENABLED:-false}"
+}
+
+render_conflict_thread_reuse_continuation() {
+  local previous_attempt="$1"
+  local failure_kind="$2"
+  local marker_file="$3"
+  local fp_file="$4"
+  local continuation_source="$5"
+  local continuation_rendered="$6"
+  local render_prompt_script="${SUPPORT_SCRIPTS_DIR:-scripts}/render_prompt.sh"
+  local marker_count="0"
+  local marker_list="(none)"
+  local fp_count="0"
+  local fp_details="(none)"
+
+  [ -n "${continuation_source}" ] || return 1
+  [ -f "${render_prompt_script}" ] || return 1
+
+  if [ -s "${marker_file}" ]; then
+    marker_count="$(wc -l < "${marker_file}" | tr -d '[:space:]')"
+    marker_list="$(sed 's/^/          - /' "${marker_file}")"
+  fi
+  if [ -s "${fp_file}" ]; then
+    fp_count="$(wc -l < "${fp_file}" | tr -d '[:space:]')"
+    fp_details="$(sed 's/^/          - /' "${fp_file}")"
+  fi
+
+  PREVIOUS_ATTEMPT_NUMBER="${previous_attempt}" \
+    MAX_ATTEMPTS="${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" \
+    PREVIOUS_ATTEMPT_FAILURE_KIND="${failure_kind}" \
+    MARKER_VIOLATION_COUNT="${marker_count}" \
+    MARKER_VIOLATION_FILES="${marker_list}" \
+    FINGERPRINT_VIOLATION_COUNT="${fp_count}" \
+    FINGERPRINT_VIOLATION_DETAILS="${fp_details}" \
+    SERENA_TOOL_HINTS_RESOLVER="${RESOLVER_SERENA_TOOL_HINTS:-}" \
+    bash "${render_prompt_script}" "${continuation_source}" > "${continuation_rendered}"
+}
 
 resolve_ledger_substate_helper() {
   local candidate
@@ -1518,7 +1596,12 @@ if [ -s "${RESOLVER_ALLOWLIST_FILE:-}" ] && [ -f "${TARGETED_FILE_CONTEXT_SCRIPT
 fi
 # Append the targeted-context block to the rendered prompt once, so
 # every retry (which copies CONFLICT_RESOLVER_PROMPT_FILE into
-# RESOLVER_RETRY_PROMPT_FILE at the loop top) inherits it.
+# RESOLVER_RETRY_PROMPT_FILE at the loop top) inherits it. The
+# thread-reuse marker itself is only needed when the feature is on.
+CONFLICT_RESOLVER_THREAD_REUSE_MARKER="=== THREAD REUSE LIVE CONTEXT ==="
+if conflict_thread_reuse_enabled; then
+  printf '\n%s\n' "${CONFLICT_RESOLVER_THREAD_REUSE_MARKER}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
+fi
 if [ -s "${TARGETED_FILES_CONTEXT_FILE}" ]; then
   printf '\n' >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
   cat "${TARGETED_FILES_CONTEXT_FILE}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
@@ -1535,6 +1618,36 @@ fi
 if [ -s "${CONFLICT_RESOLVER_SEMBLE_CONTEXT_FILE}" ]; then
   printf '\n' >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
   cat "${CONFLICT_RESOLVER_SEMBLE_CONTEXT_FILE}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
+fi
+
+CONFLICT_RESOLVER_PLAIN_PATH="${PATH}"
+CONFLICT_RESOLVER_CODEX_PATH="${CONFLICT_RESOLVER_PLAIN_PATH}"
+CONFLICT_RESOLVER_CONTINUATION_RENDERED_FILE="${RUNTIME_DIR}/mode-review-conflict-resolver-continuation.rendered.txt"
+CONFLICT_RESOLVER_CONTINUATION_SOURCE=""
+conflict_wrapper_dir=""
+if conflict_thread_reuse_enabled; then
+  CONFLICT_RESOLVER_CONTINUATION_SOURCE="$(resolve_conflict_thread_reuse_asset 'prompts/mode-review-conflict-resolver-continuation.txt' 2>/dev/null || true)"
+  if [ -z "${CONFLICT_RESOLVER_CONTINUATION_SOURCE}" ]; then
+    echo "::warning::Review conflict-resolver continuation prompt not found; resolver will use the full prompt path."
+  elif render_conflict_thread_reuse_continuation \
+    "0" \
+    "initial" \
+    "${RESOLVER_MARKER_VIOLATIONS_FILE}" \
+    "${RESOLVER_FP_VIOLATIONS_FILE}" \
+    "${CONFLICT_RESOLVER_CONTINUATION_SOURCE}" \
+    "${CONFLICT_RESOLVER_CONTINUATION_RENDERED_FILE}"; then
+    if conflict_wrapper_dir="$(codex_thread_reuse_install_wrapper \
+      'review-conflict-resolver' \
+      "${CONFLICT_RESOLVER_CONTINUATION_RENDERED_FILE}" \
+      'replace-prefix' \
+      "${CONFLICT_RESOLVER_THREAD_REUSE_MARKER}")"; then
+      CONFLICT_RESOLVER_CODEX_PATH="${conflict_wrapper_dir}:${CONFLICT_RESOLVER_PLAIN_PATH}"
+    else
+      echo "::warning::Failed to install review conflict-resolver thread-reuse wrapper; resolver will use the full prompt path."
+    fi
+  else
+    echo "::warning::Failed to render review conflict-resolver continuation prompt; resolver will use the full prompt path."
+  fi
 fi
 
 # _prev_attempt_failure_kind tracks why the previous attempt left
@@ -1622,6 +1735,7 @@ fi
 
 attempt=1
 while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
+  _attempt_codex_path="${CONFLICT_RESOLVER_CODEX_PATH}"
   emit_conflict_resolver_substate "PreparingWorkspace" "${attempt}"
   # On retries: restore the working tree to its post-merge-replay
   # state (so retries don't compound the previous attempt's bad
@@ -1716,6 +1830,21 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
         echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: previous attempt timed out at reasoning level ${_current_reasoning_effort} (ladder floor reached); not stepping down further."
       fi
     fi
+    if [ "${CONFLICT_RESOLVER_CODEX_PATH}" != "${CONFLICT_RESOLVER_PLAIN_PATH}" ] \
+       && [ -n "${CONFLICT_RESOLVER_CONTINUATION_SOURCE}" ]; then
+      if render_conflict_thread_reuse_continuation \
+        "$((attempt - 1))" \
+        "${_prev_attempt_failure_kind:-validation}" \
+        "${RESOLVER_MARKER_VIOLATIONS_FILE}" \
+        "${RESOLVER_FP_VIOLATIONS_FILE}" \
+        "${CONFLICT_RESOLVER_CONTINUATION_SOURCE}" \
+        "${CONFLICT_RESOLVER_CONTINUATION_RENDERED_FILE}"; then
+        echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: using same-run thread reuse continuation prompt."
+      else
+        echo "::warning::Failed to render review conflict-resolver continuation prompt for retry ${attempt}; falling back to the full prompt path."
+        _attempt_codex_path="${CONFLICT_RESOLVER_PLAIN_PATH}"
+      fi
+    fi
   else
     _effective_prompt_file="${CONFLICT_RESOLVER_PROMPT_FILE}"
   fi
@@ -1748,28 +1877,37 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
     sanitize_codex_prompt_file "${_effective_prompt_file}"
   fi
-  emit_conflict_resolver_substate "LaunchingAgentProcess" "${attempt}"
-  emit_conflict_resolver_substate "InitializingSession" "${attempt}"
-  emit_conflict_resolver_substate "StreamingTurn" "${attempt}"
-  if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
-    timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
-      "${CODEX_STALL_GUARD_HELPER}" \
-      --phase review_conflict_resolve \
-      --stdout-file "${tmp_output}" \
-      --status-file "${_stall_status_file}" \
-      -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" \
-      || _codex_exit=$?
-  elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
-    timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
-      "${CODEX_HEARTBEAT_HELPER}" \
-      --phase review_conflict_resolve \
-      --stdout-file "${tmp_output}" \
-      -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" \
-      || _codex_exit=$?
-  else
-    timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
-      codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" > "${tmp_output}" \
-      || _codex_exit=$?
+  _run_codex=true
+  if [ -x "${WORKSPACE_SAFETY_CHECK_HELPER}" ]; then
+    if ! bash "${WORKSPACE_SAFETY_CHECK_HELPER}"; then
+      _codex_exit=$?
+      _run_codex=false
+    fi
+  fi
+  if [ "${_run_codex}" = "true" ]; then
+    emit_conflict_resolver_substate "LaunchingAgentProcess" "${attempt}"
+    emit_conflict_resolver_substate "InitializingSession" "${attempt}"
+    emit_conflict_resolver_substate "StreamingTurn" "${attempt}"
+    if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
+      PATH="${_attempt_codex_path}" timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
+        "${CODEX_STALL_GUARD_HELPER}" \
+        --phase review_conflict_resolve \
+        --stdout-file "${tmp_output}" \
+        --status-file "${_stall_status_file}" \
+        -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" \
+        || _codex_exit=$?
+    elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
+      PATH="${_attempt_codex_path}" timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
+        "${CODEX_HEARTBEAT_HELPER}" \
+        --phase review_conflict_resolve \
+        --stdout-file "${tmp_output}" \
+        -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" \
+        || _codex_exit=$?
+    else
+      PATH="${_attempt_codex_path}" timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
+        codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" > "${tmp_output}" \
+        || _codex_exit=$?
+    fi
   fi
   _attempt_elapsed=$(( $(date +%s) - _attempt_started_at ))
   emit_conflict_resolver_substate "Finishing" "${attempt}"
@@ -1782,6 +1920,11 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   if [ "${_stall_state}" = "observed" ]; then
     echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: codex_stall_observed recorded (observe-only mode)."
     emit_conflict_resolver_substate "codex_stall_observed" "${attempt}"
+  fi
+  if [ "${_codex_exit}" -eq 78 ]; then
+    echo "::error::Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: workspace_safety_violation."
+    emit_conflict_resolver_substate "Failed" "${attempt}"
+    exit 78
   fi
   # Graceful-SIGTERM-at-timer-boundary diagnostic.  If codex installs
   # a SIGTERM handler that completes cleanup and exits 0 within the
