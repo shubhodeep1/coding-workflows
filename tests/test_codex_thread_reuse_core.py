@@ -17,6 +17,7 @@ HELPER = REPO_ROOT / "scripts" / "codex_thread_reuse.sh"
 RENDER_PROMPT_PY = REPO_ROOT / "scripts" / "render_prompt.py"
 RENDER_PROMPT_SH = REPO_ROOT / "scripts" / "render_prompt.sh"
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
+VALIDATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "validate.yml"
 VALIDATE_PROCESS = REPO_ROOT / "scripts" / "validate_process.sh"
 
 
@@ -204,6 +205,47 @@ def test_extract_session_id_uses_session_meta_payload_id() -> None:
 		proc = _run_helper(["extract-session-id", str(session_file)], env=_base_env())
 		assert proc.returncode == 0, proc.stderr
 		assert proc.stdout.strip() == "session-123"
+
+
+def test_begin_capture_uses_portable_marker_name() -> None:
+	with tempfile.TemporaryDirectory(prefix="codex_thread_marker_") as td:
+		tmp_path = Path(td)
+		env = _helper_env(tmp_path)
+		proc = _run_helper(["begin-capture", "portable"], env=env)
+		assert proc.returncode == 0, proc.stderr
+		marker_path = Path(proc.stdout.strip())
+		assert marker_path.name.startswith("portable.")
+		assert "%N" not in marker_path.name
+		assert marker_path.read_text(encoding="utf-8").strip().isdigit()
+
+
+def test_record_session_skips_null_cwd_metadata_without_crashing() -> None:
+	with tempfile.TemporaryDirectory(prefix="codex_thread_null_cwd_") as td:
+		tmp_path = Path(td)
+		env = _helper_env(tmp_path)
+		marker = _run_helper(["begin-capture", "null-cwd"], env=env)
+		assert marker.returncode == 0, marker.stderr
+		session_root = Path(env["CODEX_THREAD_REUSE_SESSION_ROOT"])
+		(session_root / "null-cwd.jsonl").write_text(
+			json.dumps({"type": "session_meta", "payload": {"id": "session-null", "cwd": None}}) + "\n",
+			encoding="utf-8",
+		)
+		proc = _run_helper(["record-session", "null-cwd", marker.stdout.strip()], env=env)
+		assert proc.returncode != 0
+		assert "TypeError" not in proc.stderr
+
+
+def test_direct_run_disabled_does_not_store_session_state_or_markers() -> None:
+	with tempfile.TemporaryDirectory(prefix="codex_thread_disabled_clean_") as td:
+		tmp_path = Path(td)
+		env = _helper_env(tmp_path)
+		env["CODEX_THREAD_REUSE_ENABLED"] = "false"
+		proc, _ = _run_direct(env, state_key="disabled-clean", prompt_text="prompt\n", phase="implement")
+		assert proc.returncode == 0, proc.stderr
+		session_get = _run_helper(["session-get", "disabled-clean"], env=env)
+		assert session_get.returncode != 0
+		markers_dir = Path(env["CODEX_THREAD_REUSE_RUNTIME_DIR"]) / "codex-thread-reuse" / "markers"
+		assert not markers_dir.exists() or not any(markers_dir.iterdir())
 
 
 def test_direct_run_uses_exec_when_feature_disabled_even_with_saved_session() -> None:
@@ -467,3 +509,11 @@ def test_validate_process_contains_thread_reuse_wiring() -> None:
 	assert "=== SELF-HEAL ATTEMPT ===" in text
 	assert 'PATH="${heal_path}" \\' in text
 	assert 'SELF_HEAL_FAILURE_PHASE="${phase}" \\' in text
+
+
+def test_validate_workflow_contains_thread_reuse_bootstrap() -> None:
+	text = VALIDATE_WORKFLOW.read_text(encoding="utf-8")
+	assert "CODEX_THREAD_REUSE_ENABLED: ${{ vars.CODEX_THREAD_REUSE_ENABLED || 'false' }}" in text
+	assert 'copy_from_ref_or_local "scripts/codex_thread_reuse.sh" "scripts/codex_thread_reuse.sh.tmp" "false" "true"' in text
+	assert 'copy_from_ref_or_local "prompts/mode-validate-self-heal-continuation.txt" "prompts/mode-validate-self-heal-continuation.txt.tmp" "false" "true"' in text
+	assert 'copy_from_ref_or_local "prompts/contracts/mode-validate-self-heal-continuation.yml" "prompts/contracts/mode-validate-self-heal-continuation.yml.tmp" "false" "true"' in text

@@ -169,17 +169,20 @@ codex_thread_reuse_probe_supported()
 codex_thread_reuse_begin_capture()
 {
 	local state_key="${1:?state key required}"
-	local marker_file
+	local markers_dir=""
 
-	marker_file="$(codex_thread_reuse_ensure_runtime_root)/markers/$(codex_thread_reuse_safe_key "${state_key}").$(date +%s%N).marker"
-	python3 - "${marker_file}" <<'PY'
+	markers_dir="$(codex_thread_reuse_ensure_runtime_root)/markers"
+	python3 - "${markers_dir}" "$(codex_thread_reuse_safe_key "${state_key}")" <<'PY'
 from pathlib import Path
 import sys
 import time
 
-path = Path(sys.argv[1])
-path.parent.mkdir(parents=True, exist_ok=True)
-path.write_text(f"{time.time_ns()}\n", encoding="utf-8")
+markers_dir = Path(sys.argv[1])
+state_key = sys.argv[2]
+markers_dir.mkdir(parents=True, exist_ok=True)
+ns = time.time_ns()
+path = markers_dir / f"{state_key}.{ns}.marker"
+path.write_text(f"{ns}\n", encoding="utf-8")
 print(path)
 PY
 }
@@ -295,8 +298,10 @@ for path in session_root.rglob("*.jsonl"):
 					continue
 				meta = payload.get("payload", {})
 				session_id = meta.get("id", "")
-				session_cwd = meta.get("cwd", "")
+				session_cwd = meta.get("cwd") or ""
 				if not isinstance(session_id, str) or not session_id:
+					break
+				if not isinstance(session_cwd, str) or not session_cwd:
 					break
 				if os.path.realpath(session_cwd) != cwd:
 					break
@@ -565,16 +570,21 @@ codex_thread_reuse_direct_run()
 	local capture_marker=""
 	local effective_prompt="${prompt_file}"
 	local transformed_prompt=""
+	local reuse_available='false'
 	local resume_session_id=""
 	local resume_allowed='false'
 	local rc=0
 
 	real_codex="$(codex_thread_reuse_real_codex)"
-	resume_session_id="$(codex_thread_reuse_get_session_id "${state_key}" || true)"
 
 	if codex_thread_reuse_truthy "${CODEX_THREAD_REUSE_ENABLED:-false}" \
-		&& [ -n "${resume_session_id}" ] \
 		&& codex_thread_reuse_probe_supported; then
+		reuse_available='true'
+		resume_session_id="$(codex_thread_reuse_get_session_id "${state_key}" || true)"
+	fi
+
+	if [ "${reuse_available}" = 'true' ] \
+		&& [ -n "${resume_session_id}" ]; then
 		if [ -n "${continuation_file}" ]; then
 			transformed_prompt="$(mktemp /tmp/codex_thread_reuse_prompt.XXXXXX)"
 			if codex_thread_reuse_transform_prompt \
@@ -594,7 +604,9 @@ codex_thread_reuse_direct_run()
 		fi
 	fi
 
-	capture_marker="$(codex_thread_reuse_begin_capture "${state_key}")"
+	if [ "${reuse_available}" = 'true' ]; then
+		capture_marker="$(codex_thread_reuse_begin_capture "${state_key}")"
+	fi
 	if [ "${resume_allowed}" = 'true' ]; then
 		if codex_thread_reuse_run_once \
 			"${real_codex}" \
@@ -662,7 +674,9 @@ codex_thread_reuse_direct_run()
 		fi
 	fi
 
-	codex_thread_reuse_record_session_from_marker "${state_key}" "${capture_marker}" >/dev/null 2>&1 || true
+	if [ "${reuse_available}" = 'true' ] && [ -n "${capture_marker}" ]; then
+		codex_thread_reuse_record_session_from_marker "${state_key}" "${capture_marker}" >/dev/null 2>&1 || true
+	fi
 	if [ -n "${transformed_prompt}" ] && [ -f "${transformed_prompt}" ]; then
 		rm -f "${transformed_prompt}"
 	fi
@@ -680,6 +694,7 @@ codex_thread_reuse_wrapper_main()
 	local marker_end="${CODEX_THREAD_REUSE_MARKER_END:-}"
 	local prompt_file=""
 	local transformed_prompt=""
+	local reuse_available='false'
 	local resume_session_id=""
 	local capture_marker=""
 	local rc=0
@@ -711,13 +726,17 @@ codex_thread_reuse_wrapper_main()
 	fi
 
 	prompt_file="$(mktemp /tmp/codex_thread_reuse_wrapper_prompt.XXXXXX)"
+	trap 'rm -f "${prompt_file:-}" "${transformed_prompt:-}"' EXIT
 	cat > "${prompt_file}"
 
-	resume_session_id="$(codex_thread_reuse_get_session_id "${state_key}" || true)"
 	if codex_thread_reuse_truthy "${CODEX_THREAD_REUSE_ENABLED:-false}" \
-		&& [ -n "${resume_session_id}" ] \
 		&& [ -n "${continuation_file}" ] \
 		&& codex_thread_reuse_probe_supported; then
+		reuse_available='true'
+		resume_session_id="$(codex_thread_reuse_get_session_id "${state_key}" || true)"
+	fi
+	if [ "${reuse_available}" = 'true' ] \
+		&& [ -n "${resume_session_id}" ]; then
 		transformed_prompt="$(mktemp /tmp/codex_thread_reuse_wrapper_transformed.XXXXXX)"
 		if codex_thread_reuse_transform_prompt \
 			"${transform_mode}" \
@@ -743,12 +762,16 @@ codex_thread_reuse_wrapper_main()
 		fi
 	fi
 
-	capture_marker="$(codex_thread_reuse_begin_capture "${state_key}")"
+	if [ "${reuse_available}" = 'true' ]; then
+		capture_marker="$(codex_thread_reuse_begin_capture "${state_key}")"
+	fi
 	set +e
 	"${real_codex}" "${prefix[@]}" exec "${suffix[@]}" < "${prompt_file}"
 	rc=$?
 	set -e
-	codex_thread_reuse_record_session_from_marker "${state_key}" "${capture_marker}" >/dev/null 2>&1 || true
+	if [ "${reuse_available}" = 'true' ] && [ -n "${capture_marker}" ]; then
+		codex_thread_reuse_record_session_from_marker "${state_key}" "${capture_marker}" >/dev/null 2>&1 || true
+	fi
 	rm -f "${prompt_file}"
 	if [ -n "${transformed_prompt}" ] && [ -f "${transformed_prompt}" ]; then
 		rm -f "${transformed_prompt}"
