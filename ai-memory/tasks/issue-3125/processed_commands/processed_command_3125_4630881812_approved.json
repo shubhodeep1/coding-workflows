@@ -5,13 +5,31 @@
   "entry_id": "processed_command_3125_4630881812_approved",
   "issue_number": 3125,
   "metadata": {
+    "branch": "ai/issue-3125",
+    "changed_files": [
+      "prompts/contracts/mode-review-apply-fixes-continuation.yml",
+      "prompts/contracts/mode-review-conflict-resolver-continuation.yml",
+      "prompts/mode-review-apply-fixes-continuation.txt",
+      "prompts/mode-review-conflict-resolver-continuation.txt",
+      "scripts/files_touched_scope_guard.py",
+      "scripts/memory_helpers.sh",
+      "scripts/render_prompt.sh",
+      "scripts/review_apply_fixes.sh",
+      "scripts/review_conflict_resolve.sh",
+      "tests/test_codex_thread_reuse_review.py"
+    ],
+    "issue_number": 3125,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/3125",
+    "pr_number": 3127,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/3127",
+    "run_attempt": "1",
+    "run_id": "27011358732",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/27011358732"
   },
   "run_attempt": 1,
   "run_id": "27011358732",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-06-05T11:09:34Z",
+  "status": "completed",
+  "timestamp": "2026-06-05T11:20:40Z",
   "workflow": "implement"
 }
