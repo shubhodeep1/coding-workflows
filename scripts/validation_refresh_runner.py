@@ -320,7 +320,19 @@ class ValidationRefreshRunner:
 				result.outcome = "skipped"
 				result.diagnostics.append("no_changes_detected")
 			else:
-				result.outcome = "error"
+				# Consumer self-test failed and the rendered assets matched the
+				# committed ones (no drift). This is the same class of signal as
+				# the drift case below (`red`): a consumer-repo health failure,
+				# NOT a refresh-mechanism error. Classify it `red` (monitored,
+				# non-blocking) so it is consistent with the drift-present path
+				# and does not fail the runner. `error` stays reserved for
+				# genuine mechanism failures (clone/checkout/manifest bootstrap/
+				# unexpected exceptions) that DO gate the release smoke via
+				# main()'s exit code. Regression: release v1.14.0 (run
+				# 26994091117) was blocked when consumer `digital_pa` failed its
+				# self-test (app never became healthy) with no drift and was
+				# mis-classified `error`.
+				result.outcome = "red"
 				result.diagnostics.append("pipeline_failed_without_changes")
 			return result
 
@@ -815,6 +827,13 @@ def main() -> int:
 		if temporary_root is not None:
 			temporary_root.cleanup()
 
+	# Only genuine refresh-mechanism failures (`error`: clone/checkout/manifest
+	# bootstrap failures, invalid repo names, unexpected exceptions) fail the
+	# runner and therefore gate the release smoke (`orphan-workflows-test` in
+	# test-and-mark-stable.yml watches this run's conclusion). Consumer-repo
+	# health outcomes — `red` (self-test failed), `green`, `skipped` — are
+	# recorded for monitoring but intentionally non-blocking, so one unhealthy
+	# downstream consumer never blocks a stable release of this library.
 	return 1 if any(result.outcome == "error" for result in results) else 0
 
 
