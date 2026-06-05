@@ -383,3 +383,128 @@
 |---|---:|---:|---:|---|
 | Serena | 0 | 0 | 0 | No runtime probe/query telemetry observed; rollout appears disabled |
 | Other MCP servers observed | 0 | 0 | 0 | None confirmed in first-class telemetry |
+
+## Deep Audit — Workflows & Scripts (2026-06-05)
+
+### Section 1: Bug & Correctness Sweep
+
+- **ID:** `BUG-001`  
+  **File:** `.github/workflows/review_autofix.yml:775-777, 5216-5228, 5397-5411, 6386-6400` (contrast: `.github/workflows/issue_pr_status.yml:272-287`, `.github/workflows/review_autofix.yml:2669-2682`)  
+  **Severity:** High  
+  **Category:** `bug`  
+  **Description:** `review_autofix.yml` still treats bare `issues/<n>` and `issue #<n>` prose as linked issues in four fallback paths. `issue_pr_status.yml:272-287` explicitly forbids those forms because they caused incorrect issue transitions, and `review_autofix.yml:2669-2682` already uses the stricter closing-keyword pattern for smoke-test detection. In review_autofix, the looser regex feeds post-merge validation dispatch (`.github/workflows/review_autofix.yml:787-807`) and the linked-issue label mutations in the `ready-to-merge` / `review-blocked` steps, so incidental PR-body references can dispatch validation or relabel the wrong issue.  
+  **Recommended fix:** Extract one shared helper, e.g. `resolve_linked_issue_numbers_from_pr_text <repo> <text>`, into `scripts/gh_helpers.sh` and reuse the stricter `close/fix/resolve + #N or repo-scoped issue URL` pattern already present in `issue_pr_status.yml:272-287` / `review_autofix.yml:2669-2682` at all four review_autofix call sites.
+
+- **ID:** `CONSIST-001`  
+  **File:** `.github/workflows/implement.yml:839-842, 2478-2480, 3254-3256`  
+  **Severity:** Medium  
+  **Category:** `consistency`  
+  **Description:** These guards treat any repo matching `*/coding-workflows` as the canonical workflow-source repo. Earlier in the same workflow, exact-match guards at `.github/workflows/implement.yml:206-209` and `780-784` already use `wf_source="shubhodeep1/coding-workflows"`. The suffix-based checks therefore give forks or mirrors named `*/coding-workflows` self-repo behavior: local support assets are trusted as source-of-truth and consumer-repo commit exclusions are dropped.  
+  **Recommended fix:** Replace all three wildcard checks with the same exact `wf_source` equality test already used earlier in `implement.yml` and in `.github/workflows/validate.yml:218-235` / `.github/workflows/review_autofix.yml:1238-1242`, so every self-repo decision shares one source-of-truth.
+
+No additional high-confidence secret-leak, quoting, or `set -e` defects rose above report threshold beyond the items above and the failure-path issues already captured in the parent report.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+_Excluding the fixed-interval `actions/runs/{id}` polling hotspot already covered in the parent report, the remaining static GH API candidates are below._
+
+- **ID:** `BATCH-001`  
+  **File:** `.github/workflows/review_autofix.yml:1916-1922; scripts/gh_helpers.sh:734-900`  
+  **Severity:** Medium  
+  **Category:** `api-batching`  
+  **Description:** `Collect PR metadata` hydrates PR context with four separate fetches: PR payload, issue comments, reviews, and review comments. Two are paginated, so the underlying REST request count can exceed four. `scripts/gh_helpers.sh` already has a GraphQL-first consolidated batching pattern in `gh_pr_with_all_comments`. **Current call count:** 4 logical fetches per normal PR path. **Proposed call count:** 1 logical helper call on the fast path, with REST fallback only when GraphQL/pagination parity requires it.  
+  **Recommended fix:** Extend `gh_pr_with_all_comments` to also emit top-level review state/body metadata, then use that helper here to materialize `PR_META_FILE`, `PR_ISSUE_COMMENTS_FILE`, `PR_REVIEWS_FILE`, and `PR_REVIEW_COMMENTS_FILE`. Existing batching pattern to extend: `scripts/gh_helpers.sh:734-900`.
+
+- **ID:** `BATCH-002`  
+  **File:** `.github/workflows/review_autofix.yml:1946-1951, 2017-2032`  
+  **Severity:** Medium  
+  **Category:** `api-batching`  
+  **Description:** When `closingIssuesReferences` returns `[]`, review_autofix regex-parses fallback issue numbers and then fetches each fallback issue body with `gh api repos/{repo}/issues/{n}` inside a loop. The path is capped at 20 issues. **Current call count:** 1 initial GraphQL PR query + up to 20 REST issue fetches (21 total). **Proposed call count:** 2 total with the current cap (1 PR GraphQL query + 1 batched issue GraphQL query).  
+  **Recommended fix:** Batch the fallback issue hydration with an aliased issue query, reusing the pattern from `_fetch_candidate_issue_details_graphql`. Existing batching pattern to extend: `scripts/orchestrate_poll_process.sh:10174-10297`.
+
+- **ID:** `BATCH-003`  
+  **File:** `.github/workflows/review_autofix.yml:767-784, 789-799`  
+  **Severity:** Medium  
+  **Category:** `api-batching`  
+  **Description:** The post-merge validate-dispatch step already does one GraphQL `closingIssuesReferences` lookup, but on the regex-fallback path it stores `labels: null` and then resolves labels with `gh issue view` inside the per-issue loop. The inline comment at `.github/workflows/review_autofix.yml:2035` says the empty-GraphQL path is expected for non-default-base orchestrator PRs, so this loop is not rare. **Current call count:** 1 GraphQL query + N per-issue label lookups. **Proposed call count:** 2 total (the existing PR query + 1 batched issue-label query).  
+  **Recommended fix:** After regex fallback, batch-fetch `{number, labels}` for all candidate issues and feed the loop from local JSON instead of `gh issue view` per issue. Existing batching pattern to extend: `scripts/orchestrate_poll_process.sh:10174-10297`.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **ID:** `DUP-001`  
+  **File:** `scripts/gh_helpers.sh:26-126, 391-446; .github/workflows/review_autofix.yml:1834-1872; .github/workflows/cancel_on_pr_close.yml:26-50; .github/workflows/mark-stable.yml:383-410, 546-559; .github/workflows/orchestrate_poll.yml:95-113`  
+  **Severity:** Medium  
+  **Category:** `duplication`  
+  **Description:** The repo already has a canonical GH retry layer in `scripts/gh_helpers.sh`, but a repository-wide search still finds 57 `gh_retry`/`_gh_retry` definitions or stubs. The inline copies above drift from the canonical helper by omitting `_is_gh_permanent_failure`, `_gh_actions_escape`, and the shared rate-limit wait/breaker behavior. That makes retry semantics inconsistent and forces every future GH-layer fix to be patched in many places.  
+  **Recommended fix:** Keep `scripts/gh_helpers.sh` as the single owner of GH retry behavior (`gh_retry "$@"`, `gh_retry_to_file <outfile> "$@"`, `_safe_gh_jq ...`). Update callers such as `cancel_on_pr_close.yml`, `mark-stable.yml`, `orchestrate_poll.yml`, `review_autofix.yml`, `scripts/review_apply_fixes.sh`, `scripts/review_run_reviewers.sh`, `scripts/review_rb_judge.sh`, and `scripts/validate_process.sh` to source it instead of redefining wrappers.
+
+- **ID:** `DUP-002`  
+  **File:** `.github/workflows/validate.yml:212-636; .github/workflows/review_autofix.yml:1228-1554; .github/workflows/implement.yml:829-1058`  
+  **Severity:** Medium  
+  **Category:** `duplication`  
+  **Description:** These three large blocks each re-implement support-source staging: canonical repo detection, primary-ref vs `main` fallback, curated script/prompt/schema copies, and commit-exclusion bookkeeping. Variants of the same resolve/checkout/stage pattern also exist in `clarify.yml`, `plan.yml`, `orchestrate.yml`, `orchestrate_poll.yml`, and `orchestrate_clarify_respond.yml`. This is the maintainability side of the startup-tax issue already captured in the parent report, and it is also what pushed validate/review_autofix near the expression-size limit.  
+  **Recommended fix:** Move support staging into one shared owner, preferably `scripts/stage_workflow_support.sh` (or a composite action), with a profile-style interface such as `stage_workflow_support <profile> <dest_root> [fetched_manifest]`. First-wave callers: `validate.yml`, `review_autofix.yml`, `implement.yml`; then repoint `clarify.yml`, `plan.yml`, `orchestrate.yml`, `orchestrate_poll.yml`, and `orchestrate_clarify_respond.yml`.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+- **ID:** `EXPR-001`  
+  **File:** `.github/workflows/validate.yml:212-636`  
+  **Severity:** High  
+  **Category:** `expression-limit`  
+  **Description:** The `Fetch workflow support files` `run:` block contains `${{ }}` interpolations and measures approximately **20,065 characters**, leaving only about **935 characters** of headroom under GitHub's 21,000-character expression cap. It already embeds helper functions, copy loops, fallback logic, and many inline comments, so a small edit can make the workflow unloadable.  
+  **Recommended fix:** Extract the whole block to an external script (ideally the shared support-staging module from `DUP-002`) so the workflow step becomes a thin launcher.
+
+- **ID:** `EXPR-002`  
+  **File:** `.github/workflows/review_autofix.yml:1228-1554`  
+  **Severity:** High  
+  **Category:** `expression-limit`  
+  **Description:** `Stage workflow support files` measures approximately **18,675 characters**, leaving about **2,325 characters** of headroom. The block contains long file lists, main-fallback logic, and many conditional copies; it is already inside the repo's stated danger zone for expression regressions.  
+  **Recommended fix:** Extract this block to the same shared support-staging script/composite action rather than continuing to edit the inline YAML body.
+
+- **ID:** `EXPR-003`  
+  **File:** `.github/workflows/implement.yml:3164-3539`  
+  **Severity:** Medium  
+  **Category:** `expression-limit`  
+  **Description:** `Commit changes` measures approximately **17,460 characters**, leaving about **3,540 characters** of headroom. It mixes failure traps, fetched-manifest cleanup, self-repo path exclusions, destructive-delete guarding, scope enforcement, and no-op detection in one interpolated `run:` block.  
+  **Recommended fix:** Split the block into multiple smaller steps or extract the commit orchestration to `scripts/implement_commit_changes.sh`.
+
+- **ID:** `EXPR-004`  
+  **File:** `.github/workflows/review_autofix.yml:1828-2220`  
+  **Severity:** Medium  
+  **Category:** `expression-limit`  
+  **Description:** `Collect PR metadata` measures approximately **17,408 characters**, leaving about **3,592 characters** of headroom. It combines a bespoke retry helper, no-PR synthesis, linked-issue lookups, fallback API loops, inline Python serializers, diff capture, and base-ref resolution in one interpolated step.  
+  **Recommended fix:** Extract PR-context hydration to a script such as `scripts/review_collect_pr_context.sh` and keep the workflow step as a short wrapper.
+
+I did not find any `if:` expression remotely close to the 21,000-character limit; the largest single-line `if:` found was 115 characters in `.github/workflows/internal-review.yml:54`. No workflow exceeds 800 KB; the largest file is `.github/workflows/review_autofix.yml` at **401,929** bytes.
+
+### Section 5: Cross-Cutting Concerns
+
+- **ID:** `DEAD-001`  
+  **File:** `scripts/issue_attachment_bundle.py:1-354; scripts/ai_context_utils.py:38-612; .github/workflows/ci.yml:89-95`  
+  **Severity:** Low  
+  **Category:** `dead-code`  
+  **Description:** Repository search only found `issue_attachment_bundle.py` and `ai_context_utils.py` referenced by CI `py_compile` and by `issue_attachment_bundle.py`'s own import of two helper functions. The rest of `ai_context_utils.py`'s public APIs (`build_issue_envelope`, `build_pull_request_envelope`, `ingest_attachments`, `build_prompt_parts`, etc.) have no callers in workflows or scripts. This looks like an unattached attachment-ingestion subsystem that is syntax-checked but not exercised at runtime. [NEEDS VERIFICATION]  
+  **Recommended fix:** Either wire this subsystem into an owning workflow and add an integration test that exercises `build`/`extract`, or move/remove it from the production script surface so CI and maintainers do not treat it as a live path.
+
+No literal `TODO` / `FIXME` / `HACK` markers were found under `.github/workflows/*.yml` or `scripts/*.{sh,py}`. No additional high-confidence shellcheck issues rose above threshold beyond the duplicated GH-helper layer called out in `DUP-001`.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 3 | BUG-001, EXPR-001, EXPR-002 |
+| Medium | 8 | CONSIST-001, BATCH-001, BATCH-002, BATCH-003, DUP-001, DUP-002, EXPR-003, EXPR-004 |
+| Low | 1 | DEAD-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 2-3 | Small |
+| API call optimization | 2-3 | Medium |
+| Code modularization | 8-10 | Large |
+| Expression size reduction | 4 | Large |
+| Medium/Low fixes | 3-4 | Small |
