@@ -1,0 +1,18 @@
+{
+  "actor": "shubhodeep1",
+  "command": "answer",
+  "comment_id": 4630915695,
+  "entry_id": "processed_command_3126_4630915695_answer",
+  "issue_number": 3126,
+  "metadata": {
+    "clarify_comment_id": 4630915695,
+    "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/3126",
+    "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/27011470894"
+  },
+  "run_attempt": 1,
+  "run_id": "27011470894",
+  "schema_version": "processed_command_entry.v1",
+  "status": "claimed",
+  "timestamp": "2026-06-05T11:12:25Z",
+  "workflow": "orchestrate_clarify_respond"
+}
