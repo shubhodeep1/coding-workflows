@@ -1312,18 +1312,18 @@ rm -f "${PREVIOUS_REVIEWS_DIR}/editor_refused.flag" 2>/dev/null || true
 # children running unsupervised. Reaping by FIFO holder is targeted: the
 # only processes with that FIFO open are the reader (read-end) and the
 # codex process tree (write-end); the main shell and watchdog never open
-# it, so this cannot signal them. Prefers fuser, falls back to a /proc fd
-# scan, and is a no-op when neither can identify a holder.
+# it, so this cannot signal them. Prefers fuser, then sweeps /proc for any
+# remaining holders, and is a no-op when neither path can identify one.
 _reap_editor_fifo_holders() {
   local fifo="$1"
   local sig="${2:-TERM}"
   [ -n "${fifo}" ] && [ -e "${fifo}" ] || return 0
   if command -v fuser >/dev/null 2>&1; then
     fuser -k -"${sig}" "${fifo}" >/dev/null 2>&1 || true
-    return 0
   fi
   local link target pid
   for link in /proc/[0-9]*/fd/*; do
+    [ -e "${link}" ] || continue
     target="$(readlink -f "${link}" 2>/dev/null)" || continue
     [ "${target}" = "${fifo}" ] || continue
     pid="${link#/proc/}"

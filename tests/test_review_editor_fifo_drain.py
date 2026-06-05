@@ -73,7 +73,7 @@ def test_reaper_function_is_targeted_and_has_proc_fallback() -> None:
 	body = _extract_function("_reap_editor_fifo_holders")
 	# Primary path uses fuser to signal FIFO holders.
 	assert "fuser -k" in body
-	# Fallback scans /proc fds when fuser is unavailable.
+	# Fallback scans /proc fds when fuser is unavailable or ineffective.
 	assert "/proc/" in body and "readlink -f" in body
 	# Never signal the orchestrating shell itself.
 	assert '"${pid}" = "$$"' in body
@@ -178,6 +178,58 @@ echo OK
 		res = _run_bash(harness, timeout=45.0)
 	assert res.returncode == 0, (
 		f"/proc fallback did not free the FIFO (rc={res.returncode}); "
+		f"stdout={res.stdout!r} stderr={res.stderr!r}"
+	)
+	assert "OK" in res.stdout
+
+
+def test_reaper_proc_fallback_runs_when_fuser_present_but_fails() -> None:
+	"""If `fuser` exists but cannot reap the FIFO holders, the real shipped
+	reaper must still fall through to the /proc sweep instead of becoming a
+	silent no-op."""
+	func = _extract_function("_reap_editor_fifo_holders")
+	with tempfile.TemporaryDirectory() as td:
+		td = os.path.realpath(td)
+		fifo = os.path.join(td, "stderr.pipe")
+		shim = os.path.join(td, "bin")
+		harness = f"""
+set -u
+{func}
+SHIM={shim!r}
+FIFO={fifo!r}
+mkdir -p "$SHIM"
+for b in cat sleep mkfifo readlink; do
+	src="$(command -v "$b" 2>/dev/null)" || {{ echo "PRECOND_FAIL: missing $b"; exit 3; }}
+	ln -sf "$src" "$SHIM/$b"
+done
+cat > "$SHIM/fuser" <<'SH'
+#!/bin/sh
+exit 1
+SH
+chmod +x "$SHIM/fuser"
+export PATH="$SHIM"
+command -v fuser >/dev/null 2>&1 || {{ echo "PRECOND_FAIL: fuser missing"; exit 3; }}
+reader=""
+orphan=""
+trap 'kill "${{reader:-}}" "${{orphan:-}}" 2>/dev/null; kill -9 "${{reader:-}}" "${{orphan:-}}" 2>/dev/null; true' EXIT
+mkfifo -m 600 "$FIFO"
+
+( cat "$FIFO" >/dev/null 2>&1 ) &
+reader=$!
+( exec 9>"$FIFO"; exec sleep 600 ) &
+orphan=$!
+sleep 1
+kill -0 "$orphan" 2>/dev/null || {{ echo "PRECOND_FAIL: orphan not alive"; exit 3; }}
+
+_reap_editor_fifo_holders "$FIFO" KILL
+wait "$orphan" 2>/dev/null || true
+wait "$reader" 2>/dev/null || true
+kill -0 "$orphan" 2>/dev/null && {{ echo "FAIL: orphan survived failed-fuser fallback"; exit 4; }}
+echo OK
+"""
+		res = _run_bash(harness, timeout=45.0)
+	assert res.returncode == 0, (
+		f"failed-fuser fallback did not free the FIFO (rc={res.returncode}); "
 		f"stdout={res.stdout!r} stderr={res.stderr!r}"
 	)
 	assert "OK" in res.stdout
