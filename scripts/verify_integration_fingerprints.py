@@ -630,8 +630,9 @@ def _is_must_contain_post_capture_evolution_false_positive(
 		except ValueError:
 			continue
 		# Newest-first: the first well-formed pickaxe hit is the commit that
-		# removed the captured line's last occurrence (it is absent at HEAD);
-		# that commit alone decides the verdict.
+		# changed the captured line's count on the verified ref — removed it
+		# for must_contain, re-added it for must_not_contain — and that commit
+		# alone decides the verdict.
 		if commit_epoch > captured_epoch and not subject.lstrip().startswith(
 			_AI_MERGE_RESOLVE_SUBJECT_PREFIX
 		):
