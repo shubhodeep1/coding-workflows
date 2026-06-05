@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -51,9 +52,17 @@ def _step_run_text(path: Path, step_name: str) -> str:
 
 
 def _run_helper(tmp_path: Path, cwd: Path, **env_overrides: str) -> subprocess.CompletedProcess[str]:
+	workspace_shell_env = tmp_path / "workspace-shell.env"
+	workspace_shell_env.write_text(
+		'if [ -n "${WORKSPACE_PATH:-}" ] && [ -d "${WORKSPACE_PATH}" ]; then\n'
+		'  cd "${WORKSPACE_PATH}"\n'
+		'fi\n',
+		encoding="utf-8",
+	)
 	env = os.environ.copy()
 	env.update(
 		{
+			"BASH_ENV": str(workspace_shell_env),
 			"RUNNER_TEMP": str(tmp_path / "runner-temp"),
 			"WORKSPACE_REUSE_ENABLED": "true",
 			"WORKSPACE_KEY": "issue-42",
@@ -169,10 +178,22 @@ def test_review_workflow_bootstraps_and_restages_workspace_safety_helper() -> No
 
 def test_validate_process_guards_codex_attempts_and_short_circuits_exit_78() -> None:
 	text = VALIDATE_PROCESS.read_text(encoding="utf-8")
-	assert 'WORKSPACE_SAFETY_CHECK_HELPER="${_validate_script_dir}/workspace_safety_check.sh"' in text
+	assert 'WORKSPACE_SAFETY_CHECK_HELPER=""' in text
+	assert '".codex-workflow-src/scripts/workspace_safety_check.sh"' in text
+	assert '".codex-workflow-src-main/scripts/workspace_safety_check.sh"' in text
 	assert 'bash "${WORKSPACE_SAFETY_CHECK_HELPER}" || return $?' in text
+	assert 'local exit_code="${5:-1}"' in text
+	assert 'exit "${exit_code}"' in text
 	assert '[ "${DISCOVER_EXIT}" -eq 78 ]' in text
 	assert '[ "${DIAGNOSE_EXIT}" -eq 78 ]' in text
+	assert re.search(
+		r'Workspace safety preflight failed before validation hint discovery could launch Codex\." \\\n\s+78',
+		text,
+	)
+	assert re.search(
+		r'Workspace safety preflight failed before validation diagnosis could launch Codex\." \\\n\s+78',
+		text,
+	)
 	assert 'workspace_safety_violation' in text
 
 

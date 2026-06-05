@@ -1595,6 +1595,7 @@ fail_validate_codex_phase()
   local failure_mode="$2"
   local attempt_count="$3"
   local failure_summary="$4"
+  local exit_code="${5:-1}"
 
   emit_phase_failure_marker "validate" "${failed_step_name}" "${failure_mode}" "${attempt_count}" "${failure_summary}"
 
@@ -1606,7 +1607,7 @@ fail_validate_codex_phase()
 
   write_result_files "error" "Validate workflow failed before runtime validation could complete" "${failure_summary}" "codex_failure"
   tg_notify "Validate workflow Codex failure during ${failed_step_name} for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
-  exit 1
+  exit "${exit_code}"
 }
 
 cleanup_runtime_containers()
@@ -2461,7 +2462,17 @@ trap cleanup_runtime_containers EXIT
 _validate_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODEX_HEARTBEAT_HELPER="${_validate_script_dir}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${_validate_script_dir}/codex_stall_guard.sh"
-WORKSPACE_SAFETY_CHECK_HELPER="${_validate_script_dir}/workspace_safety_check.sh"
+WORKSPACE_SAFETY_CHECK_HELPER=""
+for _workspace_safety_candidate in \
+  "${_validate_script_dir}/workspace_safety_check.sh" \
+  "scripts/workspace_safety_check.sh" \
+  ".codex-workflow-src/scripts/workspace_safety_check.sh" \
+  ".codex-workflow-src-main/scripts/workspace_safety_check.sh"; do
+  if [ -f "${_workspace_safety_candidate}" ]; then
+    WORKSPACE_SAFETY_CHECK_HELPER="${_workspace_safety_candidate}"
+    break
+  fi
+done
 LEDGER_SUBSTATE_HELPER=""
 for _ledger_candidate in \
   "${_validate_script_dir}/ledger_emit_substate.sh" \
@@ -2778,7 +2789,8 @@ else
       "validation_discovery" \
       "workspace_safety_violation" \
       "${DISCOVER_ATTEMPTS_USED:-${attempt}}" \
-      "Workspace safety preflight failed before validation hint discovery could launch Codex."
+      "Workspace safety preflight failed before validation hint discovery could launch Codex." \
+      78
   fi
 
     if [ "${DISCOVER_EXIT}" -ne 0 ]; then
@@ -3516,7 +3528,8 @@ for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
       "validation_diagnosis" \
       "workspace_safety_violation" \
       "${DIAGNOSE_ATTEMPTS_USED:-${attempt}}" \
-      "Workspace safety preflight failed before validation diagnosis could launch Codex."
+      "Workspace safety preflight failed before validation diagnosis could launch Codex." \
+      78
   fi
 
   if [ "${DIAGNOSE_EXIT}" -ne 0 ]; then

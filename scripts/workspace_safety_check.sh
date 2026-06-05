@@ -55,8 +55,23 @@ workspace_root_resolved="$(printf '%s\n' "${resolved_paths}" | sed -n '1p')"
 workspace_path_resolved="$(printf '%s\n' "${resolved_paths}" | sed -n '2p')"
 
 current_dir="$(pwd -P 2>/dev/null)" || fail "failed to resolve current working directory"
-if [ "${current_dir}" != "${workspace_path_resolved}" ]; then
-	fail "pwd -P (${current_dir}) does not match WORKSPACE_PATH (${workspace_path_resolved})"
+launch_dir="${current_dir}"
+
+# BASH_ENV already `cd`s into WORKSPACE_PATH before reused-workspace helpers
+# run. When that masks the real launch directory, OLDPWD still points to the
+# pre-hook cwd. Only trust that signal when it resolves inside the shared
+# workspaces root; outer step shells often start from GITHUB_WORKSPACE.
+if [ "${current_dir}" = "${workspace_path_resolved}" ] && [ -n "${OLDPWD:-}" ]; then
+	old_pwd_resolved="$(cd "${OLDPWD}" 2>/dev/null && pwd -P)" || old_pwd_resolved=""
+	case "${old_pwd_resolved}/" in
+		"${workspace_root_resolved}/"*)
+			launch_dir="${old_pwd_resolved}"
+			;;
+	esac
+fi
+
+if [ "${launch_dir}" != "${workspace_path_resolved}" ]; then
+	fail "launch directory (${launch_dir}) does not match WORKSPACE_PATH (${workspace_path_resolved})"
 fi
 
 if [ -z "${workspace_root_resolved}" ] || [ -z "${workspace_path_resolved}" ]; then
