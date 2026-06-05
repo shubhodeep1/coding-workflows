@@ -18,10 +18,15 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 STEP_NAME = "Pre-flight — lint PR title/body for auto-close keywords against tracking issues"
+CREATE_PR_STEP_NAME = "Create Pull Request"
 
 
 def _workflow_text() -> str:
 	return IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
+
+
+def _step_text(step_name: str) -> str:
+	return "\n".join(_step_block(step_name)) + "\n"
 
 
 def _step_block(step_name: str) -> list[str]:
@@ -164,3 +169,21 @@ def test_non_orchestrator_issue_keeps_close_only_body_even_with_tracking_footer(
 	)
 
 	assert body == "Automated implementation. Closes https://github.com/owner/repo/issues/123\n"
+
+
+def test_create_pr_step_uses_the_linted_body_artifact() -> None:
+	step = _step_text(CREATE_PR_STEP_NAME)
+	assert 'PR_BODY_FILE="${RUNTIME_DIR}/pr-body-lint/body.txt"' in step
+	assert '--body-file "${PR_BODY_FILE}"' in step
+
+
+def main() -> int:
+	test_orchestrator_managed_issue_appends_non_closing_tracking_ref()
+	test_non_orchestrator_issue_keeps_close_only_body_even_with_tracking_footer()
+	test_create_pr_step_uses_the_linted_body_artifact()
+	print("OK: implement PR body tracking refs contract holds")
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
