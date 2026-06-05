@@ -508,3 +508,109 @@ No literal `TODO` / `FIXME` / `HACK` markers were found under `.github/workflows
 | Code modularization | 8-10 | Large |
 | Expression size reduction | 4 | Large |
 | Medium/Low fixes | 3-4 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-06-05)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the consolidation can be implemented directly without changing endpoint scope, control flow, or fail-open behavior; `NEEDS_VERIFICATION` means the overlap is real but pagination/freshness/parity must be checked first; `RISKY_SKIP` means the duplicate-looking calls sit in race-defense, retry, or other guard paths that must not be auto-consolidated.
+
+### Consolidation Candidates (MERGE-###)
+
+- **ID:** `MERGE-001`  
+  **Safety tag:** `NEEDS_VERIFICATION`  
+  **Files:** `.github/workflows/clarify.yml:414-438`  
+  **Current call count:** 2 calls when `SEMANTIC_CACHE_BACKEND != none`.  
+  **Proposed call count:** 1 call in that branch, if the single paginated result is reused for both outputs.  
+  **Endpoint(s):** `GET /repos/{repo}/issues/{issue_number}/comments` with the same `sort=created&direction=asc` filter, once as `per_page=50` and once as paginated `per_page=100`.  
+  **Evidence:**
+  ```sh
+  gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=50" > "${ISSUE_COMMENTS_FILE}"
+
+  if [ "${SEMANTIC_CACHE_BACKEND}" != "none" ]; then
+    if ! gh_retry gh api --paginate --slurp "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=100" \
+      | jq -r 'add // [] | .[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' > "${THREAD_HISTORY_FILE}"; then
+  ```
+  **Proposed fix:** In the `Fetch issue comments` step, when semantic cache is enabled, fetch the full paginated comment set once into a temp JSON blob, derive `THREAD_HISTORY_FILE` from that blob, and write `ISSUE_COMMENTS_FILE` from the first 50 ordered entries of the same blob; keep the current single-50-comment path only for the cache-disabled branch or as an explicit fail-open fallback.  
+  **Safety rationale:** The calls overlap, but they currently have different pagination shapes and intentionally decoupled failure behavior, so a one-call path needs parity verification before it is safe.  
+  **Downstream signal:** Verify with an issue having `>100` comments that a merged path preserves `ISSUE_COMMENTS_FILE` ordering/truncation and that a simulated full-fetch failure still degrades to the current semantic-cache bypass behavior without losing prompt context.
+
+- **ID:** `MERGE-002`  
+  **Safety tag:** `SAFE_TO_MERGE`  
+  **Files:** `scripts/implement_diagnose_post_codex_failure.sh:166-172`, `scripts/implement_diagnose_post_codex_failure.sh:261-277`  
+  **Current call count:** 2 calls on the `ISSUE_META_FILE` miss/parse-fail path.  
+  **Proposed call count:** 1 shared `GET /issues/{n}` call on that path, with the existing split behavior retained only as fail-open fallback if the shared fetch fails.  
+  **Endpoint(s):** `GET /repos/{repo}/issues/{issue_number}`  
+  **Evidence:**
+  ```sh
+  if [ -z "${ISSUE_LABELS_JSON}" ]; then
+    ISSUE_LABELS_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]' || echo '[]')"
+  fi
+  ...
+  if [ "${issue_body_loaded_from_meta}" != "true" ]; then
+    gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}" --jq '.body // ""' > "${ISSUE_BODY_FILE}" || printf '' > "${ISSUE_BODY_FILE}"
+  fi
+  ```
+  **Proposed fix:** In `scripts/implement_diagnose_post_codex_failure.sh`, add one shared fallback issue JSON fetch (for example via `gh_api_json_to_file` from `scripts/gh_helpers.sh` or a temp-file `gh_retry gh api "repos/.../issues/${ISSUE_NUMBER}"`) when `ISSUE_META_FILE` is unusable, then derive both `ISSUE_LABELS_JSON` and `ISSUE_BODY_FILE` from that payload.  
+  **Safety rationale:** Both reads hit the same endpoint in one script path, no code mutates the issue between them, and a success-only shared fetch can preserve the existing fail-open semantics exactly.  
+  **Downstream signal:** Implement a shared fallback issue JSON cache in `scripts/implement_diagnose_post_codex_failure.sh` and use it for both label extraction and body extraction on the `ISSUE_META_FILE` miss path.
+
+- **ID:** `MERGE-003`  
+  **Safety tag:** `RISKY_SKIP`  
+  **Files:** `.github/workflows/test-and-mark-stable.yml:1040-1045`, `.github/workflows/test-and-mark-stable.yml:1070-1075`  
+  **Current call count:** 3 `/pulls/{PR_NUMBER}` reads on the stable-first-attempt path (`HEAD_A`, `HEAD_B`, then `PR_META`), up to 11 if all 5 stability attempts run.  
+  **Proposed call count:** A tempting floor is 2 on the stable-first-attempt path by widening the second read and reusing it, but this must not be auto-implemented.  
+  **Endpoint(s):** `GET /repos/{repo}/pulls/{pull_number}`  
+  **Evidence:**
+  ```sh
+  HEAD_A=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null || echo "")
+  sleep 3
+  HEAD_B=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null || echo "")
+  ...
+  PR_META=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" 2>/dev/null || echo "")
+  ```
+  **Proposed fix:** No auto-fix. If manually reviewed, only consider widening the second post-sleep pull fetch to include `state`, `merged`, `merged_at`, and `closed_at`, then reusing that payload instead of the separate `PR_META` read.  
+  **Safety rationale:** This is an explicit upstream-race defense path; the duplicate reads are part of the “stable across two reads ≥3s apart” contract, so policy requires `RISKY_SKIP`.  
+  **Downstream signal:** Do not auto-implement; manual review must prove that any widened second `/pulls/{PR_NUMBER}` read still preserves both the 3-second stability check and the separate closed/merged guard semantics.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID:** `REUSE-001`  
+  **Safety tag:** `NEEDS_VERIFICATION`  
+  **Files:** `.github/workflows/orchestrate_clarify_respond.yml:62-71`, `.github/workflows/orchestrate_clarify_respond.yml:152-158`, `scripts/resolve_integration_ref.sh:38-40`, `scripts/resolve_integration_ref.sh:59-62`, `.github/workflows/orchestrate_clarify_respond.yml:425-436`  
+  **Current call count:** 3 child-issue `GET /issues/{ISSUE_NUMBER}` calls on the orchestrator-managed path before prompt assembly.  
+  **Proposed call count:** 1 child-issue fetch reused across the step and the resolver helper.  
+  **Endpoint(s):** `GET /repos/{repo}/issues/{issue_number}`  
+  **Evidence:**
+  ```sh
+  ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ...
+  child_body="$(get_issue_body "${ISSUE}")"
+  # get_issue_body -> gh api "repos/${REPO}/issues/${issue_num}" --jq '.body // ""'
+  ...
+  ISSUE_META="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ```
+  **Proposed fix:** Persist the first `ISSUE_PAYLOAD` (or at least its body/title/tracking-number fields) from `Check orchestrator metadata` to a temp file, extend `scripts/resolve_integration_ref.sh` with an optional cached-body input so it only falls back to `gh api` when that input is absent/invalid, and make `Fetch issue and tracking context` read the same cached JSON first.  
+  **Safety rationale:** The reuse crosses workflow-step and helper-script boundaries, so freshness expectations must be validated before replacing live reads with cached issue body data.  
+  **Downstream signal:** Verify that no supported operator flow depends on issue-body edits made after `Check orchestrator metadata` starts, then add resolver coverage for a cached-body override path and confirm the fallback-to-live-API path still works when the cache is missing or malformed.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- `BATCH-001`: `NEEDS_VERIFICATION` — agreed; extending `gh_pr_with_all_comments` is directionally correct, but parity for reviews/review-comments pagination and fail-open fallback must be re-tested before swapping the step over.
+- `BATCH-002`: `NEEDS_VERIFICATION` — agreed; batching fallback issue hydration is the right shape, but the replacement must preserve the current 20-issue cap and per-issue fail-open behavior.
+- `BATCH-003`: `NEEDS_VERIFICATION` — agreed; batching regex-fallback issue-label lookups is sound, but it still needs parity checks for the non-default-base fallback path and the current “labels unknown” handling.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 1 | `MERGE-002` |
+| NEEDS_VERIFICATION | 2 | `MERGE-001`, `REUSE-001` |
+| RISKY_SKIP | 1 | `MERGE-003` |
+
+### Implement-Stage Handoff
+
+- `MERGE-002`
