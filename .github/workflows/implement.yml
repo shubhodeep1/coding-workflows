@@ -4519,7 +4519,52 @@ jobs:
           # lint validates. Keep these strings in lockstep — drift means
           # the lint is checking a different artifact than the one
           # submitted.
+          TRACKING_ISSUE_NUMBER="$(
+            python3 - "${ISSUE_META_FILE}" <<'PY'
+          import json
+          import re
+          import sys
+          from pathlib import Path
+
+          TRACKING_ISSUE_LINE_RE = re.compile(
+              r"^\s*(?:-\s*)?(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+)\s*$",
+              re.MULTILINE,
+          )
+
+          try:
+              issue_meta = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          except (IndexError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+              raise SystemExit(0)
+
+          label_names = []
+          for raw_label in issue_meta.get("labels") or []:
+              if not isinstance(raw_label, dict):
+                  continue
+              name = raw_label.get("name")
+              if isinstance(name, str):
+                  label_names.append(name)
+
+          if "ai:orchestrator-managed" not in label_names:
+              raise SystemExit(0)
+
+          issue_body = issue_meta.get("body")
+          if not isinstance(issue_body, str):
+              raise SystemExit(0)
+
+          match = TRACKING_ISSUE_LINE_RE.search(issue_body)
+          if match is None:
+              raise SystemExit(0)
+
+          print(match.group(1))
+          PY
+          )"
           printf 'Automated implementation. Closes %s\n' "${ISSUE_URL}" > "${PR_BODY_FILE}"
+          # Child PRs must keep auto-closing the child issue while linking
+          # back to the tracking issue with a non-closing reference for
+          # archival / audit tooling.
+          if [ -n "${TRACKING_ISSUE_NUMBER}" ]; then
+            printf 'Refs #%s\n' "${TRACKING_ISSUE_NUMBER}" >> "${PR_BODY_FILE}"
+          fi
           printf '%s\n\n' "${PR_TITLE}" > "${PR_LINT_FILE}"
           cat "${PR_BODY_FILE}" >> "${PR_LINT_FILE}"
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/lint_pr_body_auto_close.py \
