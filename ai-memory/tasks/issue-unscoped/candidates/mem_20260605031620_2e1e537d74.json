@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_apply_fixes.sh:1280-1292 | severity=medium | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: The `EDITOR_DRAIN_GRACE_SECS` validation accepts leading-zero values like `08` and `09`, which later crash bash arithmetic as invalid octal.\n  WHY: All reviewers describe the same misconfiguration path where the case check passes but `_drain_deadline=$(( $(date +%s) + EDITOR_DRAIN_GRACE_SECS ))` aborts the shell under `set -euo pipefail`; severity is set to the highest practical level because this crashes the drain block.\n- scripts/review_apply_fixes.sh:1319-1350,1495-1520 | severity=low | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: The timeout/reap path adds avoidable latency because the `/proc` fallback runs even after `fuser`, and the drain logic also includes fixed sleeps before rechecking.\n  WHY: Both reviewers flag the same performance issue in the editor drain path; it does not change correctness, but it can measurably slow every timeout-triggered drain.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_apply_fixes.sh:1287 | confidence=4\n  PROBLEM: The validation pattern `''|*[!0-9]*|0)` does not reject leading-zero values like `08` or `09`.\n  WHY: `08` and `09` pass the case check, and the later arithmetic expansion treats them as invalid octal, crashing the editor loop under `set -euo pipefail`.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/review_apply_fixes.sh:1284-1292 | confidence=2\n  PROBLEM: The validation rejects empty, non-numeric, and zero values but accepts leading-zero values like `08` or `09`.\n  WHY: Bash arithmetic expansion treats these as octal, so setting `EDITOR_DRAIN_GRACE_SECS=08` would crash the drain block with an arithmetic error.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_apply_fixes.sh:1283-1290 | confidence=4\n  PROBLEM: The validation pattern `''|*[!0-9]*|0)` accepts values with leading zeros like `08` or `09`.\n  WHY: In bash arithmetic contexts, numbers with leading zeros are interpreted as octal, so `08` and `09` trigger `value too great for base` errors under `set -euo pipefail` when used in `_drain_deadline=$(( $(date +%s) + EDITOR_DRAIN_GRACE_SECS ))`.\n- scripts/review_apply_fixes.sh:1320-1350,1495-1520 | confidence=2\n  PROBLEM: The `_reap_editor_fifo_holders` function runs the `/proc` fd-scan fallback unconditionally after `fuser`, and the drain timeout logic adds mandatory sleeps and polling overhead.\n  WHY: The timeout path is meant to be fast, but the current implementation adds latency on every drain-triggered reaping attempt.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/review_apply_fixes.sh:1283-1290 | confidence=4\n  PROBLEM: The `''|*[!0-9]*|0` case pattern accepts leading-zero values like `08` or `09`.\n  WHY: `08` passes validation because it contains only digits, but bash later interprets it as an octal literal in arithmetic expansion and aborts with `value too great for base`.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/review_apply_fixes.sh:1319-1345 | confidence=3\n  PROBLEM: The `/proc` fd scan runs unconditionally after the `fuser` path, even when `fuser` succeeds.\n  WHY: On runners with many processes, the glob and `readlink` loop can add measurable latency to every editor drain.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "323977e93cdb981d48fbe219932b0580ecd936009326dd0e6d9e2be924babe54",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3110,
+    "run_id": "26992679673",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26992679673",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260605031620_2e1e537d74",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3110,
+    "run_id": "26992679673"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-05T03:16:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
