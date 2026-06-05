@@ -1347,29 +1347,15 @@ jobs:
             # workflow_dispatch run at that SHA was filtered out and the
             # poll timed out 30m later.
             if [ -n "${PIN_SHA:-}" ]; then
-              # Among name-matching runs at PIN_SHA, prefer the latest
-              # NON-cancelled run; fall back to the latest cancelled run
-              # only when every run at PIN_SHA is cancelled. Without the
-              # non-cancelled preference a `cancelled` sibling masks a
-              # `success` run on the same head SHA: on run-26989483268 the
-              # bait/fix-triggered internal-review.yml run #26990664122
-              # (conclusion=success — it ran the reviewer, applied the
-              # editor fix, committed, and enabled auto-merge) was created
-              # 15s before a redundant review_autofix.yml workflow_dispatch
-              # run #26990671639 that GitHub immediately cancelled via the
-              # `pr-autofix-<pr>` concurrency group ("a higher priority
-              # waiting request … exists"). The plain
-              # `sort_by(.created_at) | last` latched onto the newer
-              # cancelled run; because the cancellation was a concurrency
-              # preemption (not an editor-pushed commit) the PR head never
-              # advanced past the pin, so the pin-advance guard below never
-              # fired and the loop polled the dead run until the 30-minute
-              # REVIEW_TIMEOUT — blocking the release even though
-              # review+autofix had already succeeded. The `//` fallback
-              # keeps a genuine all-cancelled stall reaching the timeout as
-              # before. The head_sha==PIN_SHA filter still scopes selection
-              # to the pinned commit, so preferring non-cancelled cannot
-              # latch onto a stale success on a prior head.
+              # Among matching runs at PIN_SHA, prefer the newest
+              # non-cancelled run and fall back to the newest cancelled
+              # run only when every matching run is cancelled. This fixes
+              # run-26989483268, where a newer concurrency-cancelled
+              # sibling masked an older successful review run on the same
+              # head SHA; because the PR head did not move, the pin-
+              # advance guard never fired and the loop waited until
+              # REVIEW_TIMEOUT. The PIN_SHA filter still prevents latching
+              # onto a stale success from an earlier commit.
               REVIEW_RUN=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&per_page=100" \
                 --jq "[.workflow_runs[] | select(.name | test(\"Review|review|autofix|self-healing\"; \"i\")) | select(.head_sha == \"${PIN_SHA}\")] as \$m | (\$m | map(select(.conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | sort_by(.created_at) | last)" || echo "")
             else
