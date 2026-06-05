@@ -294,7 +294,7 @@ jobs:
           }
 
           _fetched_scripts=()
-          for f in gh_helpers.sh ai_labels.py render_prompt.sh render_prompt.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py write_codex_config.sh orchestrate_force_tick.sh workspace_init.sh run_workspace_hook.sh; do
+          for f in gh_helpers.sh ai_labels.py render_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py write_codex_config.sh orchestrate_force_tick.sh workspace_init.sh run_workspace_hook.sh; do
             copy_from_ref_or_local "scripts/${f}" "scripts/${f}"
             chmod +x "scripts/${f}"
             _fetched_scripts+=("${f}")
@@ -450,7 +450,8 @@ jobs:
             validation_history.v1.json \
             operator_bypass_audit.v1.json \
             revalidate_events.v1.json \
-            validation_discovery.v1.json; do
+            validation_discovery.v1.json \
+            workflow_overlay.v1.json; do
             if [ ! -f "ai-memory/schemas/${sf}" ]; then
               schema_tmp="ai-memory/schemas/${sf}.tmp"
               if copy_from_ref_or_local "ai-memory/schemas/${sf}" "${schema_tmp}" "false" "true"; then
@@ -460,6 +461,13 @@ jobs:
               fi
             fi
           done
+
+          # WORKFLOW.md overlay is opt-in by file presence; absent file must
+          # stay a no-op while valid prompt overrides flow through render_prompt.py.
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/load_workflow_overlay.py \
+            --repo-root "${GITHUB_WORKSPACE}" \
+            --schema-path "ai-memory/schemas/workflow_overlay.v1.json" \
+            --github-env "${GITHUB_ENV}"
 
           if copy_from_ref_or_local "scripts/codex_model_catalog.json" "scripts/codex_model_catalog.json.tmp" "false" "false"; then
             if [ -s "scripts/codex_model_catalog.json.tmp" ]; then

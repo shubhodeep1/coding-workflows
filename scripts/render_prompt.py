@@ -21,6 +21,7 @@ except ImportError:  # pragma: no cover - dependency is optional
 PLACEHOLDER_PATTERN = re.compile(r"\{\{([A-Za-z0-9_]+)\}\}")
 STANDALONE_PLACEHOLDER_PATTERN = re.compile(r"^[ \t]*\{\{([A-Za-z0-9_]+)\}\}[ \t]*$")
 VARIABLE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_]+$")
+OVERLAY_MODE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*$")
 CONTRACT_TOP_LEVEL_KEYS = {"required_vars", "optional_vars", "forbidden_vars"}
 LEGACY_STANDALONE_ONLY_VARS = frozenset({"WORKFLOW_EDIT_RESTRICTION", "SEMBLE_PREFETCH", "SERENA_TOOL_HINTS"})
 
@@ -499,7 +500,7 @@ def _coerce_overlay_mode_name(raw_value: Any, *, field_name: str) -> str:
 	mode_name = raw_value.strip()
 	if not mode_name:
 		raise WorkflowOverlayError(f"Field '{field_name}' must not be empty")
-	if VARIABLE_NAME_PATTERN.fullmatch(mode_name.replace("-", "_")) is None:
+	if OVERLAY_MODE_NAME_PATTERN.fullmatch(mode_name) is None:
 		raise WorkflowOverlayError(
 			f"Field '{field_name}' contains invalid mode name '{mode_name}'"
 		)
@@ -533,7 +534,18 @@ def load_workflow_overlay_from_env() -> WorkflowOverlay | None:
 		raise WorkflowOverlayError("WORKFLOW_OVERLAY_PROMPT_OVERRIDES_JSON must decode to a list")
 
 	repo_root_raw = os.environ.get("WORKFLOW_OVERLAY_REPO_ROOT", "").strip()
-	repo_root = Path(repo_root_raw).resolve() if repo_root_raw else Path.cwd().resolve()
+	if repo_root_raw:
+		repo_root = Path(repo_root_raw).resolve()
+		if not repo_root.exists():
+			raise WorkflowOverlayError(
+				f"WORKFLOW_OVERLAY_REPO_ROOT must point to an existing directory: {repo_root_raw}"
+			)
+		if not repo_root.is_dir():
+			raise WorkflowOverlayError(
+				f"WORKFLOW_OVERLAY_REPO_ROOT must point to a directory: {repo_root_raw}"
+			)
+	else:
+		repo_root = Path.cwd().resolve()
 	overrides: list[PromptOverride] = []
 	for index, item in enumerate(payload):
 		if not isinstance(item, dict):
