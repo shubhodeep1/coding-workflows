@@ -1348,16 +1348,14 @@ jobs:
             # poll timed out 30m later.
             if [ -n "${PIN_SHA:-}" ]; then
               # Among matching runs at PIN_SHA, prefer the newest
-              # non-cancelled run and fall back to the newest cancelled
-              # run only when every matching run is cancelled. This fixes
-              # run-26989483268, where a newer concurrency-cancelled
-              # sibling masked an older successful review run on the same
-              # head SHA; because the PR head did not move, the pin-
-              # advance guard never fired and the loop waited until
-              # REVIEW_TIMEOUT. The PIN_SHA filter still prevents latching
-              # onto a stale success from an earlier commit.
+              # completed non-cancelled run. If none has completed yet,
+              # watch the newest non-cancelled live run, and fall back to
+              # the newest cancelled run only when every matching run is
+              # cancelled. This fixes run-26989483268 and avoids picking a
+              # newer queued/in-progress sibling over an already-completed
+              # success on the same head SHA.
               REVIEW_RUN=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&per_page=100" \
-                --jq "[.workflow_runs[] | select(.name | test(\"Review|review|autofix|self-healing\"; \"i\")) | select(.head_sha == \"${PIN_SHA}\")] as \$m | (\$m | map(select(.conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | sort_by(.created_at) | last)" || echo "")
+                --jq "[.workflow_runs[] | select(.name | test(\"Review|review|autofix|self-healing\"; \"i\")) | select(.head_sha == \"${PIN_SHA}\")] as \$m | (\$m | map(select(.status == \"completed\" and .conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | map(select(.conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | sort_by(.created_at) | last)" || echo "")
             else
               REVIEW_RUN=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&event=pull_request&per_page=5" \
                 --jq '[.workflow_runs[] | select(.name | test("Review|review|autofix|self-healing"; "i"))] | sort_by(.created_at) | last' || echo "")
