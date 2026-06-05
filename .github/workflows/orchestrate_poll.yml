@@ -524,6 +524,12 @@ jobs:
           ENABLE_CLEAN_WAVE_JUDGE_SKIP: ${{ vars.ENABLE_CLEAN_WAVE_JUDGE_SKIP || 'true' }}
           MAX_REVIEW_BLOCKED_RETRIES: ${{ vars.MAX_REVIEW_BLOCKED_RETRIES || '2' }}
           STALL_THRESHOLD_MINUTES: ${{ vars.STALL_THRESHOLD_MINUTES || '120' }}
+          # Freshness window (minutes) the in-flight / zombie guards use for
+          # review_autofix runs, which legitimately run past the generic stall
+          # threshold (up to the codex-agent job's 240-min timeout). Default
+          # 250 ≈ that hard timeout plus a small buffer. Floored at
+          # STALL_THRESHOLD_MINUTES in-script.
+          REVIEW_RUN_MAX_RUNTIME_MINUTES: ${{ vars.REVIEW_RUN_MAX_RUNTIME_MINUTES || '250' }}
           STALL_THRESHOLD_NO_LABELS_MINUTES: ${{ vars.STALL_THRESHOLD_NO_LABELS_MINUTES || '' }}
           STALL_THRESHOLD_CLARIFICATION_MINUTES: ${{ vars.STALL_THRESHOLD_CLARIFICATION_MINUTES || '' }}
           STALL_THRESHOLD_PLANNING_MINUTES: ${{ vars.STALL_THRESHOLD_PLANNING_MINUTES || '' }}

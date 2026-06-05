@@ -9267,6 +9267,70 @@ def test_retrigger_review_inflight_guard_treats_zombie_run_as_eligible():
 	)
 
 
+def test_retrigger_review_skips_empty_commit_for_review_run_past_stall_threshold_but_within_budget():
+	# Regression for the PR #3082 / issue #3081 "stuck 169m, attempt 2" loop:
+	# a review_autofix run that has been in_progress longer than
+	# STALL_THRESHOLD_MINUTES (120) but is still within its legitimate budget
+	# (REVIEW_RUN_MAX_RUNTIME_MINUTES, default 250 ≈ the 240-min codex-agent
+	# job timeout) is STILL EDITING and must NOT be clobbered by an empty
+	# commit.  Before the review-aware window it was misclassified as a zombie
+	# (>120m), dropped from the active set, and re-triggered — discarding the
+	# whole review pass via AUTOFIX_PRE_EDITOR_STALE_BASE -> soft_exit.
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	head_ref = "ai/issue-3081"
+	# 169 minutes ago: past the 120m stall threshold, inside the 250m review
+	# window — exactly the window where the old code re-triggered destructively.
+	started_169m_ago = time.strftime(
+		"%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 169 * 60)
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 3082},
+		prs=[
+			{
+				"number": 3082,
+				"state": "open",
+				"mergeable": True,
+				"mergeable_state": "clean",
+				"headRefName": head_ref,
+				"headRefFromApi": head_ref,
+				"headSha": "sha3082",
+				"baseRefName": "main",
+			},
+		],
+		actions_runs_workflow_runs=[
+			{
+				"id": 26944643043,
+				"name": "Internal: AI Review & Autofix",
+				"path": ".github/workflows/internal-review.yml",
+				"status": "in_progress",
+				"head_branch": head_ref,
+				"run_started_at": started_169m_ago,
+			},
+		],
+		mock_git_push_success=True,
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 0, (
+		f"expected stall_recovery_count to stay at 0 when a review run past the "
+		f"stall threshold but within its budget blocks the empty-commit push; "
+		f"got {issue_entry['stall_recovery_count']}"
+	)
+	dispatches_for_pr = [d for d in result.get("review_dispatches", []) if str(d.get("pr_number")) == "3082"]
+	assert dispatches_for_pr == [], (
+		f"expected no redispatch when an in-budget review run blocks recovery; "
+		f"got: {dispatches_for_pr}"
+	)
+
+
 def test_retrigger_review_skips_empty_commit_when_pr_head_advanced_after_snapshot():
 	# Defense-in-depth for the narrower PR-fetch→git-fetch race: if the
 	# PR head SHA changed after `_fetch_pr_json` captured `.head.sha`, the
