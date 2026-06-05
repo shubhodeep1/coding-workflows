@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:8556-8557 | severity=low | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The zombie-exclusion log message reports `stall_secs` for review_autofix exclusions even though those runs are filtered by the longer `review_stall_secs` window.\n  WHY: Operators will see a misleading cutoff age in the log, which can misdirect debugging because a run excluded by the review window is reported with the generic stall threshold instead.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:8556-8557 | confidence=3\n  PROBLEM: The zombie-exclusion log message uses `stall_secs` (derived from `STALL_THRESHOLD_MINUTES`, default 120) to report the cutoff for ALL excluded runs, even though review_autofix runs are now excluded by the longer `review_stall_secs` window (derived from `REVIEW_RUN_MAX_RUNTIME_MINUTES`, default 250).\n  WHY: Operators debugging stall recovery via these log lines will see a misleading age threshold, which can lead them to incorrectly conclude the review-run cutoff is 120 minutes when it is not.\n- File: scripts/orchestrate_poll_process.sh\n  Location: `build_active_issue_set`, lines 8556-8557\n  Issue: Zombie exclusion log reports a single unified cutoff age that may be wrong for review_autofix runs excluded by the longer review-run window.\n  Suggested minimal fix: Report the stale count with a qualified message that acknowledges both windows, e.g., \"zombie runs excluded \u2014 stale cutoff varies by run type (general: >N minutes, review_autofix: >M minutes)\". Alternatively, count review-run vs non-review-run exclusions separately and report both.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "701b3d4d9b9a4632e76a52fd15b0caf94ea2c0e93d72a2fea3621a56dfcb0724",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26990286247",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26990286247",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260605015629_869e907e13",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26990286247"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-05T01:56:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
