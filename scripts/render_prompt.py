@@ -486,12 +486,11 @@ def _workflow_edit_restriction_value() -> str:
 
 
 def collect_legacy_env_values() -> dict[str, str]:
-	values = {"WORKFLOW_EDIT_RESTRICTION": _workflow_edit_restriction_value()}
-	if "SEMBLE_PREFETCH" in os.environ:
-		values["SEMBLE_PREFETCH"] = os.environ.get("SEMBLE_PREFETCH", "")
-	if "SERENA_TOOL_HINTS" in os.environ:
-		values["SERENA_TOOL_HINTS"] = os.environ.get("SERENA_TOOL_HINTS", "")
-	return values
+	return {
+		"WORKFLOW_EDIT_RESTRICTION": _workflow_edit_restriction_value(),
+		"SEMBLE_PREFETCH": os.environ.get("SEMBLE_PREFETCH", ""),
+		"SERENA_TOOL_HINTS": os.environ.get("SERENA_TOOL_HINTS", ""),
+	}
 
 
 def _coerce_overlay_mode_name(raw_value: Any, *, field_name: str) -> str:

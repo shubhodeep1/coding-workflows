@@ -114,6 +114,33 @@ def test_absent_workflow_overlay_is_a_noop() -> None:
 		assert proc.stdout == "Base prompt\n"
 
 
+def test_render_prompt_py_defaults_legacy_placeholder_blocks_to_empty_strings() -> None:
+	with tempfile.TemporaryDirectory(prefix="workflow_overlay_legacy_defaults_") as td:
+		repo_root = Path(td)
+		prompt_file = repo_root / "prompts" / "mode-inline.txt"
+		prompt_file.parent.mkdir(parents=True, exist_ok=True)
+		prompt_file.write_text(
+			"Before\n{{SEMBLE_PREFETCH}}\n{{SERENA_TOOL_HINTS}}\nAfter\n",
+			encoding="utf-8",
+		)
+
+		env = _base_env()
+		env.pop("SEMBLE_PREFETCH", None)
+		env.pop("SERENA_TOOL_HINTS", None)
+		proc = subprocess.run(
+			[sys.executable, str(RENDER_PROMPT_PY), str(prompt_file)],
+			cwd=str(repo_root),
+			env=env,
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+
+		assert proc.returncode == 0, proc.stderr
+		assert proc.stderr == ""
+		assert proc.stdout == "Before\n\n\nAfter\n"
+
+
 def test_loader_rejects_unknown_top_level_keys() -> None:
 	with tempfile.TemporaryDirectory(prefix="workflow_overlay_unknown_key_") as td:
 		repo_root = Path(td)
@@ -133,6 +160,26 @@ def test_loader_rejects_unknown_top_level_keys() -> None:
 		assert proc.returncode == 1
 		assert proc.stdout == ""
 		assert "unexpected_flag" in proc.stderr
+
+
+def test_loader_rejects_null_prompt_overrides() -> None:
+	with tempfile.TemporaryDirectory(prefix="workflow_overlay_null_overrides_") as td:
+		repo_root = Path(td)
+		overlay_file = repo_root / ".github" / "ai" / "WORKFLOW.md"
+		overlay_file.parent.mkdir(parents=True, exist_ok=True)
+		overlay_file.write_text(
+			"---\n"
+			"schema_version: workflow_overlay.v1\n"
+			"prompt_overrides: null\n"
+			"---\n",
+			encoding="utf-8",
+		)
+
+		proc, _github_env = _run_loader(repo_root)
+
+		assert proc.returncode == 1
+		assert proc.stdout == ""
+		assert "prompt_overrides" in proc.stderr
 
 
 def test_loader_exports_prompt_overrides_and_shell_shim_applies_them() -> None:
@@ -177,6 +224,47 @@ def test_loader_exports_prompt_overrides_and_shell_shim_applies_them() -> None:
 		assert proc.returncode == 0, proc.stderr
 		assert proc.stderr == ""
 		assert proc.stdout == "Base prompt\nOverlay appendix\n"
+
+
+def test_overlay_replace_path_is_validated_by_contract_layer() -> None:
+	with tempfile.TemporaryDirectory(prefix="workflow_overlay_contract_") as td:
+		repo_root = Path(td)
+		prompt_file = repo_root / "prompts" / "mode-inline.txt"
+		contract_file = repo_root / "prompts" / "contracts" / "mode-inline.yml"
+		fragment_file = repo_root / ".github" / "ai" / "fragments" / "replace.txt"
+		overlay_file = repo_root / ".github" / "ai" / "WORKFLOW.md"
+		prompt_file.parent.mkdir(parents=True, exist_ok=True)
+		contract_file.parent.mkdir(parents=True, exist_ok=True)
+		fragment_file.parent.mkdir(parents=True, exist_ok=True)
+		overlay_file.parent.mkdir(parents=True, exist_ok=True)
+
+		prompt_file.write_text("Base prompt\n", encoding="utf-8")
+		contract_file.write_text(
+			"required_vars: []\n"
+			"optional_vars: {}\n"
+			"forbidden_vars: []\n",
+			encoding="utf-8",
+		)
+		fragment_file.write_text("Overlay needs {{UNKNOWN}}\n", encoding="utf-8")
+		overlay_file.write_text(
+			"---\n"
+			"schema_version: workflow_overlay.v1\n"
+			"prompt_overrides:\n"
+			"  - mode: mode-inline\n"
+			"    replace_path: .github/ai/fragments/replace.txt\n"
+			"---\n",
+			encoding="utf-8",
+		)
+
+		loader_proc, github_env = _run_loader(repo_root)
+		assert loader_proc.returncode == 0, loader_proc.stderr
+		values = _parse_github_env(github_env)
+
+		proc = _run_render_prompt_py(prompt_file, repo_root=repo_root, extra_env=values)
+		assert proc.returncode == 1
+		assert proc.stdout == ""
+		assert "unknown_in_template" in proc.stderr
+		assert "UNKNOWN" in proc.stderr
 
 
 def test_render_prompt_rejects_nonexistent_overlay_repo_root() -> None:
@@ -238,8 +326,11 @@ def test_target_workflows_stage_schema_and_invoke_loader() -> None:
 
 if __name__ == "__main__":
 	test_absent_workflow_overlay_is_a_noop()
+	test_render_prompt_py_defaults_legacy_placeholder_blocks_to_empty_strings()
 	test_loader_rejects_unknown_top_level_keys()
+	test_loader_rejects_null_prompt_overrides()
 	test_loader_exports_prompt_overrides_and_shell_shim_applies_them()
+	test_overlay_replace_path_is_validated_by_contract_layer()
 	test_render_prompt_rejects_nonexistent_overlay_repo_root()
 	test_render_prompt_rejects_invalid_overlay_mode_names()
 	test_target_workflows_stage_schema_and_invoke_loader()

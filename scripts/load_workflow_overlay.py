@@ -336,8 +336,6 @@ def coerce_prompt_overrides(payload: dict[str, Any], overlay_path: Path) -> tupl
 			)
 
 	raw_overrides = payload.get("prompt_overrides", [])
-	if raw_overrides is None:
-		raw_overrides = []
 	if not isinstance(raw_overrides, list):
 		raise WorkflowOverlayLoadError(
 			f"Field 'prompt_overrides' in '{overlay_path}' must be a list"
