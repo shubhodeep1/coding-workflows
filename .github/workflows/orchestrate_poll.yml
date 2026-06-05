@@ -616,7 +616,7 @@ jobs:
         run: bash scripts/orchestrate_poll_process.sh
 
       - name: Build state snapshot
-        if: ${{ always() && steps.find_tracking.outputs.has_work == 'true' && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' }}
+        if: ${{ always() && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -633,7 +633,7 @@ jobs:
             --memory-root-relative "${AI_MEMORY_ROOT:-ai-memory}"
 
       - name: Upload state snapshot artifact
-        if: ${{ always() && steps.find_tracking.outputs.has_work == 'true' && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' }}
+        if: ${{ always() && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' }}
         uses: actions/upload-artifact@v6
         with:
           name: state-snapshot
@@ -641,7 +641,7 @@ jobs:
           if-no-files-found: error
 
       - name: Publish state snapshot branch
-        if: ${{ always() && steps.find_tracking.outputs.has_work == 'true' && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' && env.STATE_SNAPSHOT_BRANCH_ENABLED == 'true' }}
+        if: ${{ always() && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' && env.STATE_SNAPSHOT_BRANCH_ENABLED == 'true' }}
         shell: bash
         run: |
           set -euo pipefail

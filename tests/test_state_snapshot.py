@@ -14,6 +14,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BUILD_STATE_SNAPSHOT_PATH = REPO_ROOT / "scripts" / "build_state_snapshot.py"
 POLLER_SCRIPT_PATH = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
+WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml"
 if str(REPO_ROOT) not in sys.path:
 	sys.path.insert(0, str(REPO_ROOT))
 
@@ -164,6 +165,19 @@ def _extract_function_body(script_text: str, function_name: str) -> str:
 	match = re.search(rf"^{function_name}\(\) \{{\n(?P<body>.*?)^\}}\n", script_text, re.MULTILINE | re.DOTALL)
 	assert match is not None, function_name
 	return match.group("body")
+
+
+def _extract_workflow_step_if(step_name: str) -> str:
+	lines = WORKFLOW_PATH.read_text(encoding="utf-8").splitlines()
+	for idx, line in enumerate(lines):
+		if line.strip() != f"- name: {step_name}":
+			continue
+		for candidate in lines[idx + 1:idx + 6]:
+			candidate = candidate.strip()
+			if candidate.startswith("if:"):
+				return candidate
+		raise AssertionError(f"missing if condition for step {step_name}")
+	raise AssertionError(f"missing workflow step {step_name}")
 
 
 def test_snapshot_builder_generates_schema_valid_payload_with_enrichment_and_deferred_entries() -> None:
@@ -391,6 +405,20 @@ def test_poller_snapshot_exports_reuse_cached_data_without_new_api_calls() -> No
 
 	assert 'write_state_snapshot_actions_runs_export || true' in script_text
 	assert 'write_state_snapshot_tracker_export "${TRACKING_NUM}" "${TRACKING_TITLE}" || true' in script_text
+
+
+def test_snapshot_workflow_artifact_steps_are_not_gated_on_has_work() -> None:
+	for step_name in ("Build state snapshot", "Upload state snapshot artifact"):
+		condition = _extract_workflow_step_if(step_name)
+		assert "always()" in condition
+		assert "env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false'" in condition
+		assert "steps.find_tracking.outputs.has_work == 'true'" not in condition
+
+	condition = _extract_workflow_step_if("Publish state snapshot branch")
+	assert "always()" in condition
+	assert "env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false'" in condition
+	assert "env.STATE_SNAPSHOT_BRANCH_ENABLED == 'true'" in condition
+	assert "steps.find_tracking.outputs.has_work == 'true'" not in condition
 
 
 def main() -> int:

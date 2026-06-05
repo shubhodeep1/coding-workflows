@@ -190,11 +190,11 @@ _state_snapshot_json_object_or_empty() {
 }
 
 write_state_snapshot_actions_runs_export() {
-	local out_file="${RUNTIME_DIR:-}/state_snapshot_actions_runs.json"
 	local empty_blob='{"workflow_runs":[]}'
 	local actions_runs_blob="${_ACTIONS_RUNS_BLOB_CACHE:-${empty_blob}}"
 
 	[ -n "${RUNTIME_DIR:-}" ] || return 0
+	local out_file="${RUNTIME_DIR}/state_snapshot_actions_runs.json"
 	if ! printf '%s' "${actions_runs_blob}" | jq -e 'type == "object" and (.workflow_runs? | type == "array")' >/dev/null 2>&1; then
 		actions_runs_blob="${empty_blob}"
 	fi
