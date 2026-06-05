@@ -64,6 +64,8 @@ launch_dir="${current_dir}"
 if [ "${current_dir}" = "${workspace_path_resolved}" ] && [ -n "${OLDPWD:-}" ]; then
 	old_pwd_resolved="$(cd "${OLDPWD}" 2>/dev/null && pwd -P)" || old_pwd_resolved=""
 	case "${old_pwd_resolved}/" in
+		"${workspace_root_resolved}/")
+			;;
 		"${workspace_root_resolved}/"*)
 			launch_dir="${old_pwd_resolved}"
 			;;

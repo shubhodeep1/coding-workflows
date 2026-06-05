@@ -107,6 +107,16 @@ def test_helper_accepts_valid_reused_workspace() -> None:
 		assert result.returncode == 0, result.stderr
 
 
+def test_helper_accepts_launch_from_shared_workspaces_root() -> None:
+	with tempfile.TemporaryDirectory(prefix="workspace-safety-check-") as td:
+		tmp_path = Path(td)
+		workspace_root = tmp_path / "runner-temp" / "workspaces"
+		workspace_path = workspace_root / "issue-42"
+		workspace_path.mkdir(parents=True)
+		result = _run_helper(tmp_path, workspace_root)
+		assert result.returncode == 0, result.stderr
+
+
 def test_helper_rejects_workspace_root_escape() -> None:
 	with tempfile.TemporaryDirectory(prefix="workspace-safety-check-") as td:
 		tmp_path = Path(td)
