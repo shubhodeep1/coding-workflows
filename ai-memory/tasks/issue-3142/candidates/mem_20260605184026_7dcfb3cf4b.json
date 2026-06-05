@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3142,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3142\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3143\",\"pr_number\":3143,\"branch\":\"ai/issue-3142\",\"run_id\":\"27032351745\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/27032351745\",\"changed_files\":[\".github/workflows/orchestrate_poll.yml\",\"ai-memory/schemas/state_snapshot.v1.json\",\"scripts/ai_memory_lib.py\",\"scripts/build_state_snapshot.py\",\"scripts/memory_helpers.sh\",\"scripts/orchestrate_poll_process.sh\",\"scripts/render_prompt.sh\",\"tests/test_state_snapshot.py\"]}",
+  "fingerprint": "ed1c5c2efda466e16867209fab58c53c3b9a1fb2dd6669325bfdbdd6517cd1f6",
+  "lineage": {
+    "issue_number": 3142,
+    "parent_ids": [],
+    "pr_number": 3143,
+    "run_id": "27032351745",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27032351745",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3143"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260605184026_7dcfb3cf4b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3142,
+    "level": "run",
+    "pr_number": 3143,
+    "run_id": "27032351745"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3142: https://github.com/shubhodeep1/coding-workflows/pull/3143",
+  "timestamps": {
+    "created_at": "2026-06-05T18:40:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
