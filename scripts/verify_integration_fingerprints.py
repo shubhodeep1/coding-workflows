@@ -630,8 +630,9 @@ def _is_must_contain_post_capture_evolution_false_positive(
 		except ValueError:
 			continue
 		# Newest-first: the first well-formed pickaxe hit is the commit that
-		# removed the captured line's last occurrence (it is absent at HEAD);
-		# that commit alone decides the verdict.
+		# changed the captured line's count on the verified ref — removed it
+		# for must_contain, re-added it for must_not_contain — and that commit
+		# alone decides the verdict.
 		if commit_epoch > captured_epoch and not subject.lstrip().startswith(
 			_AI_MERGE_RESOLVE_SUBJECT_PREFIX
 		):
@@ -639,6 +640,68 @@ def _is_must_contain_post_capture_evolution_false_positive(
 		break
 	_POST_CAPTURE_EVOLUTION_CACHE[cache_key] = result
 	return result
+
+
+# Direction-agnostic alias for the attribution primitive above. The helper
+# inspects only the commit that changed the captured line's *count* on the
+# verified ref — a removal for a must_contain miss, a re-addition for a
+# must_not_contain reappearance — and never the constraint direction itself
+# (``git log -S`` triggers on a count change in either direction). Both
+# post-capture-evolution defenses share it so the subtle fail-closed +
+# pickaxe + cache logic lives in exactly one place (and shares
+# ``_POST_CAPTURE_EVOLUTION_CACHE``).
+_post_capture_non_resolver_line_change_commit = (
+	_is_must_contain_post_capture_evolution_false_positive
+)
+
+
+def _is_must_not_contain_post_capture_evolution_false_positive(
+	ref: str | None,
+	captured_at: Any,
+	path: str,
+	regex_src: str,
+) -> str | None:
+	"""Detect must_not_contain reappearances caused by legitimate post-capture evolution.
+
+	Symmetric counterpart of
+	:func:`_is_must_contain_post_capture_evolution_false_positive`. The
+	wave-dispatch gate captures each merged sub-issue's *deleted* lines as
+	exact (``re.escape``) ``must_not_contain`` regexes at merge time. A line
+	the sub-issue genuinely removed can later be *re-introduced* on the
+	integration branch by a non-resolver commit — most commonly a back-merge
+	of the default branch whose conflict resolution kept the default branch's
+	still-present copy (observed on project #3042 wave 8: the ``Merge main
+	into orchestrator/project-3042`` back-merge ``822f8a6`` — authored by the
+	judge, NOT an ``[ai-merge-resolve]`` resolver commit — re-added
+	``local stall_secs=$(( STALL_THRESHOLD_MINUTES * 60 ))`` to
+	``build_active_issue_set()`` after issue #3051 deleted it, while #3051's
+	actual refactor and every other must_contain fingerprint stayed intact).
+
+	That is the same class of expected drift the must_contain defense already
+	tolerates: the gate's sole purpose is catching the integration-sync
+	conflict resolver (``[ai-merge-resolve]`` commits) silently reverting
+	intent, so a reappearance attributable to a non-resolver commit is NOT a
+	resolver regression and must not perpetually block the next wave's
+	dispatch. Without this symmetric defense the must_not_contain side hard-
+	failed on exactly the drift the must_contain side waves through, wedging
+	the whole project.
+
+	Returns the re-introducing non-resolver commit SHA when the reappearance
+	is confirmed as post-capture evolution (caller should skip the
+	violation); None otherwise. Fails CLOSED on every guard the shared helper
+	enforces: working-tree mode (so the conflict resolver's own pre-commit
+	self-check stays strict and still cannot silently revert a deletion), a
+	missing/unparseable ``captured_at``, a non-``re.escape`` ``regex_src``, a
+	re-introduction by an ``[ai-merge-resolve]`` resolver commit (a genuine
+	regression), the line never having changed after capture, or any git
+	plumbing error.
+
+	API call count: zero (local ``git log`` only); shares
+	``_POST_CAPTURE_EVOLUTION_CACHE`` with the must_contain defense.
+	"""
+	return _post_capture_non_resolver_line_change_commit(
+		ref, captured_at, path, regex_src,
+	)
 
 
 def _fp_key(fp: Any) -> tuple[str, str] | None:
@@ -1300,6 +1363,47 @@ def _evaluate_fp_state(
 				"check_error": None,
 				"violation": None,
 			}
+		# must_not_contain reappearance: before flagging a silent regression,
+		# check whether the deleted line was legitimately RE-ADDED after
+		# capture by a non-resolver commit (most commonly a back-merge of the
+		# default branch whose conflict resolution kept the default branch's
+		# still-present copy). Symmetric to the must_contain post-capture-
+		# evolution defense above — the gate only guards against the
+		# integration-sync resolver ([ai-merge-resolve]) reverting intent, so
+		# a reappearance from anything else is expected drift, not a
+		# regression. Fails closed in working-tree mode, so the resolver's own
+		# pre-commit self-check still cannot silently revert a deletion.
+		reintroduction_sha = _is_must_not_contain_post_capture_evolution_false_positive(
+			ref, captured_at, path, regex_src,
+		)
+		if reintroduction_sha:
+			print(
+				f"::warning::FINGERPRINT_POST_CAPTURE_REINTRODUCTION_FALSE_POSITIVE_V1 "
+				f"issue=#{issue_num} pr=#{pr_num} file={path} "
+				f"superseding_commit={reintroduction_sha[:12]} "
+				f"reason=must_not_contain_line_reintroduced_after_capture_by_non_resolver_commit",
+				flush=True,
+				file=sys.stderr,
+			)
+			print(
+				f"::warning::issue #{issue_num} (PR #{pr_num}): must_not_contain pattern in '{path}' "
+				"classified as post-capture reintroduction false positive — the deleted line was "
+				f"re-added after capture by non-resolver commit {reintroduction_sha[:12]} on the verified "
+				"ref (e.g. a back-merge of the default branch); the pickaxe-identified line-reintroduction "
+				"commit is not an [ai-merge-resolve] commit, so this reappearance is not attributable to "
+				f"the resolver. Skipping violation. Pattern (first 200 chars): {regex_src[:200]}",
+				flush=True,
+				file=sys.stderr,
+			)
+			return {
+				"kind": kind,
+				"path": path,
+				"regex": regex_src,
+				"fp_key": fp_key,
+				"satisfied": True,
+				"check_error": None,
+				"violation": None,
+			}
 		return {
 			"kind": kind,
 			"path": path,
@@ -1556,7 +1660,10 @@ def verify_with_tier(
 				mc_total_satisfied += 1
 
 		for fp in issue_entry["must_not_contain"]:
-			state = _evaluate_fp_state(fp, "must_not_contain", issue_num, pr_num, file_cache, exists_cache, ref=ref)
+			state = _evaluate_fp_state(
+				fp, "must_not_contain", issue_num, pr_num, file_cache, exists_cache,
+				ref=ref, captured_at=issue_entry.get("captured_at"),
+			)
 			if state is None or state["satisfied"]:
 				continue
 			if tier == "warn_only":
@@ -1798,7 +1905,7 @@ def list_violated_files(fingerprints: dict[str, Any], ref: str | None = None) ->
 				violated.add(state["path"])
 
 		for fp in must_not_contain:
-			state = _evaluate_fp_state(fp, "must_not_contain", issue_num=issue_num, pr_num=pr_num, file_cache=file_cache, exists_cache=exists_cache, ref=ref)
+			state = _evaluate_fp_state(fp, "must_not_contain", issue_num=issue_num, pr_num=pr_num, file_cache=file_cache, exists_cache=exists_cache, ref=ref, captured_at=entry.get("captured_at"))
 			if state is None:
 				continue
 			if state["check_error"] is not None:
@@ -1886,7 +1993,10 @@ def verify(fingerprints: dict[str, Any], branch: str, ref: str | None = None) ->
 				violations.append(state["violation"])
 
 		for fp in must_not_contain:
-			state = _evaluate_fp_state(fp, "must_not_contain", issue_num, pr_num, file_cache, exists_cache, ref=ref)
+			state = _evaluate_fp_state(
+				fp, "must_not_contain", issue_num, pr_num, file_cache, exists_cache,
+				ref=ref, captured_at=entry.get("captured_at"),
+			)
 			if state is None:
 				continue
 			if not state["satisfied"]:
