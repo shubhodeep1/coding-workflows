@@ -36,6 +36,7 @@ if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
 fi
 
 CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
+WORKSPACE_SAFETY_CHECK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/workspace_safety_check.sh"
 
 read_codex_stall_guard_state() {
   local status_file="$1"
@@ -72,6 +73,10 @@ run_editor_codex_attempt() {
   local stderr_target="$3"
   local activity_file="$4"
   local status_file="$5"
+
+  if [ -x "${WORKSPACE_SAFETY_CHECK_HELPER}" ]; then
+    bash "${WORKSPACE_SAFETY_CHECK_HELPER}" || return $?
+  fi
 
   if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
     exec "${CODEX_STALL_GUARD_HELPER}" \
@@ -1637,6 +1642,21 @@ while [ "${attempt}" -le 3 ]; do
       emit_editor_substate "codex_stall_killed" "${attempt}" "${tmp_err}"
       ;;
   esac
+
+  if [ "${cmd_rc}" -eq 78 ]; then
+    echo "Editor attempt ${attempt}: workspace_safety_violation; aborting without retry."
+    if [ -z "${PR_NUMBER:-}" ] || [ ! -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+      emit_editor_substate "Failed" "${attempt}" "${tmp_err}"
+    fi
+    cp "${tmp_output}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.txt" || true
+    cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
+    if [ -s "${tmp_err}" ]; then
+      echo "Editor stderr on attempt ${attempt}:"
+      cat "${tmp_err}"
+    fi
+    rm -f "${tmp_output}" "${tmp_err}" "${attempt_prompt_file}"
+    exit 78
+  fi
 
   if [ "${cmd_rc}" -eq 0 ]; then
     cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
