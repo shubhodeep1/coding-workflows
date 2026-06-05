@@ -55,6 +55,7 @@ env:
   BULK_DELETE_THRESHOLD: ${{ vars.BULK_DELETE_THRESHOLD || '3' }}
   BULK_DELETE_THRESHOLD_MD: ${{ vars.BULK_DELETE_THRESHOLD_MD || '100' }}
   MAX_POST_CODEX_REPAIR_ATTEMPTS: ${{ vars.MAX_POST_CODEX_REPAIR_ATTEMPTS || '3' }}
+  CODEX_THREAD_REUSE_ENABLED: ${{ vars.CODEX_THREAD_REUSE_ENABLED || 'false' }}
 
 jobs:
   implement:
@@ -129,6 +130,7 @@ jobs:
           {
             echo "JOB_START_EPOCH=$(date +%s)"
             echo "RUNTIME_DIR=${RUNTIME_DIR}"
+            echo "CODEX_THREAD_REUSE_RUNTIME_DIR=${RUNTIME_DIR}"
             echo "SEMBLE_AVAILABLE=false"
             echo "SEMBLE_INDEX_AVAILABLE=false"
             echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"
@@ -806,7 +808,7 @@ jobs:
 
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh render_prompt.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_stall_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh run_workspace_hook.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh render_prompt.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_stall_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh run_workspace_hook.sh codex_thread_reuse.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -959,7 +961,7 @@ jobs:
             fi
           done
 
-          mkdir -p prompts
+          mkdir -p prompts prompts/contracts
           if [ ! -f prompts/mode-implement-diagnose.txt ]; then
             src=".codex-workflow-src/prompts/mode-implement-diagnose.txt"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/mode-implement-diagnose.txt" ]; then
@@ -993,10 +995,56 @@ jobs:
               echo "prompts/mode-implement-repair.txt" >> "${FETCHED_MANIFEST}"
             fi
           fi
+          for f in mode-implement-repair-continuation.txt mode-implement-diagnose-continuation.txt mode-validate-self-heal-continuation.txt; do
+            if [ -f "prompts/${f}" ]; then
+              continue
+            fi
+            src=".codex-workflow-src/prompts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/${f}" ]; then
+              src=".codex-workflow-src-main/prompts/${f}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::error::Failed to stage required file prompts/${f}"
+              exit 1
+            fi
+            install -m 0644 "${src}" "prompts/${f}"
+            if [ "${is_self_repo}" = "false" ]; then
+              echo "prompts/${f}" >> "${FETCHED_MANIFEST}"
+            fi
+          done
+          for f in mode-implement-repair-continuation.yml mode-implement-diagnose-continuation.yml mode-validate-self-heal-continuation.yml; do
+            if [ -f "prompts/contracts/${f}" ]; then
+              continue
+            fi
+            src=".codex-workflow-src/prompts/contracts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/contracts/${f}" ]; then
+              src=".codex-workflow-src-main/prompts/contracts/${f}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::error::Failed to stage required file prompts/contracts/${f}"
+              exit 1
+            fi
+            install -m 0644 "${src}" "prompts/contracts/${f}"
+            if [ "${is_self_repo}" = "false" ]; then
+              echo "prompts/contracts/${f}" >> "${FETCHED_MANIFEST}"
+            fi
+          done
 
           if [ -f .codex-workflow-src/agents.md ]; then
             install -m 0644 .codex-workflow-src/agents.md "${RUNTIME_DIR}/agents_canonical.md"
           fi
+
+      - name: Probe Codex thread-reuse support
+        if: env.SKIP_IMPLEMENT != 'true'
+        run: |
+          set -euo pipefail
+          CODEX_THREAD_REUSE_AVAILABLE=false
+          # shellcheck source=/dev/null
+          source scripts/codex_thread_reuse.sh
+          if codex_thread_reuse_truthy "${CODEX_THREAD_REUSE_ENABLED:-false}" && codex_thread_reuse_probe_supported; then
+            CODEX_THREAD_REUSE_AVAILABLE=true
+          fi
+          echo "CODEX_THREAD_REUSE_AVAILABLE=${CODEX_THREAD_REUSE_AVAILABLE}" >> "$GITHUB_ENV"
 
           # Soft install: probably_unnecessary_but_read_if_stuck.md holds the
           # operator-runbook overflow split out of agents.md. Inliners reference
@@ -1972,9 +2020,9 @@ jobs:
             return 1
           }
 
-          read_codex_stall_guard_state() {
-            local status_file="$1"
-            local state=""
+            read_codex_stall_guard_state() {
+              local status_file="$1"
+              local state=""
 
             [ -s "${status_file}" ] || return 1
             state="$(sed -n 's/^state=//p' "${status_file}" | head -n 1)"
@@ -1988,14 +2036,17 @@ jobs:
             return 1
           }
 
-          codex_stall_guard_kill_detected() {
-            local _rc="${1:-0}"
-            local stall_state="${2:-}"
+            codex_stall_guard_kill_detected() {
+              local _rc="${1:-0}"
+              local stall_state="${2:-}"
 
-            [ "${stall_state}" = "killed" ]
-          }
+              [ "${stall_state}" = "killed" ]
+            }
 
-          for attempt in $(seq 1 "${max_attempts}"); do
+            # shellcheck source=/dev/null
+            source scripts/codex_thread_reuse.sh
+
+            for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex implement attempt ${attempt}/${max_attempts}..."
 
             # Budget check: skip attempt if not enough time remains
@@ -2101,17 +2152,12 @@ jobs:
 
             # Run codex through the shared stall-guard wrapper. The
             # per-attempt `codex_log_attempt_<N>.txt` file is still preserved,
-            # and a FIFO keeps the cumulative `codex_log.txt` plus the live
-            # Actions stderr stream in lockstep with the wrapper's output.
+            # and the helper keeps the cumulative `codex_log.txt` plus the
+            # live Actions stderr stream in lockstep with the wrapper's output.
             attempt_log_file="${RUNTIME_DIR}/codex_log_attempt_${attempt}.txt"
             : > "${attempt_log_file}"
             attempt_stall_status_file="$(mktemp /tmp/codex_stall_status_implement.XXXXXX)"
             attempt_stall_state=""
-            attempt_log_pipe_dir="$(mktemp -d /tmp/codex_log_pipe_implement.XXXXXX)"
-            attempt_log_pipe="${attempt_log_pipe_dir}/stderr.pipe"
-            mkfifo "${attempt_log_pipe}"
-            tee -a "${RUNTIME_DIR}/codex_log.txt" "${attempt_log_file}" < "${attempt_log_pipe}" >&2 &
-            attempt_log_tee_pid=$!
             if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
               sanitize_codex_prompt_file "${PROMPT_FILE_TO_USE}"
             fi
@@ -2119,22 +2165,17 @@ jobs:
             emit_implement_substate "implement" "implement" "InitializingSession" "${attempt}" "${attempt_log_file}"
             emit_implement_substate "implement" "implement" "StreamingTurn" "${attempt}" "${attempt_log_file}"
             cmd_rc=0
-            timeout_cmd=()
-            if command -v timeout >/dev/null 2>&1; then
-              timeout_cmd=(timeout --signal=TERM --kill-after=5s "${attempt_wall}s")
-            else
-              echo "::warning::timeout unavailable; implement attempt ${attempt} will rely on the job timeout plus codex stall guard."
-            fi
-            if ! "${timeout_cmd[@]}" "${CODEX_STALL_GUARD_HELPER}" \
-              --phase implement \
-              --stdout-file "${CODEX_OUTPUT_FILE}" \
-              --stderr-file "${attempt_log_pipe}" \
-              --status-file "${attempt_stall_status_file}" \
-              -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${PROMPT_FILE_TO_USE}"; then
-              cmd_rc=$?
-            fi
-            wait "${attempt_log_tee_pid}" 2>/dev/null || true
-            rm -rf "${attempt_log_pipe_dir}"
+            CODEX_THREAD_REUSE_STATE_KEY="implement" \
+              CODEX_THREAD_REUSE_PROMPT_FILE="${PROMPT_FILE_TO_USE}" \
+              CODEX_THREAD_REUSE_OUTPUT_FILE="${CODEX_OUTPUT_FILE}" \
+              CODEX_THREAD_REUSE_PHASE="implement" \
+              CODEX_THREAD_REUSE_MODEL="${MODEL_EDITOR}" \
+              CODEX_THREAD_REUSE_LOG_FILE="${attempt_log_file}" \
+              CODEX_THREAD_REUSE_CUMULATIVE_LOG_FILE="${RUNTIME_DIR}/codex_log.txt" \
+              CODEX_THREAD_REUSE_STATUS_FILE="${attempt_stall_status_file}" \
+              CODEX_THREAD_REUSE_STALL_GUARD_HELPER="${CODEX_STALL_GUARD_HELPER}" \
+              CODEX_THREAD_REUSE_TIMEOUT_SECS="${attempt_wall}" \
+              bash scripts/codex_thread_reuse.sh direct-run || cmd_rc=$?
 
             emit_implement_substate "implement" "implement" "Finishing" "${attempt}" "${attempt_log_file}"
 
@@ -3003,6 +3044,14 @@ jobs:
           else
             echo "::warning::Failed to render repair prompt template ${REPAIR_PROMPT_TEMPLATE}; using raw prompt."
           fi
+          REPAIR_CONTINUATION_PROMPT=""
+          if [ -s "prompts/mode-implement-repair-continuation.txt" ]; then
+            REPAIR_CONTINUATION_PROMPT="${RUNTIME_DIR}/mode-implement-repair-continuation.rendered.txt"
+            if ! SERENA_TOOL_HINTS="${REPAIR_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh "prompts/mode-implement-repair-continuation.txt" > "${REPAIR_CONTINUATION_PROMPT}"; then
+              echo "::warning::Failed to render repair continuation prompt; later repair attempts will fall back to the full prompt path."
+              REPAIR_CONTINUATION_PROMPT=""
+            fi
+          fi
 
           : > "${INITIAL_CHANGED_FILE}"
           while IFS= read -r -d '' path; do
@@ -3209,13 +3258,26 @@ jobs:
 
             REPAIR_OUTPUT_FILE="${RUNTIME_DIR}/post_codex_repair_output_attempt_${attempt}.txt"
             REPAIR_LOG_FILE="${RUNTIME_DIR}/post_codex_repair_log_attempt_${attempt}.txt"
+            repair_thread_reuse_continuation_file=""
+            if [ "${attempt}" -gt 1 ] && [ -n "${REPAIR_CONTINUATION_PROMPT}" ]; then
+              repair_thread_reuse_continuation_file="${REPAIR_CONTINUATION_PROMPT}"
+            fi
             if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
               sanitize_codex_prompt_file "${REPAIR_PROMPT_FILE}"
             fi
             emit_implement_substate "implement_repair" "implement_repair" "LaunchingAgentProcess" "${attempt}" "${REPAIR_LOG_FILE}"
             emit_implement_substate "implement_repair" "implement_repair" "InitializingSession" "${attempt}" "${REPAIR_LOG_FILE}"
             emit_implement_substate "implement_repair" "implement_repair" "StreamingTurn" "${attempt}" "${REPAIR_LOG_FILE}"
-            if ! codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${REPAIR_PROMPT_FILE}" > "${REPAIR_OUTPUT_FILE}" 2> >(tee -a "${REPAIR_LOG_FILE}" >&2); then
+            if ! CODEX_THREAD_REUSE_STATE_KEY="implement-repair" \
+              CODEX_THREAD_REUSE_PROMPT_FILE="${REPAIR_PROMPT_FILE}" \
+              CODEX_THREAD_REUSE_OUTPUT_FILE="${REPAIR_OUTPUT_FILE}" \
+              CODEX_THREAD_REUSE_PHASE="implement_repair" \
+              CODEX_THREAD_REUSE_MODEL="${MODEL_EDITOR}" \
+              CODEX_THREAD_REUSE_LOG_FILE="${REPAIR_LOG_FILE}" \
+              CODEX_THREAD_REUSE_CONTINUATION_FILE="${repair_thread_reuse_continuation_file}" \
+              CODEX_THREAD_REUSE_TRANSFORM_MODE="replace-prefix" \
+              CODEX_THREAD_REUSE_MARKER_START="=== CAPTURED SYNTAX DIAGNOSTICS (FULL) ===" \
+              bash scripts/codex_thread_reuse.sh direct-run; then
               emit_implement_substate "implement_repair" "implement_repair" "Finishing" "${attempt}" "${REPAIR_LOG_FILE}"
               echo "::warning::Post-Codex repair attempt ${attempt} failed while invoking Codex."
               emit_implement_substate "implement_repair" "implement_repair" "Failed" "${attempt}" "${REPAIR_LOG_FILE}"
@@ -5008,7 +5070,30 @@ jobs:
           MODEL_DIAGNOSE_REASONING_EFFORT: ${{ env.MODEL_DIAGNOSE_REASONING_EFFORT }}
         run: |
           set -euo pipefail
-          bash scripts/implement_diagnose_post_codex_failure.sh
+          diagnose_path="${PATH}"
+          if [ "${CODEX_THREAD_REUSE_AVAILABLE:-false}" = 'true' ] && [ -x scripts/codex_thread_reuse.sh ]; then
+            # shellcheck source=/dev/null
+            source scripts/codex_thread_reuse.sh
+            diagnose_continuation_source="$(codex_thread_reuse_resolve_asset 'prompts/mode-implement-diagnose-continuation.txt' 2>/dev/null || true)"
+            if [ -n "${diagnose_continuation_source}" ]; then
+              diagnose_continuation_rendered="${RUNTIME_DIR}/mode-implement-diagnose-continuation.rendered.txt"
+              if SERENA_TOOL_HINTS='' bash scripts/render_prompt.sh "${diagnose_continuation_source}" > "${diagnose_continuation_rendered}"; then
+                if diagnose_wrapper_dir="$(codex_thread_reuse_install_wrapper \
+                  'implement-diagnose' \
+                  "${diagnose_continuation_rendered}" \
+                  'replace-between' \
+                  '=== IMPLEMENT FAILURE DIAGNOSIS TASK ===' \
+                  '=== SOURCE ISSUE BODY ===')"; then
+                  diagnose_path="${diagnose_wrapper_dir}:${PATH}"
+                else
+                  echo "::warning::Failed to install implement-diagnose thread-reuse wrapper; diagnose will use the full prompt path."
+                fi
+              else
+                echo "::warning::Failed to render implement-diagnose continuation prompt; diagnose will use the full prompt path."
+              fi
+            fi
+          fi
+          PATH="${diagnose_path}" bash scripts/implement_diagnose_post_codex_failure.sh
 
       - name: Comment on issue failure
         if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.diagnose_post_codex_failure.outputs.handled != 'true' && steps.preflight_destructive_guard.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.scope_violation_blocked == ''
