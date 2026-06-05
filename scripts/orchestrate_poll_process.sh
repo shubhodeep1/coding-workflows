@@ -178,6 +178,84 @@ is_truthy() {
   esac
 }
 
+_state_snapshot_json_object_or_empty() {
+	local payload="${1:-}"
+
+	if [ -n "${payload}" ] && printf '%s' "${payload}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+		printf '%s' "${payload}" | jq -c . 2>/dev/null || printf '{}'
+		return 0
+	fi
+
+	printf '{}'
+}
+
+write_state_snapshot_actions_runs_export() {
+	local empty_blob='{"workflow_runs":[]}'
+	local actions_runs_blob="${_ACTIONS_RUNS_BLOB_CACHE:-${empty_blob}}"
+
+	[ -n "${RUNTIME_DIR:-}" ] || return 0
+	local out_file="${RUNTIME_DIR}/state_snapshot_actions_runs.json"
+	if ! printf '%s' "${actions_runs_blob}" | jq -e 'type == "object" and (.workflow_runs? | type == "array")' >/dev/null 2>&1; then
+		actions_runs_blob="${empty_blob}"
+	fi
+
+	mkdir -p "${RUNTIME_DIR}" 2>/dev/null || return 0
+	printf '%s\n' "${actions_runs_blob}" > "${out_file}" 2>/dev/null || true
+}
+
+write_state_snapshot_tracker_export() {
+	local tracking_num="${1:-}"
+	local tracking_title="${2:-}"
+	local trackers_dir out_file
+	local state_json wave_status_json labels_json issue_states_json pr_states_json candidate_details_json
+	local runtime_blocker_enabled="false"
+	local ledger_substates_enabled="false"
+
+	[ -n "${RUNTIME_DIR:-}" ] || return 0
+	[[ "${tracking_num}" =~ ^[0-9]+$ ]] || return 0
+
+	trackers_dir="${RUNTIME_DIR}/state_snapshot_trackers"
+	out_file="${trackers_dir}/tracking_${tracking_num}.json"
+	state_json="$(_state_snapshot_json_object_or_empty "$(cat "${STATE_FILE}" 2>/dev/null || printf '{}')")"
+	wave_status_json="$(_state_snapshot_json_object_or_empty "${WAVE_STATUS:-}")"
+	labels_json="$(_state_snapshot_json_object_or_empty "${LABELS_JSON:-}")"
+	issue_states_json="$(_state_snapshot_json_object_or_empty "${ISSUE_STATES_JSON:-}")"
+	pr_states_json="$(_state_snapshot_json_object_or_empty "${PR_STATES_JSON:-}")"
+	candidate_details_json="$(_state_snapshot_json_object_or_empty "${_current_wave_details_json:-}")"
+
+	if [ "${RUNTIME_BLOCKER_CHECK_ENABLED:-false}" = "true" ]; then
+		runtime_blocker_enabled="true"
+	fi
+	if is_truthy "${LEDGER_SUBSTATES_ENABLED:-true}"; then
+		ledger_substates_enabled="true"
+	fi
+
+	mkdir -p "${trackers_dir}" 2>/dev/null || return 0
+	jq -cn \
+		--argjson number "${tracking_num}" \
+		--arg title "${tracking_title}" \
+		--argjson state "${state_json}" \
+		--argjson wave_status "${wave_status_json}" \
+		--argjson labels_json "${labels_json}" \
+		--argjson issue_states_json "${issue_states_json}" \
+		--argjson pr_states_json "${pr_states_json}" \
+		--argjson candidate_details_json "${candidate_details_json}" \
+		--argjson runtime_blocker_check_enabled "${runtime_blocker_enabled}" \
+		--argjson ledger_substates_enabled "${ledger_substates_enabled}" \
+		'{
+			number: $number,
+			title: $title,
+			state: $state,
+			wave_status: $wave_status,
+			labels_json: $labels_json,
+			issue_states_json: $issue_states_json,
+			pr_states_json: $pr_states_json,
+			candidate_details_json: $candidate_details_json,
+			runtime_blocker_check_enabled: $runtime_blocker_check_enabled,
+			ledger_substates_enabled: $ledger_substates_enabled
+		}' > "${out_file}" 2>/dev/null || true
+}
+
 assemble_judge_static_context() {
   local out_file="$1"
   local missing=""
@@ -12704,6 +12782,7 @@ TRACKING_ISSUES="$(cat "${RUNTIME_DIR}/tracking_issues.json")"
 COUNT="$(echo "${TRACKING_ISSUES}" | jq 'length')"
 FEATURE_SWEEP_DONE="false"
 prime_phase_concurrency_snapshot ".github/ai/concurrency_caps.yml"
+write_state_snapshot_actions_runs_export || true
 
 for ((tidx=0; tidx<COUNT; tidx++)); do
   TRACKING_NUM="$(echo "${TRACKING_ISSUES}" | jq -r ".[${tidx}].number")"
@@ -14067,6 +14146,8 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     --issue-states-json "${ISSUE_STATES_JSON}" \
     --pr-states-json "${PR_STATES_JSON}" \
     --integration-ahead-by "${CWS_AHEAD_BY}")"
+
+  write_state_snapshot_tracker_export "${TRACKING_NUM}" "${TRACKING_TITLE}" || true
 
   echo "Wave status: ${WAVE_STATUS}"
   WAVE_COMPLETE="$(echo "${WAVE_STATUS}" | jq -r '.wave_complete')"
