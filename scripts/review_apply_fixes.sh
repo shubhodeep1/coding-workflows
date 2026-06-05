@@ -1277,6 +1277,18 @@ fi
 EDITOR_IDLE_TIMEOUT="${EDITOR_IDLE_TIMEOUT:-1200}"   # 20 min
 EDITOR_MAX_WALL="${EDITOR_MAX_WALL:-3300}"            # 55 min
 EDITOR_MIN_ATTEMPT_SECS="${EDITOR_MIN_ATTEMPT_SECS:-300}"  # 5 min minimum
+# Upper bound on how long we wait for the stderr-FIFO heartbeat reader to
+# drain after codex exits. A stall-killed codex can leave orphaned
+# tool-subprocesses holding the FIFO's write-end open, so the reader never
+# sees EOF; without this bound the drain `wait` below blocks until GitHub's
+# hard job ceiling (~4h) — the editor-stall hang that wedged review autofix.
+EDITOR_DRAIN_GRACE_SECS="${EDITOR_DRAIN_GRACE_SECS:-60}"
+case "${EDITOR_DRAIN_GRACE_SECS}" in
+  ''|*[!0-9]*|0|0[0-9]*)
+    echo "::warning::Invalid EDITOR_DRAIN_GRACE_SECS='${EDITOR_DRAIN_GRACE_SECS}' (expected positive integer); falling back to 60."
+    EDITOR_DRAIN_GRACE_SECS="60"
+    ;;
+esac
 EDITOR_VERBOSITY="${EDITOR_VERBOSITY:-low}"
 case "${EDITOR_VERBOSITY}" in
   low|medium|high) ;;
@@ -1298,6 +1310,38 @@ trap '[ -n "${_hb_tmpdir:-}" ] && rm -rf "${_hb_tmpdir}" 2>/dev/null || true' EX
 # the two checks stay in lockstep without false-positive rejection.
 _REFUSAL_REGEX="(^I'?m sorry,? but I (can ?not|can.?t) assist( with that request)?\\.?$|^I (can ?not|can.?t) help with that( request)?\\.?$)"
 rm -f "${PREVIOUS_REVIEWS_DIR}/editor_refused.flag" 2>/dev/null || true
+
+# Kill any processes still holding the editor stderr FIFO open. After the
+# watchdog stall-kills codex it signals only the codex PID, so codex's
+# orphaned tool-subprocesses can keep the FIFO's write-end open — which
+# both hangs the heartbeat reader's drain and leaves danger-full-access
+# children running unsupervised. Reaping by FIFO holder is targeted: the
+# only processes with that FIFO open are the reader (read-end) and the
+# codex process tree (write-end); the main shell and watchdog never open
+# it, so this cannot signal them. Prefers fuser, then sweeps /proc for any
+# remaining holders, and is a no-op when neither path can identify one.
+_reap_editor_fifo_holders() {
+  local fifo="$1"
+  local sig="${2:-TERM}"
+  [ -n "${fifo}" ] && [ -e "${fifo}" ] || return 0
+  if command -v fuser >/dev/null 2>&1; then
+    fuser -k -"${sig}" "${fifo}" >/dev/null 2>&1 || true
+  fi
+  local link target pid
+  for link in /proc/[0-9]*/fd/*; do
+    [ -e "${link}" ] || continue
+    target="$(readlink -f "${link}" 2>/dev/null)" || continue
+    [ "${target}" = "${fifo}" ] || continue
+    pid="${link#/proc/}"
+    pid="${pid%%/*}"
+    case "${pid}" in
+      ''|*[!0-9]*) continue ;;
+    esac
+    [ "${pid}" = "$$" ] && continue
+    kill -"${sig}" "${pid}" 2>/dev/null || true
+  done
+  return 0
+}
 
 attempt=1
 while [ "${attempt}" -le 3 ]; do
@@ -1400,12 +1444,17 @@ while [ "${attempt}" -le 3 ]; do
   _hb_fifo="${_hb_tmpdir}/stderr.pipe"
   mkfifo -m 600 "${_hb_fifo}"
   # Start heartbeat reader in background — reads stderr lines through
-  # the FIFO, updates the heartbeat file, and writes to tmp_err.
+  # the FIFO, updates the heartbeat file, and writes to tmp_err. It
+  # touches _hb_reader_done once the FIFO closes (EOF), which the bounded
+  # drain below polls to tell a clean finish apart from an orphan-held
+  # FIFO that would otherwise hang the drain forever.
+  _hb_reader_done="${_hb_tmpdir}/reader.done"
   (
     while IFS= read -r line || [ -n "$line" ]; do
       printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}" 2>/dev/null
       printf '%s\n' "$line"
     done < "${_hb_fifo}" > "${tmp_err}"
+    : > "${_hb_reader_done}"
   ) &
   _hb_reader_pid=$!
   # ── Per-attempt cache-busting nonce ──
@@ -1437,8 +1486,37 @@ while [ "${attempt}" -le 3 ]; do
   echo "${codex_bg_pid}" > "${codex_pid_file}"
   cmd_rc=0
   wait "${codex_bg_pid}" 2>/dev/null || cmd_rc=$?
-  # Wait for the heartbeat reader to finish draining the FIFO.
-  wait "${_hb_reader_pid}" 2>/dev/null || true
+  # Drain the stderr FIFO, but never block on it indefinitely. The
+  # watchdog stall-kills only the codex PID; codex's orphaned
+  # tool-subprocesses can keep the FIFO's write-end open so the reader
+  # never sees EOF. Without a bound, `wait "${_hb_reader_pid}"` hangs here
+  # until the job's hard ceiling (~4h) — the editor-stall hang that wedged
+  # PR review autofix. Wait up to EDITOR_DRAIN_GRACE_SECS for a clean drain
+  # (signalled by the reader's done-marker); if it doesn't complete, reap
+  # whatever still holds the FIFO — that both unblocks the reader and stops
+  # any lingering danger-full-access codex child — then reap the reader.
+  _skip_hb_reader_wait=false
+  _drain_deadline=$(( $(date +%s) + EDITOR_DRAIN_GRACE_SECS ))
+  while [ ! -e "${_hb_reader_done}" ]; do
+    if [ "$(date +%s)" -ge "${_drain_deadline}" ]; then
+      echo "Editor stderr drain exceeded ${EDITOR_DRAIN_GRACE_SECS}s — reaping FIFO holders (attempt ${attempt})." >&2
+      _reap_editor_fifo_holders "${_hb_fifo}" TERM
+      sleep 2
+      _reap_editor_fifo_holders "${_hb_fifo}" KILL
+      if [ ! -e "${_hb_reader_done}" ]; then
+        echo "Editor heartbeat reader still blocked after FIFO-holder reap — killing reader process ${_hb_reader_pid} (attempt ${attempt})." >&2
+        kill -KILL "${_hb_reader_pid}" 2>/dev/null || true
+        _skip_hb_reader_wait=true
+      fi
+      break
+    fi
+    sleep 1
+  done
+  if [ "${_skip_hb_reader_wait}" = true ] && kill -0 "${_hb_reader_pid}" 2>/dev/null; then
+    echo "Editor heartbeat reader still running after forced drain timeout — skipping blocking wait (attempt ${attempt})." >&2
+  else
+    wait "${_hb_reader_pid}" 2>/dev/null || true
+  fi
   rm -rf "${_hb_tmpdir}"
   _hb_tmpdir=""
   _hb_fifo=""
