@@ -1,0 +1,65 @@
+{
+  "entries": [
+    {
+      "consecutive_unchanged_runs": 1,
+      "first_seen_run_id": "26993788694",
+      "fp_key": [
+        "scripts/review_conflict_resolve.sh",
+        "\\-\\-\\ codex\\ \\-\\-ask\\-for\\-approval\\ never\\ \\-c\\ model_verbosity=low\\ \\-c\\ include_apply_patch_tool=true\\ exec\\ \\-\\-model\\ \"\\$\\{MODEL_EDITOR\\}\"\\ \\-\\-sandbox\\ danger\\-full\\-access\\ <\\ \"\\$\\{_effective_prompt_file\\}\"\\ \\\\"
+      ],
+      "issue_key": "3044",
+      "last_seen_run_id": "26993788694"
+    },
+    {
+      "consecutive_unchanged_runs": 1,
+      "first_seen_run_id": "26993788694",
+      "fp_key": [
+        "scripts/self_heal_validation.sh",
+        "SELF_HEAL_STALL_STATE=\"\\$\\(sed\\ \\-n\\ 's/\\^state=//p'\\ \"\\$\\{stall_status_file\\}\"\\ \\|\\ head\\ \\-n\\ 1\\)\""
+      ],
+      "issue_key": "3044",
+      "last_seen_run_id": "26993788694"
+    },
+    {
+      "consecutive_unchanged_runs": 1,
+      "first_seen_run_id": "26993788694",
+      "fp_key": [
+        "scripts/self_heal_validation.sh",
+        "\\-\\-\\ codex\\ \\-\\-ask\\-for\\-approval\\ never\\ \\-c\\ model_verbosity=low\\ \\-c\\ include_apply_patch_tool=true\\ exec\\ \\-\\-model\\ \"\\$\\{MODEL_EDITOR\\}\"\\ \\-\\-sandbox\\ danger\\-full\\-access\\ <\\ \"\\$\\{SELF_HEAL_PROMPT_FILE\\}\"\\ 2>\\ \"\\$\\{stderr_tmp\\}\""
+      ],
+      "issue_key": "3044",
+      "last_seen_run_id": "26993788694"
+    },
+    {
+      "consecutive_unchanged_runs": 1,
+      "first_seen_run_id": "26993788694",
+      "fp_key": [
+        "scripts/review_conflict_resolve.sh",
+        "GH_PAT=\"\\$\\{GH_PAT:\\-\\$\\{GH_TOKEN:\\-\\}\\}\"\\ \\\\"
+      ],
+      "issue_key": "3058",
+      "last_seen_run_id": "26993788694"
+    },
+    {
+      "consecutive_unchanged_runs": 1,
+      "first_seen_run_id": "26993788694",
+      "fp_key": [
+        "scripts/review_conflict_resolve.sh",
+        "GH_TOKEN=\"\\$\\{GH_PAT:\\-\\$\\{GH_TOKEN:\\-\\}\\}\"\\ \\\\"
+      ],
+      "issue_key": "3058",
+      "last_seen_run_id": "26993788694"
+    },
+    {
+      "consecutive_unchanged_runs": 1,
+      "first_seen_run_id": "26993788694",
+      "fp_key": [
+        ".github/workflows/review_autofix.yml",
+        "REQUIRED_BOOTSTRAP_SCRIPTS=\"gh_helpers\\.sh\\ git_ref_health_check\\.sh\\ generate_symbol_diff_summary\\.py\\ render_prompt\\.sh\\ render_prompt\\.py\\ tg_helpers\\.sh\\ label_helpers\\.sh\\ memory_helpers\\.sh\\ ai_memory\\.py\\ ai_memory_lib\\.py\\ openrouter_prompt_cache\\.py\\ cost_audit\\.py\\ codex_heartbeat\\.sh\\ review_run_reviewers\\.sh\\ review_apply_fixes\\.sh\\ review_reject_verify\\.sh\\ review_rb_judge\\.sh\\ review_run_judge_interim\\.sh\\ review_synthesise_smoke\\.sh\\ review_commit_changes\\.sh\\ review_conflict_prepare\\.sh\\ review_conflict_resolve\\.sh\\ orchestrate_force_tick\\.sh\\ check_workflow_script_refs\\.py\\ check_resolver_diff\\.sh\\ summarize_reviewer_consensus\\.sh\\ check_external_branch_advance\\.sh\\ post_review_comment\\.sh\\ targeted_file_context\\.py\\ write_codex_config\\.sh\\ detect_editor_changes_lost\\.sh\\ validate_editor_audit\\.sh\\ workspace_init\\.sh\""
+      ],
+      "issue_key": "3066",
+      "last_seen_run_id": "26993788694"
+    }
+  ],
+  "schema_version": "v1"
+}
