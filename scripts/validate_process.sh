@@ -1623,6 +1623,7 @@ fail_validate_codex_phase()
   local failure_mode="$2"
   local attempt_count="$3"
   local failure_summary="$4"
+  local exit_code="${5:-1}"
 
   emit_phase_failure_marker "validate" "${failed_step_name}" "${failure_mode}" "${attempt_count}" "${failure_summary}"
 
@@ -1634,7 +1635,7 @@ fail_validate_codex_phase()
 
   write_result_files "error" "Validate workflow failed before runtime validation could complete" "${failure_summary}" "codex_failure"
   tg_notify "Validate workflow Codex failure during ${failed_step_name} for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
-  exit 1
+  exit "${exit_code}"
 }
 
 cleanup_runtime_containers()
@@ -2489,6 +2490,17 @@ trap cleanup_runtime_containers EXIT
 _validate_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODEX_HEARTBEAT_HELPER="${_validate_script_dir}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${_validate_script_dir}/codex_stall_guard.sh"
+WORKSPACE_SAFETY_CHECK_HELPER=""
+for _workspace_safety_candidate in \
+  "${_validate_script_dir}/workspace_safety_check.sh" \
+  "scripts/workspace_safety_check.sh" \
+  ".codex-workflow-src/scripts/workspace_safety_check.sh" \
+  ".codex-workflow-src-main/scripts/workspace_safety_check.sh"; do
+  if [ -f "${_workspace_safety_candidate}" ]; then
+    WORKSPACE_SAFETY_CHECK_HELPER="${_workspace_safety_candidate}"
+    break
+  fi
+done
 CODEX_THREAD_REUSE_HELPER=""
 for _thread_reuse_candidate in \
   "${_validate_script_dir}/codex_thread_reuse.sh" \
@@ -2602,6 +2614,10 @@ run_validate_codex_attempt() {
   local output_file="$3"
   local log_file="$4"
   local status_file="$5"
+
+  if [ -x "${WORKSPACE_SAFETY_CHECK_HELPER}" ]; then
+    bash "${WORKSPACE_SAFETY_CHECK_HELPER}" || return $?
+  fi
 
 	if validate_thread_reuse_enabled; then
 		CODEX_THREAD_REUSE_STATE_KEY="${phase_name}" \
@@ -2848,6 +2864,16 @@ else
       emit_validate_substate "validate_discover" "discover" "codex_stall_killed" "${attempt}" "${DISCOVER_LOG_FILE}"
       ;;
   esac
+
+  if [ "${DISCOVER_EXIT}" -eq 78 ]; then
+    emit_validate_substate "validate_discover" "discover" "Failed" "${attempt}" "${DISCOVER_LOG_FILE}"
+    fail_validate_codex_phase \
+      "validation_discovery" \
+      "workspace_safety_violation" \
+      "${DISCOVER_ATTEMPTS_USED:-${attempt}}" \
+      "Workspace safety preflight failed before validation hint discovery could launch Codex." \
+      78
+  fi
 
     if [ "${DISCOVER_EXIT}" -ne 0 ]; then
       if [ "${discover_stall_state}" = "killed" ]; then
@@ -3577,6 +3603,16 @@ for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
       emit_validate_substate "validate_diagnose" "diagnose" "codex_stall_killed" "${attempt}" "${DIAGNOSE_LOG_FILE}"
       ;;
   esac
+
+  if [ "${DIAGNOSE_EXIT}" -eq 78 ]; then
+    emit_validate_substate "validate_diagnose" "diagnose" "Failed" "${attempt}" "${DIAGNOSE_LOG_FILE}"
+    fail_validate_codex_phase \
+      "validation_diagnosis" \
+      "workspace_safety_violation" \
+      "${DIAGNOSE_ATTEMPTS_USED:-${attempt}}" \
+      "Workspace safety preflight failed before validation diagnosis could launch Codex." \
+      78
+  fi
 
   if [ "${DIAGNOSE_EXIT}" -ne 0 ]; then
     if [ "${diagnose_stall_state}" = "killed" ]; then
