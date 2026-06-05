@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Edit only `tests/e2e_smoke_canary.txt`. Do not modify any other file.\" / \"No files other than `tests/e2e_smoke_canary.txt` are changed.\"\n  expected_change_site: `tests/e2e_smoke_canary.txt` only; PR diff should not include `scripts/files_touched_scope_guard.py`\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, mistralai_mistral-small-2603, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  EVIDENCE: `scripts/files_touched_scope_guard.py appears in the PR diff with a mode change (old mode 100644, new mode 100755)`, `The commit stat confirms 2 files changed`, `pr_changed_files.txt lists two files: scripts/files_touched_scope_guard.py and tests/e2e_smoke_canary.txt`, the extra file violates the explicit single-file-scope acceptance criterion.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- Requirement: \"Edit only `tests/e2e_smoke_canary.txt`.\" / \"Do not modify any other file.\" / \"No files other than `tests/e2e_smoke_canary.txt` are changed.\" (from linked issue #3104 acceptance criteria)\n  Expected change site: Only `tests/e2e_smoke_canary.txt` should appear in the commit diff.\n  Evidence of absence: `scripts/files_touched_scope_guard.py appears in the PR diff with a mode change (old mode 100644, new mode 100755). The commit stat confirms 2 files changed \u2014 the second file is `scripts/files_touched_scope_guard.py` with 0 content lines changed but a permissions flip from non-executable to executable. The `files_touched` list in the linked issue names only `tests/e2e_smoke_canary.txt`. Current on-disk permissions are `-rwxr-xr-x` (0755). This mode change violates the explicit single-file-scope acceptance criterion.`\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- Requirement: \"Edit only `tests/e2e_smoke_canary.txt`. Do not modify any other file.\"\n  Expected change site: Only `tests/e2e_smoke_canary.txt` should appear in the diff\n  Evidence of absence: The PR diff shows 2 files changed. `scripts/files_touched_scope_guard.py` appears with a mode change (old mode 100644, new mode 100755) but zero content changes. The git commit stat confirms `2 files changed, 1 insertion(+), 1 deletion(-)` \u2014 one file more than the single-file scope the issue mandates. The `files_touched` list in the linked issue names only `tests/e2e_smoke_canary.txt`. This extra file modification violates the explicit acceptance criterion \"No files other than `tests/e2e_smoke_canary.txt` are changed.\"\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- TASK_GAP\n  Requirement: Edit only tests/e2e_smoke_canary.txt. Do not modify any other file.\n  Expected change site: tests/e2e_smoke_canary.txt only\n  Evidence of absence: PR diff shows scripts/files_touched_scope_guard.py was added and made executable (mode change from 100644 to 100755) with zero content changes. According to the linked issue and acceptance criteria, only tests/e2e_smoke_canary.txt should be modified.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- Requirement: \"Edit only `tests/e2e_smoke_canary.txt`. Do not modify any other file.\"\n  Expected change site: Entire PR diff should contain only one modified file: `tests/e2e_smoke_canary.txt`\n  Evidence of absence: The PR diff shows `scripts/files_touched_scope_guard.py` with a mode change (old mode 100644, new mode 100755). The `pr_changed_files.txt` lists two files: `scripts/files_touched_scope_guard.py` and `tests/e2e_smoke_canary.txt`. This violates the explicit acceptance criterion: \"No files other than `tests/e2e_smoke_canary.txt` are changed.\"\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Preserve line 3 (`updated-by: ai-pipeline`) and any other remaining content unchanged; this should be the smallest possible single-file edit.\"\n  Expected change site: `tests/e2e_smoke_canary.txt` should show only the line 2 change\n  Evidence of absence: The file `tests/e2e_smoke_canary.txt` is correctly modified (line 2 changed from `run_id: 26151428977` to `decompose-run: 26989483268`, line 3 preserved as `updated-by: ai-pipeline`). However, the extraneous mode change on `scripts/files_touched_scope_guard.py` makes this NOT the smallest possible single-file edit.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- Requirement: \"Edit only tests/e2e_smoke_canary.txt. Do not modify any other file.\" Acceptance criteria: \"No files other than tests/e2e_smoke_canary.txt are changed.\"\n  Expected change site: Only tests/e2e_smoke_canary.txt should appear in the PR diff\n  Evidence of absence: scripts/files_touched_scope_guard.py appears in the PR diff with a mode change (old mode 100644, new mode 100755) and zero content changes. The git commit stat confirms \"2 files changed\" \u2014 one file more than the single-file scope the issue mandates. The files_touched list in the linked issue names only tests/e2e_smoke_canary.txt.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: \"Edit only `tests/e2e_smoke_canary.txt`. [...] Do not modify any other file.\" and \"No files other than `tests/e2e_smoke_canary.txt` are changed.\" (Acceptance criteria; also `files_touched: - tests/e2e_smoke_canary.txt` and \"smallest possible single-file edit\").\n  Expected change site: tests/e2e_smoke_canary.txt (with no other files touched or mode-changed).\n  Evidence of absence: PR diff, last_run_diff, pr_changed_files.txt, last_commit_stat.txt, and symbol_diff_summary.txt all list `scripts/files_touched_scope_guard.py` (mode change 100644\u2192100755; 0 lines changed but present in diffstat and git status); canary file matches required content (`status: ok` + `decompose-run: 26989483268`) but the extraneous file violates the explicit single-file scope.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "9cd9933b3676328afb7fa6635d7b3846ad311c7d85bdb52a5ca511f154888987",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3108,
+    "run_id": "26990019585",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26990019585",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260605014016_fdbed45336",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3108,
+    "run_id": "26990019585"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-05T01:40:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
