@@ -1284,7 +1284,7 @@ EDITOR_MIN_ATTEMPT_SECS="${EDITOR_MIN_ATTEMPT_SECS:-300}"  # 5 min minimum
 # hard job ceiling (~4h) — the editor-stall hang that wedged review autofix.
 EDITOR_DRAIN_GRACE_SECS="${EDITOR_DRAIN_GRACE_SECS:-60}"
 case "${EDITOR_DRAIN_GRACE_SECS}" in
-  ''|*[!0-9]*|0)
+  ''|*[!0-9]*|0|0[0-9]*)
     echo "::warning::Invalid EDITOR_DRAIN_GRACE_SECS='${EDITOR_DRAIN_GRACE_SECS}' (expected positive integer); falling back to 60."
     EDITOR_DRAIN_GRACE_SECS="60"
     ;;

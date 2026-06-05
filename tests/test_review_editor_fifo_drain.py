@@ -241,6 +241,7 @@ def test_editor_loop_bounds_the_drain_and_wires_the_reaper() -> None:
 	text = SCRIPT.read_text(encoding="utf-8")
 	# Grace bound is configurable with a safe default.
 	assert 'EDITOR_DRAIN_GRACE_SECS="${EDITOR_DRAIN_GRACE_SECS:-60}"' in text
+	assert "''|*[!0-9]*|0|0[0-9]*)" in text
 	assert 'Invalid EDITOR_DRAIN_GRACE_SECS=' in text
 	# Reader signals a clean drain via the done-marker.
 	assert '_hb_reader_done="${_hb_tmpdir}/reader.done"' in text
