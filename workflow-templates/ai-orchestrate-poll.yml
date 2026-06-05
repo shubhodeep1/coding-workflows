@@ -13,5 +13,8 @@ permissions:
   actions: write
 jobs:
   poll:
+    # State snapshot publication is configured centrally by the called
+    # workflow via caller-repo vars (LEDGER_SUBSTATES_ENABLED and the
+    # STATE_SNAPSHOT_* toggles), so the wrapper interface stays unchanged.
     uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate_poll.yml@stable
     secrets: inherit
