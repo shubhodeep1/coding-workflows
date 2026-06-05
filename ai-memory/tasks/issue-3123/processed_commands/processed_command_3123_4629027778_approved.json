@@ -5,13 +5,34 @@
   "entry_id": "processed_command_3123_4629027778_approved",
   "issue_number": 3123,
   "metadata": {
+    "branch": "ai/issue-3123",
+    "changed_files": [
+      ".github/workflows/implement.yml",
+      "prompts/contracts/mode-implement-diagnose-continuation.yml",
+      "prompts/contracts/mode-implement-repair-continuation.yml",
+      "prompts/contracts/mode-validate-self-heal-continuation.yml",
+      "prompts/mode-implement-diagnose-continuation.txt",
+      "prompts/mode-implement-repair-continuation.txt",
+      "prompts/mode-validate-self-heal-continuation.txt",
+      "scripts/codex_thread_reuse.sh",
+      "scripts/files_touched_scope_guard.py",
+      "scripts/memory_helpers.sh",
+      "scripts/render_prompt.sh",
+      "scripts/validate_process.sh",
+      "tests/test_codex_thread_reuse_core.py"
+    ],
+    "issue_number": 3123,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/3123",
+    "pr_number": 3124,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/3124",
+    "run_attempt": "1",
+    "run_id": "27000656054",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/27000656054"
   },
   "run_attempt": 1,
   "run_id": "27000656054",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-06-05T07:04:09Z",
+  "status": "completed",
+  "timestamp": "2026-06-05T07:32:44Z",
   "workflow": "implement"
 }
