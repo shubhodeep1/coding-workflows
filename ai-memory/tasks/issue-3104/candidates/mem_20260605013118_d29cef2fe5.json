@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan\n\nRef context\n- Planning ref: `orchestrator/project-3099`\n- Commit: `07f52c352e80f8ff930f4a025cbc96eacef4b6f6`\n- Integration branch metadata matches the checked-out ref.\n\nClarification mapping\n- No Q1/Q2 clarification was required.\n- The `/answer [auto-answered-by-orchestrator]` comment did not change scope; it confirms proceeding with the original issue requirements.\n\nAutomation / scheduler impact\n- Change type: modify one existing file only.\n- Scheduler / PR-push wiring: none.\n- New supervisor: none.\n- DB gate pattern: not applicable.\n- `docs/scripts-pending-removal.md`: no entry needed.\n\nConflict check\n- None.\n- Current `tests/e2e_smoke_canary.txt` matches the issue\u2019s reported starting state:\n  - line 1: `status: ok`\n  - line 2: `run_id: 26151428977`\n  - line 3: `updated-by: ai-pipeline`\n\nFiles likely to change\n- `tests/e2e_smoke_canary.txt`\n\nFunctions or modules to implement\n- None. This is a direct single-file content correction.\n\nData structures affected\n- The smoke canary text record in `tests/e2e_smoke_canary.txt`.\n- Only line 2\u2019s key/value changes from `run_id: 26151428977` to `decompose-run: 26989483268`.\n\nAPI or interface changes\n- No external API changes.\n- Internal file-content contract changes only in `tests/e2e_smoke_canary.txt` line 2 to match the required orchestrate smoke value.\n\nPlanned edit\n- Keep line 1 exactly `status: ok`.\n- Replace line 2 with exactly `decompose-run: 26989483268`.\n- Preserve line 3 `updated-by: ai-pipeline` unchanged.\n- Preserve any remaining content and existing file formatting/newline behavior unchanged.\n- Do not modify any other file.\n\nRisks and edge cases\n- Accidental full-file rewrite instead of a one-line replacement.\n- Accidental edits to line 1, line 3, or any trailing content.\n- Accidental changes outside `tests/e2e_smoke_canary.txt`, which would violate scope and acceptance criteria.\n\nTesting considerations\n- Re-check `tests/e2e_smoke_canary.txt` after the edit to confirm the exact first three lines.\n- Confirm the diff is limited to the line-2 replacement in `tests/e2e_smoke_canary.txt`.\n- Confirm no other files are changed.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "3e289c7bb42d0728cbe3161417f5770d3e60c07151f7f50a4009f8dec7068de9",
+  "lineage": {
+    "issue_number": 3104,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "26989813214",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26989813214",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3104"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260605013118_d29cef2fe5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3104,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "26989813214"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3104",
+  "timestamps": {
+    "created_at": "2026-06-05T01:31:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
