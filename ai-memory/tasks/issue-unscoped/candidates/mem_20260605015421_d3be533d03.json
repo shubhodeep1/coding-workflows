@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/files_touched_scope_guard.py:mode 100644 \u2192 100755 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Changing file permissions without functional changes can cause unnecessary diff noise and break build scripts that expect specific file permissions.\n  WHY: CI systems and shell scripts may rely on consistent file permissions for workflow artifacts; mode-only changes add noise to git history.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Only modify `tests/e2e_smoke_canary.txt` \u2014 do not touch any other file.\"\n  expected_change_site: scripts/files_touched_scope_guard.py\n  confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, mistralai_mistral-small-2603, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  EVIDENCE: ORIGINAL_PR_DIFF / LAST_RUN_DIFF / PR_CHANGED_FILES show a permissions-only change (100644 \u2192 100755, no content diff) on scripts/files_touched_scope_guard.py; the PR as a whole still ships this extraneous mode change outside the single-file constraint.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- Requirement: \"Only modify `tests/e2e_smoke_canary.txt` \u2014 do not touch any other file.\"\n  Expected change site: scripts/files_touched_scope_guard.py (should have been left untouched)\n  Evidence of absence: ORIGINAL PR DIFF shows a permissions-only change on scripts/files_touched_scope_guard.py (old mode 100644 \u2192 new mode 100755) with no content diff. The file mode on disk is 755, confirming the metadata modification persists. This is a file modification outside the issue's single-file constraint. The LAST RUN DIFF did not introduce this (LAST RUN CHANGED FILES lists only tests/e2e_smoke_canary.txt), but the violation remains unfixed in the PR.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- File: scripts/files_touched_scope_guard.py\n  Code: mode change 100644 \u2192 100755 on a file intended as workflow support code\n  Problem: Changing file permissions without functional changes can cause unnecessary diff noise and break build scripts that expect specific file permissions\n  Why it fails at runtime: CI systems and shell scripts may rely on consistent file permissions for workflow artifacts; mode-only changes add noise to git history\n  ISSUE_CONFIDENCE: 4\n- Requirement: \"Only modify `tests/e2e_smoke_canary.txt` \u2014 do not touch any other file.\"\n  Expected change site: no other files should be modified\n  Evidence of absence: scripts/files_touched_scope_guard.py permissions were changed from 100644 to 100755 (mode-only change) despite being outside the allowed scope\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- Requirement: \"Only modify `tests/e2e_smoke_canary.txt` \u2014 do not touch any other file.\" (and \"The file already exists \u2014 do not create any new directories.\")\n  Expected change site: tests/e2e_smoke_canary.txt exclusively\n  Evidence of absence: ORIGINAL_PR_DIFF shows a permissions-only mode change on scripts/files_touched_scope_guard.py (100644 \u2192 100755) that exists in the PR; LAST_RUN_DIFF does not touch this file (correctly, per smoke-fixture constraints), but the pre-existing mode change remains unaddressed. This is outside the allowed single-file change scope.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- Requirement: \"Only modify `tests/e2e_smoke_canary.txt` \u2014 do not touch any other file.\"\n  Expected change site: The PR commit should contain changes only to `tests/e2e_smoke_canary.txt`.\n  Evidence of absence: Both ORIGINAL_PR_DIFF and LAST_RUN_DIFF show a permissions-only change (mode 100644 \u2192 100755) on `scripts/files_touched_scope_guard.py` with no content diff in it. The file predates this PR (introduced in #3078) and its mode change is an out-of-scope modification against the issue's explicit single-file constraint. The LAST RUN DIFF (the autofix commit) correctly leaves this alone per the autofix editor's `CONSOLIDATOR_OVERRIDDEN` decision, but the PR as a whole still ships the extraneous mode change.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: \"Only modify `tests/e2e_smoke_canary.txt` \u2014 do not touch any other file.\" (and \"The file already exists \u2014 do not create any new directories.\")\n  Expected change site: tests/e2e_smoke_canary.txt (and no other files)\n  Evidence of absence: LAST RUN DIFF, ORIGINAL_PR_DIFF, and PR_CHANGED_FILES all show a permissions-only change (100644 \u2192 100755, no content diff) on scripts/files_touched_scope_guard.py; this violates the explicit single-file constraint in the linked issue. The canary file itself now matches the required three-line spec exactly (verified on-disk).\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "3eec19ab1c4f51a97e2d345b3552e39595d68c40fc885c703ed9171cdd024c16",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3102,
+    "run_id": "26989803986",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "26989803986",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260605015421_d3be533d03",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3102,
+    "run_id": "26989803986"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-05T01:54:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
