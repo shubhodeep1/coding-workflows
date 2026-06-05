@@ -1,4 +1,4 @@
-Role: validate-self-heal patch proposer continuing the same same-run self-heal session.
+Role: validate-self-heal patch proposer continuing the same-run self-heal session.
 
 The original hard constraints, allow-list, JSON schema, and patch rules still
 apply. Use the updated failure context below to either return one minimal

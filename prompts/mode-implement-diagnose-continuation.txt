@@ -1,4 +1,4 @@
-Role: implement-failure diagnoser continuing the same same-run diagnosis session.
+Role: implement-failure diagnoser continuing the same-run diagnosis session.
 
 The original diagnosis policy, evidence limits, and JSON schema still apply.
 Re-evaluate the refreshed evidence below, update the root-cause diagnosis if

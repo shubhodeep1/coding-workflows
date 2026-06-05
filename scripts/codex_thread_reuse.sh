@@ -15,6 +15,19 @@ codex_thread_reuse_truthy()
 	esac
 }
 
+codex_thread_reuse_seed_run_token()
+{
+	[ -n "${CODEX_THREAD_REUSE_RUN_TOKEN:-}" ] && return 0
+
+	CODEX_THREAD_REUSE_RUN_TOKEN="$(python3 - <<'PY'
+import uuid
+
+print(uuid.uuid4().hex)
+PY
+)"
+	export CODEX_THREAD_REUSE_RUN_TOKEN
+}
+
 codex_thread_reuse_safe_key()
 {
 	printf '%s' "${1:-default}" | tr -c 'A-Za-z0-9._-' '_'
@@ -25,7 +38,8 @@ codex_thread_reuse_runtime_root()
 	local runtime_dir="${CODEX_THREAD_REUSE_RUNTIME_DIR:-${RUNTIME_DIR:-}}"
 
 	if [ -z "${runtime_dir}" ]; then
-		runtime_dir="${TMPDIR:-/tmp}/codex-thread-reuse-default"
+		codex_thread_reuse_seed_run_token
+		runtime_dir="${TMPDIR:-/tmp}/codex-thread-reuse-run-${CODEX_THREAD_REUSE_RUN_TOKEN:-parent-${PPID:-$$}}"
 	fi
 
 	printf '%s/codex-thread-reuse\n' "${runtime_dir}"
@@ -834,6 +848,8 @@ EOF
 			;;
 	esac
 }
+
+codex_thread_reuse_seed_run_token
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
 	codex_thread_reuse_main "$@"

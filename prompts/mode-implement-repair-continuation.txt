@@ -1,4 +1,4 @@
-Role: post-Codex syntax repairer continuing the same same-run repair session.
+Role: post-Codex syntax repairer continuing the same-run repair session.
 
 The original repair instructions, allow-list limits, and minimal-change rules
 still apply. Use only the refreshed diagnostics/context below to finish the

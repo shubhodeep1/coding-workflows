@@ -219,6 +219,55 @@ def test_begin_capture_uses_portable_marker_name() -> None:
 		assert marker_path.read_text(encoding="utf-8").strip().isdigit()
 
 
+def test_runtime_root_scopes_fallback_per_shell_session() -> None:
+	base_env = _base_env()
+	same_shell = subprocess.run(
+		[
+			"bash",
+			"-lc",
+			f'source "{HELPER}" && unset CODEX_THREAD_REUSE_RUNTIME_DIR RUNTIME_DIR && '\
+			'printf "%s\\n%s\\n" "$(codex_thread_reuse_runtime_root)" "$(codex_thread_reuse_runtime_root)"',
+		],
+		cwd=str(REPO_ROOT),
+		env=base_env,
+		capture_output=True,
+		text=True,
+		check=False,
+	)
+	assert same_shell.returncode == 0, same_shell.stderr
+	first, second = [line for line in same_shell.stdout.splitlines() if line.strip()]
+	assert first == second
+	assert "codex-thread-reuse-default" not in first
+
+	first_shell = subprocess.run(
+		[
+			"bash",
+			"-lc",
+			f'source "{HELPER}" && unset CODEX_THREAD_REUSE_RUNTIME_DIR RUNTIME_DIR && codex_thread_reuse_runtime_root',
+		],
+		cwd=str(REPO_ROOT),
+		env=base_env,
+		capture_output=True,
+		text=True,
+		check=False,
+	)
+	assert first_shell.returncode == 0, first_shell.stderr
+	second_shell = subprocess.run(
+		[
+			"bash",
+			"-lc",
+			f'source "{HELPER}" && unset CODEX_THREAD_REUSE_RUNTIME_DIR RUNTIME_DIR && codex_thread_reuse_runtime_root',
+		],
+		cwd=str(REPO_ROOT),
+		env=base_env,
+		capture_output=True,
+		text=True,
+		check=False,
+	)
+	assert second_shell.returncode == 0, second_shell.stderr
+	assert first_shell.stdout.strip() != second_shell.stdout.strip()
+
+
 def test_record_session_skips_null_cwd_metadata_without_crashing() -> None:
 	with tempfile.TemporaryDirectory(prefix="codex_thread_null_cwd_") as td:
 		tmp_path = Path(td)
@@ -523,6 +572,7 @@ def main() -> int:
 	test_probe_supported_and_unsupported()
 	test_extract_session_id_uses_session_meta_payload_id()
 	test_begin_capture_uses_portable_marker_name()
+	test_runtime_root_scopes_fallback_per_shell_session()
 	test_record_session_skips_null_cwd_metadata_without_crashing()
 	test_direct_run_disabled_does_not_store_session_state_or_markers()
 	test_direct_run_uses_exec_when_feature_disabled_even_with_saved_session()
