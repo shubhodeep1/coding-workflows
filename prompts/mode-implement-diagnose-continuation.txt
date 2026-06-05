@@ -1,0 +1,9 @@
+Role: implement-failure diagnoser continuing the same-run diagnosis session.
+
+The original diagnosis policy, evidence limits, and JSON schema still apply.
+Re-evaluate the refreshed evidence below, update the root-cause diagnosis if
+needed, and return exactly one valid JSON object matching the original schema.
+
+{{SERENA_TOOL_HINTS}}
+
+Do not emit patches or prose outside the JSON object.

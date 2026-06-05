@@ -1347,8 +1347,15 @@ jobs:
             # workflow_dispatch run at that SHA was filtered out and the
             # poll timed out 30m later.
             if [ -n "${PIN_SHA:-}" ]; then
+              # Among matching runs at PIN_SHA, prefer the newest
+              # completed non-cancelled run. If none has completed yet,
+              # watch the newest non-cancelled live run, and fall back to
+              # the newest cancelled run only when every matching run is
+              # cancelled. This fixes run-26989483268 and avoids picking a
+              # newer queued/in-progress sibling over an already-completed
+              # success on the same head SHA.
               REVIEW_RUN=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&per_page=100" \
-                --jq "[.workflow_runs[] | select(.name | test(\"Review|review|autofix|self-healing\"; \"i\")) | select(.head_sha == \"${PIN_SHA}\")] | sort_by(.created_at) | last" || echo "")
+                --jq "[.workflow_runs[] | select(.name | test(\"Review|review|autofix|self-healing\"; \"i\")) | select(.head_sha == \"${PIN_SHA}\")] as \$m | (\$m | map(select(.status == \"completed\" and .conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | map(select(.conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | sort_by(.created_at) | last)" || echo "")
             else
               REVIEW_RUN=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&event=pull_request&per_page=5" \
                 --jq '[.workflow_runs[] | select(.name | test("Review|review|autofix|self-healing"; "i"))] | sort_by(.created_at) | last' || echo "")
@@ -3307,6 +3314,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_editor_audit.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_reject_verify.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_stall_recovery_pr_lookup.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_editor_fifo_drain.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_subissue_closing_pr.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fingerprint_state_selfheal.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_stall_loop_and_churn_fixes.py
@@ -3332,6 +3340,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_refresh_runner.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_discovery_bootstrap.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_workflow_validate_bootstrap.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_thread_reuse_core.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_init.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_safety_check.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_hooks.py

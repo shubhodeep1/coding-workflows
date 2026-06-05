@@ -250,6 +250,54 @@ def test_process_repository_red_pipeline_failure_with_drift_records_no_push() ->
 		executor.assert_consumed()
 
 
+def test_process_repository_pipeline_failure_no_drift_is_red_not_error() -> None:
+	# Regression for release v1.14.0 (run 26994091117): consumer `digital_pa`
+	# failed its self-test (app never became healthy) with NO asset drift and
+	# was mis-classified `error`, which fails the runner and blocked the stable
+	# release smoke. A consumer self-test failure is a `red` (non-blocking,
+	# monitored) outcome whether or not the assets drifted — `error` is
+	# reserved for genuine refresh-mechanism failures.
+	with tempfile.TemporaryDirectory(prefix="validation-refresh-red-nodrift-") as td:
+		workspace = Path(td) / "work"
+		workspace.mkdir(parents=True, exist_ok=True)
+		repository = "octo/demo-repo"
+		repo_dir = workspace / "octo__demo-repo"
+		branch = "ai/validation-refresh"
+
+		def on_clone(_command: list[str], _cwd: Path | None) -> None:
+			_write_manifest(repo_dir)
+
+		executor = FakeExecutor(
+			[
+				PlannedCall(("gh", "repo", "view"), stdout="main\n"),
+				PlannedCall(("gh", "repo", "clone"), callback=on_clone),
+				PlannedCall(("git", "fetch", "origin", "main")),
+				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
+				PlannedCall(
+					("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh")),
+					returncode=1,
+					stderr="self test failed",
+				),
+				PlannedCall(("git", "status"), stdout=""),
+			]
+		)
+
+		runner = _make_runner(executor, branch)
+		result = runner.process_repository(repository, workspace)
+
+		assert result.outcome == "red"
+		assert result.changed is False
+		assert "pipeline_failed_without_changes" in result.diagnostics
+		assert any("self_test_failed" in line for line in result.diagnostics)
+		assert "validation_assets_drifted_no_push" not in result.diagnostics
+		# `red` must not count toward the runner's exit-1 gate (error-only).
+		assert refresh_runner.summarize_results([result])["totals"]["error"] == 0
+		assert refresh_runner.summarize_results([result])["totals"]["red"] == 1
+		executor.assert_consumed()
+
+
 def test_process_repository_no_changes_skips_pr_operations() -> None:
 	with tempfile.TemporaryDirectory(prefix="validation-refresh-no-change-") as td:
 		workspace = Path(td) / "work"

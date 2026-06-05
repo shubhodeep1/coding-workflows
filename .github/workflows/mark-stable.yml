@@ -247,6 +247,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_editor_audit.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_reject_verify.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_stall_recovery_pr_lookup.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_editor_fifo_drain.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_subissue_closing_pr.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fingerprint_state_selfheal.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_stall_loop_and_churn_fixes.py
@@ -272,6 +273,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_refresh_runner.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_discovery_bootstrap.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_workflow_validate_bootstrap.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_thread_reuse_core.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_init.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_hooks.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_cache_maintenance.py
