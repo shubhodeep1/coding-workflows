@@ -517,3 +517,29 @@ def test_validate_workflow_contains_thread_reuse_bootstrap() -> None:
 	assert 'copy_from_ref_or_local "scripts/codex_thread_reuse.sh" "scripts/codex_thread_reuse.sh.tmp" "false" "true"' in text
 	assert 'copy_from_ref_or_local "prompts/mode-validate-self-heal-continuation.txt" "prompts/mode-validate-self-heal-continuation.txt.tmp" "false" "true"' in text
 	assert 'copy_from_ref_or_local "prompts/contracts/mode-validate-self-heal-continuation.yml" "prompts/contracts/mode-validate-self-heal-continuation.yml.tmp" "false" "true"' in text
+
+
+def main() -> int:
+	test_probe_supported_and_unsupported()
+	test_extract_session_id_uses_session_meta_payload_id()
+	test_begin_capture_uses_portable_marker_name()
+	test_record_session_skips_null_cwd_metadata_without_crashing()
+	test_direct_run_disabled_does_not_store_session_state_or_markers()
+	test_direct_run_uses_exec_when_feature_disabled_even_with_saved_session()
+	test_direct_run_stores_session_then_resumes_on_later_attempt()
+	test_resume_failure_falls_back_to_exec()
+	test_resume_and_fallback_exec_failure_clears_saved_session()
+	test_invalid_saved_session_id_falls_back_to_exec()
+	test_transform_prompt_replace_prefix_preserves_repair_context()
+	test_transform_prompt_replace_between_preserves_diagnose_evidence()
+	test_transform_prompt_replace_between_preserves_self_heal_evidence()
+	test_render_prompt_autodiscovers_continuation_contracts_and_accepts_serena_hints()
+	test_render_prompt_shell_shim_enforces_prompt_contracts()
+	test_implement_workflow_contains_thread_reuse_wiring()
+	test_validate_process_contains_thread_reuse_wiring()
+	test_validate_workflow_contains_thread_reuse_bootstrap()
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
