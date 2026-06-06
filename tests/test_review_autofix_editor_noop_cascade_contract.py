@@ -286,11 +286,171 @@ def test_review_apply_fixes_has_per_attempt_cache_busting_nonce() -> None:
 		"actual cache-buster; without it the per-attempt copy is byte-"
 		"identical and the cache still hits."
 	)
-	# codex must read the attempt-specific file, not the base prompt.
+	# codex must read the per-attempt file (which carries the nonce trailer),
+	# never the unchanging base prompt. The stdin redirect may be inline
+	# (`< "${attempt_prompt_file}"`) or inside a one-arg helper that the call
+	# site feeds `${attempt_prompt_file}` into — the S4 continuation-thread-
+	# reuse change extracted `run_editor_codex_attempt` for exactly this.
+	# Assert the behaviour, not one code shape, so a cache-buster-preserving
+	# refactor does not trip this guard while a regression to the base prompt
+	# still does.
 	assert 'codex --ask-for-approval never' in text
-	assert '< "${attempt_prompt_file}"' in text, (
-		"codex stdin must be fed from the per-attempt prompt file, not "
-		"from the unchanging `${EDITOR_PROMPT_FILE}`."
+
+	def _shell_function_blocks(script_text: str) -> dict[str, str]:
+		function_blocks: dict[str, str] = {}
+		current_function: str | None = None
+		pending_function: str | None = None
+		pending_lines: list[str] = []
+		current_lines: list[str] = []
+		brace_depth = 0
+		for line in script_text.splitlines():
+			if current_function is None:
+				stripped = line.strip()
+				if pending_function is not None:
+					if re.match(r'^\{\s*(?:#.*)?$', stripped):
+						current_function = pending_function
+						current_lines = pending_lines + [line]
+						brace_depth = 1
+						pending_function = None
+						pending_lines = []
+						continue
+					pending_function = None
+					pending_lines = []
+				function_start = re.match(r'^\s*(?!#)(\w+)\s*\(\)\s*\{\s*(?:#.*)?$', line)
+				if function_start is not None:
+					current_function = function_start.group(1)
+					current_lines = [line]
+					brace_depth = 1
+					continue
+				function_declaration = re.match(r'^\s*(?!#)(\w+)\s*\(\)\s*(?:#.*)?$', line)
+				if function_declaration is not None:
+					pending_function = function_declaration.group(1)
+					pending_lines = [line]
+				continue
+			current_lines.append(line)
+			stripped = line.strip()
+			if re.match(r'^\{\s*(?:#.*)?$', stripped):
+				brace_depth += 1
+				continue
+			if re.match(r'^\}(?=\s*(?:$|#|[;|&<>]|\d))', stripped):
+				brace_depth -= 1
+				if brace_depth == 0:
+					function_blocks[current_function] = "\n".join(current_lines)
+					current_function = None
+					current_lines = []
+		return function_blocks
+
+	def _codex_stdin_targets(script_text: str) -> list[tuple[str, str | None]]:
+		targets: list[tuple[str, str | None]] = []
+		current_function: str | None = None
+		pending_function: str | None = None
+		brace_depth = 0
+		for line in script_text.splitlines():
+			started_function = False
+			if current_function is None:
+				stripped = line.strip()
+				if pending_function is not None:
+					if re.match(r'^\{\s*(?:#.*)?$', stripped):
+						current_function = pending_function
+						brace_depth = 1
+						started_function = True
+					pending_function = None
+				if not started_function:
+					function_start = re.match(r'^\s*(?!#)(\w+)\s*\(\)\s*\{\s*(?:#.*)?$', line)
+					if function_start is not None:
+						current_function = function_start.group(1)
+						brace_depth = 1
+						started_function = True
+					else:
+						function_declaration = re.match(r'^\s*(?!#)(\w+)\s*\(\)\s*(?:#.*)?$', line)
+						if function_declaration is not None:
+							pending_function = function_declaration.group(1)
+			if not re.match(r'^\s*#', line):
+				for operand in re.findall(
+					r'codex --ask-for-approval never[^\n]*<\s*"?([$](?:\{?\w+\}?))"?',
+					line,
+				):
+					targets.append((
+						operand.strip('"').lstrip("$").strip("{}"),
+						current_function,
+					))
+			if current_function is None or started_function:
+				continue
+			stripped = line.strip()
+			if re.match(r'^\{\s*(?:#.*)?$', stripped):
+				brace_depth += 1
+			elif re.match(r'^\}(?=\s*(?:$|#|[;|&<>]|\d))', stripped):
+				brace_depth -= 1
+				if brace_depth == 0:
+					current_function = None
+		return targets
+
+	function_blocks = _shell_function_blocks(text)
+	codex_stdin_targets = _codex_stdin_targets(text)
+	assert codex_stdin_targets, (
+		"No `codex --ask-for-approval never … < \"$file\"`-style stdin "
+		"redirect "
+		"found; the editor must feed codex a prompt file on stdin."
+	)
+	assert all(
+		stdin_var != "EDITOR_PROMPT_FILE"
+		for stdin_var, _helper_name in codex_stdin_targets
+	), (
+		"codex stdin is the unchanging `${EDITOR_PROMPT_FILE}` — every retry "
+		"sends identical bytes and a cached refusal is served instantly "
+		"(PR #3053 / run 26081926521). Feed `${attempt_prompt_file}` instead."
+	)
+	unsafe_targets = []
+	for _stdin_var, _helper_name in codex_stdin_targets:
+		if _helper_name is None:
+			if _stdin_var == "attempt_prompt_file":
+				continue
+			unsafe_targets.append(f"script:${{{_stdin_var}}}")
+			continue
+		helper_body = function_blocks.get(_helper_name, "")
+		first_arg_reaches_stdin = (
+			_stdin_var == "1"
+			or re.search(
+				rf'(?m)^(?!\s*#)\s*(?:local(?:\s+-[A-Za-z]+)*\s+)?{re.escape(_stdin_var)}='
+				r'"?[$]\{?1\}?"?',
+				helper_body,
+			)
+			is not None
+		)
+		call_forwards_attempt_prompt = (
+			re.search(
+				rf'(?m)^(?!\s*#)\s*{re.escape(_helper_name)}\s+"?[$]'
+				r'\{?attempt_prompt_file\}?"?(?:\s|$)',
+				text,
+			)
+			is not None
+		)
+		call_forwards_base_prompt = (
+			re.search(
+				rf'(?m)^(?!\s*#)\s*{re.escape(_helper_name)}\s+"?[$]'
+				r'\{?EDITOR_PROMPT_FILE\}?"?(?:\s|$)',
+				text,
+			)
+			is not None
+		)
+		if first_arg_reaches_stdin and call_forwards_attempt_prompt and not call_forwards_base_prompt:
+			continue
+		unsafe_reasons = []
+		if not first_arg_reaches_stdin:
+			unsafe_reasons.append("stdin is not helper arg1")
+		if not call_forwards_attempt_prompt:
+			unsafe_reasons.append("no helper call forwards attempt_prompt_file")
+		if call_forwards_base_prompt:
+			unsafe_reasons.append("helper is called with EDITOR_PROMPT_FILE")
+		unsafe_targets.append(
+			f"{_helper_name}:${{{_stdin_var}}} ({'; '.join(unsafe_reasons)})"
+		)
+	assert not unsafe_targets, (
+		"Each codex stdin redirect must either read `${attempt_prompt_file}` "
+		"directly from the script body or live in a helper whose first "
+		"argument reaches codex and whose call site forwards "
+		"`${attempt_prompt_file}` — never `${EDITOR_PROMPT_FILE}`. "
+		f"Unsafe targets: {', '.join(unsafe_targets)}"
 	)
 
 
