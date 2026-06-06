@@ -299,16 +299,33 @@ def test_review_apply_fixes_has_per_attempt_cache_busting_nonce() -> None:
 	def _shell_function_blocks(script_text: str) -> dict[str, str]:
 		function_blocks: dict[str, str] = {}
 		current_function: str | None = None
+		pending_function: str | None = None
+		pending_lines: list[str] = []
 		current_lines: list[str] = []
 		brace_depth = 0
 		for line in script_text.splitlines():
 			if current_function is None:
-				function_start = re.match(r'^\s*(?!#)(\w+)\s*\(\)\s*\{\s*$', line)
-				if function_start is None:
+				stripped = line.strip()
+				if pending_function is not None:
+					if re.match(r'^\{\s*(?:#.*)?$', stripped):
+						current_function = pending_function
+						current_lines = pending_lines + [line]
+						brace_depth = 1
+						pending_function = None
+						pending_lines = []
+						continue
+					pending_function = None
+					pending_lines = []
+				function_start = re.match(r'^\s*(?!#)(\w+)\s*\(\)\s*\{\s*(?:#.*)?$', line)
+				if function_start is not None:
+					current_function = function_start.group(1)
+					current_lines = [line]
+					brace_depth = 1
 					continue
-				current_function = function_start.group(1)
-				current_lines = [line]
-				brace_depth = 1
+				function_declaration = re.match(r'^\s*(?!#)(\w+)\s*\(\)\s*(?:#.*)?$', line)
+				if function_declaration is not None:
+					pending_function = function_declaration.group(1)
+					pending_lines = [line]
 				continue
 			current_lines.append(line)
 			stripped = line.strip()
@@ -326,14 +343,28 @@ def test_review_apply_fixes_has_per_attempt_cache_busting_nonce() -> None:
 	def _codex_stdin_targets(script_text: str) -> list[tuple[str, str | None]]:
 		targets: list[tuple[str, str | None]] = []
 		current_function: str | None = None
+		pending_function: str | None = None
 		brace_depth = 0
 		for line in script_text.splitlines():
-			function_start = None
+			started_function = False
 			if current_function is None:
-				function_start = re.match(r'^\s*(?!#)(\w+)\s*\(\)\s*\{\s*$', line)
-				if function_start is not None:
-					current_function = function_start.group(1)
-					brace_depth = 1
+				stripped = line.strip()
+				if pending_function is not None:
+					if re.match(r'^\{\s*(?:#.*)?$', stripped):
+						current_function = pending_function
+						brace_depth = 1
+						started_function = True
+					pending_function = None
+				if not started_function:
+					function_start = re.match(r'^\s*(?!#)(\w+)\s*\(\)\s*\{\s*(?:#.*)?$', line)
+					if function_start is not None:
+						current_function = function_start.group(1)
+						brace_depth = 1
+						started_function = True
+					else:
+						function_declaration = re.match(r'^\s*(?!#)(\w+)\s*\(\)\s*(?:#.*)?$', line)
+						if function_declaration is not None:
+							pending_function = function_declaration.group(1)
 			if not re.match(r'^\s*#', line):
 				for operand in re.findall(
 					r'codex --ask-for-approval never[^\n]*<\s*"?([$](?:\{?\w+\}?))"?',
@@ -343,7 +374,7 @@ def test_review_apply_fixes_has_per_attempt_cache_busting_nonce() -> None:
 						operand.strip('"').lstrip("$").strip("{}"),
 						current_function,
 					))
-			if current_function is None or function_start is not None:
+			if current_function is None or started_function:
 				continue
 			stripped = line.strip()
 			if re.match(r'^\{\s*(?:#.*)?$', stripped):
