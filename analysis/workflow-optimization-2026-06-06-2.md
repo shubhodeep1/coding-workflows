@@ -472,3 +472,131 @@ _Source-level measurements below are interpolated `run:` body lengths from the c
 | Code modularization | 10-11 | Large |
 | Expression size reduction | 4-5 | Large |
 | Medium/Low fixes | 2-3 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-06-06)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlap is proven safe to collapse without changing scope, retries, or control flow; `NEEDS_VERIFICATION` means the overlap looks real but a caller contract or freshness assumption is not fully proven from static reading; `RISKY_SKIP` means the duplication sits in a loop/race-defense/retry-sensitive path and must not be auto-implemented even if it appears mergeable.
+
+### Consolidation Candidates (MERGE-###)
+
+- **MERGE-001 — RISKY_SKIP**  
+  **File(s):** `.github/workflows/test-and-mark-stable.yml:1041-1043`, `.github/workflows/test-and-mark-stable.yml:1070-1075`  
+  **Current call count:** `3` calls on the common “SHA stabilized on this iteration” path.  
+  **Proposed call count:** `2` calls on that same path.  
+  **Endpoint(s):** `GET /repos/{owner}/{repo}/pulls/{pull_number}`  
+  **Evidence:** the step reads the same PR endpoint twice to stabilize `head.sha`, then immediately reads it a third time for state/merged guards.
+  ```bash
+  HEAD_A=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' ...)
+  sleep 3
+  HEAD_B=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' ...)
+  ...
+  PR_META=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" ...)
+  PR_STATE=$(printf '%s' "${PR_META}" | jq -r '.state // ""')
+  PR_MERGED=$(printf '%s' "${PR_META}" | jq -r '.merged // false')
+  ```
+  **Proposed fix:** fetch full PR JSON on the `HEAD_B` read, derive `HEAD_B` from `.head.sha`, and reuse that same JSON for the immediate post-loop `PR_STATE`/`PR_MERGED`/timestamps guard; keep the explicit third fetch only as a fallback when no stable read was obtained.  
+  **Safety rationale:** this sits inside a stability/backoff loop that explicitly defends against GitHub indexing races, so it triggers the `RISKY_SKIP` rule.  
+  **Downstream signal:** Manual only: preserve the two-read stability contract and re-run the E2E smoke path before collapsing the third PR read.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **REUSE-001 — SAFE_TO_MERGE**  
+  **File(s):** `.github/workflows/internal-review.yml:84-119`  
+  **Current call count:** `2` API calls in the step.  
+  **Proposed call count:** `1` API call in the step.  
+  **Endpoint(s):** `GET /repos/{owner}/{repo}`  
+  **Evidence:** the step already has push-event repo context, but still re-fetches the repo just to read `default_branch`.
+  ```bash
+  existing_pr="$(gh api \
+    "repos/${REPOSITORY}/pulls?state=open&head=${REPOSITORY%/*}:${HEAD_REF}" ...)"
+  ...
+  base_ref="$(gh api "repos/${REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo 'main')"
+  ```
+  **Proposed fix:** replace the repo GET with `${{ github.event.repository.default_branch }}` (optionally passed into `env`) and keep `main` only as a shell fallback if that context is blank.  
+  **Safety rationale:** this is a push-triggered job, the needed field is already in event context, and there is no intervening mutation or concurrency boundary inside the step.  
+  **Downstream signal:** Replace the `gh api "repos/${REPOSITORY}" --jq '.default_branch'` lookup in `resolve-claude-branch-pr` with `github.event.repository.default_branch`.
+
+- **REUSE-002 — NEEDS_VERIFICATION**  
+  **File(s):** `.github/workflows/internal-review.yml:112-135`, `.github/workflows/review_autofix.yml:1991-2006`  
+  **Current call count:** up to `1` fallback default-branch lookup per no-PR `force_claude_branch_review` invocation.  
+  **Proposed call count:** `0` fallback lookups.  
+  **Endpoint(s):** `GET /repos/{owner}/{repo}`  
+  **Evidence:** the only in-repo no-PR caller passes `base_ref_override`, but `review_autofix.yml` still has a second default-branch fallback.
+  ```yaml
+  # internal-review.yml
+  base_ref: ${{ needs.resolve-claude-branch-pr.outputs.base_ref }}
+  force_claude_branch_review: true
+
+  # review_autofix.yml
+  BASE_REF_OVERRIDE="${BASE_REF_OVERRIDE_INPUT:-}"
+  if [ -z "${BASE_REF_OVERRIDE}" ]; then
+    BASE_REF_OVERRIDE="$(gh api "repos/${{ github.repository }}" --jq '.default_branch' ...)"
+  fi
+  ```
+  **Proposed fix:** tighten the no-PR caller contract so `base_ref_override` is required whenever `force_claude_branch_review=true`, then remove the fallback repo GET from `review_autofix.yml`.  
+  **Safety rationale:** this is a reusable workflow, so static in-repo reading does not prove no external consumer relies on the fallback.  
+  **Downstream signal:** Verify every supported no-PR caller passes `base_ref_override`; only then delete the fallback repo lookup in `review_autofix.yml`.
+
+- **REUSE-003 — NEEDS_VERIFICATION**  
+  **File(s):** `.github/workflows/internal-issue-pr-status.yml:3-12`, `.github/workflows/issue_pr_status.yml:180-187`, `.github/workflows/issue_pr_status.yml:272-285`  
+  **Current call count:** up to `1` fallback PR fetch per close event.  
+  **Proposed call count:** `0` fallback PR fetches on the in-repo caller path.  
+  **Endpoint(s):** `GET /repos/{owner}/{repo}/pulls/{pull_number}`  
+  **Evidence:** the reusable workflow already receives `github.event.pull_request.title/body` from the in-repo `pull_request.closed` wrapper, then re-fetches the PR only if those are blank.
+  ```yaml
+  PR_TITLE: ${{ github.event.pull_request.title }}
+  PR_BODY: ${{ github.event.pull_request.body || '' }}
+  ```
+  ```bash
+  PR_DATA="${PR_TITLE:-} ${PR_BODY:-}"
+  if [ -z "$(printf '%s' "${PR_DATA}" | tr -d '[:space:]')" ]; then
+    PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' ...)"
+  fi
+  ```
+  **Proposed fix:** treat event `PR_TITLE`/`PR_BODY` as authoritative for the in-repo `pull_request.closed` path; if non-PR workflow_call consumers must stay supported, make that an explicit contract instead of a silent fallback fetch.  
+  **Safety rationale:** this workflow is reusable, so removing the fallback is not proven safe until supported callers are audited.  
+  **Downstream signal:** Verify `issue_pr_status.yml` is only invoked from `pull_request.closed` wrappers that populate `github.event.pull_request`; if so, remove the fallback PR fetch.
+
+- **REUSE-004 — NEEDS_VERIFICATION**  
+  **File(s):** `.github/workflows/orchestrate_clarify_respond.yml:62-88`, `scripts/resolve_integration_ref.sh:38-40`, `scripts/resolve_integration_ref.sh:59-62`, `.github/workflows/orchestrate_clarify_respond.yml:436-440`  
+  **Current call count:** `3` child-issue reads on the orchestrator-managed path.  
+  **Proposed call count:** `1` child-issue read.  
+  **Endpoint(s):** `GET /repos/{owner}/{repo}/issues/{issue_number}`  
+  **Evidence:** the same child issue is fetched in the gate step, fetched again inside the resolver, then fetched again for prompt assembly.
+  ```bash
+  # check_orchestrator
+  ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+
+  # resolve_integration_ref.sh
+  get_issue_body() { gh api "repos/${REPO}/issues/${issue_num}" --jq '.body // ""'; }
+  child_body="$(get_issue_body "${ISSUE}")"
+
+  # collect context
+  ISSUE_META="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ```
+  **Proposed fix:** persist the first `ISSUE_PAYLOAD` as a step output or temp file, pass preloaded child-body data into `resolve_integration_ref.sh`, and have `Collect issue context` reuse the cached payload instead of re-fetching the same issue.  
+  **Safety rationale:** this crosses step boundaries, so freshness semantics are not proven; maintainers may want prompt assembly to see mid-run issue edits.  
+  **Downstream signal:** Verify whether issue title/body edits made after job start must be visible to clarify-respond; if not, cache the child issue payload once and thread it through resolver plus prompt assembly.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: NEEDS_VERIFICATION — sound batching direction, but the helper extension must preserve `PR_REVIEWS_FILE` shape plus GraphQL/REST fallback parity.
+- BATCH-001: NEEDS_VERIFICATION — good consolidation target, but the close-path fail-open behavior and per-issue label-knowledge semantics must stay unchanged.
+- API-002: RISKY_SKIP — the duplicate run-status calls are inside a poll loop, so manual review is required before changing loop-local fetch semantics.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 1 | REUSE-001 |
+| NEEDS_VERIFICATION | 4 | REUSE-002, REUSE-003, REUSE-004, API-001/BATCH-001 alignment reflected in this pass |
+| RISKY_SKIP | 1 | MERGE-001 |
+
+### Implement-Stage Handoff
+
+- REUSE-001
