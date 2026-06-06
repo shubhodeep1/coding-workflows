@@ -336,3 +336,139 @@ _Notes:_
 |---|---|---:|---:|---:|---:|---:|---|
 | `serena` | unknown / not emitted in runtime logs | 0 | 0 | 1 | 1 | 1 | aggregate only; no runtime target line available |
 | `semble` | n/a | n/a | n/a | n/a | present | present | no Semble probe telemetry emitted in this window |
+
+## Deep Audit — Workflows & Scripts (2026-06-06)
+
+### Section 1: Bug & Correctness Sweep
+
+_All workflow YAMLs parsed successfully in this audit pass; `bash -n` passed on `scripts/*.sh` and `python -m py_compile` passed on `scripts/*.py`, so the findings below are runtime, API, and maintainability defects rather than syntax errors._
+
+- **BUG-001**  
+  **File(s):** `scripts/resolve_integration_ref.sh:38-90`; `.github/workflows/implement.yml:347-365`; `.github/workflows/validate.yml:143-159`  
+  **Severity:** High  
+  **Category:** `bug`  
+  **Description:** `get_issue_body()` and `branch_exists()` call raw `gh api` with no retry/backoff. Any non-404 API failure makes the resolver exit non-zero, and the workflow callers then emit `Canonical integration resolver failed; falling back to default branch.` before checking out `${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}`. In write-capable flows (`implement`, `validate`), that means a transient GitHub/API failure can silently reroute work onto the default branch instead of the orchestrator integration branch. The same fallback pattern also appears in `clarify.yml:117-133`, `plan.yml:168-187`, and `orchestrate_clarify_respond.yml:152-170`.  
+  **Recommended fix:** Make integration-ref resolution tri-state instead of fail-open-to-default for transient errors: reuse retry-aware GitHub helpers (`scripts/gh_helpers.sh:391-615`) or make `scripts/orchestrate_lib.py:2174-2203` the canonical resolver with retries, preserve a distinct exit/status for transient API failure, and have write-capable workflows fail the job on that status instead of setting `ref=`.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+- **API-001**  
+  **File(s):** `.github/workflows/review_autofix.yml:1916-1922,2080-2142`; `scripts/gh_helpers.sh:698-731,735-900`; `scripts/review_rb_judge.sh:760-768`  
+  **Severity:** Medium  
+  **Category:** `api-redundancy`  
+  **Description:** `review_autofix` fetches PR context with four separate calls (`pulls/{pr}`, `issues/{pr}/comments`, `pulls/{pr}/reviews`, `pulls/{pr}/comments`) and then re-merges those files in Python. The repo already has a GraphQL-first batching helper, `gh_pr_with_all_comments()`, and `review_rb_judge.sh` already uses it. The only gap is that the helper currently omits top-level review bodies/states, while `review_autofix` later reads `PR_REVIEWS_FILE`.  
+  **Current vs proposed calls:** `4` logical calls on the happy path (`+` pagination) -> `1` helper call on the happy path.  
+  **Recommended fix:** Extend `scripts/gh_helpers.sh:735-900` so `gh_pr_with_all_comments <owner> <repo> <pr_number> [preloaded_meta_json]` also returns a `reviews` array (`id`, `author`, `state`, `submitted_at`, `updated_at`, `body`) in both GraphQL and REST fallback modes, then replace the four inline fetches in `review_autofix` with that single helper.
+
+- **BATCH-001**  
+  **File(s):** `.github/workflows/review_autofix.yml:767-819`; `scripts/orchestrate_poll_process.sh:10174-10297`  
+  **Severity:** Medium  
+  **Category:** `api-batching`  
+  **Description:** In `post-merge-validate-dispatch`, the fast path is one GraphQL query, but the PR-body fallback path expands to `1` GraphQL call for `closingIssuesReferences`, `1` REST PR fetch for title/body parsing, and then `1` `gh issue view --json labels` call per recovered issue when `labels_known != true`. That is an avoidable `2 + N` request shape.  
+  **Current vs proposed calls:** fallback path `2 + N` -> `1-2` total.  
+  **Recommended fix:** Add PR `title`/`body` to the initial GraphQL query so the REST PR fetch disappears, then batch fallback issue-label hydration with one aliased GraphQL query using the same fragment-building pattern as `_fetch_candidate_issue_details_graphql()` in `scripts/orchestrate_poll_process.sh:10174-10297`.
+
+- **API-002**  
+  **File(s):** `.github/workflows/test-and-mark-stable.yml:2875-2885,3552-3556,3717-3721`  
+  **Severity:** Low  
+  **Category:** `api-redundancy`  
+  **Description:** The cancel-on-close smoke-test wait loop polls `actions/runs/{id}` twice per iteration—once for `.status` and once for `.conclusion`—even though later loops in the same workflow already fetch `{status, conclusion}` together.  
+  **Current vs proposed calls:** `2` calls per poll iteration -> `1` call per poll iteration.  
+  **Recommended fix:** Reuse the same-file combined polling pattern already present at `3554-3556` and `3719-3721`: fetch `--jq '{status, conclusion}'` once, then parse both fields locally.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **DUP-001**  
+  **File(s):** `.github/workflows/clarify.yml:214-307`; `.github/workflows/plan.yml:265-357`; `.github/workflows/orchestrate.yml:339-446`; `.github/workflows/orchestrate_clarify_respond.yml:257-369`; `.github/workflows/orchestrate_poll.yml:287-418`; `.github/workflows/implement.yml:829-1058`; `.github/workflows/review_autofix.yml:1227-1554`; `.github/workflows/validate.yml:212-636`  
+  **Severity:** Medium  
+  **Category:** `duplication`  
+  **Description:** Eight workflows carry near-duplicate “stage/fetch workflow support files” blocks: resolve script-ref/main fallback, copy long script lists, optionally stage `render_prompt.py`, install schemas/prompts/catalogs, and generate `scripts/.gitignore` or support-env outputs. This duplication is already large enough to drive the expression-limit findings below, and it guarantees drift whenever a support asset is added or renamed.  
+  **Recommended fix:** Move this into a shared module such as `scripts/stage_workflow_support.sh` with a CLI like `stage_workflow_support --mode <workflow> --script-ref <ref> --support-root <dir> [--fetched-manifest <file>] [--github-env-file <path>]`. Update callers in `clarify`, `plan`, `orchestrate`, `orchestrate_clarify_respond`, `orchestrate_poll`, `implement`, `review_autofix`, and `validate`.
+
+- **DUP-002**  
+  **File(s):** `scripts/gh_helpers.sh:391-615`; `.github/workflows/cancel_on_pr_close.yml:26-52`; `.github/workflows/mark-stable.yml:386-410,546-559`; `.github/workflows/orchestrate_poll.yml:85-113`; `.github/workflows/review_autofix.yml:864-876,1838-1871`; `.github/workflows/test-and-mark-stable.yml:4825-4847`  
+  **Severity:** Medium  
+  **Category:** `duplication`  
+  **Description:** Retry/backoff wrappers for `gh` are copied inline across multiple workflows instead of reusing the canonical helper. They have already drifted: `review_autofix.yml:867-876` is simple exponential retry with no rate-limit handling, while the other copies implement `_rl_wait` and different stderr/temp-file behavior. That means the same GitHub failure mode is handled differently depending on which step happens to hit it.  
+  **Recommended fix:** Make one shared entry point own this logic—either `scripts/gh_helpers.sh` directly or a thin wrapper such as `scripts/gh_retry.sh` exposing `gh_retry <cmd...>` and `gh_api_json_to_file <outfile> <cmd...>`. Replace the inline copies in `cancel_on_pr_close`, `mark-stable`, `orchestrate_poll`, `review_autofix`, and `test-and-mark-stable`.
+
+- **DUP-003**  
+  **File(s):** `scripts/resolve_integration_ref.sh:8-91`; `scripts/orchestrate_lib.py:2097-2203,2696-2705`  
+  **Severity:** Medium  
+  **Category:** `duplication`  
+  **Description:** Integration-branch extraction, tracking-issue fallback, and branch-existence checks are implemented twice—once in Bash and once in Python. The control flow is near-identical, including the same raw `gh api` behavior, so any resolver fix has to be mirrored manually and can drift.  
+  **Recommended fix:** Make `scripts/orchestrate_lib.py` the canonical implementation with `resolve_integration_ref(repo: str, issue: int) -> str` plus the existing `--print-integration-ref` CLI, and reduce `scripts/resolve_integration_ref.sh` to a thin wrapper (or remove it). Update the resolver stage in `clarify`, `plan`, `implement`, `validate`, and `orchestrate_clarify_respond` to call the canonical entry point.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+_Source-level measurements below are interpolated `run:` body lengths from the checked-in YAML. Actual runtime expansion will be equal or larger, so the remaining headroom is a best-case number._
+
+- **EXPR-001**  
+  **File(s):** `.github/workflows/validate.yml:212-636`  
+  **Severity:** High  
+  **Category:** `expression-limit`  
+  **Description:** `Fetch workflow support files` is already about `20,065` characters with `${{ }}` interpolation present, leaving only about `935` characters before GitHub’s `21,000`-character expression cap. This is the closest remaining workflow block to a hard parse failure.  
+  **Recommended fix:** Extract the entire staging routine to an external script/composite action (`scripts/stage_workflow_support.sh` preferred) and keep the workflow step to argument wiring only.
+
+- **EXPR-002**  
+  **File(s):** `.github/workflows/review_autofix.yml:1227-1554`  
+  **Severity:** High  
+  **Category:** `expression-limit`  
+  **Description:** `Stage workflow support files` is about `18,675` characters, leaving roughly `2,325` characters of headroom. Given how often this block grows when new support assets are added, it is one modest edit away from runner rejection.  
+  **Recommended fix:** Move support staging out to a script/composite, or at minimum split script/prompt/schema staging into separate smaller steps.
+
+- **EXPR-003**  
+  **File(s):** `.github/workflows/implement.yml:3164-3539`  
+  **Severity:** Medium  
+  **Category:** `expression-limit`  
+  **Description:** `Commit changes` is about `17,460` characters, leaving roughly `3,540` characters. It embeds multiple guards, output heredocs, and policy messages in one interpolated block, so future guard additions have little space left.  
+  **Recommended fix:** Move the destructive-commit guard and files-touched scope guard into dedicated scripts (for example `scripts/implement_commit_guard.sh` and `scripts/implement_scope_guard.sh`) and keep the workflow step as orchestration.
+
+- **EXPR-004**  
+  **File(s):** `.github/workflows/review_autofix.yml:1831-2220`  
+  **Severity:** Medium  
+  **Category:** `expression-limit`  
+  **Description:** `Collect PR metadata` is about `17,408` characters, leaving roughly `3,592` characters. It mixes retry helpers, no-PR synthesis, PR context fetches, linked-issue GraphQL, and fallback issue hydration in one interpolated block.  
+  **Recommended fix:** Extract PR-context collection into a script such as `scripts/review_collect_pr_metadata.sh`, or split no-PR synthesis, main PR fetch, and linked-issue hydration into separate steps.
+
+- No `if:` expression in `.github/workflows` came close to the limit in this scan; the largest observed was about `115` characters.
+- No workflow file exceeded `800 KB`; the largest was `.github/workflows/review_autofix.yml` at `401,929` bytes.
+
+### Section 5: Cross-Cutting Concerns
+
+- **DEAD-001**  
+  **File(s):** `scripts/orchestrate_poll_process.sh:8895-8901`  
+  **Severity:** Low  
+  **Category:** `dead-code`  
+  **Description:** `read_standalone_state_json()` performs a paginated comments fetch, but repo-wide search only finds its definition and no in-repo callers. That makes it dead within this repository and leaves an unused API-fetch path sitting beside actively used helpers. [NEEDS VERIFICATION]  
+  **Recommended fix:** If no out-of-repo consumer sources `scripts/orchestrate_poll_process.sh`, delete the helper. If it must remain for external callers, add a test and a doc comment naming that contract explicitly.
+
+- **SHELL-001**  
+  **File(s):** `scripts/validate_changed_files_syntax.sh:70-73`  
+  **Severity:** Low  
+  **Category:** `shellcheck`  
+  **Description:** In `case "${file},${basename_lc}"`, the early `*.env*` pattern already matches inputs that the later `*,*.envrc|*,.env*` arms try to catch, so those later alternatives never change behavior. ShellCheck flags this as overlapping/unreachable pattern logic (`SC2221`/`SC2222`).  
+  **Recommended fix:** Remove the redundant alternatives from the case arm, or keep them only with an explicit `shellcheck disable=SC2221,SC2222` and a short rationale.
+
+- No `TODO`, `FIXME`, `HACK`, or `XXX` markers were present in `.github/workflows/` or `scripts/` in this audit pass.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 3 | BUG-001, EXPR-001, EXPR-002 |
+| Medium | 7 | API-001, BATCH-001, DUP-001, DUP-002, DUP-003, EXPR-003, EXPR-004 |
+| Low | 3 | API-002, DEAD-001, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 7 | Medium |
+| API call optimization | 4 | Medium |
+| Code modularization | 10-11 | Large |
+| Expression size reduction | 4-5 | Large |
+| Medium/Low fixes | 2-3 | Small |
