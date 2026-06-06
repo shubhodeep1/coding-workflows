@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_editor_noop_cascade_contract.py:299-345 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: The shell-function parser only matches `name() {` on one line, so it misses existing brace-on-next-line helpers and can misattribute codex stdin redirects.\n  WHY: Multiple reviewers confirmed `scripts/review_apply_fixes.sh` already uses brace-on-next-line style (e.g. `prepare_judge_interim_priors()`), so a future helper refactor using that style would make the test falsely fail by treating the helper body as script-level scope.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_review_autofix_editor_noop_cascade_contract.py:303-328 | confidence=4\n  PROBLEM: Both parsers only detect shell functions declared with `name() {` on a single line, so they do not handle brace-on-next-line helpers.\n  WHY: The repo already uses this style (`prepare_judge_interim_priors()` at line 149 of `scripts/review_apply_fixes.sh`), so a future codex-invoking helper using the same convention would be missed and the guard would false-fail.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_review_autofix_editor_noop_cascade_contract.py:299-345 | confidence=5\n  PROBLEM: Both helper functions use a function-start regex that only matches `name() {` on a single line, so they miss brace-on-next-line shell functions.\n  WHY: `scripts/review_apply_fixes.sh` already uses brace-on-next-line style for `prepare_judge_interim_priors()` at lines 149-150, so a future refactor extracting `run_editor_codex_attempt` would not be recognized and the contract test would fail falsely.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_review_autofix_editor_noop_cascade_contract.py:303-332 | confidence=5\n  PROBLEM: Both parsers only detect shell functions declared as `name() {` on a single line, so brace-on-next-line declarations are missed.\n  WHY: `scripts/review_apply_fixes.sh` already uses brace-on-next-line style for `prepare_judge_interim_priors()` (lines 149-150), so a refactor that extracts `run_editor_codex_attempt` in that style would not be recognized and the test would raise a false-positive contract violation.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_review_autofix_editor_noop_cascade_contract.py:299-345 | confidence=5\n  PROBLEM: Both parsers require `{` on the same line as `name()`, so they miss existing brace-on-next-line function declarations.\n  WHY: `scripts/review_apply_fixes.sh` already uses the brace-on-next-line style, so a future helper refactor using that convention would leave `current_function` unset and make the test fail on a stylistic change that preserves the contract.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "e8b61d3f7333f782d76603be127946fa2eba6f72340012d992f6d142ec812fbc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3159,
+    "run_id": "27053983984",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27053983984",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260606055439_062a2e5ab9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3159,
+    "run_id": "27053983984"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-06T05:54:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
