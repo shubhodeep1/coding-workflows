@@ -229,6 +229,22 @@ def test_finalize_refreshes_source_tree_and_preserves_extra_state(tmp_path: Path
 	assert not (workspace_path / ".serena").exists()
 
 
+def test_finalize_ignores_manifest_entries_outside_workspace(tmp_path: Path) -> None:
+	source_path = tmp_path / "source"
+	workspace_path = tmp_path / "runner-temp" / "workspaces" / "issue-7"
+	sibling_path = workspace_path.parent / "sibling.txt"
+	source_path.mkdir(parents=True)
+	workspace_path.mkdir(parents=True)
+	(source_path / "tracked.txt").write_text("fresh\n", encoding="utf-8")
+	sibling_path.write_text("keep\n", encoding="utf-8")
+	(workspace_path / ".ai").mkdir(parents=True)
+	(workspace_path / ".ai" / ".workspace_source_manifest.txt").write_text("../sibling.txt\ntracked.txt\n", encoding="utf-8")
+
+	result = _run_helper("finalize", tmp_path, WORKSPACE_SOURCE_PATH=str(source_path), WORKSPACE_PATH=str(workspace_path), WORKSPACE_REUSE_ENABLED="true")
+	assert result.returncode == 0, result.stderr
+	assert sibling_path.read_text(encoding="utf-8") == "keep\n"
+
+
 def test_implement_workflow_stages_workspace_helper_and_orders_restore_keys() -> None:
 	stage_block = _step_run_text(IMPLEMENT_WORKFLOW, "Stage workflow support files")
 	assert "workspace_init.sh" in stage_block

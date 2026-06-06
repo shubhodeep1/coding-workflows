@@ -321,6 +321,11 @@ def iter_source_relpaths() -> list[str]:
     return relpaths
 
 
+def is_safe_relpath(relpath: str) -> bool:
+    path = Path(relpath)
+    return not path.is_absolute() and all(part not in {"", ".", ".."} for part in path.parts)
+
+
 def remove_path(target: Path) -> None:
     if target.is_symlink() or target.is_file():
         target.unlink(missing_ok=True)
@@ -338,7 +343,7 @@ if manifest_path.exists():
     previous_set = {
         line.strip()
         for line in manifest_path.read_text(encoding='utf-8').splitlines()
-        if line.strip()
+        if line.strip() and is_safe_relpath(line.strip())
     }
 
 for relpath in sorted(previous_set - current_set, key=lambda item: (item.count('/'), item), reverse=True):

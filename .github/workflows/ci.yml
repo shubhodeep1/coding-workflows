@@ -579,6 +579,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_noop_suspicious_recovery.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_state_snapshot.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_run_substate_ledger.py
 
       - name: Semantic cache unit tests
         run: |

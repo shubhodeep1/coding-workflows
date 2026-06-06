@@ -233,6 +233,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_noop_suspicious_recovery.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_state_snapshot.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_run_substate_ledger.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_pr_body_auto_close.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_plan_archival_completeness.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_integration_pr_readiness.py
