@@ -531,9 +531,10 @@ def test_render_prompt_shell_shim_enforces_prompt_contracts() -> None:
 
 def test_implement_workflow_contains_thread_reuse_wiring() -> None:
 	text = IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
+	fetch_script_list = text.split("for f in ", 1)[1].split("; do", 1)[0]
 	assert "CODEX_THREAD_REUSE_ENABLED: ${{ vars.CODEX_THREAD_REUSE_ENABLED || 'false' }}" in text
 	assert 'echo "CODEX_THREAD_REUSE_RUNTIME_DIR=${RUNTIME_DIR}"' in text
-	assert "codex_thread_reuse.sh; do" in text
+	assert "codex_thread_reuse.sh" in fetch_script_list
 	assert "mode-implement-repair-continuation.txt mode-implement-diagnose-continuation.txt mode-validate-self-heal-continuation.txt" in text
 	assert "mode-implement-repair-continuation.yml mode-implement-diagnose-continuation.yml mode-validate-self-heal-continuation.yml" in text
 	assert "name: Probe Codex thread-reuse support" in text
