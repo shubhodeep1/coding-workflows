@@ -44,7 +44,7 @@ Regressions / mislabeled (only if any):
 - <plan> — <what's off>
 
 ➡ Next highest-value to implement: <plan>
-Why: <2–4 lines — value, cost, §1 priority, dependencies. Reference /implement-plan as the follow-up.>
+Why: <2–4 lines — value, cost, §1 priority, dependencies. Reference /implement-plan-claude (in-session) or /implement-plan-ai (AI orchestrator) as the follow-up.>
 ```
 
 Omit empty sections. Keep evidence terse but specific — a classification without a citation is a guess.
@@ -59,7 +59,7 @@ Read-only surface:
 
 ## Rules
 
-- **Read-only.** This command produces a verdict, not changes. No file edits, no commits, no PR. To act on the recommendation, the user runs `/implement-plan`.
+- **Read-only.** This command produces a verdict, not changes. No file edits, no commits, no PR. To act on the recommendation, the user runs `/implement-plan-claude` (Claude implements it in-session) or `/implement-plan-ai` (hand it to the AI orchestrator).
 - **Verify, don't trust the plan's self-reported status.** Classification must cite repo evidence (`file:line`, a passing/failing test, an absent symbol). "The plan says it's done" is not evidence.
 - **Treat `docs/completed/` as presumed-done but auditable** — surface any plan there that the repo shows is regressed or was never fully implemented.
 - **Value ranking obeys §1.** Security and correctness outrank performance and speed. Factor dependencies (unblocking value), blast radius, and effort into the single recommendation.

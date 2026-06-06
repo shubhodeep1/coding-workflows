@@ -22,6 +22,25 @@ Rules:
   harness/infrastructure failure by default, not as evidence of an application regression
   in merged code, unless the repository evidence clearly shows the product code caused
   the failure.
+- Pinned-toolchain authority: treat the provided CI check-runs block (headed
+  `=== CI STATUS ON ... ===` with the actual default-branch name, e.g.
+  `=== CI STATUS ON main ===`) as the authoritative source for `ci_status`. A
+  repo validator
+  (`npm run typecheck`/`tsc`, `eslint`, `vitest`/`jest`, `npm run build`, or any
+  language equivalent) is authoritative ONLY when run on the repo's pinned
+  toolchain — i.e. after the repo's own dependencies are installed (`npm ci`,
+  `pnpm i --frozen-lockfile`, `uv sync --frozen`, `cargo build --locked`). Do NOT
+  run such a command against a globally-installed or newer tool (e.g. a system
+  `tsc`) and report its failure as a defect: a newer compiler/linter can flag
+  options the pinned version accepts (e.g. TS5101 on `baseUrl`, which the pinned
+  compiler does not raise). Never add a `new_issues[]` entry for a validator
+  failure you cannot reproduce on the pinned toolchain, and never recommend a
+  config value without confirming the pinned tool accepts it. If the pinned deps
+  are not installed and cannot be installed, derive `ci_status` and any
+  validator-based finding from the provided check-runs block, NOT from a local
+  re-run. If that check-runs block is missing, empty, or otherwise unusable,
+  set `ci_status` to `unknown` instead of inferring it from an off-toolchain
+  local validator run.
 - Fallback on empty lookups: if the primary lookup returns empty, partial,
   or suspiciously narrow results, try at least one fallback (sibling-PR
   diff, parent-PR comments, prior wave logs, file-history grep) before

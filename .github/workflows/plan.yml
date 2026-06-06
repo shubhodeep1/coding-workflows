@@ -999,6 +999,19 @@ jobs:
             endpoint/method/parameter details in the plan so the implementation editor
             has the contract inlined. If the docs are genuinely unavailable after web
             search, ask for clarification instead of inventing details.
+          - Pinned-toolchain authority: a repo validator (`npm run typecheck`/`tsc`,
+            `eslint`, `vitest`/`jest`, `npm run build`, or any language equivalent) is
+            authoritative only on the repo's pinned toolchain — i.e. after the repo's
+            own dependencies are installed (`npm ci`, `pnpm i --frozen-lockfile`,
+            `uv sync --frozen`, `cargo build --locked`). Do NOT run such a command
+            against a globally-installed or newer tool (e.g. a system `tsc`) and treat
+            its failure as ground truth: a newer compiler/linter can flag options the
+            pinned version accepts (e.g. TS5101 on `baseUrl`, which the pinned compiler
+            does not raise). If the pinned deps are not installed, mark any local
+            validator result UNVERIFIED and defer to the branch's CI check results;
+            never plan a fix for a validator failure you cannot reproduce on the
+            pinned toolchain, and never recommend a config value without confirming
+            the pinned tool accepts it.
           - Do NOT write code.
           - Do NOT modify repository files.
           - Only generate the implementation plan when answers are interpretable and sufficient.
