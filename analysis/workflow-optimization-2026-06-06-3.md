@@ -494,3 +494,126 @@ Audit note: grep found **no `TODO`/`FIXME`/`HACK`/`XXX` markers** under `.github
 | Code modularization | 7 workflows + 5 scripts | Large |
 | Expression size reduction | 3 workflows | Medium |
 | Medium/Low fixes | 5 scripts + 1 workflow | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-06-06)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the consolidation can be implemented directly without changing call semantics; `NEEDS_VERIFICATION` means the overlap is real but caller contracts or parity still need explicit confirmation; `RISKY_SKIP` means the redundancy/deadness is visible, but the call sits in a high-risk pattern (for example pagination or shared recovery helpers) and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+No findings.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID** — REUSE-001  
+  **Safety tag** — NEEDS_VERIFICATION  
+  **File path and line ranges** — `.github/workflows/issue_pr_status.yml:180-188,281-285`; `.github/workflows/internal-issue-pr-status.yml:1-12`  
+  **Current call count** — 1 guarded fallback call site (`0` expected executions under the current in-repo caller contract)  
+  **Proposed call count** — 0  
+  **Endpoint(s)** — `GET /repos/{repo}/pulls/{pull_number}`  
+  **Evidence** — the step already has PR title/body from the event payload, then conditionally re-fetches the same data:
+  ```bash
+  PR_TITLE: ${{ github.event.pull_request.title }}
+  PR_BODY: ${{ github.event.pull_request.body || '' }}
+  ...
+  PR_DATA="${PR_TITLE:-} ${PR_BODY:-}"
+  if [ -z "$(printf '%s' "${PR_DATA}" | tr -d '[:space:]')" ]; then
+    PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+  fi
+  ```
+  The only in-repo caller is the closed-PR wrapper:
+  ```yaml
+  on:
+    pull_request:
+      types: [closed]
+  jobs:
+    sync-status:
+      uses: shubhodeep1/coding-workflows/.github/workflows/issue_pr_status.yml@main
+  ```
+  **Proposed fix** — In `Update linked issue labels when PR closes`, remove the REST PR title/body fallback and rely on `PR_TITLE`/`PR_BODY`; if a future non-PR caller is added, pass title/body explicitly instead of re-fetching them.  
+  **Safety rationale** — NEEDS_VERIFICATION because this is only safe if `issue_pr_status.yml` remains invoked from `pull_request.closed` callers and `github.event.pull_request.title` stays populated through `workflow_call`.  
+  **Downstream signal** — Verify `issue_pr_status.yml` is only called by `.github/workflows/internal-issue-pr-status.yml` and inspect one recent closed-PR run payload to confirm non-empty `github.event.pull_request.title`; then delete the REST fallback.
+
+- **ID** — REUSE-002  
+  **Safety tag** — NEEDS_VERIFICATION  
+  **File path and line ranges** — `.github/workflows/implement.yml:4522-4566,4963-4975`; `scripts/orchestrate_force_tick.sh:57-115,274-292`  
+  **Current call count** — up to 2 helper lookups per force-tick invocation (`GET /pulls/{number}` then `GET /issues/{number}`)  
+  **Proposed call count** — 0 helper lookups when the already-parsed tracking issue is passed through  
+  **Endpoint(s)** — `GET /repos/{repo}/pulls/{number}`; `GET /repos/{repo}/issues/{number}`  
+  **Evidence** — `implement.yml` already parses the tracking issue from cached issue metadata while building the PR body:
+  ```bash
+  TRACKING_ISSUE_NUMBER="$(
+    python3 - "${ISSUE_META_FILE}" <<'PY'
+    ...
+    match = TRACKING_ISSUE_LINE_RE.search(issue_body)
+    ...
+    print(match.group(1))
+  )"
+  ...
+  if [ -n "${TRACKING_ISSUE_NUMBER}" ]; then
+    printf 'Refs #%s\n' "${TRACKING_ISSUE_NUMBER}" >> "${PR_BODY_FILE}"
+  fi
+  ```
+  but the later force-tick step does not reuse it:
+  ```bash
+  bash scripts/orchestrate_force_tick.sh \
+    --repo "${{ github.repository }}" \
+    --issue "${ISSUE_NUMBER}" \
+    --reason "implement-pr-created"
+  ```
+  so the helper re-resolves tracking state from GitHub:
+  ```bash
+  if [ -z "${TRACKING_ISSUE}" ] && [ -n "${ISSUE_NUMBER}" ]; then
+    if ! pr_json="$(_force_tick_fetch_pull_request_json "${REPOSITORY}" "${ISSUE_NUMBER}")"; then
+      ...
+    fi
+  fi
+  if [ -z "${TRACKING_ISSUE}" ] && [ -n "${ISSUE_NUMBER}" ]; then
+    if ! issue_body="$(_force_tick_fetch_issue_body "${REPOSITORY}" "${ISSUE_NUMBER}")"; then
+      ...
+    fi
+  fi
+  ```
+  **Proposed fix** — Export `TRACKING_ISSUE_NUMBER` from the PR-body build step (or store it in `PR_METADATA_FILE`) and pass `--tracking-issue "${TRACKING_ISSUE_NUMBER}"` to `scripts/orchestrate_force_tick.sh`; keep the helper fallback only for empty values.  
+  **Safety rationale** — NEEDS_VERIFICATION because this path feeds immediate orchestrator redispatch, so the exported tracking number must match the helper’s current derivation and preserve empty-value fail-open behavior.  
+  **Downstream signal** — Verify on one orchestrator-managed implement run that the value parsed at `.github/workflows/implement.yml:4522-4558` matches the helper-resolved tracking issue; then pass that value into the force-tick step and leave the helper fallback for empty/missing cases only.
+
+### Dead Calls (DEAD-API-###)
+
+- **ID** — DEAD-API-001  
+  **Safety tag** — RISKY_SKIP  
+  **File path and line ranges** — `scripts/orchestrate_poll_process.sh:9261-9267`  
+  **Current call count** — 1 latent paginated API-fetch path; 0 in-repo callsites  
+  **Proposed call count** — 0  
+  **Endpoint(s)** — `GET /repos/{repo}/issues/{issue}/comments?sort=created&direction=desc&per_page=100` via `--paginate`  
+  **Evidence** — the helper performs a paginated comments fetch:
+  ```bash
+  read_standalone_state_json() {
+    local issue_num="$1"
+    local comments_json
+    if ! comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" | jq -s 'add // []' 2>/dev/null)"; then
+      comments_json='[]'
+    fi
+    _extract_standalone_state_json_from_comments "${comments_json}"
+  }
+  ```
+  but repo-local search only finds the definition, not a caller.  
+  **Proposed fix** — After confirming no out-of-repo consumers source this helper, delete `read_standalone_state_json()` and leave `_extract_standalone_state_json_from_comments` / `write_standalone_state_json()` untouched.  
+  **Safety rationale** — RISKY_SKIP because the dead helper contains a paginated `gh api --paginate` path, and shared-script helper removal requires manual review for external sourcing/parity.  
+  **Downstream signal** — Do not auto-implement; manually audit any out-of-repo consumers or operator docs that source `scripts/orchestrate_poll_process.sh`, then remove the helper only if none call `read_standalone_state_json()`.
+
+### Cross-References to Deep Audit Section
+- API-001: NEEDS_VERIFICATION — good direction, but swapping the inline retry wrapper in `Collect PR metadata` changes permanent/transient failure behavior in a hot step and needs parity review.
+- BATCH-001: NEEDS_VERIFICATION — batching is the right shape, but merged-PR validate dispatch still needs label-hydration parity checks before dropping the mixed GraphQL/REST fallback.
+- BATCH-002: NEEDS_VERIFICATION — the judge path is batchable, but the “first useful linked issue” semantics and merged-PR safety guards need explicit before/after comparison.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 2 | REUSE-001, REUSE-002 |
+| RISKY_SKIP | 1 | DEAD-API-001 |
+
+### Implement-Stage Handoff
+No SAFE_TO_MERGE findings in this pass.
