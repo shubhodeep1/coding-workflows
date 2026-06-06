@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_editor_noop_cascade_contract.py:291 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The contract test still asserts `'< \"${attempt_prompt_file}\"'`, but the refactor moved the stdin redirect to `< \"${prompt_file}\"`, so the literal no longer appears.\n  WHY: The lint check-run fails because the test searches for a stale string and exits non-zero, blocking merge.\n- scripts/review_apply_fixes.sh:70-92 | severity=high | confidence=[5]\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: `run_editor_codex_attempt` now takes the prompt file as `$1` and uses `< \"${prompt_file}\"`, so the expected literal `< \"${attempt_prompt_file}\"` is absent from the refactored script.\n  WHY: CI's grep-based assertion does not find the old pattern in `scripts/review_apply_fixes.sh`, causing `tests/test_review_autofix_editor_noop_cascade_contract.py` to fail with `AssertionError`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"feat: Implement the Symphony-inspired orchestrator improvements and archive the plan after verified completion\" with the plan-archival lint requiring all tracking-issue #3042 sub-issue checkboxes ticked or a non-empty `## De-scoped phases` section in the PR body.\n  expected_change_site: PR body (GitHub PR description)\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_6-plus]\n  EVIDENCE: lint_plan_archival_completeness.py output confirms the PR body has no `## De-scoped phases` section and reports tracking issue #3042 has 1 unchecked sub-issue checkbox (`- **fix-s2-stall-guard-contract-test**: #3146`); docs/completed/symphony-inspired-improvements-plan.md lines 88-93 acknowledge the unchecked checkbox but do not satisfy the PR-body de-scope requirement, and the PR body contains only \"Squash merge of orchestrator project #3042\" plus a validation status block and `Refs #3042`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_review_autofix_editor_noop_cascade_contract.py:291 | severity=high | confidence=5\n  PROBLEM: The contract test asserts a literal string pattern that was eliminated when the editor codex invocation in scripts/review_apply_fixes.sh was refactored into the run_editor_codex_attempt function.\n  WHY: The lint check-run fails because the test searches the text of scripts/review_apply_fixes.sh for the literal string `< \"${attempt_prompt_file}\"` which no longer appears, so the build exits non-zero and blocks merge.\n- Requirement: The PR title states \"feat: Implement the Symphony-inspired orchestrator improvements and archive the plan after verified completion\" and the archive file's closeout summary states \"the closeout summary below reflects the shipped repository state re-audited on 2026-06-05 UTC\". The plan-archival lint requires that when a plan is archived to docs/completed/ with an open sub-issue on the tracking issue, the PR body must include a ## De-scoped phases section explaining the gap.\n  Expected change site: PR body (GitHub PR description)\n  Evidence of absence: The lint_plan_archival_completeness.py output confirms the PR body has no ## De-scoped phases section. The archive file at docs/completed/symphony-inspired-improvements-plan.md lines 88-93 acknowledges the unchecked symphony-closeout-audit-archive checkbox but does not itself serve as the PR-body de-scope section that the lint requires.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/review_apply_fixes.sh:70-92 | severity=high | confidence=5\n  PROBLEM: The function accepts the prompt file as parameter $1 (prompt_file) and uses `< \"${prompt_file}\"` for the codex stdin redirect; the contract test at line 291 asserts the literal string `< \"${attempt_prompt_file}\"` exists in the file.\n  WHY: CI runs `tests/test_review_autofix_editor_noop_cascade_contract.py` as part of the lint step, and the grep-based string assertion does not find the expected pattern in the refactored code path where the per-attempt prompt file is passed as an argument to `run_editor_codex_attempt`.\n- Requirement: \"feat: Implement the Symphony-inspired orchestrator improvements and archive the plan after verified completion\" with the plan-archival lint requiring all tracking-issue #3042 sub-issue checkboxes ticked or a non-empty `## De-scoped phases` section in the PR body.\n  Expected change site: GitHub PR body for this merge (squash of orchestrator project #3042)\n  Evidence of absence: The PR body contains only \"Squash merge of orchestrator project #3042\" plus a validation status block and `Refs #3042`. There is no `## De-scoped phases` section. The `lint_plan_archival_completeness.py` check-run log confirms: \"Tracking issue #3042 has 1 unchecked sub-issue checkbox(es) ... `- **fix-s2-stall-guard-contract-test**: #3146`\". The completed-plan archive at docs/completed/symphony-inspired-improvements-plan.md lists all 12 phases as Complete with no mention of the unchecked sub-issue.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "9ab346c990dd0b31f7e69f61310cd1b9579d586bd574e64aabd62905889b9f40",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3048,
+    "run_id": "27051284971",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27051284971",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260606042557_d9b80ffd6a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3048,
+    "run_id": "27051284971"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-06T04:25:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
