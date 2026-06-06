@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- prompts/mode-judge.txt:25-29 | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The rule describes the CI block header as `=== CI STATUS ON ... ===` with an ellipsis placeholder even though the live harness emits a concrete header such as `=== CI STATUS ON main ===`.\n  WHY: A judge model may treat the ellipsis literally, miss the authoritative block, and incorrectly emit `new_issues[]` or the wrong `ci_status`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"the live planner heredoc in .github/workflows/plan.yml already contains the pinned-toolchain authority rule; the unwired reference copies ... are intentionally left untouched\" plus keeping the two *live* prompts in sync.\n  expected_change_site: .github/workflows/plan.yml (inline heredoc ~lines 992-1010)\n  confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: LAST RUN DIFF and LAST RUN CHANGED FILES show only prompts/mode-judge.txt; the original PR DIFF's plan.yml hunk was never updated in the autofix round, leaving the live prompts subtly out of sync.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- prompts/mode-judge.txt:25-29 | confidence=4\n  PROBLEM: The rule describes the CI block header as `=== CI STATUS ON ... ===` (with ellipsis placeholder) even though the live harness in `scripts/orchestrate_poll_process.sh:16155-16240` emits a concrete header such as `=== CI STATUS ON main ===`.\n  WHY: A judge model may treat the ellipsis literally, fail to locate the authoritative block, and incorrectly emit `new_issues[]` entries or the wrong `ci_status`.\n- Requirement: \"the live planner heredoc in .github/workflows/plan.yml already contains the pinned-toolchain authority rule; the unwired reference copies ... are intentionally left untouched\" (PR Description) plus keeping the two *live* prompts in sync.\n  Expected change site: .github/workflows/plan.yml (inline heredoc ~lines 992-1010)\n  Evidence of absence: LAST RUN DIFF and LAST RUN CHANGED FILES show *only* prompts/mode-judge.txt; the original PR DIFF's plan.yml hunk was never updated in the autofix round despite the editor summary claiming the planner rule was \"already satisfied.\" The two live prompts are now subtly out of sync (judge has concrete default-branch example + unknown fallback; planner does not).\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "1976f19237fda9fdda13cafdc4d222c6e7f0e727f89846eb704ea9c17929eb8b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3158,
+    "run_id": "27051802026",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27051802026",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260606040638_9c69bce309",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3158,
+    "run_id": "27051802026"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-06T04:06:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
