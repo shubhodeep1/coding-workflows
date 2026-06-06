@@ -14,6 +14,7 @@ so git resolves the repository from ``cwd``.
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import os
 import subprocess
@@ -35,15 +36,36 @@ sys.modules[spec.name] = ai_memory_lib
 spec.loader.exec_module(ai_memory_lib)
 
 
-def test_git_env_strips_repo_location_vars(monkeypatch) -> None:
+@contextlib.contextmanager
+def _patched_env(updates: dict[str, str]):
+	original = {key: os.environ.get(key) for key in updates}
+	try:
+		os.environ.update(updates)
+		yield
+	finally:
+		for key, value in original.items():
+			if value is None:
+				os.environ.pop(key, None)
+			else:
+				os.environ[key] = value
+
+
+def _git_process_env() -> dict[str, str]:
+	env = os.environ.copy()
+	for var in ai_memory_lib._GIT_LOCATION_ENV_VARS:
+		env.pop(var, None)
+	return env
+
+
+def test_git_env_strips_repo_location_vars() -> None:
 	# Every repo-location variable must be removed so an inherited workspace
 	# GIT_DIR/GIT_WORK_TREE cannot re-bind the subprocess to the host repo.
-	for var in ai_memory_lib._GIT_LOCATION_ENV_VARS:
-		monkeypatch.setenv(var, f"/host/{var.lower()}")
-	monkeypatch.setenv("PATH", os.environ.get("PATH", "/usr/bin"))
-	monkeypatch.setenv("GH_TOKEN", "sentinel-token")
+	updates = {var: f"/host/{var.lower()}" for var in ai_memory_lib._GIT_LOCATION_ENV_VARS}
+	updates["PATH"] = os.environ.get("PATH", "/usr/bin")
+	updates["GH_TOKEN"] = "sentinel-token"
 
-	env = ai_memory_lib._git_env()
+	with _patched_env(updates):
+		env = ai_memory_lib._git_env()
 
 	for var in ai_memory_lib._GIT_LOCATION_ENV_VARS:
 		assert var not in env, f"{var} leaked into git env"
@@ -64,11 +86,12 @@ def _git(cwd: Path, *args: str) -> None:
 		cwd=str(cwd),
 		check=True,
 		capture_output=True,
+		env=_git_process_env(),
 		text=True,
 	)
 
 
-def test_run_git_clone_survives_polluted_workspace_env(monkeypatch) -> None:
+def test_run_git_clone_survives_polluted_workspace_env() -> None:
 	# End-to-end repro of the failing run: with GIT_DIR/GIT_WORK_TREE pointing at
 	# an existing work tree, an un-sanitized `git clone` aborts with exit 128.
 	# _run_git must succeed because it strips those vars.
@@ -84,20 +107,66 @@ def test_run_git_clone_survives_polluted_workspace_env(monkeypatch) -> None:
 		work_tree = root / "wt"
 		work_tree.mkdir()  # existing dir is what triggers the "already exists" abort
 
-		monkeypatch.setenv("GIT_DIR", str(src / ".git"))
-		monkeypatch.setenv("GIT_WORK_TREE", str(work_tree))
-
-		dst = root / "clone"
-		proc = ai_memory_lib._run_git(
-			root, ["clone", "--no-tags", "--quiet", str(src), str(dst)], check=False
-		)
+		with _patched_env({"GIT_DIR": str(src / ".git"), "GIT_WORK_TREE": str(work_tree)}):
+			dst = root / "clone"
+			proc = ai_memory_lib._run_git(
+				root, ["clone", "--no-tags", "--quiet", str(src), str(dst)], check=False
+			)
 		assert proc.returncode == 0, (
 			f"clone failed under polluted env: rc={proc.returncode} stderr={proc.stderr!r}"
 		)
 		assert (dst / "a.txt").exists()
 
 
-if __name__ == "__main__":
-	import pytest
+def test_run_git_check_true_preserves_real_clone_error_under_polluted_env() -> None:
+	# The production callers use check=True.  Even with polluted workspace
+	# GIT_DIR/GIT_WORK_TREE, the sanitized subprocess must surface the clone's
+	# real failure instead of the inherited "working tree already exists" error.
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		src = root / "src"
+		src.mkdir()
+		_git(src, "init", "-q")
+		(src / "a.txt").write_text("hi\n")
+		_git(src, "add", "a.txt")
+		_git(src, "commit", "-qm", "init")
 
-	raise SystemExit(pytest.main([__file__, "-v"]))
+		work_tree = root / "wt"
+		work_tree.mkdir()
+		dst = root / "clone"
+		dst.mkdir()
+		(dst / "junk.txt").write_text("junk\n")
+
+		with _patched_env({"GIT_DIR": str(src / ".git"), "GIT_WORK_TREE": str(work_tree)}):
+			try:
+				ai_memory_lib._run_git(root, ["clone", "--no-tags", "--quiet", str(src), str(dst)])
+			except ai_memory_lib.MemoryGitError as exc:
+				message = str(exc)
+			else:
+				raise AssertionError("expected MemoryGitError from non-empty destination clone")
+
+		assert "destination path" in message
+		assert "already exists and is not an empty directory" in message
+		assert "working tree" not in message
+
+
+def main() -> int:
+	passed = 0
+	failed = 0
+	for name, func in sorted(globals().items()):
+		if not name.startswith("test_") or not callable(func):
+			continue
+		try:
+			func()
+			print(f"  PASS  {name}", flush=True)
+			passed += 1
+		except Exception as exc:
+			print(f"  FAIL  {name}: {exc}", flush=True)
+			failed += 1
+
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total", flush=True)
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
