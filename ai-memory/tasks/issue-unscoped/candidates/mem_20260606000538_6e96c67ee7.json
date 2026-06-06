@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update `tests/test_codex_stall_guard_poller.py` so it validates the real shared contract across `.github/workflows/implement.yml` and `scripts/codex_thread_reuse.sh`. Make the S2 contract consistent again with the smallest safe change. `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_poller.py` (and the other listed tests) must pass. If any test file path changes, update `.github/workflows/ci.yml`, `.github/workflows/mark-stable.yml`, and `.github/workflows/test-and-mark-stable.yml` in the same PR.\n  expected_change_site: tests/test_codex_stall_guard_poller.py (and any workflow YAML files if test path changed)\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The updated test (and its legacy alias) and the new `test_thread_reuse_helper_owns_timeout_and_stall_guard_wrapper()` pass when run individually, and the PR diff contains the exact snippets required by the linked issue. However the four tests that exercise `_run_poller_contract()` (which use `tempfile.TemporaryDirectory`) fail at runtime with `FileNotFoundError: [Errno 2] No usable temporary directory found in ['/tmp', '/var/tmp', '/usr/tmp', '/home/runner/work/coding-workflows/coding-workflows']`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- Requirement: \"Update `tests/test_codex_stall_guard_poller.py` so it validates the real shared contract across `.github/workflows/implement.yml` and `scripts/codex_thread_reuse.sh`.\" + \"Make the S2 contract consistent again with the smallest safe change.\"\n  Expected change site: tests/test_codex_stall_guard_poller.py\n  Evidence of absence: None \u2014 the new `test_implement_workflow_delegates_stall_guard_launch_to_thread_reuse_helper()` replaces the old assertions with delegation-aware snippets, `test_thread_reuse_helper_owns_timeout_and_stall_guard_wrapper()` asserts the real timeout/stall-guard path in `codex_thread_reuse.sh`, and `test_implement_workflow_uses_shared_stall_guard_path()` is preserved as a backward-compatible alias. This deliverable is implemented.\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_scripts.py still passes.\"\n  Expected change site: tests/test_codex_stall_guard_scripts.py\n  Evidence of absence: None \u2014 the test file path was untouched and the PR does not modify scripts referenced by it.\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_thread_reuse_core.py still passes.\"\n  Expected change site: tests/test_codex_thread_reuse_core.py\n  Evidence of absence: None \u2014 the test file path was untouched. The `codex_thread_reuse_seed_run_token()` change (PR original diff) is an internal idempotency fix (adding `CODEX_THREAD_REUSE_RUN_TOKEN_SEEDED`) that does not affect the external contract tested by core tests.\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_thread_reuse_review.py still passes.\"\n  Expected change site: tests/test_codex_thread_reuse_review.py\n  Evidence of absence: None \u2014 the test file path was untouched and the PR does not modify interfaces it depends on.\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"If any test file path changes, `.github/workflows/ci.yml`, `.github/workflows/mark-stable.yml`, and `.github/workflows/test-and-mark-stable.yml` are updated in the same PR.\"\n  Expected change site: .github/workflows/ci.yml, .github/workflows/mark-stable.yml, .github/workflows/test-and-mark-stable.yml\n  Evidence of absence: Not applicable \u2014 no test file paths changed; `tests/test_codex_stall_guard_poller.py` remains at the same path. The PR diff and LAST RUN DIFF both show only inline edits to that file.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: Update `tests/test_codex_stall_guard_poller.py` so it validates the real shared contract across `.github/workflows/implement.yml` and `scripts/codex_thread_reuse.sh`. Make the S2 contract consistent again with the smallest safe change. `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_poller.py` (and the other listed tests) must pass. If any test file path changes, update `.github/workflows/ci.yml`, `.github/workflows/mark-stable.yml`, and `.github/workflows/test-and-mark-stable.yml` in the same PR.  \n  Expected change site: tests/test_codex_stall_guard_poller.py (and any workflow YAML files if test path changed)  \n  Evidence of absence: The updated test (and its legacy alias) and the new `test_thread_reuse_helper_owns_timeout_and_stall_guard_wrapper()` pass when run individually, and the PR diff contains the exact snippets required by the linked issue. However the four tests that exercise `_run_poller_contract()` (which use `tempfile.TemporaryDirectory`) fail at runtime with `FileNotFoundError: [Errno 2] No usable temporary directory found in ['/tmp', '/var/tmp', '/usr/tmp', '/home/runner/work/coding-workflows/coding-workflows']`. This is triggered by the reviewer environment's restrictive tmpdir layout (many `drwx------ root` systemd-private dirs and a `codex-pr-...` working tree under `runner`). The acceptance command therefore does not succeed, violating the explicit acceptance criteria. The editor's prior \"already satisfied\" claim and the `CONSOLIDATOR_OVERRIDDEN` note did not address this runtime blocker.  \n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "39df6656c6c612aa01391995a8bde182cfc81b09da10730998cdbfbf22ede911",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3147,
+    "run_id": "27045590742",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27045590742",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260606000538_6e96c67ee7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3147,
+    "run_id": "27045590742"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-06T00:05:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
