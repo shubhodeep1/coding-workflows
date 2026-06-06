@@ -286,12 +286,42 @@ def test_review_apply_fixes_has_per_attempt_cache_busting_nonce() -> None:
 		"actual cache-buster; without it the per-attempt copy is byte-"
 		"identical and the cache still hits."
 	)
-	# codex must read the attempt-specific file, not the base prompt.
+	# codex must read the per-attempt file (which carries the nonce trailer),
+	# never the unchanging base prompt. The stdin redirect may be inline
+	# (`< "${attempt_prompt_file}"`) or inside a one-arg helper that the call
+	# site feeds `${attempt_prompt_file}` into — the S4 continuation-thread-
+	# reuse change extracted `run_editor_codex_attempt` for exactly this.
+	# Assert the behaviour, not one code shape, so a cache-buster-preserving
+	# refactor does not trip this guard while a regression to the base prompt
+	# still does.
 	assert 'codex --ask-for-approval never' in text
-	assert '< "${attempt_prompt_file}"' in text, (
-		"codex stdin must be fed from the per-attempt prompt file, not "
-		"from the unchanging `${EDITOR_PROMPT_FILE}`."
+	codex_stdin_vars = re.findall(
+		r'codex --ask-for-approval never[^\n]*< "\$\{(\w+)\}"', text
 	)
+	assert codex_stdin_vars, (
+		"No `codex --ask-for-approval never … < \"${<file>}\"` stdin redirect "
+		"found; the editor must feed codex a prompt file on stdin."
+	)
+	assert "EDITOR_PROMPT_FILE" not in codex_stdin_vars, (
+		"codex stdin is the unchanging `${EDITOR_PROMPT_FILE}` — every retry "
+		"sends identical bytes and a cached refusal is served instantly "
+		"(PR #3053 / run 26081926521). Feed `${attempt_prompt_file}` instead."
+	)
+	for _stdin_var in codex_stdin_vars:
+		fed_directly = _stdin_var == "attempt_prompt_file"
+		# Helper indirection: codex reads a function's first positional
+		# parameter, and a call site forwards the per-attempt file in as
+		# that first argument.
+		fed_via_helper = (
+			re.search(rf'local {re.escape(_stdin_var)}="\$1"', text) is not None
+			and re.search(r'\b\w+ "\$\{attempt_prompt_file\}"', text) is not None
+		)
+		assert fed_directly or fed_via_helper, (
+			f"codex stdin `${{{_stdin_var}}}` is neither the per-attempt prompt "
+			f"file nor a helper parameter fed `${{attempt_prompt_file}}`; the "
+			f"per-attempt nonce cannot reach codex, re-opening the cached-"
+			f"refusal cascade (PR #3053)."
+		)
 
 
 def test_review_apply_fixes_cleans_attempt_prompt_file_on_success() -> None:
