@@ -203,7 +203,7 @@ jobs:
               if not cache_id:
                 delete_failures.append(f"{cache_key}: missing cache id")
                 continue
-              result = run_gh("cache", "delete", cache_id, "--repo", repository, "--confirm")
+              result = run_gh("cache", "delete", cache_id, "--repo", repository)
               if result.returncode == 0:
                 deleted_count += 1
                 continue
