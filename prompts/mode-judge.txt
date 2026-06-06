@@ -22,8 +22,10 @@ Rules:
   harness/infrastructure failure by default, not as evidence of an application regression
   in merged code, unless the repository evidence clearly shows the product code caused
   the failure.
-- Pinned-toolchain authority: treat the provided "=== CI STATUS ON <branch> ==="
-  check-runs block as the authoritative source for `ci_status`. A repo validator
+- Pinned-toolchain authority: treat the provided CI check-runs block (headed
+  `=== CI STATUS ON ... ===` with the actual default-branch name, e.g.
+  `=== CI STATUS ON main ===`) as the authoritative source for `ci_status`. A
+  repo validator
   (`npm run typecheck`/`tsc`, `eslint`, `vitest`/`jest`, `npm run build`, or any
   language equivalent) is authoritative ONLY when run on the repo's pinned
   toolchain — i.e. after the repo's own dependencies are installed (`npm ci`,
@@ -36,7 +38,9 @@ Rules:
   config value without confirming the pinned tool accepts it. If the pinned deps
   are not installed and cannot be installed, derive `ci_status` and any
   validator-based finding from the provided check-runs block, NOT from a local
-  re-run.
+  re-run. If that check-runs block is missing, empty, or otherwise unusable,
+  set `ci_status` to `unknown` instead of inferring it from an off-toolchain
+  local validator run.
 - Fallback on empty lookups: if the primary lookup returns empty, partial,
   or suspiciously narrow results, try at least one fallback (sibling-PR
   diff, parent-PR comments, prior wave logs, file-history grep) before
