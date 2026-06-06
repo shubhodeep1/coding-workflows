@@ -16,6 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 ORCHESTRATE_POLL_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml"
 POLLER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
+THREAD_REUSE_HELPER = REPO_ROOT / "scripts" / "codex_thread_reuse.sh"
 
 
 def _run_bash(script: str, cwd: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -100,6 +101,7 @@ def _run_poller_contract(
 		source extracted/poller_stall.sh
 		STALL_THRESHOLD_MINUTES={global_threshold_minutes}
 		STALL_THRESHOLD_IMPLEMENTING_MINUTES='{implementing_threshold}'
+		REVIEW_RUN_MAX_RUNTIME_MINUTES=250
 		CODEX_STALL_GUARD_ENABLED={'true' if stall_guard_enabled else 'false'}
 		normalize_stall_guard_thresholds
 		GITHUB_REPOSITORY='octo/example'
@@ -138,21 +140,39 @@ def _active_issues_from_stdout(stdout: str) -> list[str]:
 	return [line.strip() for line in block.splitlines() if line.strip()]
 
 
-def test_implement_workflow_uses_shared_stall_guard_path() -> None:
+def test_implement_workflow_delegates_stall_guard_launch_to_thread_reuse_helper() -> None:
 	text = IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
 	for snippet in [
 		"codex_stall_guard.sh",
 		"CODEX_STALL_GUARD_ENABLED:",
 		"CODEX_STALL_TIMEOUT_SECONDS:",
 		"CODEX_STALL_KILL_GRACE_SECONDS:",
-		"CODEX_STALL_GUARD_HELPER=\"scripts/codex_stall_guard.sh\"",
-		"timeout --signal=TERM --kill-after=5s",
-		"--phase implement",
-		"--status-file \"${attempt_stall_status_file}\"",
+		'CODEX_STALL_GUARD_HELPER="scripts/codex_stall_guard.sh"',
+		'CODEX_THREAD_REUSE_STALL_GUARD_HELPER="${CODEX_STALL_GUARD_HELPER}"',
+		'CODEX_THREAD_REUSE_STATUS_FILE="${attempt_stall_status_file}"',
+		'CODEX_THREAD_REUSE_TIMEOUT_SECS="${attempt_wall}"',
+		'CODEX_THREAD_REUSE_PHASE="implement"',
+		"bash scripts/codex_thread_reuse.sh direct-run || cmd_rc=$?",
 		"observed|killed)",
 		"[ \"${stall_state}\" = \"killed\" ]",
 	]:
 		assert snippet in text, f"missing {snippet!r} in {IMPLEMENT_WORKFLOW}"
+
+
+# Preserve the legacy test name for any name-targeted invocations.
+def test_implement_workflow_uses_shared_stall_guard_path() -> None:
+	test_implement_workflow_delegates_stall_guard_launch_to_thread_reuse_helper()
+
+
+def test_thread_reuse_helper_owns_timeout_and_stall_guard_wrapper() -> None:
+	text = THREAD_REUSE_HELPER.read_text(encoding="utf-8")
+	for snippet in [
+		"timeout --signal=TERM --kill-after=5s",
+		'runner+=("${stall_guard}" --phase "${phase}" --stdout-file "${output_file}")',
+		'runner+=(--status-file "${status_file}")',
+		'"${timeout_cmd[@]}" "${runner[@]}" < "${prompt_file}"',
+	]:
+		assert snippet in text, f"missing {snippet!r} in {THREAD_REUSE_HELPER}"
 
 
 def test_orchestrate_poll_workflow_surfaces_s2_guard_envs() -> None:
