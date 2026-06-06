@@ -73,7 +73,39 @@ PY
 }
 
 CODEX_HEARTBEAT_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_heartbeat.sh"
+CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
 
+resolve_ledger_substate_helper() {
+  local candidate
+  for candidate in \
+    "${SUPPORT_SCRIPTS_DIR:-scripts}/ledger_emit_substate.sh" \
+    ".codex-workflow-src/scripts/ledger_emit_substate.sh" \
+    "scripts/ledger_emit_substate.sh"; do
+    if [ -f "${candidate}" ]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+LEDGER_SUBSTATE_HELPER="$(resolve_ledger_substate_helper || true)"
+
+read_codex_stall_guard_state() {
+  local status_file="$1"
+  local state=""
+
+  [ -s "${status_file}" ] || return 1
+  state="$(sed -n 's/^state=//p' "${status_file}" | head -n 1)"
+  case "${state}" in
+    observed|killed)
+      printf '%s\n' "${state}"
+      return 0
+      ;;
+  esac
+
+  return 1
+}
 if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh" ]; then
   # shellcheck source=/dev/null
   source "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh"
@@ -158,6 +190,41 @@ print(
 	f"cache_read_input_tokens={format_usage_value(usage.get('cache_read_input_tokens'))}"
 )
 PY
+}
+
+emit_reviewer_substate() {
+  local event_or_substate="$1"
+  local attempt_number="$2"
+  local tokens_log_file="${3:-}"
+  local args=()
+
+  [ -f "${LEDGER_SUBSTATE_HELPER:-}" ] || return 0
+
+  args=(
+    --run-id "${GITHUB_RUN_ID:-}"
+    --workflow "review_autofix"
+    --phase "review_run_reviewers"
+    --mode "${output_prefix:-review}:${safe_name:-reviewer}"
+    --attempt "${attempt_number}"
+    --lane "${slot_model:-${safe_name:-reviewer}}"
+    --model "${effective_model:-}"
+    --pr-number "${PR_NUMBER:-}"
+    --actor "${GITHUB_ACTOR:-codex-bot}"
+    --repo-root "$(pwd)"
+  )
+  case "${event_or_substate}" in
+    codex_stall_observed|codex_stall_killed)
+      args+=(--event-type "${event_or_substate}")
+      ;;
+    *)
+      args+=(--substate "${event_or_substate}")
+      ;;
+  esac
+  if [ -n "${tokens_log_file}" ]; then
+    args+=(--tokens-log-file "${tokens_log_file}")
+  fi
+
+  bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" || true
 }
 
 run_cache_probe() {
@@ -2478,6 +2545,8 @@ execute_reviewer_attempt() {
   local tmp_output=""
   local tmp_stderr=""
   local hb_file=""
+  local stall_status_file=""
+  local stall_state=""
   local start_time=""
   local codex_pid_file=""
   local wd_reason_file=""
@@ -2496,6 +2565,8 @@ execute_reviewer_attempt() {
   REVIEWER_ATTEMPT_RETRYABLE_CLASS=""
   REVIEWER_ATTEMPT_WD_REASON=""
   REVIEWER_ATTEMPT_CMD_RC=0
+
+  emit_reviewer_substate "PreparingWorkspace" "${attempt_number}"
 
   reviewer_prepare_reasoning_configs \
     "${reviewer_config_path:-}" \
@@ -2519,10 +2590,13 @@ execute_reviewer_attempt() {
     return 0
   fi
 
+  emit_reviewer_substate "BuildingPrompt" "${attempt_number}"
+
   tmp_output="$(mktemp)"
   tmp_stderr="$(mktemp)"
   hb_file="$(mktemp /tmp/heartbeat_reviewer.XXXXXX)"
   printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}"
+  stall_status_file="$(mktemp /tmp/reviewer_stall_status.XXXXXX)"
   start_time="$(date +%s)"
   codex_pid_file="$(mktemp /tmp/codex_pid_reviewer.XXXXXX)"
   wd_reason_file="$(mktemp /tmp/reviewer_wd_reason.XXXXXX)"
@@ -2593,6 +2667,9 @@ execute_reviewer_attempt() {
   if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
     sanitize_codex_prompt_file "${prompt_file}"
   fi
+  emit_reviewer_substate "LaunchingAgentProcess" "${attempt_number}"
+  emit_reviewer_substate "InitializingSession" "${attempt_number}"
+  emit_reviewer_substate "StreamingTurn" "${attempt_number}"
   reviewer_codex_cmd=(
     "${codex_bin}"
     --ask-for-approval never
@@ -2603,7 +2680,15 @@ execute_reviewer_attempt() {
     --model "${effective_model}"
     --sandbox read-only
   )
-  if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
+  if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
+    "${CODEX_STALL_GUARD_HELPER}" \
+      --phase review_run_reviewers \
+      --stdout-file "${tmp_output}" \
+      --stderr-file "${tmp_stderr}" \
+      --activity-file "${hb_file}" \
+      --status-file "${stall_status_file}" \
+      -- "${reviewer_codex_cmd[@]}" < "${prompt_file}" &
+  elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
     "${CODEX_HEARTBEAT_HELPER}" \
       --phase review_run_reviewers \
       --stdout-file "${tmp_output}" \
@@ -2631,6 +2716,14 @@ execute_reviewer_attempt() {
     wd_reason="$(cat "${wd_reason_file}" 2>/dev/null || true)"
   fi
   rm -f "${wd_reason_file}"
+  if stall_state="$(read_codex_stall_guard_state "${stall_status_file}" 2>/dev/null)"; then
+    :
+  elif [ -s "${stall_status_file}" ]; then
+    echo "Reviewer slot ${slot_model} (${effective_model}) could not parse codex stall guard status from ${stall_status_file}." | tee -a "${log_file}"
+  fi
+  rm -f "${stall_status_file}"
+
+  emit_reviewer_substate "Finishing" "${attempt_number}" "${tmp_stderr}"
 
   case "${wd_reason}" in
     pr_closed_sentinel|pr_closed_api)
@@ -2643,10 +2736,22 @@ execute_reviewer_attempt() {
       ;;
   esac
 
+  case "${stall_state}" in
+    observed)
+      echo "Reviewer slot ${slot_model} (${effective_model}) recorded codex_stall_observed on ${attempt_label} (observe-only mode)." | tee -a "${log_file}"
+      emit_reviewer_substate "codex_stall_observed" "${attempt_number}" "${tmp_stderr}"
+      ;;
+    killed)
+      echo "Reviewer slot ${slot_model} (${effective_model}) recorded codex_stall_killed on ${attempt_label} (exit=${cmd_rc})." | tee -a "${log_file}"
+      emit_reviewer_substate "codex_stall_killed" "${attempt_number}" "${tmp_stderr}"
+      ;;
+  esac
+
   if [ "${cmd_rc}" -eq 0 ] && [ -s "${tmp_output}" ]; then
     cat "${tmp_stderr}" >> "${log_file}"
     mv "${tmp_output}" "${output_file}"
     echo "Reviewer slot ${slot_model} (${effective_model}) succeeded on ${attempt_label}." | tee -a "${log_file}"
+    emit_reviewer_substate "Succeeded" "${attempt_number}" "${tmp_stderr}"
     rm -f "${tmp_output}" "${tmp_stderr}"
     REVIEWER_ATTEMPT_OUTCOME="success"
     REVIEWER_ATTEMPT_CMD_RC=0
@@ -2665,17 +2770,21 @@ execute_reviewer_attempt() {
       echo "Reviewer slot ${slot_model} (${effective_model}) ${attempt_label}: codex-cli stderr was also empty (no diagnostic available)." | tee -a "${log_file}" >&2
     fi
   else
-    case "${wd_reason}" in
-      idle_timeout)
-        echo "Reviewer slot ${slot_model} (${effective_model}) killed by watchdog on ${attempt_label} (idle timeout ${reviewer_idle_timeout}s, exit=${cmd_rc})." | tee -a "${log_file}"
-        ;;
-      max_wall)
-        echo "Reviewer slot ${slot_model} (${effective_model}) killed by watchdog on ${attempt_label} (max wall ${reviewer_max_wall}s, exit=${cmd_rc})." | tee -a "${log_file}"
-        ;;
-      *)
-        echo "Reviewer slot ${slot_model} (${effective_model}) execution failed on ${attempt_label} (exit=${cmd_rc})." | tee -a "${log_file}"
-        ;;
-    esac
+    if [ "${stall_state}" = "killed" ]; then
+      echo "Reviewer slot ${slot_model} (${effective_model}) killed by codex stall guard on ${attempt_label} (exit=${cmd_rc})." | tee -a "${log_file}"
+    else
+      case "${wd_reason}" in
+        idle_timeout)
+          echo "Reviewer slot ${slot_model} (${effective_model}) killed by watchdog on ${attempt_label} (idle timeout ${reviewer_idle_timeout}s, exit=${cmd_rc})." | tee -a "${log_file}"
+          ;;
+        max_wall)
+          echo "Reviewer slot ${slot_model} (${effective_model}) killed by watchdog on ${attempt_label} (max wall ${reviewer_max_wall}s, exit=${cmd_rc})." | tee -a "${log_file}"
+          ;;
+        *)
+          echo "Reviewer slot ${slot_model} (${effective_model}) execution failed on ${attempt_label} (exit=${cmd_rc})." | tee -a "${log_file}"
+          ;;
+      esac
+    fi
   fi
 
   if [ -s "${tmp_stderr}" ]; then
@@ -2692,6 +2801,17 @@ execute_reviewer_attempt() {
   fi
   REVIEWER_ATTEMPT_WD_REASON="${wd_reason}"
   REVIEWER_ATTEMPT_CMD_RC="${cmd_rc}"
+  case "${stall_state}:${wd_reason}:${cmd_rc}" in
+    killed:*:*|*:idle_timeout:*|*:*:137)
+      emit_reviewer_substate "Stalled" "${attempt_number}" "${tmp_stderr}"
+      ;;
+    *:max_wall:*|*:*:124|*:*:143)
+      emit_reviewer_substate "TimedOut" "${attempt_number}" "${tmp_stderr}"
+      ;;
+    *)
+      emit_reviewer_substate "Failed" "${attempt_number}" "${tmp_stderr}"
+      ;;
+  esac
   rm -f "${tmp_output}" "${tmp_stderr}"
   return 0
 }

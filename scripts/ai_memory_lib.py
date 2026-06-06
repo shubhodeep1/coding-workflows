@@ -48,6 +48,7 @@ VALIDATION_HISTORY_SCHEMA_VERSION = "v1"
 OPERATOR_BYPASS_AUDIT_SCHEMA_VERSION = "v1"
 REVALIDATE_EVENTS_SCHEMA_VERSION = "v1"
 VALIDATION_DISCOVERY_SCHEMA_VERSION = "v1"
+STATE_SNAPSHOT_SCHEMA_VERSION = "v1"
 MAX_MEMORY_DETAILS_LENGTH = 12000
 LEGACY_MEMORY_ROOT_RELATIVE = ".github/ai-memory"
 CANONICAL_MEMORY_ROOT_RELATIVE = "ai-memory"
@@ -557,6 +558,33 @@ def _run_ledger_path(memory_root: Path, run_id: str) -> Path:
     return memory_root / "runs" / safe_run_id / "ledger" / "events.jsonl"
 
 
+def load_run_ledger_entries(memory_root: Path, run_id: str) -> list[dict[str, Any]]:
+    ensure_memory_layout(memory_root)
+    ledger_path = _run_ledger_path(memory_root, run_id)
+    if not ledger_path.exists():
+        return []
+
+    entries: list[dict[str, Any]] = []
+    with ledger_path.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                payload = json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                raise MemoryValidationError(
+                    f"Invalid JSON in run ledger {ledger_path} at line {line_number}"
+                ) from exc
+            if not isinstance(payload, dict):
+                raise MemoryValidationError(
+                    f"Run ledger entry in {ledger_path} at line {line_number} must be a JSON object"
+                )
+            validate_run_ledger_entry(payload, memory_root)
+            entries.append(payload)
+    return entries
+
+
 def _validate_repository_name(repository: str) -> str:
     normalized = (repository or "").strip()
     if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", normalized) is None:
@@ -723,6 +751,10 @@ def validate_operator_bypass_audit_payload(payload: dict[str, Any], memory_root:
 
 def validate_revalidate_events_payload(payload: dict[str, Any], memory_root: Path) -> None:
     _validate_with_schema_file(payload, _schema_file(memory_root, "revalidate_events.v1.json"))
+
+
+def validate_state_snapshot_payload(payload: dict[str, Any], memory_root: Path) -> None:
+    _validate_with_schema_file(payload, _schema_file(memory_root, "state_snapshot.v1.json"))
 
 
 def _default_validation_history_payload(repository: str, integration_sha: str) -> dict[str, Any]:

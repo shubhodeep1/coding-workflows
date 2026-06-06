@@ -16,6 +16,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+try:
+	import yaml
+except Exception:  # pragma: no cover - fail-open dependency guard
+	yaml = None
+
 
 class OrchestrateError(ValueError):
 	"""Raised when orchestrator data is invalid."""
@@ -185,6 +190,357 @@ def _detect_cycles(issue_ids: set[str], edges: list[dict[str, str]]) -> None:
 # ---------------------------------------------------------------------------
 
 DEFAULT_HOT_FILES_PATH = ".github/ai/hot_files.json"
+
+DEFAULT_CONCURRENCY_CAPS_PATH = ".github/ai/concurrency_caps.yml"
+SUPPORTED_CONCURRENCY_CAP_STATES: tuple[str, ...] = (
+	"ai:clarification",
+	"ai:planning",
+	"ai:implementing",
+	"ai:validating",
+	"ai:review-blocked",
+)
+_SUPPORTED_CONCURRENCY_CAP_STATES_SET: frozenset[str] = frozenset(SUPPORTED_CONCURRENCY_CAP_STATES)
+_WORKFLOW_RUN_STATE_BY_PATH: dict[str, str] = {
+	"clarify.yml": "ai:clarification",
+	"internal-clarify.yml": "ai:clarification",
+	"plan.yml": "ai:planning",
+	"internal-plan.yml": "ai:planning",
+	"implement.yml": "ai:implementing",
+	"internal-implement.yml": "ai:implementing",
+	"validate.yml": "ai:validating",
+	"internal-validate.yml": "ai:validating",
+	"review_rb_judge_dispatch.yml": "ai:review-blocked",
+}
+_WORKFLOW_RUN_STATE_NAME_PREFIXES: tuple[tuple[str, str], ...] = (
+	("internal: ai clarify", "ai:clarification"),
+	("ai clarify", "ai:clarification"),
+	("internal: ai plan", "ai:planning"),
+	("ai plan", "ai:planning"),
+	("internal: ai implement", "ai:implementing"),
+	("ai implement", "ai:implementing"),
+	("internal: ai validate", "ai:validating"),
+	("ai validate", "ai:validating"),
+	("internal: review-blocked judge dispatch", "ai:review-blocked"),
+	("ai review-blocked judge dispatch", "ai:review-blocked"),
+)
+
+
+def _disabled_concurrency_caps(
+	target: Path,
+	*,
+	status: str,
+	error: str = "",
+) -> dict[str, Any]:
+	return {
+		"enabled": False,
+		"status": status,
+		"error": error,
+		"source_path": str(target),
+		"global_max_concurrent": None,
+		"max_concurrent_by_state": {},
+		"supported_states": list(SUPPORTED_CONCURRENCY_CAP_STATES),
+	}
+
+
+def _normalize_concurrency_cap_state(raw_state: Any) -> str | None:
+	if not isinstance(raw_state, str):
+		return None
+	normalized = raw_state.strip().lower()
+	if normalized in _SUPPORTED_CONCURRENCY_CAP_STATES_SET:
+		return normalized
+	return None
+
+
+def _normalize_concurrency_cap_value(raw_value: Any, *, field_name: str) -> int | None:
+	if raw_value is None:
+		return None
+	if isinstance(raw_value, bool):
+		raise OrchestrateError(f"{field_name} must be an integer")
+	if isinstance(raw_value, float):
+		if not raw_value.is_integer():
+			raise OrchestrateError(f"{field_name} must be an integer")
+		raw_value = int(raw_value)
+	if not isinstance(raw_value, int):
+		raise OrchestrateError(f"{field_name} must be an integer")
+	if raw_value < -1:
+		raise OrchestrateError(f"{field_name} must be >= -1")
+	if raw_value == -1:
+		return None
+	return raw_value
+
+
+def _parse_minimal_concurrency_cap_scalar(
+	raw_value: str,
+	*,
+	field_name: str,
+	path: Path,
+	line_number: int,
+) -> int | float | None:
+	if raw_value in {"", "null", "~"}:
+		return None
+	if re.fullmatch(r"-?[0-9]+", raw_value):
+		return int(raw_value)
+	if re.fullmatch(r"-?[0-9]+\.0+", raw_value):
+		return float(raw_value)
+	raise OrchestrateError(
+		f"Unsupported scalar for {field_name} at {path}:{line_number}; install PyYAML for richer caps syntax"
+	)
+
+
+def _parse_minimal_concurrency_caps_yaml(text: str, path: Path) -> dict[str, Any]:
+	stripped = text.strip()
+	if not stripped:
+		return {}
+	if stripped.startswith("{"):
+		try:
+			loaded = json.loads(stripped)
+		except json.JSONDecodeError as exc:
+			raise OrchestrateError(
+				f"Invalid JSON-formatted caps file '{path}' at line {exc.lineno}, column {exc.colno}: {exc.msg}"
+			) from exc
+		if not isinstance(loaded, dict):
+			raise OrchestrateError("caps file must be a YAML mapping")
+		return loaded
+
+	data: dict[str, Any] = {}
+	lines = text.splitlines()
+	index = 0
+	while index < len(lines):
+		raw_line = lines[index]
+		line_number = index + 1
+		stripped_line = raw_line.strip()
+		if not stripped_line or stripped_line.startswith("#"):
+			index += 1
+			continue
+		if raw_line.startswith((" ", "\t")):
+			raise OrchestrateError(
+				f"Unsupported indentation at {path}:{line_number}; install PyYAML for richer caps syntax"
+			)
+		key, separator, remainder = raw_line.partition(":")
+		if separator != ":":
+			raise OrchestrateError(f"Invalid caps line at {path}:{line_number}: {raw_line!r}")
+		key = key.strip()
+		remainder = remainder.strip()
+		if key == "global_max_concurrent":
+			data[key] = _parse_minimal_concurrency_cap_scalar(
+				remainder,
+				field_name=key,
+				path=path,
+				line_number=line_number,
+			)
+			index += 1
+			continue
+		if key != "max_concurrent_by_state":
+			raise OrchestrateError(
+				f"Unknown concurrency-caps key '{key}' in '{path}'; supported keys: ['global_max_concurrent', 'max_concurrent_by_state']"
+			)
+		if remainder:
+			if remainder == "{}":
+				data[key] = {}
+				index += 1
+				continue
+			raise OrchestrateError(
+				f"Unsupported inline mapping syntax for {key} at {path}:{line_number}; install PyYAML for richer caps syntax"
+			)
+
+		mapping: dict[str, int | float | None] = {}
+		index += 1
+		while index < len(lines):
+			child_raw = lines[index]
+			child_line_number = index + 1
+			child_stripped = child_raw.strip()
+			if not child_stripped or child_stripped.startswith("#"):
+				index += 1
+				continue
+			if not child_raw.startswith("  "):
+				break
+			if child_raw.startswith("   ") or child_raw.startswith("  \t"):
+				raise OrchestrateError(
+					f"Unsupported indentation at {path}:{child_line_number}; install PyYAML for richer caps syntax"
+				)
+			child_payload = child_raw[2:]
+			child_key, child_separator, child_remainder = child_payload.rpartition(":")
+			if child_separator != ":":
+				raise OrchestrateError(
+					f"Expected key/value mapping under max_concurrent_by_state at {path}:{child_line_number}"
+				)
+			child_key = child_key.strip()
+			mapping[child_key] = _parse_minimal_concurrency_cap_scalar(
+				child_remainder.strip(),
+				field_name=f"max_concurrent_by_state.{child_key}",
+				path=path,
+				line_number=child_line_number,
+			)
+			index += 1
+		data[key] = mapping
+
+	return data
+
+
+def load_concurrency_caps(path: str | Path | None = None) -> dict[str, Any]:
+	"""Load the optional per-state workflow concurrency caps.
+
+	The config is fail-open by contract: missing, empty, malformed, unreadable,
+	or semantically invalid files disable caps instead of raising.
+	"""
+	target = Path(path) if path else Path(DEFAULT_CONCURRENCY_CAPS_PATH)
+	try:
+		raw_text = target.read_text(encoding="utf-8")
+	except FileNotFoundError:
+		return _disabled_concurrency_caps(target, status="missing")
+	except (PermissionError, OSError) as exc:
+		return _disabled_concurrency_caps(target, status="unreadable", error=str(exc))
+
+	if not raw_text.strip():
+		return _disabled_concurrency_caps(target, status="empty")
+
+	try:
+		if yaml is None:
+			data = _parse_minimal_concurrency_caps_yaml(raw_text, target)
+		else:
+			data = yaml.safe_load(raw_text)
+	except OrchestrateError as exc:
+		return _disabled_concurrency_caps(target, status="yaml_unavailable", error=str(exc))
+	except Exception as exc:
+		return _disabled_concurrency_caps(target, status="malformed", error=str(exc))
+
+	if data is None:
+		return _disabled_concurrency_caps(target, status="empty")
+	if not isinstance(data, dict):
+		return _disabled_concurrency_caps(target, status="invalid", error="caps file must be a YAML mapping")
+
+	try:
+		global_cap = _normalize_concurrency_cap_value(
+			data.get("global_max_concurrent", None),
+			field_name="global_max_concurrent",
+		)
+		raw_state_caps = data.get("max_concurrent_by_state", {})
+		if raw_state_caps is None:
+			raw_state_caps = {}
+		if not isinstance(raw_state_caps, dict):
+			raise OrchestrateError("max_concurrent_by_state must be a mapping")
+
+		normalized_state_caps: dict[str, int] = {}
+		for raw_state, raw_limit in raw_state_caps.items():
+			state = _normalize_concurrency_cap_state(raw_state)
+			if state is None:
+				raise OrchestrateError(f"unsupported concurrency-cap state: {raw_state!r}")
+			limit = _normalize_concurrency_cap_value(raw_limit, field_name=f"max_concurrent_by_state.{state}")
+			if limit is not None:
+				normalized_state_caps[state] = limit
+	except OrchestrateError as exc:
+		return _disabled_concurrency_caps(target, status="invalid", error=str(exc))
+
+	enabled = global_cap is not None or bool(normalized_state_caps)
+	status = "enabled" if enabled else "disabled"
+	return {
+		"enabled": enabled,
+		"status": status,
+		"error": "",
+		"source_path": str(target),
+		"global_max_concurrent": global_cap,
+		"max_concurrent_by_state": normalized_state_caps,
+		"supported_states": list(SUPPORTED_CONCURRENCY_CAP_STATES),
+	}
+
+
+def classify_workflow_run_target_state(run: dict[str, Any]) -> str | None:
+	"""Map a workflow run payload to the orchestrator phase it directly drives."""
+	if not isinstance(run, dict):
+		return None
+
+	workflow_path = str(run.get("path") or "").strip().replace("\\", "/")
+	while workflow_path.startswith("./"):
+		workflow_path = workflow_path[2:]
+	for suffix, state in _WORKFLOW_RUN_STATE_BY_PATH.items():
+		if workflow_path == suffix or workflow_path.endswith(f"/{suffix}"):
+			return state
+
+	workflow_name = " ".join(str(run.get("name") or "").strip().casefold().split())
+	for prefix, state in _WORKFLOW_RUN_STATE_NAME_PREFIXES:
+		if workflow_name.startswith(prefix):
+			return state
+	return None
+
+
+def _workflow_run_counts_toward_concurrency(
+	run: dict[str, Any],
+	state: str,
+	*,
+	now_ts: int,
+	threshold_minutes: int,
+	implementing_threshold_minutes: int | None,
+) -> bool:
+	status = str(run.get("status") or "").strip().lower()
+	if status not in {"in_progress", "queued"}:
+		return False
+
+	start_epoch = _parse_iso8601_to_epoch(run.get("run_started_at"))
+	if start_epoch is None:
+		start_epoch = _parse_iso8601_to_epoch(run.get("created_at"))
+	if start_epoch is None:
+		return False
+
+	effective_minutes = threshold_minutes
+	if state == "ai:implementing" and implementing_threshold_minutes is not None:
+		effective_minutes = implementing_threshold_minutes
+	if effective_minutes < 1:
+		effective_minutes = 120
+
+	return (now_ts - start_epoch) < (effective_minutes * 60)
+
+
+def build_concurrency_snapshot(
+	actions_runs_payload: Any,
+	*,
+	caps: dict[str, Any] | None = None,
+	caps_path: str | Path | None = None,
+	threshold_minutes: int = 120,
+	implementing_threshold_minutes: int | None = None,
+	now_ts: int | None = None,
+) -> dict[str, Any]:
+	"""Build one cycle-local count map from the shared Actions runs snapshot."""
+	caps_doc = dict(caps) if caps is not None else load_concurrency_caps(caps_path)
+	counts = {state: 0 for state in SUPPORTED_CONCURRENCY_CAP_STATES}
+	global_running = 0
+
+	runs = actions_runs_payload.get("workflow_runs") if isinstance(actions_runs_payload, dict) else None
+	if not isinstance(runs, list):
+		runs = []
+
+	try:
+		effective_now_ts = int(now_ts) if now_ts is not None else int(time.time())
+	except (TypeError, ValueError):
+		effective_now_ts = int(time.time())
+	if not isinstance(threshold_minutes, int) or threshold_minutes < 1:
+		threshold_minutes = 120
+	if implementing_threshold_minutes is not None and (
+		not isinstance(implementing_threshold_minutes, int) or implementing_threshold_minutes < 1
+	):
+		implementing_threshold_minutes = None
+
+	for run in runs:
+		if not isinstance(run, dict):
+			continue
+		state = classify_workflow_run_target_state(run)
+		if state is None:
+			continue
+		if not _workflow_run_counts_toward_concurrency(
+			run,
+			state,
+			now_ts=effective_now_ts,
+			threshold_minutes=threshold_minutes,
+			implementing_threshold_minutes=implementing_threshold_minutes,
+		):
+			continue
+		counts[state] += 1
+		global_running += 1
+
+	return {
+		**caps_doc,
+		"running_by_state": counts,
+		"global_running": global_running,
+	}
 
 
 def load_hot_files(path: str | Path | None = None) -> set[str]:
@@ -1001,6 +1357,7 @@ TERMINAL_PHASES: set[str] = {
 	"ai:memory-maintenance-failed",
 }
 TERMINAL_WAVE_STATUSES: set[str] = {"merged", "closed", "skipped", "not_created"}
+BLOCKER_TERMINAL_WAVE_STATUSES: set[str] = {"merged", "closed", "skipped", "not_created"}
 
 # Phases already handled by dedicated logic in the poller — stall detector
 # should not double-act on these.
@@ -1770,6 +2127,36 @@ def reconcile_wave_issue_status(
 	if determine_phase(labels) in TERMINAL_PHASES:
 		return "closed", "label_terminal_phase"
 	return "in_progress", "default_in_progress"
+
+
+def is_terminal_wave_issue_status(status: str | None) -> bool:
+	"""Return whether a wave issue status is terminal for dependency gating."""
+	return str(status or "").strip() in BLOCKER_TERMINAL_WAVE_STATUSES
+
+
+def is_terminal_wave_issue(
+	issue: dict[str, Any],
+	labels: list[str],
+	issue_state: str | None = None,
+	pr_state: str | None = None,
+	pr_merged: bool | None = None,
+) -> tuple[bool, str, str]:
+	"""Return blocker-terminality using the shared reconciliation model.
+
+	The returned tuple is ``(terminal, status, source)`` where ``status`` and
+	``source`` come from :func:`reconcile_wave_issue_status`.
+	"""
+	status, source = reconcile_wave_issue_status(
+		issue,
+		labels,
+		issue_state=issue_state,
+		pr_state=pr_state,
+		pr_merged=pr_merged,
+	)
+	terminal = is_terminal_wave_issue_status(status)
+	if status == "not_created" and source == "no_github_issue":
+		terminal = False
+	return terminal, status, source
 
 
 # Phases whose stall clock is re-anchored to
@@ -2785,6 +3172,36 @@ def cmd_update_timestamps(args: argparse.Namespace) -> int:
 	return 0
 
 
+def cmd_concurrency_caps(args: argparse.Namespace) -> int:
+	actions_runs_payload: dict[str, Any] = {"workflow_runs": []}
+	actions_runs_file = getattr(args, "actions_runs_file", "-") or "-"
+	try:
+		if actions_runs_file == "-":
+			raw_payload = sys.stdin.read()
+		else:
+			raw_payload = Path(actions_runs_file).read_text(encoding="utf-8")
+	except (FileNotFoundError, PermissionError, OSError):
+		raw_payload = ""
+
+	if raw_payload.strip():
+		try:
+			parsed_payload = json.loads(raw_payload)
+			if isinstance(parsed_payload, dict):
+				actions_runs_payload = parsed_payload
+		except json.JSONDecodeError:
+			pass
+
+	snapshot = build_concurrency_snapshot(
+		actions_runs_payload,
+		caps_path=args.caps_path,
+		threshold_minutes=args.threshold_minutes,
+		implementing_threshold_minutes=args.implementing_threshold_minutes,
+		now_ts=args.now_ts,
+	)
+	print(json.dumps(snapshot, ensure_ascii=False, separators=(",", ":")))
+	return 0
+
+
 # ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
@@ -2912,6 +3329,14 @@ def build_parser() -> argparse.ArgumentParser:
 	p_ts.add_argument("--labels-json", required=True, help='JSON: {"issue_num": ["label1", ...]}')
 	p_ts.add_argument("--now-ts", default=None, help="Current epoch seconds (default: now)")
 	p_ts.set_defaults(func=cmd_update_timestamps)
+
+	p_caps = subparsers.add_parser("concurrency-caps", help="Load optional phase concurrency caps and count active workflow runs")
+	p_caps.add_argument("--caps-path", default=DEFAULT_CONCURRENCY_CAPS_PATH)
+	p_caps.add_argument("--actions-runs-file", default="-", help="Actions runs JSON file path (default: stdin)")
+	p_caps.add_argument("--threshold-minutes", type=int, default=120)
+	p_caps.add_argument("--implementing-threshold-minutes", type=int, default=None)
+	p_caps.add_argument("--now-ts", type=int, default=None)
+	p_caps.set_defaults(func=cmd_concurrency_caps)
 
 	return parser
 

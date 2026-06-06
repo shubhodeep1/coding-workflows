@@ -85,6 +85,77 @@ SELF_HEAL_DECISION_FILE="${RUNTIME_DIR}/validate_self_heal_decision.json"
 SELF_HEAL_PATCH_TMP="${RUNTIME_DIR}/validate_self_heal_patch.diff"
 SELF_HEAL_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODEX_HEARTBEAT_HELPER="${SELF_HEAL_SCRIPT_DIR}/codex_heartbeat.sh"
+CODEX_STALL_GUARD_HELPER="${SELF_HEAL_SCRIPT_DIR}/codex_stall_guard.sh"
+LEDGER_SUBSTATE_HELPER=""
+for _ledger_candidate in \
+	"${SELF_HEAL_SCRIPT_DIR}/ledger_emit_substate.sh" \
+	"scripts/ledger_emit_substate.sh" \
+	".codex-workflow-src/scripts/ledger_emit_substate.sh"; do
+	if [ -f "${_ledger_candidate}" ]; then
+		LEDGER_SUBSTATE_HELPER="${_ledger_candidate}"
+		break
+	fi
+done
+SELF_HEAL_STALL_STATE=""
+
+emit_self_heal_substate()
+{
+	local event_or_substate="$1"
+	local llm_attempt="$2"
+	local tokens_log_file="${3:-}"
+	local lane="self-heal-attempt-$((SELF_HEAL_ATTEMPT + 1))"
+	local issue_number=""
+	local args=()
+
+	if [[ "${TRACKING_ISSUE:-}" =~ ^[0-9]+$ ]] && [ "${TRACKING_ISSUE}" -gt 0 ]; then
+		issue_number="${TRACKING_ISSUE}"
+	fi
+
+	[ -f "${LEDGER_SUBSTATE_HELPER:-}" ] || return 0
+
+	args=(
+		--run-id "${GITHUB_RUN_ID:-}"
+		--workflow "validate"
+		--phase "validate_self_heal"
+		--mode "self_heal"
+		--attempt "${llm_attempt}"
+		--lane "${lane}"
+		--model "${MODEL_EDITOR:-}"
+		--issue-number "${issue_number}"
+		--actor "${GITHUB_ACTOR:-codex-bot}"
+		--repo-root "$(pwd)"
+	)
+	case "${event_or_substate}" in
+		codex_stall_observed|codex_stall_killed)
+			args+=(--event-type "${event_or_substate}")
+			;;
+		*)
+			args+=(--substate "${event_or_substate}")
+			;;
+	esac
+	if [ -n "${tokens_log_file}" ]; then
+		args+=(--tokens-log-file "${tokens_log_file}")
+	fi
+
+	bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" || true
+}
+
+read_codex_stall_guard_state()
+{
+	local status_file="$1"
+	local state=""
+
+	[ -s "${status_file}" ] || return 1
+	state="$(sed -n 's/^state=//p' "${status_file}" | head -n 1)"
+	case "${state}" in
+		observed|killed)
+			printf '%s\n' "${state}"
+			return 0
+			;;
+	esac
+
+	return 1
+}
 
 ALLOWED_TARGETS=(
 	"mode-validate-discover.txt"
@@ -236,15 +307,35 @@ build_self_heal_serena_tool_hints()
 run_self_heal_codex()
 {
 	local stderr_tmp="$1"
+	local stall_status_file=""
+	local rc=0
 
-	if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
+	SELF_HEAL_STALL_STATE=""
+	if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
+		stall_status_file="$(mktemp /tmp/self_heal_stall_status.XXXXXX)"
+		set +e
+		"${CODEX_STALL_GUARD_HELPER}" \
+			--phase validate_self_heal \
+			--stdout-file "${SELF_HEAL_OUTPUT_FILE}" \
+			--status-file "${stall_status_file}" \
+			-- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${SELF_HEAL_PROMPT_FILE}" 2> "${stderr_tmp}"
+		rc=$?
+		set -e
+		if SELF_HEAL_STALL_STATE="$(read_codex_stall_guard_state "${stall_status_file}" 2>/dev/null)"; then
+			:
+		elif [ -s "${stall_status_file}" ]; then
+			echo "self-heal: could not parse codex stall guard status from ${stall_status_file}" >&2
+		fi
+		rm -f "${stall_status_file}"
+		return "${rc}"
+	elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
 		"${CODEX_HEARTBEAT_HELPER}" \
 			--phase validate_self_heal \
 			--stdout-file "${SELF_HEAL_OUTPUT_FILE}" \
 			--stderr-file "${stderr_tmp}" \
-			-- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${SELF_HEAL_PROMPT_FILE}"
+			-- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${SELF_HEAL_PROMPT_FILE}"
 	else
-		codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${SELF_HEAL_PROMPT_FILE}" > "${SELF_HEAL_OUTPUT_FILE}" 2> "${stderr_tmp}"
+		codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${SELF_HEAL_PROMPT_FILE}" > "${SELF_HEAL_OUTPUT_FILE}" 2> "${stderr_tmp}"
 	fi
 }
 
@@ -307,14 +398,30 @@ self_heal_serena_tool_hints="$(build_self_heal_serena_tool_hints || true)"
 # ---------------------------------------------------------------
 SELF_HEAL_LLM_SUCCESS=false
 for _llm_attempt in 1 2; do
+	_self_heal_terminal_substate="Failed"
 	echo "self-heal: LLM call attempt ${_llm_attempt}/2" >> "${SELF_HEAL_LOG_FILE}"
+	emit_self_heal_substate "PreparingWorkspace" "${_llm_attempt}"
 	if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
 		sanitize_codex_prompt_file "${SELF_HEAL_PROMPT_FILE}"
 	fi
 	_self_heal_stderr_tmp="$(mktemp)"
+	emit_self_heal_substate "BuildingPrompt" "${_llm_attempt}"
+	emit_self_heal_substate "LaunchingAgentProcess" "${_llm_attempt}"
+	emit_self_heal_substate "InitializingSession" "${_llm_attempt}"
+	emit_self_heal_substate "StreamingTurn" "${_llm_attempt}"
 	if run_self_heal_codex "${_self_heal_stderr_tmp}"; then
+		emit_self_heal_substate "Finishing" "${_llm_attempt}" "${_self_heal_stderr_tmp}"
 		cat "${_self_heal_stderr_tmp}" >> "${SELF_HEAL_LOG_FILE}" 2>/dev/null || true
-		rm -f "${_self_heal_stderr_tmp}"
+		case "${SELF_HEAL_STALL_STATE}" in
+			observed)
+				echo "self-heal: codex_stall_observed recorded (observe-only mode)" >> "${SELF_HEAL_LOG_FILE}"
+				emit_self_heal_substate "codex_stall_observed" "${_llm_attempt}" "${_self_heal_stderr_tmp}"
+				;;
+			killed)
+				echo "self-heal: codex_stall_killed recorded despite zero exit; treating output with caution" >> "${SELF_HEAL_LOG_FILE}"
+				emit_self_heal_substate "codex_stall_killed" "${_llm_attempt}" "${_self_heal_stderr_tmp}"
+				;;
+		esac
 		# Extract the last JSON object that contains a "target_prompt" key.
 		# Use json.JSONDecoder.raw_decode() which is string/escape-aware
 		# (the earlier brace-depth counter mis-handled JSON strings that
@@ -362,11 +469,26 @@ with open(dst, 'w', encoding='utf-8') as fh:
 PY
 		then
 			SELF_HEAL_LLM_SUCCESS=true
+			emit_self_heal_substate "Succeeded" "${_llm_attempt}" "${_self_heal_stderr_tmp}"
+			rm -f "${_self_heal_stderr_tmp}"
 			break
 		fi
 	else
+		emit_self_heal_substate "Finishing" "${_llm_attempt}" "${_self_heal_stderr_tmp}"
 		cat "${_self_heal_stderr_tmp}" >> "${SELF_HEAL_LOG_FILE}" 2>/dev/null || true
+		case "${SELF_HEAL_STALL_STATE}" in
+			observed)
+				echo "self-heal: codex_stall_observed recorded before non-zero exit" >> "${SELF_HEAL_LOG_FILE}"
+				emit_self_heal_substate "codex_stall_observed" "${_llm_attempt}" "${_self_heal_stderr_tmp}"
+				;;
+			killed)
+				echo "self-heal: codex_stall_killed recorded; preserving non-zero exit" >> "${SELF_HEAL_LOG_FILE}"
+				emit_self_heal_substate "codex_stall_killed" "${_llm_attempt}" "${_self_heal_stderr_tmp}"
+				_self_heal_terminal_substate="Stalled"
+				;;
+		esac
 	fi
+	emit_self_heal_substate "${_self_heal_terminal_substate}" "${_llm_attempt}" "${_self_heal_stderr_tmp}"
 	rm -f "${_self_heal_stderr_tmp}"
 	if [ "${_llm_attempt}" -lt 2 ]; then
 		sleep $((_llm_attempt * 5))

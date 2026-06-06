@@ -296,6 +296,7 @@ def test_review_apply_fixes_has_per_attempt_cache_busting_nonce() -> None:
 	# still does.
 	assert 'codex --ask-for-approval never' in text
 
+
 	def _shell_function_blocks(script_text: str) -> dict[str, str]:
 		function_blocks: dict[str, str] = {}
 		current_function: str | None = None
@@ -408,6 +409,11 @@ def test_review_apply_fixes_has_per_attempt_cache_busting_nonce() -> None:
 			unsafe_targets.append(f"script:${{{_stdin_var}}}")
 			continue
 		helper_body = function_blocks.get(_helper_name, "")
+		helper_call_prefix = (
+			rf'(?m)^(?!\s*#)\s*'
+			r"(?:[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"\n]*\"|'[^'\n]*'|[^ \t\n]+)\s+)*"
+			rf'{re.escape(_helper_name)}\s+'
+		)
 		first_arg_reaches_stdin = (
 			_stdin_var == "1"
 			or re.search(
@@ -419,16 +425,14 @@ def test_review_apply_fixes_has_per_attempt_cache_busting_nonce() -> None:
 		)
 		call_forwards_attempt_prompt = (
 			re.search(
-				rf'(?m)^(?!\s*#)\s*{re.escape(_helper_name)}\s+"?[$]'
-				r'\{?attempt_prompt_file\}?"?(?:\s|$)',
+				helper_call_prefix + r'"?[$]' + r'\{?attempt_prompt_file\}?"?(?:\s|$)',
 				text,
 			)
 			is not None
 		)
 		call_forwards_base_prompt = (
 			re.search(
-				rf'(?m)^(?!\s*#)\s*{re.escape(_helper_name)}\s+"?[$]'
-				r'\{?EDITOR_PROMPT_FILE\}?"?(?:\s|$)',
+				helper_call_prefix + r'"?[$]' + r'\{?EDITOR_PROMPT_FILE\}?"?(?:\s|$)',
 				text,
 			)
 			is not None

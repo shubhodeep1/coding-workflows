@@ -701,7 +701,7 @@ def test_validate_workflows_restore_cached_behavioural_smoke_artifacts() -> None
 	assert "- name: Resolve behavioural smoke source PR" in validate_workflow
 	assert "if: steps.behavioural_smoke_gate.outputs.enabled == 'true'" in validate_workflow
 	assert "- name: Restore behavioural smoke runtime cache" in validate_workflow
-	assert "path: .ai/review_runtime/" in validate_workflow
+	assert ".ai/review_runtime/" in validate_workflow
 	assert "review-ledger-${{ github.repository }}-pr-${{ steps.behavioural_smoke_pr.outputs.pr_number }}-" in validate_workflow
 
 	assert "pr_number:" in internal_validate_workflow

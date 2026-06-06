@@ -59,11 +59,14 @@ env:
   MODEL_EDITOR: ${{ vars.WORKFLOW_VALIDATE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-5.4' }}
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_VALIDATE || 'xhigh' }}
   MODEL_VERBOSITY: ${{ vars.VERBOSITY_VALIDATE || 'low' }}
+  CODEX_THREAD_REUSE_ENABLED: ${{ vars.CODEX_THREAD_REUSE_ENABLED || 'false' }}
   VALIDATION_INCLUDE_SYNTHESISED: ${{ vars.VALIDATION_INCLUDE_SYNTHESISED || 'true' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   CODEX_HEARTBEAT_ENABLED: ${{ vars.CODEX_HEARTBEAT_ENABLED || '1' }}
   CODEX_HEARTBEAT_INTERVAL_SECS: ${{ vars.CODEX_HEARTBEAT_INTERVAL_SECS || '30' }}
   SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}
+  WORKSPACE_HOOK_TIMEOUT_SECONDS: ${{ vars.WORKSPACE_HOOK_TIMEOUT_SECONDS || '600' }}
+  WORKSPACE_REUSE_ENABLED: ${{ vars.WORKSPACE_REUSE_ENABLED || 'false' }}
 
 jobs:
   validate:
@@ -160,21 +163,6 @@ jobs:
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
 
-      - name: Initialize Serena runtime state
-        run: |
-          set -euo pipefail
-
-          serena_project_preexisted="false"
-          if git ls-files --error-unmatch -- .serena/project.yml >/dev/null 2>&1 || [ -e .serena/project.yml ]; then
-            serena_project_preexisted="true"
-          fi
-
-          {
-            echo "SERENA_AVAILABLE=false"
-            echo "SERENA_PROJECT_PREEXISTED=${serena_project_preexisted}"
-            echo "SERENA_PROJECT_BOOTSTRAP_HASH="
-          } >> "$GITHUB_ENV"
-
       - name: Log checkout ref
         run: |
           set -euo pipefail
@@ -220,7 +208,7 @@ jobs:
           else
             script_ref="stable"
           fi
-          mkdir -p scripts prompts .github/ai
+          mkdir -p scripts prompts prompts/contracts .github/ai
 
           SERVER_HOST="${GITHUB_SERVER_URL#https://}"
           SERVER_HOST="${SERVER_HOST#http://}"
@@ -306,7 +294,7 @@ jobs:
           }
 
           _fetched_scripts=()
-          for f in gh_helpers.sh ai_labels.py render_prompt.sh tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py write_codex_config.sh; do
+          for f in gh_helpers.sh ai_labels.py render_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py write_codex_config.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh; do
             copy_from_ref_or_local "scripts/${f}" "scripts/${f}"
             chmod +x "scripts/${f}"
             _fetched_scripts+=("${f}")
@@ -462,7 +450,8 @@ jobs:
             validation_history.v1.json \
             operator_bypass_audit.v1.json \
             revalidate_events.v1.json \
-            validation_discovery.v1.json; do
+            validation_discovery.v1.json \
+            workflow_overlay.v1.json; do
             if [ ! -f "ai-memory/schemas/${sf}" ]; then
               schema_tmp="ai-memory/schemas/${sf}.tmp"
               if copy_from_ref_or_local "ai-memory/schemas/${sf}" "${schema_tmp}" "false" "true"; then
@@ -472,6 +461,13 @@ jobs:
               fi
             fi
           done
+
+          # WORKFLOW.md overlay is opt-in by file presence; absent file must
+          # stay a no-op while valid prompt overrides flow through render_prompt.py.
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/load_workflow_overlay.py \
+            --repo-root "${GITHUB_WORKSPACE}" \
+            --schema-path "ai-memory/schemas/workflow_overlay.v1.json" \
+            --github-env "${GITHUB_ENV}"
 
           if copy_from_ref_or_local "scripts/codex_model_catalog.json" "scripts/codex_model_catalog.json.tmp" "false" "false"; then
             if [ -s "scripts/codex_model_catalog.json.tmp" ]; then
@@ -498,6 +494,34 @@ jobs:
           else
             chmod +x "scripts/codex_heartbeat.sh"
             _fetched_scripts+=(codex_heartbeat.sh)
+          fi
+
+          if [ ! -f "scripts/codex_stall_guard.sh" ]; then
+            if copy_from_ref_or_local "scripts/codex_stall_guard.sh" "scripts/codex_stall_guard.sh.tmp" "false" "true"; then
+              mv "scripts/codex_stall_guard.sh.tmp" "scripts/codex_stall_guard.sh"
+              chmod +x "scripts/codex_stall_guard.sh"
+              _fetched_scripts+=(codex_stall_guard.sh)
+            else
+              rm -f "scripts/codex_stall_guard.sh.tmp"
+              echo "Codex stall guard helper not on ${script_ref} yet; validation will continue without idle-kill wrapping."
+            fi
+          else
+            chmod +x "scripts/codex_stall_guard.sh"
+            _fetched_scripts+=(codex_stall_guard.sh)
+          fi
+
+          if [ ! -f "scripts/codex_thread_reuse.sh" ]; then
+            if copy_from_ref_or_local "scripts/codex_thread_reuse.sh" "scripts/codex_thread_reuse.sh.tmp" "false" "true"; then
+              mv "scripts/codex_thread_reuse.sh.tmp" "scripts/codex_thread_reuse.sh"
+              chmod +x "scripts/codex_thread_reuse.sh"
+              _fetched_scripts+=(codex_thread_reuse.sh)
+            else
+              rm -f "scripts/codex_thread_reuse.sh.tmp"
+              echo "Codex thread reuse helper not on ${script_ref} yet; validation will continue without same-run thread reuse."
+            fi
+          else
+            chmod +x "scripts/codex_thread_reuse.sh"
+            _fetched_scripts+=(codex_thread_reuse.sh)
           fi
 
           # Semble bootstrap helpers (optional; validation falls back if
@@ -624,6 +648,24 @@ jobs:
             fi
           fi
 
+          if [ ! -f "prompts/mode-validate-self-heal-continuation.txt" ]; then
+            if copy_from_ref_or_local "prompts/mode-validate-self-heal-continuation.txt" "prompts/mode-validate-self-heal-continuation.txt.tmp" "false" "true"; then
+              mv "prompts/mode-validate-self-heal-continuation.txt.tmp" "prompts/mode-validate-self-heal-continuation.txt"
+            else
+              rm -f "prompts/mode-validate-self-heal-continuation.txt.tmp"
+              echo "Self-heal continuation prompt not on ${script_ref} yet; validation will continue with the full prompt path."
+            fi
+          fi
+
+          if [ ! -f "prompts/contracts/mode-validate-self-heal-continuation.yml" ]; then
+            if copy_from_ref_or_local "prompts/contracts/mode-validate-self-heal-continuation.yml" "prompts/contracts/mode-validate-self-heal-continuation.yml.tmp" "false" "true"; then
+              mv "prompts/contracts/mode-validate-self-heal-continuation.yml.tmp" "prompts/contracts/mode-validate-self-heal-continuation.yml"
+            else
+              rm -f "prompts/contracts/mode-validate-self-heal-continuation.yml.tmp"
+              echo "Self-heal continuation contract not on ${script_ref} yet; validation will continue with the full prompt path."
+            fi
+          fi
+
           for f in unattended_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
               copy_from_ref_or_local "${f}" "${f}"
@@ -633,6 +675,103 @@ jobs:
           if [ ! -f .github/ai/label_contract.v1.json ]; then
             copy_from_ref_or_local ".github/ai/label_contract.v1.json" ".github/ai/label_contract.v1.json" "false" "true" || true
           fi
+
+      - name: Initialize workspace metadata
+        id: workspace_meta
+        run: |
+          set -euo pipefail
+
+          workspace_reuse_enabled="${WORKSPACE_REUSE_ENABLED:-false}"
+          workspace_identifier=""
+          if [[ "${{ inputs.tracking_issue }}" =~ ^[0-9]+$ ]] && [ "${{ inputs.tracking_issue }}" -gt 0 ]; then
+            workspace_identifier="${{ inputs.tracking_issue }}"
+          else
+            workspace_reuse_enabled="false"
+          fi
+
+          WORKSPACE_REUSE_ENABLED="${workspace_reuse_enabled}" \
+          WORKSPACE_REQUIRE_STABLE_IDENTIFIER_FOR_REUSE="true" \
+          WORKSPACE_ISSUE_IDENTIFIER="${workspace_identifier}" \
+          WORKSPACE_SOURCE_PATH="${GITHUB_WORKSPACE}" \
+            bash scripts/workspace_init.sh metadata
+
+      - name: Restore reusable workspace cache
+        if: steps.workspace_meta.outputs.workspace_reuse_enabled == 'true'
+        id: workspace_cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ steps.workspace_meta.outputs.workspace_path }}
+          key: ${{ steps.workspace_meta.outputs.workspace_cache_key }}
+          restore-keys: |
+            ${{ steps.workspace_meta.outputs.workspace_cache_restore_prefix_exact }}
+            ${{ steps.workspace_meta.outputs.workspace_cache_restore_prefix_issue }}
+
+      - name: Finalize workspace metadata
+        id: workspace_state
+        run: |
+          set -euo pipefail
+          workspace_cache_matched_key=""
+          workspace_cache_path="${{ steps.workspace_meta.outputs.workspace_path }}"
+          workspace_cache_key="${{ steps.workspace_meta.outputs.workspace_cache_key }}"
+          workspace_cache_restore_prefix_issue="${{ steps.workspace_meta.outputs.workspace_cache_restore_prefix_issue }}"
+          workspace_cache_hit="${{ steps.workspace_cache.outputs.cache-hit || '' }}"
+          if [ "${workspace_cache_hit}" = "true" ]; then
+            workspace_cache_matched_key="${workspace_cache_key}"
+          elif [ -d "${workspace_cache_path}" ] && [ -n "$(find "${workspace_cache_path}" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
+            workspace_cache_matched_key="${workspace_cache_restore_prefix_issue}restored"
+          fi
+          WORKSPACE_REUSE_ENABLED="${{ steps.workspace_meta.outputs.workspace_reuse_enabled }}" \
+          WORKSPACE_REQUIRE_STABLE_IDENTIFIER_FOR_REUSE="true" \
+          WORKSPACE_ISSUE_IDENTIFIER="${{ steps.workspace_meta.outputs.workspace_issue_identifier }}" \
+          WORKSPACE_SOURCE_PATH="${GITHUB_WORKSPACE}" \
+          WORKSPACE_FINGERPRINT="${{ steps.workspace_meta.outputs.workspace_fingerprint }}" \
+          WORKSPACE_CACHE_MATCHED_KEY="${workspace_cache_matched_key}" \
+            bash scripts/workspace_init.sh metadata
+
+      - name: Finalize workspace contents
+        run: |
+          set -euo pipefail
+          WORKSPACE_SOURCE_PATH="${GITHUB_WORKSPACE}" \
+          WORKSPACE_PATH="${{ steps.workspace_state.outputs.workspace_path }}" \
+          WORKSPACE_REUSE_ENABLED="${{ steps.workspace_state.outputs.workspace_reuse_enabled }}" \
+          WORKSPACE_CACHE_RESTORE_STATE="${{ steps.workspace_state.outputs.workspace_cache_restore_state }}" \
+            bash scripts/workspace_init.sh finalize
+
+      - name: Activate workspace shell context
+        run: |
+          set -euo pipefail
+          workspace_shell_env="${{ steps.runtime.outputs.runtime_dir }}/workspace-shell.env"
+          cat > "${workspace_shell_env}" <<'EOF'
+          if [ -n "${WORKSPACE_PATH:-}" ] && [ -d "${WORKSPACE_PATH}" ]; then
+            cd "${WORKSPACE_PATH}"
+          fi
+          EOF
+          {
+            echo "BASH_ENV=${workspace_shell_env}"
+            echo "GIT_DIR=${GITHUB_WORKSPACE}/.git"
+            echo "GIT_WORK_TREE=${WORKSPACE_PATH}"
+          } >> "$GITHUB_ENV"
+
+      - name: Run workspace after_create hook
+        id: workspace_after_create_hook
+        run: |
+          set -euo pipefail
+          bash scripts/run_workspace_hook.sh validate after_create
+
+      - name: Initialize Serena runtime state
+        run: |
+          set -euo pipefail
+
+          serena_project_preexisted="false"
+          if git ls-files --error-unmatch -- .serena/project.yml >/dev/null 2>&1 || [ -e .serena/project.yml ]; then
+            serena_project_preexisted="true"
+          fi
+
+          {
+            echo "SERENA_AVAILABLE=false"
+            echo "SERENA_PROJECT_PREEXISTED=${serena_project_preexisted}"
+            echo "SERENA_PROJECT_BOOTSTRAP_HASH="
+          } >> "$GITHUB_ENV"
 
       - name: Restore validate hints cache
         # Reuse .ai/validate-hints-cache/hints.yml from a prior successful
@@ -648,7 +787,7 @@ jobs:
         id: validate_hints_cache
         uses: actions/cache@v5
         with:
-          path: .ai/validate-hints-cache
+          path: ${{ steps.workspace_state.outputs.workspace_path }}/.ai/validate-hints-cache
           key: validate-hints-v1-${{ hashFiles('docker-compose*.yml', 'compose*.yml', '**/Dockerfile', '**/Dockerfile.*', '**/package.json', '**/pyproject.toml', '**/requirements*.txt', '**/go.mod', '**/Cargo.toml') }}
 
       - name: Normalize behavioural smoke include flag
@@ -721,7 +860,7 @@ jobs:
         continue-on-error: true
         uses: actions/cache/restore@v4
         with:
-          path: .ai/review_runtime/
+          path: ${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_runtime/
           key: review-ledger-${{ github.repository }}-pr-${{ steps.behavioural_smoke_pr.outputs.pr_number }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             review-ledger-${{ github.repository }}-pr-${{ steps.behavioural_smoke_pr.outputs.pr_number }}-
@@ -896,9 +1035,15 @@ jobs:
             } >> "$GITHUB_ENV"
           fi
 
+      - name: Run workspace before_run hook
+        id: workspace_before_run_hook
+        run: |
+          set -euo pipefail
+          bash scripts/run_workspace_hook.sh validate before_run
+
       - name: Run validation process
         id: validate_run
-        if: always()
+        if: always() && steps.workspace_after_create_hook.outcome != 'failure' && steps.workspace_before_run_hook.outcome != 'failure'
         continue-on-error: true
         env:
           RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
@@ -921,6 +1066,12 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/validate_process.sh
+
+      - name: Run workspace after_run hook
+        if: always() && steps.validate_run.outcome != 'skipped'
+        run: |
+          set -euo pipefail
+          bash scripts/run_workspace_hook.sh validate after_run
 
       - name: Collect validation status
         id: collect_status
@@ -1091,7 +1242,7 @@ jobs:
           retention-days: 14
           path: |
             ${{ steps.runtime.outputs.runtime_dir }}/
-            validation/
+            ${{ steps.workspace_state.outputs.workspace_path }}/validation/
 
       - name: Write run summary
         if: always()
@@ -1182,6 +1333,34 @@ jobs:
             --issue-number "${issue_number}" \
             --actor "${{ github.actor }}" \
             --metadata-json "${metadata_json}"
+
+      - name: Force orchestrate poll after validation finalization
+        if: always()
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TRACKING_ISSUE: ${{ inputs.tracking_issue }}
+        run: |
+          set -euo pipefail
+
+          if ! [[ "${TRACKING_ISSUE:-}" =~ ^[0-9]+$ ]] || [ "${TRACKING_ISSUE:-0}" -le 0 ]; then
+            echo "No tracking issue provided; skipping force-tick dispatch."
+            exit 0
+          fi
+
+          bash scripts/orchestrate_force_tick.sh \
+            --repo "${{ github.repository }}" \
+            --tracking-issue "${TRACKING_ISSUE}" \
+            --issue "${TRACKING_ISSUE}" \
+            --reason "validation-finalized" \
+            --source-workflow "validate" \
+            --run-id "${{ github.run_id }}"
+
+      - name: Run workspace before_remove hook
+        if: always()
+        run: |
+          set -euo pipefail
+          bash scripts/run_workspace_hook.sh validate before_remove
 
       - name: Enforce validation outcome
         if: always()

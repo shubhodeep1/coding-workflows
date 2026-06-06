@@ -43,6 +43,148 @@ set -euo pipefail
 
 SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"
 CODEX_HEARTBEAT_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_heartbeat.sh"
+CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
+WORKSPACE_SAFETY_CHECK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/workspace_safety_check.sh"
+ORCHESTRATE_FORCE_TICK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/orchestrate_force_tick.sh"
+CODEX_THREAD_REUSE_ENABLED="${CODEX_THREAD_REUSE_ENABLED:-false}"
+CODEX_THREAD_REUSE_HELPER=""
+for _thread_reuse_candidate in \
+  "${SUPPORT_SCRIPTS_DIR:-scripts}/codex_thread_reuse.sh" \
+  "scripts/codex_thread_reuse.sh" \
+  ".codex-workflow-src/scripts/codex_thread_reuse.sh" \
+  ".codex-workflow-src-main/scripts/codex_thread_reuse.sh"; do
+  if [ -f "${_thread_reuse_candidate}" ]; then
+    CODEX_THREAD_REUSE_HELPER="${_thread_reuse_candidate}"
+    break
+  fi
+done
+export CODEX_THREAD_REUSE_ENABLED
+export CODEX_THREAD_REUSE_RUNTIME_DIR="${CODEX_THREAD_REUSE_RUNTIME_DIR:-${RUNTIME_DIR}}"
+if [ -n "${CODEX_THREAD_REUSE_HELPER}" ]; then
+  # shellcheck disable=SC1090
+  source "${CODEX_THREAD_REUSE_HELPER}"
+fi
+
+resolve_conflict_thread_reuse_asset() {
+  local repo_path="$1"
+  local candidate=""
+
+  for candidate in \
+    "${repo_path}" \
+    ".codex-workflow-src/${repo_path}" \
+    ".codex-workflow-src-main/${repo_path}"; do
+    if [ -f "${candidate}" ]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+conflict_thread_reuse_enabled() {
+  [ -n "${CODEX_THREAD_REUSE_HELPER:-}" ] || return 1
+  declare -F codex_thread_reuse_truthy >/dev/null 2>&1 || return 1
+  codex_thread_reuse_truthy "${CODEX_THREAD_REUSE_ENABLED:-false}"
+}
+
+render_conflict_thread_reuse_continuation() {
+  local previous_attempt="$1"
+  local failure_kind="$2"
+  local marker_file="$3"
+  local fp_file="$4"
+  local continuation_source="$5"
+  local continuation_rendered="$6"
+  local render_prompt_script="${SUPPORT_SCRIPTS_DIR:-scripts}/render_prompt.sh"
+  local marker_count="0"
+  local marker_list="(none)"
+  local fp_count="0"
+  local fp_details="(none)"
+
+  [ -n "${continuation_source}" ] || return 1
+  [ -f "${render_prompt_script}" ] || return 1
+
+  if [ -s "${marker_file}" ]; then
+    marker_count="$(wc -l < "${marker_file}" | tr -d '[:space:]')"
+    marker_list="$(sed 's/^/          - /' "${marker_file}")"
+  fi
+  if [ -s "${fp_file}" ]; then
+    fp_count="$(wc -l < "${fp_file}" | tr -d '[:space:]')"
+    fp_details="$(sed 's/^/          - /' "${fp_file}")"
+  fi
+
+  PREVIOUS_ATTEMPT_NUMBER="${previous_attempt}" \
+    MAX_ATTEMPTS="${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" \
+    PREVIOUS_ATTEMPT_FAILURE_KIND="${failure_kind}" \
+    MARKER_VIOLATION_COUNT="${marker_count}" \
+    MARKER_VIOLATION_FILES="${marker_list}" \
+    FINGERPRINT_VIOLATION_COUNT="${fp_count}" \
+    FINGERPRINT_VIOLATION_DETAILS="${fp_details}" \
+    SERENA_TOOL_HINTS_RESOLVER="${RESOLVER_SERENA_TOOL_HINTS:-}" \
+    bash "${render_prompt_script}" "${continuation_source}" > "${continuation_rendered}"
+}
+
+resolve_ledger_substate_helper() {
+  local candidate
+  for candidate in \
+    "${SUPPORT_SCRIPTS_DIR:-scripts}/ledger_emit_substate.sh" \
+    ".codex-workflow-src/scripts/ledger_emit_substate.sh" \
+    "scripts/ledger_emit_substate.sh"; do
+    if [ -f "${candidate}" ]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+LEDGER_SUBSTATE_HELPER="$(resolve_ledger_substate_helper || true)"
+
+emit_conflict_resolver_substate() {
+  local event_or_substate="$1"
+  local attempt_number="$2"
+  local args=()
+
+  [ -f "${LEDGER_SUBSTATE_HELPER:-}" ] || return 0
+
+  args=(
+    --run-id "${GITHUB_RUN_ID:-}"
+    --workflow "review_autofix"
+    --phase "review_conflict_resolve"
+    --mode "resolver"
+    --attempt "${attempt_number}"
+    --model "${MODEL_EDITOR:-}"
+    --pr-number "${PR_NUMBER:-}"
+    --actor "${GITHUB_ACTOR:-codex-bot}"
+    --repo-root "$(pwd)"
+  )
+  case "${event_or_substate}" in
+    codex_stall_observed|codex_stall_killed)
+      args+=(--event-type "${event_or_substate}")
+      ;;
+    *)
+      args+=(--substate "${event_or_substate}")
+      ;;
+  esac
+
+  bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" || true
+}
+
+read_codex_stall_guard_state() {
+  local status_file="$1"
+  local state=""
+
+  [ -s "${status_file}" ] || return 1
+  state="$(sed -n 's/^state=//p' "${status_file}" | head -n 1)"
+  case "${state}" in
+    observed|killed)
+      printf '%s\n' "${state}"
+      return 0
+      ;;
+  esac
+
+  return 1
+}
 
 # Source gh_helpers.sh for sanitize_codex_prompt_file (and the broader
 # gh_retry / rate-limit helpers if they are needed later in this
@@ -75,37 +217,6 @@ RESOLVER_SERENA_TOOL_HINTS="$({
   fi
 }; )"
 
-# ----------------------------------------------------------------------
-# Immediate orchestrator-poll dispatch on resolver bail (Q3: A).
-#
-# When the resolver path cannot deliver a clean [ai-merge-resolve]
-# commit (loop exhaustion, no-progress detection, allowlist guard
-# failure, check_resolver_diff rejection), the integration-sync
-# unattended escalation is the orchestrator integration judge,
-# which lives inside scripts/orchestrate_poll_process.sh and is
-# invoked on each */5 cron tick of internal-orchestrate-poll.yml.
-# Cron lag is up to 5 min; for an integration branch already
-# blocked on a contradictory merge, that is 5 min of wasted human
-# attention if alerts fired.  Fire a workflow_dispatch immediately
-# instead so the judge picks up on the next available scheduling
-# slot.
-#
-# Concurrency: orchestrate_poll.yml has
-# `concurrency.group: ai-orchestrate-poll-${{ github.repository }}`
-# with `cancel-in-progress: false`, so a dispatched run queues
-# behind any active cron-tick run rather than racing it.  To avoid
-# stacking dispatches when several PRs bail at once, dedup against
-# already in_progress / queued poller runs before firing.
-#
-# Fail-open: any failure in the dispatch path (missing GH_PAT,
-# rate limit, unknown workflow name on a consumer repo) is a
-# warning, not a hard failure — the cron tick remains the safety
-# net so unattendedness is preserved either way.
-#
-# Gate on IS_INTEGRATION_SYNC=true: the integration judge only
-# applies to orchestrator/project-* branches.  Non-integration
-# resolver failures continue along the existing path
-# (synchronize-event re-trigger of the review pipeline).
 _RESOLVER_DISPATCH_FIRED=0
 _dispatch_integration_judge_now() {
   [ "${_RESOLVER_DISPATCH_FIRED}" -eq 1 ] && return 0
@@ -114,51 +225,22 @@ _dispatch_integration_judge_now() {
   if [ "${IS_INTEGRATION_SYNC:-false}" != "true" ]; then
     return 0
   fi
-  if [ -z "${GH_PAT:-}" ] || [ -z "${GITHUB_REPOSITORY:-}" ]; then
-    echo "::warning::Skipping immediate orchestrator-poll dispatch: GH_PAT or GITHUB_REPOSITORY unset. Cron tick will pick up the integration-sync stall within 5 min."
+  if [ ! -f "${ORCHESTRATE_FORCE_TICK_HELPER}" ]; then
+    echo "::warning::Skipping immediate orchestrator-poll dispatch: ${ORCHESTRATE_FORCE_TICK_HELPER} is unavailable. Cron tick will pick up the integration-sync stall within 5 min."
     return 0
   fi
 
-  local _poll_workflow="${ORCHESTRATE_POLL_WORKFLOW_FILE:-internal-orchestrate-poll.yml}"
+  local dispatch_token="${GH_PAT:-${GH_TOKEN:-}}"
 
-  # Dedup: the poller's per-repo concurrency group already
-  # serialises runs, but firing while one is queued/active just
-  # adds to the queue.  Skip when an existing run will pick up
-  # the new state on the next slot.  Uses gh's built-in --jq
-  # for consistency with the rest of the codebase (no embedded
-  # python3 -c snippet) and so a non-JSON / empty response from
-  # gh falls open via the trailing `|| echo 0` rather than
-  # silently miscounting.
-  local _active_count
-  _active_count="$(GH_TOKEN="${GH_PAT}" gh run list \
-      --workflow="${_poll_workflow}" \
-      --repo "${GITHUB_REPOSITORY}" \
-      --status in_progress \
-      --limit 1 \
-      --json databaseId \
-      --jq 'length' 2>/dev/null || echo 0)"
-  if [ "${_active_count}" != "0" ]; then
-    echo "Skipping immediate orchestrator-poll dispatch: a poller run is already in_progress (will scan integration-sync state on the next concurrency slot)."
-    return 0
-  fi
-  _active_count="$(GH_TOKEN="${GH_PAT}" gh run list \
-      --workflow="${_poll_workflow}" \
-      --repo "${GITHUB_REPOSITORY}" \
-      --status queued \
-      --limit 1 \
-      --json databaseId \
-      --jq 'length' 2>/dev/null || echo 0)"
-  if [ "${_active_count}" != "0" ]; then
-    echo "Skipping immediate orchestrator-poll dispatch: a poller run is already queued (will scan integration-sync state when it starts)."
-    return 0
-  fi
-
-  if GH_TOKEN="${GH_PAT}" gh workflow run "${_poll_workflow}" \
-       --repo "${GITHUB_REPOSITORY}" 2>/dev/null; then
-    echo "Dispatched ${_poll_workflow} on ${GITHUB_REPOSITORY} to fast-track integration-judge escalation (resolver could not produce a clean commit)."
-  else
-    echo "::warning::Failed to dispatch ${_poll_workflow}; cron tick will pick up the integration-sync stall within 5 min."
-  fi
+  GH_PAT="${dispatch_token}" \
+  GH_TOKEN="${dispatch_token}" \
+  GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-}" \
+  bash "${ORCHESTRATE_FORCE_TICK_HELPER}" \
+    --repo "${GITHUB_REPOSITORY:-}" \
+    --issue "${PR_NUMBER:-}" \
+    --reason "resolver-failed" \
+    --source-workflow "review_conflict_resolve" \
+    --run-id "${GITHUB_RUN_ID:-}" || echo "::warning::Immediate orchestrator-poll dispatch helper failed; cron tick will pick up the integration-sync stall within 5 min."
 }
 
 # EXIT trap — fires the dispatch on any non-zero exit from this
@@ -1514,7 +1596,12 @@ if [ -s "${RESOLVER_ALLOWLIST_FILE:-}" ] && [ -f "${TARGETED_FILE_CONTEXT_SCRIPT
 fi
 # Append the targeted-context block to the rendered prompt once, so
 # every retry (which copies CONFLICT_RESOLVER_PROMPT_FILE into
-# RESOLVER_RETRY_PROMPT_FILE at the loop top) inherits it.
+# RESOLVER_RETRY_PROMPT_FILE at the loop top) inherits it. The
+# thread-reuse marker itself is only needed when the feature is on.
+CONFLICT_RESOLVER_THREAD_REUSE_MARKER="=== THREAD REUSE LIVE CONTEXT ==="
+if conflict_thread_reuse_enabled; then
+  printf '\n%s\n' "${CONFLICT_RESOLVER_THREAD_REUSE_MARKER}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
+fi
 if [ -s "${TARGETED_FILES_CONTEXT_FILE}" ]; then
   printf '\n' >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
   cat "${TARGETED_FILES_CONTEXT_FILE}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
@@ -1531,6 +1618,36 @@ fi
 if [ -s "${CONFLICT_RESOLVER_SEMBLE_CONTEXT_FILE}" ]; then
   printf '\n' >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
   cat "${CONFLICT_RESOLVER_SEMBLE_CONTEXT_FILE}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
+fi
+
+CONFLICT_RESOLVER_PLAIN_PATH="${PATH}"
+CONFLICT_RESOLVER_CODEX_PATH="${CONFLICT_RESOLVER_PLAIN_PATH}"
+CONFLICT_RESOLVER_CONTINUATION_RENDERED_FILE="${RUNTIME_DIR}/mode-review-conflict-resolver-continuation.rendered.txt"
+CONFLICT_RESOLVER_CONTINUATION_SOURCE=""
+conflict_wrapper_dir=""
+if conflict_thread_reuse_enabled; then
+  CONFLICT_RESOLVER_CONTINUATION_SOURCE="$(resolve_conflict_thread_reuse_asset 'prompts/mode-review-conflict-resolver-continuation.txt' 2>/dev/null || true)"
+  if [ -z "${CONFLICT_RESOLVER_CONTINUATION_SOURCE}" ]; then
+    echo "::warning::Review conflict-resolver continuation prompt not found; resolver will use the full prompt path."
+  elif render_conflict_thread_reuse_continuation \
+    "0" \
+    "initial" \
+    "${RESOLVER_MARKER_VIOLATIONS_FILE}" \
+    "${RESOLVER_FP_VIOLATIONS_FILE}" \
+    "${CONFLICT_RESOLVER_CONTINUATION_SOURCE}" \
+    "${CONFLICT_RESOLVER_CONTINUATION_RENDERED_FILE}"; then
+    if conflict_wrapper_dir="$(codex_thread_reuse_install_wrapper \
+      'review-conflict-resolver' \
+      "${CONFLICT_RESOLVER_CONTINUATION_RENDERED_FILE}" \
+      'replace-prefix' \
+      "${CONFLICT_RESOLVER_THREAD_REUSE_MARKER}")"; then
+      CONFLICT_RESOLVER_CODEX_PATH="${conflict_wrapper_dir}:${CONFLICT_RESOLVER_PLAIN_PATH}"
+    else
+      echo "::warning::Failed to install review conflict-resolver thread-reuse wrapper; resolver will use the full prompt path."
+    fi
+  else
+    echo "::warning::Failed to render review conflict-resolver continuation prompt; resolver will use the full prompt path."
+  fi
 fi
 
 # _prev_attempt_failure_kind tracks why the previous attempt left
@@ -1618,6 +1735,8 @@ fi
 
 attempt=1
 while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
+  _attempt_codex_path="${CONFLICT_RESOLVER_CODEX_PATH}"
+  emit_conflict_resolver_substate "PreparingWorkspace" "${attempt}"
   # On retries: restore the working tree to its post-merge-replay
   # state (so retries don't compound the previous attempt's bad
   # edits) and build a reflexion prompt naming the previous
@@ -1711,11 +1830,30 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
         echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: previous attempt timed out at reasoning level ${_current_reasoning_effort} (ladder floor reached); not stepping down further."
       fi
     fi
+    if [ "${CONFLICT_RESOLVER_CODEX_PATH}" != "${CONFLICT_RESOLVER_PLAIN_PATH}" ] \
+       && [ -n "${CONFLICT_RESOLVER_CONTINUATION_SOURCE}" ]; then
+      if render_conflict_thread_reuse_continuation \
+        "$((attempt - 1))" \
+        "${_prev_attempt_failure_kind:-validation}" \
+        "${RESOLVER_MARKER_VIOLATIONS_FILE}" \
+        "${RESOLVER_FP_VIOLATIONS_FILE}" \
+        "${CONFLICT_RESOLVER_CONTINUATION_SOURCE}" \
+        "${CONFLICT_RESOLVER_CONTINUATION_RENDERED_FILE}"; then
+        echo "Conflict resolver retry ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: using same-run thread reuse continuation prompt."
+      else
+        echo "::warning::Failed to render review conflict-resolver continuation prompt for retry ${attempt}; falling back to the full prompt path."
+        _attempt_codex_path="${CONFLICT_RESOLVER_PLAIN_PATH}"
+      fi
+    fi
   else
     _effective_prompt_file="${CONFLICT_RESOLVER_PROMPT_FILE}"
   fi
 
+  emit_conflict_resolver_substate "BuildingPrompt" "${attempt}"
+
   tmp_output="$(mktemp)"
+  _stall_status_file="$(mktemp)"
+  _stall_state=""
   # Pass the prompt via stdin (consistent with every other codex
   # invocation in this repo) rather than as a single positional argv
   # string. The `"$(cat …)"` shape risks ARG_MAX truncation on large
@@ -1739,19 +1877,55 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
     sanitize_codex_prompt_file "${_effective_prompt_file}"
   fi
-  if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
-    timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
-      "${CODEX_HEARTBEAT_HELPER}" \
-      --phase review_conflict_resolve \
-      --stdout-file "${tmp_output}" \
-      -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" \
-      || _codex_exit=$?
-  else
-    timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
-      codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" > "${tmp_output}" \
-      || _codex_exit=$?
+  _run_codex=true
+  if [ -x "${WORKSPACE_SAFETY_CHECK_HELPER}" ]; then
+    if ! bash "${WORKSPACE_SAFETY_CHECK_HELPER}"; then
+      _codex_exit=$?
+      _run_codex=false
+    fi
+  fi
+  if [ "${_run_codex}" = "true" ]; then
+    emit_conflict_resolver_substate "LaunchingAgentProcess" "${attempt}"
+    emit_conflict_resolver_substate "InitializingSession" "${attempt}"
+    emit_conflict_resolver_substate "StreamingTurn" "${attempt}"
+    if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
+      PATH="${_attempt_codex_path}" timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
+        "${CODEX_STALL_GUARD_HELPER}" \
+        --phase review_conflict_resolve \
+        --stdout-file "${tmp_output}" \
+        --status-file "${_stall_status_file}" \
+        -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" \
+        || _codex_exit=$?
+    elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
+      PATH="${_attempt_codex_path}" timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
+        "${CODEX_HEARTBEAT_HELPER}" \
+        --phase review_conflict_resolve \
+        --stdout-file "${tmp_output}" \
+        -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" \
+        || _codex_exit=$?
+    else
+      PATH="${_attempt_codex_path}" timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
+        codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_effective_prompt_file}" > "${tmp_output}" \
+        || _codex_exit=$?
+    fi
   fi
   _attempt_elapsed=$(( $(date +%s) - _attempt_started_at ))
+  emit_conflict_resolver_substate "Finishing" "${attempt}"
+  if _stall_state="$(read_codex_stall_guard_state "${_stall_status_file}" 2>/dev/null)"; then
+    :
+  elif [ -s "${_stall_status_file}" ]; then
+    echo "::warning::Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: could not parse codex stall guard status from ${_stall_status_file}."
+  fi
+  rm -f "${_stall_status_file}"
+  if [ "${_stall_state}" = "observed" ]; then
+    echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: codex_stall_observed recorded (observe-only mode)."
+    emit_conflict_resolver_substate "codex_stall_observed" "${attempt}"
+  fi
+  if [ "${_codex_exit}" -eq 78 ]; then
+    echo "::error::Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}: workspace_safety_violation."
+    emit_conflict_resolver_substate "Failed" "${attempt}"
+    exit 78
+  fi
   # Graceful-SIGTERM-at-timer-boundary diagnostic.  If codex installs
   # a SIGTERM handler that completes cleanup and exits 0 within the
   # 30s `--kill-after` window, `timeout` propagates the child's 0
@@ -1815,28 +1989,47 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     #     hand back; falling back to the original prompt verbatim
     #     is the conservative choice — same handling as a missing
     #     prelude template.
-    case "${_codex_exit}" in
-      124)
-        _prev_attempt_failure_kind="timeout"
-        echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} killed by per-attempt timer (timeout exit 124 = SIGTERM after ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s; elapsed ${_attempt_elapsed}s)."
-        ;;
-      137)
-        if [ "${_attempt_elapsed}" -ge "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" ]; then
+    if [ "${_stall_state}" = "killed" ]; then
+      _prev_attempt_failure_kind="stall_guard"
+      echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} recorded codex_stall_killed (exit ${_codex_exit}; elapsed ${_attempt_elapsed}s; per-attempt timer budget ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s)."
+      emit_conflict_resolver_substate "codex_stall_killed" "${attempt}"
+    else
+      case "${_codex_exit}" in
+        124)
           _prev_attempt_failure_kind="timeout"
-          echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} killed by per-attempt timer (timeout exit 137 = SIGKILL after kill-after backstop; elapsed ${_attempt_elapsed}s ≥ budget ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s)."
-        else
+          echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} killed by per-attempt timer (timeout exit 124 = SIGTERM after ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s; elapsed ${_attempt_elapsed}s)."
+          ;;
+        137)
+          if [ "${_attempt_elapsed}" -ge "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" ]; then
+            _prev_attempt_failure_kind="timeout"
+            echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} killed by per-attempt timer (timeout exit 137 = SIGKILL after kill-after backstop; elapsed ${_attempt_elapsed}s ≥ budget ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s)."
+          else
+            _prev_attempt_failure_kind="exec_error"
+            echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} crashed (SIGKILL exit 137 but elapsed ${_attempt_elapsed}s < budget ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s — likely OOM kill or external SIGKILL, not the per-attempt timer)."
+          fi
+          ;;
+        *)
           _prev_attempt_failure_kind="exec_error"
-          echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} crashed (SIGKILL exit 137 but elapsed ${_attempt_elapsed}s < budget ${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}s — likely OOM kill or external SIGKILL, not the per-attempt timer)."
-        fi
+          echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} failed with non-timeout exit ${_codex_exit} (codex itself returned non-zero; elapsed ${_attempt_elapsed}s)."
+          ;;
+        esac
+    fi
+    case "${_prev_attempt_failure_kind}" in
+      stall_guard)
+        emit_conflict_resolver_substate "Stalled" "${attempt}"
+        ;;
+      timeout)
+        emit_conflict_resolver_substate "TimedOut" "${attempt}"
         ;;
       *)
-        _prev_attempt_failure_kind="exec_error"
-        echo "Conflict resolver attempt ${attempt}/${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS} failed with non-timeout exit ${_codex_exit} (codex itself returned non-zero; elapsed ${_attempt_elapsed}s)."
+        emit_conflict_resolver_substate "Failed" "${attempt}"
         ;;
     esac
     if [ "${attempt}" -eq "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; then
       if [ "${_prev_attempt_failure_kind}" = "timeout" ]; then
         echo "Conflict resolver failed after retries (final attempt killed by per-attempt timer)."
+      elif [ "${_prev_attempt_failure_kind}" = "stall_guard" ]; then
+        echo "Conflict resolver failed after retries (final attempt killed by codex stall guard)."
       else
         echo "Conflict resolver failed after retries (final attempt: codex non-zero exit ${_codex_exit})."
       fi
@@ -1895,6 +2088,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   # worth retrying against.
   if [ "${_marker_count}" -eq 0 ] && { [ "${RESOLVER_FP_EXIT}" -eq 0 ] || [ "${RESOLVER_FP_EXIT}" -eq 2 ]; }; then
     echo "Conflict resolver succeeded on attempt ${attempt} (soft validation passed)."
+    emit_conflict_resolver_substate "Succeeded" "${attempt}"
     # Re-emit the verifier's info line at normal verbosity so
     # operators see the "must_contain satisfied N/M" summary
     # that exists today.  Plumbing-exit (2) was not a soft
@@ -1919,6 +2113,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     echo "Fingerprint violations (first 10):"
     head -10 "${RESOLVER_FP_VIOLATIONS_FILE}" | sed 's/^/  - /' || true
   fi
+  emit_conflict_resolver_substate "Failed" "${attempt}"
 
   # No-progress detection: if attempt N's fingerprint violation set
   # is identical to attempt N-1's, the model has already seen the

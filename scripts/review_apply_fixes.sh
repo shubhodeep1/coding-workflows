@@ -35,6 +35,61 @@ if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   sanitize_codex_prompt_file() { :; }
 fi
 
+CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
+WORKSPACE_SAFETY_CHECK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/workspace_safety_check.sh"
+
+read_codex_stall_guard_state() {
+  local status_file="$1"
+  local state=""
+
+  [ -s "${status_file}" ] || return 1
+  state="$(sed -n 's/^state=//p' "${status_file}" | head -n 1)"
+  case "${state}" in
+    observed|killed)
+      printf '%s\n' "${state}"
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
+resolve_editor_network_probe_pid() {
+  local wrapper_pid="$1"
+  local child_pid=""
+
+  [ -n "${wrapper_pid}" ] || return 1
+  child_pid="$(ps -o pid= --ppid "${wrapper_pid}" 2>/dev/null | awk 'NR==1 { print $1; exit }' || true)"
+  if [ -n "${child_pid}" ]; then
+    printf '%s\n' "${child_pid}"
+  else
+    printf '%s\n' "${wrapper_pid}"
+  fi
+}
+
+run_editor_codex_attempt() {
+  local prompt_file="$1"
+  local stdout_file="$2"
+  local stderr_target="$3"
+  local activity_file="$4"
+  local status_file="$5"
+
+  if [ -x "${WORKSPACE_SAFETY_CHECK_HELPER}" ]; then
+    bash "${WORKSPACE_SAFETY_CHECK_HELPER}" || return $?
+  fi
+
+  if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
+    exec "${CODEX_STALL_GUARD_HELPER}" \
+      --phase review_apply_fixes \
+      --stdout-file "${stdout_file}" \
+      --activity-file "${activity_file}" \
+      --status-file "${status_file}" \
+      -- codex --ask-for-approval never -c model_verbosity="${EDITOR_VERBOSITY}" -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" 2>"${stderr_target}"
+  fi
+
+  exec codex --ask-for-approval never -c model_verbosity="${EDITOR_VERBOSITY}" -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" > "${stdout_file}" 2>"${stderr_target}"
+}
+
 emit_context_budget_warn_for_prompt() {
   local phase="$1"
   local prompt_path="$2"
@@ -333,6 +388,74 @@ resolve_support_script() {
     fi
   done
   return 1
+}
+
+resolve_review_thread_reuse_asset() {
+  local repo_path="$1"
+  local candidate=""
+
+  for candidate in \
+    "${repo_path}" \
+    ".codex-workflow-src/${repo_path}" \
+    ".codex-workflow-src-main/${repo_path}"; do
+    if [ -f "${candidate}" ]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+CODEX_THREAD_REUSE_ENABLED="${CODEX_THREAD_REUSE_ENABLED:-false}"
+CODEX_THREAD_REUSE_HELPER="$(resolve_support_script codex_thread_reuse.sh || true)"
+export CODEX_THREAD_REUSE_ENABLED
+export CODEX_THREAD_REUSE_RUNTIME_DIR="${CODEX_THREAD_REUSE_RUNTIME_DIR:-${RUNTIME_DIR}}"
+if [ -n "${CODEX_THREAD_REUSE_HELPER}" ]; then
+  # shellcheck disable=SC1090
+  source "${CODEX_THREAD_REUSE_HELPER}"
+fi
+
+review_thread_reuse_enabled() {
+  [ -n "${CODEX_THREAD_REUSE_HELPER:-}" ] || return 1
+  declare -F codex_thread_reuse_truthy >/dev/null 2>&1 || return 1
+  codex_thread_reuse_truthy "${CODEX_THREAD_REUSE_ENABLED:-false}"
+}
+
+ledger_substate_script="$(resolve_support_script ledger_emit_substate.sh || true)"
+
+emit_editor_substate() {
+  local event_or_substate="$1"
+  local attempt_number="$2"
+  local tokens_log_file="${3:-}"
+  local args=()
+
+  [ -f "${ledger_substate_script:-}" ] || return 0
+
+  args=(
+    --run-id "${GITHUB_RUN_ID:-}"
+    --workflow "review_autofix"
+    --phase "review_apply_fixes"
+    --mode "editor"
+    --attempt "${attempt_number}"
+    --model "${MODEL_EDITOR:-}"
+    --pr-number "${PR_NUMBER:-}"
+    --actor "${GITHUB_ACTOR:-codex-bot}"
+    --repo-root "$(pwd)"
+  )
+  case "${event_or_substate}" in
+    codex_stall_observed|codex_stall_killed)
+      args+=(--event-type "${event_or_substate}")
+      ;;
+    *)
+      args+=(--substate "${event_or_substate}")
+      ;;
+  esac
+  if [ -n "${tokens_log_file}" ]; then
+    args+=(--tokens-log-file "${tokens_log_file}")
+  fi
+
+  bash "${ledger_substate_script}" "${args[@]}" || true
 }
 
 AUTOFIX_ITERATION="${AUTOFIX_ITERATION:-}"
@@ -1139,6 +1262,33 @@ if [ "${SERENA_AVAILABLE:-false}" = "true" ]; then
     '- Keep apply_patch as the primary write path for repository edits; use Serena for discovery/navigation, not as a replacement for minimal patches.')"
 fi
 
+EDITOR_CODEX_PATH="${PATH}"
+editor_continuation_source=""
+editor_wrapper_dir=""
+if review_thread_reuse_enabled; then
+  editor_continuation_source="$(resolve_review_thread_reuse_asset 'prompts/mode-review-apply-fixes-continuation.txt' 2>/dev/null || true)"
+  if [ -z "${editor_continuation_source}" ]; then
+    echo "::warning::Review apply-fixes continuation prompt not found; editor will use the full prompt path."
+  elif [ ! -f "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" ]; then
+    echo "::warning::render_prompt.sh unavailable; editor will use the full prompt path."
+  else
+    EDITOR_CONTINUATION_RENDERED_FILE="${RUNTIME_DIR}/mode-review-apply-fixes-continuation.rendered.txt"
+    if SERENA_TOOL_HINTS="${EDITOR_SERENA_TOOL_HINTS}" bash "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh" "${editor_continuation_source}" > "${EDITOR_CONTINUATION_RENDERED_FILE}"; then
+      if editor_wrapper_dir="$(codex_thread_reuse_install_wrapper \
+        'review-apply-fixes-editor' \
+        "${EDITOR_CONTINUATION_RENDERED_FILE}" \
+        'replace-prefix' \
+        'FINAL RESPONSE FORMAT')"; then
+        EDITOR_CODEX_PATH="${editor_wrapper_dir}:${PATH}"
+      else
+        echo "::warning::Failed to install review apply-fixes thread-reuse wrapper; editor will use the full prompt path."
+      fi
+    else
+      echo "::warning::Failed to render review apply-fixes continuation prompt; editor will use the full prompt path."
+    fi
+  fi
+fi
+
 editor_prompt_rendered="$(mktemp)"
 (
   cd "${SUPPORT_ROOT_DIR}"
@@ -1358,6 +1508,7 @@ while [ "${attempt}" -le 3 ]; do
     echo "Skipping editor attempt ${attempt}: only ${remaining}s remain before job deadline (need ${EDITOR_MIN_ATTEMPT_SECS}s minimum)."
     break
   fi
+  emit_editor_substate "PreparingWorkspace" "${attempt}"
   # Cap this attempt's wall time to the lesser of EDITOR_MAX_WALL
   # and the remaining budget minus a 2-min buffer for cleanup steps.
   attempt_wall="${EDITOR_MAX_WALL}"
@@ -1375,6 +1526,7 @@ while [ "${attempt}" -le 3 ]; do
   printf '%s' "$(date +%s)" > "${hb_file}.tmp" && mv -f "${hb_file}.tmp" "${hb_file}"
   editor_start="$(date +%s)"
   codex_pid_file="$(mktemp /tmp/codex_pid_editor.XXXXXX)"
+  stall_status_file="$(mktemp /tmp/editor_stall_status.XXXXXX)"
 
   # ── Background watchdog: heartbeat + network-activity aware ──
   (
@@ -1400,9 +1552,10 @@ while [ "${attempt}" -le 3 ]; do
       if [ "${idle_secs}" -ge "${EDITOR_IDLE_TIMEOUT}" ]; then
         cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
         net_active=false
-        if [ -n "${cpid}" ] && [ -d "/proc/${cpid}/fd" ]; then
-          sock_count="$(find "/proc/${cpid}/fd" -lname 'socket:*' 2>/dev/null | head -20 | wc -l || echo 0)"
-          if [ "${sock_count}" -gt 0 ]; then
+        probe_pid="$(resolve_editor_network_probe_pid "${cpid}" || true)"
+        if [ -n "${probe_pid}" ] && [ -d "/proc/${probe_pid}/fd" ]; then
+          sock_count="$(find "/proc/${probe_pid}/fd" -lname 'socket:*' 2>/dev/null | head -20 | wc -l || echo 0)"
+          if [[ "${sock_count}" =~ ^[0-9]+$ ]] && [ "${sock_count}" -gt 0 ]; then
             net_active=true
           fi
         fi
@@ -1477,11 +1630,15 @@ while [ "${attempt}" -le 3 ]; do
       "$(date +%s)" \
       "$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
   } >> "${attempt_prompt_file}"
+  emit_editor_substate "BuildingPrompt" "${attempt}"
   # Run codex: stdout → tmp_output, stderr → FIFO (heartbeat reader).
+  emit_editor_substate "LaunchingAgentProcess" "${attempt}"
+  emit_editor_substate "InitializingSession" "${attempt}"
+  emit_editor_substate "StreamingTurn" "${attempt}"
   (
     trap '' PIPE
-    exec codex --ask-for-approval never -c model_verbosity="${EDITOR_VERBOSITY}" -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${attempt_prompt_file}" 2>"${_hb_fifo}"
-  ) > "${tmp_output}" &
+    PATH="${EDITOR_CODEX_PATH}" run_editor_codex_attempt "${attempt_prompt_file}" "${tmp_output}" "${_hb_fifo}" "${hb_file}" "${stall_status_file}"
+  ) &
   codex_bg_pid=$!
   echo "${codex_bg_pid}" > "${codex_pid_file}"
   cmd_rc=0
@@ -1523,6 +1680,42 @@ while [ "${attempt}" -le 3 ]; do
 
   kill "${wd_pid}" 2>/dev/null; wait "${wd_pid}" 2>/dev/null || true
   rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}"
+
+  stall_state=""
+  if stall_state="$(read_codex_stall_guard_state "${stall_status_file}" 2>/dev/null)"; then
+    :
+  elif [ -s "${stall_status_file}" ]; then
+    echo "::warning::Editor attempt ${attempt}: could not parse codex stall guard status from ${stall_status_file}."
+  fi
+  rm -f "${stall_status_file}"
+
+  emit_editor_substate "Finishing" "${attempt}" "${tmp_err}"
+
+  case "${stall_state}" in
+    observed)
+      echo "Editor attempt ${attempt}: codex_stall_observed marker recorded (observe-only mode)."
+      emit_editor_substate "codex_stall_observed" "${attempt}" "${tmp_err}"
+      ;;
+    killed)
+      echo "Editor attempt ${attempt}: codex_stall_killed marker recorded (exit=${cmd_rc})."
+      emit_editor_substate "codex_stall_killed" "${attempt}" "${tmp_err}"
+      ;;
+  esac
+
+  if [ "${cmd_rc}" -eq 78 ]; then
+    echo "Editor attempt ${attempt}: workspace_safety_violation; aborting without retry."
+    if [ -z "${PR_NUMBER:-}" ] || [ ! -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+      emit_editor_substate "Failed" "${attempt}" "${tmp_err}"
+    fi
+    cp "${tmp_output}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.txt" || true
+    cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
+    if [ -s "${tmp_err}" ]; then
+      echo "Editor stderr on attempt ${attempt}:"
+      cat "${tmp_err}"
+    fi
+    rm -f "${tmp_output}" "${tmp_err}" "${attempt_prompt_file}"
+    exit 78
+  fi
 
   if [ "${cmd_rc}" -eq 0 ]; then
     cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
@@ -1748,6 +1941,7 @@ while [ "${attempt}" -le 3 ]; do
           rm -f "${tmp_err}"
           rm -f "${attempt_prompt_file}"
           echo "Editor succeeded on attempt ${attempt}."
+          emit_editor_substate "Succeeded" "${attempt}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err"
           # Diagnostic: capture working tree state at the very last moment
           # before this script exits.  Combined with checkpoints at the
           # start of the Commit step and just before the touched-file
@@ -1797,6 +1991,19 @@ while [ "${attempt}" -le 3 ]; do
       echo "Editor stderr on attempt ${attempt}:"
       cat "${tmp_err}"
     fi
+  fi
+  if [ -z "${PR_NUMBER:-}" ] || [ ! -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+    case "${stall_state}:${cmd_rc}" in
+      killed:*|*:137|*:142)
+        emit_editor_substate "Stalled" "${attempt}" "${tmp_err}"
+        ;;
+      *:124|*:143)
+        emit_editor_substate "TimedOut" "${attempt}" "${tmp_err}"
+        ;;
+      *)
+        emit_editor_substate "Failed" "${attempt}" "${tmp_err}"
+        ;;
+    esac
   fi
   cp "${tmp_output}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.txt" || true
   cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true

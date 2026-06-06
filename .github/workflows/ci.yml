@@ -134,6 +134,10 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_lib.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_blocker_check.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_poller.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_force_tick.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrator_concurrency_caps.py
 
       - name: Integration-ahead-by gate regression tests
         run: |
@@ -201,8 +205,15 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_workflow_validate_bootstrap.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_thread_reuse_core.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_scripts.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_init.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_safety_check.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_hooks.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_cache_maintenance.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_family_node_runtime.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_workflow_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_orchestrator.py
 
       - name: Validation lint rule unit tests
         run: |
@@ -328,6 +339,14 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_judge_interim_round_trip.py
+
+      - name: Review/judge/conflict strict-render contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_foundation.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_core_modes.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_review_judge_modes.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_validate_analytics_modes.py
 
       - name: Review synthesize-smoke contract test
         run: |
@@ -559,6 +578,8 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_noop_suspicious_recovery.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_state_snapshot.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_run_substate_ledger.py
 
       - name: Semantic cache unit tests
         run: |

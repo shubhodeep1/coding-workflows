@@ -131,6 +131,43 @@ Cycle-local caches that must not be re-fetched per iteration:
 
 ---
 
+## Optional `.github/ai` operator surfaces
+
+The Symphony closeout left three consumer-authored config surfaces on current
+HEAD. All are absent-by-default and fail open when missing:
+
+- `.github/ai/WORKFLOW.md` — loaded by `scripts/load_workflow_overlay.py`
+  and validated by `ai-memory/schemas/workflow_overlay.v1.json`. The shipped
+  schema is intentionally narrow: `schema_version` plus `prompt_overrides[]`
+  append/replace entries only.
+- `.github/ai/concurrency_caps.yml` — parsed by
+  `scripts/orchestrate_lib.py::load_concurrency_caps`. Missing or empty files
+  disable the cap layer and restore legacy uncapped dispatch.
+- `.github/ai/workspace_hooks/<phase>/<hook>.sh` — executed by
+  `scripts/run_workspace_hook.sh`. Supported hook names are `after_create`,
+  `before_run`, `after_run`, and `before_remove`; missing files are a no-op.
+
+---
+
+## Run-substate ledger + state-snapshot contract
+
+- `scripts/ledger_emit_substate.sh` writes additive run-attempt telemetry into
+  `ai-memory:runs/<run-id>/ledger/events.jsonl`, and the open metadata bag in
+  `ai-memory/schemas/run_ledger_entry.v1.json` is the authoritative schema
+  contract for the shipped `run_substate` + token fields.
+- Common shipped `run_substate` values are `PreparingWorkspace`,
+  `BuildingPrompt`, `LaunchingAgentProcess`, `InitializingSession`,
+  `StreamingTurn`, `Finishing`, `Succeeded`, `Failed`, `TimedOut`, and
+  `Stalled`.
+- Stall-sidecar markers are emitted as separate ledger event types
+  `codex_stall_observed` and `codex_stall_killed` rather than as
+  `run_substate` values.
+- `scripts/build_state_snapshot.py` builds the poller's `state.json` artifact,
+  and `ai-memory/schemas/state_snapshot.v1.json` is the authoritative schema
+  for that payload.
+
+---
+
 ## Orchestrator tracking-issue comment markers
 
 The orchestrator poller (`scripts/orchestrate_poll_process.sh`) maintains

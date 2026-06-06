@@ -60,11 +60,13 @@ case "${MODEL_REASONING_EFFORT_DISCOVER}" in
     MODEL_REASONING_EFFORT_DISCOVER="xhigh"
     ;;
 esac
+CODEX_THREAD_REUSE_ENABLED="${CODEX_THREAD_REUSE_ENABLED:-false}"
 # Export MODEL_EDITOR so child processes (notably scripts/self_heal_validation.sh)
 # see it even when the caller relied on our default fallback. In CI the workflow
 # env: block already exports MODEL_EDITOR, but standalone/local invocations
 # would otherwise lose the default at the env boundary.
 export MODEL_EDITOR
+export CODEX_THREAD_REUSE_ENABLED
 VALIDATION_TIMEOUT="${VALIDATION_TIMEOUT:-15}"
 if ! [[ "${VALIDATION_TIMEOUT}" =~ ^[0-9]+$ ]] || [ "${VALIDATION_TIMEOUT}" -le 0 ]; then
   echo "VALIDATION_TIMEOUT must be a positive integer (got: ${VALIDATION_TIMEOUT})" >&2
@@ -684,8 +686,34 @@ attempt_self_heal_and_reexec()
 
   ensure_serena_bootstrap "${phase}"
 
+  local heal_path="${PATH}"
+  local self_heal_continuation_source=""
+  local self_heal_continuation_rendered=""
+  local self_heal_wrapper_dir=""
+  if validate_thread_reuse_enabled; then
+    self_heal_continuation_source="$(resolve_validate_thread_reuse_asset 'prompts/mode-validate-self-heal-continuation.txt' 2>/dev/null || true)"
+    if [ -n "${self_heal_continuation_source}" ]; then
+      self_heal_continuation_rendered="${RUNTIME_DIR}/mode-validate-self-heal-continuation.rendered.txt"
+      if SERENA_TOOL_HINTS='' bash scripts/render_prompt.sh "${self_heal_continuation_source}" > "${self_heal_continuation_rendered}"; then
+        if self_heal_wrapper_dir="$(codex_thread_reuse_install_wrapper \
+          'validate-self-heal' \
+          "${self_heal_continuation_rendered}" \
+          'replace-between' \
+          '=== SELF-HEAL TASK ===' \
+          '=== SELF-HEAL ATTEMPT ===')"; then
+          heal_path="${self_heal_wrapper_dir}:${PATH}"
+        else
+          echo "::warning::Failed to install validate self-heal thread-reuse wrapper; using the full prompt path." >&2
+        fi
+      else
+        echo "::warning::Failed to render validate self-heal continuation prompt; using the full prompt path." >&2
+      fi
+    fi
+  fi
+
   local heal_exit=0
-  SELF_HEAL_FAILURE_PHASE="${phase}" \
+  PATH="${heal_path}" \
+    SELF_HEAL_FAILURE_PHASE="${phase}" \
     STATIC_CONTEXT_FILE="${STATIC_CONTEXT_FILE}" \
     VALIDATION_RESULT_FILE="${VALIDATION_RESULT_FILE}" \
     DIAGNOSE_RESULT_FILE="${DIAGNOSE_RESULT_FILE}" \
@@ -1595,6 +1623,7 @@ fail_validate_codex_phase()
   local failure_mode="$2"
   local attempt_count="$3"
   local failure_summary="$4"
+  local exit_code="${5:-1}"
 
   emit_phase_failure_marker "validate" "${failed_step_name}" "${failure_mode}" "${attempt_count}" "${failure_summary}"
 
@@ -1606,7 +1635,7 @@ fail_validate_codex_phase()
 
   write_result_files "error" "Validate workflow failed before runtime validation could complete" "${failure_summary}" "codex_failure"
   tg_notify "Validate workflow Codex failure during ${failed_step_name} for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
-  exit 1
+  exit "${exit_code}"
 }
 
 cleanup_runtime_containers()
@@ -2460,10 +2489,170 @@ trap cleanup_runtime_containers EXIT
 # still picks up the catalog shipped next to validate_process.sh.
 _validate_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODEX_HEARTBEAT_HELPER="${_validate_script_dir}/codex_heartbeat.sh"
+CODEX_STALL_GUARD_HELPER="${_validate_script_dir}/codex_stall_guard.sh"
+WORKSPACE_SAFETY_CHECK_HELPER=""
+for _workspace_safety_candidate in \
+  "${_validate_script_dir}/workspace_safety_check.sh" \
+  "scripts/workspace_safety_check.sh" \
+  ".codex-workflow-src/scripts/workspace_safety_check.sh" \
+  ".codex-workflow-src-main/scripts/workspace_safety_check.sh"; do
+  if [ -f "${_workspace_safety_candidate}" ]; then
+    WORKSPACE_SAFETY_CHECK_HELPER="${_workspace_safety_candidate}"
+    break
+  fi
+done
+CODEX_THREAD_REUSE_HELPER=""
+for _thread_reuse_candidate in \
+  "${_validate_script_dir}/codex_thread_reuse.sh" \
+  "scripts/codex_thread_reuse.sh" \
+  ".codex-workflow-src/scripts/codex_thread_reuse.sh" \
+  ".codex-workflow-src-main/scripts/codex_thread_reuse.sh"; do
+  if [ -f "${_thread_reuse_candidate}" ]; then
+    CODEX_THREAD_REUSE_HELPER="${_thread_reuse_candidate}"
+    break
+  fi
+done
+export CODEX_THREAD_REUSE_RUNTIME_DIR="${CODEX_THREAD_REUSE_RUNTIME_DIR:-${RUNTIME_DIR}}"
+if [ -n "${CODEX_THREAD_REUSE_HELPER}" ]; then
+  # shellcheck disable=SC1090
+  source "${CODEX_THREAD_REUSE_HELPER}"
+fi
+LEDGER_SUBSTATE_HELPER=""
+for _ledger_candidate in \
+  "${_validate_script_dir}/ledger_emit_substate.sh" \
+  "scripts/ledger_emit_substate.sh" \
+  ".codex-workflow-src/scripts/ledger_emit_substate.sh" \
+  ".codex-workflow-src-main/scripts/ledger_emit_substate.sh"; do
+  if [ -f "${_ledger_candidate}" ]; then
+    LEDGER_SUBSTATE_HELPER="${_ledger_candidate}"
+    break
+  fi
+done
 bash "${_validate_script_dir}/write_codex_config.sh" \
   --model "${MODEL_EDITOR}" \
   --reasoning "${MODEL_REASONING_EFFORT}" \
   --catalog-path "${_validate_script_dir}/codex_model_catalog.json"
+
+read_validate_codex_stall_guard_state() {
+  local status_file="$1"
+  local state=""
+
+  [ -s "${status_file}" ] || return 1
+  state="$(sed -n 's/^state=//p' "${status_file}" | head -n 1)"
+  case "${state}" in
+    observed|killed)
+      printf '%s\n' "${state}"
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
+emit_validate_substate() {
+  local phase_name="$1"
+  local mode_name="$2"
+  local event_or_substate="$3"
+  local attempt_number="$4"
+  local tokens_log_file="${5:-}"
+  local args=()
+
+  [ -f "${LEDGER_SUBSTATE_HELPER:-}" ] || return 0
+
+  args=(
+    --run-id "${GITHUB_RUN_ID:-}"
+    --workflow "validate"
+    --phase "${phase_name}"
+    --mode "${mode_name}"
+    --attempt "${attempt_number}"
+    --model "${MODEL_EDITOR:-}"
+    --issue-number "${TRACKING_ISSUE_NUM:-}"
+    --actor "${GITHUB_ACTOR:-codex-bot}"
+    --repo-root "$(pwd)"
+  )
+  case "${event_or_substate}" in
+    codex_stall_observed|codex_stall_killed)
+      args+=(--event-type "${event_or_substate}")
+      ;;
+    *)
+      args+=(--substate "${event_or_substate}")
+      ;;
+  esac
+  if [ -n "${tokens_log_file}" ]; then
+    args+=(--tokens-log-file "${tokens_log_file}")
+  fi
+
+  bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" || true
+}
+
+resolve_validate_thread_reuse_asset() {
+	local repo_path="$1"
+	local candidate=""
+
+	for candidate in \
+	  "${repo_path}" \
+	  ".codex-workflow-src/${repo_path}" \
+	  ".codex-workflow-src-main/${repo_path}"; do
+		if [ -f "${candidate}" ]; then
+			printf '%s\n' "${candidate}"
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+validate_thread_reuse_enabled() {
+	[ -n "${CODEX_THREAD_REUSE_HELPER:-}" ] || return 1
+	declare -F codex_thread_reuse_truthy >/dev/null 2>&1 || return 1
+	codex_thread_reuse_truthy "${CODEX_THREAD_REUSE_ENABLED:-false}"
+}
+
+run_validate_codex_attempt() {
+  local phase_name="$1"
+  local prompt_file="$2"
+  local output_file="$3"
+  local log_file="$4"
+  local status_file="$5"
+
+  if [ -x "${WORKSPACE_SAFETY_CHECK_HELPER}" ]; then
+    bash "${WORKSPACE_SAFETY_CHECK_HELPER}" || return $?
+  fi
+
+	if validate_thread_reuse_enabled; then
+		CODEX_THREAD_REUSE_STATE_KEY="${phase_name}" \
+		  CODEX_THREAD_REUSE_PROMPT_FILE="${prompt_file}" \
+		  CODEX_THREAD_REUSE_OUTPUT_FILE="${output_file}" \
+		  CODEX_THREAD_REUSE_PHASE="${phase_name}" \
+		  CODEX_THREAD_REUSE_MODEL="${MODEL_EDITOR}" \
+		  CODEX_THREAD_REUSE_LOG_FILE="${log_file}" \
+		  CODEX_THREAD_REUSE_STATUS_FILE="${status_file}" \
+		  CODEX_THREAD_REUSE_STALL_GUARD_HELPER="${CODEX_STALL_GUARD_HELPER}" \
+		  CODEX_THREAD_REUSE_HEARTBEAT_HELPER="${CODEX_HEARTBEAT_HELPER}" \
+		  CODEX_THREAD_REUSE_SKIP_GIT_REPO_CHECK="true" \
+		  bash "${CODEX_THREAD_REUSE_HELPER}" direct-run
+		return $?
+	fi
+
+  if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
+    "${CODEX_STALL_GUARD_HELPER}" \
+      --phase "${phase_name}" \
+      --stdout-file "${output_file}" \
+      --status-file "${status_file}" \
+      -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" 2> >(tee -a "${log_file}" >&2)
+    return $?
+  fi
+
+  if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
+    "${CODEX_HEARTBEAT_HELPER}" \
+      --phase "${phase_name}" \
+      --stdout-file "${output_file}" \
+      -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" 2> >(tee -a "${log_file}" >&2)
+    return $?
+  fi
+
+  codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" > "${output_file}" 2> >(tee -a "${log_file}" >&2)
+}
 
 export PATH="${HOME}/.local/bin:${PATH}"
 
@@ -2646,21 +2835,52 @@ else
   for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
   DISCOVER_ATTEMPTS_USED="${attempt}"
   echo "Validation hint discovery attempt ${attempt}/${MAX_CODEX_ATTEMPTS}"
+  emit_validate_substate "validate_discover" "discover" "PreparingWorkspace" "${attempt}"
+  emit_validate_substate "validate_discover" "discover" "BuildingPrompt" "${attempt}"
   sanitize_codex_prompt_file "${DISCOVER_PROMPT_FILE}"
+  discover_stall_status_file="$(mktemp /tmp/validate_discover_stall_status.XXXXXX)"
+  discover_stall_state=""
+  emit_validate_substate "validate_discover" "discover" "LaunchingAgentProcess" "${attempt}"
+  emit_validate_substate "validate_discover" "discover" "InitializingSession" "${attempt}"
+  emit_validate_substate "validate_discover" "discover" "StreamingTurn" "${attempt}"
   set +e
-  if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
-    "${CODEX_HEARTBEAT_HELPER}" \
-      --phase validate_discover \
-      --stdout-file "${DISCOVER_OUTPUT_FILE}" \
-      -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${DISCOVER_PROMPT_FILE}" 2> >(tee -a "${DISCOVER_LOG_FILE}" >&2)
-  else
-    codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${DISCOVER_PROMPT_FILE}" > "${DISCOVER_OUTPUT_FILE}" 2> >(tee -a "${DISCOVER_LOG_FILE}" >&2)
-  fi
+  run_validate_codex_attempt "validate_discover" "${DISCOVER_PROMPT_FILE}" "${DISCOVER_OUTPUT_FILE}" "${DISCOVER_LOG_FILE}" "${discover_stall_status_file}"
   DISCOVER_EXIT=$?
   set -e
+  emit_validate_substate "validate_discover" "discover" "Finishing" "${attempt}" "${DISCOVER_LOG_FILE}"
+  if discover_stall_state="$(read_validate_codex_stall_guard_state "${discover_stall_status_file}" 2>/dev/null)"; then
+    :
+  elif [ -s "${discover_stall_status_file}" ]; then
+    echo "::warning::Validation hint discovery attempt ${attempt}/${MAX_CODEX_ATTEMPTS}: could not parse codex stall guard status from ${discover_stall_status_file}."
+  fi
+  rm -f "${discover_stall_status_file}"
+  case "${discover_stall_state}" in
+    observed)
+      echo "Validation hint discovery attempt ${attempt}/${MAX_CODEX_ATTEMPTS}: codex_stall_observed recorded (observe-only mode)."
+      emit_validate_substate "validate_discover" "discover" "codex_stall_observed" "${attempt}" "${DISCOVER_LOG_FILE}"
+      ;;
+    killed)
+      echo "::warning::Validation hint discovery attempt ${attempt}/${MAX_CODEX_ATTEMPTS}: codex_stall_killed recorded."
+      emit_validate_substate "validate_discover" "discover" "codex_stall_killed" "${attempt}" "${DISCOVER_LOG_FILE}"
+      ;;
+  esac
+
+  if [ "${DISCOVER_EXIT}" -eq 78 ]; then
+    emit_validate_substate "validate_discover" "discover" "Failed" "${attempt}" "${DISCOVER_LOG_FILE}"
+    fail_validate_codex_phase \
+      "validation_discovery" \
+      "workspace_safety_violation" \
+      "${DISCOVER_ATTEMPTS_USED:-${attempt}}" \
+      "Workspace safety preflight failed before validation hint discovery could launch Codex." \
+      78
+  fi
 
     if [ "${DISCOVER_EXIT}" -ne 0 ]; then
-      DISCOVER_FAILURE_MODE="codex_rc_nonzero"
+      if [ "${discover_stall_state}" = "killed" ]; then
+        DISCOVER_FAILURE_MODE="codex_stall_killed"
+      else
+        DISCOVER_FAILURE_MODE="codex_rc_nonzero"
+      fi
     elif ! grep -q '[^[:space:]]' "${DISCOVER_OUTPUT_FILE}"; then
       DISCOVER_FAILURE_MODE="codex_empty_output"
     elif python3 - "${DISCOVER_OUTPUT_FILE}" "${VALIDATE_HINTS_FILE}" <<'PY'
@@ -2710,9 +2930,16 @@ PY
     then
       DISCOVER_SUCCESS=true
       HINTS_SOURCE="discovered"
+      emit_validate_substate "validate_discover" "discover" "Succeeded" "${attempt}" "${DISCOVER_LOG_FILE}"
       break
     else
       DISCOVER_FAILURE_MODE="validator_rejected"
+    fi
+
+    if [ "${discover_stall_state}" = "killed" ]; then
+      emit_validate_substate "validate_discover" "discover" "Stalled" "${attempt}" "${DISCOVER_LOG_FILE}"
+    else
+      emit_validate_substate "validate_discover" "discover" "Failed" "${attempt}" "${DISCOVER_LOG_FILE}"
     fi
 
     if [ "${attempt}" -lt "${MAX_CODEX_ATTEMPTS}" ]; then
@@ -3347,28 +3574,66 @@ DIAGNOSE_ATTEMPTS_USED=0
 for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
   DIAGNOSE_ATTEMPTS_USED="${attempt}"
   echo "Validation diagnosis attempt ${attempt}/${MAX_CODEX_ATTEMPTS}"
+  emit_validate_substate "validate_diagnose" "diagnose" "PreparingWorkspace" "${attempt}"
+  emit_validate_substate "validate_diagnose" "diagnose" "BuildingPrompt" "${attempt}"
   sanitize_codex_prompt_file "${DIAGNOSE_PROMPT_FILE}"
+  diagnose_stall_status_file="$(mktemp /tmp/validate_diagnose_stall_status.XXXXXX)"
+  diagnose_stall_state=""
+  emit_validate_substate "validate_diagnose" "diagnose" "LaunchingAgentProcess" "${attempt}"
+  emit_validate_substate "validate_diagnose" "diagnose" "InitializingSession" "${attempt}"
+  emit_validate_substate "validate_diagnose" "diagnose" "StreamingTurn" "${attempt}"
   set +e
-  if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
-    "${CODEX_HEARTBEAT_HELPER}" \
-      --phase validate_diagnose \
-      --stdout-file "${DIAGNOSE_OUTPUT_FILE}" \
-      -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${DIAGNOSE_PROMPT_FILE}" 2> >(tee -a "${DIAGNOSE_LOG_FILE}" >&2)
-  else
-    codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${DIAGNOSE_PROMPT_FILE}" > "${DIAGNOSE_OUTPUT_FILE}" 2> >(tee -a "${DIAGNOSE_LOG_FILE}" >&2)
-  fi
+  run_validate_codex_attempt "validate_diagnose" "${DIAGNOSE_PROMPT_FILE}" "${DIAGNOSE_OUTPUT_FILE}" "${DIAGNOSE_LOG_FILE}" "${diagnose_stall_status_file}"
   DIAGNOSE_EXIT=$?
   set -e
+  emit_validate_substate "validate_diagnose" "diagnose" "Finishing" "${attempt}" "${DIAGNOSE_LOG_FILE}"
+  if diagnose_stall_state="$(read_validate_codex_stall_guard_state "${diagnose_stall_status_file}" 2>/dev/null)"; then
+    :
+  elif [ -s "${diagnose_stall_status_file}" ]; then
+    echo "::warning::Validation diagnosis attempt ${attempt}/${MAX_CODEX_ATTEMPTS}: could not parse codex stall guard status from ${diagnose_stall_status_file}."
+  fi
+  rm -f "${diagnose_stall_status_file}"
+  case "${diagnose_stall_state}" in
+    observed)
+      echo "Validation diagnosis attempt ${attempt}/${MAX_CODEX_ATTEMPTS}: codex_stall_observed recorded (observe-only mode)."
+      emit_validate_substate "validate_diagnose" "diagnose" "codex_stall_observed" "${attempt}" "${DIAGNOSE_LOG_FILE}"
+      ;;
+    killed)
+      echo "::warning::Validation diagnosis attempt ${attempt}/${MAX_CODEX_ATTEMPTS}: codex_stall_killed recorded."
+      emit_validate_substate "validate_diagnose" "diagnose" "codex_stall_killed" "${attempt}" "${DIAGNOSE_LOG_FILE}"
+      ;;
+  esac
+
+  if [ "${DIAGNOSE_EXIT}" -eq 78 ]; then
+    emit_validate_substate "validate_diagnose" "diagnose" "Failed" "${attempt}" "${DIAGNOSE_LOG_FILE}"
+    fail_validate_codex_phase \
+      "validation_diagnosis" \
+      "workspace_safety_violation" \
+      "${DIAGNOSE_ATTEMPTS_USED:-${attempt}}" \
+      "Workspace safety preflight failed before validation diagnosis could launch Codex." \
+      78
+  fi
 
   if [ "${DIAGNOSE_EXIT}" -ne 0 ]; then
-    DIAGNOSE_FAILURE_MODE="codex_rc_nonzero"
+    if [ "${diagnose_stall_state}" = "killed" ]; then
+      DIAGNOSE_FAILURE_MODE="codex_stall_killed"
+    else
+      DIAGNOSE_FAILURE_MODE="codex_rc_nonzero"
+    fi
   elif ! grep -q '[^[:space:]]' "${DIAGNOSE_OUTPUT_FILE}"; then
     DIAGNOSE_FAILURE_MODE="codex_empty_output"
   elif extract_last_json_with_key "${DIAGNOSE_OUTPUT_FILE}" "status" "${DIAGNOSE_RESULT_FILE}"; then
     DIAGNOSE_SUCCESS=true
+    emit_validate_substate "validate_diagnose" "diagnose" "Succeeded" "${attempt}" "${DIAGNOSE_LOG_FILE}"
     break
   else
     DIAGNOSE_FAILURE_MODE="validator_rejected"
+  fi
+
+  if [ "${diagnose_stall_state}" = "killed" ]; then
+    emit_validate_substate "validate_diagnose" "diagnose" "Stalled" "${attempt}" "${DIAGNOSE_LOG_FILE}"
+  else
+    emit_validate_substate "validate_diagnose" "diagnose" "Failed" "${attempt}" "${DIAGNOSE_LOG_FILE}"
   fi
 
   if [ "${attempt}" -lt "${MAX_CODEX_ATTEMPTS}" ]; then

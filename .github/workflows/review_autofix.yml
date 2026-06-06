@@ -754,7 +754,18 @@ jobs:
       REPOSITORY: ${{ github.repository }}
       PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
       VALIDATE_WORKFLOW_NAME: ${{ vars.VALIDATE_WORKFLOW_NAME || 'ai-validate.yml' }}
+      WORKFLOW_SUPPORT_REF: ${{ github.repository == 'shubhodeep1/coding-workflows' && github.sha || 'stable' }}
     steps:
+      - name: Checkout workflow support source
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ env.WORKFLOW_SUPPORT_REF }}
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+
       - name: Dispatch standalone validate for orchestrator short-circuit issues
         run: |
           set -euo pipefail
@@ -821,6 +832,24 @@ jobs:
           if [ "${validation_dispatched}" = "false" ]; then
             echo "::warning::No standalone validation workflow could be dispatched for merged PR #${PR_NUMBER}."
           fi
+
+      - name: Force orchestrate poll after merged PR handling
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          HELPER=".codex-workflow-src/scripts/orchestrate_force_tick.sh"
+          if [ ! -f "${HELPER}" ]; then
+            echo "::warning::orchestrate_force_tick.sh unavailable; skipping post-merge force tick."
+            exit 0
+          fi
+          bash "${HELPER}" \
+            --repo "${REPOSITORY}" \
+            --issue "${PR_NUMBER}" \
+            --reason "review-post-merge" \
+            --source-workflow "review_autofix" \
+            --run-id "${{ github.run_id }}"
 
   # Deterministic skip path: fires when the gate detects a doc-only PR or a
   # PR under the +/- LOC threshold. Mirrors the labeler + auto-merge tail of
@@ -1034,6 +1063,7 @@ jobs:
     env:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
+      WORKSPACE_REUSE_ENABLED: ${{ vars.WORKSPACE_REUSE_ENABLED || 'false' }}
       # Review-pipeline knobs: mirror the landed script defaults so repo-var
       # overrides are honored without changing current branch behaviour.
       REVIEW_FLOOR_RULES_ENABLED: ${{ vars.REVIEW_FLOOR_RULES_ENABLED || '1' }}
@@ -1252,7 +1282,7 @@ jobs:
             echo "SUPPORT_AGENTS_FILE=${SUPPORT_ROOT_DIR}/agents.md"
           } >> "$GITHUB_ENV"
 
-          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py cost_audit.py codex_heartbeat.sh review_run_reviewers.sh review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh"
+          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py cost_audit.py codex_heartbeat.sh codex_stall_guard.sh review_run_reviewers.sh review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh orchestrate_force_tick.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh workspace_init.sh workspace_safety_check.sh"
           # Main-primary bootstrap scripts: prefer the fresh main snapshot so
           # wedged integration branches still pick up resolver safety fixes
           # shipped on main. Missing from both refs remains fail-open so older
@@ -1337,7 +1367,7 @@ jobs:
             install -m 0644 "${serena_template_src}" "${SUPPORT_SCRIPTS_DIR}/templates/serena_project.yml.j2"
           fi
 
-          for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json actions_runs_cache.v1.json workflow_log_analysis_cache.v1.json fingerprint_quarantine.v1.json validation_history.v1.json operator_bypass_audit.v1.json revalidate_events.v1.json validation_discovery.v1.json; do
+          for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json actions_runs_cache.v1.json workflow_log_analysis_cache.v1.json fingerprint_quarantine.v1.json validation_history.v1.json operator_bypass_audit.v1.json revalidate_events.v1.json validation_discovery.v1.json workflow_overlay.v1.json; do
             src=".codex-workflow-src/ai-memory/schemas/${sf}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/ai-memory/schemas/${sf}" ]; then
               src=".codex-workflow-src-main/ai-memory/schemas/${sf}"
@@ -1346,6 +1376,13 @@ jobs:
               install -m 0644 "${src}" "${SUPPORT_AI_MEMORY_DIR}/schemas/${sf}"
             fi
           done
+
+          # WORKFLOW.md overlay is opt-in by file presence; absent file must
+          # stay a no-op while valid prompt overrides flow through render_prompt.py.
+          PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/load_workflow_overlay.py" \
+            --repo-root "${GITHUB_WORKSPACE}" \
+            --schema-path "${SUPPORT_AI_MEMORY_DIR}/schemas/workflow_overlay.v1.json" \
+            --github-env "${GITHUB_ENV}"
 
           # Mirror the schema install above for the retrieval profiles
           # config so consumer repos that do not vendor ai-memory/config/
@@ -1651,6 +1688,86 @@ jobs:
             echo "HAS_PR_DIFF=false"
             echo "PR_DIFF_SOURCE=uninitialized"
             echo "PR_DIFF_ATTEMPTED_PATHS=gh_pr_diff:${RUNTIME_DIR}/pr_diff.patch"
+          } >> "$GITHUB_ENV"
+
+      - name: Initialize workspace metadata
+        if: env.PR_CLOSED != 'true'
+        id: workspace_meta
+        run: |
+          set -euo pipefail
+
+          workspace_reuse_enabled="${WORKSPACE_REUSE_ENABLED:-false}"
+          workspace_identifier=""
+          if [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]] && [ "${PR_NUMBER}" -gt 0 ]; then
+            workspace_identifier="${PR_NUMBER}"
+          else
+            workspace_reuse_enabled="false"
+          fi
+
+          WORKSPACE_REUSE_ENABLED="${workspace_reuse_enabled}" \
+          WORKSPACE_REQUIRE_STABLE_IDENTIFIER_FOR_REUSE="true" \
+          WORKSPACE_ISSUE_IDENTIFIER="${workspace_identifier}" \
+          WORKSPACE_SOURCE_PATH="${GITHUB_WORKSPACE}" \
+            bash "${SUPPORT_SCRIPTS_DIR}/workspace_init.sh" metadata
+
+      - name: Restore reusable workspace cache
+        if: env.PR_CLOSED != 'true' && steps.workspace_meta.outputs.workspace_reuse_enabled == 'true'
+        id: workspace_cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ steps.workspace_meta.outputs.workspace_path }}
+          key: ${{ steps.workspace_meta.outputs.workspace_cache_key }}
+          restore-keys: |
+            ${{ steps.workspace_meta.outputs.workspace_cache_restore_prefix_exact }}
+            ${{ steps.workspace_meta.outputs.workspace_cache_restore_prefix_issue }}
+
+      - name: Finalize workspace metadata
+        if: env.PR_CLOSED != 'true'
+        id: workspace_state
+        run: |
+          set -euo pipefail
+          workspace_cache_matched_key=""
+          workspace_cache_path="${{ steps.workspace_meta.outputs.workspace_path }}"
+          workspace_cache_key="${{ steps.workspace_meta.outputs.workspace_cache_key }}"
+          workspace_cache_restore_prefix_issue="${{ steps.workspace_meta.outputs.workspace_cache_restore_prefix_issue }}"
+          workspace_cache_hit="${{ steps.workspace_cache.outputs.cache-hit || '' }}"
+          if [ "${workspace_cache_hit}" = "true" ]; then
+            workspace_cache_matched_key="${workspace_cache_key}"
+          elif [ -d "${workspace_cache_path}" ] && [ -n "$(find "${workspace_cache_path}" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
+            workspace_cache_matched_key="${workspace_cache_restore_prefix_issue}restored"
+          fi
+          WORKSPACE_REUSE_ENABLED="${{ steps.workspace_meta.outputs.workspace_reuse_enabled }}" \
+          WORKSPACE_REQUIRE_STABLE_IDENTIFIER_FOR_REUSE="true" \
+          WORKSPACE_ISSUE_IDENTIFIER="${{ steps.workspace_meta.outputs.workspace_issue_identifier }}" \
+          WORKSPACE_SOURCE_PATH="${GITHUB_WORKSPACE}" \
+          WORKSPACE_FINGERPRINT="${{ steps.workspace_meta.outputs.workspace_fingerprint }}" \
+          WORKSPACE_CACHE_MATCHED_KEY="${workspace_cache_matched_key}" \
+            bash "${SUPPORT_SCRIPTS_DIR}/workspace_init.sh" metadata
+
+      - name: Finalize workspace contents
+        if: env.PR_CLOSED != 'true'
+        run: |
+          set -euo pipefail
+          WORKSPACE_SOURCE_PATH="${GITHUB_WORKSPACE}" \
+          WORKSPACE_PATH="${{ steps.workspace_state.outputs.workspace_path }}" \
+          WORKSPACE_REUSE_ENABLED="${{ steps.workspace_state.outputs.workspace_reuse_enabled }}" \
+          WORKSPACE_CACHE_RESTORE_STATE="${{ steps.workspace_state.outputs.workspace_cache_restore_state }}" \
+            bash "${SUPPORT_SCRIPTS_DIR}/workspace_init.sh" finalize
+
+      - name: Activate workspace shell context
+        if: env.PR_CLOSED != 'true'
+        run: |
+          set -euo pipefail
+          workspace_shell_env="${RUNTIME_DIR}/workspace-shell.env"
+          cat > "${workspace_shell_env}" <<'EOF'
+          if [ -n "${WORKSPACE_PATH:-}" ] && [ -d "${WORKSPACE_PATH}" ]; then
+            cd "${WORKSPACE_PATH}"
+          fi
+          EOF
+          {
+            echo "BASH_ENV=${workspace_shell_env}"
+            echo "GIT_DIR=${GITHUB_WORKSPACE}/.git"
+            echo "GIT_WORK_TREE=${WORKSPACE_PATH}"
           } >> "$GITHUB_ENV"
 
       - name: Setup uv for Semble
@@ -2642,9 +2759,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: |
-            .ai/review_issue_ledger/
-            .ai/review_runtime/
-            ${{ env.REVIEW_LEDGER_PATH }}
+            ${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_issue_ledger/
+            ${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_runtime/
+            ${{ steps.workspace_state.outputs.workspace_path }}/${{ env.REVIEW_LEDGER_PATH }}
           key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-
@@ -3379,8 +3496,10 @@ jobs:
           check_required_dir "${SUPPORT_SCRIPTS_DIR}"
           check_required_dir "${SUPPORT_PROMPTS_DIR}"
 
+          check_required_file "${SUPPORT_SCRIPTS_DIR}/codex_stall_guard.sh"
           check_required_file "${SUPPORT_SCRIPTS_DIR}/review_run_reviewers.sh"
           check_required_file "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh"
+          check_required_file "${SUPPORT_SCRIPTS_DIR}/render_prompt.py"
           check_required_nonempty_file "${SUPPORT_INSTRUCTIONS_FILE}"
           check_required_file "./pre_assembled_static.txt"
           check_required_file "${PR_DIFF_FILE}"
@@ -4181,9 +4300,9 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: |
-            .ai/review_issue_ledger/
-            .ai/review_runtime/
-            ${{ env.REVIEW_LEDGER_PATH }}
+            ${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_issue_ledger/
+            ${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_runtime/
+            ${{ steps.workspace_state.outputs.workspace_path }}/${{ env.REVIEW_LEDGER_PATH }}
           key: review-ledger-${{ github.repository }}-pr-${{ env.PR_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Post editor summary comment
@@ -4686,12 +4805,12 @@ jobs:
           # commit step (caller repos delete fetched scripts before committing)
           # or wiped by git clean -ffdx above.
           # Re-stage any missing scripts from checked-out support source.
-          for f in gh_helpers.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh cost_audit.py codex_heartbeat.sh review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh cost_audit.py codex_heartbeat.sh review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh workspace_safety_check.sh; do
             if [ ! -f "${SUPPORT_SCRIPTS_DIR}/${f}" ]; then
               mkdir -p "${SUPPORT_SCRIPTS_DIR}"
-              src=".codex-workflow-src/scripts/${f}"
-              if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
-                src=".codex-workflow-src-main/scripts/${f}"
+              src="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/${f}"
+              if [ ! -f "${src}" ] && [ -f "${GITHUB_WORKSPACE}/.codex-workflow-src-main/scripts/${f}" ]; then
+                src="${GITHUB_WORKSPACE}/.codex-workflow-src-main/scripts/${f}"
               fi
               if [ ! -f "${src}" ]; then
                 echo "::warning::${f} not found in checked-out support source; downstream steps that need it will fail with a specific error."
@@ -5060,8 +5179,8 @@ jobs:
           }
           _primary_state="$(_probe_resolver "${RESOLVER_SCRIPT}")"
           if [ "${_primary_state}" != "ok" ]; then
-            _fb1=".codex-workflow-src/scripts/review_conflict_resolve.sh"
-            _fb2=".codex-workflow-src-main/scripts/review_conflict_resolve.sh"
+            _fb1="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_conflict_resolve.sh"
+            _fb2="${GITHUB_WORKSPACE}/.codex-workflow-src-main/scripts/review_conflict_resolve.sh"
             _fb1_state="$(_probe_resolver "${_fb1}")"
             if [ "${_fb1_state}" = "ok" ]; then
               echo "::warning::Resolver entry-point check: ${RESOLVER_SCRIPT}=${_primary_state} (likely unresolved conflict markers from the merge replay); falling back to ${_fb1} (SCRIPT_REF=${SCRIPT_REF:-unknown})."
@@ -5349,13 +5468,13 @@ jobs:
           if [ -f "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" ] && source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null; then
             :
           else
-            if [ -f .codex-workflow-src/scripts/label_helpers.sh ]; then
+            if [ -f "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/label_helpers.sh" ]; then
               mkdir -p "${SUPPORT_SCRIPTS_DIR}"
-              install -m 0755 .codex-workflow-src/scripts/label_helpers.sh "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
+              install -m 0755 "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/label_helpers.sh" "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
               source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null || true
-            elif [ -f .codex-workflow-src-main/scripts/label_helpers.sh ]; then
+            elif [ -f "${GITHUB_WORKSPACE}/.codex-workflow-src-main/scripts/label_helpers.sh" ]; then
               mkdir -p "${SUPPORT_SCRIPTS_DIR}"
-              install -m 0755 .codex-workflow-src-main/scripts/label_helpers.sh "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
+              install -m 0755 "${GITHUB_WORKSPACE}/.codex-workflow-src-main/scripts/label_helpers.sh" "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh"
               source "${SUPPORT_SCRIPTS_DIR}/label_helpers.sh" 2>/dev/null || true
             else
               type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
@@ -5417,6 +5536,25 @@ jobs:
             echo "Setting ai:review-blocked on issue #${issue_number}"
             set_issue_phase_label_resilient "${issue_number}" "ai:review-blocked" "${REPOSITORY}"
           done <<< "${ISSUE_NUMBERS}"
+
+      - name: Force orchestrate poll after review-blocked exhaustion
+        if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          HELPER="${SUPPORT_SCRIPTS_DIR}/orchestrate_force_tick.sh"
+          if [ ! -f "${HELPER}" ]; then
+            echo "::warning::orchestrate_force_tick.sh unavailable; skipping review-blocked force tick."
+            exit 0
+          fi
+          bash "${HELPER}" \
+            --repo "${REPOSITORY}" \
+            --issue "${PR_NUMBER}" \
+            --reason "review-blocked" \
+            --source-workflow "review_autofix" \
+            --run-id "${{ github.run_id }}"
 
       - name: Post review-blocked comment on PR (autofix exhaustion)
         if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && steps.rb_judge.outputs.judge_handled != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
@@ -6406,6 +6544,25 @@ jobs:
             set_issue_phase_label_resilient "${issue_number}" "ai:review-blocked" "${REPOSITORY}"
           done <<< "${ISSUE_NUMBERS}"
 
+      - name: Force orchestrate poll after workflow failure review-blocked label
+        if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true'
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          HELPER="${SUPPORT_SCRIPTS_DIR}/orchestrate_force_tick.sh"
+          if [ ! -f "${HELPER}" ]; then
+            echo "::warning::orchestrate_force_tick.sh unavailable; skipping workflow-failure force tick."
+            exit 0
+          fi
+          bash "${HELPER}" \
+            --repo "${REPOSITORY}" \
+            --issue "${PR_NUMBER}" \
+            --reason "review-blocked" \
+            --source-workflow "review_autofix" \
+            --run-id "${{ github.run_id }}"
+
       - name: Post review-blocked comment on PR (workflow failure)
         if: failure() && env.PR_CLOSED != 'true' && env.AUTOFIX_EDITOR_EMPTY_NOOP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.RESOLVER_ESCALATED != 'true'
         env:
@@ -6841,7 +6998,7 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
-          rm -rf .codex-workflow-src-main
+          rm -rf "${GITHUB_WORKSPACE}/.codex-workflow-src-main"
 
           # Guard: RUNTIME_DIR is only written to $GITHUB_ENV by the
           # Create runtime workspace step.  If an earlier step failed

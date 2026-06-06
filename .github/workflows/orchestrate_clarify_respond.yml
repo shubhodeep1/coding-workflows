@@ -262,7 +262,7 @@ jobs:
           mkdir -p scripts
 
           _fetched_scripts=()
-          for f in gh_helpers.sh render_prompt.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py semantic_cache.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh; do
+          for f in gh_helpers.sh render_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py semantic_cache.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -300,7 +300,7 @@ jobs:
           # schemas on their default branch can bootstrap the ai-memory
           # branch (schemas are validated during memory operations).
           mkdir -p ai-memory/schemas
-          for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json actions_runs_cache.v1.json workflow_log_analysis_cache.v1.json validation_history.v1.json operator_bypass_audit.v1.json revalidate_events.v1.json validation_discovery.v1.json; do
+          for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json actions_runs_cache.v1.json workflow_log_analysis_cache.v1.json validation_history.v1.json operator_bypass_audit.v1.json revalidate_events.v1.json validation_discovery.v1.json workflow_overlay.v1.json; do
             src=".codex-workflow-src/ai-memory/schemas/${sf}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/ai-memory/schemas/${sf}" ]; then
               src=".codex-workflow-src-main/ai-memory/schemas/${sf}"
@@ -309,6 +309,13 @@ jobs:
               install -m 0644 "${src}" "ai-memory/schemas/${sf}"
             fi
           done
+
+          # WORKFLOW.md overlay is opt-in by file presence; absent file must
+          # stay a no-op while valid prompt overrides flow through render_prompt.py.
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/load_workflow_overlay.py \
+            --repo-root "${GITHUB_WORKSPACE}" \
+            --schema-path "ai-memory/schemas/workflow_overlay.v1.json" \
+            --github-env "${GITHUB_ENV}"
 
           # Model catalog: try script_ref first, fall back to local copy from checkout.
           catalog_src=".codex-workflow-src/scripts/codex_model_catalog.json"

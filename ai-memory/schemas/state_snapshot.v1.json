@@ -1,0 +1,379 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/state_snapshot.v1.json",
+  "title": "StateSnapshotV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "tick_at",
+    "tracking_issues",
+    "running",
+    "deferred",
+    "totals"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "state_snapshot.v1"
+    },
+    "tick_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "tracking_issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "number",
+          "title",
+          "status",
+          "current_wave",
+          "total_waves",
+          "wave_complete",
+          "project_complete",
+          "issue_counts"
+        ],
+        "properties": {
+          "number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "in-progress",
+              "waiting",
+              "ready",
+              "validated",
+              "failed"
+            ]
+          },
+          "current_wave": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total_waves": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "wave_complete": {
+            "type": "boolean"
+          },
+          "project_complete": {
+            "type": "boolean"
+          },
+          "integration_ahead_by": {
+            "type": "string",
+            "maxLength": 32
+          },
+          "issue_counts": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "merged",
+              "closed",
+              "skipped",
+              "in_progress",
+              "review_blocked",
+              "ready_to_merge",
+              "done",
+              "implementation_failed",
+              "not_created"
+            ],
+            "properties": {
+              "merged": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "closed": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "skipped": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "in_progress": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "review_blocked": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "ready_to_merge": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "done": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "implementation_failed": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "not_created": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    "running": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tracking_issue",
+          "wave",
+          "local_id",
+          "github_issue",
+          "run_id",
+          "workflow",
+          "run_status",
+          "issue_status",
+          "phase"
+        ],
+        "properties": {
+          "tracking_issue": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "wave": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "local_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240
+          },
+          "github_issue": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "run_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "workflow": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240
+          },
+          "run_status": {
+            "type": "string",
+            "enum": [
+              "in_progress"
+            ]
+          },
+          "issue_status": {
+            "type": "string",
+            "enum": [
+              "merged",
+              "closed",
+              "skipped",
+              "in_progress",
+              "review-blocked",
+              "ready-to-merge",
+              "done",
+              "implementation-failed",
+              "not_created"
+            ]
+          },
+          "phase": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "head_branch": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "html_url": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "substate": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "pattern": "^[A-Za-z0-9_.:-]+$"
+          },
+          "tokens": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "input": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "output": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "total": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    "deferred": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tracking_issue",
+          "wave",
+          "local_id",
+          "reason",
+          "metadata_present",
+          "blocker_count",
+          "blockers"
+        ],
+        "properties": {
+          "tracking_issue": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "wave": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "local_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "metadata_present": {
+            "type": "boolean"
+          },
+          "blocker_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "detail": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "blockers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "local_id",
+                "github_issue",
+                "terminal",
+                "status",
+                "source"
+              ],
+              "properties": {
+                "local_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 240
+                },
+                "github_issue": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 1
+                },
+                "terminal": {
+                  "type": "boolean"
+                },
+                "status": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 120
+                },
+                "source": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 120
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "totals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tracking_issues",
+        "running",
+        "deferred",
+        "tokens"
+      ],
+      "properties": {
+        "tracking_issues": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "running": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deferred": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tokens": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "input",
+            "output",
+            "total"
+          ],
+          "properties": {
+            "input": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "output": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "total": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    }
+  }
+}
