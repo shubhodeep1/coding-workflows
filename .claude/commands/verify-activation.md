@@ -55,7 +55,7 @@ Read-only surface:
 
 ## Rules
 
-- **Read-only.** A verdict, not a change. No edits, no commits, no PR. If the project is DORMANT and the user wants it activated, that is a follow-up task (e.g. `/implement-plan` or a direct change) — this command only diagnoses.
+- **Read-only.** A verdict, not a change. No edits, no commits, no PR. If the project is DORMANT and the user wants it activated, that is a follow-up task (e.g. `/implement-plan-claude`, `/implement-plan-ai`, or a direct change) — this command only diagnoses.
 - **"Activated" ≠ "implemented."** A merged feature sitting behind `FOO_ENABLED=0` (default off), or a scheduled workflow that has not reached the default branch, is implemented-but-dormant. Say so plainly and give the exact flip.
 - **Evidence-based.** Cite the workflow trigger, the flag's default and read-site (`file:line`), and the merged PR#. Do not guess whether something runs — read the YAML and the gate.
 - **Distinguish trigger types precisely.** `workflow_dispatch` is manual, never "automatic." `cron` requires the workflow on the default branch. `repository_dispatch` requires a dispatcher and token scope (§14). Name which one applies.
