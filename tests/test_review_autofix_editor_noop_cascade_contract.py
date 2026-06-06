@@ -315,7 +315,7 @@ def test_review_apply_fixes_has_per_attempt_cache_busting_nonce() -> None:
 			if re.match(r'^\{\s*(?:#.*)?$', stripped):
 				brace_depth += 1
 				continue
-			if stripped.startswith("}"):
+			if re.match(r'^\}(?=\s*(?:$|#|[;|&<>]|\d))', stripped):
 				brace_depth -= 1
 				if brace_depth == 0:
 					function_blocks[current_function] = "\n".join(current_lines)
@@ -348,7 +348,7 @@ def test_review_apply_fixes_has_per_attempt_cache_busting_nonce() -> None:
 			stripped = line.strip()
 			if re.match(r'^\{\s*(?:#.*)?$', stripped):
 				brace_depth += 1
-			elif stripped.startswith("}"):
+			elif re.match(r'^\}(?=\s*(?:$|#|[;|&<>]|\d))', stripped):
 				brace_depth -= 1
 				if brace_depth == 0:
 					current_function = None
