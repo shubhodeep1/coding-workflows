@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_editor_noop_cascade_contract.py:314-355 | severity=medium | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, mistralai_mistral-small-2603, moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: `_shell_function_blocks` and `_codex_stdin_targets` treat any stripped line starting with `}` as a function-closing brace, so lines like `})\"` or `} >> file` can truncate function tracking early.\n  WHY: That can clear `current_function` before the real close, misattribute or drop codex stdin targets, and make the contract test report false unsafe-target failures or misses.\n- tests/test_review_autofix_editor_noop_cascade_contract.py:326-355 | severity=medium | confidence=[3]\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The `_codex_stdin_targets` regex literals are not raw strings, so backslashes and dollar signs can be interpreted by Python before regex compilation.\n  WHY: That can change the matcher\u2019s meaning and let unsafe or valid codex stdin shapes be classified incorrectly.\n- tests/test_review_autofix_editor_noop_cascade_contract.py:326-355 | severity=medium | confidence=[3]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The parser applies regexes line-by-line and over the full script without handling malformed shell constructs or multiple codex invocations on one line.\n  WHY: That brittleness can misclassify safe helper forwarding as unsafe, or miss real redirects, making the rewritten guard fail on legitimate refactors.\n- tests/test_review_autofix_editor_noop_cascade_contract.py:417-423 | severity=low | confidence=[4]\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The `unsafe_targets` assertion message formats the list with an unbalanced backtick, producing malformed output when the assertion fires.\n  WHY: That can confuse log parsers and downstream tooling that consume the failure message.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: tests/test_review_autofix_editor_noop_cascade_contract.py\n  Line or code reference: lines 318 and 351 (`if stripped.startswith(\"}\"):` / `elif stripped.startswith(\"}\"):`)\n  Problem: Both `_shell_function_blocks` and `_codex_stdin_targets` treat any stripped line starting with `}` as a function-closing brace, decrementing `brace_depth`.\n  Why it fails at runtime: `})\"` is not a function-closing brace; it closes a `$({ ... })` subshell whose opening `{` was not tracked, so the parser can truncate helper bodies and clear `current_function` early.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- File: tests/test_review_autofix_editor_noop_cascade_contract.py\n  Lines 314-343 (_shell_function_blocks) and 326-355 (_codex_stdin_targets)\n  Problem: Both helper functions treat any line whose stripped content starts with `}` as a function-closing brace.\n  Why it fails at runtime: This can prematurely end function tracking when encountering lines like `})\"` or `} >> file`, truncating the helper body and affecting stdin target validation.\n  ISSUE_CONFIDENCE: 3\n- File: tests/test_review_autofix_editor_noop_cascade_contract.py\n  Lines 417-423\n  Problem: The `unsafe_targets` assertion message contains an unbalanced backtick that creates malformed output.\n  Why it fails at runtime: When `unsafe_targets` contains entries, the formatted message can confuse log parsers and downstream tools.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- File: tests/test_review_autofix_editor_noop_cascade_contract.py\n  Code: provided test mocking of unix shell parsing\n  Problem: none\n  Why it fails at runtime: not applicable\n  ISSUE_CONFIDENCE: 5\n- File: tests/test_review_autofix_editor_noop_cascade_contract.py\n  Code: test_review_apply_fixes_has_per_attempt_cache_busting_nonce multiple regex parsers\n  Problem: parsers can misattribute codex stdin targets if helper body contains lines like `})\"` or `} >> file`\n  Why it fails at runtime: invalid attribution breaks the guard contract by either missing real redirects or accepting unsafe ones\n  ISSUE_CONFIDENCE: 4\n- File: tests/test_review_autofix_editor_noop_cascade_contract.py\n  Code: _codex_stdin_targets parsing logic\n  Problem: regexes not raw-string literals can mishandle backslashes and dollar signs\n  Why it fails at runtime: matching failures allow unsafe stanza to bypass intended behavioral guarding\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- File: tests/test_review_autofix_editor_noop_cascade_contract.py\n  Line or code reference: Lines 318 and 351 (both occurrences of `stripped.startswith(\"}\")`)\n  Problem: The brace detection logic in both `_shell_function_blocks` and `_codex_stdin_targets` treats any line that starts with `}` as a function-closing brace.\n  Why it fails at runtime: This incorrectly matches shell constructs like `})`, `} >> file`, or `}; echo done`, which can prematurely end function tracking and misattribute codex stdin targets.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: tests/test_review_autofix_editor_noop_cascade_contract.py\n  Line or code reference: _shell_function_blocks (lines ~298-322), _codex_stdin_targets (lines ~326-355), specifically the `if stripped.startswith(\"}\"):` and `elif stripped.startswith(\"}\"):` blocks\n  Problem: Both parsers treat any stripped line whose content begins with `}` as a function closer.\n  Why it fails at runtime: A future refactor that puts a `}`-prefixed construct in a helper body will truncate function parsing, reset `current_function` too early, and misclassify codex stdin targets.\n  ISSUE_CONFIDENCE: 4\n- File: tests/test_review_autofix_editor_noop_cascade_contract.py\n  Line or code reference: `re.findall(..., line)` inside _codex_stdin_targets and the two `re.search(..., text)` calls that use the whole-script `text` for call-site detection.\n  Problem: The regex parsing does not guard against malformed shell constructs or multiple codex invocations on one line.\n  Why it fails at runtime: Safe helper forwarding can be misclassified as unsafe, or real redirects can be missed, making the contract test fail on legitimate refactors.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "33bea8c04d865033ba3b679b3389c03d86e378d7b6df31a6e95d0ebb50d8250f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3159,
+    "run_id": "27053282075",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27053282075",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260606053247_35fb0e1ee1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3159,
+    "run_id": "27053282075"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-06T05:32:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
