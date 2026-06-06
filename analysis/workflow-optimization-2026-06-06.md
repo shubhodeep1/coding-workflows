@@ -511,3 +511,146 @@ _No actual rate-limit events or retry storms were visible in the deep-dive logs.
 | record-run-event ops | 18 |
 | record-candidate ops | 3 |
 | max push_attempts | 2 |
+
+## Deep Audit — Workflows & Scripts (2026-06-06)
+
+### Section 1: Bug & Correctness Sweep
+
+- **BUG-001**  
+  **File path:** `scripts/review_run_reviewers.sh:3099-3108`  
+  **Severity:** High  
+  **Category tag:** `bug`  
+  **Description:** In two-pass mode, pass 1 is still hardcoded to `xhigh` via `run_reviewer_pass "pass1" ... "xhigh"`. That bypasses the normal reasoning-resolution path used by single-pass mode at `scripts/review_run_reviewers.sh:3213-3215`, and it also bypasses the explicit override that pass 2 honors at `scripts/review_run_reviewers.sh:3189-3197`. The workflow advertises `REVIEWER_REASONING_EFFORT` as the override surface (`.github/workflows/review_autofix.yml:107,2724-2725,2759-2760`), and `agents.md:62-64` documents smoke reviewer downgrades, but two-pass pass 1 ignores them.  
+  **Recommended fix:** Make pass 1 use the same reasoning-resolution path as single-pass—either pass `""` to `run_reviewer_pass` or compute `PASS1_REASONING="${REVIEWER_REASONING_EFFORT:-}"` first—so smoke and repo-level overrides apply consistently to both passes.
+
+- **SEC-001**  
+  **File path:** `scripts/review_conflict_resolve.sh:2314-2316; scripts/review_commit_changes.sh:482-490`  
+  **Severity:** Medium  
+  **Category tag:** `security`  
+  **Description:** Both scripts set the remote URL with an unquoted PAT-bearing string: `git remote set-url origin https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}`. Shellcheck reports SC2086 on both lines, so word-splitting/globbing is possible, and the token is also embedded directly in the git command line. The repo already uses a safer header-based auth pattern in `.github/workflows/clarify.yml:82-85` and `.github/workflows/validate.yml:108-110`.  
+  **Recommended fix:** At minimum, quote the full URL in both scripts. Prefer the existing `git -c "http.extraHeader=Authorization: Basic ..."` helper pattern so the PAT is not embedded in the remote URL/argv at all.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+_Not repeated here: the existing report already covers the `review_autofix` check-run polling hotspot and the duplicate `/pulls/{PR}/files` fetch path._
+
+- **API-001**  
+  **File path:** `scripts/orchestrate_poll_process.sh:2843-2884`  
+  **Severity:** Medium  
+  **Category tag:** `api-batching`  
+  **Description:** `_subissue_closing_pr_number()` does one `gh pr list --head` lookup, then on a tier-1 miss calls `_issue_cross_ref_pr_numbers_unique`, then loops over each candidate PR and fetches `repos/${GITHUB_REPOSITORY}/pulls/${pr}` one at a time. The tier-2 path only needs merged state and PR body text, so the per-PR REST loop is batchable.  
+  **Current call count:** Tier-2 path = `2 + N` calls (`1` head-branch list, `1` cross-reference/timeline fetch, up to `N` individual PR fetches).  
+  **Proposed call count:** Tier-2 path = `2 + ceil(N/25)` calls, typically `3` when `N <= 25`.  
+  **Pattern to extend:** `scripts/orchestrate_poll_process.sh:10174-10409` (`_fetch_candidate_issue_details_graphql` / `_fetch_linked_pr_status_graphql`).  
+  **Recommended fix:** Add a batched helper such as `_fetch_pr_details_graphql <pr_numbers_json>` using the same GraphQL-alias batching shape, then replace the `while read pr; gh api pulls/${pr}` loop with one batched fetch.
+
+- **API-002**  
+  **File path:** `.github/workflows/review_autofix.yml:767-819`  
+  **Severity:** Low  
+  **Category tag:** `api-batching`  
+  **Description:** The post-merge validate dispatch first queries `closingIssuesReferences`, then falls back to `GET /pulls/${PR_NUMBER}` body/title parsing, and finally loops over each recovered issue number. When `labels_known != true`, every issue triggers a separate `gh issue view ... --json labels` call. Those label fetches are independent and batchable.  
+  **Current call count:** Fallback path = `1 + 1 + N` calls (`1` GraphQL PR lookup, `1` PR REST body fetch, up to `N` per-issue label fetches).  
+  **Proposed call count:** Fallback path = `1 + 1 + 1` calls (`1` GraphQL PR lookup, `1` PR REST body fetch, `1` batched issue-label lookup).  
+  **Pattern to extend:** `scripts/orchestrate_poll_process.sh:10174-10297` (`_fetch_candidate_issue_details_graphql`).  
+  **Recommended fix:** After the regex fallback builds `issue_numbers`, batch-fetch labels in one aliased GraphQL query (or lift that into `scripts/gh_helpers.sh`) and drive the loop from the returned map instead of calling `gh issue view` once per issue.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **DUP-001**  
+  **File path:** `.github/workflows/validate.yml:209-637; .github/workflows/review_autofix.yml:1227-1555; .github/workflows/implement.yml:831-1059; .github/workflows/clarify.yml:215-308; .github/workflows/plan.yml:266-358; .github/workflows/orchestrate_clarify_respond.yml:259-370`  
+  **Severity:** Medium  
+  **Category tag:** `duplication`  
+  **Description:** Six workflows inline the same support-staging concerns: resolve `SCRIPT_REF` vs `main`, clone/copy support files, distinguish required vs optional assets, stage prompts and AI-memory schemas, and emit `.gitignore` entries for fetched files. `validate.yml:238-345` already contains the most reusable version (`checkout_support_ref`, `copy_from_ref_or_local`), but the other workflows re-implement similar logic with slightly different behavior. This duplication is already causing drift and it overlaps the two highest expression-risk blocks (EXPR-001 and EXPR-002).  
+  **Proposed module:** `scripts/stage_workflow_support.sh`  
+  **Function signature:** `stage_workflow_support <wf_source> <script_ref> <primary_root> <fallback_root> <dest_root> <profile>`  
+  **Callers to update:** `validate.yml`, `review_autofix.yml`, `implement.yml`, `clarify.yml`, `plan.yml`, `orchestrate_clarify_respond.yml`  
+  **Recommended fix:** Lift validate’s `checkout_support_ref` / `copy_from_ref_or_local` logic into the shared module and let each workflow supply only a manifest/profile describing which scripts, prompts, and schemas are required or optional.
+
+- **DUP-002**  
+  **File path:** `.github/workflows/comprehensive-test-and-release.yml:72-98,318-344; .github/workflows/test-and-mark-stable.yml:477-489,610-622,829-841,1284-1302,2465-2476`  
+  **Severity:** Low  
+  **Category tag:** `duplication`  
+  **Description:** Near-identical `gh_api_safe()` wrappers are redefined seven times across these two workflows. All copies call `gh api`, detect rate-limit text, back off 30→60→120 seconds, and otherwise fail open. Keeping seven copies invites drift in backoff, error logging, and permanent-failure handling away from the repo’s canonical GitHub API helper behavior.  
+  **Proposed module:** `scripts/gh_helpers.sh`  
+  **Function signature:** `gh_api_safe <gh-api-args...>`  
+  **Callers to update:** dispatch/polling steps in `comprehensive-test-and-release.yml` and `test-and-mark-stable.yml`  
+  **Recommended fix:** Add a shared `gh_api_safe` (or `gh_retry_or_empty`) wrapper to `scripts/gh_helpers.sh` on top of the existing `gh_retry` logic, then source that helper instead of redefining the function inline in each workflow step.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+_I found four interpolated `run:` blocks above the 15,000-character warning threshold. I did not find any `if:` expression close to the 21,000-character cap, and no workflow file exceeded the 800 KB warning threshold._
+
+- **EXPR-001**  
+  **File path:** `.github/workflows/validate.yml:209-637`  
+  **Severity:** High  
+  **Category tag:** `expression-limit`  
+  **Estimated current expression size:** ~20,065 chars  
+  **Headroom remaining:** ~935 chars  
+  **Description:** `Fetch workflow support files` is already within ~4.5% of GitHub’s 21,000-character hard failure limit. It combines ref selection, support checkout, fallback logic, file copy helpers, schema staging, prompt staging, and support-file staging in one interpolated `run:` block, so small future edits can make `validate.yml` fail at workflow-load time.  
+  **Recommended fix:** Extract the entire step to an external script (preferred, and shared with DUP-001) so the YAML step becomes a thin env/argument wrapper.
+
+- **EXPR-002**  
+  **File path:** `.github/workflows/review_autofix.yml:1227-1555`  
+  **Severity:** High  
+  **Category tag:** `expression-limit`  
+  **Estimated current expression size:** ~18,675 chars  
+  **Headroom remaining:** ~2,325 chars  
+  **Description:** `Stage workflow support files` is already above the 85% warning band. It is another large inline support-staging block in the repo’s largest workflow file, and it will keep growing as review/autofix support assets change.  
+  **Recommended fix:** Move this block to the shared external staging script/composite proposed in DUP-001.
+
+- **EXPR-003**  
+  **File path:** `.github/workflows/review_autofix.yml:1828-2221`  
+  **Severity:** Medium  
+  **Category tag:** `expression-limit`  
+  **Estimated current expression size:** ~17,408 chars  
+  **Headroom remaining:** ~3,592 chars  
+  **Description:** `Collect PR metadata` is already well into the warning band. The step mixes retry helpers, multiple GitHub API fetches, diff generation, hashing, and environment export in a single interpolated block, so future edits have little room before hitting the hard cap.  
+  **Recommended fix:** Extract PR metadata/diff collection into a dedicated script such as `scripts/review_collect_pr_metadata.sh <repo> <pr_number> <out_dir>`, leaving only env setup in YAML.
+
+- **EXPR-004**  
+  **File path:** `.github/workflows/implement.yml:3161-3540`  
+  **Severity:** Medium  
+  **Category tag:** `expression-limit`  
+  **Estimated current expression size:** ~17,460 chars  
+  **Headroom remaining:** ~3,540 chars  
+  **Description:** `Commit changes` bundles stderr capture, commit/no-op branching, remaining-change reporting, and destructive-commit plumbing into one interpolated `run:` block. It is not failing yet, but it is already in the zone where a modest refactor or extra guard can push it over the cap.  
+  **Recommended fix:** Move the body into `scripts/implement_commit_changes.sh`, or split the step into smaller commit, no-op, and failure-capture steps.
+
+### Section 5: Cross-Cutting Concerns
+
+- **CONSIST-001**  
+  **File path:** `scripts/review_run_reviewers.sh:3134-3161`  
+  **Severity:** Medium  
+  **Category tag:** `consistency`  
+  **Description:** The script comments and fallback assignments say both pass-2 branches default to `xhigh`, and the code sets `PASS2_REASONING_SMALL="${REVIEWER_PASS2_REASONING_SMALL:-xhigh}"`. That diverges from `.github/workflows/review_autofix.yml:116-118`, `README.md:91`, and `agents.md:63-64`, which all define small diffs as `high` and large diffs as `xhigh`. The workflow currently masks this by exporting the env vars, but any script-only caller or future workflow that omits them will silently run small diffs at `xhigh`.  
+  **Recommended fix:** Align the script fallback and nearby comments with the documented contract (`small=high`, `large=xhigh`), or explicitly document a separate standalone-script default if the divergence is intentional.
+
+- **DEBT-001**  
+  **File path:** `.github/workflows/orchestrate_poll.yml:7-20; .github/workflows/workflow-log-analysis.yml:16-20; .github/workflows/comprehensive-test-and-release.yml:151-159; scripts/validation_refresh_runner.py:779-787; scripts/analyze_workflow_logs.py:112-119`  
+  **Severity:** Low  
+  **Category tag:** `tech-debt`  
+  **Description:** Several backward-compatibility surfaces are now effectively no-op inside this repo: `caller_workflow` is declared deprecated in `orchestrate_poll.yml` and has no in-repo caller; `codex_mode` is declared deprecated in both `workflow-log-analysis.yml` and `scripts/analyze_workflow_logs.py`, but `comprehensive-test-and-release.yml` still passes `codex_mode=true`; `validation_refresh_runner.py` keeps deprecated `--commit-message` and `--pr-title` flags with no in-repo callers. These dead surfaces add interface noise and make future cleanup harder.  
+  **Recommended fix:** Remove the remaining internal `codex_mode=true` call first, then prune the unused deprecated inputs/flags after a documented grace window. If external compatibility must remain, keep a single shim layer instead of threading deprecated options through the core workflows/scripts.
+
+_No `TODO` / `FIXME` / `HACK` markers were present under `.github/workflows` or `scripts/`, and no additional high-signal shellcheck defects stood out beyond SEC-001._
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 3 | BUG-001, EXPR-001, EXPR-002 |
+| Medium | 6 | SEC-001, API-001, DUP-001, EXPR-003, EXPR-004, CONSIST-001 |
+| Low | 3 | API-002, DUP-002, DEBT-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---|---|
+| Critical/High bug fixes | 1 script | Small |
+| API call optimization | 2 files + 1 helper | Medium |
+| Code modularization | 8 workflows + 1 shared helper | Large |
+| Expression size reduction | 3 workflows + 2 extracted scripts/helpers | Large |
+| Medium/Low fixes | 7 files + docs cleanup | Medium |
