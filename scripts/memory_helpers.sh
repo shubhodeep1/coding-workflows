@@ -75,6 +75,14 @@ memory_ensure_branch()
 	temp_dir="$(mktemp -d)"
 
 	(
+		# The workspace shell context exports GIT_DIR/GIT_WORK_TREE pointing at
+		# the host repo (see the "Activate workspace shell context" step in the
+		# implement/validate/review_autofix workflows).  Leaving them set would
+		# make `git init` and the orphan-branch commit below operate on the host
+		# repo instead of this throwaway temp dir.  Unset them so git resolves
+		# the repository from the temp working directory.
+		unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+			GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_NAMESPACE
 		cd "${temp_dir}"
 		git init --quiet
 		git config user.name "codex-bot"
