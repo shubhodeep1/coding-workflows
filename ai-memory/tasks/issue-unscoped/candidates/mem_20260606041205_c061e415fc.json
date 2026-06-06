@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_editor_noop_cascade_contract.py:320 | flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The call-site regex uses a single literal space and will miss legitimate refactors that use tabs or multiple spaces.\n  WHY: This is a minor robustness issue; changing the space to `\\s+` would match equivalent shell formatting without weakening the guard.\n- tests/test_review_autofix_editor_noop_cascade_contract.py:315-320 | flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The helper-indirection regex is broad enough that it can match an unrelated function call with the same argument.\n  WHY: The current pattern works for the expected code shapes but is not strictly verifying the data flow; tightening it would reduce false positives.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: tests/test_review_autofix_editor_noop_cascade_contract.py\n  Location: line 320, the call-site regex inside `fed_via_helper`\n  Issue: The regex `r'\\b\\w+ \"\\$\\{attempt_prompt_file\\}\"'` uses a single literal space between the function name and the argument. If a future refactor formats the call site with multiple spaces or a tab (`func_name  \"${attempt_prompt_file}\"` or `func_name\\t\"${attempt_prompt_file}\"`), the pattern would miss, causing a false test failure on a legitimate refactor.\n  Suggested minimal fix: Change the single space to `\\s+` in the call-site regex: `r'\\b\\w+\\s+\"\\$\\{attempt_prompt_file\\}\"'`. This matches any whitespace between the function name and its first argument without weakening the guard against the `EDITOR_PROMPT_FILE` regression.\n  Estimated lines changed: 1\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- File: tests/test_review_autofix_editor_noop_cascade_contract.py\n  Location: Lines 315-320 (fed_via_helper regex pattern)\n  Issue: The helper indirection check uses a weak regex `\\b\\w+ \"\\$\\{attempt_prompt_file\\}\"` that matches any word boundary followed by a function-like call. This could match an unrelated function call with the same argument, not necessarily the one feeding codex.\n  Suggested minimal fix: Consider tightening the regex to require the matched function name to correspond to the variable capture, or add a comment documenting this limitation. The current pattern works for the expected code shapes but is not strictly verifying the data flow.\n  Estimated lines changed: 1-2 lines (comment) or 3-5 lines (tighter regex)\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "ca14ca46fa21ec91fa7da66d9e0c17629de5cbe54d1022cdf7f612c716245444",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27052010892",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27052010892",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260606041205_c061e415fc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27052010892"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-06T04:12:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
