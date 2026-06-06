@@ -654,3 +654,238 @@ _No `TODO` / `FIXME` / `HACK` markers were present under `.github/workflows` or 
 | Code modularization | 8 workflows + 1 shared helper | Large |
 | Expression size reduction | 3 workflows + 2 extracted scripts/helpers | Large |
 | Medium/Low fixes | 7 files + docs cleanup | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-06-06)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the repository text proves the calls can be consolidated without changing endpoint scope, filters, retry/error semantics, or concurrency behavior. `NEEDS_VERIFICATION` means the overlap looks real but at least one safety precondition is not provable from static reading alone. `RISKY_SKIP` means the call sits in a polling/retry/race-defense or similar protected path where auto-implementing consolidation/removal is unsafe even if redundancy exists.
+
+### Consolidation Candidates (MERGE-###)
+
+- **ID** — `MERGE-001`  
+  **Safety tag** — `RISKY_SKIP`  
+  **File path and line ranges** — `.github/workflows/test-and-mark-stable.yml:2876-2885`  
+  **Current call count** — 2 `gh api` calls per poll iteration  
+  **Proposed call count** — 1 `gh api` call per poll iteration  
+  **Endpoint(s)** — `GET /repos/{repo}/actions/runs/{run_id}`  
+  **Evidence** — The poll loop fetches the same run resource twice, once for `.status` and once for `.conclusion`, on every 5-second iteration:
+  ```bash
+  while [ "${EXISTING_STATUS}" != "completed" ] && [ "$(date +%s)" -lt "${WAIT_DEADLINE}" ]; do
+    sleep 5
+    EXISTING_STATUS=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" \
+      --jq '.status // ""' 2>/dev/null || echo "")
+    EXISTING_CONCLUSION=$(gh api "repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}" \
+      --jq '.conclusion // ""' 2>/dev/null || echo "")
+  ```
+  **Proposed fix** — If this path is ever manually approved for cleanup, fetch the run JSON once inside the loop and derive both fields locally, e.g. one `gh api "repos/.../actions/runs/${EXISTING_RUN_ID}"` into a variable and then `jq -r '.status // ""'` / `jq -r '.conclusion // ""'` from that single payload.  
+  **Safety rationale** — This is inside an active polling loop, which the audit contract explicitly treats as `RISKY_SKIP`; changing fetch shape here requires manual review of loop timing, fail-open behavior, and smoke-test observability.  
+  **Downstream signal** — Do not auto-implement; manual review must confirm the single-fetch rewrite preserves this poll loop’s empty-string fallback behavior and per-iteration logging under transient `gh api` failures.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID** — `REUSE-001`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — `.github/workflows/issue_pr_status.yml:177-186`, `.github/workflows/issue_pr_status.yml:272-285`, `workflow-templates/ai-issue-pr-status.yml:5-12`, `.github/workflows/internal-issue-pr-status.yml:3-12`  
+  **Current call count** — fallback path uses 1 extra `gh api` call  
+  **Proposed call count** — 0 extra `gh api` calls on that fallback path  
+  **Endpoint(s)** — `GET /repos/{repo}/pulls/{number}`  
+  **Evidence** — The workflow already injects the PR title/body from the event payload:
+  ```yaml
+  PR_TITLE: ${{ github.event.pull_request.title }}
+  PR_BODY: ${{ github.event.pull_request.body || '' }}
+  ```
+  but later re-fetches the same title/body only when those env vars are blank:
+  ```bash
+  PR_DATA="${PR_TITLE:-} ${PR_BODY:-}"
+  if [ -z "$(printf '%s' "${PR_DATA}" | tr -d '[:space:]')" ]; then
+    PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+  fi
+  ```
+  The only in-repo callers are pull-request-closed wrappers:
+  ```yaml
+  on:
+    pull_request:
+      types: [closed]
+  jobs:
+    status:
+      uses: shubhodeep1/coding-workflows/.github/workflows/issue_pr_status.yml@stable
+  ```
+  and
+  ```yaml
+  on:
+    pull_request:
+      types: [closed]
+  jobs:
+    sync-status:
+      uses: shubhodeep1/coding-workflows/.github/workflows/issue_pr_status.yml@main
+  ```
+  **Proposed fix** — Keep the current GraphQL `closingIssuesReferences` lookup, but gate removal of the fallback PR REST fetch on proof that this reusable workflow is only invoked from `pull_request.closed` payloads with non-empty `title`/`body`; if confirmed, delete the `gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"` fallback and treat missing event text as empty input.  
+  **Safety rationale** — The data overlap is strong, but `SAFE_TO_MERGE` is not provable until the implementer confirms no external `workflow_call` consumer invokes this reusable workflow without a full `pull_request` payload.  
+  **Downstream signal** — Verify all live callers of `.github/workflows/issue_pr_status.yml` are `pull_request.closed` wrappers with populated `github.event.pull_request.title/body`; only then remove the fallback `GET /pulls/{PR}` call.
+
+- **ID** — `REUSE-002`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — `.github/workflows/review_autofix.yml:1916-1930`, `scripts/review_rb_judge.sh:753-759`, `scripts/review_rb_judge.sh:2016-2021`  
+  **Current call count** — 1 `GET /pulls/{pr}` earlier in the workflow + 1 later `gh pr view --json headRefOid` call  
+  **Proposed call count** — 1 earlier `GET /pulls/{pr}` only, with later reuse of preloaded metadata  
+  **Endpoint(s)** — `GET /repos/{repo}/pulls/{number}` and `gh pr view --json headRefOid` (same PR head-SHA data surface)  
+  **Evidence** — `review_autofix.yml` already fetches the PR payload once:
+  ```bash
+  gh_retry "${PR_PAYLOAD_FILE}" api repos/${{ github.repository }}/pulls/"${PR_NUMBER}"
+  ```
+  but then projects `PR_META_FILE` without the head SHA:
+  ```bash
+  jq '{
+    title: (.title // ""),
+    body: (.body // ""),
+    baseRefName: (.base.ref // ""),
+    headRefName: (.head.ref // ""),
+    headRepoFullName: (.head.repo.full_name // "")
+  }' "${PR_PAYLOAD_FILE}" > "${PR_META_FILE}"
+  ```
+  `review_rb_judge.sh` is already prepared to consume `head_sha` from `PR_META_FILE`:
+  ```bash
+  PRELOADED_PR_META="$(jq -c '{
+    title: (.title // ""),
+    body: (.body // ""),
+    head_ref: (.head_ref // .head.ref // .headRefName // ""),
+    base_ref: (.base_ref // .base.ref // .baseRefName // ""),
+    head_sha: (.head_sha // .head.sha // .headSha // "")
+  }' "${PR_META_FILE}" 2>/dev/null || echo '{}')"
+  ```
+  but later re-fetches the head SHA from GitHub:
+  ```bash
+  RB_HEAD_SHA="$(gh_retry gh pr view "${PR_NUMBER}" --repo "${REPOSITORY}" --json headRefOid --jq '.headRefOid' 2>/dev/null || true)"
+  ```
+  **Proposed fix** — Extend the existing `PR_META_FILE` projection in `.github/workflows/review_autofix.yml` to include `head_sha: (.head.sha // "")`, then update `scripts/review_rb_judge.sh` to consume `PRELOADED_PR_META.head_sha` first and only fall back to `gh pr view ... --json headRefOid` if that value is absent/invalid.  
+  **Safety rationale** — This is a cross-step contract change between workflow and script; static reading proves overlap, but not that all judge entry paths always provide a `PR_META_FILE` carrying fresh head SHA.  
+  **Downstream signal** — Verify every invocation path of `scripts/review_rb_judge.sh` supplies the same `PR_META_FILE` contract as `review_autofix.yml` (including `review_rb_judge_dispatch.yml`), then add `head_sha` to that file and demote `gh pr view` to fallback-only.
+
+- **ID** — `REUSE-003`  
+  **Safety tag** — `RISKY_SKIP`  
+  **File path and line ranges** — `.github/workflows/orchestrate_clarify_respond.yml:68-83`, `.github/workflows/orchestrate_clarify_respond.yml:430-441`  
+  **Current call count** — 4 issue fetches across the two steps in the common orchestrator-managed path (`issue`, `tracking title`, `issue` again, `tracking body`)  
+  **Proposed call count** — potentially 2 issue fetches if the first step exported and reused payload/body  
+  **Endpoint(s)** — `GET /repos/{repo}/issues/{issue_number}` and `GET /repos/{repo}/issues/{tracking_number}`  
+  **Evidence** — The first gate step fetches child-issue metadata and parent title:
+  ```bash
+  ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ISSUE_BODY="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.body // ""')"
+  TRACKING_TITLE="$(gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.title // ""' 2>/dev/null || echo "")"
+  ```
+  The later prompt-assembly step re-fetches both issue scopes:
+  ```bash
+  ISSUE_META="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+  ISSUE_BODY="$(printf '%s' "${ISSUE_META}" | jq -r '.body // ""')"
+  TRACKING_BODY="$(gh_retry gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.body // ""')"
+  ```
+  **Proposed fix** — If manually reviewed, consider exporting the already-fetched `ISSUE_BODY` from the gate step and, if needed, expanding the first tracking-issue fetch to include both title and body so the later step can reuse them instead of re-hitting the same endpoints.  
+  **Safety rationale** — This crosses workflow steps and changes retry semantics from plain `gh api` to `gh_retry gh api`; because step boundaries and failure behavior differ, it is not safe to auto-merge.  
+  **Downstream signal** — Do not auto-implement; manual review must confirm the early gate step can safely become the sole source of issue/tracking payloads without changing later-step retry/fail-open behavior.
+
+- **ID** — `REUSE-004`  
+  **Safety tag** — `RISKY_SKIP`  
+  **File path and line ranges** — `.github/workflows/test-and-mark-stable.yml:1040-1048`  
+  **Current call count** — 2 `gh api` calls per stability-check attempt  
+  **Proposed call count** — 1 call per attempt only if the stability check is redesigned  
+  **Endpoint(s)** — `GET /repos/{repo}/pulls/{number}`  
+  **Evidence** — The loop intentionally reads the same PR head SHA twice with a 3-second gap:
+  ```bash
+  for stability_attempt in 1 2 3 4 5; do
+    HEAD_A=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null || echo "")
+    sleep 3
+    HEAD_B=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null || echo "")
+    if [ -n "${HEAD_A}" ] && [ "${HEAD_A}" = "${HEAD_B}" ]; then
+      ...
+    fi
+  done
+  ```
+  This is a deliberate anti-race probe, not an accidental duplicate.  
+  **Proposed fix** — None for auto-implementation; any reduction would require redesigning the race detector rather than simply deduplicating calls.  
+  **Safety rationale** — This is explicitly a race-defense path; the audit contract requires `RISKY_SKIP` for changes that could weaken upstream-race protection.  
+  **Downstream signal** — Do not auto-implement; only a manual redesign that preserves the two-sample stability guarantee should touch this path.
+
+### Dead Calls (DEAD-API-###)
+
+- **ID** — `DEAD-API-001`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — `scripts/orchestrate_poll_process.sh:8895-8901`, `scripts/orchestrate_poll_process.sh:10914-10915`  
+  **Current call count** — helper would issue 1 paginated `gh api` call per invocation  
+  **Proposed call count** — 0 if the helper is removed as unused  
+  **Endpoint(s)** — `GET /repos/{repo}/issues/{issue_num}/comments?sort=created&direction=desc&per_page=100` with `--paginate`  
+  **Evidence** — The helper is defined as:
+  ```bash
+  read_standalone_state_json() {
+    local issue_num="$1"
+    local comments_json
+    if ! comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" | jq -s 'add // []' 2>/dev/null)"; then
+      comments_json='[]'
+    fi
+    _extract_standalone_state_json_from_comments "${comments_json}"
+  }
+  ```
+  but repo search found no in-repo callers; the active standalone path already parses the state from an existing `comments_json` blob:
+  ```bash
+  state_comment_id="$(_extract_standalone_state_comment_id_from_comments "${comments_json}")"
+  state_json="$(_extract_standalone_state_json_from_comments "${comments_json}")"
+  ```
+  **Proposed fix** — Confirm the helper is not sourced or invoked by any out-of-repo consumer; if not, delete `read_standalone_state_json()` so the latent paginated `/comments` fetch cannot be reintroduced accidentally.  
+  **Safety rationale** — The helper is unused within this repository, but because `orchestrate_poll_process.sh` is an executable script that could be consumed externally, static repo search alone is not enough for `SAFE_TO_MERGE`.  
+  **Downstream signal** — Verify there are no external operators or downstream repos sourcing `scripts/orchestrate_poll_process.sh` and calling `read_standalone_state_json`; if none exist, remove the dead helper.
+
+- **ID** — `DEAD-API-002`  
+  **Safety tag** — `NEEDS_VERIFICATION`  
+  **File path and line ranges** — `scripts/collect_workflow_logs.py:798-806`, `scripts/collect_workflow_logs.py:1243-1248`, `scripts/collect_workflow_logs.py:1480-1480`, `tests/test_collect_workflow_logs.py:232-281`  
+  **Current call count** — helper would issue 1 `_fetch_run_log_archive()` API path per invocation  
+  **Proposed call count** — 0 if the helper is removed and tests updated  
+  **Endpoint(s)** — `_fetch_run_log_archive()` ultimately fetches `GET /repos/{repo}/actions/runs/{run_id}/logs`  
+  **Evidence** — The helper is defined as:
+  ```python
+  def list_run_log_excerpts(
+      repo: str,
+      run_id: int,
+      *,
+      token: str,
+      max_chars: int = LOG_EXCERPT_MAX_CHARS,
+  ) -> list[dict[str, str]]:
+      payload = _fetch_run_log_archive(repo, run_id, token=token)
+      return extract_log_excerpts(payload, max_chars=max_chars)
+  ```
+  while live code fetches log archives directly:
+  ```python
+  payload = _fetch_run_log_archive(
+      repository,
+      run_id,
+      token=token,
+      cache=log_archive_cache,
+  )
+  ```
+  and
+  ```python
+  payload = _fetch_run_log_archive(repository, run_id, token=token, cache=log_archive_cache)
+  ```
+  The only in-repo references to `list_run_log_excerpts` are test monkeypatches:
+  ```python
+  orig_list_logs = collector.list_run_log_excerpts
+  ...
+  collector.list_run_log_excerpts = fake_list_run_log_excerpts
+  ```
+  **Proposed fix** — Verify production code no longer calls `list_run_log_excerpts`; if confirmed, remove the dead wrapper and update the cache-skipping test to patch the currently used `_fetch_run_log_archive` path instead.  
+  **Safety rationale** — The wrapper appears dead in this repo, but tests still reference it and external imports are unknown, so removal needs verification before it is safe.  
+  **Downstream signal** — Verify no non-test caller imports `list_run_log_excerpts`; if none do, delete the wrapper and adjust `tests/test_collect_workflow_logs.py` to patch the direct archive-fetch path.
+
+### Cross-References to Deep Audit Section
+
+- `API-001`: `NEEDS_VERIFICATION` — The GraphQL batching opportunity in `scripts/orchestrate_poll_process.sh` is real, but it touches orchestrator decision logic and needs manual verification of fail-open parity.
+- `API-002`: `NEEDS_VERIFICATION` — The per-issue label fetches in `.github/workflows/review_autofix.yml` are good batching candidates, but the fallback path and issue-classification semantics should be checked before implementation.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 4 | REUSE-001, REUSE-002, DEAD-API-001, DEAD-API-002 |
+| RISKY_SKIP | 3 | MERGE-001, REUSE-003, REUSE-004 |
+
+### Implement-Stage Handoff
+- No SAFE_TO_MERGE findings in this pass.
