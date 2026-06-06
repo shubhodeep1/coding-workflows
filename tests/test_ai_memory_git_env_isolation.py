@@ -145,9 +145,9 @@ def test_run_git_check_true_preserves_real_clone_error_under_polluted_env() -> N
 			else:
 				raise AssertionError("expected MemoryGitError from non-empty destination clone")
 
-		assert "destination path" in message
-		assert "already exists and is not an empty directory" in message
-		assert "working tree" not in message
+		stderr = message.partition("stderr:\n")[2]
+		assert str(dst) in stderr
+		assert str(work_tree) not in stderr
 
 
 def main() -> int:
