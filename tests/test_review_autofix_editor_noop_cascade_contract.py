@@ -296,10 +296,11 @@ def test_review_apply_fixes_has_per_attempt_cache_busting_nonce() -> None:
 	# still does.
 	assert 'codex --ask-for-approval never' in text
 	codex_stdin_vars = re.findall(
-		r'codex --ask-for-approval never[^\n]*< "\$\{(\w+)\}"', text
+		r'codex --ask-for-approval never[^\n]*<\s*"?\$\{?(\w+)\}?"?', text
 	)
 	assert codex_stdin_vars, (
-		"No `codex --ask-for-approval never … < \"${<file>}\"` stdin redirect "
+		"No `codex --ask-for-approval never … < \"$file\"`-style stdin "
+		"redirect "
 		"found; the editor must feed codex a prompt file on stdin."
 	)
 	assert "EDITOR_PROMPT_FILE" not in codex_stdin_vars, (
@@ -313,8 +314,17 @@ def test_review_apply_fixes_has_per_attempt_cache_busting_nonce() -> None:
 		# parameter, and a call site forwards the per-attempt file in as
 		# that first argument.
 		fed_via_helper = (
-			re.search(rf'local {re.escape(_stdin_var)}="\$1"', text) is not None
-			and re.search(r'\b\w+ "\$\{attempt_prompt_file\}"', text) is not None
+			re.search(
+				rf'(?<!\w)(?:local(?:\s+-[A-Za-z]+)*\s+)?{re.escape(_stdin_var)}='
+				r'"?\$\{?1\}?"?',
+				text,
+			)
+			is not None
+			and re.search(
+				r'\b\w+\s+"?\$\{?attempt_prompt_file\}?"?(?:\s|$)',
+				text,
+			)
+			is not None
 		)
 		assert fed_directly or fed_via_helper, (
 			f"codex stdin `${{{_stdin_var}}}` is neither the per-attempt prompt "
