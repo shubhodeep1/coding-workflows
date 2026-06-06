@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_editor_noop_cascade_contract.py:299-450 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The brace parser misclassifies brace-on-next-line function declarations and closing braces like `})\"`/grouped redirections, so helper scope is dropped or misattributed.\n  WHY: When scanning `scripts/review_apply_fixes.sh`, `_codex_stdin_targets` can report a script-level unsafe target or miss `attempt_prompt_file` forwarding, causing `assert not unsafe_targets` to fail even for correct cache-busting behavior.\n- tests/test_review_autofix_editor_noop_cascade_contract.py:352-356 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The brace-on-next-line promotion path fails to initialize `brace_depth = 1` when moving a pending function into `current_function`.\n  WHY: Without the depth reset, nested blocks can underflow and redirect misattribution follows.\n- tests/test_review_autofix_editor_noop_cascade_contract.py:368-385 | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: `_codex_stdin_targets` still mishandles future helpers that span lines or include inline comments, producing incorrect `(var, helper)` pairs.\n  WHY: Comment lines and multiline `codex ... <` invocations are reduced to a single tuple without full context, making the contract test flaky or overly strict on legitimate refactors.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Rewrite the assertion to check the behaviour, not one code shape: codex stdin must be fed a prompt file, never the unchanging ${EDITOR_PROMPT_FILE}; that file must be the per-attempt copy directly (main's inline form) or a one-arg helper that the call site forwards ${attempt_prompt_file} into (the branch's helper form). The two existing asserts (per-attempt file is built; nonce trailer is appended) are unchanged.\"\n  expected_change_site: tests/test_review_autofix_editor_noop_cascade_contract.py (the test_review_apply_fixes_has_per_attempt_cache_busting_nonce function)\n  confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: LAST RUN DIFF and current file implement a complex parser but it is still incomplete (fails to robustly handle brace-on-next-line style used in scripts/review_apply_fixes.sh and has closing-brace edge cases flagged by 4+ reviewers); the PR description states this should unblock project #3042/PR #3048 but the test does not yet pass cleanly against the target script.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Brace parsing misclassification \u2014 command substitutions like `})\"` can fake out the parser into premature scope closure.\n- Missing brace_depth initialization in brace-on-next-line handler \u2014 without setting `brace_depth = 1` during promotion, nested blocks can underflow state leading to misattribution of helper mode redirects.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: tests/test_review_autofix_editor_noop_cascade_contract.py  \n  Line or code reference: _shell_function_blocks (lines ~299-340) and _codex_stdin_targets (lines ~343-390) + calls at 410-450  \n  Problem: The brace parser still mishandles brace-on-next-line function declarations (e.g. `prepare_judge_interim_priors()` followed by `{` on next line, which the script uses) and can misclassify closing braces on lines containing `})\"` or grouped redirections. Consensus findings (mistralai_mistral-small-2603 confidence=5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus) match exactly.  \n  Why it fails at runtime: When scanning `scripts/review_apply_fixes.sh` the helper scope for `run_editor_codex_attempt` (which does `< \"${attempt_prompt_file}\"` inside the subshell) is dropped or misattributed. This makes `_codex_stdin_targets` report a script-level unsafe target or miss the `attempt_prompt_file` forwarding, causing the final `assert not unsafe_targets` to fail and block CI/lint even on correct cache-busting behavior.  \n  ISSUE_CONFIDENCE: 5\n- File: tests/test_review_autofix_editor_noop_cascade_contract.py  \n  Line or code reference: _codex_stdin_targets regex + brace_depth logic (~360-385)  \n  Problem: The scanner skips comment lines but still processes them for function start detection in some paths; multiline `codex ... <` invocations are reduced to a single tuple without full context.  \n  Why it fails at runtime: A future helper that spans lines or has inline comments can produce incorrect `(var, helper)` pairs, making the contract test flaky or overly strict on legitimate refactors of `review_apply_fixes.sh`.  \n  ISSUE_CONFIDENCE: 3\n- Requirement: \"Rewrite the assertion to check the behaviour, not one code shape: codex stdin must be fed a prompt file, never the unchanging ${EDITOR_PROMPT_FILE}; that file must be the per-attempt copy directly (main's inline form) or a one-arg helper that the call site forwards ${attempt_prompt_file} into (the branch's helper form). The two existing asserts (per-attempt file is built; nonce trailer is appended) are unchanged.\"  \n  Expected change site: tests/test_review_autofix_editor_noop_cascade_contract.py (the test_review_apply_fixes_has_per_attempt_cache_busting_nonce function)  \n  Evidence of absence: LAST RUN DIFF and current file implement a complex parser but it is still incomplete (fails to robustly handle brace-on-next-line style used in scripts/review_apply_fixes.sh and has closing-brace edge cases flagged by 4+ reviewers); the PR description states this should unblock project #3042/PR #3048 but the test does not yet pass cleanly against the target script.  \n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "b4ac924e43ecc1c80655246403682350ca99a23909e0a2ab09486712fc735d45",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3159,
+    "run_id": "27054414179",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27054414179",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260606062222_398da755b0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3159,
+    "run_id": "27054414179"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-06T06:22:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
