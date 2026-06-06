@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ai_memory_lib.py:2282 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `_git_env()` strips only git location variables and leaves the rest of the shell environment intact, including credential helpers like `GIT_SSH_COMMAND`, `GIT_ASKPASS`, or proxy environment variables.\n  WHY: An attacker or a misconfigured environment could inject values via these remaining variables, influencing `git clone` / `add` / `commit` operations on `/tmp` clones and weakening the isolation boundary.\n- tests/test_ai_memory_git_env_isolation.py:60-72 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `_patched_env` snapshots only the current value for updated keys before restoring them, so environment state can be incorrect when a key was previously unset in the ambient environment.\n  WHY: After patching with unset variables, restoring with `os.environ[key] = value` or `pop` will clobber or fail to restore the original environment when the key was absent before the patch, potentially leaking environment pollution into subsequent tests and test runs outside this function.\n- tests/test_ai_memory_git_env_isolation.py:99 | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The assertion error references `ai_memory_lib._run_git` which may not be imported in the local test scope.\n  WHY: If `_run_git` is not in scope for the current test, the error message will raise a NameError or refer to an incorrect module path, obscuring the actual problem.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Add hardening to `_git_env()` to strip additional potential pollution sources so git operations are isolated from `GIT_SSH_COMMAND`, `GIT_ASKPASS`, proxy variables, or other credential helpers.\n  expected_change_site: scripts/ai_memory_lib.py _git_env() function\n  confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The implemented `_git_env()` only strips the originally listed seven repo-location git env vars and the PR diff lacks diff hunks in this function to strip additional git-related env vars.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/ai_memory_lib.py:2282 | confidence=4\n  PROBLEM: `_git_env()` strips only git location variables and leaves the rest of the shell environment intact (including credential helpers like `GIT_SSH_COMMAND`, `GIT_ASKPASS`, or proxy environment variables).\n  WHY: An attacker or a misconfigured environment could inject values via these remaining variables, influencing `git clone` / `add` / `commit` operations on `/tmp` clones. The compute isolation provided by the tmp clone is weakened if git can be retargeted by `GIT_SSH_COMMAND` or similar helpers.\n- tests/test_ai_memory_git_env_isolation.py:60-72 | confidence=4\n  PROBLEM: `_patched_env` snapshots only the current value for updated keys before restoring them, so environment state can be incorrect when a key was previously unset in the ambient environment.\n  WHY: After patching with unset variables, restoring with `os.environ[key] = value` or `pop` will clobber or fail to restore the original environment when the key was absent before the patch, potentially leaking environment pollution into subsequent tests and test runs outside this function.\n- tests/test_ai_memory_git_env_isolation.py:99 | confidence=4\n  PROBLEM: The assertion error references `ai_memory_lib._run_git` which may not be imported in the local test scope.\n  WHY: If `_run_git` is not in scope for the current test, the error message will raise a NameError or refer to an incorrect module path, obscuring the actual problem.\n- Requirement: Add hardening to `_git_env()` to strip additional potential pollution sources so git operations are isolated from `GIT_SSH_COMMAND`, `GIT_ASKPASS`, proxy variables, or other credential helpers.\n  Expected change site: scripts/ai_memory_lib.py _git_env() function\n  Evidence of absence: The implemented `_git_env()` only strips the originally listed seven repo-location git env vars and the PR diff lacks diff hunks in this function to strip additional git-related env vars.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "222b60274b898ae1183d0b4d9a2f3858775d5e51995c0e67fb27f7dc70d4fef7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3179,
+    "run_id": "27058835860",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27058835860",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260606094612_662328379a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3179,
+    "run_id": "27058835860"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-06T09:46:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
