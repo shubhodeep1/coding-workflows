@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"E2E smoke: two independent canary updates for run 27054956555\",\"issues\":[{\"id\":\"e2e_smoke_canary_a\",\"title\":\"Update tests/e2e_smoke_canary.txt for smoke run 27054956555\",\"priority\":1},{\"id\":\"e2e_smoke_canary_b\",\"title\":\"Update tests/e2e_smoke_canary_b.txt for smoke run 27054956555\",\"priority\":1}],\"dependency_edges\":[]}",
+  "fingerprint": "00298caf068f9811ca91cc30ee22b9ac9890e4e77df65999659ff093327ff138",
+  "lineage": {
+    "issue_number": 3166,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27054967566",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27054967566",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260606062949_6447bd169f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3166,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27054967566"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'E2E smoke: two independent canary updates for run 27054956555' into 2 issues (tracking #3166)",
+  "timestamps": {
+    "created_at": "2026-06-06T06:29:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
