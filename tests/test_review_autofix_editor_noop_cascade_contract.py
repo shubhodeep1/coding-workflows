@@ -288,9 +288,13 @@ def test_review_apply_fixes_has_per_attempt_cache_busting_nonce() -> None:
 	)
 	# codex must read the attempt-specific file, not the base prompt.
 	assert 'codex --ask-for-approval never' in text
-	assert '< "${attempt_prompt_file}"' in text, (
-		"codex stdin must be fed from the per-attempt prompt file, not "
-		"from the unchanging `${EDITOR_PROMPT_FILE}`."
+	assert 'run_editor_codex_attempt "${attempt_prompt_file}"' in text, (
+		"The editor retry loop must pass the per-attempt prompt file into "
+		"`run_editor_codex_attempt`, not the unchanging `${EDITOR_PROMPT_FILE}`."
+	)
+	assert '< "${prompt_file}"' in text, (
+		"`run_editor_codex_attempt` must feed codex stdin from its "
+		"`prompt_file` parameter so retries read the per-attempt prompt copy."
 	)
 
 
