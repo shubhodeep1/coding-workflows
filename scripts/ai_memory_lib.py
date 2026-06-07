@@ -2271,18 +2271,14 @@ def compact_memory(
     return summary
 
 
-# Repository-location git environment variables.  The workspace shell context
-# (the "Activate workspace shell context" step in implement.yml / validate.yml /
-# review_autofix.yml) exports GIT_DIR and GIT_WORK_TREE into $GITHUB_ENV so that
-# later steps' git commands operate on the reusable workspace work tree.  Every
-# memory-helper git command instead operates on a dedicated /tmp clone selected
-# via `cwd`, so an inherited GIT_DIR/GIT_WORK_TREE would (a) make `git clone`
-# abort with `fatal: working tree '<path>' already exists` and (b) silently
-# retarget add/commit/push at the host repo rather than the clone.  Strip these
-# so git resolves the repository from `cwd`.  GIT_INDEX_FILE, GIT_OBJECT_DIRECTORY,
-# GIT_ALTERNATE_OBJECT_DIRECTORIES, GIT_COMMON_DIR, and GIT_NAMESPACE are stripped
-# defensively for the same reason — they would re-bind the subprocess to a
-# different repository, index, or object store.
+# Repository-location git environment variables. The workspace shell context
+# exports GIT_DIR and GIT_WORK_TREE so later steps' git commands operate on the
+# main checkout. Every memory-helper git command instead operates on a dedicated
+# /tmp clone selected via ``cwd``. If these leak in, they can make ``git clone``
+# abort with ``fatal: working tree '<path>' already exists`` or silently retarget
+# add/commit/push at the host repo rather than the clone. Strip these and related
+# repo-pinning variables so every memory git subprocess resolves its repository
+# purely from ``cwd``.
 _GIT_LOCATION_ENV_VARS = (
     "GIT_DIR",
     "GIT_WORK_TREE",
@@ -2294,11 +2290,17 @@ _GIT_LOCATION_ENV_VARS = (
 )
 
 
-def _git_env() -> dict[str, str]:
-    """Return a copy of the environment with repo-location git vars removed."""
-    env = os.environ.copy()
-    for var in _GIT_LOCATION_ENV_VARS:
-        env.pop(var, None)
+def _git_subprocess_env() -> dict[str, str]:
+    """Return a copy of the environment with repo-pinning git vars removed.
+
+    Ensures git subprocesses spawned by the memory helpers discover their
+    repository from the ``cwd`` argument instead of inheriting GIT_DIR /
+    GIT_WORK_TREE (and friends) from a workflow step that pointed them at
+    the main checkout.
+    """
+    env = dict(os.environ)
+    for name in _GIT_LOCATION_ENV_VARS:
+        env.pop(name, None)
     return env
 
 
@@ -2309,7 +2311,7 @@ def _run_git(cwd: Path, args: list[str], check: bool = True) -> subprocess.Compl
         check=False,
         text=True,
         capture_output=True,
-        env=_git_env(),
+        env=_git_subprocess_env(),
     )
     if check and process.returncode != 0:
         message = (
