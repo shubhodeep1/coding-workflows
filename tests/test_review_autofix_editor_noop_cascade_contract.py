@@ -851,6 +851,88 @@ def test_noop_warning_literal_present_in_poller() -> None:
 		"same noop-suspicious warning literal — otherwise the recovery "
 		"sweep will fail to detect any noop-suspicious PRs."
 	)
+
+
+# ---------------------------------------------------------------
+# Operator-facing warning step must branch on EDITOR_NOOP_REFUSAL.
+#
+# The validator sets EDITOR_NOOP_REFUSAL=true on a safety-policy refusal
+# (Check 1b) specifically so the downstream Telegram/PR-comment alert can
+# distinguish "model refused — re-run" from the generic "no-op suspicious
+# — manual review". Before this branch the warning step ignored the flag
+# and always posted the generic causes list, mis-attributing a transient
+# refusal (consumer report: tele-funtoken-msg-scoring#3291, run
+# 27057518455). These contracts pin the refusal-aware branch and the
+# load-bearing poller literal that MUST survive in both branches.
+# ---------------------------------------------------------------
+
+
+WARNING_STEP_NAME = "Telegram editor-noop-suspicious warning"
+
+
+def test_noop_warning_step_branches_on_editor_noop_refusal() -> None:
+	"""The operator-facing warning step must branch on EDITOR_NOOP_REFUSAL
+	(with a `:-false` default) so a safety-policy refusal surfaces a
+	re-run-recommended alert instead of the generic causes list. The flag
+	exists for exactly this branch (set by `Validate editor no-op
+	disposition` Check 1b); leaving the warning generic mis-attributes a
+	transient refusal."""
+	block = _step_block(_review_autofix_text(), WARNING_STEP_NAME)
+	assert '"${EDITOR_NOOP_REFUSAL:-false}" = "true"' in block, (
+		"Warning step must branch on EDITOR_NOOP_REFUSAL (with a :-false "
+		"default) so refusals get a refusal-specific alert."
+	)
+
+
+def test_noop_warning_refusal_branch_emits_refusal_specific_text() -> None:
+	"""The refusal branch's Telegram message and PR comment must name the
+	safety-policy refusal and recommend a re-run rather than the generic
+	causes list."""
+	block = _step_block(_review_autofix_text(), WARNING_STEP_NAME)
+	assert "Editor safety-policy refusal: #${PR_NUMBER}" in block, (
+		"Refusal branch must emit a refusal-specific Telegram heading."
+	)
+	assert "Re-run is likely to succeed once the provider-side cache expires." in block, (
+		"Refusal branch must tell the operator a re-run is the remediation."
+	)
+	assert "returned a safety-policy refusal (safety filter)" in block, (
+		"Refusal branch PR comment must attribute the no-op to the refusal."
+	)
+
+
+def test_noop_warning_refusal_branch_preserves_poller_literal() -> None:
+	"""Both branches' PR comment bodies MUST keep the
+	'⚠️ **Editor no-op suspicious**' literal: the orchestrator-poll
+	noop-suspicious recovery sweep (scripts/orchestrate_poll_process.sh)
+	greps PR comments for it to auto-re-dispatch the run, which is
+	precisely the remediation a refusal needs. Dropping it from the
+	refusal branch would strand refusal PRs (no auto-re-dispatch, no
+	force-merge)."""
+	block = _step_block(_review_autofix_text(), WARNING_STEP_NAME)
+	body_prefix = f'BODY="{NOOP_WARNING_LITERAL}'
+	assert block.count(body_prefix) == 2, (
+		f"Both branches must keep {body_prefix!r} so the poller recovery "
+		f"sweep still detects refusal-caused noop PRs. Found "
+		f"{block.count(body_prefix)} matching BODY assignment(s)."
+	)
+
+
+def test_noop_warning_generic_branch_preserved() -> None:
+	"""The non-refusal branch must keep the existing generic operator
+	wording verbatim (CLAUDE.md §6 — additive change only)."""
+	block = _step_block(_review_autofix_text(), WARNING_STEP_NAME)
+	assert "Editor claimed no changes needed but disposition could not be verified." in block, (
+		"Generic-branch Telegram wording must be preserved (additive change)."
+	)
+	assert (
+		"Possible causes: editor failed silently, did not read reviewer "
+		"files, or audit counts are inconsistent." in block
+	), (
+		"Generic-branch PR-comment causes list must be preserved (additive "
+		"change)."
+	)
+
+
 if __name__ == "__main__":
 	test_merge_conflict_chain_gates_on_editor_noop_suspicious()
 	test_validator_emits_exact_grep_literal()
@@ -878,4 +960,8 @@ if __name__ == "__main__":
 	test_required_bootstrap_scripts_includes_audit_helper()
 	test_noop_warning_literal_present_in_workflow()
 	test_noop_warning_literal_present_in_poller()
+	test_noop_warning_step_branches_on_editor_noop_refusal()
+	test_noop_warning_refusal_branch_emits_refusal_specific_text()
+	test_noop_warning_refusal_branch_preserves_poller_literal()
+	test_noop_warning_generic_branch_preserved()
 	print("All EDITOR_NOOP_SUSPICIOUS cascade-guard contract tests passed.")
