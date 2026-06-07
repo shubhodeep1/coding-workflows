@@ -1311,6 +1311,8 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 	stage_step_block = _step_block("Stage workflow support files")
 	assert '.codex-workflow-src/scripts/stage_workflow_support.sh' in stage_step_block
 	assert '.codex-workflow-src-main/scripts/stage_workflow_support.sh' in stage_step_block
+	assert "REQUIRED_BOOTSTRAP_SCRIPTS=" not in stage_step_block
+	assert 'mkdir -p "${SUPPORT_SCRIPTS_DIR}"' not in stage_step_block
 	required_bootstrap_line = next(
 		line for line in _stage_helper_text().splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line
 	)
@@ -1339,9 +1341,8 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 
 
 def test_review_collect_pr_metadata_helper_is_bootstrapped_and_delegated() -> None:
-	workflow = _workflow_text()
 	required_bootstrap_line = next(
-		line for line in workflow.splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line
+		line for line in _stage_helper_text().splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line
 	)
 	block = _step_block("Collect PR metadata")
 
