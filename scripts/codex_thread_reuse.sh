@@ -473,8 +473,8 @@ codex_thread_reuse_run_once()
 	# workspace (GIT_DIR/GIT_WORK_TREE split, no .git in cwd), where codex
 	# aborts with "Not inside a trusted directory and --skip-git-repo-check
 	# was not specified". Omitting the flag is a deterministic failure (see
-	# #3077, #3194/#3195), so the safe default is to skip the check; a caller
-	# may still pass "false" to opt back in.
+	# #3077, #3194/#3195), so automation callers should leave the check
+	# skipped.
 	local skip_git_repo_check="${9:-true}"
 	local log_file="${10:-}"
 	local cumulative_log_file="${11:-}"
@@ -582,9 +582,8 @@ codex_thread_reuse_direct_run()
 	local status_file="${CODEX_THREAD_REUSE_STATUS_FILE:-}"
 	local stall_guard="${CODEX_THREAD_REUSE_STALL_GUARD_HELPER:-}"
 	local heartbeat_helper="${CODEX_THREAD_REUSE_HEARTBEAT_HELPER:-}"
-	# Default ON — see the rationale in codex_thread_reuse_run_once. Callers
-	# may set CODEX_THREAD_REUSE_SKIP_GIT_REPO_CHECK=false to re-enable codex's
-	# git-repo/trust check when running in a real checkout.
+	# Default ON — see the rationale in codex_thread_reuse_run_once.
+	# Automation callers should leave codex's git-repo/trust check skipped.
 	local skip_git_repo_check="${CODEX_THREAD_REUSE_SKIP_GIT_REPO_CHECK:-true}"
 	local timeout_secs="${CODEX_THREAD_REUSE_TIMEOUT_SECS:-}"
 	local continuation_file="${CODEX_THREAD_REUSE_CONTINUATION_FILE:-}"
