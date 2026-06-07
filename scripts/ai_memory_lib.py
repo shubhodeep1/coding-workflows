@@ -2271,6 +2271,42 @@ def compact_memory(
     return summary
 
 
+# Git environment variables that pin git to a specific repository, work
+# tree, object store, index, or namespace regardless of the directory git
+# is invoked in.  The memory helpers always operate on an isolated clone
+# addressed via the subprocess ``cwd``; if any of these leak in from the
+# ambient environment they override ``cwd`` and break the operation.  The
+# implement / review_autofix / validate workflows export GIT_DIR and
+# GIT_WORK_TREE (so later workflow steps share the main checkout's object
+# store and a per-issue work tree), which made ``git clone`` abort with
+# "fatal: working tree '<workspace>' already exists." inside the memory
+# branch clone.  Strip them so every memory git subprocess resolves its
+# repository purely from ``cwd``.
+_GIT_LOCATION_ENV_VARS = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_NAMESPACE",
+)
+
+
+def _git_subprocess_env() -> dict[str, str]:
+    """Return a copy of the environment with repo-pinning git vars removed.
+
+    Ensures git subprocesses spawned by the memory helpers discover their
+    repository from the ``cwd`` argument instead of inheriting GIT_DIR /
+    GIT_WORK_TREE (and friends) from a workflow step that pointed them at
+    the main checkout.
+    """
+    env = dict(os.environ)
+    for name in _GIT_LOCATION_ENV_VARS:
+        env.pop(name, None)
+    return env
+
+
 def _run_git(cwd: Path, args: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
     process = subprocess.run(
         ["git", *args],
@@ -2278,6 +2314,7 @@ def _run_git(cwd: Path, args: list[str], check: bool = True) -> subprocess.Compl
         check=False,
         text=True,
         capture_output=True,
+        env=_git_subprocess_env(),
     )
     if check and process.returncode != 0:
         message = (
