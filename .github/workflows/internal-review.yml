@@ -88,16 +88,18 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           HEAD_REF: ${{ github.ref_name }}
           HEAD_SHA: ${{ github.sha }}
+          EVENT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch || '' }}
         run: |
           set -euo pipefail
           base_ref=""
+          encoded_head_ref="$(jq -nr --arg ref "${HEAD_REF}" '$ref | @uri')"
           # Look up open PRs for this exact head branch.  Filter to PRs
           # whose head ref matches the pushed branch — `gh pr list --head`
           # already does this — and consider only OPEN PRs (closed/merged
           # PRs do not double-fire, but the API call returns them too if
           # state filter is omitted).
           existing_pr="$(gh api \
-            "repos/${REPOSITORY}/pulls?state=open&head=${REPOSITORY%/*}:${HEAD_REF}" \
+            "repos/${REPOSITORY}/pulls?state=open&head=${REPOSITORY%/*}:${encoded_head_ref}" \
             --jq '[.[] | .number] | first // empty' 2>/dev/null || echo "")"
           if [ -n "${existing_pr}" ]; then
             echo "RESOLVE_CLAUDE_BRANCH_PR_SKIP head_ref=${HEAD_REF} existing_pr=${existing_pr} reason=pull_request_synchronize_handles"
@@ -109,7 +111,10 @@ jobs:
             } >> "${GITHUB_OUTPUT}"
             exit 0
           fi
-          base_ref="$(gh api "repos/${REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo 'main')"
+          base_ref="${EVENT_DEFAULT_BRANCH:-}"
+          if [ -z "${base_ref}" ]; then
+            base_ref="$(gh api "repos/${REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo 'main')"
+          fi
           echo "RESOLVE_CLAUDE_BRANCH_PR_PROCEED head_ref=${HEAD_REF} head_sha=${HEAD_SHA} base_ref=${base_ref} reason=no_open_pr"
           {
             echo "proceed=true"
