@@ -56,7 +56,7 @@ _rl_wait()
 {
 	local _reset_ts _wait_secs
 	_reset_ts=$(gh api -i /rate_limit 2>/dev/null | grep -i '^x-ratelimit-reset:' | head -1 | awk '{print $2}' | tr -d '\r') || true
-	if [ -n "${_reset_ts}" ] && [ "${_reset_ts}" -gt 0 ] 2>/dev/null; then
+	if [[ "${_reset_ts}" =~ ^[0-9]+$ ]] && [ "${_reset_ts}" -gt 0 ]; then
 		_wait_secs=$(( _reset_ts - $(date +%s) + 1 ))
 		[ "${_wait_secs}" -lt 1 ] && _wait_secs=1
 		[ "${_wait_secs}" -gt 600 ] && _wait_secs=600
@@ -147,21 +147,23 @@ fi
 # Fetch linked issue title+body via GraphQL — single call that also
 # populates LINKED_ISSUES_JSON early so the late-stage cache step can
 # skip its own fetch.
-_linked_tmp="$(mktemp)"
 _linked_fetch_ok="false"
-if gh_retry "${_linked_tmp}" api graphql \
-	-f owner="${REPOSITORY_OWNER}" \
-	-f name="${REPOSITORY_NAME}" \
-	-F number="${PR_NUMBER}" \
-	-f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:50){nodes{number title body}}}}}' \
-	--jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []'; then
-	_linked_fetch_ok="true"
-	_linked_raw="$(cat "${_linked_tmp}" 2>/dev/null || echo '[]')"
-else
-	echo "::warning::Failed to fetch linked issues via GraphQL; proceeding without linked-issue context."
-	_linked_raw='[]'
+_linked_raw='[]'
+if [ -n "${PR_NUMBER:-}" ]; then
+	_linked_tmp="$(mktemp)"
+	if gh_retry "${_linked_tmp}" api graphql \
+		-f owner="${REPOSITORY_OWNER}" \
+		-f name="${REPOSITORY_NAME}" \
+		-F number="${PR_NUMBER}" \
+		-f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:50){nodes{number title body}}}}}' \
+		--jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []'; then
+		_linked_fetch_ok="true"
+		_linked_raw="$(cat "${_linked_tmp}" 2>/dev/null || echo '[]')"
+	else
+		echo "::warning::Failed to fetch linked issues via GraphQL; proceeding without linked-issue context."
+	fi
+	rm -f "${_linked_tmp}"
 fi
-rm -f "${_linked_tmp}"
 _linked_raw="$(printf '%s' "${_linked_raw}" | jq -c '.' 2>/dev/null || echo '[]')"
 
 # Store a lightweight numbers-only array in the env var to avoid
@@ -173,6 +175,8 @@ if [ "${_linked_fetch_ok}" = "true" ]; then
 	else
 		printf 'LINKED_ISSUES_JSON=[]\n' >> "${GITHUB_ENV}"
 	fi
+elif [ -z "${PR_NUMBER:-}" ]; then
+	printf 'LINKED_ISSUES_JSON=[]\n' >> "${GITHUB_ENV}"
 fi
 
 # Body-text fallback for linked-issue prompt context only.
@@ -187,7 +191,7 @@ if [ "${_linked_context_raw}" = "[]" ] && [ -s "${PR_META_FILE}" ]; then
 		if [ -n "${_fallback_numbers}" ]; then
 			_FALLBACK_MAX_ISSUES=20
 			_fallback_total="$(printf '%s\n' "${_fallback_numbers}" | wc -l | tr -d '[:space:]')"
-			if [ "${_fallback_total:-0}" -gt "${_FALLBACK_MAX_ISSUES}" ]; then
+			if [[ "${_fallback_total:-0}" =~ ^[0-9]+$ ]] && [ "${_fallback_total:-0}" -gt "${_FALLBACK_MAX_ISSUES}" ]; then
 				echo "::warning::Linked-issue body-text fallback: PR body referenced ${_fallback_total} distinct in-repo issues; capping fetches at ${_FALLBACK_MAX_ISSUES}."
 				_fallback_numbers="$(printf '%s\n' "${_fallback_numbers}" | head -n "${_FALLBACK_MAX_ISSUES}")"
 			fi
@@ -371,7 +375,8 @@ if [ -s "${PR_ALL_COMMENTS_CONTEXT_FILE}" ]; then
 	echo "PR comments context sha256: $(sha256sum "${PR_ALL_COMMENTS_CONTEXT_FILE}" | awk '{print $1}')"
 fi
 
-if ! gh pr diff "${PR_NUMBER}" > "${PR_DIFF_FILE}"; then
+: > "${PR_DIFF_FILE}"
+if [ -n "${PR_NUMBER:-}" ] && ! gh pr diff "${PR_NUMBER}" > "${PR_DIFF_FILE}"; then
 	echo "Warning: gh pr diff failed for PR ${PR_NUMBER}; continuing with fallback diff generation."
 fi
 

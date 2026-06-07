@@ -1352,20 +1352,8 @@ def test_review_collect_pr_metadata_helper_supports_no_pr_synthetic_mode() -> No
 		base_ref_override="",
 		mock_state={
 			"api_responses": {
-				"graphql": {
-					"data": {
-						"repository": {
-							"pullRequest": {
-								"closingIssuesReferences": {
-									"nodes": [],
-								},
-							},
-						},
-					},
-				},
 				"repos/owner/repo": {"default_branch": "main"},
 			},
-			"pr_diffs": {"": "no-pr diff sentinel\n"},
 		},
 	)
 
@@ -1396,14 +1384,13 @@ def test_review_collect_pr_metadata_helper_supports_no_pr_synthetic_mode() -> No
 	assert "AUTOFIX_NO_PR_METADATA_SYNTHESIZED head_ref=claude/test-no-pr head_sha=deadbeef base_ref=main" in result["stdout"]
 	assert result["github_env"]["LINKED_ISSUES_JSON"] == "[]"
 	assert result["github_env"]["PR_DIFF_ATTEMPTED_PATHS"].endswith("/pr_diff.patch")
-	if result["github_env"]["HAS_PR_DIFF"] == "true":
-		assert result["github_env"]["PR_DIFF_SOURCE"] == "gh_pr_diff"
-		assert result["pr_diff"] != ""
-	else:
-		assert result["github_env"]["PR_DIFF_SOURCE"] == "gh_pr_diff_empty"
-		assert result["pr_diff"] == ""
+	assert result["github_env"]["HAS_PR_DIFF"] == "false"
+	assert result["github_env"]["PR_DIFF_SOURCE"] == "gh_pr_diff_empty"
+	assert result["pr_diff"] == ""
 	assert result["github_env"]["BASE_BRANCH"] == "main"
 	assert any(call[:2] == ["api", "repos/owner/repo"] for call in result["mock_state"]["calls"])
+	assert not any(call[:2] == ["api", "graphql"] for call in result["mock_state"]["calls"])
+	assert not any(call[:2] == ["pr", "diff"] for call in result["mock_state"]["calls"])
 	assert not any("repos/owner/repo/pulls/" in " ".join(call) for call in result["mock_state"]["calls"])
 
 
