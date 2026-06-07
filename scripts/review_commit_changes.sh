@@ -486,7 +486,7 @@ PY
           printf -- '- %s\n' "${changed_file}"
         done
   } > "${COMMITTED_FILES_FILE}"
-  git remote set-url origin https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}
+  git remote set-url origin "https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}"
   # NOTE: do NOT push here. The push is deferred to the final
   # "Push all pending commits" step so that conflict resolution,
   # labeling, and auto-merge complete before the synchronize event
