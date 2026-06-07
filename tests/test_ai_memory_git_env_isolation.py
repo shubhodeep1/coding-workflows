@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -46,6 +47,7 @@ def _git(cwd: Path, *args: str) -> None:
 		check=True,
 		capture_output=True,
 		text=True,
+		env=ai_memory_lib._git_subprocess_env(),
 	)
 
 
@@ -132,4 +134,4 @@ def test_clone_for_memory_branch_ignores_leaked_git_dir_and_work_tree() -> None:
 			).stdout.strip()
 			assert head_branch == "ai-memory"
 		finally:
-			subprocess.run(["rm", "-rf", str(clone_dir)], check=False)
+			shutil.rmtree(clone_dir, ignore_errors=True)
