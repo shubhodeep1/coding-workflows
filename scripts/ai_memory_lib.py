@@ -2304,14 +2304,27 @@ def _git_subprocess_env() -> dict[str, str]:
     return env
 
 
-def _run_git(cwd: Path, args: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
+def _run_git(
+    cwd: Path,
+    args: list[str],
+    check: bool = True,
+    *,
+    inherit_location_env: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    # Mutating memory git subprocesses (clone/fetch/checkout/commit/push) MUST
+    # run with the repo-pinning git vars stripped so they resolve their
+    # throwaway /tmp repo from ``cwd`` (see ``_git_subprocess_env``). A read
+    # that legitimately needs to discover the *host* repository — e.g.
+    # ``git remote get-url origin`` when ``cwd`` is a bare work tree whose
+    # ``.git`` lives elsewhere via GIT_DIR — sets ``inherit_location_env`` so
+    # the inherited GIT_DIR/GIT_WORK_TREE locate the host repo instead.
     process = subprocess.run(
         ["git", *args],
         cwd=str(cwd),
         check=False,
         text=True,
         capture_output=True,
-        env=_git_subprocess_env(),
+        env=dict(os.environ) if inherit_location_env else _git_subprocess_env(),
     )
     if check and process.returncode != 0:
         message = (
@@ -2354,7 +2367,23 @@ def _inject_token_into_url(url: str, token: str) -> str:
 
 
 def _resolve_origin_url(repo_root: Path) -> str:
-    process = _run_git(repo_root, ["remote", "get-url", "origin"], check=False)
+    # ``git remote get-url origin`` is a read against the *host* repository so
+    # the memory branch can be cloned from /tmp. Under the implement /
+    # review_autofix / validate workflows ``repo_root`` is the per-issue work
+    # tree (the exported GIT_WORK_TREE), which is frequently not itself a
+    # discoverable git directory — the host repo is reachable only via the
+    # exported GIT_DIR. Stripping the location env here (as every mutating
+    # memory git subprocess does) makes this read fail and fall back to the
+    # bare work-tree path, which is not a clonable repository, so the
+    # subsequent clone aborts with exit 128. Preserve the inherited location
+    # env for this read only so origin resolves correctly; the clone/fetch/
+    # checkout that follow still run with the env stripped.
+    process = _run_git(
+        repo_root,
+        ["remote", "get-url", "origin"],
+        check=False,
+        inherit_location_env=True,
+    )
     if process.returncode == 0:
         url = process.stdout.strip()
     else:
