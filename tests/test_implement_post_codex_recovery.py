@@ -1510,6 +1510,88 @@ def test_validator_capture_aggregates_multiple_files_before_nonzero_exit():
 		assert "python3 yaml.safe_load" in capture
 
 
+def test_validator_scratch_repo_without_head_still_checks_untracked_files() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		repo_dir = tmp_path / "validate-repo"
+		repo_dir.mkdir(parents=True, exist_ok=True)
+		_git(["git", "init"], cwd=repo_dir)
+		_git(["git", "config", "user.name", "tests"], cwd=repo_dir)
+		_git(["git", "config", "user.email", "tests@example.com"], cwd=repo_dir)
+
+		validator_src = REPO_ROOT / "scripts" / "validate_changed_files_syntax.sh"
+		validator_dst = repo_dir / "scripts" / "validate_changed_files_syntax.sh"
+		validator_dst.parent.mkdir(parents=True, exist_ok=True)
+		shutil.copy2(validator_src, validator_dst)
+		validator_dst.chmod(0o755)
+
+		(repo_dir / "broken.py").write_text("def nope(:\n\tpass\n", encoding="utf-8")
+		capture_path = tmp_path / "captured.txt"
+		env = os.environ.copy()
+		env["CAPTURE_FILE"] = str(capture_path)
+		env["ALLOW_WORKFLOW_EDITS"] = "true"
+
+		result = subprocess.run(
+			["bash", str(validator_dst)],
+			cwd=str(repo_dir),
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+
+		assert result.returncode != 0, (
+			"scratch repos without HEAD must still validate untracked files "
+			"instead of silently succeeding"
+		)
+		combined = result.stdout + result.stderr
+		assert "fatal: bad revision 'HEAD'" not in combined, (
+			"the tolerated scratch-repo HEAD error must stay suppressed; "
+			f"got:\n{combined}"
+		)
+		assert "::error file=broken.py::Syntax error in broken.py" in combined, (
+			"the untracked python file must still be fed to py_compile in a "
+			"scratch repo"
+		)
+		assert capture_path.exists(), "scratch-repo validation must still emit CAPTURE_FILE"
+		assert "broken.py" in capture_path.read_text(encoding="utf-8")
+
+
+def test_validator_surfaces_real_git_failures_instead_of_silently_skipping() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		repo_dir = tmp_path / "validate-repo"
+		_bootstrap_git_repo(repo_dir)
+
+		validator_src = REPO_ROOT / "scripts" / "validate_changed_files_syntax.sh"
+		validator_dst = repo_dir / "scripts" / "validate_changed_files_syntax.sh"
+		validator_dst.parent.mkdir(parents=True, exist_ok=True)
+		shutil.copy2(validator_src, validator_dst)
+		validator_dst.chmod(0o755)
+
+		missing_git_dir = tmp_path / "missing-git-dir"
+		env = os.environ.copy()
+		env["ALLOW_WORKFLOW_EDITS"] = "true"
+		env["GIT_DIR"] = str(missing_git_dir)
+
+		result = subprocess.run(
+			["bash", str(validator_dst)],
+			cwd=str(repo_dir),
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+
+		assert result.returncode != 0, "real git failures must abort the validator"
+		combined = result.stdout + result.stderr
+		assert "All changed files passed syntax validation." not in combined, (
+			"real git failures must not degrade into a false success"
+		)
+		assert "Could not access 'HEAD'" in combined or "fatal:" in combined, (
+			"the underlying git failure must still surface to stderr/stdout; "
+			f"got:\n{combined}"
+		)
+
+
 def test_syntax_gate_step_fails_when_check_reports_unresolved_errors():
 	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
 		tmp_path = Path(td)

@@ -69,8 +69,7 @@ append_checker_error() {
       # the alternation.
       case "${file},${basename_lc}" in
         *.env*|*.pem*|*.p12*|*.pfx*|*.key*|*.cer*|*.crt*|\
-        *,*secret*|*,*credential*|*,*password*|*,*token*|\
-        *,*.envrc|*,.env*)
+        *,*secret*|*,*credential*|*,*password*|*,*token*)
           skip_dump=1
           ;;
       esac
@@ -134,6 +133,30 @@ if [ -n "${CAPTURE_FILE}" ]; then
   rm -f "${CAPTURE_FILE}" || true
 fi
 
+emit_changed_or_untracked_paths() {
+  local git_diff_stderr git_diff_status
+  git_diff_stderr="$(mktemp)"
+  if git diff --name-only --diff-filter=ACMR -z HEAD -- "$@" 2>"${git_diff_stderr}"; then
+    :
+  else
+    git_diff_status=$?
+    # Scratch repos without a first commit surface as `fatal: bad revision
+    # 'HEAD'`; tolerate only that case so the companion untracked-file scan
+    # still feeds the validators while real git failures keep surfacing.
+    if ! grep -Fq "fatal: bad revision 'HEAD'" "${git_diff_stderr}"; then
+      cat "${git_diff_stderr}" >&2
+      rm -f "${git_diff_stderr}"
+      return "${git_diff_status}"
+    fi
+  fi
+  rm -f "${git_diff_stderr}"
+  git ls-files --others --exclude-standard -z -- "$@"
+}
+
+candidate_paths="$(mktemp)"
+# Collect candidate paths in the main shell so a real git failure aborts the
+# script instead of getting hidden behind process-substitution status.
+emit_changed_or_untracked_paths '*.py' > "${candidate_paths}"
 while IFS= read -r -d '' f; do
   if [ -f "${f}" ] && { [ "${ALLOW_WORKFLOW_EDITS:-true}" = "true" ] || [[ "${f}" != .github/workflows/* ]]; }; then
     checker_stderr="$(mktemp)"
@@ -145,8 +168,11 @@ while IFS= read -r -d '' f; do
     fi
     rm -f "${checker_stderr}"
   fi
-done < <({ git diff --name-only --diff-filter=ACMR -z HEAD -- '*.py'; git ls-files --others --exclude-standard -z -- '*.py'; })
+done < "${candidate_paths}"
+rm -f "${candidate_paths}"
 
+candidate_paths="$(mktemp)"
+emit_changed_or_untracked_paths '*.js' > "${candidate_paths}"
 while IFS= read -r -d '' f; do
   if [ -f "${f}" ] && { [ "${ALLOW_WORKFLOW_EDITS:-true}" = "true" ] || [[ "${f}" != .github/workflows/* ]]; }; then
     checker_stderr="$(mktemp)"
@@ -158,8 +184,11 @@ while IFS= read -r -d '' f; do
     fi
     rm -f "${checker_stderr}"
   fi
-done < <({ git diff --name-only --diff-filter=ACMR -z HEAD -- '*.js'; git ls-files --others --exclude-standard -z -- '*.js'; })
+done < "${candidate_paths}"
+rm -f "${candidate_paths}"
 
+candidate_paths="$(mktemp)"
+emit_changed_or_untracked_paths '*.sh' > "${candidate_paths}"
 while IFS= read -r -d '' f; do
   if [ -f "${f}" ] && { [ "${ALLOW_WORKFLOW_EDITS:-true}" = "true" ] || [[ "${f}" != .github/workflows/* ]]; }; then
     checker_stderr="$(mktemp)"
@@ -171,7 +200,8 @@ while IFS= read -r -d '' f; do
     fi
     rm -f "${checker_stderr}"
   fi
-done < <({ git diff --name-only --diff-filter=ACMR -z HEAD -- '*.sh'; git ls-files --others --exclude-standard -z -- '*.sh'; })
+done < "${candidate_paths}"
+rm -f "${candidate_paths}"
 
 # Strip a fully-fence-wrapped LLM artifact in place: the *entire* file
 # is a single ```/``` block (optionally with a language tag like ```yaml).
@@ -210,6 +240,8 @@ with open(path, "w", encoding="utf-8") as handle:
 PY
 }
 
+candidate_paths="$(mktemp)"
+emit_changed_or_untracked_paths '*.yml' '*.yaml' > "${candidate_paths}"
 while IFS= read -r -d '' f; do
   if [ -f "${f}" ] && { [ "${ALLOW_WORKFLOW_EDITS:-true}" = "true" ] || [[ "${f}" != .github/workflows/* ]]; }; then
     strip_full_file_fence "${f}"
@@ -222,8 +254,11 @@ while IFS= read -r -d '' f; do
     fi
     rm -f "${checker_stderr}"
   fi
-done < <({ git diff --name-only --diff-filter=ACMR -z HEAD -- '*.yml' '*.yaml'; git ls-files --others --exclude-standard -z -- '*.yml' '*.yaml'; })
+done < "${candidate_paths}"
+rm -f "${candidate_paths}"
 
+candidate_paths="$(mktemp)"
+emit_changed_or_untracked_paths '*.json' > "${candidate_paths}"
 while IFS= read -r -d '' f; do
   if [ -f "${f}" ] && { [ "${ALLOW_WORKFLOW_EDITS:-true}" = "true" ] || [[ "${f}" != .github/workflows/* ]]; }; then
     strip_full_file_fence "${f}"
@@ -236,7 +271,8 @@ while IFS= read -r -d '' f; do
     fi
     rm -f "${checker_stderr}"
   fi
-done < <({ git diff --name-only --diff-filter=ACMR -z HEAD -- '*.json'; git ls-files --others --exclude-standard -z -- '*.json'; })
+done < "${candidate_paths}"
+rm -f "${candidate_paths}"
 
 if [ "${ERRORS}" -gt 0 ]; then
   echo "::error::${ERRORS} file(s) failed syntax validation."
