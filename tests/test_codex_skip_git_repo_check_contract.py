@@ -46,6 +46,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HELPER = REPO_ROOT / "scripts" / "codex_thread_reuse.sh"
+DISCOVERY_BOOTSTRAP = REPO_ROOT / "scripts" / "validation_discovery_bootstrap.py"
 
 # A fully-specified codex invocation on one logical shell / YAML command line:
 # after reassembling backslash-continued physical lines, the command must
@@ -133,6 +134,19 @@ def test_helper_defaults_skip_git_repo_check_on() -> None:
 	)
 	# And it must still be the flag actually appended to the command line.
 	assert "cmd+=(--skip-git-repo-check)" in text
+
+
+def test_python_discovery_helper_skips_git_repo_check() -> None:
+	"""The production Python discovery helper must carry the same flag."""
+	text = DISCOVERY_BOOTSTRAP.read_text(encoding="utf-8")
+	assert re.search(
+		r'command = \[\s*"codex",.*?"exec",\s*"--skip-git-repo-check",\s*"--model",.*?"--sandbox",',
+		text,
+		re.S,
+	), (
+		"validation_discovery_bootstrap.py must pass --skip-git-repo-check "
+		"in its codex command list"
+	)
 
 
 def test_all_codex_exec_invocations_skip_git_repo_check() -> None:
