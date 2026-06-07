@@ -3343,6 +3343,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_discovery_bootstrap.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_workflow_validate_bootstrap.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_thread_reuse_core.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_skip_git_repo_check_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_init.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_safety_check.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_hooks.py
