@@ -19,6 +19,7 @@ APPLY_FIXES = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
 CONSOLIDATE = REPO_ROOT / "scripts" / "review_consolidate.sh"
 RB_JUDGE = REPO_ROOT / "scripts" / "review_rb_judge.sh"
 AGENTS_MD_MATERIALITY = REPO_ROOT / "scripts" / "review_agents_md_materiality.sh"
+METADATA_HELPER = REPO_ROOT / "scripts" / "review_collect_pr_metadata.sh"
 REVIEWER_FAILBACK_CHAINS = REPO_ROOT / "scripts" / "reviewer_failback_chains.json"
 MODEL_CATALOG = REPO_ROOT / "scripts" / "codex_model_catalog.json"
 FIXTURES_DIR = REPO_ROOT / "scripts" / "fixtures" / "cloudflare-learnings"
@@ -55,6 +56,193 @@ def _consolidate_text() -> str:
 
 def _rb_judge_text() -> str:
 	return RB_JUDGE.read_text(encoding="utf-8")
+
+
+def _install_review_collect_mock_gh(bin_dir: Path, state_file: Path) -> None:
+	gh_script = r'''#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+state_path = Path(os.environ["MOCK_GH_STATE_FILE"])
+if state_path.exists():
+	state = json.loads(state_path.read_text(encoding="utf-8"))
+else:
+	state = {}
+args = sys.argv[1:]
+
+
+def save() -> None:
+	state_path.write_text(json.dumps(state), encoding="utf-8")
+
+
+def first_value(flag: str) -> str:
+	for idx, arg in enumerate(args):
+		if arg == flag and idx + 1 < len(args):
+			return args[idx + 1]
+	return ""
+
+
+def api_path() -> str:
+	idx = 1
+	takes_value = {"--jq", "-f", "-F", "-H", "-X", "--input"}
+	no_value = {"--paginate", "-i"}
+	while idx < len(args):
+		arg = args[idx]
+		if arg in takes_value:
+			idx += 2
+			continue
+		if arg in no_value:
+			idx += 1
+			continue
+		if arg.startswith("-"):
+			idx += 1
+			continue
+		return arg
+	return ""
+
+
+state.setdefault("calls", []).append(args)
+
+if args[:2] == ["pr", "diff"]:
+	pr_number = args[2] if len(args) > 2 else ""
+	diff_text = (state.get("pr_diffs", {}) or {}).get(pr_number, state.get("pr_diff_default", ""))
+	save()
+	sys.stdout.write(diff_text)
+	sys.exit(0)
+
+if args[:1] == ["api"]:
+	path = api_path()
+	if path == "/rate_limit":
+		save()
+		sys.stdout.write("HTTP/1.1 200 OK\nx-ratelimit-reset: 0\n")
+		sys.exit(0)
+	api_responses = state.get("api_responses", {}) or {}
+	matched = None
+	for pattern, response in sorted(api_responses.items(), key=lambda item: len(item[0]), reverse=True):
+		if pattern and pattern in path:
+			matched = response
+			break
+	if matched is None:
+		save()
+		sys.stderr.write(f"mock gh: unsupported api path: {path}\n")
+		sys.exit(1)
+	jq_filter = first_value("--jq")
+	save()
+	if jq_filter == ".default_branch":
+		print((matched or {}).get("default_branch", ""))
+	elif jq_filter == ".data.repository.pullRequest.closingIssuesReferences.nodes // []":
+		nodes = (((matched or {}).get("data") or {}).get("repository") or {}).get("pullRequest") or {}
+		nodes = ((nodes.get("closingIssuesReferences") or {}).get("nodes") or [])
+		print(json.dumps(nodes))
+	elif jq_filter == '{number: (.number // 0), title: (.title // ""), body: (.body // "")}':
+		print(json.dumps({
+			"number": (matched or {}).get("number", 0) or 0,
+			"title": (matched or {}).get("title", "") or "",
+			"body": (matched or {}).get("body", "") or "",
+		}))
+	else:
+		print(json.dumps(matched))
+	sys.exit(0)
+
+save()
+sys.stderr.write(f"mock gh: unsupported args: {args!r}\n")
+sys.exit(1)
+'''
+	mock_path = bin_dir / "gh"
+	mock_path.write_text(gh_script, encoding="utf-8")
+	mock_path.chmod(0o755)
+	state_file.write_text("{}", encoding="utf-8")
+
+
+def _run_review_collect_pr_metadata_harness(
+	*,
+	pr_number: str,
+	claude_branch_review_mode: str,
+	head_ref_override: str,
+	head_sha_override: str,
+	base_ref_override: str,
+	mock_state: dict[str, object],
+) -> dict[str, object]:
+	with tempfile.TemporaryDirectory(prefix="review-collect-pr-metadata-") as td:
+		tmp = Path(td)
+		bin_dir = tmp / "bin"
+		runtime_dir = tmp / "runtime"
+		bin_dir.mkdir()
+		runtime_dir.mkdir()
+
+		gh_state_file = runtime_dir / "gh_state.json"
+		_install_review_collect_mock_gh(bin_dir, gh_state_file)
+		gh_state_file.write_text(json.dumps(mock_state), encoding="utf-8")
+
+		files = {
+			"pr_payload": runtime_dir / "pr_payload.json",
+			"pr_meta": runtime_dir / "pr_meta.json",
+			"pr_issue_comments": runtime_dir / "pr_issue_comments.json",
+			"pr_reviews": runtime_dir / "pr_reviews.json",
+			"pr_review_comments": runtime_dir / "pr_review_comments.json",
+			"linked_issue_context": runtime_dir / "linked_issue_context.txt",
+			"comments_context": runtime_dir / "pr_all_comments_context.txt",
+			"pr_diff": runtime_dir / "pr_diff.patch",
+			"github_env": runtime_dir / "github_env.txt",
+		}
+
+		env = os.environ.copy()
+		env.update({
+			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			"MOCK_GH_STATE_FILE": str(gh_state_file),
+			"PYTHONDONTWRITEBYTECODE": "1",
+			"GITHUB_REPOSITORY": "owner/repo",
+			"GITHUB_REPOSITORY_OWNER": "owner",
+			"GH_TOKEN": "test-token",
+			"PR_NUMBER": pr_number,
+			"CLAUDE_BRANCH_REVIEW_MODE": claude_branch_review_mode,
+			"HEAD_REF_OVERRIDE_INPUT": head_ref_override,
+			"HEAD_SHA_OVERRIDE_INPUT": head_sha_override,
+			"BASE_REF_OVERRIDE_INPUT": base_ref_override,
+			"PR_PAYLOAD_FILE": str(files["pr_payload"]),
+			"PR_META_FILE": str(files["pr_meta"]),
+			"PR_ISSUE_COMMENTS_FILE": str(files["pr_issue_comments"]),
+			"PR_REVIEWS_FILE": str(files["pr_reviews"]),
+			"PR_REVIEW_COMMENTS_FILE": str(files["pr_review_comments"]),
+			"LINKED_ISSUE_CONTEXT_FILE": str(files["linked_issue_context"]),
+			"PR_ALL_COMMENTS_CONTEXT_FILE": str(files["comments_context"]),
+			"PR_DIFF_FILE": str(files["pr_diff"]),
+			"GITHUB_ENV": str(files["github_env"]),
+		})
+
+		result = subprocess.run(
+			["bash", str(METADATA_HELPER)],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+			timeout=60,
+		)
+
+		github_env: dict[str, str] = {}
+		for raw_line in files["github_env"].read_text(encoding="utf-8").splitlines():
+			if "=" not in raw_line:
+				continue
+			key, value = raw_line.split("=", 1)
+			github_env[key] = value
+
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			"github_env": github_env,
+			"mock_state": json.loads(gh_state_file.read_text(encoding="utf-8")),
+			"pr_payload": json.loads(files["pr_payload"].read_text(encoding="utf-8")),
+			"pr_meta": json.loads(files["pr_meta"].read_text(encoding="utf-8")),
+			"pr_issue_comments": json.loads(files["pr_issue_comments"].read_text(encoding="utf-8")),
+			"pr_reviews": json.loads(files["pr_reviews"].read_text(encoding="utf-8")),
+			"pr_review_comments": json.loads(files["pr_review_comments"].read_text(encoding="utf-8")),
+			"linked_issue_context": files["linked_issue_context"].read_text(encoding="utf-8"),
+			"comments_context": files["comments_context"].read_text(encoding="utf-8"),
+			"pr_diff": files["pr_diff"].read_text(encoding="utf-8"),
+		}
 
 
 def _step_block(step_name: str) -> str:
@@ -1150,6 +1338,169 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		assert workflow.count(expected) >= 2, f"Missing workflow-level + codex-agent env wiring: {expected}"
 
 
+def test_review_collect_pr_metadata_helper_is_bootstrapped_and_delegated() -> None:
+	workflow = _workflow_text()
+	required_bootstrap_line = next(
+		line for line in workflow.splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line
+	)
+	block = _step_block("Collect PR metadata")
+
+	assert METADATA_HELPER.exists(), f"missing helper: {METADATA_HELPER}"
+	assert "review_collect_pr_metadata.sh" in required_bootstrap_line, required_bootstrap_line
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_collect_pr_metadata.sh"' in block
+	assert 'gh_retry "${PR_PAYLOAD_FILE}"' not in block
+
+
+def test_review_collect_pr_metadata_helper_supports_no_pr_synthetic_mode() -> None:
+	result = _run_review_collect_pr_metadata_harness(
+		pr_number="",
+		claude_branch_review_mode="true",
+		head_ref_override="claude/test-no-pr",
+		head_sha_override="deadbeef",
+		base_ref_override="",
+		mock_state={
+			"api_responses": {
+				"repos/owner/repo": {"default_branch": "main"},
+			},
+		},
+	)
+
+	assert result["pr_payload"] == {
+		"title": "",
+		"body": "",
+		"head": {
+			"ref": "claude/test-no-pr",
+			"sha": "deadbeef",
+			"repo": {"full_name": "owner/repo"},
+		},
+		"base": {"ref": "main"},
+	}
+	assert result["pr_meta"] == {
+		"title": "",
+		"body": "",
+		"baseRefName": "main",
+		"headRefName": "claude/test-no-pr",
+		"headRepoFullName": "owner/repo",
+	}
+	assert result["pr_issue_comments"] == []
+	assert result["pr_reviews"] == []
+	assert result["pr_review_comments"] == []
+	assert result["linked_issue_context"] == "No linked issues found."
+	assert "issue_comments_count: 0" in result["comments_context"]
+	assert "reviews_count: 0" in result["comments_context"]
+	assert "review_comments_count: 0" in result["comments_context"]
+	assert "AUTOFIX_NO_PR_METADATA_SYNTHESIZED head_ref=claude/test-no-pr head_sha=deadbeef base_ref=main" in result["stdout"]
+	assert result["github_env"]["LINKED_ISSUES_JSON"] == "[]"
+	assert result["github_env"]["PR_DIFF_ATTEMPTED_PATHS"].endswith("/pr_diff.patch")
+	assert result["github_env"]["HAS_PR_DIFF"] == "false"
+	assert result["github_env"]["PR_DIFF_SOURCE"] == "gh_pr_diff_empty"
+	assert result["pr_diff"] == ""
+	assert result["github_env"]["BASE_BRANCH"] == "main"
+	assert any(call[:2] == ["api", "repos/owner/repo"] for call in result["mock_state"]["calls"])
+	assert not any(call[:2] == ["api", "graphql"] for call in result["mock_state"]["calls"])
+	assert not any(call[:2] == ["pr", "diff"] for call in result["mock_state"]["calls"])
+	assert not any("repos/owner/repo/pulls/" in " ".join(call) for call in result["mock_state"]["calls"])
+
+
+def test_review_collect_pr_metadata_helper_preserves_pr_fetch_and_context_contract() -> None:
+	result = _run_review_collect_pr_metadata_harness(
+		pr_number="42",
+		claude_branch_review_mode="false",
+		head_ref_override="",
+		head_sha_override="",
+		base_ref_override="",
+		mock_state={
+			"api_responses": {
+				"repos/owner/repo/pulls/42/comments": [
+					{
+						"id": 13,
+						"user": {"login": "carol"},
+						"created_at": "2026-06-03T00:00:00Z",
+						"updated_at": "2026-06-03T01:00:00Z",
+						"path": "scripts/helper.sh",
+						"line": 7,
+						"body": "Review comment body",
+					},
+				],
+				"repos/owner/repo/pulls/42/reviews": [
+					{
+						"id": 12,
+						"user": {"login": "bob"},
+						"submitted_at": "2026-06-02T00:00:00Z",
+						"updated_at": "2026-06-02T01:00:00Z",
+						"state": "COMMENTED",
+						"body": "Review body",
+					},
+				],
+				"repos/owner/repo/issues/42/comments": [
+					{
+						"id": 11,
+						"user": {"login": "alice"},
+						"created_at": "2026-06-01T00:00:00Z",
+						"updated_at": "2026-06-01T01:00:00Z",
+						"body": "Issue comment body",
+					},
+				],
+				"repos/owner/repo/pulls/42": {
+					"title": "Synthetic PR title",
+					"body": "Fixes #7\n\nContext body",
+					"base": {"ref": "main"},
+					"head": {
+						"ref": "feature/ref",
+						"sha": "abc123",
+						"repo": {"full_name": "owner/repo"},
+					},
+				},
+				"repos/owner/repo/issues/7": {
+					"number": 7,
+					"title": "Linked fallback issue",
+					"body": "Linked fallback body",
+				},
+				"graphql": {
+					"data": {
+						"repository": {
+							"pullRequest": {
+								"closingIssuesReferences": {
+									"nodes": [],
+								},
+							},
+						},
+					},
+				},
+			},
+			"pr_diffs": {"42": "pr diff sentinel\n"},
+		},
+	)
+
+	assert result["pr_meta"] == {
+		"title": "Synthetic PR title",
+		"body": "Fixes #7\n\nContext body",
+		"baseRefName": "main",
+		"headRefName": "feature/ref",
+		"headRepoFullName": "owner/repo",
+	}
+	assert len(result["pr_issue_comments"]) == 1
+	assert len(result["pr_reviews"]) == 1
+	assert len(result["pr_review_comments"]) == 1
+	assert result["linked_issue_context"].splitlines()[:2] == [
+		"Issue #7: Linked fallback issue",
+		"Linked fallback body",
+	]
+	assert "issue_comments_count: 1" in result["comments_context"]
+	assert "reviews_count: 1" in result["comments_context"]
+	assert "review_comments_count: 1" in result["comments_context"]
+	assert "entry[0].kind: issue_comment" in result["comments_context"]
+	assert "entry[1].kind: review" in result["comments_context"]
+	assert "entry[2].kind: review_comment" in result["comments_context"]
+	assert result["pr_diff"] == "pr diff sentinel\n"
+	assert result["github_env"]["LINKED_ISSUES_JSON"] == "[]"
+	assert result["github_env"]["HAS_PR_DIFF"] == "true"
+	assert result["github_env"]["PR_DIFF_SOURCE"] == "gh_pr_diff"
+	assert result["github_env"]["BASE_BRANCH"] == "main"
+	assert any("repos/owner/repo/pulls/42" in " ".join(call) for call in result["mock_state"]["calls"])
+	assert any("repos/owner/repo/issues/7" in " ".join(call) for call in result["mock_state"]["calls"])
+
+
 def test_review_scripts_emit_context_budget_warn_signals() -> None:
 	for script_text, expected_call in (
 		(_reviewers_text(), 'emit_context_budget_warn_for_prompt "review"'),
@@ -2209,6 +2560,9 @@ def test_reviewer_iteration_scope_prepare_path_reports_missing_targeted_context_
 
 def main() -> int:
 	test_review_pipeline_knobs_are_wired_into_codex_agent_env()
+	test_review_collect_pr_metadata_helper_is_bootstrapped_and_delegated()
+	test_review_collect_pr_metadata_helper_supports_no_pr_synthetic_mode()
+	test_review_collect_pr_metadata_helper_preserves_pr_fetch_and_context_contract()
 	test_review_scripts_emit_context_budget_warn_signals()
 	test_review_filter_smoke_fixtures_are_present()
 	test_reviewer_risk_tier_classifier_honours_thresholds_and_always_full_regex()

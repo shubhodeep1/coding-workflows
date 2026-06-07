@@ -1265,6 +1265,324 @@ jobs:
             echo "::error::stage_workflow_support.sh not found in checked-out support sources (${SCRIPT_REF} and optional main snapshot) in shubhodeep1/coding-workflows."
             exit 1
           fi
+          mkdir -p "${SUPPORT_SCRIPTS_DIR}" "${SUPPORT_PROMPTS_DIR}" "${SUPPORT_AI_MEMORY_DIR}/schemas"
+          {
+            echo "SUPPORT_ROOT_DIR=${SUPPORT_ROOT_DIR}"
+            echo "SUPPORT_SCRIPTS_DIR=${SUPPORT_SCRIPTS_DIR}"
+            echo "SUPPORT_PROMPTS_DIR=${SUPPORT_PROMPTS_DIR}"
+            echo "SUPPORT_AI_MEMORY_DIR=${SUPPORT_AI_MEMORY_DIR}"
+            echo "IS_WORKFLOW_SOURCE_REPO=${IS_WORKFLOW_SOURCE_REPO}"
+            echo "SUPPORT_INSTRUCTIONS_FILE=${SUPPORT_ROOT_DIR}/unattended_system_instructions.md"
+            echo "SUPPORT_CODEX_INSTRUCTIONS_FILE=${SUPPORT_ROOT_DIR}/unattended_system_instructions.md"
+            echo "SUPPORT_AGENTS_FILE=${SUPPORT_ROOT_DIR}/agents.md"
+          } >> "$GITHUB_ENV"
+
+          REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py cost_audit.py codex_heartbeat.sh codex_stall_guard.sh review_run_reviewers.sh review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh review_collect_pr_metadata.sh review_conflict_prepare.sh review_conflict_resolve.sh orchestrate_force_tick.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh workspace_init.sh workspace_safety_check.sh"
+          # Main-primary bootstrap scripts: prefer the fresh main snapshot so
+          # wedged integration branches still pick up resolver safety fixes
+          # shipped on main. Missing from both refs remains fail-open so older
+          # consumer script_refs still bootstrap cleanly.
+          MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_conflict_resolve.sh review_conflict_prepare.sh"
+          # Optional bootstrap scripts: allowed to be missing from both
+          # refs.  The bootstrap emits a warning and continues — callers
+          # that depend on these must themselves tolerate absence.  Keep
+          # this list empty unless a genuinely optional helper is added;
+          # the default should always be "required".
+          #
+          # render_prompt.py is the Python backend for the render_prompt.sh
+          # shim adopted by branches that took the issue #3043 refactor.  main
+          # ships a self-contained bash render_prompt.sh that needs no backend,
+          # so render_prompt.py does not exist on main and MUST stay optional
+          # here: this workflow runs pinned @main (internal-review.yml), so it
+          # is main's bootstrap list — not the branch's — that decides what
+          # gets staged from the branch checkout.  Staging it required would
+          # break every normal main-based PR (where the file is absent from
+          # both refs); staging it optionally lets shim-adopting branches
+          # resolve their backend (the shim looks for render_prompt.py beside
+          # itself in SUPPORT_SCRIPTS_DIR) while non-shim branches bootstrap
+          # cleanly.
+          OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh render_prompt.py"
+          for f in ${REQUIRED_BOOTSTRAP_SCRIPTS}; do
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              src=".codex-workflow-src-main/scripts/${f}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::error::Required bootstrap script '${f}' is missing from checked-out support sources (${SCRIPT_REF} and optional main snapshot) in ${wf_source}. This usually means review_autofix.yml references a file that was never committed (common cause: a hallucinated [ai-merge-resolve] commit added a new bootstrap entry without its corresponding script). Verify REQUIRED_BOOTSTRAP_SCRIPTS matches the current contents of scripts/."
+              exit 1
+            fi
+            install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
+          done
+          for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do
+            src=".codex-workflow-src-main/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src/scripts/${f}" ]; then
+              src=".codex-workflow-src/scripts/${f}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::warning::Main-primary bootstrap script '${f}' not available in checked-out support sources; downstream features relying on this helper will be unavailable."
+              continue
+            fi
+            if [ "${src}" = ".codex-workflow-src-main/scripts/${f}" ] && [ -f ".codex-workflow-src/scripts/${f}" ]; then
+              echo "::notice::Bootstrapped ${f} from main snapshot (branch copy ignored)."
+            fi
+            install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
+          done
+          for f in ${OPTIONAL_BOOTSTRAP_SCRIPTS}; do
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              src=".codex-workflow-src-main/scripts/${f}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::warning::Optional bootstrap script '${f}' not available in checked-out support sources; downstream features relying on this helper will be unavailable."
+              continue
+            fi
+            install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
+          done
+
+          for f in setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py; do
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              src=".codex-workflow-src-main/scripts/${f}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::warning::Optional Serena support asset ${f} is unavailable in checked-out support sources; Serena bootstrap remains disabled."
+              continue
+            fi
+            install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/${f}"
+          done
+
+          mkdir -p "${SUPPORT_SCRIPTS_DIR}/templates"
+          serena_template_src=".codex-workflow-src/scripts/templates/serena_project.yml.j2"
+          if [ ! -f "${serena_template_src}" ] && [ -f ".codex-workflow-src-main/scripts/templates/serena_project.yml.j2" ]; then
+            serena_template_src=".codex-workflow-src-main/scripts/templates/serena_project.yml.j2"
+          fi
+          if [ ! -f "${serena_template_src}" ]; then
+            echo "::warning::Optional Serena template scripts/templates/serena_project.yml.j2 is unavailable in checked-out support sources; Serena bootstrap remains disabled."
+          else
+            install -m 0644 "${serena_template_src}" "${SUPPORT_SCRIPTS_DIR}/templates/serena_project.yml.j2"
+          fi
+
+          for sf in memory_record.v1.json processed_command_entry.v1.json run_ledger_entry.v1.json task_lineage.v1.json actions_runs_cache.v1.json workflow_log_analysis_cache.v1.json fingerprint_quarantine.v1.json validation_history.v1.json operator_bypass_audit.v1.json revalidate_events.v1.json validation_discovery.v1.json workflow_overlay.v1.json; do
+            src=".codex-workflow-src/ai-memory/schemas/${sf}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/ai-memory/schemas/${sf}" ]; then
+              src=".codex-workflow-src-main/ai-memory/schemas/${sf}"
+            fi
+            if [ ! -f "${SUPPORT_AI_MEMORY_DIR}/schemas/${sf}" ] && [ -f "${src}" ]; then
+              install -m 0644 "${src}" "${SUPPORT_AI_MEMORY_DIR}/schemas/${sf}"
+            fi
+          done
+
+          # WORKFLOW.md overlay is opt-in by file presence; absent file must
+          # stay a no-op while valid prompt overrides flow through render_prompt.py.
+          PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/load_workflow_overlay.py" \
+            --repo-root "${GITHUB_WORKSPACE}" \
+            --schema-path "${SUPPORT_AI_MEMORY_DIR}/schemas/workflow_overlay.v1.json" \
+            --github-env "${GITHUB_ENV}"
+
+          # Mirror the schema install above for the retrieval profiles
+          # config so consumer repos that do not vendor ai-memory/config/
+          # still get a workflow-source copy.  The memory library's
+          # _sync_memory_reference_files reads SUPPORT_AI_MEMORY_DIR as a
+          # fallback when the consumer-repo source path lacks the file.
+          retrieval_profiles_src=".codex-workflow-src/ai-memory/config/retrieval_profiles.v1.json"
+          if [ ! -f "${retrieval_profiles_src}" ] && [ -f ".codex-workflow-src-main/ai-memory/config/retrieval_profiles.v1.json" ]; then
+            retrieval_profiles_src=".codex-workflow-src-main/ai-memory/config/retrieval_profiles.v1.json"
+          fi
+          mkdir -p "${SUPPORT_AI_MEMORY_DIR}/config"
+          if [ ! -f "${SUPPORT_AI_MEMORY_DIR}/config/retrieval_profiles.v1.json" ] && [ -f "${retrieval_profiles_src}" ]; then
+            install -m 0644 "${retrieval_profiles_src}" "${SUPPORT_AI_MEMORY_DIR}/config/retrieval_profiles.v1.json"
+          fi
+
+          catalog_src=".codex-workflow-src/scripts/codex_model_catalog.json"
+          if [ ! -f "${catalog_src}" ] && [ -f ".codex-workflow-src-main/scripts/codex_model_catalog.json" ]; then
+            catalog_src=".codex-workflow-src-main/scripts/codex_model_catalog.json"
+          fi
+          if [ -f "${catalog_src}" ]; then
+            install -m 0644 "${catalog_src}" "${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
+          else
+            echo "Model catalog not on ${SCRIPT_REF} yet; using local copy."
+          fi
+
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json" ]; then
+            failback_src=".codex-workflow-src/scripts/reviewer_failback_chains.json"
+            if [ ! -f "${failback_src}" ] && [ -f ".codex-workflow-src-main/scripts/reviewer_failback_chains.json" ]; then
+              failback_src=".codex-workflow-src-main/scripts/reviewer_failback_chains.json"
+            fi
+            if [ -f "${failback_src}" ]; then
+              install -m 0644 "${failback_src}" "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json"
+            else
+              echo "::warning::reviewer_failback_chains.json not found in checked-out support sources for ${SCRIPT_REF}; reviewer failback will fail open even when REVIEWER_CIRCUIT_BREAKER_ENABLED=true."
+              rm -f "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json"
+            fi
+          fi
+
+          for f in unattended_system_instructions.md; do
+            target_path="${SUPPORT_ROOT_DIR}/${f}"
+            if [ ! -f "${target_path}" ]; then
+              src=".codex-workflow-src/${f}"
+              if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/${f}" ]; then
+                src=".codex-workflow-src-main/${f}"
+              fi
+              if [ ! -f "${src}" ]; then
+                echo "::error::Missing required support file ${f}"
+                exit 1
+              fi
+              install -m 0644 "${src}" "${target_path}"
+            fi
+          done
+
+          # Soft install: agents.md is checked by preflight via check_soft_file
+          # (review_autofix.yml's preflight step), so absence warns but does
+          # not fail.  Install when available so downstream tooling that reads
+          # SUPPORT_AGENTS_FILE has the canonical workflow-source copy.
+          # Note: SUPPORT_AGENTS_FILE is only exported via $GITHUB_ENV, so it
+          # is not set as a shell variable in this step.  Reference
+          # ${SUPPORT_ROOT_DIR}/agents.md directly to avoid an unbound
+          # variable error under set -u.
+          if [ ! -f "${SUPPORT_ROOT_DIR}/agents.md" ]; then
+            src=".codex-workflow-src/agents.md"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/agents.md" ]; then
+              src=".codex-workflow-src-main/agents.md"
+            fi
+            if [ -f "${src}" ]; then
+              install -m 0644 "${src}" "${SUPPORT_ROOT_DIR}/agents.md"
+            else
+              echo "::warning::agents.md not available in checked-out support sources for ${SCRIPT_REF}; downstream features that reference SUPPORT_AGENTS_FILE will see SOFT_MISSING."
+            fi
+          fi
+
+          # Soft install: probably_unnecessary_but_read_if_stuck.md holds the
+          # operator-runbook overflow split out of agents.md (env var ref,
+          # autofix internals, orchestrator auto-heal, validation self-heal,
+          # workflow-log-analysis runbook, etc.). Editor inliners point at it
+          # when included; if absent the pointer line is suppressed.
+          if [ ! -f probably_unnecessary_but_read_if_stuck.md ]; then
+            src=".codex-workflow-src/probably_unnecessary_but_read_if_stuck.md"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/probably_unnecessary_but_read_if_stuck.md" ]; then
+              src=".codex-workflow-src-main/probably_unnecessary_but_read_if_stuck.md"
+            fi
+            if [ -f "${src}" ]; then
+              install -m 0644 "${src}" probably_unnecessary_but_read_if_stuck.md
+            fi
+          fi
+
+          if [ ! -f "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt" ]; then
+            src=".codex-workflow-src/prompts/mode-judge-review-blocked.txt"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/mode-judge-review-blocked.txt" ]; then
+              src=".codex-workflow-src-main/prompts/mode-judge-review-blocked.txt"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::error::Missing required support file prompts/mode-judge-review-blocked.txt"
+              exit 1
+            fi
+            install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt"
+          fi
+          if [ ! -f "${SUPPORT_PROMPTS_DIR}/mode-judge-interim.txt" ]; then
+            src=".codex-workflow-src/prompts/mode-judge-interim.txt"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/mode-judge-interim.txt" ]; then
+              src=".codex-workflow-src-main/prompts/mode-judge-interim.txt"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::error::Missing required support file prompts/mode-judge-interim.txt"
+              exit 1
+            fi
+            install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/mode-judge-interim.txt"
+          fi
+          if [ ! -f "${SUPPORT_PROMPTS_DIR}/behavioural-smoke-synthesise.txt" ]; then
+            src=".codex-workflow-src/prompts/behavioural-smoke-synthesise.txt"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/behavioural-smoke-synthesise.txt" ]; then
+              src=".codex-workflow-src-main/prompts/behavioural-smoke-synthesise.txt"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::error::Missing required support file prompts/behavioural-smoke-synthesise.txt"
+              exit 1
+            fi
+            install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/behavioural-smoke-synthesise.txt"
+          fi
+          if [ ! -f "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt" ]; then
+            src=".codex-workflow-src/prompts/review-reviewer-checklist.txt"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/review-reviewer-checklist.txt" ]; then
+              src=".codex-workflow-src-main/prompts/review-reviewer-checklist.txt"
+            fi
+            if [ -f "${src}" ]; then
+              install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt"
+            else
+              echo "::warning::review-reviewer-checklist.txt not found in checked-out support sources for ${SCRIPT_REF}; reviewer prompts will keep the checklist disabled even when REVIEW_REVIEWER_CHECKLIST_ENABLED=true."
+              rm -f "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt"
+            fi
+          fi
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh" ]; then
+            src=".codex-workflow-src/scripts/review_filter_uninteresting_files.sh"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/review_filter_uninteresting_files.sh" ]; then
+              src=".codex-workflow-src-main/scripts/review_filter_uninteresting_files.sh"
+            fi
+            if [ -f "${src}" ]; then
+              install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh"
+            else
+              echo "::warning::review_filter_uninteresting_files.sh not found in checked-out support sources for ${SCRIPT_REF}; reviewer diff filtering will fail open even when REVIEWER_FILTER_UNINTERESTING_ENABLED=true."
+              rm -f "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh"
+            fi
+          fi
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh" ]; then
+            src=".codex-workflow-src/scripts/review_agents_md_materiality.sh"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/review_agents_md_materiality.sh" ]; then
+              src=".codex-workflow-src-main/scripts/review_agents_md_materiality.sh"
+            fi
+            if [ -f "${src}" ]; then
+              install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh"
+            else
+              echo "::warning::review_agents_md_materiality.sh not found in checked-out support sources for ${SCRIPT_REF}; AGENTS.md materiality advisories will fail open even when AGENTS_MD_MATERIALITY_ENABLED=true."
+              rm -f "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh"
+            fi
+          fi
+          if [ ! -f "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt" ]; then
+            src=".codex-workflow-src/prompts/conflict-resolver.txt"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/conflict-resolver.txt" ]; then
+              src=".codex-workflow-src-main/prompts/conflict-resolver.txt"
+            fi
+            if [ -f "${src}" ]; then
+              install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt"
+            else
+              echo "::warning::conflict-resolver.txt not found in checked-out support sources for ${SCRIPT_REF}; downstream conflict resolution will fail with a specific missing-template error."
+              rm -f "${SUPPORT_PROMPTS_DIR}/conflict-resolver.txt"
+            fi
+          fi
+          if [ ! -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver.txt" ]; then
+            src=".codex-workflow-src/prompts/integration-sync-conflict-resolver.txt"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/integration-sync-conflict-resolver.txt" ]; then
+              src=".codex-workflow-src-main/prompts/integration-sync-conflict-resolver.txt"
+            fi
+            if [ -f "${src}" ]; then
+              install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver.txt"
+            else
+              echo "::warning::integration-sync-conflict-resolver.txt not found in checked-out support sources for ${SCRIPT_REF}; orchestrator/project-* runs will fall back to the generic conflict-resolver template (intent-injection disabled)."
+              rm -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver.txt"
+            fi
+          fi
+          if [ ! -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-prelude.txt" ]; then
+            src=".codex-workflow-src/prompts/integration-sync-conflict-resolver-retry-prelude.txt"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/integration-sync-conflict-resolver-retry-prelude.txt" ]; then
+              src=".codex-workflow-src-main/prompts/integration-sync-conflict-resolver-retry-prelude.txt"
+            fi
+            if [ -f "${src}" ]; then
+              install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-prelude.txt"
+            else
+              echo "::warning::integration-sync-conflict-resolver-retry-prelude.txt not found in checked-out support sources for ${SCRIPT_REF}; resolver retries on integration-sync runs will use the original prompt verbatim (no reflexion guidance)."
+              rm -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-prelude.txt"
+            fi
+          fi
+          if [ ! -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeout-prelude.txt" ]; then
+            src=".codex-workflow-src/prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt" ]; then
+              src=".codex-workflow-src-main/prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
+            fi
+            if [ -f "${src}" ]; then
+              install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
+            else
+              echo "::warning::integration-sync-conflict-resolver-retry-timeout-prelude.txt not found in checked-out support sources for ${SCRIPT_REF}; resolver timeout-induced retries on integration-sync runs will fall back to the original prompt verbatim (no timeout-aware reflexion guidance)."
+              rm -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
+            fi
+          fi
           CURRENT_REPOSITORY="${{ github.repository }}" \
           WORKFLOW_SOURCE_REPO="shubhodeep1/coding-workflows" \
           bash "${helper}"
@@ -1628,393 +1946,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
-
-          # Retry wrapper for gh api calls — rate-limit-aware.
-          # On rate-limit (403/429), waits until X-RateLimit-Reset and retries.
-          # On other failures, uses exponential backoff.
-          # Usage: gh_retry <output_file> [gh api args...]
-          _rl_wait() {
-            local _reset_ts _wait_secs
-            _reset_ts=$(gh api -i /rate_limit 2>/dev/null | grep -i '^x-ratelimit-reset:' | head -1 | awk '{print $2}' | tr -d '\r') || true
-            if [ -n "${_reset_ts}" ] && [ "${_reset_ts}" -gt 0 ] 2>/dev/null; then
-              _wait_secs=$(( _reset_ts - $(date +%s) + 1 ))
-              [ "${_wait_secs}" -lt 1 ] && _wait_secs=1
-              [ "${_wait_secs}" -gt 600 ] && _wait_secs=600
-            else
-              _wait_secs=30
-            fi
-            echo "::warning::  Rate limit resets in ${_wait_secs}s (X-RateLimit-Reset: ${_reset_ts:-unknown})" >&2
-            sleep "${_wait_secs}"
-          }
-          gh_retry() {
-            local outfile="$1"; shift
-            local attempt max_attempts=5 delay=2
-            for attempt in $(seq 1 $max_attempts); do
-              if gh "$@" > "$outfile" 2>/tmp/gh_retry_stderr; then
-                return 0
-              fi
-              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/gh_retry_stderr 2>/dev/null; then
-                echo "::warning::GitHub API rate limit hit (attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
-                _rl_wait
-              else
-                cat /tmp/gh_retry_stderr >&2
-                if [ "$attempt" -lt "$max_attempts" ]; then
-                  echo "gh call failed (attempt ${attempt}/${max_attempts}), retrying in ${delay}s..." >&2
-                  sleep "$delay"
-                  delay=$((delay * 2))
-                fi
-              fi
-            done
-            echo "::error::gh call failed after ${max_attempts} attempts" >&2
-            return 1
-          }
-
-          # No-PR claude-branch-review path: synthesize PR_PAYLOAD_FILE +
-          # PR_META_FILE from the caller-supplied head/base overrides
-          # (passed in from internal-review.yml's resolve-claude-branch-pr
-          # job for push events to claude/** with no open PR).  No GitHub
-          # API calls — PR endpoints don't exist for a branch without a
-          # PR.  Comments/reviews/review_comments arrays are empty so
-          # downstream readers (reviewer prompt assembly) see "no prior
-          # discussion".  The base ref defaults to the repository's
-          # default branch when the override is empty.
-          if [ "${CLAUDE_BRANCH_REVIEW_MODE:-}" = "true" ] && [ -z "${PR_NUMBER:-}" ]; then
-            HEAD_REF_OVERRIDE="${HEAD_REF_OVERRIDE_INPUT:-}"
-            HEAD_SHA_OVERRIDE="${HEAD_SHA_OVERRIDE_INPUT:-}"
-            BASE_REF_OVERRIDE="${BASE_REF_OVERRIDE_INPUT:-}"
-            if [ -z "${BASE_REF_OVERRIDE}" ]; then
-              BASE_REF_OVERRIDE="$(gh api "repos/${{ github.repository }}" --jq '.default_branch' 2>/dev/null || echo 'main')"
-            fi
-            if [ -z "${HEAD_REF_OVERRIDE}" ] || [ -z "${HEAD_SHA_OVERRIDE}" ]; then
-              echo "::error::No-PR claude-branch-review path: head_ref_override and head_sha_override must be supplied by the caller."
-              exit 1
-            fi
-            jq -n \
-              --arg head_ref "${HEAD_REF_OVERRIDE}" \
-              --arg head_sha "${HEAD_SHA_OVERRIDE}" \
-              --arg base_ref "${BASE_REF_OVERRIDE}" \
-              --arg head_repo "${{ github.repository }}" \
-              '{
-                title: "",
-                body: "",
-                head: {ref: $head_ref, sha: $head_sha, repo: {full_name: $head_repo}},
-                base: {ref: $base_ref}
-              }' > "${PR_PAYLOAD_FILE}"
-            printf '[]\n' > "${PR_ISSUE_COMMENTS_FILE}"
-            printf '[]\n' > "${PR_REVIEWS_FILE}"
-            printf '[]\n' > "${PR_REVIEW_COMMENTS_FILE}"
-            jq -n \
-              --arg head_ref "${HEAD_REF_OVERRIDE}" \
-              --arg base_ref "${BASE_REF_OVERRIDE}" \
-              --arg head_repo "${{ github.repository }}" \
-              '{title: "", body: "", baseRefName: $base_ref, headRefName: $head_ref, headRepoFullName: $head_repo}' \
-              > "${PR_META_FILE}"
-            echo "AUTOFIX_NO_PR_METADATA_SYNTHESIZED head_ref=${HEAD_REF_OVERRIDE} head_sha=${HEAD_SHA_OVERRIDE} base_ref=${BASE_REF_OVERRIDE}"
-          else
-            gh_retry "${PR_PAYLOAD_FILE}" api repos/${{ github.repository }}/pulls/"${PR_NUMBER}"
-            gh_retry /tmp/gh_issue_comments_raw.json api --paginate repos/${{ github.repository }}/issues/"${PR_NUMBER}"/comments
-            jq -s 'add // []' /tmp/gh_issue_comments_raw.json > "${PR_ISSUE_COMMENTS_FILE}"
-            gh_retry /tmp/gh_reviews_raw.json api --paginate repos/${{ github.repository }}/pulls/"${PR_NUMBER}"/reviews
-            jq -s 'add // []' /tmp/gh_reviews_raw.json > "${PR_REVIEWS_FILE}"
-            gh_retry /tmp/gh_review_comments_raw.json api --paginate repos/${{ github.repository }}/pulls/"${PR_NUMBER}"/comments
-            jq -s 'add // []' /tmp/gh_review_comments_raw.json > "${PR_REVIEW_COMMENTS_FILE}"
-
-            jq '{
-              title: (.title // ""),
-              body: (.body // ""),
-              baseRefName: (.base.ref // ""),
-              headRefName: (.head.ref // ""),
-              headRepoFullName: (.head.repo.full_name // "")
-            }' "${PR_PAYLOAD_FILE}" > "${PR_META_FILE}"
-          fi
-
-          # Fetch linked issue title+body via GraphQL — single call that also
-          # populates LINKED_ISSUES_JSON early so the late-stage "Cache linked
-          # issues references" step can skip its own fetch.
-          # Audited existing calls: the only other closingIssuesReferences
-          # fetch is in the post-review "Cache linked issues references" step
-          # (line ~2986) which fetches numbers only. This call supersedes it
-          # by fetching title+body as well, and we set LINKED_ISSUES_JSON
-          # here so the later step becomes a no-op cache read.
-          # NOTE: first:50 matches the GitHub GraphQL API maximum for this
-          # field; PRs with more than 50 linked issues will be silently
-          # truncated (an extremely rare edge case in practice).
-          _linked_tmp="$(mktemp)"
-          _linked_fetch_ok="false"
-          if gh_retry "${_linked_tmp}" api graphql \
-            -f owner="${{ github.repository_owner }}" \
-            -f name="$(echo '${{ github.repository }}' | cut -d/ -f2)" \
-            -F number="${PR_NUMBER}" \
-            -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:50){nodes{number title body}}}}}' \
-            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []'; then
-            _linked_fetch_ok="true"
-            _linked_raw="$(cat "${_linked_tmp}" 2>/dev/null || echo '[]')"
-          else
-            echo "::warning::Failed to fetch linked issues via GraphQL; proceeding without linked-issue context."
-            _linked_raw='[]'
-          fi
-          rm -f "${_linked_tmp}"
-          _linked_raw="$(printf '%s' "${_linked_raw}" | jq -c '.' 2>/dev/null || echo '[]')"
-
-          # Store a lightweight numbers-only array in the env var to avoid
-          # size/sensitivity issues. Later steps only need numbers for linking.
-          # Only export cache state when fetch succeeded; on transient failure,
-          # leave LINKED_ISSUES_JSON unset so the late cache step retries.
-          if [ "${_linked_fetch_ok}" = "true" ]; then
-            if [ -n "${_linked_raw}" ] && [ "${_linked_raw}" != "[]" ]; then
-              _linked_numbers="$(printf '%s' "${_linked_raw}" | jq -c '[.[] | {number}]' 2>/dev/null || echo '[]')"
-              printf 'LINKED_ISSUES_JSON=%s\n' "${_linked_numbers}" >> "$GITHUB_ENV"
-            else
-              printf 'LINKED_ISSUES_JSON=[]\n' >> "$GITHUB_ENV"
-            fi
-          fi
-
-          # Body-text fallback: when GraphQL closingIssuesReferences returns
-          # empty (which happens systematically for orchestrator-managed PRs
-          # whose base is `orchestrator/project-<n>` rather than the default
-          # branch — GitHub's closingIssuesReferences only resolves closing
-          # keywords for default-branch-targeted PRs), parse the PR body for
-          # explicit Closes/Fixes/Resolves + #N or in-repo issue URL refs
-          # and back-fill issue title+body via REST.
-          # Scope: only LINKED_ISSUE_CONTEXT_FILE (used for editor/reviewer
-          # prompt context) is affected.  LINKED_ISSUES_JSON (used for
-          # downstream labeling and auto-merge gating) keeps GraphQL-only
-          # semantics — labeling-by-keyword is itself default-branch-gated
-          # by GitHub, so back-filling there would alter unrelated semantics.
-          # Trigger: GraphQL returned exactly `[]`.  A non-empty (even
-          # partial) GraphQL result is trusted as authoritative and the
-          # body is NOT scanned, matching the brief's intent (only fix the
-          # case where GitHub resolved nothing).
-          # Regex (case-insensitive closing keywords + #N or repo-scoped
-          # github.com issue URL): host is anchored to `github.com` and
-          # the repo path is PCRE-escaped via python's re.escape before
-          # splicing in, so neither a non-GitHub URL with the same path
-          # nor a future repo rename containing regex metacharacters can
-          # route an unrelated number into this repo's lookup.
-          # API cost: each distinct closing reference costs one
-          # `gh api repos/.../issues/<n>` REST call; capped at
-          # _FALLBACK_MAX_ISSUES (truncation logged) to bound the worst
-          # case against verbose or adversarial PR bodies.  Failures are
-          # logged and skipped (fail-open).
-          _linked_context_raw="${_linked_raw}"
-          if [ "${_linked_context_raw}" = "[]" ] && [ -s "${PR_META_FILE}" ]; then
-            _pr_body_for_fallback="$(jq -r '.body // ""' "${PR_META_FILE}")"
-            if [ -n "${_pr_body_for_fallback}" ]; then
-              _fb_repo_pcre="$(PYTHONDONTWRITEBYTECODE=1 python3 -c 'import re,sys; sys.stdout.write(re.escape(sys.argv[1]))' '${{ github.repository }}')"
-              _fallback_numbers="$(printf '%s\n' "${_pr_body_for_fallback}" \
-                | grep -oiP "\\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?):?\\s+(?:https?://github\\.com/${_fb_repo_pcre}/issues/|#)\\K\\d+\\b" \
-                | sort -un || true)"
-              if [ -n "${_fallback_numbers}" ]; then
-                _FALLBACK_MAX_ISSUES=20
-                _fallback_total="$(printf '%s\n' "${_fallback_numbers}" | wc -l | tr -d '[:space:]')"
-                if [ "${_fallback_total:-0}" -gt "${_FALLBACK_MAX_ISSUES}" ]; then
-                  echo "::warning::Linked-issue body-text fallback: PR body referenced ${_fallback_total} distinct in-repo issues; capping fetches at ${_FALLBACK_MAX_ISSUES}."
-                  _fallback_numbers="$(printf '%s\n' "${_fallback_numbers}" | head -n "${_FALLBACK_MAX_ISSUES}")"
-                fi
-                _fallback_json='[]'
-                while IFS= read -r _fb_num; do
-                  [ -z "${_fb_num}" ] && continue
-                  _fb_issue_tmp="$(mktemp)"
-                  if gh_retry "${_fb_issue_tmp}" api "repos/${{ github.repository }}/issues/${_fb_num}" \
-                    --jq '{number: (.number // 0), title: (.title // ""), body: (.body // "")}'; then
-                    _fb_issue_obj="$(cat "${_fb_issue_tmp}" 2>/dev/null || echo '')"
-                    if [ -n "${_fb_issue_obj}" ]; then
-                      _fallback_json="$(printf '%s' "${_fallback_json}" \
-                        | jq --argjson o "${_fb_issue_obj}" '. + [$o]' 2>/dev/null \
-                        || printf '%s' "${_fallback_json}")"
-                    fi
-                  else
-                    echo "::warning::Linked-issue body-text fallback: gh api repos/${{ github.repository }}/issues/${_fb_num} failed; skipping"
-                  fi
-                  rm -f "${_fb_issue_tmp}"
-                done <<< "${_fallback_numbers}"
-                if [ "${_fallback_json}" != "[]" ]; then
-                  _linked_context_raw="${_fallback_json}"
-                  echo "Linked-issue body-text fallback resolved $(printf '%s' "${_fallback_json}" | jq 'length') issue(s) for context (GraphQL closingIssuesReferences returned empty — likely non-default base branch)."
-                fi
-              fi
-            fi
-          fi
-
-          # Build linked issue context file for reviewer/editor prompts.
-          # Use a temp file to avoid ARG_MAX failures on large issue bodies.
-          _linked_json_file="$(mktemp)"
-          printf '%s' "${_linked_context_raw}" > "${_linked_json_file}"
-          PYTHONDONTWRITEBYTECODE=1 python3 - "${_linked_json_file}" "${LINKED_ISSUE_CONTEXT_FILE}" <<'PYLINKED'
-          import json, sys
-          json_path = sys.argv[1]
-          out_path = sys.argv[2]
-          try:
-              with open(json_path, "r", encoding="utf-8") as fh:
-                  issues = json.load(fh)
-          except (json.JSONDecodeError, TypeError, OSError, UnicodeDecodeError):
-              issues = []
-          if not isinstance(issues, list):
-              issues = []
-          lines = []
-          for iss in issues:
-              if not isinstance(iss, dict):
-                  continue
-              num = iss.get("number", "?")
-              title = iss.get("title", "")
-              body = iss.get("body", "")
-              lines.append(f"Issue #{num}: {title}")
-              if body:
-                  lines.append(body)
-              lines.append("")
-          if not lines:
-              lines.append("No linked issues found.")
-          with open(out_path, "w", encoding="utf-8") as fh:
-              fh.write("\n".join(lines))
-          PYLINKED
-          rm -f "${_linked_json_file}"
-          echo "Linked issue context bytes: $(wc -c < "${LINKED_ISSUE_CONTEXT_FILE}" | tr -d '[:space:]')"
-
-          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
-          import json
-          import os
-          from datetime import datetime, timezone
-
-          issue_comments_file = os.environ["PR_ISSUE_COMMENTS_FILE"]
-          reviews_file = os.environ["PR_REVIEWS_FILE"]
-          review_comments_file = os.environ["PR_REVIEW_COMMENTS_FILE"]
-          output_file = os.environ["PR_ALL_COMMENTS_CONTEXT_FILE"]
-
-          def load_json(path):
-              try:
-                  with open(path, "r", encoding="utf-8") as handle:
-                      content = handle.read().strip()
-                      if not content:
-                          return []
-                      data = json.loads(content)
-              except (json.JSONDecodeError, TypeError, OSError, UnicodeDecodeError):
-                  return []
-              if not isinstance(data, list):
-                  return []
-              return [item for item in data if isinstance(item, dict)]
-
-          def norm(value):
-              if value is None:
-                  return ""
-              return str(value)
-
-          def to_iso_sort_key(value):
-              text = norm(value)
-              if text == "":
-                  return "0000-00-00T00:00:00Z"
-              return text
-
-          issue_comments = load_json(issue_comments_file)
-          reviews = load_json(reviews_file)
-          review_comments = load_json(review_comments_file)
-
-          entries = []
-
-          for comment in issue_comments:
-              entries.append(
-                  {
-                      "kind": "issue_comment",
-                      "id": norm(comment.get("id")),
-                      "author": norm((comment.get("user") or {}).get("login")),
-                      "created_at": norm(comment.get("created_at")),
-                      "updated_at": norm(comment.get("updated_at")),
-                      "state": "",
-                      "path": "",
-                      "line": "",
-                      "body": norm(comment.get("body")),
-                  }
-              )
-
-          for review in reviews:
-              entries.append(
-                  {
-                      "kind": "review",
-                      "id": norm(review.get("id")),
-                      "author": norm((review.get("user") or {}).get("login")),
-                      "created_at": norm(review.get("submitted_at") or review.get("created_at")),
-                      "updated_at": norm(review.get("updated_at") or review.get("submitted_at") or review.get("created_at")),
-                      "state": norm(review.get("state")),
-                      "path": "",
-                      "line": "",
-                      "body": norm(review.get("body")),
-                  }
-              )
-
-          for comment in review_comments:
-              entries.append(
-                  {
-                      "kind": "review_comment",
-                      "id": norm(comment.get("id")),
-                      "author": norm((comment.get("user") or {}).get("login")),
-                      "created_at": norm(comment.get("created_at")),
-                      "updated_at": norm(comment.get("updated_at")),
-                      "state": "",
-                      "path": norm(comment.get("path")),
-                      "line": norm(comment.get("line") if comment.get("line") is not None else comment.get("original_line")),
-                      "body": norm(comment.get("body")),
-                  }
-              )
-
-          entries.sort(key=lambda item: (to_iso_sort_key(item.get("created_at")), norm(item.get("kind")), norm(item.get("id"))))
-
-          with open(output_file, "w", encoding="utf-8") as handle:
-              handle.write("PR_ALL_COMMENTS_CONTEXT\n")
-              handle.write(f"generated_at_utc: {datetime.now(timezone.utc).isoformat()}\n")
-              handle.write(f"issue_comments_count: {len(issue_comments)}\n")
-              handle.write(f"reviews_count: {len(reviews)}\n")
-              handle.write(f"review_comments_count: {len(review_comments)}\n")
-              handle.write(f"total_entries: {len(entries)}\n")
-              handle.write("\n")
-              for index, entry in enumerate(entries):
-                  handle.write(f"entry[{index}].kind: {entry['kind']}\n")
-                  handle.write(f"entry[{index}].id: {entry['id']}\n")
-                  handle.write(f"entry[{index}].author: {entry['author']}\n")
-                  handle.write(f"entry[{index}].created_at: {entry['created_at']}\n")
-                  handle.write(f"entry[{index}].updated_at: {entry['updated_at']}\n")
-                  handle.write(f"entry[{index}].state: {entry['state']}\n")
-                  handle.write(f"entry[{index}].path: {entry['path']}\n")
-                  handle.write(f"entry[{index}].line: {entry['line']}\n")
-                  _body = str(entry["body"])
-                  _body_escaped = _body.replace("\\", "\\\\").replace(chr(10), "\\n").replace(chr(13), "\\r")
-                  handle.write(f"entry[{index}].body: {_body_escaped}\n")
-                  handle.write("\n")
-          PY
-
-          comments_context_bytes="$(wc -c < "${PR_ALL_COMMENTS_CONTEXT_FILE}" | tr -d '[:space:]')"
-          echo "PR comments context bytes: ${comments_context_bytes}"
-          if [ -s "${PR_ALL_COMMENTS_CONTEXT_FILE}" ]; then
-            echo "PR comments context sha256: $(sha256sum "${PR_ALL_COMMENTS_CONTEXT_FILE}" | awk '{print $1}')"
-          fi
-
-          if ! gh pr diff "${PR_NUMBER}" > "${PR_DIFF_FILE}"; then
-            echo "Warning: gh pr diff failed for PR ${PR_NUMBER}; continuing with fallback diff generation."
-          fi
-
-          PR_DIFF_ATTEMPTED_PATHS="gh_pr_diff:${PR_DIFF_FILE}"
-          if [ -s "${PR_DIFF_FILE}" ]; then
-            echo "HAS_PR_DIFF=true" >> "$GITHUB_ENV"
-            echo "PR_DIFF_SOURCE=gh_pr_diff" >> "$GITHUB_ENV"
-          else
-            echo "HAS_PR_DIFF=false" >> "$GITHUB_ENV"
-            echo "PR_DIFF_SOURCE=gh_pr_diff_empty" >> "$GITHUB_ENV"
-          fi
-          echo "PR_DIFF_ATTEMPTED_PATHS=${PR_DIFF_ATTEMPTED_PATHS}" >> "$GITHUB_ENV"
-
-          pr_diff_bytes="$(wc -c < "${PR_DIFF_FILE}" | tr -d '[:space:]')"
-          echo "PR diff snapshot (post gh pr diff) bytes: ${pr_diff_bytes}"
-          if [ -s "${PR_DIFF_FILE}" ]; then
-            echo "PR diff snapshot (post gh pr diff) sha256: $(sha256sum "${PR_DIFF_FILE}" | awk '{print $1}')"
-          else
-            echo "PR diff snapshot (post gh pr diff) sha256: unavailable (empty file)"
-          fi
-          echo "PR diff snapshot (post gh pr diff) preview suppressed in logs for security."
-
-          BASE_REF="$(jq -r '.baseRefName' "${PR_META_FILE}")"
-          if [ -z "${BASE_REF}" ] || [ "${BASE_REF}" = "null" ]; then
-            echo "Unable to determine PR base branch"
-            exit 1
-          fi
-          echo "BASE_BRANCH=${BASE_REF}" >> "$GITHUB_ENV"
+          bash "${SUPPORT_SCRIPTS_DIR}/review_collect_pr_metadata.sh"
 
       - name: Retrieve reviewer memory context (fail-open)
         run: |

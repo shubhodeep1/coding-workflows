@@ -87,6 +87,17 @@ Copy this block when adding a new entry:
   - `PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py` returns `All workflow script references resolve to existing files.`
 - **Owner:** @shubhodeep1
 
+### `scripts/review_collect_pr_metadata.sh`
+
+- **Introduced in:** ai/issue-3203 (2026-06-07)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `rg -n 'review_collect_pr_metadata\.sh' .github/workflows/review_autofix.yml .github/workflows/internal-review.yml` shows the live bootstrap entry and the delegated workflow callsite.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_review_pipeline_contract.py` returns `OK: review_autofix review-pipeline plumbing contract holds`.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_alt_model_cleanup_pr_selector.py` returns `4 passed`.
+- **Owner:** @shubhodeep1
+
 ### `.github/workflows/workspace-cache-maintenance.yml`
 
 - **Introduced in:** #3066 (2026-06-02)
