@@ -203,6 +203,18 @@
       "pr_branch": null,
       "pr_url": null,
       "recorded_at": "2026-06-06T08:57:33Z"
+    },
+    {
+      "codex_attempts_used": 1,
+      "committed_type": "node-hardhat-solidity",
+      "consumer_default_branch": "main",
+      "consumer_head_sha": "29d73ff46bda0453c2869b54772dc1840f0f6458",
+      "discovered_type": "node-runtime",
+      "failure_reason": null,
+      "outcome": "success_disagree",
+      "pr_branch": "automation/validate-discovery/29d73ff46bda/node-runtime",
+      "pr_url": "https://github.com/shubhodeep1/bitsafe.io/pull/424",
+      "recorded_at": "2026-06-07T03:45:16Z"
     }
   ],
   "repository": "shubhodeep1/bitsafe.io",
