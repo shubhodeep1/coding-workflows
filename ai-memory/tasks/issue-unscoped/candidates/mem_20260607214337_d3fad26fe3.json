@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/stage_workflow_support.sh:138-139 | flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The guard line was accidentally line-broken, causing a shell syntax error (`resolved_sc\n  WHY: The line is followed by a `checkout_support_ref` invocation on the next line that was accidentally truncated/line-broken during the editing, causing a shell syntax error when run in CI.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/stage_workflow_support.sh:138-139\n  PROBLEM: The guard line was accidentally line-broken, causing a shell syntax error (`resolved_sc\n  WHY: The line is followed by a `checkout_support_ref` invocation on the next line that was accidentally truncated/line-broken during the editing, causing a shell syntax error when run in CI.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "3f4c94037db90b9c44b05f93467b6c622d6bccd05fbfaf7069a77bf3153b0b92",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3211,
+    "run_id": "27104925205",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27104925205",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260607214337_d3fad26fe3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3211,
+    "run_id": "27104925205"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-07T21:43:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
