@@ -9,9 +9,9 @@ Optional per-repository workflow overlay, loaded by
 `ai-memory/schemas/workflow_overlay.v1.json`.
 
 This overlay is intentionally a **no-op**: the front matter declares only
-`schema_version` and no `prompt_overrides`. Its presence sets
-`WORKFLOW_OVERLAY_ENABLED=true` so the overlay loader path is exercised on every
-workflow, but no rendered prompt is changed.
+`schema_version` and no `prompt_overrides`. In workflows that load this file,
+its presence sets `WORKFLOW_OVERLAY_ENABLED=true`, but no rendered prompt is
+changed.
 
 To tune per-mode prompts, add `prompt_overrides[]` entries to the front matter,
 each with a `mode` and exactly one of `append_path` or `replace_path` (paths

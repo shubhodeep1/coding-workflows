@@ -702,8 +702,16 @@ jobs:
             # The uploaded artifact is authoritative for this tick; keep branch
             # publication best-effort so a transient push failure does not fail
             # the full poll run.
-            if ! git -C "${PUBLISH_DIR}" push --quiet --force origin "HEAD:${BRANCH_NAME}"; then
-              echo "::warning::State snapshot branch publish failed; artifact upload remains authoritative for this tick"
+            publish_ok=false
+            for attempt in 1 2 3; do
+              if git -C "${PUBLISH_DIR}" push --quiet --force origin "HEAD:${BRANCH_NAME}"; then
+                publish_ok=true
+                break
+              fi
+              if [ "${attempt}" -lt 3 ]; then sleep 2; fi
+            done
+            if [ "${publish_ok}" != "true" ]; then
+              echo "::warning::State snapshot branch publish failed after 3 attempts; artifact upload remains authoritative for this tick"
             fi
           else
             echo "State snapshot branch already up to date."
