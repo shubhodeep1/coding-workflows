@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for #3194\n\nPlanning ref\n- `09de574a8ef552283c0b64f15ae50640408710bb` on `orchestrator/project-3185`\n- Integration branch metadata matches the checked-out ref.\n- Clarification mapping: none; the only `/answer` was the orchestrator auto-answer, so there are no unresolved Q-items.\n\nAutomation / wiring summary\n- Change type: modify existing automation and likely add one permanent shared helper script.\n- Entry point: existing `.github/workflows/validate.yml` validate workflow only; no new trigger/scheduler.\n- Long-running supervisor: none.\n- DB gate pattern: none.\n- `docs/scripts-pending-removal.md`: not applicable unless the helper is treated as temporary (it should be permanent/shared).\n\nActions taken\n- Reviewed validate\u2019s inline support-staging block, the representative review-side staging block, downstream validate path consumers, validate bootstrap contract tests, CI guards, and local git history for the shared helper.\n\nConflict to carry forward\n- The issue assumes a shared `scripts/stage_workflow_support.sh` already exists, but it is absent on this ref and in local history. Current staging owners are still inline in `.github/workflows/validate.yml:197-676` and `.github/workflows/review_autofix.yml:1257-1385`. Plan assumes this change must create/reintroduce the helper, but only wire validate to it.\n\nRepresentative pattern to follow\n- Structural reference: `.github/workflows/review_autofix.yml:1257-1385`\n- Validate path contract that must stay unchanged: `.github/workflows/validate.yml:197-676`, `scripts/validate_process.sh:1672-1696, 3117-3133, 3265-3272`, and `scripts/render_validation_templates.py:118-130`\n\nFiles likely to change\n- `.github/workflows/validate.yml`\n- `scripts/stage_workflow_support.sh` (new)\n- `tests/test_validate_workflow_validate_bootstrap.py`\n- `tests/test_validate_semble_contract.py`\n- `tests/test_codex_thread_reuse_core.py`\n- Possibly `scripts/check_workflow_script_refs.py` if helper-owned script inventories need equivalent pre-runtime guarding.\n\nFunctions / modules to implement\n1. `scripts/stage_workflow_support.sh`\n- Encapsulate source-repo detection, self-repo `GITHUB_SHA` vs external `stable` resolution, remote `main` fallback checkout, per-asset copy/fallback policy, chmod/copy handling, overlay export via `load_workflow_overlay.py`, AI-memory schema staging, and consumer `scripts/.gitignore` emission.\n- Keep the interface internal to the workflow (step-local args/env only); do not add new repo vars.\n\n2. `.github/workflows/validate.yml`\n- Replace the large inline \u201cFetch workflow support files\u201d shell with the smallest safe bootstrap that makes `stage_workflow_support.sh` available, then invoke the helper with validate\u2019s asset manifest.\n- Preserve current staged destinations:\n  - `scripts/*`\n  - `prompts/*` and `prompts/contracts/*`\n  - `workflow-templates/validation-harness/**`\n  - `ai-memory/schemas/*`\n  - `.github/ai/label_contract.v1.json`\n- Preserve current required vs optional behavior, warnings/notices, and local-fallback rules.\n- Do not migrate any other workflow in this issue.\n\n3. Validate contract tests\n- Rewrite the validate workflow tests to assert helper bootstrap/invocation plus the validate-specific staged asset manifest, instead of the deleted inline `copy_from_ref_or_local` details.\n\nData structures / manifests affected\n- Validate\u2019s staged script inventory (required base scripts plus canonical `validate_driver.sh` / `validate_process.sh`)\n- Optional validate assets: `render_prompt.py`, `render_validation_templates.py`, template schema/templates, Codex heartbeat/stall/thread-reuse helpers, Semble/Serena helpers, self-heal prompt/continuation assets, instructions files, and label contract\n- AI-memory schema list used by validate (`validation_history.v1.json`, `operator_bypass_audit.v1.json`, `revalidate_events.v1.json`, `workflow_overlay.v1.json`, etc.)\n- `_fetched_scripts` list that drives `scripts/.gitignore` in consumer repos\n\nAPI / interface changes\n- No external workflow inputs, repo vars, staged file paths, or downstream script paths should change.\n- New internal helper contract between `validate.yml` and `scripts/stage_workflow_support.sh` only.\n- `WORKFLOW_OVERLAY_ENABLED` export behavior must remain intact.\n\nPotential risks / edge cases\n- The inline validate staging block is larger than the issue\u2019s cited `197-320`; migration must cover the full block through line 676.\n- Self-repo behavior must keep using the current SHA, not `stable`, to avoid version skew.\n- Consumer-repo behavior must preserve `stable` primary fetch, `main` fallback, and per-file local-fallback distinctions.\n- `render_prompt.py` must remain optional because `main` may legitimately lack it.\n- `validate_driver.sh` and `validate_process.sh` must remain remote-required for consumer repos.\n- `codex_model_catalog.json` currently allows local fallback but not `main` fallback; preserve that distinction.\n- `scripts/templates/serena_project.yml.j2` must keep the \u201cpreserve caller-owned tracked file\u201d exception.\n- Downstream validate runtime hard-codes `scripts/render_validation_templates.py`, `scripts/templates/slot_manifest.schema.json`, `workflow-templates/validation-harness`, and `scripts/validate_driver.sh`; any path drift will break template mode.\n- Moving inventories out of workflow text can weaken the current missing-script guard; keep equivalent safety in the helper or extend the checker if needed.\n\nTesting considerations\n- Update and run:\n  - `python3 tests/test_validate_workflow_validate_bootstrap.py`\n  - `python3 tests/test_validate_semble_contract.py`\n  - validate workflow assertions in `python3 tests/test_codex_thread_reuse_core.py`\n  - `python3 tests/test_validate_process_template_mode.py`\n- Existing CI already provides:\n  - shell syntax + shellcheck for `scripts/*.sh` in `.github/workflows/ci.yml:562-580`\n  - workflow/script cross-reference in `.github/workflows/ci.yml:598-606`\n\nAssumptions\n- It is acceptable to create `scripts/stage_workflow_support.sh` in this change because the named helper is missing on the planning ref.\n- This issue migrates validate only.\n- The helper is a permanent shared automation asset, not a temporary/manual script.\n\nMissing-context note\n- If another PR was supposed to supply `scripts/stage_workflow_support.sh`, that dependency is not present on `orchestrator/project-3185`; implementation will need to recreate or cherry-pick the helper before validate can consume it.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "da8f9526ac2d2cf8508836e8d78e609e8537b07a625ddcbc9b37111ea876b58d",
+  "lineage": {
+    "issue_number": 3202,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27102732123",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27102732123",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3202"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260607194645_1f0a2ad062",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3202,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27102732123"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3202",
+  "timestamps": {
+    "created_at": "2026-06-07T19:46:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
