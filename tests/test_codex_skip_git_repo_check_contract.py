@@ -29,9 +29,10 @@ makes the invariant enforceable at PR time instead of in production:
    ``direct-run`` caller funnels through) must default ``skip_git_repo_check``
    to ``true`` — so a caller that forgets the env var is still safe.
 
-2. Every standalone single-line ``codex ... exec ... --model ... --sandbox``
-   invocation in ``scripts/*.sh`` and ``.github/workflows/*.yml`` must carry
-   ``--skip-git-repo-check``.
+2. Every standalone ``codex ... exec ... --model ... --sandbox`` invocation
+   in ``scripts/*.sh`` and ``.github/workflows/*.yml`` must carry
+   ``--skip-git-repo-check``. The scanner reassembles backslash-continued
+   shell / YAML commands into one logical line before checking.
 
 ``--skip-git-repo-check`` is a no-op inside a real git checkout, so it is always
 safe to require it — there is no codex call in this automation that wants the
@@ -46,12 +47,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HELPER = REPO_ROOT / "scripts" / "codex_thread_reuse.sh"
 
-# A single-line, fully-specified codex invocation: the `codex` binary, the
-# `exec` subcommand, and both `--model` and `--sandbox` on one physical line.
-# Real invocations always carry all four on the same line; this deliberately
-# does NOT try to reassemble multi-line array constructions (those keep the
-# flag on its own continuation line and are covered by manual review + the
-# helper default). Requiring --model and --sandbox keeps comments and prose
+# A fully-specified codex invocation on one logical shell / YAML command line:
+# after reassembling backslash-continued physical lines, the command must
+# mention the `codex` binary, the `exec` subcommand, and both `--model` and
+# `--sandbox`. Requiring `--model` and `--sandbox` keeps comments and prose
 # that merely mention "codex exec" from matching.
 _INVOCATION = re.compile(r"\bcodex\b.*\bexec\b.*--model\b.*--sandbox\b")
 
@@ -65,6 +64,55 @@ def _scanned_files() -> list[Path]:
 	files = sorted((REPO_ROOT / "scripts").glob("*.sh"))
 	files += sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml"))
 	return files
+
+
+def _iter_logical_lines(path: Path) -> list[tuple[int, str]]:
+	logical_lines: list[tuple[int, str]] = []
+	pending: list[str] = []
+	start_lineno = 0
+
+	for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+		if not pending:
+			if not line.strip() or line.lstrip().startswith("#"):
+				continue
+			start_lineno = lineno
+		pending.append(line)
+
+		if line.rstrip().endswith("\\"):
+			continue
+
+		parts: list[str] = []
+		for part in pending:
+			trimmed = part.rstrip()
+			if trimmed.endswith("\\"):
+				trimmed = trimmed[:-1].rstrip()
+			if trimmed.strip():
+				parts.append(trimmed.strip())
+		logical_lines.append((start_lineno, " ".join(parts)))
+		pending = []
+
+	if pending:
+		parts = []
+		for part in pending:
+			trimmed = part.rstrip()
+			if trimmed.endswith("\\"):
+				trimmed = trimmed[:-1].rstrip()
+			if trimmed.strip():
+				parts.append(trimmed.strip())
+		logical_lines.append((start_lineno, " ".join(parts)))
+
+	return logical_lines
+
+
+def _iter_codex_exec_invocations() -> list[tuple[Path, int, str]]:
+	matches: list[tuple[Path, int, str]] = []
+	for path in _scanned_files():
+		if path.name in _SCANNER_EXCLUDE:
+			continue
+		for lineno, logical_line in _iter_logical_lines(path):
+			if _INVOCATION.search(logical_line):
+				matches.append((path.relative_to(REPO_ROOT), lineno, logical_line))
+	return matches
 
 
 def test_helper_defaults_skip_git_repo_check_on() -> None:
@@ -96,22 +144,32 @@ def test_all_codex_exec_invocations_skip_git_repo_check() -> None:
 	``--skip-git-repo-check`` immediately after ``exec``.
 	"""
 	violations: list[str] = []
-	for path in _scanned_files():
-		if path.name in _SCANNER_EXCLUDE:
-			continue
-		for lineno, line in enumerate(
-			path.read_text(encoding="utf-8").splitlines(), start=1
-		):
-			if line.lstrip().startswith("#"):
-				continue
-			if _INVOCATION.search(line) and "--skip-git-repo-check" not in line:
-				rel = path.relative_to(REPO_ROOT)
-				violations.append(f"{rel}:{lineno}: {line.strip()}")
+	for rel, lineno, logical_line in _iter_codex_exec_invocations():
+		if "--skip-git-repo-check" not in logical_line:
+			violations.append(f"{rel}:{lineno}: {logical_line}")
 
 	assert not violations, (
 		"codex exec invocation(s) missing --skip-git-repo-check (will abort with "
 		"'Not inside a trusted directory' in the worktree workspace):\n"
 		+ "\n".join(violations)
+	)
+
+
+
+def test_scanner_matches_backslash_continued_invocations() -> None:
+	"""Backslash-continued codex commands must be part of the contract scan."""
+	matches = [
+		logical_line
+		for path, _, logical_line in _iter_codex_exec_invocations()
+		if path == Path(".github/workflows/orchestrate_clarify_respond.yml")
+	]
+	assert any("critic_prompt.txt" in logical_line for logical_line in matches), (
+		"scanner must detect the self-critique critic codex invocation in "
+		"orchestrate_clarify_respond.yml"
+	)
+	assert any('${CODEX_PROMPT_FILE}.v2' in logical_line for logical_line in matches), (
+		"scanner must detect the self-critique re-run codex invocation in "
+		"orchestrate_clarify_respond.yml"
 	)
 
 
@@ -121,15 +179,7 @@ def test_scanner_actually_matches_known_invocations() -> None:
 	A contract test that matches zero lines would pass vacuously and stop
 	protecting anything, so assert it still sees the real fleet of calls.
 	"""
-	matched = 0
-	for path in _scanned_files():
-		if path.name in _SCANNER_EXCLUDE:
-			continue
-		for line in path.read_text(encoding="utf-8").splitlines():
-			if line.lstrip().startswith("#"):
-				continue
-			if _INVOCATION.search(line):
-				matched += 1
+	matched = len(_iter_codex_exec_invocations())
 	assert matched >= 10, (
 		f"scanner matched only {matched} codex exec invocations; the detection "
 		"regex is probably broken"

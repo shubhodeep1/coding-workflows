@@ -780,7 +780,7 @@ jobs:
               sanitize_codex_prompt_file "${RUNTIME_DIR}/critic_prompt.txt"
             fi
             if cat "${RUNTIME_DIR}/critic_prompt.txt" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec \
-              --model "${CRITIC_MODEL}" --sandbox danger-full-access > "${RUNTIME_DIR}/critic_output.txt" 2>/dev/null; then
+              --skip-git-repo-check --model "${CRITIC_MODEL}" --sandbox danger-full-access > "${RUNTIME_DIR}/critic_output.txt" 2>/dev/null; then
               if grep -q 'VERDICT: REJECT' "${RUNTIME_DIR}/critic_output.txt"; then
                 echo "::warning::Self-critique rejected the decision. Appending critique and re-running."
                 CRITIC_REASON="$(grep -A5 'REASON:' "${RUNTIME_DIR}/critic_output.txt" || echo "No reason provided")"
@@ -796,7 +796,7 @@ jobs:
                   sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}.v2"
                 fi
                 if cat "${CODEX_PROMPT_FILE}.v2" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec \
-                  --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${CODEX_OUTPUT_FILE}" 2>/dev/null; then
+                  --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${CODEX_OUTPUT_FILE}" 2>/dev/null; then
                   echo "Revised decision produced after self-critique."
                 else
                   echo "::warning::Revised Codex call failed; using original output."
