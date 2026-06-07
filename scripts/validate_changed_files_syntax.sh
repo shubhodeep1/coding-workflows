@@ -61,16 +61,17 @@ append_checker_error() {
       # ~5 lines of diagnostic context (the underlying syntax error
       # still surfaces in stderr), whereas false negatives leak file
       # content into prompts and public issue comments. The same
-      # trade-off applies to `.env*` (matches `.env.example`) and
-      # `.pem*` (matches `.pem.bak`); `.key*`/`.cer*`/`.crt*` are
+      # trade-off applies to `.env*` on the combined
+      # `${file},${basename_lc}` input (matches `.env`, `.envrc`, and
+      # `.env.example`) and `.pem*` (matches `.pem.bak`);
+      # `.key*`/`.cer*`/`.crt*` are
       # kept consistent with the rest. Don't tighten any of these
       # to exact-suffix-only without also loosening the others to
       # match — the precision/coverage choice is unified across
       # the alternation.
       case "${file},${basename_lc}" in
         *.env*|*.pem*|*.p12*|*.pfx*|*.key*|*.cer*|*.crt*|\
-        *,*secret*|*,*credential*|*,*password*|*,*token*|\
-        *,*.envrc|*,.env*)
+        *,*secret*|*,*credential*|*,*password*|*,*token*)
           skip_dump=1
           ;;
       esac
@@ -134,6 +135,9 @@ if [ -n "${CAPTURE_FILE}" ]; then
   rm -f "${CAPTURE_FILE}" || true
 fi
 
+# `git diff HEAD -- <glob>` can exit non-zero in scratch repos when the
+# glob only matches untracked files; suppress that so the companion
+# `git ls-files --others` scan still feeds the validators.
 while IFS= read -r -d '' f; do
   if [ -f "${f}" ] && { [ "${ALLOW_WORKFLOW_EDITS:-true}" = "true" ] || [[ "${f}" != .github/workflows/* ]]; }; then
     checker_stderr="$(mktemp)"
@@ -145,7 +149,7 @@ while IFS= read -r -d '' f; do
     fi
     rm -f "${checker_stderr}"
   fi
-done < <({ git diff --name-only --diff-filter=ACMR -z HEAD -- '*.py'; git ls-files --others --exclude-standard -z -- '*.py'; })
+done < <({ git diff --name-only --diff-filter=ACMR -z HEAD -- '*.py' 2>/dev/null || true; git ls-files --others --exclude-standard -z -- '*.py'; })
 
 while IFS= read -r -d '' f; do
   if [ -f "${f}" ] && { [ "${ALLOW_WORKFLOW_EDITS:-true}" = "true" ] || [[ "${f}" != .github/workflows/* ]]; }; then
@@ -158,7 +162,7 @@ while IFS= read -r -d '' f; do
     fi
     rm -f "${checker_stderr}"
   fi
-done < <({ git diff --name-only --diff-filter=ACMR -z HEAD -- '*.js'; git ls-files --others --exclude-standard -z -- '*.js'; })
+done < <({ git diff --name-only --diff-filter=ACMR -z HEAD -- '*.js' 2>/dev/null || true; git ls-files --others --exclude-standard -z -- '*.js'; })
 
 while IFS= read -r -d '' f; do
   if [ -f "${f}" ] && { [ "${ALLOW_WORKFLOW_EDITS:-true}" = "true" ] || [[ "${f}" != .github/workflows/* ]]; }; then
@@ -171,7 +175,7 @@ while IFS= read -r -d '' f; do
     fi
     rm -f "${checker_stderr}"
   fi
-done < <({ git diff --name-only --diff-filter=ACMR -z HEAD -- '*.sh'; git ls-files --others --exclude-standard -z -- '*.sh'; })
+done < <({ git diff --name-only --diff-filter=ACMR -z HEAD -- '*.sh' 2>/dev/null || true; git ls-files --others --exclude-standard -z -- '*.sh'; })
 
 # Strip a fully-fence-wrapped LLM artifact in place: the *entire* file
 # is a single ```/``` block (optionally with a language tag like ```yaml).
@@ -222,7 +226,7 @@ while IFS= read -r -d '' f; do
     fi
     rm -f "${checker_stderr}"
   fi
-done < <({ git diff --name-only --diff-filter=ACMR -z HEAD -- '*.yml' '*.yaml'; git ls-files --others --exclude-standard -z -- '*.yml' '*.yaml'; })
+done < <({ git diff --name-only --diff-filter=ACMR -z HEAD -- '*.yml' '*.yaml' 2>/dev/null || true; git ls-files --others --exclude-standard -z -- '*.yml' '*.yaml'; })
 
 while IFS= read -r -d '' f; do
   if [ -f "${f}" ] && { [ "${ALLOW_WORKFLOW_EDITS:-true}" = "true" ] || [[ "${f}" != .github/workflows/* ]]; }; then
@@ -236,7 +240,7 @@ while IFS= read -r -d '' f; do
     fi
     rm -f "${checker_stderr}"
   fi
-done < <({ git diff --name-only --diff-filter=ACMR -z HEAD -- '*.json'; git ls-files --others --exclude-standard -z -- '*.json'; })
+done < <({ git diff --name-only --diff-filter=ACMR -z HEAD -- '*.json' 2>/dev/null || true; git ls-files --others --exclude-standard -z -- '*.json'; })
 
 if [ "${ERRORS}" -gt 0 ]; then
   echo "::error::${ERRORS} file(s) failed syntax validation."

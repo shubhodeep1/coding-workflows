@@ -231,12 +231,18 @@ _dispatch_integration_judge_now() {
   fi
 
   local dispatch_token="${GH_PAT:-${GH_TOKEN:-}}"
+  local repo_slug="${GITHUB_REPOSITORY:-}"
+
+  if ! [[ "${repo_slug}" =~ ^[^/]+/[^/]+$ ]]; then
+    echo "::warning::Skipping immediate orchestrator-poll dispatch: GITHUB_REPOSITORY is missing or invalid (${repo_slug:-<unset>}). Cron tick will pick up the integration-sync stall within 5 min."
+    return 0
+  fi
 
   GH_PAT="${dispatch_token}" \
   GH_TOKEN="${dispatch_token}" \
-  GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-}" \
+  GITHUB_REPOSITORY="${repo_slug}" \
   bash "${ORCHESTRATE_FORCE_TICK_HELPER}" \
-    --repo "${GITHUB_REPOSITORY:-}" \
+    --repo "${repo_slug}" \
     --issue "${PR_NUMBER:-}" \
     --reason "resolver-failed" \
     --source-workflow "review_conflict_resolve" \
@@ -2507,7 +2513,7 @@ if [ -n "$(git status --porcelain)" ]; then
   # ============================================================
 
   git commit -m "[ai-merge-resolve] resolve merge conflicts"
-  git remote set-url origin https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}
+  git remote set-url origin "https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}"
   # NOTE: push deferred to final "Push all pending commits" step.
   echo "CONFLICT_RESOLVED=true" >> "$GITHUB_ENV"
   echo "Conflicts resolved and committed (push deferred)"
