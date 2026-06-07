@@ -8,6 +8,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 VALIDATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "validate.yml"
+STAGE_WORKFLOW_SUPPORT = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
 VALIDATE_PROCESS = REPO_ROOT / "scripts" / "validate_process.sh"
 SELF_HEAL_SCRIPT = REPO_ROOT / "scripts" / "self_heal_validation.sh"
 VALIDATE_PROMPTS = [
@@ -26,6 +27,10 @@ def _workflow_text() -> str:
 	return _read(VALIDATE_WORKFLOW)
 
 
+def _stage_support_text() -> str:
+	return _read(STAGE_WORKFLOW_SUPPORT)
+
+
 def _validate_process_text() -> str:
 	return _read(VALIDATE_PROCESS)
 
@@ -39,23 +44,20 @@ def test_validate_prompts_include_serena_placeholder() -> None:
 		assert "{{SERENA_TOOL_HINTS}}" in _read(prompt_path), prompt_path
 
 
-def test_validate_workflow_fetches_semble_support_files() -> None:
+def test_validate_workflow_lists_semble_support_files_in_helper_manifest() -> None:
 	wf = _workflow_text()
 	required_snippets = [
-		'copy_from_ref_or_local "scripts/install_semble.sh" "scripts/install_semble.sh.tmp" "false" "true"',
-		'copy_from_ref_or_local "scripts/semble_helpers.sh" "scripts/semble_helpers.sh.tmp" "false" "true"',
-		# build_semble_wrapper.sh added once the inline BM25 wrapper was
-		# extracted to a shared script (semble 0.1.3 lacks index/query CLI).
-		'copy_from_ref_or_local "scripts/build_semble_wrapper.sh" "scripts/build_semble_wrapper.sh.tmp" "false" "true"',
-		'_fetched_scripts+=(install_semble.sh)',
-		'_fetched_scripts+=(semble_helpers.sh)',
-		'_fetched_scripts+=(build_semble_wrapper.sh)',
+		'helper_path="scripts/stage_workflow_support.sh"',
+		'bash "${helper_path}" validate --manifest "${manifest_path}"',
+		"scripts/install_semble.sh",
+		"scripts/semble_helpers.sh",
+		"scripts/build_semble_wrapper.sh",
 	]
 	for snippet in required_snippets:
 		assert snippet in wf, f"validate.yml missing snippet: {snippet}"
 
 
-def test_validate_workflow_fetches_serena_support_files() -> None:
+def test_validate_workflow_lists_serena_support_files_in_helper_manifest() -> None:
 	wf = _workflow_text()
 	required_snippets = [
 		"SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}",
@@ -63,15 +65,14 @@ def test_validate_workflow_fetches_serena_support_files() -> None:
 		'echo "SERENA_AVAILABLE=false"',
 		'echo "SERENA_PROJECT_PREEXISTED=${serena_project_preexisted}"',
 		'echo "SERENA_PROJECT_BOOTSTRAP_HASH="',
-		'for f in setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py; do',
-		'copy_from_ref_or_local "scripts/${f}" "scripts/${f}.tmp" "false" "true"',
-		'_fetched_scripts+=("${f}")',
-		'copy_from_ref_or_local "scripts/templates/serena_project.yml.j2" "scripts/templates/serena_project.yml.j2.tmp" "false" "true"',
-		'_fetched_scripts+=(templates/serena_project.yml.j2)',
-		'Consumer repo already tracks scripts/templates/serena_project.yml.j2; preserving caller-owned Serena template.',
+		"scripts/setup_serena.sh",
+		"scripts/serena_stats_emit.py",
+		"scripts/mcp_handshake_probe.py",
+		"scripts/templates/serena_project.yml.j2",
 	]
 	for snippet in required_snippets:
 		assert snippet in wf
+	assert "Consumer repo already tracks ${repo_path}; preserving caller-owned Serena template." in _stage_support_text()
 
 
 def test_validate_workflow_bootstraps_and_exports_semble_state() -> None:
@@ -180,8 +181,8 @@ def test_self_heal_includes_semble_and_serena_prompt_hooks() -> None:
 
 def main() -> int:
 	test_validate_prompts_include_serena_placeholder()
-	test_validate_workflow_fetches_semble_support_files()
-	test_validate_workflow_fetches_serena_support_files()
+	test_validate_workflow_lists_semble_support_files_in_helper_manifest()
+	test_validate_workflow_lists_serena_support_files_in_helper_manifest()
 	test_validate_workflow_bootstraps_and_exports_semble_state()
 	test_shared_wrapper_script_owns_bm25_implementation()
 	test_validate_process_includes_serena_bootstrap_and_prompt_hooks()

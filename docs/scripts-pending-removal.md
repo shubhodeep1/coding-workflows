@@ -95,5 +95,16 @@ Copy this block when adding a new entry:
 - **Removal preflight checks:**
   - `gh workflow view workspace-cache-maintenance.yml -R shubhodeep1/coding-workflows` confirms the workflow still exists and still has a scheduled nightly cron.
   - `gh run list --workflow workspace-cache-maintenance.yml --limit 5 -R shubhodeep1/coding-workflows` shows recent scheduled/manual runs completing with `success`.
-  - `gh cache list --repo shubhodeep1/coding-workflows --limit 100 --key workspace-v1- --sort created_at --order desc` still shows bounded workspace cache families (newest 3 retained per family) so the maintenance job remains operationally useful.
+- `gh cache list --repo shubhodeep1/coding-workflows --limit 100 --key workspace-v1- --sort created_at --order desc` still shows bounded workspace cache families (newest 3 retained per family) so the maintenance job remains operationally useful.
+- **Owner:** @shubhodeep1
+
+### `scripts/stage_workflow_support.sh`
+
+- **Introduced in:** #3211 (2026-06-07)
+- **Type:** long-running
+- **Removal trigger:** when validate and any future workflow-support consumers stage their support files through a replacement shared bootstrap path and no live caller invokes `scripts/stage_workflow_support.sh`.
+- **Removal preflight checks:**
+  - `rg -n 'stage_workflow_support\.sh' .github/workflows scripts --glob '!scripts/stage_workflow_support.sh'` returns no live caller matches.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_workflow_validate_bootstrap.py` returns exit code 0 after the validate bootstrap contract assertions are updated to the replacement path in the same PR.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_core.py` returns exit code 0 after validate's workflow-overlay staging assertions are updated to the replacement path in the same PR.
 - **Owner:** @shubhodeep1
