@@ -134,12 +134,15 @@ Cycle-local caches that must not be re-fetched per iteration:
 ## Optional `.github/ai` operator surfaces
 
 The Symphony closeout left three consumer-authored config surfaces on current
-HEAD. All are absent-by-default and fail open when missing:
+HEAD. Each fails open when its file is missing; a consumer enables one by
+committing the corresponding file:
 
 - `.github/ai/WORKFLOW.md` — loaded by `scripts/load_workflow_overlay.py`
   and validated by `ai-memory/schemas/workflow_overlay.v1.json`. The shipped
   schema is intentionally narrow: `schema_version` plus `prompt_overrides[]`
-  append/replace entries only.
+  append/replace entries only. This repository ships a no-op overlay
+  (`schema_version` only, no `prompt_overrides`), so `WORKFLOW_OVERLAY_ENABLED`
+  is `true` but no rendered prompt is altered until override entries are added.
 - `.github/ai/concurrency_caps.yml` — parsed by
   `scripts/orchestrate_lib.py::load_concurrency_caps`. Missing or empty files
   disable the cap layer and restore legacy uncapped dispatch.

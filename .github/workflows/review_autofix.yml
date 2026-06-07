@@ -6385,23 +6385,61 @@ jobs:
           PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
-          MSG="⚠️ Editor no-op suspicious: #${PR_NUMBER}"
-          MSG+=$'\n'
-          MSG+="Editor claimed no changes needed but disposition could not be verified."
-          MSG+=$'\n'
-          MSG+="Auto-merge blocked. Manual review or re-run required."
-          MSG+=$'\n'
-          MSG+="PR: ${PR_URL}"
-          MSG+=$'\n'
-          MSG+="Run: ${RUN_URL}"
-          tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARNING"
+          # Branch the operator-facing alert on EDITOR_NOOP_REFUSAL (set by
+          # the "Validate editor no-op disposition" step's Check 1b when the
+          # editor model returns a safety-policy refusal). A refusal is
+          # transient — re-running after the provider-side prompt cache
+          # expires usually clears it — so the alert points the operator at a
+          # re-run instead of the generic "editor failed silently / audit
+          # inconsistent" causes, which do not apply to a refusal. The flag
+          # was added for exactly this branch (see
+          # probably_unnecessary_but_read_if_stuck.md §20.10.1). Auto-merge
+          # stays blocked in both branches (the EDITOR_NOOP_SUSPICIOUS gate is
+          # unchanged — a refusal always also sets SUSPICIOUS=true via Check
+          # 1). The PR comment BODY keeps the "⚠️ **Editor no-op suspicious**"
+          # literal in BOTH branches because the orchestrator-poll
+          # noop-suspicious recovery sweep (scripts/orchestrate_poll_process.sh)
+          # greps PR comments for it to auto-re-dispatch the run — which is
+          # precisely the remediation a refusal needs. Dropping it from the
+          # refusal branch would strand refusal PRs (no auto-re-dispatch, no
+          # force-merge). Do NOT rename the flags or that literal (CLAUDE.md §6).
+          if [ "${EDITOR_NOOP_REFUSAL:-false}" = "true" ]; then
+            MSG="⚠️ Editor safety-policy refusal: #${PR_NUMBER}"
+            MSG+=$'\n'
+            MSG+="Editor model returned a safety-policy refusal — no changes applied."
+            MSG+=$'\n'
+            MSG+="Auto-merge blocked. Re-run is likely to succeed once the provider-side cache expires."
+            MSG+=$'\n'
+            MSG+="PR: ${PR_URL}"
+            MSG+=$'\n'
+            MSG+="Run: ${RUN_URL}"
+            tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARNING"
 
-          BODY="⚠️ **Editor no-op suspicious** — the editor claimed no changes were needed but the disposition could not be verified."
-          BODY+=$'\n\n'
-          BODY+="Possible causes: editor failed silently, did not read reviewer files, or audit counts are inconsistent."
-          BODY+=$'\n'
-          BODY+="Auto-merge has been **blocked**. Please review the editor summary and re-run the workflow if appropriate."
-          gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
+            BODY="⚠️ **Editor no-op suspicious** — the editor model returned a safety-policy refusal (safety filter), so no fix was applied this pass."
+            BODY+=$'\n\n'
+            BODY+="This is typically transient. Re-running the AI Review workflow after the provider-side prompt cache expires usually clears it; manual review is only needed if the refusal recurs."
+            BODY+=$'\n'
+            BODY+="Auto-merge has been **blocked**."
+            gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
+          else
+            MSG="⚠️ Editor no-op suspicious: #${PR_NUMBER}"
+            MSG+=$'\n'
+            MSG+="Editor claimed no changes needed but disposition could not be verified."
+            MSG+=$'\n'
+            MSG+="Auto-merge blocked. Manual review or re-run required."
+            MSG+=$'\n'
+            MSG+="PR: ${PR_URL}"
+            MSG+=$'\n'
+            MSG+="Run: ${RUN_URL}"
+            tg_send_tracked "${PR_NUMBER}" "${MSG}" "WARNING"
+
+            BODY="⚠️ **Editor no-op suspicious** — the editor claimed no changes were needed but the disposition could not be verified."
+            BODY+=$'\n\n'
+            BODY+="Possible causes: editor failed silently, did not read reviewer files, or audit counts are inconsistent."
+            BODY+=$'\n'
+            BODY+="Auto-merge has been **blocked**. Please review the editor summary and re-run the workflow if appropriate."
+            gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
+          fi
 
       - name: Telegram review-blocked judge decision
         if: success() && steps.retrigger_guard.outputs.max_iterations_reached == 'true' && steps.retrigger_guard.outputs.skip_judge != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'

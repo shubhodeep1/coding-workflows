@@ -44,7 +44,7 @@ env:
   TARGETED_FILE_CONTEXT_MAX_BYTES: ${{ vars.TARGETED_FILE_CONTEXT_MAX_BYTES || '102400' }}
   LEDGER_SUBSTATES_ENABLED: ${{ vars.LEDGER_SUBSTATES_ENABLED || 'true' }}
   STATE_SNAPSHOT_ARTIFACT_ENABLED: ${{ vars.STATE_SNAPSHOT_ARTIFACT_ENABLED || 'true' }}
-  STATE_SNAPSHOT_BRANCH_ENABLED: ${{ vars.STATE_SNAPSHOT_BRANCH_ENABLED || 'false' }}
+  STATE_SNAPSHOT_BRANCH_ENABLED: ${{ vars.STATE_SNAPSHOT_BRANCH_ENABLED || 'true' }}
   STATE_SNAPSHOT_HISTORY_DEPTH: ${{ vars.STATE_SNAPSHOT_HISTORY_DEPTH || '100' }}
   STATE_SNAPSHOT_BRANCH_NAME: ${{ vars.STATE_SNAPSHOT_BRANCH_NAME || 'state-snapshot' }}
 
@@ -699,7 +699,20 @@ jobs:
           if [ -n "$(git -C "${PUBLISH_DIR}" status --porcelain)" ]; then
             git -C "${PUBLISH_DIR}" add -A state.json snapshots
             git -C "${PUBLISH_DIR}" commit --quiet -m "Update state snapshot ${TICK_SLUG}"
-            git -C "${PUBLISH_DIR}" push --quiet --force origin "HEAD:${BRANCH_NAME}"
+            # The uploaded artifact is authoritative for this tick; keep branch
+            # publication best-effort so a transient push failure does not fail
+            # the full poll run.
+            publish_ok=false
+            for attempt in 1 2 3; do
+              if git -C "${PUBLISH_DIR}" push --quiet --force origin "HEAD:${BRANCH_NAME}"; then
+                publish_ok=true
+                break
+              fi
+              if [ "${attempt}" -lt 3 ]; then sleep 2; fi
+            done
+            if [ "${publish_ok}" != "true" ]; then
+              echo "::warning::State snapshot branch publish failed after 3 attempts; artifact upload remains authoritative for this tick"
+            fi
           else
             echo "State snapshot branch already up to date."
           fi
