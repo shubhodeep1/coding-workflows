@@ -200,18 +200,36 @@ The completion-status comment is updated from three call sites:
    path).
 
 The same change also adds a defensive preflight inside
-`dispatch_validation_if_needed`: when `PROJECT_COMPLETE != "true"` at
-dispatch time (rare race against label-reconciliation, or a wave PR
-that transitioned back from merged), the dispatch is skipped this
-cycle so the runtime-validation workflow is not burned on a state
-that cannot pass. The judge-side override at the `JUDGE_STATUS=complete`
-branch remains the primary gate; the dispatch-side check is belt and
-suspenders. When the validating / `/revalidate` paths reach the helper
-before the loop's main wave-status block has populated the scratch
-`PROJECT_COMPLETE` variable, the helper recomputes live wave status
-first and still fails closed on `project_complete=false`. Re-entry on
-the next 5-minute poll tick converges the
-project once wave PRs and the integration→default merge land.
+`dispatch_validation_if_needed`: when the current wave's PRs are not all
+merged into the integration branch (`WAVE_COMPLETE != "true"`) or any wave
+failed (`ANY_FAILED == "true"`) at dispatch time (rare race against
+label-reconciliation, or a wave PR that transitioned back from merged), the
+dispatch is skipped this cycle so the runtime-validation workflow is not
+burned on a state that cannot pass. When the validating / `/revalidate`
+paths reach the helper before the loop's main wave-status block has
+populated the scratch `WAVE_COMPLETE` / `ANY_FAILED` variables, the helper
+recomputes live wave status first and fails closed if the probe itself
+cannot run. Re-entry on the next 5-minute poll tick converges the project
+once wave PRs settle.
+
+The preflight gates on the wave-merge signals (`WAVE_COMPLETE` /
+`ANY_FAILED`) rather than on `PROJECT_COMPLETE`. `PROJECT_COMPLETE`
+additionally folds in `integration_contained_in_default` (`ahead_by == 0`),
+but runtime validation dispatches against `ref=integration_branch`, so the
+integration→default merge is **not** a precondition for validation — that
+merge is performed afterward by
+`mark_validation_complete → finalize_integration_merge_if_needed` once the
+run earns the `ai:validated` label. Gating dispatch on `PROJECT_COMPLETE`
+deadlocked any project using a separate integration branch: `ahead_by`
+stays `> 0` until the final merge lands, but that merge waits for
+`ai:validated`, and `ai:validated` waits for a validation run that the gate
+would never dispatch (validation needs the merge; the merge needs
+validation). Default-branch-only projects never hit it because
+`ahead_by ≡ 0`. This is the validation-dispatch sibling of the judge
+hard-guard fix for `bitsafe.io#325`, which removed the same over-broad
+`ahead_by == 0` gate from the `JUDGE_STATUS=complete` override. The
+judge-side override at the `JUDGE_STATUS=complete` branch remains the
+primary completion gate and likewise no longer blocks on integration drift.
 
 ---
 

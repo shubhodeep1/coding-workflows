@@ -2965,6 +2965,18 @@ def test_complete_verdict_enters_validation_and_finishes_after_integration_drift
 	assert first["latest_state"]["final_merge_status"] == "pending"
 	assert first["latest_state"].get("validation_completed_cycle") is None
 	assert "ai:validating" in first["tracking_labels"]
+	# Validation must actually dispatch against the integration branch even
+	# though it is ahead of default (ahead_by=5). Asserting the dispatch —
+	# not just the status flip — is what guards against the
+	# validate-needs-merge / merge-needs-validate deadlock: an earlier
+	# revision gated dispatch on PROJECT_COMPLETE (which folds in
+	# ahead_by==0) and so silently never dispatched here.
+	assert len(first["validation_dispatches"]) == 1, (
+		"validation must dispatch under integration drift; got "
+		f"{first['validation_dispatches']!r}, stderr=\n{first['stderr']}"
+	)
+	assert first["validation_dispatches"][0]["ref"] == "orchestrator/project-192"
+	assert first["latest_state"]["validation_last_dispatch_cycle"] == 2
 	first_tracking_comments = [
 		str((c or {}).get("body", ""))
 		for c in first["issues"][str(192)]["comments"]
@@ -2998,6 +3010,80 @@ def test_complete_verdict_enters_validation_and_finishes_after_integration_drift
 		"Validation completion after drift must not re-trigger the pending-wave override; "
 		f"stdout=\n{second['stdout']}\nstderr=\n{second['stderr']}"
 	)
+
+
+def test_validation_dispatches_under_integration_drift_when_validation_enabled():
+	"""Regression for the integration-branch validation-dispatch deadlock
+	(reported from consumer ``shubhodeep1/radateeree-resort.com#3`` against
+	``coding-workflows@stable``).
+
+	For a project that uses a separate integration branch with validation
+	enabled, the judge ``complete)`` arm transitions to ``status=validating``
+	without first merging integration→default (that merge is intentionally
+	deferred until ``ai:validated``). ``dispatch_validation_if_needed`` then
+	gated its preflight on ``PROJECT_COMPLETE``, which folds in
+	``integration_contained_in_default`` (``ahead_by==0``). While the
+	integration branch is ahead of default (``ahead_by>0``), that gate is
+	never satisfied, so validation never dispatches; but the
+	integration→default merge that would clear it only runs after
+	``ai:validated`` — which can only be earned by a validation run that
+	never dispatches. Permanent stall.
+
+	The fix gates the preflight on ``WAVE_COMPLETE`` / ``ANY_FAILED`` (wave
+	PRs merged into the integration branch) instead of ``PROJECT_COMPLETE``,
+	because validation runs against ``ref=integration_branch``. This test
+	pins ``compare_ahead_by=5`` and asserts validation dispatches against the
+	integration branch on the judge-complete entry AND again on a subsequent
+	poll that re-enters the function from the steady-state ``validating``
+	loop (where ``PROJECT_COMPLETE`` is unset and the live gate is recomputed
+	by ``refresh_validation_dispatch_wave_gate``)."""
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	kw = dict(
+		enable_validation="true",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+	)
+
+	# First poll: judge declares complete; the validation-enabled complete)
+	# arm must reach a dispatch despite ahead_by=5.
+	first = _run_poller(state=state, **kw)
+	assert first["latest_state"]["status"] == "validating"
+	assert len(first["validation_dispatches"]) == 1, (
+		"validation must dispatch from the judge-complete arm under "
+		f"integration drift; got {first['validation_dispatches']!r}, "
+		f"stderr=\n{first['stderr']}"
+	)
+	assert first["validation_dispatches"][0]["ref"] == "orchestrator/project-192"
+	assert first["latest_state"]["validation_last_dispatch_cycle"] == 1
+	# The old PROJECT_COMPLETE-gated deferral line must be gone.
+	assert "Preflight: PROJECT_COMPLETE=" not in (first["stdout"] + first["stderr"]), (
+		"dispatch must not defer on PROJECT_COMPLETE while integration is "
+		f"ahead of default; stdout=\n{first['stdout']}\nstderr=\n{first['stderr']}"
+	)
+
+	# Steady-state validating loop: reset the dispatch marker (as a stale /
+	# redispatch tick would) and confirm the function re-enters from the
+	# validating arm — where PROJECT_COMPLETE is unset on entry — and still
+	# dispatches once the live wave gate is recomputed. ahead_by stays 5.
+	resumed = dict(first["latest_state"])
+	resumed["validation_last_dispatch_cycle"] = 0
+	resumed["validation_last_dispatch_ts"] = 0
+	second = _run_poller(
+		state=resumed,
+		tracking_labels=["ai:validating"],
+		**kw,
+	)
+	assert second["latest_state"]["status"] == "validating"
+	assert len(second["validation_dispatches"]) == 1, (
+		"validation must re-dispatch from the steady-state validating loop "
+		f"under integration drift; got {second['validation_dispatches']!r}, "
+		f"stderr=\n{second['stderr']}"
+	)
+	assert second["validation_dispatches"][0]["ref"] == "orchestrator/project-192"
+	assert second["latest_state"]["final_merge_status"] == "pending"
 
 
 def test_integration_ahead_creates_and_reuses_eager_draft_pr_before_validation_complete():
