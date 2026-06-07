@@ -1,0 +1,18 @@
+{
+  "entries": [
+    {
+      "codex_attempts_used": 1,
+      "committed_type": null,
+      "consumer_default_branch": "main",
+      "consumer_head_sha": "532da0267209b8416ba67849cfc511178370cfe3",
+      "discovered_type": "python-mongo-flask",
+      "failure_reason": null,
+      "outcome": "success_seeded",
+      "pr_branch": "automation/validate-discovery/532da0267209/python-mongo-flask",
+      "pr_url": "https://github.com/shubhodeep1/radateeree-resort.com/pull/51",
+      "recorded_at": "2026-06-07T03:54:44Z"
+    }
+  ],
+  "repository": "shubhodeep1/radateeree-resort.com",
+  "schema_version": "v1"
+}
