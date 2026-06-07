@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ai_memory_push_retry_backoff.py:130-139 | severity=low | confidence=5\n  flagged_by: [mistralai_mistral-small-2603, moonshotai_kimi-k2_5]\n  PROBLEM: The fake_run_git stub accepts inherit_location_env but discards it, so the test does not exercise or verify the new code path.\n  WHY: This leaves the retry/backoff test with no coverage of the behavior introduced by the new kwarg.\n- scripts/ai_memory_lib.py:2326 | severity=low | confidence=3\n  flagged_by: [mistralai_mistral-small-2603, moonshotai_kimi-k2_5]\n  PROBLEM: When inherit_location_env=True, _run_git inherits the full os.environ, including git location variables that _git_subprocess_env normally strips.\n  WHY: This is harmless for the current read-only origin lookup but could redirect writes if the flag were reused by mutating git commands; moonshot raised the same hardening concern.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add two new tests in tests/test_ai_memory_git_env_isolation.py that reproduce the exact implement-workflow failure (work-tree-only repo_root behind GIT_DIR) and verify that _resolve_origin_url and _clone_for_memory_branch now succeed.\"\n  expected_change_site: tests/test_ai_memory_git_env_isolation.py\n  confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The last run only modified tests/test_ai_memory_push_retry_backoff.py without adding or expanding the new isolation tests, so the requested repro/verification coverage is not present in the last-run diff.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- tests/test_ai_memory_push_retry_backoff.py:130-139 | severity=low | confidence=5\n  PROBLEM: The updated fake_run_git stub accepts inherit_location_env as a keyword argument but discards it with `_ = inherit_location_env` without exercising or verifying the new code path.\n  WHY: When _resolve_origin_url calls _run_git with inherit_location_env=True, the logic in _run_git is exercised, but the test double doesn't validate that the parameter is used correctly or that its presence/absence affects behavior.\n- scripts/ai_memory_lib.py:2326 | severity=low | confidence=3\n  PROBLEM: When inherit_location_env=True, _run_git inherits the full os.environ including GIT_INDEX_FILE, GIT_OBJECT_DIRECTORY, GIT_COMMON_DIR, and other location variables that _git_subprocess_env normally strips.\n  WHY: While the current single callsite (git remote get-url origin) only performs a readonly config query where these extra variables are likely harmless, the inherit_location_env parameter is not inherently safe for potential future mutating git commands.\n- Requirement: \"Add two new tests in tests/test_ai_memory_git_env_isolation.py that reproduce the exact implement-workflow failure (work-tree-only repo_root behind GIT_DIR) and verify that _resolve_origin_url and _clone_for_memory_branch now succeed.\"\n  Expected change site: tests/test_ai_memory_git_env_isolation.py (the two new test functions added in the original PR, namely test_resolve_origin_url_uses_host_repo_via_leaked_git_dir and test_clone_for_memory_branch_resolves_origin_from_leaked_git_dir)\n  Evidence of absence: The original PR diff added both test functions to verify the host-repo origin resolution behavior introduced by the inherit_location_env parameter. However, the last run only modified test_ai_memory_push_retry_backoff.py without expanding coverage of these new tests. The tests exist but are not being exercised by the test double update, and no additional test coverage was added for the new parameter behavior.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- File: scripts/ai_memory_lib.py\n  Location: Line 2326\n  Issue: When `inherit_location_env=True`, the full `os.environ` is passed including git location variables beyond just `GIT_DIR`/`GIT_WORK_TREE` (e.g., `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`, `GIT_COMMON_DIR`).\n  Suggested minimal fix: Consider explicitly preserving only the location variables needed (`GIT_DIR`, `GIT_WORK_TREE`) rather than the full environment when `inherit_location_env=True`.\n  Estimated lines changed: ~3\n  HARDENING_RISK_SCORE: 1\n- File: tests/test_ai_memory_push_retry_backoff.py\n  Location: Lines 130-139 (fake_run_git stub)\n  Issue: The stub accepts `inherit_location_env: bool = False` but discards it without exercising the `True` code path.\n  Suggested minimal fix: Add a test assertion or conditional behavior in the stub that validates `inherit_location_env=True` is passed when expected, or add a dedicated test that verifies the backoff logic works correctly with the new parameter.\n  Estimated lines changed: ~5\n  HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "f4560557c8319a066f573e91bd0c8cead48b06b25ba09ee1add7f997356b9cce",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3193,
+    "run_id": "27088157307",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27088157307",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260607094336_0ec74f6e88",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3193,
+    "run_id": "27088157307"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-07T09:43:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
