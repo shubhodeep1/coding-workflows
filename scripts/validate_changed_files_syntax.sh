@@ -61,10 +61,8 @@ append_checker_error() {
       # ~5 lines of diagnostic context (the underlying syntax error
       # still surfaces in stderr), whereas false negatives leak file
       # content into prompts and public issue comments. The same
-      # trade-off applies to `.env*` on the combined
-      # `${file},${basename_lc}` input (matches `.env`, `.envrc`, and
-      # `.env.example`) and `.pem*` (matches `.pem.bak`);
-      # `.key*`/`.cer*`/`.crt*` are
+      # trade-off applies to `.env*` (matches `.env.example`) and
+      # `.pem*` (matches `.pem.bak`); `.key*`/`.cer*`/`.crt*` are
       # kept consistent with the rest. Don't tighten any of these
       # to exact-suffix-only without also loosening the others to
       # match — the precision/coverage choice is unified across
