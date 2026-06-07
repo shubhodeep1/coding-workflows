@@ -7792,27 +7792,45 @@ dispatch_validation_if_needed() {
   local now_epoch
   local stale_threshold_secs=3600  # 1 hour: if no label appears after dispatch, allow redispatch
 
-  # Defensive preflight: refuse to dispatch validate while wave PRs are
-  # unmerged or the integration→default merge has not landed. The judge
-  # override at the JUDGE_STATUS=complete branch already gates the
-  # transition to status=validating on PROJECT_COMPLETE=true, so this
-  # branch is belt-and-suspenders against the rare case where a wave PR
-  # transitions from merged back to a non-terminal state between the
-  # judge call and the dispatch (e.g. a consumer-side revert or
+  # Defensive preflight: refuse to dispatch validate while the current
+  # wave's PRs are not all merged into the integration branch, or any of
+  # them failed. This is belt-and-suspenders against the rare case where a
+  # wave PR transitions from merged back to a non-terminal state between
+  # the judge call and the dispatch (e.g. a consumer-side revert or
   # label-reconciliation race). When that happens we skip dispatch this
   # cycle and let the next poll tick re-evaluate once wave PR state
-  # settles. The judge-complete path reaches this helper after the main
-  # wave-status block has already set PROJECT_COMPLETE; validating /
-  # revalidate paths hit it earlier in the loop, so recompute the live
-  # gate on demand there and fail closed if the probe itself cannot run.
-  if [ -z "${PROJECT_COMPLETE+set}" ]; then
+  # settles.
+  #
+  # Gate on WAVE_COMPLETE / ANY_FAILED, NOT on PROJECT_COMPLETE. Validation
+  # runs against the integration branch (ref=integration_branch in
+  # dispatch_validation_workflow below), so the integration→default merge
+  # is deliberately NOT a precondition for dispatching validation — that
+  # merge is performed afterward by mark_validation_complete →
+  # finalize_integration_merge_if_needed once the run earns the
+  # ai:validated label. PROJECT_COMPLETE additionally folds in
+  # integration_contained_in_default (ahead_by==0); gating on it here
+  # deadlocks any project that uses a separate integration branch: ahead_by
+  # stays > 0 until the final merge lands, but that merge waits for
+  # ai:validated, and ai:validated waits for a validation run that this
+  # gate would never dispatch (validation needs the merge, the merge needs
+  # validation). Default-branch-only projects never hit it because
+  # ahead_by ≡ 0. This is the validation-dispatch sibling of the judge
+  # hard-guard fix for bitsafe.io#325 (see the "Hard guard: judge cannot
+  # declare complete while waves remain" comment in the judge-verdict
+  # handler), which removed the same over-broad ahead_by==0 gate there.
+  #
+  # The judge-complete path reaches this helper after the main wave-status
+  # block has already set WAVE_COMPLETE / ANY_FAILED; validating /
+  # revalidate paths hit it earlier in the loop, so recompute the live gate
+  # on demand there and fail closed if the probe itself cannot run.
+  if [ -z "${WAVE_COMPLETE+set}" ] || [ -z "${ANY_FAILED+set}" ]; then
     if ! refresh_validation_dispatch_wave_gate; then
-      echo "::warning::[validation-dispatch] unable to recompute project completion for issue #${TRACKING_NUM:-?}; deferring validate dispatch this cycle." >&2
+      echo "::warning::[validation-dispatch] unable to recompute wave-merge gate for issue #${TRACKING_NUM:-?}; deferring validate dispatch this cycle." >&2
       return 0
     fi
   fi
-  if [ "${PROJECT_COMPLETE}" != "true" ]; then
-    echo "Preflight: PROJECT_COMPLETE=${PROJECT_COMPLETE:-unset}; deferring validate dispatch this cycle (wave PRs unmerged or integration→default merge pending)."
+  if [ "${WAVE_COMPLETE:-false}" != "true" ] || [ "${ANY_FAILED:-false}" = "true" ]; then
+    echo "Preflight: WAVE_COMPLETE=${WAVE_COMPLETE:-unset} ANY_FAILED=${ANY_FAILED:-unset}; deferring validate dispatch this cycle (wave PRs not yet all merged into the integration branch or at least one wave issue failed)."
     return 0
   fi
 
