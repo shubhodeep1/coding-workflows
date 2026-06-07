@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlan for issue #3189\n\nPlanning ref:\n- HEAD: `09de574a8ef552283c0b64f15ae50640408710bb`\n- Branch: `orchestrator/project-3185`\n- Integration branch metadata matches the checked-out ref.\n\nClarification mapping:\n- No `Q1`/`Q2` clarification questions were asked.\n- `/answer [auto-answered-by-orchestrator]` adds no new requirements beyond the issue body, so the plan follows the stated scope as-is.\n\nAutomation/wiring:\n- Change type: modify existing code only; no new scripts, workflows, or supervisors.\n- Existing entry points remain:\n  - `.github/workflows/review_autofix.yml` \u2192 `scripts/review_commit_changes.sh`\n  - `.github/workflows/review_autofix.yml` \u2192 `scripts/review_conflict_resolve.sh`\n  - `.github/workflows/implement.yml` \u2192 `scripts/validate_changed_files_syntax.sh`\n- DB work: none.\n- `docs/scripts-pending-removal.md`: not applicable.\n\nConflict detected:\n- The issue says #3189 was marked merged, but this ref still contains all three cited defects:\n  - unquoted `git remote set-url origin ...` in `scripts/review_commit_changes.sh`\n  - unquoted `git remote set-url origin ...` and raw repo pass-through in `scripts/review_conflict_resolve.sh`\n  - overlapping `.env*` denylist entries in `scripts/validate_changed_files_syntax.sh`\n\n1. Files likely to change\n\nProduction scope (keep limited to these three scripts):\n- `scripts/review_commit_changes.sh`\n- `scripts/review_conflict_resolve.sh`\n- `scripts/validate_changed_files_syntax.sh`\n\nLikely test updates:\n- `tests/test_orchestrate_force_tick.py`\n- `tests/test_review_semble_contract.py`\n- `tests/test_implement_post_codex_recovery.py`\n\n2. Functions/modules to implement\n\n- `scripts/review_commit_changes.sh`\n  - Update the commit path so `git remote set-url origin` receives the full credential-bearing URL as one quoted argument.\n  - No behavior change beyond hardening shell argument handling.\n\n- `scripts/review_conflict_resolve.sh`\n  - In `_dispatch_integration_judge_now()`, introduce one local repo-slug variable, validate it once, and reuse that exact value for both:\n    - `GITHUB_REPOSITORY=...` in the helper environment\n    - `--repo ...` in the helper argv\n  - Reuse the repo\u2019s existing owner/repo validation shape (`^[^/]+/[^/]+$]`, as already used in scripts like `validate_process.sh` / `post_review_comment.sh`).\n  - Preserve fail-open semantics: if the slug is missing/invalid, warn and skip the immediate helper dispatch rather than exiting non-zero.\n  - Quote the full `git remote set-url origin` URL in the resolver commit path.\n\n- `scripts/validate_changed_files_syntax.sh`\n  - Resolve the overlapping `.env*` case entries without reducing coverage.\n  - Simplest safe path: remove the redundant basename-specific `.env`/`.envrc` alternations and keep the broader `*.env*` arm, since the case input is `${file},${basename_lc}` and `*.env*` already matches `.env`, `.envrc`, and `.env.example`.\n  - If the branch prefers to keep the explicit overlap, add a shellcheck suppression comment with a short rationale tied to that combined-input shape.\n\n3. Data structures affected\n\n- No persisted schemas or JSON contracts change.\n- Affected runtime data is limited to:\n  - local shell variable for the validated repo slug in `_dispatch_integration_judge_now()`\n  - environment propagation of `GITHUB_REPOSITORY`\n  - the validator\u2019s shell case-pattern denylist\n\n4. API or interface changes\n\n- No user-facing/API contract changes.\n- Internal hardening only:\n  - `orchestrate_force_tick.sh` continues to receive `--repo`, but now from one validated source value.\n  - `git remote set-url origin` continues to target the same URL, but as a single shell argument.\n\n5. Potential risks / edge cases\n\n- Do not turn bad `GITHUB_REPOSITORY` input into a hard resolver failure; the current trap path is intentionally fail-open with cron fallback.\n- Keep the exact remote URL content unchanged; only add quoting.\n- Do not narrow secret-file suppression coverage:\n  - `.env`\n  - `.envrc`\n  - `.env.example`\n  - nested paths matching `.env*`\n  - existing `.pem*`, `.p12*`, `.pfx*`, `.key*`, `.cer*`, `.crt*` handling\n- If a suppression comment is used instead of simplification, document why the overlap is safe so future cleanups do not reintroduce the warning.\n\n6. Testing considerations\n\n- Extend `tests/test_orchestrate_force_tick.py` (or the nearest resolver contract coverage) to lock in the resolver-side repo-slug hardening: valid slug dispatch path plus invalid/missing slug fail-open skip path.\n- Extend `tests/test_review_semble_contract.py` or another existing shell contract test to assert both scripts now quote the full `git remote set-url origin` URL argument.\n- Keep/update `tests/test_implement_post_codex_recovery.py` so `.env*` still produces the same suppression marker and innocuous files still emit offending bytes.\n- If the pinned test/lint toolchain is available, run those targeted tests and the existing shell lint path for the touched scripts; otherwise treat CI as authoritative.\n\nImplementation note:\n- Keep the code change surgical: no broader review/conflict-resolver cleanup beyond the three targeted scripts.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "c783a50be2bea6518e6886ec8f8d7591e446d93b8a4d6aebf1326cc858a1759d",
+  "lineage": {
+    "issue_number": 3206,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27102733572",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27102733572",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3206"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260607194621_e8e059cef1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3206,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27102733572"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3206",
+  "timestamps": {
+    "created_at": "2026-06-07T19:46:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
