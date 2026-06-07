@@ -30,8 +30,11 @@ def test_auto_approve_step_uses_safe_issue_state_fetch() -> None:
 	assert 'source scripts/gh_helpers.sh 2>/dev/null || true' in block
 	assert 'type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }' in block
 	assert 'type _safe_gh_jq >/dev/null 2>&1 || _safe_gh_jq() {' in block
-	assert '_tmpf="$(mktemp "${TMPDIR:-/tmp}/_safe_gh_jq.XXXXXX" 2>/dev/null)" || return 1' in block
-	assert 'if gh api "$@" > "${_tmpf}" 2>/dev/null; then' in block
+	assert 'if ! _tmpf=$(mktemp "${TMPDIR:-/tmp}/_safe_gh_jq.XXXXXX" 2>/dev/null); then' in block
+	assert 'echo "::error::_safe_gh_jq: failed to create temp file (mktemp failed); aborting without running: $*" >&2' in block
+	assert 'if gh api "$@" > "${_tmpf}"; then' in block
+	assert '_tmpf="$(mktemp "${TMPDIR:-/tmp}/_safe_gh_jq.XXXXXX" 2>/dev/null)" || return 1' not in block
+	assert 'if gh api "$@" > "${_tmpf}" 2>/dev/null; then' not in block
 	assert (
 		'CURRENT_STATE="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" '
 		'--jq \'.state // "open"\' 2>/dev/null || echo "open")"'
