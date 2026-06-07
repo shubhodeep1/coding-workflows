@@ -417,6 +417,8 @@ def _run_diagnose_step(
 	codex_output: dict | None,
 	failed_step_name: str,
 	issue_body: str,
+	issue_meta_payload: object | None = None,
+	write_issue_body_file: bool = True,
 ) -> tuple[subprocess.CompletedProcess[str], dict, Path, dict[str, str]]:
 	repo_dir = _prepare_diagnose_repo(tmp_path)
 	runtime_dir = tmp_path / "runtime"
@@ -431,7 +433,15 @@ def _run_diagnose_step(
 		(runtime_dir / "post_codex_validation_errors.txt").write_text(capture_contents, encoding="utf-8")
 
 	issue_body_file = runtime_dir / "issue_body.txt"
-	issue_body_file.write_text(issue_body, encoding="utf-8")
+	if write_issue_body_file:
+		issue_body_file.write_text(issue_body, encoding="utf-8")
+
+	issue_meta_file = runtime_dir / "issue_meta.json"
+	if issue_meta_payload is not None:
+		if isinstance(issue_meta_payload, str):
+			issue_meta_file.write_text(issue_meta_payload, encoding="utf-8")
+		else:
+			issue_meta_file.write_text(json.dumps(issue_meta_payload), encoding="utf-8")
 
 	gh_state_file = runtime_dir / "gh_state.json"
 	gh_state_file.write_text(
@@ -474,6 +484,7 @@ def _run_diagnose_step(
 			"PR_BASE_BRANCH": "orchestrator/project-829",
 			"SERENA_AVAILABLE": "true",
 			"ISSUE_BODY_FILE": str(issue_body_file),
+			"ISSUE_META_FILE": str(issue_meta_file),
 			"IMPLEMENT_DIAGNOSE_PROMPT_FILE": str(prompt_file),
 			"IMPLEMENT_DIAGNOSE_OUTPUT_FILE": str(output_file),
 			"IMPLEMENT_DIAGNOSE_LOG_FILE": str(log_file),
@@ -984,6 +995,20 @@ def test_preflight_destructive_guard_runs_before_validation_with_temp_index_cont
 	assert 'destructive_commit_blocked=bulk-delete' in preflight_block
 
 
+def test_self_repo_guards_use_exact_canonical_repo_match() -> None:
+	stage_block = _step_block_text("Stage workflow support files")
+	preflight_block = _step_block_text("Preflight destructive-commit guard")
+	commit_block = _step_block_text("Commit changes")
+
+	for block in (stage_block, preflight_block, commit_block):
+		assert 'wf_source="shubhodeep1/coding-workflows"' in block
+		assert 'if [ "${{ github.repository }}" = "${wf_source}" ]; then' in block
+		assert 'if [[ "${{ github.repository }}" == *"/coding-workflows" ]]; then' not in block
+
+	assert '`*/coding-workflows`' not in preflight_block
+	assert '`*/coding-workflows`' not in commit_block
+
+
 def test_preflight_destructive_guard_fails_without_touching_the_real_index() -> None:
 	with tempfile.TemporaryDirectory(prefix="test_preflight_destructive_guard_") as td:
 		repo_dir = Path(td)
@@ -1319,6 +1344,94 @@ def test_diagnose_invokes_codex_when_capture_exists_and_issue_is_not_already_fai
 		call_args = json.loads(call_lines[0])
 		assert "exec" in call_args
 		assert "--model" in call_args
+
+
+def test_diagnose_reuses_matching_issue_meta_body_without_issue_api_fallback() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		issue_body = "Issue context\n\nTracking issue: #829\n"
+		proc, state, runtime_dir, paths = _run_diagnose_step(
+			tmp_path,
+			issue_labels=["ai:implementing"],
+			capture_contents="===== broken.yml =====\nerror\n",
+			codex_mode="success",
+			codex_output={
+				"status": "harness_error",
+				"diagnosis": "diag",
+				"fix_issues": [],
+				"harness_fixes": "rerun validator",
+			},
+			failed_step_name="Validate syntax of changed files",
+			issue_body=issue_body,
+			issue_meta_payload={
+				"number": 948,
+				"labels": [{"name": "ai:implementing"}],
+				"body": issue_body,
+			},
+			write_issue_body_file=False,
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert state.get("issue_queries", []) == [], (
+			"Matching ISSUE_META_FILE should satisfy diagnose label/body reads without hitting /issues/{n}"
+		)
+		assert _read_file(str(runtime_dir / "issue_body_from_api.txt")) == issue_body
+		assert issue_body.strip() in _read_file(paths["stdin_file"])
+
+
+def test_diagnose_uses_safe_issue_api_body_fallback_when_issue_meta_invalid_or_mismatched() -> None:
+	for case_name, issue_meta_payload in (
+		(
+			"mismatched",
+			{
+				"number": 999,
+				"labels": [{"name": "ai:implementing"}],
+				"body": "wrong issue body\n",
+			},
+		),
+		("invalid", '{"number": 948, "labels": ['),
+	):
+		with tempfile.TemporaryDirectory(prefix=f"test_diag_{case_name}_") as td:
+			tmp_path = Path(td)
+			issue_body = "Issue context\n\nTracking issue: #829\n"
+			proc, state, runtime_dir, _paths = _run_diagnose_step(
+				tmp_path,
+				issue_labels=["ai:implementing"],
+				capture_contents="===== broken.yml =====\nerror\n",
+				codex_mode="success",
+				codex_output={
+					"status": "harness_error",
+					"diagnosis": "diag",
+					"fix_issues": [],
+					"harness_fixes": "rerun validator",
+				},
+				failed_step_name="Validate syntax of changed files",
+				issue_body=issue_body,
+				issue_meta_payload=issue_meta_payload,
+				write_issue_body_file=False,
+			)
+
+			assert proc.returncode == 0, f"case={case_name}\nstdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+			assert state.get("issue_queries", []) == [
+				"repos/owner/repo/issues/948",
+				"repos/owner/repo/issues/948",
+			], f"case={case_name}"
+			issue_api_calls = [
+				call
+				for call in state.get("calls", [])
+				if call
+				and call[0] == "api"
+				and "repos/owner/repo/issues/948" in call
+			]
+			assert ["api", "repos/owner/repo/issues/948"] in issue_api_calls, (
+				f"case={case_name}: body fallback must use the safe _safe_gh_jq JSON fetch without --jq"
+			)
+			assert any("--jq" in call for call in issue_api_calls), (
+				f"case={case_name}: label fallback should still use the jq-filtered issue read"
+			)
+			assert _read_file(str(runtime_dir / "issue_body_from_api.txt")) == issue_body, (
+				f"case={case_name}: body fallback should still materialize plain-text issue body content"
+			)
 
 
 def test_diagnose_posts_dependency_notes_for_fix_issue_edges():

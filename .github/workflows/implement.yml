@@ -802,7 +802,7 @@ jobs:
           echo "FETCHED_MANIFEST=${FETCHED_MANIFEST}" >> "$GITHUB_ENV"
 
           is_self_repo="false"
-          if [[ "${{ github.repository }}" == *"/coding-workflows" ]]; then
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
             is_self_repo="true"
           fi
 
@@ -2690,14 +2690,15 @@ jobs:
           # consumer repos, and must NOT be committed there — any edit to them
           # in a consumer wrapper would either be a no-op (overwritten next run)
           # or leak a stale copy back into the caller's tree.  In the canonical
-          # `*/coding-workflows` repository these paths ARE the source of truth
+          # `shubhodeep1/coding-workflows` repository these paths ARE the source of truth
           # and must be editable, so the excludes are dropped.
           #
           # NOTE: scripts/ is NOT blanket-excluded here. Runtime-fetched
           # infrastructure helpers are filtered separately so consumer repos can
           # still commit their own scripts/ changes when required.
+          wf_source="shubhodeep1/coding-workflows"
           is_self_repo="false"
-          if [[ "${{ github.repository }}" == *"/coding-workflows" ]]; then
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
             is_self_repo="true"
           fi
           add_u_excludes=(':!node_modules' ':!.codex-workflow-src' ':!.codex-workflow-src-main')
@@ -3536,14 +3537,15 @@ jobs:
           # consumer repos, and must NOT be committed there — any edit to them
           # in a consumer wrapper would either be a no-op (overwritten next run)
           # or leak a stale copy back into the caller's tree.  In the canonical
-          # `*/coding-workflows` repository these paths ARE the source of truth
+          # `shubhodeep1/coding-workflows` repository these paths ARE the source of truth
           # and must be editable, so the excludes are dropped.
           #
           # NOTE: scripts/ is NOT blanket-excluded here. Runtime-fetched
           # infrastructure helpers are filtered separately so consumer repos can
           # still commit their own scripts/ changes when required.
+          wf_source="shubhodeep1/coding-workflows"
           is_self_repo="false"
-          if [[ "${{ github.repository }}" == *"/coding-workflows" ]]; then
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
             is_self_repo="true"
           fi
           add_u_excludes=(':!node_modules' ':!.codex-workflow-src' ':!.codex-workflow-src-main')

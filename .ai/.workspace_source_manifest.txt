@@ -1,3 +1,4 @@
+.ai/.workspace_source_manifest.txt
 .ai/review_issue_ledger/pr-1524.txt
 .ai/review_runtime/pr-2697/round-1/verified_rejections.json
 .ai/review_runtime/pr-2697/round-3/verified_rejections.json
@@ -446,6 +447,7 @@ tests/test_orchestrator_concurrency_caps.py
 tests/test_overlap_validation_fallback.py
 tests/test_phase_prompt_untrusted_context_contract.py
 tests/test_plan_auto_answer_recommended_parser.py
+tests/test_plan_auto_approve_safe_state_fetch.py
 tests/test_plan_clarify_blocked_output.py
 tests/test_render_prompt_core_modes.py
 tests/test_render_prompt_foundation.py
