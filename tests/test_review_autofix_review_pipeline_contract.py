@@ -13,6 +13,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
+STAGE_HELPER = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
 REVIEWERS = REPO_ROOT / "scripts" / "review_run_reviewers.sh"
 APPLY_FIXES = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
 CONSOLIDATE = REPO_ROOT / "scripts" / "review_consolidate.sh"
@@ -34,6 +35,10 @@ PHASE_H_CONTEXT_BUDGET_FIXTURE = FIXTURES_DIR / "phase-h-context-budget-overflow
 
 def _workflow_text() -> str:
 	return WORKFLOW.read_text(encoding="utf-8")
+
+
+def _stage_helper_text() -> str:
+	return STAGE_HELPER.read_text(encoding="utf-8")
 
 
 def _reviewers_text() -> str:
@@ -1115,8 +1120,11 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 	):
 		assert expected in workflow, f"Missing codex-agent env wiring: {expected}"
 
+	stage_step_block = _step_block("Stage workflow support files")
+	assert '.codex-workflow-src/scripts/stage_workflow_support.sh' in stage_step_block
+	assert '.codex-workflow-src-main/scripts/stage_workflow_support.sh' in stage_step_block
 	required_bootstrap_line = next(
-		line for line in workflow.splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line
+		line for line in _stage_helper_text().splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line
 	)
 	assert "codex_heartbeat.sh" in required_bootstrap_line, required_bootstrap_line
 	assert "cost_audit.py" in required_bootstrap_line, required_bootstrap_line
@@ -1190,18 +1198,18 @@ def test_reviewer_risk_tier_classifier_honours_thresholds_and_always_full_regex(
 
 def test_review_filter_helper_wiring_is_flag_gated_and_fail_open() -> None:
 	workflow = _workflow_text()
-	stage_block = _step_block("Stage workflow support files")
+	stage_helper = _stage_helper_text()
 	preflight_block = _step_block('"Preflight: Verify required files before reviewer invocation"')
 	reviewers = _reviewers_text()
 
 	assert "REVIEWER_FILTER_UNINTERESTING_ENABLED: ${{ vars.REVIEWER_FILTER_UNINTERESTING_ENABLED || 'false' }}" in workflow
 	assert "REVIEWER_FILTER_EXTRA_GLOBS: ${{ vars.REVIEWER_FILTER_EXTRA_GLOBS || '' }}" in workflow
 	assert "REVIEWER_FILTER_EXEMPT_GLOBS: ${{ vars.REVIEWER_FILTER_EXEMPT_GLOBS || 'db/contracts/**,**/migrations/**,**/migrate/**' }}" in workflow
-	assert 'if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh" ]; then' in stage_block
-	assert 'src=".codex-workflow-src/scripts/review_filter_uninteresting_files.sh"' in stage_block
-	assert 'src=".codex-workflow-src-main/scripts/review_filter_uninteresting_files.sh"' in stage_block
-	assert 'install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh"' in stage_block
-	assert 'review_filter_uninteresting_files.sh not found in checked-out support sources' in stage_block
+	assert 'if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh" ]; then' in stage_helper
+	assert 'src=".codex-workflow-src/scripts/review_filter_uninteresting_files.sh"' in stage_helper
+	assert 'src=".codex-workflow-src-main/scripts/review_filter_uninteresting_files.sh"' in stage_helper
+	assert 'install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh"' in stage_helper
+	assert 'review_filter_uninteresting_files.sh not found in checked-out support sources' in stage_helper
 	assert 'check_soft_file "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh"' in preflight_block
 	assert 'REVIEWER_FILTER_SCRIPT="${SUPPORT_SCRIPTS_DIR:-scripts}/review_filter_uninteresting_files.sh"' in reviewers
 	assert 'prepare_reviewer_filtered_artifacts' in reviewers
@@ -1254,7 +1262,7 @@ def test_agents_md_materiality_classifier_and_workflow_wiring() -> None:
 	assert gate_api_client["agents_md_changed"] is False
 
 	workflow = _workflow_text()
-	stage_block = _step_block("Stage workflow support files")
+	stage_helper = _stage_helper_text()
 	preflight_block = _step_block('"Preflight: Verify required files before reviewer invocation"')
 	reviewer_block = _step_block("Run reviewer models")
 	advisory_block = _step_block("Post AI Materiality Advisory comment")
@@ -1262,11 +1270,11 @@ def test_agents_md_materiality_classifier_and_workflow_wiring() -> None:
 
 	assert "AGENTS_MD_MATERIALITY_RESULT_FILE=${RUNTIME_DIR}/agents_md_materiality_result.json" in workflow
 	assert "AGENTS_MD_MATERIALITY_COMMENT_FILE=${RUNTIME_DIR}/agents_md_materiality_comment.md" in workflow
-	assert 'if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh" ]; then' in stage_block
-	assert 'src=".codex-workflow-src/scripts/review_agents_md_materiality.sh"' in stage_block
-	assert 'src=".codex-workflow-src-main/scripts/review_agents_md_materiality.sh"' in stage_block
-	assert 'install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh"' in stage_block
-	assert 'review_agents_md_materiality.sh not found in checked-out support sources' in stage_block
+	assert 'if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh" ]; then' in stage_helper
+	assert 'src=".codex-workflow-src/scripts/review_agents_md_materiality.sh"' in stage_helper
+	assert 'src=".codex-workflow-src-main/scripts/review_agents_md_materiality.sh"' in stage_helper
+	assert 'install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh"' in stage_helper
+	assert 'review_agents_md_materiality.sh not found in checked-out support sources' in stage_helper
 	assert 'check_soft_file "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh"' in preflight_block
 	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh" &' in reviewer_block
 	assert 'materiality_pid="$!"' in reviewer_block
@@ -1283,15 +1291,15 @@ def test_agents_md_materiality_classifier_and_workflow_wiring() -> None:
 
 def test_reviewer_failback_wiring_stages_asset_and_restores_cache_before_reviewers() -> None:
 	workflow = _workflow_text()
-	stage_block = _step_block("Stage workflow support files")
+	stage_helper = _stage_helper_text()
 	preflight_block = _step_block('"Preflight: Verify required files before reviewer invocation"')
 	restore_block = _step_block("Restore review-issue ledger")
 	reviewers = _reviewers_text()
 
-	assert 'failback_src=".codex-workflow-src/scripts/reviewer_failback_chains.json"' in stage_block
-	assert 'failback_src=".codex-workflow-src-main/scripts/reviewer_failback_chains.json"' in stage_block
-	assert 'install -m 0644 "${failback_src}" "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json"' in stage_block
-	assert 'reviewer_failback_chains.json not found in checked-out support sources' in stage_block
+	assert 'failback_src=".codex-workflow-src/scripts/reviewer_failback_chains.json"' in stage_helper
+	assert 'failback_src=".codex-workflow-src-main/scripts/reviewer_failback_chains.json"' in stage_helper
+	assert 'install -m 0644 "${failback_src}" "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json"' in stage_helper
+	assert 'reviewer_failback_chains.json not found in checked-out support sources' in stage_helper
 	assert 'check_soft_file "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json"' in preflight_block
 	assert 'REVIEWER_FAILBACK_CHAINS_FILE="${REVIEWER_FAILBACK_CHAINS_FILE:-${SUPPORT_SCRIPTS_DIR:-scripts}/reviewer_failback_chains.json}"' in reviewers
 	assert '.ai/review_runtime/' in restore_block
@@ -1782,9 +1790,9 @@ def test_reviewer_filter_stat_harness_handles_brace_expansion_renames() -> None:
 
 
 def test_reject_verifier_bootstrap_and_stage_order_contract() -> None:
-	workflow = _workflow_text()
+	stage_helper = _stage_helper_text()
 	apply_fixes = _apply_fixes_text()
-	assert "review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh" in workflow
+	assert "review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh" in stage_helper
 	parse_idx = apply_fixes.index('if parse_script="$(resolve_support_script review_parse_consolidator.sh)"; then')
 	verify_idx = apply_fixes.index('if verify_script="$(resolve_support_script review_reject_verify.sh)"; then')
 	ledger_idx = apply_fixes.index('if ledger_script="$(resolve_support_script review_issue_ledger.sh)"; then')
@@ -1793,10 +1801,10 @@ def test_reject_verifier_bootstrap_and_stage_order_contract() -> None:
 
 
 def test_support_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets() -> None:
-	workflow = _workflow_text()
-	assert "validation_history.v1.json" in workflow
-	assert "operator_bypass_audit.v1.json" in workflow
-	assert "revalidate_events.v1.json" in workflow
+	stage_helper = _stage_helper_text()
+	assert "validation_history.v1.json" in stage_helper
+	assert "operator_bypass_audit.v1.json" in stage_helper
+	assert "revalidate_events.v1.json" in stage_helper
 
 
 def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:

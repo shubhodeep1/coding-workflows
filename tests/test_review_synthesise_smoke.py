@@ -14,6 +14,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SYNTH_SCRIPT = REPO_ROOT / "scripts" / "review_synthesise_smoke.sh"
+STAGE_HELPER = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
 VALIDATE_DRIVER = REPO_ROOT / "scripts" / "validate_driver.sh"
 VALIDATE_PROCESS = REPO_ROOT / "scripts" / "validate_process.sh"
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
@@ -655,6 +656,7 @@ def test_generated_wrappers_report_pass_fail_and_inconclusive_advisory_states() 
 
 def test_review_autofix_workflow_wires_behavioural_smoke_after_interim_judge() -> None:
 	workflow = REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
+	stage_helper = STAGE_HELPER.read_text(encoding="utf-8")
 	validate_workflow = VALIDATE_WORKFLOW.read_text(encoding="utf-8")
 	assert "BEHAVIOURAL_SMOKE_FROM_JUDGE_ENABLED: ${{ vars.BEHAVIOURAL_SMOKE_FROM_JUDGE_ENABLED || 'false' }}" in workflow
 	assert "BEHAVIOURAL_SMOKE_LANG: ${{ vars.BEHAVIOURAL_SMOKE_LANG || '' }}" in workflow
@@ -663,11 +665,11 @@ def test_review_autofix_workflow_wires_behavioural_smoke_after_interim_judge() -
 	assert "VALIDATION_INCLUDE_SYNTHESISED: ${{ vars.VALIDATION_INCLUDE_SYNTHESISED || 'true' }}" in workflow
 	assert "VALIDATION_INCLUDE_SYNTHESISED: ${{ vars.VALIDATION_INCLUDE_SYNTHESISED || 'true' }}" in validate_workflow
 	bootstrap_line = next(
-		(line for line in workflow.splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line),
+		(line for line in stage_helper.splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line),
 		"",
 	)
 	assert "review_synthesise_smoke.sh" in bootstrap_line
-	assert "prompts/behavioural-smoke-synthesise.txt" in workflow
+	assert "prompts/behavioural-smoke-synthesise.txt" in stage_helper
 	judge_idx = workflow.find("- name: Run interim judge")
 	synth_idx = workflow.find("- name: Synthesize behavioural smoke")
 	ledger_idx = workflow.find("- name: Save review-issue ledger")

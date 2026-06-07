@@ -76,6 +76,17 @@ Copy this block when adding a new entry:
   - `rg -n 'render_prompt\.py' .github/workflows scripts --glob '!scripts/render_prompt.sh'` shows the direct Python-renderer callers or staging references that replace the shim path.
 - **Owner:** @shubhodeep1
 
+### `scripts/stage_workflow_support.sh`
+
+- **Introduced in:** codex/issue-3186 (2026-06-07)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `rg -n 'stage_workflow_support\.sh' .github/workflows/review_autofix.yml` returns the shared helper invocation from the `Stage workflow support files` step.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_semble_contract.py` returns `OK: review_autofix Semble contract assertions hold`.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py` returns `All workflow script references resolve to existing files.`
+- **Owner:** @shubhodeep1
+
 ### `.github/workflows/workspace-cache-maintenance.yml`
 
 - **Introduced in:** #3066 (2026-06-02)

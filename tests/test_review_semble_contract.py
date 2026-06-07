@@ -11,6 +11,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
+STAGE_HELPER = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
 REVIEWERS = REPO_ROOT / "scripts" / "review_run_reviewers.sh"
 APPLY_FIXES = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
 COMMIT_CHANGES = REPO_ROOT / "scripts" / "review_commit_changes.sh"
@@ -24,6 +25,10 @@ REVIEWER_CHECKLIST_PROMPT = REPO_ROOT / "prompts" / "review-reviewer-checklist.t
 
 def _read(path: Path) -> str:
 	return path.read_text(encoding="utf-8")
+
+
+def _stage_helper_text() -> str:
+	return _read(STAGE_HELPER)
 
 
 def _step_block(text: str, step_name: str) -> str:
@@ -87,25 +92,30 @@ def _render_reviewer_prompt_with_checklist(*, checklist_enabled: str, prompt_ava
 
 def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> None:
 	workflow = _read(WORKFLOW)
-	stage_block = _step_block(workflow, "Stage workflow support files")
+	stage_step_block = _step_block(workflow, "Stage workflow support files")
+	stage_helper = _stage_helper_text()
 	init_block = _step_block(workflow, "Initialize runtime workspace")
 
 	assert "SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}" in workflow
 	assert "SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}" in workflow
+	assert 'helper=".codex-workflow-src/scripts/stage_workflow_support.sh"' in stage_step_block
+	assert 'helper=".codex-workflow-src-main/scripts/stage_workflow_support.sh"' in stage_step_block
+	assert 'WORKFLOW_SOURCE_REPO="shubhodeep1/coding-workflows" \\' in stage_step_block
+	assert 'bash "${helper}"' in stage_step_block
 	assert (
 		'MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_conflict_resolve.sh '
 		'review_conflict_prepare.sh"'
-	) in stage_block
+	) in stage_helper
 	# build_semble_wrapper.sh stays in the optional-bootstrap loop once the BM25
 	# wrapper was extracted to a shared script (semble 0.1.3 ships no
 	# index/query CLI). The Python render-prompt backend also stays optional so
 	# shim-adopting branches bootstrap without breaking main-based callers.
-	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh render_prompt.py"' in stage_block
-	assert "for f in setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py; do" in stage_block
-	assert 'Optional Serena support asset ${f} is unavailable in checked-out support sources; Serena bootstrap remains disabled.' in stage_block
-	assert 'mkdir -p "${SUPPORT_SCRIPTS_DIR}/templates"' in stage_block
-	assert 'install -m 0644 "${serena_template_src}" "${SUPPORT_SCRIPTS_DIR}/templates/serena_project.yml.j2"' in stage_block
-	assert 'Optional Serena template scripts/templates/serena_project.yml.j2 is unavailable in checked-out support sources; Serena bootstrap remains disabled.' in stage_block
+	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh render_prompt.py"' in stage_helper
+	assert "for f in setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py; do" in stage_helper
+	assert 'Optional Serena support asset ${f} is unavailable in checked-out support sources; Serena bootstrap remains disabled.' in stage_helper
+	assert 'mkdir -p "${SUPPORT_SCRIPTS_DIR}/templates"' in stage_helper
+	assert 'install -m 0644 "${serena_template_src}" "${SUPPORT_SCRIPTS_DIR}/templates/serena_project.yml.j2"' in stage_helper
+	assert 'Optional Serena template scripts/templates/serena_project.yml.j2 is unavailable in checked-out support sources; Serena bootstrap remains disabled.' in stage_helper
 	assert 'echo "REVIEWER_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/reviewer_semble_query.txt"' in init_block
 	assert 'echo "EDITOR_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/editor_semble_query.txt"' in init_block
 	assert 'echo "CONFLICT_RESOLVER_SEMBLE_QUERY_FILE=${RUNTIME_DIR}/conflict_resolver_semble_query.txt"' in init_block
@@ -189,7 +199,7 @@ def test_reviewer_checklist_prompt_contract_and_gate() -> None:
 	workflow = _read(WORKFLOW)
 	checklist = _read(REVIEWER_CHECKLIST_PROMPT)
 	reviewers = _read(REVIEWERS)
-	stage_block = _step_block(workflow, "Stage workflow support files")
+	stage_helper = _stage_helper_text()
 	helper_start = reviewers.index("append_reviewer_checklist_block()")
 	helper_end = reviewers.index("# Assemble the base reviewer prompt", helper_start)
 	helper_block = reviewers[helper_start:helper_end]
@@ -236,11 +246,11 @@ def test_reviewer_checklist_prompt_contract_and_gate() -> None:
 	assert "Why it fails at runtime:" in checklist
 	assert "ISSUE_CONFIDENCE:" in checklist
 	assert "REVIEW_REVIEWER_CHECKLIST_ENABLED: ${{ vars.REVIEW_REVIEWER_CHECKLIST_ENABLED || 'false' }}" in workflow
-	assert 'if [ ! -f "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt" ]; then' in stage_block
-	assert 'src=".codex-workflow-src/prompts/review-reviewer-checklist.txt"' in stage_block
-	assert 'src=".codex-workflow-src-main/prompts/review-reviewer-checklist.txt"' in stage_block
-	assert 'install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt"' in stage_block
-	assert 'review-reviewer-checklist.txt not found in checked-out support sources' in stage_block
+	assert 'if [ ! -f "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt" ]; then' in stage_helper
+	assert 'src=".codex-workflow-src/prompts/review-reviewer-checklist.txt"' in stage_helper
+	assert 'src=".codex-workflow-src-main/prompts/review-reviewer-checklist.txt"' in stage_helper
+	assert 'install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt"' in stage_helper
+	assert 'review-reviewer-checklist.txt not found in checked-out support sources' in stage_helper
 	assert 'REVIEWER_CHECKLIST_PROMPT_TEMPLATE="${SUPPORT_PROMPTS_DIR:-prompts}/review-reviewer-checklist.txt"' in reviewers
 	assert 'REVIEWER_CHECKLIST_PROMPT_TEMPLATE="${SUPPORT_ROOT_DIR:-.}/prompts/review-reviewer-checklist.txt"' in reviewers
 	assert 'REVIEWER_CHECKLIST_ENABLED=false' in reviewers

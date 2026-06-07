@@ -12819,28 +12819,32 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	# verifier gating live inside those scripts. This test verifies the
 	# full wiring across workflow + scripts.
 	wf_path = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
+	stage_helper_path = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
 	prepare_path = REPO_ROOT / "scripts" / "review_conflict_prepare.sh"
 	resolve_path = REPO_ROOT / "scripts" / "review_conflict_resolve.sh"
 	wf_body = wf_path.read_text(encoding="utf-8")
+	stage_helper_body = stage_helper_path.read_text(encoding="utf-8")
 	prepare_body = prepare_path.read_text(encoding="utf-8")
 	resolve_body = resolve_path.read_text(encoding="utf-8")
 	# Resolver safety scripts must prefer the main snapshot so wedged
 	# integration branches still pick up the shipped self-heal helpers.
+	assert '.codex-workflow-src/scripts/stage_workflow_support.sh' in wf_body
+	assert '.codex-workflow-src-main/scripts/stage_workflow_support.sh' in wf_body
 	assert (
 		'MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_conflict_resolve.sh '
 		'review_conflict_prepare.sh"'
-	) in wf_body
-	assert 'SUPPORT_ROOT_DIR="${RUNNER_TEMP}/coding-workflows-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in wf_body
-	assert 'SUPPORT_SCRIPTS_DIR="${SUPPORT_ROOT_DIR}/scripts"' in wf_body
-	assert 'SUPPORT_SCRIPTS_DIR="scripts"' not in wf_body
+	) in stage_helper_body
+	assert 'SUPPORT_ROOT_DIR="${RUNNER_TEMP}/coding-workflows-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in stage_helper_body
+	assert 'SUPPORT_SCRIPTS_DIR="${SUPPORT_ROOT_DIR}/scripts"' in stage_helper_body
+	assert 'SUPPORT_SCRIPTS_DIR="scripts"' not in stage_helper_body
 	# render_prompt.py is staged optionally on main so shim branches resolve
 	# their backend (PR #3057); keep this list in sync with review_autofix.yml.
-	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh render_prompt.py"' in wf_body
-	assert "for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do" in wf_body
-	assert "Bootstrapped ${f} from main snapshot (branch copy ignored)." in wf_body
+	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh render_prompt.py"' in stage_helper_body
+	assert "for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do" in stage_helper_body
+	assert "Bootstrapped ${f} from main snapshot (branch copy ignored)." in stage_helper_body
 	# The bootstrap still enumerates the script name in review_autofix.yml
 	# even after PR #1495 moved the resolver logic into support scripts.
-	assert "verify_integration_fingerprints.py" in wf_body
+	assert "verify_integration_fingerprints.py" in stage_helper_body
 	# The workflow must invoke the extracted prepare + resolve scripts so
 	# the integration-sync gate and fingerprint verifier actually run.
 	assert "review_conflict_prepare.sh" in wf_body
