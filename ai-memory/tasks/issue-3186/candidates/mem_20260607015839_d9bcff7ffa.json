@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for ref `719b917c48703b731b1c33ca8e777bfe295db07d` on `orchestrator/project-3185` (integration metadata matches).\n\nActions taken\n- Reviewed the live `Stage workflow support files` block in `.github/workflows/review_autofix.yml`.\n- Checked the validate-side source/fallback pattern in `.github/workflows/validate.yml`.\n- Checked `scripts/check_workflow_script_refs.py`, `docs/scripts-pending-removal.md`, and the review-autofix contract tests that currently assert inline staging content.\n\nClarification mapping\n- No Q1/Q2 were asked.\n- `/answer [auto-answered-by-orchestrator]` means proceed with the issue body as written.\n\nAutomation / wiring summary\n- Change type: add one shared script, update one existing reusable workflow, update existing tests/docs.\n- Entry point: `.github/workflows/review_autofix.yml` (`on.workflow_call`), only the existing `Stage workflow support files` step.\n- New supervisor: none.\n- DB work/gates: none.\n- Registry: add `scripts/stage_workflow_support.sh` to `docs/scripts-pending-removal.md` as the shared support-staging helper, likely as a long-running/permanent helper (`permanent \u2014 review annually`).\n\nRepresentative implementations to follow\n- Source of truth for behavior: `.github/workflows/review_autofix.yml` `Stage workflow support files`.\n- Future-compatibility reference only: `.github/workflows/validate.yml`\u2019s primary-vs-main source selection / local-fallback shape, so the new helper interface does not hard-code review-only assumptions.\n\nFiles likely to change\n- `scripts/stage_workflow_support.sh` (new)\n- `.github/workflows/review_autofix.yml`\n- `scripts/check_workflow_script_refs.py`\n- `docs/scripts-pending-removal.md`\n- `tests/test_review_semble_contract.py`\n- `tests/test_review_autofix_review_pipeline_contract.py`\n- `tests/test_workspace_cache_maintenance.py`\n- `tests/test_workspace_safety_check.py`\n\nImplementation plan\n1. Create `scripts/stage_workflow_support.sh`.\n   - Give it a documented env/CLI contract and reusable install helpers.\n   - Make it own the current review-autofix staging manifests and copy rules: required/main-primary/optional bootstrap scripts, Serena assets/template, AI-memory schemas/config, model catalog, reviewer failback JSON, root docs, required/optional prompts, and soft-installed review helpers.\n   - Preserve current destinations, permissions, warnings, and failure behavior exactly.\n\n2. Make the helper broad enough for later validate reuse, but wire only review_autofix now.\n   - Accept caller-supplied source roots and destination roots instead of baking in review-only paths.\n   - Keep the interface compatible with a later in-place caller that stages into `scripts/`, `prompts/`, and `ai-memory/`, but do not migrate validate in this issue.\n\n3. Replace the large inline review_autofix staging body with helper invocation.\n   - Keep the existing `.codex-workflow-src` / `.codex-workflow-src-main` checkouts.\n   - Resolve and execute the helper from the checked-out workflow-source snapshot, not from `${SUPPORT_SCRIPTS_DIR}`.\n   - Keep the same `SUPPORT_ROOT_DIR`, `SUPPORT_SCRIPTS_DIR`, `SUPPORT_PROMPTS_DIR`, `SUPPORT_AI_MEMORY_DIR`, `SUPPORT_INSTRUCTIONS_FILE`, `SUPPORT_CODEX_INSTRUCTIONS_FILE`, `SUPPORT_AGENTS_FILE`, and `IS_WORKFLOW_SOURCE_REPO` exports.\n   - Leave PR-metadata extraction, reviewer tuning, PR-state guards, and no-PR check-run behavior untouched.\n\n4. Preserve the existing bootstrap-reference safety guard.\n   - Update `scripts/check_workflow_script_refs.py` (or equivalent targeted validation) so moving the bare bootstrap manifests out of YAML does not weaken the current hallucinated-reference check.\n   - Keep `render_prompt.py` optional.\n   - Keep main-primary precedence for `verify_integration_fingerprints.py`, `review_conflict_prepare.sh`, and `review_conflict_resolve.sh`.\n\n5. Register the helper once.\n   - Add one `docs/scripts-pending-removal.md` entry for `scripts/stage_workflow_support.sh`.\n   - Word it as the shared support-staging helper so later validate adoption reuses the same registry row.\n\nData structures / interfaces affected\n- The review-autofix bootstrap manifests move from YAML into the helper\u2019s profile/manifests.\n- Internal helper interface will need:\n  - primary checkout root\n  - main fallback checkout root\n  - profile/phase (`review_autofix` now)\n  - staging mode/target roots\n  - `$GITHUB_ENV` path for support exports\n- No external API or consumer-facing interface change.\n\nRisks and edge cases\n- The helper runs before staged support exists, so it must be invoked from `.codex-workflow-src` / `.codex-workflow-src-main`.\n- Out-of-tree staging must remain intact, or self-repo reviewer/editor snapshots can be overwritten.\n- Exact staged paths matter; not everything lands under `SUPPORT_ROOT_DIR` (for example, `probably_unnecessary_but_read_if_stuck.md` is intentionally a workspace-root soft install).\n- `render_prompt.py` must remain optional for main-based callers.\n- Main-primary last-writer-wins behavior for resolver/fingerprint helpers must be preserved.\n- `review_autofix.yml` has a later post-`git clean` re-stage loop; this issue should not broaden into refactoring that path unless a tiny sync fix is unavoidable.\n- If the checker is left unchanged, moving manifests into shell will weaken an existing CI guard.\n\nTesting considerations\n- Update the existing contract tests that currently inspect the inline `Stage workflow support files` body so they assert the smaller workflow wiring plus the helper-owned manifests/semantics.\n- Minimum verification set:\n  - `pytest tests/test_review_semble_contract.py`\n  - `pytest tests/test_review_autofix_review_pipeline_contract.py`\n  - `pytest tests/test_workspace_cache_maintenance.py`\n  - `pytest tests/test_workspace_safety_check.py`\n  - `python3 scripts/check_workflow_script_refs.py`\n  - `bash -n scripts/stage_workflow_support.sh`\n\nAssumptions\n- The auto-posted `/answer` only confirms continuation; it does not add scope beyond the issue body.\n- Later validate migration is intentionally deferred; only the helper contract needs to keep that path open now.\n\nMissing-context notes\n- None blocking for planning.\n\nConflicts\n- No repo/issue mismatch found on this ref; the current `review_autofix.yml` still matches the issue description.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "ab1295f46a8f87e95dea13032c566c2b2a6010ef149fe4a2cfc5a698bbc4eba8",
+  "lineage": {
+    "issue_number": 3186,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27079631463",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27079631463",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3186"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260607015839_d9bcff7ffa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3186,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27079631463"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3186",
+  "timestamps": {
+    "created_at": "2026-06-07T01:58:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
