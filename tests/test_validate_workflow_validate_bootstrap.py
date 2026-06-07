@@ -101,6 +101,13 @@ def test_stage_workflow_support_helper_runs_overlay_loader_for_validate() -> Non
 		assert snippet in helper
 
 
+def test_stage_workflow_support_helper_uses_portable_copy_guard_and_optional_main_checkout() -> None:
+	helper = _helper_text()
+	assert '[ -n "${GH_TOKEN:-}" ] && checkout_support_ref "main" "${SUPPORT_STAGE_ROOT}/main"' in helper
+	assert '[ "${source_path}" -ef "${target_path}" ]' in helper
+	assert "realpath -m" not in helper
+
+
 def test_validate_workflow_passes_template_default_env() -> None:
 	wf = _workflow_text()
 	assert "VALIDATION_USE_TEMPLATES: ${{ vars.VALIDATION_USE_TEMPLATES || 'true' }}" in wf
@@ -139,6 +146,7 @@ def test_codex_heartbeat_helper_contract() -> None:
 def main() -> int:
 	test_validate_workflow_bootstrap_uses_shared_helper_and_lists_template_assets()
 	test_stage_workflow_support_helper_runs_overlay_loader_for_validate()
+	test_stage_workflow_support_helper_uses_portable_copy_guard_and_optional_main_checkout()
 	test_validate_workflow_passes_template_default_env()
 	test_validate_workflow_bootstraps_revalidate_lifecycle_ai_memory_schemas()
 	test_validate_workflow_bootstraps_codex_heartbeat_support()

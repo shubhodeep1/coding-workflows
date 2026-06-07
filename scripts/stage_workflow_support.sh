@@ -135,7 +135,7 @@ bootstrap_support_roots()
 		exit 1
 	fi
 
-	if [ "${RESOLVED_SCRIPT_REF}" != "main" ] && checkout_support_ref "main" "${SUPPORT_STAGE_ROOT}/main"; then
+	if [ "${RESOLVED_SCRIPT_REF}" != "main" ] && [ -n "${GH_TOKEN:-}" ] && checkout_support_ref "main" "${SUPPORT_STAGE_ROOT}/main"; then
 		SUPPORT_MAIN_ROOT="${SUPPORT_STAGE_ROOT}/main"
 	fi
 }
@@ -158,7 +158,7 @@ copy_from_ref_or_local()
 	fi
 
 	if [ -n "${source_path}" ]; then
-		if [ -e "${target_path}" ] && [ "$(realpath -m "${source_path}")" = "$(realpath -m "${target_path}")" ]; then
+		if [ -e "${target_path}" ] && [ "${source_path}" -ef "${target_path}" ]; then
 			return 0
 		fi
 		cp "${source_path}" "${target_path}" || {
