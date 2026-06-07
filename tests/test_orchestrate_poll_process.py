@@ -63,6 +63,12 @@ def _make_poller_sandbox(target: Path) -> None:
 	context came from integration branch state rather than default-branch
 	state.
 	"""
+	git_env = os.environ.copy()
+	# GitHub Actions / review-autofix can export repo-scoped GIT_* vars
+	# that would otherwise redirect `git init` / `git add` / `git commit`
+	# into the outer checkout instead of this throwaway sandbox repo.
+	for _key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+		git_env.pop(_key, None)
 	for rel in _SANDBOX_DIRS:
 		src = REPO_ROOT / rel
 		if src.exists():
@@ -76,18 +82,21 @@ def _make_poller_sandbox(target: Path) -> None:
 	subprocess.run(
 		["git", "init", "--quiet", str(target)],
 		check=True,
+		env=git_env,
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
 	)
 	subprocess.run(
 		["git", "-C", str(target), "config", "user.email", "sandbox@example.com"],
 		check=True,
+		env=git_env,
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
 	)
 	subprocess.run(
 		["git", "-C", str(target), "config", "user.name", "Poller Sandbox"],
 		check=True,
+		env=git_env,
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
 	)
@@ -99,21 +108,24 @@ def _make_poller_sandbox(target: Path) -> None:
 	# here and an unsigned commit is identical to the signed one for
 	# every assertion the suite makes.
 	for _key in ("commit.gpgsign", "commit.gpgSign", "tag.gpgsign", "tag.gpgSign"):
-		subprocess.run(
-			["git", "-C", str(target), "config", _key, "false"],
-			check=False,
-			stdout=subprocess.DEVNULL,
-			stderr=subprocess.DEVNULL,
-		)
+			subprocess.run(
+				["git", "-C", str(target), "config", _key, "false"],
+				check=False,
+				env=git_env,
+				stdout=subprocess.DEVNULL,
+				stderr=subprocess.DEVNULL,
+			)
 	subprocess.run(
 		["git", "-C", str(target), "checkout", "-B", "main"],
 		check=True,
+		env=git_env,
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
 	)
 	subprocess.run(
 		["git", "-C", str(target), "add", "-A"],
 		check=True,
+		env=git_env,
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
 	)
@@ -125,12 +137,14 @@ def _make_poller_sandbox(target: Path) -> None:
 			"commit", "--allow-empty", "-m", "sandbox init", "--quiet",
 		],
 		check=True,
+		env=git_env,
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
 	)
 	subprocess.run(
 		["git", "-C", str(target), "checkout", "-B", "orchestrator/project-192"],
 		check=True,
+		env=git_env,
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
 	)
@@ -141,18 +155,21 @@ def _make_poller_sandbox(target: Path) -> None:
 	subprocess.run(
 		["git", "-C", str(target), "add", ".orchestrator_judge_context_sentinel.txt"],
 		check=True,
+		env=git_env,
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
 	)
 	subprocess.run(
 		["git", "-C", str(target), "commit", "-m", "integration sentinel", "--quiet"],
 		check=True,
+		env=git_env,
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
 	)
 	subprocess.run(
 		["git", "-C", str(target), "checkout", "main"],
 		check=True,
+		env=git_env,
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
 	)
@@ -162,6 +179,7 @@ def _make_poller_sandbox(target: Path) -> None:
 			"origin", "https://github.com/test-harness/poller-sandbox.git",
 		],
 		check=True,
+		env=git_env,
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
 	)
@@ -235,6 +253,16 @@ def _run_poller_subprocess(
 		owns_sandbox = True
 		_make_poller_sandbox(sandbox)
 	try:
+		env = dict(env)
+		# The review-autofix runner injects a BASH_ENV helper that cd's every
+		# bash subprocess back to WORKSPACE_PATH. Sandbox-based poller tests
+		# rely on cwd=str(sandbox), so strip that hook (and its companion
+		# workspace vars) before launching the child process.
+		env.pop("BASH_ENV", None)
+		env.pop("ENV", None)
+		env.pop("WORKSPACE_PATH", None)
+		env["PWD"] = str(sandbox)
+		env.pop("OLDPWD", None)
 		cmd = _rewrite_cmd_for_sandbox(cmd, sandbox)
 		proc = subprocess.Popen(
 			cmd,
