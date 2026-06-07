@@ -324,3 +324,244 @@ Status keys below are scoped as `<source doc> :: <recommendation id>` because ID
 - The approved plan's stale-repo warning for the five `safe_to_apply` items was no longer true by implementation time: current repo state shows those cleanups already merged, so this report records them as actioned.
 - `analysis/workflow-optimization-2026-05-23.md` did not use MERGE/REUSE-style IDs, so the ledger groups its repeated source recommendations under stable heading-text labels when multiple sections point at the same landed change.
 - With the four 2026-05-22/23 source docs now deleted, `.github/workflows/comprehensive-test-and-release.yml` will hit its existing fallback path to `analysis/recommendation-processing-report.md` on future runs.
+
+---
+
+# Pass 2026-06-07 — workflow-optimization 2026-05-29 → 2026-06-06-3 (8 docs)
+
+Grounding note: every classification below reflects the **current repository
+state on this ref** (branch `claude/ecstatic-goodall-R7j2W`), validated by
+re-reading the targeted code, not historical intent or external GitHub state.
+"Applied" means the edit is present in this PR; "obsolete/already-satisfied"
+means the current code already does it (verified, several via passing CI
+contract tests); "rejected" means the recommendation is wrong on re-read of
+the actual code; "not applied" means correct-but-risky and left for human
+review per the apply-analysis safety bar (correct **and** safe to land
+without breaking existing flows).
+
+## Processed source docs (8 — deleted in this pass, retained for provenance)
+- `analysis/workflow-optimization-2026-05-29.md`
+- `analysis/workflow-optimization-2026-06-04.md`
+- `analysis/workflow-optimization-2026-06-05.md`
+- `analysis/workflow-optimization-2026-06-05-2.md`
+- `analysis/workflow-optimization-2026-06-05-3.md`
+- `analysis/workflow-optimization-2026-06-06.md`
+- `analysis/workflow-optimization-2026-06-06-2.md`
+- `analysis/workflow-optimization-2026-06-06-3.md`
+
+The four excluded non-recommendation files were left untouched:
+`analysis/last_collection_timestamp.txt`,
+`analysis/validation-selftest-status.json`, this report, and the prior
+report sections above.
+
+## Applied (3)
+
+- **Quote the credential-bearing remote URL (SC2086 / SEC)** —
+  `scripts/review_commit_changes.sh:489`. Was
+  `git remote set-url origin https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}`
+  (unquoted); now quoted. Zero behavior change for normal inputs, strictly
+  safer (word-split/glob hardening on a credential string). Source IDs:
+  `2026-05-29 SHELL-001`, `2026-06-06 SEC-001`. Verified `bash -n` +
+  `test_workspace_safety_check`, `test_codex_thread_reuse_review`,
+  `test_review_conflict_resolve_*` all pass.
+- **Quote the credential-bearing remote URL (SC2086 / SEC)** —
+  `scripts/review_conflict_resolve.sh:2510`. Same minimal quoting fix.
+  Source IDs: `2026-05-29 SHELL-001`, `2026-06-04 SHELL-001`,
+  `2026-06-06 SEC-001`. The docs' larger alternative (switch to
+  `git -c http.extraHeader` Basic-auth) was **not** taken — it is a bigger
+  behavioral refactor; all three docs name quoting as the minimum safe fix
+  (§5 minimal change set).
+- **Reuse `github.event.repository.default_branch` instead of a redundant
+  `repos/{repo}` read** — `.github/workflows/internal-review.yml:91,118`
+  (`resolve-claude-branch-pr`). Replaced
+  `base_ref="$(gh api "repos/${REPOSITORY}" --jq '.default_branch' ... || echo 'main')"`
+  with `base_ref="${EVENT_DEFAULT_BRANCH:-main}"`, sourced from the event
+  payload. The job is gated on `github.event_name == 'push'`, so the field
+  is always present in the event context; the `:-main` fallback preserves
+  the previous default exactly (CLAUDE.md §15). Source ID:
+  `2026-06-06-2 REUSE-001` (tagged `SAFE_TO_MERGE`). Verified `yamllint -s`
+  passes and the YAML parses.
+
+## Rejected (invalid on re-read)
+
+- **Change `VALIDATE_WORKFLOW_NAME` default from `ai-validate.yml` to
+  `internal-validate.yml`** (`2026-06-04 Speed-4` / `GH API-1`;
+  `2026-06-04 Reliability` post-merge dispatch) — REJECTED. The doc only
+  inspected `.github/workflows/` in this repo and concluded `ai-validate.yml`
+  does not exist. It does exist as the **consumer template**
+  `workflow-templates/ai-validate.yml`, which consumer repos copy into their
+  own `.github/workflows/ai-validate.yml`. So `ai-validate.yml` is the
+  correct default for the primary consumer use case, and the self-repo
+  (`internal-validate.yml`) path is already covered by the explicit fallback
+  at `review_autofix.yml:819`
+  (`... || { [ "${validate_workflow}" != "internal-validate.yml" ] && gh workflow run "internal-validate.yml" ...; }`).
+  Changing the default would break consumer repos that have no
+  `internal-validate.yml`. The only real cost is one failed self-repo
+  dispatch that the fallback already absorbs.
+
+## Obsolete / already-satisfied on this ref
+
+The following recommendations target code that the current ref already does;
+several are verified by contract tests that pass on this branch (so the
+"CI contract regression" failures the docs cite were on stale tested refs,
+not current main).
+
+- **Per-attempt prompt-file contract** (`2026-06-04 Reliability-1`,
+  `2026-06-05 Speed-2/Reliability-1`, `2026-06-05-2 Reliability-2`,
+  `2026-06-06 Reliability-1`) — current main feeds Codex stdin from the
+  per-attempt prompt file. `tests/test_review_autofix_editor_noop_cascade_contract.py`
+  PASSES on this ref.
+- **`REVIEW_RUN_MAX_RUNTIME_MINUTES` unbound + `timeout --signal=TERM
+  --kill-after=5s` in `implement.yml`** (`2026-06-05-3 Reliability-1`,
+  `2026-06-06 Reliability-1`, `2026-06-06-2 Reliability-1`) —
+  `tests/test_codex_stall_guard_poller.py` PASSES on this ref.
+- **Thread-reuse wiring contract `codex_thread_reuse.sh; do`**
+  (`2026-06-06-3 Reliability-1`) — `tests/test_codex_thread_reuse_core.py`
+  and `tests/test_codex_thread_reuse_review.py` PASS on this ref.
+- **Brace-expansion rename parsing in the reviewer diffstat filter**
+  (`2026-05-29 Reliability-1`) — `scripts/review_run_reviewers.sh:434-436`
+  already handles `{ ... => ... }` rename diffstat rows;
+  `tests/test_review_autofix_review_pipeline_contract.py` PASSES.
+- **Keep Semble enabled / do not invest in Serena / treat Semble fixture
+  fallbacks as healthy fail-open** (every doc's Cost + Reliability "Semble"
+  and "Serena" items) — these are affirmations to *not change* current
+  defaults (`SEMBLE_ENABLED=true`, `SERENA_ENABLED=false`, fail-open
+  fixtures). No action required; current state already matches.
+
+## Not applied — correct-but-risky / needs review
+
+These are real findings, but each is high-blast-radius, hot-path,
+public-contract, a multi-file refactor, a behavior/observability tradeoff,
+a §6 identifier change, or tagged `NEEDS_VERIFICATION` / `RISKY_SKIP` by the
+source doc's own consolidation audit. They are left for human review per the
+apply bar; none were split into a follow-up PR.
+
+### Large refactors (expression-size + duplication)
+- **Extract the workflow-support staging/bootstrap blocks to a shared
+  `scripts/stage_workflow_support.sh`** (`EXPR-001/002/003/004` and
+  `DUP-001` across 05-29, 06-04, 06-05-3, 06-06, 06-06-2, 06-06-3) — the
+  largest blocks (`validate.yml`, `review_autofix.yml`) are near the 21k
+  expression cap, but extraction spans 6-8 workflows and changes
+  staging/fallback semantics. Multi-file, high blast radius.
+- **Centralize the inline `gh_retry` / `gh_api_safe` / `_rl_wait` wrappers
+  on `scripts/gh_helpers.sh`** (`DUP-001/002/003` retry-wrapper variants in
+  every deep-audit doc; `API-005` 06-04; `API-001` 06-06-3) — touches many
+  workflows and changes permanent-vs-transient failure handling.
+- **Extract `Commit changes` / `Collect PR metadata` to dedicated scripts**
+  (`EXPR-003/004`) — large hot-path `run:` blocks.
+- **Shared Python log-analysis util module** (`2026-05-29 DUP-003`) and
+  **canonical Python integration-ref resolver** (`2026-06-06-2 DUP-003`) —
+  module reorganization (§12.D).
+
+### GitHub API batching / consolidation (NEEDS_VERIFICATION / RISKY_SKIP)
+- **`gh_pr_with_all_comments` consolidation of the 4 PR-context fetches**
+  (`API-001` 06-04/06-06/06-06-2, `BATCH-001` 06-05-3) — hot review path;
+  GraphQL/REST pagination + `PR_REVIEWS_FILE` parity must be proven first.
+- **Batch post-merge / fallback linked-issue label hydration via GraphQL**
+  (`BATCH-001/002/003` 06-04/06-05-3/06-06/06-06-3, `API-002/003`) —
+  validate-dispatch fail-open + label-removal semantics need parity proof.
+- **Batch `_subissue_closing_pr_number` per-PR reads / `review_rb_judge`
+  linked-issue GraphQL** (`API-001` 06-06, `BATCH-002` 06-06-3,
+  `API-002` 06-04) — orchestrator/poller decision logic.
+- **Consolidation/re-fetch candidates** `MERGE-001..003`, `REUSE-001..004`,
+  `DEAD-API-001/002` across all consolidation sections — every one is
+  tagged `NEEDS_VERIFICATION` or `RISKY_SKIP` (clarify.yml comment merge,
+  implement.yml issue reads, orchestrate_clarify_respond issue reads,
+  test-and-mark-stable PR-stability probe, issue_pr_status PR-body
+  fallback, review_autofix base_ref_override, force-tick tracking issue,
+  `read_standalone_state_json` / `list_run_log_excerpts` dead helpers in
+  externally-sourceable scripts). The single `SAFE_TO_MERGE` PR-metadata
+  re-fetch (`2026-06-06-2 REUSE-001`) is the one applied above;
+  `2026-06-05-3 MERGE-002` (implement-diagnose issue-read consolidation) was
+  tagged `SAFE_TO_MERGE` but is left for review — see below.
+- **`2026-06-05-3 MERGE-002` (implement_diagnose label+body single fetch)**
+  — `scripts/implement_diagnose_post_codex_failure.sh:166-172,261-277`. The
+  two reads are separated by early-`exit 0` branches (label-already-set,
+  no-capture), use different mechanisms (`_safe_gh_jq` vs `gh api`) and
+  different fail-open defaults (`[]` vs empty body). Consolidating to one
+  memoized fetch is doable but changes fail-open semantics on a
+  failure-diagnosis path for a 1-call saving on a rare miss path. §1
+  (correctness > speed) → defer.
+
+### Correctness defects with tradeoffs / shared-helper rollout
+- **`gh api --jq ... || echo` stdout-corruption PR/issue-state guards**
+  (`2026-05-29 BUG-001` plan.yml auto-approve, `BUG-002` review_autofix
+  two PR-state guards) — real, but the fix has a fail-open-vs-fail-closed
+  tradeoff on hot dispatch/alert paths (§12.D "material tradeoff").
+- **Strict linked-issue extractor** (`2026-06-04 BUG-001/002/005`,
+  `CONSIST-001`; `2026-06-05-3 BUG-001`) — bare `issue #N` / `issues/N`
+  accepted in several review_autofix/`review_rb_judge` fallbacks while
+  `issue_pr_status.yml` rejects them. Correct concern, but the fix is one
+  shared extractor replacing ad-hoc regex across multiple workflows/scripts
+  (matches the prior report's deferred `shared-strict-linked-issue-extractor`).
+- **`resolve_integration_ref.sh` fail-open-to-default-branch on transient
+  API error in write flows** (`2026-06-06-2 BUG-001`) — genuine
+  correctness/safety concern (write flows could reroute to the default
+  branch on a transient error), but the fix is a tri-state resolver contract
+  change across `implement`/`validate`/`clarify`/`plan`/`respond`. Flagged
+  as the highest-priority deferral for human review.
+- **`tg_helpers` read-modify-write race** (`2026-06-04 BUG-004`) — changes
+  Telegram/GitHub comment side effects (prior report's
+  `tg-helper-...-normalization`).
+- **`internal-review.yml` percent-encode `HEAD_REF`** (`2026-06-04 BUG-003`)
+  — safe in principle, but `claude/**` branch names do not contain
+  URL-reserved characters in practice, so it is low-value added code; left
+  out to keep the touched step minimal.
+- **`review_run_reviewers.sh` pass-1 hardcoded `xhigh` / pass-2 small-diff
+  default** (`2026-06-06 BUG-001`, `CONSIST-001`) — reasoning-effort
+  behavior change with a quality tradeoff (§12.D).
+- **`implement.yml` suffix-match `*/coding-workflows` self-repo guard**
+  (`2026-06-05-3 CONSIST-001`) and **`orchestrate_poll_process.sh`
+  `ensure_label_exists` return-0-on-failure** (`2026-06-06-3 CONSIST-001`)
+  — behavior changes in self-repo / poller paths needing review.
+
+### Speed / cost / reliability program items (architecture & tuning)
+- Inline review gate into heavy job; reasoning tiering for
+  plan/implement/reviewer; conditionalize `free-disk-space`;
+  phase-completion poller dispatch; reviewer fan-out reduction;
+  small-diff / no-PR review fast path + lightweight profile; check-run
+  poll backoff / lower `CHECK_RUNS_WAIT_TIMEOUT_SECS`; terminal-state
+  short-circuit for stuck editor / PR-closed runs; Phase-4 non-cancelled
+  run selection at `PIN_SHA`; one comment-router/dispatcher workflow; CI
+  `lint` sharding + brittle-contract-first ordering; trim
+  `workflow_log_analysis` scope / cap `summarize_unselected_runs`;
+  prompt-cache + reviewer-token telemetry instrumentation; AI-memory
+  retrieval tuning / worktree-collision fix; prompt-size reduction; Semble
+  byte budgets + fallback-parser de-noising; validate observability /
+  log-retention; trim `orchestrate_poll` fixed overhead. All are
+  architectural changes, model/behavior tradeoffs, or observability work
+  on hot paths — out of scope for an auto-safe apply.
+
+### Dead code / shellcheck (low value, sensitive or non-trivial)
+- `RESOLVER_ESCALATION_COMMENT_MARKER` unused (`2026-05-29 DEAD-001`),
+  `orchestrate_lib.py` contradiction-evidence dormant (`2026-06-04
+  DEAD-001`, already documented reserved in `agents.md`),
+  `ai_context_utils.py` unattached (`2026-06-05-3 DEAD-001`),
+  `read_standalone_state_json` (`DEAD-001`/`DEAD-API-001` 06-06/06-06-2/
+  06-06-3, externally-sourceable poller script), `review_issue_ledger.sh`
+  unused locals (`2026-06-06-3 DEAD-001`), `list_run_log_excerpts` wrapper
+  (`2026-06-06 DEAD-API-002`, still referenced by tests),
+  `review_run_reviewers.sh` SC2086/unused-vars/smart-quotes (`2026-06-04
+  SHELL-002`), `validate_changed_files_syntax.sh` overlapping case
+  (`2026-06-06-2 SHELL-001`), `review_conflict_resolve.sh`
+  `_dispatch_integration_judge_now` inline-env `--repo` (`2026-06-06-3
+  SHELL-001`, race-dispatch path), deprecated `caller_workflow` /
+  `codex_mode` / `--commit-message` / `--pr-title` surfaces (`DEBT-001`
+  06-06/06-06-3 — §6 back-compat, ask-first). Deferred: each is either in a
+  sensitive/externally-consumable path, still referenced, or a §6 surface.
+
+## Verification (this pass)
+- `bash -n` clean on both edited scripts.
+- `yamllint -s` clean on `internal-review.yml`; YAML parses.
+- Contract tests covering the edited files pass:
+  `test_codex_thread_reuse_review`, `test_workspace_safety_check`,
+  `test_review_conflict_resolve_retry_state`,
+  `test_review_conflict_resolve_reasoning_step_down`,
+  `test_review_conflict_resolve_smoke_deterministic`,
+  `test_review_conflict_resolve_retry_prelude_render`,
+  `test_codex_stall_guard_scripts`, `test_run_substate_ledger`,
+  `test_review_autofix_review_pipeline_contract`.
+- "Already-satisfied" CI contract tests independently pass on this ref
+  (see Obsolete section). Remaining local test failures are environment
+  artifacts only (container commit-signing server, missing `gawk`), not
+  code or recommendation issues.
