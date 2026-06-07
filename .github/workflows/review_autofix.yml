@@ -1615,8 +1615,9 @@ jobs:
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
-          pr_state="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' || echo "")"
-          if [ -n "${pr_state}" ] && [ "${pr_state}" != "open" ]; then
+          pr_meta="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" || echo 'null')"
+          pr_state="$(printf '%s\n' "${pr_meta}" | jq -r 'if ((.merged_at != null) or (.merged == true)) then "merged" else (.state // "") end' | grep -xE 'open|closed|merged' || echo "")"
+          if [ "${pr_state}" = "closed" ] || [ "${pr_state}" = "merged" ]; then
             echo "::warning::PR #${PR_NUMBER} is ${pr_state} — setting PR_CLOSED to skip downstream work."
             echo "PR_CLOSED=true" >> "$GITHUB_ENV"
           fi
@@ -6516,10 +6517,14 @@ jobs:
         if: failure() && env.PR_CLOSED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
-          pr_state="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
-          if [ "${pr_state}" != "open" ]; then
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+
+          pr_meta="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo 'null')"
+          pr_state="$(printf '%s\n' "${pr_meta}" | jq -r 'if ((.merged_at != null) or (.merged == true)) then "merged" else (.state // "") end' | grep -xE 'open|closed|merged' || echo "")"
+          if [ "${pr_state}" = "closed" ] || [ "${pr_state}" = "merged" ]; then
             echo "PR #${PR_NUMBER} is ${pr_state} — skipping failure alerts."
             echo "PR_CLOSED=true" >> "$GITHUB_ENV"
           fi
