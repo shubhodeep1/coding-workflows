@@ -63,6 +63,12 @@ def _make_poller_sandbox(target: Path) -> None:
 	context came from integration branch state rather than default-branch
 	state.
 	"""
+	git_env = os.environ.copy()
+	# GitHub Actions / review-autofix can export repo-scoped GIT_* vars
+	# that would otherwise redirect `git init` / `git add` / `git commit`
+	# into the outer checkout instead of this throwaway sandbox repo.
+	for _key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+		git_env.pop(_key, None)
 	for rel in _SANDBOX_DIRS:
 		src = REPO_ROOT / rel
 		if src.exists():
@@ -76,18 +82,21 @@ def _make_poller_sandbox(target: Path) -> None:
 	subprocess.run(
 		["git", "init", "--quiet", str(target)],
 		check=True,
+		env=git_env,
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
 	)
 	subprocess.run(
 		["git", "-C", str(target), "config", "user.email", "sandbox@example.com"],
 		check=True,
+		env=git_env,
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
 	)
 	subprocess.run(
 		["git", "-C", str(target), "config", "user.name", "Poller Sandbox"],
 		check=True,
+		env=git_env,
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
 	)
@@ -99,21 +108,24 @@ def _make_poller_sandbox(target: Path) -> None:
 	# here and an unsigned commit is identical to the signed one for
 	# every assertion the suite makes.
 	for _key in ("commit.gpgsign", "commit.gpgSign", "tag.gpgsign", "tag.gpgSign"):
-		subprocess.run(
-			["git", "-C", str(target), "config", _key, "false"],
-			check=False,
-			stdout=subprocess.DEVNULL,
-			stderr=subprocess.DEVNULL,
-		)
+			subprocess.run(
+				["git", "-C", str(target), "config", _key, "false"],
+				check=False,
+				env=git_env,
+				stdout=subprocess.DEVNULL,
+				stderr=subprocess.DEVNULL,
+			)
 	subprocess.run(
 		["git", "-C", str(target), "checkout", "-B", "main"],
 		check=True,
+		env=git_env,
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
 	)
 	subprocess.run(
 		["git", "-C", str(target), "add", "-A"],
 		check=True,
+		env=git_env,
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
 	)
@@ -125,12 +137,14 @@ def _make_poller_sandbox(target: Path) -> None:
 			"commit", "--allow-empty", "-m", "sandbox init", "--quiet",
 		],
 		check=True,
+		env=git_env,
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
 	)
 	subprocess.run(
 		["git", "-C", str(target), "checkout", "-B", "orchestrator/project-192"],
 		check=True,
+		env=git_env,
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
 	)
@@ -141,18 +155,21 @@ def _make_poller_sandbox(target: Path) -> None:
 	subprocess.run(
 		["git", "-C", str(target), "add", ".orchestrator_judge_context_sentinel.txt"],
 		check=True,
+		env=git_env,
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
 	)
 	subprocess.run(
 		["git", "-C", str(target), "commit", "-m", "integration sentinel", "--quiet"],
 		check=True,
+		env=git_env,
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
 	)
 	subprocess.run(
 		["git", "-C", str(target), "checkout", "main"],
 		check=True,
+		env=git_env,
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
 	)
@@ -162,6 +179,7 @@ def _make_poller_sandbox(target: Path) -> None:
 			"origin", "https://github.com/test-harness/poller-sandbox.git",
 		],
 		check=True,
+		env=git_env,
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
 	)
@@ -235,6 +253,16 @@ def _run_poller_subprocess(
 		owns_sandbox = True
 		_make_poller_sandbox(sandbox)
 	try:
+		env = dict(env)
+		# The review-autofix runner injects a BASH_ENV helper that cd's every
+		# bash subprocess back to WORKSPACE_PATH. Sandbox-based poller tests
+		# rely on cwd=str(sandbox), so strip that hook (and its companion
+		# workspace vars) before launching the child process.
+		env.pop("BASH_ENV", None)
+		env.pop("ENV", None)
+		env.pop("WORKSPACE_PATH", None)
+		env["PWD"] = str(sandbox)
+		env.pop("OLDPWD", None)
 		cmd = _rewrite_cmd_for_sandbox(cmd, sandbox)
 		proc = subprocess.Popen(
 			cmd,
@@ -2965,6 +2993,18 @@ def test_complete_verdict_enters_validation_and_finishes_after_integration_drift
 	assert first["latest_state"]["final_merge_status"] == "pending"
 	assert first["latest_state"].get("validation_completed_cycle") is None
 	assert "ai:validating" in first["tracking_labels"]
+	# Validation must actually dispatch against the integration branch even
+	# though it is ahead of default (ahead_by=5). Asserting the dispatch —
+	# not just the status flip — is what guards against the
+	# validate-needs-merge / merge-needs-validate deadlock: an earlier
+	# revision gated dispatch on PROJECT_COMPLETE (which folds in
+	# ahead_by==0) and so silently never dispatched here.
+	assert len(first["validation_dispatches"]) == 1, (
+		"validation must dispatch under integration drift; got "
+		f"{first['validation_dispatches']!r}, stderr=\n{first['stderr']}"
+	)
+	assert first["validation_dispatches"][0]["ref"] == "orchestrator/project-192"
+	assert first["latest_state"]["validation_last_dispatch_cycle"] == 2
 	first_tracking_comments = [
 		str((c or {}).get("body", ""))
 		for c in first["issues"][str(192)]["comments"]
@@ -2998,6 +3038,80 @@ def test_complete_verdict_enters_validation_and_finishes_after_integration_drift
 		"Validation completion after drift must not re-trigger the pending-wave override; "
 		f"stdout=\n{second['stdout']}\nstderr=\n{second['stderr']}"
 	)
+
+
+def test_validation_dispatches_under_integration_drift_when_validation_enabled():
+	"""Regression for the integration-branch validation-dispatch deadlock
+	(reported from consumer ``shubhodeep1/radateeree-resort.com#3`` against
+	``coding-workflows@stable``).
+
+	For a project that uses a separate integration branch with validation
+	enabled, the judge ``complete)`` arm transitions to ``status=validating``
+	without first merging integration→default (that merge is intentionally
+	deferred until ``ai:validated``). ``dispatch_validation_if_needed`` then
+	gated its preflight on ``PROJECT_COMPLETE``, which folds in
+	``integration_contained_in_default`` (``ahead_by==0``). While the
+	integration branch is ahead of default (``ahead_by>0``), that gate is
+	never satisfied, so validation never dispatches; but the
+	integration→default merge that would clear it only runs after
+	``ai:validated`` — which can only be earned by a validation run that
+	never dispatches. Permanent stall.
+
+	The fix gates the preflight on ``WAVE_COMPLETE`` / ``ANY_FAILED`` (wave
+	PRs merged into the integration branch) instead of ``PROJECT_COMPLETE``,
+	because validation runs against ``ref=integration_branch``. This test
+	pins ``compare_ahead_by=5`` and asserts validation dispatches against the
+	integration branch on the judge-complete entry AND again on a subsequent
+	poll that re-enters the function from the steady-state ``validating``
+	loop (where ``PROJECT_COMPLETE`` is unset and the live gate is recomputed
+	by ``refresh_validation_dispatch_wave_gate``)."""
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	kw = dict(
+		enable_validation="true",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+	)
+
+	# First poll: judge declares complete; the validation-enabled complete)
+	# arm must reach a dispatch despite ahead_by=5.
+	first = _run_poller(state=state, **kw)
+	assert first["latest_state"]["status"] == "validating"
+	assert len(first["validation_dispatches"]) == 1, (
+		"validation must dispatch from the judge-complete arm under "
+		f"integration drift; got {first['validation_dispatches']!r}, "
+		f"stderr=\n{first['stderr']}"
+	)
+	assert first["validation_dispatches"][0]["ref"] == "orchestrator/project-192"
+	assert first["latest_state"]["validation_last_dispatch_cycle"] == 1
+	# The old PROJECT_COMPLETE-gated deferral line must be gone.
+	assert "Preflight: PROJECT_COMPLETE=" not in (first["stdout"] + first["stderr"]), (
+		"dispatch must not defer on PROJECT_COMPLETE while integration is "
+		f"ahead of default; stdout=\n{first['stdout']}\nstderr=\n{first['stderr']}"
+	)
+
+	# Steady-state validating loop: reset the dispatch marker (as a stale /
+	# redispatch tick would) and confirm the function re-enters from the
+	# validating arm — where PROJECT_COMPLETE is unset on entry — and still
+	# dispatches once the live wave gate is recomputed. ahead_by stays 5.
+	resumed = dict(first["latest_state"])
+	resumed["validation_last_dispatch_cycle"] = 0
+	resumed["validation_last_dispatch_ts"] = 0
+	second = _run_poller(
+		state=resumed,
+		tracking_labels=["ai:validating"],
+		**kw,
+	)
+	assert second["latest_state"]["status"] == "validating"
+	assert len(second["validation_dispatches"]) == 1, (
+		"validation must re-dispatch from the steady-state validating loop "
+		f"under integration drift; got {second['validation_dispatches']!r}, "
+		f"stderr=\n{second['stderr']}"
+	)
+	assert second["validation_dispatches"][0]["ref"] == "orchestrator/project-192"
+	assert second["latest_state"]["final_merge_status"] == "pending"
 
 
 def test_integration_ahead_creates_and_reuses_eager_draft_pr_before_validation_complete():
