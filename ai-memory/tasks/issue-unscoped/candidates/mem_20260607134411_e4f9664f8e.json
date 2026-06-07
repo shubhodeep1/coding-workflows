@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/codex_thread_reuse.sh:473-481, 582-590 | severity=low | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Comments were tightened to remove the prior opt-out language even though the implementation remains backward-compatible and an explicit false still disables the flag.\n  WHY: This is documentation-only alignment with the new repo-wide contract; it does not fail at runtime, and the reviewer explicitly noted the opt-out path remains operational.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"the next omission fails CI instead of production\" (implied requirement from PR description section \"3 \u2014 enforce it at PR time\")\n  expected_change_site: CI job in this PR or a future PR that adds a violating codex invocation\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: No CI enforcement exists: the scanner in test_codex_skip_git_repo_check_contract.py has no GitHub Actions job that runs it, so a future violating workflow could pass unnoticed.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement: \"the next omission fails CI instead of production\" (implied requirement from PR description section \"3 \u2014 enforce it at PR time\")\n  Expected change site: CI job in this PR or a future PR that adds a violating codex invocation\n  Evidence of absence: No CI enforcement exists: the scanner in test_codex_skip_git_repo_check_contract.py has no GitHub Actions job that runs it. If another workflow site omits --skip-git-repo-check, CI will pass without noticing the violation, so the failure must be produced at PR time.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: scripts/codex_thread_reuse.sh\n  Line or code reference: lines 473-481 (run_once comment) and 582-590 (direct_run comment + variable)\n  Problem: Comments were tightened to remove prior opt-out language (\"may still pass false\", \"Callers may set ...=false\") while the implementation (positional `${9:-true}`, `CODEX_THREAD_REUSE_SKIP_GIT_REPO_CHECK:-true`, conditional `codex_thread_reuse_truthy` + `cmd+=(--skip-git-repo-check)`, and `cmd` array build) remains 100% backward-compatible; an explicit false still disables the flag.\n  Why it fails at runtime: It does not fail at runtime \u2014 the opt-out path continues to work exactly as before. This is purely a documentation alignment to the new repo-wide \"automation callers should leave the check skipped\" contract enforced by the new test.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "cfb0d625567ef04a94ff3a99b855ca5dada6e4fb2deadcf3bf3ae7afb996ed70",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3196,
+    "run_id": "27093454559",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27093454559",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260607134411_e4f9664f8e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3196,
+    "run_id": "27093454559"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-07T13:44:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
