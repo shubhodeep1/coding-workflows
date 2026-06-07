@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_codex_skip_git_repo_check_contract.py:42-87 (_scanned_files + _INVOCATION) | severity=medium | confidence=[5]\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The contract test only walks `scripts/*.sh` and `.github/workflows/*.yml`, so it can miss `codex exec` invocations in other file types and fail to enforce the claimed repo-wide invariant.\n  WHY: Both reviewers identified the same coverage gap; one reviewer disputed that it is a present defect, but the highest-confidence assessment is that the scanner\u2019s narrow scope can let future omissions escape CI.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- tests/test_codex_skip_git_repo_check_contract.py:70-87 (_scanned_files) | confidence=5\n  PROBLEM: The scanner only walks `scripts/*.sh` and `.github/workflows/*.yml`, missing `*.py` and other extensions that could contain `codex exec` invocations and allow the exact regression this PR prevents.\n  WHY: Expanding the scanner's breadth ensures the contract test truly covers the repo-wide invariant, preventing future omissions in any file type.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_codex_skip_git_repo_check_contract.py:42-69 (_scanned_files + _INVOCATION) | confidence=4\n  PROBLEM: The contract test hard-codes a narrow scanner that only walks `scripts/*.sh` and `.github/workflows/*.yml`. The docstring and test name claim a \"repo-wide contract\"; the PR description explicitly calls out fixes in `scripts/orchestrate_poll_process.sh` (which contains 4 `codex exec` sites) and notes latent omissions surfaced in \"six more workflows/scripts\". The regex `_INVOCATION` plus the file glob therefore cannot catch `*.py` scripts, `*.md` with embedded examples, or future non-`.sh`/`.yml` callers.\n  WHY: A future Python helper or workflow variant that adds a standalone `codex exec` without `--skip-git-repo-check` will pass CI but deterministically abort in the worktree workspace (the exact regression the test was written to prevent). The `test_scanner_actually_matches_known_invocations` assertion (>=10 matches) currently passes only because of the limited scope.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "6da203fa18a608fa3467824571b45ddef2379416d15fc8cdc9856ac6d097f32d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3196,
+    "run_id": "27094428767",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27094428767",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260607142917_f1b2f18d9e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3196,
+    "run_id": "27094428767"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-07T14:29:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
