@@ -310,6 +310,7 @@ def discover_manifest_via_codex(
 			"-c",
 			"include_apply_patch_tool=true",
 			"exec",
+			"--skip-git-repo-check",
 			"--model",
 			model,
 			"--sandbox",

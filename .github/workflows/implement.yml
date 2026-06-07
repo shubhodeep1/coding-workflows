@@ -2178,6 +2178,7 @@ jobs:
               CODEX_THREAD_REUSE_OUTPUT_FILE="${CODEX_OUTPUT_FILE}" \
               CODEX_THREAD_REUSE_PHASE="implement" \
               CODEX_THREAD_REUSE_MODEL="${MODEL_EDITOR}" \
+              CODEX_THREAD_REUSE_SKIP_GIT_REPO_CHECK="true" \
               CODEX_THREAD_REUSE_LOG_FILE="${attempt_log_file}" \
               CODEX_THREAD_REUSE_CUMULATIVE_LOG_FILE="${RUNTIME_DIR}/codex_log.txt" \
               CODEX_THREAD_REUSE_STATUS_FILE="${attempt_stall_status_file}" \
@@ -3282,6 +3283,7 @@ jobs:
               CODEX_THREAD_REUSE_OUTPUT_FILE="${REPAIR_OUTPUT_FILE}" \
               CODEX_THREAD_REUSE_PHASE="implement_repair" \
               CODEX_THREAD_REUSE_MODEL="${MODEL_EDITOR}" \
+              CODEX_THREAD_REUSE_SKIP_GIT_REPO_CHECK="true" \
               CODEX_THREAD_REUSE_LOG_FILE="${REPAIR_LOG_FILE}" \
               CODEX_THREAD_REUSE_CONTINUATION_FILE="${repair_thread_reuse_continuation_file}" \
               CODEX_THREAD_REUSE_TRANSFORM_MODE="replace-prefix" \
@@ -4908,7 +4910,7 @@ jobs:
               sanitize_codex_prompt_file "${_summary_combined_prompt}"
             fi
             bash scripts/workspace_safety_check.sh
-            codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_summary_combined_prompt}" > "${ISSUE_SUMMARY_FILE}" || true
+            codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_summary_combined_prompt}" > "${ISSUE_SUMMARY_FILE}" || true
             if [ -s "${ISSUE_SUMMARY_FILE}" ] && grep -q '^### AI Issue Summary' "${ISSUE_SUMMARY_FILE}"; then
               echo "Summary generated on attempt ${_summary_attempt}."
               break
