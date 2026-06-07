@@ -124,8 +124,15 @@ def _scripted_run_git(
 	rebase_results = iter(rebase_codes or [])
 	rebase_abort_results = iter(rebase_abort_codes or [])
 
-	def fake_run_git(cwd, args, check: bool = True):  # noqa: ANN001 - test stub
+	def fake_run_git(  # noqa: ANN001 - test stub
+		cwd,
+		args,
+		check: bool = True,
+		*,
+		inherit_location_env: bool = False,
+	):
 		op = args[0] if args else ""
+		_ = inherit_location_env
 		if call_log is not None:
 			call_log.append((op, tuple(args)))
 		if op == "ls-remote":

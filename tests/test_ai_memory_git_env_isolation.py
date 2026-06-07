@@ -189,6 +189,63 @@ def test_clone_for_memory_branch_ignores_leaked_git_dir_and_work_tree() -> None:
 			shutil.rmtree(clone_dir, ignore_errors=True)
 
 
+def test_resolve_origin_url_uses_host_repo_via_leaked_git_dir() -> None:
+	# Repro of the implement-workflow "Claim /approved command" failure
+	# (issues #3186 / #3188): repo_root is the per-issue work tree exported as
+	# GIT_WORK_TREE, which is *not* itself a git directory; the host repo is
+	# reachable only via the exported GIT_DIR. _resolve_origin_url must return
+	# the host repo's configured origin, not the bare work-tree path (which is
+	# not a clonable repository and makes the subsequent clone abort exit 128).
+	with tempfile.TemporaryDirectory(prefix="memory-git-env-") as td:
+		root = Path(td)
+		source = _init_source_repo(root)
+		upstream = root / "upstream.git"
+		_git(root, "clone", "--bare", "--quiet", str(source), str(upstream))
+		_git(source, "remote", "add", "origin", str(upstream))
+
+		leaked_work_tree = root / "issue-work-tree"
+		leaked_work_tree.mkdir()  # pure work tree — no .git inside
+
+		with _leaked_git_env(source / ".git", leaked_work_tree):
+			origin = ai_memory_lib._resolve_origin_url(leaked_work_tree)
+
+		assert origin == str(upstream), (
+			f"expected host origin {upstream}, got {origin!r}"
+		)
+
+
+def test_clone_for_memory_branch_resolves_origin_from_leaked_git_dir() -> None:
+	# End-to-end: cloning the memory branch must succeed even when repo_root is
+	# a work tree whose .git lives elsewhere (host repo via GIT_DIR). Before the
+	# fix the origin fell back to the bare work-tree path and the clone failed.
+	with tempfile.TemporaryDirectory(prefix="memory-git-env-") as td:
+		root = Path(td)
+		source = _init_source_repo(root)
+		upstream = root / "upstream.git"
+		_git(root, "clone", "--bare", "--quiet", str(source), str(upstream))
+		_git(source, "remote", "add", "origin", str(upstream))
+
+		leaked_work_tree = root / "issue-work-tree"
+		leaked_work_tree.mkdir()
+
+		with _leaked_git_env(source / ".git", leaked_work_tree):
+			clone_dir = ai_memory_lib._clone_for_memory_branch(leaked_work_tree, "ai-memory")
+
+		try:
+			assert (Path(clone_dir) / "marker.txt").read_text(encoding="utf-8") == "hello\n"
+			head_branch = subprocess.run(
+				["git", "rev-parse", "--abbrev-ref", "HEAD"],
+				cwd=clone_dir,
+				check=True,
+				capture_output=True,
+				text=True,
+				env=_git_process_env(),
+			).stdout.strip()
+			assert head_branch == "ai-memory"
+		finally:
+			shutil.rmtree(clone_dir, ignore_errors=True)
+
+
 def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	passed = 0
