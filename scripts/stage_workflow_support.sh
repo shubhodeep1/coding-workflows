@@ -37,11 +37,11 @@ mkdir -p "${SUPPORT_SCRIPTS_DIR}" "${SUPPORT_PROMPTS_DIR}" "${SUPPORT_AI_MEMORY_
   echo "SUPPORT_AGENTS_FILE=${SUPPORT_ROOT_DIR}/agents.md"
 } >> "$GITHUB_ENV"
 
-REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py cost_audit.py codex_heartbeat.sh codex_stall_guard.sh review_run_reviewers.sh review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh orchestrate_force_tick.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh workspace_init.sh workspace_safety_check.sh"
+REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py cost_audit.py codex_heartbeat.sh codex_stall_guard.sh review_run_reviewers.sh review_apply_fixes.sh review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh review_conflict_prepare.sh review_conflict_resolve.sh orchestrate_force_tick.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh workspace_init.sh workspace_safety_check.sh"
 # Main-primary bootstrap scripts: prefer the fresh main snapshot so
 # wedged integration branches still pick up resolver safety fixes
-# shipped on main. Missing from both refs remains fail-open so older
-# consumer script_refs still bootstrap cleanly.
+# shipped on main. Entries staged only via this list fail open when
+# missing from both refs so older consumer script_refs still bootstrap cleanly.
 MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_conflict_resolve.sh review_conflict_prepare.sh"
 # Optional bootstrap scripts: allowed to be missing from both
 # refs.  The bootstrap emits a warning and continues — callers
@@ -49,18 +49,11 @@ MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_confli
 # this list empty unless a genuinely optional helper is added;
 # the default should always be "required".
 #
-# render_prompt.py is the Python backend for the render_prompt.sh
-# shim adopted by branches that took the issue #3043 refactor.  main
-# ships a self-contained bash render_prompt.sh that needs no backend,
-# so render_prompt.py does not exist on main and MUST stay optional
-# here: this workflow runs pinned @main (internal-review.yml), so it
-# is main's bootstrap list — not the branch's — that decides what
-# gets staged from the branch checkout.  Staging it required would
-# break every normal main-based PR (where the file is absent from
-# both refs); staging it optionally lets shim-adopting branches
-# resolve their backend (the shim looks for render_prompt.py beside
-# itself in SUPPORT_SCRIPTS_DIR) while non-shim branches bootstrap
-# cleanly.
+# render_prompt.py is the Python backend for shim-adopting support
+# refs. Some refs still ship a self-contained render_prompt.sh, so
+# render_prompt.py MUST stay optional: when the checked-out support ref
+# lacks the backend, bootstrap should preserve that ref's bundled bash
+# renderer instead of hard-failing.
 OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh render_prompt.py"
 for f in ${REQUIRED_BOOTSTRAP_SCRIPTS}; do
   src=".codex-workflow-src/scripts/${f}"

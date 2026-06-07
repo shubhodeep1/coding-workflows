@@ -3180,7 +3180,7 @@ jobs:
           check_required_file "${SUPPORT_SCRIPTS_DIR}/codex_stall_guard.sh"
           check_required_file "${SUPPORT_SCRIPTS_DIR}/review_run_reviewers.sh"
           check_required_file "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh"
-          check_required_file "${SUPPORT_SCRIPTS_DIR}/render_prompt.py"
+          check_soft_file "${SUPPORT_SCRIPTS_DIR}/render_prompt.py"
           check_required_nonempty_file "${SUPPORT_INSTRUCTIONS_FILE}"
           check_required_file "./pre_assembled_static.txt"
           check_required_file "${PR_DIFF_FILE}"
