@@ -3,12 +3,11 @@
 
 The implement / review_autofix / validate workflows export GIT_DIR and
 GIT_WORK_TREE so later workflow steps share the main checkout's object
-store and a per-issue work tree.  Those variables leaked into the memory
-branch git subprocesses, which clone an isolated repo addressed purely
-via ``cwd``.  ``git clone`` then aborted with
-"fatal: working tree '<workspace>' already exists." (exit 128), turning
-the "Claim /approved command" step into a hard failure (e.g. issues
-#3187 / #3189).
+store and a per-issue work tree. Those variables leaked into memory-helper
+git subprocesses, which operate on an isolated repo addressed purely via
+``cwd``. ``git clone`` then aborted with
+"fatal: working tree '<workspace>' already exists." (exit 128), and other
+git commands could be rebound to the host repo.
 
 These tests pin that the memory git helpers strip the repo-pinning git
 variables so each subprocess resolves its repository from ``cwd``.
@@ -16,15 +15,14 @@ variables so each subprocess resolves its repository from ``cwd``.
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -40,6 +38,24 @@ sys.modules[spec.name] = ai_memory_lib
 spec.loader.exec_module(ai_memory_lib)
 
 
+@contextlib.contextmanager
+def _patched_env(updates: dict[str, str]):
+	original = {key: os.environ.get(key) for key in updates}
+	try:
+		os.environ.update(updates)
+		yield
+	finally:
+		for key, value in original.items():
+			if value is None:
+				os.environ.pop(key, None)
+			else:
+				os.environ[key] = value
+
+
+def _git_process_env() -> dict[str, str]:
+	return ai_memory_lib._git_subprocess_env()
+
+
 def _git(cwd: Path, *args: str) -> None:
 	subprocess.run(
 		["git", *args],
@@ -47,7 +63,7 @@ def _git(cwd: Path, *args: str) -> None:
 		check=True,
 		capture_output=True,
 		text=True,
-		env=ai_memory_lib._git_subprocess_env(),
+		env=_git_process_env(),
 	)
 
 
@@ -67,46 +83,83 @@ def _init_source_repo(root: Path) -> Path:
 	return repo
 
 
-@contextmanager
-def _leaked_git_env(git_dir: Path, work_tree: Path) -> Iterator[None]:
+@contextlib.contextmanager
+def _leaked_git_env(git_dir: Path, work_tree: Path):
 	"""Emulate the workflow exporting GIT_DIR / GIT_WORK_TREE."""
-	overrides = {
+	with _patched_env({
 		"GIT_DIR": str(git_dir),
 		"GIT_WORK_TREE": str(work_tree),
-	}
-	saved = {name: os.environ.get(name) for name in overrides}
-	os.environ.update(overrides)
-	try:
+	}):
 		yield
-	finally:
-		for name, value in saved.items():
-			if value is None:
-				os.environ.pop(name, None)
-			else:
-				os.environ[name] = value
 
 
 def test_git_subprocess_env_strips_repo_pinning_vars() -> None:
-	saved = {
-		name: os.environ.get(name)
-		for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_NAMESPACE", "PATH")
-	}
-	try:
-		os.environ["GIT_DIR"] = "/tmp/leaked/.git"
-		os.environ["GIT_WORK_TREE"] = "/tmp/leaked-worktree"
-		os.environ["GIT_NAMESPACE"] = "leaked"
+	updates = {var: f"/host/{var.lower()}" for var in ai_memory_lib._GIT_LOCATION_ENV_VARS}
+	updates["PATH"] = os.environ.get("PATH", "/usr/bin")
+	updates["GH_TOKEN"] = "sentinel-token"
+
+	with _patched_env(updates):
 		env = ai_memory_lib._git_subprocess_env()
-		assert "GIT_DIR" not in env
-		assert "GIT_WORK_TREE" not in env
-		assert "GIT_NAMESPACE" not in env
-		# Unrelated variables must survive so auth / PATH still work.
-		assert env.get("PATH") == os.environ.get("PATH")
-	finally:
-		for name, value in saved.items():
-			if value is None:
-				os.environ.pop(name, None)
+
+	for var in ai_memory_lib._GIT_LOCATION_ENV_VARS:
+		assert var not in env, f"{var} leaked into git env"
+	# Unrelated environment must be preserved.
+	assert env.get("GH_TOKEN") == "sentinel-token"
+	assert env.get("PATH") == updates["PATH"]
+
+
+def test_git_subprocess_env_includes_dir_and_work_tree() -> None:
+	assert "GIT_DIR" in ai_memory_lib._GIT_LOCATION_ENV_VARS
+	assert "GIT_WORK_TREE" in ai_memory_lib._GIT_LOCATION_ENV_VARS
+
+
+def test_run_git_clone_survives_polluted_workspace_env() -> None:
+	# End-to-end repro of the failing run: with GIT_DIR/GIT_WORK_TREE pointing at
+	# an existing work tree, an unsanitized `git clone` aborts with exit 128.
+	# _run_git must succeed because it strips those vars.
+	with tempfile.TemporaryDirectory(prefix="memory-git-env-") as td:
+		root = Path(td)
+		source = _init_source_repo(root)
+		work_tree = root / "existing-work-tree"
+		work_tree.mkdir()
+
+		with _leaked_git_env(source / ".git", work_tree):
+			dst = root / "clone"
+			proc = ai_memory_lib._run_git(
+				root,
+				["clone", "--no-tags", "--quiet", str(source), str(dst)],
+				check=False,
+			)
+
+		assert proc.returncode == 0, (
+			f"clone failed under polluted env: rc={proc.returncode} stderr={proc.stderr!r}"
+		)
+		assert (dst / "marker.txt").read_text(encoding="utf-8") == "hello\n"
+
+
+def test_run_git_check_true_preserves_real_clone_error_under_polluted_env() -> None:
+	# With polluted workspace env, the sanitized subprocess must surface the
+	# clone's real failure instead of the inherited work-tree collision error.
+	with tempfile.TemporaryDirectory(prefix="memory-git-env-") as td:
+		root = Path(td)
+		source = _init_source_repo(root)
+		work_tree = root / "existing-work-tree"
+		work_tree.mkdir()
+		dst = root / "clone"
+		dst.mkdir()
+		(dst / "junk.txt").write_text("junk\n", encoding="utf-8")
+
+		with _leaked_git_env(source / ".git", work_tree):
+			try:
+				ai_memory_lib._run_git(root, ["clone", "--no-tags", "--quiet", str(source), str(dst)])
+			except ai_memory_lib.MemoryGitError as exc:
+				message = str(exc)
 			else:
-				os.environ[name] = value
+				raise AssertionError("expected MemoryGitError from non-empty destination clone")
+
+		stderr = message.partition("stderr:\n")[2]
+		assert str(dst) in stderr
+		assert str(work_tree) not in stderr
 
 
 def test_clone_for_memory_branch_ignores_leaked_git_dir_and_work_tree() -> None:
@@ -122,7 +175,6 @@ def test_clone_for_memory_branch_ignores_leaked_git_dir_and_work_tree() -> None:
 			clone_dir = ai_memory_lib._clone_for_memory_branch(source, "ai-memory")
 
 		try:
-			# The clone must have succeeded and carried the source content.
 			assert (Path(clone_dir) / "marker.txt").read_text(encoding="utf-8") == "hello\n"
 			head_branch = subprocess.run(
 				["git", "rev-parse", "--abbrev-ref", "HEAD"],
@@ -130,8 +182,30 @@ def test_clone_for_memory_branch_ignores_leaked_git_dir_and_work_tree() -> None:
 				check=True,
 				capture_output=True,
 				text=True,
-				env=ai_memory_lib._git_subprocess_env(),
+				env=_git_process_env(),
 			).stdout.strip()
 			assert head_branch == "ai-memory"
 		finally:
 			shutil.rmtree(clone_dir, ignore_errors=True)
+
+
+def main() -> int:
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	passed = 0
+	failed = 0
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			func()
+			print(f"  PASS  {name}")
+			passed += 1
+		except Exception as exc:  # noqa: BLE001
+			print(f"  FAIL  {name}: {exc}")
+			failed += 1
+
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	return 1 if failed else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

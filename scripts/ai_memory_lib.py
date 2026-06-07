@@ -2271,17 +2271,14 @@ def compact_memory(
     return summary
 
 
-# Git environment variables that pin git to a specific repository, work
-# tree, object store, index, or namespace regardless of the directory git
-# is invoked in.  The memory helpers always operate on an isolated clone
-# addressed via the subprocess ``cwd``; if any of these leak in from the
-# ambient environment they override ``cwd`` and break the operation.  The
-# implement / review_autofix / validate workflows export GIT_DIR and
-# GIT_WORK_TREE (so later workflow steps share the main checkout's object
-# store and a per-issue work tree), which made ``git clone`` abort with
-# "fatal: working tree '<workspace>' already exists." inside the memory
-# branch clone.  Strip them so every memory git subprocess resolves its
-# repository purely from ``cwd``.
+# Repository-location git environment variables. The workspace shell context
+# exports GIT_DIR and GIT_WORK_TREE so later steps' git commands operate on the
+# main checkout. Every memory-helper git command instead operates on a dedicated
+# /tmp clone selected via ``cwd``. If these leak in, they can make ``git clone``
+# abort with ``fatal: working tree '<path>' already exists`` or silently retarget
+# add/commit/push at the host repo rather than the clone. Strip these and related
+# repo-pinning variables so every memory git subprocess resolves its repository
+# purely from ``cwd``.
 _GIT_LOCATION_ENV_VARS = (
     "GIT_DIR",
     "GIT_WORK_TREE",
