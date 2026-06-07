@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3201,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3201\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3210\",\"pr_number\":3210,\"branch\":\"ai/issue-3201\",\"run_id\":\"27102939899\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/27102939899\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/review_autofix.yml\",\"docs/scripts-pending-removal.md\",\"scripts/check_workflow_script_refs.py\",\"scripts/codex_thread_reuse.sh\",\"scripts/ledger_emit_substate.sh\",\"scripts/lint_pr_body_auto_close.py\",\"scripts/load_workflow_overlay.py\",\"scripts/orchestrate_force_tick.sh\",\"scripts/render_prompt.py\",\"scripts/stage_workflow_support.sh\",\"tests/test_detect_editor_changes_lost.py\",\"tests/test_orchestrate_poll_process.py\",\"tests/test_review_autofix_editor_noop_cascade_contract.py\",\"tests/test_review_autofix_review_pipeline_contract.py\",\"tests/test_review_semble_contract.py\",\"tests/test_review_synthesise_smoke.py\",\"tests/test_workspace_cache_maintenance.py\",\"tests/test_workspace_safety_check.py\"]}",
+  "fingerprint": "60a7a03e9e395a0777f57ff505bc871a9d6506582fba8349c149f859553dcdbb",
+  "lineage": {
+    "issue_number": 3201,
+    "parent_ids": [],
+    "pr_number": 3210,
+    "run_id": "27102939899",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27102939899",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3210"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260607200539_10833c7746",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3201,
+    "level": "run",
+    "pr_number": 3210,
+    "run_id": "27102939899"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3201: https://github.com/shubhodeep1/coding-workflows/pull/3210",
+  "timestamps": {
+    "created_at": "2026-06-07T20:05:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
