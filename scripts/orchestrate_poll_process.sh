@@ -7830,7 +7830,7 @@ dispatch_validation_if_needed() {
     fi
   fi
   if [ "${WAVE_COMPLETE:-false}" != "true" ] || [ "${ANY_FAILED:-false}" = "true" ]; then
-    echo "Preflight: WAVE_COMPLETE=${WAVE_COMPLETE:-unset} ANY_FAILED=${ANY_FAILED:-unset}; deferring validate dispatch this cycle (wave PRs not yet all merged into the integration branch)."
+    echo "Preflight: WAVE_COMPLETE=${WAVE_COMPLETE:-unset} ANY_FAILED=${ANY_FAILED:-unset}; deferring validate dispatch this cycle (wave PRs not yet all merged into the integration branch or at least one wave issue failed)."
     return 0
   fi
 
