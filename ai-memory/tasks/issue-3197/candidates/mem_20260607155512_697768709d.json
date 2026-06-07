@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref\n- Ref: `orchestrator/project-3185` @ `d93e4552b86ccd4ae7184058ec567bbe781e358f`\n- Integration metadata matched the checkout (`Integration branch mismatch: false`).\n\nClarification mapping\n- No `Q1`/`Q2` batch was needed. The auto-posted `/answer [auto-answered-by-orchestrator]` confirms the issue was already specific enough to plan.\n\nAutomation / wiring\n- Change type: modify existing code only.\n- Existing automation entry point: `.github/workflows/review_autofix.yml` (`workflow_call` reusable workflow). No new scheduler or PR-push wiring.\n- New script/supervisor: none.\n- DB / removal-registry impact: none.\n\nFiles likely to change\n- `.github/workflows/review_autofix.yml`\n  - `Check PR state (defense-in-depth)` (current ref: around lines 1607-1621)\n  - `Check PR state before failure alerts` (current ref: around lines 6515-6524)\n\nFiles inspected but not expected to change\n- `scripts/gh_helpers.sh` (`_safe_gh_jq` already exists and documents why raw `gh api ... || echo ...` is unsafe)\n- `scripts/orchestrate_poll_process.sh` (representative safe validated PR-state read)\n- `scripts/review_rb_judge.sh` (existing merged-detection convention)\n\nFunctions / modules to implement\n- In both targeted workflow steps, replace the raw `gh api --jq '.state'` reads with the safe helper pattern using `gh_retry _safe_gh_jq`.\n- Normalize the fetched PR status before branching:\n  - `open` \u2192 do nothing\n  - `closed` or `merged` \u2192 set `PR_CLOSED=true`\n  - empty/invalid/failed lookup \u2192 leave `PR_CLOSED` unchanged and avoid asserting a definite state\n- Keep the change inline in the two `run:` blocks; do not broaden into shared-script refactors.\n- In the late failure-alert step, add only the minimal helper bootstrapping needed to safely call `gh_retry _safe_gh_jq` (for example, mirror the early step\u2019s no-op `gh_retry` fallback if that step still lacks it after the edit).\n\nData structures affected\n- Local shell variable `pr_state`\n- Existing env var `PR_CLOSED` (meaning must stay the same: only set when the PR is confidently non-open)\n- No schema, cache, ledger, label, or memory-record changes\n\nAPI / interface changes\n- No user-facing or workflow-call interface changes.\n- Internal GitHub API usage should stay on the existing pull-request detail call; GitHub documents `GET /repos/{owner}/{repo}/pulls/{pull_number}` for PR details and a separate `GET /repos/{owner}/{repo}/pulls/{pull_number}/merge` endpoint that returns HTTP 204 when the PR is merged. For this issue, keep the implementation local and avoid adding the second API call; normalize the three-state result from the already-fetched PR payload instead. ([docs.github.com](https://docs.github.com/en/rest/pulls/pulls?apiVersion=latest))\n\nConflicts noted\n- The issue asks for branching on validated `open|closed|merged` values, but repo evidence shows merged PRs are currently detected as `state=closed` plus `merged_at != null` or `.merged == true` (`scripts/review_rb_judge.sh`), so the implementation should not expect `.state` alone to ever emit `merged`.\n\nPotential risks / edge cases\n- Do not preserve either current failure mode:\n  - early guard falsely treating API garbage as non-open\n  - late guard defaulting API failure to `\"open\"`\n- Preserve the no-PR claude-branch-review path and numeric `PR_NUMBER` validation exactly as-is.\n- Keep downstream behavior unchanged: this issue should not alter linked-issue handling, check-run logic, metadata helpers, reviewer scripts, or reviewer-profile selection.\n- Similar raw fallback patterns still exist elsewhere (`scripts/review_run_reviewers.sh`, `scripts/review_apply_fixes.sh`), but they are out of scope for this issue.\n\nTesting considerations\n- Diff check: only `.github/workflows/review_autofix.yml` should change, limited to the two targeted guards plus any tiny inline validation/fallback needed for them.\n- Scenario-check both guards against:\n  - open PR\n  - closed/unmerged PR\n  - merged PR\n  - GitHub API failure / invalid output\n- Expected outcomes:\n  - open \u2192 `PR_CLOSED` unchanged\n  - closed/merged \u2192 `PR_CLOSED=true`\n  - unknown/failed lookup \u2192 `PR_CLOSED` unchanged, with no implicit definite open/closed claim\n- Workflow sanity: ensure the YAML still parses and the edited shell snippets remain valid. I did not find an obvious repo-local workflow-lint command in targeted search, so existing CI / workflow parsing is the likely verification path.\n\nActions taken\n- Inspected the two current guard blocks in `.github/workflows/review_autofix.yml`.\n- Inspected `scripts/gh_helpers.sh::_safe_gh_jq`.\n- Inspected representative safe PR-state handling in `scripts/orchestrate_poll_process.sh` and merged detection in `scripts/review_rb_judge.sh`.\n- Verified the planning ref and integration-branch match.\n\nAssumptions\n- No new shared helper file is needed; duplicating the same validated read pattern inline in both workflow steps is the smallest safe change.\n- `PR_CLOSED` remains the only downstream flag and continues to mean \u201cconfirmed not open.\u201d\n\nMissing-context notes\n- None blocking. The only notable gap is that targeted repo search did not surface a dedicated local workflow-lint command.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "0517f3cb14dfd83722535f634f2864142fd1d127a1b758bf2c7758a9baf93341",
+  "lineage": {
+    "issue_number": 3197,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27097269986",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27097269986",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3197"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260607155512_697768709d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3197,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27097269986"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3197",
+  "timestamps": {
+    "created_at": "2026-06-07T15:55:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
