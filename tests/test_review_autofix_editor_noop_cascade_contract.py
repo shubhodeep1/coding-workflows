@@ -909,10 +909,11 @@ def test_noop_warning_refusal_branch_preserves_poller_literal() -> None:
 	refusal branch would strand refusal PRs (no auto-re-dispatch, no
 	force-merge)."""
 	block = _step_block(_review_autofix_text(), WARNING_STEP_NAME)
-	assert block.count(NOOP_WARNING_LITERAL) >= 2, (
-		f"Both branches must keep {NOOP_WARNING_LITERAL!r} so the poller "
-		f"recovery sweep still detects refusal-caused noop PRs. Found "
-		f"{block.count(NOOP_WARNING_LITERAL)} occurrence(s)."
+	body_prefix = f'BODY="{NOOP_WARNING_LITERAL}'
+	assert block.count(body_prefix) == 2, (
+		f"Both branches must keep {body_prefix!r} so the poller recovery "
+		f"sweep still detects refusal-caused noop PRs. Found "
+		f"{block.count(body_prefix)} matching BODY assignment(s)."
 	)
 
 
