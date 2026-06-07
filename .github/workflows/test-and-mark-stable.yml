@@ -4726,9 +4726,15 @@ jobs:
           }
 
           close_with_retry "issues" "${ISSUE_NUMBER}"
-          # Best-effort PR + branch cleanup
-          PR_NUMBER=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/timeline?per_page=20" \
-            --jq '[.[] | select(.event == "cross-referenced") | .source.issue.number] | first // empty' 2>/dev/null || echo "")
+          # Best-effort PR + branch cleanup. Target ONLY the implement PR whose
+          # head branch is ai/issue-<N> (the same selector Phase 3a's
+          # wait-implement uses). The previous `first cross-referenced` timeline
+          # heuristic closed whatever PR first referenced the canary issue — so
+          # an unrelated fix PR that merely says "Refs #<N>" in its body would be
+          # force-closed as collateral damage when the implement run failed and
+          # no real ai/issue-<N> PR existed to match.
+          PR_NUMBER=$(gh api "repos/${TEST_REPO}/pulls?state=open&head=${TEST_REPO%%/*}:ai/issue-${ISSUE_NUMBER}&per_page=1" \
+            --jq '.[0].number // empty' 2>/dev/null || echo "")
           if [ -n "${PR_NUMBER}" ]; then
             close_with_retry "pulls" "${PR_NUMBER}"
           fi

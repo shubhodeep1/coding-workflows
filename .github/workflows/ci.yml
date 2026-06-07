@@ -404,6 +404,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_plan_polling_guard.py
 
+      - name: Alt-model cleanup PR-selector contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_alt_model_cleanup_pr_selector.py
+
       - name: Mark-stable release-tag refspec contract test
         run: |
           set -euo pipefail
