@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3203,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3203\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3209\",\"pr_number\":3209,\"branch\":\"ai/issue-3203\",\"run_id\":\"27102933870\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/27102933870\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/internal-review.yml\",\".github/workflows/review_autofix.yml\",\"docs/scripts-pending-removal.md\",\"scripts/codex_thread_reuse.sh\",\"scripts/ledger_emit_substate.sh\",\"scripts/lint_pr_body_auto_close.py\",\"scripts/load_workflow_overlay.py\",\"scripts/orchestrate_force_tick.sh\",\"scripts/render_prompt.py\",\"scripts/review_collect_pr_metadata.sh\",\"tests/test_review_autofix_review_pipeline_contract.py\",\"tests/test_test_and_mark_stable_alt_model_cleanup_pr_selector.py\"]}",
+  "fingerprint": "44c761a9046444132c4b004f23844db5cb32a2aa48f1a87cc0b836b88deceed8",
+  "lineage": {
+    "issue_number": 3203,
+    "parent_ids": [],
+    "pr_number": 3209,
+    "run_id": "27102933870",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27102933870",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3209"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260607200410_bc13355308",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3203,
+    "level": "run",
+    "pr_number": 3209,
+    "run_id": "27102933870"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3203: https://github.com/shubhodeep1/coding-workflows/pull/3209",
+  "timestamps": {
+    "created_at": "2026-06-07T20:04:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
