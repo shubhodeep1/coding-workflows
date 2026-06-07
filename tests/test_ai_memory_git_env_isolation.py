@@ -51,10 +51,7 @@ def _patched_env(updates: dict[str, str]):
 
 
 def _git_process_env() -> dict[str, str]:
-	env = os.environ.copy()
-	for var in ai_memory_lib._GIT_LOCATION_ENV_VARS:
-		env.pop(var, None)
-	return env
+	return ai_memory_lib._git_env()
 
 
 def test_git_env_strips_repo_location_vars() -> None:
