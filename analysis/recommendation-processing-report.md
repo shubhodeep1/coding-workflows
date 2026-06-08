@@ -2,7 +2,7 @@
 
 Grounding note: this report folds the prior recommendation triage into one final artifact. "Actioned" is based on current repository state on this ref, not on historical intent or external GitHub issue state.
 
-## Processed source docs (93)
+## Processed source docs (94)
 The filenames below are retained for provenance. The twelve source docs deleted across the cleanup passes reflected in this report are no longer present under `analysis/` on this ref because their triage now lives here.
 
 - `analysis/workflow-optimization-2026-04-21.md`
@@ -96,6 +96,7 @@ The filenames below are retained for provenance. The twelve source docs deleted 
 - `analysis/workflow-optimization-2026-06-06.md`
 - `analysis/workflow-optimization-2026-06-06-2.md`
 - `analysis/workflow-optimization-2026-06-06-3.md`
+- `analysis/workflow-optimization-2026-06-08.md`
 - `analysis/plan-workflow-log-analysis.md`
 - `analysis/e2e-smoke-failure-25126757724.md`
 
@@ -427,6 +428,25 @@ Status keys below are scoped as `<source doc> :: <recommendation id>` because ID
   - `REUSE-002` — `.github/workflows/implement.yml` still parses `TRACKING_ISSUE_NUMBER` for the PR body but does not pass it through to `scripts/orchestrate_force_tick.sh`.
   - `dispatcher / prompt-cache / context-pressure / memory-worktree cleanup` — the broader wrapper-collapse, prompt-observability, and review-worktree recommendations from this doc remain deferred.
 
+### `analysis/workflow-optimization-2026-06-08.md`
+- Implemented by sibling work:
+  - `CI timeout-prelude staging contract restore` — `.github/workflows/review_autofix.yml` now stages both retry prelude templates with the expected `install -m 0644 ... integration-sync-conflict-resolver-retry-timeout-prelude.txt` contract, which is the safe-subset fix tracked as `#3223` from this source doc's CI regression cluster.
+  - `review prompt-cache + Semble fallback telemetry` — the review telemetry path now emits prompt-cache usage counters and distinguishes test-only `SEMBLE_FALLBACK` contract noise additively, matching the safe-subset observability fix tracked as `#3224`.
+  - `opaque-phase skip/gate telemetry` — the phase workflows now emit additive skip/gate status telemetry for the previously opaque paths, which is the safe-subset visibility fix tracked as `#3225`.
+  - `validate cache action/path cleanup` — `.github/workflows/validate.yml` now uses the corrected cache path/action setup described by the safe-subset fix tracked as `#3226`.
+- Already satisfied on this ref:
+  - `implementation-failed reissue / blocker-gate regression` — `test_implementation_failed_reissue_preserves_dependency_gates_and_pending_defs` was already passing on current main when this source doc was triaged, so the doc's top CI blocker was no longer an open fix on this ref.
+  - `keep Semble active; do not tune Serena yet` — the repo still keeps `SEMBLE_ENABLED=true` and `SERENA_ENABLED=false` by default, matching the source doc's recommendation to leave Serena untouched until it emits live traffic.
+- Intentionally deferred:
+  - `review_autofix` oversized-context fallback — the proposed reviewer fan-out / reasoning reductions after `CONTEXT_BUDGET_WARN` change hot review-path behavior and remain deferred for a dedicated rollout.
+  - shorter `CHECK_RUNS_WAIT_TIMEOUT_SECS` defaults — reducing the existing wait budget changes review snapshot timing and fail-open semantics, so it remains deferred.
+  - first-pass `implement` reasoning downshift — lowering default implement reasoning from `xhigh` to `high` is still deferred pending a broader runtime-quality evaluation.
+  - AI-memory push / fail-open semantics hardening — the suggested rebase+jitter retry contract and the downgrade of some memory writes to soft-fail warnings are broader persistence-behavior changes and remain deferred.
+  - reviewer-slot retry tightening — reducing per-slot retry budgets for rate-limited reviewer models remains deferred because it changes the current fail-open / quorum behavior under provider instability.
+  - `orchestrate_poll` coalescing / early no-op exit — poll coalescing and changed-work short-circuiting remain deferred because they alter orchestrator pickup latency and scheduling behavior.
+  - broader GH API shape cleanup — the doc's plan/review/sweep API bundle collapses are still deferred because they touch hot-path batching, cache reuse, and failure-surface contracts across multiple workflows.
+  - broader Semble / overflow-query policy changes — keeping targeted reviewer-context Semble usage while trimming broader implement overflow-query behavior remains deferred until a dedicated retrieval-policy pass.
+
 ## Preserved machine-maintained artifacts
 - `analysis/validation-selftest-status.json` (kept unchanged)
 - `analysis/last_collection_timestamp.txt` (kept unchanged)
@@ -436,4 +456,5 @@ Status keys below are scoped as `<source doc> :: <recommendation id>` because ID
 - `analysis/workflow-optimization-2026-05-23.md` did not use MERGE/REUSE-style IDs, so the ledger groups its repeated source recommendations under stable heading-text labels when multiple sections point at the same landed change.
 - The 2026-05-29 through 2026-06-06 source docs also repeated some recommendations across speed/cost/reliability/API sections, so the ledger groups those repeats under stable short labels within each per-doc section.
 - `analysis/workflow-optimization-2026-06-05-3.md`'s `MERGE-002` is only partially landed on this ref: `scripts/implement_diagnose_post_codex_failure.sh` prefers `ISSUE_META_FILE`, but the cache-miss path still splits live label/body recovery, so the source-doc item is recorded as deferred.
+- `analysis/workflow-optimization-2026-06-08.md` mixed one now-already-satisfied CI regression item with four landed safe-subset fixes and several risky hot-path follow-ups, so this closeout records those buckets separately instead of treating the whole doc as one implementation state.
 - With the earlier 2026-05-22/23 source docs and this pass's eight 2026-05-29/06-06 source docs now deleted, `.github/workflows/comprehensive-test-and-release.yml` will hit its existing fallback path to `analysis/recommendation-processing-report.md` on future runs.

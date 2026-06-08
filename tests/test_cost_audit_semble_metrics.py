@@ -34,9 +34,11 @@ SEMBLE_FALLBACK target=overflow reason=exit=7 raw failure from semble ms=11
 	assert parsed["semble_query_calls"] == 2
 	assert parsed["semble_query_bytes"] == 1521
 	assert parsed["semble_fallbacks"] == 2
+	assert parsed["semble_contract_test_fallbacks"] == 0
+	assert parsed["semble_runtime_fallbacks"] == 2
 	assert parsed["semble_targets"] == {
-		"overflow": {"query_calls": 1, "bytes": 1200, "fallbacks": 1},
-		"reviewer-context": {"query_calls": 1, "bytes": 321, "fallbacks": 1},
+		"overflow": {"query_calls": 1, "bytes": 1200, "fallbacks": 1, "runtime_fallbacks": 1},
+		"reviewer-context": {"query_calls": 1, "bytes": 321, "fallbacks": 1, "runtime_fallbacks": 1},
 	}
 
 
@@ -68,7 +70,65 @@ SEMBLE_FALLBACK target=judge reason=index-unavailable ms=1
 		}
 	}
 	assert parsed["semble_targets"] == {
-		"judge": {"query_calls": 1, "bytes": 88, "fallbacks": 1}
+		"judge": {"query_calls": 1, "bytes": 88, "fallbacks": 1, "runtime_fallbacks": 1}
+	}
+
+
+def test_parse_log_accepts_runtime_openrouter_usage_placeholders() -> None:
+	log = """
+INFO: openrouter usage phase=review call=review model=openai/gpt-5.4 cache_enabled=true cache_breakpoint_enabled=na cache_breakpoint_fallback_retry=na prompt_tokens=na completion_tokens=na total_tokens=na cache_creation_input_tokens=na cache_read_input_tokens=na
+"""
+
+	parsed = parse_log(log)
+
+	assert parsed["or_calls"] == 1
+	assert parsed["or_total_tokens"] == 0
+	assert parsed["or_phases"] == {
+		"review": {
+			"prompt_tokens": 0,
+			"completion_tokens": 0,
+			"total_tokens": 0,
+			"calls": 1,
+		}
+	}
+
+
+def test_parse_log_accepts_comma_formatted_openrouter_usage_counts() -> None:
+	log = """
+INFO: openrouter usage phase=review call=review model=openai/gpt-5.4 cache_enabled=true cache_breakpoint_enabled=na cache_breakpoint_fallback_retry=na prompt_tokens=100,000 completion_tokens=25,000 total_tokens=125,000 cache_creation_input_tokens=30,000 cache_read_input_tokens=40,000
+"""
+
+	parsed = parse_log(log)
+
+	assert parsed["or_prompt_tokens"] == 100000
+	assert parsed["or_completion_tokens"] == 25000
+	assert parsed["or_total_tokens"] == 125000
+	assert parsed["or_cache_write_tokens"] == 30000
+	assert parsed["or_cache_read_tokens"] == 40000
+	assert parsed["or_phases"] == {
+		"review": {
+			"prompt_tokens": 100000,
+			"completion_tokens": 25000,
+			"total_tokens": 125000,
+			"calls": 1,
+		}
+	}
+
+
+def test_parse_log_splits_contract_test_semble_fallbacks_from_runtime() -> None:
+	log = """
+SEMBLE_FALLBACK target=reviewer-context reason=timeout context=contract-test ms=5000
+SEMBLE_FALLBACK target=overflow reason=exit=7 raw failure from semble ms=11
+"""
+
+	parsed = parse_log(log)
+
+	assert parsed["semble_fallbacks"] == 2
+	assert parsed["semble_contract_test_fallbacks"] == 1
+	assert parsed["semble_runtime_fallbacks"] == 1
+	assert parsed["semble_targets"] == {
+		"overflow": {"fallbacks": 1, "runtime_fallbacks": 1},
+		"reviewer-context": {"fallbacks": 1, "contract_test_fallbacks": 1},
 	}
 
 
@@ -85,10 +145,12 @@ SEMBLE_FALLBACK target=conflict-resolver reason=exit=9 stderr tail with spaces m
 	assert parsed["semble_query_calls"] == 2
 	assert parsed["semble_query_bytes"] == 17
 	assert parsed["semble_fallbacks"] == 2
+	assert parsed["semble_contract_test_fallbacks"] == 0
+	assert parsed["semble_runtime_fallbacks"] == 2
 	assert parsed["semble_targets"] == {
 		"overflow": {"query_calls": 1, "bytes": 0},
-		"unknown": {"query_calls": 1, "bytes": 17, "fallbacks": 1},
-		"conflict-resolver": {"fallbacks": 1},
+		"unknown": {"query_calls": 1, "bytes": 17, "fallbacks": 1, "runtime_fallbacks": 1},
+		"conflict-resolver": {"fallbacks": 1, "runtime_fallbacks": 1},
 	}
 
 

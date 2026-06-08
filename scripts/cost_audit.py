@@ -12,7 +12,8 @@ aggregates token usage per workflow. Four patterns are recognised:
      scripts/review_run_reviewers.sh.
   3. Semble telemetry (`SEMBLE_QUERY ... bytes=N` and
      `SEMBLE_FALLBACK ...`) — emitted by Semble-backed prompt-context
-     helpers.
+     helpers, with optional additive `context=contract-test` markers
+     for fixture-only fallbacks.
   4. Serena / generic MCP telemetry (`SERENA_QUERY`, `SERENA_FALLBACK`,
      `SERENA_PROBE`, plus `<NAME>_QUERY|FALLBACK|PROBE` for other MCP
      servers).
@@ -60,9 +61,9 @@ CODEX_TOKENS_RE = re.compile(
 )
 
 # OpenRouter structured usage line — strict field order matches the producer
-# in scripts/review_run_reviewers.sh. Numeric fields tolerate "?" placeholders
-# emitted when a value is unavailable.
-_NUM = r"(\d+|\?)"
+# in scripts/review_run_reviewers.sh. Numeric fields tolerate the producer's
+# fail-open placeholders when a value is unavailable.
+_NUM = r"(?:[0-9][0-9,]*|na|null|none|-|\?)"
 OPENROUTER_RE = re.compile(
     r"INFO:\s*openrouter\s+usage\s+"
     r"phase=(?P<phase>\S+)\s+"
@@ -75,7 +76,8 @@ OPENROUTER_RE = re.compile(
     r"completion_tokens=(?P<ct>" + _NUM + r")\s+"
     r"total_tokens=(?P<tt>" + _NUM + r")\s+"
     r"cache_creation_input_tokens=(?P<cw>" + _NUM + r")\s+"
-    r"cache_read_input_tokens=(?P<cr>" + _NUM + r")"
+    r"cache_read_input_tokens=(?P<cr>" + _NUM + r")",
+    re.IGNORECASE,
 )
 
 SEMBLE_QUERY_RE = re.compile(r"(?:^|\s)SEMBLE_QUERY(?:\s|$)")
@@ -117,6 +119,8 @@ RUN_COST_TELEMETRY_FIELDS = (
     "semble_query_calls",
     "semble_query_bytes",
     "semble_fallbacks",
+    "semble_contract_test_fallbacks",
+    "semble_runtime_fallbacks",
     "serena_query_calls",
     "serena_query_response_bytes",
     "serena_query_tool_calls",
@@ -143,6 +147,8 @@ AGGREGATABLE_COST_FIELDS = (
     "semble_query_calls",
     "semble_query_bytes",
     "semble_fallbacks",
+    "semble_contract_test_fallbacks",
+    "semble_runtime_fallbacks",
     "serena_query_calls",
     "serena_query_response_bytes",
     "serena_query_tool_calls",
@@ -161,8 +167,20 @@ def _extract_log_field(line: str, field: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
+def _normalize_log_label(value: str | None) -> str:
+    if value is None:
+        return ""
+    return re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
+
+
+def _is_contract_test_semble_line(line: str) -> bool:
+    return _normalize_log_label(_extract_log_field(line, "context")) == "contract-test"
+
+
 def _to_int(value: Any, default: int = 0) -> int:
     try:
+        if isinstance(value, str):
+            value = value.strip().replace(",", "")
         return int(value)
     except (TypeError, ValueError):
         return default
@@ -471,6 +489,8 @@ def parse_log(log: str, *, fallback_wall_clock_ms: int | None = None) -> dict:
         "semble_query_calls": 0,
         "semble_query_bytes": 0,
         "semble_fallbacks": 0,
+        "semble_contract_test_fallbacks": 0,
+        "semble_runtime_fallbacks": 0,
         "semble_targets": defaultdict(lambda: defaultdict(int)),
         "serena_query_calls": 0,
         "serena_query_response_bytes": 0,
@@ -534,6 +554,12 @@ def parse_log(log: str, *, fallback_wall_clock_ms: int | None = None) -> dict:
             target = _extract_log_field(line, "target") or "unknown"
             out["semble_fallbacks"] += 1
             out["semble_targets"][target]["fallbacks"] += 1
+            if _is_contract_test_semble_line(line):
+                out["semble_contract_test_fallbacks"] += 1
+                out["semble_targets"][target]["contract_test_fallbacks"] += 1
+            else:
+                out["semble_runtime_fallbacks"] += 1
+                out["semble_targets"][target]["runtime_fallbacks"] += 1
         elif SERENA_QUERY_RE.search(line):
             target = _extract_log_field(line, "target") or "unknown"
             tool = _extract_log_field(line, "tool") or "unknown"
@@ -663,6 +689,8 @@ def main() -> int:
             "semble_query_calls": 0,
             "semble_query_bytes": 0,
             "semble_fallbacks": 0,
+            "semble_contract_test_fallbacks": 0,
+            "semble_runtime_fallbacks": 0,
             "semble_targets": defaultdict(lambda: defaultdict(int)),
             "serena_query_calls": 0,
             "serena_query_response_bytes": 0,
@@ -718,6 +746,7 @@ def main() -> int:
                       "or_cache_write_tokens", "or_cache_read_tokens",
                       "or_calls", "semble_query_calls",
                       "semble_query_bytes", "semble_fallbacks",
+                      "semble_contract_test_fallbacks", "semble_runtime_fallbacks",
                       "serena_query_calls", "serena_query_response_bytes",
                       "serena_query_tool_calls", "serena_query_ms",
                       "serena_fallbacks", "serena_probe_ok",
@@ -752,6 +781,7 @@ def main() -> int:
                     "or_completion_tokens", "or_total_tokens",
                     "or_cache_write_tokens", "or_cache_read_tokens", "or_calls",
                     "semble_query_calls", "semble_query_bytes", "semble_fallbacks",
+                    "semble_contract_test_fallbacks", "semble_runtime_fallbacks",
                     "serena_query_calls", "serena_query_response_bytes",
                     "serena_query_tool_calls", "serena_query_ms",
                     "serena_fallbacks", "serena_probe_ok",
@@ -770,6 +800,7 @@ def main() -> int:
                 f"or_calls={parsed['or_calls']} "
                 f"semble_bytes={fmt(parsed['semble_query_bytes'])} "
                 f"semble_fallbacks={fmt(parsed['semble_fallbacks'])} "
+                f"semble_contract_test={fmt(parsed['semble_contract_test_fallbacks'])} "
                 f"serena_calls={fmt(parsed['serena_query_calls'])} "
                 f"serena_fallbacks={fmt(parsed['serena_fallbacks'])} "
                 f"serena_probe_failed={fmt(parsed['serena_probe_failed'])} "
@@ -837,13 +868,14 @@ def main() -> int:
     ]
     if semble_workflows:
         print("\n## Semble telemetry breakdown\n")
-        print("| Workflow | query_calls | logged_bytes | fallbacks |")
-        print("|---|---:|---:|---:|")
+        print("| Workflow | query_calls | logged_bytes | fallbacks | contract_test_fallbacks | runtime_fallbacks |")
+        print("|---|---:|---:|---:|---:|---:|")
         for wf in semble_workflows:
             a = per_wf[wf]
             print(
                 f"| {wf} | {fmt(a['semble_query_calls'])} | "
-                f"{fmt(a['semble_query_bytes'])} | {fmt(a['semble_fallbacks'])} |"
+                f"{fmt(a['semble_query_bytes'])} | {fmt(a['semble_fallbacks'])} | "
+                f"{fmt(a['semble_contract_test_fallbacks'])} | {fmt(a['semble_runtime_fallbacks'])} |"
             )
 
         print()
@@ -852,8 +884,8 @@ def main() -> int:
             if not targets:
                 continue
             print(f"### {wf}\n")
-            print("| target | query_calls | logged_bytes | fallbacks |")
-            print("|---|---:|---:|---:|")
+            print("| target | query_calls | logged_bytes | fallbacks | contract_test_fallbacks | runtime_fallbacks |")
+            print("|---|---:|---:|---:|---:|---:|")
             ordered_targets = sorted(
                 targets,
                 key=lambda t: (
@@ -868,7 +900,9 @@ def main() -> int:
                 print(
                     f"| {target} | {fmt(vals.get('query_calls', 0))} | "
                     f"{fmt(vals.get('bytes', 0))} | "
-                    f"{fmt(vals.get('fallbacks', 0))} |"
+                    f"{fmt(vals.get('fallbacks', 0))} | "
+                    f"{fmt(vals.get('contract_test_fallbacks', 0))} | "
+                    f"{fmt(vals.get('runtime_fallbacks', 0))} |"
                 )
             print()
 

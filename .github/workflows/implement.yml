@@ -105,12 +105,15 @@ jobs:
           ISSUE_LABELS_JSON="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -c '.labels')"
           if [ "${ISSUE_STATE}" = "closed" ]; then
             echo "Issue #${ISSUE_NUMBER} is closed. Skipping implementation steps."
+            echo "AI_PHASE_GATE_V1 phase=implement gate=phase_precheck reason=issue_closed outcome=skip issue=${ISSUE_NUMBER}"
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
           elif printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:implementing") != null' >/dev/null; then
             echo "Issue #${ISSUE_NUMBER} already has ai:implementing label. Another implement run is in progress. Skipping."
+            echo "AI_PHASE_GATE_V1 phase=implement gate=phase_precheck reason=already_implementing outcome=skip issue=${ISSUE_NUMBER}"
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
           elif ! printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:awaiting-approval") != null' >/dev/null; then
             echo "Issue #${ISSUE_NUMBER} is not in ai:awaiting-approval phase. Skipping implementation steps."
+            echo "AI_PHASE_GATE_V1 phase=implement gate=phase_precheck reason=wrong_phase outcome=skip issue=${ISSUE_NUMBER}"
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
           fi
 
@@ -282,6 +285,7 @@ jobs:
       - name: Exit when existing PR is found
         if: env.SKIP_IMPLEMENT != 'true' && steps.existing_pr_check.outputs.existing_pr == 'true'
         run: |
+          echo "AI_PHASE_GATE_V1 phase=implement gate=existing_pr_check reason=existing_pr outcome=skip issue=${ISSUE_NUMBER}"
           echo "Existing PR already present for this issue; exiting safely."
           echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
           exit 0
@@ -1406,6 +1410,7 @@ jobs:
           # the label is applied.
           if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:destructive-blocked") != null' >/dev/null; then
             echo "::warning::Issue #${ISSUE_NUMBER} carries ai:destructive-blocked from a previous run — refusing to redispatch implementation. A human must inspect the earlier rejection, remove the label, and reapprove before this issue can run again."
+            echo "AI_PHASE_GATE_V1 phase=implement gate=phase_validation reason=destructive_blocked outcome=skip issue=${ISSUE_NUMBER}"
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
             exit 0
           fi
@@ -1416,11 +1421,13 @@ jobs:
           # for where the label is applied.
           if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:scope-blocked") != null' >/dev/null; then
             echo "::warning::Issue #${ISSUE_NUMBER} carries ai:scope-blocked from a previous run — refusing to redispatch implementation. A human must inspect the earlier out-of-scope rejection, remove the label, and reapprove before this issue can run again."
+            echo "AI_PHASE_GATE_V1 phase=implement gate=phase_validation reason=scope_blocked outcome=skip issue=${ISSUE_NUMBER}"
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
             exit 0
           fi
           if ! printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:awaiting-approval") != null' >/dev/null; then
             echo "Issue #${ISSUE_NUMBER} is not in ai:awaiting-approval phase. Exiting safely."
+            echo "AI_PHASE_GATE_V1 phase=implement gate=phase_validation reason=wrong_phase outcome=skip issue=${ISSUE_NUMBER}"
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
             exit 0
           fi
@@ -1445,6 +1452,7 @@ jobs:
           already_processed="$(printf '%s' "${check_json}" | jq -r '.exists // false')"
           if [ "${already_processed}" = "true" ]; then
             echo "Approval comment ${APPROVAL_COMMENT_ID} already processed. Skipping duplicate implementation run."
+            echo "AI_PHASE_GATE_V1 phase=implement gate=command_claim reason=already_processed outcome=skip issue=${ISSUE_NUMBER} comment_id=${APPROVAL_COMMENT_ID}"
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
             echo "RESTORE_AWAITING_APPROVAL_ON_SKIP=true" >> "$GITHUB_ENV"
             exit 0
@@ -1468,6 +1476,7 @@ jobs:
           fi
           if [ "${claimed}" != "true" ]; then
             echo "Approval comment ${APPROVAL_COMMENT_ID} was not claimed for this run. Skipping duplicate implementation run."
+            echo "AI_PHASE_GATE_V1 phase=implement gate=command_claim reason=claimed_elsewhere outcome=skip issue=${ISSUE_NUMBER} comment_id=${APPROVAL_COMMENT_ID}"
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
             echo "RESTORE_AWAITING_APPROVAL_ON_SKIP=true" >> "$GITHUB_ENV"
             exit 0

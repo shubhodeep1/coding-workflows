@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import io
 import contextlib
+import os
 import subprocess
 import sys
 import tempfile
@@ -33,6 +34,24 @@ from targeted_file_context import (  # noqa: E402
 	parse_paths_arg,
 	parse_paths_file,
 )
+
+
+os.environ["SEMBLE_LOG_CONTEXT"] = "contract-test"
+
+
+def test_semble_log_context_normalization_matches_shell_contract() -> None:
+	original = os.environ.get("SEMBLE_LOG_CONTEXT")
+	try:
+		os.environ["SEMBLE_LOG_CONTEXT"] = " --contract--\t test-- "
+		assert targeted_file_context_module._normalized_semble_log_context() == "contract-test"
+
+		os.environ["SEMBLE_LOG_CONTEXT"] = "--"
+		assert targeted_file_context_module._normalized_semble_log_context() is None
+	finally:
+		if original is None:
+			os.environ.pop("SEMBLE_LOG_CONTEXT", None)
+		else:
+			os.environ["SEMBLE_LOG_CONTEXT"] = original
 
 
 def _make_fake_semble_script(path: Path, *, stdout: str = "", stderr: str = "", exit_code: int = 0) -> None:
@@ -388,6 +407,7 @@ def test_overflow_marker_remains_default_fallback_when_semble_unavailable() -> N
 		assert "SEMBLE_FALLBACK" not in context
 		telemetry = stderr.getvalue()
 		assert "SEMBLE_FALLBACK target=overflow file=src/big.py" in telemetry
+		assert "context=contract-test" in telemetry
 		assert " ms=" in telemetry
 
 
@@ -524,6 +544,7 @@ def test_semble_query_oserror_falls_back_cleanly() -> None:
 		assert "would overflow total budget" in context
 		telemetry = stderr.getvalue()
 		assert "SEMBLE_FALLBACK target=overflow file=src/big.py reason=simulated-oserror" in telemetry
+		assert "context=contract-test" in telemetry
 		assert " ms=" in telemetry
 
 

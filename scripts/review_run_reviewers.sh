@@ -142,9 +142,10 @@ fi
 
 normalize_openrouter_usage() {
   local log_file="$1"
-  local call_label="$2"
-  local model_name="$3"
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - "$log_file" "$call_label" "$model_name" <<'PY'
+  local phase_label="$2"
+  local call_label="$3"
+  local model_name="$4"
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - "$log_file" "$phase_label" "$call_label" "$model_name" <<'PY'
 import json
 import os
 import sys
@@ -156,31 +157,54 @@ except ModuleNotFoundError:
 	from scripts.openrouter_prompt_cache import format_usage_value, normalize_usage
 
 log_path = Path(sys.argv[1])
-call_label = sys.argv[2]
-model_name = sys.argv[3]
+phase_label = sys.argv[2]
+call_label = sys.argv[3]
+model_name = sys.argv[4]
 cache_enabled = "false" if os.getenv("OPENROUTER_PROMPT_CACHE_DISABLED", "false").strip().lower() in {"1", "true", "yes", "on", "y"} else "true"
+
+
+def find_usage_dict(payload):
+	if isinstance(payload, dict):
+		usage = payload.get("usage")
+		if isinstance(usage, dict):
+			return usage
+		for value in payload.values():
+			found = find_usage_dict(value)
+			if isinstance(found, dict):
+				return found
+	elif isinstance(payload, list):
+		for value in payload:
+			found = find_usage_dict(value)
+			if isinstance(found, dict):
+				return found
+	return None
 
 usage = normalize_usage(None)
 if log_path.exists():
 	text = log_path.read_text(encoding="utf-8", errors="replace")
 	decoder = json.JSONDecoder()
-	for index, char in enumerate(text):
-		if char != "{":
-			continue
+	index = 0
+	text_length = len(text)
+	while index < text_length:
+		next_object_start = text.find("{", index)
+		if next_object_start == -1:
+			break
 		try:
-			payload, _ = decoder.raw_decode(text[index:])
+			payload, end = decoder.raw_decode(text, next_object_start)
 		except json.JSONDecodeError:
+			index = next_object_start + 1
 			continue
-		if not isinstance(payload, dict):
-			continue
-		usage = normalize_usage(payload.get("usage") if isinstance(payload.get("usage"), dict) else None)
-		if isinstance(payload.get("model"), str) and payload.get("model"):
-			model_name = payload["model"]
-		break
+		found_usage = find_usage_dict(payload)
+		if isinstance(found_usage, dict):
+			usage = normalize_usage(found_usage)
+			if isinstance(payload, dict) and isinstance(payload.get("model"), str) and payload.get("model"):
+				model_name = payload["model"]
+			break
+		index = max(end, next_object_start + 1)
 
 print(
 	"INFO: openrouter usage "
-	f"phase=review_autofix_cache_probe call={call_label} model={model_name} "
+	f"phase={phase_label} call={call_label} model={model_name} "
 	f"cache_enabled={cache_enabled} "
 	"cache_breakpoint_enabled=na cache_breakpoint_fallback_retry=na "
 	f"prompt_tokens={format_usage_value(usage.get('prompt_tokens'))} "
@@ -275,8 +299,8 @@ EOF
   codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${probe_model}" --sandbox read-only < "${probe_out}" >/dev/null 2>"${probe_log_one}" || true
   codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${probe_model}" --sandbox read-only < "${probe_out}" >/dev/null 2>"${probe_log_two}" || true
 
-  normalize_openrouter_usage "${probe_log_one}" "1" "${probe_model}" || true
-  normalize_openrouter_usage "${probe_log_two}" "2" "${probe_model}" || true
+  normalize_openrouter_usage "${probe_log_one}" "review_autofix_cache_probe" "1" "${probe_model}" || true
+  normalize_openrouter_usage "${probe_log_two}" "review_autofix_cache_probe" "2" "${probe_model}" || true
   if [ -n "${old_codex_home}" ]; then
     export CODEX_HOME="${old_codex_home}"
   else
@@ -2724,6 +2748,7 @@ execute_reviewer_attempt() {
   rm -f "${stall_status_file}"
 
   emit_reviewer_substate "Finishing" "${attempt_number}" "${tmp_stderr}"
+  normalize_openrouter_usage "${tmp_stderr}" "review" "${output_prefix}" "${effective_model}" | tee -a "${log_file}" || true
 
   case "${wd_reason}" in
     pr_closed_sentinel|pr_closed_api)

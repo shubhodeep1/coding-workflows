@@ -569,10 +569,16 @@ jobs:
             echo "::notice::No linked PR found for tracking issue #${issue_number}; skipping behavioural smoke runtime restore."
           fi
 
+      - name: Prepare behavioural smoke runtime cache path
+        if: steps.behavioural_smoke_gate.outputs.enabled == 'true' && steps.behavioural_smoke_pr.outputs.pr_number != ''
+        run: |
+          set -euo pipefail
+          mkdir -p "${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_runtime/"
+
       - name: Restore behavioural smoke runtime cache
         if: steps.behavioural_smoke_gate.outputs.enabled == 'true' && steps.behavioural_smoke_pr.outputs.pr_number != ''
         continue-on-error: true
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: ${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_runtime/
           key: review-ledger-${{ github.repository }}-pr-${{ steps.behavioural_smoke_pr.outputs.pr_number }}-${{ github.run_id }}-${{ github.run_attempt }}
