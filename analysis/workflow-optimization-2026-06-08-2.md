@@ -468,3 +468,251 @@ No `TODO` / `FIXME` / `HACK` / `XXX` markers were present under `.github/workflo
 | Code modularization | 8-10 | Large |
 | Expression size reduction | 4-6 | Large |
 | Medium/Low fixes | 2-4 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-06-08)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlapping calls are in the same local code path with matching scope/filters/error semantics and can be consolidated directly. `NEEDS_VERIFICATION` means overlap is likely but a human must verify runtime contracts or step/job interactions first. `RISKY_SKIP` means the call sits in polling/retry/race-defense/rate-limit-sensitive logic, so it should not be auto-consolidated even if it looks redundant.
+
+### Consolidation Candidates (MERGE-###)
+
+- **ID** — `MERGE-001`
+  - **Safety tag** — `SAFE_TO_MERGE`
+  - **File path and line ranges** — `.github/workflows/review_autofix.yml:769-830`, `.github/workflows/review_autofix.yml:4500-4545`, `.github/workflows/review_autofix.yml:4632-4641`, `.github/workflows/review_autofix.yml:4815-4824`, `.github/workflows/review_autofix.yml:5869-5878`, `scripts/review_collect_pr_metadata.sh:124-156`
+  - **Current call count** — 2 GraphQL calls in the common PR path (`scripts/review_collect_pr_metadata.sh` early fetch + `post-merge-validate-dispatch` fetch); 3 in the rare cache-miss path because `Cache linked issues references` can re-fetch too.
+  - **Proposed call count** — 1 GraphQL call in the common PR path; 2 only when the late cache variable is genuinely absent.
+  - **Endpoint(s)** — GraphQL `repository.pullRequest(number).closingIssuesReferences`
+  - **Evidence**
+    ```sh
+    # early metadata fetch already writes LINKED_ISSUES_JSON
+    scripts/review_collect_pr_metadata.sh:131-151
+    if gh_retry "${_linked_tmp}" api graphql ... \
+      -f query='... pullRequest(number:$number){closingIssuesReferences(first:50){nodes{number title body}}} ...'
+    ...
+    printf 'LINKED_ISSUES_JSON=%s\n' "${_linked_numbers}" >> "${GITHUB_ENV}"
+    ```
+    ```sh
+    # later step explicitly says to reuse that cache
+    .github/workflows/review_autofix.yml:4511-4514
+    # Reuse LINKED_ISSUES_JSON from the early "Collect PR metadata" step
+    # which already fetched closingIssuesReferences via GraphQL (with
+    # title+body).
+    ```
+    ```sh
+    # but post-merge dispatch still re-fetches the same linked issues
+    .github/workflows/review_autofix.yml:778-783
+    issue_nodes_json="$(gh api graphql \
+      ... pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number labels(first: 100) { nodes { name } } } } } ...
+    ```
+  - **Proposed fix** — Extend `scripts/review_collect_pr_metadata.sh` to export a second cache variable/file carrying `[{number,labels}]` for `closingIssuesReferences`, then update `.github/workflows/review_autofix.yml` `post-merge-validate-dispatch` to consume that cache before issuing its own GraphQL fetch.
+  - **Safety rationale** — Same workflow invocation, same PR number, no intervening mutation before the dispatch step that could change `closingIssuesReferences`; extending the existing early fetch preserves error behavior because the late step already treats missing data fail-open.
+  - **Downstream signal** — Add labels to the early `review_collect_pr_metadata.sh` GraphQL payload and have `post-merge-validate-dispatch` read the cached result instead of re-querying `closingIssuesReferences`.
+
+- **ID** — `MERGE-002`
+  - **Safety tag** — `SAFE_TO_MERGE`
+  - **File path and line ranges** — `.github/workflows/review_autofix.yml:4632-4641`, `.github/workflows/review_autofix.yml:4815-4824`, `.github/workflows/review_autofix.yml:5869-5878`, `.github/workflows/review_autofix.yml:1630-1635`, `scripts/review_collect_pr_metadata.sh:104-121`
+  - **Current call count** — up to 4 `/repos/${REPOSITORY}/pulls/${PR_NUMBER}` reads across one run: initial metadata fetch plus up to 3 fallback re-reads.
+  - **Proposed call count** — 1 in these paths.
+  - **Endpoint(s)** — REST `GET /repos/{owner}/{repo}/pulls/{pull_number}`
+  - **Evidence**
+    ```sh
+    # early metadata step already writes PR_META_FILE from PR_PAYLOAD_FILE
+    scripts/review_collect_pr_metadata.sh:104-121
+    gh_retry "${PR_PAYLOAD_FILE}" api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"
+    ...
+    jq '{ title: (.title // ""), body: (.body // ""), ... }' "${PR_PAYLOAD_FILE}" > "${PR_META_FILE}"
+    ```
+    ```sh
+    # late steps already read PR_META_FILE first
+    .github/workflows/review_autofix.yml:4636-4638
+    PR_DATA="$(jq -r '[.title // "", .body // ""] | join(" ")' "${PR_META_FILE}" 2>/dev/null || echo "")"
+    if [ -z "$(printf '%s' "${PR_DATA}" | tr -d '[:space:]')" ]; then
+      PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' ...)"
+    fi
+    ```
+    Same fallback pattern repeats at `4819-4821` and `5873-5875`.
+  - **Proposed fix** — Remove the three fallback `/pulls/${PR_NUMBER}` reads and trust `PR_META_FILE`/`PR_PAYLOAD_FILE` from `Collect PR metadata`; if the file is missing or invalid, fail open exactly as those steps already do when `PR_DATA` stays empty.
+  - **Safety rationale** — Same run, same PR, same data shape, and the early metadata step is a hard prerequisite of the consuming job path; no separate retry/backoff contract is being crossed.
+  - **Downstream signal** — Stop re-fetching PR title/body in the three late fallback blocks and use the already-populated `PR_META_FILE` / `PR_PAYLOAD_FILE` only.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID** — `REUSE-001`
+  - **Safety tag** — `SAFE_TO_MERGE`
+  - **File path and line ranges** — `.github/workflows/issue_pr_status.yml:181-186`, `.github/workflows/issue_pr_status.yml:272-287`
+  - **Current call count** — 1 fallback PR refetch when GraphQL returns no linked issues and `${PR_TITLE} ${PR_BODY}` is blank/whitespace.
+  - **Proposed call count** — 0 fallback refetches in that path.
+  - **Endpoint(s)** — REST `GET /repos/{owner}/{repo}/pulls/{pull_number}`
+  - **Evidence**
+    ```yaml
+    .github/workflows/issue_pr_status.yml:181-186
+    PR_NUMBER: ${{ github.event.pull_request.number }}
+    PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+    PR_TITLE: ${{ github.event.pull_request.title }}
+    PR_BODY: ${{ github.event.pull_request.body || '' }}
+    ```
+    ```sh
+    .github/workflows/issue_pr_status.yml:282-285
+    PR_DATA="${PR_TITLE:-} ${PR_BODY:-}"
+    if [ -z "$(printf '%s' "${PR_DATA}" | tr -d '[:space:]')" ]; then
+      PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' ...)"
+    fi
+    ```
+  - **Proposed fix** — Use the event payload as authoritative in this `pull_request.closed` workflow and drop the fallback `/pulls/${PR_NUMBER}` fetch in the linked-issue text parser.
+  - **Safety rationale** — The workflow is triggered directly from `pull_request` and already receives title/body in event context; removing the fallback does not change filters, auth, or retry semantics for any remaining API call.
+  - **Downstream signal** — Delete the fallback `/pulls/${PR_NUMBER}` read in `issue_pr_status.yml` and parse linked-issue text from `PR_TITLE`/`PR_BODY` only.
+
+- **ID** — `REUSE-002`
+  - **Safety tag** — `SAFE_TO_MERGE`
+  - **File path and line ranges** — `.github/workflows/internal-review.yml:89-91`, `.github/workflows/internal-review.yml:114-117`
+  - **Current call count** — up to 2 calls on push: open-PR lookup plus repo default-branch lookup.
+  - **Proposed call count** — 1 call when `github.event.repository.default_branch` is present.
+  - **Endpoint(s)** — REST `GET /repos/{owner}/{repo}/pulls?...`, REST `GET /repos/{owner}/{repo}`
+  - **Evidence**
+    ```yaml
+    .github/workflows/internal-review.yml:89-91
+    HEAD_SHA: ${{ github.sha }}
+    EVENT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch || '' }}
+    ```
+    ```sh
+    .github/workflows/internal-review.yml:114-117
+    base_ref="${EVENT_DEFAULT_BRANCH:-}"
+    if [ -z "${base_ref}" ]; then
+      base_ref="$(gh api "repos/${REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo 'main')"
+    fi
+    ```
+  - **Proposed fix** — Keep the existing fallback, but make implementers treat the repo GET as unreachable on normal GitHub-hosted push events unless they can prove `github.event.repository.default_branch` can be absent in the wrapper’s real callers.
+  - **Safety rationale** — The event payload already carries the target field and the fallback is already conditional, so the only safe change is to rely on existing event data where present.
+  - **Downstream signal** — Confirm `github.event.repository.default_branch` is always populated for the push events that hit `internal-review.yml`; if yes, remove the repo default-branch GET fallback.
+
+- **ID** — `REUSE-003`
+  - **Safety tag** — `NEEDS_VERIFICATION`
+  - **File path and line ranges** — `.github/workflows/review_autofix.yml:215-222`, `.github/workflows/review_autofix.yml:2068-2104`
+  - **Current call count** — 1 linked-issue title fetch on smoke-detection fallback.
+  - **Proposed call count** — 0 if the caller contract guarantees smoke PRs always carry `[E2E Smoke Test]` in `inputs.pr_title`/`inputs.pr_body`.
+  - **Endpoint(s)** — REST `GET /repos/{owner}/{repo}/issues/{issue_number}`
+  - **Evidence**
+    ```yaml
+    .github/workflows/review_autofix.yml:215-222
+    PR_TITLE: ${{ inputs.pr_title }}
+    PR_BODY: ${{ inputs.pr_body }}
+    ```
+    ```sh
+    .github/workflows/review_autofix.yml:2079-2100
+    if echo "${PR_TITLE}" | grep -qi '\[E2E Smoke Test\]' \
+       || echo "${PR_BODY}" | grep -qi '\[E2E Smoke Test\]'; then
+      IS_SMOKE=true
+    fi
+    ...
+    ISSUE_TITLE=$(_safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUM}" --jq '.title // ""' || echo "")
+    ```
+  - **Proposed fix** — Verify whether all workflow callers pass through PR title/body reliably for every path that can hit `Detect smoke test and tune LLM settings`; if they do, remove the linked-issue-title API fallback and rely on PR metadata only.
+  - **Safety rationale** — Static reading shows likely redundancy, but `workflow_call` and `workflow_dispatch` callers may omit or sanitize `pr_title`/`pr_body`, so the equivalence is not fully proven.
+  - **Downstream signal** — Verify every caller of `review_autofix.yml` always supplies accurate `pr_title`/`pr_body`; only then remove the `issues/${ISSUE_NUM}` title lookup.
+
+- **ID** — `REUSE-004`
+  - **Safety tag** — `SAFE_TO_MERGE`
+  - **File path and line ranges** — `.github/workflows/implement.yml:413-430`, `.github/workflows/implement.yml:1241-1257`, `.github/workflows/implement.yml:1392-1398`, `.github/workflows/implement.yml:5165-5173`
+  - **Current call count** — 1 issue fetch in `Resolve checkout ref`, plus 0-2 later fallback issue-label re-fetches when the cache file exists but `jq` parsing fails.
+  - **Proposed call count** — keep the initial fetch; reduce later fallbacks to 0 in the normal path.
+  - **Endpoint(s)** — REST `GET /repos/{owner}/{repo}/issues/{issue_number}`
+  - **Evidence**
+    ```sh
+    .github/workflows/implement.yml:415-430
+    issue_meta_json="$(gh_api_with_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+    ...
+    printf '%s\n' "${issue_meta_json}" > "${ISSUE_META_FILE}"
+    ```
+    ```sh
+    .github/workflows/implement.yml:1250-1252
+    if [ ! -s "${ISSUE_META_FILE}" ]; then
+      gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
+    fi
+    ```
+    ```sh
+    .github/workflows/implement.yml:1392-1398
+    if [ -s "${ISSUE_META_FILE:-}" ]; then
+      ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}" ... || true)"
+    fi
+    if [ -z "${ISSUE_LABELS_JSON}" ]; then
+      ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')"
+    fi
+    ```
+  - **Proposed fix** — Treat `Resolve checkout ref`’s `ISSUE_META_FILE` as the single source of truth in the successful path and keep re-fetch only on true cache miss, not for later non-critical consumers that can fail open.
+  - **Safety rationale** — The file is written before later consumers and already contains labels/body/title/state; later re-fetches are only defensive fallbacks, so common-path consolidation is safe.
+  - **Downstream signal** — Reuse `ISSUE_META_FILE` everywhere after `Resolve checkout ref`; only preserve fresh issue GETs for genuine cache-miss branches.
+
+- **ID** — `REUSE-005`
+  - **Safety tag** — `NEEDS_VERIFICATION`
+  - **File path and line ranges** — `.github/workflows/orchestrate_clarify_respond.yml:68-83`, `.github/workflows/orchestrate_clarify_respond.yml:437-449`
+  - **Current call count** — 3 issue reads in the common orchestrator path: child issue once in `Check orchestrator metadata`, tracking issue title once for smoke suppression, child issue again in `Fetch issue and tracking context`, and possibly tracking issue body again.
+  - **Proposed call count** — 2 if the first step persists the child payload and tracking title/body for reuse.
+  - **Endpoint(s)** — REST `GET /repos/{owner}/{repo}/issues/{issue_number}`
+  - **Evidence**
+    ```sh
+    .github/workflows/orchestrate_clarify_respond.yml:68-70
+    ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+    ISSUE_BODY="..."
+    ISSUE_TITLE="..."
+    ```
+    ```sh
+    .github/workflows/orchestrate_clarify_respond.yml:437-448
+    ISSUE_META="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+    ...
+    TRACKING_BODY="$(gh_retry gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.body // ""')"
+    ```
+  - **Proposed fix** — Persist `ISSUE_PAYLOAD` from the first step into a runtime file/env and reuse it in `Fetch issue and tracking context`; optionally fetch tracking title/body together once if both are needed.
+  - **Safety rationale** — Likely same-scope duplication, but these are separate workflow steps and the first step also controls smoke-alert suppression; verify no intervening mutation depends on a refreshed issue body before consolidating.
+  - **Downstream signal** — Verify no step between `Check orchestrator metadata` and `Fetch issue and tracking context` can mutate the child/tracking issue; if not, cache and reuse the first issue payload.
+
+### Dead Calls (DEAD-API-###)
+
+- **ID** — `DEAD-API-001`
+  - **Safety tag** — `SAFE_TO_MERGE`
+  - **File path and line ranges** — `scripts/review_collect_pr_metadata.sh:110-111`, `scripts/review_collect_pr_metadata.sh:240-347`, `.github/workflows/review_autofix.yml:4667-4695`
+  - **Current call count** — 1 paginated `GET /repos/{repo}/pulls/{pr}/reviews` per review run.
+  - **Proposed call count** — 0 for runs where review-blocked break-glass scanning is disabled and no downstream consumer needs top-level review objects; otherwise unchanged.
+  - **Endpoint(s)** — REST `GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews`
+  - **Evidence**
+    ```sh
+    scripts/review_collect_pr_metadata.sh:110-111
+    gh_retry "${reviews_raw}" api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews"
+    jq -s 'add // []' "${reviews_raw}" > "${PR_REVIEWS_FILE}"
+    ```
+    ```py
+    scripts/review_collect_pr_metadata.sh:294-307
+    for review in reviews:
+        entries.append({ "kind": "review", ... "state": ..., "body": ... })
+    ```
+    ```sh
+    .github/workflows/review_autofix.yml:4667-4669
+    if [ ! -s "${PR_ISSUE_COMMENTS_FILE:-}" ] && [ ! -s "${PR_REVIEWS_FILE:-}" ]; then
+      echo "Review-blocked break-glass scan inputs missing; continuing with override disabled."
+    ```
+    Static grep in this repo shows `PR_REVIEWS_FILE` is otherwise only used to build `PR_ALL_COMMENTS_CONTEXT_FILE` and in this optional break-glass scanner.
+  - **Proposed fix** — Gate the `/pulls/${PR_NUMBER}/reviews` fetch behind the feature that consumes it (`REVIEW_BREAK_GLASS_ENABLED`) or extend `review_collect_pr_metadata.sh` with an opt-in flag so `PR_REVIEWS_FILE` is skipped on ordinary runs.
+  - **Safety rationale** — The fetched reviews are not on the mandatory reviewer/editor path in this repo; they are only used for an optional advisory/break-glass context, so gating the fetch behind that feature preserves common-path behavior.
+  - **Downstream signal** — Add a flag to `review_collect_pr_metadata.sh` to skip `PR_REVIEWS_FILE` population unless break-glass/comment-context consumers are enabled, and verify no external caller depends on that file unconditionally.
+
+### Cross-References to Deep Audit Section
+
+- `API-001`: `NEEDS_VERIFICATION` — batching is directionally correct, but it sits on a REST fallback helper and must preserve the existing fail-open parity path.
+- `API-002`: `NEEDS_VERIFICATION` — agree with batched fallback issue fetch; verify the helper returns exactly the body/title shape the prompt builder expects.
+- `API-003`: `RISKY_SKIP` — commit attribution lookup is inside a rare identity-verification path explicitly described as acceptable due to tiny cardinality, so it should not be auto-batched.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 6 | MERGE-001, MERGE-002, REUSE-001, REUSE-002, REUSE-004, DEAD-API-001 |
+| NEEDS_VERIFICATION | 3 | REUSE-003, REUSE-005, API-001, API-002 |
+| RISKY_SKIP | 1 | API-003 |
+
+### Implement-Stage Handoff
+
+- `MERGE-001`
+- `MERGE-002`
+- `REUSE-004`
+- `REUSE-001`
+- `REUSE-002`
+- `DEAD-API-001`
