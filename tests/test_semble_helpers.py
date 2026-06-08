@@ -14,9 +14,25 @@ INSTALLER = REPO_ROOT / "scripts" / "install_semble.sh"
 HELPERS = REPO_ROOT / "scripts" / "semble_helpers.sh"
 
 
+def _base_env() -> dict[str, str]:
+	env = os.environ.copy()
+	for key in (
+		"SEMBLE_AVAILABLE",
+		"SEMBLE_BIN",
+		"SEMBLE_ENABLED",
+		"SEMBLE_INDEX_AVAILABLE",
+		"SEMBLE_INDEX_PATH",
+		"SEMBLE_LOG_CONTEXT",
+	):
+		env.pop(key, None)
+	return env
+
+
 def _run_bash(script: str, cwd: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
-	full_env = os.environ.copy()
+	full_env = _base_env()
+	full_env["HOME"] = str(cwd)
 	full_env["PYTHONDONTWRITEBYTECODE"] = "1"
+	full_env.setdefault("SEMBLE_LOG_CONTEXT", "contract-test")
 	if env:
 		full_env.update(env)
 	return subprocess.run(
@@ -80,6 +96,7 @@ def test_semble_query_block_success_keeps_stdout_prompt_only() -> None:
 		assert result.returncode == 0, result.stderr
 		assert result.stdout == "=== SEMBLE: Reviewer Context ===\nchunk 1\nchunk 2\n=== END SEMBLE ===\n"
 		assert "SEMBLE_QUERY target=reviewer-context chunks=20 bytes=" in result.stderr
+		assert "context=contract-test" in result.stderr
 		assert "SEMBLE_FALLBACK" not in result.stderr
 		assert "SEMBLE_QUERY" not in result.stdout
 		assert "SEMBLE_FALLBACK" not in result.stdout
@@ -100,6 +117,7 @@ def test_semble_query_block_bails_out_without_index_and_keeps_stdout_empty() -> 
 		assert result.returncode != 0
 		assert result.stdout == ""
 		assert "SEMBLE_FALLBACK target=editor-context reason=index-unavailable" in result.stderr
+		assert "context=contract-test" in result.stderr
 
 
 def test_semble_query_block_command_failure_stays_fail_open() -> None:
@@ -131,6 +149,7 @@ def test_semble_query_block_command_failure_stays_fail_open() -> None:
 		assert result.returncode != 0
 		assert result.stdout == ""
 		assert "SEMBLE_FALLBACK target=editor-context reason=exit=7 raw failure from semble" in result.stderr
+		assert "context=contract-test" in result.stderr
 		assert " ms=" in result.stderr
 		assert "SEMBLE_QUERY" not in result.stdout
 
@@ -182,9 +201,10 @@ def test_install_semble_marks_available_when_pinned_binary_exists() -> None:
 			["bash", str(INSTALLER)],
 			cwd=root,
 			env={
-				**os.environ,
+				**_base_env(),
+				"HOME": str(root),
 				"PYTHONDONTWRITEBYTECODE": "1",
-				"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+				"PATH": f"{bin_dir}:/usr/bin:/bin",
 				"GITHUB_ENV": str(github_env),
 			},
 			capture_output=True,
@@ -218,9 +238,10 @@ def test_install_semble_rejects_partial_version_match() -> None:
 			["bash", str(INSTALLER)],
 			cwd=root,
 			env={
-				**os.environ,
+				**_base_env(),
+				"HOME": str(root),
 				"PYTHONDONTWRITEBYTECODE": "1",
-				"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+				"PATH": f"{bin_dir}:/usr/bin:/bin",
 				"GITHUB_ENV": str(github_env),
 				"SEMBLE_PYTHON_BIN": "missing-python",
 			},
@@ -256,9 +277,10 @@ def test_install_semble_rejects_multiline_non_pinned_version_output() -> None:
 			["bash", str(INSTALLER)],
 			cwd=root,
 			env={
-				**os.environ,
+				**_base_env(),
+				"HOME": str(root),
 				"PYTHONDONTWRITEBYTECODE": "1",
-				"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+				"PATH": f"{bin_dir}:/usr/bin:/bin",
 				"GITHUB_ENV": str(github_env),
 				"SEMBLE_PYTHON_BIN": "missing-python",
 			},
@@ -299,9 +321,10 @@ def test_install_semble_fails_open_and_marks_unavailable_on_install_error() -> N
 			["bash", str(INSTALLER)],
 			cwd=root,
 			env={
-				**os.environ,
+				**_base_env(),
+				"HOME": str(root),
 				"PYTHONDONTWRITEBYTECODE": "1",
-				"PATH": os.environ.get("PATH", ""),
+				"PATH": "/usr/bin:/bin",
 				"GITHUB_ENV": str(github_env),
 				"SEMBLE_PYTHON_BIN": str(fake_python),
 				"FAKE_USER_BASE": str(fake_user_base),
