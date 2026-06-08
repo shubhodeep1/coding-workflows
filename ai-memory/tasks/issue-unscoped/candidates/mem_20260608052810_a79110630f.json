@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:1299-1307 and 5822-5832 | severity=high | confidence=[5]\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: Both duplicated PR-state guards fall open to `pr_state=\"open\"` when `_safe_gh_jq` cannot determine PR state, so closed/merged PRs can be treated as open.\n  WHY: This can route stale PRs through reviewer/editor/failure-alert paths; one reviewer argued the fail-open behavior is intentional, but both reviewers reported it misclassifies closed/merged PRs at runtime.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Validate and land the safe subset of 2026-05-29..2026-06-06 workflow-optimization recommendations\"\n  expected_change_site: review_autofix.yml, implement.yml, internal-review.yml, plan.yml, validate.yml, docs/scripts-pending-removal.md, and the corresponding test contracts\n  confidence=[5]\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  EVIDENCE: The PR only modified the PR-state guards in review_autofix.yml; the analysis documents listed multiple SAFE_TO_MERGE / NEEDS_VERIFICATION items that were not implemented, and the recommendation-processing-report.md was updated instead of landing the deferred optimizations.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- File: .github/workflows/review_autofix.yml\n  Line or code reference: lines 1299-1307 (first guard) and lines 5825-5832 (second guard)\n  Problem: Both PR-state guards fail open to \"open\" when `_safe_gh_jq` returns no usable state (null or empty).\n  Why it fails at runtime: When the API fails or the PR doesn't exist, `pr_state` becomes empty, triggers the warning, and is then set to \"open\", allowing downstream reviewer/editor dispatch and failure-alert logic to run against PRs that may already be closed or merged.\n  ISSUE_CONFIDENCE: 5\n\n- File: .github/workflows/review_autofix.yml\n  Line or code reference: lines 1297-1307 and 5823-5832\n  Problem: The error handling for API failures assumes \"open\" as the safe default, but for a review/autofix workflow, processing a closed PR is wasteful and potentially confusing.\n  Why it fails at runtime: On API failure, the workflow should either skip processing or retry, not proceed with a potentially incorrect state assumption; this can lead to unnecessary resource consumption and confusing UX.\n  ISSUE_CONFIDENCE: 4\n\n- Requirement: \"Validate and land the safe subset of 2026-05-29..2026-06-06 workflow-optimization recommendations\" (PR title)\n  Expected change site: All changes recommended as SAFE_TO_MERGE or NEEDS_VERIFICATION in the 8 source analysis documents, plus test contracts asserting the new behavior\n  Evidence of absence: The PR only modified the PR-state guards in review_autofix.yml. The analysis documents listed multiple SAFE_TO_MERGE items including: per-attempt prompt-file contract fixes, small-diff fast path for reviews, reviewer memory retrieval improvements, comment-router for trigger churn reduction, adaptive backoff for check-run polling, and consolidation of API calls. The recommendation-processing-report.md was updated to document status, but the actual deferred optimizations were not implemented.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: .github/workflows/review_autofix.yml\n  Lines: 1299-1307 and 5822-5832 (the two duplicated PR-state guards)\n  Problem: Both guards now fall open to `pr_state=\"open\"` when `_safe_gh_jq` fails to produce usable JSON (`pr_meta='null'` or empty output).\n  Why it fails at runtime: A closed/merged PR can be treated as open, allowing the workflow to continue dispatching reviewers, editor, or the failure-alert path with stale state.\n  ISSUE_CONFIDENCE: 5\n\n- File: .github/workflows/review_autofix.yml\n  Lines: 1299-1307 and 5822-5832 (identical hardening in both guards)\n  Problem: When the GitHub API call inside `_safe_gh_jq` fails (transient 5xx, rate-limit, network, permission, malformed JSON, etc.), the guard assumes `open` instead of propagating unknown/closed state.\n  Why it fails at runtime: The later `PR_CLOSED` check, label-mutation logic, and post-merge validation dispatch all rely on accurate `pr_state`; an erroneous \u201copen\u201d conclusion can dispatch unnecessary reviewer/editor cycles on a closed PR, incorrectly label linked issues, and trigger failure alerts on a PR that is no longer open.\n  ISSUE_CONFIDENCE: 5\n\n- Requirement: \u201cValidate and land the safe subset of 2026-05-29..2026-06-06 workflow-optimization recommendations\u201d (PR title + linked orchestrator project #3185)\n  Expected change site: All SAFE_TO_MERGE / NEEDS_VERIFICATION items from the eight source analysis documents that are not already satisfied on main, plus updates to the review/test contracts that assert the new behavior\n  Evidence of absence: The current PR touched only the two duplicated PR-state guards in review_autofix.yml; the eight source documents listed 18 distinct actionable items plus 7 explicit TASK_GAP items that were never landed, and the recommendation-processing-report.md was updated to record the gaps instead of implementing them.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "d198f513b4d930b0865855d2bbeae0f41dcb3336b9598642f2d3a1593f01734a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3191,
+    "run_id": "27116473444",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27116473444",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260608052810_a79110630f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3191,
+    "run_id": "27116473444"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-08T05:28:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
