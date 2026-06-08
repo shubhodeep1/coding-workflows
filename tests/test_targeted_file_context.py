@@ -36,7 +36,7 @@ from targeted_file_context import (  # noqa: E402
 )
 
 
-os.environ.setdefault("SEMBLE_LOG_CONTEXT", "contract-test")
+os.environ["SEMBLE_LOG_CONTEXT"] = "contract-test"
 
 
 def test_semble_log_context_normalization_matches_shell_contract() -> None:
