@@ -12552,26 +12552,39 @@ def test_resolver_tooling_refresh_allowlist_includes_both_retry_preludes():
 			"would not pick up this prelude after a release, "
 			"silently disabling the corresponding retry-reflexion path."
 		)
-	# Defence-in-depth: the matching workflow-side bootstrap in
-	# review_autofix.yml must also stage the timeout-prelude file so the
-	# script_ref pin path mirrors the orchestrator refresh path.  Anchor
-	# the assertion on the actual `install -m 0644` staging line —
-	# matching the bare filename anywhere in the YAML would false-positive
-	# if the string remained only in an `echo "::warning::..."` line while
-	# the `install` line was removed or altered.  The signature
+	# Defence-in-depth: the matching workflow-side bootstrap must also
+	# stage the timeout-prelude file so the script_ref pin path mirrors
+	# the orchestrator refresh path.  PR #3191 extracted the inline
+	# support-staging block out of review_autofix.yml into
+	# scripts/stage_workflow_support.sh (to stay under GitHub Actions'
+	# per-step expression-template limit), so the `install -m 0644` line
+	# now lives in that script — but review_autofix.yml must still invoke
+	# it.  Anchor the staging assertion on the actual `install -m 0644`
+	# line in the helper script (matching the bare filename anywhere
+	# would false-positive if the string remained only in an
+	# `echo "::warning::..."` line while the `install` line was removed
+	# or altered) AND verify the workflow wires the helper, so neither
+	# half of the mirror can be silently dropped.  The signature
 	# `install -m 0644 ... ${SUPPORT_PROMPTS_DIR}/<file>` is the exact
-	# shape used by every prompt-staging block in this workflow.
+	# shape used by every prompt-staging block in the helper.
 	wf_body = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	stage_helper_body = (REPO_ROOT / "scripts" / "stage_workflow_support.sh").read_text(encoding="utf-8")
 	timeout_prelude_install_re = re.compile(
 		r"install -m 0644 [^\n]*\$\{SUPPORT_PROMPTS_DIR\}/integration-sync-conflict-resolver-retry-timeout-prelude\.txt",
 	)
-	assert timeout_prelude_install_re.search(wf_body) is not None, (
-		"review_autofix.yml does not stage the timeout-prelude template "
-		"via the expected `install -m 0644 ... ${SUPPORT_PROMPTS_DIR}/"
+	assert timeout_prelude_install_re.search(stage_helper_body) is not None, (
+		"scripts/stage_workflow_support.sh does not stage the timeout-prelude "
+		"template via the expected `install -m 0644 ... ${SUPPORT_PROMPTS_DIR}/"
 		"integration-sync-conflict-resolver-retry-timeout-prelude.txt` "
 		"signature; consumer-repo runs whose pinned script_ref includes "
 		"the new prelude file would still hit a missing-template "
 		"::warning:: at runtime."
+	)
+	assert "stage_workflow_support.sh" in wf_body, (
+		"review_autofix.yml no longer invokes scripts/stage_workflow_support.sh; "
+		"the workflow-side bootstrap that stages the resolver retry preludes "
+		"(including the timeout prelude) is unwired, so the script_ref pin "
+		"path no longer mirrors the orchestrator refresh path."
 	)
 
 
