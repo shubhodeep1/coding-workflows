@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref\n- HEAD: `66a225cf3a2993c104d6b6f8c9c009fba91a94ab`\n- Branch: `orchestrator/project-3222`\n- Integration branch metadata matches the checked-out ref.\n\nRepresentative format to follow\n- Use the existing provenance block at the top of `analysis/recommendation-processing-report.md` plus the nearby per-doc sections for `analysis/workflow-optimization-2026-06-05.md` through `analysis/workflow-optimization-2026-06-06-3.md` as the template.\n\n1. Files likely to change\n- `analysis/recommendation-processing-report.md`\n  - Bump `## Processed source docs (93)` to `## Processed source docs (94)`.\n  - Add `analysis/workflow-optimization-2026-06-08.md` to the provenance list near the other dated workflow-optimization docs.\n  - Append a new `### \\`analysis/workflow-optimization-2026-06-08.md\\`` section in the outcome ledger using the existing three-bucket pattern:\n    - `Implemented by sibling work`\n    - `Already satisfied on this ref` / current-main-at-triage items\n    - `Intentionally deferred`\n- `analysis/workflow-optimization-2026-06-08.md`\n  - Delete it in the same change once its triage is folded into the report.\n\n2. Functions or modules to implement\n- No runtime code modules.\n- Add one markdown closeout entry that records the landed safe-subset work from tracking issue `#3222`:\n  - `#3223` \u2014 timeout-prelude staging contract restored in `review_autofix.yml`\n  - `#3224` \u2014 review telemetry now reports prompt-cache usage and distinguishes test-only `SEMBLE_FALLBACK` noise additively\n  - `#3225` \u2014 skip/gate telemetry added to the opaque phase workflows\n  - `#3226` \u2014 validate cache action/path cleanup finished\n- Record already-satisfied items separately, at minimum:\n  - the implementation-failed reissue / blocker-gate regression item (`test_implementation_failed_reissue_preserves_dependency_gates_and_pending_defs`) was already passing on current main when the doc was triaged\n- Record deferred items separately, using the tracking issue\u2019s validated-but-risky list:\n  - reviewer fan-out / reasoning changes after `CONTEXT_BUDGET_WARN`\n  - shorter `CHECK_RUNS_WAIT_TIMEOUT_SECS` defaults\n  - implement reasoning downshift\n  - AI-memory push / fail-open semantics changes\n  - reviewer-slot retry tightening\n  - `orchestrate_poll` coalescing / early no-op exit behavior\n  - broader GH API shape changes\n  - broader Semble / overflow-query policy changes\n\n3. Data structures affected\n- The markdown provenance list under `## Processed source docs`.\n- The processed-doc count in that same header.\n- One new per-source-doc ledger section with the same bullet structure used by the recent nearby entries.\n\n4. API or interface changes\n- None.\n- This is archival/reporting only: no workflow behavior, scripts, env vars, contracts, or tests should change.\n\n5. Potential risks or edge cases\n- There is a scope tension between \u201cappend-only\u201d and the existing provenance format: preserving the source-doc filename in the report\u2019s top provenance block requires a small non-tail edit to the same file. Keep that update minimal.\n- Do not misclassify the blocker-gate regression as work landed by this pass; it was already satisfied at triage time.\n- Keep the four landed safe-subset issues separate from the deferred hot-path / contract-touching recommendations.\n- Do not touch `analysis/last_collection_timestamp.txt`, `analysis/validation-selftest-status.json`, any other analysis artifact, or any code/workflow file.\n- Delete only `analysis/workflow-optimization-2026-06-08.md`.\n\n6. Testing considerations\n- Sanity-check formatting against the adjacent 2026-06-05 through 2026-06-06-3 sections in `analysis/recommendation-processing-report.md`.\n- Verify the diff is surgical: one modified file and one deleted file.\n- Confirm the new section names the source doc exactly as `analysis/workflow-optimization-2026-06-08.md`.\n- Confirm the report captures:\n  - the four landed safe-subset fixes (`#3223`-`#3226`)\n  - the already-satisfied blocker-gate item\n  - the intentionally deferred risky recommendations\n- Confirm `analysis/last_collection_timestamp.txt` and `analysis/validation-selftest-status.json` are unchanged.\n\nConflicts / assumptions to carry into implementation\n- `analysis/recommendation-processing-report.md` already has older top-of-file wording that is broader/staler than the current count; leave that pre-existing prose alone unless a minimal provenance/count update requires otherwise.\n- No dedicated automated validator exists for this report format in-repo, so verification is manual formatting + scoped diff review.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "c376d507ca72db79c326d223766e105961206bf97d429a1b3215b2fcf2d9dfb8",
+  "lineage": {
+    "issue_number": 3232,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27134456768",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27134456768",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3232"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260608113335_db01429cf3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3232,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27134456768"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3232",
+  "timestamps": {
+    "created_at": "2026-06-08T11:33:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
