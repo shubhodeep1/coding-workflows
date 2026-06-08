@@ -1269,6 +1269,21 @@ jobs:
           WORKFLOW_SOURCE_REPO="shubhodeep1/coding-workflows" \
           bash "${helper}"
 
+          SUPPORT_ROOT_DIR="${RUNNER_TEMP}/coding-workflows-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          SUPPORT_PROMPTS_DIR="${SUPPORT_ROOT_DIR}/prompts"
+          if [ ! -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeout-prelude.txt" ]; then
+            src=".codex-workflow-src/prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt" ]; then
+              src=".codex-workflow-src-main/prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
+            fi
+            if [ -f "${src}" ]; then
+              install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
+            else
+              echo "::warning::integration-sync-conflict-resolver-retry-timeout-prelude.txt not found in checked-out support sources for ${SCRIPT_REF}; resolver timeout-induced retries on integration-sync runs will fall back to the original prompt verbatim (no timeout-aware reflexion guidance)."
+              rm -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
+            fi
+          fi
+
       - name: Show disk usage (post support-source staging)
         run: df -h /
 
