@@ -96,7 +96,6 @@ ai_pipeline.md
 analysis/last_collection_timestamp.txt
 analysis/recommendation-processing-report.md
 analysis/validation-selftest-status.json
-analysis/workflow-optimization-2026-06-08.md
 codex.md
 docs/ai-tools-future-improvements.md
 docs/awesome-cc-future-improvements.md
@@ -264,7 +263,6 @@ scripts/render_validation_templates.py
 scripts/resolve_integration_ref.sh
 scripts/review_agents_md_materiality.sh
 scripts/review_apply_fixes.sh
-scripts/review_collect_pr_metadata.sh
 scripts/review_commit_changes.sh
 scripts/review_conflict_prepare.sh
 scripts/review_conflict_resolve.sh
