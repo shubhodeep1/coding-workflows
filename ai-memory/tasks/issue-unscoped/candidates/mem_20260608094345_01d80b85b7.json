@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_phase_skip_gate_telemetry_contract.py:23-37 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, mistralai_mistral-small-2603, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: `_step_block` uses a hardcoded `\"\\n      - name:\"` search and `text[start:]` fallback, so it can return a block that crosses job boundaries or runs to EOF when the target step is last in its job.\n  WHY: The helper becomes brittle under workflow edits that change indentation, step order, or job layout, which can make the telemetry contract assertions read the wrong YAML and yield false positives or false negatives.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: tests/test_phase_skip_gate_telemetry_contract.py\n  Line or code reference: lines 26-33, function _step_block\n  Problem: The _step_block helper uses text.find(\"\\n      - name:\") with a hardcoded 6-space indentation to find the next step boundary. When a tested step is the last in its job, the search returns -1 and the function falls through to return text[start:] (everything from the step marker to EOF), spanning across job boundaries.\n  Why it fails at runtime: The test currently passes because all 13 tested steps across the four workflows have a subsequent step at the same 6-space indent level, and no tested step is the last in its job. If a future workflow edit reorders steps, changes indentation, or makes a currently-tested step the last in its job, the _step_block function would capture a cross-job block and produce false positives or false negatives in downstream assertions.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- File: tests/test_phase_skip_gate_telemetry_contract.py\n  Line or code reference: lines 26-33 (_step_block function)\n  Problem: The `_step_block` helper uses a simple string search for `\"\\n      - name:\"` with hardcoded 6-space indentation to locate the next step boundary. When a tested step is the last step in its job, `next_step == -1` returns `text[start:]` which spans to end of file, potentially including content from subsequent jobs. This makes the contract test brittle and can produce false positives or false negatives in telemetry assertions as workflow files evolve.\n  Why it fails at runtime: Future workflow edits that change indentation, add steps with different formatting, or place the target step as the last in a job will cause the test to capture incorrect blocks, breaking the contract verification.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- File: tests/test_phase_skip_gate_telemetry_contract.py\n  Line or code reference: Function `_step_block`\n  Problem: The helper's text search pattern and boundary logic are structurally brittle and will begin producing false positives/negatives on future workflow edits, breaking the telemetry contract tests themselves.\n  Why it fails at runtime: Workflow steps can move, be added, have variable indentation styles, or exist as the last step in a job; none of these are under test control today. The naive fixed-indentation search in `_step_block` can capture trailing content from the next job or stop at the wrong sibling, making assertions brittle and non-deterministic across edits.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- File: tests/test_phase_skip_gate_telemetry_contract.py\n  Line or code reference: lines 26-35 (_step_block function) (2 related items)\n  Problem: The helper uses `text.find(\"\\n      - name:\")` with hardcoded 6-space indentation, and its `next_step == -1` path returns `text[start:]` to EOF, so the returned block can span across jobs when the target step is last in its job.\n  Why it fails at runtime: Future workflow edits that add/remove steps, change indentation, or reorder jobs can make the test assert against the wrong YAML block and produce false positives or false negatives in telemetry verification.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- File: tests/test_phase_skip_gate_telemetry_contract.py\n  Line or code reference: _step_block function, lines 26-37\n  Problem: The `_step_block` helper uses `text.find(\"\\n      - name:\")` with a hardcoded 6-space indentation search to locate the next step boundary. When the target step is the last step in its job, `next_step` resolves to `-1` and the function returns `text[start:]` \u2014 everything from the target step to the end of the file. This can cause the returned block to span across multiple jobs because the next `- name:` it matches may belong to an entirely different job further down the YAML. Additionally, the fixed-indentation search is brittle against workflow edits that use different indentation levels.\n  Why it fails at runtime: Future workflow edits that change step indentation, move a step to be last-in-job, or add a step with `      - name:` in a later job can cause `_step_block` to capture content from the wrong job, leading to false-positive or false-negative assertions in the telemetry contract tests. The contract tests themselves are the artifact protecting the telemetry prefix from silent removal \u2014 a brittle helper undermines their reliability.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: tests/test_phase_skip_gate_telemetry_contract.py\n  Line or code reference: `_step_block()` (lines 23-37, all callers)\n  Problem: The helper uses a naive `text.find(\"\\n      - name:\")` with a hardcoded 6-space indentation assumption after the target step marker. When the targeted step is the *last* step in its job (or when a later job/step has the same pattern), it either (a) returns everything from the marker to EOF or (b) captures a block spanning multiple jobs.\n  Why it fails at runtime: Several test functions (`test_plan_gate_steps_emit_stable_skip_and_defer_telemetry`, `test_implement_gate_steps_emit_stable_skip_telemetry`, `test_orchestrate_clarify_respond_gate_steps_emit_stable_telemetry`) rely on `_step_block` + `_assert_before` to prove the telemetry line appears *before* an `exit 0`. A future workflow edit that adds/removes steps, changes indentation, or alters job ordering will make the test block contain the wrong YAML, causing false-positive or false-negative assertions and breaking the contract test itself.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "0e230d03039f79f054b0b524155c69fc5ff34e4f747988cff13c44702a926673",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3229,
+    "run_id": "27127394334",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27127394334",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260608094345_01d80b85b7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3229,
+    "run_id": "27127394334"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-08T09:43:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
