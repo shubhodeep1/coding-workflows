@@ -12569,12 +12569,17 @@ def test_resolver_tooling_refresh_allowlist_includes_both_retry_preludes():
 	# shape used by every prompt-staging block in the helper.
 	wf_body = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
 	stage_helper_body = (REPO_ROOT / "scripts" / "stage_workflow_support.sh").read_text(encoding="utf-8")
+	wf_lines = wf_body.splitlines()
 	timeout_prelude_install_re = re.compile(
 		r"install -m 0644 [^\n]*\$\{SUPPORT_PROMPTS_DIR\}/integration-sync-conflict-resolver-retry-timeout-prelude\.txt",
 	)
-	stage_helper_exec_re = re.compile(
-		r'^\s*helper="[^"\n]*stage_workflow_support\.sh"$\n(?:.*\n){0,10}?^\s*bash "\$\{helper\}"$',
-		re.MULTILINE,
+	helper_line_idx = next(
+		(
+			idx
+			for idx, line in enumerate(wf_lines)
+			if re.search(r'helper="[^"\n]*stage_workflow_support\.sh"', line)
+		),
+		None,
 	)
 	assert timeout_prelude_install_re.search(stage_helper_body) is not None, (
 		"scripts/stage_workflow_support.sh does not stage the timeout-prelude "
@@ -12584,9 +12589,25 @@ def test_resolver_tooling_refresh_allowlist_includes_both_retry_preludes():
 		"the new prelude file would still hit a missing-template "
 		"::warning:: at runtime."
 	)
-	assert stage_helper_exec_re.search(wf_body) is not None, (
+	assert helper_line_idx is not None, (
+		"review_autofix.yml does not define a helper pointing at "
+		"stage_workflow_support.sh; the workflow-side bootstrap that stages "
+		"the resolver retry preludes is unwired."
+	)
+	next_step_idx = next(
+		(
+			idx
+			for idx, line in enumerate(wf_lines[helper_line_idx + 1 :], start=helper_line_idx + 1)
+			if re.match(r"^\s*-\s+name:", line)
+		),
+		len(wf_lines),
+	)
+	assert any(
+		re.search(r'^\s*bash "\$\{helper\}"$', line)
+		for line in wf_lines[helper_line_idx + 1 : next_step_idx]
+	), (
 		"review_autofix.yml no longer wires scripts/stage_workflow_support.sh via "
-		"the expected helper-assignment + `bash \"${helper}\"` sequence; "
+		"the expected helper-assignment + same-step `bash \"${helper}\"` sequence; "
 		"the workflow-side bootstrap that stages the resolver retry preludes "
 		"(including the timeout prelude) is unwired, so the script_ref pin "
 		"path no longer mirrors the orchestrator refresh path."
