@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_collect_pr_metadata.sh:28-30 | severity=medium | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The script sources gh_helpers.sh without checking whether it exists first, which can hard-fail the metadata collection step in edge cases.\n  WHY: If the helper is not staged or path resolution fails, sourcing aborts before the script's error handling is fully in place.\n- scripts/review_collect_pr_metadata.sh:32-37 | severity=medium | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The EXIT trap cleanup may not reclaim the temporary workspace on every failure path.\n  WHY: The reviewer noted the temp directory may leak if failure happens before the cleanup path is exercised, leaving scratch files behind.\n- scripts/review_collect_pr_metadata.sh:59 | severity=high | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The new no-op gh_retry stub shadows the real helper, so gh_retry_to_file no longer gets the shared retry/backoff behavior.\n  WHY: Transient GitHub API failures will bypass retry logic and surface as hard failures instead of being retried.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Keep existing behavior when gh_helpers.sh is not available\"\n  expected_change_site: scripts/review_collect_pr_metadata.sh lines 28-30\n  confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  EVIDENCE: No fallback like `if [ -f \"${SCRIPT_DIR}/gh_helpers.sh\" ]; then source ...; fi` was added to maintain behavior when the helper is missing\n- requirement: \"Verify the temp directory cleanup happens on both success and failure paths\"\n  expected_change_site: tests/test_review_autofix_review_pipeline_contract.py\n  confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  EVIDENCE: The test file shows assertions for the trap name pattern but no verification that cleanup actually executes or that the trap covers both successful execution and premature exit paths\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- File: scripts/review_collect_pr_metadata.sh\n  Line or code reference: Lines 28-30 (`source \"${SCRIPT_DIR}/gh_helpers.sh\"`)\n  Problem: Missing fallback if gh_helpers.sh doesn't exist during sourcing\n  Why it fails at runtime: If SUPPORT_SCRIPTS_DIR resolution fails or the file isn't staged, the script will exit with file not found before the error handling logic is defined\n  ISSUE_CONFIDENCE: 2\n\n- File: scripts/review_collect_pr_metadata.sh\n  Line or code reference: Lines 32-37 (trap definition)\n  Problem: Cleanup trap may not fire on all exit paths\n  Why it fails at runtime: The trap is set but previous errors before gh_retry_to_file might leave temp files unreclaimed on error paths before the function definitions are complete\n  ISSUE_CONFIDENCE: 3\n\n- Requirement: \"Keep existing behavior when gh_helpers.sh is not available\" (from the pattern seen in other bootstrap scripts like stage_workflow_support.sh changes)\n  Expected change site: scripts/review_collect_pr_metadata.sh lines 28-30\n  Evidence of absence: No fallback like `if [ -f \"${SCRIPT_DIR}/gh_helpers.sh\" ]; then source ...; fi` was added to maintain behavior when the helper is missing\n  ISSUE_CONFIDENCE: 3\n\n- Requirement: \"Verify the temp directory cleanup happens on both success and failure paths\" (implied by the trap addition)\n  Expected change site: tests/test_review_autofix_review_pipeline_contract.py\n  Evidence of absence: The test file shows assertions for the trap name pattern but no verification that cleanup actually executes or that the trap covers both successful execution and premature exit paths\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: scripts/review_collect_pr_metadata.sh:59\n  Problem: The patch sources gh_helpers.sh (which defines gh_retry and gh_retry_to_file) but then immediately re-defines a no-op stub for gh_retry.\n  Why it fails at runtime: This re-definition shadows the real helper, so the later gh_retry_to_file call never uses the retry/backoff/rate-limit logic that gh_helpers.sh provides.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "2f85e49eb60560adf47d67c9dec12dcdaa7244e84cc30ad3538480ab070740c0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3191,
+    "run_id": "27112662126",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27112662126",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260608031413_c2975589d5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3191,
+    "run_id": "27112662126"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-08T03:14:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
