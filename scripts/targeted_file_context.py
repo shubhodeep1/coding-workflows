@@ -150,7 +150,7 @@ def _normalized_semble_log_context() -> str | None:
 	# Shared with scripts/semble_helpers.sh: tests can opt into additive
 	# classification without changing the stable SEMBLE_* prefix contract.
 	raw = os.getenv("SEMBLE_LOG_CONTEXT", "")
-	context = "-".join(raw.split())
+	context = re.sub(r"-+", "-", re.sub(r"[\r\n\t ]", "-", raw)).strip("-")
 	return context or None
 
 

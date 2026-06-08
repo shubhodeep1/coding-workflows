@@ -39,6 +39,21 @@ from targeted_file_context import (  # noqa: E402
 os.environ.setdefault("SEMBLE_LOG_CONTEXT", "contract-test")
 
 
+def test_semble_log_context_normalization_matches_shell_contract() -> None:
+	original = os.environ.get("SEMBLE_LOG_CONTEXT")
+	try:
+		os.environ["SEMBLE_LOG_CONTEXT"] = " --contract--\t test-- "
+		assert targeted_file_context_module._normalized_semble_log_context() == "contract-test"
+
+		os.environ["SEMBLE_LOG_CONTEXT"] = "--"
+		assert targeted_file_context_module._normalized_semble_log_context() is None
+	finally:
+		if original is None:
+			os.environ.pop("SEMBLE_LOG_CONTEXT", None)
+		else:
+			os.environ["SEMBLE_LOG_CONTEXT"] = original
+
+
 def _make_fake_semble_script(path: Path, *, stdout: str = "", stderr: str = "", exit_code: int = 0) -> None:
 	path.write_text(
 		"#!/usr/bin/env python3\n"
