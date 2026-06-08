@@ -1345,11 +1345,16 @@ def test_review_collect_pr_metadata_helper_is_bootstrapped_and_delegated() -> No
 		line for line in _stage_helper_text().splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line
 	)
 	block = _step_block("Collect PR metadata")
+	helper_text = METADATA_HELPER.read_text(encoding="utf-8")
 
 	assert METADATA_HELPER.exists(), f"missing helper: {METADATA_HELPER}"
 	assert "review_collect_pr_metadata.sh" in required_bootstrap_line, required_bootstrap_line
 	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_collect_pr_metadata.sh"' in block
 	assert 'gh_retry "${PR_PAYLOAD_FILE}"' not in block
+	assert 'source "${SCRIPT_DIR}/gh_helpers.sh"' in helper_text
+	assert 'gh_retry_to_file "${outfile}" gh "$@"' in helper_text
+	assert 'review_collect_pr_metadata.XXXXXX' in helper_text
+	assert '::error::Unable to determine PR base branch' in helper_text
 
 
 def test_review_collect_pr_metadata_helper_supports_no_pr_synthetic_mode() -> None:

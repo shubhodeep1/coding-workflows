@@ -23,6 +23,17 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/gh_helpers.sh"
+
+TMP_RUNTIME_DIR="$(mktemp -d "${TMPDIR:-/tmp}/review_collect_pr_metadata.XXXXXX")"
+cleanup_review_collect_pr_metadata_tmp()
+{
+	rm -rf "${TMP_RUNTIME_DIR}"
+}
+trap cleanup_review_collect_pr_metadata_tmp EXIT
+
 REPOSITORY="${GITHUB_REPOSITORY:-}"
 if [ -z "${REPOSITORY}" ] || ! [[ "${REPOSITORY}" =~ ^[^/]+/[^/]+$ ]]; then
 	echo "::error::review_collect_pr_metadata: GITHUB_REPOSITORY must be set to owner/repo." >&2
@@ -48,48 +59,11 @@ do
 	fi
 done
 
-# Retry wrapper for gh api calls — rate-limit-aware.
-# On rate-limit (403/429), waits until X-RateLimit-Reset and retries.
-# On other failures, uses exponential backoff.
-# Usage: gh_retry <output_file> [gh api args...]
-_rl_wait()
-{
-	local _reset_ts _wait_secs
-	_reset_ts=$(gh api -i /rate_limit 2>/dev/null | grep -i '^x-ratelimit-reset:' | head -1 | awk '{print $2}' | tr -d '\r') || true
-	if [[ "${_reset_ts}" =~ ^[0-9]+$ ]] && [ "${_reset_ts}" -gt 0 ]; then
-		_wait_secs=$(( _reset_ts - $(date +%s) + 1 ))
-		[ "${_wait_secs}" -lt 1 ] && _wait_secs=1
-		[ "${_wait_secs}" -gt 600 ] && _wait_secs=600
-	else
-		_wait_secs=30
-	fi
-	echo "::warning::  Rate limit resets in ${_wait_secs}s (X-RateLimit-Reset: ${_reset_ts:-unknown})" >&2
-	sleep "${_wait_secs}"
-}
-
 gh_retry()
 {
 	local outfile="$1"
 	shift
-	local attempt max_attempts=5 delay=2
-	for attempt in $(seq 1 ${max_attempts}); do
-		if gh "$@" > "${outfile}" 2>/tmp/gh_retry_stderr; then
-			return 0
-		fi
-		if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/gh_retry_stderr 2>/dev/null; then
-			echo "::warning::GitHub API rate limit hit (attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
-			_rl_wait
-		else
-			cat /tmp/gh_retry_stderr >&2
-			if [ "${attempt}" -lt "${max_attempts}" ]; then
-				echo "gh call failed (attempt ${attempt}/${max_attempts}), retrying in ${delay}s..." >&2
-				sleep "${delay}"
-				delay=$((delay * 2))
-			fi
-		fi
-	done
-	echo "::error::gh call failed after ${max_attempts} attempts" >&2
-	return 1
+	gh_retry_to_file "${outfile}" gh "$@"
 }
 
 # No-PR claude-branch-review path: synthesize PR_PAYLOAD_FILE +
@@ -128,12 +102,15 @@ if [ "${CLAUDE_BRANCH_REVIEW_MODE:-}" = "true" ] && [ -z "${PR_NUMBER:-}" ]; the
 	echo "AUTOFIX_NO_PR_METADATA_SYNTHESIZED head_ref=${HEAD_REF_OVERRIDE} head_sha=${HEAD_SHA_OVERRIDE} base_ref=${BASE_REF_OVERRIDE}"
 else
 	gh_retry "${PR_PAYLOAD_FILE}" api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"
-	gh_retry /tmp/gh_issue_comments_raw.json api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments"
-	jq -s 'add // []' /tmp/gh_issue_comments_raw.json > "${PR_ISSUE_COMMENTS_FILE}"
-	gh_retry /tmp/gh_reviews_raw.json api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews"
-	jq -s 'add // []' /tmp/gh_reviews_raw.json > "${PR_REVIEWS_FILE}"
-	gh_retry /tmp/gh_review_comments_raw.json api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/comments"
-	jq -s 'add // []' /tmp/gh_review_comments_raw.json > "${PR_REVIEW_COMMENTS_FILE}"
+	issue_comments_raw="${TMP_RUNTIME_DIR}/gh_issue_comments_raw.json"
+	reviews_raw="${TMP_RUNTIME_DIR}/gh_reviews_raw.json"
+	review_comments_raw="${TMP_RUNTIME_DIR}/gh_review_comments_raw.json"
+	gh_retry "${issue_comments_raw}" api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments"
+	jq -s 'add // []' "${issue_comments_raw}" > "${PR_ISSUE_COMMENTS_FILE}"
+	gh_retry "${reviews_raw}" api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews"
+	jq -s 'add // []' "${reviews_raw}" > "${PR_REVIEWS_FILE}"
+	gh_retry "${review_comments_raw}" api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/comments"
+	jq -s 'add // []' "${review_comments_raw}" > "${PR_REVIEW_COMMENTS_FILE}"
 
 	jq '{
 		title: (.title // ""),
@@ -401,7 +378,7 @@ echo "PR diff snapshot (post gh pr diff) preview suppressed in logs for security
 
 BASE_REF="$(jq -r '.baseRefName' "${PR_META_FILE}")"
 if [ -z "${BASE_REF}" ] || [ "${BASE_REF}" = "null" ]; then
-	echo "Unable to determine PR base branch"
+	echo "::error::Unable to determine PR base branch"
 	exit 1
 fi
 echo "BASE_BRANCH=${BASE_REF}" >> "${GITHUB_ENV}"
