@@ -76,6 +76,19 @@ Copy this block when adding a new entry:
   - `rg -n 'render_prompt\.py' .github/workflows scripts --glob '!scripts/render_prompt.sh'` shows the direct Python-renderer callers or staging references that replace the shim path.
 - **Owner:** @shubhodeep1
 
+### `scripts/stage_workflow_support.sh`
+
+- **Introduced in:** codex/issue-3186 (2026-06-07); extended in #3211 (2026-06-07)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `rg -n 'stage_workflow_support\.sh' .github/workflows/review_autofix.yml .github/workflows/validate.yml` returns the shared helper invocation from both workflow staging steps.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_semble_contract.py` returns `OK: review_autofix Semble contract assertions hold`.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_workflow_validate_bootstrap.py` returns exit code 0 after the validate bootstrap contract assertions pass.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_core.py` returns exit code 0 after the shared-helper overlay staging assertions pass.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py` returns `All workflow script references resolve to existing files.`
+- **Owner:** @shubhodeep1
+
 ### `scripts/review_collect_pr_metadata.sh`
 
 - **Introduced in:** ai/issue-3203 (2026-06-07)
@@ -96,15 +109,4 @@ Copy this block when adding a new entry:
   - `gh workflow view workspace-cache-maintenance.yml -R shubhodeep1/coding-workflows` confirms the workflow still exists and still has a scheduled nightly cron.
   - `gh run list --workflow workspace-cache-maintenance.yml --limit 5 -R shubhodeep1/coding-workflows` shows recent scheduled/manual runs completing with `success`.
 - `gh cache list --repo shubhodeep1/coding-workflows --limit 100 --key workspace-v1- --sort created_at --order desc` still shows bounded workspace cache families (newest 3 retained per family) so the maintenance job remains operationally useful.
-- **Owner:** @shubhodeep1
-
-### `scripts/stage_workflow_support.sh`
-
-- **Introduced in:** #3211 (2026-06-07)
-- **Type:** long-running
-- **Removal trigger:** when validate and any future workflow-support consumers stage their support files through a replacement shared bootstrap path and no live caller invokes `scripts/stage_workflow_support.sh`.
-- **Removal preflight checks:**
-  - `rg -n 'stage_workflow_support\.sh' .github/workflows scripts --glob '!scripts/stage_workflow_support.sh'` returns no live caller matches.
-  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_workflow_validate_bootstrap.py` returns exit code 0 after the validate bootstrap contract assertions are updated to the replacement path in the same PR.
-  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_core.py` returns exit code 0 after validate's workflow-overlay staging assertions are updated to the replacement path in the same PR.
 - **Owner:** @shubhodeep1

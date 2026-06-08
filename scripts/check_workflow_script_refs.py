@@ -38,20 +38,46 @@ from typing import Iterable
 #     exist on main; the staging steps reference it only to copy it when a
 #     shim-adopting branch actually provides it.
 OPTIONAL_REFS = frozenset({"render_prompt.py"})
+EXTRA_REF_HOLDER_FILES = (pathlib.Path("scripts") / "stage_workflow_support.sh",)
 
 EXPLICIT_REF = re.compile(r"scripts/([a-zA-Z0-9_.\-]+\.(?:sh|py|json|txt|md))")
 SCRIPTS_VAR_REF = re.compile(
 	r"\$\{SUPPORT_SCRIPTS_DIR\}/([a-zA-Z0-9_.\-]+\.(?:sh|py|json|txt|md))"
 )
 BARE_NAME = re.compile(r"^[a-zA-Z0-9_.\-]+\.(?:sh|py|json|txt|md)$")
+SHELL_ASSIGNMENT = re.compile(r'^\s*([A-Z0-9_]+)="([^"\n]*)"', re.MULTILINE)
+VARIABLE_REF = re.compile(r"^\$(?:\{([A-Z0-9_]+)\}|([A-Z0-9_]+))$")
 FOR_LOOP = re.compile(
 	r"for\s+f\s+in\s+([^;]+?);\s*do(.*?)done",
 	re.DOTALL,
 )
 
 
+def extract_assignment_words(text: str) -> dict[str, list[str]]:
+	assignments: dict[str, list[str]] = {}
+	for name, blob in SHELL_ASSIGNMENT.findall(text):
+		words = [word.strip() for word in blob.split() if word.strip()]
+		if words:
+			assignments[name] = words
+	return assignments
+
+
+def expand_loop_items(items_blob: str, assignments: dict[str, list[str]]) -> list[str]:
+	expanded: list[str] = []
+	for item in items_blob.split():
+		item = item.strip()
+		match = VARIABLE_REF.match(item)
+		if match:
+			var_name = match.group(1) or match.group(2)
+			expanded.extend(assignments.get(var_name, []))
+			continue
+		expanded.append(item)
+	return expanded
+
+
 def extract_refs(text: str) -> set[str]:
 	refs: set[str] = set()
+	assignments = extract_assignment_words(text)
 	refs.update(EXPLICIT_REF.findall(text))
 	refs.update(SCRIPTS_VAR_REF.findall(text))
 	for items_blob, body in FOR_LOOP.findall(text):
@@ -61,7 +87,7 @@ def extract_refs(text: str) -> set[str]:
 		# such as the instruction-file fetch loop further down.
 		if "scripts/${f}" not in body and "${SUPPORT_SCRIPTS_DIR}/${f}" not in body:
 			continue
-		for item in items_blob.split():
+		for item in expand_loop_items(items_blob, assignments):
 			item = item.strip()
 			if BARE_NAME.match(item):
 				refs.add(item)
@@ -96,6 +122,12 @@ def check_workflows(repo_root: pathlib.Path) -> list[str]:
 				errors.append(
 					f"{yml.name}: references scripts/{ref} which does not exist"
 				)
+	for relpath in EXTRA_REF_HOLDER_FILES:
+		path = repo_root / relpath
+		if not path.is_file():
+			errors.append(f"{relpath}: cannot read (file missing)")
+			continue
+		errors.extend(check_paths([path], scripts_dir))
 	return errors
 
 

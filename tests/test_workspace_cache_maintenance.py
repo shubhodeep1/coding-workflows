@@ -13,6 +13,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REVIEW_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
+STAGE_HELPER = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
 MAINTENANCE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "workspace-cache-maintenance.yml"
 REVIEW_TEMPLATE = REPO_ROOT / "workflow-templates" / "ai-review.yml"
 REMOVAL_REGISTRY = REPO_ROOT / "docs" / "scripts-pending-removal.md"
@@ -80,7 +81,7 @@ def test_workspace_cache_maintenance_workflow_uses_gh_pat_cache_surfaces_and_sum
 
 def test_review_autofix_stages_and_activates_workspace_reuse_before_reviewers() -> None:
 	workflow = _workflow_text(REVIEW_WORKFLOW)
-	stage_block = _step_run_text(REVIEW_WORKFLOW, 'Stage workflow support files')
+	stage_block = STAGE_HELPER.read_text(encoding="utf-8")
 	metadata_block = _step_run_text(REVIEW_WORKFLOW, 'Initialize workspace metadata')
 	activate_block = _step_run_text(REVIEW_WORKFLOW, 'Activate workspace shell context')
 	cache_step = _step(REVIEW_WORKFLOW, 'Restore reusable workspace cache')
