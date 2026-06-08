@@ -90,6 +90,41 @@ def _render_reviewer_prompt_with_checklist(*, checklist_enabled: str, prompt_ava
 		return assembled_prompt_file.read_text(encoding="utf-8"), result.stderr
 
 
+def _normalize_openrouter_usage(log_text: str, *, phase: str, call: str, model: str) -> str:
+	reviewers = _read(REVIEWERS)
+	start = reviewers.index("normalize_openrouter_usage() {")
+	end = reviewers.index("emit_reviewer_substate()", start)
+	block = reviewers[start:end]
+
+	with tempfile.TemporaryDirectory(prefix="normalize-openrouter-usage-") as tmp:
+		tmp_p = Path(tmp)
+		log_file = tmp_p / "reviewer.stderr"
+		log_file.write_text(log_text, encoding="utf-8")
+		env = os.environ.copy()
+		env["SUPPORT_SCRIPTS_DIR"] = str(REPO_ROOT / "scripts")
+		env["PYTHONDONTWRITEBYTECODE"] = "1"
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				f"{block}\n"
+				'normalize_openrouter_usage "$1" "$2" "$3" "$4"\n',
+				"bash",
+				str(log_file),
+				phase,
+				call,
+				model,
+			],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+		return result.stdout.strip()
+
+
 def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> None:
 	workflow = _read(WORKFLOW)
 	stage_step_block = _step_block(workflow, "Stage workflow support files")
@@ -284,6 +319,30 @@ def test_reviewer_checklist_prompt_contract_and_gate() -> None:
 	assert "Reviewer checklist prompt unavailable" in missing_stderr
 
 
+def test_normalize_openrouter_usage_keeps_first_valid_usage_payload() -> None:
+	line = _normalize_openrouter_usage(
+		'noise before JSON\n'
+		'{"response":{"usage":{"prompt_tokens":11,"completion_tokens":7,'
+		'"total_tokens":18,"cache_creation_input_tokens":5,'
+		'"cache_read_input_tokens":3}},"model":"first-model"}\n'
+		'{"usage":{"prompt_tokens":99,"completion_tokens":1,"total_tokens":100,'
+		'"cache_creation_input_tokens":0,"cache_read_input_tokens":0},'
+		'"model":"second-model"}\n',
+		phase="review",
+		call="pass1",
+		model="fallback-model",
+	)
+
+	assert "phase=review call=pass1 model=first-model" in line
+	assert "prompt_tokens=11" in line
+	assert "completion_tokens=7" in line
+	assert "total_tokens=18" in line
+	assert "cache_creation_input_tokens=5" in line
+	assert "cache_read_input_tokens=3" in line
+	assert "second-model" not in line
+	assert "prompt_tokens=99" not in line
+
+
 def test_editor_targeted_file_context_and_prompt_render_path_passes_flags() -> None:
 	apply_fixes = _read(APPLY_FIXES)
 
@@ -348,6 +407,7 @@ def main() -> int:
 	test_workflow_adds_gated_setup_install_index_and_editor_only_serena_steps()
 	test_reviewer_prompt_assembles_semble_context_in_dynamic_section_without_serena()
 	test_reviewer_checklist_prompt_contract_and_gate()
+	test_normalize_openrouter_usage_keeps_first_valid_usage_payload()
 	test_editor_targeted_file_context_and_prompt_render_path_passes_flags()
 	test_commit_changes_drops_bootstrap_owned_serena_runtime_tree_before_staging()
 	test_conflict_prepare_and_resolve_wire_semble_query_and_prompt_append()

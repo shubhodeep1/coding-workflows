@@ -179,6 +179,8 @@ def _is_contract_test_semble_line(line: str) -> bool:
 
 def _to_int(value: Any, default: int = 0) -> int:
     try:
+        if isinstance(value, str):
+            value = value.strip().replace(",", "")
         return int(value)
     except (TypeError, ValueError):
         return default

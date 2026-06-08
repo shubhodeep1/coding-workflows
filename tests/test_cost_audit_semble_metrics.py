@@ -93,6 +93,28 @@ INFO: openrouter usage phase=review call=review model=openai/gpt-5.4 cache_enabl
 	}
 
 
+def test_parse_log_accepts_comma_formatted_openrouter_usage_counts() -> None:
+	log = """
+INFO: openrouter usage phase=review call=review model=openai/gpt-5.4 cache_enabled=true cache_breakpoint_enabled=na cache_breakpoint_fallback_retry=na prompt_tokens=100,000 completion_tokens=25,000 total_tokens=125,000 cache_creation_input_tokens=30,000 cache_read_input_tokens=40,000
+"""
+
+	parsed = parse_log(log)
+
+	assert parsed["or_prompt_tokens"] == 100000
+	assert parsed["or_completion_tokens"] == 25000
+	assert parsed["or_total_tokens"] == 125000
+	assert parsed["or_cache_write_tokens"] == 30000
+	assert parsed["or_cache_read_tokens"] == 40000
+	assert parsed["or_phases"] == {
+		"review": {
+			"prompt_tokens": 100000,
+			"completion_tokens": 25000,
+			"total_tokens": 125000,
+			"calls": 1,
+		}
+	}
+
+
 def test_parse_log_splits_contract_test_semble_fallbacks_from_runtime() -> None:
 	log = """
 SEMBLE_FALLBACK target=reviewer-context reason=timeout context=contract-test ms=5000

@@ -199,6 +199,7 @@ if log_path.exists():
 			usage = normalize_usage(found_usage)
 			if isinstance(payload, dict) and isinstance(payload.get("model"), str) and payload.get("model"):
 				model_name = payload["model"]
+			break
 		index = max(end, next_object_start + 1)
 
 print(
