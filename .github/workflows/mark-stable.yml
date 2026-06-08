@@ -260,6 +260,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_retry_prelude_render.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_cost_audit_semble_metrics.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_log_analysis_failure_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_skip_gate_telemetry_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_semble_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_judge_semble_prefetch_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_judge_interim_round_trip.py

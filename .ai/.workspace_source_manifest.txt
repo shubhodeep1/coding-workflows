@@ -96,7 +96,6 @@ ai_pipeline.md
 analysis/last_collection_timestamp.txt
 analysis/recommendation-processing-report.md
 analysis/validation-selftest-status.json
-analysis/workflow-optimization-2026-06-08.md
 codex.md
 docs/ai-tools-future-improvements.md
 docs/awesome-cc-future-improvements.md
