@@ -318,6 +318,8 @@ def test_target_workflows_stage_schema_and_invoke_loader() -> None:
 			assert '.codex-workflow-src/scripts/stage_workflow_support.sh' in workflow_text
 			assert '.codex-workflow-src-main/scripts/stage_workflow_support.sh' in workflow_text
 			assert 'bash "${helper}"' in workflow_text
+			assert 'bash "${helper}" validate' not in workflow_text
+			assert 'if [ "${1:-}" = "validate" ]; then\n\tmain_validate "$@"\nelse\n\tstage_review_runtime_support\nfi' in stage_helper_text
 			assert "WORKFLOW.md overlay is opt-in by file presence" in stage_helper_text
 			assert '--github-env "${GITHUB_ENV}"' in stage_helper_text
 			continue
