@@ -12572,6 +12572,10 @@ def test_resolver_tooling_refresh_allowlist_includes_both_retry_preludes():
 	timeout_prelude_install_re = re.compile(
 		r"install -m 0644 [^\n]*\$\{SUPPORT_PROMPTS_DIR\}/integration-sync-conflict-resolver-retry-timeout-prelude\.txt",
 	)
+	stage_helper_exec_re = re.compile(
+		r'^\s*helper="[^"\n]*stage_workflow_support\.sh"$\n(?:.*\n){0,10}?^\s*bash "\$\{helper\}"$',
+		re.MULTILINE,
+	)
 	assert timeout_prelude_install_re.search(stage_helper_body) is not None, (
 		"scripts/stage_workflow_support.sh does not stage the timeout-prelude "
 		"template via the expected `install -m 0644 ... ${SUPPORT_PROMPTS_DIR}/"
@@ -12580,8 +12584,9 @@ def test_resolver_tooling_refresh_allowlist_includes_both_retry_preludes():
 		"the new prelude file would still hit a missing-template "
 		"::warning:: at runtime."
 	)
-	assert "stage_workflow_support.sh" in wf_body, (
-		"review_autofix.yml no longer invokes scripts/stage_workflow_support.sh; "
+	assert stage_helper_exec_re.search(wf_body) is not None, (
+		"review_autofix.yml no longer wires scripts/stage_workflow_support.sh via "
+		"the expected helper-assignment + `bash \"${helper}\"` sequence; "
 		"the workflow-side bootstrap that stages the resolver retry preludes "
 		"(including the timeout prelude) is unwired, so the script_ref pin "
 		"path no longer mirrors the orchestrator refresh path."
