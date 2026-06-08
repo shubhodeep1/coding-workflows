@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:12583-12588 | severity=medium | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, mistralai_mistral-small-2603, moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: The wiring assertion `assert \"stage_workflow_support.sh\" in wf_body` is a bare substring check that can pass even if `review_autofix.yml` no longer actually invokes `scripts/stage_workflow_support.sh`.\n  WHY: It only matches filename mentions in assignments/error text/comments and can miss removal of `bash \"${helper}\"`, defeating the stated defence-in-depth intent; reviewers disagreed only on how blocking it is, with confidence highest at 5.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_orchestrate_poll_process.py:12584-12588 | confidence=5\n  PROBLEM: The wiring assertion `assert \"stage_workflow_support.sh\" in wf_body` is a bare substring check that contradicts the test's own stated intent.\n  WHY: The string `stage_workflow_support.sh` appears in variable assignment, existence check, fallback assignment, and error text, not the actual invocation, so the test can pass while the helper is never invoked.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_orchestrate_poll_process.py:12588 | confidence=4\n  PROBLEM: The wiring check `assert \"stage_workflow_support.sh\" in wf_body` is a plain substring match that would pass even if the helper is no longer invoked.\n  WHY: The test's defense-in-depth goal is not enforced because the substring check would still pass if only the `bash \"${helper}\"` execution were removed.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- tests/test_orchestrate_poll_process.py:12588 | confidence=5\n  PROBLEM: The wiring check `assert \"stage_workflow_support.sh\" in wf_body` only verifies substring presence, not actual helper invocation.\n  WHY: The test would pass even if the workflow retains the filename in an error message, comment, or removed variable assignment while dropping the actual `bash \"${helper}\"` execution, defeating the defence-in-depth intent.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_orchestrate_poll_process.py:12588 | confidence=4\n  PROBLEM: The wiring check `assert \"stage_workflow_support.sh\" in wf_body` is a simple substring match that can pass even if the workflow no longer actually invokes the staging helper.\n  WHY: The workflow could retain the filename only in an error message or comment while dropping the actual `bash \"${helper}\"` execution, and the test would still pass.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- (no file/line provided)\n  PROBLEM: The regex in the test fails to match the actual line because the target line has a quote before `${SUPPORT_PROMPTS_DIR}`.\n  WHY: The test will false-fail in CI because the new assertion does not account for the opening quote before `${SUPPORT_PROMPTS_DIR}` in the `install -m 0644 \"${src}\" \"${SUPPORT_PROMPTS_DIR}/...` line.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_orchestrate_poll_process.py:12588 | confidence=5\n  PROBLEM: The wiring assertion is a bare substring check on the full YAML body.\n  WHY: The test would still pass if `review_autofix.yml` retained any mention of the filename while the actual `bash \"${helper}\"` invocation or the fallback lookup were removed, defeating the explicit defence-in-depth goal.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "94b6aac785f9a7cf5b9463508560edadcdaa9dfe424bb9b2d0e454117d337200",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3242,
+    "run_id": "27149320263",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27149320263",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260608162319_8440d16ceb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3242,
+    "run_id": "27149320263"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-08T16:23:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
