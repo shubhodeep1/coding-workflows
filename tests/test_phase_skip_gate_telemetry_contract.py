@@ -20,14 +20,21 @@ def _read(path: Path) -> str:
 
 
 def _step_block(path: Path, step_name: str) -> str:
-	text = _read(path)
 	marker = f"- name: {step_name}"
-	start = text.find(marker)
+	lines = _read(path).splitlines()
+	start = next((i for i, line in enumerate(lines) if line.lstrip() == marker), -1)
 	assert start != -1, f"Missing workflow step: {step_name} in {path}"
-	next_step = text.find("\n      - name:", start + len(marker))
-	if next_step == -1:
-		return text[start:]
-	return text[start:next_step]
+	indent = len(lines[start]) - len(lines[start].lstrip())
+	block = [lines[start]]
+	for line in lines[start + 1 :]:
+		stripped = line.lstrip()
+		line_indent = len(line) - len(stripped)
+		if stripped and line_indent < indent:
+			break
+		if stripped.startswith("- name:") and line_indent == indent:
+			break
+		block.append(line)
+	return "\n".join(block)
 
 
 def _assert_before(block: str, earlier: str, later: str) -> None:
