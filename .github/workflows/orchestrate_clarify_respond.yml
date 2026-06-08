@@ -72,6 +72,7 @@ jobs:
             echo "is_orchestrator=true" >> "$GITHUB_OUTPUT"
           else
             echo "Issue #${ISSUE_NUMBER} is not orchestrator-managed. Skipping."
+            echo "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=orchestrator_metadata reason=not_orchestrator_managed outcome=skip issue=${ISSUE_NUMBER}"
             echo "is_orchestrator=false" >> "$GITHUB_OUTPUT"
           fi
           # Suppress per-phase Telegram alerts when the orchestrator
@@ -937,6 +938,7 @@ jobs:
             CHECK_EXISTS="$(printf '%s' "${CHECK_RESULT}" | jq -r '.exists // false' 2>/dev/null || echo "false")"
             if [ "${CHECK_EXISTS}" = "true" ]; then
               echo "::notice::Clarification comment ${CLARIFICATION_COMMENT_ID} was already processed; skipping duplicate auto-answer."
+              echo "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=command_claim reason=already_processed outcome=skip issue=${ISSUE_NUMBER} comment_id=${CLARIFICATION_COMMENT_ID}"
               SKIP_AUTO_ANSWER="true"
             else
               CLAIM_RESULT="$(memory_processed_command_claim \
@@ -959,6 +961,7 @@ jobs:
               fi
               if [ "${CLAIMED}" != "true" ]; then
                 echo "::notice::Clarification comment ${CLARIFICATION_COMMENT_ID} was claimed by another run; skipping duplicate auto-answer."
+                echo "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=command_claim reason=claimed_elsewhere outcome=skip issue=${ISSUE_NUMBER} comment_id=${CLARIFICATION_COMMENT_ID}"
                 SKIP_AUTO_ANSWER="true"
               fi
             fi
@@ -1028,6 +1031,11 @@ jobs:
           fi
 
           if [ "${LOOP_BLOCKED}" = "true" ] || [ "${HAS_ESCALATE}" = "true" ]; then
+            if [ "${HAS_ESCALATE}" = "true" ] && [ "${LOOP_BLOCKED}" != "true" ]; then
+              echo "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=auto_answer reason=escalate_requested outcome=defer issue=${ISSUE_NUMBER} comment_id=${CLARIFICATION_COMMENT_ID} cycle=${CYCLE} max_cycles=${MAX_CYCLES}"
+            else
+              echo "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=auto_answer reason=loop_guard_blocked outcome=defer issue=${ISSUE_NUMBER} comment_id=${CLARIFICATION_COMMENT_ID} loop_reason=${LOOP_REASON} cycle=${CYCLE} max_cycles=${MAX_CYCLES}"
+            fi
             if [ -f scripts/label_helpers.sh ]; then
               source scripts/label_helpers.sh
               ensure_label_exists "ai:blocked" "${{ github.repository }}"

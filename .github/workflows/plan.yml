@@ -436,6 +436,7 @@ jobs:
           source scripts/gh_helpers.sh 2>/dev/null || true
           if ! printf '%s' "${TRIGGER_COMMENT_BODY}" | perl -0777 -ne 'exit((/^\s*\/answer\b/is) ? 0 : 1)'; then
             echo "Comment does not begin with /answer on first non-whitespace content. Skipping planning run."
+            echo "AI_PHASE_GATE_V1 phase=plan gate=trigger_validation reason=invalid_trigger_body outcome=skip issue=${ISSUE_NUMBER}"
             echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
             exit 0
           fi
@@ -450,6 +451,7 @@ jobs:
             # posts the plan comment, and (when AUTO_IMPLEMENT_ON_CLEAR_PLAN
             # is set) auto-approves implement to fire on a closed issue.
             echo "Issue #${ISSUE_NUMBER} is closed. Skipping planning run."
+            echo "AI_PHASE_GATE_V1 phase=plan gate=trigger_validation reason=issue_closed outcome=skip issue=${ISSUE_NUMBER}"
             echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
             exit 0
           fi
@@ -471,6 +473,7 @@ jobs:
           else
             echo "Issue #${ISSUE_NUMBER} has none of ai:planning, ai:clarification, or ai:blocked labels. Skipping planning run."
             echo "Current labels: ${ISSUE_LABELS_JSON}"
+            echo "AI_PHASE_GATE_V1 phase=plan gate=trigger_validation reason=missing_expected_phase_label outcome=skip issue=${ISSUE_NUMBER}"
             echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
             exit 0
           fi
@@ -497,6 +500,7 @@ jobs:
             ')"
           if [ "${LINKED_PR_COUNT}" -gt 0 ]; then
             echo "Issue #${ISSUE_NUMBER} already has at least one open PR. Skipping planning run."
+            echo "AI_PHASE_GATE_V1 phase=plan gate=existing_pr_check reason=existing_pr outcome=skip issue=${ISSUE_NUMBER}"
             echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
           fi
 
@@ -516,6 +520,7 @@ jobs:
 
           if [ -z "${LATEST_ANSWER_COMMENT_ID}" ] || [ "${LATEST_ANSWER_COMMENT_ID}" = "null" ]; then
             echo "No start-of-comment /answer command found. Skipping planning run."
+            echo "AI_PHASE_GATE_V1 phase=plan gate=comment_freshness reason=no_answer_comment outcome=skip issue=${ISSUE_NUMBER}"
             echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
             exit 0
           fi
@@ -525,6 +530,7 @@ jobs:
 
           if [ "${LATEST_ANSWER_COMMENT_ID}" != "${TRIGGER_COMMENT_ID}" ]; then
             echo "Skipping stale /answer comment ${TRIGGER_COMMENT_ID}; latest is ${LATEST_ANSWER_COMMENT_ID}."
+            echo "AI_PHASE_GATE_V1 phase=plan gate=comment_freshness reason=stale_answer_comment outcome=skip issue=${ISSUE_NUMBER} trigger_comment_id=${TRIGGER_COMMENT_ID} latest_comment_id=${LATEST_ANSWER_COMMENT_ID}"
             echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
             exit 0
           fi
@@ -548,6 +554,7 @@ jobs:
           CHECK_EXISTS="$(printf '%s' "${CHECK_RESULT}" | jq -r '.exists // false' 2>/dev/null || echo "false")"
           if [ "${CHECK_EXISTS}" = "true" ]; then
             echo "::notice::/answer comment ${TRIGGER_COMMENT_ID} already processed; skipping."
+            echo "AI_PHASE_GATE_V1 phase=plan gate=command_claim reason=already_processed outcome=skip issue=${ISSUE_NUMBER} comment_id=${TRIGGER_COMMENT_ID}"
             echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
             exit 0
           fi
@@ -591,6 +598,7 @@ jobs:
 
           if [ "${CLAIMED}" != "true" ]; then
             echo "::notice::/answer comment ${TRIGGER_COMMENT_ID} claimed by another run; skipping."
+            echo "AI_PHASE_GATE_V1 phase=plan gate=command_claim reason=claimed_elsewhere outcome=skip issue=${ISSUE_NUMBER} comment_id=${TRIGGER_COMMENT_ID}"
             echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
             exit 0
           fi
@@ -1274,6 +1282,7 @@ jobs:
           write_output "auto_answer_command" ""
 
           if [ "${IS_ORCHESTRATOR_MANAGED}" != "true" ]; then
+            echo "AI_PHASE_GATE_V1 phase=plan gate=orchestrator_auto_answer reason=not_orchestrator_managed outcome=defer issue=${ISSUE_NUMBER}"
             exit 0
           fi
 
@@ -1365,6 +1374,7 @@ jobs:
             write_output "auto_answer_parse_failed" "true"
             write_output "auto_answer_failure_reason" "${PARSE_REASON}"
             echo "::notice::Orchestrator auto-answer skipped (run_id=${{ github.run_id }}): ${PARSE_REASON}"
+            echo "AI_PHASE_GATE_V1 phase=plan gate=orchestrator_auto_answer reason=parse_failed outcome=defer issue=${ISSUE_NUMBER}"
             exit 0
           fi
 
@@ -1703,6 +1713,7 @@ jobs:
           CURRENT_STATE="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '.state // "open"' 2>/dev/null || echo "open")"
           if [ "${CURRENT_STATE}" = "closed" ]; then
             echo "Issue #${ISSUE_NUMBER} is closed; skipping auto-approval comment."
+            echo "AI_PHASE_GATE_V1 phase=plan gate=auto_approve reason=issue_closed outcome=defer issue=${ISSUE_NUMBER}"
             exit 0
           fi
 
@@ -1719,6 +1730,7 @@ jobs:
               ;;
             *)
               echo "AUTO_IMPLEMENT_ON_CLEAR_PLAN disabled; skipping auto-approval comment."
+              echo "AI_PHASE_GATE_V1 phase=plan gate=auto_approve reason=auto_implement_disabled outcome=defer issue=${ISSUE_NUMBER}"
               ;;
           esac
 

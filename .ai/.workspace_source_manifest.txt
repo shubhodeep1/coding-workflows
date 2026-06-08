@@ -96,6 +96,7 @@ ai_pipeline.md
 analysis/last_collection_timestamp.txt
 analysis/recommendation-processing-report.md
 analysis/validation-selftest-status.json
+analysis/workflow-optimization-2026-06-08.md
 codex.md
 docs/ai-tools-future-improvements.md
 docs/awesome-cc-future-improvements.md
@@ -263,6 +264,7 @@ scripts/render_validation_templates.py
 scripts/resolve_integration_ref.sh
 scripts/review_agents_md_materiality.sh
 scripts/review_apply_fixes.sh
+scripts/review_collect_pr_metadata.sh
 scripts/review_commit_changes.sh
 scripts/review_conflict_prepare.sh
 scripts/review_conflict_resolve.sh
@@ -284,6 +286,7 @@ scripts/semantic_cache.py
 scripts/semble_helpers.sh
 scripts/serena_stats_emit.py
 scripts/setup_serena.sh
+scripts/stage_workflow_support.sh
 scripts/summarize_reviewer_consensus.sh
 scripts/summarize_unselected_runs.py
 scripts/targeted_file_context.py
