@@ -331,3 +331,140 @@ Deep-dive logs under `errors/`, `slow/`, and `recent/` (excluding `workflow_log_
 |---|---:|---|---|
 | `STALL_REANCHOR_FALLBACK` | 27135212721 | `orchestrate_poll` | `issue=3232 source=branch_name resolved=2026-06-08T11:40:28Z` |
 
+
+## Deep Audit — Workflows & Scripts (2026-06-08)
+
+### Section 1: Bug & Correctness Sweep
+
+- **ID** — `SEC-001`
+  - **File path** — `scripts/run_validation_repo_checks.sh:21-29`
+  - **Severity** — Medium
+  - **Category tag** — `security`
+  - **Description** — When positional arguments are supplied, the script replaces the built-in `CHECK_COMMANDS` list with `("$@")` and then executes each entry through `timeout ... /bin/sh -c "${check_cmd}"`. That reintroduces shell parsing for every override string, so metacharacters change what actually runs instead of preserving argv boundaries. `README.md:1691,1711-1716` documents this script as the seeded repo-check entrypoint for validation harnesses, so this is on a workflow-facing path.
+  - **Recommended fix** — Stop treating overrides as shell text. Either: (1) accept named check IDs that map to the built-in commands, or (2) accept one argv vector and execute it directly with `timeout "${CHECK_TIMEOUT_SECS}" "$@"`. If a string interface must remain, reject shell interpreters/metacharacters before dispatch, following the dangerous-command screening pattern already used in `scripts/review_synthesise_smoke.sh:252-270`.
+
+- **ID** — `BUG-001`
+  - **File path** — `.github/workflows/review_autofix.yml:785-827,4634-4654,4817-4837,5871-5890; scripts/review_rb_judge.sh:727-736,1844-1858; .github/workflows/issue_pr_status.yml:272-287`
+  - **Severity** — High
+  - **Category tag** — `bug`
+  - **Description** — `issue_pr_status.yml` explicitly tightened fallback parsing so only closing-keyword links or repo-scoped issue URLs/paths are actionable, and it documents that bare prose mentions like `issue #N` / `issues/N` caused incorrect automated transitions (`issue_pr_status.yml:272-287`). `review_autofix.yml` and `review_rb_judge.sh` still use the older broad regex that matches `issues/123` and `issue #123`. In `review_autofix.yml`, those matches drive validate dispatch + `ai:orchestrator-validate-required` removal (`785-827`), `ai:ready-to-merge` labeling (`4634-4654`), and `ai:review-blocked` labeling (`4817-4837`, `5871-5890`). That leaves the review path able to mutate unrelated issues even after `issue_pr_status` was hardened against the same failure mode.
+  - **Recommended fix** — Extract one shared fallback parser and reuse it everywhere. The best starting point is the stricter body-text fallback already in `scripts/review_collect_pr_metadata.sh:159-194`; generalize it into a helper that returns deduplicated issue numbers using the `issue_pr_status` semantics, write that once into `LINKED_ISSUES_JSON`, and delete the four inline regex copies in `review_autofix.yml` plus the copy in `review_rb_judge.sh`.
+
+- **ID** — `BUG-002`
+  - **File path** — `scripts/review_rb_judge.sh:740-764,896-916,2124-2133,2374-2391`
+  - **Severity** — Medium
+  - **Category tag** — `bug`
+  - **Description** — `review_rb_judge.sh` records `FIRST_ISSUE` and `FIRST_ISSUE_LABELS_JSON` from the first linked issue it sees, captures the first non-empty body it encounters, and then breaks (`740-764`). That same issue/body is later used as the judge’s “original requirement” (`896-916`) and as the source of `ai:orchestrator-managed` propagation for both merge-with-followup and close-and-reissue flows (`2124-2133`, `2374-2391`). On PRs linked to multiple issues, the effective parent is therefore “first one returned” rather than an explicit canonical parent. [NEEDS VERIFICATION]
+  - **Recommended fix** — Resolve the canonical parent during the early metadata pass instead of inside `review_rb_judge.sh`. Extend `scripts/review_collect_pr_metadata.sh:124-152` to emit `PRIMARY_LINKED_ISSUE_NUMBER`, `PRIMARY_LINKED_ISSUE_BODY`, and `PRIMARY_LINKED_ISSUE_LABELS_JSON` using deterministic precedence (for example: exact closing-keyword issue first, else sole linked issue, else issue already carrying orchestrator-managed/tracking metadata), and consume those values in `review_rb_judge.sh`.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+- **ID** — `API-001`
+  - **File path** — `scripts/gh_helpers.sh:916-932`
+  - **Severity** — Medium
+  - **Category tag** — `api-batching`
+  - **Description** — `_gh_issue_timeline_with_cross_refs_rest()` fetches the issue timeline once, extracts unique same-repo PR URLs, then calls `gh_retry gh api "${pr_url}"` inside a `while read` loop for every PR URL. **Current call count:** `1 + N` per issue (`1` timeline call + `N` PR REST calls). **Proposed call count:** `2` total for same-repo PRs, or `1 + ceil(N/25)` if aliased GraphQL batching is chunked. This is a per-iteration API pattern in a shared helper, so every caller that falls back to REST inherits the fan-out.
+  - **Recommended fix** — Extend the existing alias-batching pattern from `scripts/orchestrate_poll_process.sh:10585-10728` (`_fetch_candidate_issue_details_graphql` / `_fetch_linked_pr_status_graphql`) into `scripts/gh_helpers.sh`, batch PR numbers in one GraphQL request, and keep the current REST path only as fail-open fallback.
+
+- **ID** — `API-002`
+  - **File path** — `scripts/review_collect_pr_metadata.sh:124-136,161-191`
+  - **Severity** — Medium
+  - **Category tag** — `api-batching`
+  - **Description** — The script first queries `closingIssuesReferences` once via GraphQL (`124-136`). When that returns empty, the fallback path parses PR body text and then loops over each matched issue number, calling `gh_retry ... api "repos/${REPOSITORY}/issues/${_fb_num}"` one by one (`161-191`). `_FALLBACK_MAX_ISSUES=20` caps worst-case fan-out, but **current call count** on the fallback path is still `1 + N` (`1` GraphQL miss + up to `20` issue GETs). **Proposed call count:** `2` (`1` GraphQL miss + `1` batched issue-details fetch).
+  - **Recommended fix** — Add a batched issue-summary helper to `scripts/gh_helpers.sh` (same alias style as `_fetch_candidate_issue_details_graphql`) that returns `{number,title,body}` for a list of issue numbers. Then replace the per-issue loop in `review_collect_pr_metadata.sh` with one batch call and build the linked-issue context from that response.
+
+- **ID** — `API-003`
+  - **File path** — `scripts/check_external_branch_advance.sh:175-185`
+  - **Severity** — Low
+  - **Category tag** — `api-batching`
+  - **Description** — The identity-verification path performs one `gh_retry gh api "repos/${REPOSITORY}/commits/${sha}"` call per SHA in `self_subject_shas`. The inline comment says the set is “usually tiny,” but **current call count** is still `N` commit API calls for `N` SHAs. **Proposed call count:** `1` aliased GraphQL batch for the whole SHA set. [NEEDS VERIFICATION]
+  - **Recommended fix** — If this path starts seeing larger advance sets, add a batched commit-attribution helper in `scripts/gh_helpers.sh` using the same alias pattern already used in `scripts/orchestrate_poll_process.sh`, and have `check_external_branch_advance.sh` submit the full SHA list at once.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **ID** — `DUP-001`
+  - **File path** — `.github/workflows/comprehensive-test-and-release.yml:72-97,318-343`
+  - **Severity** — Low
+  - **Category tag** — `duplication`
+  - **Description** — `gh_api_safe()` is defined twice in the same workflow with near-identical bodies: same temp-file capture, same “rate limit” grep, same 30→60→120 backoff logic, and same error reporting. This is literal duplication inside one file.
+  - **Recommended fix** — Remove the local copies and use one shared implementation. The simplest path is to source `scripts/gh_helpers.sh` and call `gh_retry gh api ...` directly; if a compatibility wrapper is desired, put `gh_api_safe() { gh_retry gh api "$@"; }` in a shared helper and have both `list_dispatch_runs()` call sites use it.
+
+- **ID** — `DUP-002`
+  - **File path** — `.github/workflows/cancel_on_pr_close.yml:26-53; .github/workflows/mark-stable.yml:401-427,550-576; .github/workflows/orchestrate_poll.yml:84-118; .github/workflows/test-and-mark-stable.yml:475-489,1281-1303,4845-4871`
+  - **Severity** — Medium
+  - **Category tag** — `duplication`
+  - **Description** — Rate-limit-aware GH wrappers are reimplemented across at least seven workflow blocks. They are not fully identical: some return empty strings on failure (`test-and-mark-stable`), some hard-fail, and `orchestrate_poll` also trips a circuit-breaker file. That means the same GitHub API behavior is being maintained in multiple copies with already-divergent semantics.
+  - **Recommended fix** — Centralize this into one module. `scripts/gh_helpers.sh` already owns `gh_retry()` and `_safe_gh_jq()` (`391-446`, `532-617`); either source that where checkout is already present, or extract a tiny bootstrap companion that exposes `gh_retry "$@"`, `_safe_gh_jq <endpoint> [--jq ...]`, and shared rate-limit waiting. Update the listed callers to source the shared helper instead of keeping bespoke wrappers.
+
+- **ID** — `DUP-003`
+  - **File path** — `.github/workflows/clarify.yml:216-314; .github/workflows/plan.yml:267-364; .github/workflows/implement.yml:797-1043; .github/workflows/orchestrate.yml:341-453; .github/workflows/orchestrate_poll.yml:295-431; .github/workflows/orchestrate_clarify_respond.yml:260-376; .github/workflows/review_autofix.yml:1257-1270; scripts/stage_workflow_support.sh:4-220`
+  - **Severity** — Medium
+  - **Category tag** — `duplication`
+  - **Description** — Six workflows still inline large “Stage workflow support files” blocks that all perform overlapping work: script staging, branch→main fallback, overlay loading, model-catalog staging, schema staging, and consumer `.gitignore` generation. `review_autofix.yml` has already externalized this concern into `scripts/stage_workflow_support.sh`, so the remaining inline copies are now a clear drift hazard and a major source of YAML bulk.
+  - **Recommended fix** — Generalize the existing `stage_review_runtime_support()` implementation in `scripts/stage_workflow_support.sh` into a mode-driven shared entrypoint (for example, `stage_workflow_runtime_support <mode>` or the same env-driven function with per-mode lists such as `REQUIRED_BOOTSTRAP_SCRIPTS`, `OPTIONAL_BOOTSTRAP_SCRIPTS`, and `PROMPT_FILES`). Then update `clarify.yml`, `plan.yml`, `implement.yml`, `orchestrate.yml`, `orchestrate_poll.yml`, and `orchestrate_clarify_respond.yml` to call it the way `review_autofix.yml` already does.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+Static counts below are body-size estimates for interpolated `run:` blocks; runner-side serialization can differ slightly.
+
+- **ID** — `EXPR-001`
+  - **File path** — `.github/workflows/implement.yml:3456-3832`
+  - **Severity** — High
+  - **Category tag** — `expression-limit`
+  - **Description** — The `Commit changes` step’s interpolated `run:` body is approximately **21,133 characters**, leaving roughly **-133 characters** of headroom versus GitHub’s **21,000-character** expression ceiling. This is already at or just beyond the hard limit on a raw-body basis. [NEEDS VERIFICATION]
+  - **Recommended fix** — Extract the entire step into an external script such as `scripts/implement_commit_changes.sh` and leave only env wiring / output capture in YAML. This repo already uses that pattern successfully in helpers like `scripts/review_collect_pr_metadata.sh` and `scripts/stage_workflow_support.sh`.
+
+- **ID** — `EXPR-002`
+  - **File path** — `.github/workflows/review_autofix.yml:1697-2043`
+  - **Severity** — Medium
+  - **Category tag** — `expression-limit`
+  - **Description** — The `Collect PR check-run failures (CI/lint autofix context)` step is approximately **17,876 characters**, leaving only about **3,124 characters** of headroom. The combination of a long shell polling loop plus an embedded Python heredoc makes this block likely to cross the threshold with routine maintenance.
+  - **Recommended fix** — Move the embedded writer/log-tail logic into `scripts/review_collect_check_run_failures.py` (or a paired shell wrapper) and keep the workflow step as a short launcher that passes `HEAD_SHA`, `SELF_RUN_ID`, and output paths.
+
+- **ID** — `EXPR-003`
+  - **File path** — `.github/workflows/review_autofix.yml:4971-5185`
+  - **Severity** — Medium
+  - **Category tag** — `expression-limit`
+  - **Description** — The `Enable auto-merge on PR` step is approximately **15,878 characters**, leaving about **5,122 characters** of headroom. It packs e2e-label suppression, forward-merge special handling, orchestrator integration suppression, PR metadata fetches, and final merge enablement into one interpolated shell body.
+  - **Recommended fix** — Extract this flow to `scripts/review_enable_automerge.sh`, or split it into smaller guarded steps (`fetch PR metadata`, `e2e guard`, `integration guard`, `enable merge`) so no single interpolated `run:` block carries all branches.
+
+- **ID** — `EXPR-004`
+  - **File path** — `.github/workflows/orchestrate_clarify_respond.yml:889-1172`
+  - **Severity** — Medium
+  - **Category tag** — `expression-limit`
+  - **Description** — The `Parse and post answer` step is approximately **15,141 characters**, leaving about **5,859 characters** of headroom. The block combines memory claim handling, loop-guard state, escalation comment generation, Telegram notification, and processed-command completion in one interpolated step.
+  - **Recommended fix** — Move the body into a script such as `scripts/orchestrate_clarify_post_answer.sh`, or split the current logic into separate steps for memory claim, loop guard, escalation, and final answer posting.
+
+No workflow exceeded the **800 KB** warning threshold. Largest files in this repo are `.github/workflows/review_autofix.yml` (**370,941** bytes), `.github/workflows/test-and-mark-stable.yml` (**295,404** bytes), and `.github/workflows/implement.yml` (**287,349** bytes).
+
+### Section 5: Cross-Cutting Concerns
+
+No `TODO` / `FIXME` / `HACK` / `XXX` markers were present under `.github/workflows/` or `scripts/` in this audit pass.
+
+- **ID** — `DEAD-001`
+  - **File path** — `scripts/review_run_reviewers.sh:254-258,337-343,2443-2457`
+  - **Severity** — Low
+  - **Category tag** — `dead-code`
+  - **Description** — Several variables are assigned but never consumed: `probe_prompt` is declared and never read, `RAW_REVIEWER_ORIGINAL_PR_DIFF_FILE` and `RAW_REVIEWER_SYMBOL_DIFF_SUMMARY_FILE` are assigned once and never referenced again, and `REVIEWER_HEALTH_LAST_OPEN_UNTIL_EPOCH` is initialized and populated from parser output but never used after line 2457. In a very large reviewer script, these dead assignments make it harder to tell which artifacts and health fields actually affect runtime behavior.
+  - **Recommended fix** — Remove the unused variables, or wire them into existing outputs if they were intended to matter. If `open_until_epoch` is supposed to be observable, emit it through the existing reviewer health logging path instead of parsing and discarding it.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 2 | BUG-001, EXPR-001 |
+| Medium | 9 | SEC-001, BUG-002, API-001, API-002, DUP-002, DUP-003, EXPR-002, EXPR-003, EXPR-004 |
+| Low | 3 | API-003, DUP-001, DEAD-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 3-4 | Medium |
+| API call optimization | 3-5 | Medium |
+| Code modularization | 8-10 | Large |
+| Expression size reduction | 4-6 | Large |
+| Medium/Low fixes | 2-4 | Small |
