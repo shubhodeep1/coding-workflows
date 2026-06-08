@@ -272,7 +272,7 @@ def test_validate_workflow_stages_workspace_helper_and_uses_workspace_paths() ->
 		"${{ steps.workspace_meta.outputs.workspace_cache_restore_prefix_issue }}\n"
 	)
 	prepare_runtime_step = _step(VALIDATE_WORKFLOW, "Prepare behavioural smoke runtime cache path")
-	assert 'mkdir -p "${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_runtime/"' in str(prepare_runtime_step.get("run"))
+	assert 'mkdir -p "${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_runtime/"' in _step_run_text(VALIDATE_WORKFLOW, "Prepare behavioural smoke runtime cache path")
 	assert prepare_runtime_step.get("if") == "steps.behavioural_smoke_gate.outputs.enabled == 'true' && steps.behavioural_smoke_pr.outputs.pr_number != ''"
 	behavioural_smoke_restore_step = _step(VALIDATE_WORKFLOW, "Restore behavioural smoke runtime cache")
 	assert behavioural_smoke_restore_step.get("uses") == "actions/cache/restore@v5"
