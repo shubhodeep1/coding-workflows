@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/targeted_file_context.py:149-155 | severity=medium | confidence=[4]\n  flagged_by: [minimax_minimax-m2_5, qwen_qwen3_6-plus]\n  PROBLEM: The Python and Bash `SEMBLE_LOG_CONTEXT` normalization paths diverge on consecutive or edge hyphens, so the same input can emit different `context=` values.\n  WHY: This causes mixed Python/Bash emitters to fragment the shared context key used by `cost_audit.py`, creating inconsistent telemetry and bucket aggregation for the same logical input.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/targeted_file_context.py:149-155 (`_normalized_semble_log_context` function)\n  PROBLEM: The Python and Bash implementations of `SEMBLE_LOG_CONTEXT` normalization are inconsistent, despite the code comment claiming they are \"Shared with scripts/semble_helpers.sh\".\n  WHY: For an input like `\"contract--test\"` (double hyphen), Python emits `context=contract--test` while Bash emits `context=contract-test`, which fragments cost_audit aggregation that keys by context value.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/targeted_file_context.py:149-154 (`_normalized_semble_log_context`)\n  PROBLEM: The Python normalization `\"-\".join(raw.split())` does not collapse consecutive hyphens nor strip leading/trailing hyphens, while the Bash emitter in `scripts/semble_helpers.sh` applies `tr '\\r\\n\\t ' '-' | tr -s '-'` followed by `${context_field#-}` and `${context_field%-}`.\n  WHY: Mixed Python/Bash emit paths for the same env value fragment the aggregation bucket in `cost_audit.py`, breaking the operational goal of distinguishing contract-test noise from runtime fallbacks.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "f0731727b574dfafd41f7c5abbb55535fdbe2a1873a2a6bcf116568e2cec20df",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3231,
+    "run_id": "27146529347",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27146529347",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260608155543_c9ada69d7f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3231,
+    "run_id": "27146529347"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-08T15:55:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
