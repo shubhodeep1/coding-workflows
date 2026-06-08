@@ -8032,11 +8032,24 @@ def test_implementation_failed_reissue_preserves_dependency_gates_and_pending_de
 		issue_labels={10: ["ai:implementation-failed"]},
 	)
 	latest = result["latest_state"]
-	assert str(latest["issue_number_map"]["issue-1"]) == "901"
-	assert str(latest["issue_number_map"]["issue-2"]) == "900"
-	assert latest["pending_issue_defs"] == {}
+	# issue-1 was implementation-failed and is reissued as a fresh issue.
+	assert str(latest["issue_number_map"]["issue-1"]) == "900"
+	# issue-2 depends on issue-1, which is non-terminal this tick
+	# (implementation-failed, being reissued). The U2 runtime blocker gate
+	# (scripts/blocker_check.py, added in #3048) defers issue-2's deferred
+	# creation until its blocker terminalizes, so it stays pending rather than
+	# being created alongside the reissue — preserving both the dependency
+	# edges and the pending definition.
+	assert "issue-2" not in latest["issue_number_map"]
+	assert latest["pending_issue_defs"] == {
+		"issue-2": {"title": "Issue 2", "body": "Body 2", "priority": 2},
+	}
 	created = result.get("created_issues", [])
-	assert any(item.get("title") == "Issue 2" for item in created)
+	assert not any(item.get("title") == "Issue 2" for item in created)
+	assert (
+		"dispatch_deferred_blocker local_id=issue-2 wave=1 reason=blocked_by_dependency"
+		in result["stdout"]
+	)
 	assert latest["dependency_edges"] == [{"from": "issue-1", "to": "issue-2"}]
 
 
