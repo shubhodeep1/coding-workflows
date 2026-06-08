@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlan for `validate-cache-action-hygiene`\n\nPlanning basis\n- Reviewed `.github/workflows/validate.yml`, `tests/test_workspace_init.py`, `tests/test_review_synthesise_smoke.py`, and the existing CI wiring that runs those contract tests.\n- Ref: `1f70432f1200` on `orchestrator/project-3222`; this matches the tracking issue\u2019s integration-branch metadata.\n- Clarification mapping: no Q1/Q2 were asked. The `/answer [auto-answered-by-orchestrator]` comment only confirmed continuation.\n- Representative pattern to follow: the existing v5 cache steps already in `.github/workflows/validate.yml` (`Restore reusable workspace cache`, `Restore validate hints cache`) plus the step-level YAML assertions in `tests/test_workspace_init.py`.\n- Automation/wiring: existing-code change only. Entry point touched is `.github/workflows/validate.yml`; no new script, trigger wiring, supervisor, DB gate, or removal-registry entry is needed.\n\n1. Files likely to change\n- `.github/workflows/validate.yml`\n- `tests/test_workspace_init.py`\n- `tests/test_review_synthesise_smoke.py` only if an extra behavioural-smoke wiring assertion is needed\n\n2. Functions/modules/steps to implement\n- In `.github/workflows/validate.yml`, update `Restore behavioural smoke runtime cache` off the remaining `actions/cache/restore@v4` usage and align it to the workflow\u2019s v5 cache strategy while keeping it restore-only.\n- Add a tiny adjacent hygiene step (or equivalent safe guard) before that restore so `${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_runtime/` exists before cache-path validation runs.\n- Preserve the current behavioural-smoke gate, PR-resolution logic, cache key, restore-key prefix, `continue-on-error: true`, and workspace-relative runtime path.\n\n3. Data structures affected\n- Workflow step outputs:\n  - `steps.workspace_state.outputs.workspace_path`\n  - `steps.behavioural_smoke_gate.outputs.enabled`\n  - `steps.behavioural_smoke_pr.outputs.pr_number`\n- Cache step fields:\n  - `uses`\n  - `with.path`\n  - `with.key`\n  - `with.restore-keys`\n- Test-side parsed YAML step mappings in `tests/test_workspace_init.py`\n\n4. API or interface changes\n- No consumer-facing interface changes.\n- No `workflow_call` inputs/outputs, env var names, cache keys, or artifact locations should change.\n- Internal-only change: the behavioural-smoke restore step\u2019s cache action ref/version, plus a local path-prep step if needed.\n\n5. Potential risks / edge cases\n- Preserve restore-only semantics. Do not broaden this into a save-capable cache step unless repo-validated necessity appears; acceptance says runtime artifact semantics must stay intact.\n- Keep the restore fail-open behavior (`continue-on-error: true`).\n- Keep the path string unchanged: `${{ steps.workspace_state.outputs.workspace_path }}/.ai/review_runtime/`.\n- Gate any path-creation step consistently so runs with no resolved PR still skip quietly.\n- Conflict note: no blocking issue/code mismatch was found, but there is one implementation nuance \u2014 the other v5 cache examples in `validate.yml` are combined cache steps, while this target step is restore-only. The safest change is version alignment plus path hygiene, not a broader cache-flow refactor.\n\n6. Testing considerations\n- Extend `tests/test_workspace_init.py` so the validate-workflow contract checks assert the behavioural-smoke restore step\u2019s v5 action ref in addition to the existing path assertion.\n- If needed, tighten `tests/test_review_synthesise_smoke.py` so the behavioural-smoke wiring contract still explicitly covers the restore step after the cleanup.\n- Run the targeted contract tests already wired into CI:\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_init.py`\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_synthesise_smoke.py`\n\nAssumptions\n- \u201cCurrent cache action/version strategy used elsewhere in the workflow\u201d means \u201cmove the remaining behavioural-smoke restore to v5 without changing restore-only behavior.\u201d\n- No broader validate-flow refactor is intended beyond this cache-action/path hygiene cleanup.\n\nMissing context\n- No failing run log was attached for the earlier `Path Validation Error`, so the plan assumes the safest fix is proactive path creation (or equivalent path-validation avoidance) rather than changing cache keys or relocating runtime artifacts.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "ed9a0ea9ea9942320a81243b71a7a9b73eab65c6964d6a48dde60c69cc67915b",
+  "lineage": {
+    "issue_number": 3226,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27126380994",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27126380994",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3226"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260608085502_a6b9e280e1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3226,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27126380994"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3226",
+  "timestamps": {
+    "created_at": "2026-06-08T08:55:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
