@@ -19,10 +19,15 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
+INTERNAL_REVIEW = REPO_ROOT / ".github" / "workflows" / "internal-review.yml"
 
 
 def _read_workflow() -> str:
 	return WORKFLOW.read_text(encoding="utf-8")
+
+
+def _read_internal_review() -> str:
+	return INTERNAL_REVIEW.read_text(encoding="utf-8")
 
 
 def _cleanup_alt_model_step(wf: str) -> str:
@@ -50,6 +55,21 @@ def test_alt_model_cleanup_targets_ai_issue_head_branch_pr() -> None:
 	assert "issues/${ISSUE_NUMBER}/timeline" not in step
 	# The discovered PR is still closed via the shared retry helper.
 	assert 'close_with_retry "pulls" "${PR_NUMBER}"' in step
+
+
+def test_internal_review_percent_encodes_head_ref_for_open_pr_lookup() -> None:
+	wf = _read_internal_review()
+	assert "encoded_head_ref=\"$(jq -nr --arg ref \"${HEAD_REF}\" '$ref | @uri')\"" in wf
+	assert '"repos/${REPOSITORY}/pulls?state=open&head=${REPOSITORY%/*}:${encoded_head_ref}"' in wf
+	assert '"repos/${REPOSITORY}/pulls?state=open&head=${REPOSITORY%/*}:${HEAD_REF}"' not in wf
+
+
+def test_internal_review_prefers_event_default_branch_before_repo_get_fallback() -> None:
+	wf = _read_internal_review()
+	assert "EVENT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch || '' }}" in wf
+	assert 'base_ref="${EVENT_DEFAULT_BRANCH:-}"' in wf
+	assert "base_ref=\"$(gh api \"repos/${REPOSITORY}\" --jq '.default_branch' 2>/dev/null || echo 'main')\"" in wf
+	assert wf.index('base_ref="${EVENT_DEFAULT_BRANCH:-}"') < wf.index("base_ref=\"$(gh api \"repos/${REPOSITORY}\" --jq '.default_branch' 2>/dev/null || echo 'main')\"")
 
 
 def main() -> int:

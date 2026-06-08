@@ -258,24 +258,33 @@ if [ -z "${PR_BASE_BRANCH:-}" ]; then
   PR_BASE_BRANCH="${DEFAULT_BRANCH}"
 fi
 
+fetch_issue_body_to_file() {
+	local output_file="$1"
+	local issue_json=""
+
+	if issue_meta_matches_issue "${ISSUE_META_FILE:-}"; then
+		if jq -jre 'if has("body") then (.body // "") else error("missing body") end' "${ISSUE_META_FILE}" > "${output_file}" 2>/dev/null; then
+			return 0
+		fi
+		: > "${output_file}"
+	fi
+
+	issue_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}" || true)"
+	if printf '%s' "${issue_json}" | jq -jre 'if has("body") then (.body // "") else error("missing body") end' > "${output_file}" 2>/dev/null; then
+		return 0
+	fi
+
+	printf '' > "${output_file}"
+	return 0
+}
+
 if [ -z "${ISSUE_BODY_FILE:-}" ] || [ ! -f "${ISSUE_BODY_FILE:-}" ]; then
   ISSUE_BODY_FILE="${RUNTIME_DIR}/issue_body_from_api.txt"
   # Prefer the cached issue snapshot from "Fetch issue
   # metadata" before re-hitting the API.  jq failure (e.g.
-  # truncated/partial file) falls through to the API path
-  # rather than killing the step under set -euo pipefail.
-  : > "${ISSUE_BODY_FILE}"
-  issue_body_loaded_from_meta=false
-  if issue_meta_matches_issue "${ISSUE_META_FILE:-}"; then
-    if jq -jre 'if has("body") then (.body // "") else error("missing body") end' "${ISSUE_META_FILE}" > "${ISSUE_BODY_FILE}" 2>/dev/null; then
-      issue_body_loaded_from_meta=true
-    else
-      : > "${ISSUE_BODY_FILE}"
-    fi
-  fi
-  if [ "${issue_body_loaded_from_meta}" != "true" ]; then
-    gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}" --jq '.body // ""' > "${ISSUE_BODY_FILE}" || printf '' > "${ISSUE_BODY_FILE}"
-  fi
+  # truncated/partial file) falls through to the safe API
+  # path rather than killing the step under set -euo pipefail.
+  fetch_issue_body_to_file "${ISSUE_BODY_FILE}"
 fi
 
 TRACKING_ISSUE_NUM="$(sed -nE 's/.*Tracking issue:[[:space:]]*#([0-9]+).*/\1/p' "${ISSUE_BODY_FILE}" | head -n1 | tr -d '\r')"

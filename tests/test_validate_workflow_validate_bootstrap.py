@@ -10,18 +10,27 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CODEX_HEARTBEAT_TEST = REPO_ROOT / "tests" / "test_codex_heartbeat.py"
 VALIDATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "validate.yml"
+STAGE_WORKFLOW_SUPPORT = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
 
 
 def _workflow_text() -> str:
 	return VALIDATE_WORKFLOW.read_text(encoding="utf-8")
 
 
-def test_validate_workflow_bootstrap_fetches_template_assets() -> None:
+def _helper_text() -> str:
+	return STAGE_WORKFLOW_SUPPORT.read_text(encoding="utf-8")
+
+
+def test_validate_workflow_bootstrap_uses_shared_helper_and_lists_template_assets() -> None:
 	wf = _workflow_text()
 	required_snippets = [
-		'copy_from_ref_or_local "scripts/render_validation_templates.py" "scripts/render_validation_templates.py.tmp" "false" "true"',
-		'copy_from_ref_or_local "scripts/templates/slot_manifest.schema.json" "scripts/templates/slot_manifest.schema.json.tmp" "false" "true"',
-		'copy_from_ref_or_local "${template_path}" "${template_path}" "false" "true" || true',
+		'helper_path="scripts/stage_workflow_support.sh"',
+		'bash "${helper_path}" validate --manifest "${manifest_path}"',
+		"scripts/render_prompt.py",
+		"scripts/render_validation_templates.py",
+		"scripts/templates/slot_manifest.schema.json",
+		"scripts/validate_driver.sh",
+		"scripts/validate_process.sh",
 		"workflow-templates/validation-harness/_shared/_lib/tap_helpers.sh.j2",
 		"workflow-templates/validation-harness/_shared/tests/00_canary.sh.j2",
 		"workflow-templates/validation-harness/_shared/tests/90_tap_report.sh.j2",
@@ -81,6 +90,24 @@ def test_validate_workflow_bootstrap_fetches_template_assets() -> None:
 		assert snippet in wf
 
 
+def test_stage_workflow_support_helper_runs_overlay_loader_for_validate() -> None:
+	helper = _helper_text()
+	for snippet in (
+		"WORKFLOW.md overlay is opt-in by file presence",
+		"python3 scripts/load_workflow_overlay.py",
+		'--schema-path "ai-memory/schemas/workflow_overlay.v1.json"',
+		'--github-env "${GITHUB_ENV}"',
+	):
+		assert snippet in helper
+
+
+def test_stage_workflow_support_helper_uses_portable_copy_guard_and_optional_main_checkout() -> None:
+	helper = _helper_text()
+	assert '[ -n "${GH_TOKEN:-}" ] && checkout_support_ref "main" "${SUPPORT_STAGE_ROOT}/main"' in helper
+	assert '[ "${source_path}" -ef "${target_path}" ]' in helper
+	assert "realpath -m" not in helper
+
+
 def test_validate_workflow_passes_template_default_env() -> None:
 	wf = _workflow_text()
 	assert "VALIDATION_USE_TEMPLATES: ${{ vars.VALIDATION_USE_TEMPLATES || 'true' }}" in wf
@@ -99,8 +126,8 @@ def test_validate_workflow_bootstraps_codex_heartbeat_support() -> None:
 	for snippet in (
 		"CODEX_HEARTBEAT_ENABLED: ${{ vars.CODEX_HEARTBEAT_ENABLED || '1' }}",
 		"CODEX_HEARTBEAT_INTERVAL_SECS: ${{ vars.CODEX_HEARTBEAT_INTERVAL_SECS || '30' }}",
-		'copy_from_ref_or_local "scripts/codex_heartbeat.sh" "scripts/codex_heartbeat.sh.tmp" "false" "true"',
-		'_fetched_scripts+=(codex_heartbeat.sh)',
+		"scripts/codex_heartbeat.sh",
+		'helper_path="scripts/stage_workflow_support.sh"',
 	):
 		assert snippet in wf
 
@@ -117,7 +144,9 @@ def test_codex_heartbeat_helper_contract() -> None:
 
 
 def main() -> int:
-	test_validate_workflow_bootstrap_fetches_template_assets()
+	test_validate_workflow_bootstrap_uses_shared_helper_and_lists_template_assets()
+	test_stage_workflow_support_helper_runs_overlay_loader_for_validate()
+	test_stage_workflow_support_helper_uses_portable_copy_guard_and_optional_main_checkout()
 	test_validate_workflow_passes_template_default_env()
 	test_validate_workflow_bootstraps_revalidate_lifecycle_ai_memory_schemas()
 	test_validate_workflow_bootstraps_codex_heartbeat_support()

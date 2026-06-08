@@ -39,6 +39,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REVIEW_AUTOFIX = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
+STAGE_HELPER = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
 TEST_AND_MARK_STABLE = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
 REVIEW_APPLY_FIXES = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
 RUNBOOK = REPO_ROOT / "probably_unnecessary_but_read_if_stuck.md"
@@ -810,7 +811,7 @@ def test_required_bootstrap_scripts_includes_audit_helper() -> None:
 	helper MUST appear in that list or `source
 	${SUPPORT_SCRIPTS_DIR}/validate_editor_audit.sh` will fail with
 	"No such file" on every consumer-repo run."""
-	text = _review_autofix_text()
+	text = STAGE_HELPER.read_text(encoding="utf-8")
 	# Find the REQUIRED_BOOTSTRAP_SCRIPTS assignment.
 	bootstrap_match = re.search(r'REQUIRED_BOOTSTRAP_SCRIPTS="([^"]+)"', text)
 	assert bootstrap_match is not None, (

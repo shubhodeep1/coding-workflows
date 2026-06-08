@@ -1678,6 +1678,20 @@ jobs:
           # undefined and the next call would fail under `set -euo pipefail`.
           # Same pattern used by every other gh_retry caller in this file.
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+          type _safe_gh_jq >/dev/null 2>&1 || _safe_gh_jq() {
+            local _tmpf
+            if ! _tmpf=$(mktemp "${TMPDIR:-/tmp}/_safe_gh_jq.XXXXXX" 2>/dev/null); then
+              echo "::error::_safe_gh_jq: failed to create temp file (mktemp failed); aborting without running: $*" >&2
+              return 1
+            fi
+            if gh api "$@" > "${_tmpf}"; then
+              cat "${_tmpf}"
+              rm -f "${_tmpf}"
+              return 0
+            fi
+            rm -f "${_tmpf}"
+            return 1
+          }
 
           echo "auto_approved=false" >> "$GITHUB_OUTPUT"
 
@@ -1686,7 +1700,7 @@ jobs:
           # smoke test cleanup at test-and-mark-stable.yml:3127 races this
           # path). Posting /approved on a closed issue triggers implement.yml
           # on a dead issue and produces a misleading failure diagnostic.
-          CURRENT_STATE="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '.state // "open"' 2>/dev/null || echo "open")"
+          CURRENT_STATE="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '.state // "open"' 2>/dev/null || echo "open")"
           if [ "${CURRENT_STATE}" = "closed" ]; then
             echo "Issue #${ISSUE_NUMBER} is closed; skipping auto-approval comment."
             exit 0

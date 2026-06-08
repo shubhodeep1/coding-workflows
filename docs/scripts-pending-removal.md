@@ -76,6 +76,30 @@ Copy this block when adding a new entry:
   - `rg -n 'render_prompt\.py' .github/workflows scripts --glob '!scripts/render_prompt.sh'` shows the direct Python-renderer callers or staging references that replace the shim path.
 - **Owner:** @shubhodeep1
 
+### `scripts/stage_workflow_support.sh`
+
+- **Introduced in:** codex/issue-3186 (2026-06-07); extended in #3211 (2026-06-07)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `rg -n 'stage_workflow_support\.sh' .github/workflows/review_autofix.yml .github/workflows/validate.yml` returns the shared helper invocation from both workflow staging steps.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_semble_contract.py` returns `OK: review_autofix Semble contract assertions hold`.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_workflow_validate_bootstrap.py` returns exit code 0 after the validate bootstrap contract assertions pass.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_core.py` returns exit code 0 after the shared-helper overlay staging assertions pass.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py` returns `All workflow script references resolve to existing files.`
+- **Owner:** @shubhodeep1
+
+### `scripts/review_collect_pr_metadata.sh`
+
+- **Introduced in:** ai/issue-3203 (2026-06-07)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `rg -n 'review_collect_pr_metadata\.sh' .github/workflows/review_autofix.yml .github/workflows/internal-review.yml` shows the live bootstrap entry and the delegated workflow callsite.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_review_pipeline_contract.py` returns `OK: review_autofix review-pipeline plumbing contract holds`.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_alt_model_cleanup_pr_selector.py` returns `4 passed`.
+- **Owner:** @shubhodeep1
+
 ### `.github/workflows/workspace-cache-maintenance.yml`
 
 - **Introduced in:** #3066 (2026-06-02)
@@ -84,5 +108,5 @@ Copy this block when adding a new entry:
 - **Removal preflight checks:**
   - `gh workflow view workspace-cache-maintenance.yml -R shubhodeep1/coding-workflows` confirms the workflow still exists and still has a scheduled nightly cron.
   - `gh run list --workflow workspace-cache-maintenance.yml --limit 5 -R shubhodeep1/coding-workflows` shows recent scheduled/manual runs completing with `success`.
-  - `gh cache list --repo shubhodeep1/coding-workflows --limit 100 --key workspace-v1- --sort created_at --order desc` still shows bounded workspace cache families (newest 3 retained per family) so the maintenance job remains operationally useful.
+- `gh cache list --repo shubhodeep1/coding-workflows --limit 100 --key workspace-v1- --sort created_at --order desc` still shows bounded workspace cache families (newest 3 retained per family) so the maintenance job remains operationally useful.
 - **Owner:** @shubhodeep1

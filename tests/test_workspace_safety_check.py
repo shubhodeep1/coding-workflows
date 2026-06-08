@@ -12,6 +12,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HELPER = REPO_ROOT / "scripts" / "workspace_safety_check.sh"
+REVIEW_STAGE_HELPER = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 TEST_AND_MARK_STABLE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
@@ -179,7 +180,7 @@ def test_ci_and_release_gate_run_workspace_safety_check_tests() -> None:
 
 
 def test_review_workflow_bootstraps_and_restages_workspace_safety_helper() -> None:
-	stage_block = _step_run_text(REVIEW_WORKFLOW, "Stage workflow support files")
+	stage_block = REVIEW_STAGE_HELPER.read_text(encoding="utf-8")
 	merge_detect_block = _step_run_text(REVIEW_WORKFLOW, "Detect merge conflicts")
 
 	assert "workspace_safety_check.sh" in stage_block
