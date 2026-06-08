@@ -5,13 +5,29 @@
   "entry_id": "processed_command_3225_4646989643_approved",
   "issue_number": 3225,
   "metadata": {
+    "branch": "ai/issue-3225",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/ci.yml",
+      ".github/workflows/clarify.yml",
+      ".github/workflows/implement.yml",
+      ".github/workflows/orchestrate_clarify_respond.yml",
+      ".github/workflows/plan.yml",
+      "agents.md",
+      "tests/test_phase_skip_gate_telemetry_contract.py"
+    ],
+    "issue_number": 3225,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/3225",
+    "pr_number": 3229,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/3229",
+    "run_attempt": "1",
+    "run_id": "27126847535",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/27126847535"
   },
   "run_attempt": 1,
   "run_id": "27126847535",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-06-08T09:00:03Z",
+  "status": "completed",
+  "timestamp": "2026-06-08T09:09:45Z",
   "workflow": "implement"
 }
