@@ -146,9 +146,22 @@ SEMBLE_READ_FALLBACK_MAX_BYTES = 4096
 SEMBLE_MAX_CHUNKS_CAP = 20
 
 
+def _normalized_semble_log_context() -> str | None:
+	# Shared with scripts/semble_helpers.sh: tests can opt into additive
+	# classification without changing the stable SEMBLE_* prefix contract.
+	raw = os.getenv("SEMBLE_LOG_CONTEXT", "")
+	context = "-".join(raw.split())
+	return context or None
+
+
 def _log_semble_event(prefix: str, **fields: object) -> None:
+	rendered_fields = dict(fields)
+	if "context" not in rendered_fields:
+		context = _normalized_semble_log_context()
+		if context:
+			rendered_fields["context"] = context
 	parts = [prefix]
-	for key, value in fields.items():
+	for key, value in rendered_fields.items():
 		# Keep the Python-side overflow telemetry aligned with
 		# scripts/semble_helpers.sh: single-line, unquoted key=value fields on
 		# stderr. Normalizing whitespace prevents multiline exception payloads
