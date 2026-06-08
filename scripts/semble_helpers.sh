@@ -4,25 +4,12 @@
 _semble_log_event()
 {
 	local prefix="${1:?_semble_log_event: prefix required}"
-	local has_context="false"
-	local context_field=""
 	shift || true
 	printf '%s' "${prefix}" >&2
 	while [ "$#" -gt 0 ]; do
-		case "$1" in
-			context=*) has_context="true" ;;
-		esac
 		printf ' %s' "$1" >&2
 		shift
 	done
-	if [ "${has_context}" != "true" ] && [ -n "${SEMBLE_LOG_CONTEXT:-}" ]; then
-		context_field="$(printf '%s' "${SEMBLE_LOG_CONTEXT}" | tr '\r\n\t ' '-' | tr -s '-')"
-		context_field="${context_field#-}"
-		context_field="${context_field%-}"
-		if [ -n "${context_field}" ]; then
-			printf ' context=%s' "${context_field}" >&2
-		fi
-	fi
 	printf '\n' >&2
 }
 
