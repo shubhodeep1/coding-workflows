@@ -1256,11 +1256,9 @@ def test_tracking_issue_cli_validation_happens_before_memory_io() -> None:
 			assert "tracking_issue must be a positive integer" in stderr
 
 
-def test_push_retries_env_default_survives_shared_branch_contention() -> None:
-	# Regression for #3244: the /answer claim aborted the whole plan phase when
-	# 5 push attempts were exhausted by ai-memory branch contention. The default
-	# budget must stay >= 8 so the jittered backoff has enough attempts (and
-	# reaches the 8s cap) to win the ref-lock race under orchestrator bursts.
+def test_push_retries_env_default_override_and_validation() -> None:
+	# Lock in the raised default budget, explicit override handling, and
+	# malformed-env validation for the shared ai-memory branch retry knob.
 	import argparse as _argparse
 
 	original = os.environ.pop("AI_MEMORY_PUSH_RETRIES", None)
@@ -1271,6 +1269,13 @@ def test_push_retries_env_default_survives_shared_branch_contention() -> None:
 		os.environ["AI_MEMORY_PUSH_RETRIES"] = "3"
 		overridden = ai_memory._read_env_defaults(_argparse.Namespace())
 		assert overridden.push_retries == 3, overridden.push_retries
+		os.environ["AI_MEMORY_PUSH_RETRIES"] = "abc"
+		try:
+			ai_memory._read_env_defaults(_argparse.Namespace())
+		except ai_memory.MemoryValidationError as exc:
+			assert "AI_MEMORY_PUSH_RETRIES must be a positive integer" in str(exc)
+		else:
+			raise AssertionError("expected MemoryValidationError for malformed AI_MEMORY_PUSH_RETRIES")
 	finally:
 		if original is None:
 			os.environ.pop("AI_MEMORY_PUSH_RETRIES", None)

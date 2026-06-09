@@ -106,10 +106,14 @@ def _read_env_defaults(args: argparse.Namespace) -> argparse.Namespace:
         # loop fetches+rebases+re-pushes — but 5 attempts only sleeps for the
         # first 4 (backoff ceilings 0.5/1/2/4s, never reaching the 8s cap the
         # jitter was designed around), so heavy bursts exhaust the budget and the
-        # fail-closed claim aborts the whole phase before it can post (issue
-        # #3244). 8 attempts activates the 8s-cap sleeps and widens the
-        # decorrelation window to ~30s without weakening the mutex semantics.
-        args.push_retries = int(os.getenv("AI_MEMORY_PUSH_RETRIES", "8"))
+        # fail-closed claim aborts the whole phase before it can post. 8
+        # attempts activates the 8s-cap sleeps and widens the decorrelation
+        # window to ~30s without weakening the mutex semantics.
+        push_retries_env = os.getenv("AI_MEMORY_PUSH_RETRIES")
+        args.push_retries = _require_positive_int(
+            "8" if push_retries_env is None else push_retries_env,
+            "AI_MEMORY_PUSH_RETRIES",
+        )
     if not getattr(args, "enabled", None):
         args.enabled = parse_bool(os.getenv("AI_MEMORY_ENABLED", "true"), default=True)
     if not getattr(args, "retrieval_profiles", None):
