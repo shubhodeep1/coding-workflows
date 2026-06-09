@@ -94,7 +94,11 @@ jobs:
 
           BEFORE_RUNS_JSON=""
           for attempt in 1 2 3; do
-            BEFORE_RUNS_JSON="$(list_dispatch_runs || true)"
+            if list_dispatch_runs; then
+              BEFORE_RUNS_JSON="${GH_API_SAFE_OUTPUT}"
+            else
+              BEFORE_RUNS_JSON=""
+            fi
             if [ -n "${BEFORE_RUNS_JSON}" ]; then
               break
             fi
@@ -128,7 +132,11 @@ jobs:
 
           RUN_ID=""
           for _attempt in $(seq 1 30); do
-            RUNS_JSON="$(list_dispatch_runs || true)"
+            if list_dispatch_runs; then
+              RUNS_JSON="${GH_API_SAFE_OUTPUT}"
+            else
+              RUNS_JSON=""
+            fi
             if [ -z "${RUNS_JSON}" ]; then
               sleep 2
               continue
@@ -170,7 +178,11 @@ jobs:
             NOW="$(date +%s)"
             IDLE=$((NOW - LAST_ACTIVITY))
 
-            RUN_JSON="$(gh_api_safe "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" || true)"
+            if gh_api_safe "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}"; then
+              RUN_JSON="${GH_API_SAFE_OUTPUT}"
+            else
+              RUN_JSON=""
+            fi
             if [ -z "${RUN_JSON}" ]; then
               if [ "${IDLE}" -ge "${INACTIVITY_LIMIT}" ]; then
                 echo "::error::Phase 2 stalled while polling run ${RUN_ID}."
@@ -287,13 +299,17 @@ jobs:
           list_tracking_issue_numbers()
           {
             local issues_json
-            issues_json="$(gh_api_safe "repos/${GITHUB_REPOSITORY}/issues?state=open&labels=ai:orchestrator-tracking&per_page=100&sort=created&direction=desc" || true)"
+            TRACKING_ISSUE_NUMBERS_JSON='[]'
+            if gh_api_safe "repos/${GITHUB_REPOSITORY}/issues?state=open&labels=ai:orchestrator-tracking&per_page=100&sort=created&direction=desc"; then
+              issues_json="${GH_API_SAFE_OUTPUT}"
+            else
+              issues_json=""
+            fi
             if [ -z "${issues_json}" ]; then
-              echo '[]'
               return 0
             fi
 
-            echo "${issues_json}" | jq -c '[.[] | select(has("pull_request") | not) | .number] | sort' 2>/dev/null || echo '[]'
+            TRACKING_ISSUE_NUMBERS_JSON="$(echo "${issues_json}" | jq -c '[.[] | select(has("pull_request") | not) | .number] | sort' 2>/dev/null || echo '[]')"
           }
 
           PHASE_TIMEOUT_STR="$(sanitize_single_line "${PHASE_TIMEOUT}")"
@@ -315,14 +331,19 @@ jobs:
           PROJECT_DESCRIPTION+=" Use workflow analysis report ${REPORT_URL}."
           PROJECT_DESCRIPTION+=" Source run ${SOURCE_RUN_URL}."
 
-          BEFORE_TRACKING_JSON="$(list_tracking_issue_numbers)"
+          list_tracking_issue_numbers
+          BEFORE_TRACKING_JSON="${TRACKING_ISSUE_NUMBERS_JSON}"
           if ! echo "${BEFORE_TRACKING_JSON}" | jq -e 'type == "array"' >/dev/null 2>&1; then
             BEFORE_TRACKING_JSON='[]'
           fi
 
           BEFORE_RUNS_JSON=""
           for attempt in 1 2 3; do
-            BEFORE_RUNS_JSON="$(list_dispatch_runs || true)"
+            if list_dispatch_runs; then
+              BEFORE_RUNS_JSON="${GH_API_SAFE_OUTPUT}"
+            else
+              BEFORE_RUNS_JSON=""
+            fi
             if [ -n "${BEFORE_RUNS_JSON}" ]; then
               break
             fi
@@ -348,7 +369,11 @@ jobs:
 
           ORCH_RUN_ID=""
           for _attempt in $(seq 1 30); do
-            RUNS_JSON="$(list_dispatch_runs || true)"
+            if list_dispatch_runs; then
+              RUNS_JSON="${GH_API_SAFE_OUTPUT}"
+            else
+              RUNS_JSON=""
+            fi
             if [ -z "${RUNS_JSON}" ]; then
               sleep 2
               continue
@@ -391,7 +416,11 @@ jobs:
             NOW="$(date +%s)"
             IDLE=$((NOW - LAST_ACTIVITY))
 
-            RUN_JSON="$(gh_api_safe "repos/${GITHUB_REPOSITORY}/actions/runs/${ORCH_RUN_ID}" || true)"
+            if gh_api_safe "repos/${GITHUB_REPOSITORY}/actions/runs/${ORCH_RUN_ID}"; then
+              RUN_JSON="${GH_API_SAFE_OUTPUT}"
+            else
+              RUN_JSON=""
+            fi
             RUN_STATUS="unknown"
             RUN_CONCLUSION="null"
             RUN_UPDATED=""
@@ -401,7 +430,8 @@ jobs:
               RUN_UPDATED="$(echo "${RUN_JSON}" | jq -r '.updated_at // ""' 2>/dev/null || echo '')"
             fi
 
-            CURRENT_TRACKING_JSON="$(list_tracking_issue_numbers)"
+            list_tracking_issue_numbers
+            CURRENT_TRACKING_JSON="${TRACKING_ISSUE_NUMBERS_JSON}"
             NEW_TRACKING_JSON="$(jq -cn --argjson before "${BEFORE_TRACKING_JSON}" --argjson current "${CURRENT_TRACKING_JSON}" '[ $current[] | select($before | index(.) | not) ]')"
             NEW_TRACKING_COUNT="$(echo "${NEW_TRACKING_JSON}" | jq -r 'length' 2>/dev/null || echo '0')"
 

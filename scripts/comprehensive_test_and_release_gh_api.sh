@@ -4,11 +4,12 @@ gh_api_safe()
 {
 	local output=""
 	local err_file
+	GH_API_SAFE_OUTPUT=""
 	err_file="$(mktemp)"
 	trap 'rm -f "${err_file}"; trap - RETURN' RETURN
 	if output="$(gh api "$@" 2>"${err_file}")"; then
 		RATE_LIMIT_BACKOFF=0
-		printf '%s' "${output}"
+		GH_API_SAFE_OUTPUT="${output}"
 		return 0
 	fi
 
