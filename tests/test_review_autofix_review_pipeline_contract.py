@@ -1517,9 +1517,12 @@ def test_review_collect_pr_metadata_helper_strict_fallback_drops_bare_mentions()
 		base_ref_override="",
 		mock_state={
 			"api_responses": {
+				"repos/owner/repo/pulls/42/comments": [],
+				"repos/owner/repo/pulls/42/reviews": [],
+				"repos/owner/repo/issues/42/comments": [],
 				"repos/owner/repo/pulls/42": {
 					"title": "Docs update referencing issue #7 and issues/8",
-					"body": "Fixes #10\nAlso see owner/repo/issues/12 and https://github.com/owner/repo/issues/13\nCloses: #14",
+					"body": "Fixes #10\nAlso see owner/repo/issues/12 and github.com/owner/repo/issues/13\nCloses: #14",
 					"base": {"ref": "main"},
 					"head": {
 						"ref": "feature/ref",

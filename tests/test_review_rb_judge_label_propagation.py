@@ -74,6 +74,7 @@ def _sanitized_git_env(extra: dict[str, str] | None = None) -> dict[str, str]:
 		"GIT_INDEX_FILE",
 		"GIT_OBJECT_DIRECTORY",
 		"GIT_ALTERNATE_OBJECT_DIRECTORIES",
+		"LINKED_ISSUE_FALLBACK_NUMBERS_JSON",
 	):
 		env.pop(key, None)
 	if extra:
