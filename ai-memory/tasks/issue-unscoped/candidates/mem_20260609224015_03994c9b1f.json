@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/comprehensive_test_and_release_gh_api.sh:trap 'rm -f \"${err_file}\"; trap - RETURN' RETURN | confidence=2\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The RETURN trap may clean up `err_file` before the function exits, leaving temp-file handling incomplete.\n  WHY: The reviewer flagged a possible cleanup/state-handling issue in the trap logic, though they noted the pattern is valid and assigned low confidence.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Preserve current rate-limit backoff, fail-open behavior, and existing error-output semantics\"\n  expected_change_site: All usages of gh_api_safe() in .github/workflows/comprehensive-test-and-release.yml\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The workflow has been updated to call gh_api_safe() directly instead of through command substitution, which preserves the RATE_LIMIT_BACKOFF state across retries. The fail-open behavior (|| true pattern) has been replaced with explicit if statements that check command success, which is a behavioral improvement that actually strengthens the original intent rather than breaking compatibility.\n- requirement: \"No extra API calls or new workflow dependencies are introduced\"\n  expected_change_site: .github/workflows/comprehensive-test-and-release.yml and scripts/comprehensive_test_and_release_gh_api.sh\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The updated workflow sources the shared helper script but doesn't introduce any new API calls beyond what was already present in the inline functions. All existing API endpoints are preserved.\n- requirement: \"There is only one maintained implementation of the gh_api_safe() behavior for this workflow\"\n  expected_change_site: scripts/comprehensive_test_and_release_gh_api.sh should contain the sole implementation\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: Both inline implementations of gh_api_safe() have been successfully removed from .github/workflows/comprehensive-test-and-release.yml, and both jobs now source the same shared script at the top of their run blocks. The manifest has been updated to include the new helper script.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- File: scripts/comprehensive_test_and_release_gh_api.sh\n  Code: trap 'rm -f \"${err_file}\"; trap - RETURN' RETURN\n  Problem: RETURN trap cleans up err_file after command substitution, but the cleanup happens before the function exits, which may leave the temp file handling incomplete\n  Why it fails at runtime: While this is valid cleanup pattern, we should ensure state handling is consistent\n  ISSUE_CONFIDENCE: 2\n- Requirement: \"Preserve current rate-limit backoff, fail-open behavior, and existing error-output semantics\"\n  Expected change site: All usages of gh_api_safe() in .github/workflows/comprehensive-test-and-release.yml should maintain backward compatibility\n  Evidence of absence: The workflow has been updated to call gh_api_safe() directly instead of through command substitution, which preserves the RATE_LIMIT_BACKOFF state across retries. The fail-open behavior (|| true pattern) has been replaced with explicit if statements that check command success, which is a behavioral improvement that actually strengthens the original intent rather than breaking compatibility.\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"No extra API calls or new workflow dependencies are introduced\"\n  Expected change site: .github/workflows/comprehensive-test-and-release.yml and scripts/comprehensive_test_and_release_gh_api.sh\n  Evidence of absence: The updated workflow sources the shared helper script but doesn't introduce any new API calls beyond what was already present in the inline functions. All existing API endpoints are preserved.\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"There is only one maintained implementation of the gh_api_safe() behavior for this workflow\"\n  Expected change site: scripts/comprehensive_test_and_release_gh_api.sh should contain the sole implementation\n  Evidence of absence: Both inline implementations of gh_api_safe() have been successfully removed from .github/workflows/comprehensive-test-and-release.yml, and both jobs now source the same shared script at the top of their run blocks. The manifest has been updated to include the new helper script.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- file: scripts/comprehensive_test_and_release_gh_api.sh\n  location: gh_api_safe function, line ~9\n  issue: The `GH_API_SAFE_OUTPUT` variable is not declared as local, which could expose it to caller scope pollution or accidental overwrites.\n  suggested minimal fix: Add `local GH_API_SAFE_OUTPUT=\"\"` at function start to ensure variable scoping matches the original command-substitution pattern's encapsulation.\n  estimated lines changed: 1\n  HARDENING_RISK_SCORE: 2\n- file: .github/workflows/comprehensive-test-and-release.yml\n  location: Both jobs' run blocks\n  issue: The helper script is sourced with `. ./scripts/comprehensive_test_and-release_gh_api.sh` after setting `RATE_LIMIT_BACKOFF=0`, but if the sourced script has syntax errors or is missing, the workflow will fail early without clear context.\n  suggested minimal fix: Add a validation step after sourcing: `if ! command -v gh_api_safe >/dev/null 2>&1; then echo \"::error::Failed to load gh_api_safe helper\"; exit 1; fi`\n  estimated lines changed: 3\n  HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "c46005cbeb30d369470b49437a7cef1353bae8664f20322ba4674a15db076dbc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3251,
+    "run_id": "27238986172",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27238986172",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260609224015_03994c9b1f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3251,
+    "run_id": "27238986172"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-09T22:40:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
