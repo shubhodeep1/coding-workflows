@@ -1500,11 +1500,76 @@ def test_review_collect_pr_metadata_helper_preserves_pr_fetch_and_context_contra
 	assert "entry[2].kind: review_comment" in result["comments_context"]
 	assert result["pr_diff"] == "pr diff sentinel\n"
 	assert result["github_env"]["LINKED_ISSUES_JSON"] == "[]"
+	assert result["github_env"]["LINKED_ISSUE_FALLBACK_NUMBERS_JSON"] == "[7]"
 	assert result["github_env"]["HAS_PR_DIFF"] == "true"
 	assert result["github_env"]["PR_DIFF_SOURCE"] == "gh_pr_diff"
 	assert result["github_env"]["BASE_BRANCH"] == "main"
 	assert any("repos/owner/repo/pulls/42" in " ".join(call) for call in result["mock_state"]["calls"])
 	assert any("repos/owner/repo/issues/7" in " ".join(call) for call in result["mock_state"]["calls"])
+
+
+def test_review_collect_pr_metadata_helper_strict_fallback_drops_bare_mentions() -> None:
+	result = _run_review_collect_pr_metadata_harness(
+		pr_number="42",
+		claude_branch_review_mode="false",
+		head_ref_override="",
+		head_sha_override="",
+		base_ref_override="",
+		mock_state={
+			"api_responses": {
+				"repos/owner/repo/pulls/42": {
+					"title": "Docs update referencing issue #7 and issues/8",
+					"body": "Fixes #10\nAlso see owner/repo/issues/12 and https://github.com/owner/repo/issues/13\nCloses: #14",
+					"base": {"ref": "main"},
+					"head": {
+						"ref": "feature/ref",
+						"sha": "abc123",
+						"repo": {"full_name": "owner/repo"},
+					},
+				},
+				"repos/owner/repo/issues/10": {
+					"number": 10,
+					"title": "Closing keyword match",
+					"body": "Fix keyword body",
+				},
+				"repos/owner/repo/issues/12": {
+					"number": 12,
+					"title": "Repo path match",
+					"body": "Path body",
+				},
+				"repos/owner/repo/issues/13": {
+					"number": 13,
+					"title": "Repo URL match",
+					"body": "URL body",
+				},
+				"graphql": {
+					"data": {
+						"repository": {
+							"pullRequest": {
+								"closingIssuesReferences": {
+									"nodes": [],
+								},
+							},
+						},
+					},
+				},
+			},
+			"pr_diffs": {"42": "pr diff sentinel\n"},
+		},
+	)
+
+	assert result["github_env"]["LINKED_ISSUES_JSON"] == "[]"
+	assert result["github_env"]["LINKED_ISSUE_FALLBACK_NUMBERS_JSON"] == "[10,12,13]"
+	assert "Issue #10: Closing keyword match" in result["linked_issue_context"]
+	assert "Issue #12: Repo path match" in result["linked_issue_context"]
+	assert "Issue #13: Repo URL match" in result["linked_issue_context"]
+	assert "Issue #7:" not in result["linked_issue_context"]
+	assert "Issue #8:" not in result["linked_issue_context"]
+	assert "Issue #14:" not in result["linked_issue_context"]
+	call_texts = [" ".join(call) for call in result["mock_state"]["calls"]]
+	assert not any("repos/owner/repo/issues/7" in call for call in call_texts)
+	assert not any("repos/owner/repo/issues/8" in call for call in call_texts)
+	assert not any("repos/owner/repo/issues/14" in call for call in call_texts)
 
 
 def test_review_scripts_emit_context_budget_warn_signals() -> None:

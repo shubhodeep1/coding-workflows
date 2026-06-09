@@ -1462,3 +1462,62 @@ PY
 	fi
 	rm -f "${_tmp}"
 }
+
+# ---------------------------------------------------------------
+# extract_repo_scoped_issue_refs_from_text — strict linked-issue
+# fallback parser shared by review-path workflows/scripts.
+#
+# Inputs:
+#   $1 repository  — owner/repo (required)
+#   $2 text        — free-form text to scan (required; may be empty)
+#
+# Output:
+#   Deduplicated issue numbers, one per line, matching ONLY the
+#   strict fallback contract shared with issue_pr_status.yml:
+#   - current-repo issue URL/path references
+#   - closing-keyword refs (`close/fix/resolve` inflections + #N)
+#
+# Explicit non-matches:
+#   - bare prose `issue #N`
+#   - bare prose `issues/N`
+#   - colon forms like `Closes: #N`
+#
+# Fail-open: invalid repository input or missing python3 emits no
+# matches and returns success so callers can proceed without a hard
+# failure.
+# ---------------------------------------------------------------
+extract_repo_scoped_issue_refs_from_text()
+{
+	local repository="${1:-}"
+	local text="${2:-}"
+
+	if [ -z "${repository}" ] || ! [[ "${repository}" =~ ^[^/]+/[^/]+$ ]]; then
+		return 0
+	fi
+	if ! command -v python3 >/dev/null 2>&1; then
+		return 0
+	fi
+
+	PYTHONDONTWRITEBYTECODE=1 python3 - "${repository}" "${text}" <<'PY'
+import re
+import sys
+
+repository = sys.argv[1]
+text = sys.argv[2]
+
+repo_re = re.escape(repository)
+patterns = [
+	rf"(?<![A-Za-z0-9_/-])(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+#\s*(\d+)\b",
+	rf"\bhttps?://github\.com/{repo_re}/issues/(\d+)\b",
+	rf"\b{repo_re}/issues/(\d+)\b",
+]
+
+numbers = set()
+for pattern in patterns:
+	for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+		numbers.add(int(match.group(1)))
+
+for number in sorted(numbers):
+	print(number)
+PY
+}

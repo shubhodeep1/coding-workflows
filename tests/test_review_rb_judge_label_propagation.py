@@ -63,6 +63,24 @@ def _review_autofix_text() -> str:
 	return REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
 
 
+def _sanitized_git_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+	env = os.environ.copy()
+	for key in (
+		"BASH_ENV",
+		"ENV",
+		"GIT_DIR",
+		"GIT_WORK_TREE",
+		"GIT_COMMON_DIR",
+		"GIT_INDEX_FILE",
+		"GIT_OBJECT_DIRECTORY",
+		"GIT_ALTERNATE_OBJECT_DIRECTORIES",
+	):
+		env.pop(key, None)
+	if extra:
+		env.update(extra)
+	return env
+
+
 def _git(cmd: list[str], *, cwd: Path) -> str:
 	result = subprocess.run(
 		cmd,
@@ -70,6 +88,7 @@ def _git(cmd: list[str], *, cwd: Path) -> str:
 		check=True,
 		text=True,
 		capture_output=True,
+		env=_sanitized_git_env(),
 	)
 	return result.stdout.strip()
 
@@ -134,7 +153,7 @@ def _extract_body_fetch_loop() -> str:
 
 
 def _extract_issue_number_fallback_block() -> str:
-	"""Pull the linked-issue regex fallback block out of the real script.
+	"""Pull the linked-issue fallback block out of the real script.
 
 	Anchored on the top-level `if [ -z "${ISSUE_NUMBERS}" ]` block through
 	the cleanup line immediately before `FIRST_ISSUE=""` so tests execute
@@ -449,8 +468,7 @@ def _run_close_and_reissue(
 			"GITHUB_RUN_ID": "777",
 			"GITHUB_RUN_ATTEMPT": "1",
 		}
-		run_env = os.environ.copy()
-		run_env.update(env)
+		run_env = _sanitized_git_env(env)
 
 		proc = subprocess.run(
 			["bash", str(script_path)],
@@ -848,8 +866,7 @@ ISSUE_NUMBERS="${{ISSUE_NUMBERS_INPUT}}"
 			"ISSUE_NUMBERS_INPUT": issue_numbers,
 			"CAPTURE_FILE": str(capture_file),
 		}
-		run_env = os.environ.copy()
-		run_env.update(env)
+		run_env = _sanitized_git_env(env)
 
 		proc = subprocess.run(
 			["bash", str(script_path)],
@@ -873,7 +890,7 @@ ISSUE_NUMBERS="${{ISSUE_NUMBERS_INPUT}}"
 
 
 def _run_issue_number_fallback(*, pr_meta: str, fallback_pr_response: dict | None = None) -> dict:
-	"""Run the real linked-issue regex fallback block against mocked `gh`.
+	"""Run the real linked-issue fallback block against mocked `gh`.
 
 	``pr_meta`` seeds the early `_pr_meta` cache captured before the
 	linked-issue lookup.  ``fallback_pr_response`` is the mocked
@@ -897,9 +914,11 @@ def _run_issue_number_fallback(*, pr_meta: str, fallback_pr_response: dict | Non
 		gh_state_file.write_text(json.dumps(mock_state), encoding="utf-8")
 
 		capture_file = runtime_dir / "captured.env"
+		helper_path = (REPO_ROOT / "scripts" / "gh_helpers.sh").as_posix()
 		harness = f"""#!/usr/bin/env bash
 set -euo pipefail
 
+source "{helper_path}"
 gh_retry() {{ "$@"; }}
 _safe_gh_jq() {{ gh api "$@"; }}
 
@@ -924,8 +943,7 @@ _pr_meta="${{PR_META_INPUT}}"
 			"PR_META_INPUT": pr_meta,
 			"CAPTURE_FILE": str(capture_file),
 		}
-		run_env = os.environ.copy()
-		run_env.update(env)
+		run_env = _sanitized_git_env(env)
 
 		proc = subprocess.run(
 			["bash", str(script_path)],
@@ -1071,8 +1089,8 @@ def test_loop_pins_labels_to_first_issue_even_when_body_comes_from_later_issue()
 def test_issue_number_fallback_reuses_cached_pr_metadata_without_refetch() -> None:
 	state = _run_issue_number_fallback(
 		pr_meta=json.dumps({
-			"title": "Linked issue #41",
-			"body": "Fallback grep should reuse cached PR metadata.",
+			"title": "Fixes #41",
+			"body": "Strict fallback should reuse cached PR metadata.",
 		}),
 	)
 
@@ -1090,8 +1108,8 @@ def test_issue_number_fallback_refetches_when_cached_metadata_is_unusable() -> N
 	state = _run_issue_number_fallback(
 		pr_meta="{}",
 		fallback_pr_response={
-			"title": "Linked issue #52",
-			"body": "Fallback GET should preserve regex extraction behaviour.",
+			"title": "owner/repo/issues/52",
+			"body": "Fallback GET should preserve strict repo-scoped path extraction.",
 		},
 	)
 
@@ -1105,6 +1123,38 @@ def test_issue_number_fallback_refetches_when_cached_metadata_is_unusable() -> N
 	)
 	assert "--jq" in pull_calls[0] and '.title + " " + (.body // "")' in pull_calls[0], (
 		"the secondary pulls/{pr} fetch must preserve the existing title/body jq projection"
+	)
+
+
+def test_issue_number_fallback_ignores_bare_issue_mentions_in_cached_pr_metadata() -> None:
+	state = _run_issue_number_fallback(
+		pr_meta=json.dumps({
+			"title": "Linked issue #41",
+			"body": "Bare prose mentions must stay non-actionable.",
+		}),
+	)
+
+	assert state["_captured"].get("ISSUE_NUMBERS", "") == "", (
+		"bare 'issue #N' mentions must not resolve linked issues in the judge fallback"
+	)
+	assert _matching_api_calls(state, "pulls/42") == [], (
+		"non-empty cached PR metadata must not trigger a fallback pulls/{pr} refetch just because strict parsing found no issue links"
+	)
+
+
+def test_issue_number_fallback_ignores_bare_issue_path_mentions_in_cached_pr_metadata() -> None:
+	state = _run_issue_number_fallback(
+		pr_meta=json.dumps({
+			"title": "Docs note about issues/41",
+			"body": "Bare issues/N paths must stay non-actionable.",
+		}),
+	)
+
+	assert state["_captured"].get("ISSUE_NUMBERS", "") == "", (
+		"bare 'issues/N' mentions must not resolve linked issues in the judge fallback"
+	)
+	assert _matching_api_calls(state, "pulls/42") == [], (
+		"non-empty cached PR metadata must not refetch pulls/{pr} for ignored bare issues/N mentions"
 	)
 
 
@@ -1309,8 +1359,7 @@ def _run_merge_with_followup(
 			"PR_MERGEABLE_POLL_ATTEMPTS": "1",
 			"PR_MERGEABLE_POLL_SLEEP": "0",
 		}
-		run_env = os.environ.copy()
-		run_env.update(env)
+		run_env = _sanitized_git_env(env)
 
 		proc = subprocess.run(
 			["bash", str(script_path)],

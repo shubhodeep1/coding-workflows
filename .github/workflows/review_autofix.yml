@@ -770,6 +770,10 @@ jobs:
         run: |
           set -euo pipefail
 
+          if [ -f ".codex-workflow-src/scripts/gh_helpers.sh" ]; then
+            source ".codex-workflow-src/scripts/gh_helpers.sh" 2>/dev/null || true
+          fi
+
           if [[ ! "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
             echo "::warning::Skipping post-merge validate dispatch: invalid PR number '${PR_NUMBER}'."
             exit 0
@@ -784,8 +788,12 @@ jobs:
 
           if [ -z "${issue_nodes_json}" ] || [ "${issue_nodes_json}" = "[]" ]; then
             pr_data="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
-            repository_escaped="${REPOSITORY//./\\.}"
-            issue_numbers="$(echo "${pr_data}" | grep -oiE "(github\\.com/${repository_escaped}/issues/[0-9]+|${repository_escaped}/issues/[0-9]+|(^|[^[:alnum:]_/-])issues/[0-9]+|issue[[:space:]]*#[[:space:]]*[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)" | grep -oE '[0-9]+$' | sort -un || true)"
+            issue_numbers=""
+            if type extract_repo_scoped_issue_refs_from_text >/dev/null 2>&1; then
+              issue_numbers="$(extract_repo_scoped_issue_refs_from_text "${REPOSITORY}" "${pr_data}" || true)"
+            else
+              echo "::warning::Shared linked-issue fallback helper unavailable; skipping PR body/title fallback for PR #${PR_NUMBER}."
+            fi
             if [ -z "${issue_numbers}" ]; then
               echo "No linked issues found for merged PR #${PR_NUMBER}."
               exit 0
@@ -4647,13 +4655,20 @@ jobs:
           ISSUE_NUMBERS="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[].number' 2>/dev/null || true)"
 
           if [ -z "${ISSUE_NUMBERS}" ]; then
-            # Fallback: extract issue number from PR body/title when closing keywords are missing
+            ISSUE_NUMBERS="$(printf '%s' "${LINKED_ISSUE_FALLBACK_NUMBERS_JSON:-[]}" | jq -r '.[]' 2>/dev/null || true)"
+          fi
+
+          if [ -z "${ISSUE_NUMBERS}" ]; then
+            # Fallback: strict current-repo closing-keyword refs and repo-scoped issue URLs/paths only.
             PR_DATA="$(jq -r '[.title // "", .body // ""] | join(" ")' "${PR_META_FILE}" 2>/dev/null || echo "")"
             if [ -z "$(printf '%s' "${PR_DATA}" | tr -d '[:space:]')" ]; then
               PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
             fi
-            REPOSITORY_ESCAPED="${REPOSITORY//./\\.}"
-            ISSUE_NUMBERS="$(echo "${PR_DATA}" | grep -oiE "(github\\.com/${REPOSITORY_ESCAPED}/issues/[0-9]+|${REPOSITORY_ESCAPED}/issues/[0-9]+|(^|[^[:alnum:]_/-])issues/[0-9]+|issue[[:space:]]*#[[:space:]]*[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)" | grep -oE '[0-9]+$' | sort -un || true)"
+            if type extract_repo_scoped_issue_refs_from_text >/dev/null 2>&1; then
+              ISSUE_NUMBERS="$(extract_repo_scoped_issue_refs_from_text "${REPOSITORY}" "${PR_DATA}" || true)"
+            else
+              ISSUE_NUMBERS=""
+            fi
             if [ -z "${ISSUE_NUMBERS}" ]; then
               echo "No linked issues found for PR #${PR_NUMBER} (even after body/title fallback)."
               exit 0
@@ -4830,13 +4845,20 @@ jobs:
           ISSUE_NUMBERS="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[].number' 2>/dev/null || true)"
 
           if [ -z "${ISSUE_NUMBERS}" ]; then
-            # Fallback: extract issue number from PR body/title when closing keywords are missing
+            ISSUE_NUMBERS="$(printf '%s' "${LINKED_ISSUE_FALLBACK_NUMBERS_JSON:-[]}" | jq -r '.[]' 2>/dev/null || true)"
+          fi
+
+          if [ -z "${ISSUE_NUMBERS}" ]; then
+            # Fallback: strict current-repo closing-keyword refs and repo-scoped issue URLs/paths only.
             PR_DATA="$(jq -r '[.title // "", .body // ""] | join(" ")' "${PR_META_FILE}" 2>/dev/null || echo "")"
             if [ -z "$(printf '%s' "${PR_DATA}" | tr -d '[:space:]')" ]; then
               PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
             fi
-            REPOSITORY_ESCAPED="${REPOSITORY//./\\.}"
-            ISSUE_NUMBERS="$(echo "${PR_DATA}" | grep -oiE "(github\\.com/${REPOSITORY_ESCAPED}/issues/[0-9]+|${REPOSITORY_ESCAPED}/issues/[0-9]+|(^|[^[:alnum:]_/-])issues/[0-9]+|issue[[:space:]]*#[[:space:]]*[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)" | grep -oE '[0-9]+$' | sort -un || true)"
+            if type extract_repo_scoped_issue_refs_from_text >/dev/null 2>&1; then
+              ISSUE_NUMBERS="$(extract_repo_scoped_issue_refs_from_text "${REPOSITORY}" "${PR_DATA}" || true)"
+            else
+              ISSUE_NUMBERS=""
+            fi
             if [ -z "${ISSUE_NUMBERS}" ]; then
               echo "No linked issues found for PR #${PR_NUMBER} (even after body/title fallback)."
               exit 0
@@ -5884,13 +5906,20 @@ jobs:
           ISSUE_NUMBERS="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[].number' 2>/dev/null || true)"
 
           if [ -z "${ISSUE_NUMBERS}" ]; then
-            # Fallback: extract issue number from PR body/title when closing keywords are missing
+            ISSUE_NUMBERS="$(printf '%s' "${LINKED_ISSUE_FALLBACK_NUMBERS_JSON:-[]}" | jq -r '.[]' 2>/dev/null || true)"
+          fi
+
+          if [ -z "${ISSUE_NUMBERS}" ]; then
+            # Fallback: strict current-repo closing-keyword refs and repo-scoped issue URLs/paths only.
             PR_DATA="$(jq -r '[.title // "", .body // ""] | join(" ")' "${PR_META_FILE}" 2>/dev/null || echo "")"
             if [ -z "$(printf '%s' "${PR_DATA}" | tr -d '[:space:]')" ]; then
               PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
             fi
-            REPOSITORY_ESCAPED="${REPOSITORY//./\\.}"
-            ISSUE_NUMBERS="$(echo "${PR_DATA}" | grep -oiE "(github\\.com/${REPOSITORY_ESCAPED}/issues/[0-9]+|${REPOSITORY_ESCAPED}/issues/[0-9]+|(^|[^[:alnum:]_/-])issues/[0-9]+|issue[[:space:]]*#[[:space:]]*[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)" | grep -oE '[0-9]+$' | sort -un || true)"
+            if type extract_repo_scoped_issue_refs_from_text >/dev/null 2>&1; then
+              ISSUE_NUMBERS="$(extract_repo_scoped_issue_refs_from_text "${REPOSITORY}" "${PR_DATA}" || true)"
+            else
+              ISSUE_NUMBERS=""
+            fi
             if [ -z "${ISSUE_NUMBERS}" ]; then
               echo "No linked issues found for PR #${PR_NUMBER} (even after body/title fallback)."
               exit 0
