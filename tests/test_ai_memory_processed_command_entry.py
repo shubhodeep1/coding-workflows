@@ -1256,6 +1256,28 @@ def test_tracking_issue_cli_validation_happens_before_memory_io() -> None:
 			assert "tracking_issue must be a positive integer" in stderr
 
 
+def test_push_retries_env_default_survives_shared_branch_contention() -> None:
+	# Regression for #3244: the /answer claim aborted the whole plan phase when
+	# 5 push attempts were exhausted by ai-memory branch contention. The default
+	# budget must stay >= 8 so the jittered backoff has enough attempts (and
+	# reaches the 8s cap) to win the ref-lock race under orchestrator bursts.
+	import argparse as _argparse
+
+	original = os.environ.pop("AI_MEMORY_PUSH_RETRIES", None)
+	try:
+		args = ai_memory._read_env_defaults(_argparse.Namespace())
+		assert args.push_retries >= 8, args.push_retries
+		# An explicit override is still honoured.
+		os.environ["AI_MEMORY_PUSH_RETRIES"] = "3"
+		overridden = ai_memory._read_env_defaults(_argparse.Namespace())
+		assert overridden.push_retries == 3, overridden.push_retries
+	finally:
+		if original is None:
+			os.environ.pop("AI_MEMORY_PUSH_RETRIES", None)
+		else:
+			os.environ["AI_MEMORY_PUSH_RETRIES"] = original
+
+
 def main() -> int:
 	test_cleanup_paths = globals().setdefault("_TEST_CLEANUP_PATHS", [])
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

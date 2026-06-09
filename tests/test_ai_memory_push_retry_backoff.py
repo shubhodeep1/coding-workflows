@@ -260,6 +260,22 @@ def test_persist_memory_operation_backs_off_every_attempt_before_raising() -> No
 	assert backoff_attempts == [1, 2, 3], backoff_attempts
 
 
+def test_persist_memory_operation_survives_seven_rejections_with_default_budget() -> None:
+	# Regression for #3244: under the raised default budget (8) a burst of 7
+	# consecutive non-fast-forward rejections (shared ai-memory branch
+	# contention) must still land on the 8th attempt instead of aborting the
+	# fail-closed claim — which previously killed the plan phase at 5 attempts.
+	result, backoff_attempts, _call_log, exc = _run_persist(
+		[1, 1, 1, 1, 1, 1, 1, 0], push_retries=8
+	)
+	assert exc is None, exc
+	assert result is not None
+	assert result["did_push"] is True, result
+	assert result["push_attempts"] == 8, result
+	# Backoff fires after each of the 7 failed attempts, not after the success.
+	assert backoff_attempts == [1, 2, 3, 4, 5, 6, 7], backoff_attempts
+
+
 def test_persist_memory_operation_raises_on_fetch_failure_before_rebase() -> None:
 	result, backoff_attempts, call_log, exc = _run_persist([1], push_retries=2, fetch_codes=[1])
 	assert result is None
