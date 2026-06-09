@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Stay inside the `files_touched` list. Prefer a surgical local edit only.\"\n  expected_change_site: `.ai/.workspace_source_manifest.txt`\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, mistralai_mistral-small-2603, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  EVIDENCE: The PR diff modifies `.ai/.workspace_source_manifest.txt` by adding `analysis/workflow-optimization-2026-06-08-2.md` (line 99) and `tests/test_phase_skip_gate_telemetry_contract.py` (line 452), which are unrelated to removing the redundant PR refetch from `issue_pr_status.yml`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- Requirement: \"Stay inside the `files_touched` list. Prefer a surgical local edit only.\"\n  Expected change site: Only `.github/workflows/issue_pr_status.yml` and `tests/test_issue_pr_status_payload_fallback_contract.py` should be modified per the issue scope.\n  Evidence of absence: The PR diff modifies `.ai/.workspace_source_manifest.txt` by adding two entries \u2014 `analysis/workflow-optimization-2026-06-08-2.md` (line 99, a 67 KB analysis doc already tracked in git from PR #3231, commit 62e34c9) and `tests/test_phase_skip_gate_telemetry_contract.py` (line 452, an 8.6 KB test file already tracked since commit 13baea0). Neither file relates to removing the redundant PR refetch from `issue_pr_status.yml`. Both were already tracked in git before this PR; the manifest additions are catch-up entries for files the manifest previously omitted. The core change in `issue_pr_status.yml` (removing the three-line `gh api` fallback) and the contract test update in `tests/test_issue_pr_status_payload_fallback_contract.py` are correct and complete. The manifest additions are harmless at runtime (cosmetic only) but violate the surgical-scope guardrail.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- Requirement: \"Stay inside the `files_touched` list\" and \"Prefer a surgical local edit only\"\n  Expected change site: The issue scope is limited to `.github/workflows/issue_pr_status.yml` and its test file\n  Evidence of absence: The PR adds two entries to `.ai/.workspace_source_manifest.txt` that are unrelated to issue #3248:\n- `analysis/workflow-optimization-2026-06-08-2.md` (67KB analysis doc) \n- `tests/test_phase_skip_gate_telemetry_contract.py` (8KB test file)\n\nThese additions conflict with the stated guardrails and represent manifest churn outside the surgical scope required for REUSE-001 cleanup.\n\nThe core changes (removing the redundant PR refetch from `issue_pr_status.yml` and updating the contract test) are correct. The workspace manifest additions should be removed.\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement: \"Stay inside the `files_touched` list. Prefer a surgical local edit only.\"\n  Expected change site: `.ai/.workspace_source_manifest.txt`\n  Evidence of absence: The PR adds two unrelated entries to `.ai/.workspace_source_manifest.txt` that are not part of the issue #3248 scope: `analysis/workflow-optimization-2026-06-08-2.md` (line 99) and `tests/test_phase_skip_gate_telemetry_contract.py` (line 452). These files are not required for removing the redundant PR refetch and violate the surgical edit requirement.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- Requirement: \"Stay inside the `files_touched` list\" / \"Prefer a surgical local edit only\"\n  Expected change site: `.ai/.workspace_source_manifest.txt` - should NOT be modified for this issue\n  Evidence of absence: The PR adds two entries to `.ai/.workspace_source_manifest.txt` that are unrelated to issue #3248:\n  - `analysis/workflow-optimization-2026-06-08-2.md` (line 99)\n  - `tests/test_phase_skip_gate_telemetry_contract.py` (line 452)\nThese files are not part of the REUSE-001 cleanup scope which is limited to removing the redundant PR refetch from `issue_pr_status.yml`. The linked issue explicitly states: \"Stay inside the `files_touched` list\" and \"Prefer a surgical local edit only.\" The workspace manifest changes appear to be unrelated manifest churn that conflicts with the stated guardrails.\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- Requirement: \"Stay inside the `files_touched` list\" and \"Prefer a surgical local edit only\" (from the linked issue #3248 guardrails)\n  Expected change site: Only `.github/workflows/issue_pr_status.yml` and `tests/test_issue_pr_status_payload_fallback_contract.py` should be modified.\n  Evidence of absence: The PR diff modifies `.ai/.workspace_source_manifest.txt` by adding two entries unrelated to issue #3248: `analysis/workflow-optimization-2026-06-08-2.md` and `tests/test_phase_skip_gate_telemetry_contract.py`. These are workspace artifact/manifest entries with no connection to removing the redundant PR refetch. The issue's acceptance criteria and scope make no mention of manifest updates. This was also flagged by both Copilot inline-review comments (lines 99 and 452) and by multiple pass-1 reviewers (minimax, kimi, qwen).\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: \"Stay inside the `files_touched` list. Prefer a surgical local edit only.\" (and \"do not broaden this issue into unrelated issue-pr-status cleanup\")\n  Expected change site: Only `.github/workflows/issue_pr_status.yml` + `tests/test_issue_pr_status_payload_fallback_contract.py` (the redundant refetch removal + updated assertion pinning payload-first behavior)\n  Evidence of absence: LAST_RUN_DIFF / PR_DIFF adds two unrelated entries to `.ai/.workspace_source_manifest.txt` (analysis/workflow-optimization-2026-06-08-2.md and tests/test_phase_skip_gate_telemetry_contract.py). These are outside the declared accept criteria / guardrails; Copilot review comments (lines 99/452 in manifest) and pass-1 consensus (minimax, moonshotai, qwen) flagged the exact same scope creep. The core removal in issue_pr_status.yml (lines 282-284) and test update are correct and match acceptance criteria.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "3f5a880e79ba867483f63762aa02f993ba23200774bcfa0a3298005409474a58",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3250,
+    "run_id": "27234261003",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27234261003",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260609210925_b87c501aa2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3250,
+    "run_id": "27234261003"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-09T21:09:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
