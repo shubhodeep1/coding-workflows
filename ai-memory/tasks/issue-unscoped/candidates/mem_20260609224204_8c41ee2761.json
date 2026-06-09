@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:36-38 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: if a future edit introduces non-UTF-8 bytes into `tests/test_orchestrate_poll_process.py`, `read_text(encoding=\"utf-8\")` raises `UnicodeDecodeError` and the Derive step fails before either subset file is written.\n  WHY: the reviewer noted this fails loudly and does not create a silent misselection path; no action was required.\n- .github/workflows/ci.yml:52-70 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: transient `/tmp` files used for passing test lists between steps can cause race conditions during parallel step execution.\n  WHY: if the derive and fast-fail steps run concurrently (even under matrix expansion), the files can be read before they're fully written, leading to inconsistent or missing test selection.\n- .github/workflows/ci.yml:76-82 | severity=medium | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `mapfile` reads the `/tmp` file without error handling if the file is missing or empty.\n  WHY: if the derive step failed silently, this run will proceed with an empty test list, effectively skipping tests without failing the job.\n- .github/workflows/ci.yml:630-636 | severity=medium | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `mapfile` reads the `/tmp` file without error handling if the file is missing or empty.\n  WHY: if the earlier steps failed silently, this run will proceed with an empty test list, duplicating coverage checks and potentially masking the missing fast-fail functionality.\n- .github/workflows/ci.yml:31-42, 76-82, 630-636 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: the workflow uses `/tmp` files to pass test lists between steps within the same job, which is fragile to future workflow restructuring or reordering.\n  WHY: if the CI workflow is split into separate jobs or reordered, `/tmp/orchestrate_poll_fast_fail_tests.txt` and `/tmp/orchestrate_poll_remaining_tests.txt` will not be available, causing step failures or empty test selection.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"add an early dedicated CI gate (job or front-of-job step) for the narrow high-signal regression subset\"\n  expected_change_site: .github/workflows/ci.yml (and potentially a separate job definition)\n  confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: implementation uses transient files within a single job rather than creating a dedicated CI gate with explicit job boundaries and artifact passing\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/ci.yml:36-38 | severity=low | confidence=2\n  PROBLEM: if a future edit introduces non-UTF-8 bytes into `tests/test_orchestrate_poll_process.py`, `Path(...).read_text(encoding=\"utf-8\")` raises `UnicodeDecodeError` and the Derive step fails before either subset file is written.\n  WHY: the reviewer noted this fails loudly and does not create a silent misselection path; no action was required.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- .github/workflows/ci.yml:52-70 | severity=low | confidence=4\n  PROBLEM: Transient `/tmp` files used for passing test lists between steps can cause race conditions during parallel step execution.\n  WHY: If the derive and fast-fail steps run concurrently (even under matrix expansion), the files can be read before they're fully written, leading to inconsistent or missing test selection.\n- .github/workflows/ci.yml:76-82 | severity=medium | confidence=5\n  PROBLEM: `mapfile` command on `/tmp` file without error handling if file is missing or empty\n  WHY: If the derive step failed silently, this run will proceed with empty test list, effectively skipping tests without failing the job\n- .github/workflows/ci.yml:630-636 | severity=medium | confidence=5\n  PROBLEM: `mapfile` command on `/tmp` file without error handling if file is missing or empty\n  WHY: If the earlier steps failed silently, this run will proceed with empty test list, duplicating coverage checks and potentially masking the missing fast-fail functionality\n- Requirement: \"add an early dedicated CI gate (job or front-of-job step) for the narrow high-signal regression subset\"\n  Expected change site: .github/workflows/ci.yml (and potentially a separate job definition)\n  Evidence of absence: Implementation uses transient files within a single job rather than creating a dedicated CI gate with explicit job boundaries and artifact passing\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- .github/workflows/ci.yml:31-42, 76-82, 630-636 | severity=low | confidence=2\n  PROBLEM: The workflow uses /tmp files to pass test lists between steps within the same job. This pattern is fragile to future workflow restructuring - if steps are ever split into separate jobs or reordered, the /tmp files will not be available, causing step failures or empty test selection.\n  WHY: If someone restructures the CI workflow into multiple jobs (e.g., to parallelize the lint job), the steps that read `/tmp/orchestrate_poll_fast_fail_tests.txt` and `/tmp/orchestrate_poll_remaining_tests.txt` will fail because `/tmp` is not shared across jobs. Additionally, if the derive step is ever removed or the file paths change without updating downstream steps, the `mapfile` commands will read empty or missing files, resulting in empty test lists being passed to the Python test runner.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "12ef62be68902966c40eab0685b3424e58c2f3dd4647a9582211ca38acb3f6fc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3252,
+    "run_id": "27239072791",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27239072791",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260609224204_8c41ee2761",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3252,
+    "run_id": "27239072791"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-09T22:42:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
