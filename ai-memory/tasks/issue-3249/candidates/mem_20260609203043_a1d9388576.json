@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan\n\nPlanning ref: `orchestrator/project-3243` @ `5dc71c0e8d1153069d64f8a17f5f54c89feaf440` (integration branch matched; no mismatch).\n\nClarification mapping\n- No Q1/Q2 clarification questions were asked.\n- `/answer [auto-answered-by-orchestrator]` adds no new requirements; plan scope comes from the issue body.\n\nAutomation / wiring\n- Change type: modify existing workflow, with a preferred tiny sourceable helper under `scripts/` for this workflow only.\n- Entry point remains `.github/workflows/comprehensive-test-and-release.yml` via its existing `workflow_dispatch` trigger; no new scheduler or PR-push wiring.\n- No new supervisor.\n- No DB work or gating.\n- No `docs/scripts-pending-removal.md` entry expected; this is a permanent helper, not a standalone/manual script.\n\nCodebase re-validation / conflict check\n- No issue/code conflict found; the duplication is real at `.github/workflows/comprehensive-test-and-release.yml:72-102` and `:318-348`.\n- Important compatibility note: the existing repo-wide `scripts/gh_helpers.sh` is **not** a safe drop-in here. Its `gh_retry()` path adds retries and `/rate_limit` probing, which would change behavior and add API calls.\n\nFiles likely to change\n- `.github/workflows/comprehensive-test-and-release.yml`\n- Preferred: one new sourceable helper under `scripts/` dedicated to this workflow (name can stay workflow-scoped and minimal)\n\nFunctions / modules to implement\n- Extract the current `gh_api_safe()` body into one shared implementation.\n- Extract/parameterize `list_dispatch_runs()` so both jobs use one maintained implementation instead of two inline copies.\n- Update:\n  - `phase2-collect-and-analyze-logs`\n  - `phase3-dispatch-orchestrator`\n  to source/call the shared helper after checkout.\n- Keep `list_tracking_issue_numbers()` local to phase 3, but continue routing its GitHub reads through the shared `gh_api_safe()` behavior.\n- Leave dispatch baseline logic, jq selection, inactivity timers, and outputs untouched.\n\nData structures affected\n- No persisted schema or contract changes.\n- Preserve current step-local state:\n  - `RATE_LIMIT_BACKOFF` remains per-job mutable state.\n  - JSON payload shapes from workflow-run listing and run-detail polling stay unchanged.\n  - job outputs `report_file` and `tracking_issue` stay unchanged.\n\nAPI / interface changes\n- No user-facing workflow input/output changes.\n- No GitHub endpoint/query changes:\n  - keep workflow-dispatch run listing\n  - keep run-detail polling\n  - keep tracking-issue listing\n  - keep `per_page=100`\n- Internal-only change: jobs call/source one shared helper instead of defining duplicate shell functions inline.\n\nRisks / edge cases\n- Preserve exact fail-open behavior: `gh_api_safe()` must still return non-zero on failure so existing `|| true` callers keep working.\n- Preserve exact backoff behavior: reset `RATE_LIMIT_BACKOFF=0` only on success; on rate-limit stderr, back off 30 \u2192 60 \u2192 120 seconds.\n- Preserve current stderr behavior: non-rate-limit failures still emit `::error::gh api call failed: ...` plus stderr.\n- Do **not** switch to `gh_retry()`/`gh_api_json_to_file()` from `scripts/gh_helpers.sh`; that would violate the \u201cno extra API calls\u201d guardrail.\n- Keep the cleanup local to this workflow; do not broaden into wrapper cleanup in other workflows.\n- If the unseen `files_touched` allowlist excludes `scripts/**`, fallback to one shared source block inside `.github/workflows/comprehensive-test-and-release.yml` instead of widening scope.\n\nTesting considerations\n- Run existing workflow validation gates relevant to the change:\n  - `yamllint` on workflow YAML\n  - `actionlint -shellcheck=` on `.github/workflows/comprehensive-test-and-release.yml`\n- If a new `scripts/*.sh` helper is added, run `shellcheck --severity=error` on that helper.\n- Focused diff verification:\n  - same GitHub API URLs/query strings\n  - same outer polling loops\n  - no new `/rate_limit` path or other extra API calls\n  - same backoff/error semantics\n\nAssumptions / missing context\n- No extra clarification constraints exist beyond the issue body.\n- The prompt does not include the literal `files_touched` allowlist. This plan assumes it covers the workflow file and the chosen helper path; otherwise use the inline shared-block fallback.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "e702ee8373835fef70101bf6ffd23bf709f237c292f45c8d1c20b302b8f6e956",
+  "lineage": {
+    "issue_number": 3249,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27233532456",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27233532456",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3249"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260609203043_a1d9388576",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3249,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27233532456"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3249",
+  "timestamps": {
+    "created_at": "2026-06-09T20:30:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
