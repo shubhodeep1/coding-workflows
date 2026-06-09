@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-06-09T23:01:09Z",
+  "tick_at": "2026-06-09T23:14:28Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -16,13 +16,13 @@
   "tracking_issues": [
     {
       "current_wave": 1,
-      "integration_ahead_by": "4",
+      "integration_ahead_by": "5",
       "issue_counts": {
         "closed": 0,
-        "done": 1,
+        "done": 0,
         "implementation_failed": 0,
         "in_progress": 1,
-        "merged": 4,
+        "merged": 5,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
