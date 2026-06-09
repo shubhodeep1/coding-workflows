@@ -219,6 +219,7 @@ scripts/codex_stall_guard.sh
 scripts/codex_thread_reuse.sh
 scripts/collect_workflow_logs.py
 scripts/compare_issue_timeline_parity.sh
+scripts/comprehensive_test_and_release_gh_api.sh
 scripts/consolidate_soft_error_reports.py
 scripts/cost_audit.py
 scripts/detect_editor_changes_lost.sh

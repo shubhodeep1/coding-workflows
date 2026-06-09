@@ -5,14 +5,17 @@ gh_api_safe()
 	local output=""
 	local err_file
 	err_file="$(mktemp)"
+	trap 'rm -f "${err_file}"; trap - RETURN' RETURN
 	if output="$(gh api "$@" 2>"${err_file}")"; then
 		RATE_LIMIT_BACKOFF=0
-		rm -f "${err_file}"
 		printf '%s' "${output}"
 		return 0
 	fi
 
 	if grep -qi "rate limit" "${err_file}" 2>/dev/null; then
+		if [[ ! "${RATE_LIMIT_BACKOFF:-0}" =~ ^[0-9]+$ ]]; then
+			RATE_LIMIT_BACKOFF=0
+		fi
 		if [ "${RATE_LIMIT_BACKOFF}" -eq 0 ]; then
 			RATE_LIMIT_BACKOFF=30
 		elif [ "${RATE_LIMIT_BACKOFF}" -lt 120 ]; then
@@ -24,7 +27,6 @@ gh_api_safe()
 		cat "${err_file}" >&2
 	fi
 
-	rm -f "${err_file}"
 	return 1
 }
 
