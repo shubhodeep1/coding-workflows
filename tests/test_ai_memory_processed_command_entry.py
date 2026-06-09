@@ -1256,6 +1256,33 @@ def test_tracking_issue_cli_validation_happens_before_memory_io() -> None:
 			assert "tracking_issue must be a positive integer" in stderr
 
 
+def test_push_retries_env_default_override_and_validation() -> None:
+	# Lock in the raised default budget, explicit override handling, and
+	# malformed-env validation for the shared ai-memory branch retry knob.
+	import argparse as _argparse
+
+	original = os.environ.pop("AI_MEMORY_PUSH_RETRIES", None)
+	try:
+		args = ai_memory._read_env_defaults(_argparse.Namespace())
+		assert args.push_retries >= 8, args.push_retries
+		# An explicit override is still honoured.
+		os.environ["AI_MEMORY_PUSH_RETRIES"] = "3"
+		overridden = ai_memory._read_env_defaults(_argparse.Namespace())
+		assert overridden.push_retries == 3, overridden.push_retries
+		os.environ["AI_MEMORY_PUSH_RETRIES"] = "abc"
+		try:
+			ai_memory._read_env_defaults(_argparse.Namespace())
+		except ai_memory.MemoryValidationError as exc:
+			assert "AI_MEMORY_PUSH_RETRIES must be a positive integer" in str(exc)
+		else:
+			raise AssertionError("expected MemoryValidationError for malformed AI_MEMORY_PUSH_RETRIES")
+	finally:
+		if original is None:
+			os.environ.pop("AI_MEMORY_PUSH_RETRIES", None)
+		else:
+			os.environ["AI_MEMORY_PUSH_RETRIES"] = original
+
+
 def main() -> int:
 	test_cleanup_paths = globals().setdefault("_TEST_CLEANUP_PATHS", [])
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
