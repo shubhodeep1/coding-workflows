@@ -381,6 +381,17 @@ jobs:
           gh api "repos/${TEST_REPO}" --jq '.full_name' \
             || { echo "::error::Cannot access ${TEST_REPO}. Check GH_PAT permissions."; exit 1; }
 
+      # Fast-fail the hottest orchestrate-poll regression before the
+      # workflow creates live smoke-test resources or waits on long
+      # downstream phases.
+      - name: "Phase 0a: Hot orchestrate-poll regression guard"
+        id: hot-poller-guard
+        run: |
+          set -euo pipefail
+          echo "Running hot orchestrate-poll regression guard..."
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py test_implementation_failed_reissue_preserves_dependency_gates_and_pending_defs
+          echo "status=success" >> "$GITHUB_OUTPUT"
+
       # ── Phase 0: Create the test issue ───────────────────────────
       - name: Create E2E test issue
         id: create-issue
@@ -3027,6 +3038,15 @@ jobs:
 
           PASSED=true
 
+          # Check the early hot-regression guard
+          HOT_POLLER_GUARD="${{ steps.hot-poller-guard.outputs.status }}"
+          if [ "$HOT_POLLER_GUARD" = "success" ]; then
+            echo "  ✓ Hot poller .. PASSED"
+          else
+            echo "  ✗ Hot poller .. FAILED (${HOT_POLLER_GUARD:-not_run})"
+            PASSED=false
+          fi
+
           # Check clarify
           CLARIFY="${{ steps.wait-clarify.outputs.status }}"
           if [ "$CLARIFY" = "success" ]; then
@@ -3429,6 +3449,9 @@ jobs:
       # failures to `success`, so `notify` consumes this explicit output.
       actual_result: ${{ steps.workflow_log_analysis_actual_result.outputs.result }}
       workflow_conclusion: ${{ steps.dispatch_log_analysis.outputs.workflow_conclusion || steps.workflow_log_analysis_actual_result.outputs.result }}
+      workflow_run_id: ${{ steps.dispatch_log_analysis.outputs.run_id || '' }}
+      workflow_snapshot_status: ${{ steps.dispatch_log_analysis.outputs.workflow_snapshot_status || '' }}
+      workflow_snapshot_conclusion: ${{ steps.dispatch_log_analysis.outputs.workflow_snapshot_conclusion || '' }}
     # Split out of `orphan-workflows-test` (follow-up to release v1.8.2
     # which failed when the inner `api-redundancy` job hit its 90m
     # per-job cap and cancelled the dispatch chain). The Codex audit
@@ -3442,25 +3465,10 @@ jobs:
     # `notify` job so operators see its result in the Telegram release
     # message and the soft-error report artifact still flows into the
     # consolidated report.
-    # Cap derivation: 260m in-step DEADLINE (covers 250m audit chain
-    # = collect-logs 25m + analyze-commit-notify 60m + deep-audit 75m
-    # + api-redundancy 90m + 10m queue buffer) + ~20m headroom for
-    # checkout, prerequisite validation, the run-soft-error-analyzer
-    # composite (wait_for_completion_secs=120s + an OpenRouter call
-    # ≈ 2–3m under latency variance) and runner queueing ≈ 280m.
-    # Previously this work lived inside orphan-workflows-test which
-    # had a 390m cap covering workflow-log-analysis +
-    # validation-refresh + update_workflows + memory_maintenance
-    # combined; the per-job split lets each cap track only its own
-    # dispatch chain.
-    # When workflow-log-analysis.yml's per-job timeouts are bumped
-    # again (deep-audit 30→45→75m, api-redundancy 30→60→90m,
-    # analyze-commit-notify 30→60m, etc.), bump the in-step DEADLINE
-    # and step timeout-minutes in this job too so the watcher outlives
-    # the new worst case.
-    # Bumped 250 → 280 alongside the analyze-commit-notify 30 → 60m
-    # bump (run #25558885206), which raised the in-step DEADLINE from
-    # 230m to 260m; preserving the same ~20m headroom.
+    # Historical high cap retained as harmless outer headroom, but the
+    # dispatch step now exits after registration plus one status
+    # snapshot instead of waiting for terminal child completion. In
+    # normal operation this job should finish in minutes, not hours.
     timeout-minutes: 280
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -3481,7 +3489,7 @@ jobs:
           ref: main
           fetch-depth: 1
 
-      - name: Dispatch & watch — workflow-log-analysis
+      - name: Dispatch & snapshot — workflow-log-analysis
         id: dispatch_log_analysis
         # Rate-limit shaping: the script below opens with a brief 4s
         # sleep so concurrent gate jobs (e2e-smoke-test, alt-model,
@@ -3492,26 +3500,10 @@ jobs:
         # intervals this keeps total API spend well below GH_PAT's
         # 5000/hr budget.
         #
-        # Per-step backstop in case the in-script `DEADLINE` math goes
-        # off (e.g. the `date` command behaves unexpectedly on a future
-        # runner image). The job-level cap is the outer safety net,
-        # but a per-step bound makes the failure attribute to the right
-        # step instead of cancelling all sibling steps in the job.
-        # Sized to the workflow-log-analysis 4-job sequential worst-case
-        # (collect-logs 25m + analyze-commit-notify 60m + deep-audit
-        # 75m + api-redundancy 90m = 250m) plus a 15m runner-queue +
-        # step-setup buffer; release v1.0.113 watcher exited at 28m
-        # while deep-audit was still running, run #25088541089
-        # cancelled at 30m 16s on deep-audit with its prior 30m cap,
-        # run #25115192726 cancelled at 30m 19s on api-redundancy with
-        # its 30m cap, run #25200117236 cancelled at 60m 11s on
-        # api-redundancy with its 60m cap (now 90m, see workflow-log-
-        # analysis.yml), run #25474659590 cancelled at 45m 16s on
-        # deep-audit with its prior 45m cap (now 75m), and run #25558885206
-        # cancelled at 30m 14s on analyze-commit-notify with its
-        # prior 30m cap (now 60m). Per Copilot review on PR #1742:
-        # the previous 95m setting could still time out a healthy
-        # run that hit the worst case.
+        # Historical high cap retained as a defensive outer bound.
+        # The in-script registration probe below exits after a short
+        # registration window, so this timeout should no longer be hit
+        # during healthy runs.
         timeout-minutes: 265
         env:
           WF_FILE: workflow-log-analysis.yml
@@ -3531,32 +3523,11 @@ jobs:
             echo "::warning::workflow-log-analysis dispatch failed; continuing because this audit is non-blocking"
             exit 0
           fi
-          # 15600s (260m) covers the 250m worst-case audit chain
-          # (collect-logs 25m + analyze-commit-notify 60m + deep-audit
-          # 75m + api-redundancy 90m) plus a 10m buffer for runner
-          # queueing between jobs. Step timeout-minutes above (265m)
-          # is the outer cap that attributes a hang to this step.
-          # Bumped 7200 → 8400 after deep-audit's per-job cap was
-          # raised 30m → 45m in workflow-log-analysis.yml:603 (run
-          # #25088541089 had cancelled at 30m 16s on deep-audit).
-          # Bumped 8400 → 10200 after api-redundancy's per-job cap was
-          # raised 30m → 60m (run #25115192726 cancelled at 30m 19s
-          # on api-redundancy with its prior 30m cap).
-          # Bumped 10200 → 12000 after api-redundancy's per-job cap was
-          # raised 60m → 90m (run #25200117236 cancelled at 60m 11s on
-          # api-redundancy with its prior 60m cap, Codex still in "Plan
-          # update → Draft" phase).
-          # Bumped 12000 → 13800 after deep-audit's per-job cap was
-          # raised 45m → 75m (run #25474659590 cancelled at 45m 16s on
-          # deep-audit; codex attempt 1 ran ~24m and forced a retry
-          # that was killed mid-attempt-2 by the 45m cap).
-          # Bumped 13800 → 15600 after analyze-commit-notify's per-job
-          # cap was raised 30m → 60m (run #25558885206 cancelled at
-          # 30m 14s on analyze-commit-notify; Codex pass alone ran
-          # ~26m 31s vs the 9–13m norm).
-          DEADLINE=$(( $(date +%s) + 15600 ))
+          # Registration normally appears within seconds; allow a short
+          # fail-open window for Actions indexing lag, then stop.
+          REGISTRATION_DEADLINE=$(( $(date +%s) + 300 ))
           NEW_ID=""
-          while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
+          while [ "$(date +%s)" -lt "${REGISTRATION_DEADLINE}" ]; do
             NEW_ID=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=10" \
               --jq "[.workflow_runs[] | select(.id > ${PRE})] | sort_by(.created_at) | last | .id // empty" 2>/dev/null || echo "")
             [ -n "${NEW_ID}" ] && break
@@ -3568,26 +3539,22 @@ jobs:
             echo "::warning::workflow-log-analysis dispatch did not register; continuing because this audit is non-blocking"
             exit 0
           fi
-          echo "Watching run #${NEW_ID}"
-          while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
-            JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${NEW_ID}" --jq '{status, conclusion}' 2>/dev/null || echo "")
-            STATUS=$(echo "${JSON}" | jq -r '.status // ""')
-            CONCLUSION=$(echo "${JSON}" | jq -r '.conclusion // ""')
-            echo "  status=${STATUS} conclusion=${CONCLUSION}"
-            if [ "${STATUS}" = "completed" ]; then
-              echo "run_id=${NEW_ID}" >> "$GITHUB_OUTPUT"
-              echo "workflow_conclusion=${CONCLUSION:-unknown}" >> "$GITHUB_OUTPUT"
-              if [ "${CONCLUSION}" = "success" ]; then
-                exit 0
-              fi
-              echo "::warning::workflow-log-analysis run #${NEW_ID} concluded ${CONCLUSION}; continuing because this audit is non-blocking"
-              exit 0
-            fi
-            sleep 15
-          done
+          echo "Registered run #${NEW_ID}"
+          JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${NEW_ID}" --jq '{status, conclusion}' 2>/dev/null || true)
+          STATUS=$(printf '%s' "${JSON:-{}}" | jq -r '.status // "unknown"' 2>/dev/null || echo "unknown")
+          CONCLUSION=$(printf '%s' "${JSON:-{}}" | jq -r '.conclusion // ""' 2>/dev/null || echo "")
+          if [ -n "${CONCLUSION}" ]; then
+            echo "  snapshot: status=${STATUS} conclusion=${CONCLUSION}"
+          else
+            echo "  snapshot: status=${STATUS}"
+          fi
           echo "run_id=${NEW_ID}" >> "$GITHUB_OUTPUT"
-          echo "workflow_conclusion=timed_out" >> "$GITHUB_OUTPUT"
-          echo "::warning::workflow-log-analysis run #${NEW_ID} timed out; continuing because this audit is non-blocking"
+          echo "workflow_conclusion=success" >> "$GITHUB_OUTPUT"
+          echo "workflow_snapshot_status=${STATUS}" >> "$GITHUB_OUTPUT"
+          echo "workflow_snapshot_conclusion=${CONCLUSION}" >> "$GITHUB_OUTPUT"
+          if [ "${STATUS}" = "completed" ] && [ -n "${CONCLUSION}" ] && [ "${CONCLUSION}" != "success" ]; then
+            echo "::warning::workflow-log-analysis run #${NEW_ID} is already completed with conclusion=${CONCLUSION}; not waiting because this audit is non-blocking"
+          fi
           exit 0
 
       - name: "Soft-error analyser (workflow-log-analysis)"
@@ -5319,6 +5286,9 @@ jobs:
           ALT_MODEL="${{ needs.e2e-alt-model-test.result }}"
           VALIDATE="${{ needs.validate.result }}"
           RELEASE="${{ needs.release.result }}"
+          LOG_ANALYSIS_RUN_ID="${{ needs.workflow-log-analysis-test.outputs.workflow_run_id || '' }}"
+          LOG_ANALYSIS_STATUS="${{ needs.workflow-log-analysis-test.outputs.workflow_snapshot_status || '' }}"
+          LOG_ANALYSIS_SNAPSHOT_CONCLUSION="${{ needs.workflow-log-analysis-test.outputs.workflow_snapshot_conclusion || '' }}"
 
           # `LOG_ANALYSIS` is deliberately omitted from `all_supplemental_ok`
           # — its failure must NOT flip the overall message to "FAILED".
@@ -5371,6 +5341,16 @@ jobs:
             MSG+=$'\n'"${STATUS_LINE}"
           fi
           MSG+=$'\n'"Run: ${RUN_URL}"
+          if [ -n "${LOG_ANALYSIS_RUN_ID}" ]; then
+            LOG_ANALYSIS_SNAPSHOT="run #${LOG_ANALYSIS_RUN_ID}"
+            if [ -n "${LOG_ANALYSIS_STATUS}" ]; then
+              LOG_ANALYSIS_SNAPSHOT+=" status=${LOG_ANALYSIS_STATUS}"
+            fi
+            if [ -n "${LOG_ANALYSIS_SNAPSHOT_CONCLUSION}" ]; then
+              LOG_ANALYSIS_SNAPSHOT+=" conclusion=${LOG_ANALYSIS_SNAPSHOT_CONCLUSION}"
+            fi
+            MSG+=$'\n'"workflow-log-analysis snapshot: ${LOG_ANALYSIS_SNAPSHOT}"
+          fi
 
           # Append the consolidated soft-error summary built by the
           # `Consolidate per-phase soft-error reports` step above. The
