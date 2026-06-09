@@ -44,12 +44,10 @@ def test_payload_first_fallback_and_shared_helper_usage() -> None:
 	assert 'PR_DATA="${PR_TITLE:-} ${PR_BODY:-}"' in text
 	assert 'set_issue_phase_label_resilient "${issue_number}" "${FINAL_LABEL}" "${REPOSITORY}"' in text
 	assert "_AI_PHASE_LABELS='[\"ai:done\"" not in text
-
-	payload_pos = text.find('PR_DATA="${PR_TITLE:-} ${PR_BODY:-}"')
-	fetch_pos = text.find('PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq')
-	assert payload_pos != -1
-	assert fetch_pos != -1
-	assert payload_pos < fetch_pos, "Fallback GH pull fetch must only run after payload text check"
+	assert 'gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq' not in text, (
+		"Linked-issue fallback must use the pull_request event payload as its sole "
+		"title/body source and must not refetch the PR."
+	)
 
 
 def test_issue_pr_status_bootstraps_revalidate_lifecycle_ai_memory_schemas() -> None:
