@@ -28,6 +28,21 @@ jobs:
           set -euo pipefail
           python3 -m pip install yamllint coverage pyyaml jsonschema jinja2 ruff
 
+      - name: Orchestrate poll implementation-failed regression fast-fail
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py \
+            test_implementation_failed_post_codex_open_blockers_defers_reissue_and_persists_dependency_metadata \
+            test_implementation_failed_post_codex_closed_blockers_reissues_with_post_codex_guidance_and_uses_depends_on \
+            test_implementation_failed_noop_path_keeps_existing_guidance_without_post_codex_context \
+            test_implementation_failed_post_codex_unknown_blocker_state_defers_reissue \
+            test_implementation_failed_comment_lookup_failure_defers_reissue \
+            test_implementation_failed_reissue_keeps_orchestrator_labels_and_updates_mapping \
+            test_implementation_failed_reissue_hits_cap_and_closes_without_creating_new_issue \
+            test_implementation_failed_reissue_preserves_dependency_gates_and_pending_defs \
+            test_implementation_failed_reissue_persists_fixup_blocker_metadata_from_comment \
+            test_implementation_failed_reissue_without_blocker_metadata_keeps_state_compatible
+
       - name: YAML lint
         run: |
           set -euo pipefail
