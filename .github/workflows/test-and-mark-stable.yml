@@ -389,8 +389,13 @@ jobs:
         run: |
           set -euo pipefail
           echo "Running hot orchestrate-poll regression guard..."
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py test_implementation_failed_reissue_preserves_dependency_gates_and_pending_defs
-          echo "status=success" >> "$GITHUB_OUTPUT"
+          if PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py test_implementation_failed_reissue_preserves_dependency_gates_and_pending_defs; then
+            echo "status=success" >> "$GITHUB_OUTPUT"
+          else
+            HOT_POLLER_RC=$?
+            echo "status=exit_code=${HOT_POLLER_RC}" >> "$GITHUB_OUTPUT"
+            exit "${HOT_POLLER_RC}"
+          fi
 
       # ── Phase 0: Create the test issue ───────────────────────────
       - name: Create E2E test issue
