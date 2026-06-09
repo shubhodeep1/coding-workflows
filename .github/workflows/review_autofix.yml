@@ -206,6 +206,8 @@ jobs:
       det_skip_reason: ${{ steps.evaluate.outputs.det_skip_reason }}
       claude_branch_review: ${{ steps.evaluate.outputs.claude_branch_review }}
       head_ref: ${{ steps.evaluate.outputs.head_ref }}
+      post_merge_pr_text_json: ${{ steps.evaluate.outputs.post_merge_pr_text_json }}
+      post_merge_linked_issues_json: ${{ steps.evaluate.outputs.post_merge_linked_issues_json }}
     steps:
       - name: Evaluate review gate
         id: evaluate
@@ -249,6 +251,8 @@ jobs:
           SHOULD_RUN="true"
           POST_MERGE_DISPATCH="false"
           SKIP_REASON=""
+          POST_MERGE_PR_TEXT_JSON='{"title":"","body":""}'
+          POST_MERGE_LINKED_ISSUES_JSON='[]'
 
           pr_state=""
           pr_merged="false"
@@ -256,6 +260,8 @@ jobs:
           pr_labels=""
           pr_additions=""
           pr_deletions=""
+          pr_title_cached="${PR_TITLE:-}"
+          pr_body_cached="${PR_BODY:-}"
           if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
             : # fall through to existing PR-API fetch below
           elif [ "${FORCE_CLAUDE_BRANCH_REVIEW:-false}" = "true" ] && [ -n "${HEAD_REF_OVERRIDE:-}" ]; then
@@ -279,9 +285,21 @@ jobs:
             # additions/deletions totals (deterministic-skip size check).
             # The /pulls/{n} endpoint already exposes these; using them
             # avoids a paginated /files call on the small-diff branch.
-            if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.state, (.merged // false), (.head.ref // ""), ((.labels // []) | map(.name) | join(",")), (.additions // 0), (.deletions // 0)] | @tsv')"; then
-              IFS=$'\t' read -r pr_state pr_merged pr_head_ref pr_labels pr_additions pr_deletions <<< "${_pr_gate}" || true
-              pr_merged="$(printf '%s' "${pr_merged:-false}" | tr '[:upper:]' '[:lower:]')"
+            if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
+              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), title: (.title // ""), body: (.body // "")}' \
+              2>/dev/null)"; then
+              pr_state="$(printf '%s' "${_pr_gate}" | jq -r '.state // ""' 2>/dev/null || echo "")"
+              pr_merged="$(printf '%s' "${_pr_gate}" | jq -r 'if (.merged // false) then "true" else "false" end' 2>/dev/null || echo "false")"
+              pr_head_ref="$(printf '%s' "${_pr_gate}" | jq -r '.head_ref // ""' 2>/dev/null || echo "")"
+              pr_labels="$(printf '%s' "${_pr_gate}" | jq -r '(.labels // []) | join(",")' 2>/dev/null || echo "")"
+              pr_additions="$(printf '%s' "${_pr_gate}" | jq -r '.additions // 0' 2>/dev/null || echo "")"
+              pr_deletions="$(printf '%s' "${_pr_gate}" | jq -r '.deletions // 0' 2>/dev/null || echo "")"
+              if [ -z "$(printf '%s' "${pr_title_cached}" | tr -d '[:space:]')" ]; then
+                pr_title_cached="$(printf '%s' "${_pr_gate}" | jq -r '.title // ""' 2>/dev/null || echo "")"
+              fi
+              if [ -z "$(printf '%s' "${pr_body_cached}" | tr -d '[:space:]')" ]; then
+                pr_body_cached="$(printf '%s' "${_pr_gate}" | jq -r '.body // ""' 2>/dev/null || echo "")"
+              fi
             fi
           fi
 
@@ -301,6 +319,25 @@ jobs:
           elif printf "%s" "${PR_TITLE} ${PR_BODY}" | grep -Fq "[skip ai]"; then
             SHOULD_RUN="false"
             SKIP_REASON="skip_ai_marker"
+          fi
+
+          # post-merge-validate-dispatch runs in a separate job and cannot
+          # read the codex-agent runtime files. Hand off compact caches via
+          # gate outputs so the merged-PR path can reuse the already fetched
+          # PR text and linked-issue labels before any live fallback.
+          if [ "${POST_MERGE_DISPATCH}" = "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+            POST_MERGE_PR_TEXT_JSON="$(jq -cn --arg title "${pr_title_cached}" --arg body "${pr_body_cached}" '{title: $title, body: $body}')"
+            if _post_merge_linked="$(gh api graphql \
+              -f owner="${REPOSITORY%/*}" \
+              -f name="${REPOSITORY#*/}" \
+              -F number="${PR_NUMBER}" \
+              -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number labels(first: 100) { nodes { name } } } } } } }' \
+              --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // [] | map({number: .number, labels: ((.labels.nodes // []) | map(.name))})' \
+              2>/dev/null)"; then
+              POST_MERGE_LINKED_ISSUES_JSON="$(printf '%s' "${_post_merge_linked}" | jq -c '.' 2>/dev/null || echo '[]')"
+            else
+              echo "::warning::Failed to cache linked issue labels for merged PR #${PR_NUMBER}; post-merge validation will fall back to live lookups."
+            fi
           fi
 
           # No-PR claude-branch reviewer-comment mode:
@@ -740,6 +777,8 @@ jobs:
           # empty value as "unknown" and fall through (the empty string
           # never matches any suppressor regex, so auto-merge runs as before).
           echo "head_ref=${pr_head_ref}" >> "${GITHUB_OUTPUT}"
+          printf 'post_merge_pr_text_json=%s\n' "${POST_MERGE_PR_TEXT_JSON}" >> "${GITHUB_OUTPUT}"
+          printf 'post_merge_linked_issues_json=%s\n' "${POST_MERGE_LINKED_ISSUES_JSON}" >> "${GITHUB_OUTPUT}"
 
   post-merge-validate-dispatch:
     needs: gate
@@ -755,6 +794,8 @@ jobs:
       PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
       VALIDATE_WORKFLOW_NAME: ${{ vars.VALIDATE_WORKFLOW_NAME || 'ai-validate.yml' }}
       WORKFLOW_SUPPORT_REF: ${{ github.repository == 'shubhodeep1/coding-workflows' && github.sha || 'stable' }}
+      POST_MERGE_PR_TEXT_JSON: ${{ needs.gate.outputs.post_merge_pr_text_json }}
+      POST_MERGE_LINKED_ISSUES_JSON: ${{ needs.gate.outputs.post_merge_linked_issues_json }}
     steps:
       - name: Checkout workflow support source
         continue-on-error: true
@@ -779,15 +820,22 @@ jobs:
             exit 0
           fi
 
-          issue_nodes_json="$(gh api graphql \
-            -f owner="${REPOSITORY%/*}" \
-            -f name="${REPOSITORY#*/}" \
-            -F number="${PR_NUMBER}" \
-            -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number labels(first: 100) { nodes { name } } } } } } }' \
-            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // [] | map({number: .number, labels: ((.labels.nodes // []) | map(.name))})' || true)"
+          issue_nodes_json="$(printf '%s' "${POST_MERGE_LINKED_ISSUES_JSON:-[]}" | jq -c 'if type == "array" then [.[] | select((.number | tonumber?) != null) | {number: (.number | tonumber), labels: (if (.labels | type) == "array" then .labels else null end)}] else [] end' 2>/dev/null || echo '[]')"
+
+          if [ "${issue_nodes_json}" = "[]" ]; then
+            issue_nodes_json="$(gh api graphql \
+              -f owner="${REPOSITORY%/*}" \
+              -f name="${REPOSITORY#*/}" \
+              -F number="${PR_NUMBER}" \
+              -f query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number labels(first: 100) { nodes { name } } } } } } }' \
+              --jq '.data.repository.pullRequest.closingIssuesReferences.nodes // [] | map({number: .number, labels: ((.labels.nodes // []) | map(.name))})' || true)"
+          fi
 
           if [ -z "${issue_nodes_json}" ] || [ "${issue_nodes_json}" = "[]" ]; then
-            pr_data="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+            pr_data="$(printf '%s' "${POST_MERGE_PR_TEXT_JSON:-{}}" | jq -r 'if type == "object" then [(.title // ""), (.body // "")] | join(" ") else "" end' 2>/dev/null || echo "")"
+            if [ -z "$(printf '%s' "${pr_data}" | tr -d '[:space:]')" ]; then
+              pr_data="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
+            fi
             issue_numbers=""
             if type extract_repo_scoped_issue_refs_from_text >/dev/null 2>&1; then
               issue_numbers="$(extract_repo_scoped_issue_refs_from_text "${REPOSITORY}" "${pr_data}" || true)"

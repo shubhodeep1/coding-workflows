@@ -19,6 +19,10 @@ SHARED_HELPER_PREFIX = 'extract_repo_scoped_issue_refs_from_text "${REPOSITORY}"
 BROAD_ISSUE_MENTION = 'issue[[:space:]]*#[[:space:]]*[0-9]+'
 BROAD_ISSUES_PATH = '(^|[^[:alnum:]_/-])issues/[0-9]+'
 COLON_FALLBACK = '(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+'
+POST_MERGE_PR_OUTPUT = 'post_merge_pr_text_json: ${{ steps.evaluate.outputs.post_merge_pr_text_json }}'
+POST_MERGE_LINKED_OUTPUT = 'post_merge_linked_issues_json: ${{ steps.evaluate.outputs.post_merge_linked_issues_json }}'
+POST_MERGE_PR_ENV = 'POST_MERGE_PR_TEXT_JSON: ${{ needs.gate.outputs.post_merge_pr_text_json }}'
+POST_MERGE_LINKED_ENV = 'POST_MERGE_LINKED_ISSUES_JSON: ${{ needs.gate.outputs.post_merge_linked_issues_json }}'
 
 
 def _workflow_text() -> str:
@@ -39,6 +43,10 @@ def test_target_steps_use_shared_helper_and_remove_inline_phase_array() -> None:
 	text = _workflow_text()
 
 	assert "_AI_PHASE_LABELS='[\"ai:done\"" not in text
+	assert POST_MERGE_PR_OUTPUT in text
+	assert POST_MERGE_LINKED_OUTPUT in text
+	assert POST_MERGE_PR_ENV in text
+	assert POST_MERGE_LINKED_ENV in text
 	assert 'set_issue_phase_label_resilient "${issue_number}" "ai:ready-to-merge" "${REPOSITORY}"' in text
 	assert text.count('set_issue_phase_label_resilient "${issue_number}" "ai:review-blocked" "${REPOSITORY}"') >= 2
 
@@ -55,10 +63,18 @@ def test_target_steps_use_shared_helper_and_remove_inline_phase_array() -> None:
 		assert COLON_FALLBACK not in block, f"{step_name}: colon-form closing fallback must stay disabled"
 
 	validate_block = _step_block(text, "Dispatch standalone validate for orchestrator short-circuit issues")
+	assert "POST_MERGE_PR_TEXT_JSON" in validate_block
+	assert "POST_MERGE_LINKED_ISSUES_JSON" in validate_block
 	assert SHARED_HELPER_PREFIX in validate_block, "post-merge validate dispatch must use the shared strict fallback helper"
 	assert BROAD_ISSUE_MENTION not in validate_block
 	assert BROAD_ISSUES_PATH not in validate_block
 	assert COLON_FALLBACK not in validate_block
+	assert validate_block.find("POST_MERGE_LINKED_ISSUES_JSON") < validate_block.find("gh api graphql"), (
+		"post-merge validate dispatch must consume cached linked-issue labels before the live GraphQL fallback"
+	)
+	assert validate_block.find("POST_MERGE_PR_TEXT_JSON") < validate_block.find('gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"'), (
+		"post-merge validate dispatch must consume cached PR title/body before the live /pulls fallback"
+	)
 
 
 def test_pr_meta_fallback_precedes_pull_fetch_in_target_steps() -> None:

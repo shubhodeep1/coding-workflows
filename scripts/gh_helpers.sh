@@ -1464,60 +1464,35 @@ PY
 }
 
 # ---------------------------------------------------------------
-# extract_repo_scoped_issue_refs_from_text — strict linked-issue
-# fallback parser shared by review-path workflows/scripts.
+# extract_repo_scoped_issue_refs_from_text <owner/repo> <text>
 #
-# Inputs:
-#   $1 repository  — owner/repo (required)
-#   $2 text        — free-form text to scan (required; may be empty)
+# Print deduplicated issue numbers referenced by strict current-repo
+# closing keywords or full repo-scoped issue URLs/paths.
 #
-# Output:
-#   Deduplicated issue numbers, one per line, matching ONLY the
-#   strict fallback contract shared with issue_pr_status.yml:
-#   - current-repo issue URL/path references
-#   - closing-keyword refs (`close/fix/resolve` inflections + #N)
+# Accepted:
+#   Fixes #12
+#   closes #34
+#   owner/repo/issues/56
+#   https://github.com/owner/repo/issues/78
 #
-# Explicit non-matches:
-#   - bare prose `issue #N`
-#   - bare prose `issues/N`
-#   - colon forms like `Closes: #N`
-#
-# Fail-open: invalid repository input or missing python3 emits no
-# matches and returns success so callers can proceed without a hard
-# failure.
+# Rejected:
+#   issue #12
+#   issues/12
+#   Closes: #12
 # ---------------------------------------------------------------
 extract_repo_scoped_issue_refs_from_text()
 {
-	local repository="${1:-}"
-	local text="${2:-}"
+	local _repository="${1:-}"
+	local _text="${2:-}"
+	local _repository_escaped
 
-	if [ -z "${repository}" ] || ! [[ "${repository}" =~ ^[^/]+/[^/]+$ ]]; then
+	if [ -z "${_repository}" ] || [ -z "${_text}" ]; then
 		return 0
 	fi
-	if ! command -v python3 >/dev/null 2>&1; then
-		return 0
-	fi
 
-	PYTHONDONTWRITEBYTECODE=1 python3 - "${repository}" "${text}" <<'PY'
-import re
-import sys
-
-repository = sys.argv[1]
-text = sys.argv[2]
-
-repo_re = re.escape(repository)
-patterns = [
-	rf"(?<![A-Za-z0-9_/-])(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+#\s*(\d+)\b",
-	rf"\bhttps?://github\.com/{repo_re}/issues/(\d+)\b",
-	rf"\b{repo_re}/issues/(\d+)\b",
-]
-
-numbers = set()
-for pattern in patterns:
-	for match in re.finditer(pattern, text, flags=re.IGNORECASE):
-		numbers.add(int(match.group(1)))
-
-for number in sorted(numbers):
-	print(number)
-PY
+	_repository_escaped="${_repository//./\\.}"
+	printf '%s' "${_text}" \
+		| grep -oiE "(github\\.com/${_repository_escaped}/issues/[0-9]+|${_repository_escaped}/issues/[0-9]+|(^|[^[:alnum:]_/-])(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]+#[[:space:]]*[0-9]+)" \
+		| grep -oE '[0-9]+$' \
+		| sort -un || true
 }
