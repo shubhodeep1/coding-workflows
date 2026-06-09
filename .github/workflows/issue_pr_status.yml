@@ -280,9 +280,6 @@ jobs:
             # transitions on orchestrator-tracking issues mentioned in PR
             # bodies (see issue #1469).
             PR_DATA="${PR_TITLE:-} ${PR_BODY:-}"
-            if [ -z "$(printf '%s' "${PR_DATA}" | tr -d '[:space:]')" ]; then
-              PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null || echo "")"
-            fi
             REPOSITORY_ESCAPED="${REPOSITORY//./\\.}"
             ISSUE_NUMBERS="$(echo "${PR_DATA}" | grep -oiE "(github\\.com/${REPOSITORY_ESCAPED}/issues/[0-9]+|${REPOSITORY_ESCAPED}/issues/[0-9]+|(^|[^[:alnum:]_/-])(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]+#[[:space:]]*[0-9]+)" | grep -oE '[0-9]+$' | sort -un || true)"
             if [ -z "${ISSUE_NUMBERS}" ]; then
