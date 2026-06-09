@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_collect_pr_metadata.sh:176-178 | severity=medium | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The fallback block no longer gracefully recovers to the older `_pr_body_for_fallback` path when `LINKED_ISSUE_FALLBACK_NUMBERS_JSON` is empty, so PRs can lose linked-issue context.\n  WHY: Without that fallback, PRs whose GraphQL references are empty and whose body only contains strict refs can skip downstream label propagation and validate dispatch context.\n- scripts/gh_helpers.sh:1508-1512 | severity=medium | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The `extract_repo_scoped_issue_refs_from_text` helper misses the scheme-less `github.com/owner/repo/issues/N` form.\n  WHY: Valid repo-scoped references in that form can be dropped from `LINKED_ISSUE_FALLBACK_NUMBERS_JSON`, causing downstream linked-issue propagation to miss actionable issues.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"make `review_autofix.yml` and `scripts/review_rb_judge.sh` use the same strict fallback semantics already documented in `issue_pr_status.yml`; prefer one shared parser / one shared source of parsed numbers\"\n  expected_change_site: scripts/gh_helpers.sh\n  confidence=[5]\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  EVIDENCE: `scripts/gh_helpers.sh` line 1508-1512 only matches repo-path / https patterns and misses `github.com/owner/repo/issues/N`; the updated tests assert bare mentions are non-actionable but do not cover the scheme-less URL case, while the updated call sites in `review_autofix.yml` and `scripts/review_rb_judge.sh` depend on the shared helper.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/review_collect_pr_metadata.sh:176-178 | severity=medium | confidence=4\n  PROBLEM: The fallback block now keys off `LINKED_ISSUE_FALLBACK_NUMBERS_JSON`, and if empty, does not gracefully recover to the older `_pr_body_for_fallback` path.\n  WHY: PRs with no GraphQL references and only repo-scoped URLs/titles could lose linked-issue context, making label propagation and validate dispatch less reliable.\n- Requirement: \"make review_autofix.yml and scripts/review_rb_judge.sh use the same strict fallback semantics already documented in issue_pr_status.yml; prefer one shared parser\"\n  Expected change site: scripts/gh_helpers.sh (the extraction logic) + all three call sites in review_autofix.yml (post-merge validate dispatch, mark linked issues ready-to-merge, mark linked issues review-blocked) + scripts/review_rb_judge.sh\n  Evidence of absence: Current helper pattern at scripts/gh_helpers.sh line 1508-1512 only matches repo-path pattern `\\b{repo_re}/issues/(\\d+)\\b`, missing the canonical scheme-less form `github.com/owner/repo/issues/N`, so legitimate closing references could be mis-parsed and dropped, causing label propagation gaps.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/gh_helpers.sh:1508-1512 | severity=medium | confidence=5\n  PROBLEM: The `extract_repo_scoped_issue_refs_from_text` helper only matches `https?://github.com/...` URLs and bare `owner/repo/issues/N`; it misses the scheme-less `github.com/owner/repo/issues/N` form.\n  WHY: On PRs that use the scheme-less form, `LINKED_ISSUE_FALLBACK_NUMBERS_JSON` stays empty for that reference, so downstream label-propagation steps and judge phase transitions can skip a genuinely linked issue.\n- Requirement: \"make `review_autofix.yml` and `scripts/review_rb_judge.sh` use the same strict fallback semantics already documented in `issue_pr_status.yml`; prefer one shared parser / one shared source of parsed numbers\"\n  Expected change site: `scripts/gh_helpers.sh` (the shared helper) + all call sites that were updated to call it (the three blocks in `review_autofix.yml` + the block in `scripts/review_rb_judge.sh`)\n  Evidence of absence: The helper's patterns are a strict subset of `issue_pr_status.yml`'s accepted forms (missing scheme-less `github.com/...`). The test harness was updated to assert non-actionable bare mentions but does not yet cover the scheme-less URL case that was flagged by both Copilot and the cross-pollination summary.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "cf33384d1147f6bbbeb0dbc57be34146f70c26a8b59450e84045f962254c921f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3255,
+    "run_id": "27237778158",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27237778158",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260609230532_7d6681baa6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3255,
+    "run_id": "27237778158"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-09T23:05:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
