@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: remove the duplicated inline wrapper bodies; reuse one checked-in helper or one shared source block that both jobs can consume after checkout; preserve the current backoff / error-output semantics; there is only one maintained implementation of the gh_api_safe() behavior for this workflow.\n  expected_change_site: .github/workflows/comprehensive-test-and-release.yml (both jobs) + scripts/comprehensive_test_and_release_gh_api.sh\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: PR DIFF and LAST RUN DIFF show the inline gh_api_safe() + list_dispatch_runs() bodies were removed from both jobs, replaced by `. ./scripts/comprehensive_test_and_release_gh_api.sh` sourcing, and the helper now contains the canonical implementation with trap cleanup, numeric sanitization of RATE_LIMIT_BACKOFF, and identical semantics. No residual duplication remains.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: remove the duplicated inline wrapper bodies; reuse one checked-in helper or one shared source block that both jobs can consume after checkout; preserve the current backoff / error-output semantics; there is only one maintained implementation of the gh_api_safe() behavior for this workflow.\n  Expected change site: .github/workflows/comprehensive-test-and-release.yml (both jobs) + scripts/comprehensive_test_and_release_gh_api.sh\n  Evidence of absence: PR DIFF and LAST RUN DIFF show the inline gh_api_safe() + list_dispatch_runs() bodies were removed from both jobs, replaced by `. ./scripts/comprehensive_test_and_release_gh_api.sh` sourcing, and the helper now contains the canonical implementation with trap cleanup, numeric sanitization of RATE_LIMIT_BACKOFF, and identical semantics. No residual duplication remains.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "79b577d6b7b7bd4ca0a01ac89344b5cf34f0de67b0bdb65b64816f562e299e9b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3251,
+    "run_id": "27236561729",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27236561729",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260609215840_e7de69a7e9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3251,
+    "run_id": "27236561729"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-09T21:58:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
