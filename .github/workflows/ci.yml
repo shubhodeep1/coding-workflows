@@ -32,12 +32,17 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+          import ast
           from pathlib import Path
 
-          tests = []
-          for line in Path("tests/test_orchestrate_poll_process.py").read_text().splitlines():
-              if line.startswith("def test_"):
-                  tests.append(line.split("def ", 1)[1].split("(", 1)[0])
+          module = ast.parse(
+              Path("tests/test_orchestrate_poll_process.py").read_text(encoding="utf-8")
+          )
+          tests = [
+              node.name
+              for node in module.body
+              if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")
+          ]
 
           fast_fail = [name for name in tests if name.startswith("test_implementation_failed_")]
           if not fast_fail:
