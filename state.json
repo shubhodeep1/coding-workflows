@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-06-09T20:43:49Z",
+  "tick_at": "2026-06-09T20:47:44Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -19,9 +19,9 @@
       "integration_ahead_by": "0",
       "issue_counts": {
         "closed": 0,
-        "done": 3,
+        "done": 4,
         "implementation_failed": 0,
-        "in_progress": 3,
+        "in_progress": 2,
         "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
