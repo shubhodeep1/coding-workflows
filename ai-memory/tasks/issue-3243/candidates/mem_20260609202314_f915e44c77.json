@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Apply the validated safe subset of workflow-optimization-2026-06-08-2\",\"issues\":[{\"id\":\"harden-validation-repo-check-overrides\",\"title\":\"Harden `scripts/run_validation_repo_checks.sh` override execution (SEC-001)\",\"priority\":1},{\"id\":\"tighten-review-linked-issue-fallbacks\",\"title\":\"Unify review-path linked-issue fallback parsing with `issue_pr_status` semantics (BUG-001)\",\"priority\":2},{\"id\":\"ci-fast-fail-poller-regression\",\"title\":\"Fail fast on the hot orchestrate-poll regression subset in CI\",\"priority\":1},{\"id\":\"stable-async-audit-and-early-poller-guard\",\"title\":\"Make `test-and-mark-stable` fail earlier on the poller regression and stop blocking on non-blocking audit waits\",\"priority\":3},{\"id\":\"consolidate-review-metadata-fetches\",\"title\":\"Consolidate safe duplicate review metadata fetches in `review_autofix` (MERGE-001/MERGE-002/DEAD-API-001)\",\"priority\":4},{\"id\":\"trim-issue-pr-status-fallback-pr-fetch\",\"title\":\"Remove the redundant PR refetch from `issue_pr_status.yml` (REUSE-001)\",\"priority\":5},{\"id\":\"dedupe-comprehensive-release-gh-api-wrapper\",\"title\":\"Deduplicate the duplicated `gh_api_safe()` wrapper in `comprehensive-test-and-release.yml` (DUP-001)\",\"priority\":7},{\"id\":\"finalize-workflow-optimization-2026-06-08-2\",\"title\":\"Finalize the 2026-06-08-2 recommendation processing report and remove the source doc\",\"priority\":10}],\"dependency_edges\":[{\"from\":\"tighten-review-linked-issue-fallbacks\",\"to\":\"consolidate-review-metadata-fetches\"},{\"from\":\"harden-validation-repo-check-overrides\",\"to\":\"finalize-workflow-optimization-2026-06-08-2\"},{\"from\":\"tighten-review-linked-issue-fallbacks\",\"to\":\"finalize-workflow-optimization-2026-06-08-2\"},{\"from\":\"ci-fast-fail-poller-regression\",\"to\":\"finalize-workflow-optimization-2026-06-08-2\"},{\"from\":\"stable-async-audit-and-early-poller-guard\",\"to\":\"finalize-workflow-optimization-2026-06-08-2\"},{\"from\":\"consolidate-review-metadata-fetches\",\"to\":\"finalize-workflow-optimization-2026-06-08-2\"},{\"from\":\"trim-issue-pr-status-fallback-pr-fetch\",\"to\":\"finalize-workflow-optimization-2026-06-08-2\"},{\"from\":\"dedupe-comprehensive-release-gh-api-wrapper\",\"to\":\"finalize-workflow-optimization-2026-06-08-2\"}]}",
+  "fingerprint": "2c2ce80083f3f73df9e233f7e990804f9a6de5eaec90addbdd1fea3d04094349",
+  "lineage": {
+    "issue_number": 3243,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27232463438",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27232463438",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260609202314_f915e44c77",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3243,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27232463438"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Apply the validated safe subset of workflow-optimization-2026-06-08-2' into 8 issues (tracking #3243)",
+  "timestamps": {
+    "created_at": "2026-06-09T20:23:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
