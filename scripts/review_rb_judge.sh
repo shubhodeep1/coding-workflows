@@ -725,6 +725,10 @@ ISSUE_NUMBERS="$(gh_retry gh api graphql \
   --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].number' || true)"
 
 if [ -z "${ISSUE_NUMBERS}" ]; then
+  ISSUE_NUMBERS="$(printf '%s' "${LINKED_ISSUE_FALLBACK_NUMBERS_JSON:-[]}" | jq -r '.[]' 2>/dev/null || true)"
+fi
+
+if [ -z "${ISSUE_NUMBERS}" ]; then
   PR_DATA=""
   if [ -n "${_pr_meta:-}" ] && printf '%s\n' "${_pr_meta}" | jq -e 'type == "object" and ((has("title") and (.title | type == "string")) or (has("body") and ((.body == null) or (.body | type == "string"))))' >/dev/null 2>&1; then
     PR_DATA="$(printf '%s\n' "${_pr_meta}" | jq -r '(.title // "") + " " + (.body // "")' 2>/dev/null || echo "")"
@@ -732,8 +736,11 @@ if [ -z "${ISSUE_NUMBERS}" ]; then
   if [ -z "${PR_DATA}" ]; then
     PR_DATA="$(_safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' || echo "")"
   fi
-  REPOSITORY_ESCAPED="${REPOSITORY//./\\.}"
-  ISSUE_NUMBERS="$(echo "${PR_DATA}" | grep -oiE "(github\\.com/${REPOSITORY_ESCAPED}/issues/[0-9]+|${REPOSITORY_ESCAPED}/issues/[0-9]+|(^|[^[:alnum:]_/-])issues/[0-9]+|issue[[:space:]]*#[[:space:]]*[0-9]+|(closes|fixes|resolves)[[:space:]]*:?[[:space:]]*#[[:space:]]*[0-9]+)" | grep -oE '[0-9]+$' | sort -un || true)"
+  if type extract_repo_scoped_issue_refs_from_text >/dev/null 2>&1; then
+    ISSUE_NUMBERS="$(extract_repo_scoped_issue_refs_from_text "${REPOSITORY}" "${PR_DATA}" || true)"
+  else
+    ISSUE_NUMBERS=""
+  fi
 fi
 unset _pr_meta
 
