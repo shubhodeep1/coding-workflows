@@ -28,20 +28,37 @@ jobs:
           set -euo pipefail
           python3 -m pip install yamllint coverage pyyaml jsonschema jinja2 ruff
 
+      - name: Derive orchestrate poll test subsets
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+          from pathlib import Path
+
+          tests = []
+          for line in Path("tests/test_orchestrate_poll_process.py").read_text().splitlines():
+              if line.startswith("def test_"):
+                  tests.append(line.split("def ", 1)[1].split("(", 1)[0])
+
+          fast_fail = [name for name in tests if name.startswith("test_implementation_failed_")]
+          if not fast_fail:
+              raise SystemExit("No implementation-failed orchestrate-poll regression tests found")
+
+          fast_fail_set = set(fast_fail)
+          remaining = [name for name in tests if name not in fast_fail_set]
+          if not remaining:
+              raise SystemExit(
+                  "Fast-fail selection unexpectedly captured the entire orchestrate-poll test module"
+              )
+
+          Path("/tmp/orchestrate_poll_fast_fail_tests.txt").write_text("\n".join(fast_fail) + "\n")
+          Path("/tmp/orchestrate_poll_remaining_tests.txt").write_text("\n".join(remaining) + "\n")
+          PY
+
       - name: Orchestrate poll implementation-failed regression fast-fail
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py \
-            test_implementation_failed_post_codex_open_blockers_defers_reissue_and_persists_dependency_metadata \
-            test_implementation_failed_post_codex_closed_blockers_reissues_with_post_codex_guidance_and_uses_depends_on \
-            test_implementation_failed_noop_path_keeps_existing_guidance_without_post_codex_context \
-            test_implementation_failed_post_codex_unknown_blocker_state_defers_reissue \
-            test_implementation_failed_comment_lookup_failure_defers_reissue \
-            test_implementation_failed_reissue_keeps_orchestrator_labels_and_updates_mapping \
-            test_implementation_failed_reissue_hits_cap_and_closes_without_creating_new_issue \
-            test_implementation_failed_reissue_preserves_dependency_gates_and_pending_defs \
-            test_implementation_failed_reissue_persists_fixup_blocker_metadata_from_comment \
-            test_implementation_failed_reissue_without_blocker_metadata_keeps_state_compatible
+          mapfile -t selected_tests < /tmp/orchestrate_poll_fast_fail_tests.txt
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py "${selected_tests[@]}"
 
       - name: YAML lint
         run: |
@@ -600,7 +617,10 @@ jobs:
       - name: Orchestrate poll process unit tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py
+          # The fast-fail step already covers the implementation-failed hot path;
+          # keep the rest of this module in CI without re-running that subset.
+          mapfile -t remaining_tests < /tmp/orchestrate_poll_remaining_tests.txt
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py "${remaining_tests[@]}"
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_noop_suspicious_recovery.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_state_snapshot.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_run_substate_ledger.py
