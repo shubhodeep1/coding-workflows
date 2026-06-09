@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The commit message and code changes raise the AI_MEMORY_PUSH_RETRIES default from 5 to 8 across the codebase. The `ai-memory/README.md` file documents this env var to operators.\n  expected_change_site: ai-memory/README.md line 85\n  confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: `ai-memory/README.md:85` still reads `AI_MEMORY_PUSH_RETRIES (default 5)`. Every other reference to the default was updated \u2014 `scripts/ai_memory.py:112` uses `\"8\"`, `scripts/collect_workflow_logs.py:1309` uses `\"8\"`, and new tests lock in the >=8 expectation. The README is the sole remaining reference to the old default of 5 and will mislead operators who read this doc to understand the retry behavior.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- Requirement: The commit message and code changes raise the AI_MEMORY_PUSH_RETRIES default from 5 to 8 across the codebase. The `ai-memory/README.md` file documents this env var to operators.\n  Expected change site: ai-memory/README.md line 85\n  Evidence of absence: `ai-memory/README.md:85` still reads `AI_MEMORY_PUSH_RETRIES (default 5)`. Every other reference to the default was updated \u2014 `scripts/ai_memory.py:112` uses `\"8\"`, `scripts/collect_workflow_logs.py:1309` uses `\"8\"`, and new tests lock in the >=8 expectation. The README is the sole remaining reference to the old default of 5 and will mislead operators who read this doc to understand the retry behavior.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "e4c84551b1d5d57103a3c7e50538c29010293b5ed10f7e2d2fc4533e0e21cc88",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27234893659",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27234893659",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260609210431_e430a4a158",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27234893659"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-09T21:04:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
