@@ -3540,16 +3540,23 @@ jobs:
             exit 0
           fi
           echo "Registered run #${NEW_ID}"
-          JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${NEW_ID}" --jq '{status, conclusion}' 2>/dev/null || true)
-          STATUS=$(printf '%s' "${JSON:-{}}" | jq -r '.status // "unknown"' 2>/dev/null || echo "unknown")
-          CONCLUSION=$(printf '%s' "${JSON:-{}}" | jq -r '.conclusion // ""' 2>/dev/null || echo "")
+          if ! JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${NEW_ID}" --jq '{status, conclusion}' 2>/dev/null); then
+            JSON='{}'
+            echo "::warning::workflow-log-analysis snapshot query failed for run #${NEW_ID}; child run context unavailable"
+          fi
+          STATUS=$(printf '%s' "${JSON}" | jq -r '.status // "unknown"' 2>/dev/null || echo "unknown")
+          CONCLUSION=$(printf '%s' "${JSON}" | jq -r '.conclusion // ""' 2>/dev/null || echo "")
           if [ -n "${CONCLUSION}" ]; then
             echo "  snapshot: status=${STATUS} conclusion=${CONCLUSION}"
           else
             echo "  snapshot: status=${STATUS}"
           fi
           echo "run_id=${NEW_ID}" >> "$GITHUB_OUTPUT"
-          echo "workflow_conclusion=success" >> "$GITHUB_OUTPUT"
+          if [ "${STATUS}" = "completed" ] && [ -n "${CONCLUSION}" ]; then
+            echo "workflow_conclusion=${CONCLUSION}" >> "$GITHUB_OUTPUT"
+          else
+            echo "workflow_conclusion=success" >> "$GITHUB_OUTPUT"
+          fi
           echo "workflow_snapshot_status=${STATUS}" >> "$GITHUB_OUTPUT"
           echo "workflow_snapshot_conclusion=${CONCLUSION}" >> "$GITHUB_OUTPUT"
           if [ "${STATUS}" = "completed" ] && [ -n "${CONCLUSION}" ] && [ "${CONCLUSION}" != "success" ]; then
