@@ -1495,7 +1495,7 @@ extract_repo_scoped_issue_refs_from_text()
 
 	_repository_escaped="$(printf '%s' "${_repository}" | sed 's/[][\\.^$*+?(){}|]/\\&/g')"
 	printf '%s\n' "${_text}" \
-		| grep -oiE "(\\bgithub\\.com/${_repository_escaped}/issues/[0-9]+\\b|\\b${_repository_escaped}/issues/[0-9]+\\b|(^|[^[:alnum:]_/-])(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]+#[[:space:]]*[0-9]+\\b)" \
-		| grep -oE '[0-9]+$' \
+		| grep -oiE "((^|[^[:alnum:]_])github\\.com/${_repository_escaped}/issues/[0-9]+([^[:alnum:]_]|$)|(^|[^[:alnum:]_])${_repository_escaped}/issues/[0-9]+([^[:alnum:]_]|$)|(^|[^[:alnum:]_/-])(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]+#[[:space:]]*[0-9]+([^[:alnum:]_]|$))" \
+		| sed -nE 's/.*[^0-9]([0-9]+)[^0-9]*$/\1/p' \
 		| sort -un || true
 }

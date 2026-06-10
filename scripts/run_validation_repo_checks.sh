@@ -98,11 +98,7 @@ for check_cmd in "${CHECK_COMMANDS[@]}"; do
 	echo "# repo-check start: ${check_cmd}"
 	output_file="$(mktemp)" || { echo "# repo-check error: mktemp failed" >&2; exit 1; }
 	set +e
-	if [ "$#" -gt 0 ]; then
-		(cd "${ROOT_DIR}" && run_override_command "${check_cmd}") >"${output_file}" 2>&1
-	else
-		(cd "${ROOT_DIR}" && timeout "${CHECK_TIMEOUT_SECS}" /bin/sh -c "${check_cmd}") >"${output_file}" 2>&1
-	fi
+	(cd "${ROOT_DIR}" && run_override_command "${check_cmd}") >"${output_file}" 2>&1
 	check_rc=$?
 	set -e
 	if [ "${check_rc}" -ne 0 ]; then

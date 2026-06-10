@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -189,6 +190,30 @@ def test_run_validation_repo_checks_override_preserves_env_prefix_assignments() 
 	assert "hello" in result.stdout
 
 
+def test_run_validation_repo_checks_default_commands_do_not_reparse_shell_metacharacters() -> None:
+	with tempfile.TemporaryDirectory() as tmpdir:
+		marker_path = Path(tmpdir) / "default-marker"
+		temp_script = Path(tmpdir) / "run_validation_repo_checks.sh"
+		script_text = RUN_VALIDATION_REPO_CHECKS.read_text(encoding="utf-8")
+		script_text = re.sub(
+			r'CHECK_COMMANDS=\(\n(?:\t".*"\n)+\)',
+			f'CHECK_COMMANDS=(\n\t"python3 -c \'print(456)\' ; touch {marker_path}"\n)',
+			script_text,
+			count=1,
+		)
+		temp_script.write_text(script_text, encoding="utf-8")
+		result = subprocess.run(
+			["bash", str(temp_script)],
+			cwd=REPO_ROOT,
+			capture_output=True,
+			text=True,
+			timeout=60,
+		)
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert "456" in result.stdout
+		assert not marker_path.exists()
+
+
 def main() -> int:
 	test_validate_workflow_bootstrap_uses_shared_helper_and_lists_template_assets()
 	test_stage_workflow_support_helper_runs_overlay_loader_for_validate()
@@ -200,6 +225,7 @@ def main() -> int:
 	test_run_validation_repo_checks_override_does_not_reparse_shell_metacharacters()
 	test_run_validation_repo_checks_override_preserves_quoted_arguments()
 	test_run_validation_repo_checks_override_preserves_env_prefix_assignments()
+	test_run_validation_repo_checks_default_commands_do_not_reparse_shell_metacharacters()
 	return 0
 
 

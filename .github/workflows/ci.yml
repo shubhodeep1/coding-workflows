@@ -43,6 +43,7 @@ jobs:
               for node in module.body
               if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")
           ]
+          tests.sort()
 
           fast_fail = [name for name in tests if name.startswith("test_implementation_failed_")]
           if not fast_fail:
