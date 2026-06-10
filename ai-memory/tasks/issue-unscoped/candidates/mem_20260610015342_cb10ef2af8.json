@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:251-258,324 | severity=high | confidence=[5]\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `POST_MERGE_DISPATCH` is initialized to `\"false\"` and, per the reviewer report, never gets flipped to `\"true\"` before the cache-population check, so the merged-PR cache path never runs.\n  WHY: This would make the post-merge metadata cache dead code and prevent MERGE-001 from using cached PR metadata; several other reviewers explicitly disputed the claim and said the workflow already sets the flag on merged PRs.\n- .github/workflows/review_autofix.yml:285-302 | severity=low | confidence=[3]\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: The PR metadata fetch now invokes `jq -r` six separate times instead of using a single parse.\n  WHY: Both reviewers describe this as measurable fork/exec overhead on the gate path, but not a functional failure.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"late ready-to-merge / review-blocked steps still fall back to extra `/pulls/{PR_NUMBER}` reads even though `PR_META_FILE` was already collected earlier\" (MERGE-002)\n  expected_change_site: .github/workflows/review_autofix.yml \u2014 late ai:ready-to-merge and ai:review-blocked label step blocks (around lines 2130-2145 in the workflow)\n  confidence=[4]\n  flagged_by: [moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  EVIDENCE: The PR diff only touches the gate job (lines ~206-345, ~777-841), scripts/gh_helpers.sh, scripts/review_collect_pr_metadata.sh, and test files. No diff hunk modifies or removes the duplicate late `/pulls` reads referenced in MERGE-002; those paths continue to potentially re-query even though early `PR_META_FILE` exists.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- File: .github/workflows/review_autofix.yml\n  Line or code reference: Lines 251-258 (initialization) and line 324 (cache population check)\n  Problem: The `POST_MERGE_DISPATCH` variable is initialized to `\"false\"` at line 252 but is never set to `\"true\"` based on the fetched `pr_merged` value. The cache population logic at line 324 checks `if [ \"${POST_MERGE_DISPATCH}\" = \"true\" ]`, but since `POST_MERGE_DISPATCH` is never updated from its initial `\"false\"` value, the caching logic is dead code.\n  Why it fails at runtime: When a PR is merged, the gate job should populate `POST_MERGE_PR_TEXT_JSON` and `POST_MERGE_LINKED_ISSUES_JSON` with already-fetched metadata, but it doesn't because the `POST_MERGE_DISPATCH` check never passes. This forces the post-merge validate dispatch job to always fall back to live API calls instead of using cached values, failing the MERGE-001 acceptance criteria.\n  ISSUE_CONFIDENCE: 5\n- File: .github/workflows/review_autofix.yml\n  Line or code reference: Lines 285-302 (expanded --jq to object + per-field jq -r extractions)\n  Problem: The PR metadata fetch now requests a JSON blob and then invokes `jq -r` six separate times (state, merged, head_ref, labels, additions, deletions, title, body) instead of one `--jq '@tsv'` with a single `IFS read`.\n  Why it fails at runtime: No functional failure, but each extra `jq -r` subshell adds fork/exec overhead on every gate evaluation. Given this runs on every review_autofix trigger, the cumulative cost is measurable compared to the original single-tsv parse.\n  ISSUE_CONFIDENCE: 3\n- Requirement: \"late ready-to-merge / review-blocked steps still fall back to extra `/pulls/{PR_NUMBER}` reads even though `PR_META_FILE` was already collected\"\n  Expected change site: .github/workflows/review_autofix.yml \u2014 late ai:ready-to-merge and ai:review-blocked label step blocks (around lines 2130-2145 in the workflow)\n  Evidence of absence: The PR diff only touches the gate job (lines ~206-345, ~777-841), scripts/gh_helpers.sh, scripts/review_collect_pr_metadata.sh, and test files. No diff hunk modifies the late ready-to-merge or review-blocked label-repair steps that the issue flags under MERGE-002.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: .github/workflows/review_autofix.yml\n  Line or code reference: gate job lines ~285-302 (6 separate `jq -r` extractions after one `gh api --jq '{...}'`)\n  Problem: The metadata fetch now forks/execs `jq` six times per gate evaluation instead of the prior single `--jq '@tsv'` + `IFS read`.\n  Why it fails at runtime: Every `review_autofix` trigger (including deterministic-skip path, claude-branch-review, and post-merge dispatch) incurs measurable extra process overhead on a hot path; the original single-parse contract was tighter and cheaper.\n  ISSUE_CONFIDENCE: 3\n- Requirement: \"make the early metadata collection the single source of truth for linked issue labels and PR title/body on the normal path; late ready-to-merge / review-blocked steps still fall back to extra /pulls/{PR_NUMBER} reads even though PR_META_FILE was already collected earlier\" (MERGE-002)\n  Expected change site: .github/workflows/review_autofix.yml (late `ai:ready-to-merge` and `ai:review-blocked` label-repair steps, approximately lines 2130-2145 area)\n  Evidence of absence: PR DIFF and LAST RUN DIFF only touch the gate job (lines 206-345 / 777-841), `scripts/review_collect_pr_metadata.sh`, `scripts/gh_helpers.sh`, and test files. No hunk modifies or removes the duplicate late `/pulls` reads referenced in MERGE-002; those paths continue to potentially re-query even though early `PR_META_FILE` exists.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "49f2951c8c83dfc0730f4a2637a4c3e28ae1decefe16d403bbaa3d695d65b95c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3258,
+    "run_id": "27246618268",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27246618268",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260610015342_cb10ef2af8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3258,
+    "run_id": "27246618268"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-10T01:53:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
