@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-06-07T16:04:47Z",
+  "tick_at": "2026-06-10T00:24:40Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -15,8 +15,8 @@
   },
   "tracking_issues": [
     {
-      "current_wave": 3,
-      "integration_ahead_by": "5",
+      "current_wave": 2,
+      "integration_ahead_by": "6",
       "issue_counts": {
         "closed": 0,
         "done": 1,
@@ -28,11 +28,11 @@
         "review_blocked": 0,
         "skipped": 0
       },
-      "number": 3185,
+      "number": 3243,
       "project_complete": false,
       "status": "in-progress",
-      "title": "[Orchestrator] Validate and land the safe subset of 2026-05-29..2026-06-06 workflow-optimization recommendations",
-      "total_waves": 4,
+      "title": "[Orchestrator] Apply the validated safe subset of workflow-optimization-2026-06-08-2",
+      "total_waves": 3,
       "wave_complete": false
     }
   ]
