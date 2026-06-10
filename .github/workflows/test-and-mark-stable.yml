@@ -1199,7 +1199,10 @@ jobs:
           # bait landed and is an acceptable bait review; a run that
           # finished before the bait is not. committer.date is the
           # GitHub-assigned push time for the Contents-API commit.
-          BAIT_CREATED_AT=$(jq -r '.commit.committer.date // .commit.author.date // empty' /tmp/bait_resp.json 2>/dev/null || echo "")
+          # Invalid/malformed values are cleared to empty so wait-review
+          # falls back to the strict head_sha pin instead of broadening
+          # leg (b) with a non-timestamp placeholder.
+          BAIT_CREATED_AT=$(jq -r '.commit.committer.date // .commit.author.date // empty | select(type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))' /tmp/bait_resp.json 2>/dev/null || echo "")
           echo "bait_created_at=${BAIT_CREATED_AT}" >> "$GITHUB_OUTPUT"
 
           # Defense-in-depth for "Bug B" (PR #1811): the Contents-API PUT
@@ -1406,16 +1409,18 @@ jobs:
               #
               # Preference order over $m:
               #   1. newest completed non-cancelled run (terminal accept);
-              #   2. newest in_progress run — an actively-running review,
-              #      preferred over a queued/pending sibling so the loop
-              #      watches real progress (the v1.17.0 fix);
-              #   3. newest non-cancelled run (queued/pending fallback);
-              #   4. newest run overall (all cancelled).
+              #   2. oldest in_progress run that already spanned the bait
+              #      timestamp — this is the original long-running PR-open
+              #      review, and it must win over a newer caller workflow
+              #      run that is merely blocked behind it;
+              #   3. newest in_progress run (generic active-run fallback);
+              #   4. newest non-cancelled run (queued/pending fallback);
+              #   5. newest run overall (all cancelled).
               # Tier 1 still precedes 2 so an already-completed success
-              # wins over a newer in-progress sibling (preserves the
-              # run-26989483268 fix).
+              # wins over an active sibling (preserves the run-26989483268
+              # fix).
               REVIEW_RUN=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&per_page=100" \
-                --jq "[.workflow_runs[] | select(.name | test(\"Review|review|autofix|self-healing\"; \"i\")) | select(.head_sha == \"${PIN_SHA}\" or (\"${BAIT_CREATED_AT:-}\" != \"\" and .created_at <= \"${BAIT_CREATED_AT:-}\" and .updated_at >= \"${BAIT_CREATED_AT:-}\"))] as \$m | (\$m | map(select(.status == \"completed\" and .conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | map(select(.status == \"in_progress\")) | sort_by(.created_at) | last) // (\$m | map(select(.conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | sort_by(.created_at) | last)" || echo "")
+                --jq "[.workflow_runs[] | select(.name | test(\"Review|review|autofix|self-healing\"; \"i\")) | select(.head_sha == \"${PIN_SHA}\" or (\"${BAIT_CREATED_AT:-}\" != \"\" and .created_at <= \"${BAIT_CREATED_AT:-}\" and .updated_at >= \"${BAIT_CREATED_AT:-}\"))] as \$m | (\$m | map(select(.status == \"completed\" and .conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | map(select(.status == \"in_progress\" and \"${BAIT_CREATED_AT:-}\" != \"\" and .created_at <= \"${BAIT_CREATED_AT:-}\" and .updated_at >= \"${BAIT_CREATED_AT:-}\")) | sort_by(.created_at) | first) // (\$m | map(select(.status == \"in_progress\")) | sort_by(.created_at) | last) // (\$m | map(select(.conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | sort_by(.created_at) | last)" || echo "")
             else
               REVIEW_RUN=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&event=pull_request&per_page=5" \
                 --jq '[.workflow_runs[] | select(.name | test("Review|review|autofix|self-healing"; "i"))] | sort_by(.created_at) | last' || echo "")
