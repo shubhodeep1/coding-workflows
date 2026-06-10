@@ -1181,6 +1181,27 @@ jobs:
           echo "status=injected" >> "$GITHUB_OUTPUT"
           echo "bait_sha=${BAIT_SHA}" >> "$GITHUB_OUTPUT"
 
+          # Emit the bait commit's timestamp (ISO-8601 UTC, e.g.
+          # 2026-06-10T00:11:43Z) so wait-review (Phase 4) can recognise
+          # the in-flight PR-open review run as a valid bait review.
+          # That run is TRIGGERED on the pre-bait head SHA, so its
+          # run-level head_sha never equals BAIT_SHA and the strict
+          # head_sha pin excludes it — yet because review_autofix.yml
+          # checks out the live branch tip at runtime, a review still
+          # running when the bait lands actually reviews+edits the bait
+          # tree (confirmed by INITIAL_HEAD_SHA=<bait> in its log). The
+          # only thing distinguishing it from the historical
+          # stale-implement-review false match (run 25147636528, which
+          # COMPLETED before the bait) is whether it was still in flight
+          # at bait-injection time. wait-review uses this timestamp as
+          # the lower bound: a run with created_at <= bait_created_at
+          # and updated_at >= bait_created_at was in flight when the
+          # bait landed and is an acceptable bait review; a run that
+          # finished before the bait is not. committer.date is the
+          # GitHub-assigned push time for the Contents-API commit.
+          BAIT_CREATED_AT=$(jq -r '.commit.committer.date // .commit.author.date // empty' /tmp/bait_resp.json 2>/dev/null || echo "")
+          echo "bait_created_at=${BAIT_CREATED_AT}" >> "$GITHUB_OUTPUT"
+
           # Defense-in-depth for "Bug B" (PR #1811): the Contents-API PUT
           # above sometimes succeeds (commit + PR head pointer updated)
           # without GitHub fanning out a `pull_request: synchronize`
@@ -1243,6 +1264,15 @@ jobs:
           # filter so non-bait runs (no bait was injected this run) are
           # unaffected.
           BAIT_SHA: ${{ steps.inject-bait.outputs.bait_sha }}
+          # ISO-8601 UTC timestamp of the bait commit (see inject-bait).
+          # Lower bound for recognising the in-flight PR-open review run
+          # as a valid bait review even though its run-level head_sha is
+          # the pre-bait SHA: a review still running when the bait landed
+          # checked out the live (post-bait) tip and reviewed+edited it.
+          # Empty when no bait was injected (status != injected); the jq
+          # below then leaves the strict head_sha pin untouched because
+          # the date comparison short-circuits to false on an empty bound.
+          BAIT_CREATED_AT: ${{ steps.inject-bait.outputs.bait_created_at }}
           # Promoted to env so the run: script body contains no ${{ }}
           # interpolations. With even one inline expression, GitHub Actions
           # treats the entire script as a single expression and enforces a
@@ -1347,15 +1377,45 @@ jobs:
             # workflow_dispatch run at that SHA was filtered out and the
             # poll timed out 30m later.
             if [ -n "${PIN_SHA:-}" ]; then
-              # Among matching runs at PIN_SHA, prefer the newest
-              # completed non-cancelled run. If none has completed yet,
-              # watch the newest non-cancelled live run, and fall back to
-              # the newest cancelled run only when every matching run is
-              # cancelled. This fixes run-26989483268 and avoids picking a
-              # newer queued/in-progress sibling over an already-completed
-              # success on the same head SHA.
+              # Candidate set ($m): name-matched review runs that EITHER
+              #   (a) carry head_sha == PIN_SHA — the Phase 3c
+              #       workflow_dispatch fallback and the bait
+              #       pull_request:synchronize run; OR
+              #   (b) were in flight when the bait commit landed
+              #       (created_at <= BAIT_CREATED_AT <= updated_at).
+              # Leg (b) recovers the original PR-open review run: it is
+              # triggered on the pre-bait head SHA (so its run-level
+              # head_sha never equals BAIT_SHA and leg (a) misses it),
+              # but because review_autofix.yml checks out the live branch
+              # tip at runtime, a review still running when the bait
+              # landed actually reviews+edits the bait tree. Crucially,
+              # the bait-SHA runs in leg (a) all serialise behind that
+              # original run in review_autofix.yml's `pr-autofix-${PR}`
+              # concurrency group (cancel-in-progress: false), so when
+              # the original review runs long they stay queued/pending
+              # past REVIEW_TIMEOUT and the loop, pinned to a 0-activity
+              # pending sibling, ages out — the failure on runs
+              # 27137020958 / 27244093614 (v1.17.0). Leg (b) lets the
+              # loop watch the actually-running review instead; its
+              # growing job log registers as activity each poll and
+              # resets the inactivity timer until it completes.
+              # The BAIT_CREATED_AT guard (!= "") keeps leg (b) inert
+              # when no bait was injected, and the updated_at >= bound
+              # excludes the historical stale-implement-review false
+              # match (run 25147636528) which COMPLETED before the bait.
+              #
+              # Preference order over $m:
+              #   1. newest completed non-cancelled run (terminal accept);
+              #   2. newest in_progress run — an actively-running review,
+              #      preferred over a queued/pending sibling so the loop
+              #      watches real progress (the v1.17.0 fix);
+              #   3. newest non-cancelled run (queued/pending fallback);
+              #   4. newest run overall (all cancelled).
+              # Tier 1 still precedes 2 so an already-completed success
+              # wins over a newer in-progress sibling (preserves the
+              # run-26989483268 fix).
               REVIEW_RUN=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&per_page=100" \
-                --jq "[.workflow_runs[] | select(.name | test(\"Review|review|autofix|self-healing\"; \"i\")) | select(.head_sha == \"${PIN_SHA}\")] as \$m | (\$m | map(select(.status == \"completed\" and .conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | map(select(.conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | sort_by(.created_at) | last)" || echo "")
+                --jq "[.workflow_runs[] | select(.name | test(\"Review|review|autofix|self-healing\"; \"i\")) | select(.head_sha == \"${PIN_SHA}\" or (\"${BAIT_CREATED_AT:-}\" != \"\" and .created_at <= \"${BAIT_CREATED_AT:-}\" and .updated_at >= \"${BAIT_CREATED_AT:-}\"))] as \$m | (\$m | map(select(.status == \"completed\" and .conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | map(select(.status == \"in_progress\")) | sort_by(.created_at) | last) // (\$m | map(select(.conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | sort_by(.created_at) | last)" || echo "")
             else
               REVIEW_RUN=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&event=pull_request&per_page=5" \
                 --jq '[.workflow_runs[] | select(.name | test("Review|review|autofix|self-healing"; "i"))] | sort_by(.created_at) | last' || echo "")
