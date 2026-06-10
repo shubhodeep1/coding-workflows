@@ -1506,8 +1506,8 @@ def test_review_collect_pr_metadata_helper_skips_optional_pr_reviews_by_default(
 	assert result["github_env"]["HAS_PR_DIFF"] == "true"
 	assert result["github_env"]["PR_DIFF_SOURCE"] == "gh_pr_diff"
 	assert result["github_env"]["BASE_BRANCH"] == "main"
+	assert any(call[:2] == ["api", "repos/owner/repo/pulls/42"] for call in result["mock_state"]["calls"])
 	call_texts = [" ".join(call) for call in result["mock_state"]["calls"]]
-	assert any("repos/owner/repo/pulls/42" in call for call in call_texts)
 	assert any("repos/owner/repo/issues/7" in call for call in call_texts)
 	assert not any("repos/owner/repo/pulls/42/reviews" in call for call in call_texts)
 
