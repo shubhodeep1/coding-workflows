@@ -107,6 +107,18 @@
       "pr_branch": null,
       "pr_url": null,
       "recorded_at": "2026-06-02T04:10:15Z"
+    },
+    {
+      "codex_attempts_used": 3,
+      "committed_type": null,
+      "consumer_default_branch": "main",
+      "consumer_head_sha": "9b797b72a96c408fd12628a34da51f681abcf6b5",
+      "discovered_type": null,
+      "failure_reason": "codex_timeout",
+      "outcome": "failed",
+      "pr_branch": null,
+      "pr_url": null,
+      "recorded_at": "2026-06-10T00:22:54Z"
     }
   ],
   "repository": "shubhodeep1/fbc_shutdown",
