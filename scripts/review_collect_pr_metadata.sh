@@ -11,6 +11,7 @@
 #   GH_TOKEN
 #   PR_NUMBER
 #   CLAUDE_BRANCH_REVIEW_MODE
+#   REVIEW_BREAK_GLASS_ENABLED
 #   HEAD_REF_OVERRIDE_INPUT / HEAD_SHA_OVERRIDE_INPUT / BASE_REF_OVERRIDE_INPUT
 #   PR_PAYLOAD_FILE / PR_META_FILE / PR_ISSUE_COMMENTS_FILE
 #   PR_REVIEWS_FILE / PR_REVIEW_COMMENTS_FILE
@@ -107,8 +108,16 @@ else
 	review_comments_raw="${TMP_RUNTIME_DIR}/gh_review_comments_raw.json"
 	gh_retry "${issue_comments_raw}" api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments"
 	jq -s 'add // []' "${issue_comments_raw}" > "${PR_ISSUE_COMMENTS_FILE}"
-	gh_retry "${reviews_raw}" api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews"
-	jq -s 'add // []' "${reviews_raw}" > "${PR_REVIEWS_FILE}"
+	printf '[]\n' > "${PR_REVIEWS_FILE}"
+	case "$(printf '%s' "${REVIEW_BREAK_GLASS_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" in
+		1|true|yes|on)
+			if gh_retry "${reviews_raw}" api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews"; then
+				jq -s 'add // []' "${reviews_raw}" > "${PR_REVIEWS_FILE}"
+			else
+				echo "::warning::Optional top-level PR reviews fetch failed; continuing with PR_REVIEWS_FILE=[] for break-glass/advisory consumers."
+			fi
+			;;
+	esac
 	gh_retry "${review_comments_raw}" api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/comments"
 	jq -s 'add // []' "${review_comments_raw}" > "${PR_REVIEW_COMMENTS_FILE}"
 
