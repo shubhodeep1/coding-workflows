@@ -42,14 +42,13 @@ def test_payload_first_fallback_and_shared_helper_usage() -> None:
 	assert "PR_TITLE: ${{ github.event.pull_request.title }}" in text
 	assert "PR_BODY: ${{ github.event.pull_request.body || '' }}" in text
 	assert 'PR_DATA="${PR_TITLE:-} ${PR_BODY:-}"' in text
+	assert 'extract_repo_scoped_issue_refs_from_text "${REPOSITORY}" "${PR_DATA}"' in text
 	assert 'set_issue_phase_label_resilient "${issue_number}" "${FINAL_LABEL}" "${REPOSITORY}"' in text
 	assert "_AI_PHASE_LABELS='[\"ai:done\"" not in text
-
-	payload_pos = text.find('PR_DATA="${PR_TITLE:-} ${PR_BODY:-}"')
-	fetch_pos = text.find('PR_DATA="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq')
-	assert payload_pos != -1
-	assert fetch_pos != -1
-	assert payload_pos < fetch_pos, "Fallback GH pull fetch must only run after payload text check"
+	assert 'pulls/${PR_NUMBER}' not in text, (
+		"Linked-issue fallback must use the pull_request event payload as its sole "
+		"title/body source and must not refetch the PR."
+	)
 
 
 def test_issue_pr_status_bootstraps_revalidate_lifecycle_ai_memory_schemas() -> None:
@@ -97,7 +96,7 @@ def test_orchestrator_classification_is_exported_for_downstream_reuse() -> None:
 def test_fallback_regex_drops_bare_mentions_keeps_closing_keywords_and_urls() -> None:
 	"""Regression guard for issue #1469.
 
-	The previous fallback regex matched bare prose like ``issue #1469`` and
+	The previous fallback parser matched bare prose like ``issue #1469`` and
 	bare paths like ``issues/1469``, so any PR body merely *mentioning* an
 	issue would be treated as a closing link by this workflow. That caused
 	orchestrator tracking issues to be wrongly labeled ai:merged and
@@ -109,11 +108,12 @@ def test_fallback_regex_drops_bare_mentions_keeps_closing_keywords_and_urls() ->
 	"""
 	text = _workflow_text()
 
-	assert (
-		r'(github\\.com/${REPOSITORY_ESCAPED}/issues/[0-9]+|'
-		r'${REPOSITORY_ESCAPED}/issues/[0-9]+|'
-		r'(^|[^[:alnum:]_/-])(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]+#[[:space:]]*[0-9]+)'
-	) in text, "Tightened fallback regex must be present verbatim"
+	assert 'extract_repo_scoped_issue_refs_from_text "${REPOSITORY}" "${PR_DATA}"' in text, (
+		"Fallback linked-issue extraction must reuse the shared strict helper"
+	)
+	assert "REPOSITORY_ESCAPED=" not in text, (
+		"Inline fallback regex copies should be removed once the shared helper is used"
+	)
 
 	# Forbidden: bare prose mentions that triggered the original bug.
 	assert 'issue[[:space:]]*#[[:space:]]*[0-9]+' not in text, (

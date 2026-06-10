@@ -163,6 +163,7 @@ def _run_review_collect_pr_metadata_harness(
 	head_ref_override: str,
 	head_sha_override: str,
 	base_ref_override: str,
+	review_break_glass_enabled: str = "false",
 	mock_state: dict[str, object],
 ) -> dict[str, object]:
 	with tempfile.TemporaryDirectory(prefix="review-collect-pr-metadata-") as td:
@@ -210,7 +211,8 @@ def _run_review_collect_pr_metadata_harness(
 			"PR_ALL_COMMENTS_CONTEXT_FILE": str(files["comments_context"]),
 			"PR_DIFF_FILE": str(files["pr_diff"]),
 			"GITHUB_ENV": str(files["github_env"]),
-		})
+			"REVIEW_BREAK_GLASS_ENABLED": review_break_glass_enabled,
+			})
 
 		result = subprocess.run(
 			["bash", str(METADATA_HELPER)],
@@ -1408,7 +1410,7 @@ def test_review_collect_pr_metadata_helper_supports_no_pr_synthetic_mode() -> No
 	assert not any("repos/owner/repo/pulls/" in " ".join(call) for call in result["mock_state"]["calls"])
 
 
-def test_review_collect_pr_metadata_helper_preserves_pr_fetch_and_context_contract() -> None:
+def test_review_collect_pr_metadata_helper_skips_optional_pr_reviews_by_default() -> None:
 	result = _run_review_collect_pr_metadata_harness(
 		pr_number="42",
 		claude_branch_review_mode="false",
@@ -1486,25 +1488,207 @@ def test_review_collect_pr_metadata_helper_preserves_pr_fetch_and_context_contra
 		"headRepoFullName": "owner/repo",
 	}
 	assert len(result["pr_issue_comments"]) == 1
-	assert len(result["pr_reviews"]) == 1
+	assert result["pr_reviews"] == []
 	assert len(result["pr_review_comments"]) == 1
 	assert result["linked_issue_context"].splitlines()[:2] == [
 		"Issue #7: Linked fallback issue",
 		"Linked fallback body",
 	]
 	assert "issue_comments_count: 1" in result["comments_context"]
-	assert "reviews_count: 1" in result["comments_context"]
+	assert "reviews_count: 0" in result["comments_context"]
 	assert "review_comments_count: 1" in result["comments_context"]
+	assert "total_entries: 2" in result["comments_context"]
 	assert "entry[0].kind: issue_comment" in result["comments_context"]
-	assert "entry[1].kind: review" in result["comments_context"]
-	assert "entry[2].kind: review_comment" in result["comments_context"]
+	assert "entry[1].kind: review_comment" in result["comments_context"]
 	assert result["pr_diff"] == "pr diff sentinel\n"
 	assert result["github_env"]["LINKED_ISSUES_JSON"] == "[]"
+	assert result["github_env"]["LINKED_ISSUE_FALLBACK_NUMBERS_JSON"] == "[7]"
 	assert result["github_env"]["HAS_PR_DIFF"] == "true"
 	assert result["github_env"]["PR_DIFF_SOURCE"] == "gh_pr_diff"
 	assert result["github_env"]["BASE_BRANCH"] == "main"
-	assert any("repos/owner/repo/pulls/42" in " ".join(call) for call in result["mock_state"]["calls"])
-	assert any("repos/owner/repo/issues/7" in " ".join(call) for call in result["mock_state"]["calls"])
+	assert any(call[:2] == ["api", "repos/owner/repo/pulls/42"] for call in result["mock_state"]["calls"])
+	call_texts = [" ".join(call) for call in result["mock_state"]["calls"]]
+	assert any("repos/owner/repo/issues/7" in call for call in call_texts)
+	assert not any("repos/owner/repo/pulls/42/reviews" in call for call in call_texts)
+
+
+def test_review_collect_pr_metadata_helper_fetches_top_level_reviews_when_break_glass_enabled() -> None:
+	result = _run_review_collect_pr_metadata_harness(
+		pr_number="42",
+		claude_branch_review_mode="false",
+		head_ref_override="",
+		head_sha_override="",
+		base_ref_override="",
+		review_break_glass_enabled="true",
+		mock_state={
+			"api_responses": {
+				"repos/owner/repo/pulls/42/comments": [
+					{
+						"id": 13,
+						"user": {"login": "carol"},
+						"created_at": "2026-06-03T00:00:00Z",
+						"updated_at": "2026-06-03T01:00:00Z",
+						"path": "scripts/helper.sh",
+						"line": 7,
+						"body": "Review comment body",
+					},
+				],
+				"repos/owner/repo/pulls/42/reviews": [
+					{
+						"id": 12,
+						"user": {"login": "bob"},
+						"submitted_at": "2026-06-02T00:00:00Z",
+						"updated_at": "2026-06-02T01:00:00Z",
+						"state": "COMMENTED",
+						"body": "Review body",
+					},
+				],
+				"repos/owner/repo/issues/42/comments": [
+					{
+						"id": 11,
+						"user": {"login": "alice"},
+						"created_at": "2026-06-01T00:00:00Z",
+						"updated_at": "2026-06-01T01:00:00Z",
+						"body": "Issue comment body",
+					},
+				],
+				"repos/owner/repo/pulls/42": {
+					"title": "Synthetic PR title",
+					"body": "Fixes #7\n\nContext body",
+					"base": {"ref": "main"},
+					"head": {
+						"ref": "feature/ref",
+						"sha": "abc123",
+						"repo": {"full_name": "owner/repo"},
+					},
+				},
+				"repos/owner/repo/issues/7": {
+					"number": 7,
+					"title": "Linked fallback issue",
+					"body": "Linked fallback body",
+				},
+				"graphql": {
+					"data": {
+						"repository": {
+							"pullRequest": {
+								"closingIssuesReferences": {
+									"nodes": [],
+								},
+							},
+						},
+					},
+				},
+			},
+			"pr_diffs": {"42": "pr diff sentinel\n"},
+		},
+	)
+
+	assert len(result["pr_reviews"]) == 1
+	assert "reviews_count: 1" in result["comments_context"]
+	assert "total_entries: 3" in result["comments_context"]
+	assert "entry[1].kind: review" in result["comments_context"]
+	assert "entry[2].kind: review_comment" in result["comments_context"]
+	assert any("repos/owner/repo/pulls/42/reviews" in " ".join(call) for call in result["mock_state"]["calls"])
+
+
+def test_review_collect_pr_metadata_helper_strict_fallback_drops_bare_mentions() -> None:
+	result = _run_review_collect_pr_metadata_harness(
+		pr_number="42",
+		claude_branch_review_mode="false",
+		head_ref_override="",
+		head_sha_override="",
+		base_ref_override="",
+		mock_state={
+			"api_responses": {
+				"repos/owner/repo/pulls/42/comments": [],
+				"repos/owner/repo/pulls/42/reviews": [],
+				"repos/owner/repo/issues/42/comments": [],
+				"repos/owner/repo/pulls/42": {
+					"title": "Docs update referencing issue #7 and issues/8 plus someotherowner/repo/issues/15",
+					"body": "Fixes #10\nIgnore Fixes #11a and owner/repo/issues/16abc\nAlso see owner/repo/issues/12 and github.com/owner/repo/issues/13\nCloses: #14",
+					"base": {"ref": "main"},
+					"head": {
+						"ref": "feature/ref",
+						"sha": "abc123",
+						"repo": {"full_name": "owner/repo"},
+					},
+				},
+				"repos/owner/repo/issues/10": {
+					"number": 10,
+					"title": "Closing keyword match",
+					"body": "Fix keyword body",
+				},
+				"repos/owner/repo/issues/12": {
+					"number": 12,
+					"title": "Repo path match",
+					"body": "Path body",
+				},
+				"repos/owner/repo/issues/13": {
+					"number": 13,
+					"title": "Repo URL match",
+					"body": "URL body",
+				},
+				"graphql": {
+					"data": {
+						"repository": {
+							"pullRequest": {
+								"closingIssuesReferences": {
+									"nodes": [],
+								},
+							},
+						},
+					},
+				},
+			},
+			"pr_diffs": {"42": "pr diff sentinel\n"},
+		},
+	)
+
+	assert result["github_env"]["LINKED_ISSUES_JSON"] == "[]"
+	assert result["github_env"]["LINKED_ISSUE_FALLBACK_NUMBERS_JSON"] == "[10,12,13]"
+	assert "Issue #10: Closing keyword match" in result["linked_issue_context"]
+	assert "Issue #12: Repo path match" in result["linked_issue_context"]
+	assert "Issue #13: Repo URL match" in result["linked_issue_context"]
+	assert "Issue #7:" not in result["linked_issue_context"]
+	assert "Issue #8:" not in result["linked_issue_context"]
+	assert "Issue #11:" not in result["linked_issue_context"]
+	assert "Issue #14:" not in result["linked_issue_context"]
+	assert "Issue #15:" not in result["linked_issue_context"]
+	assert "Issue #16:" not in result["linked_issue_context"]
+	call_texts = [" ".join(call) for call in result["mock_state"]["calls"]]
+	assert not any("repos/owner/repo/issues/7" in call for call in call_texts)
+	assert not any("repos/owner/repo/issues/8" in call for call in call_texts)
+	assert not any("repos/owner/repo/issues/11" in call for call in call_texts)
+	assert not any("repos/owner/repo/issues/14" in call for call in call_texts)
+	assert not any("repos/owner/repo/issues/15" in call for call in call_texts)
+	assert not any("repos/owner/repo/issues/16" in call for call in call_texts)
+
+
+def test_extract_repo_scoped_issue_refs_rejects_malformed_repository_input() -> None:
+	helpers_path = (REPO_ROOT / "scripts" / "gh_helpers.sh").as_posix()
+	script = textwrap.dedent(
+		f"""\
+		set -euo pipefail
+		source \"{helpers_path}\"
+		extract_repo_scoped_issue_refs_from_text \"$REPOSITORY_INPUT\" \"$TEXT_INPUT\"
+		"""
+	)
+
+	for repository_input in ("owner", "owner/repo/extra"):
+		env = os.environ.copy()
+		env.update({
+			"REPOSITORY_INPUT": repository_input,
+			"TEXT_INPUT": "Fixes #12\nowner/repo/issues/13",
+		})
+		result = subprocess.run(
+			["bash", "-lc", script],
+			cwd=str(REPO_ROOT),
+			env=env,
+			capture_output=True,
+			text=True,
+			check=True,
+		)
+		assert result.stdout == ""
 
 
 def test_review_scripts_emit_context_budget_warn_signals() -> None:
@@ -2345,6 +2529,18 @@ def test_gate_emits_head_ref_output_for_forward_merge_suppressor_reuse() -> None
 	assert "PR_HEAD_REF: ${{ needs.gate.outputs.head_ref }}" in wf, (
 		"deterministic-skip-merge must consume head_ref from gate outputs"
 	)
+	assert "post_merge_pr_text_json: ${{ steps.evaluate.outputs.post_merge_pr_text_json }}" in wf, (
+		"Gate job must expose cached PR title/body for the post-merge validation dispatch"
+	)
+	assert "post_merge_linked_issues_json: ${{ steps.evaluate.outputs.post_merge_linked_issues_json }}" in wf, (
+		"Gate job must expose cached linked-issue labels for the post-merge validation dispatch"
+	)
+	assert "POST_MERGE_PR_TEXT_JSON: ${{ needs.gate.outputs.post_merge_pr_text_json }}" in wf, (
+		"post-merge validate dispatch must consume cached PR text from gate outputs"
+	)
+	assert "POST_MERGE_LINKED_ISSUES_JSON: ${{ needs.gate.outputs.post_merge_linked_issues_json }}" in wf, (
+		"post-merge validate dispatch must consume cached linked-issue labels from gate outputs"
+	)
 
 
 def test_reviewer_prompt_output_rules_still_forbid_scripts() -> None:
@@ -2568,7 +2764,10 @@ def main() -> int:
 	test_review_pipeline_knobs_are_wired_into_codex_agent_env()
 	test_review_collect_pr_metadata_helper_is_bootstrapped_and_delegated()
 	test_review_collect_pr_metadata_helper_supports_no_pr_synthetic_mode()
-	test_review_collect_pr_metadata_helper_preserves_pr_fetch_and_context_contract()
+	test_review_collect_pr_metadata_helper_skips_optional_pr_reviews_by_default()
+	test_review_collect_pr_metadata_helper_fetches_top_level_reviews_when_break_glass_enabled()
+	test_review_collect_pr_metadata_helper_strict_fallback_drops_bare_mentions()
+	test_extract_repo_scoped_issue_refs_rejects_malformed_repository_input()
 	test_review_scripts_emit_context_budget_warn_signals()
 	test_review_filter_smoke_fixtures_are_present()
 	test_reviewer_risk_tier_classifier_honours_thresholds_and_always_full_regex()

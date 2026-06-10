@@ -11,6 +11,7 @@
 #   GH_TOKEN
 #   PR_NUMBER
 #   CLAUDE_BRANCH_REVIEW_MODE
+#   REVIEW_BREAK_GLASS_ENABLED
 #   HEAD_REF_OVERRIDE_INPUT / HEAD_SHA_OVERRIDE_INPUT / BASE_REF_OVERRIDE_INPUT
 #   PR_PAYLOAD_FILE / PR_META_FILE / PR_ISSUE_COMMENTS_FILE
 #   PR_REVIEWS_FILE / PR_REVIEW_COMMENTS_FILE
@@ -107,8 +108,16 @@ else
 	review_comments_raw="${TMP_RUNTIME_DIR}/gh_review_comments_raw.json"
 	gh_retry "${issue_comments_raw}" api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments"
 	jq -s 'add // []' "${issue_comments_raw}" > "${PR_ISSUE_COMMENTS_FILE}"
-	gh_retry "${reviews_raw}" api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews"
-	jq -s 'add // []' "${reviews_raw}" > "${PR_REVIEWS_FILE}"
+	printf '[]\n' > "${PR_REVIEWS_FILE}"
+	case "$(printf '%s' "${REVIEW_BREAK_GLASS_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" in
+		1|true|yes|on)
+			if gh_retry "${reviews_raw}" api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews"; then
+				jq -s 'add // []' "${reviews_raw}" > "${PR_REVIEWS_FILE}"
+			else
+				echo "::warning::Optional top-level PR reviews fetch failed; continuing with PR_REVIEWS_FILE=[] for break-glass/advisory consumers."
+			fi
+			;;
+	esac
 	gh_retry "${review_comments_raw}" api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/comments"
 	jq -s 'add // []' "${review_comments_raw}" > "${PR_REVIEW_COMMENTS_FILE}"
 
@@ -120,6 +129,20 @@ else
 		headRepoFullName: (.head.repo.full_name // "")
 	}' "${PR_PAYLOAD_FILE}" > "${PR_META_FILE}"
 fi
+
+# Pre-compute the strict PR title/body fallback issue list once so later
+# review-path steps can reuse it without carrying their own regex copies.
+LINKED_ISSUE_FALLBACK_NUMBERS_JSON='[]'
+if [ -s "${PR_META_FILE}" ] && type extract_repo_scoped_issue_refs_from_text >/dev/null 2>&1; then
+	_pr_text_for_linked_issue_fallback="$(jq -r '[.title // "", .body // ""] | join(" ")' "${PR_META_FILE}" 2>/dev/null || echo "")"
+	if [ -n "${_pr_text_for_linked_issue_fallback//[[:space:]]/}" ]; then
+		_fallback_numbers="$(extract_repo_scoped_issue_refs_from_text "${REPOSITORY}" "${_pr_text_for_linked_issue_fallback}" || true)"
+		if [ -n "${_fallback_numbers}" ]; then
+			LINKED_ISSUE_FALLBACK_NUMBERS_JSON="$(printf '%s\n' "${_fallback_numbers}" | jq -Rsc 'split("\n") | map(select(length > 0) | tonumber)' 2>/dev/null || echo '[]')"
+		fi
+	fi
+fi
+printf 'LINKED_ISSUE_FALLBACK_NUMBERS_JSON=%s\n' "${LINKED_ISSUE_FALLBACK_NUMBERS_JSON}" >> "${GITHUB_ENV}"
 
 # Fetch linked issue title+body via GraphQL — single call that also
 # populates LINKED_ISSUES_JSON early so the late-stage cache step can
@@ -158,42 +181,38 @@ fi
 
 # Body-text fallback for linked-issue prompt context only.
 _linked_context_raw="${_linked_raw}"
-if [ "${_linked_context_raw}" = "[]" ] && [ -s "${PR_META_FILE}" ]; then
-	_pr_body_for_fallback="$(jq -r '.body // ""' "${PR_META_FILE}")"
-	if [ -n "${_pr_body_for_fallback}" ]; then
-		_fb_repo_pcre="$(PYTHONDONTWRITEBYTECODE=1 python3 -c 'import re,sys; sys.stdout.write(re.escape(sys.argv[1]))' "${REPOSITORY}")"
-		_fallback_numbers="$(printf '%s\n' "${_pr_body_for_fallback}" \
-			| grep -oiP "\\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?):?\\s+(?:https?://github\\.com/${_fb_repo_pcre}/issues/|#)\\K\\d+\\b" \
-			| sort -un || true)"
-		if [ -n "${_fallback_numbers}" ]; then
-			_FALLBACK_MAX_ISSUES=20
-			_fallback_total="$(printf '%s\n' "${_fallback_numbers}" | wc -l | tr -d '[:space:]')"
-			if [[ "${_fallback_total:-0}" =~ ^[0-9]+$ ]] && [ "${_fallback_total:-0}" -gt "${_FALLBACK_MAX_ISSUES}" ]; then
-				echo "::warning::Linked-issue body-text fallback: PR body referenced ${_fallback_total} distinct in-repo issues; capping fetches at ${_FALLBACK_MAX_ISSUES}."
-				_fallback_numbers="$(printf '%s\n' "${_fallback_numbers}" | head -n "${_FALLBACK_MAX_ISSUES}")"
-			fi
-			_fallback_json='[]'
-			while IFS= read -r _fb_num; do
-				[ -z "${_fb_num}" ] && continue
-				_fb_issue_tmp="$(mktemp)"
-				if gh_retry "${_fb_issue_tmp}" api "repos/${REPOSITORY}/issues/${_fb_num}" \
-					--jq '{number: (.number // 0), title: (.title // ""), body: (.body // "")}'; then
-					_fb_issue_obj="$(cat "${_fb_issue_tmp}" 2>/dev/null || echo '')"
-					if [ -n "${_fb_issue_obj}" ]; then
-						_fallback_json="$(printf '%s' "${_fallback_json}" \
-							| jq --argjson o "${_fb_issue_obj}" '. + [$o]' 2>/dev/null \
-							|| printf '%s' "${_fallback_json}")"
-					fi
-				else
-					echo "::warning::Linked-issue body-text fallback: gh api repos/${REPOSITORY}/issues/${_fb_num} failed; skipping"
+if [ "${_linked_context_raw}" = "[]" ] && [ "${LINKED_ISSUE_FALLBACK_NUMBERS_JSON}" != "[]" ]; then
+	_fallback_numbers="$(printf '%s' "${LINKED_ISSUE_FALLBACK_NUMBERS_JSON}" | jq -r '.[]' 2>/dev/null || true)"
+	if [ -n "${_fallback_numbers}" ]; then
+		_FALLBACK_MAX_ISSUES=20
+		_fallback_total="$(printf '%s' "${LINKED_ISSUE_FALLBACK_NUMBERS_JSON}" | jq -r 'length' 2>/dev/null || echo '0')"
+		if [[ "${_fallback_total:-0}" =~ ^[0-9]+$ ]] && [ "${_fallback_total:-0}" -gt "${_FALLBACK_MAX_ISSUES}" ]; then
+			echo "::warning::Linked-issue body-text fallback: PR title/body referenced ${_fallback_total} distinct in-repo issues; capping fetches at ${_FALLBACK_MAX_ISSUES}."
+			_fallback_numbers="$(printf '%s\n' "${_fallback_numbers}" | head -n "${_FALLBACK_MAX_ISSUES}")"
+		fi
+		_fallback_json_tmp="$(mktemp "${TMP_RUNTIME_DIR}/linked_issue_fallback.XXXXXX")"
+		while IFS= read -r _fb_num; do
+			[ -z "${_fb_num}" ] && continue
+			_fb_issue_tmp="$(mktemp)"
+			if gh_retry "${_fb_issue_tmp}" api "repos/${REPOSITORY}/issues/${_fb_num}" \
+				--jq '{number: (.number // 0), title: (.title // ""), body: (.body // "")}'; then
+				if [ -s "${_fb_issue_tmp}" ]; then
+					cat "${_fb_issue_tmp}" >> "${_fallback_json_tmp}"
+					printf '\n' >> "${_fallback_json_tmp}"
 				fi
-				rm -f "${_fb_issue_tmp}"
-			done <<< "${_fallback_numbers}"
+			else
+				echo "::warning::Linked-issue body-text fallback: gh api repos/${REPOSITORY}/issues/${_fb_num} failed; skipping"
+			fi
+			rm -f "${_fb_issue_tmp}"
+		done <<< "${_fallback_numbers}"
+		if [ -s "${_fallback_json_tmp}" ]; then
+			_fallback_json="$(jq -s '.' "${_fallback_json_tmp}" 2>/dev/null || echo '[]')"
 			if [ "${_fallback_json}" != "[]" ]; then
 				_linked_context_raw="${_fallback_json}"
 				echo "Linked-issue body-text fallback resolved $(printf '%s' "${_fallback_json}" | jq 'length') issue(s) for context (GraphQL closingIssuesReferences returned empty — likely non-default base branch)."
 			fi
 		fi
+		rm -f "${_fallback_json_tmp}"
 	fi
 fi
 

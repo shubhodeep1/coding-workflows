@@ -96,6 +96,7 @@ ai_pipeline.md
 analysis/last_collection_timestamp.txt
 analysis/recommendation-processing-report.md
 analysis/validation-selftest-status.json
+analysis/workflow-optimization-2026-06-10.md
 codex.md
 docs/ai-tools-future-improvements.md
 docs/awesome-cc-future-improvements.md
@@ -218,6 +219,7 @@ scripts/codex_stall_guard.sh
 scripts/codex_thread_reuse.sh
 scripts/collect_workflow_logs.py
 scripts/compare_issue_timeline_parity.sh
+scripts/comprehensive_test_and_release_gh_api.sh
 scripts/consolidate_soft_error_reports.py
 scripts/cost_audit.py
 scripts/detect_editor_changes_lost.sh
@@ -448,6 +450,7 @@ tests/test_orchestrate_poll_workflow_contract.py
 tests/test_orchestrator_concurrency_caps.py
 tests/test_overlap_validation_fallback.py
 tests/test_phase_prompt_untrusted_context_contract.py
+tests/test_phase_skip_gate_telemetry_contract.py
 tests/test_plan_auto_answer_recommended_parser.py
 tests/test_plan_auto_approve_safe_state_fetch.py
 tests/test_plan_clarify_blocked_output.py

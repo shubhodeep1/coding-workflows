@@ -28,6 +28,44 @@ jobs:
           set -euo pipefail
           python3 -m pip install yamllint coverage pyyaml jsonschema jinja2 ruff
 
+      - name: Derive orchestrate poll test subsets
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+          import ast
+          from pathlib import Path
+
+          module = ast.parse(
+              Path("tests/test_orchestrate_poll_process.py").read_text(encoding="utf-8")
+          )
+          tests = [
+              node.name
+              for node in module.body
+              if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")
+          ]
+          tests.sort()
+
+          fast_fail = [name for name in tests if name.startswith("test_implementation_failed_")]
+          if not fast_fail:
+              raise SystemExit("No implementation-failed orchestrate-poll regression tests found")
+
+          fast_fail_set = set(fast_fail)
+          remaining = [name for name in tests if name not in fast_fail_set]
+          if not remaining:
+              raise SystemExit(
+                  "Fast-fail selection unexpectedly captured the entire orchestrate-poll test module"
+              )
+
+          Path("/tmp/orchestrate_poll_fast_fail_tests.txt").write_text("\n".join(fast_fail) + "\n")
+          Path("/tmp/orchestrate_poll_remaining_tests.txt").write_text("\n".join(remaining) + "\n")
+          PY
+
+      - name: Orchestrate poll implementation-failed regression fast-fail
+        run: |
+          set -euo pipefail
+          mapfile -t selected_tests < /tmp/orchestrate_poll_fast_fail_tests.txt
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py "${selected_tests[@]}"
+
       - name: YAML lint
         run: |
           set -euo pipefail
@@ -585,7 +623,10 @@ jobs:
       - name: Orchestrate poll process unit tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py
+          # The fast-fail step already covers the implementation-failed hot path;
+          # keep the rest of this module in CI without re-running that subset.
+          mapfile -t remaining_tests < /tmp/orchestrate_poll_remaining_tests.txt
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py "${remaining_tests[@]}"
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_noop_suspicious_recovery.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_state_snapshot.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_run_substate_ledger.py
