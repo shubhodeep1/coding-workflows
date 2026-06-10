@@ -8,6 +8,7 @@ parse_override_command()
 {
 	local check_cmd="$1"
 	python3 - "$check_cmd" <<'PY'
+import re
 import shlex
 import sys
 
@@ -24,10 +25,17 @@ except ValueError as exc:
 	print(str(exc), file=sys.stderr)
 	raise SystemExit(1)
 
+assignment_re = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*", re.DOTALL)
+env_parts = []
+while parts and assignment_re.fullmatch(parts[0]):
+	env_parts.append(parts.pop(0))
+
 if not parts:
 	raise SystemExit(1)
 
-for part in parts:
+sys.stdout.write(str(len(env_parts)))
+sys.stdout.write("\0")
+for part in env_parts + parts:
 	sys.stdout.write(part)
 	sys.stdout.write("\0")
 PY
@@ -36,7 +44,10 @@ PY
 run_override_command()
 {
 	local check_cmd="$1"
+	local env_count=0
+	local parsed_cmd_start=0
 	local parsed_file=""
+	local -a parsed_env=()
 	local -a parsed_cmd=()
 	parsed_file="$(mktemp)" || return 1
 	if ! parse_override_command "$check_cmd" >"${parsed_file}"; then
@@ -48,10 +59,21 @@ run_override_command()
 		return 1
 	fi
 	rm -f "${parsed_file}"
+	env_count="${parsed_cmd[0]:-}"
+	[[ "${env_count}" =~ ^[0-9]+$ ]] || return 1
+	if [ "${env_count}" -gt 0 ]; then
+		parsed_env=("${parsed_cmd[@]:1:${env_count}}")
+	fi
+	parsed_cmd_start=$(( 1 + env_count ))
+	parsed_cmd=("${parsed_cmd[@]:${parsed_cmd_start}}")
 	if [ "${#parsed_cmd[@]}" -eq 0 ]; then
 		return 1
 	fi
-	timeout "${CHECK_TIMEOUT_SECS}" "${parsed_cmd[@]}"
+	if [ "${#parsed_env[@]}" -gt 0 ]; then
+		env "${parsed_env[@]}" timeout "${CHECK_TIMEOUT_SECS}" "${parsed_cmd[@]}"
+	else
+		timeout "${CHECK_TIMEOUT_SECS}" "${parsed_cmd[@]}"
+	fi
 }
 
 CHECK_COMMANDS=(

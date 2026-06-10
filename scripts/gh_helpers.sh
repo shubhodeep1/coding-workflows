@@ -1462,3 +1462,40 @@ PY
 	fi
 	rm -f "${_tmp}"
 }
+
+# ---------------------------------------------------------------
+# extract_repo_scoped_issue_refs_from_text <owner/repo> <text>
+#
+# Print deduplicated issue numbers referenced by strict current-repo
+# closing keywords or full repo-scoped issue URLs/paths.
+#
+# Accepted:
+#   Fixes #12
+#   closes #34
+#   owner/repo/issues/56
+#   https://github.com/owner/repo/issues/78
+#
+# Rejected:
+#   issue #12
+#   issues/12
+#   Closes: #12
+#
+# Fail-open:
+#   empty text or malformed repository input emits no matches
+# ---------------------------------------------------------------
+extract_repo_scoped_issue_refs_from_text()
+{
+	local _repository="${1:-}"
+	local _text="${2:-}"
+	local _repository_escaped
+
+	if [ -z "${_repository}" ] || [ -z "${_text}" ] || ! [[ "${_repository}" =~ ^[^/]+/[^/]+$ ]]; then
+		return 0
+	fi
+
+	_repository_escaped="$(printf '%s' "${_repository}" | sed 's/[][\\.^$*+?(){}|]/\\&/g')"
+	printf '%s\n' "${_text}" \
+		| grep -oiE "(\\bgithub\\.com/${_repository_escaped}/issues/[0-9]+\\b|\\b${_repository_escaped}/issues/[0-9]+\\b|(^|[^[:alnum:]_/-])(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]+#[[:space:]]*[0-9]+\\b)" \
+		| grep -oE '[0-9]+$' \
+		| sort -un || true
+}

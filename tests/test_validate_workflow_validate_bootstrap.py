@@ -176,6 +176,19 @@ def test_run_validation_repo_checks_override_preserves_quoted_arguments() -> Non
 	assert "hello world" in result.stdout
 
 
+def test_run_validation_repo_checks_override_preserves_env_prefix_assignments() -> None:
+	env_override = "MY_VAR=hello python3 -c 'import os; print(os.environ[\"MY_VAR\"])'"
+	result = subprocess.run(
+		["bash", str(RUN_VALIDATION_REPO_CHECKS), env_override],
+		cwd=REPO_ROOT,
+		capture_output=True,
+		text=True,
+		timeout=60,
+	)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "hello" in result.stdout
+
+
 def main() -> int:
 	test_validate_workflow_bootstrap_uses_shared_helper_and_lists_template_assets()
 	test_stage_workflow_support_helper_runs_overlay_loader_for_validate()
@@ -186,6 +199,7 @@ def main() -> int:
 	test_codex_heartbeat_helper_contract()
 	test_run_validation_repo_checks_override_does_not_reparse_shell_metacharacters()
 	test_run_validation_repo_checks_override_preserves_quoted_arguments()
+	test_run_validation_repo_checks_override_preserves_env_prefix_assignments()
 	return 0
 
 
