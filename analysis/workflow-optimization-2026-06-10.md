@@ -343,3 +343,130 @@ No sampled run showed HTTP `429` or secondary rate-limit failures. The issue is 
 | Other MCP servers observed | 0 | 0 | 0 | No non-Semble `<NAME>_PROBE` telemetry observed |
 
 \* **Semble-count caveat:** sampled runs `27237778158` and `27239919056` show metadata counts that are exactly double the unique raw `SEMBLE_QUERY` lines because both job-level and per-step logs contain the same events. Treat current Semble query/byte aggregates as **upper bounds** until collector dedupe is added.
+
+## Deep Audit — Workflows & Scripts (2026-06-10)
+
+### Section 1: Bug & Correctness Sweep
+
+- **ID** — BUG-001  
+  **File path** — `scripts/tg_helpers.sh:312-356,381-426`  
+  **Severity** — Medium  
+  **Category tag** — `bug`  
+  **Description** — Both cleanup loops fetch comment pages, delete matching comments in-place, then increment `page`. Because GitHub paginates the live comment collection, deleting items from page 1 shifts later comments forward; the subsequent `page=2` fetch can skip still-unprocessed tracking comments. The skip can leave stale `<!-- tg_phase:... -->` / `<!-- tg_cleanup:... -->` markers and their Telegram message IDs behind.  
+  **Recommended fix** — Stop deleting while paginating forward. Either: (a) fetch all matching comment IDs first with one full paginated read, then delete afterward; or (b) keep refetching page 1 until no tracking markers remain. Reuse `curl_gh_api` from `scripts/gh_helpers.sh` for the read pass so the cleanup path stays rate-limit aware.
+
+- **ID** — BUG-002  
+  **File path** — `scripts/tg_helpers.sh:169-205,241-276,346-350,417-421`  
+  **Severity** — Medium  
+  **Category tag** — `bug`  
+  **Description** — GitHub writes in the Telegram tracking helpers use raw `curl -s -X POST/PATCH/DELETE ... || true` instead of the repo’s retry/status helpers. Because `curl` is not run with `-f`, HTTP 4xx/5xx responses still exit successfully, and the trailing `|| true` suppresses network failures too. Result: marker comments can fail to create/update/delete silently, while the caller thinks tracking or cleanup succeeded.  
+  **Recommended fix** — Route all GitHub comment writes through `curl_gh_api`/`gh_retry_to_file` from `scripts/gh_helpers.sh`, check the HTTP status explicitly, and return/log a non-success outcome when the marker mutation did not actually happen.
+
+Sweep note: `bash -n` passed on all `scripts/*.sh`, `python -m py_compile` passed on all `scripts/*.py`, and `yamllint .github/workflows` was clean; I did not find additional high-signal correctness failures beyond the items above.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+- **ID** — API-001  
+  **File path** — `.github/workflows/implement.yml:96-105,1254-1255,1396-1401`  
+  **Severity** — Medium  
+  **Category tag** — `api-redundancy`  
+  **Description** — The common implement path reads the same issue multiple times: once in the precheck (`GET /issues/{ISSUE_NUMBER}`), again when populating `ISSUE_META_FILE`, and a third time in the label-validation fallback if the cached file is missing/unparseable. **Current call count:** 2 reads on the normal path, 3 on the cache-miss fallback. **Proposed call count:** 1 read total by writing the full precheck payload into `ISSUE_META_FILE` and reusing it downstream. **Existing pattern to extend:** the job-local `ISSUE_META_FILE` cache already present in this workflow.  
+  **Recommended fix** — During the precheck step, persist the full issue JSON to `ISSUE_META_FILE` (not just state/labels in a shell variable), then have later steps read body/title/labels from that file and fall back to the API only if the file is absent or invalid.
+
+- **ID** — API-002  
+  **File path** — `.github/workflows/orchestrate_clarify_respond.yml:68-85,438-449`  
+  **Severity** — Medium  
+  **Category tag** — `api-redundancy`  
+  **Description** — The workflow refetches both the child issue and the tracking issue across steps: the gate step reads the child issue once and the tracking issue title once; the later context step reads the child issue again and the tracking issue body again. **Current call count:** 3-4 reads on the common path. **Proposed call count:** 1 aliased GraphQL read total, or 2 reads if the child payload is cached and only the tracking issue is fetched once. **Existing batching pattern to extend:** `_fetch_candidate_issue_details_graphql` in `scripts/orchestrate_poll_process.sh`.  
+  **Recommended fix** — Replace the split reads with a single aliased `repository { issue(number: ...) ... }` GraphQL query for child + tracking issue fields, or persist the first child-issue payload and only fetch the tracking issue once.
+
+- **ID** — API-003  
+  **File path** — `.github/workflows/test-and-mark-stable.yml:2879-2888`  
+  **Severity** — Low  
+  **Category tag** — `api-redundancy`  
+  **Description** — The cancel-on-close polling loop fetches `/actions/runs/{id}` twice per iteration: once for `.status` and once for `.conclusion`. **Current call count:** 2 reads per poll iteration. **Proposed call count:** 1 read per iteration by fetching both fields in one JSON object. **Existing batching pattern to extend:** not a batching case; use the same single-response JSON read pattern already used elsewhere in this workflow.  
+  **Recommended fix** — Replace the two `gh api` calls with one `gh api ... --jq '{status, conclusion}'`, then split the JSON locally with `jq -r`.
+
+- **ID** — BATCH-001  
+  **File path** — `.github/workflows/review_autofix.yml:778-805`  
+  **Severity** — Low  
+  **Category tag** — `api-batching`  
+  **Description** — The post-merge validate-dispatch step starts with one GraphQL read of linked issues, but if `closingIssuesReferences` is empty it falls back to PR-title/body parsing and then does `gh issue view ... --json labels` once per linked issue inside the loop. **Current worst-case read count:** 1 GraphQL + 1 PR read + N issue-label reads. **Proposed read count:** 1 GraphQL + 1 PR read + 1 aliased GraphQL issue batch. **Existing batching pattern to extend:** `_fetch_candidate_issue_details_graphql` in `scripts/orchestrate_poll_process.sh`.  
+  **Recommended fix** — When the fallback regex produces issue numbers, batch-fetch those issues’ labels with one aliased GraphQL query before entering the loop, then use the cached label set for dispatch/removal decisions.
+
+- **ID** — BATCH-002  
+  **File path** — `scripts/review_collect_pr_metadata.sh:129-191`  
+  **Severity** — Low  
+  **Category tag** — `api-batching`  
+  **Description** — Linked-issue context is fetched efficiently via one GraphQL call first, but the fallback path parses issue numbers from the PR body and then loops over them with `GET /issues/{n}` one by one. The code caps the list at 20, so the fallback still does up to 20 separate REST reads. **Current worst-case read count:** 1 GraphQL + up to 20 REST reads. **Proposed read count:** 2 GraphQL reads total. **Existing batching pattern to extend:** `_fetch_candidate_issue_details_graphql` in `scripts/orchestrate_poll_process.sh`.  
+  **Recommended fix** — After parsing fallback issue numbers, issue one aliased GraphQL batch over those numbers and build `_linked_context_raw` from that payload instead of looping over `gh api repos/.../issues/{n}`.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **ID** — DUP-001  
+  **File path** — `scripts/tg_helpers.sh:154-278,300-428`  
+  **Severity** — Low  
+  **Category tag** — `duplication`  
+  **Description** — `tg_store_msg_id` and `tg_store_phase_msg_id` are near-identical upsert flows, and `tg_cleanup_phase_msgs` and `tg_cleanup_msgs` are near-identical cleanup flows. The marker syntax changes, but the fetch/parse/update/delete mechanics are duplicated twice.  
+  **Recommended fix** — Keep ownership in `scripts/tg_helpers.sh`, but factor the shared logic into helpers such as `tg_store_marker_msg_id <issue_num> <marker_kind> <marker_key> <msg_id>` and `tg_cleanup_marker_msgs <issue_num> <marker_kind> [marker_key]`. Update callers: `tg_store_msg_id`, `tg_store_phase_msg_id`, `tg_cleanup_phase_msgs`, and `tg_cleanup_msgs`.
+
+- **ID** — DUP-002  
+  **File path** — `scripts/review_collect_pr_metadata.sh:103-113`; `scripts/gh_helpers.sh:735-760`; `scripts/review_rb_judge.sh:852-860`  
+  **Severity** — Medium  
+  **Category tag** — `duplication`  
+  **Description** — `scripts/review_collect_pr_metadata.sh` still open-codes PR payload + issue comments + reviews + review comments hydration, even though `scripts/gh_helpers.sh` already exposes `gh_pr_with_all_comments` for that exact shape, and `scripts/review_rb_judge.sh` already prefers that helper. This leaves two review surfaces to keep in sync.  
+  **Recommended fix** — Make `scripts/gh_helpers.sh::gh_pr_with_all_comments <owner> <repo> <pr_number> [preloaded_meta_json]` the sole owner of this data shape. Update `scripts/review_collect_pr_metadata.sh` to call it and write its `meta/comments/review_comments` outputs into the existing artifact files; keep `scripts/review_rb_judge.sh` on the same helper path.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+No current findings above the requested thresholds.
+
+- I did **not** find any single `${{ ... }}` template expression above 2,000 characters in `.github/workflows/*.yml`.
+- The largest workflow files are `review_autofix.yml` (371,703 chars) and `implement.yml` (287,888 chars), both well below the 800 KB warning threshold.
+- Some interpolated `run:` blocks are large literals, but the embedded `${{ }}` fragments inside them are small; I am not elevating those as current `Exceeded max expression length 21000` risks.
+
+### Section 5: Cross-Cutting Concerns
+
+- **ID** — CONSIST-001  
+  **File path** — `.github/workflows/cancel_on_pr_close.yml:26-53`; `.github/workflows/orchestrate_poll.yml:84-118`; `.github/workflows/mark-stable.yml:401-428`; `.github/workflows/test-and-mark-stable.yml:475-489`  
+  **Severity** — Low  
+  **Category tag** — `consistency`  
+  **Description** — These workflows each re-implement their own rate-limit/backoff wrapper (`_gh_retry` or `gh_api_safe`) with different failure semantics: some return non-zero, some emit empty strings, some write breaker files, some do neither. That drifts away from the canonical retry contract in `scripts/gh_helpers.sh` and makes API-failure handling workflow-specific.  
+  **Recommended fix** — Treat `scripts/gh_helpers.sh::gh_retry` / `curl_gh_api` as the single canonical implementation, and bootstrap that helper through one shared module/composite before these steps so all four workflows converge on the same retry behavior.
+
+- **ID** — DEAD-001  
+  **File path** — `scripts/orchestrate_poll_process.sh:9279-9286`  
+  **Severity** — Low  
+  **Category tag** — `dead-code`  
+  **Description** — `read_standalone_state_json()` is definition-only in repo runtime code; repo-local search found no call site using it. It keeps a second paginated `/issues/{n}/comments` path alive without any active consumer.  
+  **Recommended fix** — Remove the function, or route a real caller through it so the helper has an exercised contract. If it is kept intentionally, add a targeted test that invokes it directly.
+
+- **ID** — DEAD-002  
+  **File path** — `scripts/collect_workflow_logs.py:798-805`  
+  **Severity** — Low  
+  **Category tag** — `dead-code`  
+  **Description** — `list_run_log_excerpts()` is not called by production code; repo-local search only found the definition (plus a test-local fake). It is a thin wrapper over `_fetch_run_log_archive()` and `extract_log_excerpts()` that currently adds maintenance surface without live use.  
+  **Recommended fix** — Remove the wrapper, or switch a real caller to use it so the function’s interface is actually exercised.
+
+Cross-cutting note: I found **no** `TODO` / `FIXME` / `HACK` markers under `.github/workflows` or `scripts`. ShellCheck did report a few low-signal warnings (mostly unused locals / naming reuse), but none rose above the findings listed here.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 0 | — |
+| Medium | 5 | BUG-001, BUG-002, API-001, API-002, DUP-002 |
+| Low | 7 | API-003, BATCH-001, BATCH-002, DUP-001, CONSIST-001, DEAD-001, DEAD-002 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 0 | Small |
+| API call optimization | 5 | Medium |
+| Code modularization | 5 | Medium |
+| Expression size reduction | 0 | Small |
+| Medium/Low fixes | 3 | Small |
