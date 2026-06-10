@@ -1203,6 +1203,9 @@ jobs:
           # falls back to the strict head_sha pin instead of broadening
           # leg (b) with a non-timestamp placeholder.
           BAIT_CREATED_AT=$(jq -r '.commit.committer.date // .commit.author.date // empty | select(type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))' /tmp/bait_resp.json 2>/dev/null || echo "")
+          if [ -z "${BAIT_CREATED_AT}" ]; then
+            echo "::warning::bait_created_at is empty despite bait injection; wait-review leg (b) will be inert (strict head_sha pin only)"
+          fi
           echo "bait_created_at=${BAIT_CREATED_AT}" >> "$GITHUB_OUTPUT"
 
           # Defense-in-depth for "Bug B" (PR #1811): the Contents-API PUT
