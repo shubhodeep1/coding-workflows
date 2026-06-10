@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:Lines ~1409\u20131424 | severity=low | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The comment block/text around the `wait-review` selection is technically inaccurate and potentially misleading about how the \u201coldest in_progress run\u201d is chosen.\n  WHY: This is a maintenance correctness issue, not a runtime failure, but the wording can confuse future edits and lead to fragile behavioral drift.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- .github/workflows/test-and-mark-stable.yml:Lines ~1409\u20131424 | confidence=3 (2 related items)\n  PROBLEM: The comment block/text around the `wait-review` selection is technically inaccurate and potentially misleading about how the \u201coldest in_progress run\u201d is chosen.\n  WHY: Future maintainers could misread the jq ordering semantics and unintentionally alter the selection logic, causing fragile behavioral drift.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_mistral-small-2603 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "dc3af918b8c4da2abfa0527da661bf9f0a5aea67aeb7eb374208956a458cbfa3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3271,
+    "run_id": "27258415267",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27258415267",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260610072407_77a98bd9fa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3271,
+    "run_id": "27258415267"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-10T07:24:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
