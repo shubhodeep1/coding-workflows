@@ -1604,8 +1604,8 @@ def test_review_collect_pr_metadata_helper_strict_fallback_drops_bare_mentions()
 				"repos/owner/repo/pulls/42/reviews": [],
 				"repos/owner/repo/issues/42/comments": [],
 				"repos/owner/repo/pulls/42": {
-					"title": "Docs update referencing issue #7 and issues/8",
-					"body": "Fixes #10\nAlso see owner/repo/issues/12 and github.com/owner/repo/issues/13\nCloses: #14",
+					"title": "Docs update referencing issue #7 and issues/8 plus someotherowner/repo/issues/15",
+					"body": "Fixes #10\nIgnore Fixes #11a and owner/repo/issues/16abc\nAlso see owner/repo/issues/12 and github.com/owner/repo/issues/13\nCloses: #14",
 					"base": {"ref": "main"},
 					"head": {
 						"ref": "feature/ref",
@@ -1651,11 +1651,44 @@ def test_review_collect_pr_metadata_helper_strict_fallback_drops_bare_mentions()
 	assert "Issue #13: Repo URL match" in result["linked_issue_context"]
 	assert "Issue #7:" not in result["linked_issue_context"]
 	assert "Issue #8:" not in result["linked_issue_context"]
+	assert "Issue #11:" not in result["linked_issue_context"]
 	assert "Issue #14:" not in result["linked_issue_context"]
+	assert "Issue #15:" not in result["linked_issue_context"]
+	assert "Issue #16:" not in result["linked_issue_context"]
 	call_texts = [" ".join(call) for call in result["mock_state"]["calls"]]
 	assert not any("repos/owner/repo/issues/7" in call for call in call_texts)
 	assert not any("repos/owner/repo/issues/8" in call for call in call_texts)
+	assert not any("repos/owner/repo/issues/11" in call for call in call_texts)
 	assert not any("repos/owner/repo/issues/14" in call for call in call_texts)
+	assert not any("repos/owner/repo/issues/15" in call for call in call_texts)
+	assert not any("repos/owner/repo/issues/16" in call for call in call_texts)
+
+
+def test_extract_repo_scoped_issue_refs_rejects_malformed_repository_input() -> None:
+	helpers_path = (REPO_ROOT / "scripts" / "gh_helpers.sh").as_posix()
+	script = textwrap.dedent(
+		f"""\
+		set -euo pipefail
+		source \"{helpers_path}\"
+		extract_repo_scoped_issue_refs_from_text \"$REPOSITORY_INPUT\" \"$TEXT_INPUT\"
+		"""
+	)
+
+	for repository_input in ("owner", "owner/repo/extra"):
+		env = os.environ.copy()
+		env.update({
+			"REPOSITORY_INPUT": repository_input,
+			"TEXT_INPUT": "Fixes #12\nowner/repo/issues/13",
+		})
+		result = subprocess.run(
+			["bash", "-lc", script],
+			cwd=str(REPO_ROOT),
+			env=env,
+			capture_output=True,
+			text=True,
+			check=True,
+		)
+		assert result.stdout == ""
 
 
 def test_review_scripts_emit_context_budget_warn_signals() -> None:
@@ -2733,6 +2766,8 @@ def main() -> int:
 	test_review_collect_pr_metadata_helper_supports_no_pr_synthetic_mode()
 	test_review_collect_pr_metadata_helper_skips_optional_pr_reviews_by_default()
 	test_review_collect_pr_metadata_helper_fetches_top_level_reviews_when_break_glass_enabled()
+	test_review_collect_pr_metadata_helper_strict_fallback_drops_bare_mentions()
+	test_extract_repo_scoped_issue_refs_rejects_malformed_repository_input()
 	test_review_scripts_emit_context_budget_warn_signals()
 	test_review_filter_smoke_fixtures_are_present()
 	test_reviewer_risk_tier_classifier_honours_thresholds_and_always_full_regex()
