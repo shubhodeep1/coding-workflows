@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:1486-1499 | severity=medium | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `extract_repo_scoped_issue_refs_from_text` accepts malformed repository inputs, so repo-scoped issue extraction can match references it should reject.\n  WHY: The loose repository-format check lets inputs like `owner/repo/extra` bypass validation and produce false positives from unrelated repositories.\n- tests/test_review_autofix_review_pipeline_contract.py:1497-1499 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603, moonshotai_kimi-k2_5]\n  PROBLEM: The PR metadata assertion uses substring matching, so the test can pass even if the `/pulls/42` metadata call is missing.\n  WHY: `\"repos/owner/repo/pulls/42\"` also matches comment/review endpoints, which can mask a regression; reviewers noted indirect guards, but the assertion itself is imprecise.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"make the early metadata collection the single source of truth for linked issue labels and PR title/body on the normal path; keep fail-open behavior on true cache miss or malformed cache state; gate the top-level PR reviews fetch behind the feature(s) that actually consume it\" (issue #3257)\n  expected_change_site: .github/workflows/review_autofix.yml (gate + post-merge-validate-dispatch) + scripts/review_collect_pr_metadata.sh + scripts/gh_helpers.sh\n  confidence=5\n  flagged_by: [qwen_qwen3_6-plus, x-ai_grok-4_20]\n  EVIDENCE: qwen records the duplicate-fetch requirement under TASK COMPLETENESS / INTENT GAPS, and x-ai says \"(none) \u2014 post_merge_*_json hand-off, cache-first jq parsing with live fallback, optional reviews gate, and repaired parser all landed in the base PR + last-run autofix.\"\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/gh_helpers.sh:1486-1499 | confidence=5\n  PROBLEM: The repository-format validation in `extract_repo_scoped_issue_refs_from_text` is too loose and accepts malformed owner/repo inputs.\n  WHY: That lets repository-scoped issue references from unrelated repositories slip through as matches. (2 related items)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_review_autofix_review_pipeline_contract.py:1497-1499 | confidence=4\n  PROBLEM: The assertion `assert any(\"repos/owner/repo/pulls/42\" in call for call in call_texts)` uses substring matching and could pass even when the actual PR metadata endpoint `/pulls/42` is not called.\n  WHY: The substring \"repos/owner/repo/pulls/42\" is also a prefix of \"/pulls/42/comments\" and \"/pulls/42/reviews\". If the script were refactored to skip the metadata fetch but still fetch comments or reviews, this test would incorrectly pass, giving false confidence that the metadata contract is satisfied.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- Requirement: \"Common-path review steps stop issuing the duplicate PR / linked-issue fetches listed above\" (MERGE-001: post-merge standalone validate dispatch re-queries linked issues/labels; MERGE-002: late ready-to-m\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: \"make the early metadata collection the single source of truth for linked issue labels and PR title/body on the normal path; keep fail-open behavior on true cache miss or malformed cache state; gate the top-level PR reviews fetch behind the feature(s) that actually consume it\" (issue #3257)\n  Expected change site: .github/workflows/review_autofix.yml (gate + post-merge-validate-dispatch) + scripts/review_collect_pr_metadata.sh + scripts/gh_helpers.sh\n  Evidence of absence: (none) \u2014 post_merge_*_json hand-off, cache-first jq parsing with live fallback, optional reviews gate, and repaired parser all landed in the base PR + last-run autofix.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "192963268d45a48af214bebb32b73487aed6a5a8dd227aa573be11b89da27303",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3258,
+    "run_id": "27245126305",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27245126305",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260610011334_e2180a13b1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3258,
+    "run_id": "27245126305"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-10T01:13:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
