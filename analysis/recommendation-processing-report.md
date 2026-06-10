@@ -109,6 +109,7 @@ The filenames below are retained for provenance. The twelve source docs deleted 
 | `apply-safe-internal-review-cleanups` | `internal-review-lazy-default-branch-lookup` | `.github/workflows/internal-review.yml` | verified landed on this ref | `Resolve PR for head branch` now exits on an existing open PR before the later `base_ref="$(gh api "repos/${REPOSITORY}" --jq '.default_branch' ...)"` lookup, so the repo read happens only on the no-PR path. |
 | `apply-safe-implement-diagnose-cleanups` | `implement-diagnose-single-issue-cache-miss-fetch` | `scripts/implement_diagnose_post_codex_failure.sh` | verified landed on this ref | The diagnoser now reads labels/body from `ISSUE_META_FILE` first and only falls back to `GET /issues/{n}` when the cached JSON is missing, mismatched, or unparsable. |
 | `apply-safe-orchestrate-poll-cleanups` | `internal-wrapper-stop-passing-deprecated-caller-workflow` | `.github/workflows/internal-orchestrate-poll.yml` | verified landed on this ref | The internal wrapper now invokes `.github/workflows/orchestrate_poll.yml@main` with no `with: caller_workflow:` pass-through at all. |
+| `sec-001-harden-validation-repo-check-overrides` | `SEC-001` | `scripts/run_validation_repo_checks.sh`, `tests/test_validate_workflow_validate_bootstrap.py` | verified landed on this ref | Override commands are now parsed into argv and executed without `/bin/sh -c`; regression coverage proves a `; touch ...` suffix is not executed and quoted arguments still work. |
 
 ## Actioned recommendations
 - `capture-issue-url-from-create-response` (`apply-safe-e2e-smoke-cleanups`) — `.github/workflows/test-and-mark-stable.yml` now reuses the issue-create response for both `ISSUE_NUMBER` and `ISSUE_URL` instead of immediately re-reading the new issue.
@@ -116,11 +117,12 @@ The filenames below are retained for provenance. The twelve source docs deleted 
 - `internal-review-lazy-default-branch-lookup` (`apply-safe-internal-review-cleanups`) — `.github/workflows/internal-review.yml` now checks for an existing open PR before it reads `default_branch`.
 - `implement-diagnose-single-issue-cache-miss-fetch` (`apply-safe-implement-diagnose-cleanups`) — `scripts/implement_diagnose_post_codex_failure.sh` now reuses `ISSUE_META_FILE` for both label and body recovery before falling back to live issue reads.
 - `internal-wrapper-stop-passing-deprecated-caller-workflow` (`apply-safe-orchestrate-poll-cleanups`) — `.github/workflows/internal-orchestrate-poll.yml` no longer forwards the deprecated `caller_workflow` input into the reusable poller.
+- `SEC-001` (`sec-001-harden-validation-repo-check-overrides`) — `scripts/run_validation_repo_checks.sh` now parses override arguments into argv and executes them without `/bin/sh -c`, and `tests/test_validate_workflow_validate_bootstrap.py` verifies shell metacharacters are not interpreted as extra commands.
 
 The dated 2026-05-15 through 2026-05-23 source-doc outcomes are tracked in the ledger below.
 
 ## Skipped / deferred / closed recommendations
-The remaining 15 deduped recommendations on this ref break down as: 8 already satisfied items, 6 risky deferrals, and 1 obsolete recommendation.
+The remaining 14 deduped recommendations on this ref break down as: 8 already satisfied items, 5 risky deferrals, and 1 obsolete recommendation.
 
 ### Already satisfied on this ref
 - `checkout-before-setup-uv` - `.github/workflows/plan.yml` now performs repository checkout before the later `astral-sh/setup-uv@v7` bootstrap.
@@ -144,7 +146,7 @@ The remaining 15 deduped recommendations on this ref break down as: 8 already sa
 - `remove-caller-workflow-input-entirely` - `.github/workflows/orchestrate_poll.yml` keeps that input as backward-compat surface for existing callers. The live cleanup target is the internal wrapper's redundant pass-through, not the reusable interface.
 
 ## Outcome ledger for the 2026-05-15 through 2026-05-23 backlog docs
-Status keys below are scoped as `<source doc> :: <recommendation id>` because IDs such as `MERGE-001` and `REUSE-001` repeat across the dated reports. `analysis/workflow-optimization-2026-05-23.md` did not use MERGE/REUSE IDs, so its recommendations are grouped under stable heading-text labels. On this ref, the 20 in-scope docs resolve to 41 implemented items, 15 already-satisfied items, 80 intentionally deferred items, and 1 obsolete item.
+Status keys below are scoped as `<source doc> :: <recommendation id>` because IDs such as `MERGE-001` and `REUSE-001` repeat across the dated reports. `analysis/workflow-optimization-2026-05-23.md` did not use MERGE/REUSE IDs, so its recommendations are grouped under stable heading-text labels. On this ref, the 20 in-scope docs resolve to 42 implemented items, 15 already-satisfied items, 79 intentionally deferred items, and 1 obsolete item.
 
 ### `analysis/workflow-optimization-2026-05-15.md`
 - Implemented by sibling work:
@@ -449,6 +451,8 @@ Status keys below are scoped as `<source doc> :: <recommendation id>` because ID
   - broader Semble / overflow-query policy changes — keeping targeted reviewer-context Semble usage while trimming broader implement overflow-query behavior remains deferred until a dedicated retrieval-policy pass.
 
 ### `analysis/workflow-optimization-2026-06-08-2.md`
+- Implemented on this ref:
+  - `SEC-001` — `scripts/run_validation_repo_checks.sh` now parses override strings into argv and executes them without `/bin/sh -c`, and `tests/test_validate_workflow_validate_bootstrap.py` proves a `; touch ...` suffix is not executed while quoted arguments still work.
 - Implemented by sibling work:
   - `ci fast-fail / early stable guard` — sibling issue `#3246 / PR #3252` added the early `test_implementation_failed_*` fast-fail split in `.github/workflows/ci.yml`, and sibling issue `#3247 / PR #3253` added the matching `Phase 0a: Hot orchestrate-poll regression guard` in `.github/workflows/test-and-mark-stable.yml`.
   - `non-blocking workflow-log-analysis wait` — sibling issue `#3247 / PR #3253` changed `.github/workflows/test-and-mark-stable.yml` to stop after dispatch registration plus one child-run snapshot instead of polling the non-blocking `workflow-log-analysis` child to terminal state.
@@ -464,7 +468,6 @@ Status keys below are scoped as `<source doc> :: <recommendation id>` because ID
 - Invalid / obsolete on this ref:
   - `implement git-submodule warning cleanup` — repo-local search only finds the simulated smoke-fixture `git submodule foreach` lines in `.github/workflows/test-and-mark-stable.yml`; there is no live `implement.yml` callsite left to clean up on current HEAD.
 - Intentionally deferred:
-  - `SEC-001` — `scripts/run_validation_repo_checks.sh` still replaces the default checks with raw CLI arguments and executes each override through `timeout ... /bin/sh -c`, so the shell-reparse hardening proposed in sibling issue `#3244` is not present on this ref.
   - `BUG-002` — `scripts/review_rb_judge.sh` still selects `FIRST_ISSUE` / `FIRST_ISSUE_BODY` / `FIRST_ISSUE_LABELS_JSON` from the first linked issue only, so the canonical-parent selection fix remains a behavior change for a dedicated follow-up.
   - `API-001` — `scripts/gh_helpers.sh` still iterates `gh api "${pr_url}"` once per cross-referenced PR URL on the REST fallback path; keep deferred until a batched helper preserves the same fail-open contract.
   - `API-002` — `scripts/review_collect_pr_metadata.sh` still loops `GET /issues/{n}` across fallback issue numbers when GraphQL linked-issue context is missing; batching remains directionally correct but not yet landed.
@@ -490,6 +493,6 @@ Status keys below are scoped as `<source doc> :: <recommendation id>` because ID
 - `analysis/workflow-optimization-2026-06-05-3.md`'s `MERGE-002` is only partially landed on this ref: `scripts/implement_diagnose_post_codex_failure.sh` prefers `ISSUE_META_FILE`, but the cache-miss path still splits live label/body recovery, so the source-doc item is recorded as deferred.
 - `analysis/workflow-optimization-2026-06-08.md` mixed one now-already-satisfied CI regression item with four landed safe-subset fixes and several risky hot-path follow-ups, so this closeout records those buckets separately instead of treating the whole doc as one implementation state.
 - `analysis/workflow-optimization-2026-06-08-2.md`'s API summary row says `NEEDS_VERIFICATION | 3` but then enumerates four IDs (`REUSE-003`, `REUSE-005`, `API-001`, `API-002`); this closeout follows the enumerated IDs rather than the stale count cell.
-- Tracking issue `#3243` treated `#3244` (`SEC-001`) as part of the safe subset, but current HEAD still shells override checks through `/bin/sh -c`; this closeout therefore records `SEC-001` from code state as deferred rather than crediting the closed sibling issue alone.
+- Tracking issue `#3243` treated `#3244` (`SEC-001`) as part of the safe subset, and current HEAD now matches that outcome: override checks are parsed into argv before execution, without `/bin/sh -c`, with regression coverage proving metacharacter suffixes are not executed.
 - PR `#3255` added `extract_repo_scoped_issue_refs_from_text` to `scripts/gh_helpers.sh`, and current HEAD retains that helper body while `.github/workflows/review_autofix.yml`, `scripts/review_collect_pr_metadata.sh`, and `scripts/review_rb_judge.sh` still reuse it for the strict repo-scoped fallback path.
 - With the earlier 2026-05-22/23 source docs, this pass's eight 2026-05-29/06-06 source docs, and `analysis/workflow-optimization-2026-06-08-2.md` now deleted, `.github/workflows/comprehensive-test-and-release.yml` will hit its existing fallback path to `analysis/recommendation-processing-report.md` on future runs.
