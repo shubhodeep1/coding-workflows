@@ -470,3 +470,124 @@ Cross-cutting note: I found **no** `TODO` / `FIXME` / `HACK` markers under `.git
 | Code modularization | 5 | Medium |
 | Expression size reduction | 0 | Small |
 | Medium/Low fixes | 3 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-06-10)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlap is local, same-scope, and can be consolidated without changing retry/error/concurrency behavior. `NEEDS_VERIFICATION` means the overlap is real but static reading cannot prove the merge/removal is behavior-preserving. `RISKY_SKIP` means the duplication exists, but this pass must not auto-recommend implementation because it touches pagination, race-defense, retry/polling, or `scripts/orchestrate_poll_process.sh`.
+
+### Consolidation Candidates (MERGE-###)
+
+- **ID** — MERGE-001  
+  **Safety tag** — SAFE_TO_MERGE  
+  **File path and line ranges** — `scripts/implement_diagnose_post_codex_failure.sh:166-172` and `scripts/implement_diagnose_post_codex_failure.sh:261-273`  
+  **Current call count** — 2 reads on the fallback path where `ISSUE_META_FILE` is unusable and `ISSUE_BODY_FILE` is absent.  
+  **Proposed call count** — 1 read on that same fallback path.  
+  **Endpoint(s)** — `GET /repos/{owner}/{repo}/issues/{issue_number}`  
+  **Evidence** — the script hits the same issue endpoint once for labels, then again for body, with no intervening issue mutation in between.
+  ```sh
+  ISSUE_LABELS_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]' || echo '[]')"
+  ...
+  issue_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}" || true)"
+  ```
+  **Proposed fix** — in `scripts/implement_diagnose_post_codex_failure.sh`, cache the first fallback issue payload as full JSON (for example `ISSUE_FALLBACK_JSON`), derive `ISSUE_LABELS_JSON` from it, and have `fetch_issue_body_to_file()` read `.body` from the same cached JSON before falling back further.  
+  **Safety rationale** — same endpoint, same auth, same retry wrapper, same script invocation, and no intervening mutation affecting the issue payload before the second read.  
+  **Downstream signal** — Cache the first fallback `issues/${ISSUE_NUMBER}` JSON in `implement_diagnose_post_codex_failure.sh` and derive both labels and body from it.
+
+- **ID** — MERGE-002  
+  **Safety tag** — RISKY_SKIP  
+  **File path and line ranges** — `.github/workflows/clarify.yml:427-432`  
+  **Current call count** — 2 reads when `SEMANTIC_CACHE_BACKEND != none`; 1 read otherwise.  
+  **Proposed call count** — 1 read in the cache-enabled branch.  
+  **Endpoint(s)** — `GET /repos/{owner}/{repo}/issues/{issue_number}/comments?sort=created&direction=asc`  
+  **Evidence** — the same step first fetches a bounded comment slice, then refetches the full ordered thread with `--paginate --slurp`.
+  ```sh
+  gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=50" > "${ISSUE_COMMENTS_FILE}"
+  ...
+  gh_retry gh api --paginate --slurp "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=100"
+  ```
+  **Proposed fix** — manual-only: if pursued, make the cache-enabled branch fetch the full thread once into a temp JSON file, derive `ISSUE_COMMENTS_FILE` from the first 50 comments of that aggregate, derive `THREAD_HISTORY_FILE` from the same aggregate, and preserve the current fail-open fallback to the bounded fetch if the paginated read fails.  
+  **Safety rationale** — `RISKY_SKIP` because the merge crosses a `--paginate` boundary, which can change page-shape and fail-open semantics.  
+  **Downstream signal** — Do not auto-implement; manual review must prove that one paginated aggregate preserves the bounded prompt-context contract and current cache-bypass behavior.
+
+- **ID** — MERGE-003  
+  **Safety tag** — RISKY_SKIP  
+  **File path and line ranges** — `scripts/orchestrate_poll_process.sh:7198-7204`  
+  **Current call count** — 2 reads per `final_pr` check on this path.  
+  **Proposed call count** — 1 read per `final_pr` check.  
+  **Endpoint(s)** — `GET /repos/{owner}/{repo}/pulls/{pull_number}`  
+  **Evidence** — the function reads the same PR twice back-to-back for `.state` and `.merged_at != null`.
+  ```sh
+  existing_pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
+  existing_pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+  ```
+  **Proposed fix** — manual-only: hoist one `existing_pr_json` fetch in `finalize_integration_merge_if_needed`, then derive both fields locally.  
+  **Safety rationale** — `RISKY_SKIP` because the code lives in `scripts/orchestrate_poll_process.sh`, which this pass must not auto-optimize.  
+  **Downstream signal** — Manual review required; confirm no race-defense or grep-visible behavior depends on two separate `_safe_gh_jq` invocations before changing this path.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID** — REUSE-001  
+  **Safety tag** — NEEDS_VERIFICATION  
+  **File path and line ranges** — `scripts/review_collect_pr_metadata.sh:104-121`, `.github/workflows/review_autofix.yml:1645-1650`, `.github/workflows/review_autofix.yml:5094-5107`  
+  **Current call count** — 2 full PR reads on the normal PR-backed path: one in `review_collect_pr_metadata.sh`, one later in `Enable auto-merge on PR`.  
+  **Proposed call count** — 1 full PR read on the normal path, with the later read kept only as fallback when `PR_META_FILE` is missing or invalid.  
+  **Endpoint(s)** — `GET /repos/{owner}/{repo}/pulls/{pull_number}`  
+  **Evidence** — the metadata collector already persists PR title/body/head/base into `PR_META_FILE`, but the auto-merge step fetches the full PR again to recover `head.ref` and `body`.
+  ```sh
+  gh_retry "${PR_PAYLOAD_FILE}" api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"
+  ...
+  jq '{ title: (.title // ""), body: (.body // ""), baseRefName: (.base.ref // ""), headRefName: (.head.ref // "") }' "${PR_PAYLOAD_FILE}" > "${PR_META_FILE}"
+  ```
+  ```sh
+  if ! _ORCH_PR_META_JSON="$(gh_retry gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" 2>"${_orch_pr_meta_err_file}")"; then
+  ...
+  _orch_pr_head_ref="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.head.ref // ""' 2>/dev/null || echo "")"
+  ```
+  **Proposed fix** — in the `Enable auto-merge on PR` step, read `headRefName` and `body` from `PR_META_FILE` first; only fall back to `gh_retry gh api "repos/.../pulls/${PR_NUMBER}"` when the file is absent, unparsable, or missing required fields.  
+  **Safety rationale** — overlapping data is already persisted locally, but a human must verify whether mid-run PR-body edits or other freshness concerns are intentionally covered by the live re-fetch.  
+  **Downstream signal** — Verify three things before changing this: (1) `Collect PR metadata` always runs on every PR-backed path before auto-merge enablement, (2) `PR_META_FILE` survives to the auto-merge step, and (3) stale PR body/head-ref data is acceptable for forward-merge and orchestrator-integration suppressors; otherwise keep the live fetch as fallback.
+
+### Dead Calls (DEAD-API-###)
+
+- **ID** — DEAD-API-001  
+  **Safety tag** — NEEDS_VERIFICATION  
+  **File path and line ranges** — `scripts/gh_helpers.sh:1171-1228`  
+  **Current call count** — 0 runtime invocations in this repository (the helper has no in-repo caller).  
+  **Proposed call count** — 0 runtime invocations after removal, or 0 unchanged if retained as an external-only surface.  
+  **Endpoint(s)** — `GET /repos/{repo}/actions/runs` with `branch` and `per_page=30`  
+  **Evidence** — repo-local search only found the helper’s comment and definition, with no caller sites.
+  ```sh
+  if ! response=$(gh_retry gh api \
+    -H "Accept: application/vnd.github+json" \
+    "/repos/${GITHUB_REPOSITORY}/actions/runs" \
+    -f "branch=${head_branch}" \
+    -f "per_page=30" \
+  ```
+  ```text
+  ./scripts/gh_helpers.sh:1124:# autofix_retrigger_has_inflight_peer — ...
+  ./scripts/gh_helpers.sh:1171:autofix_retrigger_has_inflight_peer()
+  ```
+  **Proposed fix** — remove `autofix_retrigger_has_inflight_peer` from `scripts/gh_helpers.sh`, or add a real in-repo caller/test if the helper is meant to remain supported.  
+  **Safety rationale** — repo-local evidence shows the API path is dead here, but `gh_helpers.sh` is a shared helper surface, so external consumers must be checked before deletion.  
+  **Downstream signal** — Verify no consumer repo, wrapper, or documentation relies on `autofix_retrigger_has_inflight_peer`; if none do, delete the helper and its associated audit comment block.
+
+### Cross-References to Deep Audit Section
+
+- API-001: NEEDS_VERIFICATION — agreed; additionally, `.github/workflows/implement.yml:419-433` already writes full issue JSON to `ISSUE_META_FILE`, which strengthens the reuse case but leaves cross-step staleness to verify.
+- API-002: NEEDS_VERIFICATION — agreed; the consolidation is directionally correct, but child/tracking issue bodies can change between steps, so a human should explicitly accept that staleness boundary.
+- API-003: NEEDS_VERIFICATION — agreed; one `/actions/runs/{id}` read per poll iteration is cleaner, but the loop should be smoke-tested because current per-field failures degrade independently.
+- BATCH-001: NEEDS_VERIFICATION — agreed; aliased GraphQL batching is the right replacement, but fallback regex behavior and fail-open label semantics should be compared against the current loop before rollout.
+- BATCH-002: NEEDS_VERIFICATION — agreed; batching the fallback linked-issue reads is correct in principle, but `_linked_context_raw` output should be diffed against the current REST loop on representative PR bodies before changing it.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 1 | MERGE-001 |
+| NEEDS_VERIFICATION | 2 | REUSE-001, DEAD-API-001 |
+| RISKY_SKIP | 2 | MERGE-002, MERGE-003 |
+
+### Implement-Stage Handoff
+
+- MERGE-001
