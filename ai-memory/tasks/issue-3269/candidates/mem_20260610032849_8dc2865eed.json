@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nReviewed the current repo state on `4d0a8014cab86013355660afed1ac66b9ceddf4a` (`orchestrator/project-3243`); the checked-out ref matches the integration-branch metadata.\n\nClarification mapping\n- No `Q1`/`Q2` clarification batch existed.\n- The only answer was `/answer [auto-answered-by-orchestrator]`, which just confirmed continuation.\n\nAutomation / wiring\n- Change type: modify existing code only.\n- Existing entrypoints only: no new scheduler/PR-push wiring, no new script, no new workflow trigger.\n- New supervisor: none.\n- DB work / gate pattern: none.\n- `docs/scripts-pending-removal.md`: no entry needed.\n\nFiles likely to change\n- `scripts/run_validation_repo_checks.sh`\n- `tests/test_validate_workflow_validate_bootstrap.py`\n- `analysis/recommendation-processing-report.md`\n\nWhy `tests/test_validate_workflow_validate_bootstrap.py`\n- It is already invoked directly by CI/stable workflows and is already in the script\u2019s built-in repo-check list, so coverage can be added without changing the default `CHECK_COMMANDS` order.\n\nImplementation plan\n\n1. Harden only the override-execution path in `scripts/run_validation_repo_checks.sh`.\n- Keep the no-argument/default path structurally unchanged so the built-in checks still run in the same order, with the same timeout, working directory, temp-file capture, and `# repo-check start/ok/failed` logging.\n- Split the logic so raw override arguments no longer flow through `timeout ... /bin/sh -c`.\n- Add a small local helper for override execution that converts each override string into an argv list and then runs `timeout \"${CHECK_TIMEOUT_SECS}\"` against that argv directly.\n- Use the existing safe string\u2192argv pattern already present in `scripts/validation_selftest_matrix.py:_stage_runtime` as the model: parse the command string first, then execute without a shell.\n- Preserve logging against the original override string so failure output still points at the exact override the caller passed.\n- Fail closed on malformed/empty override strings instead of silently falling back to shell evaluation.\n\n2. Add narrow regression coverage in the existing validation bootstrap test file.\n- Add a subprocess-based test that runs:\n  `bash scripts/run_validation_repo_checks.sh \"python3 -c 'print(123)' ; touch <tmp>/marker\"`\n- Assert:\n  - the intended Python command still runs,\n  - the script returns success for that intended command,\n  - the marker file is **not** created,\n  - normal repo-check logging is still present.\n- This is a real regression on current HEAD: the extra `touch` command does execute today.\n- Add the new test to that file\u2019s `main()` so existing CI and the repo-check default path pick it up automatically.\n- If needed to preserve compatibility, add one small quoted-argument assertion too, so the hardening does not accidentally break legitimate single-string overrides that contain spaces.\n\n3. Update the closeout report.\n- In `analysis/recommendation-processing-report.md`, move `SEC-001` out of the `Intentionally deferred` bucket for the `analysis/workflow-optimization-2026-06-08-2.md` section.\n- Reclassify it using the report\u2019s current-state wording (`Already satisfied on this ref` is the likely fit).\n- Remove or rewrite the follow-up note that currently says HEAD still shells override checks through `/bin/sh -c`.\n\nData structures / interface changes\n- `CHECK_COMMANDS` remains the built-in array of default check strings.\n- No manifest/schema/env-var changes.\n- No `python-repo-checks` / `REPO_CHECK_ENTRY` contract changes.\n- Behavioral change is limited to override handling: shell metacharacters stop acting as extra commands.\n\nRisks / edge cases / conflicts\n- Out of scope by issue instruction: `workflow-templates/validation-harness/python-repo-checks/tests/40_repo_checks.sh.j2` still uses `/bin/sh -c \"${REPO_CHECK_ENTRY}\"`; do not broaden this follow-up into template-entry redesign.\n- A naive whitespace split would harden metacharacters but break quoted arguments; preserve the current \u201cone override argument = one command string\u201d shape if possible.\n- The source analysis doc named in the report section is already deleted on this ref; the live artifact to update is only `analysis/recommendation-processing-report.md`.\n\nTesting considerations\n- Primary targeted check: `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_workflow_validate_bootstrap.py`\n- If practical after the fix, also do one no-arg smoke run of `scripts/run_validation_repo_checks.sh` to confirm the default built-in path still behaves unchanged.\n\nAssumptions\n- The safest minimal fix is to preserve the existing override CLI shape while removing shell control-operator semantics, rather than redesigning the entry contract.\n\nMissing-context notes\n- No clarification gaps remain.\n- No private/external inputs are needed for this plan.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "26a51a1005ff9c90c6c6fbceba7f0c7a6ac5aa7cafd738b22658b8c1a846ab78",
+  "lineage": {
+    "issue_number": 3269,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27250814642",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27250814642",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3269"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260610032849_8dc2865eed",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3269,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27250814642"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3269",
+  "timestamps": {
+    "created_at": "2026-06-10T03:28:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
