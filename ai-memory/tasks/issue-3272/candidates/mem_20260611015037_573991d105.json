@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Apply only the safe subset of the 2026-06-10 workflow-optimization analysis\",\"issues\":[{\"id\":\"triage-workflow-optimization-2026-06-10\",\"title\":\"Triage `analysis/workflow-optimization-2026-06-10.md` against current HEAD and record outcomes\",\"priority\":1},{\"id\":\"merge-implement-diagnose-issue-fetch\",\"title\":\"Collapse duplicate fallback issue fetches in implement diagnose (`MERGE-001`)\",\"priority\":2},{\"id\":\"remove-collect-workflow-logs-wrapper\",\"title\":\"Remove the unused `list_run_log_excerpts()` wrapper from the workflow-log collector (`DEAD-002`)\",\"priority\":3},{\"id\":\"archive-workflow-optimization-2026-06-10\",\"title\":\"Archive `analysis/workflow-optimization-2026-06-10.md` into the processing report\",\"priority\":4}],\"dependency_edges\":[{\"from\":\"triage-workflow-optimization-2026-06-10\",\"to\":\"merge-implement-diagnose-issue-fetch\"},{\"from\":\"triage-workflow-optimization-2026-06-10\",\"to\":\"remove-collect-workflow-logs-wrapper\"},{\"from\":\"triage-workflow-optimization-2026-06-10\",\"to\":\"archive-workflow-optimization-2026-06-10\"},{\"from\":\"merge-implement-diagnose-issue-fetch\",\"to\":\"archive-workflow-optimization-2026-06-10\"},{\"from\":\"remove-collect-workflow-logs-wrapper\",\"to\":\"archive-workflow-optimization-2026-06-10\"}]}",
+  "fingerprint": "89d497b9d2c2f50ec7579ba10e62c43175777a632625d9ded0139e1db9e80bfa",
+  "lineage": {
+    "issue_number": 3272,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27318079681",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27318079681",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260611015037_573991d105",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3272,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27318079681"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Apply only the safe subset of the 2026-06-10 workflow-optimization analysis' into 4 issues (tracking #3272)",
+  "timestamps": {
+    "created_at": "2026-06-11T01:50:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
