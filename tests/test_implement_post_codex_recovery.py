@@ -97,6 +97,14 @@ def _render_github_expressions(script: str, overrides: dict[str, str] | None = N
 
 
 def _run_shell_script(script: str, *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+	env = dict(env)
+	# The review-autofix runner injects a workspace BASH_ENV hook and main-checkout
+	# git-location variables. These extracted-step tests rely on the explicit
+	# scratch cwd instead, so strip the inherited overrides before launching bash.
+	for key in ("BASH_ENV", "ENV", "WORKSPACE_PATH", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"):
+		env.pop(key, None)
+	env["PWD"] = str(cwd)
+	env.pop("OLDPWD", None)
 	script_path = cwd / "__workflow_step_under_test.sh"
 	script_path.write_text(script, encoding="utf-8")
 	script_path.chmod(0o755)
@@ -111,7 +119,12 @@ def _run_shell_script(script: str, *, cwd: Path, env: dict[str, str]) -> subproc
 
 
 def _git(cmd: list[str], *, cwd: Path) -> None:
-	subprocess.run(cmd, cwd=str(cwd), check=True, capture_output=True, text=True)
+	env = os.environ.copy()
+	for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"):
+		env.pop(key, None)
+	env["PWD"] = str(cwd)
+	env.pop("OLDPWD", None)
+	subprocess.run(cmd, cwd=str(cwd), env=env, check=True, capture_output=True, text=True)
 
 
 def _bootstrap_git_repo(repo_dir: Path) -> None:
@@ -419,6 +432,7 @@ def _run_diagnose_step(
 	issue_body: str,
 	issue_meta_payload: object | None = None,
 	write_issue_body_file: bool = True,
+	issue_api_failures_remaining: int = 0,
 ) -> tuple[subprocess.CompletedProcess[str], dict, Path, dict[str, str]]:
 	repo_dir = _prepare_diagnose_repo(tmp_path)
 	runtime_dir = tmp_path / "runtime"
@@ -452,6 +466,7 @@ def _run_diagnose_step(
 				"issue_body": issue_body,
 				"failed_step_name": failed_step_name,
 				"next_issue_number": 1001,
+				"issue_api_failures_remaining": issue_api_failures_remaining,
 			}
 		),
 		encoding="utf-8",
@@ -1278,7 +1293,7 @@ def test_diagnose_prompt_contract_round_trip_and_fixup_metadata():
 		assert "=== CAPTURED POST-CODEX VALIDATION ERRORS (FULL) ===" in stdin_prompt
 		assert "scanner error on line 3" in stdin_prompt
 		assert "Serena hints:" in stdin_prompt
-		assert "Keep apply_patch as the primary write path in implement-family runs" in stdin_prompt
+		assert "Edit-tool discipline (apply_patch first with fallbacks" in stdin_prompt
 
 		created_issues = state.get("created_issues", [])
 		assert len(created_issues) == 1
@@ -1414,7 +1429,6 @@ def test_diagnose_uses_safe_issue_api_body_fallback_when_issue_meta_invalid_or_m
 			assert proc.returncode == 0, f"case={case_name}\nstdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
 			assert state.get("issue_queries", []) == [
 				"repos/owner/repo/issues/948",
-				"repos/owner/repo/issues/948",
 			], f"case={case_name}"
 			issue_api_calls = [
 				call
@@ -1426,12 +1440,52 @@ def test_diagnose_uses_safe_issue_api_body_fallback_when_issue_meta_invalid_or_m
 			assert ["api", "repos/owner/repo/issues/948"] in issue_api_calls, (
 				f"case={case_name}: body fallback must use the safe _safe_gh_jq JSON fetch without --jq"
 			)
-			assert any("--jq" in call for call in issue_api_calls), (
-				f"case={case_name}: label fallback should still use the jq-filtered issue read"
+			assert all("--jq" not in call for call in issue_api_calls), (
+				f"case={case_name}: memoized fallback should reuse the same non--jq issue payload for labels and body"
 			)
 			assert _read_file(str(runtime_dir / "issue_body_from_api.txt")) == issue_body, (
 				f"case={case_name}: body fallback should still materialize plain-text issue body content"
 			)
+
+
+def test_diagnose_retries_issue_api_after_exhausted_label_fetch_failures() -> None:
+	previous_retry_budget = os.environ.get("GH_RETRY_MAX_ATTEMPTS")
+	os.environ["GH_RETRY_MAX_ATTEMPTS"] = "2"
+	try:
+		with tempfile.TemporaryDirectory(prefix="test_diag_retry_") as td:
+			tmp_path = Path(td)
+			issue_body = "Issue context\n\nTracking issue: #829\n"
+			proc, state, runtime_dir, paths = _run_diagnose_step(
+				tmp_path,
+				issue_labels=["ai:implementing"],
+				capture_contents="===== broken.yml =====\nerror\n",
+				codex_mode="success",
+				codex_output={
+					"status": "harness_error",
+					"diagnosis": "diag",
+					"fix_issues": [],
+					"harness_fixes": "rerun validator",
+				},
+				failed_step_name="Validate syntax of changed files",
+				issue_body=issue_body,
+				issue_meta_payload='{"number": 948, "labels": [',
+				write_issue_body_file=False,
+				issue_api_failures_remaining=2,
+			)
+
+			assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+			assert state.get("issue_queries", []) == [
+				"repos/owner/repo/issues/948",
+				"repos/owner/repo/issues/948",
+				"repos/owner/repo/issues/948",
+			]
+			assert _read_file(str(runtime_dir / "issue_body_from_api.txt")) == issue_body
+			assert issue_body.strip() in _read_file(paths["stdin_file"])
+	finally:
+		if previous_retry_budget is None:
+			os.environ.pop("GH_RETRY_MAX_ATTEMPTS", None)
+		else:
+			os.environ["GH_RETRY_MAX_ATTEMPTS"] = previous_retry_budget
 
 
 def test_diagnose_posts_dependency_notes_for_fix_issue_edges():
