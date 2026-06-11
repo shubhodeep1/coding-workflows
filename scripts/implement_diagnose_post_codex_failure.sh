@@ -157,6 +157,19 @@ issue_meta_matches_issue() {
   jq -er --arg issue_num "${ISSUE_NUMBER}" '(.number | tostring) == $issue_num' "${meta_file}" >/dev/null 2>&1
 }
 
+FALLBACK_ISSUE_JSON_FETCH_ATTEMPTED=false
+FALLBACK_ISSUE_JSON=""
+
+fetch_fallback_issue_json() {
+	if [ "${FALLBACK_ISSUE_JSON_FETCH_ATTEMPTED}" = "true" ]; then
+		return 0
+	fi
+
+	FALLBACK_ISSUE_JSON_FETCH_ATTEMPTED=true
+	FALLBACK_ISSUE_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}" || true)"
+	return 0
+}
+
 # Reuse the cached issue snapshot when available — see the
 # "Fetch issue metadata" step.  Falls back to a fresh API
 # call when the file is missing OR jq fails to parse it
@@ -168,7 +181,11 @@ if issue_meta_matches_issue "${ISSUE_META_FILE:-}"; then
   ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}" 2>/dev/null || true)"
 fi
 if [ -z "${ISSUE_LABELS_JSON}" ]; then
-  ISSUE_LABELS_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]' || echo '[]')"
+  fetch_fallback_issue_json
+  ISSUE_LABELS_JSON="$(printf '%s' "${FALLBACK_ISSUE_JSON}" | jq -c '[.labels[].name]' 2>/dev/null || true)"
+fi
+if [ -z "${ISSUE_LABELS_JSON}" ]; then
+  ISSUE_LABELS_JSON='[]'
 fi
 if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:implementation-failed") != null' >/dev/null 2>&1; then
   echo "Issue #${ISSUE_NUMBER} already has ai:implementation-failed label; skipping post-Codex diagnosis."
@@ -269,7 +286,8 @@ fetch_issue_body_to_file() {
 		: > "${output_file}"
 	fi
 
-	issue_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}" || true)"
+	fetch_fallback_issue_json
+	issue_json="${FALLBACK_ISSUE_JSON}"
 	if printf '%s' "${issue_json}" | jq -jre 'if has("body") then (.body // "") else error("missing body") end' > "${output_file}" 2>/dev/null; then
 		return 0
 	fi
