@@ -795,17 +795,6 @@ def _fetch_run_log_archive(
         return payload
 
 
-def list_run_log_excerpts(
-    repo: str,
-    run_id: int,
-    *,
-    token: str,
-    max_chars: int = LOG_EXCERPT_MAX_CHARS,
-) -> list[dict[str, str]]:
-    payload = _fetch_run_log_archive(repo, run_id, token=token)
-    return extract_log_excerpts(payload, max_chars=max_chars)
-
-
 def extract_failure_point(jobs: list[dict[str, Any]]) -> dict[str, str | None]:
     for job in jobs:
         for step in job.get("steps") or []:
