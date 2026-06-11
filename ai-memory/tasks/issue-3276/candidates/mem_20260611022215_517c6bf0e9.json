@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nRef context\n- Commit: `a8d65d985521e08d1c6bfdf9177569726fc4f091`\n- Checked-out branch: `orchestrator/project-3272`\n- Integration branch metadata: `orchestrator/project-3272`\n- Integration branch mismatch: none\n\nClarification mapping\n- No `Q1`/`Q2` clarification batch was issued.\n- The `/answer [auto-answered-by-orchestrator]` comment therefore just confirms \u201cproceed with the issue as written\u201d; it does not add scope beyond the issue body.\n\nAutomation / wiring\n- Change type: modify existing code only.\n- Existing entry point: `scripts/implement_diagnose_post_codex_failure.sh`, reached from the implement phase (`.github/workflows/implement.yml`); no new scheduler, PR-push hook, or workflow wiring is needed.\n- New supervisor: none.\n- DB work / gate pattern: none.\n- `docs/scripts-pending-removal.md` entry: not needed, because no new script/supervisor is being introduced.\n\nConflict check\n- No factual conflicts found.\n- The current code matches the issue description: the duplicate fallback issue reads are at `scripts/implement_diagnose_post_codex_failure.sh:171` and `:272`.\n\nImplementation plan\n\n1. Files likely to change\n- `scripts/implement_diagnose_post_codex_failure.sh`\n\n2. Functions / modules to implement\n- Add one script-local fallback issue JSON cache path near `issue_meta_matches_issue()`:\n  - fetch `repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}` at most once per script invocation,\n  - keep the raw fallback JSON (or remembered empty/unusable result) for reuse,\n  - preserve `ISSUE_META_FILE` as the first preference whenever it matches the current issue and parses cleanly.\n- Update the label-read block (`ISSUE_LABELS_JSON` initialization around lines 166-172) to:\n  - use the shared cached fallback JSON instead of its own one-off API call,\n  - derive `[.labels[].name]` locally,\n  - keep the current `[]` default on fetch/jq failure.\n- Update `fetch_issue_body_to_file()` (around lines 261-279) to:\n  - reuse the same cached fallback JSON instead of calling the endpoint again,\n  - keep today\u2019s body extraction semantics,\n  - still write an empty file when the fallback fetch fails, the JSON is unusable, or the JSON lacks a usable `body`.\n\n3. Data structures affected\n- Existing:\n  - `ISSUE_LABELS_JSON` stays a JSON-array string.\n  - `ISSUE_BODY_FILE` semantics stay unchanged.\n- New internal state:\n  - one or two script-scoped cache variables/flags to hold the fallback issue JSON and whether the fallback fetch was already attempted.\n\n4. API / interface changes\n- No external interface changes.\n- Same endpoint: `GET /repos/{owner}/{repo}/issues/{issue_number}`\n- Same retry wrapper: `gh_retry _safe_gh_jq`\n- Same env var names, outputs, logging shape, and fail-open behavior.\n\n5. Risks / edge cases\n- `set -euo pipefail`: cache variables must be initialized before first use, and jq/API failures must remain guarded so the script still degrades safely.\n- A valid issue body can be empty; the implementation must preserve the current `has(\"body\")` / `(.body // \"\")` behavior rather than treating empty output as failure.\n- A valid labels array can be `[]`; do not mistake that for a failed fetch.\n- If `ISSUE_META_FILE` is mismatched, truncated, or unparsable, fallback behavior must remain safe and unchanged.\n- Assumption: \u201ccache the first fallback issue JSON within this script invocation\u201d means no second fallback issue fetch should occur later in the same run, even if the first fallback result is empty or unusable; downstream behavior should still stay at today\u2019s empty/default outputs.\n\n6. Testing considerations\n- Minimum required validation:\n  - `bash -n scripts/implement_diagnose_post_codex_failure.sh`\n- Focused behavior to verify during implementation:\n  - when `ISSUE_META_FILE` is valid for the current issue, nothing changes;\n  - when `ISSUE_META_FILE` is unusable and `ISSUE_BODY_FILE` is absent, the script reuses one fallback issue payload for both labels and body handling;\n  - when the fallback fetch fails or returns unusable JSON, labels still fall back to `[]` and the body file still becomes empty.\n\nAssumptions\n- No new automated test file should be added; the issue explicitly constrains the change to this script and only requires `bash -n` at minimum.\n- The change is intended to be surgical and internal-only.\n\nMissing context\n- No dedicated automated test harness for this script was identified in the inspected scope, so verification is expected to stay lightweight.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "12cf318bccc767ba529db47e8b10abb4683f328ffbc24da44c63b9095d063cc4",
+  "lineage": {
+    "issue_number": 3276,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27319396076",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27319396076",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3276"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260611022215_517c6bf0e9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3276,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27319396076"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3276",
+  "timestamps": {
+    "created_at": "2026-06-11T02:22:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
