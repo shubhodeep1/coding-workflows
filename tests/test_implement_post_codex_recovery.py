@@ -1441,7 +1441,7 @@ def test_diagnose_uses_safe_issue_api_body_fallback_when_issue_meta_invalid_or_m
 				f"case={case_name}: body fallback must use the safe _safe_gh_jq JSON fetch without --jq"
 			)
 			assert all("--jq" not in call for call in issue_api_calls), (
-				f"case={case_name}: memoized fallback should reuse the same non---jq issue payload for labels and body"
+				f"case={case_name}: memoized fallback should reuse the same non--jq issue payload for labels and body"
 			)
 			assert _read_file(str(runtime_dir / "issue_body_from_api.txt")) == issue_body, (
 				f"case={case_name}: body fallback should still materialize plain-text issue body content"
