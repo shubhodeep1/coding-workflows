@@ -165,8 +165,12 @@ fetch_fallback_issue_json() {
 		return 0
 	fi
 
-	FALLBACK_ISSUE_JSON_FETCH_ATTEMPTED=true
 	FALLBACK_ISSUE_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}" || true)"
+	if printf '%s' "${FALLBACK_ISSUE_JSON}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+		FALLBACK_ISSUE_JSON_FETCH_ATTEMPTED=true
+	else
+		FALLBACK_ISSUE_JSON=""
+	fi
 	return 0
 }
 
@@ -182,7 +186,7 @@ if issue_meta_matches_issue "${ISSUE_META_FILE:-}"; then
 fi
 if [ -z "${ISSUE_LABELS_JSON}" ]; then
   fetch_fallback_issue_json
-  ISSUE_LABELS_JSON="$(printf '%s' "${FALLBACK_ISSUE_JSON}" | jq -c '[.labels[].name]' 2>/dev/null || true)"
+  ISSUE_LABELS_JSON="$(printf '%s' "${FALLBACK_ISSUE_JSON}" | jq -c '[.labels[]?.name]' 2>/dev/null || true)"
 fi
 if [ -z "${ISSUE_LABELS_JSON}" ]; then
   ISSUE_LABELS_JSON='[]'
