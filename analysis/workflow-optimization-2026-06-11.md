@@ -367,3 +367,121 @@ No repository-specific API hygiene rules were provided in this window; the audit
 | `Other MCP servers observed` | none | `0` | `0` | `0` | `0` | `0` | `0` | `0` | No other `<NAME>_QUERY`, `<NAME>_FALLBACK`, or `<NAME>_PROBE` lines found |
 
 **Semble availability note:** three `orchestrate_poll` summaries (`27328474705`, `27326635345`, `27326545610`) logged `SEMBLE_AVAILABLE: false` / `SEMBLE_INDEX_AVAILABLE: false`, but no `SEMBLE_FALLBACK` lines were observed.
+
+## Deep Audit — Workflows & Scripts (2026-06-11)
+
+### Section 1: Bug & Correctness Sweep
+
+#### BUG-001
+- **File path / line range** — `scripts/tg_helpers.sh:296-356,365-427`
+- **Severity** — Medium
+- **Category tag** — `bug`
+- **Description** — `tg_cleanup_phase_msgs()` and `tg_cleanup_msgs()` paginate `issues/{n}/comments?per_page=100&page=${page}`, delete matching tracking comments from the same issue inside that loop, then advance `page`. Because the collection is mutated while it is being paged, later matching comments can shift onto an earlier page and be skipped, leaving stale Telegram tracking comments and undeleted TG message IDs behind.
+- **Recommended fix** — Fetch a stable snapshot first, extract all matching comment IDs/message IDs, then delete from that frozen list. If page-at-a-time fetching must stay, re-query `page=1` until no matching `<!-- tg_* -->` marker remains.
+
+#### BUG-002
+- **File path / line range** — `.github/workflows/clarify.yml:334-340,423-427,1063-1082,1225-1239`; `.github/workflows/plan.yml:383-389,421-427,481-500,1888-1898`; `.github/workflows/orchestrate.yml:959-977`; `.github/workflows/orchestrate_clarify_respond.yml:423-449,1309-1318`
+- **Severity** — Medium
+- **Category tag** — `bug`
+- **Description** — These steps make `source scripts/gh_helpers.sh` explicitly optional via `2>/dev/null || true`, then immediately call `gh_retry` with no local fallback. If `gh_helpers.sh` is missing or fails to source, the step stops being fail-open and instead hard-fails under `set -euo pipefail` when `gh_retry` is undefined. The repo already uses the safe bootstrap pattern elsewhere, e.g. `plan.yml:1687-1697` and `implement.yml:1251-1252,1386-1387`.
+- **Recommended fix** — After every optional `source scripts/gh_helpers.sh 2>/dev/null || true`, add the standard shim `type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }`, plus `_safe_gh_jq` where needed. If the helper is truly required, remove `|| true` and fail early with an explicit missing-helper error instead.
+
+_No additional high-confidence secret-leak, shell-injection, or YAML-structure defects were found beyond the already-documented issues in the current report._
+
+### Section 2: GitHub API Call Redundancy Audit
+
+_Already documented in the current report and intentionally not repeated here: the duplicate PR-files fetch in `review_gate`, the duplicate issue GET in `implement_diagnose_post_codex_failure.sh`, and the oversized `review_autofix` check-run polling path._
+
+#### API-001
+- **File path / line range** — `.github/workflows/orchestrate_clarify_respond.yml:62-84,423-449`
+- **Severity** — Low
+- **Category tag** — `api-redundancy`
+- **Description** — `Check orchestrator metadata` fetches the child issue once and conditionally fetches the tracking issue title once; `Fetch issue and tracking context` then fetches the same child issue again and fetches the tracking issue body again. On the common orchestrator-managed path with a tracking issue, current call count is **4 issue GETs for 2 resources**.
+- **Recommended fix** — Persist the first-step child/tracking payloads into `RUNTIME_DIR` or step outputs and reuse them in the second step, following the cycle-local cache pattern used in `scripts/orchestrate_poll_process.sh:11256-11292`. **Current call count:** 4 GETs. **Proposed call count:** 2 GETs.
+
+#### API-002
+- **File path / line range** — `.github/workflows/test-and-mark-stable.yml:2963-2972`
+- **Severity** — Low
+- **Category tag** — `api-redundancy`
+- **Description** — Inside the 600-second wait loop, each poll iteration calls `repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}` twice: once for `.status`, then again for `.conclusion`. **Current call count:** 2 run GETs per iteration.
+- **Recommended fix** — Fetch `{status, conclusion}` once per poll iteration and parse both fields locally, using the `_safe_gh_jq` pattern from `scripts/gh_helpers.sh:520-546` or a shared `gh_api_safe` wrapper. **Proposed call count:** 1 run GET per iteration.
+
+#### API-003
+- **File path / line range** — `.github/workflows/review_autofix.yml:823-860`
+- **Severity** — Medium
+- **Category tag** — `api-batching`
+- **Description** — When `issue_nodes_json` reaches the linked-issue loop with `labels_known != true`, the workflow calls `gh issue view ... --json labels` once per linked issue. That makes the fallback path cost **N REST calls for N linked issues**, even though this repo already has batched GraphQL issue-fetch patterns.
+- **Recommended fix** — Batch-hydrate missing labels before the loop with an aliased GraphQL query, using the same style as `scripts/orchestrate_poll_process.sh:10585-10708` (or chunked at 25 items like that helper). **Current call count:** N REST calls on the fallback path. **Proposed call count:** 1 GraphQL call for up to 25 issues per batch.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001
+- **File path / line range** — `.github/workflows/test-and-mark-stable.yml:493-505,626-638,845-857,1336-1355,2553-2564`; `scripts/comprehensive_test_and_release_gh_api.sh:3-40`; `.github/workflows/comprehensive-test-and-release.yml:48-56,282-287`
+- **Severity** — Medium
+- **Category tag** — `duplication`
+- **Description** — `test-and-mark-stable.yml` defines five near-identical `gh_api_safe()` wrappers inline, while the repo already has a shared implementation in `scripts/comprehensive_test_and_release_gh_api.sh` that is sourced by `comprehensive-test-and-release.yml`. The copies have already drifted slightly in stderr handling and logging behavior.
+- **Recommended fix** — Make `scripts/comprehensive_test_and_release_gh_api.sh` the owner. **Function signature:** `gh_api_safe <gh api args...>` with result returned via `GH_API_SAFE_OUTPUT`. **Callers to update:** the five inline blocks in `test-and-mark-stable.yml`.
+
+#### DUP-002
+- **File path / line range** — `.github/workflows/clarify.yml:56-128`; `.github/workflows/plan.yml:107-182`; `.github/workflows/validate.yml:84-157`; `.github/workflows/orchestrate_clarify_respond.yml:91-164`; `.github/workflows/implement.yml:293-366`; `scripts/resolve_integration_ref.sh:1-92`
+- **Severity** — Medium
+- **Category tag** — `duplication`
+- **Description** — The same staging wrapper for integration-ref resolution is repeated across five workflows: create temp dirs, clone `shubhodeep1/coding-workflows`, fetch the resolver ref, mask auth in clone logs, run `scripts/resolve_integration_ref.sh`, and clean up. Any future fix to auth masking, fallback ref logic, or staging layout now requires five edits.
+- **Recommended fix** — Keep `scripts/resolve_integration_ref.sh` as the pure resolver and extract the staging wrapper into a shared script. **Owning module:** new `scripts/stage_and_resolve_integration_ref.sh`. **Function signature:** `stage_and_resolve_integration_ref <issue_number> <repo_slug> <resolver_repo> <resolver_ref>`. **Callers to update:** `clarify.yml`, `plan.yml`, `validate.yml`, `orchestrate_clarify_respond.yml`, and `implement.yml`.
+
+#### DUP-003
+- **File path / line range** — `scripts/label_helpers.sh:112-207`; `.github/workflows/issue_pr_status.yml:313-327`; `.github/workflows/review_autofix.yml:4661-4700,4881-4890,5935-5948`
+- **Severity** — Low
+- **Category tag** — `duplication`
+- **Description** — Multiple workflows redefine simplified fallbacks for `ensure_label_exists` / `set_issue_phase_label_resilient` even though `scripts/label_helpers.sh` already owns the canonical implementations. The inline copies are weaker: they only POST the target label and do not preserve/replace phase labels the way the canonical helper does.
+- **Recommended fix** — Make `scripts/label_helpers.sh` the sole owner. **Function signatures:** `ensure_label_exists <label_name> [repo]` and `set_issue_phase_label_resilient <issue_number> <target_label> [repo]`. **Callers to update:** `issue_pr_status.yml` and the three late-stage label paths in `review_autofix.yml`.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+#### EXPR-001
+- **File path / line range** — `.github/workflows/implement.yml:3465-3840`
+- **Severity** — Medium
+- **Category tag** — `expression-limit`
+- **Description** — The `Commit changes` `run:` block normalizes to approximately **17,502 characters** and contains `${{ }}` interpolations, leaving only about **3,498 characters** of headroom before GitHub Actions’ **21,000-character** expression limit. This repository has already hit that limit in other workflows per the pre-audit context.
+- **Recommended fix** — Extract the commit/staging/destructive-guard flow into an external script (preferred, e.g. `scripts/implement_commit_changes.sh`) and keep only small env wiring in YAML, or split the block into separate steps for artifact cleanup, staging, destructive/scope guards, and no-op handling.
+
+_Scan result: this was the only interpolated `run:` block above 15,000 characters. The next largest was `review_autofix.yml:1768-2114` at approximately 14,586 characters. No workflow file exceeds 800 KB; the largest is `review_autofix.yml` at 376,477 bytes._
+
+### Section 5: Cross-Cutting Concerns
+
+_Repo-wide scan note: no `TODO` / `FIXME` / `HACK` markers were present in `.github/workflows/*.yml` or `scripts/*.{sh,py}`._
+
+#### DEAD-001
+- **File path / line range** — `scripts/orchestrate_poll_process.sh:9279-9286,11294-11326`
+- **Severity** — Low
+- **Category tag** — `dead-code`
+- **Description** — `read_standalone_state_json()` is a full wrapper that re-fetches paginated issue comments and then calls `_extract_standalone_state_json_from_comments()`, but the live standalone-stall loop already has `comments_json` and calls the pure parser directly at `11325-11326`. Repo-local search of workflows/scripts found no caller of `read_standalone_state_json()`.
+- **Recommended fix** — Remove the unused wrapper, or route the live caller through it if a public helper is still desired. As written, it preserves an extra dormant comments-fetch path with no active consumer.
+
+#### SHELL-001
+- **File path / line range** — `scripts/review_conflict_resolve.sh:431-439,954-958`
+- **Severity** — Low
+- **Category tag** — `shellcheck`
+- **Description** — `RESOLVER_ESCALATION_COMMENT_MARKER` is assigned in shell but never read, while the exact same literal is separately hard-coded inside the embedded Python block as `ESCALATION_COMMENT_MARKER`. This is an SC2034-style unused-variable warning and a drift risk because the shell and Python values can silently diverge.
+- **Recommended fix** — Keep one source of truth: either pass the marker into Python via env/argv and delete the duplicated Python constant, or remove the unused shell variable entirely.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 0 | — |
+| Medium | 6 | BUG-001, BUG-002, API-003, DUP-001, DUP-002, EXPR-001 |
+| Low | 5 | API-001, API-002, DUP-003, DEAD-001, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---|---|
+| Critical/High bug fixes | 0 | Small |
+| API call optimization | 3 workflows (+ optional shared helper touch) | Medium |
+| Code modularization | 8 workflows + 2 scripts | Large |
+| Expression size reduction | 1 workflow + 1 helper script | Medium |
+| Medium/Low fixes | 7 files | Medium |
