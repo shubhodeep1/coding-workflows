@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"E2E orchestrate smoke 27328808462: two parallel canary file updates\",\"issues\":[{\"id\":\"smoke-canary-a\",\"title\":\"Set tests/e2e_smoke_canary.txt smoke status and run marker\",\"priority\":1},{\"id\":\"smoke-canary-b\",\"title\":\"Set tests/e2e_smoke_canary_b.txt smoke status and run marker\",\"priority\":1}],\"dependency_edges\":[]}",
+  "fingerprint": "e5255ed89092333963f58cf16d9ef8982a1afe162e40cf4766ce6b9a7f10f352",
+  "lineage": {
+    "issue_number": 3285,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27328834591",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27328834591",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20260611064334_a3e95a6738",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3285,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27328834591"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'E2E orchestrate smoke 27328808462: two parallel canary file updates' into 2 issues (tracking #3285)",
+  "timestamps": {
+    "created_at": "2026-06-11T06:43:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
