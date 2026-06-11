@@ -101,7 +101,7 @@ def _run_shell_script(script: str, *, cwd: Path, env: dict[str, str]) -> subproc
 	# The review-autofix runner injects a workspace BASH_ENV hook and main-checkout
 	# git-location variables. These extracted-step tests rely on the explicit
 	# scratch cwd instead, so strip the inherited overrides before launching bash.
-	for key in ("BASH_ENV", "ENV", "WORKSPACE_PATH", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+	for key in ("BASH_ENV", "ENV", "WORKSPACE_PATH", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"):
 		env.pop(key, None)
 	env["PWD"] = str(cwd)
 	env.pop("OLDPWD", None)
@@ -1293,7 +1293,7 @@ def test_diagnose_prompt_contract_round_trip_and_fixup_metadata():
 		assert "=== CAPTURED POST-CODEX VALIDATION ERRORS (FULL) ===" in stdin_prompt
 		assert "scanner error on line 3" in stdin_prompt
 		assert "Serena hints:" in stdin_prompt
-		assert "Keep apply_patch as the primary write path" in stdin_prompt
+		assert "Edit-tool discipline (apply_patch first with fallbacks" in stdin_prompt
 
 		created_issues = state.get("created_issues", [])
 		assert len(created_issues) == 1
