@@ -68,9 +68,14 @@ name: Test & Mark Stable Release
           reviewer models + editor), so this has a higher default.
           The timer resets on any detected progress (step transitions,
           new commits, review comments, log output growth).
+          Raised 30→40 after run 27328808462 (v1.17.0): a pre-bait
+          implement-phase review held the `pr-autofix-<PR>` concurrency
+          lock (cancel-in-progress: false) for ~37m on a slow reviewer
+          LLM step (~29m), serialising the bait review behind it; the
+          extra headroom absorbs that contention.
         required: false
         type: number
-        default: 30
+        default: 40
       review_workflow_file:
         description: >
           Filename (under .github/workflows/ in TEST_REPO) of the
@@ -323,7 +328,7 @@ jobs:
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
       PHASE_TIMEOUT: ${{ inputs.phase_timeout || 30 }}
       PLAN_PHASE_TIMEOUT: ${{ inputs.plan_timeout || inputs.phase_timeout || 60 }}
-      REVIEW_TIMEOUT: ${{ inputs.review_timeout || inputs.phase_timeout || 30 }}
+      REVIEW_TIMEOUT: ${{ inputs.review_timeout || inputs.phase_timeout || 40 }}
       POLL_INTERVAL: 10
       # Wrapper-workflow filename used by the smoke gate to dispatch
       # / poll review_autofix runs. Defaults to the source repo's
@@ -1403,8 +1408,10 @@ jobs:
               #   (a) carry head_sha == PIN_SHA — the Phase 3c
               #       workflow_dispatch fallback and the bait
               #       pull_request:synchronize run; OR
-              #   (b) were in flight when the bait commit landed
-              #       (created_at <= BAIT_CREATED_AT <= updated_at).
+              #   (b) were in flight when the bait commit landed:
+              #       created_at <= BAIT_CREATED_AT AND the run is still
+              #       active — either updated_at >= BAIT_CREATED_AT OR
+              #       status == "in_progress".
               # Leg (b) recovers the original PR-open review run: it is
               # triggered on the pre-bait head SHA (so its run-level
               # head_sha never equals BAIT_SHA and leg (a) misses it),
@@ -1417,21 +1424,43 @@ jobs:
               # the original review runs long they stay queued/pending
               # past REVIEW_TIMEOUT and the loop, pinned to a 0-activity
               # pending sibling, ages out — the failure on runs
-              # 27137020958 / 27244093614 (v1.17.0). Leg (b) lets the
-              # loop watch the actually-running review instead; its
-              # growing job log registers as activity each poll and
+              # 27137020958 / 27244093614 / 27328808462 (v1.17.0). Leg (b)
+              # lets the loop watch the actually-running review instead;
+              # its growing job log registers as activity each poll and
               # resets the inactivity timer until it completes.
               # The BAIT_CREATED_AT guard (!= "") keeps leg (b) inert
-              # when no bait was injected, and the updated_at >= bound
-              # excludes the historical stale-implement-review false
-              # match (run 25147636528) which COMPLETED before the bait.
+              # when no bait was injected.
+              #
+              # The `or .status == "in_progress"` half is load-bearing:
+              # the original updated_at >= BAIT_CREATED_AT bound alone
+              # produced a FALSE NEGATIVE on run 27328808462. There the
+              # PR-open review's codex-agent job started ~2m BEFORE the
+              # bait and then ran a single ~37m job with no further
+              # run-level state transitions, so the runs-list API reported
+              # its `updated_at` frozen at the pre-bait job-start time
+              # (< BAIT_CREATED_AT) for the whole 30m window. The bound
+              # therefore rejected the very run leg (b) exists to catch,
+              # the loop fell through to the queued-sibling fallback, and
+              # the phase aged out. A run created at/before the bait that
+              # is STILL in_progress was necessarily in flight when the
+              # bait landed (it has not finished and review_autofix checks
+              # out the live tip), so status alone is a sound in-flight
+              # signal independent of the frozen timestamp.
+              #
+              # Both legs still exclude the historical stale-implement-
+              # review false match (run 25147636528) which COMPLETED
+              # before the bait: a completed run is neither updated_at >=
+              # BAIT_CREATED_AT (it stopped before the bait) nor
+              # status == "in_progress".
               #
               # Preference order over $m:
               #   1. newest completed non-cancelled run (terminal accept);
-              #   2. oldest in_progress run that already spanned the bait
-              #      timestamp — this is the original long-running PR-open
-              #      review, and it must win over a newer caller workflow
-              #      run that is merely blocked behind it;
+              #   2. oldest in_progress run created at/before the bait —
+              #      this is the original long-running PR-open review
+              #      (in flight when the bait landed), and it must win
+              #      over a newer caller workflow run that is merely
+              #      blocked behind it. (No updated_at bound here: see
+              #      the run 27328808462 frozen-timestamp note above.)
               #   3. newest in_progress run (generic active-run fallback);
               #   4. newest non-cancelled run (queued/pending fallback);
               #   5. newest run overall (all cancelled).
@@ -1439,7 +1468,7 @@ jobs:
               # wins over an active sibling (preserves the run-26989483268
               # fix).
               REVIEW_RUN=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&per_page=100" \
-                --jq "[.workflow_runs[] | select(.name | test(\"Review|review|autofix|self-healing\"; \"i\")) | select(.head_sha == \"${PIN_SHA}\" or (\"${BAIT_CREATED_AT:-}\" != \"\" and .created_at <= \"${BAIT_CREATED_AT:-}\" and .updated_at >= \"${BAIT_CREATED_AT:-}\"))] as \$m | (\$m | map(select(.status == \"completed\" and .conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | map(select(.status == \"in_progress\" and \"${BAIT_CREATED_AT:-}\" != \"\" and .created_at <= \"${BAIT_CREATED_AT:-}\" and .updated_at >= \"${BAIT_CREATED_AT:-}\")) | sort_by(.created_at) | first) // (\$m | map(select(.status == \"in_progress\")) | sort_by(.created_at) | last) // (\$m | map(select(.conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | sort_by(.created_at) | last)" || echo "")
+                --jq "[.workflow_runs[] | select(.name | test(\"Review|review|autofix|self-healing\"; \"i\")) | select(.head_sha == \"${PIN_SHA}\" or (\"${BAIT_CREATED_AT:-}\" != \"\" and .created_at <= \"${BAIT_CREATED_AT:-}\" and (.updated_at >= \"${BAIT_CREATED_AT:-}\" or .status == \"in_progress\")))] as \$m | (\$m | map(select(.status == \"completed\" and .conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | map(select(.status == \"in_progress\" and \"${BAIT_CREATED_AT:-}\" != \"\" and .created_at <= \"${BAIT_CREATED_AT:-}\")) | sort_by(.created_at) | first) // (\$m | map(select(.status == \"in_progress\")) | sort_by(.created_at) | last) // (\$m | map(select(.conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | sort_by(.created_at) | last)" || echo "")
             else
               REVIEW_RUN=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&event=pull_request&per_page=5" \
                 --jq '[.workflow_runs[] | select(.name | test("Review|review|autofix|self-healing"; "i"))] | sort_by(.created_at) | last' || echo "")
