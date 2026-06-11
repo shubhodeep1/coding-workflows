@@ -209,6 +209,7 @@ def test_main_reuses_cached_snapshot_on_304_and_skips_jobs_and_logs() -> None:
 		}
 		cached_row = collector.compute_run_metrics("owner/repo", cached_run, jobs=[])
 		cached_row["log_excerpts"] = [{"step_name": "failure", "excerpt": "cached log"}]
+		cached_row["cost_telemetry"] = {"or_total_tokens": 0}
 
 		cache_payload = {
 			"schema_version": "v1",
@@ -229,7 +230,7 @@ def test_main_reuses_cached_snapshot_on_304_and_skips_jobs_and_logs() -> None:
 		orig_cache_write = collector._cache_write_context
 		orig_list_runs = collector.list_runs_for_repo
 		orig_list_jobs = collector.list_jobs_for_run
-		orig_list_logs = collector.list_run_log_excerpts
+		orig_fetch_logs = collector._fetch_run_log_archive
 
 		calls = {"jobs": 0, "logs": 0}
 		persisted: dict[str, dict] = {}
@@ -251,15 +252,15 @@ def test_main_reuses_cached_snapshot_on_304_and_skips_jobs_and_logs() -> None:
 			calls["jobs"] += 1
 			raise AssertionError("jobs API should be skipped when cached row exists")
 
-		def fake_list_run_log_excerpts(*args: object, **kwargs: object):
+		def fake_fetch_run_log_archive(*args: object, **kwargs: object):
 			calls["logs"] += 1
-			raise AssertionError("logs API should be skipped when cached excerpt exists")
+			raise AssertionError("log archive fetch should be skipped when cached data exists")
 
 		collector._cache_read_context = fake_cache_read_context
 		collector._cache_write_context = fake_cache_write_context
 		collector.list_runs_for_repo = fake_list_runs_for_repo
 		collector.list_jobs_for_run = fake_list_jobs_for_run
-		collector.list_run_log_excerpts = fake_list_run_log_excerpts
+		collector._fetch_run_log_archive = fake_fetch_run_log_archive
 		try:
 			rc = collector.main(
 				[
@@ -278,7 +279,7 @@ def test_main_reuses_cached_snapshot_on_304_and_skips_jobs_and_logs() -> None:
 			collector._cache_write_context = orig_cache_write
 			collector.list_runs_for_repo = orig_list_runs
 			collector.list_jobs_for_run = orig_list_jobs
-			collector.list_run_log_excerpts = orig_list_logs
+			collector._fetch_run_log_archive = orig_fetch_logs
 
 		assert rc == 0
 		assert calls == {"jobs": 0, "logs": 0}
@@ -286,6 +287,7 @@ def test_main_reuses_cached_snapshot_on_304_and_skips_jobs_and_logs() -> None:
 		assert report["summary"]["total_runs"] == 1
 		assert report["runs"][0]["run_id"] == 501
 		assert report["runs"][0]["log_excerpts"] == [{"step_name": "failure", "excerpt": "cached log"}]
+		assert report["runs"][0]["cost_telemetry"] == {"or_total_tokens": 0}
 		assert "payload" in persisted
 
 
