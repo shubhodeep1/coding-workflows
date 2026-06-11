@@ -485,3 +485,140 @@ _Repo-wide scan note: no `TODO` / `FIXME` / `HACK` markers were present in `.git
 | Code modularization | 8 workflows + 2 scripts | Large |
 | Expression size reduction | 1 workflow + 1 helper script | Medium |
 | Medium/Low fixes | 7 files | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-06-11)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlap is fully proven safe to collapse without changing retry/pagination/error semantics; `NEEDS_VERIFICATION` means the overlap is real but at least one semantic invariant still needs a human or follow-up analysis to confirm; `RISKY_SKIP` means the duplication is visible but sits in pagination/retry/race-defensive code that must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001 — NEEDS_VERIFICATION
+- **File path / line ranges** — `scripts/review_collect_pr_metadata.sh:154-159`, `scripts/review_collect_pr_metadata.sh:182-207`
+- **Current call count / proposed call count** — fallback-hydration portion: `N` REST issue GETs (`N <= 20`) after the existing GraphQL miss → `1` aliased GraphQL batch for up to 20 fallback issues.
+- **Endpoint(s)** — current: `POST /graphql` for `pullRequest.closingIssuesReferences`, then `GET /repos/{repo}/issues/{issue_number}` per fallback issue; proposed: keep the existing `closingIssuesReferences` query and replace the per-issue REST loop with one aliased GraphQL batch.
+- **Evidence**
+  ```sh
+  if gh_retry "${_linked_tmp}" api graphql \
+    -f owner="${REPOSITORY_OWNER}" \
+    -f name="${REPOSITORY_NAME}" \
+    -F number="${PR_NUMBER}" \
+    -f query='query(...) { ... closingIssuesReferences(first:50){nodes{number title body}} ... }'
+  ```
+
+  ```sh
+  if [ "${_linked_context_raw}" = "[]" ] && [ "${LINKED_ISSUE_FALLBACK_NUMBERS_JSON}" != "[]" ]; then
+    _FALLBACK_MAX_ISSUES=20
+    ...
+    while IFS= read -r _fb_num; do
+      if gh_retry "${_fb_issue_tmp}" api "repos/${REPOSITORY}/issues/${_fb_num}" \
+        --jq '{number: (.number // 0), title: (.title // ""), body: (.body // "")}'; then
+  ```
+- **Proposed fix** — In `scripts/review_collect_pr_metadata.sh`, replace the `while ... gh_retry ... api "repos/${REPOSITORY}/issues/${_fb_num}"` loop with one chunked aliased GraphQL lookup returning `{number,title,body}` for the capped fallback set, using the `_fetch_candidate_issue_details_graphql` style from `scripts/orchestrate_poll_process.sh`; keep the current REST loop only as the fail-open fallback when the batch query fails or omits a node.
+- **Safety rationale** — This is not in a retry/poller path, but it changes a fallback-only transport from per-issue REST to batched GraphQL, so it does not meet the strict “same endpoint / same semantics” bar for `SAFE_TO_MERGE`.
+- **Downstream signal** — Verify on a PR with multiple body-text fallback issue refs that (1) `LINKED_ISSUE_CONTEXT_FILE` ordering/content is unchanged, (2) missing/404 issues still warn-and-skip exactly once, and (3) a batch-query failure still falls back to the current REST loop.
+
+#### MERGE-002 — RISKY_SKIP
+- **File path / line ranges** — `.github/workflows/clarify.yml:423-443`
+- **Current call count / proposed call count** — when `SEMANTIC_CACHE_BACKEND != none`: `2` comment GETs → `1` merged fetch on the success path.
+- **Endpoint(s)** — `GET /repos/{repo}/issues/{issue_number}/comments`
+- **Evidence**
+  ```sh
+  # Keep clarify prompt context bounded to preserve historical behavior.
+  gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=50" > "${ISSUE_COMMENTS_FILE}"
+
+  if [ "${SEMANTIC_CACHE_BACKEND}" != "none" ]; then
+    if ! gh_retry gh api --paginate --slurp "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=100" \
+      | jq -r 'add // [] | .[] | ...' > "${THREAD_HISTORY_FILE}"; then
+  ```
+- **Proposed fix** — In the `Fetch issue comments` step, when semantic cache is enabled, fetch the full comment history once into a temp JSON file, derive `ISSUE_COMMENTS_FILE` from the first 50 chronological comments, and derive `THREAD_HISTORY_FILE` from the full merged array; keep the current single-call path when semantic cache is disabled.
+- **Safety rationale** — One of the calls is paginated (`--paginate --slurp`), and the policy explicitly marks pagination merges as `RISKY_SKIP` because page-boundary and fail-open semantics can change.
+- **Downstream signal** — Do not auto-implement; manual review must confirm that the merged path still preserves the 50-comment prompt bound and the current semantic-cache fail-open sentinel behavior on API failure.
+
+#### MERGE-003 — RISKY_SKIP
+- **File path / line ranges** — `scripts/orchestrate_poll_process.sh:7123`, `scripts/orchestrate_poll_process.sh:7198-7204`
+- **Current call count / proposed call count** — `2` pull GETs → `1` pull GET on the recorded-final-PR branch.
+- **Endpoint(s)** — `GET /repos/{repo}/pulls/{pull_number}`
+- **Evidence**
+  ```sh
+  finalize_integration_merge_if_needed() {
+    ...
+    existing_pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
+    existing_pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+  ```
+- **Proposed fix** — If this is ever changed manually, fetch the PR JSON once inside `finalize_integration_merge_if_needed()` and derive both `.state` and `.merged_at != null` locally.
+- **Safety rationale** — This lives inside `scripts/orchestrate_poll_process.sh`, which the policy explicitly treats as a race-defensive path that must be `RISKY_SKIP` even when the duplicate endpoint is obvious.
+- **Downstream signal** — Do not auto-implement; manual review must prove that no race-defense, retry diagnostics, or log-grep consumer depends on those two reads remaining separate.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001 — NEEDS_VERIFICATION
+- **File path / line ranges** — `scripts/review_rb_judge.sh:720-725`, `scripts/review_rb_judge.sh:749-772`
+- **Current call count / proposed call count** — on the `closingIssuesReferences` path: `1` GraphQL query + `1..N` issue GETs → `1` GraphQL query with no extra issue GETs on that path.
+- **Endpoint(s)** — current: `POST /graphql` for `pullRequest.closingIssuesReferences`, then `GET /repos/{repo}/issues/{issue_number}`; proposed: extend the existing GraphQL query to include the body/labels already needed later.
+- **Evidence**
+  ```sh
+  ISSUE_NUMBERS="$(gh_retry gh api graphql \
+    ...
+    -f query='query(...) { ... closingIssuesReferences(first: 50) { nodes { number } } ... }' \
+    --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].number' || true)"
+  ```
+
+  ```sh
+  # Labels of the parent (FIRST_ISSUE) issue. Captured from the same
+  # REST GET that already fetches the body ...
+  while IFS= read -r issue_number; do
+    ISSUE_META_JSON="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" || echo '{}')"
+    BODY="$(printf '%s' "${ISSUE_META_JSON}" | jq -r '.body // ""' 2>/dev/null || echo "")"
+    if [ -z "${FIRST_ISSUE}" ]; then
+      FIRST_ISSUE="${issue_number}"
+      FIRST_ISSUE_LABELS_JSON="$(printf '%s' "${ISSUE_META_JSON}" | jq -c '[(.labels // [])[]?.name]' 2>/dev/null || echo '[]')"
+  ```
+- **Proposed fix** — Extend the existing `closingIssuesReferences` query in `scripts/review_rb_judge.sh` to request `number`, `body`, and `labels(first: 50) { nodes { name } }`; build `FIRST_ISSUE`, `FIRST_ISSUE_BODY`, and `FIRST_ISSUE_LABELS_JSON` from that payload, and keep the current REST loop only when `ISSUE_NUMBERS` came from `LINKED_ISSUE_FALLBACK_NUMBERS_JSON` / PR-text fallback or the GraphQL payload is missing required fields.
+- **Safety rationale** — The reuse is local to one script execution and extends an existing query, but it changes the “first issue / first non-empty body” derivation path, so it needs verification before it can satisfy the `SAFE_TO_MERGE` semantics bar.
+- **Downstream signal** — Verify on PRs with multiple linked issues that (1) `FIRST_ISSUE` stays pinned to the first linked issue, (2) `FIRST_ISSUE_BODY` still picks the first non-empty body, and (3) PR-text fallback numbers still use the current REST path.
+
+#### REUSE-002 — NEEDS_VERIFICATION
+- **File path / line ranges** — `.github/workflows/implement.yml:92-105`, `.github/workflows/implement.yml:417-434`, `.github/workflows/implement.yml:1254-1255`
+- **Current call count / proposed call count** — on non-skipped implement runs before `ISSUE_META_FILE` exists: `2` issue GETs → `1` issue GET.
+- **Endpoint(s)** — `GET /repos/{repo}/issues/{issue_number}`
+- **Evidence**
+  ```sh
+  ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '{state: (.state // "open"), labels: [.labels[].name]}')"
+  ```
+
+  ```sh
+  issue_meta_json=""
+  if ! issue_meta_json="$(gh_api_with_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"; then
+    ...
+  fi
+  printf '%s\n' "${issue_meta_json}" > "${ISSUE_META_FILE}"
+  ```
+
+  ```sh
+  if [ ! -s "${ISSUE_META_FILE}" ]; then
+    gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
+  fi
+  ```
+- **Proposed fix** — In `Precheck approval phase label`, capture the full issue JSON once (not just the `{state,labels}` projection), carry it across the step boundary via a temp file or multiline env handoff, and have `Resolve integration/default checkout ref and cache issue metadata` populate `ISSUE_META_FILE` from that cached payload before falling back to a live GET; keep the existing `Fetch issue metadata` file gate unchanged.
+- **Safety rationale** — The calls hit the same issue endpoint with identical auth and no intervening issue mutation, but the reuse crosses workflow steps and must preserve the later step’s current fail-open branch-selection behavior, so static reading alone cannot prove `SAFE_TO_MERGE`.
+- **Downstream signal** — Verify on both normal and skip paths that (1) the cached full issue JSON survives the step boundary, (2) `Resolve integration/default checkout ref...` still falls back to `DEFAULT_CHECKOUT_REF` when the cache is missing/corrupt, and (3) `Fetch issue metadata` remains a no-op when `ISSUE_META_FILE` is already present.
+
+### Dead Calls (DEAD-API-###)
+No findings.
+
+### Cross-References to Deep Audit Section
+- API-001: NEEDS_VERIFICATION — the child/tracking issue payload reuse is real, but it spans workflow steps and needs cache-path/output verification before it is safe.
+- API-002: RISKY_SKIP — the duplicate run GET sits inside a wait loop, so loop/race semantics must be reviewed manually rather than auto-merged.
+- API-003: NEEDS_VERIFICATION — batching the linked-issue label hydration is directionally correct, but replacing per-issue REST with GraphQL still needs payload-parity verification.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 3 | `MERGE-001`, `REUSE-001`, `REUSE-002` |
+| RISKY_SKIP | 2 | `MERGE-002`, `MERGE-003` |
+
+### Implement-Stage Handoff
+No SAFE_TO_MERGE findings in this pass.
