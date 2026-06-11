@@ -169,6 +169,8 @@ fetch_fallback_issue_json() {
 	FALLBACK_ISSUE_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}" || true)"
 	if ! printf '%s' "${FALLBACK_ISSUE_JSON}" | jq -e 'type == "object"' >/dev/null 2>&1; then
 		FALLBACK_ISSUE_JSON=""
+		# Let a later caller retry once gh_retry has exhausted this fetch.
+		FALLBACK_ISSUE_JSON_FETCH_ATTEMPTED=false
 	fi
 	return 0
 }
