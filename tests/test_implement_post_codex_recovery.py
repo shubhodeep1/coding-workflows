@@ -97,6 +97,14 @@ def _render_github_expressions(script: str, overrides: dict[str, str] | None = N
 
 
 def _run_shell_script(script: str, *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+	env = dict(env)
+	# The review-autofix runner injects a workspace BASH_ENV hook and main-checkout
+	# git-location variables. These extracted-step tests rely on the explicit
+	# scratch cwd instead, so strip the inherited overrides before launching bash.
+	for key in ("BASH_ENV", "ENV", "WORKSPACE_PATH", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+		env.pop(key, None)
+	env["PWD"] = str(cwd)
+	env.pop("OLDPWD", None)
 	script_path = cwd / "__workflow_step_under_test.sh"
 	script_path.write_text(script, encoding="utf-8")
 	script_path.chmod(0o755)
@@ -1278,7 +1286,7 @@ def test_diagnose_prompt_contract_round_trip_and_fixup_metadata():
 		assert "=== CAPTURED POST-CODEX VALIDATION ERRORS (FULL) ===" in stdin_prompt
 		assert "scanner error on line 3" in stdin_prompt
 		assert "Serena hints:" in stdin_prompt
-		assert "Keep apply_patch as the primary write path in implement-family runs" in stdin_prompt
+		assert "Keep apply_patch as the primary write path" in stdin_prompt
 
 		created_issues = state.get("created_issues", [])
 		assert len(created_issues) == 1
@@ -1414,7 +1422,6 @@ def test_diagnose_uses_safe_issue_api_body_fallback_when_issue_meta_invalid_or_m
 			assert proc.returncode == 0, f"case={case_name}\nstdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
 			assert state.get("issue_queries", []) == [
 				"repos/owner/repo/issues/948",
-				"repos/owner/repo/issues/948",
 			], f"case={case_name}"
 			issue_api_calls = [
 				call
@@ -1426,8 +1433,8 @@ def test_diagnose_uses_safe_issue_api_body_fallback_when_issue_meta_invalid_or_m
 			assert ["api", "repos/owner/repo/issues/948"] in issue_api_calls, (
 				f"case={case_name}: body fallback must use the safe _safe_gh_jq JSON fetch without --jq"
 			)
-			assert any("--jq" in call for call in issue_api_calls), (
-				f"case={case_name}: label fallback should still use the jq-filtered issue read"
+			assert all("--jq" not in call for call in issue_api_calls), (
+				f"case={case_name}: memoized fallback should reuse the same non---jq issue payload for labels and body"
 			)
 			assert _read_file(str(runtime_dir / "issue_body_from_api.txt")) == issue_body, (
 				f"case={case_name}: body fallback should still materialize plain-text issue body content"

@@ -384,6 +384,7 @@ Status keys below are scoped as `<source doc> :: <recommendation id>` because ID
 - Implemented by sibling work:
   - `review stall-guard contract restore` — `scripts/orchestrate_poll_process.sh` now restores and validates the `REVIEW_RUN_MAX_RUNTIME_MINUTES` default that the CI failures in this doc called out.
   - `thread-reuse contract update` — `scripts/codex_thread_reuse.sh` now carries the shared timeout wrapper and helper-based wiring that `tests/test_codex_thread_reuse_core.py` asserts on this ref, so the old literal-shell contract failure no longer matches current code.
+- Implemented on this ref:
   - `MERGE-002` — `scripts/implement_diagnose_post_codex_failure.sh` now reuses `ISSUE_META_FILE` first and one fallback issue payload for both label/body recovery, so the split cache-miss path from this doc is no longer present on current HEAD.
 - Intentionally deferred:
   - `MERGE-001` — `.github/workflows/clarify.yml` still does separate prompt-context and semantic-cache comment fetches.
@@ -392,8 +393,8 @@ Status keys below are scoped as `<source doc> :: <recommendation id>` because ID
   - `implement reasoning tiering / support-checkout reduction / dispatcher collapse / conflict-tail cleanup` — the broader implement-cost and review-failure-tail changes from this doc remain deferred.
 
 ### `analysis/workflow-optimization-2026-06-06.md`
-- Implemented by sibling work:
-  - `DEAD-API-002` — sibling issue `#3276 / PR #3278` removed `list_run_log_excerpts()` from `scripts/collect_workflow_logs.py`, so the unused wrapper this doc flagged is no longer present on current HEAD.
+- Implemented on this ref:
+  - `DEAD-API-002` — `list_run_log_excerpts()` is now removed from `scripts/collect_workflow_logs.py`, so the unused wrapper this doc flagged is no longer present on current HEAD.
 - Already satisfied on this ref:
   - `missing-log negative cache` — `scripts/collect_workflow_logs.py` now caches missing-log-archive failures within a pass instead of repeatedly re-fetching the same 404.
   - `keep-semble-defer-serena` — current workflow defaults still keep Semble enabled and Serena disabled.
@@ -486,9 +487,9 @@ Status keys below are scoped as `<source doc> :: <recommendation id>` because ID
 
 ### `analysis/workflow-optimization-2026-06-10.md`
 - Repeated 2026-06-10 recommendations are grouped under stable labels below so every concrete numbered item / bullet / ID is accounted for once.
-- Implemented by sibling work:
+- Implemented on this ref:
   - `MERGE-001` — `scripts/implement_diagnose_post_codex_failure.sh` now reuses `ISSUE_META_FILE` first and one fallback issue payload for both label/body recovery, so the split cache-miss path this source doc flagged is no longer present on current HEAD.
-  - `DEAD-002` — sibling issue `#3276 / PR #3278` removed `list_run_log_excerpts()` from `scripts/collect_workflow_logs.py`; repo-local search on this ref now finds only report/source-doc references, not a live production definition.
+  - `DEAD-002` — `list_run_log_excerpts()` is now removed from `scripts/collect_workflow_logs.py`; repo-local search on this ref now finds only report/source-doc references, not a live production definition.
 - Already satisfied on this ref:
   - `serena-disabled-rollout` — refs: Reliability-5. `.github/workflows/review_autofix.yml` and `.github/workflows/implement.yml` still default `SERENA_ENABLED=false`, so the doc's main operational conclusion — do not spend effort debugging absent Serena traffic until the rollout is intentionally enabled — already matches current HEAD.
   - `ai-memory-claim-hardening` — refs: Reliability-1; Per-repo top 3 #2. `scripts/ai_memory.py` already defaults `AI_MEMORY_PUSH_RETRIES` to `8`, and `cmd_processed_command_claim()` now catches `MemoryGitError`, re-reads the shared branch, and returns a duplicate-claim success when the entry already exists instead of hard-failing the workflow.
