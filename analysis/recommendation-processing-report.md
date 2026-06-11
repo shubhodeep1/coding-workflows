@@ -147,7 +147,7 @@ The remaining 14 deduped recommendations on this ref break down as: 8 already sa
 - `remove-caller-workflow-input-entirely` - `.github/workflows/orchestrate_poll.yml` keeps that input as backward-compat surface for existing callers. The live cleanup target is the internal wrapper's redundant pass-through, not the reusable interface.
 
 ## Outcome ledger for the 2026-05-15 through 2026-05-23 backlog docs
-Status keys below are scoped as `<source doc> :: <recommendation id>` because IDs such as `MERGE-001` and `REUSE-001` repeat across the dated reports. `analysis/workflow-optimization-2026-05-23.md` did not use MERGE/REUSE IDs, so its recommendations are grouped under stable heading-text labels. On this ref, the 21 in-scope docs resolve to 44 implemented items, 19 already-satisfied items, 95 intentionally deferred items, and 3 invalid or obsolete items.
+Status keys below are scoped as `<source doc> :: <recommendation id>` because IDs such as `MERGE-001` and `REUSE-001` repeat across the dated reports. `analysis/workflow-optimization-2026-05-23.md` did not use MERGE/REUSE IDs, so its recommendations are grouped under stable heading-text labels. On this ref, the 21 in-scope docs resolve to 46 implemented items, 19 already-satisfied items, 93 intentionally deferred items, and 3 invalid or obsolete items.
 
 ### `analysis/workflow-optimization-2026-05-15.md`
 - Implemented by sibling work:
@@ -260,7 +260,7 @@ Status keys below are scoped as `<source doc> :: <recommendation id>` because ID
 
 ### `analysis/workflow-optimization-2026-05-20-2.md`
 - Implemented by sibling work:
-  - `MERGE-001` — `scripts/implement_diagnose_post_codex_failure.sh` now reuses `ISSUE_META_FILE` before a second issue GET.
+  - `MERGE-001` — `scripts/implement_diagnose_post_codex_failure.sh` now reuses `ISSUE_META_FILE` first and one fallback issue payload for both label/body recovery.
   - `REUSE-001` — `scripts/review_rb_judge.sh` now reuses `_pr_meta` on the GraphQL-miss path.
 - Intentionally deferred:
   - `MERGE-002` — `scripts/review_conflict_resolve.sh` still does separate `gh run list` calls for `in_progress` and `queued`.
@@ -384,9 +384,9 @@ Status keys below are scoped as `<source doc> :: <recommendation id>` because ID
 - Implemented by sibling work:
   - `review stall-guard contract restore` — `scripts/orchestrate_poll_process.sh` now restores and validates the `REVIEW_RUN_MAX_RUNTIME_MINUTES` default that the CI failures in this doc called out.
   - `thread-reuse contract update` — `scripts/codex_thread_reuse.sh` now carries the shared timeout wrapper and helper-based wiring that `tests/test_codex_thread_reuse_core.py` asserts on this ref, so the old literal-shell contract failure no longer matches current code.
+  - `MERGE-002` — `scripts/implement_diagnose_post_codex_failure.sh` now reuses `ISSUE_META_FILE` first and one fallback issue payload for both label/body recovery, so the split cache-miss path from this doc is no longer present on current HEAD.
 - Intentionally deferred:
   - `MERGE-001` — `.github/workflows/clarify.yml` still does separate prompt-context and semantic-cache comment fetches.
-  - `MERGE-002` — `scripts/implement_diagnose_post_codex_failure.sh` now reuses `ISSUE_META_FILE` first, but the cache-miss path still splits live label and body recovery into separate `GET /issues/{n}` calls instead of one shared fallback fetch.
   - `MERGE-003` — `.github/workflows/test-and-mark-stable.yml` still keeps the two-read SHA stability probe plus a later PR metadata read.
   - `REUSE-001` — `.github/workflows/orchestrate_clarify_respond.yml` and `scripts/resolve_integration_ref.sh` still re-fetch the child issue body across gate, helper, and prompt-assembly paths.
   - `implement reasoning tiering / support-checkout reduction / dispatcher collapse / conflict-tail cleanup` — the broader implement-cost and review-failure-tail changes from this doc remain deferred.
@@ -487,6 +487,7 @@ Status keys below are scoped as `<source doc> :: <recommendation id>` because ID
 ### `analysis/workflow-optimization-2026-06-10.md`
 - Repeated 2026-06-10 recommendations are grouped under stable labels below so every concrete numbered item / bullet / ID is accounted for once.
 - Implemented by sibling work:
+  - `MERGE-001` — `scripts/implement_diagnose_post_codex_failure.sh` now reuses `ISSUE_META_FILE` first and one fallback issue payload for both label/body recovery, so the split cache-miss path this source doc flagged is no longer present on current HEAD.
   - `DEAD-002` — sibling issue `#3276 / PR #3278` removed `list_run_log_excerpts()` from `scripts/collect_workflow_logs.py`; repo-local search on this ref now finds only report/source-doc references, not a live production definition.
 - Already satisfied on this ref:
   - `serena-disabled-rollout` — refs: Reliability-5. `.github/workflows/review_autofix.yml` and `.github/workflows/implement.yml` still default `SERENA_ENABLED=false`, so the doc's main operational conclusion — do not spend effort debugging absent Serena traffic until the rollout is intentionally enabled — already matches current HEAD.
@@ -510,7 +511,6 @@ Status keys below are scoped as `<source doc> :: <recommendation id>` because ID
   - `clarify-respond-issue-tracking-batching` — refs: API-002. `.github/workflows/orchestrate_clarify_respond.yml` still reads the child issue and tracking issue in `Check orchestrator metadata`, then re-fetches the child issue and tracking issue again in `Fetch issue and tracking context`.
   - `review-metadata-and-linked-issue-batching` — refs: GH API audit #1; BATCH-001; BATCH-002; DUP-002; REUSE-001; Pipeline Flow Bottlenecks #5. `scripts/review_collect_pr_metadata.sh` still open-codes PR/comment hydration instead of calling `gh_pr_with_all_comments`; its fallback linked-issue path still loops `gh api "repos/${REPOSITORY}/issues/${_fb_num}"`; `scripts/review_rb_judge.sh` already uses the shared helper; and `.github/workflows/review_autofix.yml` still falls back to per-issue `gh issue view ... --json labels` plus a later live `pulls/${PR_NUMBER}` fetch in `Enable auto-merge on PR`. The duplication is real, but it still sits on the hot review path.
   - `shared-retry-wrapper-consolidation` — refs: GH API audit #3; CONSIST-001. `.github/workflows/cancel_on_pr_close.yml`, `.github/workflows/mark-stable.yml`, and `.github/workflows/test-and-mark-stable.yml` still carry their own `_gh_retry` / `gh_api_safe` shells, and `cancel_on_pr_close.yml` still calls `gh api -i /rate_limit` inside that local wrapper before it has proven there are runs to cancel.
-  - `implement-diagnose-fallback-issue-collapse` — refs: MERGE-001. `scripts/implement_diagnose_post_codex_failure.sh` still prefers `ISSUE_META_FILE`, but when that cache is unusable it still reads labels via one `GET /issues/{ISSUE_NUMBER}` and separately calls `fetch_issue_body_to_file()` for the body. The cleanup remains directionally correct, but current HEAD still carries the split cache-miss path.
   - `clarify-comment-fetch-collapse` — refs: MERGE-002. `.github/workflows/clarify.yml` still keeps the bounded `per_page=50` comment snapshot for prompt context and, when semantic cache is enabled, a second paginated read for `THREAD_HISTORY_FILE`. The duplication is real, but the source doc itself marked it manual / `RISKY_SKIP`, and prior report entries already defer it.
   - `orchestrate-poll-hot-path-cleanups` — refs: MERGE-003; DEAD-001. `scripts/orchestrate_poll_process.sh` still contains the final-merge PR double-read cleanup the source doc flagged, and `read_standalone_state_json()` is still definition-only on repo-local search. This report continues to treat `orchestrate_poll_process.sh` cleanup as explicit hot-path follow-up work.
   - `orchestrator-tool-status-observability` — refs: Orchestrator Health "emit final tool availability after setup" and "track ..." bullets. The recommendation is still plausible, but this pass did not find a small already-landed repo change that cleanly closes it; it remains broader observability / log-contract work rather than a report-safe cleanup.
@@ -523,7 +523,7 @@ Status keys below are scoped as `<source doc> :: <recommendation id>` because ID
 - The approved plan's stale-repo warning for the five `safe_to_apply` items was no longer true by implementation time: current repo state shows those cleanups already merged, so this report records them as actioned.
 - `analysis/workflow-optimization-2026-05-23.md` did not use MERGE/REUSE-style IDs, so the ledger groups its repeated source recommendations under stable heading-text labels when multiple sections point at the same landed change.
 - The 2026-05-29 through 2026-06-06 source docs also repeated some recommendations across speed/cost/reliability/API sections, so the ledger groups those repeats under stable short labels within each per-doc section.
-- `analysis/workflow-optimization-2026-06-05-3.md`'s `MERGE-002` is only partially landed on this ref: `scripts/implement_diagnose_post_codex_failure.sh` prefers `ISSUE_META_FILE`, but the cache-miss path still splits live label/body recovery, so the source-doc item is recorded as deferred.
+- `analysis/workflow-optimization-2026-06-05-3.md`'s `MERGE-002` is fully landed on this ref: `scripts/implement_diagnose_post_codex_failure.sh` now reuses `ISSUE_META_FILE` first and one fallback issue payload for both label/body recovery.
 - `analysis/workflow-optimization-2026-06-08.md` mixed one now-already-satisfied CI regression item with four landed safe-subset fixes and several risky hot-path follow-ups, so this closeout records those buckets separately instead of treating the whole doc as one implementation state.
 - `analysis/workflow-optimization-2026-06-08-2.md`'s API summary row says `NEEDS_VERIFICATION | 3` but then enumerates four IDs (`REUSE-003`, `REUSE-005`, `API-001`, `API-002`); this closeout follows the enumerated IDs rather than the stale count cell.
 - Tracking issue `#3243` treated `#3244` (`SEC-001`) as part of the safe subset, and current HEAD now matches that outcome: override checks are parsed into argv before execution, without `/bin/sh -c`, with regression coverage proving metacharacter suffixes are not executed.
