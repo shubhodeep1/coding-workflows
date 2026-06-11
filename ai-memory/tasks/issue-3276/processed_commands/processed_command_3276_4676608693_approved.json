@@ -5,13 +5,23 @@
   "entry_id": "processed_command_3276_4676608693_approved",
   "issue_number": 3276,
   "metadata": {
+    "branch": "ai/issue-3276",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      "scripts/implement_diagnose_post_codex_failure.sh"
+    ],
+    "issue_number": 3276,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/3276",
+    "pr_number": 3278,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/3278",
+    "run_attempt": "1",
+    "run_id": "27319559128",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/27319559128"
   },
   "run_attempt": 1,
   "run_id": "27319559128",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-06-11T02:24:10Z",
+  "status": "completed",
+  "timestamp": "2026-06-11T02:28:30Z",
   "workflow": "implement"
 }
