@@ -2,8 +2,8 @@
 
 Grounding note: this report folds the prior recommendation triage into one final artifact. "Actioned" is based on current repository state on this ref, not on historical intent or external GitHub issue state.
 
-## Processed source docs (96)
-The filenames below are retained for provenance. The thirteen source docs deleted across the cleanup passes reflected in this report are no longer present under `analysis/` on this ref because their triage now lives here.
+## Processed source docs (97)
+The filenames below are retained for provenance. The source docs listed below are no longer present under `analysis/` on this ref because their triage now lives here.
 
 - `analysis/workflow-optimization-2026-04-21.md`
 - `analysis/workflow-optimization-2026-04-28-2.md`
@@ -99,6 +99,7 @@ The filenames below are retained for provenance. The thirteen source docs delete
 - `analysis/workflow-optimization-2026-06-08-2.md`
 - `analysis/workflow-optimization-2026-06-08.md`
 - `analysis/workflow-optimization-2026-06-10.md`
+- `analysis/workflow-optimization-2026-06-11.md`
 - `analysis/plan-workflow-log-analysis.md`
 - `analysis/e2e-smoke-failure-25126757724.md`
 
@@ -516,6 +517,59 @@ Status keys below are scoped as `<source doc> :: <recommendation id>` because ID
   - `orchestrate-poll-hot-path-cleanups` — refs: MERGE-003; DEAD-001. `scripts/orchestrate_poll_process.sh` still contains the final-merge PR double-read cleanup the source doc flagged, and `read_standalone_state_json()` is still definition-only on repo-local search. This report continues to treat `orchestrate_poll_process.sh` cleanup as explicit hot-path follow-up work.
   - `orchestrator-tool-status-observability` — refs: Orchestrator Health "emit final tool availability after setup" and "track ..." bullets. The recommendation is still plausible, but this pass did not find a small already-landed repo change that cleanly closes it; it remains broader observability / log-contract work rather than a report-safe cleanup.
 
+### `analysis/workflow-optimization-2026-06-11.md`
+- This source doc mixed 16 named findings with repeated unnumbered recommendations across Executive Summary / Speed / Cost / Reliability / AI Memory / GH API. The named IDs below are classified once each; the repeated prose bullets are then explicitly deduplicated under stable short labels so nothing is silently dropped.
+
+#### Named findings
+- `VALID&SAFE`
+  - None remained on this ref; the safe-subset items from this source doc had already landed or were reclassified by closeout time.
+- `VALID-BUT-RISKY`
+  - `BUG-001` — `scripts/tg_helpers.sh` still paginates forward through `issues/{n}/comments?per_page=100&page=${page}` while deleting matching comments from the same issue, so the stale-Telegram-comment bug remains real; the fix still changes GitHub / Telegram cleanup side effects and stays dedicated helper-hardening work.
+  - `API-001` — `.github/workflows/orchestrate_clarify_respond.yml` still fetches the child issue in both `Check orchestrator metadata` and `Fetch issue and tracking context`, so the redundant reads remain real, but reusing those payloads crosses workflow steps and remains verification-gated.
+  - `API-002` — `.github/workflows/test-and-mark-stable.yml` still does separate `.status` and `.conclusion` GETs inside the `EXISTING_RUN_ID` wait loop; the overlap is real, but this same source doc correctly treats wait-loop consolidation as race-sensitive, so it stays deferred rather than reopened as a safe cleanup.
+  - `API-003` — `.github/workflows/review_autofix.yml` still falls back to per-issue `gh issue view ... --json labels` when `labels_known != true`; batching is directionally correct, but replacing that hot-path fallback transport still needs payload-parity verification.
+  - `DUP-001` — `.github/workflows/test-and-mark-stable.yml` still carries inline `gh_api_safe()` wrappers even though `scripts/comprehensive_test_and_release_gh_api.sh` exists; centralising them remains a retry/logging-contract change in the large stable workflow.
+  - `DUP-002` — the integration-ref staging wrapper is still repeated across `clarify.yml`, `plan.yml`, `validate.yml`, `orchestrate_clarify_respond.yml`, and `implement.yml`; extracting it is still a multi-workflow helper rollout rather than a narrow cleanup.
+  - `DUP-003` — `issue_pr_status.yml` and the late `review_autofix.yml` label paths still keep inline phase-label fallbacks instead of making `scripts/label_helpers.sh` the sole owner; unifying them would change live label-mutation semantics.
+  - `EXPR-001` — the large `Commit changes` logic still lives inside `.github/workflows/implement.yml`, and `scripts/implement_commit_changes.sh` does not exist on this ref; extracting it remains an implement hot-path refactor, not a report-safe closeout.
+  - `DEAD-001` — `scripts/orchestrate_poll_process.sh` still defines `read_standalone_state_json()` while the live standalone-stall path uses `_extract_standalone_state_json_from_comments()` directly; that cleanup still sits inside the reserved poller hot path.
+  - `MERGE-001` — `scripts/review_collect_pr_metadata.sh` still does `closingIssuesReferences` plus a per-issue fallback REST loop over `LINKED_ISSUE_FALLBACK_NUMBERS_JSON`; batching remains verification-gated.
+  - `MERGE-002` — `.github/workflows/clarify.yml` still keeps the bounded prompt-context comment fetch separate from the paginated semantic-cache history fetch; this remains the source doc's own `RISKY_SKIP` case.
+  - `MERGE-003` — `scripts/orchestrate_poll_process.sh` still reads the recorded final PR twice for `.state` and `.merged_at`; this remains the source doc's own `RISKY_SKIP` case.
+  - `REUSE-001` — `scripts/review_rb_judge.sh` still gets linked-issue numbers from GraphQL and then hydrates bodies/labels via REST issue GETs; extending the GraphQL payload is still verification-gated.
+  - `REUSE-002` — `.github/workflows/implement.yml` still does the early approval/precheck issue GET and the later full issue-metadata GET before `ISSUE_META_FILE` is available; later reuse landed, but the common path is still not down to one issue read.
+- `STALE-or-already-done`
+  - `BUG-002` — the cited workflows now pair optional `source scripts/gh_helpers.sh 2>/dev/null || true` with the standard `gh_retry` shim, so the unsafe missing-helper path this finding described is already closed on current HEAD.
+  - `SHELL-001` — `scripts/review_conflict_resolve.sh` no longer carries a shell-side `RESOLVER_ESCALATION_COMMENT_MARKER`; only the Python `ESCALATION_COMMENT_MARKER` constant remains.
+- `INVALID`
+  - None of the named IDs were invalid on this ref; the invalid bucket from this source doc only appears once the mixed top-level bullets are split below.
+
+#### Repeated unnumbered recommendation groups (deduped)
+- Pure observation-only rows such as GH API #5's rate-limit note are treated as supporting evidence for the concrete labels below rather than as separate code-change recommendations.
+- `VALID&SAFE`
+  - None remained on this ref.
+- `VALID-BUT-RISKY`
+  - `review-autofix pass2 / reviewer-tier right-sizing` (`Executive Summary` bullet 1; `Speed` #1; `Cost` #2) — `.github/workflows/review_autofix.yml` still defaults `ENABLE_REVIEWER_TWO_PASS=true` and `REVIEWER_RISK_TIER_ENABLED=0`, but changing reviewer breadth/reasoning remains a hot review-path policy change.
+  - `review check-run wait budget / late log-tail trimming` (`Executive Summary` bullet 4; `Speed` #2; `GH API` #3) — `CHECK_RUNS_WAIT_TIMEOUT_SECS` still defaults to `300`, and the late review check-run collector remains on the hot path; shortening waits or deferring log-tail fetches changes current fail-open timing.
+  - `editor prompt shrinking / default reasoning downshift` (`Speed` #3; `Cost` #3) — the remaining ask is no longer the missing consolidator file; it is prompt-condensing plus editor-reasoning policy, which still changes hot-path review behavior.
+  - `free-disk gating` (`Speed` #4) — `.github/workflows/review_autofix.yml` still runs `jlumbroso/free-disk-space@v1.3.1` unconditionally on the codex-agent job; gating it on actual pressure is valid but still a behavior change in a long-running workflow.
+  - `control-plane dispatch / no-op reduction` (`Executive Summary` bullet 6; `Speed` #5) — current HEAD still relies on in-workflow gate steps (for example `orchestrate_clarify_respond.yml` still gates inside `Check orchestrator metadata`), so the direction remains valid but broader than this closeout.
+  - `implement hard budget / stop condition` (`Executive Summary` bullet 2; `Cost` #1) — no repo-local token/call ceiling is enforced in `implement`, but stopping mid-run is still a runtime-contract change rather than a cleanup.
+  - `deterministic-skip expansion beyond docs-only` (`Cost` #4) — `AUTOFIX_GATE_DET_SKIP_EVAL` is still narrow on current HEAD; widening it would change which PRs bypass review and auto-merge logic.
+  - `Semble overflow-query suppression` (overflow half of `Cost` #6) — keeping Semble for bounded reviewer context while trimming low-value overflow fetches remains a retrieval-policy change; the "Serena is not active yet" part is already satisfied below.
+  - `workspace manifest branch-switch hygiene` (`Reliability` #2) — `scripts/workspace_init.sh` still materializes `.ai/.workspace_source_manifest.txt` inside the workspace tree, so the historical checkout-cleanliness concern is not disproved by current repo state; fixing it still affects workspace lifecycle and branch-switch sequencing.
+  - `cache-action refresh` (cache-action half of `Reliability` #5) — `.github/workflows/review_autofix.yml` still uses `actions/cache/restore@v4` and `actions/cache/save@v4`; updating those pins is still directionally valid but changes runtime dependencies.
+  - `AI-memory retrieval short-circuit / write batching / retrieval-budget contract` (`Executive Summary` bullet 5; `AI Memory Health`) — current HEAD still carries the AI-memory write path, `scripts/ai_memory.py` still defaults `AI_MEMORY_PUSH_RETRIES=8`, and there is still no repo-local `retrieval_budget` contract; the remaining change is policy / telemetry work, not a safe closeout edit.
+  - `prompt-cache / OR cost telemetry completeness` (`Executive Summary` bullet 5's cache-visibility half) — `review_autofix.yml` exports `CONTEXT_BUDGET_WARN_RATIO` and `OPENROUTER_PROMPT_CACHE_DISABLED`, but the source doc's broader cache-hit / OR-token accounting gap is still an observability rollout, not a narrow code cleanup.
+  - `review-gate PR-files payload reuse` (`Executive Summary` bullet 4; `GH API` #1) — `.github/workflows/review_autofix.yml` still contains two `gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files"` sites in the review gate; collapsing them is still valid, but the second read currently doubles as a fail-open retry path when `pr_files_json` is blank.
+- `STALE-or-already-done`
+  - `post-Codex diagnosis single issue snapshot` (`Executive Summary` bullet 3; `Cost` #5; `Reliability` #1; `GH API` #2) — `scripts/implement_diagnose_post_codex_failure.sh` now reuses `ISSUE_META_FILE` first and one fallback issue payload for both labels and body.
+  - `review-consolidator staging gap` (`Speed` #3; `Reliability` #3 safe sub-change) — `scripts/stage_workflow_support.sh` now stages `prompts/review-consolidator.txt`; the still-open portion is prompt shrinking / degraded-path policy, not the missing-file bug.
+  - `drift-audit missing-log memoization` (`Reliability` #4; `GH API` #4) — current HEAD already carries the negative-cache behavior recorded earlier in this report, and `list_run_log_excerpts()` is now gone from `scripts/collect_workflow_logs.py`.
+  - `Serena remains disabled until a real rollout` (`Cost` #6) — `.github/workflows/review_autofix.yml` and `.github/workflows/implement.yml` still default `SERENA_ENABLED=false`.
+- `INVALID`
+  - `implement-side git-submodule warning cleanup` (post-job-warning half of `Reliability` #5) — repo-local search now finds `git submodule foreach` only in the smoke-fixture diagnostic block inside `.github/workflows/test-and-mark-stable.yml`, not a live implement / review post-job cleanup path, so that specific cleanup premise is stale on current HEAD.
+
 ## Preserved machine-maintained artifacts
 - `analysis/validation-selftest-status.json` (kept unchanged)
 - `analysis/last_collection_timestamp.txt` (kept unchanged)
@@ -529,4 +583,5 @@ Status keys below are scoped as `<source doc> :: <recommendation id>` because ID
 - `analysis/workflow-optimization-2026-06-08-2.md`'s API summary row says `NEEDS_VERIFICATION | 3` but then enumerates four IDs (`REUSE-003`, `REUSE-005`, `API-001`, `API-002`); this closeout follows the enumerated IDs rather than the stale count cell.
 - Tracking issue `#3243` treated `#3244` (`SEC-001`) as part of the safe subset, and current HEAD now matches that outcome: override checks are parsed into argv before execution, without `/bin/sh -c`, with regression coverage proving metacharacter suffixes are not executed.
 - PR `#3255` added `extract_repo_scoped_issue_refs_from_text` to `scripts/gh_helpers.sh`, and current HEAD retains that helper body while `.github/workflows/review_autofix.yml`, `scripts/review_collect_pr_metadata.sh`, and `scripts/review_rb_judge.sh` still reuse it for the strict repo-scoped fallback path.
+- `analysis/workflow-optimization-2026-06-11.md` repeated the same asks across Executive Summary / Speed / Cost / Reliability / AI Memory / GH API and mixed landed safe sub-changes with broader policy work, so this closeout classifies the named IDs once and splits the mixed repeated bullets under stable short labels instead of forcing one label across whole paragraphs.
 - With the earlier 2026-05-22/23 source docs, this pass's eight 2026-05-29/06-06 source docs, and `analysis/workflow-optimization-2026-06-08-2.md` now deleted, `.github/workflows/comprehensive-test-and-release.yml` will hit its existing fallback path to `analysis/recommendation-processing-report.md` on future runs.
