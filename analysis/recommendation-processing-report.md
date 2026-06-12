@@ -539,7 +539,7 @@ Status keys below are scoped as `<source doc> :: <recommendation id>` because ID
   - `REUSE-001` — `scripts/review_rb_judge.sh` still gets linked-issue numbers from GraphQL and then hydrates bodies/labels via REST issue GETs; extending the GraphQL payload is still verification-gated.
   - `REUSE-002` — `.github/workflows/implement.yml` still does the early approval/precheck issue GET and the later full issue-metadata GET before `ISSUE_META_FILE` is available; later reuse landed, but the common path is still not down to one issue read.
 - `STALE-or-already-done`
-  - `BUG-002` — the cited workflows now pair optional `source scripts/gh_helpers.sh 2>/dev/null || true` with the standard `gh_retry` shim, so the unsafe missing-helper path this finding described is already closed on current HEAD.
+  - `BUG-002` — the 2026-06-11 safe-subset callsites now pair optional `source scripts/gh_helpers.sh 2>/dev/null || true` with the standard `gh_retry` shim, including `.github/workflows/clarify.yml`'s `Post clarification questions` and `Comment on issue failure`; broader optional-source cleanup elsewhere in `clarify.yml` remains out of scope for this closeout.
   - `SHELL-001` — `scripts/review_conflict_resolve.sh` no longer carries a shell-side `RESOLVER_ESCALATION_COMMENT_MARKER`; only the Python `ESCALATION_COMMENT_MARKER` constant remains.
 - `INVALID`
   - None of the named IDs were invalid on this ref; the invalid bucket from this source doc only appears once the mixed top-level bullets are split below.
