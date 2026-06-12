@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/stage_workflow_support.sh:267-269 | severity=medium | confidence=4\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The missing-source branch removes `${SUPPORT_PROMPTS_DIR}/review-consolidator.txt` with `rm -f`, which can delete a previously staged copy.\n  WHY: Both reviewers say this can make the fallback non-idempotent and unexpectedly disable consolidation after a transient source absence; deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, and qwen_qwen3_6-plus explicitly call the same behavior intentional and matching the existing pattern.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/stage_workflow_support.sh:267 | severity=medium | confidence=4\n  PROBLEM: Script emits warning and removes staged review-consolidator.txt with `rm -f \"${SUPPORT_PROMPTS_DIR}/review-consolidator.txt\"` when source is missing\n  WHY: If a stale/broken copy exists, deletion makes REVIEW_CONSOLIDATOR_ENABLED appear disabled next run even when the disable is temporary, creating a latent idempotency risk\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/stage_workflow_support.sh:267-269 | severity=medium | confidence=4\n  PROBLEM: The fail-open path does `rm -f \"${SUPPORT_PROMPTS_DIR}/review-consolidator.txt\"` when the source prompt is missing.\n  WHY: If a stale or previously-generated copy already existed in `${SUPPORT_PROMPTS_DIR}`, this silently deletes it; on subsequent runs `review_consolidate.sh` sees a missing file and treats consolidation as disabled even though the flag is on, making the fallback non-idempotent.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "f8568d1845dee423c0feb0c5592ecc62331f9aab6f09bddf4c19092592852bcd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3296,
+    "run_id": "27389424609",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27389424609",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260612023155_b25da27e9b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3296,
+    "run_id": "27389424609"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-12T02:31:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
