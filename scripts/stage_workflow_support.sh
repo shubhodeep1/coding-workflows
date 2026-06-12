@@ -255,6 +255,18 @@ if [ ! -f "${SUPPORT_PROMPTS_DIR}/behavioural-smoke-synthesise.txt" ]; then
   fi
   install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/behavioural-smoke-synthesise.txt"
 fi
+if [ ! -f "${SUPPORT_PROMPTS_DIR}/review-consolidator.txt" ]; then
+  src=".codex-workflow-src/prompts/review-consolidator.txt"
+  if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/review-consolidator.txt" ]; then
+    src=".codex-workflow-src-main/prompts/review-consolidator.txt"
+  fi
+  if [ -f "${src}" ]; then
+    install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/review-consolidator.txt"
+  else
+    echo "::warning::review-consolidator.txt not found in checked-out support sources for ${SCRIPT_REF}; review consolidation will fail open even when REVIEW_CONSOLIDATOR_ENABLED=true."
+    rm -f "${SUPPORT_PROMPTS_DIR}/review-consolidator.txt"
+  fi
+fi
 if [ ! -f "${SUPPORT_PROMPTS_DIR}/review-reviewer-checklist.txt" ]; then
   src=".codex-workflow-src/prompts/review-reviewer-checklist.txt"
   if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/review-reviewer-checklist.txt" ]; then
