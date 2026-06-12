@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `dc8fdddb36ff1b86fa81fd7eda30a237c1378bbd` on `orchestrator/project-3291` (matches integration-branch metadata).\n\nClarification status:\n- No clarification questions were required.\n- `/answer [auto-answered-by-orchestrator]` is sufficient to proceed.\n\nAutomation / wiring:\n- Existing assets only; no new script/module/workflow entry point.\n- Scheduler/trigger remains the existing `.github/workflows/clarify.yml` workflow.\n- No supervisor work, DB work, or `docs/scripts-pending-removal.md` entry.\n\nConflict note:\n- Current `.github/workflows/clarify.yml` has two additional out-of-scope blocks that also do optional `gh_helpers.sh` sourcing before `gh_retry` without the local shim: `Set clarification phase label` and `Orchestrator-managed fast path`.\n- The issue explicitly narrows BUG-002 safe-subset completion to `Post clarification questions` and `Comment on issue failure`, so the implementation/test patch should stay limited to those two steps and the report wording should avoid implying every similar `clarify.yml` site is fixed.\n\nImplementation plan\n\n1. Files likely to change\n- `.github/workflows/clarify.yml`\n  - In `Post clarification questions`, insert `type gh_retry >/dev/null 2>&1 || gh_retry() { \"$@\"; }` immediately after `source scripts/gh_helpers.sh 2>/dev/null || true`.\n  - In `Comment on issue failure`, insert the same shim immediately after the same optional source line.\n  - Follow the existing in-file pattern already used by `Fetch issue metadata` and `Fetch issue comments`.\n\n- `tests/test_workflow_gh_retry_fallback_contract.py`\n  - Extend `TARGET_STEPS` with:\n    - `(\".github/workflows/clarify.yml\", \"Post clarification questions\")`\n    - `(\".github/workflows/clarify.yml\", \"Comment on issue failure\")`\n  - Reuse the existing contract assertions; no new test helper should be needed.\n\n- `analysis/recommendation-processing-report.md`\n  - Update the `analysis/workflow-optimization-2026-06-11.md` closeout section so the `BUG-002` entry matches the post-fix repo state.\n  - Make the wording precise enough to describe the landed safe-subset fix without overclaiming broader `clarify.yml` cleanup.\n  - Keep `analysis/workflow-optimization-2026-06-11.md` deleted.\n\n2. Functions / modules to implement\n- Workflow-local `gh_retry` fallback shim in the two clarify step shell blocks.\n- Contract coverage via the existing `TARGET_STEPS` table in `tests/test_workflow_gh_retry_fallback_contract.py`.\n- Closeout/report classification update for the `BUG-002` bullet.\n\n3. Data structures affected\n- YAML step bodies in `.github/workflows/clarify.yml`.\n- The `TARGET_STEPS` tuple in the Python contract test.\n- The `BUG-002` classification text (and bucket placement if needed) in `analysis/recommendation-processing-report.md`.\n\n4. API / interface changes\n- None expected.\n- This is internal workflow hardening plus report synchronization; issue-comment behavior and labels should stay unchanged.\n\n5. Risks / edge cases\n- The shim must be directly adjacent to the optional `source` line; inserting comments/blank lines between them will fail the contract test.\n- Do not broaden the contract test to the other out-of-scope clarify steps, or this small fix will turn into a larger BUG-002 sweep.\n- The report update must reflect the actual landed state after this fix, not the pre-fix state and not an \u201ceverything in clarify is now covered\u201d claim.\n\n6. Testing considerations\n- Run `python3 tests/test_workflow_gh_retry_fallback_contract.py`.\n- Sanity-check the two clarify step blocks so their order is `source` -> local fallback shim -> first `gh_retry` call.\n- Verify only the three scoped files changed and `analysis/workflow-optimization-2026-06-11.md` remains absent.\n\nAssumptions / missing-context notes\n- Assumption: BUG-002 safe-subset scope is exactly the two clarify steps named in the issue.\n- Missing-source note: `analysis/workflow-optimization-2026-06-11.md` is intentionally absent on this ref, so the report edit should be based on current repo state and this issue\u2019s scope, not by restoring the deleted source doc.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "42406ba4ebf629f0686e839322cf00bddca8f773a98f1b634f5304f7449f1969",
+  "lineage": {
+    "issue_number": 3301,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27391717393",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27391717393",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3301"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260612030628_f41ac44e42",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3301,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27391717393"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3301",
+  "timestamps": {
+    "created_at": "2026-06-12T03:06:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
