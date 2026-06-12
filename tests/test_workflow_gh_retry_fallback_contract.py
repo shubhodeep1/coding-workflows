@@ -13,6 +13,8 @@ SAFE_GH_JQ_LINE = 'type _safe_gh_jq >/dev/null 2>&1 || _safe_gh_jq() {'
 TARGET_STEPS = (
 	(".github/workflows/clarify.yml", "Fetch issue metadata"),
 	(".github/workflows/clarify.yml", "Fetch issue comments"),
+	(".github/workflows/clarify.yml", "Post clarification questions"),
+	(".github/workflows/clarify.yml", "Comment on issue failure"),
 	(".github/workflows/plan.yml", "Fetch issue metadata"),
 	(".github/workflows/plan.yml", "Fetch issue comments"),
 	(".github/workflows/plan.yml", "Skip when issue already has a PR"),

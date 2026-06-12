@@ -1069,6 +1069,7 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           # Labels already set by "Set clarification phase label" step above.
           {
             echo "<!-- ai:clarification-questions -->"
@@ -1231,6 +1232,7 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           if [ "${{ job.status }}" = "cancelled" ]; then
             REASON="AI clarification workflow was cancelled/timed out for ${ISSUE_URL}. Run: ${RUN_URL}"
