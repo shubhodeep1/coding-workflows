@@ -436,7 +436,6 @@ RESOLVER_FP_VIOLATIONS_PREV_FILE="${RUNTIME_DIR}/resolver_fp_violations_prev.txt
 RESOLVER_FP_VERIFIER_OUTPUT_FILE="${RUNTIME_DIR}/resolver_fp_verifier_output.txt"
 RESOLVER_FP_BASELINE_STATE_FILE="${RUNTIME_DIR}/resolver_fp_baseline_state.json"
 RESOLVER_RETRY_STATE_ARTIFACT_FILE="${RUNTIME_DIR}/resolver_retry_state_artifact.json"
-RESOLVER_ESCALATION_COMMENT_MARKER="<!-- AUTOFIX_RESOLVER_ESCALATED_V1 -->"
 
 # Snapshot every in-scope file (the resolver's allowlist, which
 # prepare step populated with git-marked unmerged paths plus the

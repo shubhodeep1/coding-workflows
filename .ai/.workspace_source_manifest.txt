@@ -96,7 +96,7 @@ ai_pipeline.md
 analysis/last_collection_timestamp.txt
 analysis/recommendation-processing-report.md
 analysis/validation-selftest-status.json
-analysis/workflow-optimization-2026-06-10.md
+analysis/workflow-optimization-2026-06-11.md
 codex.md
 docs/ai-tools-future-improvements.md
 docs/awesome-cc-future-improvements.md
@@ -130,6 +130,7 @@ examples/validation-fixtures/python-mongo-flask.yml
 examples/validation-fixtures/python-mongo-repo-checks.yml
 examples/validation-fixtures/python-repo-checks.yml
 examples/validation-fixtures/run_validation_repo_checks.sh
+extracted/poller_stall.sh
 netwask/tier1-agent-suite.json
 path/to/your/workflow_script.sh
 probably_unnecessary_but_read_if_stuck.md
