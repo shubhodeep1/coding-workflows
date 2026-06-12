@@ -346,6 +346,14 @@ def test_retry_state_escape_threshold_sets_escalated_and_summary(tmp_path: Path)
 	assert second["retry_state"]["escalation_threshold"] == 8
 
 
+def test_resolve_script_uses_single_escalation_marker_literal_source() -> None:
+	body = _resolve_script_text()
+	marker = "<!-- AUTOFIX_RESOLVER_ESCALATED_V1 -->"
+	assert f'ESCALATION_COMMENT_MARKER = "{marker}"' in body
+	assert "RESOLVER_ESCALATION_COMMENT_MARKER=" not in body
+	assert body.count(marker) == 1
+
+
 def test_retry_state_artifact_treats_missing_baseline_as_regressed(tmp_path: Path) -> None:
 	_seed_repo_files(tmp_path)
 	artifact = _build_artifact(

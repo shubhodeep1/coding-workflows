@@ -963,6 +963,7 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
           # Build tracking issue body
           python3 scripts/orchestrate_lib.py build-tracking-body \

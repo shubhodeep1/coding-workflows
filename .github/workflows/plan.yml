@@ -386,6 +386,7 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"
 
           ISSUE_BODY="$(jq -r '.body // ""' "${ISSUE_META_FILE}")"
@@ -424,6 +425,7 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           gh_retry gh api --paginate "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?per_page=100" > "${ISSUE_COMMENTS_FILE}"
 
       - name: Validate planning phase label
@@ -485,6 +487,7 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           # Use the issue timeline API to find PRs that are actually
           # cross-referenced to this issue (not just text matches).
           # The previous gh pr list --search approach produced false positives
@@ -1892,6 +1895,7 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           FAILED_STEP_HINT="Check the AI Plan run logs and inspect the first failed step."
           gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \

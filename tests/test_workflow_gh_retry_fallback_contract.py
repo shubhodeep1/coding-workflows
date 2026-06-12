@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+"""Contract tests for workflow-local gh_retry fallback shims."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SOURCE_LINE = 'source scripts/gh_helpers.sh 2>/dev/null || true'
+FALLBACK_LINE = 'type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }'
+SAFE_GH_JQ_LINE = 'type _safe_gh_jq >/dev/null 2>&1 || _safe_gh_jq() {'
+TARGET_STEPS = (
+	(".github/workflows/clarify.yml", "Fetch issue metadata"),
+	(".github/workflows/clarify.yml", "Fetch issue comments"),
+	(".github/workflows/clarify.yml", "Post clarification questions"),
+	(".github/workflows/clarify.yml", "Comment on issue failure"),
+	(".github/workflows/plan.yml", "Fetch issue metadata"),
+	(".github/workflows/plan.yml", "Fetch issue comments"),
+	(".github/workflows/plan.yml", "Skip when issue already has a PR"),
+	(".github/workflows/plan.yml", "Comment on issue failure"),
+	(".github/workflows/orchestrate.yml", "Create tracking issue"),
+	(".github/workflows/orchestrate_clarify_respond.yml", "Fetch issue and tracking context"),
+	(".github/workflows/orchestrate_clarify_respond.yml", "Comment on issue failure"),
+)
+
+
+def _workflow_text(relative_path: str) -> str:
+	return (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+
+
+def _step_block(text: str, step_name: str) -> str:
+	marker = f"- name: {step_name}"
+	start = text.find(marker)
+	assert start != -1, f"Missing workflow step: {step_name}"
+	next_step = text.find("\n      - name:", start + len(marker))
+	if next_step == -1:
+		return text[start:]
+	return text[start:next_step]
+
+
+def _step_lines(relative_path: str, step_name: str) -> list[str]:
+	return _step_block(_workflow_text(relative_path), step_name).splitlines()
+
+
+def test_targeted_optional_source_blocks_define_local_gh_retry_fallback() -> None:
+	for relative_path, step_name in TARGET_STEPS:
+		lines = _step_lines(relative_path, step_name)
+		source_idx = next((i for i, line in enumerate(lines) if SOURCE_LINE in line), -1)
+		fallback_idx = next((i for i, line in enumerate(lines) if FALLBACK_LINE in line), -1)
+		call_idx = next(
+			(
+				i
+				for i, line in enumerate(lines)
+				if "gh_retry" in line and FALLBACK_LINE not in line
+			),
+			-1,
+		)
+
+		assert source_idx != -1, f"{relative_path} :: {step_name} must keep optional gh_helpers sourcing"
+		assert fallback_idx != -1, f"{relative_path} :: {step_name} must define the gh_retry fallback shim"
+		assert fallback_idx == source_idx + 1, (
+			f"{relative_path} :: {step_name} must place the gh_retry fallback immediately after the optional source"
+		)
+		assert call_idx != -1, f"{relative_path} :: {step_name} must still call gh_retry"
+		assert fallback_idx < call_idx, (
+			f"{relative_path} :: {step_name} must define the fallback before its first gh_retry call"
+		)
+
+
+def test_targeted_gh_retry_only_blocks_do_not_define_safe_gh_jq() -> None:
+	for relative_path, step_name in TARGET_STEPS:
+		block = _step_block(_workflow_text(relative_path), step_name)
+		assert SAFE_GH_JQ_LINE not in block, (
+			f"{relative_path} :: {step_name} should stay gh_retry-only and not add an unused _safe_gh_jq shim"
+		)
+
+
+def main() -> int:
+	tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	for test in tests:
+		test()
+	print(f"{len(tests)} passed")
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
