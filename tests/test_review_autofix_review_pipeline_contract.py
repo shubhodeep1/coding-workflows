@@ -1702,6 +1702,20 @@ def test_review_scripts_emit_context_budget_warn_signals() -> None:
 		assert expected_call in script_text
 
 
+def test_review_consolidator_prompt_is_staged_for_review_runtime_support() -> None:
+	stage_helper = _stage_helper_text()
+	consolidate = _consolidate_text()
+
+	assert 'PROMPT_TEMPLATE="${SUPPORT_PROMPTS_DIR:-prompts}/review-consolidator.txt"' in consolidate
+	assert 'if [ ! -f "${SUPPORT_PROMPTS_DIR}/review-consolidator.txt" ]; then' in stage_helper
+	assert 'src=".codex-workflow-src/prompts/review-consolidator.txt"' in stage_helper
+	assert 'src=".codex-workflow-src-main/prompts/review-consolidator.txt"' in stage_helper
+	assert 'install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/review-consolidator.txt"' in stage_helper
+	assert 'review-consolidator.txt not found in checked-out support sources' in stage_helper
+	assert 'REVIEW_CONSOLIDATOR_ENABLED=true' in stage_helper
+	assert 'rm -f "${SUPPORT_PROMPTS_DIR}/review-consolidator.txt"' in stage_helper
+
+
 def test_review_filter_smoke_fixtures_are_present() -> None:
 	assert PHASE_A_ANTI_RULES_FIXTURE.exists(), f"missing fixture: {PHASE_A_ANTI_RULES_FIXTURE}"
 	assert PHASE_C_FILTER_FIXTURE.exists(), f"missing fixture: {PHASE_C_FILTER_FIXTURE}"
@@ -2769,6 +2783,7 @@ def main() -> int:
 	test_review_collect_pr_metadata_helper_strict_fallback_drops_bare_mentions()
 	test_extract_repo_scoped_issue_refs_rejects_malformed_repository_input()
 	test_review_scripts_emit_context_budget_warn_signals()
+	test_review_consolidator_prompt_is_staged_for_review_runtime_support()
 	test_review_filter_smoke_fixtures_are_present()
 	test_reviewer_risk_tier_classifier_honours_thresholds_and_always_full_regex()
 	test_review_filter_helper_wiring_is_flag_gated_and_fail_open()
