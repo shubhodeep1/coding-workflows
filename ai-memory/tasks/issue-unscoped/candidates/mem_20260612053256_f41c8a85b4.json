@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/mark-stable.yml:264 | severity=medium | confidence=4\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The added contract test is reported to be gated by a RUN_ALLOWLIST mechanism, so the new invocation may not run.\n  WHY: The reviewers say `mark-stable.yml` selects tests through an allowlist, meaning adding only the `python3 tests/test_workflow_gh_retry_fallback_contract.py` line may be insufficient.\n- .github/workflows/test-and-mark-stable.yml:3453 | severity=medium | confidence=4\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The added contract test is reported to be gated by a RUN_ALLOWLIST mechanism, so the new invocation may not run.\n  WHY: The reviewers say `test-and-mark-stable.yml` selects tests through an allowlist, meaning adding only the `python3 tests/test_workflow_gh_retry_fallback_contract.py` line may be insufficient.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Triaged safe subset from workflow-optimization-2026-06-11.md, updated analysis/recommendation-processing-report.md with full closeout classification, retired the source doc, cleaned the .ai/.workspace_source_manifest.txt, and added contract test coverage for the new gh_retry fallback shims in affected workflows.\"\n  expected_change_site: analysis/recommendation-processing-report.md, .ai/.workspace_source_manifest.txt, scripts/stage_workflow_support.sh, tests/test_review_autofix_review_pipeline_contract.py, tests/test_workflow_gh_retry_fallback_contract.py, .github/workflows/ci.yml, .github/workflows/mark-stable.yml, .github/workflows/test-and-mark-stable.yml\n  confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The PR diff, LAST RUN DIFF, recommendation-processing-report.md, manifest, staging script, contract test, and updated allowlists fully implement every concrete deliverable; 2026-06-11.md is deleted; the report now treats it as processed provenance; test runs cleanly (`2 passed`).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- tests/test_workflow_gh_retry_fallback_contract.py\n  Hardening location: line 69\n  Hardening issue: magic constant for fallback issue batch size that may limit regression detection to 20 issues instead of the repo's 25-item actual cap\n  Minimal fix: align the cap to match actual workflow behavior, use 25 instead of 20\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- .github/workflows/mark-stable.yml\n  Line: around line 264\n  Problem: Contract test added to explicit test allowlist but workflow may not execute it due to runner selection\n  Why it fails at runtime: The workflow dispatches to GitHub Actions runners; tests listed in stable-validation must match the RUN_ALLOWLIST mechanism to actually run\n  ISSUE_CONFIDENCE: 4\n- .github/workflows/test-and-mark-stable.yml\n  Line: around line 3453\n  Problem: New contract test added to python3 test executable instruction but not to the RUN_ALLOWLIST used by the workflow\n  Why it fails at runtime: test-and-mark-stable.yml uses RUN_ALLOWLIST to control which unit tests execute; without the filename in allowlist, the test won't run on stable branches\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: .github/workflows/mark-stable.yml:264 (and symmetric in test-and-mark-stable.yml:3453)\n  Line or code reference: the explicit `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_gh_retry_fallback_contract.py` line under the CI `lint` job allowlist\n  Problem: The test enforces the exact gh_retry fallback shim placement (after every optional `source scripts/gh_helpers.sh 2>/dev/null || true` and before any gh_retry call) in the targeted workflows (clarify, plan, orchestrate, orchestrate_clarify_respond). The stable/release pipelines run this test via an explicit allowlist; however, other test suites (e.g., the full `test-and-mark-stable` matrix or any consumer CI that imports only a subset) may bypass it if their RUN_ALLOWLIST is not updated.\n  Why it fails at runtime: A consumer repo or a future change to how mark-stable/test-and-mark-stable selects tests could silently drop the contract check, allowing an incorrect or missing fallback shim to land (the exact regression the test was written to catch).\n  ISSUE_CONFIDENCE: 4\nRequirement: \"Triaged safe subset from workflow-optimization-2026-06-11.md, updated analysis/recommendation-processing-report.md with full closeout classification (including the repeated unnumbered bullets under stable labels), retired (deleted) the source doc, cleaned the .ai/.workspace_source_manifest.txt, and added contract test coverage for the new gh_retry fallback shims in affected workflows.\"\nExpected change site: analysis/recommendation-processing-report.md (full triage/closeout), .ai/.workspace_source_manifest.txt (removal of retired doc + addition of extracted/poller_stall.sh), scripts/stage_workflow_support.sh (review-consolidator.txt staging), tests/test_review_autofix_review_pipeline_contract.py (new staging test), tests/test_workflow_gh_retry_fallback_contract.py + all affected workflow test allowlists (CI, mark-stable, test-and-mark-stable).\nEvidence of absence: The PR diff, LAST RUN DIFF, recommendation-processing-report.md, manifest, staging script, contract test, and updated allowlists fully implement every concrete deliverable; 2026-06-11.md is deleted; the report now treats it as processed provenance; test runs cleanly (`2 passed`). All orchestrator-project requirements are satisfied.\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "25b932c0461a5840f58683b6c1dce85e91033e70f9ad21497e1732172c95a72b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3297,
+    "run_id": "27395063010",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27395063010",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260612053256_f41c8a85b4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3297,
+    "run_id": "27395063010"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-12T05:32:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
