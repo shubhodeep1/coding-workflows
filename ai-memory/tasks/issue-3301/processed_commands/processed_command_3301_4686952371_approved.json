@@ -5,13 +5,25 @@
   "entry_id": "processed_command_3301_4686952371_approved",
   "issue_number": 3301,
   "metadata": {
+    "branch": "ai/issue-3301",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/clarify.yml",
+      "analysis/recommendation-processing-report.md",
+      "tests/test_workflow_gh_retry_fallback_contract.py"
+    ],
+    "issue_number": 3301,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/3301",
+    "pr_number": 3302,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/3302",
+    "run_attempt": "1",
+    "run_id": "27391865755",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/27391865755"
   },
   "run_attempt": 1,
   "run_id": "27391865755",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-06-12T03:08:28Z",
+  "status": "completed",
+  "timestamp": "2026-06-12T03:13:07Z",
   "workflow": "implement"
 }
