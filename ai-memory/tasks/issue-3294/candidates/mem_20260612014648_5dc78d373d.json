@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for `shell-001-resolver-marker-single-source`\n\nPlanning ref\n- HEAD: `c97706613d2ad161d1f3928d06e58115a5874b20`\n- Branch: `orchestrator/project-3291`\n- Integration metadata matches the checked-out ref.\n\nAutomation / wiring impact\n- Change type: modify existing code only.\n- Scheduler / PR-push wiring: none.\n- New supervisor: none.\n- DB gate pattern: n/a.\n- `docs/scripts-pending-removal.md`: no new entry needed.\n\nClarification mapping\n- No `Q1`/`Q2` questions were asked in clarify.\n- `/answer [auto-answered-by-orchestrator]` confirms there are no extra user constraints beyond the issue body.\n\nWhat I inspected\n- `scripts/review_conflict_resolve.sh`: confirmed the shell prelude defines `RESOLVER_ESCALATION_COMMENT_MARKER=\"<!-- AUTOFIX_RESOLVER_ESCALATED_V1 -->\"` once, and the embedded retry-state Python helper separately defines and uses `ESCALATION_COMMENT_MARKER` for escalation-comment matching/rendering.\n- `tests/test_review_conflict_resolve_retry_state.py`: confirmed there is already focused coverage for retry-state escalation behavior, including existing escalation-comment detection and summary-comment generation.\n\nConflict check\n- No factual repo/issue conflict found; current HEAD matches the issue description.\n\n1. Files likely to change\n- `scripts/review_conflict_resolve.sh`\n- `tests/test_review_conflict_resolve_retry_state.py`\n\n2. Functions / modules to change\n- `scripts/review_conflict_resolve.sh`\n  - Remove the unused shell assignment `RESOLVER_ESCALATION_COMMENT_MARKER=...`.\n  - Keep the embedded Python `ESCALATION_COMMENT_MARKER` as the sole source of truth.\n  - Do not change `find_existing_escalation_comment_id`, `build_resolver_escalation_comment`, or retry-state semantics beyond continuing to read the same Python constant.\n- `tests/test_review_conflict_resolve_retry_state.py`\n  - Add a focused contract test that locks:\n    - the exact marker text `<!-- AUTOFIX_RESOLVER_ESCALATED_V1 -->`\n    - the absence of the duplicate shell assignment\n    - the single-source-of-truth invariant in the script\n\n3. Data structures affected\n- No schema or interface changes.\n- Existing retry-state JSON/artifact fields stay unchanged.\n- Existing PR comment matching/body generation stays unchanged; only the constant\u2019s source location is simplified.\n\n4. API / interface changes\n- None.\n- Marker text must remain exactly `<!-- AUTOFIX_RESOLVER_ESCALATED_V1 -->`.\n- No review-flow, escalation, label, or summary-comment behavior should change.\n\n5. Risks / edge cases\n- The change must stay minimal: removing only the unused shell-side duplicate, not re-threading the constant through env/argv unless strictly necessary.\n- Regression coverage should catch both:\n  - accidental marker-text edits\n  - future reintroduction of a second literal definition\n- Keep scope inside `files_touched`; expected touched files are only the resolver script and its dedicated retry-state test.\n\n6. Testing considerations\n- Run the focused regression file: `python3 tests/test_review_conflict_resolve_retry_state.py`\n- Ensure the existing escalation test still passes, especially the assertions around:\n  - existing escalation-comment detection\n  - generated summary comment body\n  - retry-state `escalated` fields\n- Cheap syntax check: `bash -n scripts/review_conflict_resolve.sh`\n\nAssumptions\n- `files_touched` allows the resolver script and its dedicated test file.\n- The embedded Python helper remains the intended authoritative contract for escalation-comment marker handling.\n\nMissing context\n- The planning context did not include the explicit `files_touched` allowlist, so this plan keeps the change set to the two smallest directly relevant files.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "8e6297528ec0bfe533a2899fd5b09f1c5b17da4da7d158af8aa875fb849be155",
+  "lineage": {
+    "issue_number": 3294,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27389054318",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27389054318",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3294"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260612014648_5dc78d373d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3294,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27389054318"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3294",
+  "timestamps": {
+    "created_at": "2026-06-12T01:46:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
