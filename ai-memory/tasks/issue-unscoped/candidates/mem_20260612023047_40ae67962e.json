@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"orchestrate_clarify_respond.yml: Check orchestrator metadata\" step must have a local gh_retry fallback after optional source scripts/gh_helpers.sh\n  expected_change_site: .github/workflows/orchestrate_clarify_respond.yml, step \"Check orchestrator metadata\" at line 62\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603, moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  EVIDENCE: The step \"Check orchestrator metadata\" at lines 62-85 calls `gh api` directly at lines 68 and 78 without using `gh_retry`. orchestrate_clarify_respond.yml contains a second `source scripts/gh_helpers.sh 2>/dev/null || true` at line 667 (inside block starting line 663 under step \"Check orchestrator metadata\") without the required fallback line `type gh_retry >/dev/null 2>&1 || gh_retry() { \"$@\"; }` immediately after it. The only two `source ... || true` + fallback pairs added by the PR are in the later \"Fetch issue and tracking context\" step (lines 435-436) and the failure comment step (lines 1316-1317).\n- requirement: The regression test should cover the \"Check orchestrator metadata\" step in `orchestrate_clarify_respond.yml` rather than the stale \"Fetch issue and tracking context\" target.\n  expected_change_site: tests/test_workflow_gh_retry_fallback_contract.py, TARGET_STEPS tuple at lines 19-21\n  confidence=5\n  flagged_by: [moonshotai_kimi-k2_5]\n  EVIDENCE: The test file contains `(\".github/workflows/orchestrate_clarify_respond.yml\", \"Fetch issue and tracking context\")` at line 21-22, but the linked issue explicitly requires testing the \"Check orchestrator metadata\" step. The test passes because it validates the wrong step, leaving the actual required step \"Check orchestrator metadata\" completely untested. The TARGET_STEPS entry should be `(\"orchestrate_clarify_respond.yml\", \"Check orchestrator metadata\")` instead.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\nTask_GAP\nRequirement: \"orchestrate_clarify_respond.yml: Check orchestrator metadata\" step must have a local gh_retry fallback after optional source scripts/gh_helpers.sh\nExpected change site: .github/workflows/orchestrate_clarify_respond.yml, step \"Check orchestrator metadata\" at line 62\nEvidence of absence: orchestrate_clarify_respond.yml contains a second `source scripts/gh_helpers.sh 2>/dev/null || true` at line 667 (inside block starting line 663 under step \"Check orchestrator metadata\") without the required fallback line `type gh_retry >/dev/null 2>&1 || gh_retry() { \"$@\"; }` immediately after it.\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\nTask_GAP\nRequirement: \"orchestrate_clarify_respond.yml: Check orchestrator metadata\" \u2014 add `type gh_retry >/dev/null 2>&1 || gh_retry() { \"$@\"; }` fallback after optional `source scripts/gh_helpers.sh 2>/dev/null || true`.\nExpected change site: .github/workflows/orchestrate_clarify_respond.yml, step \"Check orchestrator metadata\" starting at line 62\nEvidence of absence: The step \"Check orchestrator metadata\" at lines 62-85 calls `gh api` directly at lines 68 and 78 without using `gh_retry`. The step does NOT have the `source scripts/gh_helpers.sh 2>/dev/null || true` line followed by the `type gh_retry` fallback. The PR diff shows modifications to lines 433-439 (Fetch issue and tracking context) and 1314-1320 (Comment on issue failure), but NO modifications to the \"Check orchestrator metadata\" step at line 62. This step was explicitly listed in the issue's acceptance criteria as requiring the fallback.\nISSUE_CONFIDENCE: 5\n\nTask_GAP\nRequirement: \"Add focused regression coverage that scans these workflow blocks and fails if any optional-source block still calls `gh_retry` without the shim.\"\nExpected change site: `tests/test_workflow_gh_retry_fallback_contract.py`, TARGET_STEPS tuple at lines 19-21\nEvidence of absence: The test file contains `(\".github/workflows/orchestrate_clarify_respond.yml\", \"Fetch issue and tracking context\")` at line 21-22, but the linked issue explicitly requires testing the \"Check orchestrator metadata\" step. The test passes because it validates the wrong step, leaving the actual required step \"Check orchestrator metadata\" completely untested. The TARGET_STEPS entry should be `(\"orchestrate_clarify_respond.yml\", \"Check orchestrator metadata\")` instead.\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\nTask_GAP\nRequirement: orchestrate_clarify_respond.yml: Check orchestrator metadata \u2014 add `type gh_retry >/dev/null 2>&1 || gh_retry() { \"$@\"; }` fallback after optional `source scripts/gh_helpers.sh 2>/dev/null || true`.\nExpected change site: .github/workflows/orchestrate_clarify_respond.yml (the first step named \"Check orchestrator metadata\")\nEvidence of absence: The step (lines ~62-79) uses direct `gh api` (no `gh_retry` call at all, and no source line). The only two `source ... || true` + fallback pairs added by the PR are in the later \"Fetch issue and tracking context\" step (lines 435-436) and the failure comment step (lines 1316-1317). TARGET_STEPS in the test also lists the wrong step name for this file (\"Fetch issue and tracking context\" and \"Comment on issue failure\" instead of the originally-declared \"Check orchestrator metadata\" and the now-correct second occurrence). The added test passes (2/2) but does not cover the original acceptance-criteria step.\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "c2ebdd332c4385af1904bc888fd93c56aa1c40b31e128b721657e8200617d356",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3298,
+    "run_id": "27389462410",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27389462410",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260612023047_40ae67962e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3298,
+    "run_id": "27389462410"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-12T02:30:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
