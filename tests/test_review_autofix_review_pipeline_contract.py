@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 import textwrap
@@ -44,6 +45,13 @@ def _stage_helper_text() -> str:
 
 def _reviewers_text() -> str:
 	return REVIEWERS.read_text(encoding="utf-8")
+
+
+def _review_collect_pr_metadata_graphql_helper_block() -> str:
+	text = METADATA_HELPER.read_text(encoding="utf-8")
+	match = re.search(r"(?ms)^_fetch_linked_issue_bodies_graphql\(\)\n\{.*?^\}\s*$", text)
+	assert match, "missing _fetch_linked_issue_bodies_graphql helper"
+	return match.group(0)
 
 
 def _apply_fixes_text() -> str:
@@ -1596,6 +1604,36 @@ def test_review_collect_pr_metadata_helper_fetches_top_level_reviews_when_break_
 	assert any("repos/owner/repo/pulls/42/reviews" in " ".join(call) for call in result["mock_state"]["calls"])
 
 
+def test_review_collect_pr_metadata_helper_fails_open_on_non_array_batch_input() -> None:
+	helper_block = _review_collect_pr_metadata_graphql_helper_block()
+	script = textwrap.dedent(
+		"""\
+		set -euo pipefail
+		TMP_RUNTIME_DIR="$(mktemp -d)"
+		REPOSITORY_OWNER="owner"
+		REPOSITORY_NAME="repo"
+		gh_retry() {
+			echo "unexpected gh_retry call" >&2
+			return 99
+		}
+		"""
+	) + helper_block + "\n_fetch_linked_issue_bodies_graphql $'1\\n2'\n"
+
+	result = subprocess.run(
+		["bash"],
+		cwd=str(REPO_ROOT),
+		input=script,
+		capture_output=True,
+		text=True,
+		check=False,
+		timeout=60,
+	)
+
+	assert result.returncode == 0
+	assert result.stdout.strip() == "[]"
+	assert "unexpected gh_retry call" not in result.stderr
+
+
 def test_review_collect_pr_metadata_helper_strict_fallback_drops_bare_mentions() -> None:
 	result = _run_review_collect_pr_metadata_harness(
 		pr_number="42",
@@ -1679,6 +1717,46 @@ def test_review_collect_pr_metadata_helper_strict_fallback_drops_bare_mentions()
 	assert not any("repos/owner/repo/issues/14" in call for call in call_texts)
 	assert not any("repos/owner/repo/issues/15" in call for call in call_texts)
 	assert not any("repos/owner/repo/issues/16" in call for call in call_texts)
+
+
+def test_review_collect_pr_metadata_helper_warns_when_fallback_graphql_returns_errors_without_data() -> None:
+	result = _run_review_collect_pr_metadata_harness(
+		pr_number="42",
+		claude_branch_review_mode="false",
+		head_ref_override="",
+		head_sha_override="",
+		base_ref_override="",
+		mock_state={
+			"api_responses": {
+				"repos/owner/repo/pulls/42/comments": [],
+				"repos/owner/repo/pulls/42/reviews": [],
+				"repos/owner/repo/issues/42/comments": [],
+				"repos/owner/repo/pulls/42": {
+					"title": "Synthetic PR title",
+					"body": "Fixes #7\n\nContext body",
+					"base": {"ref": "main"},
+					"head": {
+						"ref": "feature/ref",
+						"sha": "abc123",
+						"repo": {"full_name": "owner/repo"},
+					},
+				},
+				"graphql": {
+					"errors": [{"message": "synthetic graphql failure"}],
+					"data": None,
+				},
+			},
+			"pr_diffs": {"42": "pr diff sentinel\n"},
+		},
+	)
+
+	assert result["github_env"]["LINKED_ISSUES_JSON"] == "[]"
+	assert result["github_env"]["LINKED_ISSUE_FALLBACK_NUMBERS_JSON"] == "[7]"
+	assert result["linked_issue_context"] == "No linked issues found."
+	assert "::warning::Linked-issue body-text fallback: batched GraphQL issue hydration failed; skipping" in result["stdout"]
+	call_texts = [" ".join(call) for call in result["mock_state"]["calls"]]
+	assert len([call for call in call_texts if call.startswith("api graphql ")]) == 2
+	assert not any("repos/owner/repo/issues/7" in call for call in call_texts)
 
 
 def test_review_collect_pr_metadata_helper_caps_fallback_graphql_batch_at_twenty_issues() -> None:
@@ -2868,7 +2946,9 @@ def main() -> int:
 	test_review_collect_pr_metadata_helper_supports_no_pr_synthetic_mode()
 	test_review_collect_pr_metadata_helper_skips_optional_pr_reviews_by_default()
 	test_review_collect_pr_metadata_helper_fetches_top_level_reviews_when_break_glass_enabled()
+	test_review_collect_pr_metadata_helper_fails_open_on_non_array_batch_input()
 	test_review_collect_pr_metadata_helper_strict_fallback_drops_bare_mentions()
+	test_review_collect_pr_metadata_helper_warns_when_fallback_graphql_returns_errors_without_data()
 	test_extract_repo_scoped_issue_refs_rejects_malformed_repository_input()
 	test_review_scripts_emit_context_budget_warn_signals()
 	test_review_consolidator_prompt_is_staged_for_review_runtime_support()

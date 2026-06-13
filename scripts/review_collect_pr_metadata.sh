@@ -83,7 +83,7 @@ _fetch_linked_issue_bodies_graphql()
 	local numbers_json="$1"
 	local count
 	count="$(printf '%s' "${numbers_json}" | jq 'length' 2>/dev/null || echo 0)"
-	if [ -z "${count}" ] || [ "${count}" -eq 0 ]; then
+	if ! [[ "${count}" =~ ^[0-9]+$ ]] || [ "${count}" -eq 0 ]; then
 		echo '[]'
 		return 0
 	fi
@@ -123,6 +123,11 @@ _fetch_linked_issue_bodies_graphql()
 	local response_file
 	response_file="$(mktemp "${TMP_RUNTIME_DIR}/linked_issue_fallback_graphql.XXXXXX")"
 	if ! gh_retry "${response_file}" api graphql -f query="${query}"; then
+		rm -f "${response_file}"
+		echo '[]'
+		return 1
+	fi
+	if jq -e '(((.errors? // []) | length) > 0) and ((.data.repository? // null) == null)' "${response_file}" >/dev/null 2>&1; then
 		rm -f "${response_file}"
 		echo '[]'
 		return 1
