@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context\n- Branch: `orchestrator/project-3323`\n- SHA: `6bb50d65252c2a23ca3eee732b15e340ce5f9bd8`\n- Integration branch metadata matches checkout: `orchestrator/project-3323`\n\nClarification mapping\n- No Q1/Q2/etc. were asked.\n- `/answer [auto-answered-by-orchestrator]` only confirmed continuation; it did not add scope beyond the issue body.\n\nRepresentative patterns inspected\n- `.github/workflows/clarify.yml` \u2014 `Fetch issue metadata`: existing `source scripts/gh_helpers.sh 2>/dev/null || true` + `type gh_retry >/dev/null 2>&1 || gh_retry() { \"$@\"; }` pattern.\n- `.github/workflows/issue_pr_status.yml` / existing `orchestrate_poll.yml` support-fetch blocks: reference pattern for staging workflow-source support files when the caller workspace may not already contain `scripts/gh_helpers.sh`.\n\nFiles likely to change\n- `.github/workflows/cancel_on_pr_close.yml`\n- `.github/workflows/mark-stable.yml`\n- `.github/workflows/orchestrate_poll.yml`\n- `.github/workflows/test-and-mark-stable.yml`\n- `tests/test_workflow_gh_retry_fallback_contract.py`\n\nFunctions / modules to implement\n1. Replace each inline `_rl_wait()` + `_gh_retry()` body with the shared-helper pattern:\n   - `source scripts/gh_helpers.sh 2>/dev/null || true`\n   - `type gh_retry >/dev/null 2>&1 || gh_retry() { \"$@\"; }`\n   - rename step-local callsites from `_gh_retry ...` to `gh_retry ...`\n\n2. `.github/workflows/cancel_on_pr_close.yml`\n   - Update `Cancel queued/in-progress runs for closed PR branch`.\n   - Add the minimal pre-step needed to stage `scripts/gh_helpers.sh` into the workspace before that run block, because this workflow currently has no support-script staging and cannot assume the caller repo already has the file.\n   - Keep the existing paginated `gh api` queries and cancel loop unchanged.\n\n3. `.github/workflows/orchestrate_poll.yml`\n   - Update `Find active tracking issues`.\n   - Make `scripts/gh_helpers.sh` available before this pre-checkout step without changing poller control-plane logic; safest scope is a narrow early fetch/copy of just `gh_helpers.sh`, not a wider poller refactor.\n   - Preserve the existing `gh issue list` query, pagination, output wiring, and breaker semantics.\n\n4. `.github/workflows/mark-stable.yml`\n   - Update both `Verify CI passed on stable` and `Notify consumer repos via repository_dispatch`.\n   - Remove `_gh_rl_err`-specific comments/diagnostics and rely on shared `gh_retry` stderr logging.\n   - Keep the CI-state gate semantics identical: hard-fail on API failure, allow empty state, fail only on explicit `failure` / `error`.\n\n5. `.github/workflows/test-and-mark-stable.yml`\n   - Mirror the `mark-stable.yml` CI-status-step change in `Verify CI passed on source branch`.\n   - Keep this file behaviorally aligned with `mark-stable.yml`.\n\n6. `tests/test_workflow_gh_retry_fallback_contract.py`\n   - Extend `TARGET_STEPS` to cover the converted steps above so the repo keeps enforcing:\n     - optional `gh_helpers.sh` sourcing,\n     - immediate `gh_retry` fallback shim placement,\n     - no unused `_safe_gh_jq` shim in these gh-retry-only blocks.\n\nData structures affected\n- `tests/test_workflow_gh_retry_fallback_contract.py::TARGET_STEPS`\n- Workflow shell step bodies only; no persisted JSON, schema, DB, or label-contract changes.\n\nAPI / interface changes\n- No `workflow_call` input/output changes.\n- No workflow trigger changes.\n- No GitHub API endpoint/parameter changes.\n- Internal shell interface only: these steps stop defining `_rl_wait` / `_gh_retry` locally and instead call shared `gh_retry`.\n\nPotential risks / edge cases\n- `scripts/gh_helpers.sh` exports `gh_retry`, not `_gh_retry`, and it does not leave `/tmp/_gh_rl_err` behind; the two CI-status steps must drop their `cat /tmp/_gh_rl_err` assumptions.\n- Shared `gh_retry` short-circuits permanent 404/422/token-scope failures; verify none of these steps intentionally relied on retrying deterministic failures five times.\n- `orchestrate_poll.yml` must preserve `GH_RATE_LIMIT_BREAKER_FILE` behavior via the shared helper; do not reintroduce inline breaker touches or alter poller branching.\n- `cancel_on_pr_close.yml` and the early `orchestrate_poll.yml` step cannot rely on caller-repo contents alone; helper staging must come from the workflow-source repo or equivalent existing support-fetch logic.\n- Keep edits mechanical: no changes to poller decisions, paginated reads, or workflow triggers.\n\nTesting considerations\n- Run `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_gh_retry_fallback_contract.py`.\n- Grep the four workflow files to confirm the inline `_rl_wait` / `_gh_retry` bodies are gone.\n- Spot-check the two CI-status steps to confirm:\n  - API failure still aborts,\n  - empty state still proceeds,\n  - explicit `failure` / `error` still blocks.\n\nAssumptions / missing-context notes\n- No clarification answers changed scope.\n- The prompt did not include an explicit `files_touched` list, so this plan assumes the intended scope is the four named workflows plus the narrow existing fallback-contract test.\n\nConflict check\n- No issue/codebase mismatch found: all four named workflow files exist, each still contains duplicated inline retry helpers, and `scripts/gh_helpers.sh` already provides the shared retry/breaker contract the issue references.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "d76b47615f220b476f3a589ace692b43f3a2391cbc53bbd7f8c49b970f792a75",
+  "lineage": {
+    "issue_number": 3346,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27473437962",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27473437962",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3346"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260613171529_d505601d22",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3346,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27473437962"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3346",
+  "timestamps": {
+    "created_at": "2026-06-13T17:15:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
