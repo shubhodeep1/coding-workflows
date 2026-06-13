@@ -53,9 +53,10 @@ conclusion_allowed()
 {
 	local conclusion="$1"
 	local allowed
+	local allowed_value
 	IFS=',' read -r -a allowed <<< "${ALLOWED_CONCLUSIONS_CSV}"
-	for allowed in "${allowed[@]}"; do
-		if [ "${conclusion}" = "${allowed}" ]; then
+	for allowed_value in "${allowed[@]}"; do
+		if [ "${conclusion}" = "${allowed_value}" ]; then
 			return 0
 		fi
 	done
