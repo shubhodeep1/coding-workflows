@@ -511,13 +511,12 @@ def collect_placeholders(prompt_text: str) -> tuple[str, ...]:
 
 
 def collect_standalone_placeholders(prompt_text: str) -> tuple[str, ...]:
-	# Only placeholders that occupy a whole line are block-substituted by
-	# render_prompt_text (via STANDALONE_PLACEHOLDER_PATTERN); inline
-	# occurrences are left literal unless the name is a known scalar value.
-	# Reference resolution must mirror that contract so a {{REFERENCE_*}}
-	# token that appears *inline* inside untrusted embedded content (e.g. a
-	# reviewer-consensus example quoted in the editor prompt body) is never
-	# treated as a real placeholder.
+	# Only placeholders that occupy a whole line participate in the
+	# standalone-line branch of render_prompt_text
+	# (STANDALONE_PLACEHOLDER_PATTERN.fullmatch(line)). Reference
+	# resolution must mirror that contract so inline {{REFERENCE_*}} tokens
+	# inside embedded untrusted content are never treated as real
+	# placeholders.
 	names: set[str] = set()
 	for line in prompt_text.splitlines():
 		match = STANDALONE_PLACEHOLDER_PATTERN.fullmatch(line)
