@@ -56,6 +56,9 @@ Rules:
 - Before creating any `new_issues` entry, read the relevant files and
   confirm the gap is not already addressed — do not file issues for
   problems the merged code already handles.
+- When summarising reviewer-derived problems in `justification`,
+  `assessment`, or any generated `new_issues[].body`, use explicit
+  `SEVERITY: BLOCKER|MAJOR|NIT` labels rather than implicit wording.
 - Include a `justification` explaining why you are requesting another cycle.
 
 Audit-gate carve-out (`npm run audit:ci`): if evidence shows validator semantics/normalization churn rather than a concrete defect, do not create a generic fix-up. `new_issues[].body` must NOT instruct implementers to:

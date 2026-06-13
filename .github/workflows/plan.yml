@@ -54,6 +54,7 @@ jobs:
       CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
       PROCESSED_ANSWER_CLAIMED: "false"
       PROCESSED_ANSWER_COMPLETED: "false"
+      PLAN_SELF_CHECK_ENABLED: ${{ vars.PLAN_SELF_CHECK_ENABLED || 'true' }}
 
     steps:
       - name: Cache Codex CLI
@@ -957,6 +958,7 @@ jobs:
           4. API or interface changes
           5. Potential risks or edge cases
           6. Testing considerations
+          7. A pre-execution self-check result
 
           Rules:
 
@@ -994,6 +996,15 @@ jobs:
             from the planning context and do not assume `main`.
           - If checked-out ref mismatches Integration branch metadata, emit exactly
             `BLOCKED: integration branch mismatch`.
+          - Before exiting, run a self-check on the plan you are about to emit.
+            If the plan is implementation-ready, end with `STATUS: CLEAR` and
+            `PLAN_SELF_CHECK: PASS`. If you find non-blocking concerns, emit one
+            or more `PLAN_SELF_CHECK: WARNING: <one-line>` lines and still end
+            with `STATUS: CLEAR`. If you find any implementation blocker, emit
+            one or more `PLAN_SELF_CHECK: BLOCKER: <one-line>` lines and end
+            with `STATUS: NOT_CLEAR`. Do not emit both `PLAN_SELF_CHECK: PASS`
+            and any `PLAN_SELF_CHECK: WARNING:` or `PLAN_SELF_CHECK: BLOCKER:`
+            lines in the same output.
           - If any answer is missing, contradictory, or unclear after best-effort interpretation,
             do NOT guess: return clarification questions in the Q<ID>/Choices format defined in
             prompts/mode-plan.txt ("Mandatory Question Format" section) and state that
@@ -1158,6 +1169,44 @@ jobs:
           echo "BLOCKED=false" >> "$GITHUB_ENV"
           echo "BLOCKED_REASON=" >> "$GITHUB_ENV"
 
+          PLAN_SELF_CHECK_GATE_ENABLED="false"
+          case "$(printf '%s' "${PLAN_SELF_CHECK_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+            1|true|yes|on)
+              PLAN_SELF_CHECK_GATE_ENABLED="true"
+              ;;
+          esac
+
+          SELF_CHECK_PASS_COUNT="$(perl -ne '
+            if (/^\s*(?:```|~~~)/) { $in_code = !$in_code; next; }
+            next if $in_code;
+            if (/^\s*PLAN_SELF_CHECK:\s*PASS\s*$/i) { $count++; }
+            END { print $count + 0; }
+          ' "${CODEX_OUTPUT_FILE}")"
+
+          SELF_CHECK_WARNING_COUNT="$(perl -ne '
+            if (/^\s*(?:```|~~~)/) { $in_code = !$in_code; next; }
+            next if $in_code;
+            if (/^\s*PLAN_SELF_CHECK:\s*WARNING:\s*(.*\S)\s*$/i) { $count++; }
+            END { print $count + 0; }
+          ' "${CODEX_OUTPUT_FILE}")"
+
+          SELF_CHECK_BLOCKER_COUNT="$(perl -ne '
+            if (/^\s*(?:```|~~~)/) { $in_code = !$in_code; next; }
+            next if $in_code;
+            if (/^\s*PLAN_SELF_CHECK:\s*BLOCKER:\s*(.*\S)\s*$/i) { $count++; }
+            END { print $count + 0; }
+          ' "${CODEX_OUTPUT_FILE}")"
+
+          SELF_CHECK_REOPEN_CLARIFICATION="false"
+          if [ "${PLAN_SELF_CHECK_GATE_ENABLED}" = "true" ] && [ "${SELF_CHECK_BLOCKER_COUNT}" -gt 0 ]; then
+            SELF_CHECK_REOPEN_CLARIFICATION="true"
+          fi
+
+          echo "plan_self_check_pass_count=${SELF_CHECK_PASS_COUNT}" >> "$GITHUB_OUTPUT"
+          echo "plan_self_check_warning_count=${SELF_CHECK_WARNING_COUNT}" >> "$GITHUB_OUTPUT"
+          echo "plan_self_check_blocker_count=${SELF_CHECK_BLOCKER_COUNT}" >> "$GITHUB_OUTPUT"
+          echo "plan_self_check_reopen_clarification=${SELF_CHECK_REOPEN_CLARIFICATION}" >> "$GITHUB_OUTPUT"
+
           HAS_STATUS_NEEDS_CLARIFICATION="false"
           if grep -qiE 'STATUS:.*NEEDS_CLARIFICATION|^\*\*STATUS:\*\*.*NEEDS_CLARIFICATION' "${CODEX_OUTPUT_FILE}"; then
             HAS_STATUS_NEEDS_CLARIFICATION="true"
@@ -1175,7 +1224,7 @@ jobs:
             HAS_STRUCTURED_CLARIFICATION_BLOCK="true"
           fi
 
-          if [ "${HAS_STATUS_NEEDS_CLARIFICATION}" = "true" ] || [ "${HAS_STRUCTURED_CLARIFICATION_BLOCK}" = "true" ]; then
+          if [ "${HAS_STATUS_NEEDS_CLARIFICATION}" = "true" ] || [ "${HAS_STRUCTURED_CLARIFICATION_BLOCK}" = "true" ] || [ "${SELF_CHECK_REOPEN_CLARIFICATION}" = "true" ]; then
             echo "needs_clarification=true" >> "$GITHUB_OUTPUT"
             echo "NEEDS_CLARIFICATION=true" >> "$GITHUB_ENV"
           else

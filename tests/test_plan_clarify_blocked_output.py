@@ -22,6 +22,11 @@ def test_prompt_contract_includes_blocked_rule() -> None:
 	clarify_prompt = _read(PROMPT_CLARIFY)
 
 	assert "emit exactly `BLOCKED: <short reason>`" in plan_prompt
+	assert "## Pre-execution self-check" in plan_prompt
+	assert "PLAN_SELF_CHECK: PASS" in plan_prompt
+	assert "PLAN_SELF_CHECK: WARNING:" in plan_prompt
+	assert "PLAN_SELF_CHECK: BLOCKER:" in plan_prompt
+	assert "STATUS: NOT_CLEAR" in plan_prompt
 	assert "emit exactly `BLOCKED: <short reason>`" in clarify_prompt
 	assert "BLOCKED: <short reason>" in clarify_prompt
 
@@ -30,8 +35,17 @@ def test_plan_workflow_detects_blocked_before_needs_clarification() -> None:
 	wf = _read(PLAN_WF)
 
 	assert "- name: Parse planning output" in wf
+	assert "PLAN_SELF_CHECK_ENABLED: ${{ vars.PLAN_SELF_CHECK_ENABLED || 'true' }}" in wf
 	assert "if (/^\\s*BLOCKED:\\s*(.*\\S)\\s*$/i)" in wf
 	assert "echo \"blocked=true\" >> \"$GITHUB_OUTPUT\"" in wf
+	assert "7. A pre-execution self-check result" in wf
+	assert "PLAN_SELF_CHECK: PASS" in wf
+	assert "PLAN_SELF_CHECK: WARNING:" in wf
+	assert "PLAN_SELF_CHECK: BLOCKER:" in wf
+	assert "SELF_CHECK_PASS_COUNT" in wf
+	assert "SELF_CHECK_WARNING_COUNT" in wf
+	assert "SELF_CHECK_BLOCKER_COUNT" in wf
+	assert "plan_self_check_reopen_clarification" in wf
 	assert "- name: Handle blocked planning output" in wf
 	assert "steps.parse_plan.outputs.blocked == 'true'" in wf
 	assert "--add-label 'ai:blocked'" in wf
@@ -40,6 +54,8 @@ def test_plan_workflow_detects_blocked_before_needs_clarification() -> None:
 	assert 'index("ai:blocked") != null' in wf
 	assert "--remove-label 'ai:blocked'" in wf
 	assert "--status \"blocked\"" in wf
+	assert '[ "${PLAN_SELF_CHECK_GATE_ENABLED}" = "true" ] && [ "${SELF_CHECK_BLOCKER_COUNT}" -gt 0 ]' in wf
+	assert '[ "${HAS_STATUS_NEEDS_CLARIFICATION}" = "true" ] || [ "${HAS_STRUCTURED_CLARIFICATION_BLOCK}" = "true" ] || [ "${SELF_CHECK_REOPEN_CLARIFICATION}" = "true" ]' in wf
 	assert "steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification == 'true'" in wf
 
 
