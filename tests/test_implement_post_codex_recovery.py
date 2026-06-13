@@ -1394,6 +1394,10 @@ def test_scope_guard_allowlist_and_workflow_rollback_contracts_present() -> None
 	assert "canonical_deletions" in commit_helper
 	assert "ALLOW_WORKFLOW_EDITS" in commit_helper
 	assert "destructive_commit_blocked=canonical-source" in commit_helper
+	assert "Non-numeric staged deletion count" in commit_helper
+	assert "total_deletions=999999" in commit_helper
+	assert "Non-numeric non-markdown deletion count" in commit_helper
+	assert "non_md_count=1" in commit_helper
 
 	protect_block = _step_block_text("Protect workflow files from implementation edits")
 	assert 'git cat-file -e HEAD:.github/workflows >/dev/null 2>&1 || [ -d .github/workflows ]' in protect_block

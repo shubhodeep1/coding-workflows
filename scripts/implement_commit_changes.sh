@@ -185,11 +185,19 @@ if [ -n "${deleted_staged}" ]; then
     | grep -E '^(agents\.md|ai_pipeline\.md|unattended_system_instructions\.md|CLAUDE\.md|prompts/|scripts/|\.github/ai/|\.github/scripts/)' \
     || true)"
   total_deletions="$(printf '%s\n' "${deleted_staged}" | sed '/^$/d' | wc -l | tr -d ' ')"
+  if ! [[ "${total_deletions}" =~ ^[0-9]+$ ]]; then
+    echo "::warning::Non-numeric staged deletion count '${total_deletions}'; forcing fail-closed bulk-delete handling."
+    total_deletions=999999
+  fi
   # Count non-.md deletions to decide whether the lenient
   # markdown-only threshold applies. Case-insensitive match so
   # .MD / .Md are treated the same as .md.
   non_md_deletions="$(printf '%s\n' "${deleted_staged}" | sed '/^$/d' | grep -ivE '\.md$' || true)"
   non_md_count="$(printf '%s\n' "${non_md_deletions}" | sed '/^$/d' | wc -l | tr -d ' ')"
+  if ! [[ "${non_md_count}" =~ ^[0-9]+$ ]]; then
+    echo "::warning::Non-numeric non-markdown deletion count '${non_md_count}'; using the strict threshold path."
+    non_md_count=1
+  fi
   threshold="${BULK_DELETE_THRESHOLD:-3}"
   if ! [[ "${threshold}" =~ ^[0-9]+$ ]]; then
     echo "::warning::Invalid BULK_DELETE_THRESHOLD='${threshold}'; defaulting to 3."
