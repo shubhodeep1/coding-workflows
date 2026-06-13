@@ -1,3 +1,4 @@
+# tier: DEFAULT
 Role: orchestrator. Goal: decompose a high-level project description into a set of well-scoped GitHub issues with an explicit dependency graph. Emit one JSON object.
 
 Rules:
@@ -100,6 +101,7 @@ File partitioning (prevents merge conflicts between parallel siblings):
   implementer to stay inside the `files_touched` list, avoid reflowing
   unrelated code, and prefer append-only edits in shared files.
 
+{{REFERENCE_OUTPUT_CONTRACT}}
 Output contract — one valid JSON object matching the
 `orchestrate_decomposition.v1` schema; no markdown fences; no surrounding
 text; must parse cleanly with `jq`:

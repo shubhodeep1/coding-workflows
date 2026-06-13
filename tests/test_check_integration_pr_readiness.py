@@ -206,12 +206,15 @@ def test_main_fails_closed_when_tracking_issue_has_no_checkboxes():
 			"--head-sha", "deadbeef",
 			"--repo", "owner/repo",
 		]
-		rc = mod.main()
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			rc = mod.main()
 		assert rc == 0
 		assert posted == [(
 			"failure",
 			"tracking issue #2734 has no checkbox items in its body; readiness check cannot verify completeness",
 		)]
+		assert "::error::[integration-pr-readiness] tracking issue #2734 has no checkbox items in its body; readiness check cannot verify completeness" in stderr.getvalue()
 	finally:
 		sys.argv = old_argv
 		mod._post_commit_status = original_post
@@ -266,12 +269,17 @@ def test_main_fails_when_any_tracking_checkbox_remains_unchecked():
 			"--head-sha", "deadbeef",
 			"--repo", "owner/repo",
 		]
-		rc = mod.main()
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			rc = mod.main()
 		assert rc == 0
 		assert posted == [(
 			"failure",
 			"1/3 sub-issues on #2734 still unchecked: outstanding B",
 		)]
+		assert "::warning::[integration-pr-readiness] 1/3 sub-issues on #2734 still unchecked: outstanding B" in stderr.getvalue()
+		assert "::notice::To merge anyway (rare; e.g. de-scoping the remaining work), apply the 'ai:override-incomplete-merge' label to this PR." in stderr.getvalue()
+		assert "::error::[integration-pr-readiness] 1/3 sub-issues on #2734 still unchecked: outstanding B" not in stderr.getvalue()
 	finally:
 		sys.argv = old_argv
 		mod._post_commit_status = original_post

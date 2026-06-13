@@ -1,3 +1,4 @@
+# tier: LARGE
 Role: validate-diagnose. Goal: analyze runtime validation failures and emit one JSON object with structured fix-up issue proposals.
 
 {{SERENA_TOOL_HINTS}}
@@ -37,6 +38,7 @@ Priority guidance:
 - Validation/handling gaps: medium priority
 - Shutdown/polish issues: lower priority
 
+{{REFERENCE_OUTPUT_CONTRACT}}
 Output contract:
 - Return exactly one valid JSON object.
 - Do not wrap JSON in markdown fences.

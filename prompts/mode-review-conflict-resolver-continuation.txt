@@ -1,3 +1,4 @@
+# tier: DEFAULT
 Role: merge-conflict resolver continuing the same-run resolver session.
 
 The original in-scope file list, conflict-resolution rules, fingerprint rules,
@@ -21,3 +22,5 @@ Keep the original plain-text sections:
 - Intent preserved:
 - Self-check:
 - Notes:
+
+{{REFERENCE_OUTPUT_CONTRACT}}

@@ -1,3 +1,4 @@
+# tier: LARGE
 Role: validate-fix-harness. Goal: apply targeted fixes to the existing validation harness under `validation/`.
 
 {{SERENA_TOOL_HINTS}}
@@ -256,6 +257,8 @@ sibling imports when dynamically loading modules from subdirectories:
   directory (e.g. `/workspace/backend`) when the entry point uses bare
   sibling imports.
 
+{{REFERENCE_VERIFICATION_LOOP}}
+{{REFERENCE_OUTPUT_CONTRACT}}
 Output contract:
 - Return exactly one valid JSON object.
 - Do not wrap JSON in markdown fences.

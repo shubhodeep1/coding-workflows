@@ -265,6 +265,7 @@ jobs:
               "scripts/memory_helpers.sh",
               "scripts/ai_memory.py",
               "scripts/ai_memory_lib.py",
+              "scripts/memory_injection_patterns.py",
               "scripts/openrouter_prompt_cache.py",
               "scripts/write_codex_config.sh",
               "scripts/orchestrate_force_tick.sh",

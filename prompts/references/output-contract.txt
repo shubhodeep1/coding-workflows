@@ -1,0 +1,5 @@
+Terminal output contract:
+- Finish with the requested deliverable shape for this prompt.
+- Do not stop at analysis, advice, or open questions when this phase expects an artefact.
+- Do not wrap structured output in markdown fences unless the prompt explicitly asks for fences.
+- If the prompt requests file changes, the worktree diff is the deliverable; if it requests a comment, report, or JSON block, emit that artefact directly.

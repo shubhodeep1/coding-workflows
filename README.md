@@ -747,6 +747,35 @@ jobs:
 > to keep your changes, either opt out or maintain your customizations after
 > each update.
 
+#### Install profiles
+
+If you use `ai-update-workflows.yml`, you can narrow which wrappers it
+auto-creates by setting the `WORKFLOW_PROFILE` repository variable. Supported
+values are `core`, `standard`, and `full`; the default is `full`, which
+preserves today's behavior of installing every wrapper template.
+
+- `core` installs the six-wrapper manifest in
+  [`workflow-templates/profiles/core.txt`](workflow-templates/profiles/core.txt):
+  `ai-clarify.yml`, `ai-plan.yml`, `ai-implement.yml`, `ai-review.yml`,
+  `ai-issue-pr-status.yml`, and `ai-cancel-on-pr-close.yml`.
+- `standard` installs `core` plus the orchestrator/validation additions listed
+  in
+  [`workflow-templates/profiles/standard.txt`](workflow-templates/profiles/standard.txt):
+  `ai-orchestrate.yml`, `ai-orchestrate-poll.yml`,
+  `ai-orchestrate-clarify-respond.yml`, `ai-validate.yml`, and
+  `review_rb_judge_dispatch.yml`.
+- `full` installs every top-level wrapper listed in
+  [`workflow-templates/profiles/full.txt`](workflow-templates/profiles/full.txt).
+
+Profile downgrades are non-destructive: switching from `full` to `core` or
+`standard` stops creating out-of-profile wrappers in future syncs, but does
+not delete wrappers that are already present in `.github/workflows/`.
+
+> **Terminology note:** the minimum manual-bootstrap wrappers are
+> `ai-clarify.yml`, `ai-plan.yml`, and `ai-implement.yml`. The `core` install
+> profile is a separate six-wrapper auto-install manifest used only by
+> `ai-update-workflows.yml`.
+
 > **Canonical audit-gate delivery contract:** `update_workflows.yml` applies
 > `workflow-templates/audit-gate/contract.json` atomically and idempotently.
 > The contract requires `package_script` and `managed_files`. When

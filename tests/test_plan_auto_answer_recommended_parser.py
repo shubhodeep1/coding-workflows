@@ -36,16 +36,28 @@ PLAN_WF = REPO_ROOT / ".github" / "workflows" / "plan.yml"
 POLL_PROCESS = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
 PROMPT_PLAN = REPO_ROOT / "prompts" / "mode-plan.txt"
 PROMPT_CLARIFY = REPO_ROOT / "prompts" / "mode-clarify.txt"
+FENCE_SANITIZER = r"s{(^|\n)([ \t]*((?:```|~~~))[^\n]*\n.*?\n[ \t]*\3[ \t]*(?=\n|$))}{$1}gms;"
 
 
 def _read(path: Path) -> str:
 	return path.read_text(encoding="utf-8")
 
 
+def _sanitize_plan_output(raw_output: str) -> str:
+	proc = subprocess.run(
+		["perl", "-0pe", FENCE_SANITIZER],
+		input=raw_output,
+		capture_output=True,
+		text=True,
+		check=True,
+	)
+	return proc.stdout
+
+
 def _extract_plan_yml_perl_heredoc() -> str:
 	wf = _read(PLAN_WF)
 	m = re.search(
-		r"perl\s*-\s*\"\$\{CODEX_OUTPUT_FILE\}\"\s*>\s*\"\$\{PARSE_RESULT_FILE\}\"\s*<<'PERL'\n(.*?)\n\s*PERL\b",
+		r"PARSE_SOURCE_FILE=\"\$\{CODEX_OUTPUT_PARSE_FILE:-\$\{CODEX_OUTPUT_FILE\}\}\"\s*\n\s*perl - \"\$\{PARSE_SOURCE_FILE\}\" > \"\$\{PARSE_RESULT_FILE\}\" <<'PERL'\n(.*?)\n\s*PERL\b",
 		wf,
 		re.DOTALL,
 	)
@@ -60,7 +72,7 @@ def _run_plan_parser(input_text: str) -> dict[str, str]:
 		script = tmp_path / "parser.pl"
 		script.write_text(body, encoding="utf-8")
 		input_file = tmp_path / "input.txt"
-		input_file.write_text(input_text, encoding="utf-8")
+		input_file.write_text(_sanitize_plan_output(input_text), encoding="utf-8")
 		proc = subprocess.run(
 			["perl", str(script), str(input_file)],
 			capture_output=True,
@@ -78,7 +90,7 @@ def _run_plan_parser(input_text: str) -> dict[str, str]:
 def _extract_structured_block_perl_program() -> str:
 	wf = _read(PLAN_WF)
 	m = re.search(
-		r"HAS_STRUCTURED_CLARIFICATION_BLOCK=\"false\"\s*\n\s*if perl -ne '(.*?)'\s*\"\$\{CODEX_OUTPUT_FILE\}\";\s*then",
+		r"HAS_STRUCTURED_CLARIFICATION_BLOCK=\"false\"\s*\n\s*if perl -ne '(.*?)'\s*\"\$\{CODEX_OUTPUT_PARSE_FILE\}\";\s*then",
 		wf,
 		re.DOTALL,
 	)
@@ -90,7 +102,7 @@ def _run_structured_block_detector(input_text: str) -> bool:
 	program = _extract_structured_block_perl_program()
 	with tempfile.TemporaryDirectory() as tmp:
 		input_file = Path(tmp) / "input.txt"
-		input_file.write_text(input_text, encoding="utf-8")
+		input_file.write_text(_sanitize_plan_output(input_text), encoding="utf-8")
 		proc = subprocess.run(
 			["perl", "-ne", program, str(input_file)],
 			capture_output=True,
