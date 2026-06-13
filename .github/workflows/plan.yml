@@ -1147,11 +1147,12 @@ jobs:
           ' "${CODEX_OUTPUT_FILE}" > "${CODEX_OUTPUT_PARSE_FILE}"
           echo "CODEX_OUTPUT_PARSE_FILE=${CODEX_OUTPUT_PARSE_FILE}" >> "$GITHUB_ENV"
 
+          # Scan the sanitized parse file so malformed or unclosed fences
+          # cannot hide a real BLOCKED line before the clarification/self-check
+          # gates run.
           BLOCKED_REASON="$(perl -ne '
-            if (/^\s*(?:```|~~~)/) { $in_code = !$in_code; next; }
-            next if $in_code;
             if (/^\s*BLOCKED:\s*(.*\S)\s*$/i) { print $1; exit; }
-          ' "${CODEX_OUTPUT_FILE}")"
+          ' "${CODEX_OUTPUT_PARSE_FILE}")"
 
           if [ -n "${BLOCKED_REASON}" ]; then
             BLOCKED_REASON_OUTPUT_DELIM="BLOCKED_REASON_OUTPUT_${GITHUB_RUN_ID:-0}_${GITHUB_RUN_ATTEMPT:-0}_$$"

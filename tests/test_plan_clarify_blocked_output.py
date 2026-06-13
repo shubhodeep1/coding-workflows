@@ -33,11 +33,17 @@ def test_prompt_contract_includes_blocked_rule() -> None:
 
 def test_plan_workflow_detects_blocked_before_needs_clarification() -> None:
 	wf = _read(PLAN_WF)
+	blocked_section = wf.split('BLOCKED_REASON="$(perl -ne \'', 1)[1].split(
+		'if [ -n "${BLOCKED_REASON}" ]; then', 1
+	)[0]
 
 	assert "- name: Parse planning output" in wf
 	assert "PLAN_SELF_CHECK_ENABLED: ${{ vars.PLAN_SELF_CHECK_ENABLED || 'true' }}" in wf
 	assert "if (/^\\s*BLOCKED:\\s*(.*\\S)\\s*$/i)" in wf
 	assert "echo \"blocked=true\" >> \"$GITHUB_OUTPUT\"" in wf
+	assert "${CODEX_OUTPUT_PARSE_FILE}" in blocked_section
+	assert "${CODEX_OUTPUT_FILE}" not in blocked_section
+	assert "$in_code" not in blocked_section
 	assert "7. A pre-execution self-check result" in wf
 	assert "PLAN_SELF_CHECK: PASS" in wf
 	assert "PLAN_SELF_CHECK: WARNING:" in wf
