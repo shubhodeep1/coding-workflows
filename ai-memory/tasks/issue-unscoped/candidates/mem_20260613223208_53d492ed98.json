@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_files_touched_scope_guard.py:232-322 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, x-ai_grok-4_20]\n  PROBLEM: The commit-time scope-guard markers were extracted to `scripts/implement_commit_changes.sh`, but the tests still read `.github/workflows/implement.yml`, so `_scope_fragment(\"commit\")` cannot find the markers and the count assertions are stale.\n  WHY: This makes every commit-scope lookup raise `StopIteration` and also breaks the marker-count assertion in `test_both_guard_sites_invoke_script_and_emit_outputs`, producing multiple test failures that block CI.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Lint / test checks passing\" (implied by merge requirements; the PR must be green for the review-blocked judge or operator to merge)\n  expected_change_site: `tests/test_files_touched_scope_guard.py` \u2014 `_scope_fragment(\"commit\")` and any test assertions that count scope-guard markers in the commit-phase code\n  confidence=5\n  flagged_by: [qwen_qwen3_6-plus]\n  EVIDENCE: No diff hunk in this PR (original or last-run) updates `tests/test_files_touched_scope_guard.py`. The function `_scope_fragment(\"commit\")` still reads from `.github/workflows/implement.yml` (`IMPLEMENT` at line 35), but the commit-phase scope-guard markers (`# >>> files_touched scope-enforcement guard (commit) >>>` / `<<<`) now reside exclusively in `scripts/implement_commit_changes.sh`. Every call to `_scope_fragment(\"commit\")` raises `StopIteration`, and `test_both_guard_sites_invoke_script_and_emit_outputs` asserts `implement.yml` contains `python3 scripts/files_touched_scope_guard.py` exactly 2 times \u2014 but the split between `implement.yml` and the helper broke that count. The CI lint job log confirms 7 test failures (6 `StopIteration` + 1 `AssertionError`). This was flagged as a consensus finding in pass 1 but remains unresolved; the PR cannot merge green without this test fix.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_files_touched_scope_guard.py:~232-322 | severity=critical | confidence=5\n  PROBLEM: The PR extracted the commit-time scope-enforcement guard from `.github/workflows/implement.yml` into `scripts/implement_commit_changes.sh`, but `_scope_fragment(\"commit\")` still reads exclusively from `IMPLEMENT`, so it can no longer find the commit markers and the count assertions are now wrong.\n  WHY: `next(i for i, line in enumerate(lines) if line.strip() == start)` raises `StopIteration` for commit-scope calls, and the stale count expectation in `test_both_guard_sites_invoke_script_and_emit_outputs` also fails, blocking CI.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_files_touched_scope_guard.py:~232-322 | severity=critical | confidence=5\n  PROBLEM: The PR extracted the commit-time scope guard from `.github/workflows/implement.yml` into `scripts/implement_commit_changes.sh`, but the test helper `_scope_fragment(\"commit\")` still reads from `IMPLEMENT` (`.github/workflows/implement.yml`), so the commit markers are no longer where the helper expects them.\n  WHY: The generator cannot find the markers and raises `StopIteration`, and `test_both_guard_sites_invoke_script_and_emit_outputs` still expects the old marker counts in `implement.yml`, so CI fails.\n- File: scripts/review_collect_pr_metadata.sh\n  Location: _fetch_linked_issue_bodies_graphql function, mktemp call line 134\n  Issue: The mktemp failure is now handled with explicit error checking, but the helper still falls back to [] on failure. Consider adding a retry loop or fallback to per-issue REST fetches when GraphQL batching fails, to ensure linked issue context is still available.\n  Suggested minimal fix: Add a retry loop with exponential backoff around the mktemp and gh_retry calls, falling back to the original per-issue REST loop only if the batch GraphQL approach fails after retries.\n  Estimated lines changed: 8\n  HARDENING_RISK_SCORE: 2\n- File: scripts/dispatch_and_watch_workflow_run.sh\n  Location: Lines 219-238\n  Issue: The event=workflow_dispatch filter assumes run IDs are monotonic in time and that the workflow is always dispatched this way. If GitHub's API returns runs out of order or other event types trigger runs, the wrong run might be captured.\n  Suggested minimal fix: Add a secondary validation check that the selected run's created_at timestamp is within a reasonable window (e.g., 60 seconds) of the dispatch time before accepting it.\n  Estimated lines changed: 5\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n- requirement: \"Lint / test checks passing\" (implied by merge requirements; the PR must be green for the review-blocked judge or operator to merge)\n  expected_change_site: `tests/test_files_touched_scope_guard.py` \u2014 `_scope_fragment(\"commit\")` and any test assertions that count scope-guard markers in the commit-phase code\n  confidence=5\n  flagged_by: [qwen_qwen3_6-plus]\n  EVIDENCE: No diff hunk in this PR (original or last-run) updates `tests/test_files_touched_scope_guard.py`. The function `_scope_fragment(\"commit\")` still reads from `.github/workflows/implement.yml` (`IMPLEMENT` at line 35), but the commit-phase scope-guard markers (`# >>> files_touched scope-enforcement guard (commit) >>>` / `<<<`) now reside exclusively in `scripts/implement_commit_changes.sh`. Every call to `_scope_fragment(\"commit\")` raises `StopIteration`, and `test_both_guard_sites_invoke_script_and_emit_outputs` asserts `implement.yml` contains `python3 scripts/files_touched_scope_guard.py` exactly 2 times \u2014 but the split between `implement.yml` and the helper broke that count. The CI lint job log confirms 7 test failures (6 `StopIteration` + 1 `AssertionError`). This was flagged as a consensus finding in pass 1 but remains unresolved; the PR cannot merge green without this test fix.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_files_touched_scope_guard.py:232-322 | severity=critical | confidence=5\n  PROBLEM: After the commit-time scope-guard logic was extracted to `scripts/implement_commit_changes.sh`, the tests still read `IMPLEMENT` (`.github/workflows/implement.yml`), so `_scope_fragment(\"commit\")` cannot find the commit markers and the count assertions are stale.\n  WHY: Every `next(...)` lookup in `_scope_fragment(\"commit\")` raises `StopIteration`, and `test_both_guard_sites_invoke_script_and_emit_outputs` fails because it still expects the old marker counts in `implement.yml`, which blocks CI.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "4cf67cc3958375a2ec2a2eec9a2cee6e6ef150fecfb9ccb16ddd0d81e6a0fd58",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3344,
+    "run_id": "27479818486",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27479818486",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260613223208_53d492ed98",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3344,
+    "run_id": "27479818486"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-13T22:32:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
