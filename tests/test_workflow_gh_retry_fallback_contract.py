@@ -88,8 +88,17 @@ def test_targeted_gh_retry_only_blocks_do_not_define_safe_gh_jq() -> None:
 def test_bootstrapped_gh_retry_workflows_require_staged_helper_with_main_fallback() -> None:
 	for relative_path in BOOTSTRAPPED_GH_HELPER_WORKFLOWS:
 		text = _workflow_text(relative_path)
+		fallback_step = (
+			"Checkout workflow support source fallback for gh retry"
+			if relative_path.endswith("orchestrate_poll.yml")
+			else "Checkout workflow support source fallback"
+		)
+		fallback_block = _step_block(text, fallback_step)
 		assert "path: .codex-workflow-src" in text, (
 			f"{relative_path} must stage the workflow support checkout before sourcing gh_helpers.sh"
+		)
+		assert "continue-on-error: true" in fallback_block, (
+			f"{relative_path} must keep the fallback checkout non-fatal until the explicit ensure step runs"
 		)
 		assert "if [ ! -d .codex-workflow-src ]; then" in text, (
 			f"{relative_path} must fail if the workflow support checkout is unavailable"
