@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-3303` @ `e5b00797eb79a068af559ed135131d9222a3c1dc` (symbolic ref `orchestrator/project-3303`); integration metadata matches (`mismatch=false`).\n\nAssumptions / conflicts noted up front:\n- Phase B is already present on this ref: the shared `{{REFERENCE_SEVERITY_CLASSIFICATION}}` include already exists in `prompts/review-reviewer-checklist.txt`, `prompts/review-consolidator.txt`, `prompts/mode-judge.txt`, and `prompts/mode-judge-review-blocked.txt`. Phase C should tighten wording around the existing include, not add duplicate placeholders.\n- The source plan mentions `scripts/plan_process.sh` / `scripts/review_parse.sh`, but current HEAD uses `.github/workflows/plan.yml` and `scripts/review_parse_consolidator.sh`.\n- `prompts/review-reviewer-checklist.txt` currently has no mandatory `SEVERITY:` line in its reviewer output format, so this is more than a reference-file tweak.\n- `scripts/review_parse_consolidator.sh` currently defaults missing severity to `low`; that is too permissive for the new contract.\n\n1. Files likely to change\n- `prompts/mode-plan.txt`\n- `.github/workflows/plan.yml`\n- `prompts/review-reviewer-checklist.txt`\n- `prompts/review-consolidator.txt`\n- `prompts/mode-judge.txt`\n- `prompts/mode-judge-review-blocked.txt`\n- `prompts/references/severity-classification.txt`\n- `scripts/review_parse_consolidator.sh`\n- `prompts/mode-implement.txt`\n- `tests/test_plan_clarify_blocked_output.py`\n- `tests/test_render_prompt_review_judge_modes.py`\n- Likely parser coverage files: `tests/test_review_parse_consolidator.py` and one small fixture under `tests/fixtures/review_pipeline/`\n\n2. Functions/modules to implement\n- `prompts/mode-plan.txt`\n  - Append the new terminal `## Pre-execution self-check` section.\n  - Require successful plans to end with `STATUS: CLEAR` plus `PLAN_SELF_CHECK: PASS`.\n  - Require self-check findings to use `PLAN_SELF_CHECK: WARNING: ...` / `PLAN_SELF_CHECK: BLOCKER: ...`, with `STATUS: NOT_CLEAR` when any blocker exists.\n  - Keep existing `BLOCKED:` and clarification-question rules intact.\n- `.github/workflows/plan.yml`\n  - Extend the `Parse planning output` step to parse `PLAN_SELF_CHECK` lines outside code fences.\n  - Add a new env gate `PLAN_SELF_CHECK_ENABLED: ${{ vars.PLAN_SELF_CHECK_ENABLED || 'true' }}`.\n  - Preserve current `BLOCKED:` precedence.\n  - Treat self-check `BLOCKER` as clarification reopen (`needs_clarification=true`), not as `ai:blocked`.\n  - Keep `PASS` and `WARNING` fail-open so the normal \u201cpost plan / auto-approve\u201d path still runs.\n  - Reuse the existing clarification path (`Post clarification questions` and label transition back to `ai:clarification`) instead of inventing a new route.\n- `prompts/review-reviewer-checklist.txt`\n  - Make severity mandatory in the reviewer output contract.\n  - Add `SEVERITY: BLOCKER|MAJOR|NIT` to both the normal issue format and the TASK_GAP format.\n- `prompts/review-consolidator.txt`\n  - Keep the existing consolidator field name and values (`blocker|high|med|low`).\n  - Add the alias mapping: reviewer `BLOCKER -> blocker`, `MAJOR -> high`, `NIT -> med`; `low` remains consolidator-internal only.\n- `prompts/mode-judge.txt` and `prompts/mode-judge-review-blocked.txt`\n  - Require reviewer-finding summaries / remaining-issue prose / generated issue bodies to use the same reviewer-side severity vocabulary.\n  - Preserve the existing JSON schema; this is prompt guidance, not a schema change.\n- `prompts/references/severity-classification.txt`\n  - Replace the generic guidance with the explicit mandatory rule set for `BLOCKER|MAJOR|NIT`, the consolidator-side aliases, and the \u201cmissing severity is invalid\u201d rule.\n- `scripts/review_parse_consolidator.sh`\n  - In `process_block`, change the missing-severity fallback from silent `low` to fail-open `high`.\n  - Emit the planned warning (`REVIEWER_SEVERITY_DEFAULT`) without turning the parser fail-closed.\n- `prompts/mode-implement.txt`\n  - Append a short `## Commit discipline` section for implement runs only.\n  - Keep review-autofix\u2019s `[ai-autofix]` convention untouched.\n\n3. Data structures affected\n- Plan output gains machine-parsed trailer lines:\n  - `PLAN_SELF_CHECK: PASS`\n  - `PLAN_SELF_CHECK: WARNING: <one-line>`\n  - `PLAN_SELF_CHECK: BLOCKER: <one-line>`\n- Reviewer output format gains mandatory `SEVERITY: BLOCKER|MAJOR|NIT`.\n- Consolidator output keeps `SEVERITY: blocker|high|med|low`, but now with an explicit translation contract from reviewer labels.\n- Judge JSON objects do not gain new keys; severity is enforced only in prose expectations within existing string fields / generated issue bodies.\n- No DB contracts, indexes, or memory schemas change.\n\n4. API/interface changes\n- New repo variable gate: `PLAN_SELF_CHECK_ENABLED` (default `true`) in `plan.yml`.\n- Behavioral change: self-check `BLOCKER` reopens clarification; self-check `WARNING` does not block plan posting or approval flow.\n- No renames of existing `SEVERITY` fields or judge JSON keys.\n- No workflow/process enforcement for atomic commits; implement prompt only.\n\n5. Risks and edge cases\n- Self-check parsing must ignore fenced examples so sample text cannot falsely reopen clarification.\n- `BLOCKED:` handling must remain first; self-check should not weaken current blocked routing.\n- WARNING-only self-checks must not suppress plan posting, label transitions, or `/approved` auto-posts.\n- The severity include already exists in the target prompts; duplicating it would be a regression.\n- The parser default should change only for missing severity. Explicit consolidator `low` must remain valid.\n- Scope tension: the issue explicitly names two test files, but the safest way to prove the parser fallback is still the dedicated parser test/fixture path.\n\n6. Testing considerations\n- Extend `tests/test_plan_clarify_blocked_output.py` to pin:\n  - the new self-check section/tokens in `prompts/mode-plan.txt`\n  - `PLAN_SELF_CHECK_ENABLED` defaulting to `true`\n  - `plan.yml` parsing of `PLAN_SELF_CHECK`\n  - clarification reopen on `BLOCKER` only\n- Extend `tests/test_render_prompt_review_judge_modes.py` so it checks the new mandatory severity wording / alias mapping in rendered reviewer, consolidator, and judge prompts, not just the presence of the shared reference block.\n- Add parser coverage in `tests/test_review_parse_consolidator.py` with a small fixture that omits severity and asserts:\n  - exit stays 0\n  - emitted severity becomes `high`\n  - `REVIEWER_SEVERITY_DEFAULT` is logged\n- Keep `prompts/mode-implement.txt` testing minimal unless an existing prompt-content pin is already being updated; current acceptance does not require a separate implement-prompt test.\n\nImplementation-time estimate: 55 minutes\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "53257408af4f21bdade108550b140d01b3ac380c5226685eb3f830cc009e7c25",
+  "lineage": {
+    "issue_number": 3316,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27457410118",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27457410118",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3316"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260613051349_0478440897",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3316,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27457410118"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3316",
+  "timestamps": {
+    "created_at": "2026-06-13T05:13:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
