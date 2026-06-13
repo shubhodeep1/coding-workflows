@@ -93,6 +93,9 @@
     "sensitive": {
       "type": "boolean"
     },
+    "injection_suspected": {
+      "type": "boolean"
+    },
     "fingerprint": {
       "type": "string",
       "pattern": "^[a-f0-9]{64}$"
