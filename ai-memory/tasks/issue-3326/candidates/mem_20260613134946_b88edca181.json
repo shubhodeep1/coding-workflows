@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlan for `review-linked-issue-batching`\n\nPlanning ref: `bff7a8ae671ca64f0949109e7a0550945d17ef4d` on `orchestrator/project-3323`\n\nAutomation / wiring\n- Change type: extend an existing script and its existing contract tests only.\n- Existing entry point remains `.github/workflows/review_autofix.yml` via `scripts/review_collect_pr_metadata.sh`.\n- No new workflow, scheduler wiring, supervisor, DB work, or `docs/scripts-pending-removal.md` entry is needed.\n\n1. Files likely to change\n- `scripts/review_collect_pr_metadata.sh`\n  - Keep the primary `closingIssuesReferences` GraphQL fetch intact.\n  - Replace only the fallback `while ... gh api \"repos/${REPOSITORY}/issues/${_fb_num}\"` loop in the linked-issue context path.\n- `tests/test_review_autofix_review_pipeline_contract.py`\n  - Update the fallback-path contract tests and add one cap/batching-focused case.\n\n2. Functions or modules to implement\n- In `scripts/review_collect_pr_metadata.sh`, add a small local batched-fallback helper or inline block that:\n  - reads the already-computed `LINKED_ISSUE_FALLBACK_NUMBERS_JSON`\n  - preserves the current `20`-issue cap before querying\n  - builds one aliased `gh api graphql` query over the fallback numbers\n  - requests only the fields needed to preserve the current context format (`number`, `title`, `body`; optionally `__typename` for union handling)\n  - transforms the GraphQL response back into the same array-of-objects shape the existing Python serializer already consumes\n- Use the existing alias-per-number pattern from `scripts/orchestrate_poll_process.sh:_fetch_candidate_issue_details_graphql` as the representative batching implementation to mirror.\n- For REST parity, prefer `repository.issueOrPullRequest(number: N)` over `issue(number: N)`, since GitHub documents `issueOrPullRequest` as returning an issue-like object and the union can be either `Issue` or `PullRequest`. `closingIssuesReferences` should remain the first/primary path. ([docs.github.com](https://docs.github.com/en/enterprise-cloud%40latest/graphql/reference/repos))\n\n3. Data structures affected\n- `LINKED_ISSUE_FALLBACK_NUMBERS_JSON`\n  - stays a JSON array of strict PR-title/PR-body fallback numbers.\n- `_linked_context_raw`\n  - fallback source changes from per-issue REST responses to one GraphQL batch result.\n- `LINKED_ISSUES_JSON`\n  - must remain numbers-only and continue to reflect only the primary linked-issue fetch contract.\n- `LINKED_ISSUE_CONTEXT_FILE`\n  - format must remain unchanged (`Issue #<n>: <title>` plus body text).\n\n4. API or interface changes\n- No external interface change to workflows, env vars, or downstream prompt files.\n- Internal transport change only:\n  - keep the existing primary `pullRequest(number: $number) { closingIssuesReferences(first: 50) { ... } }`\n  - replace fallback REST `GET /repos/{repo}/issues/{n}` calls with one GraphQL alias batch\n- GitHub documents `closingIssuesReferences` as the list of issues a PR may close, and closing-keyword links are only created when the PR targets the default branch, which matches why this fallback exists for non-default-base PRs. ([docs.github.com](https://docs.github.com/en/enterprise-server%403.20/graphql/reference/pulls))\n\n5. Potential risks or edge cases\n- Preserve the current `20`-issue cap exactly.\n- Keep fail-open behavior:\n  - if fallback batch fetch fails, do not exit\n  - leave `LINKED_ISSUES_JSON` untouched\n  - leave linked-issue context empty/default and warn\n- Skip null/malformed per-alias entries rather than failing the whole fallback payload.\n- Important parity risk: GraphQL `issue(number:)` is issue-only, while the current REST `/issues/{n}` path can surface PR-backed issue records too; `issueOrPullRequest` avoids that regression. ([docs.github.com](https://docs.github.com/en/enterprise-cloud%40latest/graphql/reference/repos))\n- No factual conflict found: the described per-issue REST fallback loop is present in the current code.\n\n6. Testing considerations\n- Update existing fallback contract cases in `tests/test_review_autofix_review_pipeline_contract.py` so they:\n  - still assert unchanged linked-issue context content\n  - still assert `LINKED_ISSUES_JSON == \"[]\"`\n  - stop expecting per-issue REST fallback calls\n  - instead assert that a second GraphQL call was issued and that its query includes aliased fallback numbers\n- Add one focused test for the `>20` fallback-number case to confirm the cap still limits the batch to 20 numbers.\n- Run the targeted helper contract suite for `tests/test_review_autofix_review_pipeline_contract.py`.\n\nAssumptions\n- Scope stays limited to `scripts/review_collect_pr_metadata.sh` and its contract tests.\n- No shared helper extraction or unrelated API-hygiene cleanup is part of this issue.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "a8720c6fcc96ae6ae5c5113dba2619eec64475f6ce2dfce017991ad944b251cc",
+  "lineage": {
+    "issue_number": 3326,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27468417469",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27468417469",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3326"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260613134946_b88edca181",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3326,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27468417469"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3326",
+  "timestamps": {
+    "created_at": "2026-06-13T13:49:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
