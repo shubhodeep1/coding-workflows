@@ -282,6 +282,7 @@ scripts/review_commit_changes.sh
 scripts/review_conflict_prepare.sh
 scripts/review_conflict_resolve.sh
 scripts/review_consolidate.sh
+scripts/review_enable_auto_merge.sh
 scripts/review_filter_uninteresting_files.sh
 scripts/review_floor_rules.sh
 scripts/review_issue_ledger.sh
