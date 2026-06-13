@@ -426,3 +426,114 @@ Marker/cleanliness notes: a word-boundary scan found no `TODO`/`FIXME`/`HACK`/`T
 | Code modularization | 5-6 | Large |
 | Expression size reduction | 4-6 | Large |
 | Medium/Low fixes | 4-6 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-06-13)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlap is proven safe to collapse without changing scope, retries, or concurrency behavior; `NEEDS_VERIFICATION` means the redundancy is real but at least one safe-merge precondition is unproven; `RISKY_SKIP` means the idea touches paginated/poller/race-defense paths or other protected control-plane logic and must stay manual-only.
+
+### Consolidation Candidates (MERGE-###)
+
+#### `MERGE-001` — `NEEDS_VERIFICATION`
+- **Files:** `.github/workflows/orchestrate_clarify_respond.yml:82-85` and `.github/workflows/orchestrate_clarify_respond.yml:447-450`
+- **Current call count / proposed call count:** `2 -> 1` per orchestrator-managed run where `TRACKING_NUM` resolves.
+- **Endpoint(s):** REST `GET /repos/{repo}/issues/{TRACKING_NUM}`
+- **Evidence:** The workflow reads the same tracking issue twice, first for title-only smoke suppression, then again for body-only prompt context.
+```bash
+TRACKING_TITLE="$(gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.title // ""' 2>/dev/null || echo "")"
+...
+TRACKING_BODY="$(gh_retry gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" --jq '.body // ""')"
+```
+- **Proposed fix:** In `Check orchestrator metadata`, fetch full tracking-issue JSON once into a `$RUNNER_TEMP` cache file, derive `TRACKING_TITLE` there, and have `Fetch issue and tracking context` read `TRACKING_BODY` from that cache; keep the existing `gh_retry gh api` call as the cache-miss/invalid-cache fallback.
+- **Safety rationale:** This is the same REST resource with overlapping fields, but the consolidation crosses workflow steps and changes retry semantics (`gh api` vs `gh_retry`), so the SAFE_TO_MERGE preconditions are not fully satisfied.
+- **Downstream signal:** Verify that `.github/workflows/orchestrate_clarify_respond.yml:91-422` stays read-only for the tracking issue and that a cache miss still falls back to the current `gh_retry` path before collapsing these reads.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### `REUSE-001` — `NEEDS_VERIFICATION`
+- **Files:** `.github/workflows/orchestrate_clarify_respond.yml:68-70` and `.github/workflows/orchestrate_clarify_respond.yml:439-442`
+- **Current call count / proposed call count:** `2 -> 1` per orchestrator-managed run.
+- **Endpoint(s):** REST `GET /repos/{repo}/issues/{ISSUE_NUMBER}`
+- **Evidence:** The child issue payload is fetched in `Check orchestrator metadata`, then fetched again in `Fetch issue and tracking context` instead of reusing the earlier JSON.
+```bash
+ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+ISSUE_BODY="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.body // ""')"
+ISSUE_TITLE="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.title // ""')"
+...
+ISSUE_META="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+ISSUE_BODY="$(printf '%s' "${ISSUE_META}" | jq -r '.body // ""')"
+ISSUE_TITLE="$(printf '%s' "${ISSUE_META}" | jq -r '.title // ""')"
+```
+- **Proposed fix:** Persist `ISSUE_PAYLOAD` from `Check orchestrator metadata` to a temp file (for example under `$RUNNER_TEMP`) and let `Fetch issue and tracking context` consume that file first; retain the current `gh_retry` GET as fallback if the cache is missing or invalid.
+- **Safety rationale:** The data is already available from an earlier step, but reuse crosses a step boundary and would alter current retry/failure behavior unless the live fetch remains as fallback.
+- **Downstream signal:** Verify that `.github/workflows/orchestrate_clarify_respond.yml:91-422` does not mutate the child issue and that the cache-miss path still uses the existing `gh_retry` fetch before removing the second GET.
+
+#### `REUSE-002` — `NEEDS_VERIFICATION`
+- **Files:** `.github/workflows/implement.yml:92-118` and `.github/workflows/implement.yml:368-441`
+- **Current call count / proposed call count:** `2 -> 1` per non-skipped `implement` run.
+- **Endpoint(s):** REST `GET /repos/{repo}/issues/{ISSUE_NUMBER}`
+- **Evidence:** `Precheck approval phase label` already reads issue state/labels, but `Resolve checkout ref` re-reads the same issue and then writes the full JSON to the canonical cache file.
+```bash
+ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '{state: (.state // "open"), labels: [.labels[].name]}')"
+...
+if ! issue_meta_json="$(gh_api_with_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"; then
+  echo "::warning::Failed to fetch issue metadata for checkout context; using ${checkout_ref}."
+  ...
+fi
+printf '%s\n' "${issue_meta_json}" > "${ISSUE_META_FILE}"
+```
+- **Proposed fix:** Extend `Precheck approval phase label` to fetch full issue JSON once, store it in an early temp cache (or move runtime-file creation ahead of the precheck), derive state/labels from that cached JSON, and let `Resolve checkout ref` load the cache before falling back to its current `gh_api_with_retry` call.
+- **Safety rationale:** The later call is a strict superset of the earlier data need, but the reuse spans steps and must preserve the current difference between fail-fast precheck behavior and the later retry-backed fallback.
+- **Downstream signal:** Verify that `.github/workflows/implement.yml:120-367` contains no issue mutation, and preserve the current `gh_api_with_retry` cache-miss fallback so precheck API failures still fail early before consolidating this pair.
+
+### Dead Calls (DEAD-API-###)
+
+#### `DEAD-API-001` — `RISKY_SKIP`
+- **Files:** `scripts/orchestrate_poll_process.sh:9270-9286`, `scripts/orchestrate_poll_process.sh:9298-9308`, `scripts/orchestrate_poll_process.sh:11376-11645`, `scripts/orchestrate_poll_process.sh:12009-12101`
+- **Current call count / proposed call count:** retained dead read sites `2 -> 0`; in-repo live call paths `0 -> 0`.
+- **Endpoint(s):** REST `GET /repos/{repo}/issues/{issue_num}/comments?sort=created&direction=desc&per_page=100`
+- **Evidence:** The script retains two paginated comment-reader helpers, but `read_standalone_state_json` has no in-repo callers, and every in-repo `write_standalone_state_json` call already passes the third argument that bypasses `get_standalone_state_comment_id`.
+```bash
+get_standalone_state_comment_id() {
+  if ! comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" | jq -s 'add // []' 2>/dev/null)"; then
+    comments_json='[]'
+  fi
+}
+
+read_standalone_state_json() {
+  if ! comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" | jq -s 'add // []' 2>/dev/null)"; then
+    comments_json='[]'
+  fi
+}
+...
+# Optional 3rd argument ... skips the otherwise-automatic lookup
+if [ "$#" -ge 3 ]; then
+  comment_id="$3"
+else
+  comment_id="$(get_standalone_state_comment_id "${issue_num}")"
+fi
+```
+
+```bash
+write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+...
+write_standalone_state_json "${new_num}" "${new_state}" ""
+```
+- **Proposed fix:** Remove `read_standalone_state_json`; then either delete `get_standalone_state_comment_id` plus the two-arg fallback branch in `write_standalone_state_json`, or keep a tiny compatibility wrapper that requires an explicit `comment_id` and never hits GitHub.
+- **Safety rationale:** Even though the branch is dead for current in-repo callers, this code lives in `scripts/orchestrate_poll_process.sh`, which the policy explicitly treats as manual-review territory.
+- **Downstream signal:** Do not auto-implement; manually confirm there is no sourced/manual consumer of `read_standalone_state_json` or the two-arg `write_standalone_state_json` contract, and preserve stall-recovery log/behavior compatibility if these helpers are removed.
+
+### Cross-References to Deep Audit Section
+- `API-001`: `NEEDS_VERIFICATION` — agree with the GraphQL batching direction; preserve the existing `20`-issue cap and keep `LINKED_ISSUES_JSON` as numbers-only env payload while moving body fetches into the batched helper.
+- `API-002`: `RISKY_SKIP` — agree on the redundancy, but the fix touches paginated active-run control-plane reads in the sweep, so page-boundary semantics and existing `active_review_runs[...]` behavior need manual validation.
+- `API-003`: `RISKY_SKIP` — agree on removing the stale `ai-review.yml` candidate, but this sits in `scripts/orchestrate_poll_process.sh` conflict/race-defense paths and must be reviewed manually before any dispatch/probe list change.
+
+### Summary Counts
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 4 | MERGE-001, REUSE-001, REUSE-002, API-001 |
+| RISKY_SKIP | 3 | DEAD-API-001, API-002, API-003 |
+
+### Implement-Stage Handoff
+No SAFE_TO_MERGE findings in this pass.
