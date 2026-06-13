@@ -99,12 +99,14 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/codex_model_catalog.json` — JSON asset for codex_model_catalog.json.
 - `scripts/codex_stall_guard.sh` — Shell helper for codex stall guard.
 - `scripts/codex_thread_reuse.sh` — Shell helper for codex thread reuse.
+- `scripts/collect_pr_check_runs_context.py` — Collect PR check-run context for review_autofix.
 - `scripts/collect_workflow_logs.py` — Collect GitHub Actions run/job telemetry for core AI workflow families.
 - `scripts/compare_issue_timeline_parity.sh` — Shell helper for compare issue timeline parity.
 - `scripts/comprehensive_test_and_release_gh_api.sh` — Shell helper for comprehensive test and release gh api.
 - `scripts/consolidate_soft_error_reports.py` — Consolidate per-phase soft-error reports into one deterministic markdown file.
 - `scripts/cost_audit.py` — cost_audit.py — Per-workflow LLM token-spend audit from GitHub Actions logs.
 - `scripts/detect_editor_changes_lost.sh` — Defense-in-depth guard for the EDITOR_CHANGES_LOST detection step in review_autofix.yml.
+- `scripts/dispatch_and_watch_workflow_run.sh` — Shell helper for dispatch and watch workflow run.
 - `scripts/dev/replay_review_pipeline.sh` — Shell helper for replay review pipeline.
 - `scripts/drift_audit.sh` — drift_audit.sh — Scan recent review/autofix logs for persistent fingerprint drift.
 - `scripts/files_touched_scope_guard.py` — files_touched scope-enforcement guard for the AI implement pipeline.
@@ -124,6 +126,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/generate_symbol_diff_summary.py` — Generate a symbol-level diff summary from a unified diff and changed files list.
 - `scripts/gh_helpers.sh` — gh_helpers.sh — Rate-limit-aware GitHub API retry helpers.
 - `scripts/git_ref_health_check.sh` — Shell helper for git ref health check.
+- `scripts/implement_commit_changes.sh` — implement_commit_changes.sh — stage + commit implement-phase editor output.
 - `scripts/implement_diagnose_post_codex_failure.sh` — validation failures in implement.yml and file fix-up issues.
 - `scripts/install_semble.sh` — install_semble.sh — fail-soft Semble installer for GitHub Actions jobs.
 - `scripts/issue_attachment_bundle.py` — Python helper for issue attachment bundle.
@@ -139,6 +142,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/openrouter_prompt_cache.py` — OpenRouter prompt-cache helpers shared by workflow scripts.
 - `scripts/orchestrate_force_tick.sh` — Shell helper for orchestrate force tick.
 - `scripts/orchestrate_lib.py` — Orchestrator library: DAG management, wave computation, issue tracking, and judge helpers.
+- `scripts/orchestrate_parse_and_post_answer.sh` — Shell helper for orchestrate parse and post answer.
 - `scripts/orchestrate_poll_process.sh` — orchestrate_poll_process.sh — Process active orchestrator tracking issues.
 - `scripts/orchestrate_state_v2.py` — V2 chunked state persistence helper for orchestrator state comments.
 - `scripts/post_review_comment.sh` — a single pull-request review when `--review-state` is supplied.
@@ -153,6 +157,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_conflict_prepare.sh` — pre-snapshot for review_autofix.yml.
 - `scripts/review_conflict_resolve.sh` — create the [ai-merge-resolve] commit for review_autofix.yml.
 - `scripts/review_consolidate.sh` — Shell helper for review consolidate.
+- `scripts/review_enable_auto_merge.sh` — Shell helper for review enable auto merge.
 - `scripts/review_filter_uninteresting_files.sh` — Shell helper for review filter uninteresting files.
 - `scripts/review_floor_rules.sh` — Shell helper for review floor rules.
 - `scripts/review_issue_ledger.sh` — Shell helper for review issue ledger.
