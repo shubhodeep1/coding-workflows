@@ -87,9 +87,17 @@ editing, and proceed.
 
 ## Commit discipline
 
-- Treat the approved task as one atomic, task-scoped commit: every edited
-  file in the final change set must be required by the approved plan, and
-  every required edit should land together.
+- One logical change = one commit. Treat the approved task as one atomic,
+  task-scoped commit: every edited file in the final change set must be
+  required by the approved plan, and every required edit should land together.
+- Use commit message format: `<verb>: <change> (plan task <N.M>)` when
+  `PLAN.md` or the approved plan names a task ID; omit the parenthetical when
+  no task ID is available.
+- Bulk style edits or auto-format passes go in a separate trailing commit
+  titled `chore: auto-format pass`.
+- Failed test fix-ups roll into the commit that introduced the failure; use
+  `--amend` only on commits from the current `implement` run that have not yet
+  been pushed.
 - Do not split the approved task across unrelated commits or bundle
   opportunistic follow-up changes into the same task commit.
 - This implement-phase guidance does not change review-autofix's existing
