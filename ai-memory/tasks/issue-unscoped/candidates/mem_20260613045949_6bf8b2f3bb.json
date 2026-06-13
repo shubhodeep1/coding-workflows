@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/prompt_size_budget.py:17-21 | severity=high | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: mode-validate-diagnose.txt is missing from EXPECTED_TIERS, so the budget check falls back to DEFAULT and fails against the file's LARGE frontmatter.\n  WHY: Both reviewers say `python3 tests/prompt_size_budget.py` exits non-zero with a tier mismatch, breaking the CI Prompt tier budget step.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add `# tier: DEFAULT|LARGE|XL` frontmatter to every `prompts/mode-*.txt` and `prompts/review-*.txt`, add `tests/prompt_size_budget.py`, and wire the budget check into `.github/workflows/ci.yml`.\"\n  expected_change_site: tests/prompt_size_budget.py EXPECTED_TIERS dict\n  confidence=5\n  flagged_by: [qwen_qwen3_6-plus]\n  EVIDENCE: The new prompt_size_budget.py EXPECTED_TIERS only lists `mode-validate-diagnose.txt`, `mode-validate-fix-harness.txt`, and `mode-validate-generate.txt`; `mode-validate-diagnose.txt` has `# tier: LARGE` but still defaults to DEFAULT and causes a tier mismatch.\n- requirement: \"prompts/mode-validate-generate.txt fits its XL tier only after the extracted reference block lands.\"\n  expected_change_site: tests/prompt_size_budget.py line-count assertion for mode-validate-generate.txt\n  confidence=3\n  flagged_by: [qwen_qwen3_6-plus]\n  EVIDENCE: The diff removed the inline \"Output contract\" + JSON schema block from mode-validate-generate.txt, but `prompt_size_budget.py` measures on-disk lines rather than rendered output, so the budget gate cannot see the render-time reference injection.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/prompt_size_budget.py:17-21 | severity=high | confidence=5\n  PROBLEM: `mode-validate-diagnose.txt` is missing from EXPECTED_TIERS but the file has `# tier: LARGE` frontmatter; the test defaults to expecting `DEFAULT` tier when a file is not in EXPECTED_TIERS, causing a tier-mismatch failure.\n  WHY: When CI runs `python3 tests/prompt_size_budget.py`, it compares actual tier `LARGE` against expected tier `DEFAULT` (fallback), fails the assertion, and exits non-zero, breaking the CI \"Prompt tier budget\" step.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/prompt_size_budget.py:17-21 | severity=high | confidence=5\n  PROBLEM: `mode-validate-diagnose.txt` was added to the PR with `# tier: LARGE` first line (confirmed in last_run_diff and symbol_diff_summary) but is absent from EXPECTED_TIERS. The budget gate falls back to expected DEFAULT, compares actual LARGE against DEFAULT, and exits non-zero with a tier-mismatch failure.\n  WHY: `python3 tests/prompt_size_budget.py` (the CI \"Prompt tier budget\" step wired by this PR) exits non-zero, breaking CI.\n- Requirement: \"Add `# tier: DEFAULT|LARGE|XL` frontmatter to every `prompts/mode-*.txt` and `prompts/review-*.txt`, add `tests/prompt_size_budget.py`, and wire the budget check into `.github/workflows/ci.yml`.\"\n  Expected change site: tests/prompt_size_budget.py EXPECTED_TIERS dict\n  Evidence of absence: The new prompt_size_budget.py EXPECTED_TIERS only lists `mode-validate-diagnose.txt`, `mode-validate-fix-harness.txt`, and `mode-validate-generate.txt`. However, `mode-validate-diagnose.txt` carries `# tier: LARGE` in its first line (this PR change), yet the dict maps it to no entry at all, so it defaults to DEFAULT and causes a tier mismatch. This makes the gate fail on the very file it was supposed to validate.\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"prompts/mode-validate-generate.txt fits its XL tier only after the extracted reference block lands.\"\n  Expected change site: tests/prompt_size_budget.py line-count assertion for mode-validate-generate.txt\n  Evidence of absence: The diff removed the inline \"Output contract\" + JSON schema block (~32 lines) from mode-validate-generate.txt (confirming it is now served via the REFERENCE_OUTPUT_CONTRACT placeholder + validate-output-contract.txt append). The rendered output therefore includes the two shared blocks (output-contract.txt + validate-output-contract.txt) injected at render time. prompt_size_budget.py line_count = 250 is correct because it checks the on-disk file lines, not the rendered output. However the tier LIMITS dict defines XL=800 lines \u2014 the on-disk file lines after the extraction are well under 800, so the gate should pass. This acceptance criterion is satisfied by the rendered output, not the on-disk line count. The test cannot validate the rendered budget because it measures the raw prompt file lines. This is a design limitation, not a bug, since the budget constraint exists only after render-time reference injection.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "f41505b8c1298f6976eb31c215162eaca2284b32d27bb151845d52a910963d59",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3305,
+    "run_id": "27456489846",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27456489846",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260613045949_6bf8b2f3bb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3305,
+    "run_id": "27456489846"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-13T04:59:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
