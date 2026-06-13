@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_files_touched_scope_guard.py:224-247 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: The filtered `git_env` can still break the synthetic git subprocess if the runner needs additional ambient environment variables to behave normally.\n  WHY: If those omitted variables are required in CI, the git commands can behave unexpectedly or fail during the test.\n- tests/test_files_touched_scope_guard.py:198 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `_scope_fragment()` silently falls back to `IMPLEMENT` for unexpected labels instead of rejecting invalid input.\n  WHY: An invalid label would read the wrong source file and produce confusing fragment failures.\n- tests/test_files_touched_scope_guard.py:321-330 | severity=low | confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `_implement_commit_text()` has no handling for a missing or unreadable `scripts/implement_commit_changes.sh`.\n  WHY: If the script is absent or inaccessible, the helper raises `FileNotFoundError`.\n- tests/test_files_touched_scope_guard.py:224-230 | severity=high | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: `_run_fragment()` leaves the temporary git repo behind, so later tests can observe stale `.git` state.\n  WHY: Lingering repos in `/tmp` can make the test order-dependent and interfere with parallel runs.\n- scripts/implement_commit_changes.sh:48-50 | severity=critical | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The unsafe-path check only warns and skips instead of failing the commit step.\n  WHY: A malformed or malicious manifest can include unsafe paths and still let the workflow continue.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"the PR must land the safe subset of workflow-optimization-2026-06-13 recommendations \u2014 this is an eager self-healing PR for orchestrator project #3323.\"\n  expected_change_site: All files listed in .ai/.workspace_source_manifest.txt + scripts/ and .github/workflows/* that the report calls out as SAFE or VALID-BUT-RISKY.\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: LAST RUN DIFF only touches tests/test_files_touched_scope_guard.py and a few helper scripts; the core workflow-optimization recommendations (review_autofix noop unification, implement reasoning staging, orchestrate_poll event triggering, etc.) are unchanged. No diff hunks appear for the 17-ID deep-audit fixes described in the report.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_files_touched_scope_guard.py:224-247 | severity=NIT | confidence=2\n  PROBLEM: The filtered `git_env` can still break the synthetic git subprocess if the runner needs additional ambient environment variables to behave normally.\n  WHY: If those omitted variables are required in CI, the git commands can behave unexpectedly or fail during the test.\n- tests/test_files_touched_scope_guard.py:198 | severity=NIT | confidence=2\n  PROBLEM: `_scope_fragment()` silently defaults to `IMPLEMENT` for unexpected labels instead of rejecting invalid input.\n  WHY: An invalid label would read the wrong source file and produce confusing fragment failures.\n- tests/test_files_touched_scope_guard.py:321-330 | severity=NIT | confidence=2\n  PROBLEM: `_implement_commit_text()` has no handling for a missing or unreadable `scripts/implement_commit_changes.sh`.\n  WHY: If the script is absent or inaccessible, the helper raises `FileNotFoundError`.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- tests/test_files_touched_scope_guard.py:224-230 | severity=MAJOR | confidence=4\n  PROBLEM: `_run_fragment()` leaves the temporary git repo behind, so later tests can observe stale `.git` state.\n  WHY: Lingering repos in `/tmp` can make the test order-dependent and interfere with parallel runs.\n- scripts/implement_commit_changes.sh:48-50 | severity=BLOCKER | confidence=5\n  PROBLEM: The unsafe-path check only warns and skips instead of failing the commit step.\n  WHY: A malformed or malicious manifest can include unsafe paths and still let the workflow continue.\n- Requirement: \"the PR must land the safe subset of workflow-optimization-2026-06-13 recommendations \u2014 this is an eager self-healing PR for orchestrator project #3323.\"\n  Expected change site: All files listed in .ai/.workspace_source_manifest.txt + scripts/ and .github/workflows/* that the report calls out as SAFE or VALID-BUT-RISKY.\n  Evidence of absence: LAST RUN DIFF only touches tests/test_files_touched_scope_guard.py and a few helper scripts; the core workflow-optimization recommendations (review_autofix noop unification, implement reasoning staging, orchestrate_poll event triggering, etc.) are unchanged. No diff hunks appear for the 17-ID deep-audit fixes described in the report.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "6b3d227d7b1d89d62988fabf62c052f59246ea3f8f35648635160f2e20884278",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3344,
+    "run_id": "27481245725",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27481245725",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260613234110_f9ef2aebe5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3344,
+    "run_id": "27481245725"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-13T23:41:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
