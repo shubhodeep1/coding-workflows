@@ -340,6 +340,7 @@ tests/fixtures/mcp_handshake/mock_server_lib.py
 tests/fixtures/review_pipeline/consolidator_anchor_mismatch.txt
 tests/fixtures/review_pipeline/consolidator_garbled.txt
 tests/fixtures/review_pipeline/consolidator_malformed_missing_file.txt
+tests/fixtures/review_pipeline/consolidator_missing_severity.txt
 tests/fixtures/review_pipeline/consolidator_path_traversal.txt
 tests/fixtures/review_pipeline/consolidator_unterminated_block.txt
 tests/fixtures/review_pipeline/consolidator_well_formed.txt

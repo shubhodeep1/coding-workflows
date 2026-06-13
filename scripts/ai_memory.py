@@ -46,6 +46,7 @@ from ai_memory_lib import (
     record_run_event,
     resolve_memory_root_dir,
     retrieve_memory_context,
+    scan_candidate_text_for_injection,
     summarize_candidate_for_event,
 )
 
@@ -553,36 +554,48 @@ def cmd_record_candidate(args: argparse.Namespace) -> int:
         return 0
 
     repo_root = _resolve_repo_root(args.repo_root)
+    category = _require_nonempty(args.category, "category")
+    summary = _require_nonempty(args.summary, "summary")
+    details = _require_nonempty(args.details, "details")
+    confidence = _safe_float(args.confidence, default=0.7)
+    workflow = _require_nonempty(args.workflow, "workflow")
+    run_attempt = _safe_int(args.run_attempt)
+    actor = _require_nonempty(args.actor, "actor")
+    issue_number = _safe_int(args.issue_number)
+    pr_number = _safe_int(args.pr_number)
+    source_refs = _split_csv(args.source_refs)
+    parent_ids = _split_csv(args.parent_ids)
+    injection_matches = scan_candidate_text_for_injection(summary, details)
 
     def _op(clone_dir: Path) -> dict[str, Any]:
         memory_root = _resolve_memory_root(clone_dir, args.memory_root)
         record = record_candidate(
             memory_root,
-            category=_require_nonempty(args.category, "category"),
-            summary=_require_nonempty(args.summary, "summary"),
-            details=_require_nonempty(args.details, "details"),
-            confidence=_safe_float(args.confidence, default=0.7),
-            workflow=_require_nonempty(args.workflow, "workflow"),
+            category=category,
+            summary=summary,
+            details=details,
+            confidence=confidence,
+            workflow=workflow,
             run_id=args.run_id,
-            run_attempt=_safe_int(args.run_attempt),
-            actor=_require_nonempty(args.actor, "actor"),
-            issue_number=_safe_int(args.issue_number),
-            pr_number=_safe_int(args.pr_number),
-            source_refs=_split_csv(args.source_refs),
-            parent_ids=_split_csv(args.parent_ids),
+            run_attempt=run_attempt,
+            actor=actor,
+            issue_number=issue_number,
+            pr_number=pr_number,
+            source_refs=source_refs,
+            parent_ids=parent_ids,
             supersedes=args.supersedes,
             sensitive=True if args.sensitive is True else None,
         )
         record_run_event(
             memory_root,
             run_id=_require_nonempty(args.run_id or "run-unknown", "run_id"),
-            workflow=_require_nonempty(args.workflow, "workflow"),
+            workflow=workflow,
             event_type="candidate_written",
             status="ok",
             message=f"Candidate {record['record_id']} written: {summarize_candidate_for_event(record)}",
-            issue_number=_safe_int(args.issue_number),
-            pr_number=_safe_int(args.pr_number),
-            actor=_require_nonempty(args.actor, "actor"),
+            issue_number=issue_number,
+            pr_number=pr_number,
+            actor=actor,
             metadata={"record_id": record["record_id"], "category": record["category"]},
         )
         return {"record": record}
@@ -598,12 +611,22 @@ def cmd_record_candidate(args: argparse.Namespace) -> int:
     op_result = result.get("operation_result") or {}
     record = op_result.get("record") or {}
     _print_json({"ok": True, **result})
+    if record.get("injection_suspected") is True:
+        _emit_telemetry(
+            "injection_scan",
+            ok=True,
+            category=record.get("category"),
+            issue_number=issue_number,
+            matches=injection_matches,
+            record_id=record.get("record_id"),
+            workflow=workflow,
+        )
     _emit_telemetry(
         "record-candidate",
         ok=True,
-        category=args.category,
+        category=category,
         record_id=record.get("record_id"),
-        issue_number=_safe_int(args.issue_number),
+        issue_number=issue_number,
         did_push=result.get("did_push", False),
         push_attempts=result.get("push_attempts", 0),
     )
