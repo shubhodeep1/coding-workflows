@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/collect_pr_check_runs_context.py:_fetch_log_tail(), inner try/except block around `_LOG_REDIRECT_OPENER.open(api_req, timeout=10)` | severity=medium | confidence=3\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: A non-HTTPError from `_LOG_REDIRECT_OPENER.open()` leaves `blob_url` unbound and can raise `NameError` instead of gracefully returning an empty tail.\n  WHY: A network-level failure can bypass the HTTPError handler, causing `_fetch_log_tail()` to crash and `main()` to emit `writer_error` instead of continuing with the rest of the snapshot.\n- scripts/collect_pr_check_runs_context.py:228-240 | severity=medium | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: `_fetch_log_tail()` still risks leaving response/socket resources unclosed on the log-tail fetch paths.\n  WHY: The reviewer reports that even with the added `with`/`finally: exc.close()` handling, the direct success path and the HEAD/GET blob-URL requests can still exhaust file descriptors in long-running runs.\n- scripts/collect_pr_check_runs_context.py:430-460 | severity=high | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The outer `except` in `main()` can still leave a stale context file if the fallback `_write_text()` fails.\n  WHY: A nested write failure after a previous successful run can preserve old non-`writer_error` content, which downstream consumers may treat as valid.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Extract the large inline `Collect PR check-run failures` step from `.github/workflows/review_autofix.yml` into `scripts/collect_pr_check_runs_context.py` and leave the workflow step as a thin wrapper. [...] preserve the current fail-open sentinel outputs, pagination handling, adaptive backoff behavior, self-run exclusion, `CHECK_RUNS_LOG_TAIL_BYTES` behavior, and the exact `PR_CHECK_RUNS_CONTEXT_FILE` contract; do not shorten the wait budget or otherwise change review-gate policy in this issue. Constraints: stay inside `files_touched`, avoid unrelated review-autofix behavior changes, and keep all existing env var names, output files, and log keys stable.\"\n  expected_change_site: scripts/collect_pr_check_runs_context.py (primary), thin call-site in `.github/workflows/review_autofix.yml:1767`, support-script update in `stage_workflow_support.sh`, test contracts in `tests/test_review_autofix_review_pipeline_contract.py` and `test_review_autofix_reasoning_schedule.py`, plus cleanup of accidental manifest entry\n  confidence=[5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The PR diff successfully performs the extraction and preserves the exact contract; the remaining error-path defects were addressed by the last-run diff, the bootstrap list and wait timeout stay intact, and the unrelated manifest entry has been removed.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- File: scripts/collect_pr_check_runs_context.py\n  Line or code reference: `_fetch_log_tail()`, inner try/except block around `_LOG_REDIRECT_OPENER.open(api_req, timeout=10)`\n  Problem: The variable `blob_url` is assigned only inside the `except urllib.error.HTTPError` handler, so a non-HTTPError leaves it unbound and can raise `NameError`.\n  Why it fails at runtime: A network-level failure in the log-tail fetch path can skip the handler, crash `_fetch_log_tail()`, and force `main()` to write `writer_error` instead of returning an empty tail.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: scripts/collect_pr_check_runs_context.py:228-240\n  Line or code reference: `_fetch_log_tail` (the direct `_LOG_REDIRECT_OPENER.open` success path and `urllib.request.urlopen` calls for HEAD/GET on blob URL)\n  Problem: Even after the previous autofix's `with` + `finally: exc.close()`, the HEAD response object, the tail `urlopen` response, and certain transient OSError/HTTPError paths can still leave sockets/descriptors unclosed in the shared opener.\n  Why it fails at runtime: Long-running review_autofix loops can eventually hit \"too many open files\" or socket exhaustion, causing the helper to fail under `set -euo pipefail`.\n  ISSUE_CONFIDENCE: 4\n- File: scripts/collect_pr_check_runs_context.py:430-460\n  Line or code reference: Top-level exception handler + `_write_text` fallback\n  Problem: The second `_write_text` inside the outer `except` can itself raise, leaving the context file in whatever stale state existed before the run.\n  Why it fails at runtime: A transient write error after a previous successful writer leaves stale check-run context for downstream consumers instead of the guaranteed sentinel.\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Extract the large inline `Collect PR check-run failures` step from `.github/workflows/review_autofix.yml` into `scripts/collect_pr_check_runs_context.py` and leave the workflow step as a thin wrapper. [...] preserve the current fail-open sentinel outputs, pagination handling, adaptive backoff behavior, self-run exclusion, `CHECK_RUNS_LOG_TAIL_BYTES` behavior, and the exact `PR_CHECK_R\nUNS_CONTEXT_FILE` contract; do not shorten the wait budget or otherwise change review-gate policy in this issue. Constraints: stay inside `files_touched`, avoid unrelated review-autofix behavior changes, and keep all existing env var names, output files, and log keys stable.\"\n  Expected change site: `scripts/collect_pr_check_runs_context.py` (primary), thin call-site in `.github/workflows/review_autofix.yml:1767`, support-script update in `stage_workflow_support.sh`, test contracts in `tests/test_review_autofix_review_pipeline_contract.py` and `test_review_autofix_reasoning_schedule.py`, plus cleanup of accidental manifest entry\n  Evidence of absence: The PR diff successfully performs the extraction and preserves the exact contract (tests now pass, bootstrap list updated, wait timeout stays at 300 s, self-exclusion and pagination via `--slurp` are intact). The two residual error-path defects above are addressed by the current last-run diff. The unrelated `.ai/.workspace_source_manifest.txt` entry has been removed in the latest commit. No other deliverables from the linked issue #3327 remain missing.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "f9159365350850f37fad6c9b039a08df144a2e49d4535acd2b5c64a02f77f42f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3332,
+    "run_id": "27471232947",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27471232947",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260613161758_7415e13205",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3332,
+    "run_id": "27471232947"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-13T16:17:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
