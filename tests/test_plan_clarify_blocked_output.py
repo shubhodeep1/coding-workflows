@@ -42,10 +42,13 @@ def test_plan_workflow_detects_blocked_before_needs_clarification() -> None:
 	assert "PLAN_SELF_CHECK: PASS" in wf
 	assert "PLAN_SELF_CHECK: WARNING:" in wf
 	assert "PLAN_SELF_CHECK: BLOCKER:" in wf
+	assert 'CODEX_OUTPUT_PARSE_FILE="${RUNTIME_DIR}/codex_output_parse.txt"' in wf
+	assert "malformed fences do not" in wf
 	assert "SELF_CHECK_PASS_COUNT" in wf
 	assert "SELF_CHECK_WARNING_COUNT" in wf
 	assert "SELF_CHECK_BLOCKER_COUNT" in wf
 	assert "plan_self_check_reopen_clarification" in wf
+	assert 'PARSE_SOURCE_FILE="${CODEX_OUTPUT_PARSE_FILE:-${CODEX_OUTPUT_FILE}}"' in wf
 	assert "- name: Handle blocked planning output" in wf
 	assert "steps.parse_plan.outputs.blocked == 'true'" in wf
 	assert "--add-label 'ai:blocked'" in wf

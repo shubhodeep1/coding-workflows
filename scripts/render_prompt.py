@@ -210,6 +210,11 @@ def discover_reference_path(prompt_path: Path, file_name: str) -> Path | None:
 	return None
 
 
+def _expected_reference_path(prompt_path: Path, file_name: str) -> Path:
+	prompt_root = prompt_path.parent.parent if prompt_path.parent.name == "prompts" else Path.cwd()
+	return prompt_root / "prompts" / "references" / file_name
+
+
 def _reference_file_name_for_placeholder(placeholder_name: str) -> str | None:
 	if not placeholder_name.startswith("REFERENCE_"):
 		return None
@@ -231,8 +236,7 @@ def _load_reference_placeholder_value(
 
 	reference_path = discover_reference_path(prompt_path, file_name)
 	if reference_path is None:
-		prompt_root = prompt_path.parent.parent if prompt_path.parent.name == "prompts" else Path.cwd()
-		expected_path = prompt_root / "prompts" / "references" / file_name
+		expected_path = _expected_reference_path(prompt_path, file_name)
 		raise PromptLoadError(
 			f"Reference file for placeholder '{placeholder_name}' not found: {expected_path}"
 		)
@@ -248,7 +252,10 @@ def _load_reference_placeholder_value(
 
 	mode_specific_append_path = discover_reference_path(prompt_path, mode_specific_append_name)
 	if mode_specific_append_path is None:
-		return reference_text
+		expected_path = _expected_reference_path(prompt_path, mode_specific_append_name)
+		raise PromptLoadError(
+			f"Append reference file '{mode_specific_append_name}' for placeholder '{placeholder_name}' not found: {expected_path}"
+		)
 
 	return reference_text + load_prompt(mode_specific_append_path)
 

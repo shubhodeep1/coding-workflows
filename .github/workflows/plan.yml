@@ -1138,6 +1138,15 @@ jobs:
             exit 1
           fi
 
+          CODEX_OUTPUT_PARSE_FILE="${RUNTIME_DIR}/codex_output_parse.txt"
+          # Strip only fully closed fenced code blocks before scanning for
+          # PLAN_SELF_CHECK / clarification markers so malformed fences do not
+          # hide blocker lines or auto-answer question blocks.
+          perl -0pe '
+            s{(^|\n)([ \t]*((?:```|~~~))[^\n]*\n.*?\n[ \t]*\3[ \t]*(?=\n|$))}{$1}gms;
+          ' "${CODEX_OUTPUT_FILE}" > "${CODEX_OUTPUT_PARSE_FILE}"
+          echo "CODEX_OUTPUT_PARSE_FILE=${CODEX_OUTPUT_PARSE_FILE}" >> "$GITHUB_ENV"
+
           BLOCKED_REASON="$(perl -ne '
             if (/^\s*(?:```|~~~)/) { $in_code = !$in_code; next; }
             next if $in_code;
@@ -1177,25 +1186,19 @@ jobs:
           esac
 
           SELF_CHECK_PASS_COUNT="$(perl -ne '
-            if (/^\s*(?:```|~~~)/) { $in_code = !$in_code; next; }
-            next if $in_code;
             if (/^\s*PLAN_SELF_CHECK:\s*PASS\s*$/i) { $count++; }
             END { print $count + 0; }
-          ' "${CODEX_OUTPUT_FILE}")"
+          ' "${CODEX_OUTPUT_PARSE_FILE}")"
 
           SELF_CHECK_WARNING_COUNT="$(perl -ne '
-            if (/^\s*(?:```|~~~)/) { $in_code = !$in_code; next; }
-            next if $in_code;
             if (/^\s*PLAN_SELF_CHECK:\s*WARNING:\s*(.*\S)\s*$/i) { $count++; }
             END { print $count + 0; }
-          ' "${CODEX_OUTPUT_FILE}")"
+          ' "${CODEX_OUTPUT_PARSE_FILE}")"
 
           SELF_CHECK_BLOCKER_COUNT="$(perl -ne '
-            if (/^\s*(?:```|~~~)/) { $in_code = !$in_code; next; }
-            next if $in_code;
             if (/^\s*PLAN_SELF_CHECK:\s*BLOCKER:\s*(.*\S)\s*$/i) { $count++; }
             END { print $count + 0; }
-          ' "${CODEX_OUTPUT_FILE}")"
+          ' "${CODEX_OUTPUT_PARSE_FILE}")"
 
           SELF_CHECK_REOPEN_CLARIFICATION="false"
           if [ "${PLAN_SELF_CHECK_GATE_ENABLED}" = "true" ] && [ "${SELF_CHECK_BLOCKER_COUNT}" -gt 0 ]; then
@@ -1208,19 +1211,17 @@ jobs:
           echo "plan_self_check_reopen_clarification=${SELF_CHECK_REOPEN_CLARIFICATION}" >> "$GITHUB_OUTPUT"
 
           HAS_STATUS_NEEDS_CLARIFICATION="false"
-          if grep -qiE 'STATUS:.*NEEDS_CLARIFICATION|^\*\*STATUS:\*\*.*NEEDS_CLARIFICATION' "${CODEX_OUTPUT_FILE}"; then
+          if grep -qiE 'STATUS:.*NEEDS_CLARIFICATION|^\*\*STATUS:\*\*.*NEEDS_CLARIFICATION' "${CODEX_OUTPUT_PARSE_FILE}"; then
             HAS_STATUS_NEEDS_CLARIFICATION="true"
           fi
 
           HAS_STRUCTURED_CLARIFICATION_BLOCK="false"
           if perl -ne '
-            if (/^\s*(?:```|~~~)/) { $in_code = !$in_code; next; }
-            next if $in_code;
             if (/^\s*(?:\*\*)?Q[0-9]+(?:\*\*)?:(?:\*\*)?\s+/i) { $q_line = $.; next; }
             if (defined $q_line && $. - $q_line <= 20 && /^\s*Choices:\s*$/i) { $has_block = 1; }
             if (defined $q_line && $. - $q_line <= 20 && /^\s*-\s*(?:\*\*)?[A-Za-z](?:\+[A-Za-z])*(?:\*\*)?\s*(?:—|–|[-)\.:]).*\(RECOMMENDED\)/i) { $has_block = 1; }
             END { exit($has_block ? 0 : 1); }
-          ' "${CODEX_OUTPUT_FILE}"; then
+          ' "${CODEX_OUTPUT_PARSE_FILE}"; then
             HAS_STRUCTURED_CLARIFICATION_BLOCK="true"
           fi
 
@@ -1339,14 +1340,14 @@ jobs:
           fi
 
           PARSE_RESULT_FILE="${RUNTIME_DIR}/orchestrator_auto_answer_parse.txt"
-          perl - "${CODEX_OUTPUT_FILE}" > "${PARSE_RESULT_FILE}" <<'PERL'
+          PARSE_SOURCE_FILE="${CODEX_OUTPUT_PARSE_FILE:-${CODEX_OUTPUT_FILE}}"
+          perl - "${PARSE_SOURCE_FILE}" > "${PARSE_RESULT_FILE}" <<'PERL'
           use strict;
           use warnings;
 
           my ($file) = @ARGV;
           open my $fh, '<', $file or die "Unable to read $file: $!";
 
-          my $in_code_fence = 0;
           my $current_qid = '';
           my @qid_order;
           my %seen_qid;
@@ -1354,12 +1355,6 @@ jobs:
 
           while (my $line = <$fh>) {
             chomp $line;
-
-            if ($line =~ /^\s*(?:```|~~~)/) {
-              $in_code_fence = !$in_code_fence;
-              next;
-            }
-            next if $in_code_fence;
 
             if ($line =~ /^\s*(?:\*\*)?\s*(Q[0-9]+)\s*(?:\*\*)?\s*:/i) {
               $current_qid = uc($1);
