@@ -771,9 +771,10 @@ Profile downgrades are non-destructive: switching from `full` to `core` or
 `standard` stops creating out-of-profile wrappers in future syncs, but does
 not delete wrappers that are already present in `.github/workflows/`.
 
-> **Terminology note:** the three "core wrappers" above are the minimum manual
-> bootstrap. The `core` install profile is a separate six-wrapper auto-install
-> manifest used only by `ai-update-workflows.yml`.
+> **Terminology note:** the minimum manual-bootstrap wrappers are
+> `ai-clarify.yml`, `ai-plan.yml`, and `ai-implement.yml`. The `core` install
+> profile is a separate six-wrapper auto-install manifest used only by
+> `ai-update-workflows.yml`.
 
 > **Canonical audit-gate delivery contract:** `update_workflows.yml` applies
 > `workflow-templates/audit-gate/contract.json` atomically and idempotently.
