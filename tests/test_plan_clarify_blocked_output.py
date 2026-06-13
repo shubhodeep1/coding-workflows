@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import re
+import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -12,9 +15,69 @@ CLARIFY_WF = REPO_ROOT / ".github" / "workflows" / "clarify.yml"
 PROMPT_PLAN = REPO_ROOT / "prompts" / "mode-plan.txt"
 PROMPT_CLARIFY = REPO_ROOT / "prompts" / "mode-clarify.txt"
 
+FENCE_SANITIZER = r"s{(^|\n)([ \t]*((?:```|~~~))[^\n]*\n.*?\n[ \t]*\3[ \t]*(?=\n|$))}{$1}gms;"
+BLOCKED_RE = re.compile(r"^\s*BLOCKED:\s*(.*\S)\s*$", re.IGNORECASE)
+SELF_CHECK_BLOCKER_RE = re.compile(r"^\s*PLAN_SELF_CHECK:\s*BLOCKER:\s*(.*\S)\s*$", re.IGNORECASE)
+STATUS_NEEDS_CLARIFICATION_RE = re.compile(
+	r"STATUS:.*NEEDS_CLARIFICATION|^\*\*STATUS:\*\*.*NEEDS_CLARIFICATION",
+	re.IGNORECASE,
+)
+Q_LINE_RE = re.compile(r"^\s*(?:\*\*)?Q[0-9]+(?:\*\*)?:(?:\*\*)?\s+", re.IGNORECASE)
+CHOICES_RE = re.compile(r"^\s*Choices:\s*$", re.IGNORECASE)
+RECOMMENDED_CHOICE_RE = re.compile(
+	r"^\s*-\s*(?:\*\*)?[A-Za-z](?:\+[A-Za-z])*(?:\*\*)?\s*(?:—|–|[-)\.:]).*\(RECOMMENDED\)",
+	re.IGNORECASE,
+)
+
 
 def _read(path: Path) -> str:
 	return path.read_text(encoding="utf-8")
+
+
+def _sanitize_plan_output(raw_output: str) -> str:
+	with tempfile.TemporaryDirectory() as td:
+		source_path = Path(td) / "codex_output.txt"
+		source_path.write_text(raw_output, encoding="utf-8")
+		result = subprocess.run(
+			["perl", "-0pe", FENCE_SANITIZER, str(source_path)],
+			capture_output=True,
+			check=True,
+			encoding="utf-8",
+		)
+		return result.stdout
+
+
+def _blocked_reason(parsed_output: str) -> str:
+	for line in parsed_output.splitlines():
+		match = BLOCKED_RE.match(line)
+		if match:
+			return match.group(1)
+	return ""
+
+
+def _self_check_blocker_count(parsed_output: str) -> int:
+	return sum(1 for line in parsed_output.splitlines() if SELF_CHECK_BLOCKER_RE.match(line))
+
+
+def _has_structured_clarification_block(parsed_output: str) -> bool:
+	q_line: int | None = None
+	for line_number, line in enumerate(parsed_output.splitlines(), start=1):
+		if Q_LINE_RE.match(line):
+			q_line = line_number
+			continue
+		if q_line is None or line_number - q_line > 20:
+			continue
+		if CHOICES_RE.match(line) or RECOMMENDED_CHOICE_RE.match(line):
+			return True
+	return False
+
+
+def _needs_clarification(parsed_output: str, *, self_check_gate_enabled: bool) -> bool:
+	has_status_needs_clarification = any(
+		STATUS_NEEDS_CLARIFICATION_RE.search(line) for line in parsed_output.splitlines()
+	)
+	self_check_reopen = self_check_gate_enabled and _self_check_blocker_count(parsed_output) > 0
+	return has_status_needs_clarification or _has_structured_clarification_block(parsed_output) or self_check_reopen
 
 
 def test_prompt_contract_includes_blocked_rule() -> None:
@@ -93,6 +156,42 @@ def test_clarify_workflow_detects_and_escalates_blocked_output() -> None:
 	assert "--remove-label 'ai:planning'" in wf
 	assert "steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'" in wf
 	assert "OUTCOME=\"blocked\"" in wf
+
+
+def test_unterminated_fence_does_not_hide_blocked_reason() -> None:
+	parsed_output = _sanitize_plan_output(
+		"```text\nexample\nBLOCKED: integration branch mismatch\n"
+	)
+
+	assert _blocked_reason(parsed_output) == "integration branch mismatch"
+
+
+def test_unterminated_fence_reopens_clarification_for_self_check_blocker() -> None:
+	parsed_output = _sanitize_plan_output(
+		"```python\nprint('demo')\nPLAN_SELF_CHECK: BLOCKER: missing files_touched list\n"
+	)
+
+	assert _self_check_blocker_count(parsed_output) == 1
+	assert _needs_clarification(parsed_output, self_check_gate_enabled=True) is True
+	assert _needs_clarification(parsed_output, self_check_gate_enabled=False) is False
+
+
+def test_warning_only_self_check_remains_fail_open() -> None:
+	parsed_output = _sanitize_plan_output(
+		"Implementation Plan\nPLAN_SELF_CHECK: WARNING: confirm rollout note\nSTATUS: CLEAR\n"
+	)
+
+	assert _self_check_blocker_count(parsed_output) == 0
+	assert _needs_clarification(parsed_output, self_check_gate_enabled=True) is False
+
+
+def test_unterminated_fence_does_not_hide_structured_clarification_block() -> None:
+	parsed_output = _sanitize_plan_output(
+		"```\nnotes\nQ1: Which branch should be used?\nChoices:\n- A - integration branch (RECOMMENDED)\n"
+	)
+
+	assert _has_structured_clarification_block(parsed_output) is True
+	assert _needs_clarification(parsed_output, self_check_gate_enabled=True) is True
 
 
 def main() -> int:
