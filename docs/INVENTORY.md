@@ -104,7 +104,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/comprehensive_test_and_release_gh_api.sh` — Shell helper for comprehensive test and release gh api.
 - `scripts/consolidate_soft_error_reports.py` — Consolidate per-phase soft-error reports into one deterministic markdown file.
 - `scripts/cost_audit.py` — cost_audit.py — Per-workflow LLM token-spend audit from GitHub Actions logs.
-- `scripts/detect_editor_changes_lost.sh` — .github/workflows/review_autofix.yml.
+- `scripts/detect_editor_changes_lost.sh` — Defense-in-depth guard for the EDITOR_CHANGES_LOST detection step in review_autofix.yml.
 - `scripts/dev/replay_review_pipeline.sh` — Shell helper for replay review pipeline.
 - `scripts/drift_audit.sh` — drift_audit.sh — Scan recent review/autofix logs for persistent fingerprint drift.
 - `scripts/files_touched_scope_guard.py` — files_touched scope-enforcement guard for the AI implement pipeline.
@@ -156,7 +156,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_floor_rules.sh` — Shell helper for review floor rules.
 - `scripts/review_issue_ledger.sh` — Shell helper for review issue ledger.
 - `scripts/review_parse_consolidator.sh` — Shell helper for review parse consolidator.
-- `scripts/review_rb_judge.sh` — in the script.
+- `scripts/review_rb_judge.sh` — Runs the review-blocked judge for PR merge, fix, or close-and-reissue decisions.
 - `scripts/review_reject_verify.sh` — Shell helper for review reject verify.
 - `scripts/review_run_judge_interim.sh` — Shell helper for review run judge interim.
 - `scripts/review_run_reviewers.sh` — Shell helper for review run reviewers.

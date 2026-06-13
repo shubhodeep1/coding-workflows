@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from pathlib import Path
+import subprocess
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -32,6 +33,22 @@ SECTION_ORDER = OrderedDict(
 
 
 def iter_surface_files() -> list[Path]:
+	try:
+		proc = subprocess.run(
+			["git", "ls-files", "-z"],
+			cwd=REPO_ROOT,
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+		return sorted(
+			Path(path)
+			for path in proc.stdout.split("\0")
+			if path and (REPO_ROOT / path).is_file()
+		)
+	except (FileNotFoundError, OSError, subprocess.SubprocessError):
+		pass
+
 	paths: list[Path] = []
 	for path in REPO_ROOT.rglob("*"):
 		if not path.is_file():

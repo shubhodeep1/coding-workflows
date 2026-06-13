@@ -220,9 +220,9 @@ def discover_reference_path(prompt_path: Path, reference_name: str) -> Path | No
 
 def _reference_file_names_for_placeholder(mode_name: str, placeholder_name: str) -> tuple[str, ...]:
 	file_names = list(REFERENCE_PLACEHOLDER_FILES.get(placeholder_name, ()))
+	file_names.extend(MODE_REFERENCE_APPEND_FILES.get((mode_name, placeholder_name), ()))
 	if not file_names:
 		raise PromptLoadError(f"Unknown reference placeholder '{placeholder_name}'")
-	file_names.extend(MODE_REFERENCE_APPEND_FILES.get((mode_name, placeholder_name), ()))
 	return tuple(file_names)
 
 
