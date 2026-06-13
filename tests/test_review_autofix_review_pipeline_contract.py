@@ -1459,11 +1459,6 @@ def test_review_collect_pr_metadata_helper_skips_optional_pr_reviews_by_default(
 						"repo": {"full_name": "owner/repo"},
 					},
 				},
-				"repos/owner/repo/issues/7": {
-					"number": 7,
-					"title": "Linked fallback issue",
-					"body": "Linked fallback body",
-				},
 				"graphql": {
 					"data": {
 						"repository": {
@@ -1471,6 +1466,12 @@ def test_review_collect_pr_metadata_helper_skips_optional_pr_reviews_by_default(
 								"closingIssuesReferences": {
 									"nodes": [],
 								},
+							},
+							"i0": {
+								"__typename": "Issue",
+								"number": 7,
+								"title": "Linked fallback issue",
+								"body": "Linked fallback body",
 							},
 						},
 					},
@@ -1508,7 +1509,11 @@ def test_review_collect_pr_metadata_helper_skips_optional_pr_reviews_by_default(
 	assert result["github_env"]["BASE_BRANCH"] == "main"
 	assert any(call[:2] == ["api", "repos/owner/repo/pulls/42"] for call in result["mock_state"]["calls"])
 	call_texts = [" ".join(call) for call in result["mock_state"]["calls"]]
-	assert any("repos/owner/repo/issues/7" in call for call in call_texts)
+	graphql_call_texts = [call for call in call_texts if call.startswith("api graphql ")]
+	assert len(graphql_call_texts) == 2
+	fallback_call = next(call for call in graphql_call_texts if "issueOrPullRequest(number:" in call)
+	assert "i0: issueOrPullRequest(number: 7)" in fallback_call
+	assert not any("repos/owner/repo/issues/7" in call for call in call_texts)
 	assert not any("repos/owner/repo/pulls/42/reviews" in call for call in call_texts)
 
 
@@ -1613,21 +1618,6 @@ def test_review_collect_pr_metadata_helper_strict_fallback_drops_bare_mentions()
 						"repo": {"full_name": "owner/repo"},
 					},
 				},
-				"repos/owner/repo/issues/10": {
-					"number": 10,
-					"title": "Closing keyword match",
-					"body": "Fix keyword body",
-				},
-				"repos/owner/repo/issues/12": {
-					"number": 12,
-					"title": "Repo path match",
-					"body": "Path body",
-				},
-				"repos/owner/repo/issues/13": {
-					"number": 13,
-					"title": "Repo URL match",
-					"body": "URL body",
-				},
 				"graphql": {
 					"data": {
 						"repository": {
@@ -1635,6 +1625,24 @@ def test_review_collect_pr_metadata_helper_strict_fallback_drops_bare_mentions()
 								"closingIssuesReferences": {
 									"nodes": [],
 								},
+							},
+							"i0": {
+								"__typename": "Issue",
+								"number": 10,
+								"title": "Closing keyword match",
+								"body": "Fix keyword body",
+							},
+							"i1": {
+								"__typename": "Issue",
+								"number": 12,
+								"title": "Repo path match",
+								"body": "Path body",
+							},
+							"i2": {
+								"__typename": "Issue",
+								"number": 13,
+								"title": "Repo URL match",
+								"body": "URL body",
 							},
 						},
 					},
@@ -1656,12 +1664,92 @@ def test_review_collect_pr_metadata_helper_strict_fallback_drops_bare_mentions()
 	assert "Issue #15:" not in result["linked_issue_context"]
 	assert "Issue #16:" not in result["linked_issue_context"]
 	call_texts = [" ".join(call) for call in result["mock_state"]["calls"]]
+	graphql_call_texts = [call for call in call_texts if call.startswith("api graphql ")]
+	assert len(graphql_call_texts) == 2
+	fallback_call = next(call for call in graphql_call_texts if "issueOrPullRequest(number:" in call)
+	assert "i0: issueOrPullRequest(number: 10)" in fallback_call
+	assert "i1: issueOrPullRequest(number: 12)" in fallback_call
+	assert "i2: issueOrPullRequest(number: 13)" in fallback_call
 	assert not any("repos/owner/repo/issues/7" in call for call in call_texts)
 	assert not any("repos/owner/repo/issues/8" in call for call in call_texts)
+	assert not any("repos/owner/repo/issues/10" in call for call in call_texts)
 	assert not any("repos/owner/repo/issues/11" in call for call in call_texts)
+	assert not any("repos/owner/repo/issues/12" in call for call in call_texts)
+	assert not any("repos/owner/repo/issues/13" in call for call in call_texts)
 	assert not any("repos/owner/repo/issues/14" in call for call in call_texts)
 	assert not any("repos/owner/repo/issues/15" in call for call in call_texts)
 	assert not any("repos/owner/repo/issues/16" in call for call in call_texts)
+
+
+def test_review_collect_pr_metadata_helper_caps_fallback_graphql_batch_at_twenty_issues() -> None:
+	referenced_numbers = list(range(1, 23))
+	graphql_repository = {
+		"pullRequest": {
+			"closingIssuesReferences": {
+				"nodes": [],
+			},
+		},
+	}
+	for idx, number in enumerate(referenced_numbers[:20]):
+		graphql_repository[f"i{idx}"] = {
+			"__typename": "Issue",
+			"number": number,
+			"title": f"Issue {number}",
+			"body": f"Body {number}",
+		}
+
+	result = _run_review_collect_pr_metadata_harness(
+		pr_number="42",
+		claude_branch_review_mode="false",
+		head_ref_override="",
+		head_sha_override="",
+		base_ref_override="",
+		mock_state={
+			"api_responses": {
+				"repos/owner/repo/pulls/42/comments": [],
+				"repos/owner/repo/pulls/42/reviews": [],
+				"repos/owner/repo/issues/42/comments": [],
+				"repos/owner/repo/pulls/42": {
+					"title": "Synthetic PR title",
+					"body": "\n".join(f"Fixes #{number}" for number in referenced_numbers),
+					"base": {"ref": "main"},
+					"head": {
+						"ref": "feature/ref",
+						"sha": "abc123",
+						"repo": {"full_name": "owner/repo"},
+					},
+				},
+				"graphql": {
+					"data": {
+						"repository": graphql_repository,
+					},
+				},
+			},
+			"pr_diffs": {"42": "pr diff sentinel\n"},
+		},
+	)
+
+	assert result["github_env"]["LINKED_ISSUES_JSON"] == "[]"
+	assert result["github_env"]["LINKED_ISSUE_FALLBACK_NUMBERS_JSON"] == json.dumps(
+		referenced_numbers,
+		separators=(",", ":"),
+	)
+	assert "Issue #20: Issue 20" in result["linked_issue_context"]
+	assert "Issue #21:" not in result["linked_issue_context"]
+	assert "Issue #22:" not in result["linked_issue_context"]
+	call_texts = [" ".join(call) for call in result["mock_state"]["calls"]]
+	graphql_call_texts = [call for call in call_texts if call.startswith("api graphql ")]
+	assert len(graphql_call_texts) == 2
+	fallback_call = next(call for call in graphql_call_texts if "issueOrPullRequest(number:" in call)
+	for idx, number in enumerate(referenced_numbers[:20]):
+		assert f"i{idx}: issueOrPullRequest(number: {number})" in fallback_call
+	assert "issueOrPullRequest(number: 21)" not in fallback_call
+	assert "issueOrPullRequest(number: 22)" not in fallback_call
+	for number in referenced_numbers:
+		assert not any(
+			call[:2] == ["api", f"repos/owner/repo/issues/{number}"]
+			for call in result["mock_state"]["calls"]
+		)
 
 
 def test_extract_repo_scoped_issue_refs_rejects_malformed_repository_input() -> None:
