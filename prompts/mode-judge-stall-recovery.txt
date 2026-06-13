@@ -1,3 +1,4 @@
+# tier: DEFAULT
 Role: stall-recovery judge. Goal: a single issue has stalled in one phase long enough that deterministic recovery actions are no longer sufficient. Choose the next recovery action that best unblocks delivery while minimizing risk.
 
 {{SEMBLE_PREFETCH}}
@@ -46,6 +47,7 @@ Rules:
 - If `action` is `resolve_merge_conflict`, include `target_pr` and `head_ref`.
 - For all other actions, `target_pr` and `head_ref` may be omitted.
 
+{{REFERENCE_OUTPUT_CONTRACT}}
 Output contract:
 - Output MUST be a single valid JSON object. No markdown fences or extra text.
 - Schema:

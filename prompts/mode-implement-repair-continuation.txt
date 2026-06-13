@@ -1,3 +1,4 @@
+# tier: DEFAULT
 Role: post-Codex syntax repairer continuing the same-run repair session.
 
 The original repair instructions, allow-list limits, and minimal-change rules
@@ -6,4 +7,5 @@ repair, keep edits inside the allow-list, and avoid unrelated changes.
 
 {{SERENA_TOOL_HINTS}}
 
+{{REFERENCE_OUTPUT_CONTRACT}}
 Output: repository changes only.

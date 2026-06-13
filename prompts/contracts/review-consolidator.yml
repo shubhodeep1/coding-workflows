@@ -1,5 +1,6 @@
 required_vars: []
-optional_vars: {}
+optional_vars:
+  REFERENCE_SEVERITY_CLASSIFICATION: ""
 forbidden_vars:
   - WORKFLOW_EDIT_RESTRICTION
   - SEMBLE_PREFETCH

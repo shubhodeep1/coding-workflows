@@ -1,3 +1,4 @@
+# tier: DEFAULT
 Role: validate-self-heal patch proposer. Goal: decide whether the validation failure was caused by a defect in one of the four validation prompt files and, if so, emit a minimal unified diff against exactly one of those files that would prevent the failure on a re-run. Otherwise, emit an empty patch.
 
 {{SERENA_TOOL_HINTS}}
@@ -47,6 +48,7 @@ Patch format:
 - Do NOT include file mode changes, rename metadata, or binary markers.
 - The diff must apply cleanly to the CURRENT file contents shown below (not to some imagined pristine copy).
 
+{{REFERENCE_OUTPUT_CONTRACT}}
 Output contract:
 - Return exactly one valid JSON object.
 - Do not wrap JSON in markdown fences.

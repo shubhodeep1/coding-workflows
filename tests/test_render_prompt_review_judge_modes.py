@@ -15,6 +15,8 @@ RENDER_PROMPT_SH = REPO_ROOT / "scripts" / "render_prompt.sh"
 RENDER_PROMPT_PY = REPO_ROOT / "scripts" / "render_prompt.py"
 PROMPTS_DIR = REPO_ROOT / "prompts"
 CONTRACTS_DIR = PROMPTS_DIR / "contracts"
+OUTPUT_CONTRACT_SENTINEL = "Terminal output contract:"
+SEVERITY_SENTINEL = "Severity calibration:"
 
 CONTRACT_NAMES = (
 	"mode-judge.yml",
@@ -91,6 +93,20 @@ def _assert_success(proc: subprocess.CompletedProcess[str]) -> None:
 	assert proc.stderr == ""
 
 
+def _assert_shared_references(
+	rendered_text: str,
+	*,
+	expect_output_contract: bool = False,
+	expect_severity: bool = False,
+) -> None:
+	if expect_output_contract:
+		assert OUTPUT_CONTRACT_SENTINEL in rendered_text
+		assert "{{REFERENCE_OUTPUT_CONTRACT}}" not in rendered_text
+	if expect_severity:
+		assert SEVERITY_SENTINEL in rendered_text
+		assert "{{REFERENCE_SEVERITY_CLASSIFICATION}}" not in rendered_text
+
+
 def test_contract_files_exist() -> None:
 	for contract_name in CONTRACT_NAMES:
 		assert (CONTRACTS_DIR / contract_name).is_file(), contract_name
@@ -99,6 +115,7 @@ def test_contract_files_exist() -> None:
 def test_judge_prompts_render_under_current_contracts() -> None:
 	mode_judge = _run_render(PROMPTS_DIR / "mode-judge.txt")
 	_assert_success(mode_judge)
+	_assert_shared_references(mode_judge.stdout, expect_output_contract=True, expect_severity=True)
 	assert "{{SEMBLE_PREFETCH}}" not in mode_judge.stdout
 	assert "\n\nYou have full access to the repository checkout and all tools" in mode_judge.stdout
 
@@ -108,6 +125,11 @@ def test_judge_prompts_render_under_current_contracts() -> None:
 		variables={"SEMBLE_PREFETCH": review_blocked_prefetch},
 	)
 	_assert_success(mode_judge_review_blocked)
+	_assert_shared_references(
+		mode_judge_review_blocked.stdout,
+		expect_output_contract=True,
+		expect_severity=True,
+	)
 	assert review_blocked_prefetch + "\n" in mode_judge_review_blocked.stdout
 	assert "{{SEMBLE_PREFETCH}}" not in mode_judge_review_blocked.stdout
 
@@ -117,6 +139,7 @@ def test_judge_prompts_render_under_current_contracts() -> None:
 		variables={"SEMBLE_PREFETCH": stall_prefetch},
 	)
 	_assert_success(mode_judge_stall)
+	_assert_shared_references(mode_judge_stall.stdout, expect_output_contract=True)
 	assert stall_prefetch + "\n" in mode_judge_stall.stdout
 	assert "{{SEMBLE_PREFETCH}}" not in mode_judge_stall.stdout
 
@@ -128,21 +151,26 @@ def test_shell_wrapper_renders_review_blocked_judge_under_current_contracts() ->
 		env_overrides={"SEMBLE_PREFETCH": review_blocked_prefetch},
 	)
 	_assert_success(proc)
+	_assert_shared_references(proc.stdout, expect_output_contract=True, expect_severity=True)
 	assert review_blocked_prefetch + "\n" in proc.stdout
 	assert "{{SEMBLE_PREFETCH}}" not in proc.stdout
 
 
-def test_no_placeholder_review_and_judge_prompts_round_trip() -> None:
-	for prompt_name in (
-		"mode-judge-interim.txt",
-		"mode-orchestrate-poll-judge.txt",
-		"review-consolidator.txt",
-		"review-reviewer-checklist.txt",
+def test_reference_backed_review_and_judge_prompts_render_shared_blocks() -> None:
+	for prompt_name, expect_output_contract, expect_severity in (
+		("mode-judge-interim.txt", True, False),
+		("mode-orchestrate-poll-judge.txt", True, False),
+		("review-consolidator.txt", False, True),
+		("review-reviewer-checklist.txt", False, True),
 	):
 		prompt_path = PROMPTS_DIR / prompt_name
 		proc = _run_render(prompt_path)
 		_assert_success(proc)
-		assert proc.stdout == _normalized_text(prompt_path), prompt_name
+		_assert_shared_references(
+			proc.stdout,
+			expect_output_contract=expect_output_contract,
+			expect_severity=expect_severity,
+		)
 
 
 def test_conflict_resolver_renders_required_values_and_optional_hints(
@@ -260,7 +288,7 @@ def main() -> int:
 	test_contract_files_exist()
 	test_judge_prompts_render_under_current_contracts()
 	test_shell_wrapper_renders_review_blocked_judge_under_current_contracts()
-	test_no_placeholder_review_and_judge_prompts_round_trip()
+	test_reference_backed_review_and_judge_prompts_render_shared_blocks()
 	test_conflict_resolver_renders_required_values_and_optional_hints()
 	test_integration_sync_conflict_resolver_renders_all_expected_values()
 	test_conflict_resolver_reports_missing_required_contract_violation()
