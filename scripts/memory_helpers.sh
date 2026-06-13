@@ -24,7 +24,8 @@ _memory_warn()
 
 _memory_telemetry()
 {
-	# Emit a structured telemetry line to stdout for log-analysis visibility.
+	# Emit a structured telemetry line. Callers that also return structured
+	# stdout payloads should redirect this to stderr.
 	# Usage: _memory_telemetry '{"op":"retrieve","ok":true,...}'
 	echo "AI_MEMORY_TELEMETRY: $1"
 }
@@ -108,13 +109,13 @@ memory_ensure_branch()
 memory_record_run_event()
 {
 	if ! _memory_enabled; then
-		_memory_telemetry '{"op":"record-run-event","ok":true,"enabled":false,"source":"shell"}'
+		_memory_telemetry '{"op":"record-run-event","ok":true,"enabled":false,"source":"shell"}' >&2
 		return 0
 	fi
 
-	python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" record-run-event "$@" 2>&1 || {
+	python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" record-run-event "$@" || {
 		_memory_warn "record-run-event failed (fail-open)"
-		_memory_telemetry '{"op":"record-run-event","ok":false,"fail_open":true,"source":"shell"}'
+		_memory_telemetry '{"op":"record-run-event","ok":false,"fail_open":true,"source":"shell"}' >&2
 		return 0
 	}
 }
@@ -122,13 +123,13 @@ memory_record_run_event()
 memory_record_candidate()
 {
 	if ! _memory_enabled; then
-		_memory_telemetry '{"op":"record-candidate","ok":true,"enabled":false,"source":"shell"}'
+		_memory_telemetry '{"op":"record-candidate","ok":true,"enabled":false,"source":"shell"}' >&2
 		return 0
 	fi
 
-	python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" record-candidate "$@" 2>&1 || {
+	python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" record-candidate "$@" || {
 		_memory_warn "record-candidate failed (fail-open)"
-		_memory_telemetry '{"op":"record-candidate","ok":false,"fail_open":true,"source":"shell"}'
+		_memory_telemetry '{"op":"record-candidate","ok":false,"fail_open":true,"source":"shell"}' >&2
 		return 0
 	}
 }

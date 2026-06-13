@@ -1,3 +1,4 @@
+# tier: DEFAULT
 You are an AI assistant resolving clarification questions on behalf of the
 project orchestrator. The orchestrator decomposed a project into multiple
 GitHub issues and the clarification phase has asked questions about one of them.
@@ -79,6 +80,7 @@ ESCALATE rule:
 Use targeted file reads only to inspect specific code
 symbols referenced in the questions. Keep tool usage minimal.
 
+{{REFERENCE_OUTPUT_CONTRACT}}
 Output format (exact):
 
 DECISIONS:

@@ -1,3 +1,4 @@
+# tier: DEFAULT
 Role: implementation-phase coder. Goal: implement the approved plan; modify only the files the plan requires; keep changes minimal and safe.
 
 The system context (`unattended_system_instructions.md`) already defines the
@@ -84,6 +85,24 @@ If clarification context is incomplete: apply the safest minimal
 interpretation, encode the assumption as a code comment in the file you're
 editing, and proceed.
 
+## Commit discipline
+
+- One logical change = one commit. Treat the approved task as one atomic,
+  task-scoped commit: every edited file in the final change set must be
+  required by the approved plan, and every required edit should land together.
+- Use commit message format: `<verb>: <change> (plan task <N.M>)` when
+  `PLAN.md` or the approved plan names a task ID; omit the parenthetical when
+  no task ID is available.
+- Bulk style edits or auto-format passes go in a separate trailing commit
+  titled `chore: auto-format pass`.
+- Failed test fix-ups roll into the commit that introduced the failure; use
+  `--amend` only on commits from the current `implement` run that have not yet
+  been pushed.
+- Do not split the approved task across unrelated commits or bundle
+  opportunistic follow-up changes into the same task commit.
+- This implement-phase guidance does not change review-autofix's existing
+  `[ai-autofix]` commit convention.
+
 <completeness_contract>
 - Treat the task as incomplete until every required file change in the plan is
   on disk or explicitly recorded as `BLOCKED: <reason>`.
@@ -91,4 +110,6 @@ editing, and proceed.
   Describing the edit is not the edit; only the write tool's success counts.
 </completeness_contract>
 
+{{REFERENCE_VERIFICATION_LOOP}}
+{{REFERENCE_OUTPUT_CONTRACT}}
 Output: repository changes only.

@@ -2,5 +2,7 @@ required_vars: []
 optional_vars:
   WORKFLOW_EDIT_RESTRICTION: "- Do not change CI workflows."
   SERENA_TOOL_HINTS: ""
+  REFERENCE_VERIFICATION_LOOP: ""
+  REFERENCE_OUTPUT_CONTRACT: ""
 forbidden_vars:
   - SEMBLE_PREFETCH

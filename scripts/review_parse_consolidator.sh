@@ -631,7 +631,9 @@ process_block()
 		lens="UNKNOWN_LENS"
 	fi
 	if [ -z "${severity}" ]; then
-		severity="low"
+		severity="high"
+		printf 'REVIEWER_SEVERITY_DEFAULT issue=%s default=%s reason=missing_severity\n' \
+			"${issue_id}" "${severity}" >&2
 	fi
 	if [ "${classification}" = "non-actionable" ] && is_truthy "${CONSOLIDATOR_REJECT_SCHEMA_ENABLED}"; then
 		if [ -z "${rejection_kind}" ]; then

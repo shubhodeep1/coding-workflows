@@ -13,8 +13,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RENDER_PROMPT_SH = REPO_ROOT / "scripts" / "render_prompt.sh"
 RENDER_PROMPT_PY = REPO_ROOT / "scripts" / "render_prompt.py"
+OUTPUT_CONTRACT_SENTINEL = "Terminal output contract:"
 
-ZERO_PLACEHOLDER_PROMPTS = (
+OUTPUT_CONTRACT_PROMPTS = (
 	("mode-clarify", REPO_ROOT / "prompts" / "mode-clarify.txt"),
 	("mode-clarify-respond", REPO_ROOT / "prompts" / "mode-clarify-respond.txt"),
 	("mode-orchestrate", REPO_ROOT / "prompts" / "mode-orchestrate.txt"),
@@ -80,13 +81,18 @@ def _run_render_prompt_sh(
 	)
 
 
-def test_zero_placeholder_core_modes_render_under_strict_contracts() -> None:
-	for mode_name, prompt_file in ZERO_PLACEHOLDER_PROMPTS:
+def _assert_output_contract_rendered(rendered_text: str) -> None:
+	assert OUTPUT_CONTRACT_SENTINEL in rendered_text
+	assert "{{REFERENCE_OUTPUT_CONTRACT}}" not in rendered_text
+
+
+def test_core_modes_render_shared_output_contract_under_strict_contracts() -> None:
+	for mode_name, prompt_file in OUTPUT_CONTRACT_PROMPTS:
 		proc = _run_render_prompt(prompt_file)
 
 		assert proc.returncode == 0, f"{mode_name}: {proc.stderr}"
 		assert proc.stderr == ""
-		assert proc.stdout == _normalize_prompt_text(prompt_file.read_text(encoding="utf-8"))
+		_assert_output_contract_rendered(proc.stdout)
 
 
 def test_serena_core_modes_render_with_default_and_explicit_optional_hints() -> None:
@@ -105,8 +111,12 @@ def test_serena_core_modes_render_with_default_and_explicit_optional_hints() -> 
 
 			assert proc.returncode == 0, f"{mode_name}/{case_name}: {proc.stderr}"
 			assert proc.stderr == ""
+			_assert_output_contract_rendered(proc.stdout)
 			assert "{{SERENA_TOOL_HINTS}}" not in proc.stdout
-			assert proc.stdout == prompt_text.replace("{{SERENA_TOOL_HINTS}}\n", replacement)
+			if case_name == "default":
+				assert "Serena hints:" not in proc.stdout
+			else:
+				assert replacement in proc.stdout
 
 
 def test_zero_placeholder_core_mode_contract_rejects_forbidden_placeholder() -> None:
@@ -139,7 +149,7 @@ def test_render_prompt_sh_enforces_core_mode_contracts_in_production_path() -> N
 
 
 def main() -> int:
-	test_zero_placeholder_core_modes_render_under_strict_contracts()
+	test_core_modes_render_shared_output_contract_under_strict_contracts()
 	test_serena_core_modes_render_with_default_and_explicit_optional_hints()
 	test_zero_placeholder_core_mode_contract_rejects_forbidden_placeholder()
 	test_render_prompt_sh_enforces_core_mode_contracts_in_production_path()

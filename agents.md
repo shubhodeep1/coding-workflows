@@ -122,12 +122,22 @@ GitHub API hygiene rules in `unattended_system_instructions.md` §14:
 - `_fetch_candidate_issue_details_graphql` (in `scripts/orchestrate_poll_process.sh`)
 - `_fetch_linked_pr_status_graphql` (in `scripts/orchestrate_poll_process.sh`)
 
+BATCH_HELPER.name=_fetch_candidate_issue_details_graphql kind=graphql-batch path=scripts/orchestrate_poll_process.sh cache=_candidate_details_json
+BATCH_HELPER.name=_fetch_linked_pr_status_graphql kind=graphql-batch path=scripts/orchestrate_poll_process.sh cache=STALL_MANAGED_LINKED_PR_CACHE
+
 Both return a dict keyed by issue number so the caller can drop the result
 into a cycle-local cache.
 
 Cycle-local caches that must not be re-fetched per iteration:
 `ACTIVE_WORKFLOW_ISSUES`, `STALL_MANAGED_LINKED_PR_CACHE`,
 `_candidate_details_json`.
+
+## Workflow install profiles
+
+PROFILE.default=full
+PROFILE.name=core manifest=workflow-templates/profiles/core.txt wrappers=ai-clarify.yml,ai-plan.yml,ai-implement.yml,ai-review.yml,ai-issue-pr-status.yml,ai-cancel-on-pr-close.yml
+PROFILE.name=standard manifest=workflow-templates/profiles/standard.txt wrappers=ai-clarify.yml,ai-plan.yml,ai-implement.yml,ai-review.yml,ai-issue-pr-status.yml,ai-cancel-on-pr-close.yml,ai-orchestrate.yml,ai-orchestrate-poll.yml,ai-orchestrate-clarify-respond.yml,ai-validate.yml,review_rb_judge_dispatch.yml
+PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-cancel-on-pr-close.yml,ai-clarify.yml,ai-implement.yml,ai-issue-pr-status.yml,ai-memory-maintenance.yml,ai-orchestrate-clarify-respond.yml,ai-orchestrate-poll.yml,ai-orchestrate.yml,ai-plan.yml,ai-review.yml,ai-update-workflows.yml,ai-validate.yml,review_rb_judge_dispatch.yml
 
 ---
 
@@ -294,6 +304,61 @@ and shipped:
 - `SERENA_FALLBACK`
 - `SERENA_PROBE`
 - `drift-audit:`
+
+LOG_PREFIX.name=LABEL_REPAIR
+LOG_PREFIX.name=LABEL_REPAIR_DIFF
+LOG_PREFIX.name=AUTOFIX_PEER_CHECK
+LOG_PREFIX.name=AUTOFIX_DISPATCH_SKIPPED
+LOG_PREFIX.name=AUTOFIX_DISPATCH_ISSUED
+LOG_PREFIX.name=AI_PHASE_FAILURE_V1
+LOG_PREFIX.name=AI_PHASE_GATE_V1
+LOG_PREFIX.name=JUDGE_INTERIM_PASS_OK
+LOG_PREFIX.name=JUDGE_INTERIM_PASS_FAIL
+LOG_PREFIX.name=JUDGE_INTERIM_PRIORS_MERGED
+LOG_PREFIX.name=BEHAVIOURAL_SMOKE_SYNTHESISED
+LOG_PREFIX.name=BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL
+LOG_PREFIX.name=BEHAVIOURAL_SMOKE_PRESENT_FAILED
+LOG_PREFIX.name=BEHAVIOURAL_SMOKE_PRESENT_PASSED
+LOG_PREFIX.name=REISSUE_BASELINE_PRESERVED
+LOG_PREFIX.name=REISSUE_BASELINE_DISCARDED
+LOG_PREFIX.name=REISSUE_MODE
+LOG_PREFIX.name=FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1
+LOG_PREFIX.name=FINGERPRINT_POST_CAPTURE_EVOLUTION_FALSE_POSITIVE_V1
+LOG_PREFIX.name=FINGERPRINT_POST_CAPTURE_REINTRODUCTION_FALSE_POSITIVE_V1
+LOG_PREFIX.name=FINGERPRINT_STATE_SELFHEAL_V1
+LOG_PREFIX.name=FINAL_MERGE_INELIGIBILITY_ALERT_SENT
+LOG_PREFIX.name=EAGER_DRAFT_PR_CREATED
+LOG_PREFIX.name=EAGER_DRAFT_PR_PROMOTED
+LOG_PREFIX.name=INTEGRATION_STALE_ALERT_SENT
+LOG_PREFIX.name=HARNESS_ERROR_DETECTED
+LOG_PREFIX.name=FORCE_MERGE_BYPASS
+LOG_PREFIX.name=BACKPRESSURE_TRIGGERED
+LOG_PREFIX.name=BACKPRESSURE_CLEARED
+LOG_PREFIX.name=VALIDATION_DISCOVERY_STARTED
+LOG_PREFIX.name=VALIDATION_DISCOVERY_AGREE
+LOG_PREFIX.name=VALIDATION_DISCOVERY_DISAGREE
+LOG_PREFIX.name=VALIDATION_DISCOVERY_PR_OPENED
+LOG_PREFIX.name=VALIDATION_DISCOVERY_PR_REUSED
+LOG_PREFIX.name=VALIDATION_DISCOVERY_FAILED
+LOG_PREFIX.name=VALIDATION_DISCOVERY_SKIPPED_DEDUP
+LOG_PREFIX.name=VALIDATION_DISCOVERY_SKIPPED_DISABLED
+LOG_PREFIX.name=VALIDATION_DISCOVERY_SKIPPED_BUDGET
+LOG_PREFIX.name=VALIDATION_DISCOVERY_DRY_RUN
+LOG_PREFIX.name=REVIEWER_RISK_TIER
+LOG_PREFIX.name=REVIEWER_FILTER_SKIP
+LOG_PREFIX.name=REVIEWER_FAILBACK
+LOG_PREFIX.name=REVIEWER_FAILBACK_UNMAPPED
+LOG_PREFIX.name=REVIEWER_HEALTH
+LOG_PREFIX.name=RE_REVIEW_SKIP
+LOG_PREFIX.name=CONTEXT_BUDGET_WARN
+LOG_PREFIX.name=CODEX_HEARTBEAT
+LOG_PREFIX.name=BREAK_GLASS
+LOG_PREFIX.name=SEMBLE_QUERY
+LOG_PREFIX.name=SEMBLE_FALLBACK
+LOG_PREFIX.name=SERENA_QUERY
+LOG_PREFIX.name=SERENA_FALLBACK
+LOG_PREFIX.name=SERENA_PROBE
+LOG_PREFIX.name=drift-audit:
 
 ---
 

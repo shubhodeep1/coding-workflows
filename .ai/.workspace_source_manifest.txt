@@ -96,7 +96,9 @@ ai_pipeline.md
 analysis/last_collection_timestamp.txt
 analysis/recommendation-processing-report.md
 analysis/validation-selftest-status.json
+analysis/workflow-optimization-2026-06-13.md
 codex.md
+docs/INVENTORY.md
 docs/ai-tools-future-improvements.md
 docs/awesome-cc-future-improvements.md
 docs/completed/ai-code-review-learnings-plan.md
@@ -195,6 +197,10 @@ prompts/mode-validate-self-heal.txt
 prompts/mode-workflow-analysis.txt
 prompts/mode-workflow-api-redundancy.txt
 prompts/mode-workflow-audit.txt
+prompts/references/output-contract.txt
+prompts/references/severity-classification.txt
+prompts/references/validate-output-contract.txt
+prompts/references/verification-loop.txt
 prompts/review-consolidator.txt
 prompts/review-reviewer-checklist.txt
 scripts/ai_context_utils.py
@@ -334,6 +340,7 @@ tests/fixtures/mcp_handshake/mock_server_lib.py
 tests/fixtures/review_pipeline/consolidator_anchor_mismatch.txt
 tests/fixtures/review_pipeline/consolidator_garbled.txt
 tests/fixtures/review_pipeline/consolidator_malformed_missing_file.txt
+tests/fixtures/review_pipeline/consolidator_missing_severity.txt
 tests/fixtures/review_pipeline/consolidator_path_traversal.txt
 tests/fixtures/review_pipeline/consolidator_unterminated_block.txt
 tests/fixtures/review_pipeline/consolidator_well_formed.txt
@@ -393,6 +400,9 @@ tests/fixtures/validation_harness/python_repo_checks/tests/40_repo_checks.sh
 tests/fixtures/validation_harness/python_repo_checks/tests/90_tap_report.sh
 tests/fixtures/validation_harness/python_repo_checks/tests/_lib/graceful_shutdown.py
 tests/fixtures/validation_harness/python_repo_checks/tests/_lib/import_audit.py
+tests/inventory_exemptions.txt
+tests/inventory_parity.py
+tests/prompt_size_budget.py
 tests/test_actions_runs_fetch_unconfirmed_warning.py
 tests/test_ai_label_precreation_contract.py
 tests/test_ai_labels.py

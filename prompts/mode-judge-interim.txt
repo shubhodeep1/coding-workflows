@@ -1,3 +1,4 @@
+# tier: DEFAULT
 Role: judge. Goal: evaluate whether the latest autofix round still leaves actionable issues. Emit one JSON object.
 
 You have full access to the repository checkout and all tools (shell, file
@@ -26,6 +27,7 @@ Rules:
 - `head_sha` must match the current HEAD commit under review.
 - `round` must match the current autofix round under review.
 
+{{REFERENCE_OUTPUT_CONTRACT}}
 Output contract - one valid JSON object, no markdown fences, no surrounding
 text:
 

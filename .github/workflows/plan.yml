@@ -54,6 +54,7 @@ jobs:
       CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
       PROCESSED_ANSWER_CLAIMED: "false"
       PROCESSED_ANSWER_COMPLETED: "false"
+      PLAN_SELF_CHECK_ENABLED: ${{ vars.PLAN_SELF_CHECK_ENABLED || 'true' }}
 
     steps:
       - name: Cache Codex CLI
@@ -268,7 +269,7 @@ jobs:
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh render_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh; do
+          for f in gh_helpers.sh render_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -957,6 +958,7 @@ jobs:
           4. API or interface changes
           5. Potential risks or edge cases
           6. Testing considerations
+          7. A pre-execution self-check result
 
           Rules:
 
@@ -994,6 +996,15 @@ jobs:
             from the planning context and do not assume `main`.
           - If checked-out ref mismatches Integration branch metadata, emit exactly
             `BLOCKED: integration branch mismatch`.
+          - Before exiting, run a self-check on the plan you are about to emit.
+            If the plan is implementation-ready, end with `STATUS: CLEAR` and
+            `PLAN_SELF_CHECK: PASS`. If you find non-blocking concerns, emit one
+            or more `PLAN_SELF_CHECK: WARNING: <one-line>` lines and still end
+            with `STATUS: CLEAR`. If you find any implementation blocker, emit
+            one or more `PLAN_SELF_CHECK: BLOCKER: <one-line>` lines and end
+            with `STATUS: NOT_CLEAR`. Do not emit both `PLAN_SELF_CHECK: PASS`
+            and any `PLAN_SELF_CHECK: WARNING:` or `PLAN_SELF_CHECK: BLOCKER:`
+            lines in the same output.
           - If any answer is missing, contradictory, or unclear after best-effort interpretation,
             do NOT guess: return clarification questions in the Q<ID>/Choices format defined in
             prompts/mode-plan.txt ("Mandatory Question Format" section) and state that
@@ -1127,11 +1138,28 @@ jobs:
             exit 1
           fi
 
+          CODEX_OUTPUT_PARSE_FILE="${RUNTIME_DIR}/codex_output_parse.txt"
+          # Strip only fully closed fenced code blocks before scanning for
+          # PLAN_SELF_CHECK / clarification markers so malformed fences do not
+          # hide blocker lines or auto-answer question blocks.
+          perl -0pe '
+            s{(^|\n)([ \t]*((?:```|~~~))[^\n]*\n.*?\n[ \t]*\3[ \t]*(?=\n|$))}{$1}gms;
+          ' "${CODEX_OUTPUT_FILE}" > "${CODEX_OUTPUT_PARSE_FILE}" || {
+            echo "::error::Failed to sanitize Codex output"
+            exit 1
+          }
+          if [ ! -s "${CODEX_OUTPUT_PARSE_FILE}" ]; then
+            echo "::error::Sanitized Codex output parse file missing or empty"
+            exit 1
+          fi
+          echo "CODEX_OUTPUT_PARSE_FILE=${CODEX_OUTPUT_PARSE_FILE}" >> "$GITHUB_ENV"
+
+          # Scan the sanitized parse file so malformed or unclosed fences
+          # cannot hide a real BLOCKED line before the clarification/self-check
+          # gates run.
           BLOCKED_REASON="$(perl -ne '
-            if (/^\s*(?:```|~~~)/) { $in_code = !$in_code; next; }
-            next if $in_code;
             if (/^\s*BLOCKED:\s*(.*\S)\s*$/i) { print $1; exit; }
-          ' "${CODEX_OUTPUT_FILE}")"
+          ' "${CODEX_OUTPUT_PARSE_FILE}")"
 
           if [ -n "${BLOCKED_REASON}" ]; then
             BLOCKED_REASON_OUTPUT_DELIM="BLOCKED_REASON_OUTPUT_${GITHUB_RUN_ID:-0}_${GITHUB_RUN_ATTEMPT:-0}_$$"
@@ -1158,24 +1186,54 @@ jobs:
           echo "BLOCKED=false" >> "$GITHUB_ENV"
           echo "BLOCKED_REASON=" >> "$GITHUB_ENV"
 
+          PLAN_SELF_CHECK_GATE_ENABLED="false"
+          case "$(printf '%s' "${PLAN_SELF_CHECK_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+            1|true|yes|on)
+              PLAN_SELF_CHECK_GATE_ENABLED="true"
+              ;;
+          esac
+
+          SELF_CHECK_PASS_COUNT="$(perl -ne '
+            if (/^\s*PLAN_SELF_CHECK:\s*PASS\s*$/i) { $count++; }
+            END { print $count + 0; }
+          ' "${CODEX_OUTPUT_PARSE_FILE}")"
+
+          SELF_CHECK_WARNING_COUNT="$(perl -ne '
+            if (/^\s*PLAN_SELF_CHECK:\s*WARNING:\s*(.*\S)\s*$/i) { $count++; }
+            END { print $count + 0; }
+          ' "${CODEX_OUTPUT_PARSE_FILE}")"
+
+          SELF_CHECK_BLOCKER_COUNT="$(perl -ne '
+            if (/^\s*PLAN_SELF_CHECK:\s*BLOCKER:\s*(.*\S)\s*$/i) { $count++; }
+            END { print $count + 0; }
+          ' "${CODEX_OUTPUT_PARSE_FILE}")"
+
+          SELF_CHECK_REOPEN_CLARIFICATION="false"
+          if [ "${PLAN_SELF_CHECK_GATE_ENABLED}" = "true" ] && [ "${SELF_CHECK_BLOCKER_COUNT}" -gt 0 ]; then
+            SELF_CHECK_REOPEN_CLARIFICATION="true"
+          fi
+
+          echo "plan_self_check_pass_count=${SELF_CHECK_PASS_COUNT}" >> "$GITHUB_OUTPUT"
+          echo "plan_self_check_warning_count=${SELF_CHECK_WARNING_COUNT}" >> "$GITHUB_OUTPUT"
+          echo "plan_self_check_blocker_count=${SELF_CHECK_BLOCKER_COUNT}" >> "$GITHUB_OUTPUT"
+          echo "plan_self_check_reopen_clarification=${SELF_CHECK_REOPEN_CLARIFICATION}" >> "$GITHUB_OUTPUT"
+
           HAS_STATUS_NEEDS_CLARIFICATION="false"
-          if grep -qiE 'STATUS:.*NEEDS_CLARIFICATION|^\*\*STATUS:\*\*.*NEEDS_CLARIFICATION' "${CODEX_OUTPUT_FILE}"; then
+          if grep -qiE 'STATUS:.*NEEDS_CLARIFICATION|^\*\*STATUS:\*\*.*NEEDS_CLARIFICATION' "${CODEX_OUTPUT_PARSE_FILE}"; then
             HAS_STATUS_NEEDS_CLARIFICATION="true"
           fi
 
           HAS_STRUCTURED_CLARIFICATION_BLOCK="false"
           if perl -ne '
-            if (/^\s*(?:```|~~~)/) { $in_code = !$in_code; next; }
-            next if $in_code;
             if (/^\s*(?:\*\*)?Q[0-9]+(?:\*\*)?:(?:\*\*)?\s+/i) { $q_line = $.; next; }
             if (defined $q_line && $. - $q_line <= 20 && /^\s*Choices:\s*$/i) { $has_block = 1; }
             if (defined $q_line && $. - $q_line <= 20 && /^\s*-\s*(?:\*\*)?[A-Za-z](?:\+[A-Za-z])*(?:\*\*)?\s*(?:—|–|[-)\.:]).*\(RECOMMENDED\)/i) { $has_block = 1; }
             END { exit($has_block ? 0 : 1); }
-          ' "${CODEX_OUTPUT_FILE}"; then
+          ' "${CODEX_OUTPUT_PARSE_FILE}"; then
             HAS_STRUCTURED_CLARIFICATION_BLOCK="true"
           fi
 
-          if [ "${HAS_STATUS_NEEDS_CLARIFICATION}" = "true" ] || [ "${HAS_STRUCTURED_CLARIFICATION_BLOCK}" = "true" ]; then
+          if [ "${HAS_STATUS_NEEDS_CLARIFICATION}" = "true" ] || [ "${HAS_STRUCTURED_CLARIFICATION_BLOCK}" = "true" ] || [ "${SELF_CHECK_REOPEN_CLARIFICATION}" = "true" ]; then
             echo "needs_clarification=true" >> "$GITHUB_OUTPUT"
             echo "NEEDS_CLARIFICATION=true" >> "$GITHUB_ENV"
           else
@@ -1290,14 +1348,14 @@ jobs:
           fi
 
           PARSE_RESULT_FILE="${RUNTIME_DIR}/orchestrator_auto_answer_parse.txt"
-          perl - "${CODEX_OUTPUT_FILE}" > "${PARSE_RESULT_FILE}" <<'PERL'
+          PARSE_SOURCE_FILE="${CODEX_OUTPUT_PARSE_FILE:-${CODEX_OUTPUT_FILE}}"
+          perl - "${PARSE_SOURCE_FILE}" > "${PARSE_RESULT_FILE}" <<'PERL'
           use strict;
           use warnings;
 
           my ($file) = @ARGV;
           open my $fh, '<', $file or die "Unable to read $file: $!";
 
-          my $in_code_fence = 0;
           my $current_qid = '';
           my @qid_order;
           my %seen_qid;
@@ -1305,12 +1363,6 @@ jobs:
 
           while (my $line = <$fh>) {
             chomp $line;
-
-            if ($line =~ /^\s*(?:```|~~~)/) {
-              $in_code_fence = !$in_code_fence;
-              next;
-            }
-            next if $in_code_fence;
 
             if ($line =~ /^\s*(?:\*\*)?\s*(Q[0-9]+)\s*(?:\*\*)?\s*:/i) {
               $current_qid = uc($1);

@@ -1,0 +1,235 @@
+# INVENTORY.md — Authoritative roster
+
+This file is the authoritative inventory for the Phase B drift-control surfaces.
+`tests/inventory_parity.py` compares these sections against the filesystem globs for the scoped surfaces.
+
+## Phase prompts
+
+- `prompts/mode-clarify-respond.txt` — You are an AI assistant resolving clarification questions on behalf of the project orchestrator.
+- `prompts/mode-clarify.txt` — Role: clarify-phase auditor. Goal: emit `STATUS: CLEAR` or a `Q1`/`Q2` batch of blocking clarification questions.
+- `prompts/mode-implement-diagnose-continuation.txt` — Role: implement-failure diagnoser continuing the same-run diagnosis session.
+- `prompts/mode-implement-diagnose.txt` — Role: implement-failure diagnoser. Goal: analyze post-Codex implement-step failures and emit one structured JSON object with fix-up issue proposals.
+- `prompts/mode-implement-repair-continuation.txt` — Role: post-Codex syntax repairer continuing the same-run repair session.
+- `prompts/mode-implement-repair-syntax.txt` — Role: syntax repairer. Goal: repair syntax/parse validation failures in files changed by the implementation step.
+- `prompts/mode-implement-repair.txt` — Role: post-Codex syntax repairer. Goal: fix syntax/parse failures captured after the main implementation pass using the captured diagnostics as source of truth.
+- `prompts/mode-implement.txt` — Role: implementation-phase coder. Goal: implement the approved plan; modify only the files the plan requires; keep changes minimal and safe.
+- `prompts/mode-judge-interim.txt` — Role: judge. Goal: evaluate whether the latest autofix round still leaves actionable issues.
+- `prompts/mode-judge-review-blocked.txt` — Role: review-blocked judge. Goal: a PR linked to an orchestrator-managed issue has been labeled `ai:review-blocked` (the autofix cycle could not resolve all issues after exhausting its retry budget, or the editor/workflow failed entirely).
+- `prompts/mode-judge-stall-recovery.txt` — Role: stall-recovery judge. Goal: a single issue has stalled in one phase long enough that deterministic recovery actions are no longer sufficient.
+- `prompts/mode-judge.txt` — Role: judge. Goal: evaluate whether the project is progressing correctly after a wave of issues has been implemented and merged.
+- `prompts/mode-orchestrate-poll-judge.txt` — Role: orchestrate-poll judge. Goal: evaluate whether the current wave is progressing correctly.
+- `prompts/mode-orchestrate.txt` — Role: orchestrator. Goal: decompose a high-level project description into a set of well-scoped GitHub issues with an explicit dependency graph.
+- `prompts/mode-plan.txt` — Role: planning-phase auditor. Goal: emit a structured implementation plan or `BLOCKED:` line.
+- `prompts/mode-review-apply-fixes-continuation.txt` — Role: review-autofix editor continuing the same-run editor session.
+- `prompts/mode-review-conflict-resolver-continuation.txt` — Role: merge-conflict resolver continuing the same-run resolver session.
+- `prompts/mode-validate-diagnose.txt` — Role: validate-diagnose. Goal: analyze runtime validation failures and emit one JSON object with structured fix-up issue proposals.
+- `prompts/mode-validate-discover.txt` — Role: validate-discover. Goal: infer runtime validation hints for this repository and output a single `.ai/validate.yml` document.
+- `prompts/mode-validate-fix-harness.txt` — Role: validate-fix-harness. Goal: apply targeted fixes to the existing validation harness under `validation/`.
+- `prompts/mode-validate-generate.txt` — You are executing the VALIDATE-GENERATE phase of the AI development pipeline.
+- `prompts/mode-validate-self-heal-continuation.txt` — Role: validate-self-heal patch proposer continuing the same-run self-heal session.
+- `prompts/mode-validate-self-heal.txt` — Role: validate-self-heal patch proposer. Goal: decide whether the validation failure was caused by a defect in one of the four validation prompt files and, if so, emit a minimal unified diff against exactly one of those files that would prevent the failure on a re-run.
+- `prompts/mode-workflow-analysis.txt` — You are a workflow optimization analyst for an AI-powered GitHub Actions pipeline.
+- `prompts/mode-workflow-api-redundancy.txt` — You are a conservative GitHub API call consolidation auditor for an AI-powered GitHub Actions pipeline.
+- `prompts/mode-workflow-audit.txt` — You are a workflow and script auditor for an AI-powered GitHub Actions pipeline.
+- `prompts/review-consolidator.txt` — You are the review consolidator for the AI review pipeline.
+- `prompts/review-reviewer-checklist.txt` — Reviewer checklist defining the eight review lenses and issue formats.
+
+## Workflows
+
+- `.github/workflows/cancel_on_pr_close.yml` — GitHub Actions workflow: AI Cancel Runs on PR Close.
+- `.github/workflows/ci.yml` — GitHub Actions workflow: CI.
+- `.github/workflows/clarify.yml` — GitHub Actions workflow: AI Clarify (Reusable).
+- `.github/workflows/comprehensive-test-and-release.yml` — GitHub Actions workflow: Workflow Log Analysis And Improvement.
+- `.github/workflows/drift-audit.yml` — GitHub Actions workflow: Drift Audit.
+- `.github/workflows/forward-merge-stable-to-main.yml` — GitHub Actions workflow: Forward-merge stable to main.
+- `.github/workflows/implement.yml` — GitHub Actions workflow: AI Implement.
+- `.github/workflows/integration-pr-readiness.yml` — GitHub Actions workflow: Integration PR readiness check.
+- `.github/workflows/internal-cancel-on-pr-close.yml` — GitHub Actions workflow: Internal: Cancel on PR Close.
+- `.github/workflows/internal-clarify.yml` — GitHub Actions workflow: Internal: AI Clarify.
+- `.github/workflows/internal-implement.yml` — GitHub Actions workflow: Internal: AI Implement.
+- `.github/workflows/internal-issue-pr-status.yml` — GitHub Actions workflow: Internal: Issue-PR Status Sync.
+- `.github/workflows/internal-memory-maintenance.yml` — GitHub Actions workflow: Internal: Memory Maintenance.
+- `.github/workflows/internal-orchestrate-clarify-respond.yml` — GitHub Actions workflow: Internal: AI Orchestrate Clarify Respond.
+- `.github/workflows/internal-orchestrate-poll.yml` — GitHub Actions workflow: Internal: AI Orchestrate Poller.
+- `.github/workflows/internal-orchestrate.yml` — GitHub Actions workflow: Internal: AI Orchestrate.
+- `.github/workflows/internal-plan.yml` — GitHub Actions workflow: Internal: AI Plan.
+- `.github/workflows/internal-review.yml` — GitHub Actions workflow: Internal: AI Review & Autofix.
+- `.github/workflows/internal-validate.yml` — GitHub Actions workflow: Internal: AI Validate.
+- `.github/workflows/issue_pr_status.yml` — GitHub Actions workflow: AI Issue PR Status Sync.
+- `.github/workflows/lint-plan-archival.yml` — GitHub Actions workflow: Lint plan-archival completeness.
+- `.github/workflows/lint-pr-body-auto-close.yml` — GitHub Actions workflow: Lint PR body for auto-close keywords against orchestrator-tracking issues.
+- `.github/workflows/mark-stable.yml` — GitHub Actions workflow: Mark Stable Release.
+- `.github/workflows/memory_maintenance.yml` — GitHub Actions workflow: AI Memory Maintenance (Reusable).
+- `.github/workflows/nightly-validation-selftest.yml` — GitHub Actions workflow: Nightly Validation Self-Test.
+- `.github/workflows/orchestrate.yml` — GitHub Actions workflow: AI Orchestrate (Reusable).
+- `.github/workflows/orchestrate_clarify_respond.yml` — GitHub Actions workflow: AI Orchestrate Clarify Respond (Reusable).
+- `.github/workflows/orchestrate_poll.yml` — GitHub Actions workflow: AI Orchestrate Poller (Reusable).
+- `.github/workflows/plan.yml` — GitHub Actions workflow: AI Plan.
+- `.github/workflows/promote-main-to-stable.yml` — GitHub Actions workflow: Promote main to stable.
+- `.github/workflows/review_autofix.yml` — GitHub Actions workflow: Codex PR Self-Healing Semantic Agent.
+- `.github/workflows/review_autofix_sweep.yml` — GitHub Actions workflow: Internal: AI Review Autofix Sweep.
+- `.github/workflows/review_rb_judge_dispatch.yml` — GitHub Actions workflow: Internal: Review-Blocked Judge Dispatch.
+- `.github/workflows/test-and-mark-stable.yml` — GitHub Actions workflow: Test & Mark Stable Release.
+- `.github/workflows/update_workflows.yml` — GitHub Actions workflow: Update Workflow Wrappers.
+- `.github/workflows/validate.yml` — GitHub Actions workflow: AI Validate (Reusable).
+- `.github/workflows/validation-improvements-intake.yml` — GitHub Actions workflow: Validation Improvements Intake.
+- `.github/workflows/validation-refresh.yml` — GitHub Actions workflow: Validation Refresh.
+- `.github/workflows/workflow-log-analysis.yml` — GitHub Actions workflow: Workflow Log Analysis.
+- `.github/workflows/workspace-cache-maintenance.yml` — GitHub Actions workflow: Workspace Cache Maintenance.
+
+## Scripts
+
+- `scripts/ai_context_utils.py` — Python helper for ai context utils.
+- `scripts/ai_labels.py` — AI label contract utilities for workflow phase transitions and repair.
+- `scripts/ai_memory.py` — CLI for AI memory operations used by GitHub workflows.
+- `scripts/ai_memory_lib.py` — Shared AI memory helpers for GitHub workflows.
+- `scripts/analyze_soft_errors.py` — Soft-error log analyzer for the release-gate smoke test.
+- `scripts/analyze_workflow_logs.py` — Prepare aggregated workflow telemetry context for the Codex analysis pass.
+- `scripts/apply_audit_gate_assets.py` — Apply canonical audit-gate assets atomically to a repository.
+- `scripts/blocker_check.py` — Python helper for blocker check.
+- `scripts/build_semble_wrapper.sh` — build_semble_wrapper.sh — fail-soft Semble BM25 wrapper builder.
+- `scripts/build_state_snapshot.py` — Python helper for build state snapshot.
+- `scripts/build_static_context.sh` — codex-cli phases.
+- `scripts/check_external_branch_advance.sh` — branch has advanced past a pinned local SHA due to a non-autofix push.
+- `scripts/check_integration_pr_readiness.py` — Check whether an orchestrator integration PR is ready to merge based on the tracking issue's sub-issue checkbox state.
+- `scripts/check_resolver_diff.sh` — Validate the output of the AI conflict-resolver step before committing.
+- `scripts/check_workflow_script_refs.py` — Verify every script referenced by a workflow file exists in scripts/.
+- `scripts/clarify_data_provision_guard.py` — Post-processing guard for orchestrate_clarify_respond.
+- `scripts/codex_heartbeat.sh` — Shell helper for codex heartbeat.
+- `scripts/codex_model_catalog.json` — JSON asset for codex_model_catalog.json.
+- `scripts/codex_stall_guard.sh` — Shell helper for codex stall guard.
+- `scripts/codex_thread_reuse.sh` — Shell helper for codex thread reuse.
+- `scripts/collect_workflow_logs.py` — Collect GitHub Actions run/job telemetry for core AI workflow families.
+- `scripts/compare_issue_timeline_parity.sh` — Shell helper for compare issue timeline parity.
+- `scripts/comprehensive_test_and_release_gh_api.sh` — Shell helper for comprehensive test and release gh api.
+- `scripts/consolidate_soft_error_reports.py` — Consolidate per-phase soft-error reports into one deterministic markdown file.
+- `scripts/cost_audit.py` — cost_audit.py — Per-workflow LLM token-spend audit from GitHub Actions logs.
+- `scripts/detect_editor_changes_lost.sh` — Defense-in-depth guard for the EDITOR_CHANGES_LOST detection step in review_autofix.yml.
+- `scripts/dev/replay_review_pipeline.sh` — Shell helper for replay review pipeline.
+- `scripts/drift_audit.sh` — drift_audit.sh — Scan recent review/autofix logs for persistent fingerprint drift.
+- `scripts/files_touched_scope_guard.py` — files_touched scope-enforcement guard for the AI implement pipeline.
+- `scripts/fixtures/cloudflare-learnings/phase-a-anti-rules-noisy-pr.patch` — Fixture asset for phase-a-anti-rules-noisy-pr.patch.
+- `scripts/fixtures/cloudflare-learnings/phase-b-risk-tier-always-full.patch` — Fixture asset for phase-b-risk-tier-always-full.patch.
+- `scripts/fixtures/cloudflare-learnings/phase-b-risk-tier-full.patch` — Fixture asset for phase-b-risk-tier-full.patch.
+- `scripts/fixtures/cloudflare-learnings/phase-b-risk-tier-lite.patch` — Fixture asset for phase-b-risk-tier-lite.patch.
+- `scripts/fixtures/cloudflare-learnings/phase-b-risk-tier-trivial.patch` — Fixture asset for phase-b-risk-tier-trivial.patch.
+- `scripts/fixtures/cloudflare-learnings/phase-c-lockfile-and-generated.patch` — Fixture asset for phase-c-lockfile-and-generated.patch.
+- `scripts/fixtures/cloudflare-learnings/phase-d-package-bump-no-agents-update.patch` — Fixture asset for phase-d-package-bump-no-agents-update.patch.
+- `scripts/fixtures/cloudflare-learnings/phase-g-flaky-reviewer.patch` — Fixture asset for phase-g-flaky-reviewer.patch.
+- `scripts/fixtures/cloudflare-learnings/phase-h-context-budget-overflow.txt` — Fixture asset for phase-h-context-budget-overflow.txt.
+- `scripts/fixtures/issue-timeline/graphql_pr_with_comments_fixture.json` — Fixture asset for graphql_pr_with_comments_fixture.json.
+- `scripts/fixtures/issue-timeline/graphql_timeline_fixture.json` — Fixture asset for graphql_timeline_fixture.json.
+- `scripts/fixtures/issue-timeline/rest_pr_with_comments_fixture.json` — Fixture asset for rest_pr_with_comments_fixture.json.
+- `scripts/fixtures/issue-timeline/rest_timeline_fixture.json` — Fixture asset for rest_timeline_fixture.json.
+- `scripts/generate_symbol_diff_summary.py` — Generate a symbol-level diff summary from a unified diff and changed files list.
+- `scripts/gh_helpers.sh` — gh_helpers.sh — Rate-limit-aware GitHub API retry helpers.
+- `scripts/git_ref_health_check.sh` — Shell helper for git ref health check.
+- `scripts/implement_diagnose_post_codex_failure.sh` — validation failures in implement.yml and file fix-up issues.
+- `scripts/install_semble.sh` — install_semble.sh — fail-soft Semble installer for GitHub Actions jobs.
+- `scripts/issue_attachment_bundle.py` — Python helper for issue attachment bundle.
+- `scripts/label_helpers.sh` — label_helpers.sh — idempotent AI label creation helpers.
+- `scripts/ledger_emit_substate.sh` — Shell helper for ledger emit substate.
+- `scripts/lint_plan_archival_completeness.py` — Lint a PR that adds files under docs/completed/ for plan-archival completeness.
+- `scripts/lint_pr_body_auto_close.py` — Lint PR title/body text (and optionally commit messages) for GitHub auto- close keywords that target ai:orchestrator-tracking issues.
+- `scripts/load_workflow_overlay.py` — Load .github/ai/WORKFLOW.md prompt overrides into $GITHUB_ENV.
+- `scripts/mark-stable.sh` — Mark the current stable branch as a released version.
+- `scripts/mcp_handshake_probe.py` — Probe an MCP stdio server with a single JSON-RPC initialize request.
+- `scripts/memory_helpers.sh` — Shell helper for memory helpers.
+- `scripts/memory_injection_patterns.py` — Advisory prompt-injection regex roster for AI-memory candidate writes.
+- `scripts/openrouter_prompt_cache.py` — OpenRouter prompt-cache helpers shared by workflow scripts.
+- `scripts/orchestrate_force_tick.sh` — Shell helper for orchestrate force tick.
+- `scripts/orchestrate_lib.py` — Orchestrator library: DAG management, wave computation, issue tracking, and judge helpers.
+- `scripts/orchestrate_poll_process.sh` — orchestrate_poll_process.sh — Process active orchestrator tracking issues.
+- `scripts/orchestrate_state_v2.py` — V2 chunked state persistence helper for orchestrator state comments.
+- `scripts/post_review_comment.sh` — a single pull-request review when `--review-state` is supplied.
+- `scripts/render_prompt.py` — Render prompt templates with optional mode contracts.
+- `scripts/render_prompt.sh` — Shell helper for render prompt.
+- `scripts/render_validation_templates.py` — Render validation harness templates from a slot manifest.
+- `scripts/resolve_integration_ref.sh` — Shell helper for resolve integration ref.
+- `scripts/review_agents_md_materiality.sh` — Shell helper for review agents md materiality.
+- `scripts/review_apply_fixes.sh` — Shell helper for review apply fixes.
+- `scripts/review_collect_pr_metadata.sh` — artifacts for review_autofix.yml.
+- `scripts/review_commit_changes.sh` — review_commit_changes.sh — stage + commit editor output in review_autofix.yml.
+- `scripts/review_conflict_prepare.sh` — pre-snapshot for review_autofix.yml.
+- `scripts/review_conflict_resolve.sh` — create the [ai-merge-resolve] commit for review_autofix.yml.
+- `scripts/review_consolidate.sh` — Shell helper for review consolidate.
+- `scripts/review_filter_uninteresting_files.sh` — Shell helper for review filter uninteresting files.
+- `scripts/review_floor_rules.sh` — Shell helper for review floor rules.
+- `scripts/review_issue_ledger.sh` — Shell helper for review issue ledger.
+- `scripts/review_parse_consolidator.sh` — Shell helper for review parse consolidator.
+- `scripts/review_rb_judge.sh` — Runs the review-blocked judge for PR merge, fix, or close-and-reissue decisions.
+- `scripts/review_reject_verify.sh` — Shell helper for review reject verify.
+- `scripts/review_run_judge_interim.sh` — Shell helper for review run judge interim.
+- `scripts/review_run_reviewers.sh` — Shell helper for review run reviewers.
+- `scripts/review_synthesise_smoke.sh` — Shell helper for review synthesise smoke.
+- `scripts/reviewer_failback_chains.json` — JSON asset for reviewer_failback_chains.json.
+- `scripts/run_validation_repo_checks.sh` — Shell helper for run validation repo checks.
+- `scripts/run_workspace_hook.sh` — Shell helper for run workspace hook.
+- `scripts/self_heal_validation.sh` — failure context, then signalling validate_process.sh to re-run.
+- `scripts/semantic_cache.py` — Semantic cache helper for clarify-phase workflows.
+- `scripts/semble_helpers.sh` — semble_helpers.sh — shared, sourceable Semble query helpers.
+- `scripts/serena_stats_emit.py` — Aggregate Serena tool-call rollups from Codex logs.
+- `scripts/setup_serena.sh` — setup_serena.sh — fail-soft Serena bootstrapper for Codex MCP usage.
+- `scripts/stage_workflow_support.sh` — Shell helper for stage workflow support.
+- `scripts/summarize_reviewer_consensus.sh` — ledger via codex-cli (model: openai/gpt-5.4-mini, reasoning: medium).
+- `scripts/summarize_unselected_runs.py` — Summarize unselected workflow runs via gpt-5.4-mini to widen analysis coverage.
+- `scripts/targeted_file_context.py` — Inline likely-to-be-edited files into the Codex prompt as a reference block so the editor doesn't waste budget reading them.
+- `scripts/templates/serena_project.yml.j2` — Template asset for serena_project.yml.j2.
+- `scripts/templates/slot_manifest.schema.json` — Template asset for slot_manifest.schema.json.
+- `scripts/tg_helpers.sh` — tg_helpers.sh — Telegram message tracking & cleanup helpers.
+- `scripts/truncate_to_utf8_byte_cap.py` — Truncate stdin to a UTF-8 byte cap on a codepoint boundary.
+- `scripts/validate_changed_files_syntax.sh` — Shell helper for validate changed files syntax.
+- `scripts/validate_driver.sh` — Shell helper for validate driver.
+- `scripts/validate_editor_audit.sh` — when the helper exits non-zero (caller-side).
+- `scripts/validate_process.sh` — validate_process.sh — Generate and execute runtime validation harness.
+- `scripts/validation_discovery_bootstrap.py` — Codex-driven .ai/validate.yml discovery for consumer repositories.
+- `scripts/validation_lint.py` — Deterministic lint checks for rendered validation harness output.
+- `scripts/validation_refresh_runner.py` — Render and self-test validation assets against consumer repositories.
+- `scripts/validation_selftest_matrix.py` — Run validation harness self-tests across fixture workspaces.
+- `scripts/validation_selftest_status.py` — Publish deterministic nightly validation self-test streak status.
+- `scripts/validation_template_bootstrap.py` — Shared onboarding helper for validation template manifests.
+- `scripts/verify_integration_fingerprints.py` — Verify that an orchestrator integration-sync resolver run preserved merged sub-issue intent.
+- `scripts/workspace_init.sh` — Shell helper for workspace init.
+- `scripts/workspace_safety_check.sh` — Shell helper for workspace safety check.
+- `scripts/write_codex_config.sh` — write_codex_config.sh — central writer for ~/.codex/config.toml.
+
+## Prompt references
+
+- `prompts/references/output-contract.txt` — Shared terminal-output contract instructions referenced by prompt templates.
+- `prompts/references/severity-classification.txt` — Shared severity-calibration guidance referenced by prompt templates.
+- `prompts/references/validate-output-contract.txt` — Validate-generate JSON output schema appended to the shared output contract.
+- `prompts/references/verification-loop.txt` — Shared verification-loop instructions referenced by prompt templates.
+
+## Audit-gate assets
+
+- `prompts/contracts/mode-clarify-respond.yml` — Strict render contract for mode-clarify-respond.
+- `prompts/contracts/mode-clarify.yml` — Strict render contract for mode-clarify.
+- `prompts/contracts/mode-implement-diagnose-continuation.yml` — Strict render contract for mode-implement-diagnose-continuation.
+- `prompts/contracts/mode-implement-diagnose.yml` — Strict render contract for mode-implement-diagnose.
+- `prompts/contracts/mode-implement-repair-continuation.yml` — Strict render contract for mode-implement-repair-continuation.
+- `prompts/contracts/mode-implement-repair-syntax.yml` — Strict render contract for mode-implement-repair-syntax.
+- `prompts/contracts/mode-implement-repair.yml` — Strict render contract for mode-implement-repair.
+- `prompts/contracts/mode-implement.yml` — Strict render contract for mode-implement.
+- `prompts/contracts/mode-judge-interim.yml` — Strict render contract for mode-judge-interim.
+- `prompts/contracts/mode-judge-review-blocked.yml` — Strict render contract for mode-judge-review-blocked.
+- `prompts/contracts/mode-judge-stall-recovery.yml` — Strict render contract for mode-judge-stall-recovery.
+- `prompts/contracts/mode-judge.yml` — Strict render contract for mode-judge.
+- `prompts/contracts/mode-orchestrate-poll-judge.yml` — Strict render contract for mode-orchestrate-poll-judge.
+- `prompts/contracts/mode-orchestrate.yml` — Strict render contract for mode-orchestrate.
+- `prompts/contracts/mode-plan.yml` — Strict render contract for mode-plan.
+- `prompts/contracts/mode-review-apply-fixes-continuation.yml` — Strict render contract for mode-review-apply-fixes-continuation.
+- `prompts/contracts/mode-review-conflict-resolver-continuation.yml` — Strict render contract for mode-review-conflict-resolver-continuation.
+- `prompts/contracts/mode-validate-diagnose.yml` — Strict render contract for mode-validate-diagnose.
+- `prompts/contracts/mode-validate-discover.yml` — Strict render contract for mode-validate-discover.
+- `prompts/contracts/mode-validate-fix-harness.yml` — Strict render contract for mode-validate-fix-harness.
+- `prompts/contracts/mode-validate-generate.yml` — Strict render contract for mode-validate-generate.
+- `prompts/contracts/mode-validate-self-heal-continuation.yml` — Strict render contract for mode-validate-self-heal-continuation.
+- `prompts/contracts/mode-validate-self-heal.yml` — Strict render contract for mode-validate-self-heal.
+- `prompts/contracts/mode-workflow-analysis.yml` — Strict render contract for mode-workflow-analysis.
+- `prompts/contracts/mode-workflow-api-redundancy.yml` — Strict render contract for mode-workflow-api-redundancy.
+- `prompts/contracts/mode-workflow-audit.yml` — Strict render contract for mode-workflow-audit.
+- `prompts/contracts/review-consolidator.yml` — Strict render contract for review-consolidator.
+- `prompts/contracts/review-reviewer-checklist.yml` — Strict render contract for review-reviewer-checklist.
+- `tests/inventory_exemptions.txt` — Documented inventory parity exemptions (`path | justification`).
+- `tests/inventory_parity.py` — Direct-run inventory drift gate for docs/INVENTORY.md.
+- `tests/prompt_size_budget.py` — Direct-run prompt tier budget gate for mode and review prompts.
