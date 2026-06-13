@@ -4,6 +4,7 @@ gh_api_safe()
 {
 	local output=""
 	local err_file
+	local quiet_stderr="${GH_API_SAFE_QUIET_STDERR:-0}"
 	GH_API_SAFE_OUTPUT=""
 	if [ -z "${RATE_LIMIT_BACKOFF+x}" ] || [[ ! "${RATE_LIMIT_BACKOFF}" =~ ^[0-9]+$ ]]; then
 		RATE_LIMIT_BACKOFF=0
@@ -25,11 +26,38 @@ gh_api_safe()
 		rm -f "${err_file}"
 		sleep "${RATE_LIMIT_BACKOFF}"
 	elif [ -s "${err_file}" ]; then
-		echo "::error::gh api call failed: $*"
-		cat "${err_file}" >&2
+		if [ "${quiet_stderr}" != "1" ]; then
+			echo "::error::gh api call failed: $*"
+			cat "${err_file}" >&2
+		fi
 		rm -f "${err_file}"
 	else
 		rm -f "${err_file}"
+	fi
+
+	return 1
+}
+
+gh_api_safe_print()
+{
+	if gh_api_safe "$@"; then
+		printf '%s' "${GH_API_SAFE_OUTPUT}"
+		return 0
+	fi
+
+	return 1
+}
+
+gh_api_safe_quiet()
+{
+	GH_API_SAFE_QUIET_STDERR=1 gh_api_safe "$@"
+}
+
+gh_api_safe_quiet_print()
+{
+	if GH_API_SAFE_QUIET_STDERR=1 gh_api_safe "$@"; then
+		printf '%s' "${GH_API_SAFE_OUTPUT}"
+		return 0
 	fi
 
 	return 1
