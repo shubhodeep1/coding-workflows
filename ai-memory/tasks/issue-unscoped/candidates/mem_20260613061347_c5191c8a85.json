@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/render_prompt.py:247-253 | severity=high | confidence=4\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m2_5, moonshotai_kimi-k2_5, qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: Missing mode-specific append content is silently dropped, so rendered prompts can be incomplete without any warning or error.\n  WHY: Four reviewers rated this MAJOR/HIGH and one rated it NIT, but the same fallback returns the base text when the append file is absent, changing prompt contents silently.\n- .github/workflows/plan.yml:1172-1202 | severity=high | confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro, x-ai_grok-4_20]\n  PROBLEM: An unclosed or malformed code fence can cause later PLAN_SELF_CHECK lines to be skipped by the Perl counters, so a BLOCKER may not reopen clarification.\n  WHY: One reviewer rated it NIT and one MAJOR, but both describe the same fence-toggle parsing flaw; consensus uses the highest severity because it can hide blocker signals.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/render_prompt.py:249-253 | severity=MAJOR | confidence=4\n  PROBLEM: When a mode-specific append reference file is expected but not found on disk, the function silently returns only the base `reference_text` instead of raising an error or emitting a warning.\n  WHY: A missing `prompts/references/validate-output-contract.txt` makes `mode-validate-generate` prompts lose the validate-specific append section with no visible failure signal.\n- .github/workflows/plan.yml:1179-1202 | severity=NIT | confidence=1\n  PROBLEM: Each perl one-liner maintains an independent `$in_code` variable, so an unclosed code fence can cause later `PLAN_SELF_CHECK:` lines to be skipped.\n  WHY: Subsequent BLOCKER lines may be invisible to the parser, letting a plan proceed when it should have been blocked.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/render_prompt.py:247-253 | severity=NIT | confidence=2\n  PROBLEM: When a mode-specific append file is absent, `_load_reference_placeholder_value` returns the base reference text without warning.\n  WHY: Optional appends are allowed to be missing, so this is a hardening improvement rather than a correctness bug.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/render_prompt.py:247-253 | severity=MAJOR | confidence=4\n  PROBLEM: When a mode-specific append file is expected but missing, `_load_reference_placeholder_value` silently returns the base `reference_text` without the append content.\n  WHY: If `validate-output-contract.txt` is removed or renamed, the `mode-validate-generate` prompt silently loses its output-contract append section and downstream consumers receive incomplete prompt content.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/render_prompt.py:247-253 | severity=MAJOR | confidence=4\n  PROBLEM: When `placeholder_name == \"REFERENCE_OUTPUT_CONTRACT\"` and `mode_name == \"mode-validate-generate\"`, a missing or renamed `validate-output-contract.txt` causes `_load_reference_placeholder_value` to return only the base `reference_text` with no warning.\n  WHY: The `mode-validate-generate` prompt is rendered without its output-contract appendix block, which is a silent correctness gap.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/render_prompt.py:251 | severity=MAJOR | confidence=4\n  PROBLEM: Silent fallback when mode-specific append (e.g. validate-output-contract.txt for `REFERENCE_OUTPUT_CONTRACT` in mode-validate-generate) is missing.\n  WHY: mode-validate-generate prompt receives incomplete output-contract text with no error/warning, leading to downstream validation gaps or missing terminal-output rules.\n- .github/workflows/plan.yml:1172-1202 | severity=MAJOR | confidence=3\n  PROBLEM: Simple fence toggle stays inverted on unclosed/ malformed ```/~~~ blocks.\n  WHY: Subsequent `PLAN_SELF_CHECK: BLOCKER:` lines after a malformed fence are skipped; a blocker plan can incorrectly reach `STATUS: CLEAR`.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "710cbd5b39acae9d3d335d479ee8098bdf6364c2025dc756895aa2962fd3e3d0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3317,
+    "run_id": "27457726245",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27457726245",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260613061347_c5191c8a85",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3317,
+    "run_id": "27457726245"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-13T06:13:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
