@@ -13,6 +13,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 DIAGNOSE_SCRIPT = REPO_ROOT / "scripts" / "implement_diagnose_post_codex_failure.sh"
+COMMIT_HELPER = REPO_ROOT / "scripts" / "implement_commit_changes.sh"
 
 
 def _workflow_text() -> str:
@@ -21,6 +22,10 @@ def _workflow_text() -> str:
 
 def _diagnose_text() -> str:
 	return DIAGNOSE_SCRIPT.read_text(encoding="utf-8")
+
+
+def _commit_helper_text() -> str:
+	return COMMIT_HELPER.read_text(encoding="utf-8")
 
 
 
@@ -99,6 +104,7 @@ def test_stage_workflow_support_files_bootstraps_optional_semble_assets() -> Non
 	assert "install_semble.sh" not in required_loop_line
 	assert "build_semble_wrapper.sh" not in required_loop_line
 	assert "semble_helpers.sh" not in required_loop_line
+	assert "implement_commit_changes.sh" in required_loop_line
 
 
 def test_stage_workflow_support_files_bootstraps_revalidate_lifecycle_ai_memory_schemas() -> None:
@@ -181,6 +187,7 @@ def test_setup_serena_step_runs_after_codex_config_and_emits_bootstrap_hash() ->
 	workflow = _workflow_text()
 	setup_step = _step("Setup Serena")
 	setup_block = _step_run_text("Setup Serena")
+	commit_step = _step_run_text("Commit changes")
 	assert setup_step.get("if") == "env.SKIP_IMPLEMENT != 'true' && env.SERENA_ENABLED == 'true'"
 	assert setup_step.get("continue-on-error") is True
 	assert 'SERENA_FALLBACK_TARGET="implement" bash scripts/setup_serena.sh' in setup_block
@@ -189,7 +196,8 @@ def test_setup_serena_step_runs_after_codex_config_and_emits_bootstrap_hash() ->
 	assert 'echo "SERENA_PROJECT_BOOTSTRAP_HASH=${serena_project_hash}" >> "$GITHUB_ENV"' in setup_block
 	assert workflow.find("- name: Create Codex config") < workflow.find("- name: Setup Serena")
 	assert workflow.find("- name: Detect preexisting Serena project config") < workflow.find("- name: Setup Serena")
-	assert 'if ! git ls-files --error-unmatch -- .serena >/dev/null 2>&1; then' in _step_run_text("Commit changes")
+	assert "bash scripts/implement_commit_changes.sh" in commit_step
+	assert 'if ! git ls-files --error-unmatch -- .serena >/dev/null 2>&1; then' in _commit_helper_text()
 
 
 def test_detect_preexisting_serena_project_config_runs_after_checkout() -> None:
