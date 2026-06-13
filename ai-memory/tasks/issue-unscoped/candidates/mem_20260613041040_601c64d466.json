@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/render_prompt.py:32-525 | severity=medium | confidence=4\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: collect_standalone_placeholders can miss whitespace-tolerant standalone placeholders that render_prompt_text accepts, so reference resolution and rendering can diverge.\n  WHY: Two reviewers reported a mismatch between the helper and renderer on whitespace-padded standalone placeholders; other reviewers disputed it as consistent, but the finding is still surfaced in the review set.\n- scripts/render_prompt.py:230-232 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m2_5, mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: collect_reference_values sorts a sequence that collect_standalone_placeholders already returns sorted.\n  WHY: This is redundant work with no behavioral change.\n- scripts/render_prompt.py:517-525 | severity=low | confidence=3\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: Placeholder collection iterates line-by-line in Python instead of using a compiled multiline regex, which is slower for large prompt bodies.\n  WHY: Reviewers described it as unnecessary Python work / potential micro-optimization, but not a correctness issue.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- scripts/render_prompt.py:230-231 | confidence=2\n  PROBLEM: Redundant sorted() call - collect_standalone_placeholders already returns a sorted tuple (line 527: return tuple(sorted(names))), but collect_reference_values wraps it in sorted() again.\n  WHY: Not a runtime failure - just unnecessary CPU overhead. The code produces correct output.\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/render_prompt.py:513-525 | confidence=4\n  PROBLEM: Standalone placeholder detection does not mirror render_prompt_text's whitespace tolerance\n  WHY: STANDALONE_PLACEHOLDER_PATTERN (used by render_prompt_text) accepts lines with leading/trailing whitespace, but collect_standalone_placeholders only matches exact lines via fullmatch after splitlines(). This can cause reference resolution to miss placeholders that the renderer would substitute, leading to inconsistent behavior.\n- scripts/render_prompt.py:232 | confidence=2\n  PROBLEM: Unnecessary sort on already sorted tuple\n  WHY: collect_standalone_placeholders returns a sorted tuple, but collect_reference_values applies sorted() again to reference_placeholders, performing redundant work with no behavioral change.\n- scripts/render_prompt.py:520-525 | confidence=3\n  PROBLEM: Inefficient pure Python line iteration for large prompt bodies\n  WHY: For very large editor prompt bodies (e.g., reviewer consensus files with long inlined PR diffs), splitting the entire string and iterating line-by-line in Python is slower and more memory-intensive than a compiled multiline regex with re.MULTILINE.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/render_prompt.py:520-525 | confidence=4\n  PROBLEM: The new helper does not match the whitespace-tolerant contract implemented by render_prompt_text / STANDALONE_PLACEHOLDER_PATTERN (which accepts leading/trailing whitespace via `^[ \\t]*...[ \\t]*$`). fullmatch(line) after splitlines() (which strips trailing whitespace) will reject a placeholder line that has only leading whitespace or certain trailing variants that the renderer would treat as standalone.\n  WHY: Inconsistent placeholder resolution between reference collection (collect_reference_values) and actual block substitution in render_prompt_text when prompts contain \"    {{REFERENCE_FOO}}\" style lines. The regression test only exercises the no-whitespace case.\n- scripts/render_prompt.py:517-525 | confidence=3\n  PROBLEM: For large editor prompt bodies (common in review_autofix \u2014 inlined reviewer consensus, PR diff, logs, etc.) the function does full splitlines() + Python loop + fullmatch on every line.\n  WHY: Unnecessary linear Python work on multi-megabyte strings; reviewer consensus already flagged this (lines 520-525). The Gemini comment in PR comments provides a single compiled re.MULTILINE alternative that runs entirely in C.\n- scripts/render_prompt.py:231 | confidence=2\n  PROBLEM: After switching from collect_placeholders(...) (which was unsorted inside the generator) to collect_standalone_placeholders(...) (which already returns a sorted tuple), the outer sorted(...) is now a no-op.\n  WHY: Purely redundant work; no behavioral change but the diff introduced unnecessary code. The consensus finding (confidence 2) is valid.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "d57ea90afb0b1bdca2d771ac6459453eb8ead869aa05ed7e211a874fbd3963ff",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3306,
+    "run_id": "27455344528",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27455344528",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260613041040_601c64d466",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3306,
+    "run_id": "27455344528"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-13T04:10:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
