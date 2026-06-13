@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-3323` @ `bff7a8ae671ca64f0949109e7a0550945d17ef4d` (matches integration metadata)\n\nClarification mapping: no `Q<ID>` items were asked; `/answer [auto-answered-by-orchestrator]` only confirmed continuation.\n\nConfirmed current state:\n- `Check orchestrator metadata` fetches the child issue and makes a tracking-issue API call for smoke suppression.\n- `Fetch issue and tracking context` then re-fetches the child issue and tracking issue again.\n- `Parse and post answer` is still a large inline shell block.\n- No codebase conflicts found.\n\nImplementation plan\n\n1. Files likely to change\n- `.github/workflows/orchestrate_clarify_respond.yml`\n  - cache the early child/tracking issue payloads to temp files during `Check orchestrator metadata`\n  - keep later `Fetch issue and tracking context` as cache-first with the current `gh_retry` fetches retained as fallback\n  - add the new helper script to `Stage workflow support files`\n  - keep the `Parse and post answer` step name/env contract, but delegate its body to the new script\n- `scripts/orchestrate_parse_and_post_answer.sh` (new)\n  - move the current parse / claim / loop-guard / escalation / Telegram / post-answer logic here\n- `tests/test_phase_skip_gate_telemetry_contract.py`\n  - update the contract so the stable `AI_PHASE_GATE_V1` lines remain enforced after the inline block moves into the script\n- Possibly one small helper-invocation contract test if needed, but avoid broad test churn\n\n2. Functions / modules to implement\n- In `Check orchestrator metadata`:\n  - write the child-issue JSON and tracking-issue JSON to temp files keyed to the run\n  - derive the tracking title for smoke suppression from the cached tracking payload instead of a title-only fetch\n  - because `RUNTIME_DIR` does not exist yet, use early temp paths (likely under `RUNNER_TEMP`) and export them for later steps\n- In `Fetch issue and tracking context`:\n  - follow the existing `clarify.yml` file-cache pattern: validate cached JSON first, then read `body` / `title` from cache\n  - on cache miss, empty file, bad JSON, or mismatched issue number, fall back to the existing live `gh_retry gh api .../issues/...` calls\n  - preserve the current thread-history fetch, semantic-cache bypass behavior, and output files (`issue_body.txt`, `tracking_body.txt`, `clarification_comment.txt`)\n- In `scripts/orchestrate_parse_and_post_answer.sh`:\n  - use the existing env/runtime files rather than inventing new inputs\n  - preserve:\n    - processed-command claim / duplicate-skip behavior\n    - clarify loop guard + backup comment-count guard\n    - ESCALATE handling\n    - label swap to `ai:blocked`\n    - loop-break comment body\n    - Telegram alert content\n    - processed-command completion metadata\n    - exact `/answer [auto-answered-by-orchestrator]` comment format\n    - `SKIP_AUTO_ANSWER` / `LOOP_BLOCKED` env writes and non-failure exits on blocked/skip paths\n  - follow the repo\u2019s existing env-driven shell-helper pattern (same style as `scripts/orchestrate_force_tick.sh` / `scripts/orchestrate_poll_process.sh`)\n\n3. Data structures affected\n- New temp JSON cache files for:\n  - child issue payload\n  - tracking issue payload\n- Existing runtime text files stay authoritative for downstream consumers:\n  - `issue_body.txt`\n  - `tracking_body.txt`\n  - `clarification_comment.txt`\n  - `answer_comment.md`\n  - `THREAD_HISTORY_FILE`\n- Existing env/output names must remain unchanged; only additive cache-path env vars/files should be introduced\n\n4. API / interface changes\n- No user-facing or workflow-call interface changes\n- No renames of workflow inputs, env vars, outputs, labels, or comment markers\n- Internal-only change: `Parse and post answer` becomes a workflow wrapper around `scripts/orchestrate_parse_and_post_answer.sh`\n\n5. Risks / edge cases\n- Early cache creation happens before staged support scripts are available, so that logic should stay simple and self-contained\n- Cache reuse must validate JSON and identity before trusting it; otherwise stale/corrupt temp files could post against the wrong issue\n- Preserve the read-only assumption between metadata gate and later context step; do not widen cache reuse beyond child/tracking payloads\n- Keep live `gh_retry` fallback semantics intact; do not remove the existing fallback path\n- Stable telemetry strings and comment bodies are effectively contractual here; changing them risks breaking tests/log consumers\n\n6. Testing considerations\n- `bash -n scripts/orchestrate_parse_and_post_answer.sh`\n- `python3 tests/test_phase_skip_gate_telemetry_contract.py`\n- `python3 tests/test_workflow_gh_retry_fallback_contract.py`\n- `python3 tests/test_semble_workflow_parity_contract.py` (guard against accidental workflow-contract drift)\n- If a helper-invocation test is added/updated, keep it narrow: assert the workflow still invokes the helper and the helper still contains the stable gate strings\n\nRepresentative patterns to follow\n- Cache-to-file / later reuse: `.github/workflows/clarify.yml`\n- Env-driven extracted shell helper: `scripts/orchestrate_force_tick.sh`\n\nAssumptions\n- The stated read-only precondition between metadata gate and later context step holds.\n- Adding new temp-file paths is acceptable as long as all existing names stay intact.\n\nMissing context\n- None.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "5eaecefd4ada8a072c0400f9396ae6d05e330b3ba49c080a5ebb412c5596976a",
+  "lineage": {
+    "issue_number": 3325,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27468415130",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27468415130",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3325"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260613134659_c00919bafa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3325,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27468415130"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3325",
+  "timestamps": {
+    "created_at": "2026-06-13T13:46:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
