@@ -135,6 +135,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/mark-stable.sh` — Mark the current stable branch as a released version.
 - `scripts/mcp_handshake_probe.py` — Probe an MCP stdio server with a single JSON-RPC initialize request.
 - `scripts/memory_helpers.sh` — Shell helper for memory helpers.
+- `scripts/memory_injection_patterns.py` — Advisory prompt-injection regex roster for AI-memory candidate writes.
 - `scripts/openrouter_prompt_cache.py` — OpenRouter prompt-cache helpers shared by workflow scripts.
 - `scripts/orchestrate_force_tick.sh` — Shell helper for orchestrate force tick.
 - `scripts/orchestrate_lib.py` — Orchestrator library: DAG management, wave computation, issue tracking, and judge helpers.
