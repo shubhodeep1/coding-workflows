@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `main` @ `bff7a8ae671ca64f0949109e7a0550945d17ef4d`\n\nClarification mapping:\n- No Q1/Q2/Q3 were needed; the workflow auto-posted `/answer` because the issue is already fully specified.\n\nReviewed context:\n- Confirmed the current target file exists.\n- Checked the nearby smoke-canary contract in `tests/e2e_smoke_canary_spec.txt` and the related smoke tests to confirm the file is treated as a byte-exact 3-line text payload.\n\nAutomation / wiring impact:\n- Change type: existing file edit only.\n- Scheduler / PR-push wiring: none.\n- New script or supervisor: none.\n- DB work / gate pattern: none.\n- `docs/scripts-pending-removal.md` entry: none.\n\n## Implementation plan\n\n### 1. Files likely to change\n- `tests/e2e_smoke_canary.txt`\n  - Overwrite the whole file so it contains exactly:\n    - `status: ok`\n    - `run_id: alt-27470400851`\n    - `updated-by: ai-pipeline`\n  - Current file already uses the same 3-line shape; only the `run_id` value differs now, but the safest implementation is a full rewrite to avoid whitespace drift.\n\n### 2. Functions or modules to implement\n- None.\n- This is a fixture/content update only; no code module, workflow, or helper function needs to be added or modified.\n\n### 3. Data structures affected\n- One plain-text canary payload in `tests/e2e_smoke_canary.txt`.\n- Effective contract to preserve:\n  - line order stays `status`, `run_id`, `updated-by`\n  - no extra whitespace\n  - no extra blank line\n  - preserve the normal final newline after line 3\n\n### 4. API or interface changes\n- None.\n- No workflow inputs, env vars, scripts, tests, or public interfaces should change.\n\n### 5. Potential risks or edge cases\n- Exactness matters: avoid CRLF conversion, trailing spaces, or a missing/extra newline.\n- Scope guard: do not modify `tests/e2e_smoke_canary_spec.txt` or any smoke-test code; the issue explicitly limits changes to `tests/e2e_smoke_canary.txt`.\n- Conflict to note: the runtime smoke harness/template still assumes a placeholder-backed numeric run id, while this issue requests a literal `alt-27470400851` in the checked-in canary file. That is a real contract mismatch to be aware of, but it does not broaden this issue\u2019s scope because the request explicitly says to change only the canary text file.\n\n### 6. Testing considerations\n- Verify `tests/e2e_smoke_canary.txt` matches the requested 3-line payload exactly.\n- Verify only `tests/e2e_smoke_canary.txt` appears in the diff.\n- Repo-wide lint/typecheck/test runs are optional here because no executable code changes; exact-content verification is the key check.\n\nAssumptions:\n- \u201cExactly these three lines\u201d means the file should have those three lines and no extra content, while still ending with the standard single trailing newline.\n- No integration-branch-specific behavior applies here; planning proceeds on `main`.\n\nMissing-context notes:\n- Integration branch metadata was blank/unknown in the provided planning context, but no mismatch was indicated.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "11512432eba2b29fdf5dba2d3c3402b7fcfba32a5a77541d497e99750370b624",
+  "lineage": {
+    "issue_number": 3337,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27470468240",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27470468240",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3337"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260613151214_d2dbf7aa2c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3337,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27470468240"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3337",
+  "timestamps": {
+    "created_at": "2026-06-13T15:12:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
