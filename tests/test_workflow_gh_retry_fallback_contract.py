@@ -28,6 +28,10 @@ TARGET_STEPS = (
 	(".github/workflows/orchestrate_clarify_respond.yml", "Comment on issue failure"),
 	(".github/workflows/test-and-mark-stable.yml", "Verify CI passed on source branch"),
 )
+BOOTSTRAPPED_GH_HELPER_WORKFLOWS = (
+	".github/workflows/cancel_on_pr_close.yml",
+	".github/workflows/orchestrate_poll.yml",
+)
 
 
 def _workflow_text(relative_path: str) -> str:
@@ -78,6 +82,29 @@ def test_targeted_gh_retry_only_blocks_do_not_define_safe_gh_jq() -> None:
 		block = _step_block(_workflow_text(relative_path), step_name)
 		assert SAFE_GH_JQ_LINE not in block, (
 			f"{relative_path} :: {step_name} should stay gh_retry-only and not add an unused _safe_gh_jq shim"
+		)
+
+
+def test_bootstrapped_gh_retry_workflows_require_staged_helper_with_main_fallback() -> None:
+	for relative_path in BOOTSTRAPPED_GH_HELPER_WORKFLOWS:
+		text = _workflow_text(relative_path)
+		assert "path: .codex-workflow-src" in text, (
+			f"{relative_path} must stage the workflow support checkout before sourcing gh_helpers.sh"
+		)
+		assert "if [ ! -d .codex-workflow-src ]; then" in text, (
+			f"{relative_path} must fail if the workflow support checkout is unavailable"
+		)
+		assert "path: .codex-workflow-src-main" in text, (
+			f"{relative_path} must keep the main-snapshot fallback for gh_helpers.sh staging"
+		)
+		assert 'src=".codex-workflow-src/scripts/gh_helpers.sh"' in text, (
+			f"{relative_path} must stage gh_helpers.sh from the workflow support checkout"
+		)
+		assert 'if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/gh_helpers.sh" ]; then' in text, (
+			f"{relative_path} must fall back to the main snapshot when the primary gh_helpers.sh is absent"
+		)
+		assert '::error::Missing required support script gh_helpers.sh' in text, (
+			f"{relative_path} must hard-fail when gh_helpers.sh cannot be staged"
 		)
 
 

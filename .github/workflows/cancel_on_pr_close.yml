@@ -18,20 +18,30 @@ jobs:
       REPOSITORY: ${{ github.repository }}
       CURRENT_RUN_ID: ${{ github.run_id }}
     steps:
+      - name: Resolve workflow support ref
+        shell: bash
+        run: |
+          set -euo pipefail
+          wf_source="shubhodeep1/coding-workflows"
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+          else
+            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+          fi
+
       - name: Checkout workflow support source
         id: checkout_support_source
         continue-on-error: true
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
-          ref: ${{ github.repository == 'shubhodeep1/coding-workflows' && github.sha || 'stable' }}
+          ref: ${{ env.SCRIPT_REF }}
           token: ${{ secrets.GH_PAT || github.token }}
           path: .codex-workflow-src
           fetch-depth: 1
 
       - name: Checkout workflow support source fallback
         if: ${{ steps.checkout_support_source.outcome == 'failure' }}
-        continue-on-error: true
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
@@ -40,18 +50,42 @@ jobs:
           path: .codex-workflow-src
           fetch-depth: 1
 
+      - name: Ensure workflow support source checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -d .codex-workflow-src ]; then
+            echo "::error::Failed to checkout workflow support source from ${SCRIPT_REF} or main"
+            exit 1
+          fi
+
+      - name: Checkout workflow support source main snapshot
+        if: ${{ env.SCRIPT_REF != 'main' }}
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: main
+          token: ${{ secrets.GH_PAT || github.token }}
+          path: .codex-workflow-src-main
+          fetch-depth: 1
+
       - name: Stage gh retry helper
         shell: bash
         run: |
           set -euo pipefail
 
-          if [ ! -f .codex-workflow-src/scripts/gh_helpers.sh ]; then
-            echo "::warning::Workflow support checkout unavailable; continuing without staged gh_helpers.sh"
-            exit 0
+          src=".codex-workflow-src/scripts/gh_helpers.sh"
+          if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/gh_helpers.sh" ]; then
+            src=".codex-workflow-src-main/scripts/gh_helpers.sh"
+          fi
+          if [ ! -f "${src}" ]; then
+            echo "::error::Missing required support script gh_helpers.sh in shubhodeep1/coding-workflows@${SCRIPT_REF}"
+            exit 1
           fi
 
           mkdir -p scripts
-          install -m 0755 .codex-workflow-src/scripts/gh_helpers.sh scripts/gh_helpers.sh
+          install -m 0755 "${src}" scripts/gh_helpers.sh
 
       - name: Cancel queued/in-progress runs for closed PR branch
         shell: bash
