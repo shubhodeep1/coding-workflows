@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-3323` @ `bff7a8ae671ca64f0949109e7a0550945d17ef4d`\n\nClarification mapping: no `Q1`/`Q2` batch existed for this issue; `/answer [auto-answered-by-orchestrator]` was only a continuation marker, so there are no unresolved clarification answers to map.\n\nAutomation / wiring\n- Change type: extend the existing implement workflow and add one permanent helper script, `scripts/implement_commit_changes.sh`.\n- Entry point: existing `.github/workflows/implement.yml` implement flow, specifically the `Commit changes` step. No new workflow, trigger, or manual script.\n- Supervisor: none.\n- DB work / gates: none.\n- Removal registry: none; this is a permanent helper, not a single-use or long-running script.\n\nRepresentative pattern to follow\n- Mirror the existing extraction pattern used by `scripts/review_commit_changes.sh` and the thin `Commit changes` wrapper in `.github/workflows/review_autofix.yml`.\n\nCodebase check\n- No factual conflicts detected.\n- Current HEAD matches the issue description: `.github/workflows/implement.yml` still contains a very large inline `Commit changes` block, and `Resolve checkout ref` still fetches fresh issue metadata instead of consuming a cached earlier payload.\n- The only steps between the early issue precheck and `Resolve checkout ref` are dependency install and runtime-workspace setup, so the issue\u2019s \u201cno mutation between reads\u201d assumption is consistent with the current flow.\n\n1. Files likely to change\n- `.github/workflows/implement.yml`\n- `scripts/implement_commit_changes.sh` (new)\n- `tests/test_implement_post_codex_recovery.py`\n- `tests/test_implement_semble_contract.py`\n\n2. Functions or modules to implement\n- Add `scripts/implement_commit_changes.sh` to own the current commit-time logic now embedded in the workflow:\n  - stderr capture/trap behavior\n  - fetched-artifact cleanup\n  - `.serena` bootstrap cleanup\n  - staging/path exclusions\n  - destructive-delete guard\n  - commit-time `files_touched` scope guard\n  - no-op / `remaining_changes` handling\n  - final `git commit`\n- Shrink the workflow\u2019s `Commit changes` step to a thin `bash scripts/implement_commit_changes.sh` wrapper, while preserving the current step id/name and output contract.\n- Update `Stage workflow support files` in `.github/workflows/implement.yml` so consumer-repo runs fetch/install `implement_commit_changes.sh` alongside the other support scripts.\n- Rework the issue-metadata reuse path in `.github/workflows/implement.yml`:\n  - have the early phase-precheck retain the full issue JSON needed later, while still deriving the same state/label fast-fail decisions from it\n  - have `Resolve checkout ref` read a valid cached issue JSON/body first\n  - only fall back to its existing `gh_api_with_retry` path when that cache is missing, unparsable, or mismatched to `ISSUE_NUMBER`\n- Harden `Fetch issue metadata` so a non-empty but invalid/mismatched `ISSUE_META_FILE` is treated as a cache miss and re-fetched, rather than being trusted just because the file exists.\n- Keep `baseline_refctx`, `PR_BASE_BRANCH`, and all label-gate behavior unchanged.\n\n3. Data structures affected\n- `ISSUE_META_FILE` and `ISSUE_BODY_FILE` runtime cache contents:\n  - semantics stay the same (cached issue JSON/body for later steps)\n  - population/validation timing changes so earlier data can be reused safely\n- Internal cached issue payload handoff between the precheck and `Resolve checkout ref` (likely a temp file or equivalent internal handoff; no public contract change)\n- `Commit changes` step outputs must remain unchanged:\n  - `did_commit`\n  - `remaining_changes`\n  - `destructive_commit_*`\n  - `scope_violation_*`\n- The support-script fetch list in `Stage workflow support files`\n\n4. API or interface changes\n- No user-facing API changes.\n- No label-name, env-var-name, or workflow-output renames.\n- Internal interface only:\n  - `Commit changes` becomes a workflow-to-helper-script call\n  - checkout-ref resolution becomes cache-first, but keeps the current fail-open default-ref behavior and current `source=integration/default` output behavior\n\n5. Potential risks or edge cases\n- The new helper must be added to the staged support-script list; otherwise consumer-repo implement runs will fail even if the source repo works.\n- Cache reuse must not trust stale/invalid/mismatched issue JSON; use the same validity rule already used elsewhere in the repo (`.number` matches `ISSUE_NUMBER`, parse succeeds, body is readable) before skipping the API fetch.\n- `Resolve checkout ref` currently has specific retry/stderr visibility behavior through its local `gh_api_with_retry`; that behavior must survive the cache-first change.\n- Downstream implement steps branch heavily on `steps.commit_changes.outputs.*`; any output drift would change failure handling, no-op handling, or PR creation.\n- Existing tests currently inspect the inline `Commit changes` shell block in YAML; once extracted, those assertions must move to the new helper file, with only a lightweight YAML wrapper assertion left in place.\n- Missing-context note: the planning prompt did not include the literal `files_touched` allowlist. Because this change adds a new helper file (and likely touches contract tests), verify that the issue allowlist covers those paths before implementation, or the implement phase\u2019s scope guard will reject the run.\n\n6. Testing considerations\n- Update `tests/test_implement_post_codex_recovery.py` to:\n  - assert the workflow now shells into `scripts/implement_commit_changes.sh`\n  - move commit-step contract assertions from the inline YAML block to the new helper file\n  - add/adjust checkout-ref cache tests so a valid cached payload avoids a fresh issue fetch, while invalid/mismatched cache still falls back through the retry path\n  - add/adjust fetch-metadata coverage so invalid `ISSUE_META_FILE` is re-fetched\n- Update `tests/test_implement_semble_contract.py` so its `.serena` cleanup assertion reads from the extracted helper instead of the old inline block.\n- Validate with the repo\u2019s existing gates relevant to these changes:\n  - targeted pytest for the two files above\n  - workflow lint (`actionlint`)\n  - shell syntax check (`bash -n` over `scripts/*.sh`)\n  - ShellCheck over `scripts/*.sh`\n\nAssumptions\n- The intended scope includes one permanent helper under `scripts/`, following the same pattern already used by `review_autofix`.\n- If contract tests are part of the allowed scope, they should be updated in the same change; otherwise the new helper extraction risks breaking pinned workflow-contract tests.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "a0048abf3f6dcc5909d7112597d78976c9ad12d7451588e622613d51ab0036eb",
+  "lineage": {
+    "issue_number": 3324,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27468414371",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27468414371",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3324"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260613134656_070c533dec",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3324,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27468414371"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3324",
+  "timestamps": {
+    "created_at": "2026-06-13T13:46:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
