@@ -176,7 +176,9 @@ class TestHardhatRpcProbe(unittest.TestCase):
         from pathlib import Path
 
         prompt_file = Path(__file__).resolve().parent.parent / "prompts" / "mode-validate-generate.txt"
+        reference_file = Path(__file__).resolve().parent.parent / "prompts" / "references" / "validate-output-contract.txt"
         content = prompt_file.read_text(encoding="utf-8")
+        reference_content = reference_file.read_text(encoding="utf-8")
 
         required_fragments = (
             "validation/Dockerfile.app",
@@ -202,6 +204,12 @@ class TestHardhatRpcProbe(unittest.TestCase):
         for fragment in forbidden_fragments:
             self.assertNotIn(fragment, content, f"mode-validate-generate.txt must not include: {fragment}")
 
+        self.assertIn(
+            "{{REFERENCE_OUTPUT_CONTRACT}}",
+            content,
+            "mode-validate-generate.txt must keep the shared output-contract placeholder",
+        )
+
         coverage_keys = (
             '"build_verification"',
             '"startup_health_checks"',
@@ -216,7 +224,7 @@ class TestHardhatRpcProbe(unittest.TestCase):
             '"error_format_validation"',
         )
         for key in coverage_keys:
-            self.assertIn(key, content, f"mode-validate-generate.txt must preserve coverage key {key}")
+            self.assertIn(key, reference_content, f"validate-output-contract.txt must preserve coverage key {key}")
 
     def test_node_hardhat_template_rpc_probe_uses_result_field(self) -> None:
         """Node-hardhat RPC probe template must require object payload and .result."""

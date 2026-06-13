@@ -287,6 +287,7 @@ def main() -> int:
 	test_render_prompt_py_renders_inline_placeholders_and_yaml_scalar_defaults()
 	test_render_prompt_sh_uses_trusted_backend_locations_only()
 	test_render_prompt_py_renders_reference_placeholders_and_mode_specific_append()
+	test_render_prompt_py_reports_missing_mode_specific_append_reference()
 	test_render_prompt_py_reports_missing_reference_file()
 	test_render_prompt_py_reports_unknown_placeholder_contract_violation()
 	print("OK: render prompt foundation assertions hold")

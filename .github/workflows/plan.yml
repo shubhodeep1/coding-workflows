@@ -1144,7 +1144,14 @@ jobs:
           # hide blocker lines or auto-answer question blocks.
           perl -0pe '
             s{(^|\n)([ \t]*((?:```|~~~))[^\n]*\n.*?\n[ \t]*\3[ \t]*(?=\n|$))}{$1}gms;
-          ' "${CODEX_OUTPUT_FILE}" > "${CODEX_OUTPUT_PARSE_FILE}"
+          ' "${CODEX_OUTPUT_FILE}" > "${CODEX_OUTPUT_PARSE_FILE}" || {
+            echo "::error::Failed to sanitize Codex output"
+            exit 1
+          }
+          if [ ! -s "${CODEX_OUTPUT_PARSE_FILE}" ]; then
+            echo "::error::Sanitized Codex output parse file missing or empty"
+            exit 1
+          fi
           echo "CODEX_OUTPUT_PARSE_FILE=${CODEX_OUTPUT_PARSE_FILE}" >> "$GITHUB_ENV"
 
           # Scan the sanitized parse file so malformed or unclosed fences

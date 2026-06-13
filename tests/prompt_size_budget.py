@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Direct-run prompt size budget gate for mode/review prompt templates."""
+"""Direct-run prompt size budget gate for tiered and operational prompts."""
 
 from __future__ import annotations
 
@@ -9,10 +9,18 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_DIR = REPO_ROOT / "prompts"
+TIER_PROMPT_GLOBS = ("mode-*.txt", "review-*.txt")
 TIER_LIMITS = {
 	"DEFAULT": 250,
 	"LARGE": 500,
 	"XL": 800,
+}
+OPERATIONAL_PROMPT_LIMITS = {
+	"conflict-resolver.txt": 150,
+	"integration-sync-conflict-resolver.txt": 200,
+	"integration-sync-conflict-resolver-retry-prelude.txt": 100,
+	"integration-sync-conflict-resolver-retry-timeout-prelude.txt": 100,
+	"header.txt": 20,
 }
 EXPECTED_TIERS = {
 	"mode-validate-diagnose.txt": "LARGE",
@@ -22,14 +30,16 @@ EXPECTED_TIERS = {
 TIER_LINE_RE = re.compile(r"^# tier: (DEFAULT|LARGE|XL)$")
 
 
-def prompt_paths() -> list[Path]:
-	paths = sorted(PROMPTS_DIR.glob("mode-*.txt")) + sorted(PROMPTS_DIR.glob("review-*.txt"))
-	return list(paths)
+def tier_prompt_paths() -> list[Path]:
+	paths: list[Path] = []
+	for pattern in TIER_PROMPT_GLOBS:
+		paths.extend(sorted(PROMPTS_DIR.glob(pattern)))
+	return paths
 
 
 def main() -> int:
 	failures: list[str] = []
-	paths = prompt_paths()
+	paths = tier_prompt_paths()
 	if not paths:
 		print("FAIL: no prompt files matched")
 		return 1
@@ -63,12 +73,26 @@ def main() -> int:
 				f"{path.as_posix()}: {line_count} lines exceeds {tier} limit of {limit}"
 			)
 
+	for name, limit in OPERATIONAL_PROMPT_LIMITS.items():
+		path = PROMPTS_DIR / name
+		if not path.is_file():
+			failures.append(f"Missing operational prompt file: {path.as_posix()}")
+			continue
+		line_count = len(path.read_text(encoding="utf-8").splitlines())
+		if line_count > limit:
+			failures.append(
+				f"{path.as_posix()}: {line_count} lines exceeds operational limit of {limit}"
+			)
+
 	if failures:
 		for failure in failures:
 			print(f"FAIL: {failure}")
 		return 1
 
-	print(f"OK: validated prompt tiers for {len(paths)} files")
+	print(
+		f"OK: validated prompt budgets for {len(paths)} tiered files and "
+		f"{len(OPERATIONAL_PROMPT_LIMITS)} operational files"
+	)
 	return 0
 
 

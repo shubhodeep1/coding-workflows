@@ -113,6 +113,9 @@ def test_plan_workflow_detects_blocked_before_needs_clarification() -> None:
 	assert "PLAN_SELF_CHECK: BLOCKER:" in wf
 	assert 'CODEX_OUTPUT_PARSE_FILE="${RUNTIME_DIR}/codex_output_parse.txt"' in wf
 	assert "malformed fences do not" in wf
+	assert '::error::Failed to sanitize Codex output' in wf
+	assert 'if [ ! -s "${CODEX_OUTPUT_PARSE_FILE}" ]; then' in wf
+	assert '::error::Sanitized Codex output parse file missing or empty' in wf
 	assert "SELF_CHECK_PASS_COUNT" in wf
 	assert "SELF_CHECK_WARNING_COUNT" in wf
 	assert "SELF_CHECK_BLOCKER_COUNT" in wf
