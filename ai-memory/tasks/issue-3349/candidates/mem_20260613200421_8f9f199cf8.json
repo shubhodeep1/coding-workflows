@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for `workflow-optimization-2026-06-13-closeout`\n\nRef context\n- `git rev-parse HEAD`: `c668218e0a399da47caf758c034c2ecc102c2827`\n- Resolved checkout ref: `orchestrator/project-3323`\n- `git symbolic-ref --short -q HEAD`: `orchestrator/project-3323`\n- Integration branch metadata: `orchestrator/project-3323`\n- Integration branch mismatch: `false`\n\nClarification mapping\n- No `Q1`/`Q2` clarification questions were asked for this issue.\n- The auto-posted `/answer [auto-answered-by-orchestrator]` therefore maps to \u201cno additional clarification required; proceed from the issue body and acceptance criteria.\u201d\n\nRepresentative pattern to follow\n- Use the existing `analysis/recommendation-processing-report.md` section for `### \\`analysis/workflow-optimization-2026-06-11.md\\`` as the representative append pattern:\n  - per-doc `###` header\n  - `#### Named findings`\n  - `#### Repeated unnumbered recommendation groups (deduped)`\n  - required bucket labels with concise current-HEAD rationale\n\n1. Files likely to change\n- `analysis/recommendation-processing-report.md`\n  - update the provenance header count from `Processed source docs (97)` to `Processed source docs (98)`\n  - add `analysis/workflow-optimization-2026-06-13.md` to the processed-source-doc filename list in the existing ordered block\n  - append a new per-doc closeout section for `analysis/workflow-optimization-2026-06-13.md` after the current `2026-06-11` section and before the shared terminal sections\n- `analysis/workflow-optimization-2026-06-13.md`\n  - delete only after its triage is fully captured in the report\n\nExplicitly unchanged\n- `analysis/last_collection_timestamp.txt`\n- `analysis/validation-selftest-status.json`\n- `analysis/workflow-optimization-2026-06-13-2.md`\n- older report sections except for the top provenance/count update\n\n2. Functions or modules to implement\n- No code functions/modules.\n- Document-only work:\n  - provenance/count update at the top of `analysis/recommendation-processing-report.md`\n  - one new per-doc closeout section in that report\n  - deletion of the fully triaged source doc\n\n3. Data structures/content affected\n- The new section should classify all 17 named IDs individually:\n  - `BUG-001`\n  - `API-001`, `API-002`, `API-003`\n  - `DUP-001`, `DUP-002`, `DUP-003`\n  - `EXPR-001`, `EXPR-002`, `EXPR-003`, `EXPR-004`\n  - `CONSIST-001`\n  - `DEAD-001`\n  - `MERGE-001`\n  - `REUSE-001`, `REUSE-002`\n  - `DEAD-API-001`\n- Then classify the remaining unnumbered top-level recommendation families from the prescriptive sections of `analysis/workflow-optimization-2026-06-13.md`, deduped under stable short labels so repeated asks are classified once, not once per section mention.\n- Use only these closeout buckets:\n  - `VALID&SAFE`\n  - `VALID-BUT-RISKY`\n  - `STALE-or-already-done`\n  - `INVALID`\n- Keep rationale grounded in current HEAD, matching the report\u2019s existing \u201ccurrent repository state on this ref\u201d convention.\n\n4. API or interface changes\n- None.\n- This issue should not introduce workflow, script, schema, CLI, env-var, or runtime behavior changes.\n\n5. Risks, edge cases, and conflicts\n- A similarly named sibling file exists: `analysis/workflow-optimization-2026-06-13-2.md`. The acceptance criteria explicitly scope deletion to the unsuffixed `analysis/workflow-optimization-2026-06-13.md`.\n- The source doc uses its own safety taxonomy (`SAFE_TO_MERGE`, `NEEDS_VERIFICATION`, `RISKY_SKIP`), but the report requires the four closeout buckets above. The implementation must translate, not copy, those tags.\n- The source doc\u2019s own handoff says \u201cNo SAFE_TO_MERGE findings in this pass,\u201d so this closeout should not reopen implementation work; valid-but-risky items need concise \u201cwhy deferred\u201d rationale instead.\n- Keep the report append-only: do not reflow or rewrite older per-doc sections.\n- Repo-local search found one extra tracked reference to the soon-to-be-deleted source doc in `.ai/.workspace_source_manifest.txt`; the issue scope does not currently authorize touching that file.\n\n6. Testing and verification considerations\n- Content completeness:\n  - confirm the new `### \\`analysis/workflow-optimization-2026-06-13.md\\`` section exists\n  - confirm all 17 named IDs appear exactly once under the required buckets\n  - confirm repeated top-level recommendation families are deduped and bucketed once each\n  - confirm risky/deferred items explain why they stayed deferred\n- Provenance:\n  - confirm `Processed source docs` increments `97 -> 98`\n  - confirm the processed-source-doc list now includes `analysis/workflow-optimization-2026-06-13.md`\n- Scope:\n  - `git diff --name-only` should show one modified file and one deleted file\n  - confirm `analysis/last_collection_timestamp.txt`, `analysis/validation-selftest-status.json`, and `analysis/workflow-optimization-2026-06-13-2.md` are unchanged\n  - confirm no new report filename is created\n- Markdown sanity:\n  - headings render cleanly\n  - older report content is unchanged aside from the provenance update and the appended per-doc section\n\nAssumptions made\n- The issue\u2019s `files_touched` allowlist matches the two explicitly named analysis paths.\n- `.ai/.workspace_source_manifest.txt` is intentionally out of scope for this closeout unless a validator proves otherwise.\n\nMissing-context notes\n- The planning context did not inline the literal `files_touched` list, so scope is derived from the issue body and current report/source-doc structure.\n- No clarification QIDs existed for this issue; planning relies on the issue body plus the auto-answered continuation signal.\n\nPLAN_SELF_CHECK: WARNING: the literal `files_touched` allowlist was not included in planning context, so this plan assumes it contains only `analysis/recommendation-processing-report.md` and `analysis/workflow-optimization-2026-06-13.md`.\nPLAN_SELF_CHECK: WARNING: deleting `analysis/workflow-optimization-2026-06-13.md` leaves a repo-tracked reference in `.ai/.workspace_source_manifest.txt`; this plan keeps that file out of scope because the issue explicitly limits the lifecycle edit to the report plus this one source-doc deletion.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "00bd62acc0c260c505c0357049d0039d6d623c1fd2fafb48e22ff55039b2b486",
+  "lineage": {
+    "issue_number": 3349,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27477501644",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27477501644",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3349"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260613200421_8f9f199cf8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3349,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27477501644"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3349",
+  "timestamps": {
+    "created_at": "2026-06-13T20:04:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
