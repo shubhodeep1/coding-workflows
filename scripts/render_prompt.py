@@ -227,8 +227,8 @@ def _reference_file_names_for_placeholder(mode_name: str, placeholder_name: str)
 
 
 def collect_reference_values(prompt_text: str, *, prompt_path: Path, mode_name: str) -> dict[str, str]:
-	reference_placeholders = sorted(
-		name for name in collect_placeholders(prompt_text) if name.startswith("REFERENCE_")
+	reference_placeholders = tuple(
+		name for name in collect_standalone_placeholders(prompt_text) if name.startswith("REFERENCE_")
 	)
 	values: dict[str, str] = {}
 	for placeholder_name in reference_placeholders:
@@ -508,6 +508,21 @@ def load_contract(contract_path: Path, mode_name: str) -> PromptContract:
 
 def collect_placeholders(prompt_text: str) -> tuple[str, ...]:
 	return tuple(sorted(set(PLACEHOLDER_PATTERN.findall(prompt_text))))
+
+
+def collect_standalone_placeholders(prompt_text: str) -> tuple[str, ...]:
+	# Only placeholders that occupy a whole line participate in the
+	# standalone-line branch of render_prompt_text
+	# (STANDALONE_PLACEHOLDER_PATTERN.fullmatch(line)). Reference
+	# resolution must mirror that contract so inline {{REFERENCE_*}} tokens
+	# inside embedded untrusted content are never treated as real
+	# placeholders.
+	names: set[str] = set()
+	for line in prompt_text.splitlines():
+		match = STANDALONE_PLACEHOLDER_PATTERN.fullmatch(line)
+		if match is not None:
+			names.add(match.group(1))
+	return tuple(sorted(names))
 
 
 def validate_contract(contract: PromptContract, prompt_text: str, values: dict[str, str]) -> None:

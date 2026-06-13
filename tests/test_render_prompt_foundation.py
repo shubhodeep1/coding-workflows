@@ -215,6 +215,58 @@ def test_render_prompt_py_reports_missing_reference_file() -> None:
 	assert "prompts/references/output-contract.txt" in proc.stderr
 
 
+def test_render_prompt_py_ignores_inline_unknown_reference_placeholder() -> None:
+	# Runtime-assembled prompt bodies inline untrusted artifacts (reviewer
+	# consensus, PR diffs, comments). A {{REFERENCE_*}}-shaped token that
+	# appears *inline* inside such content — e.g. a reviewer quoting the typo
+	# `{{REFERENCE_OUTPUT_CONTRAC}}` as an example — must be left literal, not
+	# treated as a real placeholder. Regression for the autofix editor step
+	# aborting with "Unknown reference placeholder 'REFERENCE_OUTPUT_CONTRAC'".
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_inline_ref_") as td:
+		prompt_file = Path(td) / "editor_prompt_body.txt"
+		prompt_file.write_text(
+			"Header\n"
+			"Reviewer said: a typo such as `{{REFERENCE_OUTPUT_CONTRAC}}` (missing T) is bad.\n"
+			"Footer\n",
+			encoding="utf-8",
+		)
+
+		proc = subprocess.run(
+			[sys.executable, str(RENDER_PROMPT_PY), str(prompt_file)],
+			cwd=str(REPO_ROOT),
+			env=_base_env(),
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stderr == ""
+	assert "{{REFERENCE_OUTPUT_CONTRAC}}" in proc.stdout
+
+
+def test_render_prompt_py_fails_on_standalone_unknown_reference_placeholder() -> None:
+	# A genuine reference-placeholder typo authored as its own line in a
+	# template must still hard-fail: the strict unresolved-placeholder
+	# guarantee is preserved for the case it was designed to catch.
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_standalone_ref_") as td:
+		prompt_file = Path(td) / "editor_prompt_body.txt"
+		prompt_file.write_text("Header\n{{REFERENCE_OUTPUT_CONTRAC}}\nFooter\n", encoding="utf-8")
+
+		proc = subprocess.run(
+			[sys.executable, str(RENDER_PROMPT_PY), str(prompt_file)],
+			cwd=str(REPO_ROOT),
+			env=_base_env(),
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+
+	assert proc.returncode == 1
+	assert proc.stdout == ""
+	assert "Unknown reference placeholder 'REFERENCE_OUTPUT_CONTRAC'" in proc.stderr
+
+
 def test_render_prompt_py_reports_unknown_placeholder_contract_violation() -> None:
 	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_py_") as td:
 		prompt_file = Path(td) / "prompt.txt"
@@ -247,6 +299,8 @@ def main() -> int:
 	test_render_prompt_sh_uses_trusted_backend_locations_only()
 	test_render_prompt_py_renders_reference_placeholders_and_mode_specific_append()
 	test_render_prompt_py_reports_missing_reference_file()
+	test_render_prompt_py_ignores_inline_unknown_reference_placeholder()
+	test_render_prompt_py_fails_on_standalone_unknown_reference_placeholder()
 	test_render_prompt_py_reports_unknown_placeholder_contract_violation()
 	print("OK: render prompt foundation assertions hold")
 	return 0
