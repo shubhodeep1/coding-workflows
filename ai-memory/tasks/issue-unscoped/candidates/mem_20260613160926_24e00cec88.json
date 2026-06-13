@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_review_pipeline_contract.py:2949-2950 | severity=medium | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The test `test_review_collect_pr_metadata_helper_caps_fallback_graphql_batch_at_twenty_issues()` was not being called from `main()`, so its 20-issue fallback-cap contract would never run in CI.\n  WHY: In the project's bespoke test runner, tests are invoked only by being called from `main()`, so omitting the call leaves the test dormant during CI runs.\n- scripts/review_collect_pr_metadata.sh:158 | severity=medium | confidence=3\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: GraphQL error detection has an overly strict check that may miss partial failure scenarios.\n  WHY: When GitHub GraphQL returns both `.errors` and `.data.repository` in the response, the function proceeds to transform and return data instead of failing open, which can process incomplete results without warning.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Consider warning when the GraphQL response contains fewer hydrated items than requested aliases\"\n  expected_change_site: scripts/review_collect_pr_metadata.sh in _fetch_linked_issue_bodies_graphql()\n  confidence=2\n  flagged_by: [moonshotai_kimi-k2_5]\n  EVIDENCE: The implementation uses `select(.number? != null)` in the jq transform which filters out null/missing issues silently, but there's no warning emitted when fewer items are returned than requested.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- tests/test_review_autofix_review_pipeline_contract.py:2949-2950 | severity=medium | confidence=5\n  PROBLEM: The test `test_review_collect_pr_metadata_helper_caps_fallback_graphql_batch_at_twenty_issues()` was not being called from `main()`, so its 20-issue fallback-cap contract would never run in CI.\n  WHY: In the project's bespoke test runner, tests are invoked only by being called from the `main()` function; omitting the call leaves the test dormant during CI runs.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/review_collect_pr_metadata.sh:158 | severity=medium | confidence=3\n  PROBLEM: GraphQL error detection has an overly strict check that may miss partial failure scenarios.\n  WHY: When GitHub GraphQL returns both `.errors` and `.data.repository` in the response (partial success), the function proceeds to transform and return data instead of failing open; the current check requires BOTH errors AND null repository to trigger failure, which could lead to processing incomplete results without warning.\n- Requirement: \"Consider warning when the GraphQL response contains fewer hydrated items than requested aliases\"\n  Expected change site: scripts/review_collect_pr_metadata.sh in _fetch_linked_issue_bodies_graphql()\n  Evidence of absence: The implementation uses `select(.number? != null)` in the jq transform which filters out null/missing issues silently, but there's no warning emitted when fewer items are returned than requested.\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "0e0a64bbd457b10e80cc036eec8c7ce91170ee6aff332c74c0eecd0df798e459",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3333,
+    "run_id": "27471003575",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27471003575",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260613160926_24e00cec88",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3333,
+    "run_id": "27471003575"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-13T16:09:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
