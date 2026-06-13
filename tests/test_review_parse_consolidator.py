@@ -20,6 +20,19 @@ def _run_parser(
 	consolidator_fixture: str,
 	failopen: str = "1",
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
+	env = os.environ.copy()
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	for git_var in (
+		"GIT_DIR",
+		"GIT_WORK_TREE",
+		"GIT_INDEX_FILE",
+		"GIT_OBJECT_DIRECTORY",
+		"GIT_ALTERNATE_OBJECT_DIRECTORIES",
+		"BASH_ENV",
+		"ENV",
+	):
+		env.pop(git_var, None)
+
 	workspace_dir.mkdir(parents=True, exist_ok=True)
 	runtime_dir = workspace_dir / "runtime"
 	runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -29,25 +42,24 @@ def _run_parser(
 		encoding="utf-8",
 	)
 
-	subprocess.run(["git", "init", "-q", "-b", "main"], cwd=workspace_dir, check=True)
+	subprocess.run(["git", "init", "-q", "-b", "main"], cwd=workspace_dir, check=True, env=env)
 	for key, value in (
 		("user.email", "test@local"),
 		("user.name", "test"),
 		("commit.gpgsign", "false"),
 	):
-		subprocess.run(["git", "config", key, value], cwd=workspace_dir, check=True)
-	subprocess.run(["git", "add", "src/module.py"], cwd=workspace_dir, check=True)
+		subprocess.run(["git", "config", key, value], cwd=workspace_dir, check=True, env=env)
+	subprocess.run(["git", "add", "src/module.py"], cwd=workspace_dir, check=True, env=env)
 	subprocess.run(
 		["git", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "seed"],
 		cwd=workspace_dir,
 		check=True,
+		env=env,
 	)
 
 	shutil.copy2(FIXTURES / consolidator_fixture, runtime_dir / "consolidator_raw.txt")
 	shutil.copy2(FIXTURES / "reviewer_bundle.txt", runtime_dir / "reviewer_bundle.txt")
 
-	env = os.environ.copy()
-	env["PYTHONDONTWRITEBYTECODE"] = "1"
 	env["RUNTIME_DIR"] = str(runtime_dir)
 	env["REVIEW_PARSER_FAILOPEN"] = failopen
 
@@ -142,6 +154,15 @@ def test_unterminated_block_is_recovered_at_eof() -> None:
 		assert "=== ISSUE 001 ===" in issues
 		assert "CLASSIFICATION: must-fix" in issues
 		assert "=== END ISSUE 001 ===" in issues
+
+
+def test_missing_severity_defaults_high_fail_open() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		result, runtime = _run_parser(Path(td), "consolidator_missing_severity.txt")
+		assert result.returncode == 0, result.stderr
+		issues = (runtime / "review_issues.txt").read_text(encoding="utf-8")
+		assert "SEVERITY: high" in issues
+		assert "REVIEWER_SEVERITY_DEFAULT issue=007 default=high reason=missing_severity" in result.stderr
 
 
 def test_fail_open_when_no_markers_emits_passthrough_anchors() -> None:

@@ -17,6 +17,13 @@ PROMPTS_DIR = REPO_ROOT / "prompts"
 CONTRACTS_DIR = PROMPTS_DIR / "contracts"
 OUTPUT_CONTRACT_SENTINEL = "Terminal output contract:"
 SEVERITY_SENTINEL = "Severity calibration:"
+SEVERITY_REQUIRED_SENTINEL = (
+	"Issues without an explicit severity classification are not valid output and MUST be re-emitted with severity."
+)
+CONSOLIDATOR_ALIAS_SENTINEL = (
+	"Reviewer-side `BLOCKER` maps to `blocker`; `MAJOR` maps to `high`; `NIT` maps to `med`."
+)
+JUDGE_SEVERITY_SENTINEL = "SEVERITY: BLOCKER|MAJOR|NIT"
 
 CONTRACT_NAMES = (
 	"mode-judge.yml",
@@ -104,6 +111,7 @@ def _assert_shared_references(
 		assert "{{REFERENCE_OUTPUT_CONTRACT}}" not in rendered_text
 	if expect_severity:
 		assert SEVERITY_SENTINEL in rendered_text
+		assert SEVERITY_REQUIRED_SENTINEL in rendered_text
 		assert "{{REFERENCE_SEVERITY_CLASSIFICATION}}" not in rendered_text
 
 
@@ -118,6 +126,7 @@ def test_judge_prompts_render_under_current_contracts() -> None:
 	_assert_shared_references(mode_judge.stdout, expect_output_contract=True, expect_severity=True)
 	assert "{{SEMBLE_PREFETCH}}" not in mode_judge.stdout
 	assert "\n\nYou have full access to the repository checkout and all tools" in mode_judge.stdout
+	assert JUDGE_SEVERITY_SENTINEL in mode_judge.stdout
 
 	review_blocked_prefetch = "=== SEMBLE: Review-Blocked Judge Context ===\nchunk"
 	mode_judge_review_blocked = _run_render(
@@ -132,6 +141,7 @@ def test_judge_prompts_render_under_current_contracts() -> None:
 	)
 	assert review_blocked_prefetch + "\n" in mode_judge_review_blocked.stdout
 	assert "{{SEMBLE_PREFETCH}}" not in mode_judge_review_blocked.stdout
+	assert JUDGE_SEVERITY_SENTINEL in mode_judge_review_blocked.stdout
 
 	stall_prefetch = "=== SEMBLE: Stall Judge Context ===\nchunk"
 	mode_judge_stall = _run_render(
@@ -154,6 +164,7 @@ def test_shell_wrapper_renders_review_blocked_judge_under_current_contracts() ->
 	_assert_shared_references(proc.stdout, expect_output_contract=True, expect_severity=True)
 	assert review_blocked_prefetch + "\n" in proc.stdout
 	assert "{{SEMBLE_PREFETCH}}" not in proc.stdout
+	assert JUDGE_SEVERITY_SENTINEL in proc.stdout
 
 
 def test_reference_backed_review_and_judge_prompts_render_shared_blocks() -> None:
@@ -171,6 +182,10 @@ def test_reference_backed_review_and_judge_prompts_render_shared_blocks() -> Non
 			expect_output_contract=expect_output_contract,
 			expect_severity=expect_severity,
 		)
+		if prompt_name == "review-consolidator.txt":
+			assert CONSOLIDATOR_ALIAS_SENTINEL in proc.stdout
+		if prompt_name == "review-reviewer-checklist.txt":
+			assert "SEVERITY: BLOCKER | MAJOR | NIT" in proc.stdout
 
 
 def test_conflict_resolver_renders_required_values_and_optional_hints(

@@ -180,6 +180,47 @@ def test_render_prompt_py_renders_reference_placeholders_and_mode_specific_appen
 	assert proc.stdout == "Header\nShared output block.\nValidate-only output block.\nFooter\n"
 
 
+def test_render_prompt_py_reports_missing_mode_specific_append_reference() -> None:
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_missing_append_") as td:
+		repo_root = Path(td)
+		prompt_file = repo_root / "prompts" / "mode-validate-generate.txt"
+		contract_file = repo_root / "prompts" / "contracts" / "mode-validate-generate.yml"
+		reference_dir = repo_root / "prompts" / "references"
+		render_script = repo_root / "scripts" / "render_prompt.py"
+		prompt_file.parent.mkdir(parents=True, exist_ok=True)
+		contract_file.parent.mkdir(parents=True, exist_ok=True)
+		reference_dir.mkdir(parents=True, exist_ok=True)
+		render_script.parent.mkdir(parents=True, exist_ok=True)
+
+		prompt_file.write_text("Header\n{{REFERENCE_OUTPUT_CONTRACT}}\nFooter\n", encoding="utf-8")
+		contract_file.write_text(
+			"required_vars: []\n"
+			"optional_vars:\n"
+			"  REFERENCE_OUTPUT_CONTRACT: \"\"\n"
+			"forbidden_vars: []\n",
+			encoding="utf-8",
+		)
+		(reference_dir / "output-contract.txt").write_text("Shared output block.\n", encoding="utf-8")
+		shutil.copy2(RENDER_PROMPT_PY, render_script)
+
+		proc = subprocess.run(
+			[sys.executable, str(render_script), str(prompt_file)],
+			cwd=str(repo_root),
+			env=_base_env(),
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+
+	assert proc.returncode == 1
+	assert proc.stdout == ""
+	assert (
+		"Append reference file 'validate-output-contract.txt' for placeholder 'REFERENCE_OUTPUT_CONTRACT' not found"
+		in proc.stderr
+	)
+	assert "prompts/references/validate-output-contract.txt" in proc.stderr
+
+
 def test_render_prompt_py_reports_missing_reference_file() -> None:
 	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_missing_reference_") as td:
 		repo_root = Path(td)
