@@ -8,10 +8,45 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 UPDATE_WORKFLOWS_WF = REPO_ROOT / ".github" / "workflows" / "update_workflows.yml"
+WORKFLOW_TEMPLATES_DIR = REPO_ROOT / "workflow-templates"
+WORKFLOW_PROFILE_DIR = WORKFLOW_TEMPLATES_DIR / "profiles"
 
 
 def _workflow_text() -> str:
 	return UPDATE_WORKFLOWS_WF.read_text(encoding="utf-8")
+
+
+def _manifest_lines(name: str) -> list[str]:
+	return [
+		line.strip()
+		for line in (WORKFLOW_PROFILE_DIR / name).read_text(encoding="utf-8").splitlines()
+		if line.strip()
+	]
+
+
+def test_profile_manifests_match_contracts() -> None:
+	core = [
+		"ai-clarify.yml",
+		"ai-plan.yml",
+		"ai-implement.yml",
+		"ai-review.yml",
+		"ai-issue-pr-status.yml",
+		"ai-cancel-on-pr-close.yml",
+	]
+	standard = core + [
+		"ai-orchestrate.yml",
+		"ai-orchestrate-poll.yml",
+		"ai-orchestrate-clarify-respond.yml",
+		"ai-validate.yml",
+		"review_rb_judge_dispatch.yml",
+	]
+	full = sorted(path.name for path in WORKFLOW_TEMPLATES_DIR.glob("*.yml"))
+
+	assert _manifest_lines("core.txt") == core
+	assert _manifest_lines("standard.txt") == standard
+	assert _manifest_lines("full.txt") == full
+	assert "ai-update-workflows.yml" in _manifest_lines("full.txt")
+	assert all("/" not in entry for entry in _manifest_lines("full.txt"))
 
 
 def test_fail_fast_validation_precedes_any_copy_mutation() -> None:
@@ -39,6 +74,10 @@ def test_guardrail_reason_codes_and_outputs_are_declared() -> None:
 	assert 'ERR_UPSTREAM_SELF_TEMPLATE_MISSING' in wf
 	assert 'ERR_LOCAL_WORKFLOW_DIR_MISSING' in wf
 	assert 'ERR_LOCAL_WORKFLOW_DIR_NOT_WRITABLE' in wf
+	assert 'ERR_PROFILE_MANIFEST_DIR_MISSING' in wf
+	assert 'ERR_WORKFLOW_PROFILE_UNKNOWN' in wf
+	assert 'ERR_PROFILE_TEMPLATE_MISSING' in wf
+	assert 'ERR_WORKFLOW_PROFILE_EMPTY' in wf
 	assert 'ERR_LOCAL_TARGET_IS_DIRECTORY' in wf
 	assert 'ERR_LOCAL_TARGET_NOT_WRITABLE' in wf
 	assert 'if [ "$filename" = "$SELF_TEMPLATE" ]; then' in wf
@@ -59,6 +98,23 @@ def test_guardrail_reason_codes_and_outputs_are_declared() -> None:
 	assert 'Audit-gate assets applied:' in wf
 	assert 'SCRIPTS_DIR="scripts"' in wf
 	assert 'git sparse-checkout set "${TEMPLATES_DIR}" "${SCRIPTS_DIR}"' in wf
+
+
+def test_profile_selection_and_non_destructive_downgrade_contracts() -> None:
+	wf = _workflow_text()
+	assert "SELECTED_PROFILE=\"${{ vars.WORKFLOW_PROFILE != '' && vars.WORKFLOW_PROFILE || 'full' }}\"" in wf
+	assert 'PROFILE_MANIFEST_DIR="${UPSTREAM_DIR}/profiles"' in wf
+	assert 'PROFILE_MANIFEST="${PROFILE_MANIFEST_DIR}/${SELECTED_PROFILE}.txt"' in wf
+	assert 'manifest_templates=()' in wf
+	assert 'manifest_entry="${manifest_entry%$\'\\r\'}"' in wf
+	assert 'manifest_entry="${manifest_entry#"${manifest_entry%%[![:space:]]*}"}"' in wf
+	assert 'manifest_entry="${manifest_entry%"${manifest_entry##*[![:space:]]}"}"' in wf
+	assert 'done < "${PROFILE_MANIFEST}"' in wf
+	assert wf.count('for upstream_file in "${manifest_templates[@]}"; do') == 2
+	assert 'rm "$local_file"' not in wf
+	assert 'rm -f "$local_file"' not in wf
+	assert 'git rm' not in wf
+	assert 'find "${LOCAL_DIR}"' not in wf
 
 
 def test_failure_summary_contract_is_present() -> None:
@@ -96,8 +152,10 @@ def test_success_path_contracts_are_preserved() -> None:
 
 
 def main() -> int:
+	test_profile_manifests_match_contracts()
 	test_fail_fast_validation_precedes_any_copy_mutation()
 	test_guardrail_reason_codes_and_outputs_are_declared()
+	test_profile_selection_and_non_destructive_downgrade_contracts()
 	test_failure_summary_contract_is_present()
 	test_success_path_contracts_are_preserved()
 	return 0
