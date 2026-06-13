@@ -1073,6 +1073,24 @@ def test_memory_record_candidate_wrapper_surfaces_injection_telemetry_on_stderr(
 	assert "ignore_previous_instructions" in result.stderr
 
 
+def test_memory_record_run_event_wrapper_keeps_json_stdout_and_telemetry_stderr() -> None:
+	repo_root = _create_memory_helper_repo()
+	env = {
+		"TEST_MEMORY_REPO_ROOT": str(repo_root),
+	}
+	result = _run_memory_helper(
+		'memory_record_run_event --repo-root "$TEST_MEMORY_REPO_ROOT" --memory-branch ai-memory --memory-root ai-memory --run-id 4201 --workflow clarify --event-type candidate_written --status ok --message "Stored advisory candidate" --actor octocat',
+		env=env,
+	)
+	assert result.returncode == 0
+	payload = json.loads(result.stdout.strip())
+	event = payload["operation_result"]["event"]
+	assert event["workflow"] == "clarify"
+	assert event["event_type"] == "candidate_written"
+	assert "AI_MEMORY_TELEMETRY" not in result.stdout
+	assert '"op": "record-run-event"' in result.stderr
+
+
 def test_stage_workflow_support_bootstraps_memory_injection_patterns() -> None:
 	required_bootstrap_line = next(
 		(line for line in STAGE_WORKFLOW_SUPPORT.read_text(encoding="utf-8").splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line),

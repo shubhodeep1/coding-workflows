@@ -177,6 +177,110 @@ def discover_contract_path(prompt_path: Path, mode_name: str) -> Path | None:
 	return None
 
 
+def _append_reference_candidate(
+	candidates: list[Path],
+	seen: set[Path],
+	base_dir: Path | None,
+	file_name: str,
+) -> None:
+	if base_dir is None:
+		return
+	candidate = (base_dir / "prompts" / "references" / file_name).resolve()
+	if candidate in seen:
+		return
+	seen.add(candidate)
+	candidates.append(candidate)
+
+
+def discover_reference_path(prompt_path: Path, file_name: str) -> Path | None:
+	candidates: list[Path] = []
+	seen: set[Path] = set()
+	script_root = Path(__file__).resolve().parents[1]
+	prompt_root = prompt_path.parent.parent if prompt_path.parent.name == "prompts" else None
+
+	_append_reference_candidate(candidates, seen, prompt_root, file_name)
+	_append_reference_candidate(candidates, seen, Path.cwd(), file_name)
+	_append_reference_candidate(candidates, seen, script_root, file_name)
+	_append_reference_candidate(candidates, seen, Path.cwd() / ".codex-workflow-src", file_name)
+	_append_reference_candidate(candidates, seen, Path.cwd() / ".codex-workflow-src-main", file_name)
+
+	for candidate in candidates:
+		if candidate.is_file():
+			return candidate
+	return None
+
+
+def _expected_reference_path(prompt_path: Path, file_name: str) -> Path:
+	prompt_root = prompt_path.parent.parent if prompt_path.parent.name == "prompts" else Path.cwd()
+	return prompt_root / "prompts" / "references" / file_name
+
+
+def _reference_file_name_for_placeholder(placeholder_name: str) -> str | None:
+	if not placeholder_name.startswith("REFERENCE_"):
+		return None
+	reference_stem = placeholder_name.removeprefix("REFERENCE_").strip().lower()
+	if not reference_stem:
+		return None
+	return reference_stem.replace("_", "-") + ".txt"
+
+
+def _load_reference_placeholder_value(
+	*,
+	prompt_path: Path,
+	mode_name: str,
+	placeholder_name: str,
+) -> str:
+	file_name = _reference_file_name_for_placeholder(placeholder_name)
+	if file_name is None:
+		raise PromptLoadError(f"Unsupported reference placeholder '{placeholder_name}'")
+
+	reference_path = discover_reference_path(prompt_path, file_name)
+	if reference_path is None:
+		expected_path = _expected_reference_path(prompt_path, file_name)
+		raise PromptLoadError(
+			f"Reference file for placeholder '{placeholder_name}' not found: {expected_path}"
+		)
+
+	reference_text = load_prompt(reference_path)
+
+	mode_specific_append_name = None
+	if placeholder_name == "REFERENCE_OUTPUT_CONTRACT" and mode_name == "mode-validate-generate":
+		mode_specific_append_name = "validate-output-contract.txt"
+
+	if mode_specific_append_name is None:
+		return reference_text
+
+	mode_specific_append_path = discover_reference_path(prompt_path, mode_specific_append_name)
+	if mode_specific_append_path is None:
+		expected_path = _expected_reference_path(prompt_path, mode_specific_append_name)
+		raise PromptLoadError(
+			f"Append reference file '{mode_specific_append_name}' for placeholder '{placeholder_name}' not found: {expected_path}"
+		)
+
+	return reference_text + load_prompt(mode_specific_append_path)
+
+
+def hydrate_reference_placeholders(
+	*,
+	prompt_text: str,
+	prompt_path: Path,
+	mode_name: str,
+	values: dict[str, str],
+) -> dict[str, str]:
+	hydrated = dict(values)
+	for placeholder_name in collect_placeholders(prompt_text):
+		if not placeholder_name.startswith("REFERENCE_"):
+			continue
+		if hydrated.get(placeholder_name, "") != "":
+			continue
+		hydrated[placeholder_name] = _load_reference_placeholder_value(
+			prompt_path=prompt_path,
+			mode_name=mode_name,
+			placeholder_name=placeholder_name,
+		)
+	return hydrated
+
+
 def _parse_scalar_value(raw_value: str, *, field_name: str, line_number: int, path: Path) -> str:
 	if raw_value == "":
 		return ""
@@ -666,6 +770,12 @@ def main(argv: list[str] | None = None) -> int:
 		else:
 			effective_values = dict(legacy_env_values)
 			effective_values.update(provided_values)
+		effective_values = hydrate_reference_placeholders(
+			prompt_text=prompt_text,
+			prompt_path=prompt_path,
+			mode_name=mode_name,
+			values=effective_values,
+		)
 		sys.stdout.write(render_prompt_text(prompt_text, effective_values))
 	except RenderPromptError as exc:
 		print(f"ERROR: {exc}", file=sys.stderr)

@@ -611,7 +611,7 @@ def cmd_record_candidate(args: argparse.Namespace) -> int:
     op_result = result.get("operation_result") or {}
     record = op_result.get("record") or {}
     _print_json({"ok": True, **result})
-    if record.get("injection_suspected") is True and injection_matches:
+    if record.get("injection_suspected") is True:
         _emit_telemetry(
             "injection_scan",
             ok=True,
