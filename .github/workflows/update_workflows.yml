@@ -251,6 +251,10 @@ jobs:
           TOTAL_UPDATED=0
           TOTAL_CREATED=0
           FAILURE_REASON_FILE="/tmp/update_workflows_failure_reason.txt"
+          SELECTED_PROFILE="${{ vars.WORKFLOW_PROFILE != '' && vars.WORKFLOW_PROFILE || 'full' }}"
+          PROFILE_MANIFEST_DIR="${UPSTREAM_DIR}/profiles"
+          PROFILE_MANIFEST="${PROFILE_MANIFEST_DIR}/${SELECTED_PROFILE}.txt"
+          manifest_templates=()
 
           # The updater itself must already exist for this job to run;
           # never overwrite or auto-create it to avoid bootstrap loops.
@@ -293,7 +297,22 @@ jobs:
           [ -d "${LOCAL_DIR}" ] || fail_with_reason "ERR_LOCAL_WORKFLOW_DIR_MISSING" "Local workflow directory is missing: ${LOCAL_DIR}"
           [ -w "${LOCAL_DIR}" ] || fail_with_reason "ERR_LOCAL_WORKFLOW_DIR_NOT_WRITABLE" "Local workflow directory is not writable: ${LOCAL_DIR}"
 
-          for upstream_file in "${upstream_templates[@]}"; do
+          [ -d "${PROFILE_MANIFEST_DIR}" ] || fail_with_reason "ERR_PROFILE_MANIFEST_DIR_MISSING" "Upstream profile manifest directory does not exist: ${PROFILE_MANIFEST_DIR}."
+          [ -f "${PROFILE_MANIFEST}" ] || fail_with_reason "ERR_WORKFLOW_PROFILE_UNKNOWN" "Requested WORKFLOW_PROFILE '${SELECTED_PROFILE}' does not match an upstream manifest in ${PROFILE_MANIFEST_DIR}."
+
+          while IFS= read -r manifest_entry || [ -n "${manifest_entry}" ]; do
+            manifest_entry="${manifest_entry%$'\r'}"
+            manifest_entry="${manifest_entry#"${manifest_entry%%[![:space:]]*}"}"
+            manifest_entry="${manifest_entry%"${manifest_entry##*[![:space:]]}"}"
+            [ -n "${manifest_entry}" ] || continue
+            upstream_file="${UPSTREAM_DIR}/${manifest_entry}"
+            [ -f "${upstream_file}" ] || fail_with_reason "ERR_PROFILE_TEMPLATE_MISSING" "Workflow profile ${SELECTED_PROFILE} references missing template ${manifest_entry}."
+            manifest_templates+=( "${upstream_file}" )
+          done < "${PROFILE_MANIFEST}"
+
+          [ "${#manifest_templates[@]}" -gt 0 ] || fail_with_reason "ERR_WORKFLOW_PROFILE_EMPTY" "Workflow profile ${SELECTED_PROFILE} has no template entries."
+
+          for upstream_file in "${manifest_templates[@]}"; do
             filename=$(basename "$upstream_file")
             local_file="${LOCAL_DIR}/${filename}"
             if [ "$filename" = "$SELF_TEMPLATE" ]; then
@@ -307,7 +326,7 @@ jobs:
             fi
           done
 
-          for upstream_file in "${upstream_templates[@]}"; do
+          for upstream_file in "${manifest_templates[@]}"; do
             filename=$(basename "$upstream_file")
             local_file="${LOCAL_DIR}/${filename}"
             TOTAL_CHECKED=$((TOTAL_CHECKED + 1))

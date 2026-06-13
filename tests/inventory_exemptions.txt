@@ -1,0 +1,2 @@
+# One exemption per line: repo/relative/path | short justification
+# Intentionally empty; add entries only when a documented parity escape is required.
