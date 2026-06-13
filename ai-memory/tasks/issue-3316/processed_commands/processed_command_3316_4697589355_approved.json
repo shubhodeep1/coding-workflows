@@ -5,13 +5,36 @@
   "entry_id": "processed_command_3316_4697589355_approved",
   "issue_number": 3316,
   "metadata": {
+    "branch": "ai/issue-3316",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/plan.yml",
+      "prompts/mode-implement.txt",
+      "prompts/mode-judge-review-blocked.txt",
+      "prompts/mode-judge.txt",
+      "prompts/mode-plan.txt",
+      "prompts/references/severity-classification.txt",
+      "prompts/review-consolidator.txt",
+      "prompts/review-reviewer-checklist.txt",
+      "scripts/render_prompt.py",
+      "scripts/review_parse_consolidator.sh",
+      "tests/fixtures/review_pipeline/consolidator_missing_severity.txt",
+      "tests/test_plan_clarify_blocked_output.py",
+      "tests/test_render_prompt_review_judge_modes.py",
+      "tests/test_review_parse_consolidator.py"
+    ],
+    "issue_number": 3316,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/3316",
+    "pr_number": 3317,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/3317",
+    "run_attempt": "1",
+    "run_id": "27457528038",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/27457528038"
   },
   "run_attempt": 1,
   "run_id": "27457528038",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-06-13T05:15:38Z",
+  "status": "completed",
+  "timestamp": "2026-06-13T05:24:34Z",
   "workflow": "implement"
 }
