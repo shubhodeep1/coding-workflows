@@ -228,12 +228,15 @@ def _fetch_log_tail(*, details_url: str, log_tail_bytes: int, repository: str, t
 			method="GET",
 		)
 		try:
-			_LOG_REDIRECT_OPENER.open(api_req, timeout=10)
-			return ""
-		except urllib.error.HTTPError as exc:
-			if exc.code not in (301, 302, 303, 307, 308):
+			with _LOG_REDIRECT_OPENER.open(api_req, timeout=10):
 				return ""
-			blob_url = exc.headers.get("Location") or ""
+		except urllib.error.HTTPError as exc:
+			try:
+				if exc.code not in (301, 302, 303, 307, 308):
+					return ""
+				blob_url = exc.headers.get("Location") or ""
+			finally:
+				exc.close()
 		if not blob_url:
 			return ""
 		head_req = urllib.request.Request(blob_url, method="HEAD")
@@ -349,97 +352,116 @@ def _emit_final_diagnostics(out_path: Path) -> None:
 def main() -> int:
 	payload_path = Path(_required_env("PR_PAYLOAD_FILE"))
 	out_path = Path(_required_env("PR_CHECK_RUNS_CONTEXT_FILE"))
+	_write_text(out_path, "")
+	head_sha = ""
 
-	if os.environ.get("CHECK_RUNS_AUTOFIX_ENABLED", "true") == "false":
-		_write_text(
-			out_path,
-			_sentinel_text(
-				head_sha="",
-				collection_status="disabled",
-				message="Check-run autofix context collection is disabled (CHECK_RUNS_AUTOFIX_ENABLED=false).",
-			),
-		)
-		print("CHECK_RUNS_AUTOFIX disabled via CHECK_RUNS_AUTOFIX_ENABLED=false")
+	try:
+		if os.environ.get("CHECK_RUNS_AUTOFIX_ENABLED", "true") == "false":
+			_write_text(
+				out_path,
+				_sentinel_text(
+					head_sha="",
+					collection_status="disabled",
+					message="Check-run autofix context collection is disabled (CHECK_RUNS_AUTOFIX_ENABLED=false).",
+				),
+			)
+			print("CHECK_RUNS_AUTOFIX disabled via CHECK_RUNS_AUTOFIX_ENABLED=false")
+			return 0
+
+		head_sha = _load_head_sha(payload_path)
+		if not head_sha:
+			_write_text(
+				out_path,
+				_sentinel_text(
+					head_sha="",
+					collection_status="unavailable",
+					message="Unable to determine PR head SHA; no check-run context available.",
+				),
+			)
+			print("::warning::CHECK_RUNS_AUTOFIX head SHA missing from PR payload.")
+			return 0
+
+		wait_timeout = _clamp_wait_timeout(os.environ.get("CHECK_RUNS_WAIT_TIMEOUT_SECS", str(DEFAULT_WAIT_TIMEOUT_SECS)))
+		poll_interval = _clamp_poll_interval(os.environ.get("CHECK_RUNS_POLL_INTERVAL_SECS", str(DEFAULT_POLL_INTERVAL_SECS)))
+		backoff_cap = max(BACKOFF_CAP_SECS, poll_interval)
+		repository = os.environ.get("GITHUB_REPOSITORY", "")
+		self_run_id = os.environ.get("SELF_RUN_ID", "")
+		deadline = int(time.time()) + wait_timeout
+		last_wait_view: list[dict[str, Any]] | None = None
+		unchanged_wait_snapshots = 0
+		final_status = "ready"
+		raw_text = ""
+
+		while True:
+			proc = _run_check_runs_api(repository=repository, head_sha=head_sha, script_dir=Path(__file__).resolve().parent)
+			raw_text = proc.stdout or ""
+			if proc.returncode != 0:
+				if proc.stderr:
+					sys.stderr.write(proc.stderr)
+				final_status = "api_error"
+				break
+
+			wait_view = _build_wait_view(raw_text, self_run_id)
+			in_flight = len(wait_view)
+			if last_wait_view is not None and wait_view == last_wait_view:
+				unchanged_wait_snapshots += 1
+			else:
+				last_wait_view = wait_view
+				unchanged_wait_snapshots = 0
+
+			if in_flight == 0:
+				final_status = "ready"
+				break
+
+			now = int(time.time())
+			if now >= deadline:
+				final_status = "timeout"
+				print(f"::warning::CHECK_RUNS_WAIT_TIMEOUT reached after {wait_timeout}s with {in_flight} check-run(s) still queued/in_progress; proceeding with snapshot.")
+				break
+
+			remaining = deadline - now
+			sleep_secs = poll_interval
+			if unchanged_wait_snapshots >= 2:
+				sleep_secs = poll_interval * 4
+			elif unchanged_wait_snapshots >= 1:
+				sleep_secs = poll_interval * 2
+			if sleep_secs > backoff_cap:
+				sleep_secs = backoff_cap
+			if sleep_secs > remaining:
+				sleep_secs = remaining
+			print(f"Waiting for {in_flight} in-progress/queued check-run(s) on {head_sha} (sleep {sleep_secs}s, deadline in {remaining}s)…")
+			time.sleep(max(0, sleep_secs))
+
+		writer_ok = _write_context_file(out_path=out_path, raw_text=raw_text, head_sha=head_sha, final_status=final_status)
+		if not writer_ok:
+			_write_text(
+				out_path,
+				_sentinel_text(
+					head_sha=head_sha,
+					collection_status="writer_error",
+					message="Check-run snapshot writer failed; treat absence of failures as unknown rather than confirmed-passing.",
+				),
+			)
+			print(f"::warning::CHECK_RUNS_AUTOFIX_WRITER_ERROR head_sha={head_sha} writer_ok={writer_ok}")
+
+		_emit_final_diagnostics(out_path)
 		return 0
-
-	head_sha = _load_head_sha(payload_path)
-	if not head_sha:
-		_write_text(
-			out_path,
-			_sentinel_text(
-				head_sha="",
-				collection_status="unavailable",
-				message="Unable to determine PR head SHA; no check-run context available.",
-			),
-		)
-		print("::warning::CHECK_RUNS_AUTOFIX head SHA missing from PR payload.")
+	except Exception:
+		traceback.print_exc(file=sys.stderr)
+		try:
+			_write_text(
+				out_path,
+				_sentinel_text(
+					head_sha=head_sha,
+					collection_status="writer_error",
+					message="Check-run snapshot writer failed; treat absence of failures as unknown rather than confirmed-passing.",
+				),
+			)
+		except Exception:
+			traceback.print_exc(file=sys.stderr)
+		print(f"::warning::CHECK_RUNS_AUTOFIX_WRITER_ERROR head_sha={head_sha} writer_ok=False")
+		_emit_final_diagnostics(out_path)
 		return 0
-
-	wait_timeout = _clamp_wait_timeout(os.environ.get("CHECK_RUNS_WAIT_TIMEOUT_SECS", str(DEFAULT_WAIT_TIMEOUT_SECS)))
-	poll_interval = _clamp_poll_interval(os.environ.get("CHECK_RUNS_POLL_INTERVAL_SECS", str(DEFAULT_POLL_INTERVAL_SECS)))
-	backoff_cap = max(BACKOFF_CAP_SECS, poll_interval)
-	repository = os.environ.get("GITHUB_REPOSITORY", "")
-	self_run_id = os.environ.get("SELF_RUN_ID", "")
-	deadline = int(time.time()) + wait_timeout
-	last_wait_view: list[dict[str, Any]] | None = None
-	unchanged_wait_snapshots = 0
-	final_status = "ready"
-	raw_text = ""
-
-	while True:
-		proc = _run_check_runs_api(repository=repository, head_sha=head_sha, script_dir=Path(__file__).resolve().parent)
-		raw_text = proc.stdout or ""
-		if proc.returncode != 0:
-			if proc.stderr:
-				sys.stderr.write(proc.stderr)
-			final_status = "api_error"
-			break
-
-		wait_view = _build_wait_view(raw_text, self_run_id)
-		in_flight = len(wait_view)
-		if last_wait_view is not None and wait_view == last_wait_view:
-			unchanged_wait_snapshots += 1
-		else:
-			last_wait_view = wait_view
-			unchanged_wait_snapshots = 0
-
-		if in_flight == 0:
-			final_status = "ready"
-			break
-
-		now = int(time.time())
-		if now >= deadline:
-			final_status = "timeout"
-			print(f"::warning::CHECK_RUNS_WAIT_TIMEOUT reached after {wait_timeout}s with {in_flight} check-run(s) still queued/in_progress; proceeding with snapshot.")
-			break
-
-		remaining = deadline - now
-		sleep_secs = poll_interval
-		if unchanged_wait_snapshots >= 2:
-			sleep_secs = poll_interval * 4
-		elif unchanged_wait_snapshots >= 1:
-			sleep_secs = poll_interval * 2
-		if sleep_secs > backoff_cap:
-			sleep_secs = backoff_cap
-		if sleep_secs > remaining:
-			sleep_secs = remaining
-		print(f"Waiting for {in_flight} in-progress/queued check-run(s) on {head_sha} (sleep {sleep_secs}s, deadline in {remaining}s)…")
-		time.sleep(max(0, sleep_secs))
-
-	writer_ok = _write_context_file(out_path=out_path, raw_text=raw_text, head_sha=head_sha, final_status=final_status)
-	if not writer_ok:
-		_write_text(
-			out_path,
-			_sentinel_text(
-				head_sha=head_sha,
-				collection_status="writer_error",
-				message="Check-run snapshot writer failed; treat absence of failures as unknown rather than confirmed-passing.",
-			),
-		)
-		print(f"::warning::CHECK_RUNS_AUTOFIX_WRITER_ERROR head_sha={head_sha} writer_ok={writer_ok}")
-
-	_emit_final_diagnostics(out_path)
-	return 0
 
 
 if __name__ == "__main__":

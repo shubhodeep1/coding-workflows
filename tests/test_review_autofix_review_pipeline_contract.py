@@ -1527,9 +1527,51 @@ def test_collect_pr_check_runs_helper_is_bootstrapped_and_delegated() -> None:
 	assert 'gh api --paginate --slurp' not in block
 	assert 'gh_retry gh api --paginate --slurp' in helper_text
 	assert 'NamedTemporaryFile' in helper_text
-	assert '_write_text(out_path, "")' not in helper_text
+	assert '_write_text(out_path, "")' in helper_text
+	assert 'with _LOG_REDIRECT_OPENER.open(api_req, timeout=10):' in helper_text
+	assert 'exc.close()' in helper_text
 	assert 'traceback.print_exc(file=sys.stderr)' in helper_text
 	assert 'CHECK_RUNS_AUTOFIX_WRITER_ERROR' in helper_text
+
+
+def test_collect_pr_check_runs_helper_closes_direct_log_redirect_response() -> None:
+	spec = importlib.util.spec_from_file_location("collect_pr_check_runs_context_test", CHECK_RUNS_HELPER)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+
+	class _DirectResponse:
+		def __init__(self) -> None:
+			self.closed = False
+
+		def __enter__(self):
+			return self
+
+		def __exit__(self, exc_type, exc, tb) -> None:
+			self.closed = True
+
+	class _FakeOpener:
+		def __init__(self, response: _DirectResponse) -> None:
+			self._response = response
+
+		def open(self, req, timeout=10):
+			return self._response
+
+	response = _DirectResponse()
+	original_opener = module._LOG_REDIRECT_OPENER
+	try:
+		module._LOG_REDIRECT_OPENER = _FakeOpener(response)
+		result = module._fetch_log_tail(
+			details_url="https://github.com/owner/repo/actions/runs/41/job/82",
+			log_tail_bytes=64,
+			repository="owner/repo",
+			token="test-token",
+		)
+	finally:
+		module._LOG_REDIRECT_OPENER = original_opener
+
+	assert result == ""
+	assert response.closed is True
 
 
 def test_collect_pr_check_runs_helper_ready_contract_preserves_self_run_exclusion() -> None:
@@ -1670,6 +1712,67 @@ def test_collect_pr_check_runs_helper_writer_error_is_observable_and_fail_open()
 		)
 		assert "stale-context" not in context_file.read_text(encoding="utf-8")
 		assert "RuntimeError: boom" in stderr.getvalue()
+		assert "::warning::CHECK_RUNS_AUTOFIX_WRITER_ERROR head_sha=abc123 writer_ok=False" in stdout.getvalue()
+
+
+def test_collect_pr_check_runs_helper_top_level_exception_is_fail_open() -> None:
+	spec = importlib.util.spec_from_file_location("collect_pr_check_runs_context_test", CHECK_RUNS_HELPER)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+
+	with tempfile.TemporaryDirectory(prefix="collect-pr-check-runs-top-level-") as td:
+		tmp = Path(td)
+		pr_payload_file = tmp / "pr_payload.json"
+		pr_payload_file.write_text(json.dumps({"head": {"sha": "abc123"}}), encoding="utf-8")
+		context_file = tmp / "pr_check_runs_context.txt"
+		context_file.write_text("stale-context\n", encoding="utf-8")
+
+		def _fake_run_check_runs_api(*, repository: str, head_sha: str, script_dir: Path) -> subprocess.CompletedProcess[str]:
+			return subprocess.CompletedProcess(args=["gh"], returncode=0, stdout="[]", stderr="")
+
+		def _boom_wait_view(raw_text: str, self_run_id: str):
+			raise RuntimeError("wait-view boom")
+
+		original_env = os.environ.copy()
+		original_run = module._run_check_runs_api
+		original_wait_view = module._build_wait_view
+		try:
+			os.environ.update({
+				"PR_PAYLOAD_FILE": str(pr_payload_file),
+				"PR_CHECK_RUNS_CONTEXT_FILE": str(context_file),
+				"CHECK_RUNS_AUTOFIX_ENABLED": "true",
+				"CHECK_RUNS_WAIT_TIMEOUT_SECS": "300",
+				"CHECK_RUNS_POLL_INTERVAL_SECS": "20",
+				"CHECK_RUNS_LOG_TAIL_BYTES": "0",
+				"GITHUB_REPOSITORY": "owner/repo",
+				"SELF_RUN_ID": "",
+			})
+			module._run_check_runs_api = _fake_run_check_runs_api
+			module._build_wait_view = _boom_wait_view
+			stdout = io.StringIO()
+			stderr = io.StringIO()
+			with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+				returncode = module.main()
+		finally:
+			os.environ.clear()
+			os.environ.update(original_env)
+			module._run_check_runs_api = original_run
+			module._build_wait_view = original_wait_view
+
+		assert returncode == 0
+		assert context_file.read_text(encoding="utf-8") == (
+			"PR_CHECK_RUNS_CONTEXT\n"
+			"head_sha: abc123\n"
+			"collection_status: writer_error\n"
+			"total_check_runs: 0\n"
+			"failed_count: 0\n"
+			"incomplete_count: 0\n"
+			"\n"
+			"Check-run snapshot writer failed; treat absence of failures as unknown rather than confirmed-passing.\n"
+		)
+		assert "stale-context" not in context_file.read_text(encoding="utf-8")
+		assert "RuntimeError: wait-view boom" in stderr.getvalue()
 		assert "::warning::CHECK_RUNS_AUTOFIX_WRITER_ERROR head_sha=abc123 writer_ok=False" in stdout.getvalue()
 
 
@@ -3092,9 +3195,11 @@ def main() -> int:
 	test_review_pipeline_knobs_are_wired_into_codex_agent_env()
 	test_review_collect_pr_metadata_helper_is_bootstrapped_and_delegated()
 	test_collect_pr_check_runs_helper_is_bootstrapped_and_delegated()
+	test_collect_pr_check_runs_helper_closes_direct_log_redirect_response()
 	test_collect_pr_check_runs_helper_ready_contract_preserves_self_run_exclusion()
 	test_collect_pr_check_runs_helper_fail_open_contracts()
 	test_collect_pr_check_runs_helper_writer_error_is_observable_and_fail_open()
+	test_collect_pr_check_runs_helper_top_level_exception_is_fail_open()
 	test_review_collect_pr_metadata_helper_supports_no_pr_synthetic_mode()
 	test_review_collect_pr_metadata_helper_skips_optional_pr_reviews_by_default()
 	test_review_collect_pr_metadata_helper_fetches_top_level_reviews_when_break_glass_enabled()
