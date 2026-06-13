@@ -15,6 +15,10 @@ TARGET_STEPS = (
 	(".github/workflows/clarify.yml", "Fetch issue comments"),
 	(".github/workflows/clarify.yml", "Post clarification questions"),
 	(".github/workflows/clarify.yml", "Comment on issue failure"),
+	(".github/workflows/cancel_on_pr_close.yml", "Cancel queued/in-progress runs for closed PR branch"),
+	(".github/workflows/mark-stable.yml", "Verify CI passed on stable"),
+	(".github/workflows/mark-stable.yml", "Notify consumer repos via repository_dispatch"),
+	(".github/workflows/orchestrate_poll.yml", "Find active tracking issues"),
 	(".github/workflows/plan.yml", "Fetch issue metadata"),
 	(".github/workflows/plan.yml", "Fetch issue comments"),
 	(".github/workflows/plan.yml", "Skip when issue already has a PR"),
@@ -22,6 +26,7 @@ TARGET_STEPS = (
 	(".github/workflows/orchestrate.yml", "Create tracking issue"),
 	(".github/workflows/orchestrate_clarify_respond.yml", "Fetch issue and tracking context"),
 	(".github/workflows/orchestrate_clarify_respond.yml", "Comment on issue failure"),
+	(".github/workflows/test-and-mark-stable.yml", "Verify CI passed on source branch"),
 )
 
 

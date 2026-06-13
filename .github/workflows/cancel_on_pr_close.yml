@@ -18,39 +18,47 @@ jobs:
       REPOSITORY: ${{ github.repository }}
       CURRENT_RUN_ID: ${{ github.run_id }}
     steps:
-      - name: Cancel queued/in-progress runs for closed PR branch
+      - name: Checkout workflow support source
+        id: checkout_support_source
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ github.repository == 'shubhodeep1/coding-workflows' && github.sha || 'stable' }}
+          token: ${{ secrets.GH_PAT || github.token }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+
+      - name: Checkout workflow support source fallback
+        if: ${{ steps.checkout_support_source.outcome == 'failure' }}
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: main
+          token: ${{ secrets.GH_PAT || github.token }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+
+      - name: Stage gh retry helper
         shell: bash
         run: |
           set -euo pipefail
 
-          # Rate-limit-aware gh retry
-          _rl_wait() {
-            local _reset_ts _wait_secs
-            _reset_ts=$(gh api -i /rate_limit 2>/dev/null | grep -i '^x-ratelimit-reset:' | head -1 | awk '{print $2}' | tr -d '\r') || true
-            if [ -n "${_reset_ts}" ] && [ "${_reset_ts}" -gt 0 ] 2>/dev/null; then
-              _wait_secs=$(( _reset_ts - $(date +%s) + 1 ))
-              [ "${_wait_secs}" -lt 1 ] && _wait_secs=1
-              [ "${_wait_secs}" -gt 600 ] && _wait_secs=600
-            else
-              _wait_secs=30
-            fi
-            echo "::warning::  Rate limit resets in ${_wait_secs}s (X-RateLimit-Reset: ${_reset_ts:-unknown})" >&2
-            sleep "${_wait_secs}"
-          }
-          _gh_retry() {
-            local attempt=1
-            while [ "${attempt}" -le 5 ]; do
-              if "$@" 2>/tmp/_gh_rl_err; then return 0; fi
-              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
-                echo "::warning::Rate limit hit (attempt ${attempt}/5), waiting for reset…" >&2
-                _rl_wait; attempt=$((attempt + 1))
-              else
-                cat /tmp/_gh_rl_err >&2 2>/dev/null; local w=$(( 2 ** (attempt - 1) ))
-                echo "::warning::gh failed (attempt ${attempt}/5), retrying in ${w}s…" >&2
-                sleep "${w}"; attempt=$((attempt + 1))
-              fi
-            done; return 1
-          }
+          if [ ! -f .codex-workflow-src/scripts/gh_helpers.sh ]; then
+            echo "::warning::Workflow support checkout unavailable; continuing without staged gh_helpers.sh"
+            exit 0
+          fi
+
+          mkdir -p scripts
+          install -m 0755 .codex-workflow-src/scripts/gh_helpers.sh scripts/gh_helpers.sh
+
+      - name: Cancel queued/in-progress runs for closed PR branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
           echo "Processing PR #${PR_NUMBER}" \
             "for ${REPOSITORY}" \
@@ -66,7 +74,7 @@ jobs:
           # `jq --argjson` (E2BIG -> exit 126). The client-side selects
           # below are kept as a defensive double-check.
           queued_runs_json="$(
-            _gh_retry gh api \
+            gh_retry gh api \
               --method GET \
               "repos/${REPOSITORY}/actions/runs" \
               --paginate \
@@ -77,7 +85,7 @@ jobs:
             | jq -s "${RUNS_JQ}"
           )"
           in_progress_runs_json="$(
-            _gh_retry gh api \
+            gh_retry gh api \
               --method GET \
               "repos/${REPOSITORY}/actions/runs" \
               --paginate \
@@ -134,7 +142,7 @@ jobs:
             cancel_url="repos/${REPOSITORY}"
             cancel_url+="/actions/runs"
             cancel_url+="/${run_id}/cancel"
-            if _gh_retry gh api -X POST \
+            if gh_retry gh api -X POST \
               "${cancel_url}" \
               >/dev/null 2>&1; then
               echo "Canceled run ${run_id}."

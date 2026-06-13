@@ -4653,40 +4653,12 @@ jobs:
           SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           SHA=$(git rev-parse HEAD)
           echo "Checking CI status for ${SOURCE_BRANCH} @ $SHA ..."
           # Allow the release even if no CI status is reported (repos
           # with no required checks). Fail only on explicit failure.
-          # Rate-limit-aware gh retry so transient 429 / abuse-detection /
-          # secondary-rate errors aren't silently coerced to "pending"
-          # — same wrapper as in mark-stable.yml.
-          _rl_wait() {
-            local _reset_ts _wait_secs
-            _reset_ts=$(gh api -i /rate_limit 2>/dev/null | grep -i '^x-ratelimit-reset:' | head -1 | awk '{print $2}' | tr -d '\r') || true
-            if [ -n "${_reset_ts}" ] && [ "${_reset_ts}" -gt 0 ] 2>/dev/null; then
-              _wait_secs=$(( _reset_ts - $(date +%s) + 1 ))
-              [ "${_wait_secs}" -lt 1 ] && _wait_secs=1
-              [ "${_wait_secs}" -gt 600 ] && _wait_secs=600
-            else
-              _wait_secs=30
-            fi
-            echo "::warning::  Rate limit resets in ${_wait_secs}s (X-RateLimit-Reset: ${_reset_ts:-unknown})" >&2
-            sleep "${_wait_secs}"
-          }
-          _gh_retry() {
-            local attempt=1
-            while [ "${attempt}" -le 5 ]; do
-              if "$@" 2>/tmp/_gh_rl_err; then return 0; fi
-              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
-                echo "::warning::Rate limit hit (attempt ${attempt}/5), waiting for reset…" >&2
-                _rl_wait; attempt=$((attempt + 1))
-              else
-                cat /tmp/_gh_rl_err >&2 2>/dev/null; local w=$(( 2 ** (attempt - 1) ))
-                echo "::warning::gh failed (attempt ${attempt}/5), retrying in ${w}s…" >&2
-                sleep "${w}"; attempt=$((attempt + 1))
-              fi
-            done; return 1
-          }
           # Distinguish three failure modes:
           #   1. API call itself failed (transport / auth / repeated 5xx
           #      / rate-limit retries exhausted) → hard error. The old
@@ -4698,20 +4670,16 @@ jobs:
           #      policy above).
           #   3. API returned a real state — fail only on explicit
           #      "failure" / "error".
-          # Note on stderr: `_gh_retry` already redirects the wrapped
-          # command's stderr to /tmp/_gh_rl_err internally (see helper
-          # above). An outer `2>/tmp/_gh_state_err` here would only
-          # capture _gh_retry's own warnings, not the actual `gh api`
-          # error — so on rc != 0 we surface /tmp/_gh_rl_err for the
-          # real diagnostic.
+          # gh_retry already surfaces the final failure stderr, so rc
+          # alone distinguishes transport/auth failure from an empty CI
+          # state.
           set +e
-          STATE=$(_gh_retry gh api "repos/${{ github.repository }}/commits/${SHA}/status" \
+          STATE=$(gh_retry gh api "repos/${{ github.repository }}/commits/${SHA}/status" \
             --jq '.state')
           rc=$?
           set -e
           if [ "$rc" -ne 0 ]; then
             echo "::error::Failed to query CI status after retries (rc=${rc}). Refusing to release without a confirmed CI signal."
-            cat /tmp/_gh_rl_err >&2 2>/dev/null || true
             exit 1
           fi
           if [ -z "$STATE" ]; then
