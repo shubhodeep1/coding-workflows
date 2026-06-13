@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import contextlib
+import importlib.util
+import io
 import json
 import os
 import re
@@ -21,6 +24,7 @@ CONSOLIDATE = REPO_ROOT / "scripts" / "review_consolidate.sh"
 RB_JUDGE = REPO_ROOT / "scripts" / "review_rb_judge.sh"
 AGENTS_MD_MATERIALITY = REPO_ROOT / "scripts" / "review_agents_md_materiality.sh"
 METADATA_HELPER = REPO_ROOT / "scripts" / "review_collect_pr_metadata.sh"
+CHECK_RUNS_HELPER = REPO_ROOT / "scripts" / "collect_pr_check_runs_context.py"
 REVIEWER_FAILBACK_CHAINS = REPO_ROOT / "scripts" / "reviewer_failback_chains.json"
 MODEL_CATALOG = REPO_ROOT / "scripts" / "codex_model_catalog.json"
 FIXTURES_DIR = REPO_ROOT / "scripts" / "fixtures" / "cloudflare-learnings"
@@ -252,6 +256,157 @@ def _run_review_collect_pr_metadata_harness(
 			"linked_issue_context": files["linked_issue_context"].read_text(encoding="utf-8"),
 			"comments_context": files["comments_context"].read_text(encoding="utf-8"),
 			"pr_diff": files["pr_diff"].read_text(encoding="utf-8"),
+		}
+
+
+def _install_check_runs_mock_gh(bin_dir: Path, state_file: Path) -> None:
+	gh_script = r'''#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+state_path = Path(os.environ["MOCK_GH_STATE_FILE"])
+if state_path.exists():
+	state = json.loads(state_path.read_text(encoding="utf-8"))
+else:
+	state = {}
+args = sys.argv[1:]
+
+
+def save() -> None:
+	state_path.write_text(json.dumps(state), encoding="utf-8")
+
+
+def api_path() -> str:
+	idx = 1
+	takes_value = {"--jq", "-f", "-F", "-H", "-X", "--input"}
+	no_value = {"--paginate", "--slurp", "-i"}
+	while idx < len(args):
+		arg = args[idx]
+		if arg in takes_value:
+			idx += 2
+			continue
+		if arg in no_value:
+			idx += 1
+			continue
+		if arg.startswith("-"):
+			idx += 1
+			continue
+		return arg
+	return ""
+
+
+def render_response(response: object) -> tuple[int, str, str]:
+	if not isinstance(response, dict):
+		return 1, "", "mock gh: malformed check-runs response\n"
+	exit_code = int(response.get("exit_code", 0) or 0)
+	stdout = response.get("stdout", "")
+	stderr = response.get("stderr", "")
+	if "json" in response:
+		stdout = json.dumps(response["json"])
+	return exit_code, str(stdout), str(stderr)
+
+
+state.setdefault("calls", []).append(args)
+
+if args[:1] == ["api"]:
+	path = api_path()
+	if path == "/rate_limit":
+		save()
+		sys.stdout.write("HTTP/1.1 200 OK\nx-ratelimit-reset: 0\n")
+		sys.exit(0)
+	if "/check-runs" in path:
+		responses = state.get("check_runs_responses", []) or []
+		idx = int(state.get("check_runs_index", 0) or 0)
+		if idx < len(responses):
+			response = responses[idx]
+			state["check_runs_index"] = idx + 1
+		else:
+			response = state.get("check_runs_default", {"json": []})
+		exit_code, stdout, stderr = render_response(response)
+		save()
+		if stdout:
+			sys.stdout.write(stdout)
+		if stderr:
+			sys.stderr.write(stderr)
+			if not stderr.endswith("\n"):
+				sys.stderr.write("\n")
+		sys.exit(exit_code)
+
+save()
+sys.stderr.write(f"mock gh: unsupported args: {args!r}\n")
+sys.exit(1)
+'''
+	mock_path = bin_dir / "gh"
+	mock_path.write_text(gh_script, encoding="utf-8")
+	mock_path.chmod(0o755)
+	state_file.write_text("{}", encoding="utf-8")
+
+
+def _run_collect_pr_check_runs_harness(
+	*,
+	pr_payload: object,
+	check_runs_responses: list[dict[str, object]] | None = None,
+	check_runs_autofix_enabled: str = "true",
+	self_run_id: str = "",
+	wait_timeout_secs: str = "300",
+	poll_interval_secs: str = "20",
+	log_tail_bytes: str = "0",
+	gh_retry_max_attempts: str = "1",
+) -> dict[str, object]:
+	with tempfile.TemporaryDirectory(prefix="collect-pr-check-runs-") as td:
+		tmp = Path(td)
+		bin_dir = tmp / "bin"
+		runtime_dir = tmp / "runtime"
+		bin_dir.mkdir()
+		runtime_dir.mkdir()
+
+		gh_state_file = runtime_dir / "gh_state.json"
+		_install_check_runs_mock_gh(bin_dir, gh_state_file)
+		gh_state_file.write_text(json.dumps({
+			"check_runs_responses": check_runs_responses or [],
+		}), encoding="utf-8")
+
+		pr_payload_file = runtime_dir / "pr_payload.json"
+		if isinstance(pr_payload, str):
+			pr_payload_file.write_text(pr_payload, encoding="utf-8")
+		else:
+			pr_payload_file.write_text(json.dumps(pr_payload), encoding="utf-8")
+		context_file = runtime_dir / "pr_check_runs_context.txt"
+
+		env = os.environ.copy()
+		env.update({
+			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			"MOCK_GH_STATE_FILE": str(gh_state_file),
+			"PYTHONDONTWRITEBYTECODE": "1",
+			"GH_TOKEN": "test-token",
+			"GITHUB_REPOSITORY": "owner/repo",
+			"PR_PAYLOAD_FILE": str(pr_payload_file),
+			"PR_CHECK_RUNS_CONTEXT_FILE": str(context_file),
+			"CHECK_RUNS_AUTOFIX_ENABLED": check_runs_autofix_enabled,
+			"CHECK_RUNS_WAIT_TIMEOUT_SECS": wait_timeout_secs,
+			"CHECK_RUNS_POLL_INTERVAL_SECS": poll_interval_secs,
+			"CHECK_RUNS_LOG_TAIL_BYTES": log_tail_bytes,
+			"GH_RETRY_MAX_ATTEMPTS": gh_retry_max_attempts,
+			"SELF_RUN_ID": self_run_id,
+		})
+
+		result = subprocess.run(
+			["python3", str(CHECK_RUNS_HELPER)],
+			cwd=str(REPO_ROOT),
+			env=env,
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+
+		return {
+			"returncode": result.returncode,
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			"context_text": context_file.read_text(encoding="utf-8"),
+			"mock_state": json.loads(gh_state_file.read_text(encoding="utf-8")),
 		}
 
 
@@ -1365,6 +1520,268 @@ def test_review_collect_pr_metadata_helper_is_bootstrapped_and_delegated() -> No
 	assert 'gh_retry_to_file "${outfile}" gh "$@"' in helper_text
 	assert 'review_collect_pr_metadata.XXXXXX' in helper_text
 	assert '::error::Unable to determine PR base branch' in helper_text
+
+
+def test_collect_pr_check_runs_helper_is_bootstrapped_and_delegated() -> None:
+	required_bootstrap_line = next(
+		line for line in _stage_helper_text().splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line
+	)
+	block = _step_block("Collect PR check-run failures (CI/lint autofix context)")
+	helper_text = CHECK_RUNS_HELPER.read_text(encoding="utf-8")
+
+	assert CHECK_RUNS_HELPER.exists(), f"missing helper: {CHECK_RUNS_HELPER}"
+	assert "collect_pr_check_runs_context.py" in required_bootstrap_line, required_bootstrap_line
+	assert 'python3 "${SUPPORT_SCRIPTS_DIR}/collect_pr_check_runs_context.py"' in block
+	assert 'gh api --paginate --slurp' not in block
+	assert 'gh_retry gh api --paginate --slurp' in helper_text
+	assert 'NamedTemporaryFile' in helper_text
+	assert '_write_text(out_path, "")' in helper_text
+	assert 'with _LOG_REDIRECT_OPENER.open(api_req, timeout=10):' in helper_text
+	assert 'exc.close()' in helper_text
+	assert 'traceback.print_exc(file=sys.stderr)' in helper_text
+	assert 'CHECK_RUNS_AUTOFIX_WRITER_ERROR' in helper_text
+
+
+def test_collect_pr_check_runs_helper_closes_direct_log_redirect_response() -> None:
+	spec = importlib.util.spec_from_file_location("collect_pr_check_runs_context_test", CHECK_RUNS_HELPER)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+
+	class _DirectResponse:
+		def __init__(self) -> None:
+			self.closed = False
+
+		def __enter__(self):
+			return self
+
+		def __exit__(self, exc_type, exc, tb) -> None:
+			self.closed = True
+
+	class _FakeOpener:
+		def __init__(self, response: _DirectResponse) -> None:
+			self._response = response
+
+		def open(self, req, timeout=10):
+			return self._response
+
+	response = _DirectResponse()
+	original_opener = module._LOG_REDIRECT_OPENER
+	try:
+		module._LOG_REDIRECT_OPENER = _FakeOpener(response)
+		result = module._fetch_log_tail(
+			details_url="https://github.com/owner/repo/actions/runs/41/job/82",
+			log_tail_bytes=64,
+			repository="owner/repo",
+			token="test-token",
+		)
+	finally:
+		module._LOG_REDIRECT_OPENER = original_opener
+
+	assert result == ""
+	assert response.closed is True
+
+
+def test_collect_pr_check_runs_helper_ready_contract_preserves_self_run_exclusion() -> None:
+	result = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "abc123"}},
+		self_run_id="777",
+		check_runs_responses=[{
+			"json": [
+				{
+					"check_runs": [
+						{
+							"id": 41,
+							"name": "unit-tests",
+							"status": "completed",
+							"conclusion": "failure",
+							"app": {"slug": "github-actions"},
+							"html_url": "https://github.com/owner/repo/runs/41",
+							"details_url": "https://github.com/owner/repo/actions/runs/41/job/82",
+							"output": {"title": "Tests failed", "summary": ""},
+						},
+					],
+				},
+				{
+					"check_runs": [
+						{
+							"id": 99,
+							"name": "review / codex-agent",
+							"status": "in_progress",
+							"html_url": "https://github.com/owner/repo/runs/99",
+							"details_url": "https://github.com/owner/repo/actions/runs/777/job/99",
+						},
+					],
+				},
+			],
+		}],
+	)
+
+	assert result["returncode"] == 0, result
+	assert "collection_status: ready\n" in result["context_text"]
+	assert "total_check_runs: 2\n" in result["context_text"]
+	assert "failed_count: 1\n" in result["context_text"]
+	assert "incomplete_count: 1\n" in result["context_text"]
+	assert "failed[0].name: unit-tests\n" in result["context_text"]
+	assert "failed[0].summary: \n" in result["context_text"]
+	assert "failed[0].log_tail (0 chars):\n" in result["context_text"]
+	assert "incomplete[0].name: review / codex-agent\n" in result["context_text"]
+	assert "Check-run context bytes:" in result["stdout"]
+	assert "Check-run context sha256:" in result["stdout"]
+	call_texts = [" ".join(call) for call in result["mock_state"]["calls"]]
+	assert any("--paginate" in call and "--slurp" in call and "/check-runs?per_page=100" in call for call in call_texts)
+
+
+def test_collect_pr_check_runs_helper_fail_open_contracts() -> None:
+	disabled = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "abc123"}},
+		check_runs_autofix_enabled="false",
+	)
+	assert disabled["returncode"] == 0, disabled
+	assert disabled["context_text"] == (
+		"PR_CHECK_RUNS_CONTEXT\n"
+		"head_sha: \n"
+		"collection_status: disabled\n"
+		"total_check_runs: 0\n"
+		"failed_count: 0\n"
+		"incomplete_count: 0\n"
+		"\n"
+		"Check-run autofix context collection is disabled (CHECK_RUNS_AUTOFIX_ENABLED=false).\n"
+	)
+	assert "CHECK_RUNS_AUTOFIX disabled via CHECK_RUNS_AUTOFIX_ENABLED=false\n" == disabled["stdout"]
+	assert disabled["mock_state"].get("calls", []) == []
+
+	api_error = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "abc123"}},
+		check_runs_responses=[{"exit_code": 1, "stderr": "mock gh: check-runs failure"}],
+	)
+	assert api_error["returncode"] == 0, api_error
+	assert "collection_status: api_error\n" in api_error["context_text"]
+	assert "Check-run API call failed; treat absence of failures as unknown rather than confirmed-passing.\n" in api_error["context_text"]
+	assert "mock gh: check-runs failure\n" in api_error["stderr"]
+	assert "Check-run context bytes:" in api_error["stdout"]
+
+
+def test_collect_pr_check_runs_helper_writer_error_is_observable_and_fail_open() -> None:
+	spec = importlib.util.spec_from_file_location("collect_pr_check_runs_context_test", CHECK_RUNS_HELPER)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+
+	with tempfile.TemporaryDirectory(prefix="collect-pr-check-runs-writer-error-") as td:
+		tmp = Path(td)
+		pr_payload_file = tmp / "pr_payload.json"
+		pr_payload_file.write_text(json.dumps({"head": {"sha": "abc123"}}), encoding="utf-8")
+		context_file = tmp / "pr_check_runs_context.txt"
+		context_file.write_text("stale-context\n", encoding="utf-8")
+
+		def _fake_run_check_runs_api(*, repository: str, head_sha: str, script_dir: Path) -> subprocess.CompletedProcess[str]:
+			return subprocess.CompletedProcess(args=["gh"], returncode=0, stdout="[]", stderr="")
+
+		def _boom(*, raw_text: str, head_sha: str, final_status: str) -> str:
+			raise RuntimeError("boom")
+
+		original_env = os.environ.copy()
+		original_run = module._run_check_runs_api
+		original_build = module._build_context_text
+		try:
+			os.environ.update({
+				"PR_PAYLOAD_FILE": str(pr_payload_file),
+				"PR_CHECK_RUNS_CONTEXT_FILE": str(context_file),
+				"CHECK_RUNS_AUTOFIX_ENABLED": "true",
+				"CHECK_RUNS_WAIT_TIMEOUT_SECS": "300",
+				"CHECK_RUNS_POLL_INTERVAL_SECS": "20",
+				"CHECK_RUNS_LOG_TAIL_BYTES": "0",
+				"GITHUB_REPOSITORY": "owner/repo",
+				"SELF_RUN_ID": "",
+			})
+			module._run_check_runs_api = _fake_run_check_runs_api
+			module._build_context_text = _boom
+			stdout = io.StringIO()
+			stderr = io.StringIO()
+			with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+				returncode = module.main()
+		finally:
+			os.environ.clear()
+			os.environ.update(original_env)
+			module._run_check_runs_api = original_run
+			module._build_context_text = original_build
+
+		assert returncode == 0
+		assert context_file.read_text(encoding="utf-8") == (
+			"PR_CHECK_RUNS_CONTEXT\n"
+			"head_sha: abc123\n"
+			"collection_status: writer_error\n"
+			"total_check_runs: 0\n"
+			"failed_count: 0\n"
+			"incomplete_count: 0\n"
+			"\n"
+			"Check-run snapshot writer failed; treat absence of failures as unknown rather than confirmed-passing.\n"
+		)
+		assert "stale-context" not in context_file.read_text(encoding="utf-8")
+		assert "RuntimeError: boom" in stderr.getvalue()
+		assert "::warning::CHECK_RUNS_AUTOFIX_WRITER_ERROR head_sha=abc123 writer_ok=False" in stdout.getvalue()
+
+
+def test_collect_pr_check_runs_helper_top_level_exception_is_fail_open() -> None:
+	spec = importlib.util.spec_from_file_location("collect_pr_check_runs_context_test", CHECK_RUNS_HELPER)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+
+	with tempfile.TemporaryDirectory(prefix="collect-pr-check-runs-top-level-") as td:
+		tmp = Path(td)
+		pr_payload_file = tmp / "pr_payload.json"
+		pr_payload_file.write_text(json.dumps({"head": {"sha": "abc123"}}), encoding="utf-8")
+		context_file = tmp / "pr_check_runs_context.txt"
+		context_file.write_text("stale-context\n", encoding="utf-8")
+
+		def _fake_run_check_runs_api(*, repository: str, head_sha: str, script_dir: Path) -> subprocess.CompletedProcess[str]:
+			return subprocess.CompletedProcess(args=["gh"], returncode=0, stdout="[]", stderr="")
+
+		def _boom_wait_view(raw_text: str, self_run_id: str):
+			raise RuntimeError("wait-view boom")
+
+		original_env = os.environ.copy()
+		original_run = module._run_check_runs_api
+		original_wait_view = module._build_wait_view
+		try:
+			os.environ.update({
+				"PR_PAYLOAD_FILE": str(pr_payload_file),
+				"PR_CHECK_RUNS_CONTEXT_FILE": str(context_file),
+				"CHECK_RUNS_AUTOFIX_ENABLED": "true",
+				"CHECK_RUNS_WAIT_TIMEOUT_SECS": "300",
+				"CHECK_RUNS_POLL_INTERVAL_SECS": "20",
+				"CHECK_RUNS_LOG_TAIL_BYTES": "0",
+				"GITHUB_REPOSITORY": "owner/repo",
+				"SELF_RUN_ID": "",
+			})
+			module._run_check_runs_api = _fake_run_check_runs_api
+			module._build_wait_view = _boom_wait_view
+			stdout = io.StringIO()
+			stderr = io.StringIO()
+			with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+				returncode = module.main()
+		finally:
+			os.environ.clear()
+			os.environ.update(original_env)
+			module._run_check_runs_api = original_run
+			module._build_wait_view = original_wait_view
+
+		assert returncode == 0
+		assert context_file.read_text(encoding="utf-8") == (
+			"PR_CHECK_RUNS_CONTEXT\n"
+			"head_sha: abc123\n"
+			"collection_status: writer_error\n"
+			"total_check_runs: 0\n"
+			"failed_count: 0\n"
+			"incomplete_count: 0\n"
+			"\n"
+			"Check-run snapshot writer failed; treat absence of failures as unknown rather than confirmed-passing.\n"
+		)
+		assert "stale-context" not in context_file.read_text(encoding="utf-8")
+		assert "RuntimeError: wait-view boom" in stderr.getvalue()
+		assert "::warning::CHECK_RUNS_AUTOFIX_WRITER_ERROR head_sha=abc123 writer_ok=False" in stdout.getvalue()
 
 
 def test_review_collect_pr_metadata_helper_supports_no_pr_synthetic_mode() -> None:
@@ -2998,6 +3415,12 @@ def test_reviewer_iteration_scope_prepare_path_reports_missing_targeted_context_
 def main() -> int:
 	test_review_pipeline_knobs_are_wired_into_codex_agent_env()
 	test_review_collect_pr_metadata_helper_is_bootstrapped_and_delegated()
+	test_collect_pr_check_runs_helper_is_bootstrapped_and_delegated()
+	test_collect_pr_check_runs_helper_closes_direct_log_redirect_response()
+	test_collect_pr_check_runs_helper_ready_contract_preserves_self_run_exclusion()
+	test_collect_pr_check_runs_helper_fail_open_contracts()
+	test_collect_pr_check_runs_helper_writer_error_is_observable_and_fail_open()
+	test_collect_pr_check_runs_helper_top_level_exception_is_fail_open()
 	test_review_collect_pr_metadata_helper_supports_no_pr_synthetic_mode()
 	test_review_collect_pr_metadata_helper_skips_optional_pr_reviews_by_default()
 	test_review_collect_pr_metadata_helper_fetches_top_level_reviews_when_break_glass_enabled()

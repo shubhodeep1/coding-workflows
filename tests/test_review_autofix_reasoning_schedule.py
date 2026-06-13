@@ -17,6 +17,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REVIEW_AUTOFIX_WF = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
+CHECK_RUNS_HELPER = REPO_ROOT / "scripts" / "collect_pr_check_runs_context.py"
 
 
 def _workflow() -> str:
@@ -68,11 +69,12 @@ def test_no_pr_claude_branch_review_uses_lightweight_reviewer_profile() -> None:
 
 def test_check_runs_wait_timeout_default_and_fallback_are_aligned() -> None:
 	wf = _workflow()
-	assert "CHECK_RUNS_WAIT_TIMEOUT_SECS: ${{ vars.CHECK_RUNS_WAIT_TIMEOUT_SECS || '900' }}" in wf
-	assert '_wait_timeout="${CHECK_RUNS_WAIT_TIMEOUT_SECS:-900}"' in wf
-	assert '_wait_timeout=900' in wf
-	assert "CHECK_RUNS_WAIT_TIMEOUT_SECS: ${{ vars.CHECK_RUNS_WAIT_TIMEOUT_SECS || '1200' }}" not in wf
-	assert '_wait_timeout="${CHECK_RUNS_WAIT_TIMEOUT_SECS:-1200}"' not in wf
+	helper = CHECK_RUNS_HELPER.read_text(encoding="utf-8")
+	assert "CHECK_RUNS_WAIT_TIMEOUT_SECS: ${{ vars.CHECK_RUNS_WAIT_TIMEOUT_SECS || '300' }}" in wf
+	assert "DEFAULT_WAIT_TIMEOUT_SECS = 300" in helper
+	assert "MAX_WAIT_TIMEOUT_SECS = 3600" in helper
+	assert "CHECK_RUNS_WAIT_TIMEOUT_SECS: ${{ vars.CHECK_RUNS_WAIT_TIMEOUT_SECS || '900' }}" not in wf
+	assert "DEFAULT_WAIT_TIMEOUT_SECS = 900" not in helper
 
 
 def test_editor_switch_replaces_any_reasoning_value() -> None:
