@@ -139,6 +139,9 @@ if [ "${LOOP_BLOCKED}" != "true" ] && [ "${SKIP_AUTO_ANSWER}" != "true" ]; then
 		COMMENT_COUNT_GUARD="$(grep -c '\[auto-answered-by-orchestrator\]' "${THREAD_HISTORY_FILE}" 2>/dev/null || true)"
 		COMMENT_COUNT_GUARD="${COMMENT_COUNT_GUARD:-0}"
 	fi
+	if ! [[ "${COMMENT_COUNT_GUARD}" =~ ^[0-9]+$ ]]; then
+		COMMENT_COUNT_GUARD=0
+	fi
 	if [ "${COMMENT_COUNT_GUARD}" -ge "${MAX_CYCLES}" ]; then
 		echo "::warning::Backup loop guard: found ${COMMENT_COUNT_GUARD} prior auto-answer comments (MAX_CYCLES=${MAX_CYCLES}). Blocking to prevent runaway loop."
 		LOOP_BLOCKED="true"

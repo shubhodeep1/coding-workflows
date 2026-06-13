@@ -90,10 +90,13 @@ jobs:
           # a single combined pass/fail notification at the end.
           TRACKING_NUM="$(printf '%s' "${ISSUE_BODY}" | sed -n 's/.*Tracking issue: #\([0-9][0-9]*\).*/\1/p' | head -n1)"
           if [ -n "${TRACKING_NUM}" ]; then
-            TRACKING_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" 2>/dev/null || echo "")"
-            if [ -n "${TRACKING_PAYLOAD}" ]; then
-              printf '%s' "${TRACKING_PAYLOAD}" > "${TRACKING_PAYLOAD_FILE}"
-              TRACKING_TITLE="$(printf '%s' "${TRACKING_PAYLOAD}" | jq -r '.title // ""' 2>/dev/null || echo "")"
+            if TRACKING_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" 2>/dev/null)"; then
+              if [ -n "${TRACKING_PAYLOAD}" ]; then
+                printf '%s' "${TRACKING_PAYLOAD}" > "${TRACKING_PAYLOAD_FILE}"
+                TRACKING_TITLE="$(printf '%s' "${TRACKING_PAYLOAD}" | jq -r '.title // ""' 2>/dev/null || echo "")"
+              else
+                TRACKING_TITLE=""
+              fi
             else
               TRACKING_TITLE=""
             fi
