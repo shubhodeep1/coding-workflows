@@ -5,6 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./comprehensive_test_and_release_gh_api.sh
 . "${SCRIPT_DIR}/comprehensive_test_and_release_gh_api.sh"
+GITHUB_OUTPUT="${GITHUB_OUTPUT:-/dev/null}"
 
 usage()
 {
@@ -34,6 +35,16 @@ require_numeric()
 	local value="$2"
 	if [[ ! "${value}" =~ ^[0-9]+$ ]]; then
 		echo "::error::${name} must be an integer, got '${value}'" >&2
+		exit 2
+	fi
+}
+
+require_option_argument()
+{
+	local option="${1:-}"
+	if [ "$#" -lt 2 ]; then
+		echo "::error::${option} requires an argument" >&2
+		usage
 		exit 2
 	fi
 }
@@ -97,46 +108,57 @@ DISPATCH_FIELDS=()
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 		--repo)
+			require_option_argument "$@"
 			TARGET_REPO="$2"
 			shift 2
 			;;
 		--workflow)
+			require_option_argument "$@"
 			WORKFLOW_FILE="$2"
 			shift 2
 			;;
 		--display-name)
+			require_option_argument "$@"
 			DISPLAY_NAME="$2"
 			shift 2
 			;;
 		--registration-timeout-secs)
+			require_option_argument "$@"
 			REGISTRATION_TIMEOUT_SECS="$2"
 			shift 2
 			;;
 		--registration-poll-interval-secs)
+			require_option_argument "$@"
 			REGISTRATION_POLL_INTERVAL_SECS="$2"
 			shift 2
 			;;
 		--completion-timeout-secs)
+			require_option_argument "$@"
 			COMPLETION_TIMEOUT_SECS="$2"
 			shift 2
 			;;
 		--completion-poll-interval-secs)
+			require_option_argument "$@"
 			COMPLETION_POLL_INTERVAL_SECS="$2"
 			shift 2
 			;;
 		--dispatch-max-attempts)
+			require_option_argument "$@"
 			DISPATCH_MAX_ATTEMPTS="$2"
 			shift 2
 			;;
 		--dispatch-backoff-base-secs)
+			require_option_argument "$@"
 			DISPATCH_BACKOFF_BASE_SECS="$2"
 			shift 2
 			;;
 		--allowed-conclusions)
+			require_option_argument "$@"
 			ALLOWED_CONCLUSIONS_CSV="$2"
 			shift 2
 			;;
 		--status-log-prefix)
+			require_option_argument "$@"
 			STATUS_LOG_PREFIX="$2"
 			shift 2
 			;;
@@ -153,6 +175,7 @@ while [ "$#" -gt 0 ]; do
 			shift
 			;;
 		--field)
+			require_option_argument "$@"
 			DISPATCH_FIELDS+=("$2")
 			shift 2
 			;;
@@ -193,6 +216,9 @@ if [ "${SNAPSHOT_ONLY}" != "1" ]; then
 fi
 
 PRE_RUN_ID="$(gh_api_safe_quiet_print "repos/${TARGET_REPO}/actions/workflows/${WORKFLOW_FILE}/runs?per_page=1" --jq '.workflow_runs[0].id // 0' || echo "0")"
+if [[ ! "${PRE_RUN_ID}" =~ ^[0-9]+$ ]]; then
+	PRE_RUN_ID=0
+fi
 
 if ! dispatch_workflow; then
 	if [ "${DISPATCH_FAIL_OPEN}" = "1" ]; then
@@ -258,8 +284,13 @@ STATUS=""
 CONCLUSION=""
 while [ "$(date +%s)" -lt "${COMPLETION_DEADLINE}" ]; do
 	RUN_JSON="$(gh_api_safe_quiet_print "repos/${TARGET_REPO}/actions/runs/${NEW_ID}" --jq '{status, conclusion}' || echo "")"
-	STATUS="$(printf '%s' "${RUN_JSON}" | jq -r '.status // ""' 2>/dev/null || echo "")"
-	CONCLUSION="$(printf '%s' "${RUN_JSON}" | jq -r '.conclusion // ""' 2>/dev/null || echo "")"
+	if [ -n "${RUN_JSON}" ]; then
+		STATUS="$(printf '%s' "${RUN_JSON}" | jq -r '.status // ""' 2>/dev/null || echo "")"
+		CONCLUSION="$(printf '%s' "${RUN_JSON}" | jq -r '.conclusion // ""' 2>/dev/null || echo "")"
+	else
+		STATUS=""
+		CONCLUSION=""
+	fi
 	if [ -n "${STATUS_LOG_PREFIX}" ]; then
 		echo "  ${STATUS_LOG_PREFIX} status=${STATUS} conclusion=${CONCLUSION}"
 	else
