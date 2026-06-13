@@ -302,6 +302,8 @@ jobs:
 
           while IFS= read -r manifest_entry || [ -n "${manifest_entry}" ]; do
             manifest_entry="${manifest_entry%$'\r'}"
+            manifest_entry="${manifest_entry#"${manifest_entry%%[![:space:]]*}"}"
+            manifest_entry="${manifest_entry%"${manifest_entry##*[![:space:]]}"}"
             [ -n "${manifest_entry}" ] || continue
             upstream_file="${UPSTREAM_DIR}/${manifest_entry}"
             [ -f "${upstream_file}" ] || fail_with_reason "ERR_PROFILE_TEMPLATE_MISSING" "Workflow profile ${SELECTED_PROFILE} references missing template ${manifest_entry}."

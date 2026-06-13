@@ -107,6 +107,8 @@ def test_profile_selection_and_non_destructive_downgrade_contracts() -> None:
 	assert 'PROFILE_MANIFEST="${PROFILE_MANIFEST_DIR}/${SELECTED_PROFILE}.txt"' in wf
 	assert 'manifest_templates=()' in wf
 	assert 'manifest_entry="${manifest_entry%$\'\\r\'}"' in wf
+	assert 'manifest_entry="${manifest_entry#"${manifest_entry%%[![:space:]]*}"}"' in wf
+	assert 'manifest_entry="${manifest_entry%"${manifest_entry##*[![:space:]]}"}"' in wf
 	assert 'done < "${PROFILE_MANIFEST}"' in wf
 	assert wf.count('for upstream_file in "${manifest_templates[@]}"; do') == 2
 	assert 'rm "$local_file"' not in wf

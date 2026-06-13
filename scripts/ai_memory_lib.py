@@ -34,6 +34,14 @@ try:
 except ModuleNotFoundError:
     from scripts.openrouter_prompt_cache import add_ephemeral_cache_breakpoint, should_retry_without_breakpoint
 
+try:
+    from memory_injection_patterns import scan as _scan_memory_injection_patterns
+except ModuleNotFoundError:
+    try:
+        from scripts.memory_injection_patterns import scan as _scan_memory_injection_patterns
+    except ModuleNotFoundError:
+        _scan_memory_injection_patterns = None
+
 _log = logging.getLogger(__name__)
 
 MEMORY_RECORD_SCHEMA_VERSION = "memory_record.v1"
@@ -110,6 +118,25 @@ def parse_bool(value: Any, default: bool = False) -> bool:
     if text in {"0", "false", "no", "off", "n"}:
         return False
     return default
+
+
+def scan_candidate_text_for_injection(summary: str, details: str) -> list[str]:
+    if not parse_bool(os.getenv("MEMORY_INJECTION_SCAN_ENABLED", "true"), default=True):
+        return []
+    if _scan_memory_injection_patterns is None:
+        return []
+
+    candidate_text = "\n".join(
+        item for item in (summary.strip(), details.strip()) if item.strip()
+    )
+    if not candidate_text:
+        return []
+
+    try:
+        return _scan_memory_injection_patterns(candidate_text)
+    except Exception:
+        _log.warning("AI memory injection scan failed; continuing without flag", exc_info=True)
+        return []
 
 
 def utc_now_iso() -> str:
@@ -1546,6 +1573,7 @@ def record_candidate(
         raise MemoryValidationError("Candidate details cannot be empty")
 
     resolved_sensitive = infer_sensitive(normalized_category, summary_text, details_text, sensitive)
+    injection_matches = scan_candidate_text_for_injection(summary_text, details_text)
     fingerprint = compute_fingerprint(normalized_category, summary_text, details_text, issue_number, pr_number)
     record = {
         "record_id": make_record_id("mem"),
@@ -1566,6 +1594,8 @@ def record_candidate(
             "superseded_at": None,
         },
     }
+    if injection_matches:
+        record["injection_suspected"] = True
 
     validate_memory_record(record, memory_root)
     _atomic_write_json(_record_path_for_candidate(memory_root, record), record)
