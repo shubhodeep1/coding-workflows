@@ -227,7 +227,7 @@ def _reference_file_names_for_placeholder(mode_name: str, placeholder_name: str)
 
 
 def collect_reference_values(prompt_text: str, *, prompt_path: Path, mode_name: str) -> dict[str, str]:
-	reference_placeholders = sorted(
+	reference_placeholders = tuple(
 		name for name in collect_standalone_placeholders(prompt_text) if name.startswith("REFERENCE_")
 	)
 	values: dict[str, str] = {}
