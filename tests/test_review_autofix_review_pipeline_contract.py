@@ -1758,6 +1758,61 @@ def test_review_collect_pr_metadata_helper_warns_when_fallback_graphql_returns_e
 	assert len([call for call in call_texts if call.startswith("api graphql ")]) == 2
 	assert not any("repos/owner/repo/issues/7" in call for call in call_texts)
 
+	partial_result = _run_review_collect_pr_metadata_harness(
+		pr_number="42",
+		claude_branch_review_mode="false",
+		head_ref_override="",
+		head_sha_override="",
+		base_ref_override="",
+		mock_state={
+			"api_responses": {
+				"repos/owner/repo/pulls/42/comments": [],
+				"repos/owner/repo/pulls/42/reviews": [],
+				"repos/owner/repo/issues/42/comments": [],
+				"repos/owner/repo/pulls/42": {
+					"title": "Synthetic PR title",
+					"body": "Fixes #7\nFixes #8\n\nContext body",
+					"base": {"ref": "main"},
+					"head": {
+						"ref": "feature/ref",
+						"sha": "abc123",
+						"repo": {"full_name": "owner/repo"},
+					},
+				},
+				"graphql": {
+					"errors": [{"message": "synthetic partial graphql failure"}],
+					"data": {
+						"repository": {
+							"pullRequest": {
+								"closingIssuesReferences": {
+									"nodes": [],
+								},
+							},
+							"i0": {
+								"__typename": "Issue",
+								"number": 7,
+								"title": "Linked fallback issue",
+								"body": "Linked fallback body",
+							},
+							"i1": None,
+						},
+					},
+				},
+			},
+			"pr_diffs": {"42": "pr diff sentinel\n"},
+		},
+	)
+
+	assert partial_result["github_env"]["LINKED_ISSUE_FALLBACK_NUMBERS_JSON"] == "[7,8]"
+	assert "Issue #7: Linked fallback issue" in partial_result["linked_issue_context"]
+	assert "Issue #8:" not in partial_result["linked_issue_context"]
+	assert "Linked-issue body-text fallback resolved 1 issue(s) for context" in partial_result["stdout"]
+	assert (
+		"::warning::Linked-issue body-text fallback: batched GraphQL issue hydration returned partial data "
+		"(hydrated 1 of 2 references); continuing with available context."
+		in partial_result["stderr"]
+	)
+
 
 def test_review_collect_pr_metadata_helper_caps_fallback_graphql_batch_at_twenty_issues() -> None:
 	referenced_numbers = list(range(1, 23))

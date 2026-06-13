@@ -82,6 +82,7 @@ _fetch_linked_issue_bodies_graphql()
 {
 	local numbers_json="$1"
 	local count
+	local alias_count=0
 	count="$(printf '%s' "${numbers_json}" | jq 'length' 2>/dev/null || echo 0)"
 	if ! [[ "${count}" =~ ^[0-9]+$ ]] || [ "${count}" -eq 0 ]; then
 		echo '[]'
@@ -94,6 +95,7 @@ _fetch_linked_issue_bodies_graphql()
 	for ((i=0; i<count; i++)); do
 		n="$(printf '%s' "${numbers_json}" | jq -r ".[$i] // empty" 2>/dev/null || true)"
 		[[ "${n}" =~ ^[0-9]+$ ]] || continue
+		alias_count=$((alias_count + 1))
 		fragment+=$'\n'"        i${i}: issueOrPullRequest(number: ${n}) {
           __typename
           ... on Issue {
@@ -127,10 +129,13 @@ _fetch_linked_issue_bodies_graphql()
 		echo '[]'
 		return 1
 	fi
+	local had_graphql_errors=0
 	if jq -e '(((.errors? // []) | length) > 0) and ((.data.repository? // null) == null)' "${response_file}" >/dev/null 2>&1; then
 		rm -f "${response_file}"
 		echo '[]'
 		return 1
+	elif jq -e '((.errors? // []) | length) > 0' "${response_file}" >/dev/null 2>&1; then
+		had_graphql_errors=1
 	fi
 
 	local transformed
@@ -153,7 +158,12 @@ _fetch_linked_issue_bodies_graphql()
 		echo '[]'
 		return 1
 	}
+	local hydrated_count
+	hydrated_count="$(printf '%s' "${transformed}" | jq 'length' 2>/dev/null || echo 0)"
 	rm -f "${response_file}"
+	if [ "${had_graphql_errors}" -eq 1 ] || { [[ "${hydrated_count}" =~ ^[0-9]+$ ]] && [ "${hydrated_count}" -lt "${alias_count}" ]; }; then
+		echo "::warning::Linked-issue body-text fallback: batched GraphQL issue hydration returned partial data (hydrated ${hydrated_count} of ${alias_count} references); continuing with available context." >&2
+	fi
 
 	echo "${transformed}"
 }
