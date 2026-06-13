@@ -24,6 +24,7 @@ CONSOLIDATE = REPO_ROOT / "scripts" / "review_consolidate.sh"
 RB_JUDGE = REPO_ROOT / "scripts" / "review_rb_judge.sh"
 AGENTS_MD_MATERIALITY = REPO_ROOT / "scripts" / "review_agents_md_materiality.sh"
 METADATA_HELPER = REPO_ROOT / "scripts" / "review_collect_pr_metadata.sh"
+AUTO_MERGE_HELPER = REPO_ROOT / "scripts" / "review_enable_auto_merge.sh"
 CHECK_RUNS_HELPER = REPO_ROOT / "scripts" / "collect_pr_check_runs_context.py"
 REVIEWER_FAILBACK_CHAINS = REPO_ROOT / "scripts" / "reviewer_failback_chains.json"
 MODEL_CATALOG = REPO_ROOT / "scripts" / "codex_model_catalog.json"
@@ -45,6 +46,10 @@ def _workflow_text() -> str:
 
 def _stage_helper_text() -> str:
 	return STAGE_HELPER.read_text(encoding="utf-8")
+
+
+def _auto_merge_helper_text() -> str:
+	return AUTO_MERGE_HELPER.read_text(encoding="utf-8")
 
 
 def _reviewers_text() -> str:
@@ -1520,6 +1525,25 @@ def test_review_collect_pr_metadata_helper_is_bootstrapped_and_delegated() -> No
 	assert 'gh_retry_to_file "${outfile}" gh "$@"' in helper_text
 	assert 'review_collect_pr_metadata.XXXXXX' in helper_text
 	assert '::error::Unable to determine PR base branch' in helper_text
+
+
+def test_review_enable_auto_merge_helper_is_bootstrapped_and_delegated() -> None:
+	required_bootstrap_line = next(
+		line for line in _stage_helper_text().splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line
+	)
+	block = _step_block("Enable auto-merge on PR")
+	helper_text = _auto_merge_helper_text()
+
+	assert AUTO_MERGE_HELPER.exists(), f"missing helper: {AUTO_MERGE_HELPER}"
+	assert "review_enable_auto_merge.sh" in required_bootstrap_line, required_bootstrap_line
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_enable_auto_merge.sh"' in block
+	assert 'gh pr merge "${PR_NUMBER}"' not in block
+	assert 'source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"' not in block
+	assert 'source "${SCRIPT_DIR}/gh_helpers.sh"' in helper_text
+	assert 'type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }' in helper_text
+	assert "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels?per_page=100" in helper_text
+	assert "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" in helper_text
+	assert 'gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --squash --auto' in helper_text
 
 
 def test_collect_pr_check_runs_helper_is_bootstrapped_and_delegated() -> None:
@@ -3046,15 +3070,16 @@ def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
 
 def test_auto_merge_guard_honours_configured_orchestrator_branch_pattern() -> None:
 	block = _step_block("Enable auto-merge on PR")
+	helper_text = _auto_merge_helper_text()
 	assert "ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}" in block
-	assert 'grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN}"' in block
-	assert 'if [ -z "${_orch_pr_head_ref}" ]; then' in block
-	assert "empty/null .head.ref" in block
-	assert "refs:?[[:space:]]*#[0-9]+" in block
-	assert "(closes|fixes|resolves):?[[:space:]]*#[0-9]+" in block
-	assert "matches ORCH_INTEGRATION_BRANCH_PATTERN='${ORCH_INTEGRATION_BRANCH_PATTERN}'" in block
-	assert "falling back to canonical '^orchestrator/project-([0-9]+)$' auto-merge suppressor" in block
-	assert "falling back to canonical '^orchestrator/project-[0-9]+$' auto-merge suppressor" not in block
+	assert 'grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN}"' in helper_text
+	assert 'if [ -z "${_orch_pr_head_ref}" ]; then' in helper_text
+	assert "empty/null .head.ref" in helper_text
+	assert "refs:?[[:space:]]*#[0-9]+" in helper_text
+	assert "(closes|fixes|resolves):?[[:space:]]*#[0-9]+" in helper_text
+	assert "matches ORCH_INTEGRATION_BRANCH_PATTERN='${ORCH_INTEGRATION_BRANCH_PATTERN}'" in helper_text
+	assert "falling back to canonical '^orchestrator/project-([0-9]+)$' auto-merge suppressor" in helper_text
+	assert "falling back to canonical '^orchestrator/project-[0-9]+$' auto-merge suppressor" not in helper_text
 
 
 def test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_codex_agent_path() -> None:
@@ -3070,17 +3095,17 @@ def test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_codex_agent_pa
 	# (exit 0) BEFORE reaching the orchestrator block and the squash-auto tail.
 	# Setting the var to any non-'true' value restores the old behaviour of
 	# leaving the PR for a manual merge commit; both branches are verified.
-	block = _step_block("Enable auto-merge on PR")
-	assert "Scoped opt-out for forward-merge fallback PRs" in block, (
+	helper_text = _auto_merge_helper_text()
+	assert "Scoped opt-out for forward-merge fallback PRs" in helper_text, (
 		"Forward-merge fallback suppressor comment is missing"
 	)
-	assert "grep -Eq '^auto/forward-merge-stable-'" in block, (
+	assert "grep -Eq '^auto/forward-merge-stable-'" in helper_text, (
 		"Forward-merge fallback head-ref regex is missing or has drifted"
 	)
-	assert "matches forward-merge fallback pattern '^auto/forward-merge-stable-'" in block, (
+	assert "matches forward-merge fallback pattern '^auto/forward-merge-stable-'" in helper_text, (
 		"Forward-merge suppressor log line is missing the canonical phrasing"
 	)
-	assert "promote-main-to-stable.yml" in block, (
+	assert "promote-main-to-stable.yml" in helper_text, (
 		"Suppressor must explain WHY (ancestry / promote-main-to-stable) for operator debuggability"
 	)
 	# The forward-merge suppressor must run BEFORE the orchestrator pattern
@@ -3089,8 +3114,8 @@ def test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_codex_agent_pa
 	# moves on) would be evaluated in the wrong order. Concretely: the
 	# suppressor must appear above the first reference to the configured
 	# ORCH_INTEGRATION_BRANCH_PATTERN match attempt.
-	idx_forward = block.find("matches forward-merge fallback pattern")
-	idx_orch_match = block.find('grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN}"')
+	idx_forward = helper_text.find("matches forward-merge fallback pattern")
+	idx_orch_match = helper_text.find('grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN}"')
 	assert idx_forward != -1
 	assert idx_orch_match != -1
 	assert idx_forward < idx_orch_match, (
@@ -3098,24 +3123,24 @@ def test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_codex_agent_pa
 	)
 	# Default behaviour: gated by FORWARD_MERGE_FALLBACK_AUTO_MERGE and merges
 	# via a real merge commit (NOT squash) so stable's ancestry is preserved.
-	assert "FORWARD_MERGE_FALLBACK_AUTO_MERGE" in block, (
+	assert "FORWARD_MERGE_FALLBACK_AUTO_MERGE" in helper_text, (
 		"Forward-merge auto-merge must be gated by the FORWARD_MERGE_FALLBACK_AUTO_MERGE var"
 	)
-	assert 'gh pr merge "${PR_NUMBER}" --repo "${{ github.repository }}" --merge --auto' in block, (
+	assert 'gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --merge --auto' in helper_text, (
 		"Forward-merge fallback PRs must auto-merge via a real merge commit (--merge --auto), not squash"
 	)
 	# The merge-commit enable must sit on the forward-merge branch, before the
 	# exit 0 that prevents falling through to the --squash --auto tail. Anchor
 	# on the full command lines so comment mentions of "--squash --auto" above
 	# the call site do not perturb the ordering check.
-	idx_fm_merge = block.find('--repo "${{ github.repository }}" --merge --auto')
-	idx_squash = block.find('--repo "${{ github.repository }}" --squash --auto')
+	idx_fm_merge = helper_text.find('--repo "${GITHUB_REPOSITORY}" --merge --auto')
+	idx_squash = helper_text.find('--repo "${GITHUB_REPOSITORY}" --squash --auto')
 	assert idx_fm_merge != -1 and idx_squash != -1
 	assert idx_fm_merge < idx_squash, (
 		"Forward-merge merge-commit call must precede (and short-circuit before) the squash tail"
 	)
 	# Opt-out branch still suppresses + explains when the var is not 'true'.
-	assert "FORWARD_MERGE_FALLBACK_AUTO_MERGE != 'true' — auto-merge suppressed" in block, (
+	assert "FORWARD_MERGE_FALLBACK_AUTO_MERGE != 'true' — auto-merge suppressed" in helper_text, (
 		"Forward-merge path must still suppress + log when the opt-out var is set"
 	)
 
