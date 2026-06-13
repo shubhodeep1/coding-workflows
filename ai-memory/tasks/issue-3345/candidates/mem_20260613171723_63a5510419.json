@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `6bb50d65252c2a23ca3eee732b15e340ce5f9bd8` on `orchestrator/project-3323` (`git symbolic-ref --short -q HEAD`), matching the issue\u2019s integration-branch metadata.\n\nClarification interpretation:\n- No `Q1`/`Q2` batch was issued.\n- `/answer [auto-answered-by-orchestrator]` therefore maps to \u201cno additional clarification needed\u201d; there are no clarification answers to resolve against question IDs.\n\nAutomation/wiring summary:\n- Change type: introduce one new permanent support helper script and update existing workflow/bootstrap/tests/docs.\n- Existing entry point to keep: `.github/workflows/review_autofix.yml`, existing review/autofix run path (`workflow_call` / `workflow_dispatch`), `codex-agent` job, step `Enable auto-merge on PR`.\n- New supervisor: none.\n- DB work / gate pattern: none.\n- `docs/scripts-pending-removal.md`: no entry needed; this is a permanent runtime helper, not a single-use/long-running/supervisor script.\n\nActions taken:\n- Inspected the current inline `Enable auto-merge on PR` step in `.github/workflows/review_autofix.yml`.\n- Inspected the deterministic-skip auto-merge mirror in the same workflow to avoid accidental scope creep.\n- Inspected `scripts/stage_workflow_support.sh` to confirm runtime bootstrap requirements.\n- Inspected `scripts/review_collect_pr_metadata.sh` as the representative extracted-helper pattern.\n- Inspected `tests/test_review_autofix_review_pipeline_contract.py` and `docs/INVENTORY.md` for cross-file contracts.\n\nRepresentative pattern to follow:\n- Use `scripts/review_collect_pr_metadata.sh` + its workflow delegation pattern as the template for `scripts/review_enable_auto_merge.sh`: standalone helper, explicit env contract, local temp cleanup, `gh_helpers.sh` sourcing, and thin workflow wrapper.\n\nFiles likely to change:\n- `.github/workflows/review_autofix.yml`\n- `scripts/review_enable_auto_merge.sh` (new)\n- `scripts/stage_workflow_support.sh`\n- `tests/test_review_autofix_review_pipeline_contract.py`\n- `docs/INVENTORY.md`\n\nImplementation plan:\n1. Add `scripts/review_enable_auto_merge.sh`.\n   - Move the current shell logic out of the workflow step without changing behavior.\n   - Preserve the current decision order and semantics:\n     - repo-wide `ENABLE_AUTO_MERGE` opt-out\n     - `e2e-smoke-test` label lookup with pagination and fail-closed warning path\n     - PR metadata fetch with stderr capture, mktemp fallback, and fail-closed warning path\n     - forward-merge fallback detection and `--merge --auto` / manual-suppress branch\n     - orchestrator integration PR suppression, including configured-pattern check plus canonical fallback regex/body cross-check\n     - default `gh pr merge --squash --auto` tail\n   - Keep current warning/info text and exit behavior aligned with the existing step, especially the \u201cwarn and exit 0\u201d fail-closed branches.\n\n2. Slim `.github/workflows/review_autofix.yml`.\n   - Keep the existing step name, `if:` condition, and env var names (`ENABLE_AUTO_MERGE`, `FORWARD_MERGE_FALLBACK_AUTO_MERGE`, `ORCH_INTEGRATION_BRANCH_PATTERN`, `GH_TOKEN`) intact.\n   - Replace the large inline `run:` body with a thin wrapper that executes `bash \"${SUPPORT_SCRIPTS_DIR}/review_enable_auto_merge.sh\"`.\n   - Do not refactor the separate deterministic-skip auto-merge mirror in this issue unless strictly required by test fallout.\n\n3. Bootstrap the new helper for consumer repos.\n   - Add `review_enable_auto_merge.sh` to `REQUIRED_BOOTSTRAP_SCRIPTS` in `scripts/stage_workflow_support.sh`.\n   - Keep it required, not optional: the workflow wrapper will depend on it at runtime.\n\n4. Update contract tests.\n   - Change `tests/test_review_autofix_review_pipeline_contract.py` so the wrapper-step assertions verify delegation/env wiring, while the behavior-contract assertions move to the new helper text.\n   - Add/adjust assertions that:\n     - the new helper exists\n     - it is listed in `REQUIRED_BOOTSTRAP_SCRIPTS`\n     - the workflow step delegates to it\n     - the helper still contains the guarded e2e/orchestrator/forward-merge/default paths and their key literals/orderings\n\n5. Update inventory docs.\n   - Add `scripts/review_enable_auto_merge.sh` to `docs/INVENTORY.md` so inventory-parity stays green.\n\nData structures / interfaces affected:\n- Runtime support-script manifest: `REQUIRED_BOOTSTRAP_SCRIPTS` gains one entry.\n- Internal helper interface: new support script consumed via `${SUPPORT_SCRIPTS_DIR}`.\n- No workflow inputs, outputs, log keys, or env var names should change.\n- No persisted JSON/schema/DB contracts change.\n\nAPI/interface changes:\n- None externally.\n- Internal workflow shape change only: inline shell becomes helper delegation.\n\nRisks / edge cases:\n- The refactor must preserve fail-closed behavior on label-fetch or PR-metadata-fetch failure; turning those into hard failures or fail-open paths would be a policy change.\n- Forward-merge fallback handling must still short-circuit before the orchestrator suppressor/default squash path.\n- Empty/invalid `ORCH_INTEGRATION_BRANCH_PATTERN` must still fall back to the canonical `^orchestrator/project-([0-9]+)$` suppressor.\n- The helper must preserve current \u201cwarning + exit 0\u201d semantics on suppressed paths so review_autofix does not start failing the whole job.\n- Consumer-repo runs will break if the helper is added to the workflow but not to `scripts/stage_workflow_support.sh`; those changes must land together.\n- Scope note: the codebase also has a second, smaller auto-merge branch in the deterministic-skip job. This issue only targets the main `Enable auto-merge on PR` step, so avoid turning this into a broader dedup/refactor.\n\nConflict / missing-context notes:\n- No integration-branch mismatch was found.\n- No codebase/path conflict blocks the refactor.\n- The actual `files_touched` allowlist was not included in the planning context; this plan assumes it covers the workflow, new helper, bootstrap helper, contract test, and inventory doc above.\n\nTesting considerations:\n- Fast static guard: `python scripts/check_workflow_script_refs.py --files .github/workflows/review_autofix.yml`\n- Contract regression suite: `python -m pytest tests/test_review_autofix_review_pipeline_contract.py`\n- Inventory parity: `python tests/inventory_parity.py`\n- If local pinned Python test deps are unavailable, treat local test results as unverified and rely on CI\u2019s pinned environment rather than a global toolchain.\n\nAssumptions:\n- `files_touched` permits the five paths listed above.\n- This is a refactor-only change; behavior, names, and operator-facing semantics remain unchanged.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "b42949395164a7c03eb71bd021f870c0b8d7bc433770b26dd71f95cb454a4592",
+  "lineage": {
+    "issue_number": 3345,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27473436450",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27473436450",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3345"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260613171723_63a5510419",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3345,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27473436450"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3345",
+  "timestamps": {
+    "created_at": "2026-06-13T17:17:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
