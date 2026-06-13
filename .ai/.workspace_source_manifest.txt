@@ -259,6 +259,7 @@ scripts/load_workflow_overlay.py
 scripts/mark-stable.sh
 scripts/mcp_handshake_probe.py
 scripts/memory_helpers.sh
+scripts/memory_injection_patterns.py
 scripts/openrouter_prompt_cache.py
 scripts/orchestrate_force_tick.sh
 scripts/orchestrate_lib.py
