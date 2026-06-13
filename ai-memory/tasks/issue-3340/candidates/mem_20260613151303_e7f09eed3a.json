@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for ref `orchestrator/project-3339` (`bff7a8ae671ca64f0949109e7a0550945d17ef4d`)\n\n**Actions taken**\n- Inspected `tests/e2e_smoke_canary.txt` on the planning ref.\n- Confirmed the checked-out ref matches the orchestrator integration metadata (`orchestrator/project-3339`).\n\n**Automation / wiring impact**\n- Existing-file edit only.\n- No new script.\n- No scheduler / PR-push wiring change.\n- No supervisor change.\n- No DB work or gate pattern.\n- No `docs/scripts-pending-removal.md` entry needed.\n\n**Files likely to change**\n- `tests/e2e_smoke_canary.txt`\n  - Keep line 1 exactly `status: ok` (already satisfied on the current ref).\n  - Replace line 2 from the current `run_id: 26151428977` to exactly `decompose-run: 27470400851`.\n  - Preserve the existing third line and existing file formatting/newline style unless the edit mechanism necessarily rewrites the line ending.\n\n**Functions or modules to implement**\n- None. This is a direct text-fixture update only.\n\n**Data structures affected**\n- The plain-text E2E smoke canary file, where the first two lines are the contract checked by the smoke run.\n\n**API or interface changes**\n- None.\n\n**Risks / edge cases**\n- Line 1 already matches the acceptance criteria, so avoid accidental edits to it.\n- The required change is both a key rename (`run_id` \u2192 `decompose-run`) and a value update.\n- The current file has a third line (`updated-by: ai-pipeline`). The issue does not require removing it, and the smallest-safe-change interpretation is to leave it unchanged.\n- Any change outside `tests/e2e_smoke_canary.txt` would violate scope.\n\n**Testing considerations**\n- Verify after editing that:\n  - line 1 is exactly `status: ok`\n  - line 2 is exactly `decompose-run: 27470400851`\n- Verify only `tests/e2e_smoke_canary.txt` is changed in the diff.\n- No broader lint/typecheck/test run is needed for this isolated text-file edit.\n\n**Assumptions**\n- \u201cNo other files are changed\u201d constrains file scope, not unchanged extra lines within the same file.\n- No hidden requirement exists for the file to contain exactly two lines.\n\n**Missing-context notes**\n- None blocking. The issue is sufficiently specified for implementation.\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "4fabe8c46abfdea4836e33e496c1d8b37752e96411e1e7ee9801935f2d90ce1e",
+  "lineage": {
+    "issue_number": 3340,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27470502433",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27470502433",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3340"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260613151303_e7f09eed3a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3340,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27470502433"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3340",
+  "timestamps": {
+    "created_at": "2026-06-13T15:13:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
