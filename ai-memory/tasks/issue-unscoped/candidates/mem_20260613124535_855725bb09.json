@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/update_workflows.yml:303-307 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Whitespace-only manifest entries are not filtered before validation, so blank profile lines can reach path checks and create empty-path failure modes.\n  WHY: If a profile contains a blank line, the trimmed entry can survive into `[ -f \"${upstream_file}\" ]` and later path handling, making failures hard to diagnose.\n- .github/workflows/update_workflows.yml:303-307 | severity=high | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The blank-line handling is not enforced by the guardrail test, so whitespace-only manifest entries can be silently accepted despite the runtime trimming loop.\n  WHY: The review reports that `_manifest_lines()` uses `.strip()`, which can hide whitespace-only profile lines from the test while runtime behavior still depends on them being absent.\n- tests/test_update_workflows_guardrails.py:19-24 | severity=high | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The `_manifest_lines()` helper strips lines before comparison, so the test does not verify that the raw manifest files themselves are free of blank or whitespace-only lines.\n  WHY: A manifest with only whitespace on a line can still satisfy the normalized comparison, weakening the guardrail the review expected.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Only implement item 9 from that plan. This is the operator-surface change for install profiles; no cross-repo edits are allowed.\"\n  expected_change_site: `scripts/ai_memory.py`, `scripts/ai_memory_lib.py`, `scripts/memory_helpers.sh`, `scripts/render_prompt.py`, `.ai/.workspace_source_manifest.txt` should not be part of the install-profile change set\n  confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The last-run diff introduced **7 files**, including `scripts/ai_memory.py`, `scripts/ai_memory_lib.py`, `scripts/memory_helpers.sh`, `scripts/render_prompt.py`, and `.ai/.workspace_source_manifest.txt`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- .github/workflows/update_workflows.yml:303-307 | severity=high | confidence=5\n  PROBLEM: Whitespace-only lines in profile manifests are not filtered before validation, so an empty manifest entry can flow into path handling and obscure failures.\n  WHY: The review says a blank line is trimmed only during iteration and can still reach `[ -f \"${upstream_file}\" ]`, which can produce hard-to-debug downstream path behavior.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- TASK_GAP\n  Requirement: \"Only implement item 9 from that plan. This is the operator-surface change for install profiles; no cross-repo edits are allowed.\"\n  Expected change site: Only the four files listed in the issue (`workflow-templates/profiles/*.txt`, `.github/workflows/update_workflows.yml`, `README.md`, `agents.md`, `tests/test_update_workflows_guardrails.py`).\n  Evidence of absence: The last-run diff introduced **7 files**, including `scripts/ai_memory.py`, `scripts/ai_memory_lib.py`, `scripts/memory_helpers.sh`, `scripts/render_prompt.py`, and `.ai/.workspace_source_manifest.txt`.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- .github/workflows/update_workflows.yml:303-307 | severity=high | confidence=4\n  PROBLEM: The test `_manifest_lines()` uses `.strip()`, so it cannot catch a profile file that contains only whitespace lines even though the runtime loader trims entries.\n  WHY: A malformed `full.txt` with blank lines could be accepted by the test while still causing `ERR_PROFILE_TEMPLATE_MISSING` or empty-path handling at runtime.\n- tests/test_update_workflows_guardrails.py:19-24 | severity=high | confidence=4\n  PROBLEM: The guardrail helper normalizes manifest lines before comparison, so it does not verify the raw on-disk files contain no blank or whitespace-only lines.\n  WHY: That weakens the contract the review expected because malformed manifests can still satisfy the test after normalization.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "e73d0ef851e9bf29077aec35c1ad040be847ea1192ccf091559938e83135da28",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3321,
+    "run_id": "27466287080",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27466287080",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260613124535_855725bb09",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3321,
+    "run_id": "27466287080"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-13T12:45:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
