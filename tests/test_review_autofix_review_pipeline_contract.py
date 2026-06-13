@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import contextlib
+import importlib.util
+import io
 import json
 import os
 import subprocess
@@ -244,7 +247,7 @@ def _run_review_collect_pr_metadata_harness(
 			"pr_review_comments": json.loads(files["pr_review_comments"].read_text(encoding="utf-8")),
 			"linked_issue_context": files["linked_issue_context"].read_text(encoding="utf-8"),
 			"comments_context": files["comments_context"].read_text(encoding="utf-8"),
-		"pr_diff": files["pr_diff"].read_text(encoding="utf-8"),
+			"pr_diff": files["pr_diff"].read_text(encoding="utf-8"),
 		}
 
 
@@ -1523,6 +1526,9 @@ def test_collect_pr_check_runs_helper_is_bootstrapped_and_delegated() -> None:
 	assert 'python3 "${SUPPORT_SCRIPTS_DIR}/collect_pr_check_runs_context.py"' in block
 	assert 'gh api --paginate --slurp' not in block
 	assert 'gh_retry gh api --paginate --slurp' in helper_text
+	assert 'NamedTemporaryFile' in helper_text
+	assert '_write_text(out_path, "")' not in helper_text
+	assert 'traceback.print_exc(file=sys.stderr)' in helper_text
 	assert 'CHECK_RUNS_AUTOFIX_WRITER_ERROR' in helper_text
 
 
@@ -1604,6 +1610,67 @@ def test_collect_pr_check_runs_helper_fail_open_contracts() -> None:
 	assert "Check-run API call failed; treat absence of failures as unknown rather than confirmed-passing.\n" in api_error["context_text"]
 	assert "mock gh: check-runs failure\n" in api_error["stderr"]
 	assert "Check-run context bytes:" in api_error["stdout"]
+
+
+def test_collect_pr_check_runs_helper_writer_error_is_observable_and_fail_open() -> None:
+	spec = importlib.util.spec_from_file_location("collect_pr_check_runs_context_test", CHECK_RUNS_HELPER)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+
+	with tempfile.TemporaryDirectory(prefix="collect-pr-check-runs-writer-error-") as td:
+		tmp = Path(td)
+		pr_payload_file = tmp / "pr_payload.json"
+		pr_payload_file.write_text(json.dumps({"head": {"sha": "abc123"}}), encoding="utf-8")
+		context_file = tmp / "pr_check_runs_context.txt"
+		context_file.write_text("stale-context\n", encoding="utf-8")
+
+		def _fake_run_check_runs_api(*, repository: str, head_sha: str, script_dir: Path) -> subprocess.CompletedProcess[str]:
+			return subprocess.CompletedProcess(args=["gh"], returncode=0, stdout="[]", stderr="")
+
+		def _boom(*, raw_text: str, head_sha: str, final_status: str) -> str:
+			raise RuntimeError("boom")
+
+		original_env = os.environ.copy()
+		original_run = module._run_check_runs_api
+		original_build = module._build_context_text
+		try:
+			os.environ.update({
+				"PR_PAYLOAD_FILE": str(pr_payload_file),
+				"PR_CHECK_RUNS_CONTEXT_FILE": str(context_file),
+				"CHECK_RUNS_AUTOFIX_ENABLED": "true",
+				"CHECK_RUNS_WAIT_TIMEOUT_SECS": "300",
+				"CHECK_RUNS_POLL_INTERVAL_SECS": "20",
+				"CHECK_RUNS_LOG_TAIL_BYTES": "0",
+				"GITHUB_REPOSITORY": "owner/repo",
+				"SELF_RUN_ID": "",
+			})
+			module._run_check_runs_api = _fake_run_check_runs_api
+			module._build_context_text = _boom
+			stdout = io.StringIO()
+			stderr = io.StringIO()
+			with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+				returncode = module.main()
+		finally:
+			os.environ.clear()
+			os.environ.update(original_env)
+			module._run_check_runs_api = original_run
+			module._build_context_text = original_build
+
+		assert returncode == 0
+		assert context_file.read_text(encoding="utf-8") == (
+			"PR_CHECK_RUNS_CONTEXT\n"
+			"head_sha: abc123\n"
+			"collection_status: writer_error\n"
+			"total_check_runs: 0\n"
+			"failed_count: 0\n"
+			"incomplete_count: 0\n"
+			"\n"
+			"Check-run snapshot writer failed; treat absence of failures as unknown rather than confirmed-passing.\n"
+		)
+		assert "stale-context" not in context_file.read_text(encoding="utf-8")
+		assert "RuntimeError: boom" in stderr.getvalue()
+		assert "::warning::CHECK_RUNS_AUTOFIX_WRITER_ERROR head_sha=abc123 writer_ok=False" in stdout.getvalue()
 
 
 def test_review_collect_pr_metadata_helper_supports_no_pr_synthetic_mode() -> None:
@@ -3027,6 +3094,7 @@ def main() -> int:
 	test_collect_pr_check_runs_helper_is_bootstrapped_and_delegated()
 	test_collect_pr_check_runs_helper_ready_contract_preserves_self_run_exclusion()
 	test_collect_pr_check_runs_helper_fail_open_contracts()
+	test_collect_pr_check_runs_helper_writer_error_is_observable_and_fail_open()
 	test_review_collect_pr_metadata_helper_supports_no_pr_synthetic_mode()
 	test_review_collect_pr_metadata_helper_skips_optional_pr_reviews_by_default()
 	test_review_collect_pr_metadata_helper_fetches_top_level_reviews_when_break_glass_enabled()

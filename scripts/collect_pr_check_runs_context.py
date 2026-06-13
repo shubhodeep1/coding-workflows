@@ -12,9 +12,11 @@ import re
 import subprocess
 import sys
 import time
+import traceback
 import urllib.error
 import urllib.request
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any
 
 
@@ -40,7 +42,27 @@ def _required_env(name: str) -> str:
 
 
 def _write_text(path: Path, text: str) -> None:
-	path.write_text(text, encoding="utf-8")
+	path.parent.mkdir(parents=True, exist_ok=True)
+	tmp_path: Path | None = None
+	try:
+		with NamedTemporaryFile(
+			mode="w",
+			encoding="utf-8",
+			dir=str(path.parent),
+			prefix=f".{path.name}.",
+			suffix=".tmp",
+			delete=False,
+		) as handle:
+			tmp_path = Path(handle.name)
+			handle.write(text)
+		tmp_path.replace(path)
+	except Exception:
+		if tmp_path is not None:
+			try:
+				tmp_path.unlink(missing_ok=True)
+			except OSError:
+				pass
+		raise
 
 
 def _sentinel_text(*, head_sha: str, collection_status: str, message: str) -> str:
@@ -310,6 +332,7 @@ def _write_context_file(*, out_path: Path, raw_text: str, head_sha: str, final_s
 		_write_text(out_path, context_text)
 		return out_path.exists() and out_path.stat().st_size > 0
 	except Exception:
+		traceback.print_exc(file=sys.stderr)
 		return False
 
 
@@ -326,7 +349,6 @@ def _emit_final_diagnostics(out_path: Path) -> None:
 def main() -> int:
 	payload_path = Path(_required_env("PR_PAYLOAD_FILE"))
 	out_path = Path(_required_env("PR_CHECK_RUNS_CONTEXT_FILE"))
-	_write_text(out_path, "")
 
 	if os.environ.get("CHECK_RUNS_AUTOFIX_ENABLED", "true") == "false":
 		_write_text(
