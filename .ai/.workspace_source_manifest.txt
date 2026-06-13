@@ -257,6 +257,7 @@ scripts/memory_helpers.sh
 scripts/openrouter_prompt_cache.py
 scripts/orchestrate_force_tick.sh
 scripts/orchestrate_lib.py
+scripts/orchestrate_parse_and_post_answer.sh
 scripts/orchestrate_poll_process.sh
 scripts/orchestrate_state_v2.py
 scripts/post_review_comment.sh
