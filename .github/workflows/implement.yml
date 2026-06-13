@@ -3620,6 +3620,10 @@ jobs:
           fi
 
           REASON_HUMAN="${DCB_REASON}"
+          DCB_COUNT_LABEL="Staged deletions"
+          DCB_LIST_HEADING="Staged deletion list"
+          DCB_REDISPATCH_HINT="If these deletions are legitimate, set the repository variable \`ALLOW_WORKFLOW_EDITS=true\` (for canonical-source deletions) or \`ALLOW_BULK_DELETE=true\` (for threshold-triggered rejections) under Settings → Secrets and variables → Actions, then remove \`ai:destructive-blocked\` from the issue if it is present and redispatch. **Note:** the orchestrator judge may still regenerate this task under a different issue number — the per-issue block does not cover judge-cycle regeneration (see PRs #917/#931 for context)."
+          TG_COUNT_LINE="deletions: ${DCB_COUNT}"
           case "${DCB_REASON}" in
             canonical-source)
               REASON_HUMAN="canonical workflow-source file deletion"
@@ -3632,6 +3636,13 @@ jobs:
               else
                 REASON_HUMAN="bulk deletion exceeded BULK_DELETE_THRESHOLD"
               fi
+              ;;
+            unsafe-fetched-manifest)
+              REASON_HUMAN="artifact-cleanup manifest contained unsafe path(s)"
+              DCB_COUNT_LABEL="Unsafe manifest paths"
+              DCB_LIST_HEADING="Unsafe manifest path list"
+              DCB_REDISPATCH_HINT="The commit helper refused to process these manifest entries because they were not safe repo-relative cleanup paths. Inspect the runtime-fetched manifest producer or any tool that rewrote \`FETCHED_MANIFEST\`, then rerun after the manifest contains only safe relative paths. **Note:** the orchestrator judge may still regenerate this task under a different issue number — the per-issue block does not cover judge-cycle regeneration."
+              TG_COUNT_LINE="unsafe_manifest_paths: ${DCB_COUNT}"
               ;;
           esac
 
@@ -3698,18 +3709,18 @@ jobs:
             echo "🚨 **Destructive-commit guard rejected this implementation run.**"
             echo
             echo "- Reason: \`${DCB_REASON}\` (${REASON_HUMAN})"
-            echo "- Staged deletions: **${DCB_COUNT}**"
+            echo "- ${DCB_COUNT_LABEL}: **${DCB_COUNT}**"
             echo "- Workflow run: ${RUN_URL}"
             echo
             echo "The commit was **not** created and **not** pushed. The workflow attempted to apply \`ai:destructive-blocked\`; verify that the label is present before relying on the \`Validate approval phase\` redispatch block. Once present, future redispatches of issue #${ISSUE_NUMBER} will be refused until a human removes the label."
             echo
-            echo "Staged deletion list:"
+            echo "${DCB_LIST_HEADING}:"
             echo
             echo '```'
             printf '%s\n' "${DCB_DELETIONS}" | sed '/^$/d'
             echo '```'
             echo
-            echo "If these deletions are legitimate, set the repository variable \`ALLOW_WORKFLOW_EDITS=true\` (for canonical-source deletions) or \`ALLOW_BULK_DELETE=true\` (for threshold-triggered rejections) under Settings → Secrets and variables → Actions, then remove \`ai:destructive-blocked\` from the issue if it is present and redispatch. **Note:** the orchestrator judge may still regenerate this task under a different issue number — the per-issue block does not cover judge-cycle regeneration (see PRs #917/#931 for context)."
+            echo "${DCB_REDISPATCH_HINT}"
           } > /tmp/destructive_comment.md
           gh issue comment "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
             --body-file /tmp/destructive_comment.md 2>/dev/null || true
@@ -3725,7 +3736,7 @@ jobs:
               "repo: ${{ github.repository }}" \
               "issue: #${ISSUE_NUMBER}" \
               "reason: ${DCB_REASON} (${REASON_HUMAN})" \
-              "deletions: ${DCB_COUNT}" \
+              "${TG_COUNT_LINE}" \
               "run: ${RUN_URL}" \
               "" \
               "Issue is now ai:destructive-blocked. A human must review and remove the label before this exact issue ID can be redispatched. The orchestrator judge may still regenerate this task under a different issue number.")"

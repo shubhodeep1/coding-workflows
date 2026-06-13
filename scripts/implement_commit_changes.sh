@@ -55,19 +55,39 @@ exec 2> >(tee "${STEP_STDERR_FILE}" >&3)
 # Remove workflow-generated/fetched artifacts BEFORE checking for
 # changes so they don't cause false-positive "file changes" detection.
 # The manifest tracks exactly which files were fetched — caller-repo
-# files that were never touched are safe.
+# files that were never touched are safe. Refuse the cleanup batch if
+# the manifest contains any path outside repo-relative cleanup targets.
 rm -f ./pre_assembled_static.txt
 if [ -f "${FETCHED_MANIFEST}" ]; then
+  safe_fetched_paths=()
+  unsafe_fetched_paths=""
   while IFS= read -r fetched_file; do
     [ -n "${fetched_file}" ] || continue
     case "${fetched_file}" in
       /*|../*|*/../*|..|*/..)
-        echo "::warning::Skipping unsafe fetched-manifest path '${fetched_file}' during artifact cleanup."
-        continue
+        unsafe_fetched_paths="${unsafe_fetched_paths}${unsafe_fetched_paths:+$'\n'}${fetched_file}"
+        ;;
+      *)
+        safe_fetched_paths+=("${fetched_file}")
         ;;
     esac
-    rm -f -- "${fetched_file}"
   done < "${FETCHED_MANIFEST}"
+  if [ -n "${unsafe_fetched_paths}" ]; then
+    unsafe_fetched_count="$(printf '%s\n' "${unsafe_fetched_paths}" | sed '/^$/d' | wc -l | tr -d ' ')"
+    echo "::error::Refusing to continue: fetched-manifest contains unsafe cleanup path(s)."
+    printf '%s\n' "${unsafe_fetched_paths}" | sed 's/^/  - /'
+    {
+      echo "destructive_commit_blocked=unsafe-fetched-manifest"
+      echo "destructive_commit_count=${unsafe_fetched_count}"
+      echo 'destructive_commit_deletions<<__DCD_EOF__'
+      printf '%s\n' "${unsafe_fetched_paths}"
+      echo '__DCD_EOF__'
+    } >> "$GITHUB_OUTPUT"
+    exit 1
+  fi
+  if [ "${#safe_fetched_paths[@]}" -gt 0 ]; then
+    rm -f -- "${safe_fetched_paths[@]}"
+  fi
 fi
 
 if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && [ -n "${SERENA_PROJECT_BOOTSTRAP_HASH:-}" ] && [ -f .serena/project.yml ]; then

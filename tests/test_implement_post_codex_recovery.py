@@ -1281,6 +1281,45 @@ def test_preflight_destructive_guard_fails_without_touching_the_real_index() -> 
 		assert cached == "", "preflight guard must not dirty the real git index when it rejects"
 
 
+def test_commit_helper_fails_closed_on_unsafe_fetched_manifest_paths() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_manifest_guard_") as td:
+		tmp_path = Path(td)
+		repo_dir = tmp_path / "repo"
+		outside_path = tmp_path / "outside.txt"
+		_bootstrap_git_repo(repo_dir)
+		(repo_dir / "scripts").mkdir()
+		shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, repo_dir / "scripts" / "implement_commit_changes.sh")
+		outside_path.write_text("keep\n", encoding="utf-8")
+		github_output = repo_dir / "github_output.txt"
+		github_output.write_text("", encoding="utf-8")
+		runtime_dir = repo_dir / "runtime"
+		runtime_dir.mkdir()
+		fetched_manifest = repo_dir / "fetched_manifest.txt"
+		fetched_manifest.write_text("../outside.txt\n", encoding="utf-8")
+		env = os.environ.copy()
+		env.update(
+			{
+				"FETCHED_MANIFEST": str(fetched_manifest),
+				"GITHUB_OUTPUT": str(github_output),
+				"GITHUB_REPOSITORY": "owner/repo",
+				"ISSUE_NUMBER": "948",
+				"RUNTIME_DIR": str(runtime_dir),
+				"SERENA_PROJECT_BOOTSTRAP_HASH": "",
+				"SERENA_PROJECT_PREEXISTED": "false",
+				"TMPDIR": str(runtime_dir),
+			}
+		)
+
+		proc = _run_shell_script("bash scripts/implement_commit_changes.sh\n", cwd=repo_dir, env=env)
+		assert proc.returncode != 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert outside_path.read_text(encoding="utf-8") == "keep\n"
+		output_text = github_output.read_text(encoding="utf-8")
+		assert "destructive_commit_blocked=unsafe-fetched-manifest" in output_text
+		assert "destructive_commit_count=1" in output_text
+		assert "../outside.txt" in output_text
+		assert "unsafe cleanup path" in (proc.stdout + proc.stderr)
+
+
 def test_validate_step_uses_reusable_validator_with_continue_on_error() -> None:
 	validate_block = _step_block_text("Validate syntax of changed files")
 	assert "continue-on-error: true" in validate_block
@@ -1386,6 +1425,14 @@ def test_destructive_guard_latch_verifies_label_applied() -> None:
 	assert ") && gh issue edit ${ISSUE_NUMBER} --repo ${{ github.repository }} --add-label ai:destructive-blocked" in destructive_block
 
 
+def test_destructive_guard_handler_covers_unsafe_fetched_manifest_rejections() -> None:
+	destructive_block = _step_block_text("Destructive-commit guard — label + alert on rejection")
+	assert "unsafe-fetched-manifest" in destructive_block
+	assert "artifact-cleanup manifest contained unsafe path(s)" in destructive_block
+	assert "Unsafe manifest paths" in destructive_block
+	assert "Inspect the runtime-fetched manifest producer" in destructive_block
+
+
 def test_scope_guard_allowlist_and_workflow_rollback_contracts_present() -> None:
 	commit_step = _step_block_text("Commit changes")
 	commit_helper = _implement_commit_script_text()
@@ -1394,6 +1441,7 @@ def test_scope_guard_allowlist_and_workflow_rollback_contracts_present() -> None
 	assert "canonical_deletions" in commit_helper
 	assert "ALLOW_WORKFLOW_EDITS" in commit_helper
 	assert "destructive_commit_blocked=canonical-source" in commit_helper
+	assert "destructive_commit_blocked=unsafe-fetched-manifest" in commit_helper
 	assert "Non-numeric staged deletion count" in commit_helper
 	assert "total_deletions=999999" in commit_helper
 	assert "Non-numeric non-markdown deletion count" in commit_helper
