@@ -1,5 +1,7 @@
 required_vars: []
-optional_vars: {}
+optional_vars:
+  REFERENCE_VERIFICATION_LOOP: ""
+  REFERENCE_OUTPUT_CONTRACT: ""
 forbidden_vars:
   - WORKFLOW_EDIT_RESTRICTION
   - SERENA_TOOL_HINTS

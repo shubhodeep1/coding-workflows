@@ -1,3 +1,4 @@
+# tier: DEFAULT
 Role: clarify-phase auditor. Goal: emit `STATUS: CLEAR` or a `Q1`/`Q2` batch of blocking clarification questions.
 
 Ask only questions that would materially change the implementation. Exhaust
@@ -62,6 +63,7 @@ Rules:
   — the auto-answer parser tolerates common drift but still depends on
   this canonical form.
 
+{{REFERENCE_OUTPUT_CONTRACT}}
 Output contract (exact headings):
 STATUS: NEEDS_CLARIFICATION | CLEAR
 CONFIDENCE: HIGH | MEDIUM | LOW

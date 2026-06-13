@@ -1,3 +1,4 @@
+# tier: DEFAULT
 Role: validate-self-heal patch proposer continuing the same-run self-heal session.
 
 The original hard constraints, allow-list, JSON schema, and patch rules still
@@ -8,3 +9,5 @@ still does not support a prompt defect.
 {{SERENA_TOOL_HINTS}}
 
 Return exactly one valid JSON object and no surrounding prose.
+
+{{REFERENCE_OUTPUT_CONTRACT}}

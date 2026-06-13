@@ -15,6 +15,9 @@ PROMPTS_DIR = REPO_ROOT / "prompts"
 RENDER_PROMPT_SH = REPO_ROOT / "scripts" / "render_prompt.sh"
 FORBIDDEN_PLACEHOLDER = "WORKFLOW_EDIT_RESTRICTION"
 UNKNOWN_PLACEHOLDER = "UNKNOWN_VALIDATE_ANALYTICS_VAR"
+OUTPUT_CONTRACT_SENTINEL = "Terminal output contract:"
+VERIFICATION_LOOP_SENTINEL = "Verification loop:"
+VALIDATE_OUTPUT_CONTRACT_SENTINEL = "JSON schema:"
 
 
 @dataclass(frozen=True)
@@ -125,6 +128,11 @@ def _assert_contract_failure(proc: subprocess.CompletedProcess[str], *, category
 	assert name in proc.stderr
 
 
+def _assert_output_contract_rendered(rendered_text: str) -> None:
+	assert OUTPUT_CONTRACT_SENTINEL in rendered_text
+	assert "{{REFERENCE_OUTPUT_CONTRACT}}" not in rendered_text
+
+
 def test_real_prompts_render_with_contract_defaults() -> None:
 	for case in PASS_CASES:
 		prompt_file = _prompt_path(case.mode_name)
@@ -132,8 +140,12 @@ def test_real_prompts_render_with_contract_defaults() -> None:
 
 		_assert_success(proc)
 		assert case.sentinel in proc.stdout
+		_assert_output_contract_rendered(proc.stdout)
+		if case.mode_name in {"mode-validate-generate", "mode-validate-fix-harness"}:
+			assert VERIFICATION_LOOP_SENTINEL in proc.stdout
+			assert "{{REFERENCE_VERIFICATION_LOOP}}" not in proc.stdout
 		if case.mode_name == "mode-validate-generate":
-			assert proc.stdout == _normalized_text(prompt_file)
+			assert VALIDATE_OUTPUT_CONTRACT_SENTINEL in proc.stdout
 		if case.placeholder_name is not None:
 			token = f"{{{{{case.placeholder_name}}}}}"
 			assert proc.stdout.count(token) == case.expected_placeholder_occurrences
@@ -168,11 +180,13 @@ def test_validate_self_heal_handles_standalone_and_literal_serena_markers() -> N
 
 	proc_without_var = _run_render(prompt_file)
 	_assert_success(proc_without_var)
+	_assert_output_contract_rendered(proc_without_var.stdout)
 	assert proc_without_var.stdout.count("{{SERENA_TOOL_HINTS}}") == 1
 	assert "`{{SERENA_TOOL_HINTS}}`" in proc_without_var.stdout
 
 	proc_with_var = _run_render(prompt_file, variables={"SERENA_TOOL_HINTS": hints})
 	_assert_success(proc_with_var)
+	_assert_output_contract_rendered(proc_with_var.stdout)
 	assert hints in proc_with_var.stdout
 	assert proc_with_var.stdout.count("{{SERENA_TOOL_HINTS}}") == 1
 	assert "`{{SERENA_TOOL_HINTS}}`" in proc_with_var.stdout

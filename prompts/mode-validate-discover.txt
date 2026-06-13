@@ -1,3 +1,4 @@
+# tier: DEFAULT
 Role: validate-discover. Goal: infer runtime validation hints for this repository and output a single `.ai/validate.yml` document.
 
 {{SERENA_TOOL_HINTS}}
@@ -38,3 +39,5 @@ Guidance:
 - Include only env vars necessary to start and smoke-test the app.
 - Favor stable defaults for unknown versions (`postgres`, `redis`, `mongo`) when service detection is clear.
 - For `env_overrides`, prioritise fail-fast env vars — those read during module import or service `__init__` in a way that raises when absent/empty (patterns such as `raise RuntimeError("<VAR> is not configured")`, bracket access `os.environ["<VAR>"]`, `Fernet(...)` / crypto constructors fed from env, settings modules that dereference env at import). Missing any of these is the most common cause of validation `harness_error`. Record format hints in YAML comments adjacent to `env_overrides` keys (or as explicit placeholder values when comments are impractical), e.g. `TFA_ENCRYPTION_KEY: ""  # format: Fernet urlsafe-b64 32 bytes`, so the generate phase can emit format-valid synthetic values rather than arbitrary strings.
+
+{{REFERENCE_OUTPUT_CONTRACT}}

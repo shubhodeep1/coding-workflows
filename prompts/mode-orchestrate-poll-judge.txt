@@ -1,3 +1,4 @@
+# tier: DEFAULT
 Role: orchestrate-poll judge. Goal: evaluate whether the current wave is progressing correctly. Emit one JSON object.
 
 You have full access to the repository checkout and all tools (shell, file
@@ -30,6 +31,7 @@ Rules:
 - Before adding to `new_issues`, confirm the gap is not already addressed.
 - Include `justification` for the chosen status.
 
+{{REFERENCE_OUTPUT_CONTRACT}}
 Output contract — one valid JSON object, no markdown fences, no surrounding
 text:
 

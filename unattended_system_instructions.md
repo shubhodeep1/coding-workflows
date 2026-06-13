@@ -292,6 +292,8 @@ path and merged or batched with it.
   PRs, comments, labels, timeline events), use aliased GraphQL queries (see
   `_fetch_candidate_issue_details_graphql` and `_fetch_linked_pr_status_graphql`
   in `scripts/orchestrate_poll_process.sh`).
+  BATCH_HELPER.name=_fetch_candidate_issue_details_graphql kind=graphql-batch path=scripts/orchestrate_poll_process.sh cache=_candidate_details_json
+  BATCH_HELPER.name=_fetch_linked_pr_status_graphql kind=graphql-batch path=scripts/orchestrate_poll_process.sh cache=STALL_MANAGED_LINKED_PR_CACHE
 - **Cycle-local caches are first-class.** Do not add a per-iteration `gh api`
   call inside a loop that already has a prefetched cache
   (`ACTIVE_WORKFLOW_ISSUES`, `STALL_MANAGED_LINKED_PR_CACHE`,
