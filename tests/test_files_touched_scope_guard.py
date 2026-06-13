@@ -6,10 +6,11 @@ Three layers, mirroring how the destructive-commit guard is validated:
   1. Unit tests of scripts/files_touched_scope_guard.py (the parser + matcher),
      including the real incident from orchestrator project #244 / issue #254
      ("frontend-send-status") that motivated the guard.
-  2. Behavioral extract-and-run of the commit-time scope-guard `run:` fragment
-     from .github/workflows/implement.yml against a synthetic staged index, so
-     the block / override / skip behaviour is validated against the workflow
-     itself rather than a reimplementation.
+  2. Behavioral extract-and-run of the real preflight scope-guard `run:`
+     fragment from .github/workflows/implement.yml and the real commit-time
+     scope-guard fragment from scripts/implement_commit_changes.sh against a
+     synthetic staged index, so the block / override / skip behaviour is
+     validated against production code rather than a reimplementation.
   3. Static assertions that the guard is wired in at both guard sites and into
      the alert / failure-gate / env / label / redispatch-refusal plumbing.
 
@@ -33,6 +34,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import files_touched_scope_guard as guard  # noqa: E402
 
 IMPLEMENT = REPO_ROOT / ".github" / "workflows" / "implement.yml"
+IMPLEMENT_COMMIT_SCRIPT = REPO_ROOT / "scripts" / "implement_commit_changes.sh"
 GUARD_SCRIPT = REPO_ROOT / "scripts" / "files_touched_scope_guard.py"
 LABEL_CONTRACT = REPO_ROOT / ".github" / "ai" / "label_contract.v1.json"
 LABEL_HELPERS = REPO_ROOT / "scripts" / "label_helpers.sh"
@@ -192,12 +194,13 @@ def test_cli_exit_codes_and_allowlist_dump() -> None:
 
 
 # --------------------------------------------------------------------------
-# Layer 2 — extract-and-run the real workflow guard fragment
+# Layer 2 — extract-and-run the real guard fragments
 # --------------------------------------------------------------------------
 
 
 def _scope_fragment(label: str) -> str:
-	text = IMPLEMENT.read_text(encoding="utf-8")
+	source = IMPLEMENT_COMMIT_SCRIPT if label == "commit" else IMPLEMENT
+	text = source.read_text(encoding="utf-8")
 	start = f"# >>> files_touched scope-enforcement guard ({label}) >>>"
 	end = f"# <<< files_touched scope-enforcement guard ({label}) <<<"
 	lines = text.splitlines()
@@ -221,19 +224,24 @@ def _run_fragment(
 		tdp = Path(td)
 		(tdp / "scripts").mkdir()
 		shutil.copy(GUARD_SCRIPT, tdp / "scripts" / "files_touched_scope_guard.py")
-		subprocess.run(["git", "init", "-q"], cwd=tdp, check=True)
-		subprocess.run(["git", "config", "user.email", "t@t"], cwd=tdp, check=True)
-		subprocess.run(["git", "config", "user.name", "t"], cwd=tdp, check=True)
+		git_env = {
+			key: value
+			for key, value in os.environ.items()
+			if key not in {"BASH_ENV", "GIT_DIR", "GIT_INDEX_FILE", "GIT_PREFIX", "GIT_WORK_TREE"}
+		}
+		subprocess.run(["git", "init", "-q"], cwd=tdp, check=True, env=git_env)
+		subprocess.run(["git", "config", "user.email", "t@t"], cwd=tdp, check=True, env=git_env)
+		subprocess.run(["git", "config", "user.name", "t"], cwd=tdp, check=True, env=git_env)
 		for rel in staged:
 			path = tdp / rel
 			path.parent.mkdir(parents=True, exist_ok=True)
 			path.write_text("x\n", encoding="utf-8")
-			subprocess.run(["git", "add", "--", rel], cwd=tdp, check=True)
+			subprocess.run(["git", "add", "--", rel], cwd=tdp, check=True, env=git_env)
 		body_file = tdp / "issue_body.txt"
 		body_file.write_text(body, encoding="utf-8")
 		gh_output = tdp / "gh_output.txt"
 		gh_output.write_text("", encoding="utf-8")
-		env = dict(os.environ)
+		env = dict(git_env)
 		env.update(
 			{
 				"ISSUE_BODY_FILE": str(body_file),
@@ -313,6 +321,10 @@ def _implement_text() -> str:
 	return IMPLEMENT.read_text(encoding="utf-8")
 
 
+def _implement_commit_text() -> str:
+	return IMPLEMENT_COMMIT_SCRIPT.read_text(encoding="utf-8")
+
+
 def test_env_vars_mapped() -> None:
 	text = _implement_text()
 	assert "ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}" in text
@@ -321,10 +333,12 @@ def test_env_vars_mapped() -> None:
 
 def test_both_guard_sites_invoke_script_and_emit_outputs() -> None:
 	text = _implement_text()
+	commit_text = _implement_commit_text()
+	combined_text = text + "\n" + commit_text
 	assert text.count("files_touched scope-enforcement guard (preflight)") >= 1
-	assert text.count("files_touched scope-enforcement guard (commit)") >= 1
-	assert text.count("python3 scripts/files_touched_scope_guard.py") == 2
-	assert text.count("scope_violation_blocked=out-of-scope") == 2
+	assert commit_text.count("files_touched scope-enforcement guard (commit)") >= 1
+	assert combined_text.count("python3 scripts/files_touched_scope_guard.py") == 2
+	assert combined_text.count("scope_violation_blocked=out-of-scope") == 2
 
 
 def test_alert_step_handles_scope() -> None:
