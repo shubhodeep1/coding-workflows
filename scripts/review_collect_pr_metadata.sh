@@ -123,7 +123,10 @@ _fetch_linked_issue_bodies_graphql()
 }"
 
 	local response_file
-	response_file="$(mktemp "${TMP_RUNTIME_DIR}/linked_issue_fallback_graphql.XXXXXX")"
+	if ! response_file="$(mktemp "${TMP_RUNTIME_DIR}/linked_issue_fallback_graphql.XXXXXX" 2>/dev/null)"; then
+		echo '[]'
+		return 1
+	fi
 	if ! gh_retry "${response_file}" api graphql -f query="${query}"; then
 		rm -f "${response_file}"
 		echo '[]'

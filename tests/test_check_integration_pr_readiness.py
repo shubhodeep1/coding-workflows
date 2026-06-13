@@ -278,7 +278,7 @@ def test_main_fails_when_any_tracking_checkbox_remains_unchecked():
 			"1/3 sub-issues on #2734 still unchecked: outstanding B",
 		)]
 		assert "::warning::[integration-pr-readiness] 1/3 sub-issues on #2734 still unchecked: outstanding B" in stderr.getvalue()
-		assert "::notice::To merge anyway (rare; e.g. de-scoping the remaining work), apply the 'ai:override-incomplete-merge' label to this PR." in stderr.getvalue()
+		assert f"::notice::To merge anyway (rare; e.g. de-scoping the remaining work), apply the {mod.OVERRIDE_LABEL!r} label to this PR." in stderr.getvalue()
 		assert "::error::[integration-pr-readiness] 1/3 sub-issues on #2734 still unchecked: outstanding B" not in stderr.getvalue()
 	finally:
 		sys.argv = old_argv

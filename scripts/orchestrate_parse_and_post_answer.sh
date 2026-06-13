@@ -10,7 +10,20 @@ cd "${REPO_ROOT}"
 source "${SCRIPT_DIR}/gh_helpers.sh" 2>/dev/null || true
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
-REPOSITORY="${GITHUB_REPOSITORY:-}"
+require_env() {
+	local name="$1"
+	if [ -z "${!name:-}" ]; then
+		echo "::error::orchestrate_parse_and_post_answer.sh requires ${name}."
+		exit 1
+	fi
+}
+
+for required_env in GITHUB_REPOSITORY GITHUB_ENV GITHUB_ACTOR GITHUB_RUN_ID GITHUB_RUN_ATTEMPT ISSUE_NUMBER ISSUE_URL CLARIFICATION_COMMENT_ID RUNTIME_DIR CODEX_OUTPUT_FILE; do
+	require_env "${required_env}"
+done
+mkdir -p "${RUNTIME_DIR}"
+
+REPOSITORY="${GITHUB_REPOSITORY}"
 MEMORY_HELPERS_AVAILABLE="false"
 
 SKIP_AUTO_ANSWER="false"
@@ -28,9 +41,9 @@ if ! [[ "${MAX_CYCLES}" =~ ^[1-9][0-9]*$ ]]; then
 	echo "::warning::Invalid ORCHESTRATOR_MAX_CLARIFY_CYCLES='${MAX_CYCLES}'; defaulting to 3."
 	MAX_CYCLES="3"
 fi
-RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${REPOSITORY}/actions/runs/${GITHUB_RUN_ID:-}"
+RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
-if [ -z "${CODEX_OUTPUT_FILE:-}" ] || [ ! -f "${CODEX_OUTPUT_FILE}" ]; then
+if [ ! -f "${CODEX_OUTPUT_FILE}" ]; then
 	echo "::error::Missing or unreadable CODEX_OUTPUT_FILE (${CODEX_OUTPUT_FILE:-})"
 	exit 1
 fi

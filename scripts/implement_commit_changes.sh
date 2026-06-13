@@ -59,7 +59,14 @@ exec 2> >(tee "${STEP_STDERR_FILE}" >&3)
 rm -f ./pre_assembled_static.txt
 if [ -f "${FETCHED_MANIFEST}" ]; then
   while IFS= read -r fetched_file; do
-    [ -n "${fetched_file}" ] && rm -f "${fetched_file}"
+    [ -n "${fetched_file}" ] || continue
+    case "${fetched_file}" in
+      /*|../*|*/../*|..|*/..)
+        echo "::warning::Skipping unsafe fetched-manifest path '${fetched_file}' during artifact cleanup."
+        continue
+        ;;
+    esac
+    rm -f -- "${fetched_file}"
   done < "${FETCHED_MANIFEST}"
 fi
 
