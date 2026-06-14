@@ -7,6 +7,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+DISPATCH_WATCH_HELPER = REPO_ROOT / "scripts" / "dispatch_and_watch_workflow_run.sh"
 SOURCE_LINE = 'source scripts/gh_helpers.sh 2>/dev/null || true'
 FALLBACK_LINE = 'type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }'
 SAFE_GH_JQ_LINE = 'type _safe_gh_jq >/dev/null 2>&1 || _safe_gh_jq() {'
@@ -36,6 +37,10 @@ BOOTSTRAPPED_GH_HELPER_WORKFLOWS = (
 
 def _workflow_text(relative_path: str) -> str:
 	return (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+
+
+def _dispatch_watch_helper_text() -> str:
+	return DISPATCH_WATCH_HELPER.read_text(encoding="utf-8")
 
 
 def _step_block(text: str, step_name: str) -> str:
@@ -115,6 +120,26 @@ def test_bootstrapped_gh_retry_workflows_require_staged_helper_with_main_fallbac
 		assert '::error::Missing required support script gh_helpers.sh' in text, (
 			f"{relative_path} must hard-fail when gh_helpers.sh cannot be staged"
 		)
+
+
+def test_dispatch_watcher_registration_poll_uses_pre_dispatch_created_window() -> None:
+	text = _dispatch_watch_helper_text()
+	window_capture = 'REGISTRATION_WINDOW_START_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"'
+	registration_query = 'runs?event=workflow_dispatch&created=>${REGISTRATION_WINDOW_START_UTC}&per_page=10'
+	dispatch_call = 'if ! dispatch_workflow; then'
+
+	assert window_capture in text, (
+		"scripts/dispatch_and_watch_workflow_run.sh must capture a pre-dispatch UTC registration window "
+		"before resolving the newly registered run."
+	)
+	assert registration_query in text, (
+		"scripts/dispatch_and_watch_workflow_run.sh must scope the registration poll to workflow_dispatch runs "
+		"created after the current dispatch window opens."
+	)
+	assert text.index(window_capture) < text.index(dispatch_call) < text.index(registration_query), (
+		"scripts/dispatch_and_watch_workflow_run.sh must open the registration window before dispatching and use it "
+		"in the post-dispatch poll query."
+	)
 
 
 def main() -> int:

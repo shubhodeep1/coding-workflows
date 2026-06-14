@@ -221,6 +221,8 @@ if [[ ! "${PRE_RUN_ID}" =~ ^[0-9]+$ ]]; then
 	PRE_RUN_ID=0
 fi
 
+REGISTRATION_WINDOW_START_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
 if ! dispatch_workflow; then
 	if [ "${DISPATCH_FAIL_OPEN}" = "1" ]; then
 		echo "run_id=" >> "${GITHUB_OUTPUT}"
@@ -235,7 +237,7 @@ DISPATCH_STARTED_AT="$(date +%s)"
 REGISTRATION_DEADLINE=$((DISPATCH_STARTED_AT + REGISTRATION_TIMEOUT_SECS))
 NEW_ID=""
 while [ "$(date +%s)" -lt "${REGISTRATION_DEADLINE}" ]; do
-	NEW_ID="$(gh_api_safe_quiet_print "repos/${TARGET_REPO}/actions/workflows/${WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=10" --jq "[.workflow_runs[] | select(.id > ${PRE_RUN_ID:-0})] | sort_by(.created_at) | last | .id // empty" || echo "")"
+	NEW_ID="$(gh_api_safe_quiet_print "repos/${TARGET_REPO}/actions/workflows/${WORKFLOW_FILE}/runs?event=workflow_dispatch&created=>${REGISTRATION_WINDOW_START_UTC}&per_page=10" --jq "[.workflow_runs[] | select(.id > ${PRE_RUN_ID:-0})] | sort_by(.created_at) | last | .id // empty" || echo "")"
 	[ -n "${NEW_ID}" ] && break
 	sleep "${REGISTRATION_POLL_INTERVAL_SECS}"
 done
