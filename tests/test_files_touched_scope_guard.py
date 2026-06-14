@@ -227,7 +227,7 @@ def _run_fragment(
 		git_env = {
 			key: value
 			for key, value in os.environ.items()
-			if key not in {"BASH_ENV", "GIT_DIR", "GIT_INDEX_FILE", "GIT_PREFIX", "GIT_WORK_TREE"}
+			if key not in {"BASH_ENV", "ENV", "WORKSPACE_PATH", "GIT_DIR", "GIT_INDEX_FILE", "GIT_PREFIX", "GIT_WORK_TREE", "GIT_COMMON_DIR"}
 		}
 		subprocess.run(["git", "init", "-q"], cwd=tdp, check=True, env=git_env)
 		subprocess.run(["git", "config", "user.email", "t@t"], cwd=tdp, check=True, env=git_env)

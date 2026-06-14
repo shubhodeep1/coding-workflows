@@ -1330,6 +1330,45 @@ def test_commit_helper_fails_closed_on_unsafe_fetched_manifest_paths() -> None:
 		assert "unsafe cleanup path" in (proc.stdout + proc.stderr)
 
 
+def test_commit_helper_treats_unset_fetched_manifest_as_empty() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_manifest_unset_") as td:
+		tmp_path = Path(td)
+		repo_dir = tmp_path / "repo"
+		_bootstrap_git_repo(repo_dir)
+		(repo_dir / "scripts").mkdir()
+		shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, repo_dir / "scripts" / "implement_commit_changes.sh")
+		_git(["git", "add", "scripts/implement_commit_changes.sh"], cwd=repo_dir)
+		_git(["git", "commit", "-m", "add helper"], cwd=repo_dir)
+		github_output = tmp_path / "github_output.txt"
+		github_output.write_text("", encoding="utf-8")
+		runtime_dir = tmp_path / "runtime"
+		runtime_dir.mkdir()
+		env = _isolated_test_env(
+			{
+				"GITHUB_OUTPUT": str(github_output),
+				"GITHUB_REPOSITORY": "owner/repo",
+				"ISSUE_NUMBER": "948",
+				"RUNTIME_DIR": str(runtime_dir),
+				"SERENA_PROJECT_BOOTSTRAP_HASH": "",
+				"SERENA_PROJECT_PREEXISTED": "false",
+				"TMPDIR": str(runtime_dir),
+			},
+			cwd=repo_dir,
+		)
+
+		proc = subprocess.run(
+			["bash", "scripts/implement_commit_changes.sh"],
+			cwd=str(repo_dir),
+			env=env,
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "No repository changes were produced by Codex implementation" in proc.stdout
+		assert "did_commit=false" in github_output.read_text(encoding="utf-8")
+
+
 def test_validate_step_uses_reusable_validator_with_continue_on_error() -> None:
 	validate_block = _step_block_text("Validate syntax of changed files")
 	assert "continue-on-error: true" in validate_block

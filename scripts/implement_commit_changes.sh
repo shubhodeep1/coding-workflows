@@ -58,7 +58,8 @@ exec 2> >(tee "${STEP_STDERR_FILE}" >&3)
 # files that were never touched are safe. Refuse the cleanup batch if
 # the manifest contains any path outside repo-relative cleanup targets.
 rm -f ./pre_assembled_static.txt
-if [ -f "${FETCHED_MANIFEST}" ]; then
+fetched_manifest_path="${FETCHED_MANIFEST:-}"
+if [ -n "${fetched_manifest_path}" ] && [ -f "${fetched_manifest_path}" ]; then
   safe_fetched_paths=()
   unsafe_fetched_paths=""
   while IFS= read -r fetched_file; do
@@ -71,7 +72,7 @@ if [ -f "${FETCHED_MANIFEST}" ]; then
         safe_fetched_paths+=("${fetched_file}")
         ;;
     esac
-  done < "${FETCHED_MANIFEST}"
+  done < "${fetched_manifest_path}"
   if [ -n "${unsafe_fetched_paths}" ]; then
     unsafe_fetched_count="$(printf '%s\n' "${unsafe_fetched_paths}" | sed '/^$/d' | wc -l | tr -d ' ')"
     echo "::error::Refusing to continue: fetched-manifest contains unsafe cleanup path(s)."
