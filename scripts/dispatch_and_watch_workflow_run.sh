@@ -216,12 +216,20 @@ if [ "${SNAPSHOT_ONLY}" != "1" ]; then
 	require_numeric "completion poll interval" "${COMPLETION_POLL_INTERVAL_SECS}"
 fi
 
-PRE_RUN_ID="$(gh_api_safe_quiet_print "repos/${TARGET_REPO}/actions/workflows/${WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=1" --jq '.workflow_runs[0].id // 0' || echo "0")"
+PRE_RUN_ID="0"
+PRE_RUN_ID_LOOKUP_OK="false"
+if PRE_RUN_ID_RAW="$(gh_api_safe_quiet_print "repos/${TARGET_REPO}/actions/workflows/${WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=1" --jq '.workflow_runs[0].id // 0')"; then
+	PRE_RUN_ID="${PRE_RUN_ID_RAW}"
+	PRE_RUN_ID_LOOKUP_OK="true"
+fi
 if [[ ! "${PRE_RUN_ID}" =~ ^[0-9]+$ ]]; then
 	PRE_RUN_ID=0
+	PRE_RUN_ID_LOOKUP_OK="false"
 fi
 
-REGISTRATION_WINDOW_START_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+REGISTRATION_WINDOW_START_EPOCH="$(date +%s)"
+REGISTRATION_WINDOW_FALLBACK_EPOCH="$(( REGISTRATION_WINDOW_START_EPOCH - 1 ))"
+REGISTRATION_WINDOW_FALLBACK_UTC="$(date -u -d "@${REGISTRATION_WINDOW_FALLBACK_EPOCH}" +%Y-%m-%dT%H:%M:%SZ)"
 
 if ! dispatch_workflow; then
 	if [ "${DISPATCH_FAIL_OPEN}" = "1" ]; then
@@ -236,8 +244,15 @@ fi
 DISPATCH_STARTED_AT="$(date +%s)"
 REGISTRATION_DEADLINE=$((DISPATCH_STARTED_AT + REGISTRATION_TIMEOUT_SECS))
 NEW_ID=""
+if [ "${PRE_RUN_ID_LOOKUP_OK}" = "true" ]; then
+	REGISTRATION_QUERY="repos/${TARGET_REPO}/actions/workflows/${WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=10"
+	REGISTRATION_JQ="[.workflow_runs[] | select(.id > ${PRE_RUN_ID})] | sort_by(.created_at) | last | .id // empty"
+else
+	REGISTRATION_QUERY="repos/${TARGET_REPO}/actions/workflows/${WORKFLOW_FILE}/runs?event=workflow_dispatch&created=>${REGISTRATION_WINDOW_FALLBACK_UTC}&per_page=10"
+	REGISTRATION_JQ='[.workflow_runs[]] | sort_by(.created_at) | last | .id // empty'
+fi
 while [ "$(date +%s)" -lt "${REGISTRATION_DEADLINE}" ]; do
-	NEW_ID="$(gh_api_safe_quiet_print "repos/${TARGET_REPO}/actions/workflows/${WORKFLOW_FILE}/runs?event=workflow_dispatch&created=>${REGISTRATION_WINDOW_START_UTC}&per_page=10" --jq "[.workflow_runs[] | select(.id > ${PRE_RUN_ID:-0})] | sort_by(.created_at) | last | .id // empty" || echo "")"
+	NEW_ID="$(gh_api_safe_quiet_print "${REGISTRATION_QUERY}" --jq "${REGISTRATION_JQ}" || echo "")"
 	[ -n "${NEW_ID}" ] && break
 	sleep "${REGISTRATION_POLL_INTERVAL_SECS}"
 done

@@ -122,23 +122,33 @@ def test_bootstrapped_gh_retry_workflows_require_staged_helper_with_main_fallbac
 		)
 
 
-def test_dispatch_watcher_registration_poll_uses_pre_dispatch_created_window() -> None:
+def test_dispatch_watcher_registration_poll_prefers_id_delta_and_uses_created_window_only_as_fallback() -> None:
 	text = _dispatch_watch_helper_text()
-	window_capture = 'REGISTRATION_WINDOW_START_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"'
-	registration_query = 'runs?event=workflow_dispatch&created=>${REGISTRATION_WINDOW_START_UTC}&per_page=10'
+	baseline_flag = 'PRE_RUN_ID_LOOKUP_OK="false"'
+	baseline_query = 'runs?event=workflow_dispatch&per_page=1'
+	normal_query = 'runs?event=workflow_dispatch&per_page=10'
+	normal_filter = '[.workflow_runs[] | select(.id > ${PRE_RUN_ID})] | sort_by(.created_at) | last | .id // empty'
+	fallback_epoch = 'REGISTRATION_WINDOW_FALLBACK_EPOCH="$(( REGISTRATION_WINDOW_START_EPOCH - 1 ))"'
+	fallback_query = 'runs?event=workflow_dispatch&created=>${REGISTRATION_WINDOW_FALLBACK_UTC}&per_page=10'
+	legacy_query = 'runs?event=workflow_dispatch&created=>${REGISTRATION_WINDOW_START_UTC}&per_page=10'
+	lookup_branch = 'if [ "${PRE_RUN_ID_LOOKUP_OK}" = "true" ]; then'
 	dispatch_call = 'if ! dispatch_workflow; then'
 
-	assert window_capture in text, (
-		"scripts/dispatch_and_watch_workflow_run.sh must capture a pre-dispatch UTC registration window "
-		"before resolving the newly registered run."
+	assert baseline_flag in text and baseline_query in text, (
+		"scripts/dispatch_and_watch_workflow_run.sh must track whether the baseline PRE_RUN_ID snapshot succeeded "
+		"before it chooses the registration lookup path."
 	)
-	assert registration_query in text, (
-		"scripts/dispatch_and_watch_workflow_run.sh must scope the registration poll to workflow_dispatch runs "
-		"created after the current dispatch window opens."
+	assert normal_query in text and normal_filter in text and lookup_branch in text, (
+		"scripts/dispatch_and_watch_workflow_run.sh must use the id > PRE_RUN_ID registration query on the normal path."
 	)
-	assert text.index(window_capture) < text.index(dispatch_call) < text.index(registration_query), (
-		"scripts/dispatch_and_watch_workflow_run.sh must open the registration window before dispatching and use it "
-		"in the post-dispatch poll query."
+	assert fallback_epoch in text and fallback_query in text, (
+		"scripts/dispatch_and_watch_workflow_run.sh must keep a one-second-earlier created-window fallback for degraded PRE_RUN_ID lookups."
+	)
+	assert legacy_query not in text, (
+		"scripts/dispatch_and_watch_workflow_run.sh must not apply the strict created-window filter on the normal registration path."
+	)
+	assert text.index(fallback_epoch) < text.index(dispatch_call) < text.index(fallback_query), (
+		"scripts/dispatch_and_watch_workflow_run.sh must capture the fallback registration window before dispatching and only use it in the degraded path."
 	)
 
 
