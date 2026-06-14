@@ -18,6 +18,22 @@ PARSER_SCRIPT = REPO_ROOT / "scripts" / "review_parse_consolidator.sh"
 LEDGER_SCRIPT = REPO_ROOT / "scripts" / "review_issue_ledger.sh"
 
 
+def _isolated_test_env(extra_env: dict[str, str] | None = None, *, cwd: Path | None = None) -> dict[str, str]:
+	baseline_env = os.environ.copy()
+	env = baseline_env.copy()
+	if extra_env:
+		env.update(extra_env)
+	for key in ("BASH_ENV", "ENV"):
+		env.pop(key, None)
+	for key in ("WORKSPACE_PATH", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"):
+		if env.get(key) == baseline_env.get(key):
+			env.pop(key, None)
+	if cwd is not None:
+		env["PWD"] = str(cwd)
+		env.pop("OLDPWD", None)
+	return env
+
+
 def _seed_workspace_repo(workspace_dir: Path) -> Path:
 	workspace_dir.mkdir(parents=True, exist_ok=True)
 	runtime_dir = workspace_dir / "runtime"
@@ -28,17 +44,19 @@ def _seed_workspace_repo(workspace_dir: Path) -> Path:
 		encoding="utf-8",
 	)
 
-	subprocess.run(["git", "init", "-q", "-b", "main"], cwd=workspace_dir, check=True)
+	env = _isolated_test_env(cwd=workspace_dir)
+	subprocess.run(["git", "init", "-q", "-b", "main"], cwd=workspace_dir, env=env, check=True)
 	for key, value in (
 		("user.email", "test@local"),
 		("user.name", "test"),
 		("commit.gpgsign", "false"),
 	):
-		subprocess.run(["git", "config", key, value], cwd=workspace_dir, check=True)
-	subprocess.run(["git", "add", "src/module.py"], cwd=workspace_dir, check=True)
+		subprocess.run(["git", "config", key, value], cwd=workspace_dir, env=env, check=True)
+	subprocess.run(["git", "add", "src/module.py"], cwd=workspace_dir, env=env, check=True)
 	subprocess.run(
 		["git", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "seed"],
 		cwd=workspace_dir,
+		env=env,
 		check=True,
 	)
 
@@ -83,21 +101,25 @@ def _run_stage_chain(
 	mock_bin_dir: Path | None,
 	consolidator_enabled: str,
 ) -> dict[str, subprocess.CompletedProcess[str]]:
-	env = os.environ.copy()
-	env["PYTHONDONTWRITEBYTECODE"] = "1"
-	env["RUNTIME_DIR"] = str(runtime_dir)
-	env["SUPPORT_PROMPTS_DIR"] = str(REPO_ROOT / "prompts")
-	env["PR_NUMBER"] = "4242"
-	env["AUTOFIX_ITERATION"] = "1"
-	env["REVIEW_CONSOLIDATOR_ENABLED"] = consolidator_enabled
-	env["REVIEW_PARSER_FAILOPEN"] = "1"
-	env["REVIEW_ISSUES_FILE"] = str(runtime_dir / "review_issues.txt")
-	env["PARSER_STATS_FILE"] = str(runtime_dir / "parser_stats.txt")
-	env["LEDGER_STATUS_FILE"] = str(runtime_dir / "ledger_status.txt")
-	env["FLOOR_TAGS_FILE"] = str(runtime_dir / "floor_tags.txt")
-	env["CONSOLIDATOR_RAW_FILE"] = str(runtime_dir / "consolidator_raw.txt")
-	env["REVIEW_LEDGER_ENABLED"] = "1"
-	env["REVIEW_LEDGER_PATH"] = str(runtime_dir / "review_issue_ledger.txt")
+	env = _isolated_test_env(
+		{
+			"PYTHONDONTWRITEBYTECODE": "1",
+			"RUNTIME_DIR": str(runtime_dir),
+			"SUPPORT_PROMPTS_DIR": str(REPO_ROOT / "prompts"),
+			"PR_NUMBER": "4242",
+			"AUTOFIX_ITERATION": "1",
+			"REVIEW_CONSOLIDATOR_ENABLED": consolidator_enabled,
+			"REVIEW_PARSER_FAILOPEN": "1",
+			"REVIEW_ISSUES_FILE": str(runtime_dir / "review_issues.txt"),
+			"PARSER_STATS_FILE": str(runtime_dir / "parser_stats.txt"),
+			"LEDGER_STATUS_FILE": str(runtime_dir / "ledger_status.txt"),
+			"FLOOR_TAGS_FILE": str(runtime_dir / "floor_tags.txt"),
+			"CONSOLIDATOR_RAW_FILE": str(runtime_dir / "consolidator_raw.txt"),
+			"REVIEW_LEDGER_ENABLED": "1",
+			"REVIEW_LEDGER_PATH": str(runtime_dir / "review_issue_ledger.txt"),
+		},
+		cwd=workspace_dir,
+	)
 	if mock_bin_dir is not None:
 		env["MOCK_CODEX_OUTPUT_FILE"] = str(mock_bin_dir / "codex_output.txt")
 		env["PATH"] = f"{mock_bin_dir}:{env.get('PATH', '')}"

@@ -101,15 +101,29 @@ def _render_github_expressions(script: str, overrides: dict[str, str] | None = N
 	return rendered
 
 
-def _run_shell_script(script: str, *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-	env = dict(env)
-	# The review-autofix runner injects a workspace BASH_ENV hook and main-checkout
-	# git-location variables. These extracted-step tests rely on the explicit
-	# scratch cwd instead, so strip the inherited overrides before launching bash.
-	for key in ("BASH_ENV", "ENV", "WORKSPACE_PATH", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"):
+def _isolated_test_env(extra_env: dict[str, str] | None = None, *, cwd: Path | None = None) -> dict[str, str]:
+	baseline_env = os.environ.copy()
+	env = baseline_env.copy()
+	if extra_env:
+		env.update(extra_env)
+	# Scratch-repo tests must ignore the runner's workspace-shell hook and the
+	# main-checkout git-location overrides, or bash/git subprocesses will operate
+	# on the outer workspace instead of the temp repo under test. When callers
+	# pass os.environ.copy(), drop inherited runner values after the merge while
+	# preserving explicit test overrides that intentionally differ.
+	for key in ("BASH_ENV", "ENV"):
 		env.pop(key, None)
-	env["PWD"] = str(cwd)
-	env.pop("OLDPWD", None)
+	for key in ("WORKSPACE_PATH", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"):
+		if env.get(key) == baseline_env.get(key):
+			env.pop(key, None)
+	if cwd is not None:
+		env["PWD"] = str(cwd)
+		env.pop("OLDPWD", None)
+	return env
+
+
+def _run_shell_script(script: str, *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+	env = _isolated_test_env(env, cwd=cwd)
 	script_path = cwd / "__workflow_step_under_test.sh"
 	script_path.write_text(script, encoding="utf-8")
 	script_path.chmod(0o755)
@@ -124,11 +138,7 @@ def _run_shell_script(script: str, *, cwd: Path, env: dict[str, str]) -> subproc
 
 
 def _git(cmd: list[str], *, cwd: Path) -> None:
-	env = os.environ.copy()
-	for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"):
-		env.pop(key, None)
-	env["PWD"] = str(cwd)
-	env.pop("OLDPWD", None)
+	env = _isolated_test_env(cwd=cwd)
 	subprocess.run(cmd, cwd=str(cwd), env=env, check=True, capture_output=True, text=True)
 
 
@@ -1849,9 +1859,13 @@ def test_validator_scratch_repo_without_head_still_checks_untracked_files() -> N
 
 		(repo_dir / "broken.py").write_text("def nope(:\n\tpass\n", encoding="utf-8")
 		capture_path = tmp_path / "captured.txt"
-		env = os.environ.copy()
-		env["CAPTURE_FILE"] = str(capture_path)
-		env["ALLOW_WORKFLOW_EDITS"] = "true"
+		env = _isolated_test_env(
+			{
+				"CAPTURE_FILE": str(capture_path),
+				"ALLOW_WORKFLOW_EDITS": "true",
+			},
+			cwd=repo_dir,
+		)
 
 		result = subprocess.run(
 			["bash", str(validator_dst)],
@@ -1891,9 +1905,13 @@ def test_validator_surfaces_real_git_failures_instead_of_silently_skipping() -> 
 		validator_dst.chmod(0o755)
 
 		missing_git_dir = tmp_path / "missing-git-dir"
-		env = os.environ.copy()
-		env["ALLOW_WORKFLOW_EDITS"] = "true"
-		env["GIT_DIR"] = str(missing_git_dir)
+		env = _isolated_test_env(
+			{
+				"ALLOW_WORKFLOW_EDITS": "true",
+				"GIT_DIR": str(missing_git_dir),
+			},
+			cwd=repo_dir,
+		)
 
 		result = subprocess.run(
 			["bash", str(validator_dst)],
@@ -2235,8 +2253,7 @@ def test_serena_runtime_filter_and_cleanup_preserve_mutated_tree_and_drop_unchan
 			return hashlib.sha256(project_path.read_bytes()).hexdigest()
 
 		def _run_inline_bash(script: str, *, extra_env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-			env = os.environ.copy()
-			env.update(extra_env)
+			env = _isolated_test_env(extra_env, cwd=repo_dir)
 			return subprocess.run(
 				["bash", "-s"],
 				cwd=str(repo_dir),
@@ -2588,9 +2605,13 @@ def test_validator_diagnostic_surfaces_offending_lines() -> None:
 			encoding="utf-8",
 		)
 		capture_path = repo_dir / "captured.txt"
-		env = os.environ.copy()
-		env["CAPTURE_FILE"] = str(capture_path)
-		env["ALLOW_WORKFLOW_EDITS"] = "true"
+		env = _isolated_test_env(
+			{
+				"CAPTURE_FILE": str(capture_path),
+				"ALLOW_WORKFLOW_EDITS": "true",
+			},
+			cwd=repo_dir,
+		)
 		validator = REPO_ROOT / "scripts" / "validate_changed_files_syntax.sh"
 		result = subprocess.run(
 			["bash", str(validator)],
@@ -3290,9 +3311,13 @@ def test_validator_offending_bytes_redacts_secrets() -> None:
 			encoding="utf-8",
 		)
 		capture_path = repo_dir / "captured.txt"
-		env = os.environ.copy()
-		env["CAPTURE_FILE"] = str(capture_path)
-		env["ALLOW_WORKFLOW_EDITS"] = "true"
+		env = _isolated_test_env(
+			{
+				"CAPTURE_FILE": str(capture_path),
+				"ALLOW_WORKFLOW_EDITS": "true",
+			},
+			cwd=repo_dir,
+		)
 		validator = REPO_ROOT / "scripts" / "validate_changed_files_syntax.sh"
 		subprocess.run(
 			["bash", str(validator)],
