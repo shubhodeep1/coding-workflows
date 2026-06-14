@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/check_integration_pr_readiness.py:258 | severity=high | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The change now emits `::warning::[integration-pr-readiness] \u2026` while the lint/test contract still expects the original `::error::[lint_pr_body_auto_close]`.\n  WHY: The test no longer validates the hard-error behavior used by the gate, so a contract drift can slip through.\n- scripts/dispatch_and_watch_workflow_run.sh:219,238 | severity=high | confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The baseline and post-dispatch poll can fall back to the full run list on API failure and select a non-dispatch run as the latest.\n  WHY: A transient query failure can advance the registration window to the wrong run ID and make the watcher monitor the wrong run.\n- scripts/implement_commit_changes.sh:58-72 | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The unsafe-manifest guard uses the same destructive-blocked latch but keeps inconsistent failure messaging relative to the legacy bulk-delete path.\n  WHY: Operators may see mixed wording and the old redispatch hint for different rejection reasons, causing confusion.\n- scripts/orchestrate_parse_and_post_answer.sh:15-25 | severity=low | confidence=2\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: Upfront env validation and RUNTIME_DIR creation removed the previous fallback that handled a missing RUNTIME_DIR more explicitly.\n  WHY: A mkdir failure can now surface as a generic shell/unbound-variable/permission error rather than a clear missing-env diagnostic.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/check_integration_pr_readiness.py:258 | severity=high | confidence=4\n  PROBLEM: The change that now emits `::warning::[integration-pr-readiness] \u2026` while the lint job (and the test at tests/test_check_integration_pr_readiness.py:281) still expects the original `::error::[lint_pr_body_auto_close]`.\n  WHY: A PR containing the forbidden keyword will still be rejected by the lint job with `::error::[lint_pr_body_auto_close]`, but the test only asserts the softer warning path.\n- scripts/dispatch_and_watch_workflow_run.sh:219,238 | severity=high | confidence=3\n  PROBLEM: Both calls to `gh_api_safe_quiet_print(\u2026event=workflow_dispatch\u2026)` plus the fallback path when the snapshot query fails can select the wrong latest run.\n  WHY: On a flaky `per_page=1` query that returns a scheduled/push run instead of the expected dispatch, the smoke gate times out waiting for the wrong run.\n- scripts/implement_commit_changes.sh:58-72 | severity=low | confidence=3\n  PROBLEM: The manifest-cleanup traversal plus the new `destructive_commit_blocked=unsafe-fetched-manifest` latch still logs a generic \u201cStaged deletion list\u201d heading and the old redispatch hint for the `bulk-delete` path.\n  WHY: Operators see inconsistent failure messaging for the same latch label and may attempt duplicate redispatches or misunderstand the remediation.\n- scripts/orchestrate_parse_and_post_answer.sh:15-25 | severity=low | confidence=2\n  PROBLEM: The `require_env` helper now validates required GitHub Actions env vars up front and creates RUNTIME_DIR, but the fallback path that used to tolerate a missing RUNTIME_DIR is gone.\n  WHY: A transient runner filesystem failure that prevents mkdir can now produce a generic unbound-variable or permission error instead of a clear diagnostic.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "557d383fd7087a6e761637645849f2f0235fb306702be3e3259c19863f9c2436",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3344,
+    "run_id": "27483986331",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27483986331",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260614015327_80787608a8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3344,
+    "run_id": "27483986331"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-14T01:53:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
