@@ -20,6 +20,7 @@ REQUIRED_RESOLVER_WORKFLOWS = {
 # Explicit allow-list exceptions for checkout@v5 workflows that are not
 # orchestrator-managed issue execution paths.
 ALLOWLIST_EXCEPTIONS = {
+	"cancel_on_pr_close.yml": "PR-close cleanup cancels branch runs and has no orchestrator issue-phase checkout.",
 	"ci.yml": "PR CI validation has no orchestrator issue metadata.",
 	"integration-pr-readiness.yml": "Integration-PR readiness check runs on pull_request refs and posts commit status metadata, not orchestrator issue-phase checkout.",
 	"issue_pr_status.yml": "Issue/PR status utility workflow does not execute orchestrator issue phases.",

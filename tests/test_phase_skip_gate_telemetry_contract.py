@@ -11,6 +11,8 @@ CLARIFY_WF = REPO_ROOT / ".github" / "workflows" / "clarify.yml"
 PLAN_WF = REPO_ROOT / ".github" / "workflows" / "plan.yml"
 IMPLEMENT_WF = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 ORCH_CLARIFY_RESPOND_WF = REPO_ROOT / ".github" / "workflows" / "orchestrate_clarify_respond.yml"
+ORCH_PARSE_ANSWER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_parse_and_post_answer.sh"
+WORKSPACE_SOURCE_MANIFEST = REPO_ROOT / ".ai" / ".workspace_source_manifest.txt"
 CI_WF = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 AGENTS_MD = REPO_ROOT / "agents.md"
 
@@ -113,19 +115,43 @@ def test_implement_gate_steps_emit_stable_skip_telemetry() -> None:
 
 
 def test_orchestrate_clarify_respond_gate_steps_emit_stable_telemetry() -> None:
+	stage_block = _step_block(ORCH_CLARIFY_RESPOND_WF, "Stage workflow support files")
+	assert "orchestrate_parse_and_post_answer.sh" in stage_block
+
 	metadata_block = _step_block(ORCH_CLARIFY_RESPOND_WF, "Check orchestrator metadata")
 	assert "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=orchestrator_metadata reason=not_orchestrator_managed outcome=skip issue=${ISSUE_NUMBER}" in metadata_block
 
 	parse_block = _step_block(ORCH_CLARIFY_RESPOND_WF, "Parse and post answer")
-	assert "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=command_claim reason=already_processed outcome=skip issue=${ISSUE_NUMBER} comment_id=${CLARIFICATION_COMMENT_ID}" in parse_block
-	assert "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=command_claim reason=claimed_elsewhere outcome=skip issue=${ISSUE_NUMBER} comment_id=${CLARIFICATION_COMMENT_ID}" in parse_block
-	assert "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=auto_answer reason=escalate_requested outcome=defer issue=${ISSUE_NUMBER} comment_id=${CLARIFICATION_COMMENT_ID} cycle=${CYCLE} max_cycles=${MAX_CYCLES}" in parse_block
-	assert "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=auto_answer reason=loop_guard_blocked outcome=defer issue=${ISSUE_NUMBER} comment_id=${CLARIFICATION_COMMENT_ID} loop_reason=${LOOP_REASON} cycle=${CYCLE} max_cycles=${MAX_CYCLES}" in parse_block
+	assert "bash scripts/orchestrate_parse_and_post_answer.sh" in parse_block
+
+	helper_text = _read(ORCH_PARSE_ANSWER_SCRIPT)
+	assert "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=command_claim reason=already_processed outcome=skip issue=${ISSUE_NUMBER} comment_id=${CLARIFICATION_COMMENT_ID}" in helper_text
+	assert "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=command_claim reason=claimed_elsewhere outcome=skip issue=${ISSUE_NUMBER} comment_id=${CLARIFICATION_COMMENT_ID}" in helper_text
+	assert "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=auto_answer reason=escalate_requested outcome=defer issue=${ISSUE_NUMBER} comment_id=${CLARIFICATION_COMMENT_ID} cycle=${CYCLE} max_cycles=${MAX_CYCLES}" in helper_text
+	assert "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=auto_answer reason=loop_guard_blocked outcome=defer issue=${ISSUE_NUMBER} comment_id=${CLARIFICATION_COMMENT_ID} loop_reason=${LOOP_REASON} cycle=${CYCLE} max_cycles=${MAX_CYCLES}" in helper_text
+	assert 'if ! [[ "${COMMENT_COUNT_GUARD}" =~ ^[0-9]+$ ]]; then' in helper_text
 	_assert_before(
-		parse_block,
+		helper_text,
 		"AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=auto_answer reason=loop_guard_blocked outcome=defer issue=${ISSUE_NUMBER} comment_id=${CLARIFICATION_COMMENT_ID} loop_reason=${LOOP_REASON} cycle=${CYCLE} max_cycles=${MAX_CYCLES}",
 		"exit 0",
 	)
+
+
+def test_orchestrate_clarify_respond_reuses_cached_issue_payloads_before_live_fallback() -> None:
+	metadata_block = _step_block(ORCH_CLARIFY_RESPOND_WF, "Check orchestrator metadata")
+	assert 'ISSUE_PAYLOAD_FILE="${EARLY_CACHE_DIR}/issue_payload.json"' in metadata_block
+	assert 'TRACKING_PAYLOAD_FILE="${EARLY_CACHE_DIR}/tracking_issue_payload.json"' in metadata_block
+	assert 'printf \'%s\' "${ISSUE_PAYLOAD}" > "${ISSUE_PAYLOAD_FILE}"' in metadata_block
+	assert 'if TRACKING_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" 2>/dev/null)"; then' in metadata_block
+	assert 'printf \'%s\' "${TRACKING_PAYLOAD}" > "${TRACKING_PAYLOAD_FILE}"' in metadata_block
+	assert 'TRACKING_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" 2>/dev/null || echo "")"' not in metadata_block
+
+	fetch_block = _step_block(ORCH_CLARIFY_RESPOND_WF, "Fetch issue and tracking context")
+	assert 'if [ -n "${ISSUE_PAYLOAD_FILE:-}" ] && [ -s "${ISSUE_PAYLOAD_FILE}" ]; then' in fetch_block
+	assert "ISSUE_META=\"$(gh_retry gh api \"repos/${{ github.repository }}/issues/${ISSUE_NUMBER}\")\"" in fetch_block
+	assert 'if [ -n "${TRACKING_PAYLOAD_FILE:-}" ] && [ -s "${TRACKING_PAYLOAD_FILE}" ] && jq -e --arg tracking_num "${TRACKING_NUM}"' in fetch_block
+	assert "TRACKING_BODY=\"$(gh_retry gh api \"repos/${{ github.repository }}/issues/${TRACKING_NUM}\" --jq '.body // \"\"')\"" in fetch_block
+	assert "scripts/orchestrate_parse_and_post_answer.sh" in _read(WORKSPACE_SOURCE_MANIFEST)
 
 
 def test_agents_and_ci_register_phase_gate_contract() -> None:

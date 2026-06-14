@@ -492,22 +492,7 @@ jobs:
           LAST_ACTIVITY=$(date +%s)
           PREV_STATE=""
           RATE_LIMIT_BACKOFF=0
-
-          # Rate-limit-aware gh api wrapper — sleeps on 403 rate limit,
-          # returns empty string so callers fall back to safe defaults.
-          gh_api_safe() {
-            local output
-            output=$(gh api "$@" 2>/tmp/gh_api_err) && { RATE_LIMIT_BACKOFF=0; echo "$output"; return 0; }
-            if grep -qi "rate limit" /tmp/gh_api_err 2>/dev/null || echo "$output" | grep -qi "rate limit"; then
-              if [ "$RATE_LIMIT_BACKOFF" -eq 0 ]; then RATE_LIMIT_BACKOFF=30
-              elif [ "$RATE_LIMIT_BACKOFF" -lt 120 ]; then RATE_LIMIT_BACKOFF=$((RATE_LIMIT_BACKOFF * 2)); fi
-              echo "  ⏳ Rate limited — backing off ${RATE_LIMIT_BACKOFF}s" >&2
-              sleep "$RATE_LIMIT_BACKOFF"
-              echo ""; return 1
-            fi
-            cat /tmp/gh_api_err >&2 2>/dev/null || true
-            echo ""; return 1
-          }
+          . ./scripts/comprehensive_test_and_release_gh_api.sh
 
           # Robust workflow run-ID capture — retries on empty results to ride out
           # the brief race window where the matching run isn't yet indexed by the
@@ -519,7 +504,7 @@ jobs:
             local result=""
             local _attempt
             for _attempt in 1 2 3 4 5; do
-              result=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?per_page=100&created=>${{ steps.create-issue.outputs.created_after }}" \
+              result=$(gh_api_safe_print "repos/${TEST_REPO}/actions/runs?per_page=100&created=>${{ steps.create-issue.outputs.created_after }}" \
                 --jq "[.workflow_runs[] | select(.name | test(\"${name_re}\"; \"i\")) | select(.conclusion != \"skipped\")] | sort_by(.created_at) | last | .id // empty" || echo "")
               if [ -n "$result" ] && [ "$result" != "null" ]; then
                 printf '%s' "$result"
@@ -535,7 +520,7 @@ jobs:
             NOW=$(date +%s)
             IDLE=$((NOW - LAST_ACTIVITY))
 
-            LABELS=$(gh_api_safe "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
+            LABELS=$(gh_api_safe_print "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
               --jq '[.labels[].name] | join(",")' || echo "")
 
             # If rate-limited, skip this cycle (don't corrupt state)
@@ -543,7 +528,7 @@ jobs:
               continue
             fi
 
-            COMMENT_COUNT=$(gh_api_safe "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments" \
+            COMMENT_COUNT=$(gh_api_safe_print "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments" \
               --jq 'length' || echo "0")
 
             CUR_STATE="labels=${LABELS};comments=${COMMENT_COUNT}"
@@ -568,7 +553,7 @@ jobs:
             fi
 
             # Check for failure: look for error comments from bot
-            LAST_BOT_COMMENT=$(gh_api_safe "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments?per_page=5&direction=desc" \
+            LAST_BOT_COMMENT=$(gh_api_safe_print "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments?per_page=5&direction=desc" \
               --jq '[.[] | select(.user.login == "github-actions[bot]")] | .[0].body // ""' || echo "")
             if echo "$LAST_BOT_COMMENT" | grep -qi "failed\|error\|clarification.*needed"; then
               if echo "$LAST_BOT_COMMENT" | grep -qi "clarification.*needed\|NEEDS_CLARIFICATION"; then
@@ -628,22 +613,10 @@ jobs:
             exit 1
           fi
 
-          gh_api_safe() {
-            local output
-            output=$(gh api "$@" 2>/tmp/gh_api_err) && { RATE_LIMIT_BACKOFF=0; echo "$output"; return 0; }
-            if grep -qi "rate limit" /tmp/gh_api_err 2>/dev/null || echo "$output" | grep -qi "rate limit"; then
-              if [ "$RATE_LIMIT_BACKOFF" -eq 0 ]; then RATE_LIMIT_BACKOFF=30
-              elif [ "$RATE_LIMIT_BACKOFF" -lt 120 ]; then RATE_LIMIT_BACKOFF=$((RATE_LIMIT_BACKOFF * 2)); fi
-              echo "  ⏳ Rate limited — backing off ${RATE_LIMIT_BACKOFF}s" >&2
-              sleep "$RATE_LIMIT_BACKOFF"
-              echo ""; return 1
-            fi
-            cat /tmp/gh_api_err >&2 2>/dev/null || true
-            echo ""; return 1
-          }
+          . ./scripts/comprehensive_test_and_release_gh_api.sh
 
           fetch_plan_runs_json() {
-            gh_api_safe "repos/${TEST_REPO}/actions/runs?per_page=100&created=>${{ steps.create-issue.outputs.created_after }}"
+            gh_api_safe_print "repos/${TEST_REPO}/actions/runs?per_page=100&created=>${{ steps.create-issue.outputs.created_after }}"
           }
 
           latest_scoped_run_field() {
@@ -683,7 +656,7 @@ jobs:
             NOW=$(date +%s)
             IDLE=$((NOW - LAST_ACTIVITY))
 
-            LABELS=$(gh_api_safe "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
+            LABELS=$(gh_api_safe_print "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
               --jq '[.labels[].name] | join(",")' || echo "")
 
             # If rate-limited, skip this cycle (don't corrupt state)
@@ -691,7 +664,7 @@ jobs:
               continue
             fi
 
-            COMMENTS_JSON=$(gh_api_safe "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments?per_page=100&direction=desc" || echo "[]")
+            COMMENTS_JSON=$(gh_api_safe_print "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments?per_page=100&direction=desc" || echo "[]")
             COMMENT_COUNT=$(echo "${COMMENTS_JSON}" | jq 'length' 2>/dev/null || echo "0")
             # Track latest comment updated_at so progress comment edits reset the timer
             LATEST_COMMENT_UPDATED=$(echo "${COMMENTS_JSON}" | jq -r '[.[].updated_at] | sort | last // ""' 2>/dev/null || echo "")
@@ -846,20 +819,7 @@ jobs:
           MIN_GRACE_SECONDS=60
           PREV_STATE=""
           RATE_LIMIT_BACKOFF=0
-
-          gh_api_safe() {
-            local output
-            output=$(gh api "$@" 2>/tmp/gh_api_err) && { RATE_LIMIT_BACKOFF=0; echo "$output"; return 0; }
-            if grep -qi "rate limit" /tmp/gh_api_err 2>/dev/null || echo "$output" | grep -qi "rate limit"; then
-              if [ "$RATE_LIMIT_BACKOFF" -eq 0 ]; then RATE_LIMIT_BACKOFF=30
-              elif [ "$RATE_LIMIT_BACKOFF" -lt 120 ]; then RATE_LIMIT_BACKOFF=$((RATE_LIMIT_BACKOFF * 2)); fi
-              echo "  ⏳ Rate limited — backing off ${RATE_LIMIT_BACKOFF}s" >&2
-              sleep "$RATE_LIMIT_BACKOFF"
-              echo ""; return 1
-            fi
-            cat /tmp/gh_api_err >&2 2>/dev/null || true
-            echo ""; return 1
-          }
+          . ./scripts/comprehensive_test_and_release_gh_api.sh
 
           # Robust workflow run-ID capture — retries on empty results to ride out
           # the brief race window where the matching run isn't yet indexed by the
@@ -877,7 +837,7 @@ jobs:
             local result=""
             local _attempt
             for _attempt in 1 2 3 4 5; do
-              result=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?per_page=100&created=>${IMPL_CREATED_AFTER}" \
+              result=$(gh_api_safe_print "repos/${TEST_REPO}/actions/runs?per_page=100&created=>${IMPL_CREATED_AFTER}" \
                 --jq "[.workflow_runs[] | select(.name | test(\"${name_re}\"; \"i\")) | select(.conclusion != \"skipped\")] | sort_by(.created_at) | last | .id // empty" || echo "")
               if [ -n "$result" ] && [ "$result" != "null" ]; then
                 printf '%s' "$result"
@@ -895,7 +855,7 @@ jobs:
 
             # Search for PRs that reference this issue
             # The implement workflow creates branch ai/issue-<N>
-            PR_NUMBER=$(gh_api_safe "repos/${TEST_REPO}/pulls?state=open&head=${TEST_REPO%%/*}:ai/issue-${ISSUE_NUMBER}&per_page=1" \
+            PR_NUMBER=$(gh_api_safe_print "repos/${TEST_REPO}/pulls?state=open&head=${TEST_REPO%%/*}:ai/issue-${ISSUE_NUMBER}&per_page=1" \
               --jq '.[0].number // empty' || echo "")
 
             # If rate-limited, skip this cycle (don't corrupt state)
@@ -914,11 +874,11 @@ jobs:
             fi
 
             # Track labels and implement workflow run status for activity detection
-            LABELS=$(gh_api_safe "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
+            LABELS=$(gh_api_safe_print "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
               --jq '[.labels[].name] | join(",")' || echo "")
 
             # Fetch all implement runs once and extract metrics from the response
-            IMPL_RUNS_JSON=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?per_page=50&created=>${IMPL_CREATED_AFTER}" || echo "")
+            IMPL_RUNS_JSON=$(gh_api_safe_print "repos/${TEST_REPO}/actions/runs?per_page=50&created=>${IMPL_CREATED_AFTER}" || echo "")
             if [ -n "$IMPL_RUNS_JSON" ]; then
               IMPL_RUN_TOTAL=$(echo "$IMPL_RUNS_JSON" | jq '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.conclusion != "skipped")] | length' 2>/dev/null || echo "0")
               IMPL_RUN_IN_PROGRESS=$(echo "$IMPL_RUNS_JSON" | jq '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.conclusion != "skipped") | select(.status != "completed")] | length' 2>/dev/null || echo "0")
@@ -931,12 +891,12 @@ jobs:
             # ── Adaptive signals: step name + commit count ──
             IMPL_STEP_NAME=""
             if [ -n "$IMPL_RUN_ID_LATEST" ]; then
-              IMPL_STEP_NAME=$(gh_api_safe "repos/${TEST_REPO}/actions/runs/${IMPL_RUN_ID_LATEST}/jobs?per_page=10" \
+              IMPL_STEP_NAME=$(gh_api_safe_print "repos/${TEST_REPO}/actions/runs/${IMPL_RUN_ID_LATEST}/jobs?per_page=10" \
                 --jq '[.jobs[].steps[] | select(.status == "in_progress")] | last | .name // ""' || echo "")
             fi
 
             IMPL_BRANCH="ai/issue-${ISSUE_NUMBER}"
-            COMMIT_COUNT=$(gh_api_safe "repos/${TEST_REPO}/commits?sha=${IMPL_BRANCH}&per_page=1" \
+            COMMIT_COUNT=$(gh_api_safe_print "repos/${TEST_REPO}/commits?sha=${IMPL_BRANCH}&per_page=1" \
               --jq '.[0].sha // ""' || echo "")
 
             CUR_STATE="labels=${LABELS};impl_run=${IMPL_RUN_STATUS};total=${IMPL_RUN_TOTAL};active=${IMPL_RUN_IN_PROGRESS};step=${IMPL_STEP_NAME};head=${COMMIT_COUNT}"
@@ -1335,29 +1295,7 @@ jobs:
           # then idled for the full REVIEW_TIMEOUT before failing.
           PIN_SHA="${BAIT_SHA:-}"
 
-          # ── Rate-limit-aware gh api wrapper ──
-          # Runs gh api; on 403 rate-limit, sleeps with backoff and
-          # returns empty string so callers get safe fallback values.
-          gh_api_safe() {
-            local output http_code
-            # Capture both stdout and the HTTP status code
-            output=$(gh api "$@" 2>/tmp/gh_api_err) && { RATE_LIMIT_BACKOFF=0; echo "$output"; return 0; }
-            # Check if the error is a rate limit (403 with "rate limit" in body)
-            if grep -qi "rate limit" /tmp/gh_api_err 2>/dev/null || echo "$output" | grep -qi "rate limit"; then
-              if [ "$RATE_LIMIT_BACKOFF" -eq 0 ]; then
-                RATE_LIMIT_BACKOFF=30
-              elif [ "$RATE_LIMIT_BACKOFF" -lt 120 ]; then
-                RATE_LIMIT_BACKOFF=$((RATE_LIMIT_BACKOFF * 2))
-              fi
-              echo "  ⏳ Rate limited — backing off ${RATE_LIMIT_BACKOFF}s" >&2
-              sleep "$RATE_LIMIT_BACKOFF"
-              echo ""
-              return 1
-            fi
-            # Non-rate-limit error — return empty, let caller use fallback
-            echo ""
-            return 1
-          }
+          . ./scripts/comprehensive_test_and_release_gh_api.sh
 
           # Give the review workflow a moment to start
           sleep 5
@@ -1467,10 +1405,10 @@ jobs:
               # Tier 1 still precedes 2 so an already-completed success
               # wins over an active sibling (preserves the run-26989483268
               # fix).
-              REVIEW_RUN=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&per_page=100" \
+              REVIEW_RUN=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&per_page=100" \
                 --jq "[.workflow_runs[] | select(.name | test(\"Review|review|autofix|self-healing\"; \"i\")) | select(.head_sha == \"${PIN_SHA}\" or (\"${BAIT_CREATED_AT:-}\" != \"\" and .created_at <= \"${BAIT_CREATED_AT:-}\" and (.updated_at >= \"${BAIT_CREATED_AT:-}\" or .status == \"in_progress\")))] as \$m | (\$m | map(select(.status == \"completed\" and .conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | map(select(.status == \"in_progress\" and \"${BAIT_CREATED_AT:-}\" != \"\" and .created_at <= \"${BAIT_CREATED_AT:-}\")) | sort_by(.created_at) | first) // (\$m | map(select(.status == \"in_progress\")) | sort_by(.created_at) | last) // (\$m | map(select(.conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | sort_by(.created_at) | last)" || echo "")
             else
-              REVIEW_RUN=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&event=pull_request&per_page=5" \
+              REVIEW_RUN=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&event=pull_request&per_page=5" \
                 --jq '[.workflow_runs[] | select(.name | test("Review|review|autofix|self-healing"; "i"))] | sort_by(.created_at) | last' || echo "")
             fi
 
@@ -1516,7 +1454,7 @@ jobs:
                   # of polling this dead run forever (the failure mode on
                   # run-25428461223). Reset the activity timer because
                   # the pivot itself is meaningful progress.
-                  PIN_HEAD_NOW=$(gh_api_safe "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' || echo "")
+                  PIN_HEAD_NOW=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' || echo "")
                   if [ -n "${PIN_SHA:-}" ] && [ -n "${PIN_HEAD_NOW}" ] && [ "${PIN_HEAD_NOW}" != "${PIN_SHA}" ]; then
                     echo "  ↪ PR head advanced past pin (${PIN_SHA:0:7} → ${PIN_HEAD_NOW:0:7}); advancing pin and polling successor run next iteration"
                     PIN_SHA="${PIN_HEAD_NOW}"
@@ -1534,7 +1472,7 @@ jobs:
               # that keep the run in_progress long after the main work has died.
               if [ "$RUN_STATUS" = "in_progress" ] && [ "$RUN_ID" != "unknown" ]; then
                 # Fetch jobs once and reuse for failed-steps check, current step, and log size
-                JOBS_JSON=$(gh_api_safe "repos/${TEST_REPO}/actions/runs/${RUN_ID}/jobs?per_page=10" || echo "")
+                JOBS_JSON=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs/${RUN_ID}/jobs?per_page=10" || echo "")
                 if [ -n "$JOBS_JSON" ]; then
                   FAILED_STEPS=$(echo "$JOBS_JSON" | jq '[.jobs[].steps[] | select(.conclusion == "failure")] | length' 2>/dev/null || echo "0")
                 else
@@ -1589,7 +1527,7 @@ jobs:
                     # off ${RATE_LIMIT_BACKOFF}s"), and operators rely on
                     # those lines to distinguish a genuinely-stuck review
                     # workflow from a slow smoke run caused by API blips.
-                    if ! gh_api_safe "repos/${TEST_REPO}/actions/jobs/${JOB_ID}/logs" > "$LOG_FILE"; then
+                    if ! gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/jobs/${JOB_ID}/logs" > "$LOG_FILE"; then
                       : > "$LOG_FILE"
                       echo "  ⚠ Live-log fetch failed for job ${JOB_ID} — editor-noop shortcut and reviewer-count shortcut are inactive this iteration; the wait loop continues with status/conclusion polling only" >&2
                     fi
@@ -1695,17 +1633,17 @@ jobs:
               if [ -n "${JOBS_JSON:-}" ]; then
                 CURRENT_STEP=$(echo "$JOBS_JSON" | jq -r '[.jobs[].steps[] | select(.status == "in_progress")] | last | .name // ""' 2>/dev/null || echo "")
               else
-                CURRENT_STEP=$(gh_api_safe "repos/${TEST_REPO}/actions/runs/${RUN_ID}/jobs?per_page=10" \
+                CURRENT_STEP=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs/${RUN_ID}/jobs?per_page=10" \
                   --jq '[.jobs[].steps[] | select(.status == "in_progress")] | last | .name // ""' || echo "")
               fi
             fi
 
             # 2) Commit count on PR branch — editor pushes trigger changes
-            PR_HEAD_SHA=$(gh_api_safe "repos/${TEST_REPO}/pulls/${PR_NUMBER}" \
+            PR_HEAD_SHA=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/pulls/${PR_NUMBER}" \
               --jq '.head.sha // ""' || echo "")
 
             # 3) Review comment count on the PR
-            REVIEW_COMMENT_COUNT=$(gh_api_safe "repos/${TEST_REPO}/pulls/${PR_NUMBER}/comments" \
+            REVIEW_COMMENT_COUNT=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/pulls/${PR_NUMBER}/comments" \
               --jq 'length' || echo "0")
 
             # 4) Job log byte size — grows while reviewers/editor produce output
@@ -1715,11 +1653,11 @@ jobs:
               if [ -n "${JOBS_JSON:-}" ]; then
                 JOB_ID_FOR_SIZE=$(echo "$JOBS_JSON" | jq -r '.jobs[0].id // empty' 2>/dev/null || echo "")
               else
-                JOB_ID_FOR_SIZE=$(gh_api_safe "repos/${TEST_REPO}/actions/runs/${RUN_ID}/jobs?per_page=10" \
+                JOB_ID_FOR_SIZE=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs/${RUN_ID}/jobs?per_page=10" \
                   --jq '.jobs[0].id // empty' || echo "")
               fi
               if [ -n "$JOB_ID_FOR_SIZE" ]; then
-                LOG_SIZE=$(gh_api_safe "repos/${TEST_REPO}/actions/jobs/${JOB_ID_FOR_SIZE}/logs" \
+                LOG_SIZE=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/jobs/${JOB_ID_FOR_SIZE}/logs" \
                   | wc -c || echo "0")
                 LOG_SIZE="${LOG_SIZE##*$'\n'}"
                 [[ "$LOG_SIZE" =~ ^[0-9]+$ ]] || LOG_SIZE="0"
@@ -1755,7 +1693,7 @@ jobs:
                 fi
                 echo "status=no_review_triggered" >> "$GITHUB_OUTPUT"
                 echo "Diagnostic: workflow runs visible on branch ${PR_BRANCH}:" >&2
-                gh_api_safe "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&per_page=20" \
+                gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&per_page=20" \
                   --jq '.workflow_runs[] | "  \(.id) \(.name) event=\(.event) status=\(.status) conclusion=\(.conclusion // "null") head_sha=\(.head_sha[0:7])"' >&2 \
                   || echo "  (inventory fetch failed)" >&2
                 exit 1
@@ -2578,25 +2516,13 @@ jobs:
           PREV_STATE=""
           PREV_LABELS=""
           RATE_LIMIT_BACKOFF=0
-
-          gh_api_safe() {
-            local output
-            output=$(gh api "$@" 2>/tmp/gh_api_err) && { RATE_LIMIT_BACKOFF=0; echo "$output"; return 0; }
-            if grep -qi "rate limit" /tmp/gh_api_err 2>/dev/null || echo "$output" | grep -qi "rate limit"; then
-              if [ "$RATE_LIMIT_BACKOFF" -eq 0 ]; then RATE_LIMIT_BACKOFF=30
-              elif [ "$RATE_LIMIT_BACKOFF" -lt 120 ]; then RATE_LIMIT_BACKOFF=$((RATE_LIMIT_BACKOFF * 2)); fi
-              echo "  ⏳ Rate limited — backing off ${RATE_LIMIT_BACKOFF}s" >&2
-              sleep "$RATE_LIMIT_BACKOFF"
-              echo ""; return 1
-            fi
-            echo ""; return 1
-          }
+          . ./scripts/comprehensive_test_and_release_gh_api.sh
 
           while true; do
             NOW=$(date +%s)
             IDLE=$((NOW - LAST_ACTIVITY))
 
-            LABELS=$(gh_api_safe "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
+            LABELS=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
               --jq '[.labels[].name] | join(",")' || echo "")
 
             # If rate-limited, skip this cycle (don't corrupt state)
@@ -2606,7 +2532,7 @@ jobs:
             fi
 
             # Also check poller workflow run status for activity detection
-            POLLER_RUN=$(gh_api_safe "repos/${TEST_REPO}/actions/runs?per_page=5&event=workflow_dispatch" \
+            POLLER_RUN=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs?per_page=5&event=workflow_dispatch" \
               --jq "[.workflow_runs[] | select(.name | test(\"Orchestrate.*Poll|Poll\"; \"i\"))] | sort_by(.created_at) | last" || echo "")
             POLLER_STATUS="unknown"
             POLLER_CONCLUSION="null"
@@ -3616,56 +3542,18 @@ jobs:
           # Surface audit failures via step outputs + notify instead of
           # failing this job — workflow-log-analysis is observability-only.
           sleep 4
-          PRE=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo 0)
-          if ! gh workflow run "${WF_FILE}" --repo "${TEST_REPO}" \
+          bash ./scripts/dispatch_and_watch_workflow_run.sh \
+            --repo "${TEST_REPO}" \
+            --workflow "${WF_FILE}" \
+            --display-name "workflow-log-analysis" \
+            --registration-timeout-secs 300 \
+            --registration-poll-interval-secs 5 \
+            --snapshot-only \
+            --dispatch-fail-open \
+            --registration-fail-open \
             --field lookback_days=1 \
-            --field repos_override="${TEST_REPO}" \
-            --field alert_msg_level=SILENT; then
-            echo "run_id=" >> "$GITHUB_OUTPUT"
-            echo "workflow_conclusion=dispatch_failed" >> "$GITHUB_OUTPUT"
-            echo "::warning::workflow-log-analysis dispatch failed; continuing because this audit is non-blocking"
-            exit 0
-          fi
-          # Registration normally appears within seconds; allow a short
-          # fail-open window for Actions indexing lag, then stop.
-          REGISTRATION_DEADLINE=$(( $(date +%s) + 300 ))
-          NEW_ID=""
-          while [ "$(date +%s)" -lt "${REGISTRATION_DEADLINE}" ]; do
-            NEW_ID=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=10" \
-              --jq "[.workflow_runs[] | select(.id > ${PRE})] | sort_by(.created_at) | last | .id // empty" 2>/dev/null || echo "")
-            [ -n "${NEW_ID}" ] && break
-            sleep 5
-          done
-          if [ -z "${NEW_ID}" ]; then
-            echo "run_id=" >> "$GITHUB_OUTPUT"
-            echo "workflow_conclusion=dispatch_not_registered" >> "$GITHUB_OUTPUT"
-            echo "::warning::workflow-log-analysis dispatch did not register; continuing because this audit is non-blocking"
-            exit 0
-          fi
-          echo "Registered run #${NEW_ID}"
-          if ! JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${NEW_ID}" --jq '{status, conclusion}' 2>/dev/null); then
-            JSON='{}'
-            echo "::warning::workflow-log-analysis snapshot query failed for run #${NEW_ID}; child run context unavailable"
-          fi
-          STATUS=$(printf '%s' "${JSON}" | jq -r '.status // "unknown"' 2>/dev/null || echo "unknown")
-          CONCLUSION=$(printf '%s' "${JSON}" | jq -r '.conclusion // ""' 2>/dev/null || echo "")
-          if [ -n "${CONCLUSION}" ]; then
-            echo "  snapshot: status=${STATUS} conclusion=${CONCLUSION}"
-          else
-            echo "  snapshot: status=${STATUS}"
-          fi
-          echo "run_id=${NEW_ID}" >> "$GITHUB_OUTPUT"
-          if [ "${STATUS}" = "completed" ] && [ -n "${CONCLUSION}" ]; then
-            echo "workflow_conclusion=${CONCLUSION}" >> "$GITHUB_OUTPUT"
-          else
-            echo "workflow_conclusion=success" >> "$GITHUB_OUTPUT"
-          fi
-          echo "workflow_snapshot_status=${STATUS}" >> "$GITHUB_OUTPUT"
-          echo "workflow_snapshot_conclusion=${CONCLUSION}" >> "$GITHUB_OUTPUT"
-          if [ "${STATUS}" = "completed" ] && [ -n "${CONCLUSION}" ] && [ "${CONCLUSION}" != "success" ]; then
-            echo "::warning::workflow-log-analysis run #${NEW_ID} is already completed with conclusion=${CONCLUSION}; not waiting because this audit is non-blocking"
-          fi
-          exit 0
+            --field "repos_override=${TEST_REPO}" \
+            --field alert_msg_level=SILENT
 
       - name: "Soft-error analyser (workflow-log-analysis)"
         id: soft_error_analysis
@@ -3774,7 +3662,6 @@ jobs:
           sleep 4
           WF_FILE="validation-refresh.yml"
           BRANCH_NAME="ai/validation-refresh-smoke-${GITHUB_RUN_ID}"
-          PRE=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo 0)
           # Use a per-run smoke branch name so production validation-refresh
           # branches are never collided with.
           # Retry the dispatch on transient GitHub API failures (HTTP 5xx,
@@ -3782,52 +3669,21 @@ jobs:
           # single HTTP 500 from /dispatches blocked release v1.13.8
           # (run #26328466709 — update_workflows dispatch). The dispatch
           # call itself is idempotent here because the post-dispatch poll
-          # filters runs by id > PRE, so a duplicate dispatch (if a 500
+          # filters runs by the pre-dispatch run-id snapshot, so a duplicate dispatch (if a 500
           # response masked a successful create) is harmless — the poll
           # picks up whichever run id was registered.
-          dispatch_attempt=1
-          until gh workflow run "${WF_FILE}" --repo "${TEST_REPO}" \
-              --field branch_name="${BRANCH_NAME}" \
-              --field alert_msg_level=SILENT; do
-            if [ "${dispatch_attempt}" -ge 5 ]; then
-              echo "::error::gh workflow run ${WF_FILE} failed after 5 attempts"
-              exit 1
-            fi
-            backoff=$(( 2 ** dispatch_attempt ))
-            echo "::warning::gh workflow run ${WF_FILE} failed (attempt ${dispatch_attempt}/5), retrying in ${backoff}s..."
-            sleep "${backoff}"
-            dispatch_attempt=$((dispatch_attempt + 1))
-          done
-          DEADLINE=$(( $(date +%s) + 2400 ))
-          NEW_ID=""
-          while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
-            NEW_ID=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=10" \
-              --jq "[.workflow_runs[] | select(.id > ${PRE})] | sort_by(.created_at) | last | .id // empty" 2>/dev/null || echo "")
-            [ -n "${NEW_ID}" ] && break
-            sleep 5
-          done
-          if [ -z "${NEW_ID}" ]; then
-            echo "::error::validation-refresh dispatch did not register"
-            exit 1
-          fi
-          echo "Watching run #${NEW_ID}"
-          while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
-            JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${NEW_ID}" --jq '{status, conclusion}' 2>/dev/null || echo "")
-            STATUS=$(echo "${JSON}" | jq -r '.status // ""')
-            CONCLUSION=$(echo "${JSON}" | jq -r '.conclusion // ""')
-            echo "  status=${STATUS} conclusion=${CONCLUSION}"
-            if [ "${STATUS}" = "completed" ]; then
-              echo "run_id=${NEW_ID}" >> "$GITHUB_OUTPUT"
-              if [ "${CONCLUSION}" = "success" ]; then
-                exit 0
-              fi
-              echo "::error::validation-refresh run #${NEW_ID} concluded ${CONCLUSION}"
-              exit 1
-            fi
-            sleep 15
-          done
-          echo "::error::validation-refresh run #${NEW_ID} timed out"
-          exit 1
+          bash ./scripts/dispatch_and_watch_workflow_run.sh \
+            --repo "${TEST_REPO}" \
+            --workflow "${WF_FILE}" \
+            --display-name "validation-refresh" \
+            --registration-timeout-secs 2400 \
+            --registration-poll-interval-secs 5 \
+            --completion-timeout-secs 2400 \
+            --completion-poll-interval-secs 15 \
+            --dispatch-max-attempts 5 \
+            --dispatch-backoff-base-secs 2 \
+            --field "branch_name=${BRANCH_NAME}" \
+            --field alert_msg_level=SILENT
 
       - name: "Soft-error analyser (validation-refresh)"
         if: always() && steps.dispatch_validation_refresh.outputs.run_id != ''
@@ -3855,57 +3711,22 @@ jobs:
           # overwrite local templates with whatever is at @stable — a
           # destructive feedback loop during a release rehearsal.
           WF_FILE="update_workflows.yml"
-          PRE=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo 0)
           # Retry transient GitHub API failures — see the validation-refresh
           # dispatch above for context (release v1.13.8 was blocked here by
           # a single HTTP 500 from /dispatches in run #26328466709).
-          dispatch_attempt=1
-          until gh workflow run "${WF_FILE}" --repo "${TEST_REPO}" \
-              --field allow_workflow_edits=false \
-              --field alert_msg_level=SILENT; do
-            if [ "${dispatch_attempt}" -ge 5 ]; then
-              echo "::error::gh workflow run ${WF_FILE} failed after 5 attempts"
-              exit 1
-            fi
-            backoff=$(( 2 ** dispatch_attempt ))
-            echo "::warning::gh workflow run ${WF_FILE} failed (attempt ${dispatch_attempt}/5), retrying in ${backoff}s..."
-            sleep "${backoff}"
-            dispatch_attempt=$((dispatch_attempt + 1))
-          done
-          DEADLINE=$(( $(date +%s) + 600 ))
-          NEW_ID=""
-          while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
-            NEW_ID=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=10" \
-              --jq "[.workflow_runs[] | select(.id > ${PRE})] | sort_by(.created_at) | last | .id // empty" 2>/dev/null || echo "")
-            [ -n "${NEW_ID}" ] && break
-            sleep 5
-          done
-          if [ -z "${NEW_ID}" ]; then
-            echo "::error::update_workflows dispatch did not register"
-            exit 1
-          fi
-          echo "Watching run #${NEW_ID}"
-          while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
-            JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${NEW_ID}" --jq '{status, conclusion}' 2>/dev/null || echo "")
-            STATUS=$(echo "${JSON}" | jq -r '.status // ""')
-            CONCLUSION=$(echo "${JSON}" | jq -r '.conclusion // ""')
-            echo "  status=${STATUS} conclusion=${CONCLUSION}"
-            if [ "${STATUS}" = "completed" ]; then
-              echo "run_id=${NEW_ID}" >> "$GITHUB_OUTPUT"
-              # The single update job is gated `if: allow_workflow_edits != false`;
-              # with edits=false the job is skipped, which surfaces as
-              # conclusion=skipped. That counts as success for this smoke gate
-              # (workflow startup is the only thing we can observe safely).
-              if [ "${CONCLUSION}" = "success" ] || [ "${CONCLUSION}" = "skipped" ]; then
-                exit 0
-              fi
-              echo "::error::update_workflows run #${NEW_ID} concluded ${CONCLUSION}"
-              exit 1
-            fi
-            sleep 15
-          done
-          echo "::error::update_workflows run #${NEW_ID} timed out"
-          exit 1
+          bash ./scripts/dispatch_and_watch_workflow_run.sh \
+            --repo "${TEST_REPO}" \
+            --workflow "${WF_FILE}" \
+            --display-name update_workflows \
+            --registration-timeout-secs 600 \
+            --registration-poll-interval-secs 5 \
+            --completion-timeout-secs 600 \
+            --completion-poll-interval-secs 15 \
+            --dispatch-max-attempts 5 \
+            --dispatch-backoff-base-secs 2 \
+            --allowed-conclusions success,skipped \
+            --field allow_workflow_edits=false \
+            --field alert_msg_level=SILENT
 
       - name: "Soft-error analyser (update_workflows)"
         if: always() && steps.dispatch_update_workflows.outputs.run_id != ''
@@ -3927,7 +3748,6 @@ jobs:
           set -euo pipefail
           sleep 4
           WF_FILE="internal-memory-maintenance.yml"
-          PRE=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo 0)
           # internal-memory-maintenance is a thin wrapper around the
           # reusable memory_maintenance.yml; neither the wrapper nor the
           # called workflow nor `ai_memory.py compact` emit Telegram
@@ -3937,47 +3757,16 @@ jobs:
           # Retry transient GitHub API failures — see the validation-refresh
           # dispatch above for context (release v1.13.8 was blocked by a
           # single HTTP 500 from /dispatches in run #26328466709).
-          dispatch_attempt=1
-          until gh workflow run "${WF_FILE}" --repo "${TEST_REPO}"; do
-            if [ "${dispatch_attempt}" -ge 5 ]; then
-              echo "::error::gh workflow run ${WF_FILE} failed after 5 attempts"
-              exit 1
-            fi
-            backoff=$(( 2 ** dispatch_attempt ))
-            echo "::warning::gh workflow run ${WF_FILE} failed (attempt ${dispatch_attempt}/5), retrying in ${backoff}s..."
-            sleep "${backoff}"
-            dispatch_attempt=$((dispatch_attempt + 1))
-          done
-          DEADLINE=$(( $(date +%s) + 900 ))
-          NEW_ID=""
-          while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
-            NEW_ID=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=10" \
-              --jq "[.workflow_runs[] | select(.id > ${PRE})] | sort_by(.created_at) | last | .id // empty" 2>/dev/null || echo "")
-            [ -n "${NEW_ID}" ] && break
-            sleep 5
-          done
-          if [ -z "${NEW_ID}" ]; then
-            echo "::error::internal-memory-maintenance dispatch did not register"
-            exit 1
-          fi
-          echo "Watching run #${NEW_ID}"
-          while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
-            JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${NEW_ID}" --jq '{status, conclusion}' 2>/dev/null || echo "")
-            STATUS=$(echo "${JSON}" | jq -r '.status // ""')
-            CONCLUSION=$(echo "${JSON}" | jq -r '.conclusion // ""')
-            echo "  status=${STATUS} conclusion=${CONCLUSION}"
-            if [ "${STATUS}" = "completed" ]; then
-              echo "run_id=${NEW_ID}" >> "$GITHUB_OUTPUT"
-              if [ "${CONCLUSION}" = "success" ]; then
-                exit 0
-              fi
-              echo "::error::internal-memory-maintenance run #${NEW_ID} concluded ${CONCLUSION}"
-              exit 1
-            fi
-            sleep 15
-          done
-          echo "::error::internal-memory-maintenance run #${NEW_ID} timed out"
-          exit 1
+          bash ./scripts/dispatch_and_watch_workflow_run.sh \
+            --repo "${TEST_REPO}" \
+            --workflow "${WF_FILE}" \
+            --display-name "internal-memory-maintenance" \
+            --registration-timeout-secs 900 \
+            --registration-poll-interval-secs 5 \
+            --completion-timeout-secs 900 \
+            --completion-poll-interval-secs 15 \
+            --dispatch-max-attempts 5 \
+            --dispatch-backoff-base-secs 2
 
       - name: "Soft-error analyser (memory_maintenance)"
         if: always() && steps.dispatch_memory_maintenance.outputs.run_id != ''
@@ -4052,43 +3841,21 @@ jobs:
           PROJECT_DESC+="Issue 1 (no dependencies, files_touched=[tests/e2e_smoke_canary.txt]): set the first line of tests/e2e_smoke_canary.txt to exactly 'status: ok' AND append the line 'decompose-run: ${GITHUB_RUN_ID}' as the second line. "
           PROJECT_DESC+="Issue 2 (no dependencies, files_touched=[tests/e2e_smoke_canary_b.txt]): set the first line of tests/e2e_smoke_canary_b.txt to exactly 'status: ok' AND append the line 'decompose-run: ${GITHUB_RUN_ID}' as the second line. Issue 2 is fully self-contained — it does NOT need to read Issue 1's output and can run in parallel with Issue 1. "
           PROJECT_DESC+="The orchestrate_decomposition.v1 schema dependency_edges array MUST be empty ([]) so both issues are placed in Wave 1. The two issues' files_touched lists MUST NOT overlap. This is fully specified — no clarification is needed."
-          PRE=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo 0)
           # Capture the dispatch start time before dispatching so the
           # post-run lookup can use it as a lower-bound created_at filter
           # and restrict matches to issues opened by THIS orchestrate run
           # rather than scanning the whole open-issue list.
           DISPATCH_START_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          gh workflow run "${WF_FILE}" --repo "${TEST_REPO}" \
-            --field project_description="${PROJECT_DESC}"
-          DEADLINE=$(( $(date +%s) + 3000 ))
-          NEW_ID=""
-          while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
-            NEW_ID=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=10" \
-              --jq "[.workflow_runs[] | select(.id > ${PRE})] | sort_by(.created_at) | last | .id // empty" 2>/dev/null || echo "")
-            [ -n "${NEW_ID}" ] && break
-            sleep 5
-          done
-          if [ -z "${NEW_ID}" ]; then
-            echo "::error::orchestrate dispatch did not register"
-            exit 1
-          fi
-          echo "Watching run #${NEW_ID}"
-          # Wait for orchestrate run to complete (it's the bootstrap; child
-          # workflows run separately and will continue past this run's exit).
-          while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
-            JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${NEW_ID}" --jq '{status, conclusion}' 2>/dev/null || echo "")
-            STATUS=$(echo "${JSON}" | jq -r '.status // ""')
-            CONCLUSION=$(echo "${JSON}" | jq -r '.conclusion // ""')
-            echo "  orchestrate-bootstrap status=${STATUS} conclusion=${CONCLUSION}"
-            if [ "${STATUS}" = "completed" ]; then
-              break
-            fi
-            sleep 20
-          done
-          if [ "${STATUS}" != "completed" ] || [ "${CONCLUSION}" != "success" ]; then
-            echo "::error::orchestrate run #${NEW_ID} did not succeed (status=${STATUS}, conclusion=${CONCLUSION})"
-            exit 1
-          fi
+          bash ./scripts/dispatch_and_watch_workflow_run.sh \
+            --repo "${TEST_REPO}" \
+            --workflow "${WF_FILE}" \
+            --display-name orchestrate \
+            --registration-timeout-secs 3000 \
+            --registration-poll-interval-secs 5 \
+            --completion-timeout-secs 3000 \
+            --completion-poll-interval-secs 20 \
+            --status-log-prefix "orchestrate-bootstrap" \
+            --field "project_description=${PROJECT_DESC}"
 
           # Locate the tracking issue (created by the orchestrator).
           # The orchestrator titles it `[Orchestrator] <project_title>`
@@ -4288,49 +4055,22 @@ jobs:
         run: |
           set -euo pipefail
           WF_FILE="internal-validate.yml"
-          PRE=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=1" --jq '.workflow_runs[0].id // 0' 2>/dev/null || echo 0)
           # Standalone mode: tracking_issue=0 tells validate.yml to skip
           # tracking-issue label updates. The compose_file fallback uses
           # the canonical default; if the repo has no docker-compose.yml
           # the workflow will emit `status=error` and exit gracefully.
-          gh workflow run "${WF_FILE}" --repo "${TEST_REPO}" \
+          bash ./scripts/dispatch_and_watch_workflow_run.sh \
+            --repo "${TEST_REPO}" \
+            --workflow "${WF_FILE}" \
+            --display-name validate \
+            --registration-timeout-secs 1800 \
+            --registration-poll-interval-secs 5 \
+            --completion-timeout-secs 1800 \
+            --completion-poll-interval-secs 20 \
+            --allowed-conclusions success,failure \
             --field tracking_issue=0 \
             --field compose_file=docker-compose.yml \
             --field validation_timeout=10
-          DEADLINE=$(( $(date +%s) + 1800 ))
-          NEW_ID=""
-          while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
-            NEW_ID=$(gh api "repos/${TEST_REPO}/actions/workflows/${WF_FILE}/runs?per_page=10" \
-              --jq "[.workflow_runs[] | select(.id > ${PRE})] | sort_by(.created_at) | last | .id // empty" 2>/dev/null || echo "")
-            [ -n "${NEW_ID}" ] && break
-            sleep 5
-          done
-          if [ -z "${NEW_ID}" ]; then
-            echo "::error::internal-validate dispatch did not register"
-            exit 1
-          fi
-          echo "Watching run #${NEW_ID}"
-          while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
-            JSON=$(gh api "repos/${TEST_REPO}/actions/runs/${NEW_ID}" --jq '{status, conclusion}' 2>/dev/null || echo "")
-            STATUS=$(echo "${JSON}" | jq -r '.status // ""')
-            CONCLUSION=$(echo "${JSON}" | jq -r '.conclusion // ""')
-            echo "  status=${STATUS} conclusion=${CONCLUSION}"
-            if [ "${STATUS}" = "completed" ]; then
-              echo "run_id=${NEW_ID}" >> "$GITHUB_OUTPUT"
-              # validate.yml is allowed to conclude with `failure` when the
-              # compose file is missing or the validation matrix yields an
-              # error status — that's a valid run, not a workflow defect.
-              # The smoke gate only fails when the workflow itself errors
-              # (e.g. cancelled, action_required, infra-level failure).
-              case "${CONCLUSION}" in
-                success|failure) exit 0 ;;
-                *) echo "::error::validate run #${NEW_ID} concluded ${CONCLUSION}"; exit 1 ;;
-              esac
-            fi
-            sleep 20
-          done
-          echo "::error::validate run #${NEW_ID} timed out"
-          exit 1
 
       - name: "Soft-error analyser (validate-standalone)"
         if: always() && steps.dispatch.outputs.run_id != ''
@@ -4913,40 +4653,12 @@ jobs:
           SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           SHA=$(git rev-parse HEAD)
           echo "Checking CI status for ${SOURCE_BRANCH} @ $SHA ..."
           # Allow the release even if no CI status is reported (repos
           # with no required checks). Fail only on explicit failure.
-          # Rate-limit-aware gh retry so transient 429 / abuse-detection /
-          # secondary-rate errors aren't silently coerced to "pending"
-          # — same wrapper as in mark-stable.yml.
-          _rl_wait() {
-            local _reset_ts _wait_secs
-            _reset_ts=$(gh api -i /rate_limit 2>/dev/null | grep -i '^x-ratelimit-reset:' | head -1 | awk '{print $2}' | tr -d '\r') || true
-            if [ -n "${_reset_ts}" ] && [ "${_reset_ts}" -gt 0 ] 2>/dev/null; then
-              _wait_secs=$(( _reset_ts - $(date +%s) + 1 ))
-              [ "${_wait_secs}" -lt 1 ] && _wait_secs=1
-              [ "${_wait_secs}" -gt 600 ] && _wait_secs=600
-            else
-              _wait_secs=30
-            fi
-            echo "::warning::  Rate limit resets in ${_wait_secs}s (X-RateLimit-Reset: ${_reset_ts:-unknown})" >&2
-            sleep "${_wait_secs}"
-          }
-          _gh_retry() {
-            local attempt=1
-            while [ "${attempt}" -le 5 ]; do
-              if "$@" 2>/tmp/_gh_rl_err; then return 0; fi
-              if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' /tmp/_gh_rl_err 2>/dev/null; then
-                echo "::warning::Rate limit hit (attempt ${attempt}/5), waiting for reset…" >&2
-                _rl_wait; attempt=$((attempt + 1))
-              else
-                cat /tmp/_gh_rl_err >&2 2>/dev/null; local w=$(( 2 ** (attempt - 1) ))
-                echo "::warning::gh failed (attempt ${attempt}/5), retrying in ${w}s…" >&2
-                sleep "${w}"; attempt=$((attempt + 1))
-              fi
-            done; return 1
-          }
           # Distinguish three failure modes:
           #   1. API call itself failed (transport / auth / repeated 5xx
           #      / rate-limit retries exhausted) → hard error. The old
@@ -4958,20 +4670,16 @@ jobs:
           #      policy above).
           #   3. API returned a real state — fail only on explicit
           #      "failure" / "error".
-          # Note on stderr: `_gh_retry` already redirects the wrapped
-          # command's stderr to /tmp/_gh_rl_err internally (see helper
-          # above). An outer `2>/tmp/_gh_state_err` here would only
-          # capture _gh_retry's own warnings, not the actual `gh api`
-          # error — so on rc != 0 we surface /tmp/_gh_rl_err for the
-          # real diagnostic.
+          # gh_retry already surfaces the final failure stderr, so rc
+          # alone distinguishes transport/auth failure from an empty CI
+          # state.
           set +e
-          STATE=$(_gh_retry gh api "repos/${{ github.repository }}/commits/${SHA}/status" \
+          STATE=$(gh_retry gh api "repos/${{ github.repository }}/commits/${SHA}/status" \
             --jq '.state')
           rc=$?
           set -e
           if [ "$rc" -ne 0 ]; then
             echo "::error::Failed to query CI status after retries (rc=${rc}). Refusing to release without a confirmed CI signal."
-            cat /tmp/_gh_rl_err >&2 2>/dev/null || true
             exit 1
           fi
           if [ -z "$STATE" ]; then

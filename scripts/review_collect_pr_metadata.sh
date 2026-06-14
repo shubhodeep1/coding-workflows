@@ -67,6 +67,110 @@ gh_retry()
 	gh_retry_to_file "${outfile}" gh "$@"
 }
 
+# _fetch_linked_issue_bodies_graphql — Batch-fetch linked issue or PR
+# title/body fallback context via one GraphQL call.
+#
+# Input: JSON array of issue numbers, e.g. "[7,12]".
+# Output: JSON array of objects shaped like
+#   [{"number":7,"title":"...","body":"..."}, ...]
+# API calls: exactly one `gh api graphql` call for the provided input
+# (the caller preserves the existing 20-issue cap before invoking it).
+# Fail-open: echoes [] and returns non-zero when the fetch or JSON
+# transform fails so callers can warn and continue without fallback
+# linked-issue context.
+_fetch_linked_issue_bodies_graphql()
+{
+	local numbers_json="$1"
+	local count
+	local alias_count=0
+	count="$(printf '%s' "${numbers_json}" | jq 'length' 2>/dev/null || echo 0)"
+	if ! [[ "${count}" =~ ^[0-9]+$ ]] || [ "${count}" -eq 0 ]; then
+		echo '[]'
+		return 0
+	fi
+
+	local fragment=""
+	local i
+	local n
+	for ((i=0; i<count; i++)); do
+		n="$(printf '%s' "${numbers_json}" | jq -r ".[$i] // empty" 2>/dev/null || true)"
+		[[ "${n}" =~ ^[0-9]+$ ]] || continue
+		alias_count=$((alias_count + 1))
+		fragment+=$'\n'"        i${i}: issueOrPullRequest(number: ${n}) {
+          __typename
+          ... on Issue {
+            number
+            title
+            body
+          }
+          ... on PullRequest {
+            number
+            title
+            body
+          }
+        }"
+	done
+
+	if [ -z "${fragment}" ]; then
+		echo '[]'
+		return 0
+	fi
+
+	local query
+	query="query {
+  repository(owner: \"${REPOSITORY_OWNER}\", name: \"${REPOSITORY_NAME}\") {${fragment}
+  }
+}"
+
+	local response_file
+	if ! response_file="$(mktemp "${TMP_RUNTIME_DIR}/linked_issue_fallback_graphql.XXXXXX" 2>/dev/null)"; then
+		echo '[]'
+		return 1
+	fi
+	if ! gh_retry "${response_file}" api graphql -f query="${query}"; then
+		rm -f "${response_file}"
+		echo '[]'
+		return 1
+	fi
+	local had_graphql_errors=0
+	if jq -e '(((.errors? // []) | length) > 0) and ((.data.repository? // null) == null)' "${response_file}" >/dev/null 2>&1; then
+		rm -f "${response_file}"
+		echo '[]'
+		return 1
+	elif jq -e '((.errors? // []) | length) > 0' "${response_file}" >/dev/null 2>&1; then
+		had_graphql_errors=1
+	fi
+
+	local transformed
+	transformed="$(jq -c '
+		(.data.repository // {})
+		| to_entries
+		| map(select(.key | test("^i[0-9]+$")))
+		| sort_by(.key | ltrimstr("i") | tonumber)
+		| map(
+			.value
+			| select(type == "object" and (.number? != null))
+			| {
+				number: (.number // 0),
+				title: (.title // ""),
+				body: (.body // "")
+			}
+		)
+	' "${response_file}" 2>/dev/null)" || {
+		rm -f "${response_file}"
+		echo '[]'
+		return 1
+	}
+	local hydrated_count
+	hydrated_count="$(printf '%s' "${transformed}" | jq 'length' 2>/dev/null || echo 0)"
+	rm -f "${response_file}"
+	if [ "${had_graphql_errors}" -eq 1 ] || { [[ "${hydrated_count}" =~ ^[0-9]+$ ]] && [ "${hydrated_count}" -lt "${alias_count}" ]; }; then
+		echo "::warning::Linked-issue body-text fallback: batched GraphQL issue hydration returned partial data (hydrated ${hydrated_count} of ${alias_count} references); continuing with available context." >&2
+	fi
+
+	echo "${transformed}"
+}
+
 # No-PR claude-branch-review path: synthesize PR_PAYLOAD_FILE +
 # PR_META_FILE from the caller-supplied head/base overrides.
 if [ "${CLAUDE_BRANCH_REVIEW_MODE:-}" = "true" ] && [ -z "${PR_NUMBER:-}" ]; then
@@ -190,29 +294,15 @@ if [ "${_linked_context_raw}" = "[]" ] && [ "${LINKED_ISSUE_FALLBACK_NUMBERS_JSO
 			echo "::warning::Linked-issue body-text fallback: PR title/body referenced ${_fallback_total} distinct in-repo issues; capping fetches at ${_FALLBACK_MAX_ISSUES}."
 			_fallback_numbers="$(printf '%s\n' "${_fallback_numbers}" | head -n "${_FALLBACK_MAX_ISSUES}")"
 		fi
-		_fallback_json_tmp="$(mktemp "${TMP_RUNTIME_DIR}/linked_issue_fallback.XXXXXX")"
-		while IFS= read -r _fb_num; do
-			[ -z "${_fb_num}" ] && continue
-			_fb_issue_tmp="$(mktemp)"
-			if gh_retry "${_fb_issue_tmp}" api "repos/${REPOSITORY}/issues/${_fb_num}" \
-				--jq '{number: (.number // 0), title: (.title // ""), body: (.body // "")}'; then
-				if [ -s "${_fb_issue_tmp}" ]; then
-					cat "${_fb_issue_tmp}" >> "${_fallback_json_tmp}"
-					printf '\n' >> "${_fallback_json_tmp}"
-				fi
-			else
-				echo "::warning::Linked-issue body-text fallback: gh api repos/${REPOSITORY}/issues/${_fb_num} failed; skipping"
-			fi
-			rm -f "${_fb_issue_tmp}"
-		done <<< "${_fallback_numbers}"
-		if [ -s "${_fallback_json_tmp}" ]; then
-			_fallback_json="$(jq -s '.' "${_fallback_json_tmp}" 2>/dev/null || echo '[]')"
-			if [ "${_fallback_json}" != "[]" ]; then
-				_linked_context_raw="${_fallback_json}"
-				echo "Linked-issue body-text fallback resolved $(printf '%s' "${_fallback_json}" | jq 'length') issue(s) for context (GraphQL closingIssuesReferences returned empty — likely non-default base branch)."
-			fi
+		_fallback_numbers_json="$(printf '%s\n' "${_fallback_numbers}" | jq -Rsc 'split("\n") | map(select(length > 0) | tonumber)' 2>/dev/null || echo '[]')"
+		_fallback_fetch_status=0
+		_fallback_json="$(_fetch_linked_issue_bodies_graphql "${_fallback_numbers_json}")" || _fallback_fetch_status=$?
+		if [ "${_fallback_fetch_status}" -ne 0 ]; then
+			echo "::warning::Linked-issue body-text fallback: batched GraphQL issue hydration failed; skipping"
+		elif [ "${_fallback_json}" != "[]" ]; then
+			_linked_context_raw="${_fallback_json}"
+			echo "Linked-issue body-text fallback resolved $(printf '%s' "${_fallback_json}" | jq 'length') issue(s) for context (GraphQL closingIssuesReferences returned empty — likely non-default base branch)."
 		fi
-		rm -f "${_fallback_json_tmp}"
 	fi
 fi
 

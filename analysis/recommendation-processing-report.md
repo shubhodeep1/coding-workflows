@@ -2,7 +2,7 @@
 
 Grounding note: this report folds the prior recommendation triage into one final artifact. "Actioned" is based on current repository state on this ref, not on historical intent or external GitHub issue state.
 
-## Processed source docs (97)
+## Processed source docs (98)
 The filenames below are retained for provenance. The source docs listed below are no longer present under `analysis/` on this ref because their triage now lives here.
 
 - `analysis/workflow-optimization-2026-04-21.md`
@@ -100,6 +100,7 @@ The filenames below are retained for provenance. The source docs listed below ar
 - `analysis/workflow-optimization-2026-06-08.md`
 - `analysis/workflow-optimization-2026-06-10.md`
 - `analysis/workflow-optimization-2026-06-11.md`
+- `analysis/workflow-optimization-2026-06-13.md`
 - `analysis/plan-workflow-log-analysis.md`
 - `analysis/e2e-smoke-failure-25126757724.md`
 
@@ -568,7 +569,56 @@ Status keys below are scoped as `<source doc> :: <recommendation id>` because ID
   - `drift-audit missing-log memoization` (`Reliability` #4; `GH API` #4) — current HEAD already carries the negative-cache behavior recorded earlier in this report, and `list_run_log_excerpts()` is now gone from `scripts/collect_workflow_logs.py`.
   - `Serena remains disabled until a real rollout` (`Cost` #6) — `.github/workflows/review_autofix.yml` and `.github/workflows/implement.yml` still default `SERENA_ENABLED=false`.
 - `INVALID`
-  - `implement-side git-submodule warning cleanup` (post-job-warning half of `Reliability` #5) — repo-local search now finds `git submodule foreach` only in the smoke-fixture diagnostic block inside `.github/workflows/test-and-mark-stable.yml`, not a live implement / review post-job cleanup path, so that specific cleanup premise is stale on current HEAD.
+- `implement-side git-submodule warning cleanup` (post-job-warning half of `Reliability` #5) — repo-local search now finds `git submodule foreach` only in the smoke-fixture diagnostic block inside `.github/workflows/test-and-mark-stable.yml`, not a live implement / review post-job cleanup path, so that specific cleanup premise is stale on current HEAD.
+
+### `analysis/workflow-optimization-2026-06-13.md`
+- This source doc paired a metrics-heavy top half with a 17-ID deep audit / API appendix. Several appendix items landed on sibling work after the source doc was written, so the closeout below separates current-HEAD hot-path follow-up work from already-landed helper / wrapper extractions.
+
+#### Named findings
+- `VALID&SAFE`
+  - None remained on this ref. The source doc's own handoff recorded `SAFE_TO_MERGE | 0`, and the still-live items continue to touch hot review/poller/control-plane paths that this closeout does not reopen.
+- `VALID-BUT-RISKY`
+  - `BUG-001` — `.github/workflows/orchestrate_poll.yml` and `.github/workflows/forward-merge-stable-to-main.yml` still keep the cited Telegram failure-alert blocks on `set -uo pipefail`; hardening them changes best-effort alert semantics across failure paths.
+  - `API-002` — `.github/workflows/review_autofix_sweep.yml` still snapshots active runs per workflow and per status (`queued` + `in_progress`) before PR filtering; collapsing that to repo-scope caches changes control-plane fanout and page-boundary behavior.
+  - `API-003` — `scripts/orchestrate_poll_process.sh` still probes and dispatches `ai-review.yml internal-review.yml review_autofix.yml` in the conflict path; removing the stale candidate still sits inside the protected orchestrator hot path.
+  - `CONSIST-001` — `scripts/validate_process.sh` and `scripts/orchestrate_poll_process.sh` still carry separate phase-label-application flows even though shared label helpers exist; reconciling them changes label mutation/logging behavior across validation and poller paths.
+  - `DEAD-API-001` — `scripts/orchestrate_poll_process.sh` still defines `read_standalone_state_json()` and retains the two-arg `write_standalone_state_json` fallback branch, but that cleanup remains poller-manual territory.
+- `STALE-or-already-done`
+  - `API-001` — `scripts/review_collect_pr_metadata.sh` now has `_fetch_linked_issue_bodies_graphql` and uses one batched GraphQL fallback instead of the old per-issue REST loop.
+  - `DUP-001` — `.github/workflows/test-and-mark-stable.yml` now sources `scripts/comprehensive_test_and_release_gh_api.sh` instead of keeping five owned inline `gh_api_safe()` definitions.
+  - `DUP-002` — `.github/workflows/test-and-mark-stable.yml` now dispatches the repeated “dispatch + register + wait” pattern through `scripts/dispatch_and_watch_workflow_run.sh`.
+  - `DUP-003` — the cited workflows now source shared `gh_helpers.sh` retry helpers; the old four-way inline `_rl_wait` / `_gh_retry` duplication no longer matches current workflow bodies.
+  - `EXPR-001` — `.github/workflows/implement.yml` now keeps `Commit changes` as a thin `bash scripts/implement_commit_changes.sh` wrapper, so the oversized inline block is gone.
+  - `EXPR-002` — `.github/workflows/review_autofix.yml` now shells out to `collect_pr_check_runs_context.py` for the check-run collection logic.
+  - `EXPR-003` — `.github/workflows/review_autofix.yml` now shells out to `scripts/review_enable_auto_merge.sh` for the auto-merge decision tree.
+  - `EXPR-004` — `.github/workflows/orchestrate_clarify_respond.yml` now shells out to `scripts/orchestrate_parse_and_post_answer.sh`.
+  - `MERGE-001` — `.github/workflows/orchestrate_clarify_respond.yml` now persists `TRACKING_PAYLOAD_FILE` early and reuses it for the later tracking-body read, with a live fetch only as cache-miss fallback.
+  - `REUSE-001` — `.github/workflows/orchestrate_clarify_respond.yml` now persists `ISSUE_PAYLOAD_FILE` in `Check orchestrator metadata` and reuses it in `Fetch issue and tracking context`.
+  - `REUSE-002` — `.github/workflows/implement.yml` now writes the full issue payload to `ISSUE_META_FILE` during `Precheck approval phase label` and reuses it in `Resolve checkout ref from issue context` before falling back to a live retry-backed fetch.
+- `INVALID`
+  - `DEAD-001` — `.github/workflows/orchestrate_poll.yml` still declares `caller_workflow`, but the file now documents it as an intentional deprecated compatibility surface kept for existing callers; removing it would be a breaking-interface cleanup, not a dead-code fix for this closeout.
+
+#### Repeated unnumbered recommendation groups (deduped)
+- Pure observation-only rows such as the Metrics Appendix tables, the outlier-run inventories, and the section-6 severity/count summaries are treated as supporting evidence for the groups below rather than as separate code-change recommendations.
+- `VALID&SAFE`
+  - None remained on this ref.
+- `VALID-BUT-RISKY`
+  - `review-autofix noop disposition unification` — `.github/workflows/review_autofix.yml` still revolves around `AUTOFIX_EDITOR_EMPTY_NOOP`, `EDITOR_NOOP_SUSPICIOUS`, and `EDITOR_CHANGES_LOST`; adding a terminal `noop_verified` success outcome still changes reviewer/editor/auto-merge failure contracts on the hottest review path.
+  - `claude-no-pr no-diff fast path` — the no-PR gate still logs `AUTOFIX_GATE_CLAUDE_BRANCH_REVIEW_NO_PR`, and the fallback diff path still writes `[NO_PR_DIFF_AVAILABLE]`; skipping the full reviewer panel remains a behavior change for the comment-only branch-review route.
+  - `implement reasoning-and-reuse defaults` — `implement.yml` still defaults `MODEL_REASONING_EFFORT`, diagnose, and repair to `xhigh`, with `CODEX_THREAD_REUSE_ENABLED=false` and `WORKSPACE_REUSE_ENABLED=false`; relaxing those defaults remains hot-path quality/cost policy work.
+  - `poller event/cadence tuning plus parent-side skip hoisting` — current HEAD already has `orchestrate_force_tick.sh` hooks in implement/validate/review_autofix, but the broader “more event-driven poll pickup + fewer child workflows that start only to emit `AI_PHASE_GATE_V1 ... outcome=skip/defer`” recommendation still changes scheduler/trigger semantics.
+  - `prompt-cache, cost-telemetry, and Semble-overflow policy tightening` — cache/cost parsers now exist in `scripts/cost_audit.py`, but long review/implement paths still default reuse off and the narrower “only allow overflow on touched/workflow-centric paths” policy is not the shipped default.
+  - `review control-plane API tightening` — `.github/workflows/review_autofix_sweep.yml` still paginates all open PRs and per-workflow active runs, `review_autofix.yml` still has two `/pulls/{PR}/files` fetch sites, and `collect_pr_check_runs_context.py` still waits up to `CHECK_RUNS_WAIT_TIMEOUT_SECS=300` even though unchanged-snapshot backoff is already present.
+  - `implement-and-plan metadata/comment collapse` — implement now reuses `ISSUE_META_FILE`, but the broader “materialize issue JSON/comments once for all downstream consumers” ask in implement plus the plan workflow's separate label-edit / progress-comment-delete / `/approved` transition still cross live workflow behavior boundaries.
+  - `AI-memory retrieval usefulness for planning/review` — memory plumbing is present, but the doc's broader “record/retrieve compact review/planning outcomes keyed to issue/PR lineage” change is still a policy/telemetry rollout rather than a narrow closeout fix.
+  - `orchestrator health indicator surfacing` — current code emits phase gates and force-ticks, but the doc's combined tracking view for noop counts, poll wait share, auto-answer ratio, skipped-child count, and reviewer/planner memory-hit rate is not yet one stable surfaced contract.
+- `STALE-or-already-done`
+  - `workflow-support main-fallback staging` — `review_autofix.yml` now checks out both `${SCRIPT_REF}` and `main` fallback support sources, and `scripts/stage_workflow_support.sh` explicitly falls back to `main` when the branch snapshot is unavailable.
+  - `integration-pr readiness signal hygiene` — `scripts/check_integration_pr_readiness.py` now emits `::warning::` / `::notice::` on incomplete readiness instead of the success-with-`##[error]` noise the source doc called out.
+  - `contract-test Semble fallback separation` — the Semble helper/tests now carry explicit `context=contract-test` handling, so the source doc's alert-noise concern is no longer an open runtime bug on this ref.
+  - `Serena remains deferred` — `SERENA_ENABLED=false` remains the default in the review/implement workflows, so the doc's “do not spend effort tuning absent Serena traffic” conclusion already matches current HEAD.
+- `INVALID`
+  - None on this ref.
 
 ## Preserved machine-maintained artifacts
 - `analysis/validation-selftest-status.json` (kept unchanged)

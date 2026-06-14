@@ -250,9 +250,9 @@ def main() -> int:
 	if len(unchecked) > 5:
 		preview += f", … +{len(unchecked) - 5} more"
 	desc = f"{len(unchecked)}/{total} sub-issues on #{tracking_num} still unchecked: {preview}"
-	print(f"::error::[integration-pr-readiness] {desc}", file=sys.stderr)
+	print(f"::warning::[integration-pr-readiness] {desc}", file=sys.stderr)
 	print(
-		f"::error::To merge anyway (rare; e.g. de-scoping the remaining work), "
+		f"::notice::To merge anyway (rare; e.g. de-scoping the remaining work), "
 		f"apply the {OVERRIDE_LABEL!r} label to this PR.",
 		file=sys.stderr,
 	)

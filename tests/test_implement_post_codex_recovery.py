@@ -21,10 +21,15 @@ import textwrap
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
+IMPLEMENT_COMMIT_SCRIPT = REPO_ROOT / "scripts" / "implement_commit_changes.sh"
 
 
 def _workflow_text() -> str:
 	return IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
+
+
+def _implement_commit_script_text() -> str:
+	return IMPLEMENT_COMMIT_SCRIPT.read_text(encoding="utf-8")
 
 
 def _step_block(step_name: str) -> list[str]:
@@ -96,15 +101,29 @@ def _render_github_expressions(script: str, overrides: dict[str, str] | None = N
 	return rendered
 
 
-def _run_shell_script(script: str, *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-	env = dict(env)
-	# The review-autofix runner injects a workspace BASH_ENV hook and main-checkout
-	# git-location variables. These extracted-step tests rely on the explicit
-	# scratch cwd instead, so strip the inherited overrides before launching bash.
-	for key in ("BASH_ENV", "ENV", "WORKSPACE_PATH", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"):
+def _isolated_test_env(extra_env: dict[str, str] | None = None, *, cwd: Path | None = None) -> dict[str, str]:
+	baseline_env = os.environ.copy()
+	env = baseline_env.copy()
+	if extra_env:
+		env.update(extra_env)
+	# Scratch-repo tests must ignore the runner's workspace-shell hook and the
+	# main-checkout git-location overrides, or bash/git subprocesses will operate
+	# on the outer workspace instead of the temp repo under test. When callers
+	# pass os.environ.copy(), drop inherited runner values after the merge while
+	# preserving explicit test overrides that intentionally differ.
+	for key in ("BASH_ENV", "ENV"):
 		env.pop(key, None)
-	env["PWD"] = str(cwd)
-	env.pop("OLDPWD", None)
+	for key in ("WORKSPACE_PATH", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"):
+		if env.get(key) == baseline_env.get(key):
+			env.pop(key, None)
+	if cwd is not None:
+		env["PWD"] = str(cwd)
+		env.pop("OLDPWD", None)
+	return env
+
+
+def _run_shell_script(script: str, *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+	env = _isolated_test_env(env, cwd=cwd)
 	script_path = cwd / "__workflow_step_under_test.sh"
 	script_path.write_text(script, encoding="utf-8")
 	script_path.chmod(0o755)
@@ -119,11 +138,7 @@ def _run_shell_script(script: str, *, cwd: Path, env: dict[str, str]) -> subproc
 
 
 def _git(cmd: list[str], *, cwd: Path) -> None:
-	env = os.environ.copy()
-	for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"):
-		env.pop(key, None)
-	env["PWD"] = str(cwd)
-	env.pop("OLDPWD", None)
+	env = _isolated_test_env(cwd=cwd)
 	subprocess.run(cmd, cwd=str(cwd), env=env, check=True, capture_output=True, text=True)
 
 
@@ -300,17 +315,31 @@ if args[0] == "api":
 			save()
 			print(raw_issue_response)
 			sys.exit(0)
+		issue_num = int(state.get("issue_number", issue_from_path(path)))
 		labels = [{"name": x} for x in state.get("issue_labels", [])]
 		body = state.get("issue_body", "")
+		title = state.get("issue_title", "Test issue")
+		html_url = state.get("issue_url", f"https://github.com/owner/repo/issues/{issue_num}")
+		issue_state = state.get("issue_state", "open")
+		payload = {
+			"number": issue_num,
+			"title": title,
+			"body": body,
+			"html_url": html_url,
+			"state": issue_state,
+			"labels": labels,
+		}
 		if jq:
-			if "labels" in jq:
+			if "labels" in jq and "state" in jq:
+				print(json.dumps({"state": issue_state, "labels": [x["name"] for x in labels]}))
+			elif "labels" in jq:
 				print(json.dumps([x["name"] for x in labels]))
 			elif ".body" in jq:
 				print(body)
 			else:
 				print("")
 		else:
-			print(json.dumps({"labels": labels, "body": body}))
+			print(json.dumps(payload))
 		save()
 		sys.exit(0)
 
@@ -556,6 +585,7 @@ def _run_resolve_checkout_ref_step(
 	issue_body: str,
 	default_checkout_ref: str,
 	branch_exists: dict[str, bool] | None = None,
+	issue_meta_payload: object | None = None,
 	issue_api_failures_remaining: int = 0,
 	issue_api_raw_response: str | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], dict, dict[str, str], dict[str, str]]:
@@ -585,6 +615,11 @@ def _run_resolve_checkout_ref_step(
 	github_output = runtime_dir / "checkout_ref_github_output.txt"
 	issue_meta_file = runtime_dir / "issue_meta.json"
 	issue_body_file = runtime_dir / "issue_body.txt"
+	if issue_meta_payload is not None:
+		if isinstance(issue_meta_payload, str):
+			issue_meta_file.write_text(issue_meta_payload, encoding="utf-8")
+		else:
+			issue_meta_file.write_text(json.dumps(issue_meta_payload), encoding="utf-8")
 	script = _render_github_expressions(_extract_run_script("Resolve checkout ref"))
 	env = os.environ.copy()
 	env.update(
@@ -609,6 +644,72 @@ def _run_resolve_checkout_ref_step(
 		"issue_body": _read_file(str(issue_body_file)),
 	}
 	return proc, state, outputs, files
+
+
+def _run_fetch_issue_metadata_step(
+	tmp_path: Path,
+	*,
+	issue_body: str,
+	issue_meta_payload: object | None = None,
+	issue_title: str = "Test issue",
+	issue_url: str = "https://github.com/owner/repo/issues/948",
+) -> tuple[subprocess.CompletedProcess[str], dict, str, dict[str, str]]:
+	repo_dir = tmp_path / "fetch-issue-repo"
+	_bootstrap_git_repo(repo_dir)
+	bin_dir = tmp_path / "bin"
+	runtime_dir = tmp_path / "runtime"
+	bin_dir.mkdir(parents=True, exist_ok=True)
+	runtime_dir.mkdir(parents=True, exist_ok=True)
+
+	_install_mock_gh(bin_dir)
+
+	gh_state_file = runtime_dir / "fetch_issue_gh_state.json"
+	gh_state_file.write_text(
+		json.dumps(
+			{
+				"issue_number": 948,
+				"issue_body": issue_body,
+				"issue_title": issue_title,
+				"issue_url": issue_url,
+			}
+		),
+		encoding="utf-8",
+	)
+
+	github_env = runtime_dir / "github_env.txt"
+	issue_meta_file = runtime_dir / "issue_meta.json"
+	issue_body_file = runtime_dir / "issue_body.txt"
+	if issue_meta_payload is not None:
+		if isinstance(issue_meta_payload, str):
+			issue_meta_file.write_text(issue_meta_payload, encoding="utf-8")
+		else:
+			issue_meta_file.write_text(json.dumps(issue_meta_payload), encoding="utf-8")
+
+	script = _render_github_expressions(
+		_extract_run_script("Fetch issue metadata"),
+		overrides={"steps.refctx.outputs.ref || github.event.repository.default_branch": "orchestrator/project-829"},
+	)
+	env = os.environ.copy()
+	env.update(
+		{
+			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			"GH_TOKEN": "test-token",
+			"GITHUB_ENV": str(github_env),
+			"ISSUE_NUMBER": "948",
+			"ISSUE_META_FILE": str(issue_meta_file),
+			"ISSUE_BODY_FILE": str(issue_body_file),
+			"MOCK_GH_STATE_FILE": str(gh_state_file),
+			"TMPDIR": str(runtime_dir),
+		}
+	)
+
+	proc = _run_shell_script(script, cwd=repo_dir, env=env)
+	state = _read_gh_state(gh_state_file)
+	files = {
+		"issue_meta": _read_file(str(issue_meta_file)),
+		"issue_body": _read_file(str(issue_body_file)),
+	}
+	return proc, state, _read_file(str(github_env)), files
 
 
 def _install_capture_step_mock_gh(bin_dir: Path) -> None:
@@ -845,6 +946,61 @@ def test_resolve_checkout_ref_falls_back_when_hint_missing() -> None:
 		)
 
 
+def test_resolve_checkout_ref_reuses_matching_cached_issue_metadata() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_checkout_ref_cache_hit_") as td:
+		tmp_path = Path(td)
+		issue_body = "Plan body with cached metadata.\n"
+		proc, state, outputs, files = _run_resolve_checkout_ref_step(
+			tmp_path,
+			issue_body=issue_body,
+			default_checkout_ref="orchestrator/project-829",
+			issue_meta_payload={
+				"number": 948,
+				"body": issue_body,
+				"labels": [],
+			},
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert outputs.get("ref") == "orchestrator/project-829"
+		assert outputs.get("source") == "integration/default"
+		assert state.get("issue_queries", []) == [], (
+			"Matching cached issue metadata should satisfy Resolve checkout ref without re-fetching /issues/{n}"
+		)
+		assert files["issue_body"] == issue_body
+
+
+def test_resolve_checkout_ref_refetches_invalid_or_mismatched_cached_issue_metadata() -> None:
+	for case_name, issue_meta_payload in (
+		(
+			"mismatched",
+			{
+				"number": 999,
+				"body": "stale body\n",
+				"labels": [],
+			},
+		),
+		("invalid", '{"number": 948, "body": '),
+	):
+		with tempfile.TemporaryDirectory(prefix=f"test_checkout_ref_cache_miss_{case_name}_") as td:
+			tmp_path = Path(td)
+			issue_body = "Fresh body from API\n"
+			proc, state, outputs, files = _run_resolve_checkout_ref_step(
+				tmp_path,
+				issue_body=issue_body,
+				default_checkout_ref="orchestrator/project-829",
+				issue_meta_payload=issue_meta_payload,
+				issue_api_failures_remaining=2,
+			)
+
+			assert proc.returncode == 0, f"case={case_name}\nstdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+			assert outputs.get("ref") == "orchestrator/project-829"
+			assert outputs.get("source") == "integration/default"
+			assert len(state.get("issue_queries", [])) == 3, f"case={case_name}"
+			assert files["issue_body"] == issue_body, f"case={case_name}"
+			assert json.loads(files["issue_meta"])["number"] == 948, f"case={case_name}"
+
+
 def test_resolve_checkout_ref_retries_issue_metadata_fetch() -> None:
 	with tempfile.TemporaryDirectory(prefix="test_checkout_ref_") as td:
 		tmp_path = Path(td)
@@ -968,6 +1124,67 @@ def test_fetch_issue_metadata_keeps_pr_base_branch_on_refctx_default_chain() -> 
 	)
 
 
+def test_fetch_issue_metadata_reuses_matching_cache_without_api_call() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_fetch_issue_meta_cache_hit_") as td:
+		tmp_path = Path(td)
+		issue_body = "Cached body\n"
+		issue_title = "Cached title"
+		issue_url = "https://github.com/owner/repo/issues/948"
+		proc, state, github_env_text, files = _run_fetch_issue_metadata_step(
+			tmp_path,
+			issue_body=issue_body,
+			issue_title=issue_title,
+			issue_url=issue_url,
+			issue_meta_payload={
+				"number": 948,
+				"title": issue_title,
+				"body": issue_body,
+				"html_url": issue_url,
+			},
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert state.get("issue_queries", []) == [], (
+			"Matching ISSUE_META_FILE should satisfy Fetch issue metadata without hitting /issues/{n}"
+		)
+		assert files["issue_body"] == issue_body
+		assert "ISSUE_NUMBER=948" in github_env_text
+		assert "PR_BASE_BRANCH=orchestrator/project-829" in github_env_text
+
+
+def test_fetch_issue_metadata_refetches_invalid_or_mismatched_cache() -> None:
+	for case_name, issue_meta_payload in (
+		(
+			"mismatched",
+			{
+				"number": 999,
+				"title": "wrong",
+				"body": "stale body\n",
+				"html_url": "https://github.com/owner/repo/issues/999",
+			},
+		),
+		("invalid", '{"number": 948, "title": '),
+	):
+		with tempfile.TemporaryDirectory(prefix=f"test_fetch_issue_meta_cache_miss_{case_name}_") as td:
+			tmp_path = Path(td)
+			issue_body = "Fresh fetched body\n"
+			issue_title = "Fresh fetched title"
+			issue_url = "https://github.com/owner/repo/issues/948"
+			proc, state, github_env_text, files = _run_fetch_issue_metadata_step(
+				tmp_path,
+				issue_body=issue_body,
+				issue_title=issue_title,
+				issue_url=issue_url,
+				issue_meta_payload=issue_meta_payload,
+			)
+
+			assert proc.returncode == 0, f"case={case_name}\nstdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+			assert state.get("issue_queries", []) == ["repos/owner/repo/issues/948"], f"case={case_name}"
+			assert files["issue_body"] == issue_body, f"case={case_name}"
+			assert json.loads(files["issue_meta"])["number"] == 948, f"case={case_name}"
+			assert f"ISSUE_URL={issue_url}" in github_env_text, f"case={case_name}"
+
+
 def test_noop_failure_labeling_is_gated_on_non_destructive_failures() -> None:
 	wf = _workflow_text()
 	assert (
@@ -1013,15 +1230,21 @@ def test_preflight_destructive_guard_runs_before_validation_with_temp_index_cont
 def test_self_repo_guards_use_exact_canonical_repo_match() -> None:
 	stage_block = _step_block_text("Stage workflow support files")
 	preflight_block = _step_block_text("Preflight destructive-commit guard")
-	commit_block = _step_block_text("Commit changes")
+	commit_step = _step_block_text("Commit changes")
+	commit_helper = _implement_commit_script_text()
 
-	for block in (stage_block, preflight_block, commit_block):
+	for block in (stage_block, preflight_block):
 		assert 'wf_source="shubhodeep1/coding-workflows"' in block
 		assert 'if [ "${{ github.repository }}" = "${wf_source}" ]; then' in block
 		assert 'if [[ "${{ github.repository }}" == *"/coding-workflows" ]]; then' not in block
 
+	assert "bash scripts/implement_commit_changes.sh" in commit_step
+	assert 'wf_source="shubhodeep1/coding-workflows"' in commit_helper
+	assert 'if [ "${GITHUB_REPOSITORY:-}" = "${wf_source}" ]; then' in commit_helper
+	assert 'if [[ "${GITHUB_REPOSITORY:-}" == *"/coding-workflows" ]]; then' not in commit_helper
+
 	assert '`*/coding-workflows`' not in preflight_block
-	assert '`*/coding-workflows`' not in commit_block
+	assert '`*/coding-workflows`' not in commit_helper
 
 
 def test_preflight_destructive_guard_fails_without_touching_the_real_index() -> None:
@@ -1066,6 +1289,84 @@ def test_preflight_destructive_guard_fails_without_touching_the_real_index() -> 
 			text=True,
 		).stdout.strip()
 		assert cached == "", "preflight guard must not dirty the real git index when it rejects"
+
+
+def test_commit_helper_fails_closed_on_unsafe_fetched_manifest_paths() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_manifest_guard_") as td:
+		tmp_path = Path(td)
+		repo_dir = tmp_path / "repo"
+		outside_path = tmp_path / "outside.txt"
+		_bootstrap_git_repo(repo_dir)
+		(repo_dir / "scripts").mkdir()
+		shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, repo_dir / "scripts" / "implement_commit_changes.sh")
+		outside_path.write_text("keep\n", encoding="utf-8")
+		github_output = repo_dir / "github_output.txt"
+		github_output.write_text("", encoding="utf-8")
+		runtime_dir = repo_dir / "runtime"
+		runtime_dir.mkdir()
+		fetched_manifest = repo_dir / "fetched_manifest.txt"
+		fetched_manifest.write_text("../outside.txt\n", encoding="utf-8")
+		env = os.environ.copy()
+		env.update(
+			{
+				"FETCHED_MANIFEST": str(fetched_manifest),
+				"GITHUB_OUTPUT": str(github_output),
+				"GITHUB_REPOSITORY": "owner/repo",
+				"ISSUE_NUMBER": "948",
+				"RUNTIME_DIR": str(runtime_dir),
+				"SERENA_PROJECT_BOOTSTRAP_HASH": "",
+				"SERENA_PROJECT_PREEXISTED": "false",
+				"TMPDIR": str(runtime_dir),
+			}
+		)
+
+		proc = _run_shell_script("bash scripts/implement_commit_changes.sh\n", cwd=repo_dir, env=env)
+		assert proc.returncode != 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert outside_path.read_text(encoding="utf-8") == "keep\n"
+		output_text = github_output.read_text(encoding="utf-8")
+		assert "destructive_commit_blocked=unsafe-fetched-manifest" in output_text
+		assert "destructive_commit_count=1" in output_text
+		assert "../outside.txt" in output_text
+		assert "unsafe cleanup path" in (proc.stdout + proc.stderr)
+
+
+def test_commit_helper_treats_unset_fetched_manifest_as_empty() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_manifest_unset_") as td:
+		tmp_path = Path(td)
+		repo_dir = tmp_path / "repo"
+		_bootstrap_git_repo(repo_dir)
+		(repo_dir / "scripts").mkdir()
+		shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, repo_dir / "scripts" / "implement_commit_changes.sh")
+		_git(["git", "add", "scripts/implement_commit_changes.sh"], cwd=repo_dir)
+		_git(["git", "commit", "-m", "add helper"], cwd=repo_dir)
+		github_output = tmp_path / "github_output.txt"
+		github_output.write_text("", encoding="utf-8")
+		runtime_dir = tmp_path / "runtime"
+		runtime_dir.mkdir()
+		env = _isolated_test_env(
+			{
+				"GITHUB_OUTPUT": str(github_output),
+				"GITHUB_REPOSITORY": "owner/repo",
+				"ISSUE_NUMBER": "948",
+				"RUNTIME_DIR": str(runtime_dir),
+				"SERENA_PROJECT_BOOTSTRAP_HASH": "",
+				"SERENA_PROJECT_PREEXISTED": "false",
+				"TMPDIR": str(runtime_dir),
+			},
+			cwd=repo_dir,
+		)
+
+		proc = subprocess.run(
+			["bash", "scripts/implement_commit_changes.sh"],
+			cwd=str(repo_dir),
+			env=env,
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "No repository changes were produced by Codex implementation" in proc.stdout
+		assert "did_commit=false" in github_output.read_text(encoding="utf-8")
 
 
 def test_validate_step_uses_reusable_validator_with_continue_on_error() -> None:
@@ -1173,11 +1474,27 @@ def test_destructive_guard_latch_verifies_label_applied() -> None:
 	assert ") && gh issue edit ${ISSUE_NUMBER} --repo ${{ github.repository }} --add-label ai:destructive-blocked" in destructive_block
 
 
+def test_destructive_guard_handler_covers_unsafe_fetched_manifest_rejections() -> None:
+	destructive_block = _step_block_text("Destructive-commit guard — label + alert on rejection")
+	assert "unsafe-fetched-manifest" in destructive_block
+	assert "artifact-cleanup manifest contained unsafe path(s)" in destructive_block
+	assert "Unsafe manifest paths" in destructive_block
+	assert "Inspect the runtime-fetched manifest producer" in destructive_block
+
+
 def test_scope_guard_allowlist_and_workflow_rollback_contracts_present() -> None:
-	commit_block = _step_block_text("Commit changes")
-	assert "canonical_deletions" in commit_block
-	assert "ALLOW_WORKFLOW_EDITS" in commit_block
-	assert "destructive_commit_blocked=canonical-source" in commit_block
+	commit_step = _step_block_text("Commit changes")
+	commit_helper = _implement_commit_script_text()
+	assert "bash scripts/implement_commit_changes.sh" in commit_step
+	assert 'STEP_NAME="Commit changes"' not in commit_step
+	assert "canonical_deletions" in commit_helper
+	assert "ALLOW_WORKFLOW_EDITS" in commit_helper
+	assert "destructive_commit_blocked=canonical-source" in commit_helper
+	assert "destructive_commit_blocked=unsafe-fetched-manifest" in commit_helper
+	assert "Non-numeric staged deletion count" in commit_helper
+	assert "total_deletions=999999" in commit_helper
+	assert "Non-numeric non-markdown deletion count" in commit_helper
+	assert "non_md_count=1" in commit_helper
 
 	protect_block = _step_block_text("Protect workflow files from implementation edits")
 	assert 'git cat-file -e HEAD:.github/workflows >/dev/null 2>&1 || [ -d .github/workflows ]' in protect_block
@@ -1581,9 +1898,13 @@ def test_validator_scratch_repo_without_head_still_checks_untracked_files() -> N
 
 		(repo_dir / "broken.py").write_text("def nope(:\n\tpass\n", encoding="utf-8")
 		capture_path = tmp_path / "captured.txt"
-		env = os.environ.copy()
-		env["CAPTURE_FILE"] = str(capture_path)
-		env["ALLOW_WORKFLOW_EDITS"] = "true"
+		env = _isolated_test_env(
+			{
+				"CAPTURE_FILE": str(capture_path),
+				"ALLOW_WORKFLOW_EDITS": "true",
+			},
+			cwd=repo_dir,
+		)
 
 		result = subprocess.run(
 			["bash", str(validator_dst)],
@@ -1623,9 +1944,13 @@ def test_validator_surfaces_real_git_failures_instead_of_silently_skipping() -> 
 		validator_dst.chmod(0o755)
 
 		missing_git_dir = tmp_path / "missing-git-dir"
-		env = os.environ.copy()
-		env["ALLOW_WORKFLOW_EDITS"] = "true"
-		env["GIT_DIR"] = str(missing_git_dir)
+		env = _isolated_test_env(
+			{
+				"ALLOW_WORKFLOW_EDITS": "true",
+				"GIT_DIR": str(missing_git_dir),
+			},
+			cwd=repo_dir,
+		)
 
 		result = subprocess.run(
 			["bash", str(validator_dst)],
@@ -1930,17 +2255,17 @@ def test_serena_runtime_artifact_filter_uses_bootstrap_hash_and_commit_cleanup_i
 		"Only the unchanged bootstrap Serena project file should be filtered from no-op detection"
 	)
 
-	commit_block = _step_block_text("Commit changes")
-	assert 'current_serena_project_hash="$(sha256sum .serena/project.yml' in commit_block, (
+	commit_helper = _implement_commit_script_text()
+	assert 'current_serena_project_hash="$(sha256sum .serena/project.yml' in commit_helper, (
 		"Commit cleanup must compare the current Serena project file against the bootstrap hash before deleting it"
 	)
-	assert 'if [ -n "${current_serena_project_hash}" ] && [ "${current_serena_project_hash}" = "${SERENA_PROJECT_BOOTSTRAP_HASH}" ]; then' in commit_block, (
+	assert 'if [ -n "${current_serena_project_hash}" ] && [ "${current_serena_project_hash}" = "${SERENA_PROJECT_BOOTSTRAP_HASH}" ]; then' in commit_helper, (
 		"Commit cleanup must preserve .serena/project.yml when Codex changed it"
 	)
-	assert 'if ! git ls-files --error-unmatch -- .serena >/dev/null 2>&1; then' in commit_block, (
+	assert 'if ! git ls-files --error-unmatch -- .serena >/dev/null 2>&1; then' in commit_helper, (
 		"Commit cleanup must never remove a git-tracked .serena tree"
 	)
-	assert 'rm -rf .serena' in commit_block, (
+	assert 'rm -rf .serena' in commit_helper, (
 		"Commit cleanup must remove the full bootstrap-owned .serena directory once the project hash still matches"
 	)
 
@@ -1954,7 +2279,7 @@ def test_serena_runtime_filter_and_cleanup_preserve_mutated_tree_and_drop_unchan
 		filter_helper = "filter_runtime_status_noise() {" + run_codex_script.split("filter_runtime_status_noise() {", 1)[1].split(
 			"\n\n# ────────────────────────────────────────────────────────────────", 1
 		)[0]
-		commit_script = _extract_run_script("Commit changes")
+		commit_script = _implement_commit_script_text()
 		cleanup_start = 'if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && [ -n "${SERENA_PROJECT_BOOTSTRAP_HASH:-}" ] && [ -f .serena/project.yml ]; then'
 		cleanup_snippet = cleanup_start + commit_script.split(cleanup_start, 1)[1].split('porcelain_status="$(git status --porcelain)"', 1)[0]
 
@@ -1967,8 +2292,7 @@ def test_serena_runtime_filter_and_cleanup_preserve_mutated_tree_and_drop_unchan
 			return hashlib.sha256(project_path.read_bytes()).hexdigest()
 
 		def _run_inline_bash(script: str, *, extra_env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-			env = os.environ.copy()
-			env.update(extra_env)
+			env = _isolated_test_env(extra_env, cwd=repo_dir)
 			return subprocess.run(
 				["bash", "-s"],
 				cwd=str(repo_dir),
@@ -2320,9 +2644,13 @@ def test_validator_diagnostic_surfaces_offending_lines() -> None:
 			encoding="utf-8",
 		)
 		capture_path = repo_dir / "captured.txt"
-		env = os.environ.copy()
-		env["CAPTURE_FILE"] = str(capture_path)
-		env["ALLOW_WORKFLOW_EDITS"] = "true"
+		env = _isolated_test_env(
+			{
+				"CAPTURE_FILE": str(capture_path),
+				"ALLOW_WORKFLOW_EDITS": "true",
+			},
+			cwd=repo_dir,
+		)
 		validator = REPO_ROOT / "scripts" / "validate_changed_files_syntax.sh"
 		result = subprocess.run(
 			["bash", str(validator)],
@@ -3022,9 +3350,13 @@ def test_validator_offending_bytes_redacts_secrets() -> None:
 			encoding="utf-8",
 		)
 		capture_path = repo_dir / "captured.txt"
-		env = os.environ.copy()
-		env["CAPTURE_FILE"] = str(capture_path)
-		env["ALLOW_WORKFLOW_EDITS"] = "true"
+		env = _isolated_test_env(
+			{
+				"CAPTURE_FILE": str(capture_path),
+				"ALLOW_WORKFLOW_EDITS": "true",
+			},
+			cwd=repo_dir,
+		)
 		validator = REPO_ROOT / "scripts" / "validate_changed_files_syntax.sh"
 		subprocess.run(
 			["bash", str(validator)],

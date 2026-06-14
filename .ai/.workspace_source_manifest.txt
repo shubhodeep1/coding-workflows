@@ -96,7 +96,6 @@ ai_pipeline.md
 analysis/last_collection_timestamp.txt
 analysis/recommendation-processing-report.md
 analysis/validation-selftest-status.json
-analysis/workflow-optimization-2026-06-13.md
 codex.md
 docs/INVENTORY.md
 docs/ai-tools-future-improvements.md
@@ -223,6 +222,7 @@ scripts/codex_heartbeat.sh
 scripts/codex_model_catalog.json
 scripts/codex_stall_guard.sh
 scripts/codex_thread_reuse.sh
+scripts/collect_pr_check_runs_context.py
 scripts/collect_workflow_logs.py
 scripts/compare_issue_timeline_parity.sh
 scripts/comprehensive_test_and_release_gh_api.sh
@@ -230,6 +230,7 @@ scripts/consolidate_soft_error_reports.py
 scripts/cost_audit.py
 scripts/detect_editor_changes_lost.sh
 scripts/dev/replay_review_pipeline.sh
+scripts/dispatch_and_watch_workflow_run.sh
 scripts/drift_audit.sh
 scripts/files_touched_scope_guard.py
 scripts/fixtures/cloudflare-learnings/phase-a-anti-rules-noisy-pr.patch
@@ -248,6 +249,7 @@ scripts/fixtures/issue-timeline/rest_timeline_fixture.json
 scripts/generate_symbol_diff_summary.py
 scripts/gh_helpers.sh
 scripts/git_ref_health_check.sh
+scripts/implement_commit_changes.sh
 scripts/implement_diagnose_post_codex_failure.sh
 scripts/install_semble.sh
 scripts/issue_attachment_bundle.py
@@ -259,9 +261,11 @@ scripts/load_workflow_overlay.py
 scripts/mark-stable.sh
 scripts/mcp_handshake_probe.py
 scripts/memory_helpers.sh
+scripts/memory_injection_patterns.py
 scripts/openrouter_prompt_cache.py
 scripts/orchestrate_force_tick.sh
 scripts/orchestrate_lib.py
+scripts/orchestrate_parse_and_post_answer.sh
 scripts/orchestrate_poll_process.sh
 scripts/orchestrate_state_v2.py
 scripts/post_review_comment.sh
@@ -276,6 +280,7 @@ scripts/review_commit_changes.sh
 scripts/review_conflict_prepare.sh
 scripts/review_conflict_resolve.sh
 scripts/review_consolidate.sh
+scripts/review_enable_auto_merge.sh
 scripts/review_filter_uninteresting_files.sh
 scripts/review_floor_rules.sh
 scripts/review_issue_ledger.sh
@@ -589,6 +594,9 @@ workflow-templates/ai-validate.yml
 workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js
 workflow-templates/audit-gate/assets/security/dependency-audit-allowlist.json
 workflow-templates/audit-gate/contract.json
+workflow-templates/profiles/core.txt
+workflow-templates/profiles/full.txt
+workflow-templates/profiles/standard.txt
 workflow-templates/review_rb_judge_dispatch.yml
 workflow-templates/validation-harness/_shared/_lib/tap_helpers.sh.j2
 workflow-templates/validation-harness/_shared/tests/00_canary.sh.j2
