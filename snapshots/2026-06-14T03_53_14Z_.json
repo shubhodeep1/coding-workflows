@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-06-11T20:40:23Z",
+  "tick_at": "2026-06-14T03:53:14Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -27,10 +27,10 @@
         "review_blocked": 0,
         "skipped": 0
       },
-      "number": 3272,
+      "number": 3323,
       "project_complete": false,
       "status": "in-progress",
-      "title": "[Orchestrator] Apply only the safe subset of the 2026-06-10 workflow-optimization analysis",
+      "title": "[Orchestrator] Apply the safe subset of workflow-optimization-2026-06-13 recommendations",
       "total_waves": 0,
       "wave_complete": false
     }
