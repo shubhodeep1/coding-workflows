@@ -60,18 +60,6 @@ def _blocked_reason(parsed_output: str) -> str:
 	return ""
 
 
-def _self_check_blocker_count(parsed_output: str) -> int:
-	return sum(1 for line in parsed_output.splitlines() if SELF_CHECK_BLOCKER_RE.match(line))
-
-
-def _self_check_pass_count(parsed_output: str) -> int:
-	return sum(1 for line in parsed_output.splitlines() if SELF_CHECK_PASS_RE.match(line))
-
-
-def _self_check_warning_count(parsed_output: str) -> int:
-	return sum(1 for line in parsed_output.splitlines() if SELF_CHECK_WARNING_RE.match(line))
-
-
 def _self_check_summary(parsed_output: str, *, self_check_gate_enabled: bool) -> dict[str, str | int | bool]:
 	pass_count = 0
 	warning_count = 0
