@@ -117,6 +117,22 @@ def extract_tracked_paths(text: str) -> list[str]:
 	return paths
 
 
+def iter_non_example_line_paths(line: str) -> list[str]:
+	line_without_code_spans = CODE_SPAN_RE.sub(" ", line)
+	paths: list[str] = []
+	seen: set[str] = set()
+	for pattern in TRACKED_REFERENCE_PATTERNS:
+		for match in pattern.finditer(line_without_code_spans):
+			candidate = normalize_reference(match.group(0))
+			if candidate in seen or classify_surface_path(candidate) is None:
+				continue
+			if EXAMPLE_PREFIX_RE.search(line_without_code_spans[:match.start()]):
+				continue
+			seen.add(candidate)
+			paths.append(candidate)
+	return paths
+
+
 def parse_secondary_document(document_path: Path) -> dict[str, int]:
 	references: dict[str, int] = {}
 	for line_number, line in enumerate(document_path.read_text(encoding="utf-8").splitlines(), 1):
@@ -124,6 +140,8 @@ def parse_secondary_document(document_path: Path) -> dict[str, int]:
 			candidate = normalize_reference(match.group(1))
 			if classify_surface_path(candidate) is None:
 				continue
+			references.setdefault(candidate, line_number)
+		for candidate in iter_non_example_line_paths(line):
 			references.setdefault(candidate, line_number)
 		for span_match in CODE_SPAN_RE.finditer(line):
 			if EXAMPLE_PREFIX_RE.search(line[:span_match.start()]):
@@ -192,6 +210,11 @@ def validate_secondary_documents(
 	for document_name, document_path in SECONDARY_DOC_PATHS.items():
 		try:
 			references = parse_secondary_document(document_path)
+		except UnicodeError as exc:
+			failures.append(
+				f"{document_name}: unable to decode as UTF-8 ({type(exc).__name__}: {exc})"
+			)
+			continue
 		except OSError as exc:
 			reason = exc.strerror or str(exc)
 			failures.append(f"{document_name}: unable to read ({type(exc).__name__}: {reason})")
