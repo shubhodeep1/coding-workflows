@@ -1,0 +1,40 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref:\n- HEAD: `b13a4075177e1283d00b8855603b5875a7701874`\n- Checked-out branch: `orchestrator/project-3351`\n- Integration branch metadata: `orchestrator/project-3351` (match)\n\nClarification mapping:\n- No Q1/Qn were asked; `/answer [auto-answered-by-orchestrator]` only confirms continuation.\n\nConflict detected:\n- `prompts/references/output-contract.txt` currently contains only terminal-deliverable bullets, but `docs/plans/gsd-inspired-improvements-plan.md` item 2.2 and the existing placeholder wiring expect the shared preamble/checkpoint/final-deliverable cadence to live there. This is a content gap, not a wiring gap.\n\n1. Files likely to change\n- `prompts/references/output-contract.txt` \u2014 add the shared status-update cadence (short preamble before each tool-call batch, checkpoint cadence/format, and final deliverable contract) while preserving the existing terminal-output bullets.\n- `tests/test_render_prompt_foundation.py` \u2014 extend an existing render-contract test so the shared reference cannot silently lose the cadence again.\n- No changes expected to `scripts/render_prompt.py`, `prompts/mode-*.txt`, or prompt contract YAMLs unless the focused render checks reveal a real regression.\n\n2. Functions/modules to implement\n- No new runtime module/function is needed.\n- Update the shared reference text only; keep `{{REFERENCE_OUTPUT_CONTRACT}}` hydration and the validate-only append behavior in `scripts/render_prompt.py` intact.\n- Reuse the existing foundation harness pattern \u2014 especially the real-reference/trusted-render path in `tests/test_render_prompt_foundation.py` \u2014 rather than adding a new standalone prompt test.\n- If a new test helper/function is added in `tests/test_render_prompt_foundation.py`, also wire it into that file\u2019s `main()` because CI executes the file directly with `python3`, not via pytest discovery.\n\n3. Data structures affected\n- Shared prompt reference content in `prompts/references/output-contract.txt`.\n- Test sentinel/assertion strings in `tests/test_render_prompt_foundation.py`.\n- No placeholder names, YAML contract schema, or mode-specific append mapping changes.\n\n4. API/interface changes\n- No external API, CLI, or workflow interface changes.\n- Internal prompt-contract change only: all existing mode prompts that already hydrate `{{REFERENCE_OUTPUT_CONTRACT}}` will pick up the richer shared block automatically.\n- Preserve the existing `mode-validate-generate` append flow so `validate-output-contract.txt` still follows the shared block.\n\n5. Risks and edge cases\n- The shared block is injected into strict-output prompts (including JSON-only judge flows), so the added cadence text must clearly apply to interim tool-call stdout and must not contradict the final mode-specific artefact shape.\n- Preserve the existing \u201cTerminal output contract:\u201d bullets/meaning; this issue is additive completion, not prompt weakening.\n- Keep the wording phase-agnostic; do not introduce plan-only or judge-only instructions into the shared reference.\n- Avoid broader prompt churn: this issue should not refactor placeholder wiring or touch unrelated prompt files.\n\n6. Testing considerations\n- Strengthen `tests/test_render_prompt_foundation.py` to assert cadence-specific markers from the real shared reference, not just the existing terminal heading. Representative assertions should cover:\n  - the short preamble rule (`\u226420 words`)\n  - the checkpoint cadence (`after every 3\u20135 tool calls`)\n  - the checkpoint format (`Checkpoint: ...`)\n  - preservation of the terminal deliverable contract\n- Re-run the focused prompt-render contract checks already used in CI:\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_foundation.py`\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_core_modes.py`\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_review_judge_modes.py`\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_validate_analytics_modes.py`\n\n7. Pre-execution self-check result\n- Implementation-ready.\n- Scope is narrow and verified: shared reference content + one existing test file.\n- Placeholder wiring already exists and should remain unchanged.\n- Branch/ref context is consistent with orchestrator metadata.\n\nAssumptions:\n- The auto-posted `/answer` adds no new scope beyond \u201ccontinue with planning.\u201d\n- \u201cPreserve existing terminal-output bullets\u201d means keep the current deliverable bullets intact while adding the missing cadence text alongside them.\n\nMissing-context notes:\n- None.\n\nImplementation-time estimate: 20 minutes\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "687ac1047077923cf9c68a044cdea580072d1cc82440c67ff94433bfda7dbe8d",
+  "injection_suspected": true,
+  "lineage": {
+    "issue_number": 3370,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27609874416",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27609874416",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3370"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260616100724_aa749ae48c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3370,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27609874416"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3370",
+  "timestamps": {
+    "created_at": "2026-06-16T10:07:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
