@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-3351` @ `a4d180ba1c37c7ab6430d15fe56603c2f52aca88` (matches integration branch metadata).\n\nClarification mapping: none. Clarify returned clear; the only `/answer` comment was the orchestrator auto-continuation marker.\n\nAutomation / wiring\n- Change type: extend existing code/workflows only; no new standalone script, no supervisor, no DB work, no `docs/scripts-pending-removal.md` entry.\n- Existing entry points to reuse: `.github/workflows/clarify.yml` (issue opened / `/reclarify`), `.github/workflows/plan.yml` (`/answer`), `.github/workflows/implement.yml`, `.github/workflows/review_autofix.yml`, `.github/workflows/orchestrate.yml`, `.github/workflows/orchestrate_clarify_respond.yml`, and `.github/workflows/validate.yml`. These are the candidate-write paths that should receive the rollout gate.\n\nReview basis\n- The current end-to-end write path is already `scripts/memory_helpers.sh::memory_record_candidate` \u2192 `scripts/ai_memory.py::cmd_record_candidate` \u2192 `scripts/ai_memory_lib.py::record_candidate`.\n- This ref already contains `scripts/memory_injection_patterns.py`, `scan_candidate_text_for_injection(...)`, the `injection_suspected` record field, bootstrap-copy wiring, and targeted injection tests.\n- I did not find any `.github/workflows/**` export of `MEMORY_INJECTION_SCAN_ENABLED`, so the likely remaining gap is workflow env plumbing rather than core scan logic.\n- I attempted focused local pytest validation, but `python3 -m pytest` is unavailable in this workspace.\n\n1. Files likely to change\n- Primary:\n  - `.github/workflows/clarify.yml`\n  - `.github/workflows/plan.yml`\n  - `.github/workflows/implement.yml`\n  - `.github/workflows/review_autofix.yml`\n  - `.github/workflows/orchestrate.yml`\n  - `.github/workflows/orchestrate_clarify_respond.yml`\n  - `.github/workflows/validate.yml`\n  - `tests/test_ai_memory_processed_command_entry.py` (or an equivalent workflow-contract test file)\n- Conditional only if the audit finds a real behavior gap:\n  - `scripts/ai_memory.py`\n  - `scripts/ai_memory_lib.py`\n  - `scripts/memory_helpers.sh`\n  - `scripts/memory_injection_patterns.py`\n\n2. Functions or modules to implement\n- Add workflow-level env passthrough `MEMORY_INJECTION_SCAN_ENABLED: ${{ vars.MEMORY_INJECTION_SCAN_ENABLED || 'true' }}` to each candidate-writing reusable workflow.\n- Keep `scripts/ai_memory_lib.py::scan_candidate_text_for_injection` as the single gate and `scripts/memory_injection_patterns.py` as the single pattern source.\n- Preserve `scripts/ai_memory.py::cmd_record_candidate` / `scripts/ai_memory_lib.py::record_candidate` behavior: on match, set `injection_suspected: true`, emit `AI_MEMORY_TELEMETRY` with `op: \"injection_scan\"` to stderr, and continue the write.\n- Keep `scripts/memory_helpers.sh::memory_record_candidate` as a pass-through wrapper; do not add separate shell-side scanning or any blocking path.\n\n3. Data structures affected\n- `memory_record.v1` candidate records: optional boolean `injection_suspected` field; no schema bump expected because the field already exists on this ref.\n- `AI_MEMORY_TELEMETRY` payload: `op: \"injection_scan\"` plus `matches: [...]`, remaining stderr-only.\n- Repo/workflow env knob: `MEMORY_INJECTION_SCAN_ENABLED`, default `true`.\n\n4. API or interface changes\n- Expose the existing rollout gate to workflow jobs via `vars.MEMORY_INJECTION_SCAN_ENABLED || 'true'`.\n- No new CLI flags, no new GitHub API calls, no blocking behavior, and no `AI_MEMORY_ENABLED` semantic changes.\n\n5. Potential risks / edge cases / conflicts\n- Conflict: the Phase D doc describes a \u201cnew\u201d module and `write_candidate`-style entrypoints, but this ref already uses `cmd_record_candidate` / `record_candidate` and already has the module/tests. Treat implementation as delta-only.\n- False positives are expected on quoted examples; the guard must stay advisory-only.\n- With `MEMORY_INJECTION_SCAN_ENABLED=false`, both the flag and `injection_scan` telemetry should disappear, but the write must still succeed.\n- Preserve JSON-on-stdout / telemetry-on-stderr hygiene for wrappers and CLI commands.\n- Do not make the optional `memory_injection_patterns.py` import a hard failure for non-candidate paths.\n\n6. Testing considerations\n- Keep these existing tests green:\n  - `test_record_candidate_cli_flags_injection_and_emits_advisory_telemetry`\n  - `test_record_candidate_cli_scan_disabled_still_writes_without_flag`\n  - `test_memory_record_candidate_wrapper_surfaces_injection_telemetry_on_stderr`\n  - `test_stage_workflow_support_bootstraps_memory_injection_patterns`\n- Add/extend a contract test to assert the candidate-writing workflows expose `MEMORY_INJECTION_SCAN_ENABLED: ${{ vars.MEMORY_INJECTION_SCAN_ENABLED || 'true' }}`.\n- If any Python/shell logic changes, rerun the focused ai-memory test subset and the touched workflow-contract tests in CI.\n\n7. Pre-execution self-check result\n- Assumption: the core Phase D guard is already landed on this ref; the remaining work is primarily workflow env exposure and any tiny parity cleanup that audit uncovers.\n- Missing-context note: local focused pytest execution could not be completed in this workspace.\n\nPLAN_SELF_CHECK: WARNING: Focused ai-memory pytest validation is unverified locally because `python3 -m pytest` is unavailable in this workspace.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "4b420acf7181477547e463943e338ec0fe668b5ffbbec14ab4c1c7b9b30c3c38",
+  "lineage": {
+    "issue_number": 3366,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27598632315",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27598632315",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3366"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260616063214_c34919669a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3366,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27598632315"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3366",
+  "timestamps": {
+    "created_at": "2026-06-16T06:32:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
