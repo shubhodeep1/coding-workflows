@@ -10,6 +10,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 UPDATE_WORKFLOWS_WF = REPO_ROOT / ".github" / "workflows" / "update_workflows.yml"
 WORKFLOW_TEMPLATES_DIR = REPO_ROOT / "workflow-templates"
 WORKFLOW_PROFILE_DIR = WORKFLOW_TEMPLATES_DIR / "profiles"
+README_MD = REPO_ROOT / "README.md"
+AGENTS_MD = REPO_ROOT / "agents.md"
 
 
 def _workflow_text() -> str:
@@ -47,6 +49,23 @@ def test_profile_manifests_match_contracts() -> None:
 	assert _manifest_lines("full.txt") == full
 	assert "ai-update-workflows.yml" in _manifest_lines("full.txt")
 	assert all("/" not in entry for entry in _manifest_lines("full.txt"))
+
+
+def test_install_profile_docs_and_agents_contracts() -> None:
+	readme = README_MD.read_text(encoding="utf-8")
+	assert "#### Install profiles" in readme
+	assert "`WORKFLOW_PROFILE` repository variable" in readme
+	assert "[`workflow-templates/profiles/core.txt`](workflow-templates/profiles/core.txt)" in readme
+	assert "[`workflow-templates/profiles/standard.txt`](workflow-templates/profiles/standard.txt)" in readme
+	assert "[`workflow-templates/profiles/full.txt`](workflow-templates/profiles/full.txt)" in readme
+	assert "Profile downgrades are non-destructive:" in readme
+
+	agents = AGENTS_MD.read_text(encoding="utf-8")
+	assert "## Workflow install profiles" in agents
+	assert "PROFILE.default=full" in agents
+	assert "PROFILE.name=core manifest=workflow-templates/profiles/core.txt" in agents
+	assert "PROFILE.name=standard manifest=workflow-templates/profiles/standard.txt" in agents
+	assert "PROFILE.name=full manifest=workflow-templates/profiles/full.txt" in agents
 
 
 def test_fail_fast_validation_precedes_any_copy_mutation() -> None:
@@ -153,6 +172,7 @@ def test_success_path_contracts_are_preserved() -> None:
 
 def main() -> int:
 	test_profile_manifests_match_contracts()
+	test_install_profile_docs_and_agents_contracts()
 	test_fail_fast_validation_precedes_any_copy_mutation()
 	test_guardrail_reason_codes_and_outputs_are_declared()
 	test_profile_selection_and_non_destructive_downgrade_contracts()
