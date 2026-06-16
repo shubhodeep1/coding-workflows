@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ai_memory_processed_command_entry.py:172-183 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `_isolated_git_env()` may mutate the caller\u2019s `extra` dict via `env.update(extra)`.\n  WHY: The reviewer flagged a pass-by-reference mutation risk that could leak side effects into reused environment dicts.\n- tests/test_ai_memory_processed_command_entry.py:241 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Passing a temporary dict into `_isolated_git_env({\"PYTHONDONTWRITEBYTECODE\": \"1\", **(env or {})})` is flagged as a pass-by-reference mutation risk.\n  WHY: The reviewer said the helper could unnecessarily mutate the caller-provided env mapping and affect subsequent usage.\n- tests/test_ai_memory_processed_command_entry.py:192-223 | severity=low | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Minor style inconsistency: `_isolated_git_env()` is called with no args and its result is then passed through to `subprocess.run(..., env=git_env)`.\n  WHY: The reviewer explicitly labeled this a NIT and stated there is no functional issue.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- File: tests/test_ai_memory_processed_command_entry.py\nCode: function _isolated_git_env(extra: dict[str, str] | None = None) -> dict[str, str]:\nProblem: function mutates caller's extra dict and then strips git vars twice\nWhy it fails: The current implementation likely mutates the caller's `extra` dict (via `env.update(extra)`), which could cause unintended side effects in tests that reuse the dict. Additionally, the double `env.pop` calls don't provide value.\nISSUE_CONFIDENCE: 4\n\n- File: tests/test_ai_memory_processed_command_entry.py  \nCode: env=_isolated_git_env({\"PYTHONDONTWRITEBYTECODE\": \"1\", **(env or {})})\nProblem: Pass-by-reference mutation risk in functional context\nWhy it fails: The caller creates a temporary dict and passes it directly. If `_isolated_git_env` mutates that dict, it could affect subsequent usage in the caller or in other code paths. The mutation is unnecessary for isolation.\nISSUE_CONFIDENCE: 4\n\n- File: tests/test_ai_memory_processed_command_entry.py\nCode: env=_isolated_git_env()\nProblem: Function call that returns isolated env but then passes positional dict to subprocess calls\nWhy it fails: The current fix uses `_isolated_git_env()` (no arguments) and then immediately passes its result to `subprocess.run(..., env=git_env)`. While this is not wrong per se, the helper's name and purpose suggest it should always create an isolated environment from scratch, which it does correctly by starting with `dict(os.environ)`. No functional issue, but a minor style inconsistency that could confuse future maintainers.\nISSUE_CONFIDENCE: 3\nSEVERITY: NIT\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "507f909d73a108ecde3f49abdab7e235c4e3a83b84be59a8f183065351684418",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3354,
+    "run_id": "27630007753",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27630007753",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260616171450_a9de454ba8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3354,
+    "run_id": "27630007753"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-16T17:14:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
