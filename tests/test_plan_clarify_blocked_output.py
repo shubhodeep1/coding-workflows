@@ -17,6 +17,11 @@ PROMPT_CLARIFY = REPO_ROOT / "prompts" / "mode-clarify.txt"
 
 FENCE_SANITIZER = r"s{(^|\n)([ \t]*((?:```|~~~))[^\n]*\n.*?\n[ \t]*\3[ \t]*(?=\n|$))}{$1}gms;"
 BLOCKED_RE = re.compile(r"^\s*BLOCKED:\s*(.*\S)\s*$", re.IGNORECASE)
+SELF_CHECK_PASS_RE = re.compile(r"^\s*PLAN_SELF_CHECK:\s*PASS\s*$", re.IGNORECASE)
+SELF_CHECK_WARNING_RE = re.compile(
+	r"^\s*PLAN_SELF_CHECK:\s*WARNING:\s*(.*\S)\s*$",
+	re.IGNORECASE,
+)
 SELF_CHECK_BLOCKER_RE = re.compile(r"^\s*PLAN_SELF_CHECK:\s*BLOCKER:\s*(.*\S)\s*$", re.IGNORECASE)
 STATUS_NEEDS_CLARIFICATION_RE = re.compile(
 	r"STATUS:.*NEEDS_CLARIFICATION|^\*\*STATUS:\*\*.*NEEDS_CLARIFICATION",
@@ -59,6 +64,49 @@ def _self_check_blocker_count(parsed_output: str) -> int:
 	return sum(1 for line in parsed_output.splitlines() if SELF_CHECK_BLOCKER_RE.match(line))
 
 
+def _self_check_pass_count(parsed_output: str) -> int:
+	return sum(1 for line in parsed_output.splitlines() if SELF_CHECK_PASS_RE.match(line))
+
+
+def _self_check_warning_count(parsed_output: str) -> int:
+	return sum(1 for line in parsed_output.splitlines() if SELF_CHECK_WARNING_RE.match(line))
+
+
+def _self_check_summary(parsed_output: str, *, self_check_gate_enabled: bool) -> dict[str, str | int | bool]:
+	pass_count = _self_check_pass_count(parsed_output)
+	warning_count = _self_check_warning_count(parsed_output)
+	blocker_count = _self_check_blocker_count(parsed_output)
+
+	state = "missing"
+	observation = "none"
+	if blocker_count > 0:
+		state = "blocker"
+		if pass_count > 0 or warning_count > 0:
+			observation = "mixed"
+	elif warning_count > 0:
+		state = "warning"
+		if pass_count > 0:
+			observation = "mixed"
+	elif pass_count == 1:
+		state = "pass"
+	elif pass_count > 1:
+		state = "pass"
+		observation = "duplicate-pass"
+
+	reopen = self_check_gate_enabled and blocker_count > 0
+	if state == "missing" and self_check_gate_enabled:
+		observation = "missing"
+
+	return {
+		"pass_count": pass_count,
+		"warning_count": warning_count,
+		"blocker_count": blocker_count,
+		"state": state,
+		"observation": observation,
+		"reopen": reopen,
+	}
+
+
 def _has_structured_clarification_block(parsed_output: str) -> bool:
 	q_line: int | None = None
 	for line_number, line in enumerate(parsed_output.splitlines(), start=1):
@@ -76,7 +124,10 @@ def _needs_clarification(parsed_output: str, *, self_check_gate_enabled: bool) -
 	has_status_needs_clarification = any(
 		STATUS_NEEDS_CLARIFICATION_RE.search(line) for line in parsed_output.splitlines()
 	)
-	self_check_reopen = self_check_gate_enabled and _self_check_blocker_count(parsed_output) > 0
+	self_check_reopen = _self_check_summary(
+		parsed_output,
+		self_check_gate_enabled=self_check_gate_enabled,
+	)["reopen"]
 	return has_status_needs_clarification or _has_structured_clarification_block(parsed_output) or self_check_reopen
 
 
@@ -119,6 +170,8 @@ def test_plan_workflow_detects_blocked_before_needs_clarification() -> None:
 	assert "SELF_CHECK_PASS_COUNT" in wf
 	assert "SELF_CHECK_WARNING_COUNT" in wf
 	assert "SELF_CHECK_BLOCKER_COUNT" in wf
+	assert "plan_self_check_state" in wf
+	assert "plan_self_check_observation" in wf
 	assert "plan_self_check_reopen_clarification" in wf
 	assert 'PARSE_SOURCE_FILE="${CODEX_OUTPUT_PARSE_FILE:-${CODEX_OUTPUT_FILE}}"' in wf
 	assert "- name: Handle blocked planning output" in wf
@@ -174,9 +227,32 @@ def test_unterminated_fence_reopens_clarification_for_self_check_blocker() -> No
 		"```python\nprint('demo')\nPLAN_SELF_CHECK: BLOCKER: missing files_touched list\n"
 	)
 
-	assert _self_check_blocker_count(parsed_output) == 1
+	summary_enabled = _self_check_summary(parsed_output, self_check_gate_enabled=True)
+	summary_disabled = _self_check_summary(parsed_output, self_check_gate_enabled=False)
+
+	assert summary_enabled["blocker_count"] == 1
+	assert summary_enabled["state"] == "blocker"
+	assert summary_enabled["observation"] == "none"
+	assert summary_enabled["reopen"] is True
+	assert summary_disabled["reopen"] is False
 	assert _needs_clarification(parsed_output, self_check_gate_enabled=True) is True
 	assert _needs_clarification(parsed_output, self_check_gate_enabled=False) is False
+
+
+def test_pass_self_check_stays_clear() -> None:
+	parsed_output = _sanitize_plan_output(
+		"Implementation Plan\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\n"
+	)
+
+	summary = _self_check_summary(parsed_output, self_check_gate_enabled=True)
+
+	assert summary["pass_count"] == 1
+	assert summary["warning_count"] == 0
+	assert summary["blocker_count"] == 0
+	assert summary["state"] == "pass"
+	assert summary["observation"] == "none"
+	assert summary["reopen"] is False
+	assert _needs_clarification(parsed_output, self_check_gate_enabled=True) is False
 
 
 def test_warning_only_self_check_remains_fail_open() -> None:
@@ -184,7 +260,60 @@ def test_warning_only_self_check_remains_fail_open() -> None:
 		"Implementation Plan\nPLAN_SELF_CHECK: WARNING: confirm rollout note\nSTATUS: CLEAR\n"
 	)
 
-	assert _self_check_blocker_count(parsed_output) == 0
+	summary = _self_check_summary(parsed_output, self_check_gate_enabled=True)
+
+	assert summary["pass_count"] == 0
+	assert summary["warning_count"] == 1
+	assert summary["blocker_count"] == 0
+	assert summary["state"] == "warning"
+	assert summary["observation"] == "none"
+	assert summary["reopen"] is False
+	assert _needs_clarification(parsed_output, self_check_gate_enabled=True) is False
+
+
+def test_mixed_pass_and_warning_self_check_is_observability_only() -> None:
+	parsed_output = _sanitize_plan_output(
+		"Implementation Plan\nPLAN_SELF_CHECK: PASS\nPLAN_SELF_CHECK: WARNING: confirm rollout note\nSTATUS: CLEAR\n"
+	)
+
+	summary = _self_check_summary(parsed_output, self_check_gate_enabled=True)
+
+	assert summary["pass_count"] == 1
+	assert summary["warning_count"] == 1
+	assert summary["blocker_count"] == 0
+	assert summary["state"] == "warning"
+	assert summary["observation"] == "mixed"
+	assert summary["reopen"] is False
+	assert _needs_clarification(parsed_output, self_check_gate_enabled=True) is False
+
+
+def test_duplicate_pass_self_check_is_observability_only() -> None:
+	parsed_output = _sanitize_plan_output(
+		"Implementation Plan\nPLAN_SELF_CHECK: PASS\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\n"
+	)
+
+	summary = _self_check_summary(parsed_output, self_check_gate_enabled=True)
+
+	assert summary["pass_count"] == 2
+	assert summary["warning_count"] == 0
+	assert summary["blocker_count"] == 0
+	assert summary["state"] == "pass"
+	assert summary["observation"] == "duplicate-pass"
+	assert summary["reopen"] is False
+	assert _needs_clarification(parsed_output, self_check_gate_enabled=True) is False
+
+
+def test_missing_self_check_is_observability_only() -> None:
+	parsed_output = _sanitize_plan_output("Implementation Plan\nSTATUS: CLEAR\n")
+
+	summary = _self_check_summary(parsed_output, self_check_gate_enabled=True)
+
+	assert summary["pass_count"] == 0
+	assert summary["warning_count"] == 0
+	assert summary["blocker_count"] == 0
+	assert summary["state"] == "missing"
+	assert summary["observation"] == "missing"
+	assert summary["reopen"] is False
 	assert _needs_clarification(parsed_output, self_check_gate_enabled=True) is False
 
 
