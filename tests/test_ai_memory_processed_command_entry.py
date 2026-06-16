@@ -9,6 +9,7 @@ import io
 import json
 import multiprocessing
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -1109,9 +1110,14 @@ def test_stage_workflow_support_bootstraps_memory_injection_patterns() -> None:
 
 
 def test_candidate_write_workflows_expose_memory_injection_scan_gate() -> None:
-	expected_line = "MEMORY_INJECTION_SCAN_ENABLED: ${{ vars.MEMORY_INJECTION_SCAN_ENABLED || 'true' }}"
+	pattern = re.compile(
+		r"(?m)^\s*MEMORY_INJECTION_SCAN_ENABLED:\s*[\"']?\$\{\{\s*"
+		r"vars\.MEMORY_INJECTION_SCAN_ENABLED\s*\|\|\s*'true'\s*\}\}[\"']?\s*$"
+	)
 	for workflow_path in MEMORY_INJECTION_SCAN_WORKFLOWS:
-		assert expected_line in workflow_path.read_text(encoding="utf-8"), workflow_path
+		assert pattern.search(workflow_path.read_text(encoding="utf-8")), (
+			f"{workflow_path.name} missing MEMORY_INJECTION_SCAN_ENABLED gate"
+		)
 
 
 def test_memory_validation_history_get_wrapper_disabled_stdout_stderr_hygiene() -> None:
