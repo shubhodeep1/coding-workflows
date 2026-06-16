@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-06-13T11:51:48Z",
+  "tick_at": "2026-06-16T08:27:47Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -28,10 +28,10 @@
         "review_blocked": 0,
         "skipped": 0
       },
-      "number": 3303,
+      "number": 3351,
       "project_complete": false,
       "status": "in-progress",
-      "title": "[Orchestrator] GSD-inspired unattended-pipeline improvements (Phases B-E)",
+      "title": "[Orchestrator] Complete GSD-inspired rollout phases B-E",
       "total_waves": 4,
       "wave_complete": false
     }
