@@ -44,7 +44,7 @@ TRACKED_REFERENCE_PATTERNS = (
 	re.compile(r"prompts/review-[A-Za-z0-9_.-]+\.txt"),
 	re.compile(r"prompts/references/[A-Za-z0-9_.-]+\.txt"),
 	re.compile(r"prompts/contracts/[A-Za-z0-9_.-]+\.yml"),
-	re.compile(r"scripts/[A-Za-z0-9_./-]+"),
+	re.compile(r"(?<![A-Za-z0-9_./-])(?:\./)?scripts/[A-Za-z0-9_./-]+"),
 	re.compile(r"tests/(?:prompt_size_budget\.py|inventory_parity\.py|inventory_exemptions\.txt)"),
 )
 PATH_ASSIGNMENT_RE = re.compile(r"\bpath=([A-Za-z0-9_./-]+)")
@@ -92,7 +92,10 @@ def classify_surface_path(path_text: str) -> str | None:
 
 
 def normalize_reference(path_text: str) -> str:
-	return path_text.rstrip(".,;:")
+	normalized = path_text.rstrip(".,;:")
+	if normalized.startswith("./"):
+		normalized = normalized[2:]
+	return normalized
 
 
 def is_generated_wrapper_reference(path_text: str) -> bool:
