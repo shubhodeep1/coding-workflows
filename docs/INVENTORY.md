@@ -207,6 +207,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 
 ## Audit-gate assets
 
+- `prompts/contracts/conflict-resolver.yml` — Strict render contract for conflict-resolver.
+- `prompts/contracts/integration-sync-conflict-resolver.yml` — Strict render contract for integration-sync-conflict-resolver.
 - `prompts/contracts/mode-clarify-respond.yml` — Strict render contract for mode-clarify-respond.
 - `prompts/contracts/mode-clarify.yml` — Strict render contract for mode-clarify.
 - `prompts/contracts/mode-implement-diagnose-continuation.yml` — Strict render contract for mode-implement-diagnose-continuation.

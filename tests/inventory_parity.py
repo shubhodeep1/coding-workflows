@@ -19,8 +19,7 @@ SECTION_ORDER = OrderedDict(
 		("Prompt references", lambda path: path.match("prompts/references/*.txt")),
 		(
 			"Audit-gate assets",
-			lambda path: path.match("prompts/contracts/mode-*.yml")
-			or path.match("prompts/contracts/review-*.yml")
+			lambda path: path.match("prompts/contracts/*.yml")
 			or path.as_posix()
 			in {
 				"tests/prompt_size_budget.py",
