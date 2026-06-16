@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nRef context\n- HEAD: `e2aad5d0822c7cd33fb2f3e13912348e7fd2b1a3`\n- Checkout ref: `orchestrator/project-3351`\n- Integration branch metadata matches checkout (`Integration branch mismatch: false`)\n\nClarification mapping\n- No `Q<ID>` clarification questions were issued.\n- `/answer [auto-answered-by-orchestrator]` only confirms continuation; it adds no extra scope or constraints.\n\nConflict note\n- The issue describes Phase E as work to add/finish, but this ref already appears aligned:\n  - `workflow-templates/profiles/{core,standard,full}.txt` exist with the expected split.\n  - `.github/workflows/update_workflows.yml` already reads `vars.WORKFLOW_PROFILE`, defaults to `full`, loads `workflow-templates/profiles/<profile>.txt`, installs only manifest-listed wrappers, and has no wrapper-removal path on downgrade.\n  - `README.md` already contains the `Install profiles` subsection.\n  - `agents.md` already contains `PROFILE.default=full` plus the three `PROFILE.name=` lines.\n  - `python3 tests/test_update_workflows_guardrails.py` passes on this ref.\n- Treat implementation as missing-delta-only. If direct verification finds no drift, do not introduce churn just to create a diff.\n\n1. Files likely to change\n- Expected result: no file changes.\n- If any missing delta is discovered, limit edits to:\n  - `workflow-templates/profiles/core.txt`\n  - `workflow-templates/profiles/standard.txt`\n  - `workflow-templates/profiles/full.txt`\n  - `.github/workflows/update_workflows.yml`\n  - `README.md`\n  - `agents.md`\n  - `tests/test_update_workflows_guardrails.py` only if a real contract mismatch requires test alignment\n\n2. Functions/modules to implement or verify\n- `workflow-templates/profiles/core.txt`\n  - Must list exactly: `ai-clarify.yml`, `ai-plan.yml`, `ai-implement.yml`, `ai-review.yml`, `ai-issue-pr-status.yml`, `ai-cancel-on-pr-close.yml`.\n- `workflow-templates/profiles/standard.txt`\n  - Must equal `core` plus: `ai-orchestrate.yml`, `ai-orchestrate-poll.yml`, `ai-orchestrate-clarify-respond.yml`, `ai-validate.yml`, `review_rb_judge_dispatch.yml`.\n- `workflow-templates/profiles/full.txt`\n  - Must cover every top-level wrapper in `workflow-templates/`: `ai-cancel-on-pr-close.yml`, `ai-clarify.yml`, `ai-implement.yml`, `ai-issue-pr-status.yml`, `ai-memory-maintenance.yml`, `ai-orchestrate-clarify-respond.yml`, `ai-orchestrate-poll.yml`, `ai-orchestrate.yml`, `ai-plan.yml`, `ai-review.yml`, `ai-update-workflows.yml`, `ai-validate.yml`, `review_rb_judge_dispatch.yml`.\n- `.github/workflows/update_workflows.yml`\n  - Preserve the current `Compare and update workflow wrappers` contract:\n    - `WORKFLOW_PROFILE` selection with default `full`\n    - manifest lookup under `workflow-templates/profiles/`\n    - install/update only manifest-listed wrappers\n    - skip self-updater overwrite for `ai-update-workflows.yml`\n    - no deletion logic on profile downgrade\n- Docs anchors to preserve if any delta exists:\n  - `README.md` under Quickstart \u2192 `Install profiles`\n  - `agents.md` under `## Workflow install profiles`\n\n3. Data structures affected\n- Newline-delimited profile manifests in `workflow-templates/profiles/*.txt`\n- Operator-facing repo variable `WORKFLOW_PROFILE` with allowed values `core|standard|full`\n- Default behavior when `WORKFLOW_PROFILE` is unset: behave as `full`\n\n4. API or interface changes\n- No new public interface should be added beyond the existing `WORKFLOW_PROFILE` operator surface.\n- Preserve fail-fast behavior for unknown profiles.\n- Preserve non-destructive downgrade semantics: out-of-profile wrappers already present in consumer repos stay in place.\n- Do not touch consumer repos or `.github/ai/consumer_repos.json`.\n\n5. Potential risks or edge cases\n- Biggest risk is false-positive work: the branch already looks complete, so unnecessary edits would be regression-prone churn.\n- `full.txt` must stay synchronized with all top-level `workflow-templates/*.yml` wrappers, including `ai-update-workflows.yml` even though the updater skips overwriting itself.\n- Do not introduce `rm`, `git rm`, or local workflow directory sweep logic.\n- If docs need any touch-up, keep edits append-only under the existing anchors and avoid unrelated README reflow.\n\n6. Testing considerations\n- Primary contract test: `python3 tests/test_update_workflows_guardrails.py` (already passes on this ref).\n- If any edit is required, rerun that test and confirm it still enforces:\n  - exact manifest contents\n  - `WORKFLOW_PROFILE` defaulting to `full`\n  - non-destructive downgrade behavior\n  - self-updater skip behavior\n  - existing guardrail/failure-code contracts\n- Manual spot-check:\n  - `README.md` still documents `core`, `standard`, and `full` under the existing install-profile section\n  - `agents.md` profile predicate lines remain under `## Workflow install profiles`\n  - no accidental changes outside this repository scope\n\n7. Pre-execution self-check result\n- No missing external inputs.\n- Scope is fully local to this repository.\n- Planning ref matches integration-branch metadata.\n- Implementation is ready, but likely resolves as a verification-only/no-op unless drift is discovered.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "c7601ee9c573deddd30d902e4da2d4fe2589d008e563557801df93f7e4eccbeb",
+  "lineage": {
+    "issue_number": 3368,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27603835651",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27603835651",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3368"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260616081738_d90ad6b4b7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3368,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27603835651"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3368",
+  "timestamps": {
+    "created_at": "2026-06-16T08:17:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
