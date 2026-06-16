@@ -326,3 +326,107 @@ _AI-memory counts below are deduped by unique run/step evidence because the expo
   - `implement` run `27592823653`: metadata `12` / `74,636` vs direct step evidence `6` / `37,318`.
   - `ci` run `27593141149`: metadata `10` Semble fallbacks vs `5` unique contract-test fallback lines in the step log.
 - Where step durations are cited, they are derived from exported log timestamps rather than native GitHub step-duration metadata.
+
+## Deep Audit — Workflows & Scripts (2026-06-16)
+
+### Section 1: Bug & Correctness Sweep
+
+#### BUG-001
+- **File path:** `.github/workflows/orchestrate.yml:995-1008`
+- **Severity:** Medium
+- **Category tag:** `bug`
+- **Description:** The `Create integration branch` step defines a fallback `_safe_gh_jq` as raw `gh api "$@"` when `scripts/gh_helpers.sh` is unavailable. That loses the repo’s normal stdout-suppression behavior on non-2xx responses. In this step, the fallback output is consumed immediately as `DEFAULT_BRANCH` and `BASE_SHA`, so an error payload can be treated as data and flow into ref encoding / branch creation. The canonical helper in `scripts/gh_helpers.sh:516-545` and the local fallbacks in `.github/workflows/plan.yml:1746-1758` and `.github/workflows/implement.yml:4725-4735` do not have this problem.
+- **Recommended fix:** Replace the inline fallback with the temp-file wrapper from `scripts/gh_helpers.sh:532-545`, or fail fast if `scripts/gh_helpers.sh` cannot be sourced instead of redefining an unsafe fallback.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### API-001
+- **File path:** `.github/workflows/review_autofix.yml:487-499,553-558`
+- **Severity:** Low
+- **Category tag:** `api-redundancy`
+- **Description:** The deterministic skip gate can fetch `repos/${REPOSITORY}/pulls/${PR_NUMBER}/files` twice in one candidate evaluation: once for doc-only detection and again for the materiality-suppression recheck. **Current call count:** up to 2 calls to the same endpoint in the same execution path. **Proposed call count:** 1. This is a same-step cache-reuse miss because `pr_files_json` already exists and only needs a distinct “not fetched / fetch failed / fetched empty” state.
+- **Recommended fix:** Fetch PR files once, persist the result or failure sentinel, and reuse `pr_files_json` for both checks. If you want a shared helper, model it on `scripts/gh_helpers.sh:549-615` (`gh_api_json_to_file`) so the fetch result can be reused safely across both branches.
+
+#### BATCH-001
+- **File path:** `.github/workflows/review_autofix.yml:823-831,851-866`
+- **Severity:** Medium
+- **Category tag:** `api-batching`
+- **Description:** On the PR-body fallback path, the workflow already has all candidate issue numbers in `issue_nodes_json`, but it then serially calls `gh issue view ... --json labels` once per issue to recover labels. **Current call count (label-hydration subpath):** `N` REST calls for `N` issues. **Proposed call count:** 1 GraphQL batch query for all issue numbers. This is exactly the kind of per-iteration API fanout CLAUDE.md §15 warns about.
+- **Recommended fix:** Batch the fallback label lookup with one GraphQL alias query keyed by issue number, following the pattern in `scripts/orchestrate_poll_process.sh:10585-10844` (`_fetch_candidate_issue_details_graphql` / `_fetch_linked_pr_status_graphql`). Keep the PR-body extraction path, but replace the per-issue REST loop with one batched label fetch.
+
+#### API-002
+- **File path:** `.github/workflows/test-and-mark-stable.yml:2918-2928`
+- **Severity:** Low
+- **Category tag:** `api-redundancy`
+- **Description:** The cancel-on-close smoke-test poll loop fetches the same Actions run twice every iteration: once for `.status` and once for `.conclusion`. **Current call count:** 2 calls per poll iteration, or up to 240 calls over the 600-second wait budget. **Proposed call count:** 1 call per iteration, or up to 120 over the same budget.
+- **Recommended fix:** Fetch the run once as a small JSON object (for example `{status, conclusion}`) and parse both fields locally. If you want a reusable helper instead of inline parsing, `scripts/gh_helpers.sh:549-615` already provides a safe single-fetch pattern to extend.
+
+#### API-003
+- **File path:** `scripts/orchestrate_poll_process.sh:7198-7204,9895-9897,11966-11974`
+- **Severity:** Medium
+- **Category tag:** `api-redundancy`
+- **Description:** The poller repeatedly issues separate `_safe_gh_jq` calls to the same resource just to read adjacent fields: final PR `.state` and `.merged_at`, stalled issue `.title` and `.body`, and reissued issue `.title` and `.body`. **Current call count:** 2 REST calls per resource read at each site. **Proposed call count:** 1 call per site by fetching a small object once and unpacking locally. Because this lives in `orchestrate_poll_process.sh`, the redundant round-trips recur on the repo’s hottest control-plane path.
+- **Recommended fix:** Add small single-fetch helpers such as `get_pr_state_json <pr_number>` and `get_issue_text_json <issue_number>`, or reuse the same “structured object once, parse many fields” approach already used by `scripts/orchestrate_poll_process.sh:10585-10708`.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### CONSIST-001
+- **File path:** `scripts/label_helpers.sh:120-206; scripts/validate_process.sh:947-1055; scripts/orchestrate_poll_process.sh:2303-2425; scripts/review_rb_judge.sh:566-582,615-647`
+- **Severity:** Medium
+- **Category tag:** `consistency`
+- **Description:** AI phase-label mutation logic is implemented four different ways. `scripts/label_helpers.sh` owns `ensure_label_exists` plus a resilient GET/PUT phase swap; `validate_process.sh` and `orchestrate_poll_process.sh` each reimplement contract-driven label resolution; `review_rb_judge.sh` stages and sources `label_helpers.sh` and then still keeps its own `_resilient_phase_swap`. The copies have already drifted: return semantics differ (`label_helpers.sh` returns `1` on create failure, while `validate_process.sh` / `orchestrate_poll_process.sh` warn and return `0`), and the judge maintains its own phase-label list.
+- **Recommended fix:** Move the contract-driven phase application into `scripts/label_helpers.sh` as a shared API, e.g. `set_issue_phase_label <issue_number> <phase_label> [repo] [contract_file]`, plus `resolve_phase_changes <phase_label> [contract_file]`. Then update callers in `validate_process.sh`, `orchestrate_poll_process.sh`, and `review_rb_judge.sh` to source that module instead of carrying local copies.
+
+#### DUP-001
+- **File path:** `.github/workflows/mark-stable.yml:1-545; .github/workflows/test-and-mark-stable.yml:1-5254`
+- **Severity:** Medium
+- **Category tag:** `duplication`
+- **Description:** `test-and-mark-stable.yml` embeds almost the entire operational body of `mark-stable.yml`. A local diff shows 494 of `mark-stable.yml`’s 545 lines match the larger workflow, including representative blocks at `mark-stable.yml:57-90` / `test-and-mark-stable.yml:136-169`, `163-227` / `3282-3346`, and `460-505` / `4724-4769`. That means release-path behavior must be maintained in two places. There is also already a manual helper script, `scripts/mark-stable.sh:1-111`, that encapsulates the tag/pointer update path but is not used by either workflow.
+- **Recommended fix:** Extract the shared release path into one owner. The smallest change is a new shared module such as `scripts/mark_stable_release.sh <version> <notes_file> <source_branch> [dispatch_consumers=true|false]`, with both workflows calling it. Alternatively, wrap the common path in a reusable workflow and keep `test-and-mark-stable.yml` only for the extra test gates.
+
+#### DEBT-001
+- **File path:** `.github/workflows/mark-stable.yml:315-340; .github/workflows/test-and-mark-stable.yml:3430-3455; .github/workflows/ci.yml:592-600; scripts/check_workflow_script_refs.py:1-194`
+- **Severity:** Low
+- **Category tag:** `tech-debt`
+- **Description:** Both stable-release workflows inline the same grep-based “workflow scripts exist” check even though CI already uses the canonical `scripts/check_workflow_script_refs.py`. The inline shell copies only cover explicit `scripts/...` tokens and a local `OPTIONAL_SCRIPTS` list; the Python checker also handles `${SUPPORT_SCRIPTS_DIR}/...`, bare names inside bootstrap loops, optional refs, and extra reference-holder files. This is duplicated logic with weaker coverage than the canonical implementation.
+- **Recommended fix:** Replace both inline shell blocks with `PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py`. If those workflows need custom exclusions, add them to the Python checker so CI and release-time validation stay in lockstep.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+No formal expression-limit findings.
+
+- I did not find any interpolated `run:` or `if:` block over the 15,000-character audit threshold.
+- The closest block is `.github/workflows/implement.yml:3767-3994`, estimated at ~14,728 characters, leaving ~6,272 characters before the 21,000-character hard cap and ~272 characters before the repo’s 15,000-character watch threshold.
+- The largest workflow file is `.github/workflows/review_autofix.yml` at ~342,411 characters, well below the 800 KB / 1 MB workflow-size thresholds.
+
+### Section 5: Cross-Cutting Concerns
+
+#### SHELL-001
+- **File path:** `scripts/review_collect_pr_metadata.sh:27-29; scripts/review_enable_auto_merge.sh:19-21; scripts/setup_serena.sh:11-16; scripts/review_floor_rules.sh:9-16`
+- **Severity:** Low
+- **Category tag:** `shellcheck`
+- **Description:** These scripts all use the `CDPATH= cd -- ...` form that ShellCheck flags as SC1007. It works as an environment assignment to `cd`, but it reads like a typo, triggers the same warning in multiple files, and keeps the repo’s shell baseline noisier than necessary.
+- **Recommended fix:** Normalize all four sites to the explicit ShellCheck-compliant form `CDPATH='' cd -- ...`, or wrap the pattern once in a shared helper such as `script_dir()` and reuse it.
+
+No additional evidence-based dead-code or TODO/FIXME/HACK finding stood out beyond the duplication items above.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 0 | — |
+| Medium | 5 | BUG-001, BATCH-001, API-003, CONSIST-001, DUP-001 |
+| Low | 4 | API-001, API-002, DEBT-001, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 0 | Small |
+| API call optimization | 3 | Medium |
+| Code modularization | 7 | Large |
+| Expression size reduction | 0 | Small |
+| Medium/Low fixes | 5 | Small |
