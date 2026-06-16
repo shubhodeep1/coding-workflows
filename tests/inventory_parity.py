@@ -49,9 +49,10 @@ TRACKED_REFERENCE_PATTERNS = (
 )
 PATH_ASSIGNMENT_RE = re.compile(r"\bpath=([A-Za-z0-9_./-]+)")
 CODE_SPAN_RE = re.compile(r"`([^`\n]+)`")
-LIST_LINE_RE = re.compile(r"^\s*(?:[-*]|\d+\.)\s+")
-TABLE_LINE_RE = re.compile(r"^\s*\|")
-EXAMPLE_PREFIX_RE = re.compile(r"(?:such as|for example|e\.g\.)\s*$", re.IGNORECASE)
+EXAMPLE_PREFIX_RE = re.compile(
+	r"(?:such as|for example|e\.g\.)[\s,:-]*(?:see(?:\s+also)?\s*)?$",
+	re.IGNORECASE,
+)
 
 
 def iter_surface_files() -> list[Path]:
@@ -95,9 +96,12 @@ def normalize_reference(path_text: str) -> str:
 
 
 def is_generated_wrapper_reference(path_text: str) -> bool:
-	# README.md documents generated consumer wrapper names that are not shipped
-	# in this repository, so keep them outside the repo-surface parity check.
-	return path_text.startswith(".github/workflows/ai-") and not (REPO_ROOT / path_text).is_file()
+	# README.md documents generated consumer wrapper names and consumer-managed
+	# audit-gate assets that are not shipped in this repository, so keep them
+	# outside the repo-surface parity check.
+	return (
+		path_text.startswith(".github/workflows/ai-") or path_text == "scripts/security/check-npm-audit.js"
+	) and not (REPO_ROOT / path_text).is_file()
 
 
 def extract_tracked_paths(text: str) -> list[str]:
@@ -116,16 +120,11 @@ def extract_tracked_paths(text: str) -> list[str]:
 def parse_secondary_document(document_path: Path) -> dict[str, int]:
 	references: dict[str, int] = {}
 	for line_number, line in enumerate(document_path.read_text(encoding="utf-8").splitlines(), 1):
-		stripped = line.lstrip()
-		if stripped.startswith(">"):
-			continue
 		for match in PATH_ASSIGNMENT_RE.finditer(line):
 			candidate = normalize_reference(match.group(1))
 			if classify_surface_path(candidate) is None:
 				continue
 			references.setdefault(candidate, line_number)
-		if not (LIST_LINE_RE.match(line) or TABLE_LINE_RE.match(line)):
-			continue
 		for span_match in CODE_SPAN_RE.finditer(line):
 			if EXAMPLE_PREFIX_RE.search(line[:span_match.start()]):
 				continue
@@ -191,7 +190,13 @@ def validate_secondary_documents(
 ) -> list[str]:
 	failures: list[str] = []
 	for document_name, document_path in SECONDARY_DOC_PATHS.items():
-		for path, line_number in sorted(parse_secondary_document(document_path).items()):
+		try:
+			references = parse_secondary_document(document_path)
+		except OSError as exc:
+			reason = exc.strerror or str(exc)
+			failures.append(f"{document_name}: unable to read ({type(exc).__name__}: {reason})")
+			continue
+		for path, line_number in sorted(references.items()):
 			if path in exemptions or is_generated_wrapper_reference(path):
 				continue
 			if path not in all_expected:
