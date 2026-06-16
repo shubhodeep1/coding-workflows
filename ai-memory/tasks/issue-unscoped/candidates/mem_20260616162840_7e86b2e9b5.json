@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ai_memory_processed_command_entry.py:172-186 | severity=critical | confidence=4\n  flagged_by: [mistralai_mistral-small-2603, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: `_isolated_git_env()` only strips `GIT_DIR`/`GIT_WORK_TREE` from `env`; if those keys are present in `extra`, `env.update(extra)` can reintroduce them into the returned environment.\n  WHY: That can make subprocesses inherit the outer checkout's git routing instead of the isolated temp repo; reviewers disagreed on severity (qwen: NIT, moonshot: MAJOR, mistralai: BLOCKER), so the merged severity is critical.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: defensive handling for GitHub Actions workspace env leak in wrapper-test temp repos\n  expected_change_site: tests/test_ai_memory_processed_command_entry.py \u2014 _isolated_git_env() helper\n  confidence=4\n  flagged_by: [qwen_qwen3_6-plus]\n  EVIDENCE: The `_isolated_git_env` helper at lines 172-186 pops `GIT_DIR`/`GIT_WORK_TREE` from `env` before and after `env.update(extra)`, but never sanitizes `extra`; if `extra` contains those keys, they survive into the returned environment and leak into subprocess invocations.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- tests/test_ai_memory_processed_command_entry.py:172-186 | severity=critical\n  PROBLEM: Double-pop of GIT_DIR and GIT_WORK_TREE environment variables is functionally incorrect; the second pop cannot remove keys from the caller's environment, and the env isolation is not robust if `extra` contains those keys. (2 related items)\n  WHY: If `extra` includes `GIT_DIR` or `GIT_WORK_TREE`, the helper can still return an environment that routes git commands to the wrong repository.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- tests/test_ai_memory_processed_command_entry.py:172-186 | severity=high | confidence=4\n  PROBLEM: The function performs redundant pop operations on GIT_DIR and GIT_WORK_TREE, and it never sanitizes `extra`, so those variables can leak into the returned environment.\n  WHY: If test code passes `extra` containing `GIT_DIR`/`GIT_WORK_TREE`, git commands may operate on the wrong repository instead of the isolated temp repo.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- tests/test_ai_memory_processed_command_entry.py:172-186 | severity=low | confidence=4\n  PROBLEM: The second `env.pop()` calls operate on `env` again instead of sanitizing `extra`, so callers passing `GIT_DIR`/`GIT_WORK_TREE` via `extra` can leak those variables into the returned environment.\n  WHY: Any caller that passes `extra` containing those keys would cause subprocesses to inherit the outer repo's git routing instead of the isolated temp repo.\n- Requirement: defensive handling for GitHub Actions workspace env leak in wrapper-test temp repos\n  Expected change site: tests/test_ai_memory_processed_command_entry.py \u2014 _isolated_git_env() helper\n  Evidence of absence: The `_isolated_git_env` helper at lines 172-186 performs the first `env.pop(\"GIT_DIR\"/\"GIT_WORK_TREE\")` before the `env.update(extra)` but performs the second pop on `env` again (dead code). If a caller ever passes `extra` containing `GIT_DIR` or `GIT_WORK_TREE`, these keys survive into the returned environment and leak into subprocess invocations. The fix is to pop those keys from the `extra` dict (if provided) before the update, or add a clean-up pass after the update.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "d6d75840f40e412f927eefc4fa1d10fc85006d2f53cb610a8f466f2533ef29a3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3354,
+    "run_id": "27630017263",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27630017263",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260616162840_7e86b2e9b5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3354,
+    "run_id": "27630017263"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-16T16:28:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
