@@ -169,23 +169,40 @@ def _run_ai_memory_cli(argv: list[str]) -> tuple[int, str, str]:
 	return exit_code, stdout.getvalue(), stderr.getvalue()
 
 
+def _isolated_git_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+	env = dict(os.environ)
+	# GitHub Actions workspaces can export repo-specific git routing vars; drop
+	# them so temp-repo tests exercise the repositories they create, not the
+	# outer checkout.
+	env.pop("GIT_DIR", None)
+	env.pop("GIT_WORK_TREE", None)
+	if extra:
+		env.update(extra)
+	env.pop("GIT_DIR", None)
+	env.pop("GIT_WORK_TREE", None)
+	return env
+
+
 def _create_memory_helper_repo() -> Path:
 	tmp_root = Path(tempfile.mkdtemp(prefix="ai-memory-wrapper-repo-"))
 	test_cleanup_paths = globals().setdefault("_TEST_CLEANUP_PATHS", [])
 	test_cleanup_paths.append(tmp_root)
 	bare = tmp_root / "bare.git"
 	work = tmp_root / "work"
+	git_env = _isolated_git_env()
 	subprocess.run(
 		["git", "init", "--bare", "--quiet", str(bare)],
 		check=True,
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
+		env=git_env,
 	)
 	subprocess.run(
 		["git", "init", "--quiet", str(work)],
 		check=True,
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
+		env=git_env,
 	)
 	for key, value in (("user.name", "test"), ("user.email", "t@example.com")):
 		subprocess.run(
@@ -193,6 +210,7 @@ def _create_memory_helper_repo() -> Path:
 			check=True,
 			stdout=subprocess.DEVNULL,
 			stderr=subprocess.DEVNULL,
+			env=git_env,
 		)
 	shutil.copytree(REPO_ROOT / "ai-memory", work / "ai-memory")
 
@@ -202,6 +220,7 @@ def _create_memory_helper_repo() -> Path:
 			check=True,
 			stdout=subprocess.DEVNULL,
 			stderr=subprocess.DEVNULL,
+			env=git_env,
 		)
 
 	_git("checkout", "-B", "main")
@@ -219,7 +238,7 @@ def _run_memory_helper(command: str, *, env: dict[str, str] | None = None) -> su
 		text=True,
 		capture_output=True,
 		check=False,
-		env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", **(env or {})},
+		env=_isolated_git_env({"PYTHONDONTWRITEBYTECODE": "1", **(env or {})}),
 	)
 
 
