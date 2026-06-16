@@ -1,7 +1,7 @@
 # INVENTORY.md — Authoritative roster
 
 This file is the authoritative inventory for the Phase B drift-control surfaces.
-`tests/inventory_parity.py` compares these sections against the filesystem globs for the scoped surfaces.
+`tests/inventory_parity.py` compares these sections against the filesystem globs for the scoped surfaces and validates tracked-surface references in `README.md` and `agents.md` against this roster.
 
 ## Phase prompts
 
@@ -238,5 +238,5 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `prompts/contracts/review-consolidator.yml` — Strict render contract for review-consolidator.
 - `prompts/contracts/review-reviewer-checklist.yml` — Strict render contract for review-reviewer-checklist.
 - `tests/inventory_exemptions.txt` — Documented inventory parity exemptions (`path | justification`).
-- `tests/inventory_parity.py` — Direct-run inventory drift gate for docs/INVENTORY.md.
+- `tests/inventory_parity.py` — Direct-run inventory drift gate for docs/INVENTORY.md, README.md, and agents.md.
 - `tests/prompt_size_budget.py` — Direct-run prompt tier budget gate for mode and review prompts.
