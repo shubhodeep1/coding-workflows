@@ -33,6 +33,14 @@ def _load_reference_text(file_name: str) -> str:
 	return _normalize_text((REPO_ROOT / "prompts" / "references" / file_name).read_text(encoding="utf-8"))
 
 
+def test_output_contract_reference_includes_status_update_cadence() -> None:
+	reference_text = _load_reference_text("output-contract.txt")
+	assert "Emit one short preamble sentence (≤20 words) before each tool-call batch" in reference_text
+	assert "After every 3–5 tool calls" in reference_text
+	assert "`Checkpoint: <bullet list of files touched, what changed>`" in reference_text
+	assert "Finish with the requested deliverable shape for this prompt." in reference_text
+
+
 def test_render_prompt_sh_renders_implement_contract_defaults_and_env_values() -> None:
 	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_sh_") as td:
 		prompt_file = Path(td) / "mode-implement.txt"
@@ -283,6 +291,7 @@ def test_render_prompt_py_reports_unknown_placeholder_contract_violation() -> No
 
 
 def main() -> int:
+	test_output_contract_reference_includes_status_update_cadence()
 	test_render_prompt_sh_renders_implement_contract_defaults_and_env_values()
 	test_render_prompt_py_renders_inline_placeholders_and_yaml_scalar_defaults()
 	test_render_prompt_sh_uses_trusted_backend_locations_only()
