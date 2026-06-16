@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3366,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3366\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3367\",\"pr_number\":3367,\"branch\":\"ai/issue-3366\",\"run_id\":\"27598887411\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/27598887411\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/clarify.yml\",\".github/workflows/implement.yml\",\".github/workflows/orchestrate.yml\",\".github/workflows/orchestrate_clarify_respond.yml\",\".github/workflows/plan.yml\",\".github/workflows/review_autofix.yml\",\".github/workflows/validate.yml\",\"tests/test_ai_memory_processed_command_entry.py\"]}",
+  "fingerprint": "51a94144f52b4e88f936948d66ff25da2b5e0f0a1883ca34560078946b911e72",
+  "lineage": {
+    "issue_number": 3366,
+    "parent_ids": [],
+    "pr_number": 3367,
+    "run_id": "27598887411",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27598887411",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3367"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260616063948_cb4b290684",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3366,
+    "level": "run",
+    "pr_number": 3367,
+    "run_id": "27598887411"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3366: https://github.com/shubhodeep1/coding-workflows/pull/3367",
+  "timestamps": {
+    "created_at": "2026-06-16T06:39:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
