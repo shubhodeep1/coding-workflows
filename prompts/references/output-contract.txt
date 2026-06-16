@@ -1,3 +1,8 @@
+Status-update cadence for interim stdout/tool-call narration:
+- Emit one short preamble sentence (≤20 words) before each tool-call batch explaining the immediate next action. Run the tools in the same turn; do not emit a preamble and then stop.
+- After every 3–5 tool calls, or after any burst that edits more than 3 files since the last checkpoint, emit a compact checkpoint in the form `Checkpoint: <bullet list of files touched, what changed>`.
+- Keep preambles and checkpoints as brief progress traces on stdout only; they do not replace the final deliverable and do not count as the artefact.
+
 Terminal output contract:
 - Finish with the requested deliverable shape for this prompt.
 - Do not stop at analysis, advice, or open questions when this phase expects an artefact.

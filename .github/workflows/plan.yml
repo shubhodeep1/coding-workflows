@@ -49,6 +49,7 @@ jobs:
       MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_PLAN || 'xhigh' }}
       MODEL_VERBOSITY: ${{ vars.VERBOSITY_PLAN || 'low' }}
       OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
+      MEMORY_INJECTION_SCAN_ENABLED: ${{ vars.MEMORY_INJECTION_SCAN_ENABLED || 'true' }}
       AUTO_IMPLEMENT_ON_CLEAR_PLAN: ${{ vars.AUTO_IMPLEMENT_ON_CLEAR_PLAN || 'true' }}
       PLAN_FAILURE_CONTEXT: "Planning run did not complete."
       CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
@@ -1213,9 +1214,34 @@ jobs:
             SELF_CHECK_REOPEN_CLARIFICATION="true"
           fi
 
+          SELF_CHECK_STATE="missing"
+          SELF_CHECK_OBSERVATION="none"
+          if [ "${SELF_CHECK_BLOCKER_COUNT}" -gt 0 ]; then
+            SELF_CHECK_STATE="blocker"
+            if [ "${SELF_CHECK_PASS_COUNT}" -gt 0 ] || [ "${SELF_CHECK_WARNING_COUNT}" -gt 0 ]; then
+              SELF_CHECK_OBSERVATION="mixed"
+            fi
+          elif [ "${SELF_CHECK_WARNING_COUNT}" -gt 0 ]; then
+            SELF_CHECK_STATE="warning"
+            if [ "${SELF_CHECK_PASS_COUNT}" -gt 0 ]; then
+              SELF_CHECK_OBSERVATION="mixed"
+            fi
+          elif [ "${SELF_CHECK_PASS_COUNT}" -eq 1 ]; then
+            SELF_CHECK_STATE="pass"
+          elif [ "${SELF_CHECK_PASS_COUNT}" -gt 1 ]; then
+            SELF_CHECK_STATE="pass"
+            SELF_CHECK_OBSERVATION="duplicate-pass"
+          fi
+
+          if [ "${SELF_CHECK_STATE}" = "missing" ] && [ "${PLAN_SELF_CHECK_GATE_ENABLED}" = "true" ]; then
+            SELF_CHECK_OBSERVATION="missing"
+          fi
+
           echo "plan_self_check_pass_count=${SELF_CHECK_PASS_COUNT}" >> "$GITHUB_OUTPUT"
           echo "plan_self_check_warning_count=${SELF_CHECK_WARNING_COUNT}" >> "$GITHUB_OUTPUT"
           echo "plan_self_check_blocker_count=${SELF_CHECK_BLOCKER_COUNT}" >> "$GITHUB_OUTPUT"
+          echo "plan_self_check_state=${SELF_CHECK_STATE}" >> "$GITHUB_OUTPUT"
+          echo "plan_self_check_observation=${SELF_CHECK_OBSERVATION}" >> "$GITHUB_OUTPUT"
           echo "plan_self_check_reopen_clarification=${SELF_CHECK_REOPEN_CLARIFICATION}" >> "$GITHUB_OUTPUT"
 
           HAS_STATUS_NEEDS_CLARIFICATION="false"

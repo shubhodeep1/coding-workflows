@@ -9,6 +9,7 @@ import io
 import json
 import multiprocessing
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -21,6 +22,15 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 MODULE_PATH = REPO_ROOT / "scripts" / "ai_memory_lib.py"
 CLI_MODULE_PATH = REPO_ROOT / "scripts" / "ai_memory.py"
 STAGE_WORKFLOW_SUPPORT = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
+MEMORY_INJECTION_SCAN_WORKFLOWS = (
+	REPO_ROOT / ".github" / "workflows" / "clarify.yml",
+	REPO_ROOT / ".github" / "workflows" / "plan.yml",
+	REPO_ROOT / ".github" / "workflows" / "implement.yml",
+	REPO_ROOT / ".github" / "workflows" / "review_autofix.yml",
+	REPO_ROOT / ".github" / "workflows" / "orchestrate.yml",
+	REPO_ROOT / ".github" / "workflows" / "orchestrate_clarify_respond.yml",
+	REPO_ROOT / ".github" / "workflows" / "validate.yml",
+)
 
 if str(REPO_ROOT) not in sys.path:
 	sys.path.insert(0, str(REPO_ROOT))
@@ -159,23 +169,40 @@ def _run_ai_memory_cli(argv: list[str]) -> tuple[int, str, str]:
 	return exit_code, stdout.getvalue(), stderr.getvalue()
 
 
+def _isolated_git_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+	env = dict(os.environ)
+	# GitHub Actions workspaces can export repo-specific git routing vars; drop
+	# them so temp-repo tests exercise the repositories they create, not the
+	# outer checkout.
+	env.pop("GIT_DIR", None)
+	env.pop("GIT_WORK_TREE", None)
+	if extra:
+		env.update(extra)
+	env.pop("GIT_DIR", None)
+	env.pop("GIT_WORK_TREE", None)
+	return env
+
+
 def _create_memory_helper_repo() -> Path:
 	tmp_root = Path(tempfile.mkdtemp(prefix="ai-memory-wrapper-repo-"))
 	test_cleanup_paths = globals().setdefault("_TEST_CLEANUP_PATHS", [])
 	test_cleanup_paths.append(tmp_root)
 	bare = tmp_root / "bare.git"
 	work = tmp_root / "work"
+	git_env = _isolated_git_env()
 	subprocess.run(
 		["git", "init", "--bare", "--quiet", str(bare)],
 		check=True,
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
+		env=git_env,
 	)
 	subprocess.run(
 		["git", "init", "--quiet", str(work)],
 		check=True,
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.DEVNULL,
+		env=git_env,
 	)
 	for key, value in (("user.name", "test"), ("user.email", "t@example.com")):
 		subprocess.run(
@@ -183,6 +210,7 @@ def _create_memory_helper_repo() -> Path:
 			check=True,
 			stdout=subprocess.DEVNULL,
 			stderr=subprocess.DEVNULL,
+			env=git_env,
 		)
 	shutil.copytree(REPO_ROOT / "ai-memory", work / "ai-memory")
 
@@ -192,6 +220,7 @@ def _create_memory_helper_repo() -> Path:
 			check=True,
 			stdout=subprocess.DEVNULL,
 			stderr=subprocess.DEVNULL,
+			env=git_env,
 		)
 
 	_git("checkout", "-B", "main")
@@ -209,7 +238,7 @@ def _run_memory_helper(command: str, *, env: dict[str, str] | None = None) -> su
 		text=True,
 		capture_output=True,
 		check=False,
-		env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", **(env or {})},
+		env=_isolated_git_env({"PYTHONDONTWRITEBYTECODE": "1", **(env or {})}),
 	)
 
 
@@ -1097,6 +1126,17 @@ def test_stage_workflow_support_bootstraps_memory_injection_patterns() -> None:
 		"",
 	)
 	assert "memory_injection_patterns.py" in required_bootstrap_line
+
+
+def test_candidate_write_workflows_expose_memory_injection_scan_gate() -> None:
+	pattern = re.compile(
+		r"(?m)^\s*MEMORY_INJECTION_SCAN_ENABLED:\s*[\"']?\$\{\{\s*"
+		r"vars\.MEMORY_INJECTION_SCAN_ENABLED\s*\|\|\s*'true'\s*\}\}[\"']?\s*$"
+	)
+	for workflow_path in MEMORY_INJECTION_SCAN_WORKFLOWS:
+		assert pattern.search(workflow_path.read_text(encoding="utf-8")), (
+			f"{workflow_path.name} missing MEMORY_INJECTION_SCAN_ENABLED gate"
+		)
 
 
 def test_memory_validation_history_get_wrapper_disabled_stdout_stderr_hygiene() -> None:
