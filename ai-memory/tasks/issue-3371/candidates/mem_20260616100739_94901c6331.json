@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref:\n- Commit: `b13a4075177e1283d00b8855603b5875a7701874`\n- Branch: `orchestrator/project-3351`\n- Integration metadata: `orchestrator/project-3351` (match confirmed)\n\nClarification mapping:\n- No Q1/Q2 clarification batch was issued.\n- `/answer [auto-answered-by-orchestrator]` only confirms continuation; the plan relies on the issue body as the scope source.\n\nRepresentative implementation to extend:\n- Extend the existing direct-run gate in `tests/inventory_parity.py`, which is already wired into CI by `.github/workflows/ci.yml`. Do not add a parallel checker.\n\nFiles likely to change:\n1. `tests/inventory_parity.py`\n   - Main implementation target.\n   - Expand the current single-document parity flow so it audits `README.md`, `agents.md`, and `docs/INVENTORY.md`.\n   - Keep `docs/INVENTORY.md` as the authoritative full roster for tracked surfaces.\n2. `docs/INVENTORY.md`\n   - Update the top-level prose and the `tests/inventory_parity.py` entry so the document no longer describes the narrower \u201cdocs/INVENTORY-only\u201d contract.\n3. `README.md` and/or `agents.md` only if the widened gate exposes real drift\n   - Keep any edits surgical and limited to stale/missing tracked-surface references.\n4. `tests/inventory_exemptions.txt` only if a truly necessary, justified exemption is discovered\n   - Otherwise leave it unchanged.\n5. `.github/workflows/ci.yml` likely unchanged\n   - The existing \u201cInventory parity\u201d step already runs the correct direct-run gate.\n\nFunctions/modules to implement:\n- In `tests/inventory_parity.py`:\n  1. Replace the hard-coded single-doc assumption (`INVENTORY_PATH`) with explicit documentation-surface handling for:\n     - `README.md`\n     - `agents.md`\n     - `docs/INVENTORY.md`\n  2. Keep `parse_inventory()` (or equivalent) as the authoritative parser for `docs/INVENTORY.md` sectioned roster.\n  3. Add a focused extractor for tracked repo-relative paths mentioned in `README.md` and `agents.md`.\n     - Scope extraction to the tracked surfaces already defined by `SECTION_ORDER` / filesystem matchers.\n     - De-duplicate repeated mentions inside a doc instead of treating repeats as failures.\n  4. Extend `main()` comparison flow so it performs:\n     - filesystem \u2194 authoritative `docs/INVENTORY.md` parity (existing behavior, preserved),\n     - `README.md` tracked-surface references \u2194 authoritative roster / live files,\n     - `agents.md` tracked-surface references \u2194 authoritative roster / live files,\n     - existing exemption validation (`path | justification`, duplicate rejection, out-of-scope rejection).\n  5. Improve failure messages so they name the drifting surface (`README.md`, `agents.md`, `docs/INVENTORY.md`) instead of reporting only generic inventory failures.\n\nData structures affected:\n- `SECTION_ORDER`\n  - Remains the source of truth for which filesystem paths belong to each tracked surface.\n- New document-surface metadata in `tests/inventory_parity.py`\n  - Likely a small mapping/list describing each markdown source and how it should be parsed.\n- Exemptions map from `tests/inventory_exemptions.txt`\n  - Keep current format and semantics; continue to validate that each exemption targets a tracked path.\n\nAPI / interface changes:\n- No external API changes.\n- No workflow interface changes expected.\n- CLI contract stays the same:\n  - `python3 tests/inventory_parity.py`\n  - exit `0` on success, non-zero on drift\n- Output will likely become more specific by naming which document surface is missing/stale.\n\nPotential risks / edge cases:\n1. Mixed markdown formats in `README.md` and `agents.md`\n   - They contain bullets, tables, inline code paths, and predicate-style lines; the parser must avoid false positives from URLs, labels, env vars, issue refs, and non-path code spans.\n2. Authoritative-vs-secondary doc semantics\n   - `docs/INVENTORY.md` should stay the only full roster; `README.md` and `agents.md` should be validated as secondary documentation surfaces, not promoted to a competing source of truth.\n3. Duplicate mentions in README/agents\n   - Repeated references are likely normal; de-duplicate them instead of failing.\n4. Exemption behavior\n   - Preserve explicit exemptions and continue failing unused/out-of-scope exemption entries.\n5. Existing wording conflict in the source plan\n   - The high-level Item 7 summary says \u201cREADME and agents.md roster,\u201d while Item 7.2 explicitly names `README.md`, `agents.md`, and `docs/INVENTORY.md`. Implement the stricter detailed contract and the issue\u2019s stated acceptance criteria: `docs/INVENTORY.md` authoritative, README/agents checked for drift against it.\n6. Current doc wording is stale\n   - `docs/INVENTORY.md` currently says `tests/inventory_parity.py` compares only its sections against filesystem globs; that prose must be updated if the script is widened.\n\nTesting considerations:\n- Re-run the direct gate locally:\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/inventory_parity.py`\n- Preserve the existing CI path in `.github/workflows/ci.yml`; no new parallel job should be added.\n- If `README.md` or `agents.md` need updates to satisfy the widened gate, keep those edits minimal and verify the rerun passes without adding unrelated inventory/doc churn.\n- Current baseline on this ref already passes the narrow gate, so the implementation should preserve the direct-run behavior while widening coverage rather than changing how CI invokes it.\n\nPre-execution self-check:\n- Scope is clear and matches the checked-out integration branch.\n- Required implementation path is identified and already has an incumbent mechanism to extend.\n- No missing scalar input or external dependency blocks planning.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "8d80771d6d425d560ab07249659d91c3234880487d4a199f97d1c11ee754e7ea",
+  "lineage": {
+    "issue_number": 3371,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27609874740",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27609874740",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3371"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260616100739_94901c6331",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3371,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27609874740"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3371",
+  "timestamps": {
+    "created_at": "2026-06-16T10:07:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
