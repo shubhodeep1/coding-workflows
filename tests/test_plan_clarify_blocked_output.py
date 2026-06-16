@@ -73,9 +73,16 @@ def _self_check_warning_count(parsed_output: str) -> int:
 
 
 def _self_check_summary(parsed_output: str, *, self_check_gate_enabled: bool) -> dict[str, str | int | bool]:
-	pass_count = _self_check_pass_count(parsed_output)
-	warning_count = _self_check_warning_count(parsed_output)
-	blocker_count = _self_check_blocker_count(parsed_output)
+	pass_count = 0
+	warning_count = 0
+	blocker_count = 0
+	for line in parsed_output.splitlines():
+		if SELF_CHECK_PASS_RE.match(line):
+			pass_count += 1
+		elif SELF_CHECK_WARNING_RE.match(line):
+			warning_count += 1
+		elif SELF_CHECK_BLOCKER_RE.match(line):
+			blocker_count += 1
 
 	state = "missing"
 	observation = "none"
