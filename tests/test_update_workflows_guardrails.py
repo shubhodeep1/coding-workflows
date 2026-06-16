@@ -26,6 +26,14 @@ def _manifest_lines(name: str) -> list[str]:
 	]
 
 
+def _agents_profile_line(profile: str) -> str:
+	return (
+		f"PROFILE.name={profile} "
+		f"manifest=workflow-templates/profiles/{profile}.txt "
+		f"wrappers={','.join(_manifest_lines(f'{profile}.txt'))}"
+	)
+
+
 def test_profile_manifests_match_contracts() -> None:
 	core = [
 		"ai-clarify.yml",
@@ -63,9 +71,9 @@ def test_install_profile_docs_and_agents_contracts() -> None:
 	agents = AGENTS_MD.read_text(encoding="utf-8")
 	assert "## Workflow install profiles" in agents
 	assert "PROFILE.default=full" in agents
-	assert "PROFILE.name=core manifest=workflow-templates/profiles/core.txt" in agents
-	assert "PROFILE.name=standard manifest=workflow-templates/profiles/standard.txt" in agents
-	assert "PROFILE.name=full manifest=workflow-templates/profiles/full.txt" in agents
+	assert _agents_profile_line("core") in agents
+	assert _agents_profile_line("standard") in agents
+	assert _agents_profile_line("full") in agents
 
 
 def test_fail_fast_validation_precedes_any_copy_mutation() -> None:
