@@ -143,6 +143,7 @@ env:
   CONTEXT_BUDGET_WARN_RATIO: ${{ vars.CONTEXT_BUDGET_WARN_RATIO || '0.7' }}
   MAX_PROMPT_TOKENS_FOR_PHASE: ${{ vars.MAX_PROMPT_TOKENS_FOR_PHASE || '' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
+  MEMORY_INJECTION_SCAN_ENABLED: ${{ vars.MEMORY_INJECTION_SCAN_ENABLED || 'true' }}
   # Targeted-file-context inlining limit — propagated to scripts/
   # review_apply_fixes.sh (autofix editor) and scripts/review_conflict_resolve.sh
   # (conflict resolver) via this workflow-level env block. Without this
