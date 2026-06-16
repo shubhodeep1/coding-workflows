@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-06-13T11:00:32Z",
+  "tick_at": "2026-06-16T06:43:15Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -16,24 +16,24 @@
   "tracking_issues": [
     {
       "current_wave": 3,
-      "integration_ahead_by": "5",
+      "integration_ahead_by": "4",
       "issue_counts": {
         "closed": 0,
-        "done": 0,
+        "done": 1,
         "implementation_failed": 0,
         "in_progress": 0,
-        "merged": 1,
+        "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
         "skipped": 0
       },
-      "number": 3303,
+      "number": 3351,
       "project_complete": false,
-      "status": "waiting",
-      "title": "[Orchestrator] GSD-inspired unattended-pipeline improvements (Phases B-E)",
+      "status": "in-progress",
+      "title": "[Orchestrator] Complete GSD-inspired rollout phases B-E",
       "total_waves": 4,
-      "wave_complete": true
+      "wave_complete": false
     }
   ]
 }
