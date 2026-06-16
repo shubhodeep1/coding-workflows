@@ -20,6 +20,9 @@ SEVERITY_SENTINEL = "Severity calibration:"
 SEVERITY_REQUIRED_SENTINEL = (
 	"Issues without an explicit severity classification are not valid output and MUST be re-emitted with severity."
 )
+SEVERITY_ALIAS_SENTINEL = (
+	"When a prompt uses the consolidator severity schema, map reviewer `BLOCKER` to `blocker`, `MAJOR` to `high`, and `NIT` to `med`."
+)
 CONSOLIDATOR_ALIAS_SENTINEL = (
 	"Reviewer-side `BLOCKER` maps to `blocker`; `MAJOR` maps to `high`; `NIT` maps to `med`."
 )
@@ -112,6 +115,7 @@ def _assert_shared_references(
 	if expect_severity:
 		assert SEVERITY_SENTINEL in rendered_text
 		assert SEVERITY_REQUIRED_SENTINEL in rendered_text
+		assert SEVERITY_ALIAS_SENTINEL in rendered_text
 		assert "{{REFERENCE_SEVERITY_CLASSIFICATION}}" not in rendered_text
 
 
