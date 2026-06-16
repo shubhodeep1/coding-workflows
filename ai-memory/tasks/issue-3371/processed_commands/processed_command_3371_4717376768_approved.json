@@ -5,13 +5,23 @@
   "entry_id": "processed_command_3371_4717376768_approved",
   "issue_number": 3371,
   "metadata": {
+    "branch": "ai/issue-3371",
+    "changed_files": [
+      "docs/INVENTORY.md",
+      "tests/inventory_parity.py"
+    ],
+    "issue_number": 3371,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/3371",
+    "pr_number": 3373,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/3373",
+    "run_attempt": "1",
+    "run_id": "27610143393",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/27610143393"
   },
   "run_attempt": 1,
   "run_id": "27610143393",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-06-16T10:09:47Z",
+  "status": "completed",
+  "timestamp": "2026-06-16T10:17:35Z",
   "workflow": "implement"
 }
