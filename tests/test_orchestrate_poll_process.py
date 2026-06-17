@@ -2797,6 +2797,117 @@ def test_complete_verdict_enters_validation_mode_when_enabled():
 	assert result["merge_calls"][0]["head"] == "main"
 
 
+def test_complete_verdict_dispatches_validation_with_closed_wave_issue_no_pr():
+	"""Regression for the validate-dispatch deadlock (hylifegroup.com#3).
+
+	A final wave whose issues are all ``ai:merged`` except one legitimately
+	closed without a merged PR (``ai:closed`` — e.g. a judge-fix-up that needed
+	no code change) reconciles to ``wave_complete=true`` AND ``any_failed=true``.
+	The judge still declares the project complete (the WAVE_COMPLETE hard guard
+	does not block on ANY_FAILED), so the poller transitions to ``ai:validating``
+	and reaches ``dispatch_validation_if_needed``.
+
+	Before the fix, that helper's preflight also gated on ``ANY_FAILED=true`` and
+	deferred dispatch every cycle, wedging the project in ``ai:validating``
+	indefinitely (validation never dispatched -> never earned ``ai:validated`` ->
+	integration never merged -> tracking issue never closed). The gate now keys
+	on ``WAVE_COMPLETE`` only, so validation must dispatch on this tick."""
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["total_issues"] = 2
+	state["waves"][0]["issues"].append(
+		{"id": "issue-2", "github_issue": 11, "status": "pending"}
+	)
+	state["issue_number_map"]["issue-2"] = 11
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		# Force the judge invocation (default verdict "complete") rather than
+		# the clean-wave skip, so the test drives the judge-complete ->
+		# dispatch_validation_if_needed path that the deadlock lived on.
+		enable_clean_wave_judge_skip="false",
+		issue_labels={10: ["ai:merged"], 11: ["ai:closed"]},
+		issue_closed={11: True},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert result["latest_state"]["status"] == "validating", result["stdout"]
+	assert "ai:validating" in result["tracking_labels"]
+	assert result["tracking_closed"] is False
+	# The fix: validation dispatches despite ANY_FAILED=true from the closed
+	# wave issue. Pre-fix this list was empty and the run deferred.
+	assert len(result["validation_dispatches"]) == 1, result["stdout"]
+	assert result["validation_dispatches"][0]["ref"] == "orchestrator/project-192"
+	assert (
+		"deferring validate dispatch" not in result["stdout"]
+	), result["stdout"]
+
+
+def test_complete_verdict_still_defers_validation_for_failed_wave_phase():
+	"""Keep the deadlock fix from widening into failed-wave misdispatch.
+
+	``ANY_FAILED`` is broader than the judge-cleared closed-without-merge case:
+	an explicit failed terminal phase such as ``ai:plan-failed`` still produces
+	``any_failed=true`` and must continue to block validation dispatch, even if
+	the wave reconciles to ``wave_complete=true``. Without that narrower gate,
+	the poller dispatches runtime validation against a project the current wave
+	still marks as failed.
+	"""
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["total_issues"] = 2
+	state["waves"][0]["issues"].append(
+		{"id": "issue-2", "github_issue": 11, "status": "pending"}
+	)
+	state["issue_number_map"]["issue-2"] = 11
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		issue_labels={10: ["ai:plan-failed"], 11: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert result["latest_state"]["status"] == "validating", result["stdout"]
+	assert result["validation_dispatches"] == [], result["stdout"]
+	assert (
+		"wave includes failed issue statuses other than adjudicated closed-without-merge"
+		in result["stdout"]
+	), result["stdout"]
+
+
+def test_complete_verdict_still_defers_validation_for_closed_plus_failed_labels():
+	"""A contradictory ``ai:closed`` label must not hide a failure label.
+
+	``determine_phase`` prioritises ``ai:closed`` over failure labels, so the
+	validate-dispatch safety signal must inspect the full label set rather than
+	rely on the single derived phase. Otherwise a wave issue carrying both
+	``ai:closed`` and ``ai:plan-failed`` wrongly looks like the intended
+	closed-without-merge bypass and validation dispatches against a failed wave.
+	"""
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["total_issues"] = 2
+	state["waves"][0]["issues"].append(
+		{"id": "issue-2", "github_issue": 11, "status": "pending"}
+	)
+	state["issue_number_map"]["issue-2"] = 11
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		issue_labels={10: ["ai:closed", "ai:plan-failed"], 11: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert result["latest_state"]["status"] == "validating", result["stdout"]
+	assert result["validation_dispatches"] == [], result["stdout"]
+	assert (
+		"wave includes failed issue statuses other than adjudicated closed-without-merge"
+		in result["stdout"]
+	), result["stdout"]
+
+
 def test_complete_verdict_enters_validation_mode_when_enable_validation_is_mixed_case_truthy():
 	state = _base_state(status="in_progress")
 	result = _run_poller(

@@ -2194,6 +2194,7 @@ refresh_validation_dispatch_wave_gate() {
 
   WAVE_COMPLETE="$(echo "${wave_status}" | jq -r '.wave_complete // false' 2>/dev/null || echo false)"
   ANY_FAILED="$(echo "${wave_status}" | jq -r '.any_failed // false' 2>/dev/null || echo false)"
+  VALIDATION_DISPATCH_SAFE_DESPITE_FAILURES="$(echo "${wave_status}" | jq -r '.validation_dispatch_safe_despite_failures // false' 2>/dev/null || echo false)"
   PROJECT_COMPLETE="$(echo "${wave_status}" | jq -r '.project_complete // false' 2>/dev/null || echo false)"
 }
 
@@ -7791,17 +7792,42 @@ dispatch_validation_if_needed() {
   local last_dispatch_ts
   local now_epoch
   local stale_threshold_secs=3600  # 1 hour: if no label appears after dispatch, allow redispatch
+  local validation_dispatch_safe_despite_failures
 
   # Defensive preflight: refuse to dispatch validate while the current
-  # wave's PRs are not all merged into the integration branch, or any of
-  # them failed. This is belt-and-suspenders against the rare case where a
-  # wave PR transitions from merged back to a non-terminal state between
-  # the judge call and the dispatch (e.g. a consumer-side revert or
-  # label-reconciliation race). When that happens we skip dispatch this
-  # cycle and let the next poll tick re-evaluate once wave PR state
-  # settles.
+  # wave's PRs are not all merged into the integration branch
+  # (WAVE_COMPLETE != true). This is belt-and-suspenders against the rare
+  # case where a wave PR transitions from merged back to a non-terminal
+  # state between the judge call and the dispatch (e.g. a consumer-side
+  # revert or label-reconciliation race): that regression drives
+  # all_merged=false -> WAVE_COMPLETE=false, which the gate below catches.
+  # When it happens we skip dispatch this cycle and let the next poll tick
+  # re-evaluate once wave PR state settles.
   #
-  # Gate on WAVE_COMPLETE / ANY_FAILED, NOT on PROJECT_COMPLETE. Validation
+  # Do NOT blanket-gate on ANY_FAILED. ANY_FAILED is broad: it is set for
+  # a wave issue legitimately closed WITHOUT a merged PR — e.g. a
+  # judge-fix-up whose premise turned out false, so no code change was
+  # needed. Such a "closed" issue keeps all_merged=true (so
+  # WAVE_COMPLETE=true) while setting ANY_FAILED=true, so a blanket
+  # ANY_FAILED gate defers dispatch on every poll cycle and permanently
+  # deadlocks the project in ai:validating: validation never dispatches ->
+  # never earns ai:validated -> integration never merges -> tracking issue
+  # never closes.
+  #
+  # But ANY_FAILED still covers explicit failure phases such as
+  # ai:plan-failed / ai:implement-diagnose-failed and the dedicated
+  # ai:implementation-failed status. Those must continue to block
+  # validation dispatch even when they reconcile to WAVE_COMPLETE=true.
+  # check-wave-status therefore emits
+  # validation_dispatch_safe_despite_failures=true only when every failed
+  # issue is an adjudicated closed-without-merge case (live issue closed or
+  # ai:closed, with no blocking terminal-failure phase). The gate below uses
+  # that finer signal instead of the coarse ANY_FAILED boolean.
+  # Real-world repro: hylifegroup.com#3 wedged for 10 days on a wave issue
+  # closed ai:closed with no PR (judge-fix-up that needed no code change).
+  #
+  # Gate on WAVE_COMPLETE only, NOT on PROJECT_COMPLETE (and deliberately
+  # not on ANY_FAILED, per the paragraph above). Validation
   # runs against the integration branch (ref=integration_branch in
   # dispatch_validation_workflow below), so the integration→default merge
   # is deliberately NOT a precondition for dispatching validation — that
@@ -7829,8 +7855,16 @@ dispatch_validation_if_needed() {
       return 0
     fi
   fi
-  if [ "${WAVE_COMPLETE:-false}" != "true" ] || [ "${ANY_FAILED:-false}" = "true" ]; then
-    echo "Preflight: WAVE_COMPLETE=${WAVE_COMPLETE:-unset} ANY_FAILED=${ANY_FAILED:-unset}; deferring validate dispatch this cycle (wave PRs not yet all merged into the integration branch or at least one wave issue failed)."
+  validation_dispatch_safe_despite_failures="${VALIDATION_DISPATCH_SAFE_DESPITE_FAILURES:-}"
+  if [ -z "${validation_dispatch_safe_despite_failures}" ] && [ -n "${WAVE_STATUS:-}" ]; then
+    validation_dispatch_safe_despite_failures="$(echo "${WAVE_STATUS}" | jq -r '.validation_dispatch_safe_despite_failures // false' 2>/dev/null || echo false)"
+  fi
+  if [ "${WAVE_COMPLETE:-false}" != "true" ]; then
+    echo "Preflight: WAVE_COMPLETE=${WAVE_COMPLETE:-unset} ANY_FAILED=${ANY_FAILED:-unset}; deferring validate dispatch this cycle (wave PRs not yet all merged into the integration branch)."
+    return 0
+  fi
+  if [ "${ANY_FAILED:-false}" = "true" ] && [ "${validation_dispatch_safe_despite_failures:-false}" != "true" ]; then
+    echo "Preflight: WAVE_COMPLETE=${WAVE_COMPLETE:-unset} ANY_FAILED=${ANY_FAILED:-unset} validation_dispatch_safe_despite_failures=${validation_dispatch_safe_despite_failures:-unset}; deferring validate dispatch this cycle (wave includes failed issue statuses other than adjudicated closed-without-merge)."
     return 0
   fi
 
@@ -12923,7 +12957,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   fi
 
   echo "${STATE_JSON}" > "${STATE_FILE}"
-  unset PROJECT_COMPLETE WAVE_COMPLETE ANY_FAILED
+  unset PROJECT_COMPLETE WAVE_COMPLETE ANY_FAILED WAVE_STATUS VALIDATION_DISPATCH_SAFE_DESPITE_FAILURES
   COMPLETION_STATUS_STATE_CHANGED="false"
   PROJECT_STATUS="$(jq -r '.status' "${STATE_FILE}")"
   TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"

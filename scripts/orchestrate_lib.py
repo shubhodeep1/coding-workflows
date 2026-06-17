@@ -1356,6 +1356,10 @@ TERMINAL_PHASES: set[str] = {
 	"ai:log-analysis-failed",
 	"ai:memory-maintenance-failed",
 }
+VALIDATION_DISPATCH_BLOCKING_TERMINAL_PHASES: set[str] = TERMINAL_PHASES - {"ai:closed"}
+VALIDATION_DISPATCH_BLOCKING_FAILURE_LABELS: set[str] = (
+	VALIDATION_DISPATCH_BLOCKING_TERMINAL_PHASES - {"ai:merged", "ai:validated"}
+) | {"ai:implementation-failed"}
 TERMINAL_WAVE_STATUSES: set[str] = {"merged", "closed", "skipped", "not_created"}
 BLOCKER_TERMINAL_WAVE_STATUSES: set[str] = {"merged", "closed", "skipped", "not_created"}
 
@@ -2981,6 +2985,7 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 	wave = waves[current_wave_idx]
 	all_merged = True
 	any_failed = False
+	validation_dispatch_safe_despite_failures = True
 	any_review_blocked = False
 	statuses: list[dict[str, Any]] = []
 
@@ -3007,11 +3012,12 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 			pr_merged = pr_merged.lower() == "true"
 		elif not isinstance(pr_merged, bool):
 			pr_merged = None
+		issue_state_for_status = issue_state if issue_state in ("open", "closed") else None
 
 		status, source = reconcile_wave_issue_status(
 			issue=issue,
 			labels=labels,
-			issue_state=issue_state if issue_state in ("open", "closed") else None,
+			issue_state=issue_state_for_status,
 			pr_state=pr_state if pr_state in ("open", "closed") else None,
 			pr_merged=pr_merged,
 		)
@@ -3019,6 +3025,17 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 			any_review_blocked = True
 		if status in ("closed", "implementation-failed"):
 			any_failed = True
+			has_blocking_failure_label = any(
+				label in VALIDATION_DISPATCH_BLOCKING_FAILURE_LABELS
+				for label in labels
+			)
+			failure_is_safe_for_validation_dispatch = (
+				status == "closed"
+				and (issue_state_for_status == "closed" or "ai:closed" in labels)
+				and not has_blocking_failure_label
+			)
+			if not failure_is_safe_for_validation_dispatch:
+				validation_dispatch_safe_despite_failures = False
 		if status not in ("merged", "closed", "skipped"):
 			all_merged = False
 		if status == "not_created":
@@ -3055,6 +3072,7 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 		"wave": current_wave_idx + 1,
 		"wave_complete": all_merged,
 		"any_failed": any_failed,
+		"validation_dispatch_safe_despite_failures": any_failed and validation_dispatch_safe_despite_failures,
 		"any_review_blocked": any_review_blocked,
 		"any_not_created": any_not_created,
 		"project_complete": project_complete,

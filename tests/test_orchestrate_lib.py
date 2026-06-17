@@ -470,14 +470,56 @@ def test_check_wave_status_closed_counts_as_failed():
 	assert issues_by_gh[10]["status"] == "closed"
 
 
+def test_check_wave_status_final_wave_one_closed_rest_merged_is_complete_but_failed():
+	"""Contract underpinning the validate-dispatch deadlock fix
+	(hylifegroup.com#3): a final wave whose issues are all ``ai:merged``
+	EXCEPT one legitimately closed without a merged PR (``ai:closed`` — e.g. a
+	judge-fix-up that needed no code change) yields ``wave_complete=true`` AND
+	``any_failed=true`` simultaneously. ``"closed"`` is in the
+	merged/closed/skipped set so it keeps ``all_merged`` (hence
+	``wave_complete``) True, while still flipping ``any_failed`` True. This is
+	the only failed-wave shape that should still allow validate dispatch.
+
+	The orchestrator MUST therefore NOT gate validate-dispatch on
+	``any_failed`` (see ``dispatch_validation_if_needed`` in
+	``scripts/orchestrate_poll_process.sh``): doing so deferred dispatch every
+	poll cycle and wedged the project in ``ai:validating`` indefinitely. This
+	test pins the value pair the dispatch gate now relies on."""
+	state = _make_state()
+	labels = {"10": ["ai:closed"], "11": ["ai:merged"]}
+	result = _run_check_wave_status(state, labels)
+	assert result["wave_complete"] is True
+	assert result["any_failed"] is True
+	assert result["validation_dispatch_safe_despite_failures"] is True
+	# Single (final) wave with no separate integration branch -> the project
+	# is genuinely complete; the closed wave issue must not change that.
+	assert result["project_complete"] is True
+	issues_by_gh = {i["github_issue"]: i for i in result["issues"]}
+	assert issues_by_gh[10]["status"] == "closed"
+	assert issues_by_gh[11]["status"] == "merged"
+
+
 def test_check_wave_status_failure_phase_counts_as_failed():
 	state = _make_state()
 	labels = {"10": ["ai:plan-failed"], "11": ["ai:merged"]}
 	result = _run_check_wave_status(state, labels)
 	assert result["any_failed"] is True
+	assert result["validation_dispatch_safe_despite_failures"] is False
 	issues_by_gh = {i["github_issue"]: i for i in result["issues"]}
 	assert issues_by_gh[10]["status"] == "closed"
 	assert issues_by_gh[10]["decision_source"] == "label_terminal_phase"
+
+
+def test_check_wave_status_closed_label_does_not_mask_failure_phase():
+	state = _make_state()
+	labels = {"10": ["ai:closed", "ai:plan-failed"], "11": ["ai:merged"]}
+	result = _run_check_wave_status(state, labels)
+	assert result["wave_complete"] is True
+	assert result["any_failed"] is True
+	assert result["validation_dispatch_safe_despite_failures"] is False
+	issues_by_gh = {i["github_issue"]: i for i in result["issues"]}
+	assert issues_by_gh[10]["status"] == "closed"
+	assert issues_by_gh[10]["decision_source"] == "label_ai_closed"
 
 
 def test_check_wave_status_null_github_issue_means_not_created():
