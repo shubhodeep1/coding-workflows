@@ -2843,6 +2843,39 @@ def test_complete_verdict_dispatches_validation_with_closed_wave_issue_no_pr():
 	), result["stdout"]
 
 
+def test_complete_verdict_still_defers_validation_for_failed_wave_phase():
+	"""Keep the deadlock fix from widening into failed-wave misdispatch.
+
+	``ANY_FAILED`` is broader than the judge-cleared closed-without-merge case:
+	an explicit failed terminal phase such as ``ai:plan-failed`` still produces
+	``any_failed=true`` and must continue to block validation dispatch, even if
+	the wave reconciles to ``wave_complete=true``. Without that narrower gate,
+	the poller dispatches runtime validation against a project the current wave
+	still marks as failed.
+	"""
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["total_issues"] = 2
+	state["waves"][0]["issues"].append(
+		{"id": "issue-2", "github_issue": 11, "status": "pending"}
+	)
+	state["issue_number_map"]["issue-2"] = 11
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false",
+		issue_labels={10: ["ai:plan-failed"], 11: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert result["latest_state"]["status"] == "validating", result["stdout"]
+	assert result["validation_dispatches"] == [], result["stdout"]
+	assert (
+		"wave includes failed issue statuses other than adjudicated closed-without-merge"
+		in result["stdout"]
+	), result["stdout"]
+
+
 def test_complete_verdict_enters_validation_mode_when_enable_validation_is_mixed_case_truthy():
 	state = _base_state(status="in_progress")
 	result = _run_poller(

@@ -477,7 +477,8 @@ def test_check_wave_status_final_wave_one_closed_rest_merged_is_complete_but_fai
 	judge-fix-up that needed no code change) yields ``wave_complete=true`` AND
 	``any_failed=true`` simultaneously. ``"closed"`` is in the
 	merged/closed/skipped set so it keeps ``all_merged`` (hence
-	``wave_complete``) True, while still flipping ``any_failed`` True.
+	``wave_complete``) True, while still flipping ``any_failed`` True. This is
+	the only failed-wave shape that should still allow validate dispatch.
 
 	The orchestrator MUST therefore NOT gate validate-dispatch on
 	``any_failed`` (see ``dispatch_validation_if_needed`` in
@@ -489,6 +490,7 @@ def test_check_wave_status_final_wave_one_closed_rest_merged_is_complete_but_fai
 	result = _run_check_wave_status(state, labels)
 	assert result["wave_complete"] is True
 	assert result["any_failed"] is True
+	assert result["validation_dispatch_safe_despite_failures"] is True
 	# Single (final) wave with no separate integration branch -> the project
 	# is genuinely complete; the closed wave issue must not change that.
 	assert result["project_complete"] is True
@@ -502,6 +504,7 @@ def test_check_wave_status_failure_phase_counts_as_failed():
 	labels = {"10": ["ai:plan-failed"], "11": ["ai:merged"]}
 	result = _run_check_wave_status(state, labels)
 	assert result["any_failed"] is True
+	assert result["validation_dispatch_safe_despite_failures"] is False
 	issues_by_gh = {i["github_issue"]: i for i in result["issues"]}
 	assert issues_by_gh[10]["status"] == "closed"
 	assert issues_by_gh[10]["decision_source"] == "label_terminal_phase"

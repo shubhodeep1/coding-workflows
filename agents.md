@@ -221,24 +221,26 @@ variables, the helper recomputes live wave status first and fails closed if
 the probe itself cannot run. Re-entry on the next 5-minute poll tick
 converges the project once wave PRs settle.
 
-The preflight deliberately does **not** gate on `ANY_FAILED`. A wave issue
-legitimately closed without a merged PR (reconciled status `"closed"` — e.g.
-a judge-fix-up whose premise turned out false, so no code change was needed)
-yields `WAVE_COMPLETE=true` **and** `ANY_FAILED=true` simultaneously, because
-`"closed"` is in the merged/closed/skipped set that keeps `all_merged` true.
-Gating on `ANY_FAILED` there deferred dispatch on every poll cycle and wedged
-the project in `ai:validating` forever (validation never dispatched → never
+The preflight deliberately does **not** blanket-gate on `ANY_FAILED`.
+`ANY_FAILED` is broad: a wave issue legitimately closed without a merged PR
+(reconciled status `"closed"` — e.g. a judge-fix-up whose premise turned out
+false, so no code change was needed) yields `WAVE_COMPLETE=true` **and**
+`ANY_FAILED=true` simultaneously, because `"closed"` is in the
+merged/closed/skipped set that keeps `all_merged` true. Gating on
+`ANY_FAILED` there deferred dispatch on every poll cycle and wedged the
+project in `ai:validating` forever (validation never dispatched → never
 earned `ai:validated` → integration never merged → tracking issue never
-closed; real-world repro: `hylifegroup.com#3`, stuck 10 days). The
-`ANY_FAILED` half also added nothing the `WAVE_COMPLETE` half does not
-already cover: a merged→non-terminal PR regression and a genuinely failed
-wave issue (`ai:implementation-failed`) both drive
-`all_merged=false → WAVE_COMPLETE=false`, and the latter is additionally
-blocked at the `JUDGE_STATUS=complete` hard guard. By the time this helper
-runs the integration judge has already adjudicated any closed-without-merge
-wave issue (it gates completion on actual deliverables), so the dispatch gate
-must not second-guess that verdict. `ANY_FAILED` is still computed and
-printed in the deferral log line for observability.
+closed; real-world repro: `hylifegroup.com#3`, stuck 10 days).
+
+But `ANY_FAILED` also covers explicit failed terminal phases (for example
+`ai:plan-failed`) and the dedicated `ai:implementation-failed` status, and
+those **must** continue to block validation even if the wave still reconciles
+to `WAVE_COMPLETE=true`. So `check-wave-status` now emits a narrower
+`validation_dispatch_safe_despite_failures` signal: it is `true` only when
+every failed issue is an adjudicated closed-without-merge case (live issue
+closed or `ai:closed`, with no blocking terminal-failure phase). The validate
+dispatch preflight keys on `WAVE_COMPLETE` plus that finer signal, while
+still logging `ANY_FAILED` for observability.
 
 The preflight gates on the wave-merge signal (`WAVE_COMPLETE`) rather than on
 `PROJECT_COMPLETE`. `PROJECT_COMPLETE`
