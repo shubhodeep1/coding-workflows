@@ -211,19 +211,37 @@ The completion-status comment is updated from three call sites:
 
 The same change also adds a defensive preflight inside
 `dispatch_validation_if_needed`: when the current wave's PRs are not all
-merged into the integration branch (`WAVE_COMPLETE != "true"`) or any wave
-failed (`ANY_FAILED == "true"`) at dispatch time (rare race against
-label-reconciliation, or a wave PR that transitioned back from merged), the
-dispatch is skipped this cycle so the runtime-validation workflow is not
-burned on a state that cannot pass. When the validating / `/revalidate`
-paths reach the helper before the loop's main wave-status block has
-populated the scratch `WAVE_COMPLETE` / `ANY_FAILED` variables, the helper
-recomputes live wave status first and fails closed if the probe itself
-cannot run. Re-entry on the next 5-minute poll tick converges the project
-once wave PRs settle.
+merged into the integration branch (`WAVE_COMPLETE != "true"`) at dispatch
+time (rare race against label-reconciliation, or a wave PR that transitioned
+back from merged), the dispatch is skipped this cycle so the
+runtime-validation workflow is not burned on a state that cannot pass. When
+the validating / `/revalidate` paths reach the helper before the loop's main
+wave-status block has populated the scratch `WAVE_COMPLETE` / `ANY_FAILED`
+variables, the helper recomputes live wave status first and fails closed if
+the probe itself cannot run. Re-entry on the next 5-minute poll tick
+converges the project once wave PRs settle.
 
-The preflight gates on the wave-merge signals (`WAVE_COMPLETE` /
-`ANY_FAILED`) rather than on `PROJECT_COMPLETE`. `PROJECT_COMPLETE`
+The preflight deliberately does **not** gate on `ANY_FAILED`. A wave issue
+legitimately closed without a merged PR (reconciled status `"closed"` — e.g.
+a judge-fix-up whose premise turned out false, so no code change was needed)
+yields `WAVE_COMPLETE=true` **and** `ANY_FAILED=true` simultaneously, because
+`"closed"` is in the merged/closed/skipped set that keeps `all_merged` true.
+Gating on `ANY_FAILED` there deferred dispatch on every poll cycle and wedged
+the project in `ai:validating` forever (validation never dispatched → never
+earned `ai:validated` → integration never merged → tracking issue never
+closed; real-world repro: `hylifegroup.com#3`, stuck 10 days). The
+`ANY_FAILED` half also added nothing the `WAVE_COMPLETE` half does not
+already cover: a merged→non-terminal PR regression and a genuinely failed
+wave issue (`ai:implementation-failed`) both drive
+`all_merged=false → WAVE_COMPLETE=false`, and the latter is additionally
+blocked at the `JUDGE_STATUS=complete` hard guard. By the time this helper
+runs the integration judge has already adjudicated any closed-without-merge
+wave issue (it gates completion on actual deliverables), so the dispatch gate
+must not second-guess that verdict. `ANY_FAILED` is still computed and
+printed in the deferral log line for observability.
+
+The preflight gates on the wave-merge signal (`WAVE_COMPLETE`) rather than on
+`PROJECT_COMPLETE`. `PROJECT_COMPLETE`
 additionally folds in `integration_contained_in_default` (`ahead_by == 0`),
 but runtime validation dispatches against `ref=integration_branch`, so the
 integration→default merge is **not** a precondition for validation — that

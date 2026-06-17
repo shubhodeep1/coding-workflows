@@ -7793,15 +7793,38 @@ dispatch_validation_if_needed() {
   local stale_threshold_secs=3600  # 1 hour: if no label appears after dispatch, allow redispatch
 
   # Defensive preflight: refuse to dispatch validate while the current
-  # wave's PRs are not all merged into the integration branch, or any of
-  # them failed. This is belt-and-suspenders against the rare case where a
-  # wave PR transitions from merged back to a non-terminal state between
-  # the judge call and the dispatch (e.g. a consumer-side revert or
-  # label-reconciliation race). When that happens we skip dispatch this
-  # cycle and let the next poll tick re-evaluate once wave PR state
-  # settles.
+  # wave's PRs are not all merged into the integration branch
+  # (WAVE_COMPLETE != true). This is belt-and-suspenders against the rare
+  # case where a wave PR transitions from merged back to a non-terminal
+  # state between the judge call and the dispatch (e.g. a consumer-side
+  # revert or label-reconciliation race): that regression drives
+  # all_merged=false -> WAVE_COMPLETE=false, which the gate below catches.
+  # When it happens we skip dispatch this cycle and let the next poll tick
+  # re-evaluate once wave PR state settles.
   #
-  # Gate on WAVE_COMPLETE / ANY_FAILED, NOT on PROJECT_COMPLETE. Validation
+  # Do NOT additionally gate on ANY_FAILED. ANY_FAILED is set whenever a
+  # wave issue's reconciled status is "closed" (see check-wave-status in
+  # orchestrate_lib.py), which includes a wave issue legitimately closed
+  # WITHOUT a merged PR — e.g. a judge-fix-up whose premise turned out
+  # false, so no code change was needed. Such a "closed" issue keeps
+  # all_merged=true (so WAVE_COMPLETE=true) while setting ANY_FAILED=true,
+  # so gating on ANY_FAILED here defers dispatch on every poll cycle and
+  # permanently deadlocks the project in ai:validating: validation never
+  # dispatches -> never earns ai:validated -> integration never merges ->
+  # tracking issue never closes. The ANY_FAILED half adds nothing for the
+  # regression case above (a regressed PR already drives WAVE_COMPLETE=false)
+  # and a genuinely failed wave issue (ai:implementation-failed) likewise
+  # drives all_merged=false -> WAVE_COMPLETE=false, so the judge-complete
+  # hard guard already blocks completion there. By the time this helper
+  # runs the integration judge has already declared the project complete,
+  # gating completion on actual deliverables, so a closed-without-merge
+  # wave issue has already been adjudicated and must not block dispatch a
+  # second time. ANY_FAILED stays in the log line below for observability.
+  # Real-world repro: hylifegroup.com#3 wedged for 10 days on a wave issue
+  # closed ai:closed with no PR (judge-fix-up that needed no code change).
+  #
+  # Gate on WAVE_COMPLETE only, NOT on PROJECT_COMPLETE (and deliberately
+  # not on ANY_FAILED, per the paragraph above). Validation
   # runs against the integration branch (ref=integration_branch in
   # dispatch_validation_workflow below), so the integration→default merge
   # is deliberately NOT a precondition for dispatching validation — that
@@ -7829,8 +7852,8 @@ dispatch_validation_if_needed() {
       return 0
     fi
   fi
-  if [ "${WAVE_COMPLETE:-false}" != "true" ] || [ "${ANY_FAILED:-false}" = "true" ]; then
-    echo "Preflight: WAVE_COMPLETE=${WAVE_COMPLETE:-unset} ANY_FAILED=${ANY_FAILED:-unset}; deferring validate dispatch this cycle (wave PRs not yet all merged into the integration branch or at least one wave issue failed)."
+  if [ "${WAVE_COMPLETE:-false}" != "true" ]; then
+    echo "Preflight: WAVE_COMPLETE=${WAVE_COMPLETE:-unset} ANY_FAILED=${ANY_FAILED:-unset}; deferring validate dispatch this cycle (wave PRs not yet all merged into the integration branch)."
     return 0
   fi
 
