@@ -510,6 +510,18 @@ def test_check_wave_status_failure_phase_counts_as_failed():
 	assert issues_by_gh[10]["decision_source"] == "label_terminal_phase"
 
 
+def test_check_wave_status_closed_label_does_not_mask_failure_phase():
+	state = _make_state()
+	labels = {"10": ["ai:closed", "ai:plan-failed"], "11": ["ai:merged"]}
+	result = _run_check_wave_status(state, labels)
+	assert result["wave_complete"] is True
+	assert result["any_failed"] is True
+	assert result["validation_dispatch_safe_despite_failures"] is False
+	issues_by_gh = {i["github_issue"]: i for i in result["issues"]}
+	assert issues_by_gh[10]["status"] == "closed"
+	assert issues_by_gh[10]["decision_source"] == "label_ai_closed"
+
+
 def test_check_wave_status_null_github_issue_means_not_created():
 	"""Issues with github_issue: null should be reported as not_created."""
 	waves = [

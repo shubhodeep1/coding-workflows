@@ -1357,6 +1357,9 @@ TERMINAL_PHASES: set[str] = {
 	"ai:memory-maintenance-failed",
 }
 VALIDATION_DISPATCH_BLOCKING_TERMINAL_PHASES: set[str] = TERMINAL_PHASES - {"ai:closed"}
+VALIDATION_DISPATCH_BLOCKING_FAILURE_LABELS: set[str] = (
+	VALIDATION_DISPATCH_BLOCKING_TERMINAL_PHASES - {"ai:merged", "ai:validated"}
+) | {"ai:implementation-failed"}
 TERMINAL_WAVE_STATUSES: set[str] = {"merged", "closed", "skipped", "not_created"}
 BLOCKER_TERMINAL_WAVE_STATUSES: set[str] = {"merged", "closed", "skipped", "not_created"}
 
@@ -3002,7 +3005,6 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 		gh_num_str = str(raw_gh_num)
 		labels = issue_labels.get(gh_num_str, [])
 		issue_state = issue_states.get(gh_num_str)
-		phase = determine_phase(labels)
 		pr_entry = pr_states.get(gh_num_str, {})
 		pr_state = pr_entry.get("state") if isinstance(pr_entry, dict) else None
 		pr_merged = pr_entry.get("merged") if isinstance(pr_entry, dict) else None
@@ -3023,11 +3025,14 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 			any_review_blocked = True
 		if status in ("closed", "implementation-failed"):
 			any_failed = True
+			has_blocking_failure_label = any(
+				label in VALIDATION_DISPATCH_BLOCKING_FAILURE_LABELS
+				for label in labels
+			)
 			failure_is_safe_for_validation_dispatch = (
 				status == "closed"
 				and (issue_state_for_status == "closed" or "ai:closed" in labels)
-				and phase not in VALIDATION_DISPATCH_BLOCKING_TERMINAL_PHASES
-				and "ai:implementation-failed" not in labels
+				and not has_blocking_failure_label
 			)
 			if not failure_is_safe_for_validation_dispatch:
 				validation_dispatch_safe_despite_failures = False
