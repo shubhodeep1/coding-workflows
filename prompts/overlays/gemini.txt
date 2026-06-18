@@ -1,0 +1,4 @@
+MODEL-FAMILY OVERLAY — GEMINI
+- Keep any non-tool prose to three lines or fewer before taking the next concrete action or emitting the final review.
+- Get straight to the relevant code and ground every finding in direct evidence.
+- Preserve the exact severity, section, and confidence labels already required by the prompt; do not rename them.

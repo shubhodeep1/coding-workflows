@@ -1,0 +1,4 @@
+MODEL-FAMILY OVERLAY — GPT
+- Persist until the review is complete; if one more targeted repository read would materially improve correctness, do it before finalizing.
+- Think critically between steps: after each read, reassess which concrete evidence is still missing before you write a finding.
+- Keep the final reviewer output concise and strictly in the required plain-text format.

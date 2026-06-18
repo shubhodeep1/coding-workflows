@@ -40,14 +40,22 @@ SEMBLE_PREFETCH_BLOCK="${SEMBLE_PREFETCH:-}"
 # without touching reviewer or judge prompt assembly.
 SERENA_TOOL_HINTS_BLOCK="${SERENA_TOOL_HINTS:-}"
 
+# {{MODEL_FAMILY_OVERLAY}} resolves from the optional
+# ${MODEL_FAMILY_OVERLAY} environment variable. Prompt consumers set it per
+# render invocation so reviewer-family-specific guidance stays prompt-local
+# and renders to an empty block when no overlay applies.
+MODEL_FAMILY_OVERLAY_BLOCK="${MODEL_FAMILY_OVERLAY:-}"
+
 # Legacy source-contract sentinels intentionally preserved while the shim now
 # delegates rendering to scripts/render_prompt.py.
 # "{{WORKFLOW_EDIT_RESTRICTION}}")
 # "{{SEMBLE_PREFETCH}}")
 # "{{SERENA_TOOL_HINTS}}")
+# "{{MODEL_FAMILY_OVERLAY}}")
 # Unresolved WORKFLOW_EDIT_RESTRICTION placeholder in rendered output for ${PROMPT_FILE}
 # Unresolved SEMBLE_PREFETCH placeholder in rendered output for ${PROMPT_FILE}
 # Unresolved SERENA_TOOL_HINTS placeholder in rendered output for ${PROMPT_FILE}
+# Unresolved MODEL_FAMILY_OVERLAY placeholder in rendered output for ${PROMPT_FILE}
 
 SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROMPT_BASENAME="$(basename -- "${PROMPT_FILE}")"
@@ -124,6 +132,7 @@ RENDER_ARGS=(
 append_render_var "WORKFLOW_EDIT_RESTRICTION" "${WORKFLOW_EDIT_RESTRICTION_LINE}"
 append_render_var "SEMBLE_PREFETCH" "${SEMBLE_PREFETCH_BLOCK}"
 append_render_var "SERENA_TOOL_HINTS" "${SERENA_TOOL_HINTS_BLOCK}"
+append_render_var "MODEL_FAMILY_OVERLAY" "${MODEL_FAMILY_OVERLAY_BLOCK}"
 
 while IFS= read -r placeholder_name; do
 	[ -n "${placeholder_name}" ] || continue
