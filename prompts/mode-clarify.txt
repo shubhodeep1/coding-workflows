@@ -42,6 +42,8 @@ Rules:
 
 Mandatory Question Format (when emitting `QUESTIONS:`):
 
+The planner's `CLARIFY` readiness-gate evidence expects this existing `Q1`/`Q2` question format.
+
 > **Q1: \<question\>**
 >
 > Choices:
