@@ -140,14 +140,8 @@ def compact_if_over_budget(
 		resolved_budget_tokens = 0
 	if not copied_sections:
 		return copied_sections
-
-	def _estimated_tokens(current_sections: list[tuple[int, str, str]]) -> int:
-		assembled_prompt = "".join(body for _, _, body in current_sections)
-		if not assembled_prompt:
-			return 0
-		return (len(assembled_prompt) + 3) // 4
-
-	if _estimated_tokens(copied_sections) <= resolved_budget_tokens:
+	total_chars = sum(len(body) for _, _, body in copied_sections)
+	if (total_chars + 3) // 4 <= resolved_budget_tokens:
 		return copied_sections
 
 	dropped_indexes: set[int] = set()
@@ -160,14 +154,13 @@ def compact_if_over_budget(
 		)
 		if section[0] > 1
 	]
-	retained_sections = list(copied_sections)
 	for dropped_index in drop_candidate_indexes:
 		dropped_indexes.add(dropped_index)
-		retained_sections = [
-			section
-			for index, section in enumerate(copied_sections)
-			if index not in dropped_indexes
-		]
-		if _estimated_tokens(retained_sections) <= resolved_budget_tokens:
-			return retained_sections
-	return retained_sections
+		total_chars -= len(copied_sections[dropped_index][2])
+		if (total_chars + 3) // 4 <= resolved_budget_tokens:
+			break
+	return [
+		section
+		for index, section in enumerate(copied_sections)
+		if index not in dropped_indexes
+	]

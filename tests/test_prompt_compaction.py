@@ -37,6 +37,19 @@ def test_compact_if_over_budget_under_budget_passthrough() -> None:
 	assert sections == original
 
 
+def test_compact_if_over_budget_none_uses_env_budget(monkeypatch) -> None:
+	sections = [
+		(1, "system", "A" * 8),
+		(3, "low-priority", "B" * 8),
+		(2, "higher-priority", "C" * 8),
+	]
+	monkeypatch.setenv("OPENROUTER_PROMPT_BUDGET_TOKENS", "4")
+	assert openrouter_prompt_cache.compact_if_over_budget(sections, None) == [
+		sections[0],
+		sections[2],
+	]
+
+
 def test_compact_if_over_budget_drops_tier_three_before_tier_two() -> None:
 	sections = [
 		(1, "system", "A" * 8),
@@ -56,3 +69,12 @@ def test_compact_if_over_budget_extreme_case_keeps_only_tier_one() -> None:
 		(3, "supplement", "C" * 8),
 	]
 	assert openrouter_prompt_cache.compact_if_over_budget(sections, 2) == [sections[0]]
+
+
+def test_compact_if_over_budget_negative_budget_clamps_to_zero() -> None:
+	sections = [
+		(1, "system", "A" * 8),
+		(2, "issue", "B" * 8),
+		(3, "supplement", "C" * 8),
+	]
+	assert openrouter_prompt_cache.compact_if_over_budget(sections, -1) == [sections[0]]
