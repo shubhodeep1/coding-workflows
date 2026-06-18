@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/openrouter_prompt_cache.py:153-172 | severity=low | confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The helper rebuilds and sorts the drop-candidate list on each call, and total_chars is recomputed from scratch on every iteration of the drop loop.\n  WHY: That makes the compaction path quadratic for realistic prompt sizes with many sections, adding measurable CPU overhead once callers use the helper.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/openrouter_prompt_cache.py:153-172 | severity=low | confidence=4\n  PROBLEM: The listcomp rebuilds/sorts all low-tier sections on every call to the helper; total_chars is recomputed from scratch on every iteration of the drop loop.\n  WHY: For realistic prompt sizes with many tier>1 memory/context sections this becomes quadratic, so once callers adopt the helper it will add measurable CPU/token overhead on hot compaction paths.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "566f3e02fee700327e63e757775e994490c3747622d6e693b6d8d22422b7ff65",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3404,
+    "run_id": "27754141441",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27754141441",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260618112440_8110634ba8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3404,
+    "run_id": "27754141441"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-18T11:24:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
