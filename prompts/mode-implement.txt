@@ -32,11 +32,10 @@ Test verification:
 - For `npm test`, treat "Missing script" errors as a pass (no tests defined);
   treat any other test failure as a real error.
 
-Verification loop:
-- Resolve the exact verification commands from the target repo's `AGENTS.md`, `package.json`, and `Makefile` when those surfaces exist; do not invent new repo-level commands in this prompt.
-- Run verification in this exact order: `typecheck -> lint -> tests -> build`.
-- If any stage fails, fix that stage and restart the verification loop from the beginning; iterate until all four stages pass in sequence.
-- Never emit a done, success, or completion signal until the full verification sequence has been run successfully end-to-end.
+Verification stage order:
+- Resolve the exact `typecheck -> lint -> tests -> build` commands from the target repo's `AGENTS.md`, `package.json`, and `Makefile` when those surfaces exist; do not invent new repo-level commands in this prompt.
+- Inside the shared verification loop below, always run those four stages in that exact order before any later smoke validation.
+- Repeat the full verification loop until every required stage passes, and never emit a done, success, or completion signal before the full loop finishes end-to-end.
 
 Restrictions:
 - Do not ask clarification questions (unattended runtime).
