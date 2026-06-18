@@ -164,6 +164,26 @@ failure mode equivalent to stopping early. Either emit the artefact or emit
 
 ---
 
+### Bash safety heuristics (advisory)
+
+- **Auto-safe read-only commands.** Treat `ls`, `find` (without `-delete`),
+  `grep`, `git status`, `git diff`, `git log`, `pwd`, `echo`, `wc`, `head`,
+  `tail`, `stat`, `file`, and `cat`-equivalents as read-only by default.
+- **Destructive commands require explicit justification in the same step's
+  reasoning.** This includes `rm` (any form), `mv`, `cp` when overwriting an
+  existing destination, `chmod`, `chown`, `sudo`, `git reset --hard`,
+  `git clean -f`, `git checkout -- .`, `git push --force`,
+  `git push --force-with-lease`, and package-manager installs such as
+  `apt-get install`, `pip install`, `npm install`, `bun add`, `yarn add`,
+  `pnpm add`, `cargo install`, and `go install`.
+- **Pipes, redirects, and chained commands inherit the destructive
+  classification** when they feed, invoke, or gate a destructive command.
+- This block is advisory text only. Codex CLI `--approval-mode` remains the
+  runtime enforcement mechanism, and existing retry caps such as
+  `MAX_POST_CODEX_REPAIR_ATTEMPTS` remain unchanged.
+
+---
+
 ## §5. Destructive Operations
 
 Never use destructive git commands unless the task specifically requires them:
