@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1. Which part of this repository should be improved?\nChoices:\nA. Clarify / plan workflows\nB. Implement / review_autofix / conflict-resolution workflows\nC. Orchestrate / judge / poller / validation workflows\nD. Docs / setup / workflow-wrapper behavior\nE. A specific workflow, script, or file path \u2014 include its name/path in your reply (RECOMMENDED)\nQ2. What kind of improvement do you want?\nChoices:\nA. Fix a bug or incorrect behavior \u2014 include current vs expected behavior (RECOMMENDED)\nB. Reduce runtime / token cost / API usage without changing behavior\nC. Improve logs / alerts / status reporting / operator visibility\nD. Improve documentation or setup guidance\nE. Another concrete outcome \u2014 describe the exact before/after behavior (RECOMMENDED)\nQ3. What evidence should we use as the source of truth?\nChoices:\nA. A workflow run URL or run ID/job name (and the consumer repo name if the run was not in this repo) (RECOMMENDED)\nB. A PR number or issue number that shows the problem\nC. A file path plus function/script name\nD. No artifact exists; I will provide a precise description of the current behavior and the expected behavior (RECOMMENDED)",
+  "fingerprint": "f7f805ab2de6157387409171803fe744e7a06c7d7fbeadc89edb7025f1cac40d",
+  "lineage": {
+    "issue_number": 3388,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27738930686",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27738930686",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260618053407_8c932bedf9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3388,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27738930686"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #3388 needs clarification",
+  "timestamps": {
+    "created_at": "2026-06-18T05:34:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
