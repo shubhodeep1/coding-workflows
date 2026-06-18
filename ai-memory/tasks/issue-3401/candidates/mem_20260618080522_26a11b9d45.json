@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `171f30f0b6a5df51e1e70b2d4c97f196bccfa9e4` on `orchestrator/project-3376` (matches integration branch metadata; no mismatch).\n\nClarification mapping: no `Q<ID>` items were asked for this issue; `/answer [auto-answered-by-orchestrator]` only confirms continuation.\n\nActions taken: reviewed item 5 in `docs/plans/open-agents-learnings-plan.md:344-361` and the current prompt sections in `prompts/mode-implement.txt:23-29, 48-76` and `prompts/mode-implement-repair.txt:12-20`.\n\nAssumptions made: keep the change strictly additive inside the two listed prompt files; preserve `# tier: DEFAULT` and all existing placeholders/frontmatter.\n\nMissing-context notes: no dedicated prompt-lint command was inspected in this targeted read, so verification should rely on scoped diff review plus any existing CI that already consumes these prompt templates.\n\n1. Files likely to change\n- `prompts/mode-implement.txt`\n  - Add three guardrail bullets in the early instruction area, most likely adjacent to the existing exploration/scope guidance (`23-29`, `48-76`), without rewriting existing items.\n- `prompts/mode-implement-repair.txt`\n  - Add repair-safe guardrail bullets near the existing minimal-edit / plan-divergence guidance (`12-20`).\n- No other files should change. Do not edit `docs/plans/open-agents-learnings-plan.md` or bundle any other prompt-plan items.\n\n2. Functions or modules to implement\n- No executable code changes; this is a prompt-template update only.\n- `prompts/mode-implement.txt`\n  - Add bullets covering:\n    - read each file completely before the first `apply_patch` on that file, using the exploration log as the checklist;\n    - run independent operations in parallel and serialize only when there is an explicit dependency;\n    - never make surprise edits affecting more than three files outside the plan\u2019s `files_touched` set without flagging the expansion in the post-implementation summary.\n- `prompts/mode-implement-repair.txt`\n  - Add the repair variants:\n    - always re-read the failing file before patching;\n    - keep repairs free of surprise scope expansion / stay inside the allow-list and surface any scope drift instead of silently expanding it.\n  - Do not add the parallel bullet to the repair prompt; item 5 explicitly drops it for repair turns.\n\n3. Data structures affected\n- Prompt text only:\n  - `# tier: DEFAULT` frontmatter stays unchanged.\n  - Existing placeholders such as `{{SERENA_TOOL_HINTS}}`, `{{WORKFLOW_EDIT_RESTRICTION}}`, and `{{REFERENCE_*}}` stay intact.\n- No runtime data structures, schemas, contracts, or workflow metadata change.\n\n4. API or interface changes\n- No external API, CLI, or workflow interface changes.\n- Internal prompt-behavior change only: implement and implement-repair phases will receive stricter edit-discipline instructions.\n\n5. Potential risks or edge cases\n- The new bullets must be additive and must not weaken the existing stronger scope rules around `files_touched` / allow-listed edits.\n- Avoid contradicting the existing exploration-log guidance already in `prompts/mode-implement.txt`; this change should tighten it from \u201clisted in exploration log\u201d to \u201cfully read before first patch.\u201d\n- The implement prompt\u2019s parallelization bullet must clearly apply only to independent operations.\n- The repair prompt should not accidentally inherit the implement prompt\u2019s parallel rule.\n- Preserve frontmatter and placeholders exactly.\n- No factual issue/codebase conflicts found. The current prompts already contain exploration-log and scope-discipline language, so this is a local refinement, not a rewrite.\n\n6. Testing considerations\n- Verify via scoped diff that only:\n  - `prompts/mode-implement.txt`\n  - `prompts/mode-implement-repair.txt`\n  changed.\n- Confirm exact presence of:\n  - all three new implement guardrails;\n  - both repair-safe variants.\n- Confirm `# tier: DEFAULT` and placeholders are unchanged.\n- Let any existing CI/prompt-consumer checks run unchanged; do not add new validation commands just for this PR.\n- Confirm no other \u201copen agents learnings\u201d prompt items were bundled.\n\n7. Pre-execution self-check result\n- Scope check: pass \u2014 issue scope and `files_touched` both limit the change to the two prompt files.\n- Ref check: pass \u2014 checkout ref matches integration branch metadata.\n- Feasibility check: pass \u2014 both target files exist, item 5 matches the requested change, and no external inputs are required.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "919d83d56acde39e8e3b870d8fbb58c4cf92e9b4e5754f7fe726e2f38677f0d1",
+  "lineage": {
+    "issue_number": 3401,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27745475859",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27745475859",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3401"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260618080522_26a11b9d45",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3401,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27745475859"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3401",
+  "timestamps": {
+    "created_at": "2026-06-18T08:05:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
