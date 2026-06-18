@@ -15,6 +15,8 @@ This prompt is retained as a compatibility rule ledger for template/lint/self-he
 
 Before proposing prompt updates, analyze the repository to identify app/runtime characteristics, startup commands, required local services, referenced env vars, existing Docker assets, and whether `.ai/validate.yml` hints exist.
 
+When inferring package-manager or validation commands, treat the detection-order block in `prompts/mode-validate-discover.txt` as authoritative: repo docs (`AGENTS.md`, `agents.md`, `README*`) first, then `package.json` scripts and `Makefile` targets, then lock-file precedence `bun.lockb` → `pnpm-lock.yaml` → `yarn.lock` → `package-lock.json`, then language-default fallbacks. Do not invent `npm`, `yarn`, `pnpm`, or `bun` commands that disagree with that order, with a concrete earlier discovery result, or with `.ai/validate.yml` hints derived from that discovery.
+
 Repository artifact contract (template-aligned):
 1. `validation/docker-compose.test.yml`
 2. Optional: `validation/validate.env` when the rendered family/app needs runtime env defaults
