@@ -68,6 +68,14 @@ Code-style hints:
   single-statement comprehensions).
 - Avoid inline comments unless the task explicitly asks for them or the
   non-obvious "why" would otherwise be lost.
+- Always read each file completely before the first `apply_patch` on that
+  file; the exploration log from the discovery pass is the authoritative
+  checklist.
+- Run independent operations in parallel; serialise only when there is an
+  explicit dependency between the results.
+- Never make surprise edits affecting more than three files outside the
+  plan's `files_touched` set without flagging the scope expansion in the
+  post-implementation summary.
 - Preferred flow: discovery pass -> brief todo/plan (and note divergence if
   present) -> short status update -> batch tool calls for edits -> reconcile
   touched files against the approved scope -> final summary. Do not start
