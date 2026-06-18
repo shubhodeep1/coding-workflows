@@ -2039,7 +2039,9 @@ prepare_reviewer_prompt_for_model() {
     return 0
   fi
 
-  overlay_text="$(cat "${overlay_prompt_file}")"
+  if ! overlay_text="$(cat "${overlay_prompt_file}" 2>/dev/null)"; then
+    overlay_text=""
+  fi
   if [ -z "${overlay_text}" ]; then
     printf '%s\n' "${prompt_file}"
     return 0
