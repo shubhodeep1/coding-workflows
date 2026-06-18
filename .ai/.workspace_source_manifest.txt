@@ -97,6 +97,7 @@ analysis/last_collection_timestamp.txt
 analysis/recommendation-processing-report.md
 analysis/validation-selftest-status.json
 analysis/workflow-optimization-2026-06-16.md
+analysis/workflow-optimization-2026-06-18.md
 codex.md
 docs/INVENTORY.md
 docs/ai-tools-future-improvements.md
@@ -197,6 +198,10 @@ prompts/mode-validate-self-heal.txt
 prompts/mode-workflow-analysis.txt
 prompts/mode-workflow-api-redundancy.txt
 prompts/mode-workflow-audit.txt
+prompts/overlays/claude.txt
+prompts/overlays/gemini.txt
+prompts/overlays/gpt.txt
+prompts/overlays/other.txt
 prompts/references/output-contract.txt
 prompts/references/severity-classification.txt
 prompts/references/validate-output-contract.txt

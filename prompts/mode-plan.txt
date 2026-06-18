@@ -113,3 +113,15 @@ Before exiting, audit the plan you are about to emit.
   present.
 
 Output: plain text suitable for posting as an issue comment.
+
+## Six-step readiness gate
+
+Before emitting `STATUS: CLEAR`, include non-empty evidence lines for all six labels below.
+`STATUS: CLEAR` is invalid unless every label is present and carries concrete evidence.
+
+- `EXPLORE: <evidence from the read-only exploration pass>`
+- `CLARIFY: <evidence that clarification was unnecessary, or which Q1/Q2 answers were resolved>`
+- `DESIGN: <evidence describing the intended implementation shape>`
+- `REVIEW: <evidence that risks, edge cases, and affected surfaces were checked>`
+- `PRESENT: <evidence that the plan output covers the required sections and format>`
+- `IMPLEMENT-READY: <evidence that the plan is actionable on the checked-out ref>`
