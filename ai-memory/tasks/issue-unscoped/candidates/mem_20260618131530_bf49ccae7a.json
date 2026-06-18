@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/openrouter_prompt_cache.py:16 | severity=critical | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `compact_if_over_budget` now returns `str` instead of the documented list of tuples, breaking the public helper contract.\n  WHY: The source review labeled this MAJOR/BLOCKER and notes callers expecting the tuple-list result would fail immediately.\n- scripts/openrouter_prompt_cache.py:187-188 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The public function converts retained sections into a prompt string before returning, so the returned value no longer matches the original list-based contract.\n  WHY: The source review says `_retain_sections_within_budget` yields a list of sections, but the function discards that list via `_assemble_prompt`, which would break consumers expecting the documented return shape.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Keep the public helper name and signature unchanged, and leave it opt-in/dormant without rewiring existing runtime paths.\"\n  expected_change_site: scripts/openrouter_prompt_cache.py: compact_if_over_budget function signature\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The function signature's return type is now `-> str` instead of the documented `-> list[tuple[int, str, str]]`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/openrouter_prompt_cache.py:16 | severity=MAJOR | confidence=5\n  PROBLEM: Return type changed from `list[tuple[int, str, str]]` to `str`, breaking API contract for any caller expecting a list of tuples.\n  WHY: Any code calling this helper and expecting a list (e.g., iterating over it) will raise TypeError/AttributeError.\n- scripts/openrouter_prompt_cache.py:187-188 | severity=MAJOR | confidence=5\n  PROBLEM: The private helper `_retain_sections_within_budget` returns `list[PromptSection]`, but the public function now calls `_assemble_prompt` to convert it to a string and returns the string, discarding the list.\n  WHY: No runtime consumer uses the helper currently, but the change still breaks the documented API contract explicitly and would cause errors if any caller were added in the future.\n- scripts/openrouter_prompt_cache.py:16 | severity=BLOCKER | confidence=5\n  PROBLEM: Return type signature changed from `list[tuple[int, str, str]]` to `str`, which is a breaking public contract change.\n  WHY: Any consumers expecting a list of tuples (documented in the plan) would raise TypeError at import/use.\n- Requirement: \"Keep the public helper name and signature unchanged, and leave it opt-in/dormant without rewiring existing runtime paths.\"\n  Expected change site: scripts/openrouter_prompt_cache.py: compact_if_over_budget function signature\n  Evidence of absence: The function signature's return type is now `-> str` instead of the documented `-> list[tuple[int, str, str]]`.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "7d976343880229a007fcd4e6bd2b1f84c0f8fa0b8108d5cc1a489834cffdfae3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3406,
+    "run_id": "27759879046",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27759879046",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260618131530_bf49ccae7a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3406,
+    "run_id": "27759879046"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-18T13:15:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
