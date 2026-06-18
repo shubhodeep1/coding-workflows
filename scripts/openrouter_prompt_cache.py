@@ -173,8 +173,9 @@ def compact_if_over_budget(sections: list[PromptSection], budget_tokens: int | N
 		sections: Ordered ``(tier, label, body)`` tuples where tier ``1`` is
 			keep-always, tier ``2`` is drop-after-tier-3, and tier ``3`` is
 			drop-first when the assembled prompt exceeds the budget.
-		budget_tokens: Explicit token budget, or ``None`` to fall back to
-			``OPENROUTER_PROMPT_BUDGET_TOKENS`` and then ``160000``.
+		budget_tokens: Explicit token budget, or ``None`` / any invalid value
+			to fall back to ``OPENROUTER_PROMPT_BUDGET_TOKENS`` and then
+			``160000``.
 
 	Returns:
 		A prompt string assembled from retained section bodies with blank lines
