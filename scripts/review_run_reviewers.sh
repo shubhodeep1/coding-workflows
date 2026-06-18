@@ -2041,6 +2041,9 @@ prepare_reviewer_prompt_for_model() {
 
   if ! overlay_text="$(cat "${overlay_prompt_file}" 2>/dev/null)"; then
     overlay_text=""
+    if [ -n "${log_file}" ]; then
+      printf 'Reviewer overlay %s for %s could not be read; continuing without a model-family overlay.\n' "${overlay_file_name}" "${model}" | tee -a "${log_file}" >&2
+    fi
   fi
   if [ -z "${overlay_text}" ]; then
     printf '%s\n' "${prompt_file}"
@@ -2048,7 +2051,14 @@ prepare_reviewer_prompt_for_model() {
   fi
 
   model_prompt_file="${prompt_work_dir}/reviewer_prompt_${safe_name}.txt"
-  cp "${prompt_file}" "${model_prompt_file}"
+  if ! cp "${prompt_file}" "${model_prompt_file}"; then
+    rm -f "${model_prompt_file}"
+    if [ -n "${log_file}" ]; then
+      printf 'Reviewer overlay prompt copy failed for %s (%s); continuing without a model-family overlay.\n' "${model}" "${overlay_file_name}" | tee -a "${log_file}" >&2
+    fi
+    printf '%s\n' "${prompt_file}"
+    return 0
+  fi
   # Append the overlay placeholder only in the reviewer flow so the shared
   # prompt assets remain unchanged for every other render path.
   printf '\n{{MODEL_FAMILY_OVERLAY}}\n' >> "${model_prompt_file}"
