@@ -227,6 +227,18 @@ index/event/metric names, log keys) without an explicit instruction.
 All renames are breaking changes. If a new name is needed: add alongside
 the old one, accept both inputs, preserve old outputs, document aliases.
 
+**New identifier uniqueness (strict).** When creating new variables — or any
+new identifier you introduce for a task (functions, classes, constants,
+parameters, env vars, JSON/DB fields, log/metric keys) — you MUST ensure the
+chosen name is unique and does not clash with any existing identifier
+reachable in that scope. Before introducing a new name, check the surrounding
+function, file, module, and any imported / shared / global scope; never shadow
+or collide with an existing variable, parameter, import, global, or inherited
+member. If the intended name is already taken, choose a distinct, descriptive
+alternative rather than shadowing or overloading it. This is the complement of
+the immutability rule above: that rule forbids renaming existing identifiers;
+this one forbids new identifiers from colliding with them.
+
 ---
 
 ## §11. Code Style

@@ -131,6 +131,25 @@ All renames are **breaking changes**. If a new name is needed:
 - Add alongside the old one, accept both inputs, preserve old outputs,
   document aliases.
 
+### New Identifier Uniqueness (STRICT)
+
+When creating **new** variables — or any new identifier you introduce for a
+task (functions, classes, constants, parameters, env vars, JSON/DB fields,
+log/metric keys) — you MUST ensure the chosen name is unique and does not
+clash with any existing identifier reachable in that scope. This is a
+**strict, non-negotiable condition**.
+
+- Before introducing a new name, check the surrounding function, file,
+  module, and any imported / shared / global scope for an existing
+  identifier of the same name. Never shadow or collide with existing
+  variables, parameters, imports, globals, inherited members, or any other
+  in-scope identifier.
+- If the intended name is already taken, choose a distinct, descriptive
+  alternative — do not reuse, shadow, or overload the existing one.
+- This is the complement of the immutability rule above: §6 forbids renaming
+  existing identifiers; this rule forbids new identifiers from colliding with
+  them.
+
 Section numbers in this file are also covered by §6 — they are referenced from
 `.github/workflows/`, `scripts/`, and `prompts/` and must not be renumbered.
 
