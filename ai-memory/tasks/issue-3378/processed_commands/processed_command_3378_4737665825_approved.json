@@ -5,13 +5,27 @@
   "entry_id": "processed_command_3378_4737665825_approved",
   "issue_number": 3378,
   "metadata": {
+    "branch": "ai/issue-3378",
+    "changed_files": [
+      "prompts/overlays/claude.txt",
+      "prompts/overlays/gemini.txt",
+      "prompts/overlays/gpt.txt",
+      "prompts/overlays/other.txt",
+      "scripts/render_prompt.sh",
+      "scripts/review_run_reviewers.sh"
+    ],
+    "issue_number": 3378,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/3378",
+    "pr_number": 3387,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/3387",
+    "run_attempt": "1",
+    "run_id": "27735290498",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/27735290498"
   },
   "run_attempt": 1,
   "run_id": "27735290498",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-06-18T03:46:32Z",
+  "status": "completed",
+  "timestamp": "2026-06-18T03:53:57Z",
   "workflow": "implement"
 }
