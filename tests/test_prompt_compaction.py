@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
@@ -37,17 +38,24 @@ def test_compact_if_over_budget_under_budget_passthrough() -> None:
 	assert sections == original
 
 
-def test_compact_if_over_budget_none_uses_env_budget(monkeypatch) -> None:
+def test_compact_if_over_budget_none_uses_env_budget() -> None:
 	sections = [
 		(1, "system", "A" * 8),
 		(3, "low-priority", "B" * 8),
 		(2, "higher-priority", "C" * 8),
 	]
-	monkeypatch.setenv("OPENROUTER_PROMPT_BUDGET_TOKENS", "4")
-	assert openrouter_prompt_cache.compact_if_over_budget(sections, None) == [
-		sections[0],
-		sections[2],
-	]
+	previous_budget_tokens = os.environ.get("OPENROUTER_PROMPT_BUDGET_TOKENS")
+	try:
+		os.environ["OPENROUTER_PROMPT_BUDGET_TOKENS"] = "4"
+		assert openrouter_prompt_cache.compact_if_over_budget(sections, None) == [
+			sections[0],
+			sections[2],
+		]
+	finally:
+		if previous_budget_tokens is None:
+			os.environ.pop("OPENROUTER_PROMPT_BUDGET_TOKENS", None)
+		else:
+			os.environ["OPENROUTER_PROMPT_BUDGET_TOKENS"] = previous_budget_tokens
 
 
 def test_compact_if_over_budget_drops_tier_three_before_tier_two() -> None:
@@ -78,3 +86,18 @@ def test_compact_if_over_budget_negative_budget_clamps_to_zero() -> None:
 		(3, "supplement", "C" * 8),
 	]
 	assert openrouter_prompt_cache.compact_if_over_budget(sections, -1) == [sections[0]]
+
+
+def main() -> int:
+	test_compact_if_over_budget_empty_input()
+	test_compact_if_over_budget_under_budget_passthrough()
+	test_compact_if_over_budget_none_uses_env_budget()
+	test_compact_if_over_budget_drops_tier_three_before_tier_two()
+	test_compact_if_over_budget_extreme_case_keeps_only_tier_one()
+	test_compact_if_over_budget_negative_budget_clamps_to_zero()
+	print("PASS")
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

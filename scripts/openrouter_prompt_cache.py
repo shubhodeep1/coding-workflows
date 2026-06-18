@@ -127,8 +127,9 @@ def compact_if_over_budget(
 	sections are dropped before earlier sections so earlier context survives longest.
 	The return value preserves the original tuple shape and the original relative order
 	of any retained sections. When ``budget_tokens`` is ``None`` or invalid, the helper
-	falls back to ``OPENROUTER_PROMPT_BUDGET_TOKENS`` and then to the default budget of
-	160000 tokens. Budgeting uses the repo's shared approximation of ``~4 chars/token``.
+	falls back to the ``OPENROUTER_PROMPT_BUDGET_TOKENS`` environment variable and then
+	to the default budget of 160000 tokens. Budgeting uses the repo's shared
+	approximation of ``~4 chars/token``.
 	"""
 	copied_sections = [tuple(section) for section in sections]
 	resolved_budget_tokens = _to_int_or_none(budget_tokens)
