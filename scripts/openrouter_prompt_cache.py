@@ -7,7 +7,8 @@ import os
 from typing import Any
 
 
-DEFAULT_PROMPT_BUDGET_TOKENS = 160000
+OPENROUTER_PROMPT_BUDGET_TOKENS_DEFAULT = 160000
+DEFAULT_PROMPT_BUDGET_TOKENS = OPENROUTER_PROMPT_BUDGET_TOKENS_DEFAULT
 CHARS_PER_TOKEN_ESTIMATE = 4
 PromptSection = tuple[int, str, str]
 
@@ -116,12 +117,12 @@ def format_usage_value(value: int | None) -> str:
 
 
 def _resolve_budget_tokens(budget_tokens: int | None) -> int:
-	if budget_tokens is not None:
-		return max(0, int(budget_tokens))
-	budget_from_env = _to_int_or_none(os.getenv("OPENROUTER_PROMPT_BUDGET_TOKENS"))
-	if budget_from_env is None:
-		return DEFAULT_PROMPT_BUDGET_TOKENS
-	return max(0, budget_from_env)
+	resolved_budget_tokens = _to_int_or_none(budget_tokens)
+	if resolved_budget_tokens is None:
+		resolved_budget_tokens = _to_int_or_none(os.getenv("OPENROUTER_PROMPT_BUDGET_TOKENS"))
+	if resolved_budget_tokens is None:
+		resolved_budget_tokens = OPENROUTER_PROMPT_BUDGET_TOKENS_DEFAULT
+	return max(0, resolved_budget_tokens)
 
 
 def _assemble_prompt(retained_sections: list[PromptSection]) -> str:
@@ -139,16 +140,31 @@ def _retain_sections_within_budget(
 	sections: list[PromptSection],
 	budget_tokens: int,
 ) -> list[PromptSection]:
-	retained_sections = list(sections)
-	if _estimate_prompt_tokens(_assemble_prompt(retained_sections)) <= budget_tokens:
-		return retained_sections
+	copied_sections = [tuple(section) for section in sections]
+	if _estimate_prompt_tokens(_assemble_prompt(copied_sections)) <= budget_tokens:
+		return copied_sections
 
-	for tier_to_drop in (3, 2):
-		retained_sections = [section for section in retained_sections if section[0] != tier_to_drop]
+	dropped_indexes: set[int] = set()
+	drop_candidate_indexes = [
+		index
+		for index, section in sorted(
+			enumerate(copied_sections),
+			key=lambda item: (item[1][0], item[0]),
+			reverse=True,
+		)
+		if section[0] > 1
+	]
+	for dropped_index in drop_candidate_indexes:
+		dropped_indexes.add(dropped_index)
+		retained_sections = [
+			section
+			for index, section in enumerate(copied_sections)
+			if index not in dropped_indexes
+		]
 		if _estimate_prompt_tokens(_assemble_prompt(retained_sections)) <= budget_tokens:
 			return retained_sections
 
-	return [section for section in retained_sections if section[0] == 1]
+	return [section for section in copied_sections if section[0] == 1]
 
 
 def compact_if_over_budget(sections: list[PromptSection], budget_tokens: int | None) -> str:

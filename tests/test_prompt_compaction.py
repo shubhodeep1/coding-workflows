@@ -49,6 +49,10 @@ def test_compact_if_over_budget_none_uses_env_budget() -> None:
 		assert openrouter_prompt_cache.compact_if_over_budget(sections, None) == (
 			"AAAAAAAA\n\nCCCCCCCC"
 		)
+		assert openrouter_prompt_cache.compact_if_over_budget(  # type: ignore[arg-type]
+			sections,
+			"invalid",
+		) == "AAAAAAAA\n\nCCCCCCCC"
 	finally:
 		if previous_budget_tokens is None:
 			os.environ.pop("OPENROUTER_PROMPT_BUDGET_TOKENS", None)
@@ -63,6 +67,18 @@ def test_compact_if_over_budget_drops_tier_three_before_tier_two() -> None:
 		(2, "higher-priority", "C" * 8),
 	]
 	assert openrouter_prompt_cache.compact_if_over_budget(sections, 5) == "AAAAAAAA\n\nCCCCCCCC"
+
+
+def test_compact_if_over_budget_drops_one_section_at_a_time_within_tier() -> None:
+	sections = [
+		(1, "system", "A" * 8),
+		(3, "small-tail", "B" * 8),
+		(3, "large-tail", "C" * 16),
+		(2, "higher-priority", "D" * 8),
+	]
+	assert openrouter_prompt_cache.compact_if_over_budget(sections, 7) == (
+		"AAAAAAAA\n\nBBBBBBBB\n\nDDDDDDDD"
+	)
 
 
 def test_compact_if_over_budget_extreme_case_keeps_only_tier_one() -> None:
@@ -88,6 +104,7 @@ def main() -> int:
 	test_compact_if_over_budget_under_budget_passthrough()
 	test_compact_if_over_budget_none_uses_env_budget()
 	test_compact_if_over_budget_drops_tier_three_before_tier_two()
+	test_compact_if_over_budget_drops_one_section_at_a_time_within_tier()
 	test_compact_if_over_budget_extreme_case_keeps_only_tier_one()
 	test_compact_if_over_budget_negative_budget_clamps_to_zero()
 	print("PASS")
