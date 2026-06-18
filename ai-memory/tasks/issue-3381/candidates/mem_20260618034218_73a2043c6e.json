@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref\n- HEAD: `56ff5b270613d547b6b389b13b8eae8e9b914c58`\n- Checked-out branch: `orchestrator/project-3376`\n- Integration metadata matches checked-out ref.\n\nClarification mapping\n- No `Q<ID>` clarification questions were issued.\n- The `/answer [auto-answered-by-orchestrator]` comment only confirms continuation; there are no unresolved answers blocking planning.\n\nConflicts noted\n- `docs/plans/open-agents-learnings-plan.md` item 8 still says to append after `## Review pipeline consolidator + ledger contract`, but the current `agents.md` now continues past that and ends with `## Integration-sync verifier + bootstrap contract`.\n- For implementation, follow the issue body/current file layout: append at EOF only; do not move or renumber any existing sections.\n\nFiles likely to change\n- `agents.md` only.\n\nRepresentative pattern to follow\n- Match the compact invariant-bullet style already used by the adjacent end-of-file contract sections in `agents.md` (`## Review pipeline consolidator + ledger contract` and `## Integration-sync verifier + bootstrap contract`): short bullets, pointer-oriented, no surrounding reflow.\n\nFunctions / modules to implement\n1. Append a new top-level section `## Operational lessons learned (categorised)` at the end of `agents.md`, after the current `## Integration-sync verifier + bootstrap contract` block.\n2. Under that heading, add the six required categories as compact subsections or compact category labels, keeping the entire added section <= 60 lines.\n3. Populate each category only with stable invariant bullets, each ending with canonical path pointers:\n   - **General / Tooling** \u2014 cover the `openai/codex#11151` regression outcome, `apply_patch_tool_type: \"function\"` as the settled fix, and `low` verbosity as the settled default. Pointer targets: `scripts/codex_model_catalog.json`, `scripts/write_codex_config.sh`, `.github/workflows/clarify.yml`, `.github/workflows/plan.yml`, `.github/workflows/implement.yml`, `.github/workflows/orchestrate.yml`.\n   - **codex-cli quirks** \u2014 cover announce-without-emit, `include_apply_patch_tool=true`, and the OpenRouter Responses-path interaction. Pointer targets: `scripts/codex_model_catalog.json`, `.github/workflows/clarify.yml`, `.github/workflows/plan.yml`, `.github/workflows/implement.yml`.\n   - **OpenRouter / prompt-cache** \u2014 cover cache-friendly prompt ordering, `OPENROUTER_PROMPT_CACHE_DISABLED`, and Gemini-family cache-breakpoint skips. Pointer targets: `probably_unnecessary_but_read_if_stuck.md` (OpenRouter Prompt Cache Instrumentation / Semantic Cache Scope), `scripts/openrouter_prompt_cache.py`, `scripts/review_run_reviewers.sh`.\n   - **GitHub API rate-limits** \u2014 cover `gh_retry` reset-aware backoff, `TG_GH_RATELIMIT_ALERT_COOLDOWN_SECS` pin-based dedup, and the batched GraphQL helpers. Pointer targets: `scripts/gh_helpers.sh`, `scripts/orchestrate_poll_process.sh`.\n   - **Memory subsystem** \u2014 cover the `ai-memory` branch as canonical store, fail-open memory behavior, `AI_MEMORY_TELEMETRY`, and per-PR ledger continuity. Pointer targets: `scripts/memory_helpers.sh`, `scripts/ai_memory.py`, `scripts/review_issue_ledger.sh`.\n   - **Validation harness Docker lifecycle** \u2014 cover `/bin/sh -c` vs `/bin/sh -lc`, npm/yarn/pnpm wrapper SIGTERM exit-code handling, and `mongosh` apt-repo constraints. Pointer targets: `scripts/validation_lint.py`, `scripts/validate_driver.sh`, `prompts/mode-validate-generate.txt`, `prompts/mode-validate-fix-harness.txt`.\n4. Keep the edit strictly append-only: no changes to prior headings, anchors, numbering, or prose outside the new block.\n\nData structures affected\n- Markdown structure only: one new `##` section, six category blocks, and bullet items.\n- No code, schema, env var, or workflow contract changes.\n\nAPI or interface changes\n- None.\n\nPotential risks / edge cases\n- Following the stale \u201cappend after Review pipeline\u2026\u201d instruction would place the section incorrectly in the current file.\n- Prose-heavy bullets could exceed the 60-line cap; keep bullets terse and pointer-first.\n- Any bullet lacking a real file-path pointer would miss acceptance.\n- Reflowing nearby sections in this hot file would violate scope and increase merge risk.\n\nTesting / verification considerations\n- Structural verification only; no runtime/typecheck/lint/build/test work is needed for this docs-only scope.\n- Verify only `agents.md` changes in `git diff --stat`.\n- Verify the new heading appears once, at EOF.\n- Verify all six categories are present, every bullet includes a path pointer, and the added block stays <= 60 lines.\n- Verify existing headings/anchors remain unchanged.\n\nEstimated implementation time\n- ~10\u201315 minutes.\n\nAssumptions\n- The six categories can be rendered as compact subsections or compact category labels, as long as the section is append-only, <= 60 lines, and every bullet has a path pointer.\n- Path pointers can reference files plus nearby section/helper names; exact line numbers are not required.\n\nMissing-context notes\n- No missing inputs; the only stale context is the older placement note in the source plan doc, which the issue body supersedes.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "e9cfafa119c443444fa2a40276935a27b937af3f97e241cf588cc3a0895df9ab",
+  "lineage": {
+    "issue_number": 3381,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27735076368",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27735076368",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3381"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260618034218_73a2043c6e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3381,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27735076368"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3381",
+  "timestamps": {
+    "created_at": "2026-06-18T03:42:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
