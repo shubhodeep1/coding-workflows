@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-06-14T09:55:33Z",
+  "tick_at": "2026-06-18T06:58:23Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -15,24 +15,25 @@
   },
   "tracking_issues": [
     {
-      "current_wave": 0,
+      "current_wave": 1,
+      "integration_ahead_by": "6",
       "issue_counts": {
         "closed": 0,
         "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
-        "merged": 0,
+        "merged": 5,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
         "skipped": 0
       },
-      "number": 3323,
+      "number": 3376,
       "project_complete": false,
-      "status": "in-progress",
-      "title": "[Orchestrator] Apply the safe subset of workflow-optimization-2026-06-13 recommendations",
-      "total_waves": 0,
-      "wave_complete": false
+      "status": "waiting",
+      "title": "[Orchestrator] Apply open-agents learnings to unattended prompts and reviewer scripts",
+      "total_waves": 4,
+      "wave_complete": true
     }
   ]
 }
