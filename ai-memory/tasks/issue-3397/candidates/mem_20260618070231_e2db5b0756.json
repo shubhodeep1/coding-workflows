@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref:\n- HEAD: `599f8ea9a73eee65d4ebb398fa836d46e8c6a19e`\n- Branch: `orchestrator/project-3376`\n- Integration branch metadata: `orchestrator/project-3376` (match)\n\nClarification mapping:\n- No `Q1`/`Q2` batch was emitted in clarify.\n- `/answer [auto-answered-by-orchestrator]` is continuation-only, so there are no unresolved clarification inputs to map.\n\n1. Files likely to change\n- `prompts/mode-plan.txt` \u2014 at the current tail (`## Pre-execution self-check` / footer area around lines 93-115), append a new final `Six-step readiness gate` section. It should require six evidence lines: `EXPLORE`, `CLARIFY`, `DESIGN`, `REVIEW`, `PRESENT`, and `IMPLEMENT-READY`, and explicitly state that `STATUS: CLEAR` is invalid unless all six labels have non-empty evidence.\n- `prompts/mode-clarify.txt` \u2014 in the existing mandatory Q-format block (around lines 43-64), add one additive sentence noting that the planner\u2019s `CLARIFY` gate expects the existing `Q1`/`Q2` format. Do not change headings or clarify behavior.\n\n2. Functions/modules to implement\n- Prompt text only; no executable modules or scripts.\n- Use the current section style already present in `prompts/mode-plan.txt` (`Read-only exploration sub-phase`, `## Pre-execution self-check`) as the representative pattern so the new gate reads as an additive prompt section rather than a rewrite.\n\n3. Data structures affected\n- The plan-phase output contract gains six required terminal evidence labels:\n  - `EXPLORE`\n  - `CLARIFY`\n  - `DESIGN`\n  - `REVIEW`\n  - `PRESENT`\n  - `IMPLEMENT-READY`\n- `prompts/mode-clarify.txt` keeps the existing `Q1`, `Q2`, ... question structure; the new line only cross-references that format.\n- No runtime schema, workflow input, or persisted data changes.\n\n4. API/interface changes\n- No external API changes.\n- Internal interface change: the planning prompt becomes stricter by making `STATUS: CLEAR` contingent on the six populated evidence labels.\n- Clarify behavior stays unchanged; only a documentation/back-pointer sentence is added.\n\n5. Risks and edge cases\n- Keep scope to item 3 only; do not alter other prompt files or rework the already-present exploration wording in `prompts/mode-plan.txt`.\n- Preserve existing `# tier` lines, headings, and output-contract wording outside the new gate text; if any existing line must mention the new gate, keep that edit minimal.\n- The `CLARIFY` evidence line needs to support both valid paths: \u201cno clarification needed\u201d and \u201cQ1/Q2 were asked and answered,\u201d while still requiring non-empty evidence text.\n- Place the clarify back-pointer next to the canonical Q-format rules, not inside the output headings block, so clarify output remains format-compatible.\n- Conflict check: none found; both target files exist and the checked-out ref matches the integration metadata.\n\n6. Testing considerations\n- Verify the diff only touches `prompts/mode-plan.txt` and `prompts/mode-clarify.txt`.\n- Confirm `prompts/mode-plan.txt` ends with a `Six-step readiness gate` section containing all six labels and the explicit `STATUS: CLEAR` dependency.\n- Confirm `prompts/mode-clarify.txt` only gains the one-line `Q1`/`Q2` back-pointer and preserves current headings/status contract text.\n- Rely on the repo\u2019s pinned CI/tooling if prompt rendering or lint checks run; no new runtime/unit tests are expected for this prompt-only change.\n\nImplementation-time estimate: 15 minutes\n\n7. Pre-execution self-check result\n- Ready to implement: branch context matches, scope matches the declared `files_touched`, and the acceptance criteria map cleanly to the two prompt files.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "5c77c70b3baa0a6770c3deddbe55f6dd776f5ab1211a29315bc3286d8aec7381",
+  "lineage": {
+    "issue_number": 3397,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27742451699",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27742451699",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3397"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260618070231_e2db5b0756",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3397,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27742451699"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3397",
+  "timestamps": {
+    "created_at": "2026-06-18T07:02:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
