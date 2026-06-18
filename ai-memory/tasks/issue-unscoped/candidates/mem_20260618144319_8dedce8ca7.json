@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/openrouter_prompt_cache.py:169-185 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5]\n  PROBLEM: The docstring for `compact_if_over_budget` documents `budget_tokens=None` fallback, but omits that invalid non-int values also fall back via `_to_int_or_none`.\n  WHY: The implementation already handles non-int values correctly, so this is a documentation-only contract mismatch.\n- scripts/openrouter_prompt_cache.py:8 | severity=low | confidence=[4]\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: `OPENROUTER_PROMPT_BUDGET_TOKENS_DEFAULT` is only an internal constant and is not exposed as a documented public contract surface beyond an incidental mention in README.md.\n  WHY: No caller breakage; this is a backward-compatibility/documentation nit rather than a runtime defect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Change the public helper so it returns the assembled prompt string derived from the retained section bodies after applying the required tier-drop order.\"\n  expected_change_site: scripts/openrouter_prompt_cache.py:compact_if_over_budget\n  confidence=[5]\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: LAST_RUN_DIFF shows the public function now returns `str` assembled from retained bodies via `_assemble_prompt()`; all four authored test cases assert assembled-prompt output instead of tuple lists; tests pass cleanly\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: scripts/openrouter_prompt_cache.py\n  Line or code reference: line 176 (docstring `budget_tokens:` parameter description)\n  Problem: The docstring for `compact_if_over_budget` documents that `budget_tokens=None` triggers the fallback chain but does not document that any non-int/invalid value also triggers the same fallback.\n  Why it fails at runtime: Not a runtime failure \u2014 the implementation correctly handles non-int values via `_to_int_or_none`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement: \"Change the public helper so it returns the assembled prompt string derived from the retained section bodies after applying the required tier-drop order.\"\n  Expected change site: scripts/openrouter_prompt_cache.py:compact_if_over_budget\n  Evidence of absence: LAST_RUN_DIFF shows the public function now returns `str` assembled from retained bodies via `_assemble_prompt()`; all four authored test cases assert assembled-prompt output instead of tuple lists; tests pass cleanly\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- File: scripts/openrouter_prompt_cache.py\n  Location: compact_if_over_budget docstring (lines 169-185)\n  Issue: The docstring documents that budget_tokens=None falls back to env/default, but doesn't mention that invalid non-int values (like the \"invalid\" string tested) also follow this fallback path via _to_int_or_none.\n  Suggested minimal fix: Expand the budget_tokens arg description to include \"Explicit token budget, or None or any non-int value to fall back to OPENROUTER_PROMPT_BUDGET_TOKENS and then 160000.\"\n  Estimated lines changed: 1\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: scripts/openrouter_prompt_cache.py:8\n  Line or code reference: `OPENROUTER_PROMPT_BUDGET_TOKENS_DEFAULT` (and the helper's fallback chain)\n  Problem: The constant is used only internally by the dormant helper; it is not exposed as a documented public contract surface beyond an incidental mention in README.md. No caller breakage.\n  Why it fails at runtime: Does not fail.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "266d4b403aa550400505db467ff7c54d9c57113d7cd45951c339fe2e53642e4b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3406,
+    "run_id": "27765295333",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27765295333",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260618144319_8dedce8ca7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3406,
+    "run_id": "27765295333"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-18T14:43:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
