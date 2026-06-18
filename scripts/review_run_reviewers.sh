@@ -1980,6 +1980,120 @@ append_reviewer_checklist_block() {
   cat "${REVIEWER_CHECKLIST_PROMPT_TEMPLATE}"
 }
 
+REVIEWER_OVERLAYS_PROMPT_DIR="${SUPPORT_PROMPTS_DIR:-prompts}/overlays"
+
+reviewer_model_overlay_file_name() {
+  local model="${1:-}"
+
+  case "${model}" in
+    openai/*)
+      printf 'gpt.txt\n'
+      ;;
+    anthropic/*)
+      printf 'claude.txt\n'
+      ;;
+    google/*|*/gemini-*)
+      printf 'gemini.txt\n'
+      ;;
+    *)
+      printf 'other.txt\n'
+      ;;
+  esac
+}
+
+resolve_reviewer_overlay_prompt_file() {
+  local overlay_file_name="$1"
+  local overlay_prompt_file="${REVIEWER_OVERLAYS_PROMPT_DIR}/${overlay_file_name}"
+
+  if [ ! -f "${overlay_prompt_file}" ] && [ -f "${SUPPORT_ROOT_DIR:-.}/prompts/overlays/${overlay_file_name}" ]; then
+    overlay_prompt_file="${SUPPORT_ROOT_DIR:-.}/prompts/overlays/${overlay_file_name}"
+  fi
+
+  if [ -f "${overlay_prompt_file}" ]; then
+    printf '%s\n' "${overlay_prompt_file}"
+    return 0
+  fi
+
+  return 1
+}
+
+prepare_reviewer_prompt_for_model() {
+  local model="$1"
+  local prompt_file="$2"
+  local safe_name="$3"
+  local prompt_work_dir="$4"
+  local log_file="${5:-}"
+  local overlay_file_name=""
+  local overlay_prompt_file=""
+  local overlay_text=""
+  local model_prompt_file=""
+  local model_prompt_rendered_file=""
+
+  overlay_file_name="$(reviewer_model_overlay_file_name "${model}")"
+  overlay_prompt_file="$(resolve_reviewer_overlay_prompt_file "${overlay_file_name}" || true)"
+  if [ -z "${overlay_prompt_file}" ]; then
+    if [ -n "${log_file}" ]; then
+      printf 'Reviewer overlay %s for %s was not found; continuing without a model-family overlay.\n' "${overlay_file_name}" "${model}" | tee -a "${log_file}" >&2
+    fi
+    printf '%s\n' "${prompt_file}"
+    return 0
+  fi
+
+  if ! overlay_text="$(cat "${overlay_prompt_file}" 2>/dev/null)"; then
+    overlay_text=""
+    if [ -n "${log_file}" ]; then
+      printf 'Reviewer overlay %s for %s could not be read; continuing without a model-family overlay.\n' "${overlay_file_name}" "${model}" | tee -a "${log_file}" >&2
+    fi
+  fi
+  if [ -z "${overlay_text}" ]; then
+    printf '%s\n' "${prompt_file}"
+    return 0
+  fi
+
+  model_prompt_file="${prompt_work_dir}/reviewer_prompt_${safe_name}.txt"
+  if ! cp "${prompt_file}" "${model_prompt_file}"; then
+    rm -f "${model_prompt_file}"
+    if [ -n "${log_file}" ]; then
+      printf 'Reviewer overlay prompt copy failed for %s (%s); continuing without a model-family overlay.\n' "${model}" "${overlay_file_name}" | tee -a "${log_file}" >&2
+    fi
+    printf '%s\n' "${prompt_file}"
+    return 0
+  fi
+  # Append the overlay placeholder only in the reviewer flow so the shared
+  # prompt assets remain unchanged for every other render path.
+  if ! printf '\n{{MODEL_FAMILY_OVERLAY}}\n' >> "${model_prompt_file}"; then
+    rm -f "${model_prompt_file}"
+    if [ -n "${log_file}" ]; then
+      printf 'Reviewer overlay prompt append failed for %s (%s); continuing without a model-family overlay.\n' "${model}" "${overlay_file_name}" | tee -a "${log_file}" >&2
+    fi
+    printf '%s\n' "${prompt_file}"
+    return 0
+  fi
+
+  model_prompt_rendered_file="${prompt_work_dir}/reviewer_prompt_${safe_name}.rendered.txt"
+  if ! (
+    cd "${SUPPORT_ROOT_DIR:-.}"
+    MODEL_FAMILY_OVERLAY="${overlay_text}" bash "${SUPPORT_SCRIPTS_DIR:-scripts}/render_prompt.sh" "${model_prompt_file}"
+  ) > "${model_prompt_rendered_file}"; then
+    rm -f "${model_prompt_file}" "${model_prompt_rendered_file}"
+    if [ -n "${log_file}" ]; then
+      printf 'Reviewer overlay render failed for %s (%s); continuing without a model-family overlay.\n' "${model}" "${overlay_file_name}" | tee -a "${log_file}" >&2
+    fi
+    printf '%s\n' "${prompt_file}"
+    return 0
+  fi
+  if ! mv "${model_prompt_rendered_file}" "${model_prompt_file}"; then
+    rm -f "${model_prompt_file}" "${model_prompt_rendered_file}"
+    if [ -n "${log_file}" ]; then
+      printf 'Reviewer overlay prompt finalize failed for %s (%s); continuing without a model-family overlay.\n' "${model}" "${overlay_file_name}" | tee -a "${log_file}" >&2
+    fi
+    printf '%s\n' "${prompt_file}"
+    return 0
+  fi
+
+  printf '%s\n' "${model_prompt_file}"
+}
+
 # Assemble the base reviewer prompt (used by both passes in two-pass mode,
 # or as the sole prompt in single-pass mode).
 assemble_reviewer_prompt() {
@@ -2923,6 +3037,7 @@ run_reviewer() {
   fi
   mkdir -p "${reviewer_codex_home}/bin"
   export CODEX_HOME="${reviewer_codex_home}"
+  prompt_file="$(prepare_reviewer_prompt_for_model "${model}" "${prompt_file}" "${safe_name}" "${reviewer_codex_home}" "${log_file}")"
   if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
     sanitize_codex_prompt_file "${prompt_file}"
   fi

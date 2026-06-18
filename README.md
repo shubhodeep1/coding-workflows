@@ -1116,6 +1116,10 @@ Operational behavior:
 - `OPENROUTER_PROMPT_CACHE_DISABLED=false` (default): cache behavior and telemetry are enabled.
 - `OPENROUTER_PROMPT_CACHE_DISABLED=true`: explicit breakpoint insertion is disabled and workflows continue with normal execution.
 
+### Opt-in budget helper
+
+- `OPENROUTER_PROMPT_BUDGET_TOKENS=160000` (default): fallback budget for `scripts/openrouter_prompt_cache.py::compact_if_over_budget(sections, budget_tokens)` when a future caller passes `budget_tokens=None`. The helper follows the repo's shared `~4 chars/token` budgeting rule and remains dormant until a caller explicitly opts in.
+
 ### Telemetry fields
 
 - Structured OpenRouter usage logging now includes:

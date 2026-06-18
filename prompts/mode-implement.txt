@@ -20,10 +20,22 @@ surface that divergence prominently in your output instead of silently
 absorbing it. Follow the codebase truth for the edit, keep scope
 conservative, and call out the specific mismatch you encountered.
 
+Pre-edit exploration checklist:
+- Before the first `apply_patch`, complete a read-only exploration pass and record an exploration log.
+- Allowed read-only operations in this exploration pass: grep/glob discovery, targeted file reads, manifest inspection, lockfile detection, and preview-only patch planning.
+- Use the exploration pass to confirm edit targets, gather surrounding context, and outline intended non-writing patch shapes.
+- No write-mode tools are allowed during this exploration pass.
+- Every file to be edited must appear in the exploration log before the first `apply_patch`.
+
 Test verification:
 - If `pytest` is not installed, install it via `pip install pytest`.
 - For `npm test`, treat "Missing script" errors as a pass (no tests defined);
   treat any other test failure as a real error.
+
+Verification stage order:
+- Resolve the exact `typecheck -> lint -> tests -> build` commands from the target repo's `AGENTS.md`, `package.json`, and `Makefile` when those surfaces exist; do not invent new repo-level commands in this prompt.
+- Inside the shared verification loop below, always run those four stages in that exact order before any later smoke validation.
+- Repeat the full verification loop until every required stage passes, and never emit a done, success, or completion signal before the full loop finishes end-to-end.
 
 Restrictions:
 - Do not ask clarification questions (unattended runtime).
@@ -56,10 +68,20 @@ Code-style hints:
   single-statement comprehensions).
 - Avoid inline comments unless the task explicitly asks for them or the
   non-obvious "why" would otherwise be lost.
+- Always read each file completely before the first `apply_patch` on that
+  file; the exploration log from the discovery pass is the authoritative
+  checklist.
+- Run independent operations in parallel; serialise only when there is an
+  explicit dependency between the results.
+- Never make surprise edits affecting more than three files outside the
+  plan's `files_touched` set without flagging the scope expansion in the
+  post-implementation summary.
 - Preferred flow: discovery pass -> brief todo/plan (and note divergence if
   present) -> short status update -> batch tool calls for edits -> reconcile
   touched files against the approved scope -> final summary. Do not start
   editing before the discovery pass completes.
+- During the discovery pass, record the exploration log and ensure every file
+  to be edited appears in it before the first `apply_patch`.
 
 Data-file output discipline: when writing files under `db/contracts/` or any
 other YAML/JSON path, emit raw YAML or raw JSON only. Never wrap the file

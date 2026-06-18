@@ -20,6 +20,14 @@ repair against the codebase truth, stay inside the allow-list, and surface
 the divergence prominently in your concise output instead of silently
 absorbing it.
 
+Repair guardrails:
+
+- Always re-read the failing file before patching so the repair is grounded in
+  the current file contents rather than stale diagnostics alone.
+- Keep repairs free of surprise scope expansion: stay inside the allow-list
+  and surface any required scope drift in your concise output instead of
+  silently broadening the patch.
+
 Category-specific repair recipes:
 
 - **YAML reserved-indicator scalar.** If the diagnostic is
