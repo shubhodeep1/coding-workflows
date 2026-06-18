@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref\n- HEAD: `56ff5b270613d547b6b389b13b8eae8e9b914c58`\n- Branch: `orchestrator/project-3376`\n- Integration branch metadata: `orchestrator/project-3376` (match confirmed)\n\nClarification mapping\n- No Q1/Q2/etc. were asked.\n- The `/answer [auto-answered-by-orchestrator]` comment is continuation confirmation only, so planning relies on the issue body plus item 7 in `docs/plans/open-agents-learnings-plan.md`.\n\nActions taken\n- Inspected item 7 in `docs/plans/open-agents-learnings-plan.md` to recover the exact command lists and advisory wording.\n- Inspected the `## \u00a74. Edit-Tool Discipline (codex paths)` \u2192 `## \u00a75. Destructive Operations` boundary in `unattended_system_instructions.md` to confirm the insertion point.\n- Checked for branch mismatch and codebase conflicts relevant to this doc-only change.\n\nImplementation plan\n\n1. Files likely to change\n- `unattended_system_instructions.md` only.\n- Add a new non-numbered `Bash safety heuristics (advisory)` block between the current `## \u00a74. Edit-Tool Discipline (codex paths)` section and `## \u00a75. Destructive Operations`.\n- Keep the edit strictly additive and local; do not touch any other file, including `docs/plans/open-agents-learnings-plan.md`.\n\n2. Functions or modules to implement\n- No executable functions/modules change.\n- Update the markdown content to add one self-contained advisory block with:\n  - an **auto-safe read-only** list: `ls`, `find` (without `-delete`), `grep`, `git status`, `git diff`, `git log`, `pwd`, `echo`, `wc`, `head`, `tail`, `stat`, `file`, `cat`-equivalents;\n  - a **destructive / requires justification** list: `rm` (any form), `mv`, `cp` when overwriting an existing destination, `chmod`, `chown`, `sudo`, `git reset --hard`, `git clean -f`, `git checkout -- .`, `git push --force` / `--force-with-lease`, and package-manager installs (`apt-get install`, `pip install`, `npm install`, `bun add`, `yarn add`, `pnpm add`, `cargo install`, `go install`);\n  - a rule that **pipes, redirects, and chained commands inherit the destructive classification** when they feed a destructive command.\n- End the block with explicit wording that the section is advisory and codex-cli `--approval-mode` remains the runtime enforcement mechanism. If item 7 is followed verbatim, include that `MAX_POST_CODEX_REPAIR_ATTEMPTS` remains unchanged.\n\n3. Data structures affected\n- None at runtime.\n- Only markdown document structure is affected; all existing numbered `## \u00a7N` headings must remain unchanged.\n\n4. API or interface changes\n- No API, CLI, workflow, schema, or env-var behavior change.\n- Documentation-only guidance update inside `unattended_system_instructions.md`.\n- No renames, no new flags, no contract changes.\n\n5. Potential risks or edge cases\n- Accidentally renumbering `## \u00a75` or later sections would fail acceptance.\n- Reflowing or rewriting adjacent numbered sections would exceed the requested bounded scope.\n- The safe list must preserve the `find` caveat (`without -delete`).\n- The destructive list should keep `cp` narrowly scoped to overwriting an existing destination.\n- Existing `\u00a75` already treats `git checkout --` broadly as destructive, while item 7 gives `git checkout -- .` as the example; the new advisory text should avoid implying a narrower rule than the existing section.\n- The inherited-destructive rule should be written generically, not as a broad shell-policy rewrite.\n- The advisory note must not imply that prose itself enforces approvals; runtime enforcement stays with codex-cli approval mode.\n\n6. Testing considerations\n- Diff check: only `unattended_system_instructions.md` should change.\n- Placement check: the new advisory block should sit between the current \u00a74 and \u00a75 sections (or immediately adjacent to that boundary) with `## \u00a75. Destructive Operations` unchanged.\n- Content check: verify all required command categories from item 7 are present, including package-manager installs and force-push variants.\n- Acceptance check: verify the section is self-contained, explicitly advisory, and does not rename or renumber any existing numbered heading.\n- No runtime/code smoke is needed beyond normal doc sanity because this is a documentation-only edit.\n\n7. Pre-execution self-check result\n- Ready to implement within the declared `files_touched` scope.\n- No clarification gaps detected.\n- No material conflict detected between the issue and the current branch state.\n- Integration branch check passed.\n\nAssumptions\n- Item 7 in `docs/plans/open-agents-learnings-plan.md` is the authoritative source where it is more specific than the abbreviated issue summary.\n- The new block should be unnumbered so existing numbered section headings remain intact.\n\nMissing-context notes\n- None.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "585f1b54df42a7072cdc17450cb010000fee05fe990ad55db7deb7b92faf84e5",
+  "lineage": {
+    "issue_number": 3380,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27735075607",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27735075607",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3380"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260618034225_987125f0fb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3380,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27735075607"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3380",
+  "timestamps": {
+    "created_at": "2026-06-18T03:42:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
