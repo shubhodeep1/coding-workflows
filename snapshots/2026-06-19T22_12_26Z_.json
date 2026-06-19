@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-06-16T07:10:35Z",
+  "tick_at": "2026-06-19T22:12:26Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -15,11 +15,10 @@
   },
   "tracking_issues": [
     {
-      "current_wave": 3,
-      "integration_ahead_by": "4",
+      "current_wave": 0,
       "issue_counts": {
         "closed": 0,
-        "done": 1,
+        "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
         "merged": 0,
@@ -28,11 +27,11 @@
         "review_blocked": 0,
         "skipped": 0
       },
-      "number": 3351,
+      "number": 3376,
       "project_complete": false,
       "status": "in-progress",
-      "title": "[Orchestrator] Complete GSD-inspired rollout phases B-E",
-      "total_waves": 4,
+      "title": "[Orchestrator] Apply open-agents learnings to unattended prompts and reviewer scripts",
+      "total_waves": 0,
       "wave_complete": false
     }
   ]
