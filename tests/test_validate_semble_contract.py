@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import sys
 import contextlib
 from pathlib import Path
@@ -39,6 +40,7 @@ OPTIONAL_PRESERVED_VALIDATE_PROMPTS = (
 )
 STAGED_VALIDATE_WORKSPACE_PROMPTS = STAGED_REQUIRED_VALIDATE_PROMPTS + OPTIONAL_PRESERVED_VALIDATE_PROMPTS
 RENDER_PROMPT_MODULE_NAME = "_validate_semble_render_prompt"
+REFERENCE_PATH_RE = re.compile(r"(?P<path>[^\s'\"]*/prompts/references/[^\s:'\"]+\.txt)")
 
 
 def _read(path: Path) -> str:
@@ -97,10 +99,10 @@ def _manifest_required_prompts() -> list[str]:
 
 
 def _missing_reference_path_from_error(error_text: str) -> Path | None:
-	_, separator, path_text = error_text.rpartition(": ")
-	if separator != ": " or "/prompts/references/" not in path_text:
+	match = REFERENCE_PATH_RE.search(error_text)
+	if match is None:
 		return None
-	return Path(path_text)
+	return Path(match.group("path"))
 
 
 def _expected_validate_reference_files() -> set[str]:
@@ -112,31 +114,35 @@ def _expected_validate_reference_files() -> set[str]:
 		render_prompt_path = workspace_root / "scripts" / "render_prompt.py"
 		render_prompt_path.parent.mkdir(parents=True, exist_ok=True)
 		render_prompt_path.write_text((SCRIPTS_DIR / "render_prompt.py").read_text(encoding="utf-8"), encoding="utf-8")
-		render_prompt = _import_render_prompt(render_prompt_path, f"{RENDER_PROMPT_MODULE_NAME}_isolated")
-		with contextlib.chdir(workspace_root):
-			for rel in STAGED_VALIDATE_WORKSPACE_PROMPTS:
-				prompt_path = workspace_root / rel
-				prompt_path.parent.mkdir(parents=True, exist_ok=True)
-				prompt_path.write_text((REPO_ROOT / rel).read_text(encoding="utf-8"), encoding="utf-8")
-				prompt_text = render_prompt.load_prompt(prompt_path)
-				mode_name = render_prompt.resolve_mode_name(prompt_path, None)
-				hydrated_values: dict[str, str] = {}
-				while True:
-					try:
-						hydrated_values = render_prompt.hydrate_reference_placeholders(
-							prompt_text=prompt_text,
-							prompt_path=prompt_path,
-							mode_name=mode_name,
-							values=hydrated_values,
-						)
-						break
-					except render_prompt.PromptLoadError as exc:
-						missing_path = _missing_reference_path_from_error(str(exc))
-						if missing_path is None:
-							raise AssertionError(f"unexpected hydration failure for {rel}: {exc}") from exc
-						expected.add(missing_path.name)
-						missing_path.parent.mkdir(parents=True, exist_ok=True)
-						missing_path.write_text(f"{missing_path.name}\n", encoding="utf-8")
+		isolated_module_name = f"{RENDER_PROMPT_MODULE_NAME}_isolated"
+		try:
+			render_prompt = _import_render_prompt(render_prompt_path, isolated_module_name)
+			with contextlib.chdir(workspace_root):
+				for rel in STAGED_VALIDATE_WORKSPACE_PROMPTS:
+					prompt_path = workspace_root / rel
+					prompt_path.parent.mkdir(parents=True, exist_ok=True)
+					prompt_path.write_text((REPO_ROOT / rel).read_text(encoding="utf-8"), encoding="utf-8")
+					prompt_text = render_prompt.load_prompt(prompt_path)
+					mode_name = render_prompt.resolve_mode_name(prompt_path, None)
+					hydrated_values: dict[str, str] = {}
+					while True:
+						try:
+							hydrated_values = render_prompt.hydrate_reference_placeholders(
+								prompt_text=prompt_text,
+								prompt_path=prompt_path,
+								mode_name=mode_name,
+								values=hydrated_values,
+							)
+							break
+						except render_prompt.PromptLoadError as exc:
+							missing_path = _missing_reference_path_from_error(str(exc))
+							if missing_path is None:
+								raise AssertionError(f"unexpected hydration failure for {rel}: {exc}") from exc
+							expected.add(missing_path.name)
+							missing_path.parent.mkdir(parents=True, exist_ok=True)
+							missing_path.write_text(f"{missing_path.name}\n", encoding="utf-8")
+		finally:
+			sys.modules.pop(isolated_module_name, None)
 	return expected
 
 
