@@ -374,7 +374,10 @@ jobs:
               "prompts/mode-validate-generate.txt",
               "prompts/mode-validate-diagnose.txt",
               "prompts/mode-validate-discover.txt",
-              "prompts/mode-validate-fix-harness.txt"
+              "prompts/mode-validate-fix-harness.txt",
+              "prompts/references/output-contract.txt",
+              "prompts/references/verification-loop.txt",
+              "prompts/references/validate-output-contract.txt"
             ],
             "optional_preserve_files_after_prompts": [
               "prompts/mode-validate-self-heal.txt",

@@ -3,10 +3,17 @@
 
 from __future__ import annotations
 
+import importlib.util
+import json
+import re
+import sys
+import contextlib
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+SCRIPTS_DIR = REPO_ROOT / "scripts"
 VALIDATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "validate.yml"
 STAGE_WORKFLOW_SUPPORT = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
 VALIDATE_PROCESS = REPO_ROOT / "scripts" / "validate_process.sh"
@@ -17,6 +24,23 @@ VALIDATE_PROMPTS = [
 	REPO_ROOT / "prompts" / "mode-validate-fix-harness.txt",
 	REPO_ROOT / "prompts" / "mode-validate-self-heal.txt",
 ]
+# The validate-mode prompts the support manifest stages into the isolated
+# per-project validate workspace via `required_prompts`. render_prompt.py
+# hydrates their {{REFERENCE_*}} placeholders from prompts/references/*.txt,
+# so those reference files must be staged alongside them or render aborts.
+STAGED_REQUIRED_VALIDATE_PROMPTS = (
+	"prompts/mode-validate-generate.txt",
+	"prompts/mode-validate-diagnose.txt",
+	"prompts/mode-validate-discover.txt",
+	"prompts/mode-validate-fix-harness.txt",
+)
+OPTIONAL_PRESERVED_VALIDATE_PROMPTS = (
+	"prompts/mode-validate-self-heal.txt",
+	"prompts/mode-validate-self-heal-continuation.txt",
+)
+STAGED_VALIDATE_WORKSPACE_PROMPTS = STAGED_REQUIRED_VALIDATE_PROMPTS + OPTIONAL_PRESERVED_VALIDATE_PROMPTS
+RENDER_PROMPT_MODULE_NAME = "_validate_semble_render_prompt"
+REFERENCE_PATH_RE = re.compile(r"(?P<path>[^\s'\"]*/prompts/references/[^\s:'\"]+\.txt)")
 
 
 def _read(path: Path) -> str:
@@ -37,6 +61,114 @@ def _validate_process_text() -> str:
 
 def _self_heal_text() -> str:
 	return _read(SELF_HEAL_SCRIPT)
+
+
+def _import_render_prompt(script_path: Path = SCRIPTS_DIR / "render_prompt.py", module_name: str = RENDER_PROMPT_MODULE_NAME):
+	if module_name in sys.modules:
+		return sys.modules[module_name]
+	spec = importlib.util.spec_from_file_location(module_name, script_path)
+	if spec is None or spec.loader is None:
+		raise AssertionError(f"unable to load render_prompt.py from {script_path}")
+	render_prompt = importlib.util.module_from_spec(spec)
+	sys.modules[module_name] = render_prompt
+	try:
+		spec.loader.exec_module(render_prompt)
+	except Exception:
+		sys.modules.pop(module_name, None)
+		raise
+	return render_prompt
+
+
+def _manifest_required_prompts() -> list[str]:
+	workflow_text = _workflow_text()
+	key = '"required_prompts"'
+	key_index = workflow_text.find(key)
+	if key_index == -1:
+		raise AssertionError("validate.yml support manifest is missing a required_prompts array")
+	field_start = workflow_text.find(":", key_index + len(key))
+	array_start = workflow_text.find("[", field_start)
+	if field_start == -1 or array_start == -1:
+		raise AssertionError("validate.yml support manifest is missing a required_prompts array")
+	try:
+		required_prompts, _ = json.JSONDecoder().raw_decode(workflow_text[array_start:])
+	except json.JSONDecodeError as exc:
+		raise AssertionError("validate.yml support manifest contains an invalid required_prompts array") from exc
+	if not isinstance(required_prompts, list) or not all(isinstance(item, str) for item in required_prompts):
+		raise AssertionError("validate.yml support manifest required_prompts must be a string array")
+	return required_prompts
+
+
+def _missing_reference_path_from_error(error_text: str) -> Path | None:
+	match = REFERENCE_PATH_RE.search(error_text)
+	if match is None:
+		return None
+	return Path(match.group("path"))
+
+
+def _expected_validate_reference_files() -> set[str]:
+	# Discover dependencies by exercising render_prompt.py's real reference
+	# hydration path in an isolated workspace, mirroring validate's runtime.
+	expected: set[str] = set()
+	with TemporaryDirectory() as tmpdir:
+		workspace_root = Path(tmpdir)
+		render_prompt_path = workspace_root / "scripts" / "render_prompt.py"
+		render_prompt_path.parent.mkdir(parents=True, exist_ok=True)
+		render_prompt_path.write_text((SCRIPTS_DIR / "render_prompt.py").read_text(encoding="utf-8"), encoding="utf-8")
+		isolated_module_name = f"{RENDER_PROMPT_MODULE_NAME}_isolated"
+		try:
+			render_prompt = _import_render_prompt(render_prompt_path, isolated_module_name)
+			with contextlib.chdir(workspace_root):
+				for rel in STAGED_VALIDATE_WORKSPACE_PROMPTS:
+					prompt_path = workspace_root / rel
+					prompt_path.parent.mkdir(parents=True, exist_ok=True)
+					prompt_path.write_text((REPO_ROOT / rel).read_text(encoding="utf-8"), encoding="utf-8")
+					prompt_text = render_prompt.load_prompt(prompt_path)
+					mode_name = render_prompt.resolve_mode_name(prompt_path, None)
+					hydrated_values: dict[str, str] = {}
+					while True:
+						try:
+							hydrated_values = render_prompt.hydrate_reference_placeholders(
+								prompt_text=prompt_text,
+								prompt_path=prompt_path,
+								mode_name=mode_name,
+								values=hydrated_values,
+							)
+							break
+						except render_prompt.PromptLoadError as exc:
+							missing_path = _missing_reference_path_from_error(str(exc))
+							if missing_path is None:
+								raise AssertionError(f"unexpected hydration failure for {rel}: {exc}") from exc
+							expected.add(missing_path.name)
+							missing_path.parent.mkdir(parents=True, exist_ok=True)
+							missing_path.write_text(f"{missing_path.name}\n", encoding="utf-8")
+		finally:
+			sys.modules.pop(isolated_module_name, None)
+	return expected
+
+
+def test_validate_manifest_stages_reference_dependencies() -> None:
+	# Regression guard for the infinite redispatch loop: the validate job runs
+	# in an isolated workspace with no .codex-workflow-src checkout, so every
+	# prompts/references/*.txt file a staged validate prompt depends on must be
+	# listed in the manifest's required_prompts. If one is missing,
+	# render_prompt.py aborts ("Reference file ... not found"), the validate run
+	# exits before applying a result label, and the orchestrate poller keeps
+	# redispatching the same cycle forever.
+	required_prompts = _manifest_required_prompts()
+	expected_references = _expected_validate_reference_files()
+	assert expected_references, "expected at least one validate reference dependency"
+	assert "validate-output-contract.txt" in expected_references, (
+		"mode-validate-generate should require the validate-output-contract append reference"
+	)
+	for file_name in sorted(expected_references):
+		manifest_entry = f"prompts/references/{file_name}"
+		assert manifest_entry in required_prompts, (
+			f"validate manifest required_prompts is missing {manifest_entry}; "
+			"staged validate prompts depend on it at render time"
+		)
+		assert (REPO_ROOT / "prompts" / "references" / file_name).is_file(), (
+			f"prompts/references/{file_name} is staged by the manifest but does not exist on disk"
+		)
 
 
 def test_validate_prompts_include_serena_placeholder() -> None:
@@ -180,15 +312,25 @@ def test_self_heal_includes_semble_and_serena_prompt_hooks() -> None:
 
 
 def main() -> int:
-	test_validate_prompts_include_serena_placeholder()
-	test_validate_workflow_lists_semble_support_files_in_helper_manifest()
-	test_validate_workflow_lists_serena_support_files_in_helper_manifest()
-	test_validate_workflow_bootstraps_and_exports_semble_state()
-	test_shared_wrapper_script_owns_bm25_implementation()
-	test_validate_process_includes_serena_bootstrap_and_prompt_hooks()
-	test_validate_process_includes_discover_and_diagnose_semble_hooks()
-	test_self_heal_includes_semble_and_serena_prompt_hooks()
-	return 0
+	failures: list[str] = []
+	for test_fn in (
+		test_validate_manifest_stages_reference_dependencies,
+		test_validate_prompts_include_serena_placeholder,
+		test_validate_workflow_lists_semble_support_files_in_helper_manifest,
+		test_validate_workflow_lists_serena_support_files_in_helper_manifest,
+		test_validate_workflow_bootstraps_and_exports_semble_state,
+		test_shared_wrapper_script_owns_bm25_implementation,
+		test_validate_process_includes_serena_bootstrap_and_prompt_hooks,
+		test_validate_process_includes_discover_and_diagnose_semble_hooks,
+		test_self_heal_includes_semble_and_serena_prompt_hooks,
+	):
+		try:
+			test_fn()
+		except Exception as exc:
+			failures.append(f"{test_fn.__name__}: {exc}")
+	for failure in failures:
+		print(f"::error::{failure}", file=sys.stderr)
+	return 1 if failures else 0
 
 
 if __name__ == "__main__":
