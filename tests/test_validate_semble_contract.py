@@ -78,15 +78,22 @@ def _import_render_prompt(script_path: Path = SCRIPTS_DIR / "render_prompt.py", 
 
 
 def _manifest_required_prompts() -> list[str]:
-	array_lines: list[str] = []
-	for line in _workflow_text().splitlines():
-		stripped = line.strip()
-		if not array_lines and not stripped.startswith('"required_prompts"'):
-			continue
-		array_lines.append(stripped.split(":", 1)[1].strip() if not array_lines else stripped)
-		if stripped == "],":
-			return json.loads("\n".join(array_lines).removesuffix(","))
-	raise AssertionError("validate.yml support manifest is missing a complete required_prompts array")
+	workflow_text = _workflow_text()
+	key = '"required_prompts"'
+	key_index = workflow_text.find(key)
+	if key_index == -1:
+		raise AssertionError("validate.yml support manifest is missing a required_prompts array")
+	field_start = workflow_text.find(":", key_index + len(key))
+	array_start = workflow_text.find("[", field_start)
+	if field_start == -1 or array_start == -1:
+		raise AssertionError("validate.yml support manifest is missing a required_prompts array")
+	try:
+		required_prompts, _ = json.JSONDecoder().raw_decode(workflow_text[array_start:])
+	except json.JSONDecodeError as exc:
+		raise AssertionError("validate.yml support manifest contains an invalid required_prompts array") from exc
+	if not isinstance(required_prompts, list) or not all(isinstance(item, str) for item in required_prompts):
+		raise AssertionError("validate.yml support manifest required_prompts must be a string array")
+	return required_prompts
 
 
 def _missing_reference_path_from_error(error_text: str) -> Path | None:
@@ -113,19 +120,20 @@ def _expected_validate_reference_files() -> set[str]:
 				prompt_path.write_text((REPO_ROOT / rel).read_text(encoding="utf-8"), encoding="utf-8")
 				prompt_text = render_prompt.load_prompt(prompt_path)
 				mode_name = render_prompt.resolve_mode_name(prompt_path, None)
+				hydrated_values: dict[str, str] = {}
 				while True:
 					try:
-						render_prompt.hydrate_reference_placeholders(
+						hydrated_values = render_prompt.hydrate_reference_placeholders(
 							prompt_text=prompt_text,
 							prompt_path=prompt_path,
 							mode_name=mode_name,
-							values={},
+							values=hydrated_values,
 						)
 						break
 					except render_prompt.PromptLoadError as exc:
 						missing_path = _missing_reference_path_from_error(str(exc))
 						if missing_path is None:
-							raise AssertionError(str(exc)) from exc
+							raise AssertionError(f"unexpected hydration failure for {rel}: {exc}") from exc
 						expected.add(missing_path.name)
 						missing_path.parent.mkdir(parents=True, exist_ok=True)
 						missing_path.write_text(f"{missing_path.name}\n", encoding="utf-8")
@@ -143,6 +151,9 @@ def test_validate_manifest_stages_reference_dependencies() -> None:
 	required_prompts = _manifest_required_prompts()
 	expected_references = _expected_validate_reference_files()
 	assert expected_references, "expected at least one validate reference dependency"
+	assert "validate-output-contract.txt" in expected_references, (
+		"mode-validate-generate should require the validate-output-contract append reference"
+	)
 	for file_name in sorted(expected_references):
 		manifest_entry = f"prompts/references/{file_name}"
 		assert manifest_entry in required_prompts, (
@@ -312,7 +323,7 @@ def main() -> int:
 		except Exception as exc:
 			failures.append(f"{test_fn.__name__}: {exc}")
 	for failure in failures:
-		print(failure, file=sys.stderr)
+		print(f"::error::{failure}", file=sys.stderr)
 	return 1 if failures else 0
 
 
