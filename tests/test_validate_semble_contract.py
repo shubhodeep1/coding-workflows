@@ -3,10 +3,13 @@
 
 from __future__ import annotations
 
+import re
+import sys
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+SCRIPTS_DIR = REPO_ROOT / "scripts"
 VALIDATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "validate.yml"
 STAGE_WORKFLOW_SUPPORT = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
 VALIDATE_PROCESS = REPO_ROOT / "scripts" / "validate_process.sh"
@@ -17,6 +20,16 @@ VALIDATE_PROMPTS = [
 	REPO_ROOT / "prompts" / "mode-validate-fix-harness.txt",
 	REPO_ROOT / "prompts" / "mode-validate-self-heal.txt",
 ]
+# The validate-mode prompts the support manifest stages into the isolated
+# per-project validate workspace via `required_prompts`. render_prompt.py
+# hydrates their {{REFERENCE_*}} placeholders from prompts/references/*.txt,
+# so those reference files must be staged alongside them or render aborts.
+STAGED_REQUIRED_VALIDATE_PROMPTS = (
+	"prompts/mode-validate-generate.txt",
+	"prompts/mode-validate-diagnose.txt",
+	"prompts/mode-validate-discover.txt",
+	"prompts/mode-validate-fix-harness.txt",
+)
 
 
 def _read(path: Path) -> str:
@@ -37,6 +50,64 @@ def _validate_process_text() -> str:
 
 def _self_heal_text() -> str:
 	return _read(SELF_HEAL_SCRIPT)
+
+
+def _import_render_prompt():
+	if str(SCRIPTS_DIR) not in sys.path:
+		sys.path.insert(0, str(SCRIPTS_DIR))
+	import render_prompt
+
+	return render_prompt
+
+
+def _manifest_required_prompts() -> list[str]:
+	match = re.search(r'"required_prompts"\s*:\s*\[(.*?)\]', _workflow_text(), re.DOTALL)
+	assert match, "validate.yml support manifest is missing a required_prompts array"
+	return re.findall(r'"([^"]+)"', match.group(1))
+
+
+def _expected_validate_reference_files() -> set[str]:
+	# Mirror render_prompt.py's placeholder->reference-file resolution so this
+	# guard tracks the renderer's real behaviour instead of a hand-maintained
+	# list: every {{REFERENCE_*}} placeholder maps to a prompts/references/*.txt
+	# file, and mode-validate-generate additionally appends
+	# validate-output-contract.txt for REFERENCE_OUTPUT_CONTRACT.
+	render_prompt = _import_render_prompt()
+	expected: set[str] = set()
+	for rel in STAGED_REQUIRED_VALIDATE_PROMPTS:
+		prompt_path = REPO_ROOT / rel
+		text = prompt_path.read_text(encoding="utf-8")
+		mode_name = prompt_path.stem
+		for placeholder in sorted(set(re.findall(r"\{\{([A-Za-z0-9_]+)\}\}", text))):
+			file_name = render_prompt._reference_file_name_for_placeholder(placeholder)
+			if file_name is None:
+				continue
+			expected.add(file_name)
+			if placeholder == "REFERENCE_OUTPUT_CONTRACT" and mode_name == "mode-validate-generate":
+				expected.add("validate-output-contract.txt")
+	return expected
+
+
+def test_validate_manifest_stages_reference_dependencies() -> None:
+	# Regression guard for the infinite redispatch loop: the validate job runs
+	# in an isolated workspace with no .codex-workflow-src checkout, so every
+	# prompts/references/*.txt file a staged validate prompt depends on must be
+	# listed in the manifest's required_prompts. If one is missing,
+	# render_prompt.py aborts ("Reference file ... not found"), the validate run
+	# exits before applying a result label, and the orchestrate poller keeps
+	# redispatching the same cycle forever.
+	required_prompts = _manifest_required_prompts()
+	expected_references = _expected_validate_reference_files()
+	assert expected_references, "expected at least one validate reference dependency"
+	for file_name in sorted(expected_references):
+		manifest_entry = f"prompts/references/{file_name}"
+		assert manifest_entry in required_prompts, (
+			f"validate manifest required_prompts is missing {manifest_entry}; "
+			"staged validate prompts depend on it at render time"
+		)
+		assert (REPO_ROOT / "prompts" / "references" / file_name).is_file(), (
+			f"prompts/references/{file_name} is staged by the manifest but does not exist on disk"
+		)
 
 
 def test_validate_prompts_include_serena_placeholder() -> None:
@@ -180,6 +251,7 @@ def test_self_heal_includes_semble_and_serena_prompt_hooks() -> None:
 
 
 def main() -> int:
+	test_validate_manifest_stages_reference_dependencies()
 	test_validate_prompts_include_serena_placeholder()
 	test_validate_workflow_lists_semble_support_files_in_helper_manifest()
 	test_validate_workflow_lists_serena_support_files_in_helper_manifest()
