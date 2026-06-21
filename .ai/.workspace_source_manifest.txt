@@ -59,6 +59,7 @@
 .github/workflows/review_autofix.yml
 .github/workflows/review_autofix_sweep.yml
 .github/workflows/review_rb_judge_dispatch.yml
+.github/workflows/sync_ai_labels.yml
 .github/workflows/test-and-mark-stable.yml
 .github/workflows/update_workflows.yml
 .github/workflows/validate.yml
@@ -596,6 +597,7 @@ workflow-templates/ai-orchestrate-poll.yml
 workflow-templates/ai-orchestrate.yml
 workflow-templates/ai-plan.yml
 workflow-templates/ai-review.yml
+workflow-templates/ai-sync-labels.yml
 workflow-templates/ai-update-workflows.yml
 workflow-templates/ai-validate.yml
 workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js

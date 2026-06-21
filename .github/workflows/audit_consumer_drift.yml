@@ -1,0 +1,276 @@
+name: Audit Consumer Drift
+
+on:
+  schedule:
+    - cron: '0 8 * * 1'
+  workflow_dispatch:
+
+env:
+  ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audit-consumer-drift-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  audit-consumer-drift:
+    if: github.repository == 'shubhodeep1/coding-workflows'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Run consumer drift audit
+        id: audit
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "ERROR: secrets.GH_PAT is required for cross-repository consumer drift reads."
+            exit 1
+          fi
+
+          RUNTIME_DIR="${RUNNER_TEMP}/audit-consumer-drift-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "${RUNTIME_DIR}"
+          SUMMARY_JSON="${RUNTIME_DIR}/summary.json"
+          echo "summary_json=${SUMMARY_JSON}" >> "${GITHUB_OUTPUT}"
+
+          python3 scripts/audit_consumer_drift.py \
+            --consumer-repos .github/ai/consumer_repos.json \
+            --templates-dir workflow-templates \
+            --output "${SUMMARY_JSON}" \
+            --max-diff-lines 25
+
+      - name: Build report artifacts
+        if: always()
+        id: report
+        env:
+          SUMMARY_JSON: ${{ steps.audit.outputs.summary_json }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          REPORT_DIR="${RUNNER_TEMP}/audit-consumer-drift-report-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "${REPORT_DIR}"
+          SUMMARY_MD="${REPORT_DIR}/summary.md"
+          TELEGRAM_BODY="${REPORT_DIR}/telegram.txt"
+          TELEGRAM_LEVEL_FILE="${REPORT_DIR}/telegram-level.txt"
+
+          python3 - "${SUMMARY_JSON}" "${SUMMARY_MD}" "${TELEGRAM_BODY}" "${TELEGRAM_LEVEL_FILE}" "${RUN_URL}" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          summary_path = Path(sys.argv[1])
+          summary_md_path = Path(sys.argv[2])
+          telegram_body_path = Path(sys.argv[3])
+          level_path = Path(sys.argv[4])
+          run_url = sys.argv[5]
+
+          def preview_line_count(text: str) -> int:
+              return 0 if not text else len(text.splitlines())
+
+          def append_capped(blocks: list[str], base_lines: list[str], *, max_chars: int = 3900) -> str:
+              body = "\n".join(base_lines)
+              if not blocks:
+                  return body
+              result = body
+              for index, block in enumerate(blocks):
+                  candidate = result + "\n" + block
+                  if len(candidate) <= max_chars:
+                      result = candidate
+                      continue
+                  remaining = len(blocks) - index
+                  return result + f"\n- ... {remaining} more item(s); see workflow summary for full details."
+              return result
+
+          if not summary_path or not summary_path.is_file():
+              summary_md_path.write_text(
+                  "\n".join(
+                      [
+                          "## Consumer Drift Audit",
+                          "",
+                          "- Summary JSON was not produced.",
+                          f"- Run: {run_url}",
+                      ]
+                  )
+                  + "\n",
+                  encoding="utf-8",
+              )
+              telegram_body_path.write_text(
+                  "Consumer wrapper drift audit failed before producing summary JSON.\n"
+                  f"Run: {run_url}\n",
+                  encoding="utf-8",
+              )
+              level_path.write_text("ERROR\n", encoding="utf-8")
+              raise SystemExit(0)
+
+          try:
+              summary = json.loads(summary_path.read_text(encoding="utf-8"))
+          except (OSError, json.JSONDecodeError) as exc:
+              summary_md_path.write_text(
+                  "\n".join(
+                      [
+                          "## Consumer Drift Audit",
+                          "",
+                          f"- Summary JSON parse failed: {exc}",
+                          f"- Run: {run_url}",
+                      ]
+                  )
+                  + "\n",
+                  encoding="utf-8",
+              )
+              telegram_body_path.write_text(
+                  "Consumer wrapper drift audit produced unreadable summary JSON.\n"
+                  f"Reason: {exc}\n"
+                  f"Run: {run_url}\n",
+                  encoding="utf-8",
+              )
+              level_path.write_text("ERROR\n", encoding="utf-8")
+              raise SystemExit(0)
+
+          totals = summary.get("totals", {})
+          results = summary.get("results", [])
+          template_files = summary.get("template_files", [])
+          drift_results = [item for item in results if item.get("outcome") == "drift"]
+          error_results = [item for item in results if item.get("outcome") == "error"]
+          level = "WARNING" if drift_results or error_results else "DEBUG"
+
+          lines = [
+              "## Consumer Drift Audit",
+              "",
+              f"- Generated at: `{summary.get('generated_at', 'unknown')}`",
+              f"- Processed repositories: {totals.get('processed', 0)}",
+              f"- Matching repositories: {totals.get('match', 0)}",
+              f"- Drifting repositories: {totals.get('drift', 0)}",
+              f"- Error repositories: {totals.get('error', 0)}",
+              f"- Drift items: {totals.get('drift_items', 0)}",
+              f"- Templates checked per repo: {len(template_files)}",
+              "",
+              f"- Run: {run_url}",
+          ]
+
+          if drift_results:
+              lines.extend(["", "### Drift detected"])
+              for result in drift_results:
+                  repo = result.get("repository", "unknown")
+                  lines.extend(["", f"#### `{repo}`"])
+                  for item in result.get("drift_items", []):
+                      diff_preview = item.get("diff_preview", "")
+                      lines.append(
+                          f"- `{item.get('file', 'unknown')}` — "
+                          f"{'missing' if item.get('missing') else 'content drift'} "
+                          f"({preview_line_count(diff_preview)}/{item.get('diff_lines_total', 0)} diff lines shown)"
+                      )
+                      if diff_preview:
+                          lines.extend(["", "```diff", diff_preview, "```"])
+
+          if error_results:
+              lines.extend(["", "### Repository fetch errors"])
+              for result in error_results:
+                  repo = result.get("repository", "unknown")
+                  detail = result.get("error_detail") or result.get("error") or "unknown"
+                  lines.append(f"- `{repo}` — `{result.get('error', 'error')}`: {detail}")
+
+          summary_md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+          telegram_lines = []
+          if level == "DEBUG":
+              telegram_lines.extend(
+                  [
+                      "All consumer wrappers match the checked-out workflow templates.",
+                      (
+                          f"Processed={totals.get('processed', 0)} "
+                          f"Match={totals.get('match', 0)} Drift={totals.get('drift', 0)} Error={totals.get('error', 0)}"
+                      ),
+                      "Registry: .github/ai/consumer_repos.json",
+                      f"Run: {run_url}",
+                  ]
+              )
+              telegram_body = "\n".join(telegram_lines)
+          else:
+              telegram_lines.extend(
+                  [
+                      "Consumer wrapper drift audit detected drift or repository fetch errors.",
+                      (
+                          f"Processed={totals.get('processed', 0)} "
+                          f"Match={totals.get('match', 0)} Drift={totals.get('drift', 0)} "
+                          f"Error={totals.get('error', 0)} DriftItems={totals.get('drift_items', 0)}"
+                      ),
+                      "Registry: .github/ai/consumer_repos.json",
+                  ]
+              )
+              blocks = []
+              for result in drift_results:
+                  repo = result.get("repository", "unknown")
+                  for item in result.get("drift_items", []):
+                      block_lines = [
+                          f"- {repo} / {item.get('file', 'unknown')} "
+                          f"({'missing' if item.get('missing') else 'drift'}, diff lines {item.get('diff_lines_total', 0)})"
+                      ]
+                      diff_preview = item.get("diff_preview", "")
+                      if diff_preview:
+                          block_lines.extend([f"  {line}" for line in diff_preview.splitlines()])
+                      blocks.append("\n".join(block_lines))
+              for result in error_results:
+                  repo = result.get("repository", "unknown")
+                  detail = result.get("error_detail") or result.get("error") or "unknown"
+                  blocks.append(f"- {repo}: {result.get('error', 'error')} ({detail})")
+              telegram_body = append_capped(blocks, telegram_lines + [f"Run: {run_url}"])
+
+          telegram_body_path.write_text(telegram_body + "\n", encoding="utf-8")
+          level_path.write_text(level + "\n", encoding="utf-8")
+          PY
+
+          echo "summary_md=${SUMMARY_MD}" >> "${GITHUB_OUTPUT}"
+          echo "telegram_body=${TELEGRAM_BODY}" >> "${GITHUB_OUTPUT}"
+          echo "telegram_level=$(tr -d '\n' < "${TELEGRAM_LEVEL_FILE}")" >> "${GITHUB_OUTPUT}"
+
+      - name: Append step summary
+        if: always()
+        env:
+          SUMMARY_MD: ${{ steps.report.outputs.summary_md }}
+        run: |
+          set -euo pipefail
+          if [ -n "${SUMMARY_MD:-}" ] && [ -f "${SUMMARY_MD}" ]; then
+            cat "${SUMMARY_MD}" >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "No consumer drift summary was produced." >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: Telegram alert
+        if: always()
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          TELEGRAM_BODY_FILE: ${{ steps.report.outputs.telegram_body }}
+          TELEGRAM_LEVEL: ${{ steps.report.outputs.telegram_level }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TELEGRAM_BODY_FILE:-}" ] || [ ! -f "${TELEGRAM_BODY_FILE}" ]; then
+            echo "Telegram alert skipped (no rendered message body)."
+            exit 0
+          fi
+
+          # shellcheck source=scripts/tg_helpers.sh
+          source scripts/tg_helpers.sh
+          telegram_body="$(cat "${TELEGRAM_BODY_FILE}")"
+          if [ -z "${telegram_body}" ]; then
+            echo "Telegram alert skipped (empty rendered message body)."
+            exit 0
+          fi
+
+          tg_send_msg "${telegram_body}" "${TELEGRAM_LEVEL:-ERROR}" >/dev/null || true
