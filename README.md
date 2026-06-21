@@ -753,6 +753,15 @@ stay aligned with the upstream contract, add
 as `.github/workflows/ai-sync-labels.yml`. It supports manual
 `workflow_dispatch` runs plus the stable-release `repository_dispatch` hook.
 
+**Central consumer drift audit:** This source repo also runs
+[`.github/workflows/audit_consumer_drift.yml`](.github/workflows/audit_consumer_drift.yml)
+on a weekly cron plus manual `workflow_dispatch`. The audit reads the live
+[`.github/ai/consumer_repos.json`](.github/ai/consumer_repos.json) registry,
+fetches each consumer's installed `.github/workflows/ai-*.yml` wrappers via
+the GitHub contents API, diffs them against this repo's checked-in
+[`workflow-templates/ai-*.yml`](workflow-templates/), and reports drift
+read-only — it never writes to consumer repositories.
+
 #### Install profiles
 
 If you use `ai-update-workflows.yml`, you can narrow which wrappers it
