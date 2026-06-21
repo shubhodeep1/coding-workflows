@@ -76,8 +76,14 @@ def test_memory_record_schema_accepts_repo_learnings_without_version_bump() -> N
 		assert "repo_learnings" in schema_payload["properties"]["category"]["enum"]
 
 
+def test_build_scope_treats_blank_override_as_unset() -> None:
+	scope = ai_memory_lib._build_scope(42, None, None, "   ")
+	assert scope == {"level": "task", "issue_number": 42, "pr_number": None, "run_id": None}
+
+
 def main() -> int:
 	test_memory_record_schema_accepts_repo_learnings_without_version_bump()
+	test_build_scope_treats_blank_override_as_unset()
 	print("OK: memory record schema accepts repo_learnings additively")
 	return 0
 

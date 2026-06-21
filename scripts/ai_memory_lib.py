@@ -527,7 +527,7 @@ def _build_scope(
     scope_level_override: str | None = None,
 ) -> dict[str, Any]:
     normalized_scope_level_override = None
-    if scope_level_override is not None:
+    if scope_level_override is not None and scope_level_override.strip():
         normalized_scope_level_override = scope_level_override.strip().lower()
         if normalized_scope_level_override not in ALLOWED_SCOPE_LEVELS:
             raise MemoryValidationError(f"Unsupported scope level: {scope_level_override}")
