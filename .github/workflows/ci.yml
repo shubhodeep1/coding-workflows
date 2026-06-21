@@ -325,6 +325,7 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/dev/test_codex_helpers.sh
+          bash scripts/dev/test_write_guard.sh
           bash scripts/dev/test_watchdog_helpers.sh
 
       - name: Targeted file context contract tests

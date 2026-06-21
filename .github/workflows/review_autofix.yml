@@ -1168,6 +1168,7 @@ jobs:
       BEHAVIOURAL_SMOKE_TIMEOUT_S: ${{ vars.BEHAVIOURAL_SMOKE_TIMEOUT_S || '120' }}
       VALIDATION_INCLUDE_SYNTHESISED: ${{ vars.VALIDATION_INCLUDE_SYNTHESISED || 'true' }}
       ALLOW_WORKFLOW_EDITS: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || (github.event_name != 'workflow_dispatch' && inputs.allow_workflow_edits)) && 'true' || 'false' }}
+      WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
       # Claude-branch-review mode: when true, the codex-agent job runs the
       # reviewer panel + summariser, posts the consensus ledger as a PR
       # commit comment via scripts/post_review_comment.sh, and exits without

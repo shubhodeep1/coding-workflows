@@ -63,6 +63,7 @@ env:
   VALIDATION_INCLUDE_SYNTHESISED: ${{ vars.VALIDATION_INCLUDE_SYNTHESISED || 'true' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   MEMORY_INJECTION_SCAN_ENABLED: ${{ vars.MEMORY_INJECTION_SCAN_ENABLED || 'true' }}
+  WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
   CODEX_HEARTBEAT_ENABLED: ${{ vars.CODEX_HEARTBEAT_ENABLED || '1' }}
   CODEX_HEARTBEAT_INTERVAL_SECS: ${{ vars.CODEX_HEARTBEAT_INTERVAL_SECS || '30' }}
   SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}
@@ -272,6 +273,7 @@ jobs:
               "scripts/codex_helpers.sh",
               "scripts/orchestrate_force_tick.sh",
               "scripts/watchdog_helpers.sh",
+              "scripts/write_guard.sh",
               "scripts/workspace_init.sh",
               "scripts/workspace_safety_check.sh",
               "scripts/run_workspace_hook.sh"
@@ -281,6 +283,7 @@ jobs:
               "scripts/render_validation_templates.py"
             ],
             "optional_preserve_files_before_templates": [
+              ".github/ai/write_guards.v1.json",
               "scripts/templates/slot_manifest.schema.json"
             ],
             "optional_copy_files": [
