@@ -76,9 +76,13 @@ write_guard_check()
 	local write_guard_pattern=""
 	local write_guard_env_var=""
 	local write_guard_env_value=""
+	local write_guard_safe_path=""
+	local write_guard_safe_pattern=""
+	local write_guard_safe_env_var=""
+	local write_guard_safe_env_value=""
 
 	if ! write_guard_is_truthy "${write_guard_enabled_value}"; then
-		echo "WRITE_GUARD_BYPASS_ENV: phase=${write_guard_phase} env=WRITE_GUARDS_ENABLED value=${write_guard_enabled_value}"
+		echo "WRITE_GUARD_BYPASS_ENV: phase=${write_guard_phase} env=WRITE_GUARDS_ENABLED value=$(write_guard_sanitize_log_value "${write_guard_enabled_value}")"
 		return 0
 	fi
 
@@ -169,11 +173,15 @@ def first_match(path, patterns):
 	return None
 
 
+def sanitize_field(value):
+	return " ".join(str(value).replace("\n", " ").replace("\t", " ").split())
+
+
 violations = 0
 for path in paths:
 	blocked_pattern = first_match(path, blocked_globs)
 	if blocked_pattern is not None:
-		print("\t".join(["blocked_glob", path, blocked_pattern, "", ""]))
+		print("\t".join(["blocked_glob", sanitize_field(path), sanitize_field(blocked_pattern), "", ""]))
 		violations += 1
 		continue
 	conditional_hit = False
@@ -183,14 +191,14 @@ for path in paths:
 			continue
 		blocked_pattern = first_match(path, globs)
 		if blocked_pattern is not None:
-			print("\t".join(["conditional_blocked_glob", path, blocked_pattern, env_var, env_value]))
+			print("\t".join(["conditional_blocked_glob", sanitize_field(path), sanitize_field(blocked_pattern), sanitize_field(env_var), sanitize_field(env_value)]))
 			violations += 1
 			conditional_hit = True
 			break
 	if conditional_hit:
 		continue
 	if first_match(path, allowed_globs) is None:
-		print("\t".join(["not_allowed", path, "<no-match>", "", ""]))
+		print("\t".join(["not_allowed", sanitize_field(path), "<no-match>", "", ""]))
 		violations += 1
 
 sys.exit(1 if violations else 0)
@@ -205,10 +213,14 @@ PY
 			while IFS=$'\t' read -r write_guard_reason write_guard_path write_guard_pattern write_guard_env_var write_guard_env_value; do
 				[ -n "${write_guard_reason}" ] || continue
 				write_guard_block_count=$((write_guard_block_count + 1))
+				write_guard_safe_path="$(write_guard_sanitize_log_value "${write_guard_path}")"
+				write_guard_safe_pattern="$(write_guard_sanitize_log_value "${write_guard_pattern}")"
+				write_guard_safe_env_var="$(write_guard_sanitize_log_value "${write_guard_env_var}")"
+				write_guard_safe_env_value="$(write_guard_sanitize_log_value "${write_guard_env_value}")"
 				if [ -n "${write_guard_env_var}" ]; then
-					echo "WRITE_GUARD_BLOCK: phase=${write_guard_phase} path=${write_guard_path} reason=${write_guard_reason} pattern=${write_guard_pattern} env=${write_guard_env_var} env_value=${write_guard_env_value}"
+					echo "WRITE_GUARD_BLOCK: phase=${write_guard_phase} path=${write_guard_safe_path} reason=${write_guard_reason} pattern=${write_guard_safe_pattern} env=${write_guard_safe_env_var} env_value=${write_guard_safe_env_value}"
 				else
-					echo "WRITE_GUARD_BLOCK: phase=${write_guard_phase} path=${write_guard_path} reason=${write_guard_reason} pattern=${write_guard_pattern}"
+					echo "WRITE_GUARD_BLOCK: phase=${write_guard_phase} path=${write_guard_safe_path} reason=${write_guard_reason} pattern=${write_guard_safe_pattern}"
 				fi
 			done < "${write_guard_result_file}"
 			rm -f "${write_guard_result_file}" "${write_guard_stderr_file}"

@@ -185,6 +185,26 @@ test_bypass_env_audit()
 	rm -rf "${repo_dir}"
 }
 
+test_bypass_env_audit_sanitizes_value()
+{
+	local repo_dir
+	repo_dir="$(make_temp_repo)"
+	run_guard_capture "${repo_dir}" validate_fix_harness $'README.md\n' $'WRITE_GUARDS_ENABLED=false\tline\nbreak'
+	assert_eq "0" "${RUN_GUARD_STATUS}" 'bypass log should stay single-line when WRITE_GUARDS_ENABLED contains control characters'
+	assert_contains 'WRITE_GUARD_BYPASS_ENV: phase=validate_fix_harness env=WRITE_GUARDS_ENABLED value=false line break' "${RUN_GUARD_OUTPUT}" 'bypass log should sanitize control characters'
+	rm -rf "${repo_dir}"
+}
+
+test_block_log_sanitizes_fields()
+{
+	local repo_dir
+	repo_dir="$(make_temp_repo)"
+	run_guard_capture "${repo_dir}" review_editor $'.github/workflows/test\tfile.yml\n' $'ALLOW_WORKFLOW_EDITS=false\tline\nbreak'
+	assert_eq "1" "${RUN_GUARD_STATUS}" 'blocked log should fail closed even when inputs contain control characters'
+	assert_contains 'WRITE_GUARD_BLOCK: phase=review_editor path=.github/workflows/test file.yml reason=conditional_blocked_glob pattern=.github/workflows/** env=ALLOW_WORKFLOW_EDITS env_value=false line break' "${RUN_GUARD_OUTPUT}" 'blocked log should sanitize path and env value'
+	rm -rf "${repo_dir}"
+}
+
 test_allowlist_pass
 test_blocklist_fail
 test_not_allowed_fail
@@ -193,4 +213,6 @@ test_conditional_block_with_env_enabled
 test_config_parse_fail_open
 test_config_parse_fail_open_from_fallback
 test_bypass_env_audit
+test_bypass_env_audit_sanitizes_value
+test_block_log_sanitizes_fields
 echo "test_write_guard.sh: PASS"
