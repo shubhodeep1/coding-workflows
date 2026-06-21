@@ -214,13 +214,17 @@ if [ -f "scripts/tg_helpers.sh" ]; then
   source scripts/tg_helpers.sh
 fi
 # shellcheck source=/dev/null
-if [ -f "${_validate_script_dir}/codex_helpers.sh" ]; then
-  source "${_validate_script_dir}/codex_helpers.sh"
+if [ ! -f "${_validate_script_dir}/codex_helpers.sh" ]; then
+  echo "::error::Missing required support script ${_validate_script_dir}/codex_helpers.sh" >&2
+  exit 1
 fi
+source "${_validate_script_dir}/codex_helpers.sh"
 # shellcheck source=/dev/null
-if [ -f "${_validate_script_dir}/watchdog_helpers.sh" ]; then
-  source "${_validate_script_dir}/watchdog_helpers.sh"
+if [ ! -f "${_validate_script_dir}/watchdog_helpers.sh" ]; then
+  echo "::error::Missing required support script ${_validate_script_dir}/watchdog_helpers.sh" >&2
+  exit 1
 fi
+source "${_validate_script_dir}/watchdog_helpers.sh"
 
 
 # _gh_url constructs a full GitHub URL for the current repository.

@@ -589,7 +589,7 @@ jobs:
             bash -n "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
           done
 
-      - name: Validate memory_helpers.sh exports memory_ensure_branch
+      - name: Validate memory_helpers.sh exports memory helpers
         run: |
           set -euo pipefail
           bash -c 'source scripts/memory_helpers.sh && declare -F memory_ensure_branch >/dev/null && declare -F memory_bootstrap >/dev/null' \

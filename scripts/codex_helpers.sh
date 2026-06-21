@@ -11,7 +11,7 @@ _codex_helpers_resolve_scripts_dir()
 	local workspace_root=""
 
 	if [ -z "${configured_dir}" ]; then
-		cd "$(dirname "${BASH_SOURCE[0]}")" && pwd
+		(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 		return 0
 	fi
 

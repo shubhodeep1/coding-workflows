@@ -88,6 +88,28 @@ EOF
 	rm -rf "${tmpdir}"
 }
 
+test_default_support_dir_resolution_preserves_pwd()
+{
+	local tmpdir caller_dir resolved_file starting_dir current_dir
+	tmpdir="$(mktemp -d)"
+	trap 'cd "${starting_dir}" 2>/dev/null || true; rm -rf "${tmpdir}"' RETURN
+	caller_dir="${tmpdir}/caller"
+	resolved_file="${tmpdir}/resolved.txt"
+	starting_dir="$(pwd)"
+	mkdir -p "${caller_dir}"
+	cd "${caller_dir}"
+	CODEX_HELPERS_SCRIPTS_DIR="" _codex_helpers_resolve_scripts_dir > "${resolved_file}"
+	assert_contains "${REPO_ROOT}/scripts" "${resolved_file}"
+	current_dir="$(pwd)"
+	if [ "${current_dir}" != "${caller_dir}" ]; then
+		echo "default scripts-dir resolution mutated the caller working directory: ${current_dir}" >&2
+		exit 1
+	fi
+	trap - RETURN
+	cd "${starting_dir}"
+	rm -rf "${tmpdir}"
+}
+
 test_missing_writer_helper_fails_fast()
 {
 	local tmpdir scripts_dir env_file err_file helper_home
@@ -114,5 +136,6 @@ test_missing_writer_helper_fails_fast()
 
 test_relative_support_dir_resolution
 test_absolute_support_dir_resolution
+test_default_support_dir_resolution_preserves_pwd
 test_missing_writer_helper_fails_fast
 echo "test_codex_helpers.sh: PASS"
