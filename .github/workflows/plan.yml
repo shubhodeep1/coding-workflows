@@ -1195,6 +1195,7 @@ jobs:
           ) | LC_ALL=C sort -u > "${POST_PLAN_WRITE_GUARD_PATHS_FILE}"
 
           # shellcheck source=/dev/null
+          [ -f scripts/write_guard.sh ] || { echo "::error::write_guard.sh not found after fetch"; exit 1; }
           source scripts/write_guard.sh
           PLAN_WRITE_GUARD_FILE="$(mktemp "${TMPDIR:-/tmp}/plan-write-guard.XXXXXX")"
 
