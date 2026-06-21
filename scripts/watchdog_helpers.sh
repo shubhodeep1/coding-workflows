@@ -53,7 +53,9 @@ _reap_editor_fifo_holders()
 	local target=""
 	local pid=""
 
-	sig="${sig#-}"
+	while [ "${sig#-}" != "${sig}" ]; do
+		sig="${sig#-}"
+	done
 	[ -n "${fifo}" ] && [ -e "${fifo}" ] || return 0
 	if command -v fuser >/dev/null 2>&1; then
 		fuser -k -"${sig}" "${fifo}" >/dev/null 2>&1 || true

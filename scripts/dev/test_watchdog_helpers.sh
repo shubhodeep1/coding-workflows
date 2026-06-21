@@ -82,9 +82,37 @@ test_reap_editor_fifo_holders_missing_path()
 	_reap_editor_fifo_holders '/tmp/does-not-exist-watchdog-helper' TERM
 }
 
+test_reap_editor_fifo_holders_normalizes_multi_hyphen_signal()
+{
+	local tmpdir fifo holder_pid=''
+	tmpdir="$(mktemp -d)"
+	trap 'kill "${holder_pid}" 2>/dev/null || true; wait "${holder_pid}" 2>/dev/null || true; rm -rf "${tmpdir}"' RETURN
+	fifo="${tmpdir}/stderr.fifo"
+	mkfifo "${fifo}"
+	bash -c 'exec 3<>"$1"; sleep 30' _ "${fifo}" &
+	holder_pid=$!
+	sleep 1
+	_reap_editor_fifo_holders "${fifo}" --TERM
+	for _poll_attempt in 1 2 3 4 5; do
+		if ! kill -0 "${holder_pid}" 2>/dev/null; then
+			break
+		fi
+		sleep 0.2
+	done
+	if kill -0 "${holder_pid}" 2>/dev/null; then
+		echo 'expected fifo holder to be reaped for --TERM input' >&2
+		exit 1
+	fi
+	wait "${holder_pid}" 2>/dev/null || true
+	holder_pid=''
+	trap - RETURN
+	rm -rf "${tmpdir}"
+}
+
 test_read_codex_stall_guard_state
 test_codex_stall_guard_kill_detected
 test_resolve_editor_network_probe_pid
 test_resolve_editor_network_probe_pid_falls_back_to_wrapper_pid
 test_reap_editor_fifo_holders_missing_path
+test_reap_editor_fifo_holders_normalizes_multi_hyphen_signal
 echo "test_watchdog_helpers.sh: PASS"

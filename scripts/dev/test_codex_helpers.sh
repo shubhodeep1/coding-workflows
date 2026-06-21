@@ -134,8 +134,25 @@ test_missing_writer_helper_fails_fast()
 	rm -rf "${tmpdir}"
 }
 
+test_missing_option_value_fails_fast()
+{
+	local tmpdir err_file
+	tmpdir="$(mktemp -d)"
+	trap 'rm -rf "${tmpdir}"' RETURN
+	err_file="${tmpdir}/stderr.log"
+
+	if codex_config_assemble "openai/gpt-5.4" "medium" "low" --web-search 2>"${err_file}"; then
+		echo 'expected codex_config_assemble to fail when an option value is missing' >&2
+		exit 1
+	fi
+	assert_contains '::error::codex_config_assemble: option --web-search requires an argument' "${err_file}"
+	trap - RETURN
+	rm -rf "${tmpdir}"
+}
+
 test_relative_support_dir_resolution
 test_absolute_support_dir_resolution
 test_default_support_dir_resolution_preserves_pwd
 test_missing_writer_helper_fails_fast
+test_missing_option_value_fails_fast
 echo "test_codex_helpers.sh: PASS"

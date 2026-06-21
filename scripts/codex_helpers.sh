@@ -62,6 +62,14 @@ codex_config_assemble()
 
 	while [ $# -gt 0 ]; do
 		case "$1" in
+			--scripts-dir|--web-search|--catalog-path|--project-path|--config-path|--allow-elevation)
+				if [ $# -lt 2 ]; then
+					echo "::error::codex_config_assemble: option $1 requires an argument" >&2
+					return 2
+				fi
+				;;
+		esac
+		case "$1" in
 			--scripts-dir)
 				scripts_dir_override="${2:-}"
 				shift 2
