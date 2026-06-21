@@ -45,6 +45,15 @@ assert_not_contains()
 	fi
 }
 
+unset_git_env()
+{
+	local write_guard_git_env
+	while IFS= read -r write_guard_git_env; do
+		[ -n "${write_guard_git_env}" ] || continue
+		unset "${write_guard_git_env}"
+	done < <(env | sed -n 's/^\(GIT_[A-Za-z0-9_]*\)=.*/\1/p')
+}
+
 make_temp_repo()
 {
 	local temp_repo
@@ -53,6 +62,7 @@ make_temp_repo()
 	cp "${REPO_ROOT}/scripts/write_guard.sh" "${temp_repo}/scripts/write_guard.sh"
 	cp "${REPO_ROOT}/.github/ai/write_guards.v1.json" "${temp_repo}/.github/ai/write_guards.v1.json"
 	(
+		unset_git_env
 		cd "${temp_repo}"
 		git init -q
 		git config user.name tester
@@ -76,6 +86,7 @@ run_guard_capture()
 	printf '%s' "${paths_content}" > "${paths_file}"
 	set +e
 	(
+		unset_git_env
 		cd "${repo_dir}"
 		export PYTHONDONTWRITEBYTECODE=1
 		for write_guard_env_assignment in "$@"; do
