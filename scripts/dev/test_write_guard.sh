@@ -151,6 +151,36 @@ test_conditional_block_with_env_enabled()
 	rm -rf "${repo_dir}"
 }
 
+test_plan_no_repo_writes_pass()
+{
+	local repo_dir
+	repo_dir="$(make_temp_repo)"
+	run_guard_capture "${repo_dir}" plan ''
+	assert_eq "0" "${RUN_GUARD_STATUS}" 'plan should pass when no repo paths changed after bootstrap'
+	assert_not_contains 'WRITE_GUARD_BLOCK' "${RUN_GUARD_OUTPUT}" 'plan no-op pass should not block'
+	rm -rf "${repo_dir}"
+}
+
+test_plan_repo_write_fails()
+{
+	local repo_dir
+	repo_dir="$(make_temp_repo)"
+	run_guard_capture "${repo_dir}" plan $'README.md\n'
+	assert_eq "1" "${RUN_GUARD_STATUS}" 'plan should block repository writes after bootstrap'
+	assert_contains 'WRITE_GUARD_BLOCK: phase=plan path=README.md reason=not_allowed pattern=<no-match>' "${RUN_GUARD_OUTPUT}" 'plan write guard failure should be logged'
+	rm -rf "${repo_dir}"
+}
+
+test_plan_bypass_env_audit()
+{
+	local repo_dir
+	repo_dir="$(make_temp_repo)"
+	run_guard_capture "${repo_dir}" plan $'README.md\n' 'WRITE_GUARDS_ENABLED=false'
+	assert_eq "0" "${RUN_GUARD_STATUS}" 'WRITE_GUARDS_ENABLED=false should bypass the plan guard'
+	assert_contains 'WRITE_GUARD_BYPASS_ENV: phase=plan env=WRITE_GUARDS_ENABLED value=false' "${RUN_GUARD_OUTPUT}" 'plan guard bypass should be logged'
+	rm -rf "${repo_dir}"
+}
+
 test_config_parse_fail_open()
 {
 	local repo_dir
@@ -210,6 +240,9 @@ test_blocklist_fail
 test_not_allowed_fail
 test_conditional_block_with_env_disabled
 test_conditional_block_with_env_enabled
+test_plan_no_repo_writes_pass
+test_plan_repo_write_fails
+test_plan_bypass_env_audit
 test_config_parse_fail_open
 test_config_parse_fail_open_from_fallback
 test_bypass_env_audit

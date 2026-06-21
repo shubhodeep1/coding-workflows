@@ -20,6 +20,15 @@
         }
       ]
     },
+    "plan": {
+      "allowed_globs": [
+        "/__write_guard_plan_no_repo_writes__/**"
+      ],
+      "blocked_globs": [
+        ".git/**"
+      ],
+      "conditional_blocked_globs": []
+    },
     "review_editor": {
       "allowed_globs": [
         "**"
