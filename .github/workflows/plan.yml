@@ -936,9 +936,10 @@ jobs:
             printf '%s\t%s\n' "${path}" "${path_state}"
           done < <(
             {
+              # Keep the snapshot limited to repository-visible paths; recursing
+              # through .git/** is expensive and can churn independently of repo files.
               git diff --name-only --diff-filter=ACMRD HEAD || true
               git ls-files --others --exclude-standard || true
-              find .git \( -type f -o -type l \) -print 2>/dev/null || true
             } | sed '/^$/d' | LC_ALL=C sort -u
           ) | LC_ALL=C sort -u > "${PRE_PLAN_WRITE_GUARD_PATHS_FILE}"
 
@@ -1188,9 +1189,10 @@ jobs:
             printf '%s\t%s\n' "${path}" "${path_state}"
           done < <(
             {
+              # Keep the snapshot limited to repository-visible paths; recursing
+              # through .git/** is expensive and can churn independently of repo files.
               git diff --name-only --diff-filter=ACMRD HEAD || true
               git ls-files --others --exclude-standard || true
-              find .git \( -type f -o -type l \) -print 2>/dev/null || true
             } | sed '/^$/d' | LC_ALL=C sort -u
           ) | LC_ALL=C sort -u > "${POST_PLAN_WRITE_GUARD_PATHS_FILE}"
 
