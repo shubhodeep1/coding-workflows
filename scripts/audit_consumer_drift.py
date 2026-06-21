@@ -422,6 +422,15 @@ class ConsumerDriftAuditor:
 				error="fetch_failed",
 				error_detail=exc.detail,
 			)
+		except CommandFailure as exc:
+			detail = _sanitize_log_value(str(exc))
+			print(f"DRIFT_SCAN_ERROR repository={repository} error=command_failed detail={detail}")
+			return RepoAuditResult(
+				repository=repository,
+				outcome="error",
+				error="command_failed",
+				error_detail=str(exc),
+			)
 
 		outcome = "drift" if drift_items else "match"
 		print(f"DRIFT_SCAN_OK repository={repository} outcome={outcome} drift_items={len(drift_items)}")

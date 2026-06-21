@@ -35,6 +35,7 @@ class PlannedCall:
 	stderr: str = ""
 	returncode: int = 0
 	check: bool = False
+	raises: Exception | None = None
 
 
 class FakeExecutor:
@@ -60,6 +61,8 @@ class FakeExecutor:
 		assert tuple(command[: len(plan.prefix)]) == plan.prefix, (
 			f"expected command prefix {plan.prefix}, got {tuple(command)}"
 		)
+		if plan.raises is not None:
+			raise plan.raises
 		proc = subprocess.CompletedProcess(command, plan.returncode, stdout=plan.stdout, stderr=plan.stderr)
 		if check and proc.returncode != 0:
 			raise drift_audit.CommandFailure(
@@ -344,12 +347,86 @@ def test_repo_fetch_failure_is_recorded_without_aborting_other_repos() -> None:
 		executor.assert_consumed()
 
 
+def test_command_failure_is_recorded_without_aborting_other_repos() -> None:
+	with tempfile.TemporaryDirectory(prefix="audit-consumer-drift-command-failure-") as td:
+		templates_dir = Path(td) / "workflow-templates"
+		_write_templates(
+			templates_dir,
+			{
+				"ai-clarify.yml": STANDARD_HEADER + "name: AI Clarify\non:\n  workflow_dispatch: {}\n",
+			},
+		)
+
+		executor = FakeExecutor(
+			[
+				PlannedCall(
+					(
+						"gh",
+						"api",
+						"-H",
+						"Accept: application/vnd.github+json",
+						"repos/octo/broken/contents/.github/workflows",
+					),
+					raises=drift_audit.CommandFailure(
+						command=("gh", "api"),
+						cwd=None,
+						returncode=124,
+						stdout="",
+						stderr="timeout_expired",
+					),
+				),
+				PlannedCall(
+					(
+						"gh",
+						"api",
+						"-H",
+						"Accept: application/vnd.github+json",
+						"repos/octo/healthy/contents/.github/workflows",
+					),
+					stdout=json.dumps([{"name": "ai-clarify.yml", "type": "file"}]),
+				),
+				PlannedCall(
+					(
+						"gh",
+						"api",
+						"-H",
+						"Accept: application/vnd.github.raw+json",
+						"repos/octo/healthy/contents/.github/workflows/ai-clarify.yml",
+					),
+					stdout="name: AI Clarify\non:\n  workflow_dispatch: {}\n",
+				),
+			]
+		)
+
+		auditor = drift_audit.ConsumerDriftAuditor(
+			expected_templates=_load_expected_templates(templates_dir),
+			max_diff_lines=5,
+			executor=executor,
+		)
+		results = auditor.audit_repositories(["octo/broken", "octo/healthy"])
+		summary = drift_audit.summarize_results(results, ["ai-clarify.yml"])
+
+		assert results[0].outcome == "error"
+		assert results[0].error == "command_failed"
+		assert "timeout_expired" in (results[0].error_detail or "")
+		assert results[1].outcome == "match"
+		assert summary["totals"] == {
+			"processed": 2,
+			"match": 1,
+			"drift": 0,
+			"error": 1,
+			"drift_items": 0,
+		}
+		executor.assert_consumed()
+
+
 def main() -> int:
 	test_load_target_repositories_deduplicates_and_validates()
 	test_clean_match_normalizes_managed_header_and_trailing_whitespace()
 	test_missing_wrapper_is_reported_as_drift_without_extra_fetch()
 	test_multi_repo_drift_aggregates_into_summary()
 	test_repo_fetch_failure_is_recorded_without_aborting_other_repos()
+	test_command_failure_is_recorded_without_aborting_other_repos()
 	return 0
 
 
