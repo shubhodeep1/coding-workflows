@@ -2,6 +2,14 @@
 set -euo pipefail
 
 SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"
+WATCHDOG_HELPERS="${SUPPORT_SCRIPTS_DIR}/watchdog_helpers.sh"
+
+if [ ! -f "${WATCHDOG_HELPERS}" ]; then
+	echo "::error::Missing required support script ${WATCHDOG_HELPERS}" >&2
+	exit 1
+fi
+# shellcheck source=/dev/null
+source "${WATCHDOG_HELPERS}"
 
 # Source rate-limit-aware GH API helpers (provides gh_retry and the
 # Telegram admin alert on GH API rate-limit events).
@@ -37,35 +45,6 @@ fi
 
 CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
 WORKSPACE_SAFETY_CHECK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/workspace_safety_check.sh"
-
-read_codex_stall_guard_state() {
-  local status_file="$1"
-  local state=""
-
-  [ -s "${status_file}" ] || return 1
-  state="$(sed -n 's/^state=//p' "${status_file}" | head -n 1)"
-  case "${state}" in
-    observed|killed)
-      printf '%s\n' "${state}"
-      return 0
-      ;;
-  esac
-
-  return 1
-}
-
-resolve_editor_network_probe_pid() {
-  local wrapper_pid="$1"
-  local child_pid=""
-
-  [ -n "${wrapper_pid}" ] || return 1
-  child_pid="$(ps -o pid= --ppid "${wrapper_pid}" 2>/dev/null | awk 'NR==1 { print $1; exit }' || true)"
-  if [ -n "${child_pid}" ]; then
-    printf '%s\n' "${child_pid}"
-  else
-    printf '%s\n' "${wrapper_pid}"
-  fi
-}
 
 run_editor_codex_attempt() {
   local prompt_file="$1"

@@ -26,6 +26,7 @@
 .github/ai/hot_files.json
 .github/ai/label_contract.v1.json
 .github/ai/orchestrate_schema.v1.json
+.github/workflows/audit_consumer_drift.yml
 .github/workflows/cancel_on_pr_close.yml
 .github/workflows/ci.yml
 .github/workflows/clarify.yml
@@ -216,6 +217,7 @@ scripts/ai_memory_lib.py
 scripts/analyze_soft_errors.py
 scripts/analyze_workflow_logs.py
 scripts/apply_audit_gate_assets.py
+scripts/audit_consumer_drift.py
 scripts/blocker_check.py
 scripts/build_semble_wrapper.sh
 scripts/build_state_snapshot.py
@@ -424,6 +426,7 @@ tests/test_ai_memory_push_retry_backoff.py
 tests/test_ai_memory_sync_reference_files.py
 tests/test_ai_memory_workflow_log_analysis_cache.py
 tests/test_analyze_workflow_logs.py
+tests/test_audit_consumer_drift.py
 tests/test_audit_gate_identity.py
 tests/test_audit_gate_template_atomicity.py
 tests/test_blocker_check.py

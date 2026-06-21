@@ -23,6 +23,8 @@ command -v jq >/dev/null 2>&1 || { echo "jq is required but not installed" >&2; 
 command -v python3 >/dev/null 2>&1 || { echo "python3 is required but not installed" >&2; exit 1; }
 command -v sha256sum >/dev/null 2>&1 || { echo "sha256sum is required but not installed" >&2; exit 1; }
 
+_validate_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
 TRACKING_ISSUE_NUM=0
 if [[ "${TRACKING_ISSUE_RAW}" =~ ^[0-9]+$ ]]; then
@@ -210,6 +212,14 @@ fi
 if [ -f "scripts/tg_helpers.sh" ]; then
   # shellcheck disable=SC1091
   source scripts/tg_helpers.sh
+fi
+# shellcheck source=/dev/null
+if [ -f "${_validate_script_dir}/codex_helpers.sh" ]; then
+  source "${_validate_script_dir}/codex_helpers.sh"
+fi
+# shellcheck source=/dev/null
+if [ -f "${_validate_script_dir}/watchdog_helpers.sh" ]; then
+  source "${_validate_script_dir}/watchdog_helpers.sh"
 fi
 
 
@@ -2487,7 +2497,6 @@ trap cleanup_runtime_containers EXIT
 # workspace-write/on-request defaults). Catalog path is script-relative
 # so a "Standalone validation run" without a fetched scripts/ tree
 # still picks up the catalog shipped next to validate_process.sh.
-_validate_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODEX_HEARTBEAT_HELPER="${_validate_script_dir}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${_validate_script_dir}/codex_stall_guard.sh"
 WORKSPACE_SAFETY_CHECK_HELPER=""
@@ -2528,26 +2537,12 @@ for _ledger_candidate in \
     break
   fi
 done
-bash "${_validate_script_dir}/write_codex_config.sh" \
-  --model "${MODEL_EDITOR}" \
-  --reasoning "${MODEL_REASONING_EFFORT}" \
+codex_config_assemble \
+  "${MODEL_EDITOR}" \
+  "${MODEL_REASONING_EFFORT}" \
+  "low" \
+  --scripts-dir "${_validate_script_dir}" \
   --catalog-path "${_validate_script_dir}/codex_model_catalog.json"
-
-read_validate_codex_stall_guard_state() {
-  local status_file="$1"
-  local state=""
-
-  [ -s "${status_file}" ] || return 1
-  state="$(sed -n 's/^state=//p' "${status_file}" | head -n 1)"
-  case "${state}" in
-    observed|killed)
-      printf '%s\n' "${state}"
-      return 0
-      ;;
-  esac
-
-  return 1
-}
 
 emit_validate_substate() {
   local phase_name="$1"
@@ -2848,7 +2843,7 @@ else
   DISCOVER_EXIT=$?
   set -e
   emit_validate_substate "validate_discover" "discover" "Finishing" "${attempt}" "${DISCOVER_LOG_FILE}"
-  if discover_stall_state="$(read_validate_codex_stall_guard_state "${discover_stall_status_file}" 2>/dev/null)"; then
+  if discover_stall_state="$(read_codex_stall_guard_state "${discover_stall_status_file}" 2>/dev/null)"; then
     :
   elif [ -s "${discover_stall_status_file}" ]; then
     echo "::warning::Validation hint discovery attempt ${attempt}/${MAX_CODEX_ATTEMPTS}: could not parse codex stall guard status from ${discover_stall_status_file}."
@@ -3587,7 +3582,7 @@ for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
   DIAGNOSE_EXIT=$?
   set -e
   emit_validate_substate "validate_diagnose" "diagnose" "Finishing" "${attempt}" "${DIAGNOSE_LOG_FILE}"
-  if diagnose_stall_state="$(read_validate_codex_stall_guard_state "${diagnose_stall_status_file}" 2>/dev/null)"; then
+  if diagnose_stall_state="$(read_codex_stall_guard_state "${diagnose_stall_status_file}" 2>/dev/null)"; then
     :
   elif [ -s "${diagnose_stall_status_file}" ]; then
     echo "::warning::Validation diagnosis attempt ${attempt}/${MAX_CODEX_ATTEMPTS}: could not parse codex stall guard status from ${diagnose_stall_status_file}."

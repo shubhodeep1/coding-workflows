@@ -269,7 +269,9 @@ jobs:
               "scripts/memory_injection_patterns.py",
               "scripts/openrouter_prompt_cache.py",
               "scripts/write_codex_config.sh",
+              "scripts/codex_helpers.sh",
               "scripts/orchestrate_force_tick.sh",
+              "scripts/watchdog_helpers.sh",
               "scripts/workspace_init.sh",
               "scripts/workspace_safety_check.sh",
               "scripts/run_workspace_hook.sh"
@@ -599,7 +601,7 @@ jobs:
           set -euo pipefail
 
           source scripts/memory_helpers.sh
-          memory_ensure_branch
+          memory_bootstrap --ensure-branch --require memory_record_run_event
 
           issue_number="${TRACKING_ISSUE}"
           if ! [[ "${issue_number}" =~ ^[0-9]+$ ]] || [ "${issue_number}" -le 0 ]; then
@@ -895,6 +897,7 @@ jobs:
           set -euo pipefail
 
           source scripts/memory_helpers.sh
+          memory_bootstrap --require memory_record_candidate
 
           issue_number="${TRACKING_ISSUE}"
           if ! [[ "${issue_number}" =~ ^[0-9]+$ ]] || [ "${issue_number}" -le 0 ]; then
@@ -1014,6 +1017,7 @@ jobs:
           set -euo pipefail
 
           source scripts/memory_helpers.sh
+          memory_bootstrap --require memory_record_run_event
 
           issue_number="${TRACKING_ISSUE}"
           if ! [[ "${issue_number}" =~ ^[0-9]+$ ]] || [ "${issue_number}" -le 0 ]; then
