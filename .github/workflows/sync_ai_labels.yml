@@ -34,8 +34,44 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Checkout repository
+      - name: Resolve workflow support ref
+        run: |
+          set -euo pipefail
+          wf_source="shubhodeep1/coding-workflows"
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+          else
+            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+          fi
+
+      - name: Checkout workflow support source
+        id: checkout_support_source
+        continue-on-error: true
         uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ env.SCRIPT_REF }}
+          token: ${{ secrets.GH_PAT || github.token }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+
+      - name: Checkout workflow support source fallback
+        if: ${{ steps.checkout_support_source.outcome == 'failure' }}
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: main
+          token: ${{ secrets.GH_PAT || github.token }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+
+      - name: Ensure workflow support source checkout
+        run: |
+          set -euo pipefail
+          if [ ! -d .codex-workflow-src ]; then
+            echo "::error::Failed to checkout workflow support source from ${SCRIPT_REF} or main"
+            exit 1
+          fi
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -50,14 +86,21 @@ jobs:
         run: |
           set -euo pipefail
 
+          SCRIPT_PATH=".codex-workflow-src/scripts/ai_labels.py"
+          CONTRACT_PATH=".codex-workflow-src/.github/ai/label_contract.v1.json"
+          if [ ! -f "${SCRIPT_PATH}" ] || [ ! -f "${CONTRACT_PATH}" ]; then
+            echo "::error::Missing workflow support files in .codex-workflow-src"
+            exit 1
+          fi
+
           RESULT_JSON="${RUNNER_TEMP}/sync-ai-labels-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
           STDERR_LOG="${RUNNER_TEMP}/sync-ai-labels-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.stderr.log"
           CMD=(
             python3
-            scripts/ai_labels.py
+            "${SCRIPT_PATH}"
             sync-labels
             --contract-file
-            .github/ai/label_contract.v1.json
+            "${CONTRACT_PATH}"
             --repo
             "${GITHUB_REPOSITORY}"
           )
@@ -112,6 +155,7 @@ jobs:
 
           python3 - <<'PY' "${RESULT_JSON}" "${EXIT_CODE}" "${DRY_RUN}" "${GITHUB_OUTPUT}" "${GITHUB_STEP_SUMMARY}"
           import json
+          import os
           import sys
           from pathlib import Path
 
@@ -155,7 +199,7 @@ jobs:
           summary_lines = [
               "## AI Label Sync Summary",
               "",
-              f"- Repository: `{Path.cwd().name}`",
+              f"- Repository: `{os.environ.get('GITHUB_REPOSITORY', Path.cwd().name)}`",
               f"- Dry run: `{str(dry_run).lower()}`",
               "",
               "| Created | Updated | Unchanged | Errors | Exit code |",
@@ -203,7 +247,13 @@ jobs:
             exit 0
           fi
 
-          source scripts/tg_helpers.sh
+          TG_HELPERS_PATH=".codex-workflow-src/scripts/tg_helpers.sh"
+          if [ ! -f "${TG_HELPERS_PATH}" ]; then
+            echo "Telegram notification skipped (missing ${TG_HELPERS_PATH})."
+            exit 0
+          fi
+
+          source "${TG_HELPERS_PATH}"
           suffix=""
           if [ "${DRY_RUN}" = "true" ]; then
             suffix=" (dry-run)"

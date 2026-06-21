@@ -362,7 +362,7 @@ def test_sync_labels_records_partial_errors_and_continues() -> None:
 				"https://api.github.com/repos/octo-org/octo-repo/labels",
 				422,
 				"Unprocessable Entity",
-				{"message": "Validation Failed", "errors": [{"field": "name", "code": "already_exists"}]},
+				{"message": "Validation Failed", "errors": [{"field": "color", "code": "invalid"}]},
 			),
 		]
 		rc, payload, stderr_text, request_log = _run_sync_labels(contract_path, responses=responses)
@@ -375,13 +375,35 @@ def test_sync_labels_records_partial_errors_and_continues() -> None:
 		{
 			"action": "create",
 			"label": "ai:beta",
-			"message": 'Validation Failed: [{"code": "already_exists", "field": "name"}]',
+			"message": 'Validation Failed: [{"code": "invalid", "field": "color"}]',
 			"status": 422,
 		}
 	]
 	assert [entry["method"] for entry in request_log] == ["GET", "GET", "POST"]
 	assert "LABEL_SYNC_UNCHANGED:" in stderr_text
 	assert "LABEL_SYNC_ERROR:" in stderr_text
+
+
+def test_sync_labels_treats_matching_already_exists_create_conflict_as_created() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-create-conflict-") as tmpdir:
+		contract_path = _make_sync_contract(Path(tmpdir), {"ai:alpha": SYNC_LABELS["ai:alpha"], "ai:beta": SYNC_LABELS["ai:beta"]})
+		responses = [
+			_http_error("https://api.github.com/repos/octo-org/octo-repo/labels/ai%3Aalpha", 404, "Not Found"),
+			_http_error(
+				"https://api.github.com/repos/octo-org/octo-repo/labels",
+				422,
+				"Unprocessable Entity",
+				{"message": "Validation Failed", "errors": [{"field": "name", "code": "already_exists"}]},
+			),
+			_FakeHTTPResponse({"name": "ai:alpha", **SYNC_LABELS["ai:alpha"]}),
+			_FakeHTTPResponse({"name": "ai:beta", **SYNC_LABELS["ai:beta"]}),
+		]
+		rc, payload, stderr_text, request_log = _run_sync_labels(contract_path, responses=responses)
+
+	assert rc == 0
+	assert payload == {"created": 1, "updated": 0, "unchanged": 1, "errors": []}
+	assert [entry["method"] for entry in request_log] == ["GET", "POST", "GET", "GET"]
+	assert "resolved already_exists conflict by re-reading label" in stderr_text
 
 
 def test_sync_labels_returns_nonzero_when_every_label_fails() -> None:
@@ -476,6 +498,33 @@ def test_sync_labels_dry_run_skips_mutations() -> None:
 	assert [entry["method"] for entry in request_log] == ["GET", "GET"]
 	assert "LABEL_SYNC_CREATED:" in stderr_text
 	assert "LABEL_SYNC_UPDATED:" in stderr_text
+
+
+def test_sync_labels_rejects_overlong_label_name_before_api_calls() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-label-name-") as tmpdir:
+		label_name = "ai:" + ("x" * 48)
+		contract_path = _make_sync_contract(Path(tmpdir), {
+			label_name: {"color": "123abc", "description": "Alpha label"},
+			"ai:beta": SYNC_LABELS["ai:beta"],
+		})
+		responses = [
+			_FakeHTTPResponse({"name": "ai:beta", **SYNC_LABELS["ai:beta"]}),
+		]
+		rc, payload, stderr_text, request_log = _run_sync_labels(contract_path, responses=responses)
+
+	assert rc == 0
+	assert payload["created"] == 0
+	assert payload["updated"] == 0
+	assert payload["unchanged"] == 1
+	assert payload["errors"] == [
+		{
+			"action": "validate",
+			"label": label_name,
+			"message": "label name exceeds GitHub's 50-character limit (51)",
+		}
+	]
+	assert [entry["method"] for entry in request_log] == ["GET"]
+	assert "LABEL_SYNC_ERROR:" in stderr_text
 
 
 def test_sync_labels_rejects_invalid_repo_before_api_calls() -> None:

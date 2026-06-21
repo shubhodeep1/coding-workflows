@@ -137,6 +137,12 @@ def _label_sync_validation_error(metadata: dict[str, str]) -> str | None:
     return None
 
 
+def _label_sync_name_validation_error(label_name: str) -> str | None:
+    if len(label_name) > 50:
+        return f"label name exceeds GitHub's 50-character limit ({len(label_name)})"
+    return None
+
+
 def _github_token() -> str | None:
     token_text = (os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or "").strip()
     return token_text or None
@@ -285,6 +291,11 @@ def _http_error_message(exc: urllib.error.HTTPError) -> str:
     return f"HTTP {exc.code}"
 
 
+def _is_already_exists_error_message(message: str) -> bool:
+    lowered_message = message.lower()
+    return "already_exists" in lowered_message or "already exists" in lowered_message
+
+
 def _log_label_sync(
     prefix: str,
     *,
@@ -430,6 +441,17 @@ def cmd_sync_labels(args: argparse.Namespace) -> int:
 
     for label_name, raw_metadata in label_items:
         expected_metadata = _normalize_label_sync_metadata(label_name, raw_metadata)
+        name_validation_error = _label_sync_name_validation_error(label_name)
+        if name_validation_error is not None:
+            _append_label_sync_error(
+                errors,
+                repo=repo,
+                label_name=label_name,
+                action="validate",
+                dry_run=dry_run,
+                message=name_validation_error,
+            )
+            continue
         label_path = _github_label_path(repo, label_name)
 
         try:
@@ -492,13 +514,32 @@ def cmd_sync_labels(args: argparse.Namespace) -> int:
                     require_token=True,
                 )
             except urllib.error.HTTPError as exc:
+                error_message = _http_error_message(exc)
+                if exc.code == 422 and _is_already_exists_error_message(error_message):
+                    try:
+                        current_label = _github_api_request(label_path)
+                    except LabelContractError:
+                        raise
+                    except (urllib.error.HTTPError, urllib.error.URLError, OSError, ValueError):
+                        current_label = None
+                    if isinstance(current_label, dict) and _label_sync_matches(current_label, expected_metadata):
+                        created_count += 1
+                        _log_label_sync(
+                            "LABEL_SYNC_CREATED",
+                            repo=repo,
+                            label_name=label_name,
+                            action="create",
+                            dry_run=False,
+                            detail="resolved already_exists conflict by re-reading label",
+                        )
+                        continue
                 _append_label_sync_error(
                     errors,
                     repo=repo,
                     label_name=label_name,
                     action="create",
                     dry_run=False,
-                    message=_http_error_message(exc),
+                    message=error_message,
                     status=exc.code,
                 )
                 continue
