@@ -1713,9 +1713,6 @@ jobs:
               fi
               # shellcheck disable=SC1091
               if source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"; then
-                if ! declare -F memory_retrieve >/dev/null 2>&1; then
-                  echo "::warning::memory_retrieve helper unavailable; writing fallback reviewer memory context"
-                fi
                 if declare -F memory_bootstrap >/dev/null 2>&1; then
                   memory_bootstrap --require memory_retrieve
                 fi

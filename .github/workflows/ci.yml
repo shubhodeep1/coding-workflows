@@ -600,6 +600,11 @@ jobs:
         run: |
           set -euo pipefail
 
+          command -v rg >/dev/null 2>&1 || {
+            echo "::error::ripgrep (rg) is required for shared shell-block anti-regression checks"
+            exit 1
+          }
+
           if rg -n 'bash ("\$\{[^}]+\}/|scripts/)?write_codex_config\.sh|WRITE_CODEX_CONFIG=' \
             .github/workflows/clarify.yml \
             .github/workflows/plan.yml \
