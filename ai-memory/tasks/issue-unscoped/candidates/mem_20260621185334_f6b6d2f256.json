@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validate_process.sh:585-596 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The `comm -13` pipeline can miss deletion of an untracked file captured in PRE but absent from POST, so that blocked-path deletion escapes the guard.\n  WHY: The reviewer says tracked deletions become `__deleted__` and are caught, but a PRE-only untracked path produces no POST line for `comm -13` to emit, so the path never reaches `write_guard_check`.\n- scripts/validate_process.sh:580-604 | severity=high | confidence=5\n  flagged_by: [moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  PROBLEM: The `comm -13` comparison only checks POST-unique lines, so deletions of blocked files are never sent to `write_guard_check`.\n  WHY: Both reviewers state that a file under a blocked glob can be deleted during harness generation and disappear from the delta entirely, leaving the guard blind to the deletion.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/validate_process.sh:585-596 | severity=low | confidence=2\n  PROBLEM: The `comm -13` comparison on tab-separated path<tab>hash lines would not catch the deletion of an untracked file that was present in the PRE snapshot and deleted during harness generation.\n  WHY: The reviewer says tracked-file deletions are caught via `__deleted__`, but an untracked PRE-only file produces no POST line at all, so `comm -13` never emits it for guard evaluation.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/validate_process.sh:590 | severity=high | confidence=5\n  PROBLEM: The `comm -13` comparison only outputs lines unique to the POST file, missing deletions of blocked files.\n  WHY: If a blocked file exists in PRE and is deleted during harness generation, it is absent from POST, so `comm -13 PRE POST` produces no output for that path and `write_guard_check` never sees the deletion.\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- scripts/validate_process.sh:580-604 | severity=high | confidence=4\n  PROBLEM: The function only checks newly-added paths via `comm -13` and never checks deletions of previously-existing blocked files.\n  WHY: If a file under a blocked glob is deleted during harness generation, it existed in PRE but is absent from POST, so it never reaches `write_guard_check` and the deletion slips through.\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "0dba568054858ff032256c2c3a3a136cdace44a650bb465a46b859022045871c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3419,
+    "run_id": "27912850883",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27912850883",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260621185334_f6b6d2f256",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3419,
+    "run_id": "27912850883"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-21T18:53:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
