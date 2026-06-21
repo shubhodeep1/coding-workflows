@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/audit_consumer_drift.py:323 | severity=high | confidence=5\n  flagged_by: [moonshotai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The raw-content request uses the unsupported GitHub media type `application/vnd.github.raw+json`.\n  WHY: That can return JSON metadata instead of raw plaintext, so drift comparison will misread workflow contents and report false positives.\n- scripts/label_helpers.sh (and synced sites in label_contract.v1.json, implement.yml, test_implement_post_codex_recovery.py) | severity=low | confidence=3\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The shortened label descriptions are not fully synchronized across the label repair/fallback sites and test assertion.\n  WHY: Future label-repair steps may recreate the labels with a different description, leaving `ai:destructive-blocked` / `ai:resolver-escalated` inconsistent across call sites.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Use the live `.github/ai/consumer_repos.json` contents rather than the stale plan count. The registry currently has 13 entries on `origin/main`.\"\n  expected_change_site: Documentation or verification step showing that the `--consumer-repos .github/ai/consumer_repos.json` path is valid and resolves to a file on disk with expected contents\n  confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: No file comment or assertion in the PR diff shows that the path `.github/ai/consumer_repos.json` exists on disk and contains 13 entries\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Task_gap_note: Requirement \"Use the live `.github/ai/consumer_repos.json` contents rather than the stale plan count. The registry currently has 13 entries on `origin/main`.\"\n  Expected change site: Documentation or verification step showing that the `--consumer-repos .github/ai/consumer_repos.json` path is valid and resolves to a file on disk with expected contents\n  Evidence of absence: No file comment or assertion in the PR diff shows that the path `.github/ai/consumer_repos.json` exists on disk and contains 13 entries\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_mistral-small-2603 ===\n- File: scripts/audit_consumer_drift.py\n  Line or code reference: Line 323 in _run_gh_api method\n  Problem: Invalid GitHub API Accept header media type \"application/vnd.github.raw+json\" is used for raw content retrieval.\n  Why it fails at runtime: According to GitHub REST API documentation for the Contents endpoint, the valid media type for raw content is \"application/vnd.github.v3.raw\" (or \"application/vnd.github.raw\"), not \"application/vnd.github.raw+json\". When an invalid media type is requested, the API may fall back to the default JSON response format containing base64-encoded content metadata instead of the raw file text. The script expects plaintext for diff comparison, so this would cause drift detection to fail because the \"actual\" content would be JSON metadata rather than the workflow file content.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM moonshotai_mistral-small-2603 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: scripts/audit_consumer_drift.py:323\n  Line or code reference: `_run_gh_api` (the `accept = \"application/vnd.github.raw+json\" if raw else ...` line)\n  Problem: The raw-content media type `application/vnd.github.raw+json` is not a documented GitHub Contents API media type. The supported raw variant is `application/vnd.github.v3.raw`.\n  Why it fails at runtime: An unsupported media type typically causes the API to return the default JSON metadata response (with base64-encoded content) instead of raw plaintext. The script never base64-decodes, so every `fetch_workflow_content` call would receive non-YAML text, causing every consumer wrapper to be reported as drift (false positives on every run).\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- File: scripts/label_helpers.sh (and synced sites in label_contract.v1.json, implement.yml, test_implement_post_codex_recovery.py)\n  Line or code reference: `_AI_LABEL_DESCS[\"ai:resolver-escalated\"]` and `[\"ai:destructive-blocked\"]` (post-shortening) plus matching strings in implement.yml fallback commands\n  Problem: The label descriptions were shortened in the autofix round to stay under GitHub\u2019s 100-character limit, but the exact strings in the destructive-latch fallback logic (`gh label create/edit`) and the test assertion were only partially synchronized.\n  Why it fails at runtime: Future label-repair steps (ci.yml, orchestrate_poll, etc.) may recreate the labels with the old longer description, causing inconsistent latch behavior for `ai:destructive-blocked` / `ai:resolver-escalated` redispatch guards.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "394b34c502aa5d63a1b3086a623e88e86444e10816f30361970dc18e8821685c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3413,
+    "run_id": "27898566702",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27898566702",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260621090541_564f553787",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3413,
+    "run_id": "27898566702"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-21T09:05:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
