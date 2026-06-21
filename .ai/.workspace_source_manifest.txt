@@ -26,6 +26,7 @@
 .github/ai/hot_files.json
 .github/ai/label_contract.v1.json
 .github/ai/orchestrate_schema.v1.json
+.github/ai/write_guards.v1.json
 .github/workflows/audit_consumer_drift.yml
 .github/workflows/cancel_on_pr_close.yml
 .github/workflows/ci.yml
@@ -144,6 +145,7 @@ prompts/contracts/conflict-resolver.yml
 prompts/contracts/integration-sync-conflict-resolver.yml
 prompts/contracts/mode-clarify-respond.yml
 prompts/contracts/mode-clarify.yml
+prompts/contracts/mode-extract-learnings.yml
 prompts/contracts/mode-implement-diagnose-continuation.yml
 prompts/contracts/mode-implement-diagnose.yml
 prompts/contracts/mode-implement-repair-continuation.yml
@@ -176,6 +178,7 @@ prompts/integration-sync-conflict-resolver-retry-timeout-prelude.txt
 prompts/integration-sync-conflict-resolver.txt
 prompts/mode-clarify-respond.txt
 prompts/mode-clarify.txt
+prompts/mode-extract-learnings.txt
 prompts/mode-implement-diagnose-continuation.txt
 prompts/mode-implement-diagnose.txt
 prompts/mode-implement-repair-continuation.txt
@@ -242,6 +245,7 @@ scripts/detect_editor_changes_lost.sh
 scripts/dev/replay_review_pipeline.sh
 scripts/dev/test_codex_helpers.sh
 scripts/dev/test_watchdog_helpers.sh
+scripts/dev/test_write_guard.sh
 scripts/dispatch_and_watch_workflow_run.sh
 scripts/drift_audit.sh
 scripts/files_touched_scope_guard.py
@@ -333,6 +337,7 @@ scripts/watchdog_helpers.sh
 scripts/workspace_init.sh
 scripts/workspace_safety_check.sh
 scripts/write_codex_config.sh
+scripts/write_guard.sh
 test_file.txt
 tests/e2e_smoke_canary.txt
 tests/e2e_smoke_canary_b.txt
@@ -466,6 +471,7 @@ tests/test_lint_pr_body_auto_close.py
 tests/test_mark_stable_release_tag_refspec_contract.py
 tests/test_mcp_handshake_probe.py
 tests/test_memory_maintenance_contract_noop.py
+tests/test_memory_record_schema.py
 tests/test_merge_probe.py
 tests/test_nightly_validation_selftest_workflow_contract.py
 tests/test_orchestrate_clarify_loop_guard.py

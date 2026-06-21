@@ -51,6 +51,7 @@ jobs:
       OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
       MEMORY_INJECTION_SCAN_ENABLED: ${{ vars.MEMORY_INJECTION_SCAN_ENABLED || 'true' }}
       AUTO_IMPLEMENT_ON_CLEAR_PLAN: ${{ vars.AUTO_IMPLEMENT_ON_CLEAR_PLAN || 'true' }}
+      WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
       PLAN_FAILURE_CONTEXT: "Planning run did not complete."
       CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
       PROCESSED_ANSWER_CLAIMED: "false"
@@ -270,7 +271,7 @@ jobs:
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh render_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh; do
+          for f in gh_helpers.sh render_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh write_guard.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -376,6 +377,8 @@ jobs:
             echo "PLANNING_CONTEXT_FILE=${RUNTIME_DIR}/planning_context.txt"
             echo "CODEX_PROMPT_FILE=${RUNTIME_DIR}/codex_prompt.txt"
             echo "CODEX_OUTPUT_FILE=${RUNTIME_DIR}/codex_output.txt"
+            echo "PRE_PLAN_WRITE_GUARD_PATHS_FILE=${RUNTIME_DIR}/pre_plan_write_guard_paths.txt"
+            echo "POST_PLAN_WRITE_GUARD_PATHS_FILE=${RUNTIME_DIR}/post_plan_write_guard_paths.txt"
             echo "PLAN_COMMENT_FILE=${RUNTIME_DIR}/plan_comment.md"
             echo "SEMBLE_AVAILABLE=false"
             echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"
@@ -913,6 +916,32 @@ jobs:
               output_path.write_text("", encoding="utf-8")
           PY
 
+      - name: Capture pre-Codex plan write-guard snapshot
+        if: env.SKIP_PLAN != 'true'
+        run: |
+          set -euo pipefail
+          if ! command -v git >/dev/null 2>&1 || [ ! -d .git ]; then
+            : > "${PRE_PLAN_WRITE_GUARD_PATHS_FILE}"
+            exit 0
+          fi
+
+          while IFS= read -r path; do
+            [ -n "${path}" ] || continue
+            if [ -e "${path}" ]; then
+              path_state="$(sha256sum -- "${path}" 2>/dev/null | awk '{print $1}' || true)"
+              [ -n "${path_state}" ] || path_state="__present__"
+            else
+              path_state="__deleted__"
+            fi
+            printf '%s\t%s\n' "${path}" "${path_state}"
+          done < <(
+            {
+              git diff --name-only --diff-filter=ACMRD HEAD || true
+              git ls-files --others --exclude-standard || true
+              find .git \( -type f -o -type l \) -print 2>/dev/null || true
+            } | sed '/^$/d' | LC_ALL=C sort -u
+          ) | LC_ALL=C sort -u > "${PRE_PLAN_WRITE_GUARD_PATHS_FILE}"
+
       - name: Run Codex planning
         if: env.SKIP_PLAN != 'true'
         env:
@@ -1139,6 +1168,55 @@ jobs:
               exit 1
             fi
           done
+
+      - name: Enforce plan write guard
+        if: env.SKIP_PLAN != 'true'
+        run: |
+          set -euo pipefail
+          if ! command -v git >/dev/null 2>&1 || [ ! -d .git ]; then
+            exit 0
+          fi
+
+          while IFS= read -r path; do
+            [ -n "${path}" ] || continue
+            if [ -e "${path}" ]; then
+              path_state="$(sha256sum -- "${path}" 2>/dev/null | awk '{print $1}' || true)"
+              [ -n "${path_state}" ] || path_state="__present__"
+            else
+              path_state="__deleted__"
+            fi
+            printf '%s\t%s\n' "${path}" "${path_state}"
+          done < <(
+            {
+              git diff --name-only --diff-filter=ACMRD HEAD || true
+              git ls-files --others --exclude-standard || true
+              find .git \( -type f -o -type l \) -print 2>/dev/null || true
+            } | sed '/^$/d' | LC_ALL=C sort -u
+          ) | LC_ALL=C sort -u > "${POST_PLAN_WRITE_GUARD_PATHS_FILE}"
+
+          # shellcheck source=/dev/null
+          source scripts/write_guard.sh
+          PLAN_WRITE_GUARD_FILE="$(mktemp "${TMPDIR:-/tmp}/plan-write-guard.XXXXXX")"
+
+          if [ -f "${PRE_PLAN_WRITE_GUARD_PATHS_FILE}" ] && [ -f "${POST_PLAN_WRITE_GUARD_PATHS_FILE}" ]; then
+            {
+              LC_ALL=C comm -23 "${PRE_PLAN_WRITE_GUARD_PATHS_FILE}" "${POST_PLAN_WRITE_GUARD_PATHS_FILE}" || true
+              LC_ALL=C comm -13 "${PRE_PLAN_WRITE_GUARD_PATHS_FILE}" "${POST_PLAN_WRITE_GUARD_PATHS_FILE}" || true
+            } | cut -f1 | sed '/^$/d' | LC_ALL=C sort -u > "${PLAN_WRITE_GUARD_FILE}"
+          elif [ -f "${POST_PLAN_WRITE_GUARD_PATHS_FILE}" ]; then
+            cut -f1 "${POST_PLAN_WRITE_GUARD_PATHS_FILE}" | sed '/^$/d' | LC_ALL=C sort -u > "${PLAN_WRITE_GUARD_FILE}"
+          else
+            : > "${PLAN_WRITE_GUARD_FILE}"
+          fi
+
+          if ! write_guard_check plan "${PLAN_WRITE_GUARD_FILE}"; then
+            rm -f "${PLAN_WRITE_GUARD_FILE}"
+            echo "PLAN_FAILURE_CONTEXT=AI Plan write guard blocked repository changes during Codex planning." >> "$GITHUB_ENV"
+            echo "::error::Codex modified files outside the plan write-guard policy during planning."
+            exit 1
+          fi
+
+          rm -f "${PLAN_WRITE_GUARD_FILE}"
 
       - name: Write run summary
         if: env.SKIP_PLAN != 'true' && always()
