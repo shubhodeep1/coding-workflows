@@ -573,8 +573,8 @@ capture_write_guard_candidate_paths()
 		{
 			git diff --name-only --diff-filter=ACMRD HEAD || true
 			git ls-files --others --exclude-standard || true
-		} | sed '/^$/d' | sort -u
-	) | filter_runtime_path_noise | sort -u
+		} | sed '/^$/d' | LC_ALL=C sort -u
+	) | filter_runtime_path_noise | LC_ALL=C sort -u
 }
 
 run_validate_write_guard()
@@ -587,9 +587,12 @@ run_validate_write_guard()
 	validate_write_guard_file="$(mktemp "${TMPDIR:-/tmp}/validate-write-guard.XXXXXX")"
 
 	if [ -f "${PRE_GENERATE_GUARD_PATHS_FILE}" ] && [ -f "${POST_GENERATE_GUARD_PATHS_FILE}" ]; then
-		comm -13 "${PRE_GENERATE_GUARD_PATHS_FILE}" "${POST_GENERATE_GUARD_PATHS_FILE}" | cut -f1 | sed '/^$/d' | sort -u > "${validate_write_guard_file}" || true
+		{
+			LC_ALL=C comm -23 "${PRE_GENERATE_GUARD_PATHS_FILE}" "${POST_GENERATE_GUARD_PATHS_FILE}" || true
+			LC_ALL=C comm -13 "${PRE_GENERATE_GUARD_PATHS_FILE}" "${POST_GENERATE_GUARD_PATHS_FILE}" || true
+		} | cut -f1 | sed '/^$/d' | LC_ALL=C sort -u > "${validate_write_guard_file}"
 	elif [ -f "${POST_GENERATE_GUARD_PATHS_FILE}" ]; then
-		cut -f1 "${POST_GENERATE_GUARD_PATHS_FILE}" | sed '/^$/d' | sort -u > "${validate_write_guard_file}"
+		cut -f1 "${POST_GENERATE_GUARD_PATHS_FILE}" | sed '/^$/d' | LC_ALL=C sort -u > "${validate_write_guard_file}"
 	fi
 
   if ! write_guard_check validate_fix_harness "${validate_write_guard_file}"; then
