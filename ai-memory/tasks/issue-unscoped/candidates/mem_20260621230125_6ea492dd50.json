@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- `.github/workflows/plan.yml:~922-942,~1180-1200` | severity=high | confidence=5\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The plan workflow scans and hashes `.git/**` during both snapshot steps, making every plan run expensive on repositories with non-trivial git object trees.\n  WHY: The reviewer classified this as a major regression because the repeated `find .git ...` traversal can push the plan job over its wall-time budget.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Allow plan-phase writes to pass when confined to the designated allowed globs\n  expected_change_site: `.github/ai/write_guards.v1.json`\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: no gap \u2014 policy already defines allowed glob `/__write_guard_plan_no_repo_writes__/**`, which blocks all real repo writes\n- requirement: Out-of-policy plan-phase writes must fail with WRITE_GUARD_BLOCK signal\n  expected_change_site: `.github/workflows/plan.yml` post-Codex guard enforcement step\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: no gap \u2014 post-Codex step captures git changes, runs `write_guard_check plan`, and exits 1 when policy is violated, emitting PLAN_FAILURE_CONTEXT and WRITE_GUARD_BLOCK-level error\n- requirement: WRITE_GUARDS_ENABLED=false must bypass the guard and log WRITE_GUARD_BYPASS_ENV\n  expected_change_site: `.github/workflows/plan.yml` guard enforcement environment handling\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: no gap \u2014 plan.yml sets WRITE_GUARDS_ENABLED from vars, guard sources write_guard.sh only when enabled, and `write_guard_check` explicitly checks env; tests confirm bypass works\n- requirement: The change must extend coverage to plan phase with no manual operator step\n  expected_change_site: `.github/workflows/plan.yml`, `.github/ai/write_guards.v1.json`, `scripts/dev/test_write_guard.sh`, and vars plumbing\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: no gap \u2014 policy added for plan phase, workflow stages write_guard.sh and sets WRITE_GUARDS_ENABLED=true by default; tests added; README updated; all changes are automatic and do not require manual steps\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement: Allow plan-phase writes to pass when confined to the designated allowed globs\n  Expected change site: `.github/ai/write_guards.v1.json`\n  Evidence of absence: No violation \u2014 policy defines allowed glob `/__write_guard_plan_no_repo_writes__/**` only, which blocks all real repo writes\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- Requirement: Out-of-policy plan-phase writes must fail with WRITE_GUARD_BLOCK signal\n  Expected change site: `.github/workflows/plan.yml` post-Codex guard enforcement step\n  Evidence of absence: Block found in the PR \u2014 post-Codex step captures git changes, runs `write_guard_check plan`, and exits 1 when policy is violated, emitting PLAN_FAILURE_CONTEXT and WRITE_GUARD_BLOCK-level error\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- Requirement: WRITE_GUARDS_ENABLED=false must bypass the guard and log WRITE_GUARD_BYPASS_ENV\n  Expected change site: `.github/workflows/plan.yml` guard enforcement environment handling\n  Evidence of absence: Block found in the PR \u2014 plan.yml sets WRITE_GUARDS_ENABLED from vars, guard sources write_guard.sh only when enabled, and `write_guard_check` explicitly checks env; tests confirm bypass works\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- Requirement: The change must extend coverage to plan phase with no manual operator step\n  Expected change site: `.github/workflows/plan.yml`, `.github/ai/write_guards.v1.json`, `scripts/dev/test_write_guard.sh`, and vars plumbing\n  Evidence of absence: No gap \u2014 policy added for plan phase, workflow stages write_guard.sh and sets WRITE_GUARDS_ENABLED=true by default; tests added; README updated; all changes are automatic and do not require manual steps\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- `.github/workflows/plan.yml:~922-942,~1180-1200` | severity=high | confidence=5\n  PROBLEM: The plan workflow scans and hashes `.git/**` during both snapshot steps, making every plan run expensive on repositories with non-trivial git object trees.\n  WHY: This can push the plan job over its wall-time budget; the reviewer classified it as a major regression and noted the `find .git ...` traversal was left unchanged.\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "7cc5adb96fadde54078d1f478b680102bcdb7d10b2bb24b5c0d3c590e3bd3a97",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3421,
+    "run_id": "27919294068",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27919294068",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260621230125_6ea492dd50",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3421,
+    "run_id": "27919294068"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-21T23:01:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
