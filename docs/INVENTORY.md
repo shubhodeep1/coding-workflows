@@ -7,6 +7,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 
 - `prompts/mode-clarify-respond.txt` — You are an AI assistant resolving clarification questions on behalf of the project orchestrator.
 - `prompts/mode-clarify.txt` — Role: clarify-phase auditor. Goal: emit `STATUS: CLEAR` or a `Q1`/`Q2` batch of blocking clarification questions.
+- `prompts/mode-extract-learnings.txt` — Extract stable repository learnings from prior merged AI-workflow runs as a machine-readable JSON array.
 - `prompts/mode-implement-diagnose-continuation.txt` — Role: implement-failure diagnoser continuing the same-run diagnosis session.
 - `prompts/mode-implement-diagnose.txt` — Role: implement-failure diagnoser. Goal: analyze post-Codex implement-step failures and emit one structured JSON object with fix-up issue proposals.
 - `prompts/mode-implement-repair-continuation.txt` — Role: post-Codex syntax repairer continuing the same-run repair session.
@@ -218,6 +219,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `prompts/contracts/integration-sync-conflict-resolver.yml` — Strict render contract for integration-sync-conflict-resolver.
 - `prompts/contracts/mode-clarify-respond.yml` — Strict render contract for mode-clarify-respond.
 - `prompts/contracts/mode-clarify.yml` — Strict render contract for mode-clarify.
+- `prompts/contracts/mode-extract-learnings.yml` — Strict render contract for mode-extract-learnings.
 - `prompts/contracts/mode-implement-diagnose-continuation.yml` — Strict render contract for mode-implement-diagnose-continuation.
 - `prompts/contracts/mode-implement-diagnose.yml` — Strict render contract for mode-implement-diagnose.
 - `prompts/contracts/mode-implement-repair-continuation.yml` — Strict render contract for mode-implement-repair-continuation.

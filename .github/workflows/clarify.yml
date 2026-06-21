@@ -674,6 +674,41 @@ jobs:
             --issue-title "${ISSUE_TITLE}" \
             --issue-body-file "${RUNTIME_DIR}/issue_body.txt"
 
+          memory_retrieve "${RUNTIME_DIR}/repo_learnings_context.txt" \
+            --role "clarify" \
+            --issue-number "${ISSUE_NUMBER}" \
+            --issue-title "${ISSUE_TITLE}" \
+            --issue-body-file "${RUNTIME_DIR}/issue_body.txt" \
+            --category "repo_learnings" \
+            --scope-level "global" \
+            --max "10"
+
+          python3 - <<'PY' "${RUNTIME_DIR}/repo_learnings_context.txt" "${RUNTIME_DIR}/repo_learnings.txt"
+          from pathlib import Path
+          import sys
+
+
+          source_path = Path(sys.argv[1])
+          output_path = Path(sys.argv[2])
+          summaries: list[str] = []
+          for raw_line in source_path.read_text(encoding="utf-8").splitlines():
+              if not raw_line.startswith("- [") or " :: " not in raw_line:
+                  continue
+              summary = raw_line.split(" :: ", 1)[1].strip()
+              if summary and summary.lower() != "none":
+                  summaries.append(summary)
+
+          if summaries:
+              output_path.write_text(
+                  "Repository learnings from prior merged work:\n"
+                  + "\n".join(f"- {summary}" for summary in summaries)
+                  + "\n",
+                  encoding="utf-8",
+              )
+          else:
+              output_path.write_text("", encoding="utf-8")
+          PY
+
       - name: Set orchestrator /reclarify reasoning effort
         if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.clarify_route.outputs.is_orchestrator_managed == 'true' && steps.clarify_route.outputs.is_forced_reclarify == 'true'
         run: |
@@ -853,6 +888,8 @@ jobs:
             echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
             echo
             bash scripts/render_prompt.sh "${PROMPT_TEMPLATE_FILE}"
+            echo
+            REPO_LEARNINGS="$(cat "${RUNTIME_DIR}/repo_learnings.txt")" bash scripts/render_prompt.sh prompts/header.txt
             echo
             echo "=== AI MEMORY CONTEXT ==="
             cat "${RUNTIME_DIR}/memory_context.txt"
