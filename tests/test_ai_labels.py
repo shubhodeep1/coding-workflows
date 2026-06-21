@@ -432,7 +432,7 @@ def test_sync_labels_retries_rate_limited_requests() -> None:
 				"https://api.github.com/repos/octo-org/octo-repo/labels/ai%3Aalpha",
 				429,
 				"Too Many Requests",
-				headers={"Retry-After": "3"},
+				headers={"Retry-After": "60"},
 			),
 			_FakeHTTPResponse({"name": "ai:alpha", **SYNC_LABELS["ai:alpha"]}),
 			_FakeHTTPResponse({"name": "ai:beta", **SYNC_LABELS["ai:beta"]}),
@@ -451,7 +451,7 @@ def test_sync_labels_retries_rate_limited_requests() -> None:
 	assert rc == 0
 	assert payload == {"created": 0, "updated": 0, "unchanged": 2, "errors": []}
 	assert [entry["method"] for entry in request_log] == ["GET", "GET", "GET"]
-	assert sleep_calls == [3.0]
+	assert sleep_calls == [60.0]
 	assert stderr_text.count("LABEL_SYNC_UNCHANGED:") == 2
 
 

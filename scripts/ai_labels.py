@@ -182,9 +182,13 @@ def _github_retry_delay_seconds(headers: Any, attempt_index: int) -> float:
     if header_delay_seconds is not None:
         base_delay_seconds = max(base_delay_seconds, header_delay_seconds)
 
+    jitter_seconds = random.uniform(0.0, 0.5)
+    if header_delay_seconds is not None and header_delay_seconds > GITHUB_API_BACKOFF_CAP_SECONDS:
+        return base_delay_seconds + jitter_seconds
+
     return min(
         GITHUB_API_BACKOFF_CAP_SECONDS,
-        base_delay_seconds + random.uniform(0.0, 0.5),
+        base_delay_seconds + jitter_seconds,
     )
 
 
