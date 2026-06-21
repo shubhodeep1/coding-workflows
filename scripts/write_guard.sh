@@ -65,6 +65,7 @@ write_guard_check()
 	local write_guard_root_dir=""
 	local write_guard_config_rel=".github/ai/write_guards.v1.json"
 	local write_guard_config_path=""
+	local write_guard_config_log_path="${write_guard_config_rel}"
 	local write_guard_result_file=""
 	local write_guard_stderr_file=""
 	local write_guard_rc=0
@@ -86,14 +87,18 @@ write_guard_check()
 	fi
 
 	if ! command -v python3 >/dev/null 2>&1; then
-		echo "WRITE_GUARD_CONFIG_ERROR: phase=${write_guard_phase} config=${write_guard_config_rel} detail=python3_unavailable"
+		echo "WRITE_GUARD_CONFIG_ERROR: phase=${write_guard_phase} config=${write_guard_config_log_path} detail=python3_unavailable"
 		return 0
 	fi
 
 	write_guard_root_dir="$(write_guard_repo_root)"
 	if ! write_guard_config_path="$(write_guard_resolve_config_path "${write_guard_root_dir}")"; then
-		echo "WRITE_GUARD_CONFIG_ERROR: phase=${write_guard_phase} config=${write_guard_config_rel} detail=missing"
+		echo "WRITE_GUARD_CONFIG_ERROR: phase=${write_guard_phase} config=${write_guard_config_log_path} detail=missing"
 		return 0
+	fi
+	write_guard_config_log_path="${write_guard_config_path}"
+	if [ -n "${write_guard_root_dir}" ] && [ "${write_guard_config_log_path#${write_guard_root_dir}/}" != "${write_guard_config_log_path}" ]; then
+		write_guard_config_log_path="${write_guard_config_log_path#${write_guard_root_dir}/}"
 	fi
 
 	write_guard_result_file="$(mktemp "${TMPDIR:-/tmp}/write-guard-result.XXXXXX")"
@@ -185,7 +190,7 @@ for path in paths:
 	if conditional_hit:
 		continue
 	if first_match(path, allowed_globs) is None:
-		print("\t".join(["not_allowed", path, "|".join(allowed_globs), "", ""]))
+		print("\t".join(["not_allowed", path, "<no-match>", "", ""]))
 		violations += 1
 
 sys.exit(1 if violations else 0)
@@ -216,7 +221,7 @@ PY
 				write_guard_detail="unknown"
 			fi
 			rm -f "${write_guard_result_file}" "${write_guard_stderr_file}"
-			echo "WRITE_GUARD_CONFIG_ERROR: phase=${write_guard_phase} config=${write_guard_config_rel} detail=${write_guard_detail}"
+			echo "WRITE_GUARD_CONFIG_ERROR: phase=${write_guard_phase} config=${write_guard_config_log_path} detail=${write_guard_detail}"
 			return 0
 			;;
 	esac

@@ -121,6 +121,16 @@ test_blocklist_fail()
 	rm -rf "${repo_dir}"
 }
 
+test_not_allowed_fail()
+{
+	local repo_dir
+	repo_dir="$(make_temp_repo)"
+	run_guard_capture "${repo_dir}" validate_fix_harness $'README.md\n'
+	assert_eq "1" "${RUN_GUARD_STATUS}" 'validate allowlist misses should fail'
+	assert_contains 'WRITE_GUARD_BLOCK: phase=validate_fix_harness path=README.md reason=not_allowed pattern=<no-match>' "${RUN_GUARD_OUTPUT}" 'not_allowed failure should use the sentinel pattern'
+	rm -rf "${repo_dir}"
+}
+
 test_conditional_block_with_env_disabled()
 {
 	local repo_dir
@@ -152,6 +162,19 @@ test_config_parse_fail_open()
 	rm -rf "${repo_dir}"
 }
 
+test_config_parse_fail_open_from_fallback()
+{
+	local repo_dir
+	repo_dir="$(make_temp_repo)"
+	mkdir -p "${repo_dir}/.codex-workflow-src/.github/ai"
+	rm -f "${repo_dir}/.github/ai/write_guards.v1.json"
+	printf '{invalid json\n' > "${repo_dir}/.codex-workflow-src/.github/ai/write_guards.v1.json"
+	run_guard_capture "${repo_dir}" review_editor $'.github/workflows/test.yml\n' 'ALLOW_WORKFLOW_EDITS=false'
+	assert_eq "0" "${RUN_GUARD_STATUS}" 'fallback config parse errors should fail open'
+	assert_contains 'WRITE_GUARD_CONFIG_ERROR: phase=review_editor config=.codex-workflow-src/.github/ai/write_guards.v1.json' "${RUN_GUARD_OUTPUT}" 'fallback config parse failure should log the resolved path'
+	rm -rf "${repo_dir}"
+}
+
 test_bypass_env_audit()
 {
 	local repo_dir
@@ -164,8 +187,10 @@ test_bypass_env_audit()
 
 test_allowlist_pass
 test_blocklist_fail
+test_not_allowed_fail
 test_conditional_block_with_env_disabled
 test_conditional_block_with_env_enabled
 test_config_parse_fail_open
+test_config_parse_fail_open_from_fallback
 test_bypass_env_audit
 echo "test_write_guard.sh: PASS"
