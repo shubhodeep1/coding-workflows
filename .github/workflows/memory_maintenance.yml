@@ -166,7 +166,7 @@ jobs:
                       task_summary_records_by_issue[issue_number] = candidate
 
               canonical_dir = memory_root / "global" / "canonical"
-              for record_path in sorted(canonical_dir.glob("*.json")):
+              for record_path in sorted(canonical_dir.rglob("*.json")):
                   payload = _load_json(record_path)
                   if payload is not None:
                       consider_record(payload)
