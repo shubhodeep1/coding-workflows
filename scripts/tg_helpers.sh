@@ -290,24 +290,6 @@ tg_send_phase_tracked()
 }
 
 # ---------------------------------------------------------------
-# tg_send_phase_failure — Send a phase-failure Telegram message.
-# Usage: tg_send_phase_failure clarify "message text" "ERROR" 42
-# The phase argument is retained for call-site readability; the current
-# failure path preserves the existing tracked-send behavior.
-# ---------------------------------------------------------------
-tg_send_phase_failure()
-{
-	local phase="$1" reason="$2" level="${3:-ERROR}" tracked_num="${4:-${ISSUE_NUMBER:-${PR_NUMBER:-0}}}"
-	[ -n "${phase}" ] || return 0
-	[ -n "${reason}" ] || return 0
-	if [ -n "${tracked_num}" ] && [ "${tracked_num}" != "0" ]; then
-		tg_send_tracked "${tracked_num}" "${reason}" "${level}"
-	else
-		tg_send_msg "${reason}" "${level}" >/dev/null
-	fi
-}
-
-# ---------------------------------------------------------------
 # tg_cleanup_phase_msgs — Delete TG messages for a specific phase.
 # Usage: tg_cleanup_phase_msgs 42 clarify
 # ---------------------------------------------------------------

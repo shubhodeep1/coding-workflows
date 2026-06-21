@@ -35,6 +35,7 @@ env:
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   MEMORY_INJECTION_SCAN_ENABLED: ${{ vars.MEMORY_INJECTION_SCAN_ENABLED || 'true' }}
   ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+  WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
   # files_touched scope-enforcement guard (see the preflight + commit-time
   # scope guards in this workflow and scripts/files_touched_scope_guard.py).
   # ENFORCE_FILES_TOUCHED is the master toggle — set 'false' to globally
@@ -849,7 +850,7 @@ jobs:
 
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh lint_pr_body_auto_close.py; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh lint_pr_body_auto_close.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -3473,6 +3474,19 @@ jobs:
           trap on_step_exit EXIT
           exec 3>&2
           exec 2> >(tee "${STEP_STDERR_FILE}" >&3)
+
+          # shellcheck source=/dev/null
+          source scripts/write_guard.sh
+          IMPLEMENT_WRITE_GUARD_FILE="$(mktemp)"
+          {
+            git diff --name-only --diff-filter=ACMRD HEAD || true
+            git ls-files --others --exclude-standard || true
+          } | sed '/^$/d' | sort -u > "${IMPLEMENT_WRITE_GUARD_FILE}"
+          if ! write_guard_check implement "${IMPLEMENT_WRITE_GUARD_FILE}"; then
+            rm -f "${IMPLEMENT_WRITE_GUARD_FILE}"
+            exit 1
+          fi
+          rm -f "${IMPLEMENT_WRITE_GUARD_FILE}"
 
           if [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
             echo "ALLOW_WORKFLOW_EDITS is enabled — preserving .github/workflows changes."

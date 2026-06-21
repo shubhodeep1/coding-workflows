@@ -12,6 +12,7 @@
 #   COMMITTED_FILES_FILE              Path where a per-line list of committed paths is written.
 #   IS_WORKFLOW_SOURCE_REPO           "true" on the coding-workflows repo itself.
 #   ALLOW_WORKFLOW_EDITS              "true" to allow editor changes under .github/workflows.
+#   WRITE_GUARDS_ENABLED              "true" to enforce write-guard policy; false logs a bypass and continues.
 #   RUNTIME_DIR                       Ephemeral per-run directory.
 #   PRE_EDITOR_STATE_FILE             Optional snapshot of pre-editor tree state.
 #   PRE_EDITOR_DIFF_BASELINE_FILE     Optional pre-editor baseline diff file.
@@ -46,6 +47,10 @@
 #   - Exits 0 (no-op) when CAN_PUSH != "true" or nothing is staged.
 
 set -euo pipefail
+
+_review_commit_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "${_review_commit_script_dir}/write_guard.sh"
 
 if [ -z "${COMMITTED_FILES_FILE:-}" ]; then
   if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ]; then
@@ -152,6 +157,17 @@ if [ -s "${NEW_FILES_BEFORE_COMMIT_FILE}" ]; then
   fi
 fi
 rm -f "${NEW_FILES_BEFORE_COMMIT_FILE}"
+
+REVIEW_WRITE_GUARD_PRESTAGE_FILE="$(mktemp "${TMPDIR:-/tmp}/review-write-guard-prestage.XXXXXX")"
+{
+  git diff --name-only --diff-filter=ACMRD HEAD || true
+  git ls-files --others --exclude-standard || true
+} | sed '/^$/d' | sort -u > "${REVIEW_WRITE_GUARD_PRESTAGE_FILE}"
+if ! write_guard_check review_editor "${REVIEW_WRITE_GUARD_PRESTAGE_FILE}"; then
+  rm -f "${REVIEW_WRITE_GUARD_PRESTAGE_FILE}"
+  exit 1
+fi
+rm -f "${REVIEW_WRITE_GUARD_PRESTAGE_FILE}"
 
 if [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ] && [ -n "$(git status --porcelain .github/workflows)" ]; then
   echo "Workflow edits are not allowed; discarding .github/workflows changes."
@@ -341,6 +357,14 @@ if [ "${PROTECTED_LEAKED}" = "true" ]; then
   echo "Staged files after protected-path reset:"
   printf '%s\n' "${STAGED_FILES}" | sed '/^$/d; s/^/ - /' || true
 fi
+
+REVIEW_WRITE_GUARD_STAGED_FILE="$(mktemp "${TMPDIR:-/tmp}/review-write-guard-staged.XXXXXX")"
+printf '%s\n' "${STAGED_FILES}" | sed '/^$/d' > "${REVIEW_WRITE_GUARD_STAGED_FILE}"
+if ! write_guard_check review_editor "${REVIEW_WRITE_GUARD_STAGED_FILE}"; then
+  rm -f "${REVIEW_WRITE_GUARD_STAGED_FILE}"
+  exit 1
+fi
+rm -f "${REVIEW_WRITE_GUARD_STAGED_FILE}"
 
 if git diff --cached --quiet; then
   echo "No repository changes to commit."
