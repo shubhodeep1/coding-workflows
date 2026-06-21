@@ -453,6 +453,31 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_label_precreation_contract.py
 
+      - name: AI label helper unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_labels.py
+
+      - name: AI label sync dry-run smoke
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          RESULT_JSON="/tmp/ai-label-sync-dry-run.json"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ai_labels.py sync-labels \
+            --contract-file .github/ai/label_contract.v1.json \
+            --repo "${GITHUB_REPOSITORY}" \
+            --dry-run > "${RESULT_JSON}"
+          python3 - <<'PY' "${RESULT_JSON}"
+          import json
+          import sys
+          from pathlib import Path
+
+          payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          assert set(payload) == {"created", "updated", "unchanged", "errors"}
+          assert isinstance(payload["errors"], list)
+          PY
+
       - name: Phase label transition and fallback contract tests
         run: |
           set -euo pipefail
