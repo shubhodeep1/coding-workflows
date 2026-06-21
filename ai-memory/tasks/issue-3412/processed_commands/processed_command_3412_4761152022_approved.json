@@ -5,13 +5,28 @@
   "entry_id": "processed_command_3412_4761152022_approved",
   "issue_number": 3412,
   "metadata": {
+    "branch": "ai/issue-3412",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/audit_consumer_drift.yml",
+      "README.md",
+      "agents.md",
+      "scripts/audit_consumer_drift.py",
+      "scripts/label_helpers.sh",
+      "tests/test_audit_consumer_drift.py"
+    ],
+    "issue_number": 3412,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/3412",
+    "pr_number": 3413,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/3413",
+    "run_attempt": "1",
+    "run_id": "27896193736",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/27896193736"
   },
   "run_attempt": 1,
   "run_id": "27896193736",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-06-21T06:40:53Z",
+  "status": "completed",
+  "timestamp": "2026-06-21T06:51:53Z",
   "workflow": "implement"
 }
