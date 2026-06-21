@@ -70,7 +70,13 @@ _memory_bootstrap_define_fallback()
 				return 0
 			}
 			;;
+		*)
+			_memory_warn "bootstrap unsupported helper: ${helper_name}"
+			return 1
+			;;
 	esac
+
+	return 0
 }
 
 memory_bootstrap()
@@ -91,7 +97,7 @@ memory_bootstrap()
 				;;
 			*)
 				_memory_warn "bootstrap unknown arg: $1"
-				return 0
+				return 2
 				;;
 		esac
 	done
@@ -105,7 +111,13 @@ memory_bootstrap()
 		if declare -F "${required_helper_name}" >/dev/null 2>&1; then
 			continue
 		fi
-		_memory_bootstrap_define_fallback "${required_helper_name}"
+		if ! _memory_bootstrap_define_fallback "${required_helper_name}"; then
+			return 2
+		fi
+		if ! declare -F "${required_helper_name}" >/dev/null 2>&1; then
+			_memory_warn "bootstrap failed to provide required helper: ${required_helper_name}"
+			return 2
+		fi
 	done
 
 	return 0

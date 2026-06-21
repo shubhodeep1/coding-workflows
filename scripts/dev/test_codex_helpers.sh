@@ -88,6 +88,31 @@ EOF
 	rm -rf "${tmpdir}"
 }
 
+test_missing_writer_helper_fails_fast()
+{
+	local tmpdir scripts_dir env_file err_file helper_home
+	tmpdir="$(mktemp -d)"
+	trap 'rm -rf "${tmpdir}"' RETURN
+	scripts_dir="${tmpdir}/runtime/scripts"
+	env_file="${tmpdir}/github.env"
+	err_file="${tmpdir}/stderr.log"
+	helper_home="${tmpdir}/home"
+	mkdir -p "${scripts_dir}" "${helper_home}"
+	touch "${scripts_dir}/codex_model_catalog.json"
+
+	if GITHUB_ENV="${env_file}" \
+		HOME="${helper_home}" \
+		CODEX_HELPERS_SCRIPTS_DIR="${scripts_dir}" \
+		codex_config_assemble "openai/gpt-5.4" "medium" "low" 2>"${err_file}"; then
+		echo 'expected codex_config_assemble to fail when write_codex_config.sh is missing' >&2
+		exit 1
+	fi
+	assert_contains "::error::codex_config_assemble: missing writer helper ${scripts_dir}/write_codex_config.sh" "${err_file}"
+	trap - RETURN
+	rm -rf "${tmpdir}"
+}
+
 test_relative_support_dir_resolution
 test_absolute_support_dir_resolution
+test_missing_writer_helper_fails_fast
 echo "test_codex_helpers.sh: PASS"

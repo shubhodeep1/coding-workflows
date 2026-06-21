@@ -1440,37 +1440,8 @@ trap '[ -n "${_hb_tmpdir:-}" ] && rm -rf "${_hb_tmpdir}" 2>/dev/null || true' EX
 _REFUSAL_REGEX="(^I'?m sorry,? but I (can ?not|can.?t) assist( with that request)?\\.?$|^I (can ?not|can.?t) help with that( request)?\\.?$)"
 rm -f "${PREVIOUS_REVIEWS_DIR}/editor_refused.flag" 2>/dev/null || true
 
-# Kill any processes still holding the editor stderr FIFO open. After the
-# watchdog stall-kills codex it signals only the codex PID, so codex's
-# orphaned tool-subprocesses can keep the FIFO's write-end open — which
-# both hangs the heartbeat reader's drain and leaves danger-full-access
-# children running unsupervised. Reaping by FIFO holder is targeted: the
-# only processes with that FIFO open are the reader (read-end) and the
-# codex process tree (write-end); the main shell and watchdog never open
-# it, so this cannot signal them. Prefers fuser, then sweeps /proc for any
-# remaining holders, and is a no-op when neither path can identify one.
-_reap_editor_fifo_holders() {
-  local fifo="$1"
-  local sig="${2:-TERM}"
-  [ -n "${fifo}" ] && [ -e "${fifo}" ] || return 0
-  if command -v fuser >/dev/null 2>&1; then
-    fuser -k -"${sig}" "${fifo}" >/dev/null 2>&1 || true
-  fi
-  local link target pid
-  for link in /proc/[0-9]*/fd/*; do
-    [ -e "${link}" ] || continue
-    target="$(readlink -f "${link}" 2>/dev/null)" || continue
-    [ "${target}" = "${fifo}" ] || continue
-    pid="${link#/proc/}"
-    pid="${pid%%/*}"
-    case "${pid}" in
-      ''|*[!0-9]*) continue ;;
-    esac
-    [ "${pid}" = "$$" ] && continue
-    kill -"${sig}" "${pid}" 2>/dev/null || true
-  done
-  return 0
-}
+# Shared FIFO-holder cleanup comes from watchdog_helpers.sh so the
+# editor drain path stays aligned with the other extracted watchdog helpers.
 
 attempt=1
 while [ "${attempt}" -le 3 ]; do

@@ -645,8 +645,9 @@ jobs:
             fi
           done
 
-          if rg -n 'read_codex_stall_guard_state\(\)|codex_stall_guard_kill_detected\(\)' \
+          if rg -n 'read_codex_stall_guard_state\(\)|read_validate_codex_stall_guard_state\(\)|codex_stall_guard_kill_detected\(\)|resolve_editor_network_probe_pid\(\)|_reap_editor_fifo_holders\(\)' \
             .github/workflows/implement.yml \
+            scripts/review_apply_fixes.sh \
             scripts/validate_process.sh; then
             echo "::error::Inline stall-guard parsing helpers detected; use scripts/watchdog_helpers.sh"
             exit 1

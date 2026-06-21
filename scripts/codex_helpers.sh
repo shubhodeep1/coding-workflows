@@ -97,6 +97,10 @@ codex_config_assemble()
 	if [ -z "${catalog_path}" ]; then
 		catalog_path="$(_codex_helpers_resolve_catalog_path "${scripts_dir_override}")"
 	fi
+	if [ ! -r "${writer_path}" ]; then
+		echo "::error::codex_config_assemble: missing writer helper ${writer_path}" >&2
+		return 1
+	fi
 
 	CODEX_HOME="${HOME:-/root}/.codex"
 	export CODEX_HOME
