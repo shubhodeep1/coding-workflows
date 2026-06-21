@@ -5,13 +5,30 @@
   "entry_id": "processed_command_3409_4760759194_approved",
   "issue_number": 3409,
   "metadata": {
+    "branch": "ai/issue-3409",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      ".github/workflows/sync_ai_labels.yml",
+      "README.md",
+      "agents.md",
+      "docs/INVENTORY.md",
+      "scripts/ai_labels.py",
+      "tests/test_ai_labels.py",
+      "workflow-templates/ai-sync-labels.yml",
+      "workflow-templates/profiles/full.txt"
+    ],
+    "issue_number": 3409,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/3409",
+    "pr_number": 3410,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/3410",
+    "run_attempt": "1",
+    "run_id": "27891916574",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/27891916574"
   },
   "run_attempt": 1,
   "run_id": "27891916574",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-06-21T03:15:18Z",
+  "status": "completed",
+  "timestamp": "2026-06-21T03:25:04Z",
   "workflow": "implement"
 }
