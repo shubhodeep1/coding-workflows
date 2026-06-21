@@ -26,6 +26,7 @@
 .github/ai/hot_files.json
 .github/ai/label_contract.v1.json
 .github/ai/orchestrate_schema.v1.json
+.github/workflows/audit_consumer_drift.yml
 .github/workflows/cancel_on_pr_close.yml
 .github/workflows/ci.yml
 .github/workflows/clarify.yml
@@ -216,6 +217,7 @@ scripts/ai_memory_lib.py
 scripts/analyze_soft_errors.py
 scripts/analyze_workflow_logs.py
 scripts/apply_audit_gate_assets.py
+scripts/audit_consumer_drift.py
 scripts/blocker_check.py
 scripts/build_semble_wrapper.sh
 scripts/build_state_snapshot.py
@@ -226,6 +228,7 @@ scripts/check_resolver_diff.sh
 scripts/check_workflow_script_refs.py
 scripts/clarify_data_provision_guard.py
 scripts/codex_heartbeat.sh
+scripts/codex_helpers.sh
 scripts/codex_model_catalog.json
 scripts/codex_stall_guard.sh
 scripts/codex_thread_reuse.sh
@@ -237,6 +240,8 @@ scripts/consolidate_soft_error_reports.py
 scripts/cost_audit.py
 scripts/detect_editor_changes_lost.sh
 scripts/dev/replay_review_pipeline.sh
+scripts/dev/test_codex_helpers.sh
+scripts/dev/test_watchdog_helpers.sh
 scripts/dispatch_and_watch_workflow_run.sh
 scripts/drift_audit.sh
 scripts/files_touched_scope_guard.py
@@ -324,6 +329,7 @@ scripts/validation_selftest_matrix.py
 scripts/validation_selftest_status.py
 scripts/validation_template_bootstrap.py
 scripts/verify_integration_fingerprints.py
+scripts/watchdog_helpers.sh
 scripts/workspace_init.sh
 scripts/workspace_safety_check.sh
 scripts/write_codex_config.sh
@@ -424,6 +430,7 @@ tests/test_ai_memory_push_retry_backoff.py
 tests/test_ai_memory_sync_reference_files.py
 tests/test_ai_memory_workflow_log_analysis_cache.py
 tests/test_analyze_workflow_logs.py
+tests/test_audit_consumer_drift.py
 tests/test_audit_gate_identity.py
 tests/test_audit_gate_template_atomicity.py
 tests/test_blocker_check.py
