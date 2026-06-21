@@ -747,6 +747,12 @@ jobs:
 > to keep your changes, either opt out or maintain your customizations after
 > each update.
 
+**Optional label-sync wrapper:** If you want your repository's `ai:*` labels to
+stay aligned with the upstream contract, add
+[`workflow-templates/ai-sync-labels.yml`](workflow-templates/ai-sync-labels.yml)
+as `.github/workflows/ai-sync-labels.yml`. It supports manual
+`workflow_dispatch` runs plus the stable-release `repository_dispatch` hook.
+
 #### Install profiles
 
 If you use `ai-update-workflows.yml`, you can narrow which wrappers it
