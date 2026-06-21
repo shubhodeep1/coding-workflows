@@ -91,6 +91,20 @@ class _FakeHTTPResponse:
 		return False
 
 
+class _FakeRawHTTPResponse:
+	def __init__(self, body: bytes) -> None:
+		self._body = body
+
+	def read(self) -> bytes:
+		return self._body
+
+	def __enter__(self) -> "_FakeRawHTTPResponse":
+		return self
+
+	def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
+		return False
+
+
 def _set_env(overrides: dict[str, str | None]) -> dict[str, str | None]:
 	previous: dict[str, str | None] = {}
 	for key, value in overrides.items():
@@ -134,13 +148,19 @@ def _make_sync_contract(tmpdir: Path, labels: dict[str, dict[str, str]]) -> Path
 	return contract_path
 
 
-def _http_error(url: str, code: int, message: str, body: object | None = None) -> urllib.error.HTTPError:
+def _http_error(
+	url: str,
+	code: int,
+	message: str,
+	body: object | None = None,
+	headers: dict[str, str] | None = None,
+) -> urllib.error.HTTPError:
 	payload = body if body is not None else {"message": message}
 	return urllib.error.HTTPError(
 		url,
 		code,
 		message,
-		hdrs=None,
+		hdrs=headers,
 		fp=io.BytesIO(json.dumps(payload, ensure_ascii=True, sort_keys=True).encode("utf-8")),
 	)
 
@@ -171,7 +191,7 @@ def _run_sync_labels(
 		response = next(response_iter)
 		if isinstance(response, Exception):
 			raise response
-		assert isinstance(response, _FakeHTTPResponse)
+		assert hasattr(response, "read")
 		return response
 
 	previous_env = _set_env({"GH_TOKEN": token, "GITHUB_TOKEN": None})
@@ -368,8 +388,8 @@ def test_sync_labels_returns_nonzero_when_every_label_fails() -> None:
 	with tempfile.TemporaryDirectory(prefix="ai-label-sync-fail-") as tmpdir:
 		contract_path = _make_sync_contract(Path(tmpdir), SYNC_LABELS)
 		responses = [
-			_http_error("https://api.github.com/repos/octo-org/octo-repo/labels/ai%3Aalpha", 500, "Server Error"),
-			_http_error("https://api.github.com/repos/octo-org/octo-repo/labels/ai%3Abeta", 503, "Unavailable"),
+			_http_error("https://api.github.com/repos/octo-org/octo-repo/labels/ai%3Aalpha", 401, "Unauthorized"),
+			_http_error("https://api.github.com/repos/octo-org/octo-repo/labels/ai%3Abeta", 403, "Forbidden"),
 		]
 		rc, payload, stderr_text, request_log = _run_sync_labels(contract_path, responses=responses, use_main=True)
 
@@ -380,6 +400,61 @@ def test_sync_labels_returns_nonzero_when_every_label_fails() -> None:
 	assert len(payload["errors"]) == 2
 	assert [entry["method"] for entry in request_log] == ["GET", "GET"]
 	assert stderr_text.count("LABEL_SYNC_ERROR:") == 2
+
+
+def test_sync_labels_retries_rate_limited_requests() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-retry-") as tmpdir:
+		contract_path = _make_sync_contract(Path(tmpdir), SYNC_LABELS)
+		responses = [
+			_http_error(
+				"https://api.github.com/repos/octo-org/octo-repo/labels/ai%3Aalpha",
+				429,
+				"Too Many Requests",
+				headers={"Retry-After": "3"},
+			),
+			_FakeHTTPResponse({"name": "ai:alpha", **SYNC_LABELS["ai:alpha"]}),
+			_FakeHTTPResponse({"name": "ai:beta", **SYNC_LABELS["ai:beta"]}),
+		]
+		sleep_calls: list[float] = []
+		original_sleep = ai_labels.time.sleep
+		original_uniform = ai_labels.random.uniform
+		try:
+			ai_labels.time.sleep = lambda seconds: sleep_calls.append(seconds)
+			ai_labels.random.uniform = lambda _start, _end: 0.0
+			rc, payload, stderr_text, request_log = _run_sync_labels(contract_path, responses=responses)
+		finally:
+			ai_labels.time.sleep = original_sleep
+			ai_labels.random.uniform = original_uniform
+
+	assert rc == 0
+	assert payload == {"created": 0, "updated": 0, "unchanged": 2, "errors": []}
+	assert [entry["method"] for entry in request_log] == ["GET", "GET", "GET"]
+	assert sleep_calls == [3.0]
+	assert stderr_text.count("LABEL_SYNC_UNCHANGED:") == 2
+
+
+def test_sync_labels_records_non_json_success_bodies() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-non-json-") as tmpdir:
+		contract_path = _make_sync_contract(Path(tmpdir), SYNC_LABELS)
+		responses = [
+			_FakeRawHTTPResponse(b"<html>ok</html>"),
+			_FakeHTTPResponse({"name": "ai:beta", **SYNC_LABELS["ai:beta"]}),
+		]
+		rc, payload, stderr_text, request_log = _run_sync_labels(contract_path, responses=responses)
+
+	assert rc == 0
+	assert payload["created"] == 0
+	assert payload["updated"] == 0
+	assert payload["unchanged"] == 1
+	assert payload["errors"] == [
+		{
+			"action": "get",
+			"label": "ai:alpha",
+			"message": "GitHub API returned non-JSON response for GET repos/octo-org/octo-repo/labels/ai%3Aalpha: <html>ok</html>",
+		}
+	]
+	assert [entry["method"] for entry in request_log] == ["GET", "GET"]
+	assert "LABEL_SYNC_ERROR:" in stderr_text
 
 
 def test_sync_labels_dry_run_skips_mutations() -> None:
@@ -401,6 +476,39 @@ def test_sync_labels_dry_run_skips_mutations() -> None:
 	assert [entry["method"] for entry in request_log] == ["GET", "GET"]
 	assert "LABEL_SYNC_CREATED:" in stderr_text
 	assert "LABEL_SYNC_UPDATED:" in stderr_text
+
+
+def test_sync_labels_rejects_invalid_repo_before_api_calls() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-invalid-repo-") as tmpdir:
+		contract_path = _make_sync_contract(Path(tmpdir), SYNC_LABELS)
+		stderr_buffer = io.StringIO()
+		urlopen_called = False
+		previous_env = _set_env({"GH_TOKEN": "test-token", "GITHUB_TOKEN": None})
+		original_urlopen = ai_labels.urllib.request.urlopen
+		try:
+			def _unexpected_urlopen(request: object, timeout: int = 120) -> _FakeHTTPResponse:
+				nonlocal urlopen_called
+				urlopen_called = True
+				raise AssertionError(f"urlopen should not be called for invalid repo: {request!r} {timeout!r}")
+
+			ai_labels.urllib.request.urlopen = _unexpected_urlopen
+			with contextlib.redirect_stderr(stderr_buffer):
+				rc = ai_labels.main(
+					[
+						"sync-labels",
+						"--contract-file",
+						str(contract_path),
+						"--repo",
+						"octo-org",
+					]
+				)
+		finally:
+			ai_labels.urllib.request.urlopen = original_urlopen
+			_restore_env(previous_env)
+
+	assert rc == 2
+	assert urlopen_called is False
+	assert "repo must be in 'owner/name' format" in stderr_buffer.getvalue()
 
 
 def main() -> int:

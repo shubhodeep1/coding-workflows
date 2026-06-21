@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -19,6 +21,10 @@ class LabelContractError(ValueError):
 
 
 GITHUB_API_BASE_URL = "https://api.github.com"
+GITHUB_API_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+GITHUB_API_MAX_ATTEMPTS = 3
+GITHUB_API_BACKOFF_BASE_SECONDS = 1.0
+GITHUB_API_BACKOFF_CAP_SECONDS = 8.0
 
 
 def _require_nonempty(value: str | None, field_name: str) -> str:
@@ -26,6 +32,20 @@ def _require_nonempty(value: str | None, field_name: str) -> str:
     if not text:
         raise LabelContractError(f"{field_name} is required")
     return text
+
+
+def _require_repo_slug(value: str | None) -> str:
+    repo_text = _require_nonempty(value, "repo")
+    if repo_text.count("/") != 1:
+        raise LabelContractError("repo must be in 'owner/name' format")
+
+    owner_name, repo_name = repo_text.split("/", 1)
+    if not owner_name or not repo_name:
+        raise LabelContractError("repo must be in 'owner/name' format")
+    if owner_name.strip() != owner_name or repo_name.strip() != repo_name:
+        raise LabelContractError("repo must be in 'owner/name' format")
+
+    return repo_text
 
 
 def _load_json(path: Path) -> Any:
@@ -122,6 +142,46 @@ def _github_token() -> str | None:
     return token_text or None
 
 
+def _sanitize_log_detail(detail: str) -> str:
+    return " ".join(detail.split())
+
+
+def _github_retry_header_delay_seconds(headers: Any) -> float | None:
+    if headers is None:
+        return None
+
+    retry_after_value = headers.get("Retry-After")
+    if isinstance(retry_after_value, str):
+        retry_after_text = retry_after_value.strip()
+        if retry_after_text.isdigit():
+            return float(retry_after_text)
+
+    rate_limit_reset_value = headers.get("X-RateLimit-Reset")
+    if isinstance(rate_limit_reset_value, str):
+        rate_limit_reset_text = rate_limit_reset_value.strip()
+        if rate_limit_reset_text.isdigit():
+            reset_delay_seconds = float(int(rate_limit_reset_text) - int(time.time()))
+            return max(0.0, reset_delay_seconds)
+
+    return None
+
+
+def _github_retry_delay_seconds(headers: Any, attempt_index: int) -> float:
+    header_delay_seconds = _github_retry_header_delay_seconds(headers)
+    exponential_delay_seconds = min(
+        GITHUB_API_BACKOFF_CAP_SECONDS,
+        GITHUB_API_BACKOFF_BASE_SECONDS * (2**attempt_index),
+    )
+    base_delay_seconds = exponential_delay_seconds
+    if header_delay_seconds is not None:
+        base_delay_seconds = max(base_delay_seconds, header_delay_seconds)
+
+    return min(
+        GITHUB_API_BACKOFF_CAP_SECONDS,
+        base_delay_seconds + random.uniform(0.0, 0.5),
+    )
+
+
 def _github_api_request(
     path: str,
     *,
@@ -145,18 +205,44 @@ def _github_api_request(
         request_data = json.dumps(payload, ensure_ascii=True, sort_keys=True).encode("utf-8")
         request_headers["Content-Type"] = "application/json; charset=utf-8"
 
+    method_name = method.upper()
     request = urllib.request.Request(
         f"{GITHUB_API_BASE_URL}/{path.lstrip('/')}",
         data=request_data,
         headers=request_headers,
-        method=method.upper(),
+        method=method_name,
     )
-    with urllib.request.urlopen(request, timeout=120) as response:
-        response_body = response.read()
+    for attempt_index in range(GITHUB_API_MAX_ATTEMPTS):
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                response_body = response.read()
+        except urllib.error.HTTPError as exc:
+            if exc.code not in GITHUB_API_RETRY_STATUSES or attempt_index + 1 >= GITHUB_API_MAX_ATTEMPTS:
+                raise
+            time.sleep(_github_retry_delay_seconds(exc.headers, attempt_index))
+            continue
+        except (urllib.error.URLError, OSError):
+            if attempt_index + 1 >= GITHUB_API_MAX_ATTEMPTS:
+                raise
+            time.sleep(_github_retry_delay_seconds(None, attempt_index))
+            continue
 
-    if not response_body:
-        return None
-    return json.loads(response_body)
+        if not response_body:
+            return None
+
+        try:
+            return json.loads(response_body)
+        except json.JSONDecodeError as exc:
+            response_preview = _sanitize_log_detail(response_body.decode("utf-8", errors="replace"))
+            if len(response_preview) > 160:
+                response_preview = f"{response_preview[:157]}..."
+            if not response_preview:
+                response_preview = "<empty response body>"
+            raise ValueError(
+                f"GitHub API returned non-JSON response for {method_name} {path}: {response_preview}"
+            ) from exc
+
+    raise RuntimeError(f"GitHub API retry loop exhausted for {method_name} {path}")
 
 
 def _github_label_path(repo: str, label_name: str) -> str:
@@ -170,15 +256,11 @@ def _label_sync_matches(existing_label: dict[str, Any], expected_label: dict[str
     return existing_color == expected_label["color"] and existing_description == expected_label["description"]
 
 
-def _sanitize_log_detail(detail: str) -> str:
-    return " ".join(detail.split())
-
-
 def _http_error_message(exc: urllib.error.HTTPError) -> str:
     error_body = b""
     try:
         error_body = exc.read() or b""
-    except OSError:
+    except (OSError, ValueError):
         error_body = b""
 
     if error_body:
@@ -335,7 +417,7 @@ def cmd_repair_labels(args: argparse.Namespace) -> int:
 
 def cmd_sync_labels(args: argparse.Namespace) -> int:
     contract = load_label_contract(Path(args.contract_file).resolve())
-    repo = _require_nonempty(args.repo, "repo")
+    repo = _require_repo_slug(args.repo)
     dry_run = bool(args.dry_run)
     if not dry_run and _github_token() is None:
         raise LabelContractError("GH_TOKEN / GITHUB_TOKEN is required unless --dry-run is set")
@@ -365,7 +447,9 @@ def cmd_sync_labels(args: argparse.Namespace) -> int:
                 )
                 continue
             existing_label = None
-        except Exception as exc:  # noqa: BLE001 - per-label fail-open contract
+        except LabelContractError:
+            raise
+        except (urllib.error.URLError, OSError, ValueError) as exc:
             _append_label_sync_error(
                 errors,
                 repo=repo,
@@ -418,7 +502,9 @@ def cmd_sync_labels(args: argparse.Namespace) -> int:
                     status=exc.code,
                 )
                 continue
-            except Exception as exc:  # noqa: BLE001 - per-label fail-open contract
+            except LabelContractError:
+                raise
+            except (urllib.error.URLError, OSError, ValueError) as exc:
                 _append_label_sync_error(
                     errors,
                     repo=repo,
@@ -502,7 +588,9 @@ def cmd_sync_labels(args: argparse.Namespace) -> int:
                 status=exc.code,
             )
             continue
-        except Exception as exc:  # noqa: BLE001 - per-label fail-open contract
+        except LabelContractError:
+            raise
+        except (urllib.error.URLError, OSError, ValueError) as exc:
             _append_label_sync_error(
                 errors,
                 repo=repo,

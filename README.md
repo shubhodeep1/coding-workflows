@@ -770,6 +770,8 @@ preserves today's behavior of installing every wrapper template.
   `ai-orchestrate.yml`, `ai-orchestrate-poll.yml`,
   `ai-orchestrate-clarify-respond.yml`, `ai-validate.yml`, and
   `review_rb_judge_dispatch.yml`.
+  The standard manifest also includes the optional `ai-sync-labels.yml`
+  wrapper so stable-channel syncs can auto-install the label-sync entrypoint.
 - `full` installs every top-level wrapper listed in
   [`workflow-templates/profiles/full.txt`](workflow-templates/profiles/full.txt).
 

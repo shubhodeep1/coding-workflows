@@ -8,4 +8,5 @@ ai-orchestrate.yml
 ai-orchestrate-poll.yml
 ai-orchestrate-clarify-respond.yml
 ai-validate.yml
+ai-sync-labels.yml
 review_rb_judge_dispatch.yml
