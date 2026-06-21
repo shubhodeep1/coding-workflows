@@ -533,35 +533,48 @@ filter_runtime_status_noise()
 
 filter_runtime_path_noise()
 {
-  local path current_hash
+	local candidate_line path current_hash
 
-  while IFS= read -r path; do
-    case "${path}" in
-      .serena|.serena/*)
-        if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && \
-           [ -n "${SERENA_PROJECT_BOOTSTRAP_HASH:-}" ] && \
+	while IFS= read -r candidate_line; do
+		path="${candidate_line%%$'\t'*}"
+		case "${path}" in
+		  .serena|.serena/*)
+			if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && \
+			   [ -n "${SERENA_PROJECT_BOOTSTRAP_HASH:-}" ] && \
            [ -f .serena/project.yml ]; then
           current_hash="$(sha256sum .serena/project.yml 2>/dev/null | awk '{print $1}' || true)"
           if [ -n "${current_hash}" ] && [ "${current_hash}" = "${SERENA_PROJECT_BOOTSTRAP_HASH}" ]; then
             continue
           fi
-        fi
-        ;;
-    esac
-    printf '%s\n' "${path}"
-  done
+			fi
+			;;
+		esac
+		printf '%s\n' "${candidate_line}"
+	done
 }
 
 capture_write_guard_candidate_paths()
 {
-  if ! command -v git >/dev/null 2>&1 || [ ! -d .git ]; then
-    return 0
-  fi
+	if ! command -v git >/dev/null 2>&1 || [ ! -d .git ]; then
+		return 0
+	fi
 
-  {
-    git diff --name-only --diff-filter=ACMRD HEAD || true
-    git ls-files --others --exclude-standard || true
-  } | filter_runtime_path_noise | sed '/^$/d' | sort -u
+	local path path_state
+	while IFS= read -r path; do
+		[ -n "${path}" ] || continue
+		if [ -e "${path}" ]; then
+			path_state="$(sha256sum -- "${path}" 2>/dev/null | awk '{print $1}' || true)"
+			[ -n "${path_state}" ] || path_state="__present__"
+		else
+			path_state="__deleted__"
+		fi
+		printf '%s\t%s\n' "${path}" "${path_state}"
+	done < <(
+		{
+			git diff --name-only --diff-filter=ACMRD HEAD || true
+			git ls-files --others --exclude-standard || true
+		} | sed '/^$/d' | sort -u
+	) | filter_runtime_path_noise | sort -u
 }
 
 run_validate_write_guard()
@@ -570,14 +583,14 @@ run_validate_write_guard()
     return 0
   fi
 
-  local validate_write_guard_file
-  validate_write_guard_file="$(mktemp "${TMPDIR:-/tmp}/validate-write-guard.XXXXXX")"
+	local validate_write_guard_file
+	validate_write_guard_file="$(mktemp "${TMPDIR:-/tmp}/validate-write-guard.XXXXXX")"
 
-  if [ -f "${PRE_GENERATE_GUARD_PATHS_FILE}" ] && [ -f "${POST_GENERATE_GUARD_PATHS_FILE}" ]; then
-    comm -13 "${PRE_GENERATE_GUARD_PATHS_FILE}" "${POST_GENERATE_GUARD_PATHS_FILE}" > "${validate_write_guard_file}" || true
-  elif [ -f "${POST_GENERATE_GUARD_PATHS_FILE}" ]; then
-    cp "${POST_GENERATE_GUARD_PATHS_FILE}" "${validate_write_guard_file}"
-  fi
+	if [ -f "${PRE_GENERATE_GUARD_PATHS_FILE}" ] && [ -f "${POST_GENERATE_GUARD_PATHS_FILE}" ]; then
+		comm -13 "${PRE_GENERATE_GUARD_PATHS_FILE}" "${POST_GENERATE_GUARD_PATHS_FILE}" | cut -f1 | sed '/^$/d' | sort -u > "${validate_write_guard_file}" || true
+	elif [ -f "${POST_GENERATE_GUARD_PATHS_FILE}" ]; then
+		cut -f1 "${POST_GENERATE_GUARD_PATHS_FILE}" | sed '/^$/d' | sort -u > "${validate_write_guard_file}"
+	fi
 
   if ! write_guard_check validate_fix_harness "${validate_write_guard_file}"; then
     rm -f "${validate_write_guard_file}"
