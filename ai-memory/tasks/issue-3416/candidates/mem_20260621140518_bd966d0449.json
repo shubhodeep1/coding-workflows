@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3416,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3416\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3417\",\"pr_number\":3417,\"branch\":\"ai/issue-3416\",\"run_id\":\"27906299825\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/27906299825\",\"changed_files\":[\".github/workflows/ci.yml\",\".github/workflows/clarify.yml\",\".github/workflows/mark-stable.yml\",\".github/workflows/memory_maintenance.yml\",\".github/workflows/plan.yml\",\".github/workflows/test-and-mark-stable.yml\",\"README.md\",\"ai-memory/schemas/memory_record.v1.json\",\"docs/INVENTORY.md\",\"prompts/contracts/mode-extract-learnings.yml\",\"prompts/header.txt\",\"prompts/mode-extract-learnings.txt\",\"scripts/ai_memory.py\",\"scripts/ai_memory_lib.py\",\"scripts/run_validation_repo_checks.sh\",\"tests/test_memory_record_schema.py\",\"tests/test_render_prompt_foundation.py\"]}",
+  "fingerprint": "a960e883ab0b9c10c55b012de267a39eb71bfd35b4446d83ae73de14048918af",
+  "lineage": {
+    "issue_number": 3416,
+    "parent_ids": [],
+    "pr_number": 3417,
+    "run_id": "27906299825",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27906299825",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3417"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260621140518_bd966d0449",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3416,
+    "level": "run",
+    "pr_number": 3417,
+    "run_id": "27906299825"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3416: https://github.com/shubhodeep1/coding-workflows/pull/3417",
+  "timestamps": {
+    "created_at": "2026-06-21T14:05:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
