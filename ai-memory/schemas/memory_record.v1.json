@@ -38,8 +38,7 @@
         "patterns",
         "incidents",
         "run_events",
-        "task_summaries",
-        "repo_learnings"
+        "task_summaries"
       ]
     },
     "status": {
