@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import ast
 import json
 import os
 import subprocess
@@ -76,13 +75,25 @@ def _run_validation_lint(output_root: Path) -> subprocess.CompletedProcess[str]:
 
 
 def _read_env_values(path: Path) -> dict[str, str]:
+	# Mirror scripts/validate_driver.sh:load_env_file (lines 63-70): strip a
+	# single matched pair of surrounding quotes with NO backslash unescaping.
+	# The previous ast.literal_eval model silently unescaped backslashes, so it
+	# did NOT match the real driver — which is exactly why the CUSTOM_TESTS_JSON
+	# double-encoding regression (hylifegroup.com run 27939731907) passed this
+	# test while the in-container JSON.parse failed in production.
 	values: dict[str, str] = {}
 	for raw_line in path.read_text(encoding="utf-8").splitlines():
 		line = raw_line.strip()
 		if not line or line.startswith("#") or "=" not in line:
 			continue
 		key, raw_value = line.split("=", 1)
-		values[key] = ast.literal_eval(raw_value)
+		if (
+			len(raw_value) >= 2
+			and raw_value[0] == raw_value[-1]
+			and raw_value[0] in ('"', "'")
+		):
+			raw_value = raw_value[1:-1]
+		values[key] = raw_value
 	return values
 
 
