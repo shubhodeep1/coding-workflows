@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-06-22T05:56:33Z",
+  "tick_at": "2026-06-22T06:13:26Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -11,7 +11,7 @@
       "output": 0,
       "total": 0
     },
-    "tracking_issues": 2
+    "tracking_issues": 1
   },
   "tracking_issues": [
     {
@@ -32,27 +32,6 @@
       "status": "in-progress",
       "title": "[Orchestrator] Complete remaining squad-workflow improvements (N1, P5a, P5b, N2, N4)",
       "total_waves": 0,
-      "wave_complete": false
-    },
-    {
-      "current_wave": 1,
-      "integration_ahead_by": "0",
-      "issue_counts": {
-        "closed": 0,
-        "done": 0,
-        "implementation_failed": 0,
-        "in_progress": 0,
-        "merged": 0,
-        "not_created": 0,
-        "ready_to_merge": 0,
-        "review_blocked": 1,
-        "skipped": 0
-      },
-      "number": 3453,
-      "project_complete": false,
-      "status": "in-progress",
-      "title": "[E2E Smoke Test] Review-Blocked Simulation (run 27930377220)",
-      "total_waves": 1,
       "wave_complete": false
     }
   ]
