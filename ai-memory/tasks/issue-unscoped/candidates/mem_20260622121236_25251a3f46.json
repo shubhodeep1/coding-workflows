@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/write_guard.sh:36-40, 160-170, 200-210 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Log sanitization collapses whitespace but does not escape or quote user-controlled values before interpolation into shell log lines.\n  WHY: Malicious filenames or env values could be rendered into logs in a way that later shell parsing or eval-style consumers may treat as executable content.\n- scripts/write_guard.sh:170-250 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: When the JSON schema is malformed or Python is missing, the guard logs WRITE_GUARD_CONFIG_ERROR and returns success (0).\n  WHY: A corrupt write_guards.v1.json or absent Python silently disables protection for plan/implement/review_editor/validate_fix_harness phases.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- File: scripts/write_guard.sh\n  Line or code reference: write_guard_sanitize_log_value() (lines 36-40, usage at 160-170, 200-210)\n  Problem: Log sanitization collapses whitespace but does not escape or quote user-controlled values before interpolation into shell log lines.\n  Why it fails at runtime: Malformed filenames or env values could be rendered into logs in a way that later shell parsing, CI summary, or downstream log consumers might treat as executable content, leading to possible command injection.\n  ISSUE_CONFIDENCE: 4\n  SEVERITY: MAJOR\n\n- File: scripts/write_guard.sh\n  Line or code reference: python3 subprocess call at write_guard_check() exit-path (lines 170-250)\n  Problem: When the JSON schema is malformed or Python is missing the guard logs a WRITE_GUARD_CONFIG_ERROR and returns success (0).\n  Why it fails at runtime: A corrupt write_guards.v1.json (or absent Python) silently disables protection for plan/implement/review_editor/validate_fix_har\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "a7dd1a8163b9e8cefec84cef7a8be3633f08ce97589c6f91375cfb71fd4e6a98",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3456,
+    "run_id": "27949129254",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27949129254",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260622121236_25251a3f46",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3456,
+    "run_id": "27949129254"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-22T12:12:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
