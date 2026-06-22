@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_update_workflows_guardrails.py:51 | severity=low | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The single-line addition is correct; no logic defect in the last-run change.\n  WHY: N/A \u2014 this change is correct.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: New scripts added to the repository must be documented in docs/INVENTORY.md Scripts section (enforced by CI lint check via inventory_parity.py).\n  expected_change_site: docs/INVENTORY.md in the Scripts section\n  confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, moonshotai_kimi-k2_5, qwen_qwen3_6-plus]\n  EVIDENCE: `FAIL: docs/INVENTORY.md: Scripts: missing scripts/dev/test_write_guard.sh`, `FAIL: docs/INVENTORY.md: Scripts: missing scripts/write_guard.sh`; scripts/write_guard.sh exists on disk but is not listed in docs/INVENTORY.md; scripts/dev/test_write_guard.sh exists on disk but lacks an INVENTORY.md entry.\n- requirement: Consumer drift audit workflow and label-sync wrapper must be wired into update_workflows profile contracts (workflow-templates/profiles/standard.txt, workflow-templates/profiles/full.txt).\n  expected_change_site: workflow-templates/profiles/standard.txt, workflow-templates/profiles/full.txt\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: PR DIFF includes new files but last_run_diff.patch did not touch standard.txt or full.txt to add ai-sync-labels.yml to the wrappers list, and the consensus summary shows this omission.\n- requirement: The linked issue body was empty; the PR description indicates this is a squash merge of orchestrator project #3408 completing squad-workflow improvements. No explicit task-spec deliverable is identifiable beyond what the diff already delivers.\n  expected_change_site: N/A\n  confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: The only unmet requirement is the INVENTORY.md gap already reported under ERROR PATHS.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_update_workflows_guardrails.py:51 | severity=low | confidence=5\n  PROBLEM: The single-line addition is correct; no logic defect in the last-run change.\n  WHY: N/A \u2014 this change is correct.\n- docs/INVENTORY.md:absent entries for scripts/write_guard.sh and scripts/dev/test_write_guard.sh | severity=critical | confidence=5\n  PROBLEM: The CI lint job (`inventory_parity.py`) exits 1 because both files exist on disk but are missing from the authoritative Scripts inventory.\n  WHY: `inventory_parity.py` requires every script on disk to have an entry; the absence of these two entries causes the lint check-run to fail, blocking merge.\n- Requirement: The linked issue body was empty; the PR description indicates this is a squash merge of orchestrator project #3408 completing squad-workflow improvements. No explicit task-spec deliverable is identifiable beyond what the diff already delivers.\n  Expected change site: N/A\n  Evidence of absence: The only unmet requirement is the INVENTORY.md gap already reported under ERROR PATHS.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Requirement: Consumer drift audit workflow and label-sync wrapper must be wired into update_workflows profile contracts (workflow-templates/profiles/standard.txt, workflow-templates/profiles/full.txt).\n  Expected change site: workflow-templates/profiles/standard.txt, workflow-templates/profiles/full.txt\n  Evidence of absence: PR DIFF includes new files but last_run_diff.patch did not touch standard.txt or full.txt to add ai-sync-labels.yml to the wrappers list, and the consensus summary shows this omission.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- Requirement: New scripts added to the repository must be documented in docs/INVENTORY.md Scripts section (enforced by CI lint check via inventory_parity.py).\n  Expected change site: docs/INVENTORY.md in the Scripts section near other scripts/dev/ entries\n  Evidence of absence: scripts/write_guard.sh exists on disk but is not listed in docs/INVENTORY.md.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- Requirement: Test scripts under scripts/dev/ must be documented in docs/INVENTORY.md Scripts section (consistent with existing entries for replay_review_pipeline.sh, test_codex_helpers.sh, test_watchdog_helpers.sh).\n  Expected change site: docs/INVENTORY.md in the Scripts section near other scripts/dev/ entries\n  Evidence of absence: scripts/dev/test_write_guard.sh exists but lacks an INVENTORY.md entry.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- Requirement: Every file on disk under tracked surfaces must have a corresponding entry in docs/INVENTORY.md (enforced by CI lint check `inventory_parity.py`).\n  Expected change site: docs/INVENTORY.md in the Scripts section, sorted alongside existing `scripts/write_codex_config.sh` and `scripts/dev/` entries.\n  Evidence of absence: `scripts/write_guard.sh` and `scripts/dev/test_write_guard.sh` both exist on disk in the PR but have no corresponding entries in the Scripts section of docs/INVENTORY.md.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "27bbffbcf302dd009cf6c4e44f591bb57d7d57a2bccb3d67042ab896d9ada931",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3411,
+    "run_id": "27942405726",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27942405726",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260622101611_324a7fc87e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3411,
+    "run_id": "27942405726"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-22T10:16:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
