@@ -461,3 +461,136 @@ _Already-covered hotspots in the in-progress report body (for example the smoke-
 | Code modularization | 6-9 | Large |
 | Expression size reduction | 0 | Small |
 | Medium/Low fixes | 3-5 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-06-22)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the consolidation is fully proven safe in the current code path. `NEEDS_VERIFICATION` means the overlap is real but pagination, cache freshness, or failure semantics still need a targeted check before implementation. `RISKY_SKIP` means the redundancy is visible, but the call lives in protected/racy control-plane logic and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001 — NEEDS_VERIFICATION
+- **File path and line ranges:** `.github/workflows/clarify.yml:419-449`
+- **Current call count / proposed call count:** `2` GH API calls on semantic-cache-enabled runs → `1` common-path call, with the small-call fallback retained only if the full fetch fails
+- **Endpoint(s):**
+  - `GET /repos/{repo}/issues/{ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=50`
+  - `GET /repos/{repo}/issues/{ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=100` via `--paginate --slurp`
+- **Evidence:**
+  ```bash
+  gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=50" > "${ISSUE_COMMENTS_FILE}"
+
+  if [ "${SEMANTIC_CACHE_BACKEND}" != "none" ]; then
+    if ! gh_retry gh api --paginate --slurp "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=100" \
+      | jq -r 'add // [] | .[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' > "${THREAD_HISTORY_FILE}"; then
+  ```
+  The second call is a strict superset of the first call’s data shape; `ISSUE_COMMENTS_FILE` is later consumed as JSON at `.github/workflows/clarify.yml:534`, while `THREAD_HISTORY_FILE` is built from the full thread.
+- **Proposed fix:** In the same step, when `SEMANTIC_CACHE_BACKEND != none`, fetch the full paginated/slurped comment array once to a temp file, write `ISSUE_COMMENTS_FILE` from `.[0:50]`, and derive `THREAD_HISTORY_FILE` from the full array. If that full fetch fails, preserve today’s fail-open behavior by falling back to the current 50-comment call plus the cache-bypass placeholder.
+- **Safety rationale:** The two calls hit the same resource in the same step, but they do not have identical pagination or identical failure behavior today.
+- **Downstream signal:** Verify that `ISSUE_COMMENTS_FILE` built from the first 50 elements of the slurped full-thread JSON is byte-for-byte acceptable to all downstream parsers, and that a failed full-thread fetch still leaves clarify with the same prompt-context and cache-bypass behavior it has now.
+
+#### MERGE-002 — NEEDS_VERIFICATION
+- **File path and line ranges:** `scripts/review_collect_pr_metadata.sh:209-226,228-234`; existing consolidation helper at `scripts/gh_helpers.sh:735-900`; existing helper consumers at `scripts/review_rb_judge.sh:859-867` and `scripts/orchestrate_poll_process.sh:14836-14844`
+- **Current call count / proposed call count:** `3` mandatory REST calls + `1` optional REST call (`REVIEW_BREAK_GLASS_ENABLED`) → `1` GraphQL-first helper call on the common path
+- **Endpoint(s):**
+  - Current:
+    - `GET /repos/{repo}/pulls/{PR_NUMBER}`
+    - `GET /repos/{repo}/issues/{PR_NUMBER}/comments` with `--paginate`
+    - `GET /repos/{repo}/pulls/{PR_NUMBER}/comments` with `--paginate`
+    - optional `GET /repos/{repo}/pulls/{PR_NUMBER}/reviews` with `--paginate`
+  - Proposed:
+    - existing `gh_pr_with_all_comments` GraphQL-first helper in `scripts/gh_helpers.sh`
+- **Evidence:**
+  ```bash
+  gh_retry "${PR_PAYLOAD_FILE}" api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"
+  gh_retry "${issue_comments_raw}" api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments"
+  ...
+  if gh_retry "${reviews_raw}" api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews"; then
+  ...
+  gh_retry "${review_comments_raw}" api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/comments"
+  ```
+
+  ```bash
+  # gh_pr_with_all_comments — GraphQL-first consolidated PR context.
+  # Emits JSON object:
+  # {
+  #   "meta": {"title", "body", "head_ref", "base_ref", "head_sha"},
+  #   "comments": [...],
+  #   "review_comments": [...]
+  # }
+  ```
+  The repo already has a purpose-built consolidation helper, but `review_collect_pr_metadata.sh` still fans out into separate REST calls.
+- **Proposed fix:** Extend `gh_pr_with_all_comments` to emit any still-missing fields needed by `review_collect_pr_metadata.sh` (notably top-level `reviews[]`, and any PR payload fields still read downstream), then replace `scripts/review_collect_pr_metadata.sh:209-234` with one helper invocation that fans the returned JSON back out into `PR_PAYLOAD_FILE`, `PR_META_FILE`, `PR_ISSUE_COMMENTS_FILE`, `PR_REVIEWS_FILE`, and `PR_REVIEW_COMMENTS_FILE`.
+- **Safety rationale:** The overlap is real and an existing helper already models it, but the helper is currently fail-open and does not yet prove parity with every field/exit contract that `review_collect_pr_metadata.sh` enforces.
+- **Downstream signal:** Verify that a helper-backed payload can supply every field later read from `PR_PAYLOAD_FILE`, `PR_META_FILE`, and `PR_REVIEWS_FILE`, and that helper fallback behavior can preserve the current step’s mandatory-failure contract before replacing the REST fan-out.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001 — NEEDS_VERIFICATION
+- **File path and line ranges:** `scripts/review_enable_auto_merge.sh:64-75,127-139,192-225`; `.github/workflows/review_autofix.yml:1407-1415,1702-1707,4687-4715`; `scripts/review_collect_pr_metadata.sh:209-234`
+- **Current call count / proposed call count:** `2` helper-local API calls → `1` common-path API call (`/labels`), with `/pulls/{PR}` retained only as cache-miss fallback
+- **Endpoint(s):**
+  - `GET /repos/{repo}/issues/{PR_NUMBER}/labels?per_page=100`
+  - `GET /repos/{repo}/pulls/{PR_NUMBER}`
+- **Evidence:**
+  ```bash
+  # review_collect_pr_metadata.sh
+  gh_retry "${PR_PAYLOAD_FILE}" api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"
+  ...
+  jq '{ title: (.title // ""), body: (.body // ""), baseRefName: (.base.ref // ""),
+        headRefName: (.head.ref // ""), headRepoFullName: (.head.repo.full_name // "") }' \
+    "${PR_PAYLOAD_FILE}" > "${PR_META_FILE}"
+  ```
+
+  ```bash
+  # review_enable_auto_merge.sh
+  if PR_LABELS_RAW="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels?per_page=100" --jq '.[].name' ...)"; then
+  ...
+  if ! _ORCH_PR_META_JSON="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" ...)"; then
+  ...
+  _orch_pr_head_ref="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.head.ref // ""' ...)"
+  _orch_pr_body="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.body // ""' ...)"
+  ```
+  The same `review_autofix` job already materializes PR metadata before the later auto-merge step runs.
+- **Proposed fix:** Add a validated fast path in `review_enable_auto_merge.sh` that reads `PR_PAYLOAD_FILE` (or `PR_META_FILE` plus a validated payload companion) for `head.ref` and `body`, and only falls back to live `/pulls/{PR}` when the file is missing or malformed. Keep the paginated labels call for the `e2e-smoke-test` guard unless/until someone proves the embedded label list on `/pulls/{PR}` is complete for >30-label PRs.
+- **Safety rationale:** The data is already materialized earlier in the same job, but the reuse crosses workflow steps and must be checked against later body/head updates and cache-validity assumptions.
+- **Downstream signal:** Verify that no step between “Collect PR metadata” and “Enable auto-merge on PR” mutates the needed `head.ref`/`body` fields in a way that requires a live read, and that the file-backed fast path still handles malformed/missing cache files by falling back exactly once to `/pulls/{PR}`.
+
+### Dead Calls (DEAD-API-###)
+
+#### DEAD-API-001 — RISKY_SKIP
+- **File path and line ranges:** `scripts/orchestrate_poll_process.sh:17641-17655`
+- **Current call count / proposed call count:** `1` → `0`
+- **Endpoint(s):** `GET /repos/{repo}` (`.default_branch`)
+- **Evidence:**
+  ```bash
+  STANDALONE_PRS="$(gh_retry gh pr list \
+    --repo "${GITHUB_REPOSITORY}" \
+    --state open \
+    --json number,headRefName,baseRefName \
+    --limit 100 2>/dev/null || echo "[]")"
+
+  STANDALONE_COUNT="$(echo "${STANDALONE_PRS}" | jq 'length')"
+  echo "Found ${STANDALONE_COUNT} open PR(s) to scan."
+
+  CONFLICT_SWEEP_FIXED=0
+  DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+  ```
+  In this standalone conflict-sweep block, `${DEFAULT_BRANCH}` is assigned and the subsequent sweep uses `S_PR`, `S_HEAD`, and `S_BASE`; there is no read of `${DEFAULT_BRANCH}` after the assignment inside this section.
+- **Proposed fix:** Remove the lookup only after a manual reviewer confirms there is no later indirect/global expansion in the remaining top-level script path that depends on this specific post-`17654` assignment.
+- **Safety rationale:** The value is statically unused here, but the call sits inside `scripts/orchestrate_poll_process.sh`, which the safety contract explicitly treats as a protected control-plane path.
+- **Downstream signal:** Do **not** auto-implement; manual review must confirm that deleting this assignment cannot perturb poller-side race handling, shell-global variable assumptions, or log-scraper expectations inside the standalone conflict sweep.
+
+### Cross-References to Deep Audit Section
+- BATCH-001: NEEDS_VERIFICATION — the N+1 pattern is real, but the expanded GraphQL selection must preserve `review_rb_judge.sh`’s first-usable-body and label-propagation behavior before replacing the per-issue REST GETs.
+- BATCH-002: RISKY_SKIP — agreed hotspot, but it lives in `scripts/orchestrate_poll_process.sh`’s stall-recovery loop, so it is not an auto-implementable merge under this pass’s safety rules.
+- BATCH-003: RISKY_SKIP — agreed N+1 shape, but it is inside `scripts/orchestrate_poll_process.sh` and part of cross-reference resolution that explicitly guards against upstream race conditions.
+
+### Summary Counts
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 3 | MERGE-001, MERGE-002, REUSE-001 |
+| RISKY_SKIP | 1 | DEAD-API-001 |
+
+### Implement-Stage Handoff
+No SAFE_TO_MERGE findings in this pass.
