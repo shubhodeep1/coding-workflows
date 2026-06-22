@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:1410-1436 | severity=high | confidence=4\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The jq exclusion expression is visually ambiguous and easy to mis-edit.\n  WHY: Reviewers disagree on severity (MAJOR vs NIT), but both point to the same maintainability hazard in the negated-OR filter.\n- .github/workflows/test-and-mark-stable.yml:1410-1432 | severity=high | confidence=4\n  flagged_by: [x-ai_grok-4_20]\n  PROBLEM: The Copilot exclusion is evaluated only after the positive review/autofix name-match select, so runs whose names no longer match that regex never reach the exclusion logic.\n  WHY: That can silently drop legitimate review/autofix runs and leave the workflow vulnerable to the same stale/in-progress behavior it is trying to prevent.\n- .github/workflows/test-and-mark-stable.yml:1423-1436 | severity=high | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The Copilot exclusion may miss future Copilot-like runs if GitHub changes the event or naming convention beyond `dynamic`/`copilot`.\n  WHY: A variant with a different name or event type could slip through and reintroduce the false-positive issue.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- File: .github/workflows/test-and-mark-stable.yml\nLine or code reference: lines ~1423-1429, ~1431-1436 (jq select expressions)\nProblem: JQ exclusion expression readability/maintenance risk \u2014 `select((.event == \"dynamic\" or (.name | test(\"copilot\"; \"i\"))) | not)` groups an OR with parentheses but applies `| not` at the end, which may confuse maintainers and invite future mis-edits.\nWhy it fails at runtime: A future modification touching the exclusion could inadvertently break the filter due to misunderstanding of operator precedence and grouping, causing a Copilot run to be re-admitted and Phase 4 to short-circuit again.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n- File: .github/workflows/test-and-mark-stable.yml\nLine or code reference: lines ~1423-1429, ~1431-1436 (Copilot exclusion guards)\nProblem: The Copilot exclusion uses only name substring (\"copilot\") and event==\"dynamic\", which may miss workflows from other organizations/apps or future GitHub naming variations that still represent a code-review agent.\nWhy it fails at runtime: A Copilot-style reviewer with a slightly different name or event type could be admitted, re-introducing the same bug.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: .github/workflows/test-and-mark-stable.yml\nLine or code reference: lines 1410-1412 (first jq filter) and lines ~1430-1432 (legacy fallback)\nProblem: The Copilot exclusion `select((.event == \"dynamic\" or (.name | test(\"copilot\"; \"i\"))) | not)` is applied *inside* the name-match `select(...)` for the primary PIN_SHA query (and similarly in the fallback). A workflow run whose `.name` does *not* contain \"Review|review|autofix|self-healing\" is never considered, even if it would otherwise be excluded by the Copilot rule.\nWhy it fails at runtime: The `as $m` candidate set can silently drop real review/autofix runs whose names have drifted (or future variants added to the positive regex) because the exclusion logic never sees them; the wait loop could fall back to stale/in-progress siblings or time out exactly as before the fix (observed pattern on prior runs like 27328808462).\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n- File: .github/workflows/test-and-mark-stable.yml\nLine or code reference: jq filter at lines 1410 and 1430 (the `select((.event == \"dynamic\" or (.name | test(\"copilot\"; \"i\"))) | not)` construct)\nProblem: The boolean negation around the OR is syntactically valid but visually ambiguous; maintainers may misread the precedence when extending the exclusion list.\nWhy it fails at runtime: A mis-edited filter could re-admit Copilot runs (or exclude legitimate ones), causing the exact premature-success + unrestored-canary failure that this PR was written to prevent.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "fbe89a7a11b7a045377e15ab65dc83f78f8e13b3fd22cf243176f34f92d687c7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3444,
+    "run_id": "27927804150",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27927804150",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260622041357_7e32def0ff",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3444,
+    "run_id": "27927804150"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-22T04:13:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
