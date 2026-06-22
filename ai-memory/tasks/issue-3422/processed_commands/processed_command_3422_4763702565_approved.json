@@ -5,13 +5,27 @@
   "entry_id": "processed_command_3422_4763702565_approved",
   "issue_number": 3422,
   "metadata": {
+    "branch": "ai/issue-3422",
+    "changed_files": [
+      "scripts/ai_memory.py",
+      "scripts/ai_memory_lib.py",
+      "scripts/implement_commit_changes.sh",
+      "scripts/label_helpers.sh",
+      "scripts/memory_helpers.sh",
+      "scripts/tg_helpers.sh"
+    ],
+    "issue_number": 3422,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/3422",
+    "pr_number": 3423,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/3423",
+    "run_attempt": "1",
+    "run_id": "27921743869",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/27921743869"
   },
   "run_attempt": 1,
   "run_id": "27921743869",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-06-22T00:03:38Z",
+  "status": "completed",
+  "timestamp": "2026-06-22T00:08:16Z",
   "workflow": "implement"
 }
