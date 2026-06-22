@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-06-18T22:26:47Z",
+  "tick_at": "2026-06-22T01:15:18Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -15,24 +15,25 @@
   },
   "tracking_issues": [
     {
-      "current_wave": 0,
+      "current_wave": 5,
+      "integration_ahead_by": "9",
       "issue_counts": {
         "closed": 0,
         "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
-        "merged": 0,
+        "merged": 3,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
         "skipped": 0
       },
-      "number": 3376,
+      "number": 3408,
       "project_complete": false,
-      "status": "in-progress",
-      "title": "[Orchestrator] Apply open-agents learnings to unattended prompts and reviewer scripts",
-      "total_waves": 0,
-      "wave_complete": false
+      "status": "waiting",
+      "title": "[Orchestrator] Complete remaining squad-workflow improvements (N1, P5a, P5b, N2, N4)",
+      "total_waves": 5,
+      "wave_complete": true
     }
   ]
 }
