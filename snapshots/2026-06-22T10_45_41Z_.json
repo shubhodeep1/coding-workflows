@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-06-19T15:12:48Z",
+  "tick_at": "2026-06-22T10:45:41Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -27,10 +27,10 @@
         "review_blocked": 0,
         "skipped": 0
       },
-      "number": 3376,
+      "number": 3408,
       "project_complete": false,
       "status": "in-progress",
-      "title": "[Orchestrator] Apply open-agents learnings to unattended prompts and reviewer scripts",
+      "title": "[Orchestrator] Complete remaining squad-workflow improvements (N1, P5a, P5b, N2, N4)",
       "total_waves": 0,
       "wave_complete": false
     }
