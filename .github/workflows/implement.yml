@@ -2210,7 +2210,7 @@ jobs:
             attempt_log_file="${RUNTIME_DIR}/codex_log_attempt_${attempt}.txt"
             : > "${attempt_log_file}"
             attempt_stall_status_file="$(mktemp /tmp/codex_stall_status_implement.XXXXXX)"
-            attempt_stall_state=""
+            stall_state=""
             if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
               sanitize_codex_prompt_file "${PROMPT_FILE_TO_USE}"
             fi
@@ -2234,15 +2234,16 @@ jobs:
 
             emit_implement_substate "implement" "implement" "Finishing" "${attempt}" "${attempt_log_file}"
 
-            if attempt_stall_state="$(read_codex_stall_guard_state "${attempt_stall_status_file}")"; then
-              case "${attempt_stall_state}" in
-                observed)
-                  echo "Codex implement attempt ${attempt} recorded codex_stall_observed (observe-only mode)."
-                  emit_implement_substate "implement" "implement" "codex_stall_observed" "${attempt}" "${attempt_log_file}"
-                  ;;
-                killed)
-                  echo "::warning::Codex implement attempt ${attempt} recorded codex_stall_killed."
-                  emit_implement_substate "implement" "implement" "codex_stall_killed" "${attempt}" "${attempt_log_file}"
+            if stall_state="$(read_codex_stall_guard_state "${attempt_stall_status_file}")"; then
+              case "${stall_state}" in
+                observed|killed)
+                  if [ "${stall_state}" = "killed" ]; then
+                    echo "::warning::Codex implement attempt ${attempt} recorded codex_stall_killed."
+                    emit_implement_substate "implement" "implement" "codex_stall_killed" "${attempt}" "${attempt_log_file}"
+                  else
+                    echo "Codex implement attempt ${attempt} recorded codex_stall_observed (observe-only mode)."
+                    emit_implement_substate "implement" "implement" "codex_stall_observed" "${attempt}" "${attempt_log_file}"
+                  fi
                   ;;
               esac
             elif [ -s "${attempt_stall_status_file}" ]; then
@@ -2356,7 +2357,7 @@ jobs:
               # otherwise long attempts that produce real partial work get
               # discarded and the loop wastes its remaining budget restarting
               # from scratch (see analyze-log run 24989488561).
-              if codex_stall_guard_kill_detected "${cmd_rc}" "${attempt_stall_state}"; then
+              if codex_stall_guard_kill_detected "${cmd_rc}" "${stall_state}"; then
                 echo "::warning::Codex exited with code $cmd_rc on attempt ${attempt} after a codex stall-guard kill."
               fi
               codex_delta="$(git status --porcelain -uall | filter_runtime_status_noise | grep -vxFf "${CODEX_PRE_BASELINE}" || true)"
@@ -2458,7 +2459,7 @@ jobs:
               empty_streak=0
             fi
 
-            case "${attempt_stall_state}:${cmd_rc}" in
+            case "${stall_state}:${cmd_rc}" in
               killed:*|*:137)
                 emit_implement_substate "implement" "implement" "Stalled" "${attempt}" "${attempt_log_file}"
                 ;;
