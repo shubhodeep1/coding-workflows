@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-06-22T00:43:19Z",
+  "tick_at": "2026-06-22T01:08:13Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -16,13 +16,13 @@
   "tracking_issues": [
     {
       "current_wave": 5,
-      "integration_ahead_by": "7",
+      "integration_ahead_by": "8",
       "issue_counts": {
         "closed": 0,
-        "done": 1,
+        "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
-        "merged": 2,
+        "merged": 3,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
@@ -30,10 +30,10 @@
       },
       "number": 3408,
       "project_complete": false,
-      "status": "in-progress",
+      "status": "waiting",
       "title": "[Orchestrator] Complete remaining squad-workflow improvements (N1, P5a, P5b, N2, N4)",
       "total_waves": 5,
-      "wave_complete": false
+      "wave_complete": true
     }
   ]
 }
