@@ -92,7 +92,11 @@ memory_bootstrap()
 				shift
 				;;
 			--require)
-				required_helpers+=("${2:-}")
+				if [ $# -lt 2 ] || [ -z "${2:-}" ]; then
+					_memory_warn "bootstrap --require expects a non-empty helper name"
+					return 2
+				fi
+				required_helpers+=("${2}")
 				shift 2
 				;;
 			*)

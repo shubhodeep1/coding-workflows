@@ -203,6 +203,11 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
 
         api_key = os.getenv("OPENROUTER_API_KEY")
 
+        try:
+            max_records = _safe_int(getattr(args, "max", None))
+        except ValueError as exc:
+            raise MemoryValidationError("--max must be an integer") from exc
+
         result = retrieve_memory_context(
             memory_root,
             profiles_path,
@@ -214,7 +219,7 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
             api_key=api_key,
             category_filter=getattr(args, "category", None),
             scope_level_filter=getattr(args, "scope_level", None),
-            max_records=_safe_int(getattr(args, "max", None)),
+            max_records=max_records,
         )
 
         if args.output_file:
