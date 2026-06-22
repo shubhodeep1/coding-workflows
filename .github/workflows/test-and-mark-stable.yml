@@ -1329,6 +1329,20 @@ jobs:
             # BAIT_SHA because we dispatch with --ref "${BRANCH}" and
             # GitHub records the ref's tip SHA at dispatch time.
             #
+            # GitHub's "Running Copilot Code Review" run is excluded
+            # (event == "dynamic" / name contains "copilot"): it is a
+            # code-REVIEW agent, not the review-AND-AUTOFIX workflow, yet
+            # its name matches the broad `Review` token above. On v1.19.0
+            # (run 27926259717) the Copilot run (head=pre-bait SHA,
+            # created 02:56:26, updated 02:58:40) straddled the bait
+            # timestamp (02:58:37) so leg (b)'s created<=bait<=updated
+            # window admitted it; tier-1 preference then picked that
+            # already-completed Copilot success over the still-in-progress
+            # real autofix run, so Phase 4 declared success ~6s in and
+            # Phase 4b then failed on the unrestored canary. Excluding the
+            # Copilot reviewer keeps the loop watching the actual
+            # internal-review.yml / review_autofix.yml run instead.
+            #
             # `self-healing` is part of the regex because review_autofix.yml
             # ("Codex PR Self-Healing Semantic Agent") is dispatched directly
             # by its own post_commit_retrigger after the editor commits the
@@ -1406,10 +1420,10 @@ jobs:
               # wins over an active sibling (preserves the run-26989483268
               # fix).
               REVIEW_RUN=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&per_page=100" \
-                --jq "[.workflow_runs[] | select(.name | test(\"Review|review|autofix|self-healing\"; \"i\")) | select(.head_sha == \"${PIN_SHA}\" or (\"${BAIT_CREATED_AT:-}\" != \"\" and .created_at <= \"${BAIT_CREATED_AT:-}\" and (.updated_at >= \"${BAIT_CREATED_AT:-}\" or .status == \"in_progress\")))] as \$m | (\$m | map(select(.status == \"completed\" and .conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | map(select(.status == \"in_progress\" and \"${BAIT_CREATED_AT:-}\" != \"\" and .created_at <= \"${BAIT_CREATED_AT:-}\")) | sort_by(.created_at) | first) // (\$m | map(select(.status == \"in_progress\")) | sort_by(.created_at) | last) // (\$m | map(select(.conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | sort_by(.created_at) | last)" || echo "")
+                --jq "[.workflow_runs[] | select(.name | test(\"Review|review|autofix|self-healing\"; \"i\")) | select((.event == \"dynamic\" or (.name | test(\"copilot\"; \"i\"))) | not) | select(.head_sha == \"${PIN_SHA}\" or (\"${BAIT_CREATED_AT:-}\" != \"\" and .created_at <= \"${BAIT_CREATED_AT:-}\" and (.updated_at >= \"${BAIT_CREATED_AT:-}\" or .status == \"in_progress\")))] as \$m | (\$m | map(select(.status == \"completed\" and .conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | map(select(.status == \"in_progress\" and \"${BAIT_CREATED_AT:-}\" != \"\" and .created_at <= \"${BAIT_CREATED_AT:-}\")) | sort_by(.created_at) | first) // (\$m | map(select(.status == \"in_progress\")) | sort_by(.created_at) | last) // (\$m | map(select(.conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | sort_by(.created_at) | last)" || echo "")
             else
               REVIEW_RUN=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&event=pull_request&per_page=5" \
-                --jq '[.workflow_runs[] | select(.name | test("Review|review|autofix|self-healing"; "i"))] | sort_by(.created_at) | last' || echo "")
+                --jq '[.workflow_runs[] | select(.name | test("Review|review|autofix|self-healing"; "i")) | select((.event == "dynamic" or (.name | test("copilot"; "i"))) | not)] | sort_by(.created_at) | last' || echo "")
             fi
 
             # If rate-limited, skip this cycle entirely (don't corrupt state)
