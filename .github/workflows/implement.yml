@@ -3658,7 +3658,6 @@ jobs:
           #    when GitHub accepts the verification read.
           if ! gh label create 'ai:destructive-blocked' \
             --repo "${{ github.repository }}" \
-            --color 'b60205' \
             --description 'Implementation blocked for mass/destructive deletions; this issue ID now waits for human review' \
             2>/dev/null \
             && ! gh label edit 'ai:destructive-blocked' \
