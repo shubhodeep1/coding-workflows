@@ -127,7 +127,7 @@ test_not_allowed_fail()
 	repo_dir="$(make_temp_repo)"
 	run_guard_capture "${repo_dir}" validate_fix_harness $'README.md\n'
 	assert_eq "1" "${RUN_GUARD_STATUS}" 'validate allowlist misses should fail'
-	assert_contains 'WRITE_GUARD_BLOCK: phase=validate_fix_harness path=README.md reason=not_allowed pattern=<no-match>' "${RUN_GUARD_OUTPUT}" 'not_allowed failure should use the sentinel pattern'
+	assert_contains 'WRITE_GUARD_BLOCK: phase=validate_fix_harness path=README.md reason=not_allowed pattern=\<no-match\>' "${RUN_GUARD_OUTPUT}" 'not_allowed failure should use the escaped sentinel pattern'
 	rm -rf "${repo_dir}"
 }
 
@@ -167,7 +167,7 @@ test_plan_repo_write_fails()
 	repo_dir="$(make_temp_repo)"
 	run_guard_capture "${repo_dir}" plan $'README.md\n'
 	assert_eq "1" "${RUN_GUARD_STATUS}" 'plan should block repository writes after bootstrap'
-	assert_contains 'WRITE_GUARD_BLOCK: phase=plan path=README.md reason=not_allowed pattern=<no-match>' "${RUN_GUARD_OUTPUT}" 'plan write guard failure should be logged'
+	assert_contains 'WRITE_GUARD_BLOCK: phase=plan path=README.md reason=not_allowed pattern=\<no-match\>' "${RUN_GUARD_OUTPUT}" 'plan write guard failure should be logged'
 	rm -rf "${repo_dir}"
 }
 
@@ -221,7 +221,7 @@ test_bypass_env_audit_sanitizes_value()
 	repo_dir="$(make_temp_repo)"
 	run_guard_capture "${repo_dir}" validate_fix_harness $'README.md\n' $'WRITE_GUARDS_ENABLED=false\tline\nbreak'
 	assert_eq "0" "${RUN_GUARD_STATUS}" 'bypass log should stay single-line when WRITE_GUARDS_ENABLED contains control characters'
-	assert_contains 'WRITE_GUARD_BYPASS_ENV: phase=validate_fix_harness env=WRITE_GUARDS_ENABLED value=false line break' "${RUN_GUARD_OUTPUT}" 'bypass log should sanitize control characters'
+	assert_contains 'WRITE_GUARD_BYPASS_ENV: phase=validate_fix_harness env=WRITE_GUARDS_ENABLED value=false\ line\ break' "${RUN_GUARD_OUTPUT}" 'bypass log should sanitize and escape control characters'
 	rm -rf "${repo_dir}"
 }
 
@@ -231,7 +231,7 @@ test_block_log_sanitizes_fields()
 	repo_dir="$(make_temp_repo)"
 	run_guard_capture "${repo_dir}" review_editor $'.github/workflows/test\tfile.yml\n' $'ALLOW_WORKFLOW_EDITS=false\tline\nbreak'
 	assert_eq "1" "${RUN_GUARD_STATUS}" 'blocked log should fail closed even when inputs contain control characters'
-	assert_contains 'WRITE_GUARD_BLOCK: phase=review_editor path=.github/workflows/test file.yml reason=conditional_blocked_glob pattern=.github/workflows/** env=ALLOW_WORKFLOW_EDITS env_value=false line break' "${RUN_GUARD_OUTPUT}" 'blocked log should sanitize path and env value'
+	assert_contains 'WRITE_GUARD_BLOCK: phase=review_editor path=.github/workflows/test\ file.yml reason=conditional_blocked_glob pattern=.github/workflows/\*\* env=ALLOW_WORKFLOW_EDITS env_value=false\ line\ break' "${RUN_GUARD_OUTPUT}" 'blocked log should sanitize and escape path, pattern, and env value'
 	rm -rf "${repo_dir}"
 }
 

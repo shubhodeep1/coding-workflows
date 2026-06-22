@@ -24,7 +24,12 @@ write_guard_repo_root()
 
 write_guard_sanitize_log_value()
 {
-	printf '%s' "${1:-}" | tr '\n\t' '  ' | tr -s ' ' | sed 's/^ //;s/ $//'
+	local write_guard_log_value=""
+	write_guard_log_value="$(printf '%s' "${1:-}" | tr '\n\t' '  ' | tr -s ' ' | sed 's/^ //;s/ $//')"
+	if [ -z "${write_guard_log_value}" ]; then
+		return 0
+	fi
+	printf '%q' "${write_guard_log_value}"
 }
 
 write_guard_resolve_config_path()
@@ -91,13 +96,13 @@ write_guard_check()
 	fi
 
 	if ! command -v python3 >/dev/null 2>&1; then
-		echo "WRITE_GUARD_CONFIG_ERROR: phase=${write_guard_phase} config=${write_guard_config_log_path} detail=python3_unavailable"
+		echo "WRITE_GUARD_CONFIG_ERROR: phase=${write_guard_phase} config=$(write_guard_sanitize_log_value "${write_guard_config_log_path}") detail=python3_unavailable"
 		return 0
 	fi
 
 	write_guard_root_dir="$(write_guard_repo_root)"
 	if ! write_guard_config_path="$(write_guard_resolve_config_path "${write_guard_root_dir}")"; then
-		echo "WRITE_GUARD_CONFIG_ERROR: phase=${write_guard_phase} config=${write_guard_config_log_path} detail=missing"
+		echo "WRITE_GUARD_CONFIG_ERROR: phase=${write_guard_phase} config=$(write_guard_sanitize_log_value "${write_guard_config_log_path}") detail=missing"
 		return 0
 	fi
 	write_guard_config_log_path="${write_guard_config_path}"
@@ -233,7 +238,7 @@ PY
 				write_guard_detail="unknown"
 			fi
 			rm -f "${write_guard_result_file}" "${write_guard_stderr_file}"
-			echo "WRITE_GUARD_CONFIG_ERROR: phase=${write_guard_phase} config=${write_guard_config_log_path} detail=${write_guard_detail}"
+			echo "WRITE_GUARD_CONFIG_ERROR: phase=${write_guard_phase} config=$(write_guard_sanitize_log_value "${write_guard_config_log_path}") detail=${write_guard_detail}"
 			return 0
 			;;
 	esac
