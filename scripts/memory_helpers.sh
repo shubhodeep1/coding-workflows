@@ -45,6 +45,84 @@ _memory_retrieve_fallback()
 	return 0
 }
 
+_memory_bootstrap_define_fallback()
+{
+	local helper_name="${1:-}"
+
+	case "${helper_name}" in
+		memory_retrieve)
+			memory_retrieve()
+			{
+				local output_file="${1:-}"
+				_memory_retrieve_fallback "${output_file}" "unavailable"
+				return 0
+			}
+			;;
+		memory_record_run_event)
+			memory_record_run_event()
+			{
+				return 0
+			}
+			;;
+		memory_record_candidate)
+			memory_record_candidate()
+			{
+				return 0
+			}
+			;;
+		*)
+			_memory_warn "bootstrap unsupported helper: ${helper_name}"
+			return 1
+			;;
+	esac
+
+	return 0
+}
+
+memory_bootstrap()
+{
+	local ensure_branch="false"
+	local required_helpers=()
+	local required_helper_name=""
+
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--ensure-branch)
+				ensure_branch="true"
+				shift
+				;;
+			--require)
+				required_helpers+=("${2:-}")
+				shift 2
+				;;
+			*)
+				_memory_warn "bootstrap unknown arg: $1"
+				return 2
+				;;
+		esac
+	done
+
+	if [ "${ensure_branch}" = "true" ] && declare -F memory_ensure_branch >/dev/null 2>&1; then
+		memory_ensure_branch 2>/dev/null || true
+	fi
+
+	for required_helper_name in "${required_helpers[@]}"; do
+		[ -n "${required_helper_name}" ] || continue
+		if declare -F "${required_helper_name}" >/dev/null 2>&1; then
+			continue
+		fi
+		if ! _memory_bootstrap_define_fallback "${required_helper_name}"; then
+			return 2
+		fi
+		if ! declare -F "${required_helper_name}" >/dev/null 2>&1; then
+			_memory_warn "bootstrap failed to provide required helper: ${required_helper_name}"
+			return 2
+		fi
+	done
+
+	return 0
+}
+
 memory_ensure_branch()
 {
 	# Ensure the ai-memory branch exists on the remote.  If it doesn't,
