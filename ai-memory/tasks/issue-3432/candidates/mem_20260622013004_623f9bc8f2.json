@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `770fc81ec67d937fe5052a0efa9d5d17018a572c` on `orchestrator/project-3408` (matches integration metadata `orchestrator/project-3408`).\n\nClarification mapping: none \u2014 no Q1/Q2 were issued; `/answer [auto-answered-by-orchestrator]` added no extra constraints.\n\nActions taken: inspected `.github/workflows/implement.yml`, `tests/test_codex_stall_guard_poller.py`, `scripts/watchdog_helpers.sh`, `scripts/codex_thread_reuse.sh`, `scripts/review_apply_fixes.sh`, and `scripts/run_validation_repo_checks.sh`.\n\nRepresentative existing pattern to follow: `scripts/review_apply_fixes.sh` around the canonical `stall_state` parse/handle/classify flow, backed by `scripts/watchdog_helpers.sh` for the accepted `observed`/`killed` contract.\n\nAssumptions:\n- This is intentionally a workflow-only fix.\n- The shared stall-guard contract remains `observed` and `killed`; no new states are intended.\n\nMissing-context notes:\n- I did not rerun validation during planning; verification steps below are based on HEAD inspection and the reported failing suite.\n\n1. Files likely to change\n- `.github/workflows/implement.yml` \u2014 the implement Codex-attempt block around the current `attempt_stall_state` handling and final retry classification.\n- No change is currently indicated for `validation/**` or `tests/test_codex_stall_guard_poller.py`; the evidence points to repo-owned workflow drift, not a harness/test defect.\n\n2. Functions or modules to implement\n- Restore the implement workflow\u2019s post-`scripts/codex_thread_reuse.sh direct-run` handling to the repo-wide stall-guard contract:\n  - parse the status file into canonical `stall_state`,\n  - use `case \"${stall_state}\" in observed|killed)` for log/substate emission,\n  - use the canonical killed check (`[ \"${stall_state}\" = \"killed\" ]` via the existing helper path) for non-zero-exit stall detection,\n  - keep final retry classification aligned with existing `Stalled` / `TimedOut` / `Failed` outcomes.\n- Keep the launcher delegation unchanged. `scripts/codex_thread_reuse.sh` already owns the timeout/stall-guard wrapper and status-file plumbing; the fix should stay in the implement workflow\u2019s post-run handling.\n- Lowest-risk shape: restore/add the canonical `stall_state` contract locally in the implement step rather than changing shared helpers or weakening the test.\n\n3. Data structures affected\n- The stall-status file consumed by `read_codex_stall_guard_state` (valid values: `observed`, `killed`).\n- Workflow-local shell state that drives:\n  - codex stall logging,\n  - `emit_implement_substate` events (`codex_stall_observed`, `codex_stall_killed`, `Stalled`, `TimedOut`, `Failed`),\n  - final retry classification.\n- No DB/schema/API payload changes.\n\n4. API or interface changes\n- No external API changes.\n- No change to `scripts/codex_thread_reuse.sh` inputs or env-var contract.\n- This is a restorative internal contract fix only: make `.github/workflows/implement.yml` conform to the same watchdog pattern already used elsewhere in the repo.\n\n5. Potential risks or edge cases\n- `tests/test_codex_stall_guard_poller.py` is substring-based, so behaviorally equivalent rewrites that omit the literal `observed|killed)` or `[ \"${stall_state}\" = \"killed\" ]` forms will still fail.\n- Preserve observe-only behavior: `observed` should log/emit its informational substate without being treated as a kill.\n- Preserve timeout vs stall semantics: `124` must remain `TimedOut`; killed/signal-style exits must remain `Stalled`.\n- Keep the unrecognized-status warning path intact when the status file exists but cannot be parsed.\n- Do not \u201cfix\u201d the generated validation harness or relax the test; the inspected code confirms the drift is in repository-owned workflow logic.\n\n6. Testing considerations\n- Targeted check first: `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_poller.py`\n- Then run the repo-local validation bundle: `PYTHONDONTWRITEBYTECODE=1 scripts/run_validation_repo_checks.sh`\n  - This bundle already includes `python3 tests/test_codex_stall_guard_poller.py`, so it verifies the same path that failed runtime validation.\n- If full validation is rerun later, confirm `validation/logs/40_repo_checks.sh` no longer reports missing implement-workflow stall-guard snippets.\n- No test-file changes are currently indicated; existing tests should go green once the workflow contract is restored.\n\n7. Pre-execution self-check result\n- Ref check: checkout and integration metadata match; no branch blocker.\n- Conflict check: no factual contradiction was found between the issue and the codebase. The current workflow does use `attempt_stall_state`, while shared helpers/sibling callers still use the canonical `stall_state` contract.\n- Scope check: this is a single-file, surgical, implementation-ready fix.\n- Constraint check: `validation/**` artifacts are evidence only and should not be edited for this change.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "3c141aa8f10eb3358a1ef79a6b814de50ab524615076e5b90a248fd2f1822455",
+  "lineage": {
+    "issue_number": 3432,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27923988530",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27923988530",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3432"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260622013004_623f9bc8f2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3432,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27923988530"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3432",
+  "timestamps": {
+    "created_at": "2026-06-22T01:30:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
