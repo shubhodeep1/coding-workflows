@@ -486,3 +486,166 @@ No `TODO`, `FIXME`, or `HACK` markers were present under `.github/workflows/` or
 | Code modularization | 3 workflows, 2 scripts, plus 2 new shared helpers | Medium |
 | Expression size reduction | 0 | Small |
 | Medium/Low fixes | 3 workflows/scripts | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-06-22)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the consolidation is proven equivalent on endpoint/filter/error-handling scope and can be implemented directly. `NEEDS_VERIFICATION` means the overlap is real but a human or follow-on analysis must verify caller coverage, freshness, or behavior before changing it. `RISKY_SKIP` means the redundancy is visible, but the call sits in a pagination/race-recovery/cancellation-sensitive path and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001
+- **ID** — MERGE-001
+- **Safety tag** — RISKY_SKIP
+- **File path and line ranges** — `.github/workflows/cancel_on_pr_close.yml:102-132`
+- **Current call count** — `2` paginated GETs per run
+- **Proposed call count** — `1` paginated GET per run
+- **Endpoint(s)** — `GET /repos/{repo}/actions/runs`
+- **Evidence** — The same branch/event-scoped endpoint is fetched twice, differing only by `status`:
+  ```bash
+  queued_runs_json="$(
+    gh_retry gh api \
+      --method GET \
+      "repos/${REPOSITORY}/actions/runs" \
+      --paginate \
+      -f status=queued \
+      -f event=pull_request \
+      -f "branch=${PR_HEAD_REF}" \
+      -f per_page=100 \
+  ...
+  in_progress_runs_json="$(
+    gh_retry gh api \
+      --method GET \
+      "repos/${REPOSITORY}/actions/runs" \
+      --paginate \
+      -f status=in_progress \
+      -f event=pull_request \
+      -f "branch=${PR_HEAD_REF}" \
+      -f per_page=100 \
+  ```
+- **Proposed fix** — If manually approved, replace the paired status-specific fetches with one branch/event-scoped `actions/runs` fetch, then filter `queued|in_progress` client-side before building `target_run_ids`.
+- **Safety rationale** — `RISKY_SKIP` because both calls use `--paginate`; collapsing server-side status filters into one paginated query can change page-boundary coverage for the cancel set.
+- **Downstream signal** — Do not auto-implement; manually validate on a branch with `>100` matching active runs and confirm the merged query preserves both the cancel set and current log output.
+
+#### MERGE-002
+- **ID** — MERGE-002
+- **Safety tag** — RISKY_SKIP
+- **File path and line ranges** — `.github/workflows/test-and-mark-stable.yml:1014-1054`
+- **Current call count** — `3` GETs on the first-stable-attempt path; up to `11` if all `5` stability attempts run
+- **Proposed call count** — `2` on the first-stable-attempt path; up to `10` with `5` attempts
+- **Endpoint(s)** — `GET /repos/{repo}/pulls/{pr}`
+- **Evidence** — The step double-reads the PR head SHA for race protection, then immediately fetches the full PR again for the closed/merged guard:
+  ```bash
+  HEAD_A=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' ...)
+  sleep 3
+  HEAD_B=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' ...)
+  ...
+  PR_META=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" 2>/dev/null || echo "")
+  PR_STATE=$(printf '%s' "${PR_META}" | jq -r '.state // ""' ...)
+  PR_MERGED=$(printf '%s' "${PR_META}" | jq -r '.merged // false' ...)
+  ```
+  The surrounding comments explicitly call out stale-parent and auto-merge races.
+- **Proposed fix** — If optimized manually, make the second stability read fetch a small JSON object (`head.sha`, `state`, `merged`, `merged_at`, `closed_at`) and reuse it for the immediate closed/merged guard.
+- **Safety rationale** — `RISKY_SKIP` because this is an explicit upstream-race defense path; removing or merging reads changes the protection contract.
+- **Downstream signal** — Do not auto-implement; any change must prove it still prevents stale-parent `PUT /contents` conflicts and still catches PR auto-merge between stability polling and bait injection.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001
+- **ID** — REUSE-001
+- **Safety tag** — NEEDS_VERIFICATION
+- **File path and line ranges** — `.github/workflows/review_autofix.yml:289-302,780-782,4706-4715`; `scripts/review_enable_auto_merge.sh:65-74,127-137`
+- **Current call count** — `2` API calls per `review_enable_auto_merge.sh` invocation
+- **Proposed call count** — `1` on the common path; `2` only when a head-ref suppressor still requires a live body cross-check
+- **Endpoint(s)** — `GET /repos/{repo}/issues/{pr}/labels?per_page=100`; `GET /repos/{repo}/pulls/{pr}`
+- **Evidence** — The gate job already fetches and outputs PR head ref from `/pulls/{n}`:
+  ```bash
+  if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
+    --jq '{..., head_ref: (.head.ref // ""), labels: ((.labels // []) | map(.name)), ..., title: (.title // ""), body: (.body // "")}'
+  ...
+  echo "head_ref=${pr_head_ref}" >> "${GITHUB_OUTPUT}"
+  ```
+  But the later auto-merge step does not consume that output:
+  ```bash
+  env:
+    GH_TOKEN: ${{ secrets.GH_PAT }}
+    ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
+    FORWARD_MERGE_FALLBACK_AUTO_MERGE: ...
+    ORCH_INTEGRATION_BRANCH_PATTERN: ...
+  run: |
+    bash "${SUPPORT_SCRIPTS_DIR}/review_enable_auto_merge.sh"
+  ```
+  and the script re-fetches PR metadata:
+  ```bash
+  if ! _ORCH_PR_META_JSON="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" ... )"; then
+  ...
+  _orch_pr_head_ref="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.head.ref // ""' ...)"
+  ```
+- **Proposed fix** — Pass `PR_HEAD_REF: ${{ needs.gate.outputs.head_ref }}` into the auto-merge step and update `scripts/review_enable_auto_merge.sh` to skip `GET /pulls/{pr}` unless `PR_HEAD_REF` matches the forward-merge or orchestrator-integration suppressors and the body cross-check is still needed.
+- **Safety rationale** — `NEEDS_VERIFICATION` because the reuse crosses jobs and the late-step suppressor decision can still depend on fresh PR/body/label state.
+- **Downstream signal** — Verify whether head-ref/body-based suppressor inputs can change after the gate job starts; if yes, reuse only `PR_HEAD_REF` and keep live body/label fetches.
+
+#### REUSE-002
+- **ID** — REUSE-002
+- **Safety tag** — NEEDS_VERIFICATION
+- **File path and line ranges** — `.github/workflows/internal-review.yml:91-116,137-140`
+- **Current call count** — `1` fallback GET when `EVENT_DEFAULT_BRANCH` is empty
+- **Proposed call count** — `0`
+- **Endpoint(s)** — `GET /repos/{repo}`
+- **Evidence** — The workflow already injects the default branch from the event payload, then re-fetches the same value only if that env is empty:
+  ```bash
+  EVENT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch || '' }}
+  ...
+  base_ref="${EVENT_DEFAULT_BRANCH:-}"
+  if [ -z "${base_ref}" ]; then
+    base_ref="$(gh api "repos/${REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo 'main')"
+  fi
+  ```
+  The resolved `base_ref` is then forwarded directly into the no-PR review call:
+  ```bash
+  force_claude_branch_review: true
+  head_ref_override: ${{ needs.resolve-claude-branch-pr.outputs.head_ref }}
+  head_sha_override: ${{ needs.resolve-claude-branch-pr.outputs.head_sha }}
+  base_ref_override: ${{ needs.resolve-claude-branch-pr.outputs.base_ref }}
+  ```
+- **Proposed fix** — Trust `github.event.repository.default_branch` as the sole source for this workflow, keep forwarding it via `base_ref_override`, and drop the repo lookup fallback.
+- **Safety rationale** — `NEEDS_VERIFICATION` because this is only safe if every repo-local trigger path into `internal-review.yml` always includes `github.event.repository.default_branch`.
+- **Downstream signal** — Verify one real payload for each trigger path into `internal-review.yml` and confirm `github.event.repository.default_branch` is never empty before removing the fallback GET.
+
+### Dead Calls (DEAD-API-###)
+
+#### DEAD-API-001
+- **ID** — DEAD-API-001
+- **Safety tag** — NEEDS_VERIFICATION
+- **File path and line ranges** — `scripts/review_collect_pr_metadata.sh:176-181`; supporting caller path `.github/workflows/internal-review.yml:129-140`; input surface `.github/workflows/review_autofix.yml:40-69,77-90,1183-1185`
+- **Current call count** — `1` dead fallback call site (`0` executions on repo-local workflow paths)
+- **Proposed call count** — `0` call sites
+- **Endpoint(s)** — `GET /repos/{repo}`
+- **Evidence** — The fallback exists only in no-PR claude-branch mode:
+  ```bash
+  BASE_REF_OVERRIDE="${BASE_REF_OVERRIDE_INPUT:-}"
+  if [ -z "${BASE_REF_OVERRIDE}" ]; then
+    BASE_REF_OVERRIDE="$(gh api "repos/${REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo 'main')"
+  fi
+  ```
+  But, in this repository:
+  1. no-PR mode is exposed only on `workflow_call` inputs, not on `workflow_dispatch`, and
+  2. the only repo-local caller (`internal-review.yml`) always passes `base_ref_override`.
+- **Proposed fix** — Remove the `BASE_REF_OVERRIDE="" -> gh api repos/${REPOSITORY}` fallback from `scripts/review_collect_pr_metadata.sh` for repo-local no-PR mode, or replace it with an explicit hard error telling callers to supply `base_ref_override`.
+- **Safety rationale** — `NEEDS_VERIFICATION` because the fallback is dead for current repo workflows but could still matter for tests, manual script runs, or future callers.
+- **Downstream signal** — Verify there are no tests, wrapper workflows, or operator runbooks that invoke no-PR review mode without `base_ref_override` before deleting the fallback.
+
+### Cross-References to Deep Audit Section
+- API-001: SAFE_TO_MERGE — same `actions/runs/{id}` payload is polled twice in one loop and can supply both `.status` and `.conclusion`.
+- BATCH-001: NEEDS_VERIFICATION — repo-wide run snapshots are promising, but page-boundary and workflow-name filtering behavior must be checked before replacing per-workflow list calls.
+- BATCH-002: RISKY_SKIP — the fallback path is paginated and fail-open; batching changes here need manual review of page-boundary and fallback semantics.
+
+### Summary Counts
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 3 | REUSE-001, REUSE-002, DEAD-API-001 |
+| RISKY_SKIP | 2 | MERGE-001, MERGE-002 |
+
+### Implement-Stage Handoff
+- No SAFE_TO_MERGE findings in this pass.
