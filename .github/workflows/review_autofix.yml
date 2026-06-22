@@ -1966,7 +1966,22 @@ jobs:
           if [ "${CURRENT_BRANCH}" = "${HEAD_REF}" ]; then
             git reset --hard "refs/remotes/origin/${HEAD_REF}"
           else
-            git checkout -B "${HEAD_REF}" "refs/remotes/origin/${HEAD_REF}"
+            # Use -f so the branch switch discards any runtime-local
+            # modifications in the worktree, mirroring the `reset --hard`
+            # in the sibling branch above. The "Initialize/Finalize
+            # workspace contents" steps materialize the source tree into
+            # this worktree and regenerate the gitignored-but-tracked
+            # runtime artifact .ai/.workspace_source_manifest.txt. Without
+            # -f, a plain `git checkout -B` aborts with "Your local changes
+            # to the following files would be overwritten by checkout"
+            # whenever the target branch's committed copy of that manifest
+            # differs from the index's (e.g. a cross-base PR whose base is
+            # `stable` while the worktree index is `main`). This step runs
+            # before the editor touches the worktree, so the only local
+            # changes here are regenerated runtime artifacts that are safe
+            # to discard — landing cleanly on origin/${HEAD_REF} is exactly
+            # the intent.
+            git checkout -f -B "${HEAD_REF}" "refs/remotes/origin/${HEAD_REF}"
           fi
 
           echo "CAN_PUSH=true" >> "$GITHUB_ENV"
