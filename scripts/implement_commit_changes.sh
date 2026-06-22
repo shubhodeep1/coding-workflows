@@ -8,10 +8,6 @@
 
 set -euo pipefail
 
-_implement_commit_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=/dev/null
-source "${_implement_commit_script_dir}/write_guard.sh"
-
 STEP_NAME="Commit changes"
 STEP_STDERR_FILE="$(mktemp)"
 CAPTURE_FILE=""
@@ -353,14 +349,6 @@ else
   fi
 fi
 # <<< files_touched scope-enforcement guard (commit) <<<
-
-IMPLEMENT_WRITE_GUARD_STAGED_FILE="$(mktemp "${TMPDIR:-/tmp}/implement-write-guard-staged.XXXXXX")"
-git diff --cached --name-only --diff-filter=ACMRD > "${IMPLEMENT_WRITE_GUARD_STAGED_FILE}" || true
-if ! write_guard_check implement "${IMPLEMENT_WRITE_GUARD_STAGED_FILE}"; then
-  rm -f "${IMPLEMENT_WRITE_GUARD_STAGED_FILE}"
-  exit 1
-fi
-rm -f "${IMPLEMENT_WRITE_GUARD_STAGED_FILE}"
 
 # If every Codex-produced change was filtered out by the path exclusions
 # above (or stripped by the fetched-manifest cleanup earlier in this step),

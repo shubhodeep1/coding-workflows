@@ -68,10 +68,7 @@ ALLOWED_CATEGORIES = {
     "incidents",
     "run_events",
     "task_summaries",
-    "repo_learnings",
 }
-
-ALLOWED_SCOPE_LEVELS = {"global", "task", "run"}
 
 SENSITIVE_CATEGORIES = {"incidents"}
 SENSITIVE_KEYWORDS = {
@@ -520,48 +517,18 @@ def make_record_id(prefix: str = "mem") -> str:
     return f"{sanitize_segment(prefix, 'mem')}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:10]}"
 
 
-def _build_scope(
-    issue_number: int | None,
-    pr_number: int | None,
-    run_id: str | None,
-    scope_level_override: str | None = None,
-) -> dict[str, Any]:
-    normalized_scope_level_override = None
-    if scope_level_override is not None and scope_level_override.strip():
-        normalized_scope_level_override = scope_level_override.strip().lower()
-        if normalized_scope_level_override not in ALLOWED_SCOPE_LEVELS:
-            raise MemoryValidationError(f"Unsupported scope level: {scope_level_override}")
-
-    if normalized_scope_level_override is None:
-        if run_id:
-            level = "run"
-        elif issue_number is not None:
-            level = "task"
-        else:
-            level = "global"
+def _build_scope(issue_number: int | None, pr_number: int | None, run_id: str | None) -> dict[str, Any]:
+    if run_id:
+        level = "run"
+    elif issue_number is not None:
+        level = "task"
     else:
-        level = normalized_scope_level_override
-
-    scope_issue_number = issue_number
-    scope_pr_number = pr_number
-    scope_run_id = run_id
-
-    if level == "global":
-        scope_issue_number = None
-        scope_pr_number = None
-        scope_run_id = None
-    elif level == "task":
-        if issue_number is None:
-            raise MemoryValidationError("Task scope requires issue_number")
-        scope_run_id = None
-    elif level == "run" and not run_id:
-        raise MemoryValidationError("Run scope requires run_id")
-
+        level = "global"
     return {
         "level": level,
-        "issue_number": scope_issue_number,
-        "pr_number": scope_pr_number,
-        "run_id": scope_run_id,
+        "issue_number": issue_number,
+        "pr_number": pr_number,
+        "run_id": run_id,
     }
 
 
@@ -1592,7 +1559,6 @@ def record_candidate(
     parent_ids: list[str] | None = None,
     supersedes: str | None = None,
     sensitive: bool | None = None,
-    scope_level: str | None = None,
 ) -> dict[str, Any]:
     ensure_memory_layout(memory_root)
     normalized_category = category.strip().lower()
@@ -1614,7 +1580,7 @@ def record_candidate(
         "schema_version": MEMORY_RECORD_SCHEMA_VERSION,
         "category": normalized_category,
         "status": "candidate",
-        "scope": _build_scope(issue_number, pr_number, run_id, scope_level),
+        "scope": _build_scope(issue_number, pr_number, run_id),
         "summary": summary_text,
         "details": details_text,
         "confidence": float(confidence),
@@ -2051,9 +2017,6 @@ def retrieve_memory_context(
     issue_title: str | None = None,
     issue_body: str | None = None,
     api_key: str | None = None,
-    category_filter: str | None = None,
-    scope_level_filter: str | None = None,
-    max_records: int | None = None,
 ) -> RetrievalResult:
     ensure_memory_layout(memory_root)
     profiles = _load_retrieval_profiles(profiles_path)
@@ -2065,21 +2028,6 @@ def retrieve_memory_context(
 
     profile = roles[resolved_role]
     token_budget = _resolve_token_budget(profile, resolved_role)
-
-    normalized_category_filter = None
-    if category_filter is not None and category_filter.strip():
-        normalized_category_filter = category_filter.strip().lower()
-        if normalized_category_filter not in ALLOWED_CATEGORIES:
-            raise MemoryValidationError(f"Unknown memory category filter: {category_filter}")
-
-    normalized_scope_level_filter = None
-    if scope_level_filter is not None and scope_level_filter.strip():
-        normalized_scope_level_filter = scope_level_filter.strip().lower()
-        if normalized_scope_level_filter not in ALLOWED_SCOPE_LEVELS:
-            raise MemoryValidationError(f"Unknown scope level filter: {scope_level_filter}")
-
-    if max_records is not None and max_records < 1:
-        raise MemoryValidationError("max_records must be a positive integer when provided")
 
     # Extract keywords for content-aware scoring
     keywords, keyword_method = _extract_keywords(issue_title, issue_body, api_key=api_key)
@@ -2101,14 +2049,6 @@ def retrieve_memory_context(
             validate_memory_record(record, memory_root)
         except MemoryValidationError:
             continue
-        if normalized_category_filter is not None:
-            record_category = str(record.get("category") or "").strip().lower()
-            if record_category != normalized_category_filter:
-                continue
-        if normalized_scope_level_filter is not None:
-            record_scope_level = str((record.get("scope") or {}).get("level") or "").strip().lower()
-            if record_scope_level != normalized_scope_level_filter:
-                continue
         score, created_at, record_id = _record_score(
             record, profile, issue_number, pr_number, keywords=keywords or None,
         )
@@ -2122,8 +2062,6 @@ def retrieve_memory_context(
     selected: list[dict[str, Any]] = []
     used_tokens = 0
     for _score, _created_at, _record_id, record in scored:
-        if max_records is not None and len(selected) >= max_records:
-            break
         line = (
             f"[{record['category']}|{record['status']}|conf={record['confidence']:.2f}|"
             f"id={record['record_id']}] {record['summary']}"
