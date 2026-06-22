@@ -341,3 +341,123 @@ The repo already encodes this hygiene standard in code comments: `scripts/lint_p
 |---|---|---:|---:|---:|---|
 | Serena | unknown (aggregate only) | 0 | 0 | 1 | Repo aggregate telemetry; no raw target-level `SERENA_PROBE` line exposed in deep-dive logs |
 | Semble | n/a | n/a | n/a | n/a | No `SEMBLE_PROBE` telemetry format observed; availability inferred only from `SEMBLE_AVAILABLE` / `SEMBLE_INDEX_AVAILABLE` logs |
+
+## Deep Audit — Workflows & Scripts (2026-06-22)
+
+### Section 1: Bug & Correctness Sweep
+
+#### BUG-001
+- **File path:** `.github/workflows/review_autofix.yml:4339-4358, 4528-4548, 5386-5395; .github/workflows/issue_pr_status.yml:318-327; scripts/label_helpers.sh:156-206`
+- **Severity:** High
+- **Category tag:** `bug`
+- **Description:** The fallback `set_issue_phase_label_resilient()` implementations in `review_autofix.yml` and `issue_pr_status.yml` only `POST` the target label. They do **not** remove prior phase labels. The canonical helper in `scripts/label_helpers.sh:156-206` does a GET → phase-label strip → PUT replacement. In `review_autofix.yml`, the fallback path is explicitly reachable when fetched helper artifacts are missing (`4322-4323`, `4510-4515`), so an issue can end a run with conflicting phase labels like `ai:done` plus `ai:ready-to-merge` or `ai:review-blocked`, corrupting the pipeline state machine.
+- **Recommended fix:** Stop using POST-only fallbacks for phase swaps. Either always stage/source `scripts/label_helpers.sh`, or copy the canonical `set_issue_phase_label_resilient <issue_number> <target_label> [repo]` logic verbatim into one shared fallback helper and call that from `review_autofix.yml` and `issue_pr_status.yml`.
+
+#### CONSIST-001
+- **File path:** `.github/workflows/orchestrate.yml:997-1010; scripts/gh_helpers.sh:516-545`
+- **Severity:** Medium
+- **Category tag:** `consistency`
+- **Description:** The fallback `_safe_gh_jq` in `orchestrate.yml` is `gh api "$@"` (`999`) rather than the canonical stdout-suppressing implementation in `scripts/gh_helpers.sh:516-545`. The step immediately uses that fallback in command substitutions for `DEFAULT_BRANCH` (`1001`) and `BASE_SHA` (`1009`). If `gh_helpers.sh` fails to load and GitHub returns a non-2xx response, raw error JSON can be captured into those variables instead of failing cleanly.
+- **Recommended fix:** Replace the one-line fallback with the canonical temp-file implementation from `scripts/gh_helpers.sh`, or fail the step immediately when `gh_helpers.sh` cannot be sourced. Do not use raw `gh api` as a drop-in `_safe_gh_jq` substitute.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+_Already-covered hotspots in the in-progress report body (for example the smoke-test polling loop and the review-gate `/pulls/{PR}/files` duplication) are not repeated here._
+
+#### BATCH-001
+- **File path:** `scripts/review_rb_judge.sh:720-772`
+- **Severity:** Medium
+- **Category tag:** `api-batching`
+- **Description:** The judge first fetches linked issue numbers with one GraphQL `closingIssuesReferences` call (`720-725`), then loops over those issue numbers and hydrates each issue again with `_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}"` (`755-772`) just to read `body` and `labels`. That is an N+1 pattern on top of data that GraphQL can already return.
+- **Current call count:** `1 GraphQL + up to N REST issue GETs`
+- **Proposed call count after fix:** `1 GraphQL total`
+- **Existing batching pattern to extend:** The aliased GraphQL patterns already used in `scripts/orchestrate_poll_process.sh:_fetch_candidate_issue_details_graphql` and `.github/workflows/issue_pr_status.yml:364-393`
+- **Recommended fix:** Extend the existing `closingIssuesReferences` GraphQL selection to include `body` and `labels(first: 100) { nodes { name } }`, then pick the first usable issue body locally instead of REST-fetching each linked issue.
+
+#### BATCH-002
+- **File path:** `scripts/orchestrate_poll_process.sh:11269-11293`
+- **Severity:** Medium
+- **Category tag:** `api-batching`
+- **Description:** The standalone-stall sweep builds `labeled_issues` by looping over seven labels and issuing one `gh issue list` call per label (`11272-11275`). It then immediately builds `candidates` and prefetches issue details with `_fetch_candidate_issue_details_graphql` (`11292-11293`). This is a fixed seven-call prepass every cycle before any per-candidate work starts.
+- **Current call count:** `7 gh issue list + 1 marker GraphQL + 1 details GraphQL`
+- **Proposed call count after fix:** `1 bulk open-issue snapshot + 1 marker GraphQL + 1 details GraphQL`
+- **Existing batching pattern to extend:** Cycle-local caches like `ACTIVE_WORKFLOW_ISSUES` and the existing `_fetch_candidate_issue_details_graphql` cache fill
+- **Recommended fix:** Replace the seven-label loop with one `gh issue list --state open --json number,labels --limit 1000` snapshot (or equivalent GraphQL search), filter the seven labels locally, then feed that result into the existing candidate-details cache.
+
+#### BATCH-003
+- **File path:** `scripts/orchestrate_poll_process.sh:2941-2982`
+- **Severity:** Low
+- **Category tag:** `api-batching`
+- **Description:** `_subissue_closing_pr_number()` documents that after the fast `gh pr list --head` miss, it may do one timeline fetch plus one `GET /pulls/{n}` per cross-referenced PR (`2941-2944`). The loop at `2971-2982` performs exactly that REST-per-PR hydration to inspect merged state and body text. This is small-call-count most of the time, but it still scales linearly with the number of cross-referenced PRs and breaks the repo’s own “N items => aliased GraphQL” rule. [NEEDS VERIFICATION]
+- **Current call count:** `1 gh pr list --head + 1 timeline fetch + up to N REST pull GETs`
+- **Proposed call count after fix:** `1 gh pr list --head + 1 batched GraphQL fetch over the cross-referenced PR numbers`
+- **Existing batching pattern to extend:** `scripts/orchestrate_poll_process.sh:_fetch_linked_pr_status_graphql`
+- **Recommended fix:** Reuse the cross-referenced PR number set, then batch-fetch `merged/body` (or equivalent fields) in one GraphQL request instead of looping `GET /pulls/{n}`.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001
+- **File path:** `scripts/gh_helpers.sh:516-545; .github/workflows/plan.yml:1771-1785; .github/workflows/implement.yml:4725-4735; scripts/implement_diagnose_post_codex_failure.sh:49-60; .github/workflows/orchestrate.yml:998-999`
+- **Severity:** Medium
+- **Category tag:** `duplication`
+- **Description:** `_safe_gh_jq` is duplicated in at least four places outside its canonical home in `scripts/gh_helpers.sh`. One copy has already drifted semantically (`orchestrate.yml:998-999`), which is the root cause of `CONSIST-001`.
+- **Shared module owner:** `scripts/gh_helpers.sh`
+- **Suggested signature:** `_safe_gh_jq <endpoint> [gh api args...]`
+- **Callers to update:** `plan.yml` auto-approve gate, `implement.yml` review-blocked job capture, `implement_diagnose_post_codex_failure.sh`, and `orchestrate.yml` integration-branch bootstrap
+- **Recommended fix:** Make `gh_helpers.sh` a guaranteed staged dependency for these call sites and remove the inline helper copies. If a fallback must exist, generate one from a single checked-in snippet instead of hand-copying the function body.
+
+#### DUP-002
+- **File path:** `scripts/label_helpers.sh:120-206; .github/workflows/review_autofix.yml:953-976, 4324-4358, 4516-4548, 5377-5395; scripts/review_rb_judge.sh:594-646`
+- **Severity:** Medium
+- **Category tag:** `duplication`
+- **Description:** Label creation and phase-transition logic is copied inline across `review_autofix.yml` and `review_rb_judge.sh`. The comments in `review_autofix.yml:969-974` already acknowledge that these copies “must stay in lockstep.” Some copies only special-case a subset of labels and fall back to generic color/description defaults, so contract drift in `.github/ai/label_contract.v1.json` will not propagate uniformly.
+- **Shared module owner:** `scripts/label_helpers.sh`
+- **Suggested signature:** `ensure_label_exists <label_name> [repo]` and `set_issue_phase_label_resilient <issue_number> <target_label> [repo]`
+- **Callers to update:** `review_autofix.yml` deterministic-skip merge path, post-merge ready-to-merge / review-blocked paths, and `scripts/review_rb_judge.sh`
+- **Recommended fix:** Source `scripts/label_helpers.sh` everywhere instead of inlining label catalogs. If a lightweight fallback is required, generate it from the checked-in label contract during `stage_workflow_support.sh` so the contract has one source of truth.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+- No `run:` or `if:` block exceeded the requested `15,000`-char Medium-risk or `18,000`-char High-risk thresholds.
+- The largest interpolated `run:` block I found was `.github/workflows/implement.yml:3767-3994` at about `14,742` characters — `258` chars below the `15,000`-char warning threshold and `6,258` below the `21,000` hard cap.
+- No workflow file exceeds the `800 KB` early-warning size. The largest workflow is `.github/workflows/review_autofix.yml` at `342,968` bytes.
+
+### Section 5: Cross-Cutting Concerns
+
+#### DEAD-001
+- **File path:** `scripts/orchestrate_poll_process.sh:6161-6235, 15477-15507, 15920-15974`
+- **Severity:** Low
+- **Category tag:** `dead-code`
+- **Description:** `BRANCH_REBUILD_LAST_REBUILD_AT`, `RB_FOLLOWUP_REFUSED`, and `IF_BLOCKERS_SOURCE` are assigned, but no read sites exist elsewhere in `scripts/orchestrate_poll_process.sh`. They currently do not affect control flow, persisted state, comments, or telemetry, which makes them dead state plumbing rather than live behavior.
+- **Recommended fix:** Either remove these assignments or wire them into a real output path (state JSON, log event, or comment rendering) so the state they represent is observable and testable.
+
+#### SHELL-001
+- **File path:** `scripts/review_enable_auto_merge.sh:19; scripts/review_collect_pr_metadata.sh:27`
+- **Severity:** Low
+- **Category tag:** `shellcheck`
+- **Description:** Both helpers trigger ShellCheck `SC1007` on `SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"`. The code works, but the assignment form is ambiguous enough that linting flags it.
+- **Recommended fix:** Rewrite as `SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"`, or keep the current form with a narrow `# shellcheck disable=SC1007` and an intent comment.
+
+- No material `TODO` / `FIXME` / `HACK` markers were present; the grep hits were `mktemp ... XXXXXX` placeholders, not debt markers.
+- I did **not** count ShellCheck `SC2154` on `_bws_effective_threshold`, `_csc_effective_threshold`, or `_rtm_effective_threshold` as findings, because `scripts/orchestrate_poll_process.sh:3633-3638` populates those names intentionally via `printf -v` out-parameter assignment.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 1 | BUG-001 |
+| Medium | 5 | CONSIST-001, BATCH-001, BATCH-002, DUP-001, DUP-002 |
+| Low | 3 | BATCH-003, DEAD-001, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 3-4 | Medium |
+| API call optimization | 2-3 | Medium |
+| Code modularization | 6-9 | Large |
+| Expression size reduction | 0 | Small |
+| Medium/Low fixes | 3-5 | Small |
