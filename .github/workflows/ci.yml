@@ -602,6 +602,8 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Use ubiquitous grep instead of ripgrep so this gate does not
+          # fail on runner images that omit `rg`.
           if grep -nE 'bash ("\$\{[^}]+\}/|scripts/)?write_codex_config\.sh|WRITE_CODEX_CONFIG=' \
             .github/workflows/clarify.yml \
             .github/workflows/plan.yml \
