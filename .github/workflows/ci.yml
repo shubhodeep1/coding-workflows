@@ -602,12 +602,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          command -v rg >/dev/null 2>&1 || {
-            echo "::error::ripgrep (rg) is required for shared shell-block anti-regression checks"
-            exit 1
-          }
-
-          if rg -n 'bash ("\$\{[^}]+\}/|scripts/)?write_codex_config\.sh|WRITE_CODEX_CONFIG=' \
+          if grep -nE 'bash ("\$\{[^}]+\}/|scripts/)?write_codex_config\.sh|WRITE_CODEX_CONFIG=' \
             .github/workflows/clarify.yml \
             .github/workflows/plan.yml \
             .github/workflows/implement.yml \
@@ -623,7 +618,7 @@ jobs:
             .github/workflows/implement.yml \
             .github/workflows/review_autofix.yml \
             scripts/validate_process.sh; do
-            if ! rg -q 'codex_config_assemble' "${f}"; then
+            if ! grep -q 'codex_config_assemble' "${f}"; then
               echo "::error file=${f}::Shared Codex config helper is not wired into this targeted call site."
               exit 1
             fi
@@ -635,7 +630,7 @@ jobs:
             .github/workflows/implement.yml \
             .github/workflows/validate.yml \
             .github/workflows/review_autofix.yml; do
-            if ! rg -q 'memory_bootstrap' "${f}"; then
+            if ! grep -q 'memory_bootstrap' "${f}"; then
               echo "::error file=${f}::Shared memory bootstrap helper is not wired into this targeted workflow domain."
               exit 1
             fi
@@ -646,13 +641,13 @@ jobs:
             .github/workflows/plan.yml \
             .github/workflows/implement.yml \
             .github/workflows/review_autofix.yml; do
-            if ! rg -q 'tg_send_phase_failure' "${f}"; then
+            if ! grep -q 'tg_send_phase_failure' "${f}"; then
               echo "::error file=${f}::Shared Telegram failure helper is not wired into this targeted workflow."
               exit 1
             fi
           done
 
-          if rg -n 'read_codex_stall_guard_state\(\)|read_validate_codex_stall_guard_state\(\)|codex_stall_guard_kill_detected\(\)|resolve_editor_network_probe_pid\(\)|_reap_editor_fifo_holders\(\)' \
+          if grep -nE 'read_codex_stall_guard_state\(\)|read_validate_codex_stall_guard_state\(\)|codex_stall_guard_kill_detected\(\)|resolve_editor_network_probe_pid\(\)|_reap_editor_fifo_holders\(\)' \
             .github/workflows/implement.yml \
             scripts/review_apply_fixes.sh \
             scripts/validate_process.sh; then
@@ -664,7 +659,7 @@ jobs:
             .github/workflows/implement.yml \
             scripts/review_apply_fixes.sh \
             scripts/validate_process.sh; do
-            if ! rg -q 'watchdog_helpers\.sh' "${f}"; then
+            if ! grep -qE 'watchdog_helpers\.sh' "${f}"; then
               echo "::error file=${f}::Shared watchdog helper is not wired into this targeted runtime."
               exit 1
             fi
