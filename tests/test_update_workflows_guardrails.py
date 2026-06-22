@@ -48,6 +48,7 @@ def test_profile_manifests_match_contracts() -> None:
 		"ai-orchestrate-poll.yml",
 		"ai-orchestrate-clarify-respond.yml",
 		"ai-validate.yml",
+		"ai-sync-labels.yml",
 		"review_rb_judge_dispatch.yml",
 	]
 	full = sorted(path.name for path in WORKFLOW_TEMPLATES_DIR.glob("*.yml"))
