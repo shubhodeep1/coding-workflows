@@ -115,6 +115,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/dev/replay_review_pipeline.sh` — Shell helper for replay review pipeline.
 - `scripts/dev/test_codex_helpers.sh` — Shell regression tests for codex_helpers.sh.
 - `scripts/dev/test_watchdog_helpers.sh` — Shell regression tests for watchdog_helpers.sh.
+- `scripts/dev/test_write_guard.sh` — Shell regression tests for write_guard.sh.
 - `scripts/drift_audit.sh` — drift_audit.sh — Scan recent review/autofix logs for persistent fingerprint drift.
 - `scripts/files_touched_scope_guard.py` — files_touched scope-enforcement guard for the AI implement pipeline.
 - `scripts/fixtures/cloudflare-learnings/phase-a-anti-rules-noisy-pr.patch` — Fixture asset for phase-a-anti-rules-noisy-pr.patch.
@@ -205,6 +206,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/workspace_init.sh` — Shell helper for workspace init.
 - `scripts/workspace_safety_check.sh` — Shell helper for workspace safety check.
 - `scripts/write_codex_config.sh` — write_codex_config.sh — central writer for ~/.codex/config.toml.
+- `scripts/write_guard.sh` — Shell helper for write-guard policy enforcement.
 
 ## Prompt references
 
