@@ -219,7 +219,7 @@ jobs:
           mkdir -p scripts
 
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -491,24 +491,27 @@ jobs:
         run: |
           set -euo pipefail
           if ! bash -n scripts/memory_helpers.sh >/dev/null 2>&1 \
-            || ! grep -q 'memory_retrieve' scripts/memory_helpers.sh \
-            || ! grep -q 'memory_record_run_event' scripts/memory_helpers.sh \
-            || ! grep -q 'memory_record_candidate' scripts/memory_helpers.sh; then
+            || ! grep -q 'memory_bootstrap' scripts/memory_helpers.sh; then
             echo "::warning::memory_helpers.sh unavailable; using fail-open stubs"
-            cat > scripts/memory_helpers.sh <<'EOF'
-          memory_retrieve(){ local out="${1:-}"; [ -n "${out}" ] && printf 'AI MEMORY CONTEXT\nstatus: unavailable\n' > "${out}"; return 0; }
-          memory_record_run_event(){ return 0; }
-          memory_record_candidate(){ return 0; }
-          EOF
+            memory_bootstrap(){ return 0; }
+            memory_retrieve(){ local out="${1:-}"; [ -n "${out}" ] && printf 'AI MEMORY CONTEXT\nstatus: unavailable\n' > "${out}"; return 0; }
+            memory_record_run_event(){ return 0; }
+            memory_record_candidate(){ return 0; }
+          else
+            source scripts/memory_helpers.sh 2>/dev/null || true
           fi
-          source scripts/memory_helpers.sh 2>/dev/null || true
-          memory_ensure_branch 2>/dev/null || true
 
           if ! declare -F memory_retrieve >/dev/null 2>&1 \
             || ! declare -F memory_record_run_event >/dev/null 2>&1 \
             || ! declare -F memory_record_candidate >/dev/null 2>&1; then
             echo "::warning::memory_helpers.sh missing expected helpers; applying fail-open function fallbacks"
           fi
+          declare -F memory_bootstrap >/dev/null 2>&1 || memory_bootstrap(){ return 0; }
+          memory_bootstrap \
+            --ensure-branch \
+            --require memory_retrieve \
+            --require memory_record_run_event \
+            --require memory_record_candidate
           declare -F memory_retrieve >/dev/null 2>&1 || memory_retrieve(){ local out="${1:-}"; [ -n "${out}" ] && printf 'AI MEMORY CONTEXT\nstatus: unavailable\n' > "${out}"; return 0; }
           declare -F memory_record_run_event >/dev/null 2>&1 || memory_record_run_event(){ return 0; }
           declare -F memory_record_candidate >/dev/null 2>&1 || memory_record_candidate(){ return 0; }
@@ -634,13 +637,11 @@ jobs:
         if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
         run: |
           set -euo pipefail
+          source scripts/codex_helpers.sh
           # Centralised in scripts/write_codex_config.sh — see that
           # script's header for the apply_patch / trust / elevation
           # rationale.
-          bash scripts/write_codex_config.sh \
-            --model "${MODEL_EDITOR}" \
-            --reasoning "${MODEL_REASONING_EFFORT}"
-          echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
+          codex_config_assemble "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "low"
 
       - name: Pre-assemble static context (cacheable across runs)
         if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
@@ -661,6 +662,8 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/memory_helpers.sh 2>/dev/null || true
+          declare -F memory_bootstrap >/dev/null 2>&1 || memory_bootstrap(){ return 0; }
+          memory_bootstrap --require memory_retrieve
           declare -F memory_retrieve >/dev/null 2>&1 || memory_retrieve(){ local out="${1:-}"; [ -n "${out}" ] && printf 'AI MEMORY CONTEXT\nstatus: unavailable\n' > "${out}"; return 0; }
 
           jq -r '.body // ""' "${ISSUE_META_FILE}" > "${RUNTIME_DIR}/issue_body.txt"
@@ -670,6 +673,41 @@ jobs:
             --issue-number "${ISSUE_NUMBER}" \
             --issue-title "${ISSUE_TITLE}" \
             --issue-body-file "${RUNTIME_DIR}/issue_body.txt"
+
+          memory_retrieve "${RUNTIME_DIR}/repo_learnings_context.txt" \
+            --role "clarify" \
+            --issue-number "${ISSUE_NUMBER}" \
+            --issue-title "${ISSUE_TITLE}" \
+            --issue-body-file "${RUNTIME_DIR}/issue_body.txt" \
+            --category "repo_learnings" \
+            --scope-level "global" \
+            --max "10"
+
+          python3 - <<'PY' "${RUNTIME_DIR}/repo_learnings_context.txt" "${RUNTIME_DIR}/repo_learnings.txt"
+          from pathlib import Path
+          import sys
+
+
+          source_path = Path(sys.argv[1])
+          output_path = Path(sys.argv[2])
+          summaries: list[str] = []
+          for raw_line in source_path.read_text(encoding="utf-8").splitlines():
+              if not raw_line.startswith("- [") or " :: " not in raw_line:
+                  continue
+              summary = raw_line.split(" :: ", 1)[1].strip()
+              if summary and summary.lower() != "none":
+                  summaries.append(summary)
+
+          if summaries:
+              output_path.write_text(
+                  "Repository learnings from prior merged work:\n"
+                  + "\n".join(f"- {summary}" for summary in summaries)
+                  + "\n",
+                  encoding="utf-8",
+              )
+          else:
+              output_path.write_text("", encoding="utf-8")
+          PY
 
       - name: Set orchestrator /reclarify reasoning effort
         if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.clarify_route.outputs.is_orchestrator_managed == 'true' && steps.clarify_route.outputs.is_forced_reclarify == 'true'
@@ -850,6 +888,8 @@ jobs:
             echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
             echo
             bash scripts/render_prompt.sh "${PROMPT_TEMPLATE_FILE}"
+            echo
+            REPO_LEARNINGS="$(cat "${RUNTIME_DIR}/repo_learnings.txt")" bash scripts/render_prompt.sh prompts/header.txt
             echo
             echo "=== AI MEMORY CONTEXT ==="
             cat "${RUNTIME_DIR}/memory_context.txt"
@@ -1264,4 +1304,4 @@ jobs:
           MSG+="Issue: ${ISSUE_URL}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "ERROR"
+          tg_send_phase_failure clarify "${MSG}" "ERROR" "${ISSUE_NUMBER}"

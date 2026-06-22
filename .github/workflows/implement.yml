@@ -35,6 +35,7 @@ env:
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   MEMORY_INJECTION_SCAN_ENABLED: ${{ vars.MEMORY_INJECTION_SCAN_ENABLED || 'true' }}
   ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+  WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
   # files_touched scope-enforcement guard (see the preflight + commit-time
   # scope guards in this workflow and scripts/files_touched_scope_guard.py).
   # ENFORCE_FILES_TOUCHED is the master toggle — set 'false' to globally
@@ -849,7 +850,7 @@ jobs:
 
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_stall_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh lint_pr_body_auto_close.py; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh lint_pr_body_auto_close.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -1496,7 +1497,7 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/memory_helpers.sh
-          memory_ensure_branch
+          memory_bootstrap --ensure-branch
 
           check_json="$(memory_processed_command_check \
             --issue-number "${ISSUE_NUMBER}" \
@@ -1629,16 +1630,13 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
           set -euo pipefail
+          source scripts/codex_helpers.sh
           # Centralised in scripts/write_codex_config.sh — wires the
           # apply_patch fix (model_catalog_json), the v0.113+ trust pre-
           # seed, and the elevated approval/sandbox combo at one place
           # so the 9 codex-config sites can't drift. See that script's
           # header comment for the full upstream-bug context.
-          bash scripts/write_codex_config.sh \
-            --model "${MODEL_EDITOR}" \
-            --reasoning "${MODEL_REASONING_EFFORT}" \
-            --web-search disabled
-          echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
+          codex_config_assemble "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "low" --web-search disabled
 
           # MCP server configuration is managed in ~/.codex/config.toml.
 
@@ -1679,6 +1677,7 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/memory_helpers.sh
+          memory_bootstrap --require memory_retrieve
 
           ISSUE_TITLE_JSON="$(jq -r '.title // ""' "${ISSUE_META_FILE}")"
           memory_retrieve "${MEMORY_CONTEXT_FILE}" \
@@ -1732,6 +1731,14 @@ jobs:
           # piping is the cheapest insurance.
           # shellcheck source=/dev/null
           source scripts/gh_helpers.sh 2>/dev/null || true
+
+          WATCHDOG_HELPERS="scripts/watchdog_helpers.sh"
+          if [ ! -f "${WATCHDOG_HELPERS}" ]; then
+            echo "::error::Missing required support script ${WATCHDOG_HELPERS}"
+            exit 1
+          fi
+          # shellcheck source=/dev/null
+          source "${WATCHDOG_HELPERS}"
 
           CODEX_STALL_GUARD_HELPER="scripts/codex_stall_guard.sh"
           if [ ! -x "${CODEX_STALL_GUARD_HELPER}" ]; then
@@ -2089,29 +2096,6 @@ jobs:
             return 1
           }
 
-            read_codex_stall_guard_state() {
-              local status_file="$1"
-              local state=""
-
-            [ -s "${status_file}" ] || return 1
-            state="$(sed -n 's/^state=//p' "${status_file}" | head -n 1)"
-            case "${state}" in
-              observed|killed)
-                printf '%s\n' "${state}"
-                return 0
-                ;;
-            esac
-
-            return 1
-          }
-
-            codex_stall_guard_kill_detected() {
-              local _rc="${1:-0}"
-              local stall_state="${2:-}"
-
-              [ "${stall_state}" = "killed" ]
-            }
-
             # shellcheck source=/dev/null
             source scripts/codex_thread_reuse.sh
 
@@ -2226,7 +2210,7 @@ jobs:
             attempt_log_file="${RUNTIME_DIR}/codex_log_attempt_${attempt}.txt"
             : > "${attempt_log_file}"
             attempt_stall_status_file="$(mktemp /tmp/codex_stall_status_implement.XXXXXX)"
-            attempt_stall_state=""
+            stall_state=""
             if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
               sanitize_codex_prompt_file "${PROMPT_FILE_TO_USE}"
             fi
@@ -2250,15 +2234,16 @@ jobs:
 
             emit_implement_substate "implement" "implement" "Finishing" "${attempt}" "${attempt_log_file}"
 
-            if attempt_stall_state="$(read_codex_stall_guard_state "${attempt_stall_status_file}")"; then
-              case "${attempt_stall_state}" in
-                observed)
-                  echo "Codex implement attempt ${attempt} recorded codex_stall_observed (observe-only mode)."
-                  emit_implement_substate "implement" "implement" "codex_stall_observed" "${attempt}" "${attempt_log_file}"
-                  ;;
-                killed)
-                  echo "::warning::Codex implement attempt ${attempt} recorded codex_stall_killed."
-                  emit_implement_substate "implement" "implement" "codex_stall_killed" "${attempt}" "${attempt_log_file}"
+            if stall_state="$(read_codex_stall_guard_state "${attempt_stall_status_file}")"; then
+              case "${stall_state}" in
+                observed|killed)
+                  if [ "${stall_state}" = "killed" ]; then
+                    echo "::warning::Codex implement attempt ${attempt} recorded codex_stall_killed."
+                    emit_implement_substate "implement" "implement" "codex_stall_killed" "${attempt}" "${attempt_log_file}"
+                  else
+                    echo "Codex implement attempt ${attempt} recorded codex_stall_observed (observe-only mode)."
+                    emit_implement_substate "implement" "implement" "codex_stall_observed" "${attempt}" "${attempt_log_file}"
+                  fi
                   ;;
               esac
             elif [ -s "${attempt_stall_status_file}" ]; then
@@ -2372,7 +2357,7 @@ jobs:
               # otherwise long attempts that produce real partial work get
               # discarded and the loop wastes its remaining budget restarting
               # from scratch (see analyze-log run 24989488561).
-              if codex_stall_guard_kill_detected "${cmd_rc}" "${attempt_stall_state}"; then
+              if codex_stall_guard_kill_detected "${cmd_rc}" "${stall_state}"; then
                 echo "::warning::Codex exited with code $cmd_rc on attempt ${attempt} after a codex stall-guard kill."
               fi
               codex_delta="$(git status --porcelain -uall | filter_runtime_status_noise | grep -vxFf "${CODEX_PRE_BASELINE}" || true)"
@@ -2474,7 +2459,7 @@ jobs:
               empty_streak=0
             fi
 
-            case "${attempt_stall_state}:${cmd_rc}" in
+            case "${stall_state}:${cmd_rc}" in
               killed:*|*:137)
                 emit_implement_substate "implement" "implement" "Stalled" "${attempt}" "${attempt_log_file}"
                 ;;
@@ -3503,6 +3488,19 @@ jobs:
             git clean -fd -- .github/workflows
           fi
 
+          # shellcheck source=/dev/null
+          source scripts/write_guard.sh
+          IMPLEMENT_WRITE_GUARD_FILE="$(mktemp)"
+          {
+            git diff --name-only --diff-filter=ACMRD HEAD || true
+            git ls-files --others --exclude-standard || true
+          } | sed '/^$/d' | sort -u > "${IMPLEMENT_WRITE_GUARD_FILE}"
+          if ! write_guard_check implement "${IMPLEMENT_WRITE_GUARD_FILE}"; then
+            rm -f "${IMPLEMENT_WRITE_GUARD_FILE}"
+            exit 1
+          fi
+          rm -f "${IMPLEMENT_WRITE_GUARD_FILE}"
+
       - name: Enforce syntax validation outcome
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
@@ -3661,12 +3659,12 @@ jobs:
           if ! gh label create 'ai:destructive-blocked' \
             --repo "${{ github.repository }}" \
             --color 'b60205' \
-            --description 'Implementation commit was refused for mass/destructive deletions — redispatch of this issue ID is blocked pending human review' \
+            --description 'Implementation blocked for mass/destructive deletions; redispatch waits for human review' \
             2>/dev/null \
             && ! gh label edit 'ai:destructive-blocked' \
             --repo "${{ github.repository }}" \
             --color 'b60205' \
-            --description 'Implementation commit was refused for mass/destructive deletions — redispatch of this issue ID is blocked pending human review' \
+            --description 'Implementation blocked for mass/destructive deletions; redispatch waits for human review' \
             2>/dev/null; then
             echo "::warning::Could not ensure the ai:destructive-blocked label exists on ${{ github.repository }} — the GH_PAT may lack issues:write. The follow-up read below reports whether the issue itself ended up latched."
           fi
@@ -3696,7 +3694,7 @@ jobs:
             if grep -qxF 'ai:destructive-blocked' <<< "${latched_labels}"; then
               echo "Confirmed ai:destructive-blocked is latched on #${ISSUE_NUMBER}; redispatch will be refused until a human removes it."
             else
-              echo "::error::FAILED to latch ai:destructive-blocked on #${ISSUE_NUMBER}; the redispatch block is NOT in effect. Apply it manually: (gh label edit ai:destructive-blocked --repo ${{ github.repository }} --color b60205 --description 'Implementation commit was refused for mass/destructive deletions — redispatch of this issue ID is blocked pending human review' || gh label create ai:destructive-blocked --repo ${{ github.repository }} --color b60205 --description 'Implementation commit was refused for mass/destructive deletions — redispatch of this issue ID is blocked pending human review') && gh issue edit ${ISSUE_NUMBER} --repo ${{ github.repository }} --add-label ai:destructive-blocked"
+              echo "::error::FAILED to latch ai:destructive-blocked on #${ISSUE_NUMBER}; the redispatch block is NOT in effect. Apply it manually: (gh label edit ai:destructive-blocked --repo ${{ github.repository }} --color b60205 --description 'Implementation blocked for mass/destructive deletions; redispatch waits for human review' || gh label create ai:destructive-blocked --repo ${{ github.repository }} --color b60205 --description 'Implementation blocked for mass/destructive deletions; redispatch waits for human review') && gh issue edit ${ISSUE_NUMBER} --repo ${{ github.repository }} --add-label ai:destructive-blocked"
             fi
           else
             echo "::warning::Could not verify ai:destructive-blocked on #${ISSUE_NUMBER}; gh issue view failed, so the latch state is unknown. Re-check manually: gh issue view ${ISSUE_NUMBER} --repo ${{ github.repository }} --json labels -q '.labels[].name'"
@@ -4913,8 +4911,8 @@ jobs:
           MSG+="Issue: ${ISSUE_URL}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          if declare -F tg_send_tracked >/dev/null 2>&1; then
-            tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "ERROR"
+          if declare -F tg_send_phase_failure >/dev/null 2>&1; then
+            tg_send_phase_failure implement "${MSG}" "ERROR" "${ISSUE_NUMBER}"
           else
             echo "::warning::tg_helpers.sh unavailable; skipping Telegram notification."
           fi

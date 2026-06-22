@@ -266,6 +266,8 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_judge_semble_prefetch_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_judge_interim_round_trip.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_scripts.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_memory_record_schema.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_audit_consumer_drift.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_foundation.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_core_modes.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_review_judge_modes.py

@@ -136,8 +136,8 @@ Cycle-local caches that must not be re-fetched per iteration:
 
 PROFILE.default=full
 PROFILE.name=core manifest=workflow-templates/profiles/core.txt wrappers=ai-clarify.yml,ai-plan.yml,ai-implement.yml,ai-review.yml,ai-issue-pr-status.yml,ai-cancel-on-pr-close.yml
-PROFILE.name=standard manifest=workflow-templates/profiles/standard.txt wrappers=ai-clarify.yml,ai-plan.yml,ai-implement.yml,ai-review.yml,ai-issue-pr-status.yml,ai-cancel-on-pr-close.yml,ai-orchestrate.yml,ai-orchestrate-poll.yml,ai-orchestrate-clarify-respond.yml,ai-validate.yml,review_rb_judge_dispatch.yml
-PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-cancel-on-pr-close.yml,ai-clarify.yml,ai-implement.yml,ai-issue-pr-status.yml,ai-memory-maintenance.yml,ai-orchestrate-clarify-respond.yml,ai-orchestrate-poll.yml,ai-orchestrate.yml,ai-plan.yml,ai-review.yml,ai-update-workflows.yml,ai-validate.yml,review_rb_judge_dispatch.yml
+PROFILE.name=standard manifest=workflow-templates/profiles/standard.txt wrappers=ai-clarify.yml,ai-plan.yml,ai-implement.yml,ai-review.yml,ai-issue-pr-status.yml,ai-cancel-on-pr-close.yml,ai-orchestrate.yml,ai-orchestrate-poll.yml,ai-orchestrate-clarify-respond.yml,ai-validate.yml,ai-sync-labels.yml,review_rb_judge_dispatch.yml
+PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-cancel-on-pr-close.yml,ai-clarify.yml,ai-implement.yml,ai-issue-pr-status.yml,ai-memory-maintenance.yml,ai-orchestrate-clarify-respond.yml,ai-orchestrate-poll.yml,ai-orchestrate.yml,ai-plan.yml,ai-review.yml,ai-sync-labels.yml,ai-update-workflows.yml,ai-validate.yml,review_rb_judge_dispatch.yml
 
 ---
 
@@ -271,6 +271,10 @@ and shipped:
 
 - `LABEL_REPAIR`
 - `LABEL_REPAIR_DIFF`
+- `LABEL_SYNC_CREATED`
+- `LABEL_SYNC_UPDATED`
+- `LABEL_SYNC_UNCHANGED`
+- `LABEL_SYNC_ERROR`
 - `AUTOFIX_PEER_CHECK`
 - `AUTOFIX_DISPATCH_SKIPPED`
 - `AUTOFIX_DISPATCH_ISSUED`
@@ -317,6 +321,13 @@ and shipped:
 - `CONTEXT_BUDGET_WARN`
 - `CODEX_HEARTBEAT`
 - `BREAK_GLASS`
+- `WRITE_GUARD_BLOCK`
+- `WRITE_GUARD_CONFIG_ERROR`
+- `WRITE_GUARD_BYPASS_ENV`
+- `DRIFT_SCAN_START`
+- `DRIFT_SCAN_DIFF`
+- `DRIFT_SCAN_OK`
+- `DRIFT_SCAN_ERROR`
 
 - `SEMBLE_QUERY`
 - `SEMBLE_FALLBACK`
@@ -327,6 +338,10 @@ and shipped:
 
 LOG_PREFIX.name=LABEL_REPAIR
 LOG_PREFIX.name=LABEL_REPAIR_DIFF
+LOG_PREFIX.name=LABEL_SYNC_CREATED
+LOG_PREFIX.name=LABEL_SYNC_UPDATED
+LOG_PREFIX.name=LABEL_SYNC_UNCHANGED
+LOG_PREFIX.name=LABEL_SYNC_ERROR
 LOG_PREFIX.name=AUTOFIX_PEER_CHECK
 LOG_PREFIX.name=AUTOFIX_DISPATCH_SKIPPED
 LOG_PREFIX.name=AUTOFIX_DISPATCH_ISSUED
@@ -373,6 +388,13 @@ LOG_PREFIX.name=RE_REVIEW_SKIP
 LOG_PREFIX.name=CONTEXT_BUDGET_WARN
 LOG_PREFIX.name=CODEX_HEARTBEAT
 LOG_PREFIX.name=BREAK_GLASS
+LOG_PREFIX.name=WRITE_GUARD_BLOCK
+LOG_PREFIX.name=WRITE_GUARD_CONFIG_ERROR
+LOG_PREFIX.name=WRITE_GUARD_BYPASS_ENV
+LOG_PREFIX.name=DRIFT_SCAN_START
+LOG_PREFIX.name=DRIFT_SCAN_DIFF
+LOG_PREFIX.name=DRIFT_SCAN_OK
+LOG_PREFIX.name=DRIFT_SCAN_ERROR
 LOG_PREFIX.name=SEMBLE_QUERY
 LOG_PREFIX.name=SEMBLE_FALLBACK
 LOG_PREFIX.name=SERENA_QUERY

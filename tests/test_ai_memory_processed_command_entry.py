@@ -1155,6 +1155,13 @@ def test_memory_validation_history_get_wrapper_disabled_stdout_stderr_hygiene() 
 	assert "validation-history-get" in result.stderr
 
 
+def test_memory_bootstrap_require_without_helper_name_fails_cleanly() -> None:
+	result = _run_memory_helper("memory_bootstrap --require")
+	assert result.returncode == 2
+	assert result.stdout == ""
+	assert "::warning::memory bootstrap --require expects a non-empty helper name" in result.stderr
+
+
 def test_memory_validation_history_wrapper_round_trip() -> None:
 	repo_root = _create_memory_helper_repo()
 	entry_file = _write_json_file(
@@ -1422,6 +1429,37 @@ def test_tracking_issue_cli_validation_happens_before_memory_io() -> None:
 			assert exit_code == 2
 			assert stdout == ""
 			assert "tracking_issue must be a positive integer" in stderr
+
+
+def test_retrieve_cli_invalid_max_reports_flag_specific_error() -> None:
+	branch_dir = _memory_root_with_repo_schemas().parent
+
+	def _unexpected_retrieve_memory_context(*_args, **_kwargs):
+		raise AssertionError("retrieve_memory_context should not run for invalid --max")
+
+	with _patched_module_attrs(
+		ai_memory,
+		read_memory_root_from_branch=lambda *_args, **_kwargs: branch_dir,
+		retrieve_memory_context=_unexpected_retrieve_memory_context,
+	):
+		exit_code, stdout, stderr = _run_ai_memory_cli(
+			[
+				"retrieve",
+				"--memory-branch",
+				"ai-memory",
+				"--memory-root",
+				"ai-memory",
+				"--role",
+				"clarify",
+				"--max",
+				"abc",
+			]
+		)
+
+	assert exit_code == 2
+	assert stdout == ""
+	assert "AI_MEMORY_ERROR: --max must be an integer" in stderr
+	assert "invalid literal for int()" not in stderr
 
 
 def test_push_retries_env_default_override_and_validation() -> None:

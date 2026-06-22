@@ -192,6 +192,8 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `E2E_ALT_MODEL_ENABLED` | No | `true` | test-and-mark-stable (`e2e-alt-model-test` job) | External-dependency opt-out. Set to `false` to skip the alt-model job when the upstream OpenRouter model (selected via `ALT_EDITOR_MODEL`) is temporarily unavailable, deprecated, or your API key lacks access. The validate gate accepts `skipped` as a pass for this job, so flipping the flag unblocks releases when the orthogonal alt-model dependency is the only thing failing. Re-enable once the upstream is healthy. |
 | `LOG_ANALYZER_MODEL` | No | `openai/gpt-5.4-mini` | test-and-mark-stable (Phase 8 soft-error analyser) | Lightweight model used by the release-gate post-run log analyser (`scripts/analyze_soft_errors.py`) to summarise soft failures (rate-limit recoveries, codex fallbacks, summariser hard-fails, editor no-ops) into the Telegram release notification. Non-blocking; analyser failures fall back to a stub report rather than failing the gate. The script collects logs from every phase run (clarify, plan, implement, review_autofix, orchestrate_poll, cancel_on_pr_close), filters to soft-error candidates, truncates per-run to 40K chars, and emits a markdown report whose first line carries a parseable status code (`ok` / `no_runs` / `api_skipped` / `call_failed` / `analyser_empty`). The full report is uploaded as the `soft-error-report-${run_id}` workflow artifact and a truncated copy is appended to the Telegram release message. |
 | `LOG_ANALYZER_REASONING` | No | `medium` | test-and-mark-stable (Phase 8 soft-error analyser) | Reasoning effort for `LOG_ANALYZER_MODEL`. Default is `medium` per the OpenAI gpt-5.4 prompt guide (cross-run log triage is research/synthesis). Earlier revisions defaulted to `none` for cost; if cost or `gpt-5.4-mini` empty-output behaviour matters more than triage depth on a given repo, set `LOG_ANALYZER_REASONING=none`. Other accepted values: `xhigh`, `high`, `low`; values must match what the chosen model accepts. |
+| `MEMORY_LEARNINGS_EXTRACT_ENABLED` | No | `true` | memory_maintenance | Enables the fail-open merged-run `repo_learnings` extraction step before compaction. When disabled, when `OPENROUTER_API_KEY` is unavailable, or when extraction/promotion fails, the workflow logs a warning and continues with compaction. |
+| `WRITE_GUARDS_ENABLED` | No | `true` | implement, plan, review_autofix, validate | Enable the write-guard policy from `.github/ai/write_guards.v1.json` at the plan post-Codex workspace boundary, implement commit boundary, review-editor commit boundary, and validate fix/harness boundary. Set to `false` to bypass the guard; bypasses are logged with `WRITE_GUARD_BYPASS_ENV`. |
 
 **Thinking levels** — control the model's reasoning effort per phase. Valid values: `xhigh`, `high`, `medium`, `low`, `none`. Most `openai/gpt-5.4` phases default to `xhigh` — see the table below. **Conflict resolver exception:** `THINKING_LEVEL_CONFLICT_RESOLVER` defaults to `high` (lowered from `xhigh` after `timeout`-killed retries on degenerate orchestrator-stack integrations — see the row's description for the originating runs). No cycle-based downgrades are applied — every phase uses the configured reasoning effort for all cycles. **E2E smoke test exception:** when an issue or PR title contains `[E2E Smoke Test]`, the clarify, plan, and reviewer phases force `low` reasoning; the editor phase keeps `medium`; the implement phase keeps its production default (now `xhigh`) unmodified. The review-blocked judge is not overridden and retains its configured reasoning level. See `agents.md` for the authoritative per-phase reasoning/verbosity table.
 
@@ -747,6 +749,21 @@ jobs:
 > to keep your changes, either opt out or maintain your customizations after
 > each update.
 
+**Optional label-sync wrapper:** If you want your repository's `ai:*` labels to
+stay aligned with the upstream contract, add
+[`workflow-templates/ai-sync-labels.yml`](workflow-templates/ai-sync-labels.yml)
+as `.github/workflows/ai-sync-labels.yml`. It supports manual
+`workflow_dispatch` runs plus the stable-release `repository_dispatch` hook.
+
+**Central consumer drift audit:** This source repo also runs
+[`.github/workflows/audit_consumer_drift.yml`](.github/workflows/audit_consumer_drift.yml)
+on a weekly cron plus manual `workflow_dispatch`. The audit reads the live
+[`.github/ai/consumer_repos.json`](.github/ai/consumer_repos.json) registry,
+fetches each consumer's installed `.github/workflows/ai-*.yml` wrappers via
+the GitHub contents API, diffs them against this repo's checked-in
+[`workflow-templates/ai-*.yml`](workflow-templates/), and reports drift
+read-only — it never writes to consumer repositories.
+
 #### Install profiles
 
 If you use `ai-update-workflows.yml`, you can narrow which wrappers it
@@ -764,6 +781,8 @@ preserves today's behavior of installing every wrapper template.
   `ai-orchestrate.yml`, `ai-orchestrate-poll.yml`,
   `ai-orchestrate-clarify-respond.yml`, `ai-validate.yml`, and
   `review_rb_judge_dispatch.yml`.
+  The standard manifest also includes the optional `ai-sync-labels.yml`
+  wrapper so stable-channel syncs can auto-install the label-sync entrypoint.
 - `full` installs every top-level wrapper listed in
   [`workflow-templates/profiles/full.txt`](workflow-templates/profiles/full.txt).
 
@@ -1071,6 +1090,7 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `MAX_PROMPT_TOKENS_FOR_PHASE` | _(empty)_ | Absolute prompt-token override that takes precedence over `CONTEXT_BUDGET_WARN_RATIO`; phase-specific `MAX_PROMPT_TOKENS_FOR_<PHASE>` overrides remain supported. |
 | `CODEX_HEARTBEAT_ENABLED` | `1` | Enable the `codex_heartbeat.sh` wrapper on long-running review / validate Codex calls. |
 | `CODEX_HEARTBEAT_INTERVAL_SECS` | `30` | Silence interval (seconds) between emitted `CODEX_HEARTBEAT` lines. |
+| `MEMORY_LEARNINGS_EXTRACT_ENABLED` | `true` | Enable the fail-open merged-run `repo_learnings` extraction step before memory compaction |
 
 ## Semantic Cache (Clarification Only)
 

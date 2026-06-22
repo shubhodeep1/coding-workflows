@@ -82,6 +82,7 @@ CHECK_COMMANDS=(
 	"python3 tests/test_codex_stall_guard_poller.py"
 	"python3 tests/test_codex_stall_guard_scripts.py"
 	"python3 tests/test_run_substate_ledger.py"
+	"python3 tests/test_memory_record_schema.py"
 	"python3 tests/test_render_prompt_foundation.py"
 	"python3 tests/test_render_prompt_core_modes.py"
 	"python3 tests/test_render_prompt_review_judge_modes.py"

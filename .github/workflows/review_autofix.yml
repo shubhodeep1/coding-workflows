@@ -1168,6 +1168,7 @@ jobs:
       BEHAVIOURAL_SMOKE_TIMEOUT_S: ${{ vars.BEHAVIOURAL_SMOKE_TIMEOUT_S || '120' }}
       VALIDATION_INCLUDE_SYNTHESISED: ${{ vars.VALIDATION_INCLUDE_SYNTHESISED || 'true' }}
       ALLOW_WORKFLOW_EDITS: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || (github.event_name != 'workflow_dispatch' && inputs.allow_workflow_edits)) && 'true' || 'false' }}
+      WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
       # Claude-branch-review mode: when true, the codex-agent job runs the
       # reviewer panel + summariser, posts the consensus ledger as a PR
       # commit comment via scripts/post_review_comment.sh, and exits without
@@ -1613,7 +1614,7 @@ jobs:
           if [ -f "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh" ]; then
             # shellcheck disable=SC1091
             source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"
-            memory_ensure_branch
+            memory_bootstrap --ensure-branch --require memory_record_run_event
             memory_record_run_event \
               --run-id "${GITHUB_RUN_ID}" \
               --workflow "review_autofix" \
@@ -1632,30 +1633,11 @@ jobs:
       - name: Create Codex config
         run: |
           set -euo pipefail
-          # Compute absolute CATALOG_PATH correctly whether SUPPORT_SCRIPTS_DIR is absolute or relative
-          if [[ "${SUPPORT_SCRIPTS_DIR}" = /* ]]; then
-            CATALOG_PATH="${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
-          else
-            CATALOG_PATH="${GITHUB_WORKSPACE}/${SUPPORT_SCRIPTS_DIR}/codex_model_catalog.json"
-          fi
-          # The shared writer lives next to the catalog under
-          # SUPPORT_SCRIPTS_DIR (the runtime-fetched workflow-source
-          # tree), not under repo-root scripts/, because review_autofix
-          # runs in consumer-repo checkouts and the support tree is
-          # the only place the helper is guaranteed to exist.
-          if [[ "${SUPPORT_SCRIPTS_DIR}" = /* ]]; then
-            WRITE_CODEX_CONFIG="${SUPPORT_SCRIPTS_DIR}/write_codex_config.sh"
-          else
-            WRITE_CODEX_CONFIG="${GITHUB_WORKSPACE}/${SUPPORT_SCRIPTS_DIR}/write_codex_config.sh"
-          fi
+          source "${SUPPORT_SCRIPTS_DIR}/codex_helpers.sh"
           # See scripts/write_codex_config.sh for the apply_patch /
           # trust / elevation rationale.
-          bash "${WRITE_CODEX_CONFIG}" \
-            --model "${MODEL_EDITOR}" \
-            --reasoning "${REVIEWER_REASONING_EFFORT}" \
-            --web-search disabled \
-            --catalog-path "${CATALOG_PATH}"
-          echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
+          CODEX_HELPERS_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR}" \
+            codex_config_assemble "${MODEL_EDITOR}" "${REVIEWER_REASONING_EFFORT}" "low" --web-search disabled
 
       - name: Pre-assemble static context (cacheable across runs)
         run: |
@@ -1732,6 +1714,9 @@ jobs:
               fi
               # shellcheck disable=SC1091
               if source "${SUPPORT_SCRIPTS_DIR}/memory_helpers.sh"; then
+                if declare -F memory_bootstrap >/dev/null 2>&1; then
+                  memory_bootstrap --require memory_retrieve
+                fi
                 if declare -F memory_retrieve >/dev/null 2>&1; then
                   memory_retrieve "${MEMORY_CONTEXT_FILE}" \
                     --role reviewer \
@@ -2524,7 +2509,9 @@ jobs:
           check_required_dir "${SUPPORT_SCRIPTS_DIR}"
           check_required_dir "${SUPPORT_PROMPTS_DIR}"
 
+          check_required_file "${SUPPORT_SCRIPTS_DIR}/codex_helpers.sh"
           check_required_file "${SUPPORT_SCRIPTS_DIR}/codex_stall_guard.sh"
+          check_required_file "${SUPPORT_SCRIPTS_DIR}/watchdog_helpers.sh"
           check_required_file "${SUPPORT_SCRIPTS_DIR}/review_run_reviewers.sh"
           check_required_file "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh"
           check_soft_file "${SUPPORT_SCRIPTS_DIR}/render_prompt.py"
@@ -2630,7 +2617,7 @@ jobs:
 
           # Mirror the late merge-precheck cleanup so runtime-fetched helper
           # files cannot trip an exit-128 pre-merge abort before reviewers run.
-          rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh scripts/openrouter_prompt_cache.py scripts/cost_audit.py scripts/codex_heartbeat.sh scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/summarize_reviewer_consensus.sh scripts/check_external_branch_advance.sh 2>/dev/null || true
+          rm -f scripts/ai_memory.py scripts/ai_memory_lib.py scripts/memory_helpers.sh scripts/openrouter_prompt_cache.py scripts/cost_audit.py scripts/codex_helpers.sh scripts/codex_heartbeat.sh scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh scripts/review_rb_judge.sh scripts/summarize_reviewer_consensus.sh scripts/watchdog_helpers.sh scripts/check_external_branch_advance.sh 2>/dev/null || true
           if ! git reset --hard HEAD; then
             echo "::warning::git reset --hard HEAD failed during pre-review merge-topology gate; fail-open to reviewer path."
             exit 0
@@ -3833,7 +3820,7 @@ jobs:
           # commit step (caller repos delete fetched scripts before committing)
           # or wiped by git clean -ffdx above.
           # Re-stage any missing scripts from checked-out support source.
-          for f in gh_helpers.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh cost_audit.py codex_heartbeat.sh review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh workspace_safety_check.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh tg_helpers.sh label_helpers.sh cost_audit.py codex_helpers.sh codex_heartbeat.sh review_run_reviewers.sh review_apply_fixes.sh review_rb_judge.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh watchdog_helpers.sh check_external_branch_advance.sh workspace_safety_check.sh; do
             if [ ! -f "${SUPPORT_SCRIPTS_DIR}/${f}" ]; then
               mkdir -p "${SUPPORT_SCRIPTS_DIR}"
               src="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/${f}"
@@ -5513,7 +5500,7 @@ jobs:
           fi
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_tracked "${PR_NUMBER}" "${MSG}" "ERROR"
+          tg_send_phase_failure review_autofix "${MSG}" "ERROR" "${PR_NUMBER}"
 
       - name: Record review run completion in memory (fail-open)
         if: success()

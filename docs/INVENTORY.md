@@ -7,6 +7,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 
 - `prompts/mode-clarify-respond.txt` — You are an AI assistant resolving clarification questions on behalf of the project orchestrator.
 - `prompts/mode-clarify.txt` — Role: clarify-phase auditor. Goal: emit `STATUS: CLEAR` or a `Q1`/`Q2` batch of blocking clarification questions.
+- `prompts/mode-extract-learnings.txt` — Extract stable repository learnings from prior merged AI-workflow runs as a machine-readable JSON array.
 - `prompts/mode-implement-diagnose-continuation.txt` — Role: implement-failure diagnoser continuing the same-run diagnosis session.
 - `prompts/mode-implement-diagnose.txt` — Role: implement-failure diagnoser. Goal: analyze post-Codex implement-step failures and emit one structured JSON object with fix-up issue proposals.
 - `prompts/mode-implement-repair-continuation.txt` — Role: post-Codex syntax repairer continuing the same-run repair session.
@@ -36,6 +37,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 
 ## Workflows
 
+- `.github/workflows/audit_consumer_drift.yml` — GitHub Actions workflow: Audit Consumer Drift.
 - `.github/workflows/cancel_on_pr_close.yml` — GitHub Actions workflow: AI Cancel Runs on PR Close.
 - `.github/workflows/ci.yml` — GitHub Actions workflow: CI.
 - `.github/workflows/clarify.yml` — GitHub Actions workflow: AI Clarify (Reusable).
@@ -69,6 +71,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/review_autofix.yml` — GitHub Actions workflow: Codex PR Self-Healing Semantic Agent.
 - `.github/workflows/review_autofix_sweep.yml` — GitHub Actions workflow: Internal: AI Review Autofix Sweep.
 - `.github/workflows/review_rb_judge_dispatch.yml` — GitHub Actions workflow: Internal: Review-Blocked Judge Dispatch.
+- `.github/workflows/sync_ai_labels.yml` — GitHub Actions workflow: AI Sync Labels.
 - `.github/workflows/test-and-mark-stable.yml` — GitHub Actions workflow: Test & Mark Stable Release.
 - `.github/workflows/update_workflows.yml` — GitHub Actions workflow: Update Workflow Wrappers.
 - `.github/workflows/validate.yml` — GitHub Actions workflow: AI Validate (Reusable).
@@ -86,6 +89,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/analyze_soft_errors.py` — Soft-error log analyzer for the release-gate smoke test.
 - `scripts/analyze_workflow_logs.py` — Prepare aggregated workflow telemetry context for the Codex analysis pass.
 - `scripts/apply_audit_gate_assets.py` — Apply canonical audit-gate assets atomically to a repository.
+- `scripts/audit_consumer_drift.py` — Audit consumer workflow-wrapper drift against checked-in templates.
 - `scripts/blocker_check.py` — Python helper for blocker check.
 - `scripts/build_semble_wrapper.sh` — build_semble_wrapper.sh — fail-soft Semble BM25 wrapper builder.
 - `scripts/build_state_snapshot.py` — Python helper for build state snapshot.
@@ -96,6 +100,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/check_workflow_script_refs.py` — Verify every script referenced by a workflow file exists in scripts/.
 - `scripts/clarify_data_provision_guard.py` — Post-processing guard for orchestrate_clarify_respond.
 - `scripts/codex_heartbeat.sh` — Shell helper for codex heartbeat.
+- `scripts/codex_helpers.sh` — Shell helper for Codex config assembly.
 - `scripts/codex_model_catalog.json` — JSON asset for codex_model_catalog.json.
 - `scripts/codex_stall_guard.sh` — Shell helper for codex stall guard.
 - `scripts/codex_thread_reuse.sh` — Shell helper for codex thread reuse.
@@ -108,6 +113,9 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/detect_editor_changes_lost.sh` — Defense-in-depth guard for the EDITOR_CHANGES_LOST detection step in review_autofix.yml.
 - `scripts/dispatch_and_watch_workflow_run.sh` — Shell helper for dispatch and watch workflow run.
 - `scripts/dev/replay_review_pipeline.sh` — Shell helper for replay review pipeline.
+- `scripts/dev/test_codex_helpers.sh` — Shell regression tests for codex_helpers.sh.
+- `scripts/dev/test_watchdog_helpers.sh` — Shell regression tests for watchdog_helpers.sh.
+- `scripts/dev/test_write_guard.sh` — Shell regression tests for write_guard.sh.
 - `scripts/drift_audit.sh` — drift_audit.sh — Scan recent review/autofix logs for persistent fingerprint drift.
 - `scripts/files_touched_scope_guard.py` — files_touched scope-enforcement guard for the AI implement pipeline.
 - `scripts/fixtures/cloudflare-learnings/phase-a-anti-rules-noisy-pr.patch` — Fixture asset for phase-a-anti-rules-noisy-pr.patch.
@@ -194,9 +202,11 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/validation_selftest_status.py` — Publish deterministic nightly validation self-test streak status.
 - `scripts/validation_template_bootstrap.py` — Shared onboarding helper for validation template manifests.
 - `scripts/verify_integration_fingerprints.py` — Verify that an orchestrator integration-sync resolver run preserved merged sub-issue intent.
+- `scripts/watchdog_helpers.sh` — Shell helper for shared Codex watchdog utilities.
 - `scripts/workspace_init.sh` — Shell helper for workspace init.
 - `scripts/workspace_safety_check.sh` — Shell helper for workspace safety check.
 - `scripts/write_codex_config.sh` — write_codex_config.sh — central writer for ~/.codex/config.toml.
+- `scripts/write_guard.sh` — Shell helper for write-guard policy enforcement.
 
 ## Prompt references
 
@@ -211,6 +221,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `prompts/contracts/integration-sync-conflict-resolver.yml` — Strict render contract for integration-sync-conflict-resolver.
 - `prompts/contracts/mode-clarify-respond.yml` — Strict render contract for mode-clarify-respond.
 - `prompts/contracts/mode-clarify.yml` — Strict render contract for mode-clarify.
+- `prompts/contracts/mode-extract-learnings.yml` — Strict render contract for mode-extract-learnings.
 - `prompts/contracts/mode-implement-diagnose-continuation.yml` — Strict render contract for mode-implement-diagnose-continuation.
 - `prompts/contracts/mode-implement-diagnose.yml` — Strict render contract for mode-implement-diagnose.
 - `prompts/contracts/mode-implement-repair-continuation.yml` — Strict render contract for mode-implement-repair-continuation.

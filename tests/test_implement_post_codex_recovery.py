@@ -436,6 +436,19 @@ def _copy_diagnose_assets(repo_dir: Path) -> None:
 			dst.chmod(0o755)
 
 
+def _copy_write_guard_assets(repo_dir: Path) -> None:
+	for rel in (
+		"scripts/write_guard.sh",
+		".github/ai/write_guards.v1.json",
+	):
+		src = REPO_ROOT / rel
+		dst = repo_dir / rel
+		dst.parent.mkdir(parents=True, exist_ok=True)
+		shutil.copy2(src, dst)
+		if dst.suffix == ".sh":
+			dst.chmod(0o755)
+
+
 def _prepare_diagnose_repo(tmp_path: Path) -> Path:
 	repo_dir = tmp_path / "diag-repo"
 	_bootstrap_git_repo(repo_dir)
@@ -1467,7 +1480,7 @@ def test_destructive_guard_latch_verifies_label_applied() -> None:
 	assert "The workflow attempted to apply \\`ai:destructive-blocked\\`; verify that the label is present before relying on the \\`Validate approval phase\\` redispatch block." in destructive_block
 	assert "remove \\`ai:destructive-blocked\\` from the issue if it is present and redispatch" in destructive_block
 	assert destructive_block.count(
-		"--description 'Implementation commit was refused for mass/destructive deletions — redispatch of this issue ID is blocked pending human review'"
+		"--description 'Implementation blocked for mass/destructive deletions; redispatch waits for human review'"
 	) == 4
 	assert "(gh label edit ai:destructive-blocked --repo ${{ github.repository }} --color b60205" in destructive_block
 	assert "|| gh label create ai:destructive-blocked --repo ${{ github.repository }} --color b60205" in destructive_block
@@ -1507,6 +1520,7 @@ def test_protect_workflow_files_restores_deleted_workflow_directory() -> None:
 	with tempfile.TemporaryDirectory(prefix="test_protect_workflow_dir_") as td:
 		repo_dir = Path(td)
 		_bootstrap_git_repo(repo_dir)
+		_copy_write_guard_assets(repo_dir)
 		workflow_file = repo_dir / ".github" / "workflows" / "sample.yml"
 		workflow_file.parent.mkdir(parents=True, exist_ok=True)
 		workflow_file.write_text("name: sample\n", encoding="utf-8")
@@ -1521,6 +1535,7 @@ def test_protect_workflow_files_restores_deleted_workflow_directory() -> None:
 		workflow_status = subprocess.run(
 			["git", "status", "--porcelain", ".github/workflows"],
 			cwd=str(repo_dir),
+			env=_isolated_test_env(cwd=repo_dir),
 			check=True,
 			capture_output=True,
 			text=True,
@@ -1532,6 +1547,7 @@ def test_protect_workflow_files_cleans_untracked_workflow_directory_when_head_la
 	with tempfile.TemporaryDirectory(prefix="test_protect_workflow_dir_head_absent_") as td:
 		repo_dir = Path(td)
 		_bootstrap_git_repo(repo_dir)
+		_copy_write_guard_assets(repo_dir)
 		workflow_file = repo_dir / ".github" / "workflows" / "sample.yml"
 		workflow_file.parent.mkdir(parents=True, exist_ok=True)
 		workflow_file.write_text("name: sample\n", encoding="utf-8")
@@ -1543,6 +1559,7 @@ def test_protect_workflow_files_cleans_untracked_workflow_directory_when_head_la
 		workflow_status = subprocess.run(
 			["git", "status", "--porcelain", ".github/workflows"],
 			cwd=str(repo_dir),
+			env=_isolated_test_env(cwd=repo_dir),
 			check=True,
 			capture_output=True,
 			text=True,

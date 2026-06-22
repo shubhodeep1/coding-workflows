@@ -10,6 +10,7 @@
 #   TG_BOT_SECRET, TG_ADMIN_CHAT_ID,
 #   VALIDATION_COMPOSE_FILE, VALIDATION_USE_TEMPLATES,
 #   VALIDATION_TEST_USERNAME, VALIDATION_TEST_PASSWORD, VALIDATION_TEST_API_KEY,
+#   WRITE_GUARDS_ENABLED,
 #   VALIDATE_PREFLIGHT_PYFLAKES_ENABLED, VALIDATE_PREFLIGHT_PYFLAKES_RULES
 
 set -euo pipefail
@@ -22,6 +23,10 @@ set -euo pipefail
 command -v jq >/dev/null 2>&1 || { echo "jq is required but not installed" >&2; exit 1; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 is required but not installed" >&2; exit 1; }
 command -v sha256sum >/dev/null 2>&1 || { echo "sha256sum is required but not installed" >&2; exit 1; }
+
+_validate_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "${_validate_script_dir}/write_guard.sh"
 
 TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
 TRACKING_ISSUE_NUM=0
@@ -148,6 +153,8 @@ CONTAINER_LOG_TAIL_FILE="${RUNTIME_DIR}/container_logs_tail.txt"
 NULL_JSON_FILE="${RUNTIME_DIR}/null.json"
 PRE_GENERATE_STATUS_FILE="${RUNTIME_DIR}/pre_generate_git_status.txt"
 POST_GENERATE_STATUS_FILE="${RUNTIME_DIR}/post_generate_git_status.txt"
+PRE_GENERATE_GUARD_PATHS_FILE="${RUNTIME_DIR}/pre_generate_write_guard_paths.txt"
+POST_GENERATE_GUARD_PATHS_FILE="${RUNTIME_DIR}/post_generate_write_guard_paths.txt"
 PRE_FLIGHT_LOG_FILE="${RUNTIME_DIR}/validation_preflight.log"
 PRIOR_RESULT_JSON_FILE="${RUNTIME_DIR}/prior_validation_result.json"
 PRIOR_CONTAINER_LOGS_FILE="${RUNTIME_DIR}/prior_container_logs_tail.txt"
@@ -211,6 +218,18 @@ if [ -f "scripts/tg_helpers.sh" ]; then
   # shellcheck disable=SC1091
   source scripts/tg_helpers.sh
 fi
+# shellcheck source=/dev/null
+if [ ! -f "${_validate_script_dir}/codex_helpers.sh" ]; then
+  echo "::error::Missing required support script ${_validate_script_dir}/codex_helpers.sh" >&2
+  exit 1
+fi
+source "${_validate_script_dir}/codex_helpers.sh"
+# shellcheck source=/dev/null
+if [ ! -f "${_validate_script_dir}/watchdog_helpers.sh" ]; then
+  echo "::error::Missing required support script ${_validate_script_dir}/watchdog_helpers.sh" >&2
+  exit 1
+fi
+source "${_validate_script_dir}/watchdog_helpers.sh"
 
 
 # _gh_url constructs a full GitHub URL for the current repository.
@@ -510,6 +529,79 @@ filter_runtime_status_noise()
     esac
     printf '%s\n' "${line}"
   done
+}
+
+filter_runtime_path_noise()
+{
+	local candidate_line path current_hash
+
+	while IFS= read -r candidate_line; do
+		path="${candidate_line%%$'\t'*}"
+		case "${path}" in
+		  .serena|.serena/*)
+			if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && \
+			   [ -n "${SERENA_PROJECT_BOOTSTRAP_HASH:-}" ] && \
+           [ -f .serena/project.yml ]; then
+          current_hash="$(sha256sum .serena/project.yml 2>/dev/null | awk '{print $1}' || true)"
+          if [ -n "${current_hash}" ] && [ "${current_hash}" = "${SERENA_PROJECT_BOOTSTRAP_HASH}" ]; then
+            continue
+          fi
+			fi
+			;;
+		esac
+		printf '%s\n' "${candidate_line}"
+	done
+}
+
+capture_write_guard_candidate_paths()
+{
+	if ! command -v git >/dev/null 2>&1 || [ ! -d .git ]; then
+		return 0
+	fi
+
+	local path path_state
+	while IFS= read -r path; do
+		[ -n "${path}" ] || continue
+		if [ -e "${path}" ]; then
+			path_state="$(sha256sum -- "${path}" 2>/dev/null | awk '{print $1}' || true)"
+			[ -n "${path_state}" ] || path_state="__present__"
+		else
+			path_state="__deleted__"
+		fi
+		printf '%s\t%s\n' "${path}" "${path_state}"
+	done < <(
+		{
+			git diff --name-only --diff-filter=ACMRD HEAD || true
+			git ls-files --others --exclude-standard || true
+		} | sed '/^$/d' | LC_ALL=C sort -u
+	) | filter_runtime_path_noise | LC_ALL=C sort -u
+}
+
+run_validate_write_guard()
+{
+  if ! command -v git >/dev/null 2>&1 || [ ! -d .git ]; then
+    return 0
+  fi
+
+	local validate_write_guard_file
+	validate_write_guard_file="$(mktemp "${TMPDIR:-/tmp}/validate-write-guard.XXXXXX")"
+
+	if [ -f "${PRE_GENERATE_GUARD_PATHS_FILE}" ] && [ -f "${POST_GENERATE_GUARD_PATHS_FILE}" ]; then
+		{
+			LC_ALL=C comm -23 "${PRE_GENERATE_GUARD_PATHS_FILE}" "${POST_GENERATE_GUARD_PATHS_FILE}" || true
+			LC_ALL=C comm -13 "${PRE_GENERATE_GUARD_PATHS_FILE}" "${POST_GENERATE_GUARD_PATHS_FILE}" || true
+		} | cut -f1 | sed '/^$/d' | LC_ALL=C sort -u > "${validate_write_guard_file}"
+	elif [ -f "${POST_GENERATE_GUARD_PATHS_FILE}" ]; then
+		cut -f1 "${POST_GENERATE_GUARD_PATHS_FILE}" | sed '/^$/d' | LC_ALL=C sort -u > "${validate_write_guard_file}"
+	fi
+
+  if ! write_guard_check validate_fix_harness "${validate_write_guard_file}"; then
+    rm -f "${validate_write_guard_file}"
+    return 1
+  fi
+
+  rm -f "${validate_write_guard_file}"
+  return 0
 }
 
 build_validate_serena_tool_hints()
@@ -2487,7 +2579,6 @@ trap cleanup_runtime_containers EXIT
 # workspace-write/on-request defaults). Catalog path is script-relative
 # so a "Standalone validation run" without a fetched scripts/ tree
 # still picks up the catalog shipped next to validate_process.sh.
-_validate_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODEX_HEARTBEAT_HELPER="${_validate_script_dir}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${_validate_script_dir}/codex_stall_guard.sh"
 WORKSPACE_SAFETY_CHECK_HELPER=""
@@ -2528,26 +2619,12 @@ for _ledger_candidate in \
     break
   fi
 done
-bash "${_validate_script_dir}/write_codex_config.sh" \
-  --model "${MODEL_EDITOR}" \
-  --reasoning "${MODEL_REASONING_EFFORT}" \
+codex_config_assemble \
+  "${MODEL_EDITOR}" \
+  "${MODEL_REASONING_EFFORT}" \
+  "low" \
+  --scripts-dir "${_validate_script_dir}" \
   --catalog-path "${_validate_script_dir}/codex_model_catalog.json"
-
-read_validate_codex_stall_guard_state() {
-  local status_file="$1"
-  local state=""
-
-  [ -s "${status_file}" ] || return 1
-  state="$(sed -n 's/^state=//p' "${status_file}" | head -n 1)"
-  case "${state}" in
-    observed|killed)
-      printf '%s\n' "${state}"
-      return 0
-      ;;
-  esac
-
-  return 1
-}
 
 emit_validate_substate() {
   local phase_name="$1"
@@ -2848,7 +2925,7 @@ else
   DISCOVER_EXIT=$?
   set -e
   emit_validate_substate "validate_discover" "discover" "Finishing" "${attempt}" "${DISCOVER_LOG_FILE}"
-  if discover_stall_state="$(read_validate_codex_stall_guard_state "${discover_stall_status_file}" 2>/dev/null)"; then
+  if discover_stall_state="$(read_codex_stall_guard_state "${discover_stall_status_file}" 2>/dev/null)"; then
     :
   elif [ -s "${discover_stall_status_file}" ]; then
     echo "::warning::Validation hint discovery attempt ${attempt}/${MAX_CODEX_ATTEMPTS}: could not parse codex stall guard status from ${discover_stall_status_file}."
@@ -3057,6 +3134,7 @@ ensure_validate_wrapper
 
 if command -v git >/dev/null 2>&1; then
   git status --porcelain --untracked-files=all -- . ':!validation/**' | filter_runtime_status_noise | sort > "${PRE_GENERATE_STATUS_FILE}" 2>/dev/null || true
+  capture_write_guard_candidate_paths > "${PRE_GENERATE_GUARD_PATHS_FILE}" 2>/dev/null || true
 fi
 
 # ---------------------------------------------------------------
@@ -3185,6 +3263,15 @@ materialize_synthesised_behavioural_smoke_tests
 
 if command -v git >/dev/null 2>&1; then
   git status --porcelain --untracked-files=all -- . ':!validation/**' | filter_runtime_status_noise | sort > "${POST_GENERATE_STATUS_FILE}" 2>/dev/null || true
+  capture_write_guard_candidate_paths > "${POST_GENERATE_GUARD_PATHS_FILE}" 2>/dev/null || true
+  if ! run_validate_write_guard; then
+    local_failure_summary="Codex modified files outside the validate write-guard policy during harness generation."
+    post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}"
+    set_tracking_phase_label "ai:validation-failed"
+    write_result_files "error" "Validation harness generation violated write guard" "${local_failure_summary}" "harness_error"
+    tg_notify "Validation harness generation violated the write guard for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+    exit 1
+  fi
   NON_VALIDATION_CHANGES=""
   if [ -f "${PRE_GENERATE_STATUS_FILE}" ] && [ -f "${POST_GENERATE_STATUS_FILE}" ] && ! cmp -s "${PRE_GENERATE_STATUS_FILE}" "${POST_GENERATE_STATUS_FILE}"; then
     NON_VALIDATION_CHANGES="$(diff -u "${PRE_GENERATE_STATUS_FILE}" "${POST_GENERATE_STATUS_FILE}" || true)"
@@ -3587,7 +3674,7 @@ for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
   DIAGNOSE_EXIT=$?
   set -e
   emit_validate_substate "validate_diagnose" "diagnose" "Finishing" "${attempt}" "${DIAGNOSE_LOG_FILE}"
-  if diagnose_stall_state="$(read_validate_codex_stall_guard_state "${diagnose_stall_status_file}" 2>/dev/null)"; then
+  if diagnose_stall_state="$(read_codex_stall_guard_state "${diagnose_stall_status_file}" 2>/dev/null)"; then
     :
   elif [ -s "${diagnose_stall_status_file}" ]; then
     echo "::warning::Validation diagnosis attempt ${attempt}/${MAX_CODEX_ATTEMPTS}: could not parse codex stall guard status from ${diagnose_stall_status_file}."

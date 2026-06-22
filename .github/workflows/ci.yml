@@ -234,6 +234,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_refresh_workflow_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_checkout_integration_ref_audit.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_drift_audit_job.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_audit_consumer_drift.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fingerprint_quarantine.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_retry_state.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_tiers.py
@@ -320,6 +321,13 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_write_codex_config.py
 
+      - name: Codex/watchdog helper shell tests
+        run: |
+          set -euo pipefail
+          bash scripts/dev/test_codex_helpers.sh
+          bash scripts/dev/test_write_guard.sh
+          bash scripts/dev/test_watchdog_helpers.sh
+
       - name: Targeted file context contract tests
         run: |
           set -euo pipefail
@@ -382,6 +390,7 @@ jobs:
       - name: Review/judge/conflict strict-render contract test
         run: |
           set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_memory_record_schema.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_foundation.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_core_modes.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_review_judge_modes.py
@@ -452,6 +461,31 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_label_precreation_contract.py
+
+      - name: AI label helper unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_labels.py
+
+      - name: AI label sync dry-run smoke
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          RESULT_JSON="/tmp/ai-label-sync-dry-run.json"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ai_labels.py sync-labels \
+            --contract-file .github/ai/label_contract.v1.json \
+            --repo "${GITHUB_REPOSITORY}" \
+            --dry-run > "${RESULT_JSON}"
+          python3 - <<'PY' "${RESULT_JSON}"
+          import json
+          import sys
+          from pathlib import Path
+
+          payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          assert set(payload) == {"created", "updated", "unchanged", "errors"}
+          assert isinstance(payload["errors"], list)
+          PY
 
       - name: Phase label transition and fallback contract tests
         run: |
@@ -557,12 +591,84 @@ jobs:
             bash -n "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
           done
 
-      - name: Validate memory_helpers.sh exports memory_ensure_branch
+      - name: Validate memory_helpers.sh exports memory helpers
         run: |
           set -euo pipefail
-          bash -c 'source scripts/memory_helpers.sh && declare -F memory_ensure_branch >/dev/null' \
-            && echo "OK: memory_ensure_branch is defined after sourcing scripts/memory_helpers.sh" \
-            || { echo "FAIL: memory_ensure_branch not defined after sourcing scripts/memory_helpers.sh"; exit 1; }
+          bash -c 'source scripts/memory_helpers.sh && declare -F memory_ensure_branch >/dev/null && declare -F memory_bootstrap >/dev/null' \
+            && echo "OK: memory_ensure_branch and memory_bootstrap are defined after sourcing scripts/memory_helpers.sh" \
+            || { echo "FAIL: memory_ensure_branch and/or memory_bootstrap not defined after sourcing scripts/memory_helpers.sh"; exit 1; }
+
+      - name: Shared shell-block anti-regression checks
+        run: |
+          set -euo pipefail
+
+          command -v rg >/dev/null 2>&1 || {
+            echo "::error::ripgrep (rg) is required for shared shell-block anti-regression checks"
+            exit 1
+          }
+
+          if rg -n 'bash ("\$\{[^}]+\}/|scripts/)?write_codex_config\.sh|WRITE_CODEX_CONFIG=' \
+            .github/workflows/clarify.yml \
+            .github/workflows/plan.yml \
+            .github/workflows/implement.yml \
+            .github/workflows/review_autofix.yml \
+            scripts/validate_process.sh; then
+            echo "::error::Inline Codex config assembly detected; use scripts/codex_helpers.sh"
+            exit 1
+          fi
+
+          for f in \
+            .github/workflows/clarify.yml \
+            .github/workflows/plan.yml \
+            .github/workflows/implement.yml \
+            .github/workflows/review_autofix.yml \
+            scripts/validate_process.sh; do
+            if ! rg -q 'codex_config_assemble' "${f}"; then
+              echo "::error file=${f}::Shared Codex config helper is not wired into this targeted call site."
+              exit 1
+            fi
+          done
+
+          for f in \
+            .github/workflows/clarify.yml \
+            .github/workflows/plan.yml \
+            .github/workflows/implement.yml \
+            .github/workflows/validate.yml \
+            .github/workflows/review_autofix.yml; do
+            if ! rg -q 'memory_bootstrap' "${f}"; then
+              echo "::error file=${f}::Shared memory bootstrap helper is not wired into this targeted workflow domain."
+              exit 1
+            fi
+          done
+
+          for f in \
+            .github/workflows/clarify.yml \
+            .github/workflows/plan.yml \
+            .github/workflows/implement.yml \
+            .github/workflows/review_autofix.yml; do
+            if ! rg -q 'tg_send_phase_failure' "${f}"; then
+              echo "::error file=${f}::Shared Telegram failure helper is not wired into this targeted workflow."
+              exit 1
+            fi
+          done
+
+          if rg -n 'read_codex_stall_guard_state\(\)|read_validate_codex_stall_guard_state\(\)|codex_stall_guard_kill_detected\(\)|resolve_editor_network_probe_pid\(\)|_reap_editor_fifo_holders\(\)' \
+            .github/workflows/implement.yml \
+            scripts/review_apply_fixes.sh \
+            scripts/validate_process.sh; then
+            echo "::error::Inline stall-guard parsing helpers detected; use scripts/watchdog_helpers.sh"
+            exit 1
+          fi
+
+          for f in \
+            .github/workflows/implement.yml \
+            scripts/review_apply_fixes.sh \
+            scripts/validate_process.sh; do
+            if ! rg -q 'watchdog_helpers\.sh' "${f}"; then
+              echo "::error file=${f}::Shared watchdog helper is not wired into this targeted runtime."
+              exit 1
+            fi
+          done
 
       - name: ShellCheck static analysis
         run: |

@@ -128,6 +128,9 @@ def _run_guard_for_contract(
 	env["CODEX_STALL_KILL_GRACE_SECONDS"] = "1"
 	env["CODEX_STALL_HEARTBEAT_DIR"] = str(heartbeat_dir)
 	env["GITHUB_RUN_ID"] = "123456"
+	env.pop("ISSUE_NUMBER", None)
+	env.pop("TRACKING_ISSUE", None)
+	env.pop("TRACKING_ISSUE_NUM", None)
 	env["PR_NUMBER"] = "3044"
 
 	cmd = [
@@ -272,6 +275,9 @@ def test_codex_stall_guard_observe_only_records_event_idle_without_killing_child
 		env["CODEX_STALL_KILL_GRACE_SECONDS"] = "1"
 		env["CODEX_STALL_HEARTBEAT_DIR"] = str(heartbeat_dir)
 		env["GITHUB_RUN_ID"] = "123456"
+		env.pop("ISSUE_NUMBER", None)
+		env.pop("TRACKING_ISSUE", None)
+		env.pop("TRACKING_ISSUE_NUM", None)
 		env["PR_NUMBER"] = "3044"
 
 		result = subprocess.run(
