@@ -3659,12 +3659,12 @@ jobs:
           if ! gh label create 'ai:destructive-blocked' \
             --repo "${{ github.repository }}" \
             --color 'b60205' \
-            --description 'Implementation blocked for mass/destructive deletions; redispatch waits for human review' \
+            --description 'Implementation blocked for mass/destructive deletions; this issue ID now waits for human review' \
             2>/dev/null \
             && ! gh label edit 'ai:destructive-blocked' \
             --repo "${{ github.repository }}" \
             --color 'b60205' \
-            --description 'Implementation blocked for mass/destructive deletions; redispatch waits for human review' \
+            --description 'Implementation blocked for mass/destructive deletions; this issue ID now waits for human review' \
             2>/dev/null; then
             echo "::warning::Could not ensure the ai:destructive-blocked label exists on ${{ github.repository }} — the GH_PAT may lack issues:write. The follow-up read below reports whether the issue itself ended up latched."
           fi
@@ -3694,7 +3694,7 @@ jobs:
             if grep -qxF 'ai:destructive-blocked' <<< "${latched_labels}"; then
               echo "Confirmed ai:destructive-blocked is latched on #${ISSUE_NUMBER}; redispatch will be refused until a human removes it."
             else
-              echo "::error::FAILED to latch ai:destructive-blocked on #${ISSUE_NUMBER}; the redispatch block is NOT in effect. Apply it manually: (gh label edit ai:destructive-blocked --repo ${{ github.repository }} --color b60205 --description 'Implementation blocked for mass/destructive deletions; redispatch waits for human review' || gh label create ai:destructive-blocked --repo ${{ github.repository }} --color b60205 --description 'Implementation blocked for mass/destructive deletions; redispatch waits for human review') && gh issue edit ${ISSUE_NUMBER} --repo ${{ github.repository }} --add-label ai:destructive-blocked"
+              echo "::error::FAILED to latch ai:destructive-blocked on #${ISSUE_NUMBER}; the redispatch block is NOT in effect. Apply it manually: (gh label edit ai:destructive-blocked --repo ${{ github.repository }} --color b60205 --description 'Implementation blocked for mass/destructive deletions; this issue ID now waits for human review' || gh label create ai:destructive-blocked --repo ${{ github.repository }} --color b60205 --description 'Implementation blocked for mass/destructive deletions; this issue ID now waits for human review') && gh issue edit ${ISSUE_NUMBER} --repo ${{ github.repository }} --add-label ai:destructive-blocked"
             fi
           else
             echo "::warning::Could not verify ai:destructive-blocked on #${ISSUE_NUMBER}; gh issue view failed, so the latch state is unknown. Re-check manually: gh issue view ${ISSUE_NUMBER} --repo ${{ github.repository }} --json labels -q '.labels[].name'"
