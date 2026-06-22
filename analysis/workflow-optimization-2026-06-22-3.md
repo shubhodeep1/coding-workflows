@@ -338,3 +338,151 @@ No separate repo-specific API hygiene rules were surfaced in the inspected repos
 **Per-tool Serena breakdown:** none recorded (`serena_query_tool_calls=0`).
 
 **Other MCP servers observed:** none.
+
+## Deep Audit — Workflows & Scripts (2026-06-22)
+
+### Section 1: Bug & Correctness Sweep
+Scope audited: `40` workflows under `.github/workflows/` and `100` repo scripts under `scripts/`. No reportable secret-leak or shell-injection path surfaced in this pass.
+
+#### BUG-001
+- **ID** — BUG-001
+- **File path** — `.github/workflows/test-and-mark-stable.yml:3831-3833,3946-3953`
+- **Severity** — High
+- **Category tag** — bug
+- **Description** — This step enables `set -euo pipefail`, then computes `CHILD_COUNT=$(echo "${CHILDREN}" | tr ',' '\n' | grep -c .)`. When the first poll sees no child issues yet—the exact eventual-consistency case the surrounding comments describe—`grep -c .` prints `0` but exits `1`, so the assignment aborts the step before the intended 90-second retry loop can continue. That turns a designed retry path into a false stable-release failure.
+- **Recommended fix** — Count children with a non-failing primitive (`jq 'length'` on `CHILDREN_JSON`, `awk 'NF{c++} END{print c+0}'`, or `grep -c . || true`) and keep the loop condition on the numeric result. Add a regression test for “0 children on first poll, >0 later”.
+
+#### BUG-002
+- **ID** — BUG-002
+- **File path** — `.github/workflows/orchestrate_poll.yml:155-160`; `scripts/orchestrate_poll_process.sh:12833-12840`
+- **Severity** — Medium
+- **Category tag** — bug
+- **Description** — The poll workflow says “Find all open issues” but fetches `ai:orchestrator-tracking` issues with `--limit 20`, writes that truncated list to `tracking_issues.json`, and the processor iterates only that cached file. **Inference:** once the repo has more than `20` open tracking issues, later issues are silently skipped for the full poll cycle.
+- **Recommended fix** — Page the discovery step (`--limit 1000` at minimum, or `gh api --paginate`) and keep the full JSON list as script input. If a cap is intentional, fail loudly when the cap is hit so operators see starvation instead of silent omission.
+
+### Section 2: GitHub API Call Redundancy Audit
+This section omits the `review_autofix` and `orchestrate_poll` hotspots already documented in the current report and focuses on additional code-level candidates.
+
+#### API-001
+- **ID** — API-001
+- **File path** — `.github/workflows/test-and-mark-stable.yml:2933-2941`
+- **Severity** — Medium
+- **Category tag** — api-redundancy
+- **Description** — The cancel-on-close waiter polls `repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}` twice per iteration: once for `.status` and again for `.conclusion`. Both fields come from the same payload.
+- **Current call count** — `2` GETs per 5-second poll tick; up to `240` GETs over the `600s` budget.
+- **Proposed call count after fix** — `1` GET per tick; up to `120` GETs over the same budget.
+- **Pattern to extend** — None required from `gh_helpers.sh`/`orchestrate_poll_process.sh`; this is a same-endpoint collapse. Reuse a single JSON fetch plus local `jq`, as this workflow already does elsewhere.
+- **Recommended fix** — Fetch the run JSON once per iteration and extract both fields locally. Use the same single-fetch parse style already present in this workflow at `.github/workflows/test-and-mark-stable.yml:618-629` and `:881-886`.
+
+#### BATCH-001
+- **ID** — BATCH-001
+- **File path** — `.github/workflows/test-and-mark-stable.yml:4403-4405,4479-4490`
+- **Severity** — Medium
+- **Category tag** — api-batching
+- **Description** — The alt-model smoke path snapshots phase runs by looping over `clarify`, `plan`, `implement`, and `review_autofix`, then repeats the same workflow-run listing after issue creation. That is eight separate list-runs calls for one smoke cycle.
+- **Current call count** — `8` REST list calls (`4` pre + `4` post).
+- **Proposed call count after fix** — `2` repo-wide `actions/runs` snapshots (`1` pre + `1` post), then client-side filtering by workflow name/branch.
+- **Pattern to extend** — `scripts/orchestrate_poll_process.sh:8384-8533` (`_load_actions_runs_cached`) or `scripts/gh_helpers.sh:1171-1188` (`autofix_retrigger_has_inflight_peer`), both of which already rely on a single repo-wide `actions/runs` fetch.
+- **Recommended fix** — Replace the per-workflow loop with repo-wide snapshots and filter in `jq`. If `per_page=100` is too small for this repo’s volume, page once more or add the same `created=>...` lower bound already used elsewhere in this workflow.
+
+#### BATCH-002
+- **ID** — BATCH-002
+- **File path** — `scripts/gh_helpers.sh:916-932`
+- **Severity** — Low
+- **Category tag** — api-batching
+- **Description** — `_gh_issue_timeline_with_cross_refs_rest()` fetches a paginated issue timeline and then performs one extra `gh api` call per cross-referenced PR URL to enrich state. On this fallback path, expensive issues scale as `1` paginated timeline walk `+ N` PR GETs instead of a bounded batch. [NEEDS VERIFICATION]
+- **Current call count** — `1` paginated timeline fetch `+ N` PR GETs, where `N` is the number of linked PRs.
+- **Proposed call count after fix** — `1` total call if the GraphQL path is extended far enough, or `2` max (timeline + batched PR-state lookup).
+- **Pattern to extend** — `scripts/orchestrate_poll_process.sh:10744-10822` (`_fetch_linked_pr_status_graphql`).
+- **Recommended fix** — Keep the existing GraphQL-first path, but when fallback is unavoidable, batch PR enrichment instead of walking URLs one-by-one.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001
+- **ID** — DUP-001
+- **File path** — `.github/workflows/workflow-log-analysis.yml:242-280,879-920,1355-1395`
+- **Severity** — Medium
+- **Category tag** — duplication
+- **Description** — Three jobs repeat the same Codex CLI tool-cache persist/restore and config-generation sequence. The copies already diverge slightly in comments/env handling, which raises drift risk the next time the cache layout or bootstrap rules change.
+- **Recommended fix** — Extract this to a shared module.
+  - **Shared module** — `scripts/setup_codex_cli.sh`
+  - **Suggested signature** — `setup_codex_cli.sh --tool-cache-dir <dir> --model <model> --thinking-level <level> --mode auto`
+  - **Callers to update** — the three `workflow-log-analysis.yml` jobs that currently embed the duplicate Codex cache/config block
+
+#### DUP-002
+- **ID** — DUP-002
+- **File path** — `scripts/validate_driver.sh:212-296`; `scripts/validate_process.sh:1180-1232`
+- **Severity** — Medium
+- **Category tag** — duplication
+- **Description** — `append_failure()` and `emit_result()` are duplicated in two validation entrypoints, but already drift: one version captures compose logs and propagates `${PHASE}`, while the other hardcodes `"runtime_validation"` and truncates logs differently. Future fixes can easily land in one path and miss the other.
+- **Recommended fix** — Extract the result/failure serialization into a shared helper.
+  - **Shared module** — `scripts/validate_result_helpers.sh`
+  - **Suggested signature** — `append_failure <failures_file> <test> <error> [log_file] [mode]`; `emit_validate_result <result> <phase> <failures_file> <total> <passed> <failed> <start_ts>`
+  - **Callers to update** — `scripts/validate_driver.sh`, `scripts/validate_process.sh`
+
+#### DUP-003
+- **ID** — DUP-003
+- **File path** — `.github/workflows/mark-stable.yml:312-338`; `.github/workflows/test-and-mark-stable.yml:3442-3468`
+- **Severity** — Low
+- **Category tag** — duplication
+- **Description** — The stable-release and stable-test workflows carry an identical “verify every `scripts/*` reference in workflows exists” shell loop, including the same optional-script allowlist and missing-file accounting.
+- **Recommended fix** — Extract the integrity check into one script.
+  - **Shared module** — `scripts/check_workflow_script_refs.sh`
+  - **Suggested signature** — `check_workflow_script_refs.sh --workflow-root <dir> [--optional <path>]...`
+  - **Callers to update** — `.github/workflows/mark-stable.yml`, `.github/workflows/test-and-mark-stable.yml`
+
+### Section 4: Expression Size Limit Risk Assessment
+No reportable expression-size findings.
+
+Across all `40` workflows, no `run:` or `if:` block containing `${{ }}` crossed the `15,000`-character reporting threshold, and no workflow exceeded `800 KB`. The largest workflow files were:
+- `review_autofix.yml` — `342,496` bytes
+- `test-and-mark-stable.yml` — `280,742`
+- `implement.yml` — `270,190`
+
+The largest interpolated `run:` bodies measured in this audit were:
+- `implement.yml` — `12,608` characters (`2,392` below the 15k medium-risk threshold; `8,392` below the 21k hard limit)
+- `plan.yml` — `11,340`
+- `workflow-log-analysis.yml` — `9,499`
+
+These are worth watching, but none are currently at the prompt’s Medium/High risk thresholds.
+
+### Section 5: Cross-Cutting Concerns
+
+#### DEAD-001
+- **ID** — DEAD-001
+- **File path** — `scripts/orchestrate_poll_process.sh:9313-9319`
+- **Severity** — Low
+- **Category tag** — dead-code
+- **Description** — `read_standalone_state_json()` is defined but not referenced elsewhere in the repo. It also duplicates a full paginated issue-comments fetch, so keeping it around increases maintenance surface and leaves a stale API path available for accidental reuse.
+- **Recommended fix** — Remove the function if obsolete, or add a real caller plus test coverage if it is intended to stay. If retained, share its comments-fetch path with `get_standalone_state_comment_id()` instead of maintaining a second wrapper.
+
+#### CONSIST-001
+- **ID** — CONSIST-001
+- **File path** — `.github/workflows/test-and-mark-stable.yml:503-508,618-629,838-846,2917-2941,3904-3907,3947-3950,4403-4490`
+- **Severity** — Medium
+- **Category tag** — consistency
+- **Description** — The same workflow already uses `gh_api_safe_print` for some run-discovery paths, but later polling/discovery blocks fall back to raw `gh api`. That leaves one release-gate workflow with two different retry/error-handling models: wrapped calls get standardized stderr handling and safer JSON parsing, while raw calls do fixed-interval polling with ad hoc parsing.
+- **Recommended fix** — Standardize the stable workflow on one API access layer. Concretely, lift the raw run/issue polling blocks onto `gh_api_safe_print`/`gh_api_safe_quiet_print` (or a tiny local wrapper built on them) so retry/backoff, stderr capture, and JSON validation behave consistently across the file.
+
+No `TODO`, `FIXME`, or `HACK` markers were present under `.github/workflows/` or `scripts/` in this pass.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 1 | BUG-001 |
+| Medium | 6 | BUG-002, API-001, BATCH-001, DUP-001, DUP-002, CONSIST-001 |
+| Low | 3 | BATCH-002, DUP-003, DEAD-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---|---|
+| Critical/High bug fixes | 1 workflow | Small |
+| API call optimization | 1 workflow, 1 script | Medium |
+| Code modularization | 3 workflows, 2 scripts, plus 2 new shared helpers | Medium |
+| Expression size reduction | 0 | Small |
+| Medium/Low fixes | 3 workflows/scripts | Small |
