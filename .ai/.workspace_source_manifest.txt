@@ -98,6 +98,7 @@ analysis/recommendation-processing-report.md
 analysis/validation-selftest-status.json
 analysis/workflow-optimization-2026-06-16.md
 analysis/workflow-optimization-2026-06-18.md
+analysis/workflow-optimization-2026-06-22.md
 codex.md
 docs/INVENTORY.md
 docs/ai-tools-future-improvements.md
