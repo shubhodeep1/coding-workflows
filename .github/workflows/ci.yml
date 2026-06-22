@@ -604,7 +604,7 @@ jobs:
 
           # Use ubiquitous grep instead of ripgrep so this gate does not
           # fail on runner images that omit `rg`.
-          if grep -En 'bash ("\$\{[^}]+\}/|scripts/)?write_codex_config\.sh|WRITE_CODEX_CONFIG=' \
+          if grep -nE 'bash ("\$\{[^}]+\}/|scripts/)?write_codex_config\.sh|WRITE_CODEX_CONFIG=' \
             .github/workflows/clarify.yml \
             .github/workflows/plan.yml \
             .github/workflows/implement.yml \
@@ -649,7 +649,7 @@ jobs:
             fi
           done
 
-          if grep -En 'read_codex_stall_guard_state\(\)|read_validate_codex_stall_guard_state\(\)|codex_stall_guard_kill_detected\(\)|resolve_editor_network_probe_pid\(\)|_reap_editor_fifo_holders\(\)' \
+          if grep -nE 'read_codex_stall_guard_state\(\)|read_validate_codex_stall_guard_state\(\)|codex_stall_guard_kill_detected\(\)|resolve_editor_network_probe_pid\(\)|_reap_editor_fifo_holders\(\)' \
             .github/workflows/implement.yml \
             scripts/review_apply_fixes.sh \
             scripts/validate_process.sh; then
@@ -661,7 +661,7 @@ jobs:
             .github/workflows/implement.yml \
             scripts/review_apply_fixes.sh \
             scripts/validate_process.sh; do
-            if ! grep -q 'watchdog_helpers\.sh' "${f}"; then
+            if ! grep -qE 'watchdog_helpers\.sh' "${f}"; then
               echo "::error file=${f}::Shared watchdog helper is not wired into this targeted runtime."
               exit 1
             fi

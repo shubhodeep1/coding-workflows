@@ -1480,8 +1480,11 @@ def test_destructive_guard_latch_verifies_label_applied() -> None:
 	assert "The workflow attempted to apply \\`ai:destructive-blocked\\`; verify that the label is present before relying on the \\`Validate approval phase\\` redispatch block." in destructive_block
 	assert "remove \\`ai:destructive-blocked\\` from the issue if it is present and redispatch" in destructive_block
 	assert destructive_block.count(
-		"--description 'Implementation blocked for mass/destructive deletions; redispatch waits for human review'"
+		"--description 'Implementation blocked for mass/destructive deletions; this issue ID now waits for human review'"
 	) == 4
+	assert "gh label create 'ai:destructive-blocked' \\" in destructive_block
+	assert "--repo \"${{ github.repository }}\" \\" in destructive_block
+	assert "--color 'b60205' \\" in destructive_block
 	assert "(gh label edit ai:destructive-blocked --repo ${{ github.repository }} --color b60205" in destructive_block
 	assert "|| gh label create ai:destructive-blocked --repo ${{ github.repository }} --color b60205" in destructive_block
 	assert ") && gh issue edit ${ISSUE_NUMBER} --repo ${{ github.repository }} --add-label ai:destructive-blocked" in destructive_block
