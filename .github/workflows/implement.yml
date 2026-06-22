@@ -3476,6 +3476,18 @@ jobs:
           exec 3>&2
           exec 2> >(tee "${STEP_STDERR_FILE}" >&3)
 
+          if [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
+            echo "ALLOW_WORKFLOW_EDITS is enabled — preserving .github/workflows changes."
+          elif git cat-file -e HEAD:.github/workflows >/dev/null 2>&1 || [ -d .github/workflows ]; then
+            if git cat-file -e HEAD:.github/workflows >/dev/null 2>&1; then
+              if [ -n "$(git status --porcelain .github/workflows)" ]; then
+                echo "Discarding Codex edits under .github/workflows (ALLOW_WORKFLOW_EDITS is not enabled)."
+                git restore --source=HEAD --staged --worktree .github/workflows || true
+              fi
+            fi
+            git clean -fd -- .github/workflows
+          fi
+
           # shellcheck source=/dev/null
           source scripts/write_guard.sh
           IMPLEMENT_WRITE_GUARD_FILE="$(mktemp)"
@@ -3488,18 +3500,6 @@ jobs:
             exit 1
           fi
           rm -f "${IMPLEMENT_WRITE_GUARD_FILE}"
-
-          if [ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ]; then
-            echo "ALLOW_WORKFLOW_EDITS is enabled — preserving .github/workflows changes."
-          elif git cat-file -e HEAD:.github/workflows >/dev/null 2>&1 || [ -d .github/workflows ]; then
-            if git cat-file -e HEAD:.github/workflows >/dev/null 2>&1; then
-              if [ -n "$(git status --porcelain .github/workflows)" ]; then
-                echo "Discarding Codex edits under .github/workflows (ALLOW_WORKFLOW_EDITS is not enabled)."
-                git restore --source=HEAD --staged --worktree .github/workflows || true
-              fi
-            fi
-            git clean -fd -- .github/workflows
-          fi
 
       - name: Enforce syntax validation outcome
         if: env.SKIP_IMPLEMENT != 'true'
