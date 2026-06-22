@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -71,6 +72,36 @@ def _run_validation_lint(output_root: Path) -> subprocess.CompletedProcess[str]:
 	)
 
 
+def _load_env_file_values(path: Path) -> dict[str, str]:
+	"""Parse validate.env exactly as scripts/validate_driver.sh:load_env_file does.
+
+	Mirrors validate_driver.sh lines 40-72: strip a trailing CR, skip blank /
+	comment lines, match ``KEY=VALUE``, and unwrap a single matched pair of
+	surrounding quotes — crucially with NO backslash unescaping. This is the
+	authoritative model of what the in-container ``CUSTOM_TESTS_JSON`` value
+	actually becomes, which JSON.parse then consumes in 40_repo_checks.sh.
+	"""
+	values: dict[str, str] = {}
+	for raw_line in path.read_text(encoding="utf-8").splitlines():
+		line = raw_line.rstrip("\r")
+		trimmed = line.lstrip()
+		if not trimmed or trimmed.startswith("#"):
+			continue
+		if "=" not in trimmed:
+			continue
+		key, value = trimmed.split("=", 1)
+		if not key or not all(ch.isalnum() or ch == "_" for ch in key) or key[0].isdigit():
+			continue
+		if (
+			len(value) >= 2
+			and value[0] == value[-1]
+			and value[0] in ('"', "'")
+		):
+			value = value[1:-1]
+		values[key] = value
+	return values
+
+
 def test_node_runtime_family_renders_expected_files_and_passes_lint() -> None:
 	with tempfile.TemporaryDirectory(prefix="render-validation-node-runtime-") as td:
 		temp_root = Path(td)
@@ -135,8 +166,14 @@ def test_node_runtime_compose_is_single_service_and_free_of_hardhat_rpc_state() 
 		assert "anvil:" not in compose_text
 		assert "foundry" not in compose_text.lower()
 
-		assert 'CUSTOM_TESTS_JSON="' in env_text
-		assert 'SKIP_TESTS_JSON="' in env_text
+		# The node-runtime repo-check runner re-parses these with JSON.parse, so
+		# they must render as raw (unquoted) JSON arrays — not shell-escaped,
+		# double-quoted strings. See the regression test below and
+		# hylifegroup.com run 27939731907.
+		assert 'CUSTOM_TESTS_JSON=[' in env_text
+		assert 'SKIP_TESTS_JSON=[' in env_text
+		assert 'CUSTOM_TESTS_JSON="' not in env_text
+		assert 'SKIP_TESTS_JSON="' not in env_text
 		assert 'RPC_URL=' not in env_text
 		assert 'HARDHAT_NETWORK=' not in env_text
 		assert 'HARDHAT_TEST_CMD=' not in env_text
@@ -280,6 +317,39 @@ def test_node_runtime_graceful_shutdown_skips_without_python3_before_docker_call
 			"1..1",
 			"ok 1 - graceful shutdown helper can terminate in-container process # SKIP python3 not available",
 		]
+
+
+def test_node_runtime_custom_tests_json_survives_load_env_file_and_json_parse() -> None:
+	# Regression for the node-runtime CUSTOM_TESTS_JSON / SKIP_TESTS_JSON
+	# double-encoding bug (hylifegroup.com run 27939731907): validate.env.j2
+	# wrapped the tojson output in double quotes and applied
+	# replace('"', '\\"'), so after validate_driver.sh:load_env_file stripped
+	# the outer quote pair the literal backslashes survived and the
+	# in-container JSON.parse threw "Unexpected token '\\'". Render with
+	# BOTH lists non-empty (skip_tests was empty in the field report, which
+	# masked the identical latent defect on that line) and assert the values
+	# round-trip through load_env_file back into the original arrays.
+	with tempfile.TemporaryDirectory(prefix="render-validation-node-runtime-") as td:
+		temp_root = Path(td)
+		manifest_path = temp_root / "validate.yml"
+		output_root = temp_root / "out"
+		payload = _manifest_payload()
+		payload["custom_tests"] = ["npm run typecheck", "npm run lint", "npm run test"]
+		payload["skip_tests"] = ["npm run lint"]
+		_write_yaml(manifest_path, payload)
+
+		result = _run_renderer(manifest_path, output_root)
+		assert result.returncode == 0, result.stderr
+
+		env_values = _load_env_file_values(output_root / "validate.env")
+
+		assert "CUSTOM_TESTS_JSON" in env_values
+		assert "SKIP_TESTS_JSON" in env_values
+		# Must be valid JSON after load_env_file — no stray backslashes.
+		assert "\\" not in env_values["CUSTOM_TESTS_JSON"], env_values["CUSTOM_TESTS_JSON"]
+		assert "\\" not in env_values["SKIP_TESTS_JSON"], env_values["SKIP_TESTS_JSON"]
+		assert json.loads(env_values["CUSTOM_TESTS_JSON"]) == payload["custom_tests"]
+		assert json.loads(env_values["SKIP_TESTS_JSON"]) == payload["skip_tests"]
 
 
 def main() -> int:
