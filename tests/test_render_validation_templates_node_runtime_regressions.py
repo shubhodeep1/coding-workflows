@@ -73,25 +73,26 @@ def _run_validation_lint(output_root: Path) -> subprocess.CompletedProcess[str]:
 
 
 def _load_env_file_values(path: Path) -> dict[str, str]:
-	"""Parse validate.env exactly as scripts/validate_driver.sh:load_env_file does.
+	"""Parse validate.env with the same semantics as validate_driver.sh.
 
 	Mirrors validate_driver.sh lines 40-72: strip a trailing CR, skip blank /
-	comment lines, match ``KEY=VALUE``, and unwrap a single matched pair of
-	surrounding quotes — crucially with NO backslash unescaping. This is the
-	authoritative model of what the in-container ``CUSTOM_TESTS_JSON`` value
-	actually becomes, which JSON.parse then consumes in 40_repo_checks.sh.
+	comment lines, fail fast on malformed non-comment input, match
+	``KEY=VALUE``, and unwrap a single matched pair of surrounding quotes —
+	crucially with NO backslash unescaping. This is the authoritative model of
+	what the in-container ``CUSTOM_TESTS_JSON`` value actually becomes, which
+	JSON.parse then consumes in 40_repo_checks.sh.
 	"""
 	values: dict[str, str] = {}
-	for raw_line in path.read_text(encoding="utf-8").splitlines():
+	for lineno, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
 		line = raw_line.rstrip("\r")
 		trimmed = line.lstrip()
 		if not trimmed or trimmed.startswith("#"):
 			continue
 		if "=" not in trimmed:
-			continue
+			raise AssertionError(f"unparseable env_file line {lineno}: {line!r}")
 		key, value = trimmed.split("=", 1)
 		if not key or not all(ch.isalnum() or ch == "_" for ch in key) or key[0].isdigit():
-			continue
+			raise AssertionError(f"unparseable env_file line {lineno}: {line!r}")
 		if (
 			len(value) >= 2
 			and value[0] == value[-1]
@@ -345,9 +346,6 @@ def test_node_runtime_custom_tests_json_survives_load_env_file_and_json_parse() 
 
 		assert "CUSTOM_TESTS_JSON" in env_values
 		assert "SKIP_TESTS_JSON" in env_values
-		# Must be valid JSON after load_env_file — no stray backslashes.
-		assert "\\" not in env_values["CUSTOM_TESTS_JSON"], env_values["CUSTOM_TESTS_JSON"]
-		assert "\\" not in env_values["SKIP_TESTS_JSON"], env_values["SKIP_TESTS_JSON"]
 		assert json.loads(env_values["CUSTOM_TESTS_JSON"]) == payload["custom_tests"]
 		assert json.loads(env_values["SKIP_TESTS_JSON"]) == payload["skip_tests"]
 

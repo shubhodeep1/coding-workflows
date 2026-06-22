@@ -75,18 +75,25 @@ def _run_validation_lint(output_root: Path) -> subprocess.CompletedProcess[str]:
 
 
 def _read_env_values(path: Path) -> dict[str, str]:
-	# Mirror scripts/validate_driver.sh:load_env_file (lines 63-70): strip a
-	# single matched pair of surrounding quotes with NO backslash unescaping.
-	# The previous ast.literal_eval model silently unescaped backslashes, so it
-	# did NOT match the real driver — which is exactly why the CUSTOM_TESTS_JSON
-	# double-encoding regression (hylifegroup.com run 27939731907) passed this
-	# test while the in-container JSON.parse failed in production.
+	# Mirror the load_env_file semantics that matter to these tests: preserve
+	# trailing whitespace (except a trailing CR), fail fast on malformed
+	# non-comment lines, and strip only one matched pair of surrounding quotes
+	# with NO backslash unescaping. The previous ast.literal_eval model silently
+	# unescaped backslashes, so it did NOT match the real driver — which is
+	# exactly why the CUSTOM_TESTS_JSON double-encoding regression
+	# (hylifegroup.com run 27939731907) passed this test while the in-container
+	# JSON.parse failed in production.
 	values: dict[str, str] = {}
-	for raw_line in path.read_text(encoding="utf-8").splitlines():
-		line = raw_line.strip()
-		if not line or line.startswith("#") or "=" not in line:
+	for lineno, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+		line = raw_line.rstrip("\r")
+		trimmed = line.lstrip()
+		if not trimmed or trimmed.startswith("#"):
 			continue
-		key, raw_value = line.split("=", 1)
+		if "=" not in trimmed:
+			raise AssertionError(f"unparseable env_file line {lineno}: {line!r}")
+		key, raw_value = trimmed.split("=", 1)
+		if not key or not all(ch.isalnum() or ch == "_" for ch in key) or key[0].isdigit():
+			raise AssertionError(f"unparseable env_file line {lineno}: {line!r}")
 		if (
 			len(raw_value) >= 2
 			and raw_value[0] == raw_value[-1]
