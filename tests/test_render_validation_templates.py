@@ -391,8 +391,12 @@ def test_renderer_node_runtime_family_dispatch_routing() -> None:
 		env_text = (output_root / "validate.env").read_text(encoding="utf-8")
 		repo_checks_text = (output_root / "tests" / "40_repo_checks.sh").read_text(encoding="utf-8")
 		assert "node-runtime family for demo-project" in family_marker_text
-		assert 'CUSTOM_TESTS_JSON="' in env_text
-		assert 'SKIP_TESTS_JSON="' in env_text
+		# node-runtime renders raw (unquoted) JSON arrays so the in-container
+		# JSON.parse in 40_repo_checks.sh succeeds (regression: run 27939731907).
+		assert 'CUSTOM_TESTS_JSON=[' in env_text
+		assert 'SKIP_TESTS_JSON=[' in env_text
+		assert 'CUSTOM_TESTS_JSON="' not in env_text
+		assert 'SKIP_TESTS_JSON="' not in env_text
 		assert "node - <<'JS'" in repo_checks_text
 		assert "json.loads(payload)" not in repo_checks_text
 
