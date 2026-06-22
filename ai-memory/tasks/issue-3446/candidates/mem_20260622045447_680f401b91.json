@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which part of this repository should be changed?\nChoices:\nA. Name the exact workflow, script, or file path to change. (RECOMMENDED)\nB. Name the subsystem if you do not know the exact path yet (for example: clarify, plan, implement, review_autofix, orchestrate, validate, memory, docs).\nC. This is a documentation-only improvement; name the exact document and section.\nQ2: What problem should this change solve?\nChoices:\nA. A bug or wrong behavior; describe the current behavior and the expected behavior. (RECOMMENDED)\nB. Reliability or flakiness; provide the failing workflow, symptom, or log marker.\nC. Maintainability or readability; describe what is currently confusing or hard to operate.\nQ3: What should count as \"done\" for this issue?\nChoices:\nA. Provide concrete acceptance criteria or an example of the desired end state. (RECOMMENDED)\nB. Point to a specific error, workflow run, or issue that should no longer reproduce after the change.\nC. For docs/process changes, state the exact missing or incorrect information that should be added or corrected.",
+  "fingerprint": "57a4d895cd206bdaa5c53ed2bd33ca41c0e069ee58bac9f65b1398a746c564a3",
+  "lineage": {
+    "issue_number": 3446,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27930399492",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27930399492",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20260622045447_680f401b91",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3446,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27930399492"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #3446 needs clarification",
+  "timestamps": {
+    "created_at": "2026-06-22T04:54:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
