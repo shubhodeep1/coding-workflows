@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/write_guard.sh:27-36 | severity=high | confidence=[4]\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `write_guard_sanitize_log_value` does not validate input before sanitization and uses `printf '%q'`, which the reviewer says may not be supported in all POSIX/BSD/macOS shells.\n  WHY: The reviewer says empty input or unsupported shell features could corrupt or break log output, causing diagnostic and monitoring breaks in critical guard paths.\n- scripts/write_guard.sh:27 | severity=high | confidence=[4]\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `write_guard_sanitize_log_value` has no early validation for empty, extremely long, or malformed strings before the sanitization step.\n  WHY: The reviewer says sanitization assumes valid input and a failing sanitization subprocess could leave global state inconsistent and error logs unusable.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/write_guard.sh:27-36 | severity=high | confidence=[4]\n  PROBLEM: Function does not validate input before sanitization, and uses printf '%q' which may not be supported in all POSIX shells or BSD/macOS environments.\n  WHY: Empty input or unsupported shell features would corrupt or break log output, causing diagnostic and monitoring breaks in critical guard paths.\n- scripts/write_guard.sh:27 | severity=high | confidence=[4]\n  PROBLEM: No early input validation for empty, extremely long, or malformed strings before sanitization step.\n  WHY: Sanitization assumes valid input; if sanitization function's subprocess fails or exits non-zero, it can leave global state inconsistent and error logs unusable.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "7c659098723abc6b9067867a3e48783fb13fe5e58517d1d40b6d706238c97723",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3456,
+    "run_id": "27958855644",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27958855644",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260622145147_2e9e95c545",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3456,
+    "run_id": "27958855644"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-22T14:51:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
