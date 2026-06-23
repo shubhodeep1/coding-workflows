@@ -150,8 +150,24 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
             Path(args.output_file).write_text(context, encoding="utf-8")
         else:
             print(context, end="")
-        _print_json({"ok": True, "enabled": False, "records_selected": 0, "estimated_tokens": 0})
-        _emit_telemetry("retrieve", ok=True, enabled=False, records_selected=0)
+        _print_json(
+            {
+                "ok": True,
+                "enabled": False,
+                "records_selected": 0,
+                "estimated_tokens": 0,
+                "token_budget": None,
+                "miss_reason": "disabled",
+            }
+        )
+        _emit_telemetry(
+            "retrieve",
+            ok=True,
+            enabled=False,
+            records_selected=0,
+            token_budget=None,
+            miss_reason="disabled",
+        )
         return 0
 
     repo_root = _resolve_repo_root(args.repo_root)
@@ -179,12 +195,24 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
                 Path(args.output_file).write_text(context, encoding="utf-8")
             else:
                 print(context, end="")
-            _print_json({"ok": True, "enabled": False, "records_selected": 0, "estimated_tokens": 0, "warning": error_text})
+            _print_json(
+                {
+                    "ok": True,
+                    "enabled": False,
+                    "records_selected": 0,
+                    "estimated_tokens": 0,
+                    "token_budget": None,
+                    "miss_reason": "branch_unavailable" if is_missing_branch else "git_error",
+                    "warning": error_text,
+                }
+            )
             _emit_telemetry(
                 "retrieve",
                 ok=True,
                 enabled=False,
                 records_selected=0,
+                token_budget=None,
+                miss_reason="branch_unavailable" if is_missing_branch else "git_error",
                 warning="branch_unavailable" if is_missing_branch else "git_error",
             )
             return 0
@@ -235,7 +263,9 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
                 "records_selected": len(result.selected_record_ids),
                 "record_ids": result.selected_record_ids,
                 "estimated_tokens": result.estimated_tokens,
+                "token_budget": result.token_budget,
                 "keyword_method": result.keyword_method,
+                "miss_reason": result.miss_reason,
             }
         )
         _emit_telemetry(
@@ -245,7 +275,9 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
             role=result.role,
             records_selected=len(result.selected_record_ids),
             estimated_tokens=result.estimated_tokens,
+            token_budget=result.token_budget,
             keyword_method=result.keyword_method,
+            miss_reason=result.miss_reason,
         )
         return 0
     finally:
