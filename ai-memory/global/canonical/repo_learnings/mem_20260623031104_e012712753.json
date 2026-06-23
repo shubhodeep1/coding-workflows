@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Write-guard and safety-related workflow changes need explicit test coverage.",
   "timestamps": {
     "created_at": "2026-06-23T03:11:04Z",
