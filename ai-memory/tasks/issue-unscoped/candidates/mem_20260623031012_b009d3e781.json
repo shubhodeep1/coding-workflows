@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.89,
+  "details": "Updates to prompt templates, render helpers, and memory schema/helper code tended to land together with tests. This matters when changing any AI-facing output, because downstream modes and stored records can break even if the implementation looks small.",
+  "fingerprint": "bbdb30379cc999a223ea46af7d8fe1bf99ae554297f905b598893d8dfdd8423c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27999403262",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27999403262",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3416",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3418",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3420",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3422",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3432",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3417",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3419",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3421",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3423",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3433"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260623031012_b009d3e781",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Prompt-rendering and memory-format changes should be treated as contract changes.",
+  "timestamps": {
+    "created_at": "2026-06-23T03:10:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
