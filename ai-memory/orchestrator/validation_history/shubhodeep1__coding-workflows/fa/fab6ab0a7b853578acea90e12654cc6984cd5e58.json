@@ -1,0 +1,19 @@
+{
+  "entries": [
+    {
+      "context": "validation passed",
+      "cycle": 1,
+      "outcome": "passed",
+      "raw_conclusion": "success",
+      "raw_status": "pass",
+      "recorded_at": "2026-06-23T10:16:14Z",
+      "run_attempt": 1,
+      "run_id": 28018781033,
+      "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/28018781033",
+      "source": "orchestrate_poll.mark_validation_complete"
+    }
+  ],
+  "integration_sha": "fab6ab0a7b853578acea90e12654cc6984cd5e58",
+  "repository": "shubhodeep1/coding-workflows",
+  "schema_version": "v1"
+}
