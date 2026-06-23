@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref context\n- HEAD: `c90ee7c85858db2cbec6e85ce2e1167eb7f9fe09`\n- Checked-out branch: `orchestrator/project-3472`\n- Integration branch metadata: `orchestrator/project-3472`\n- Integration branch mismatch: `false`\n\nClarification mapping\n- No `Q1`/`Q2` clarification batch was asked in this issue.\n- The only answer was `/answer [auto-answered-by-orchestrator]`, which I interpret as \u201ccontinue with the issue-scoped implementation as written.\u201d\n\nActions taken\n- Inspected `.github/workflows/orchestrate.yml` and confirmed the `Create integration branch` step still defines the unsafe raw fallback `type _safe_gh_jq >/dev/null 2>&1 || _safe_gh_jq() { gh api \"$@\"; }`.\n- Inspected `scripts/gh_helpers.sh` and confirmed the canonical `_safe_gh_jq` contract is the temp-file/stdout-suppressing version.\n- Inspected the representative existing inline implementation in `.github/workflows/plan.yml` (`Auto-approve clear plan`) and its contract test in `tests/test_plan_auto_approve_safe_state_fetch.py`.\n- Inspected `tests/test_workflow_gh_retry_fallback_contract.py` and confirmed it does not currently anchor the `Create integration branch` step.\n- Verified the current standalone baseline passes on this ref:\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_gh_retry_fallback_contract.py`\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_auto_approve_safe_state_fetch.py`\n\nImplementation plan\n\n1. Files likely to change\n- `.github/workflows/orchestrate.yml`\n  - Update only the `Create integration branch` step.\n- `tests/test_workflow_gh_retry_fallback_contract.py`\n  - Extend the existing standalone fallback-contract coverage for that step.\n\n2. Representative pattern to follow\n- Reuse the safe inline `_safe_gh_jq` pattern already present in `.github/workflows/plan.yml` (`Auto-approve clear plan`).\n- Use `tests/test_plan_auto_approve_safe_state_fetch.py` as the model for how to lock the fallback contract in tests.\n\n3. Functions / modules to implement\n- In `.github/workflows/orchestrate.yml`:\n  - Replace the raw `_safe_gh_jq` fallback in `Create integration branch` with the canonical safe inline body (temp file, emit stdout only on success, return non-zero on failure).\n  - Keep the existing optional `source scripts/gh_helpers.sh 2>/dev/null || true`.\n  - Keep the existing `gh_retry` fallback shim unchanged.\n  - Keep `DEFAULT_BRANCH` and `BASE_SHA` fetched via `gh_retry _safe_gh_jq`.\n  - Preserve integration-branch naming, branch existence check, branch creation, outputs, and tracking-issue edit flow.\n- In `tests/test_workflow_gh_retry_fallback_contract.py`:\n  - Add explicit positive coverage for `Create integration branch`.\n  - Keep the existing \u201cgh_retry-only steps must not define `_safe_gh_jq`\u201d rule for the current gh_retry-only step list.\n  - Structure the new assertions so this one step is explicitly allowed/required to define the safe `_safe_gh_jq` shim.\n\n4. Data structures affected\n- Workflow-local shell variables:\n  - `DEFAULT_BRANCH`\n  - `DEFAULT_BRANCH_REF`\n  - `BASE_SHA`\n  - `INTEGRATION_BRANCH`\n  - `INTEGRATION_BRANCH_REF`\n- Workflow outputs/env that must remain unchanged:\n  - `$GITHUB_OUTPUT`: `integration_branch`, `default_branch`\n  - `$GITHUB_ENV`: `INTEGRATION_BRANCH`\n- Test-side constants / step registries in `tests/test_workflow_gh_retry_fallback_contract.py`:\n  - likely a new dedicated safe-step tuple or a new dedicated test block, rather than adding this step to the existing gh_retry-only tuple.\n\n5. API / interface changes\n- No external API or user-facing interface changes.\n- Internal hardening only:\n  - if `gh_helpers.sh` is unavailable at runtime, `_safe_gh_jq` must not allow raw non-2xx `gh api` stdout to populate `DEFAULT_BRANCH` or `BASE_SHA`.\n  - The step should either produce filtered stdout on success or fail cleanly before those values are consumed.\n\n6. Potential risks / edge cases\n- Do not change the `Stage workflow support files` bootstrap behavior; it already hard-fails missing `gh_helpers.sh` and should remain untouched.\n- Do not refactor unrelated orchestrate logic or other `gh_helpers.sh` source sites.\n- Keep the inline safe helper semantically aligned with the canonical version:\n  - `mktemp` failure is fatal\n  - stdout is emitted only on success\n  - no `2>/dev/null` is added to the inner `gh api` call\n- Update the contract test carefully so the new positive safe-step assertions do not break the existing negative assertions for gh_retry-only steps.\n\n7. Testing considerations\n- Required by the issue:\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_gh_retry_fallback_contract.py`\n- Recommended confidence check:\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_auto_approve_safe_state_fetch.py`\n- The updated contract test should explicitly fail if:\n  - the step regresses to `_safe_gh_jq() { gh api \"$@\"; }`\n  - `DEFAULT_BRANCH` stops using `gh_retry _safe_gh_jq`\n  - `BASE_SHA` stops using `gh_retry _safe_gh_jq`\n\nAssumptions\n- The safest minimal implementation is to mirror the existing inline safe `_safe_gh_jq` pattern from `plan.yml`, rather than introducing a different fail-fast control path.\n- No separate machine-readable `files_touched` block was present in the provided context, so I am treating the issue\u2019s explicit local-scope instructions as the operative scope guard.\n\nMissing-context notes\n- No codebase conflict was found against the issue description.\n- The current gap is coverage, not bootstrap staging: the workflow already stages `gh_helpers.sh` with a hard failure if it is missing, but the local runtime fallback in `Create integration branch` is still unsafe.\n\nPre-execution self-check\n- Scope is local and implementation-ready.\n- A representative safe implementation and matching contract-test style already exist in-repo.\n- No integration-branch mismatch or external-input blocker was found.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "508cee1c1bf01b1343709c6b900412c0a4c0234575f6ffb2b2aac6301a166725",
+  "lineage": {
+    "issue_number": 3475,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28003169592",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28003169592",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3475"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260623045913_5e069c9694",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3475,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "28003169592"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3475",
+  "timestamps": {
+    "created_at": "2026-06-23T04:59:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
