@@ -336,3 +336,135 @@ This repo already codifies the rule in **`CLAUDE.md §15`**: reuse existing call
 |---|---:|---:|---:|---|
 | Serena (all observed targets) | 0 | 0 | 0 | no `SERENA_PROBE` lines and no Serena query traffic |
 | Other MCP servers | — | — | — | none observed beyond Semble query/fallback telemetry; Semble did not emit probe lines in this window |
+
+## Deep Audit — Workflows & Scripts (2026-06-23)
+
+### Section 1: Bug & Correctness Sweep
+
+- **ID:** SEC-001  
+  **File path:** `.github/workflows/update_workflows.yml:61-77,462-490`  
+  **Severity:** High  
+  **Category tag:** `security`  
+  **Description:** The workflow first clones the canonical upstream from `shubhodeep1/coding-workflows@stable`, but the later Telegram step rebuilds `wf_source` as `${{ github.repository_owner }}/coding-workflows`, downloads `scripts/tg_helpers.sh` from that repo via `gh api`, and `source`s it while `GH_TOKEN`, `TG_BOT_SECRET`, and `TG_ADMIN_CHAT_ID` are in scope. In `workflow_call` runs outside this repo, that can execute helper code from an owner-controlled repository instead of the already-fetched canonical source.  
+  **Recommended fix:** Reuse the checked-out canonical helper from the fetch step output, or hard-code the helper fetch to `shubhodeep1/coding-workflows@stable` and verify the file before sourcing it.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+Cross-reference only: **SEC-001** also removes one avoidable raw-content `gh api` fetch in `update_workflows.yml` because the canonical upstream is already present on disk.
+
+- **ID:** API-001  
+  **File path:** `.github/workflows/review_autofix_sweep.yml:104-148`  
+  **Severity:** Low  
+  **Category tag:** `api-redundancy`  
+  **Description:** Each sweep tick snapshots active review runs by looping `queued` and `in_progress` for each of two workflows (`internal-review.yml`, `review_autofix.yml`), so the same logical “active review runs” snapshot costs four REST calls every run.  
+  **Current / proposed call count:** `4 → 2` per sweep tick.  
+  **Batching pattern to extend:** `scripts/gh_helpers.sh:1160-1224` (`autofix_retrigger_has_inflight_peer()`), which already filters statuses and workflow paths from a single repo-level runs snapshot.  
+  **Recommended fix:** Replace the per-workflow/per-status loop with one repo-level `actions/runs` snapshot per active status, then filter `.path` and `.head_branch` locally for both review workflows.
+
+- **ID:** BATCH-001  
+  **File path:** `.github/workflows/review_autofix.yml:824-887`  
+  **Severity:** Medium  
+  **Category tag:** `api-batching`  
+  **Description:** When linked issues fall back to PR body/title parsing, `issue_nodes_json` is synthesized with `labels: null`, and the loop at lines 857-887 calls `gh issue view ... --json labels` once per linked issue. That is an API call inside a per-issue loop on a hot review path.  
+  **Current / proposed call count:** `N → 1` label lookups for `N` fallback-linked issues.  
+  **Batching pattern to extend:** `scripts/orchestrate_poll_process.sh:2633-2668` (`_fetch_issue_labels_batch_graphql()`).  
+  **Recommended fix:** Batch the fallback issue numbers through `_fetch_issue_labels_batch_graphql()` and read label presence from the returned map instead of calling `gh issue view` inside the loop.
+
+- **ID:** API-002  
+  **File path:** `.github/workflows/test-and-mark-stable.yml:2933-2942,2996-3003`  
+  **Severity:** Medium  
+  **Category tag:** `api-redundancy`  
+  **Description:** The cancel-on-close wait loop fetches the same run twice every poll iteration: once for `.status` and again for `.conclusion`. The same step already uses the better “fetch once, parse twice” pattern later at lines 2996-3003. Besides doubling API traffic, the split fetch can observe mismatched status/conclusion pairs if the run changes state between calls.  
+  **Current / proposed call count:** `2 → 1` per poll iteration.  
+  **Batching pattern to extend:** None exact from `gh_helpers.sh` or `orchestrate_poll_process.sh`; this is a local single-fetch reuse fix.  
+  **Recommended fix:** Fetch the run JSON once per poll iteration, store it in a temp variable, and extract both fields locally with `jq`.
+
+- **ID:** BATCH-002  
+  **File path:** `scripts/gh_helpers.sh:902-932`  
+  **Severity:** Low  
+  **Category tag:** `api-batching`  
+  **Description:** [NEEDS VERIFICATION] The REST fallback for `gh_issue_timeline_with_cross_refs()` fetches the issue timeline once, extracts unique PR URLs, then loops each URL and calls `gh api` once per PR to enrich state/merge data. That makes fallback cost scale with the number of cross-referenced PRs.  
+  **Current / proposed call count:** `1 + U → 2`, where `U` is the number of unique PR URLs.  
+  **Batching pattern to extend:** `scripts/orchestrate_poll_process.sh:2633-2668`’s GraphQL alias batching style, or the GraphQL-first timeline path in the same helper family.  
+  **Recommended fix:** Keep the initial timeline fetch, then batch all PR-number enrichments into one GraphQL alias query and merge that result back into the timeline JSON.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **ID:** DUP-001  
+  **File path:** `.github/workflows/review_autofix.yml:4318-4360,4502-4550,5372-5396`  
+  **Severity:** Medium  
+  **Category tag:** `duplication`  
+  **Description:** Three late-stage `review_autofix` steps reimplement fallback `ensure_label_exists()` / `set_issue_phase_label_resilient()` logic inline even though `scripts/label_helpers.sh:120-207` already owns those behaviors. The copies have already drifted: the ready-to-merge path special-cases `ai:ready-to-merge` and `ai:closed`, the exhaustion path special-cases `ai:review-blocked`, and the workflow-failure path hard-codes the review-blocked description for any fallback label.  
+  **Proposed owner / signature:** Reuse `scripts/label_helpers.sh` with existing `ensure_label_exists <label_name> [repo]` and `set_issue_phase_label_resilient <issue_number> <label> <repo>`.  
+  **Callers to update:** The three `review_autofix.yml` late-stage labeling steps above.  
+  **Recommended fix:** Stage/source `label_helpers.sh` once for the job and fall back to the checked-out repo copy if staged support files were cleaned up, instead of inlining step-local label helpers.
+
+- **ID:** DUP-002  
+  **File path:** `scripts/review_apply_fixes.sh:72-110`; `scripts/review_rb_judge.sh:188-226`; `scripts/review_run_reviewers.sh:35-73`  
+  **Severity:** Low  
+  **Category tag:** `duplication`  
+  **Description:** `emit_context_budget_warn_for_prompt()` is repeated nearly line-for-line in three review scripts. Any future change to prompt-budget telemetry, import path handling, or failure behavior has to be kept in sync manually.  
+  **Proposed owner / signature:** New `scripts/review_common.sh` (or equivalent shared helper) with `emit_context_budget_warn_for_prompt <phase> <prompt_path> <model>`.  
+  **Callers to update:** `review_apply_fixes.sh`, `review_rb_judge.sh`, `review_run_reviewers.sh`.  
+  **Recommended fix:** Move the helper into one shared module and source it from each caller before prompt execution.
+
+- **ID:** DUP-003  
+  **File path:** `scripts/review_apply_fixes.sh:372-387`; `scripts/review_conflict_resolve.sh:68-83`; `scripts/validate_process.sh:2665-2680`  
+  **Severity:** Low  
+  **Category tag:** `duplication`  
+  **Description:** Three scripts implement the same “search `repo_path`, `.codex-workflow-src/`, then `.codex-workflow-src-main/`” resolver for thread-reuse assets, differing only in function name.  
+  **Proposed owner / signature:** `scripts/codex_thread_reuse.sh` with `resolve_thread_reuse_asset <repo_path>`.  
+  **Callers to update:** `review_apply_fixes.sh`, `review_conflict_resolve.sh`, `validate_process.sh`.  
+  **Recommended fix:** Add one shared resolver to the existing thread-reuse helper module and delete the per-script copies.
+
+- **ID:** DUP-004  
+  **File path:** `.github/workflows/workflow-log-analysis.yml:405-628,1003-1184,1472-1650`  
+  **Severity:** Medium  
+  **Category tag:** `duplication`  
+  **Description:** The `Run workflow log analysis`, `Run deep audit pass`, and `Run API redundancy pass` steps repeat the same control-plane shape: tracking-issue parsing, failure comment+label emission, Semble prefetch, prompt assembly, Codex retry/backoff, heading validation, and append-to-report handling. These blocks are each large and already diverge in small ways only because they are copy-edited inline.  
+  **Proposed owner / signature:** New `scripts/run_workflow_log_analysis_phase.sh` (or a composite action) with a CLI like `run_workflow_log_analysis_phase --mode <analysis|deep_audit|api_redundancy> --report-file <path> --tracking-issue <n> --prompt <path> [--run-logs-dir <dir>]`.  
+  **Callers to update:** The three `workflow-log-analysis.yml` phase steps above.  
+  **Recommended fix:** Extract the shared control plane into one script/composite action and keep only phase-specific prompt inputs and heading expectations in the workflow YAML.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+- **ID:** EXPR-001  
+  **File path:** `.github/workflows/memory_maintenance.yml:45-391`  
+  **Severity:** Medium  
+  **Category tag:** `expression-limit`  
+  **Description:** The `Extract repository learnings (fail-open)` step spans 346 lines and embeds five `${{ }}` interpolations. Using the raw interpolated `run:` block source as the conservative measure, the step is about **15,168** characters, leaving roughly **5,832** characters of headroom before GitHub’s 21,000-character expression ceiling. Given this repo’s prior expression-limit incidents, this is the closest current block to the warning threshold. [NEEDS VERIFICATION]  
+  **Recommended fix:** Extract the inline Python/model-call logic into `scripts/` helpers, or split this step into smaller “discover source data”, “render prompt”, and “call model” steps so each interpolated block stays comfortably below 15k.
+
+No other interpolated `run:` block crossed the 15,000-character threshold in this pass, and no workflow file in `.github/workflows` exceeds 800 KB.
+
+### Section 5: Cross-Cutting Concerns
+
+- **ID:** CONSIST-001  
+  **File path:** `scripts/comprehensive_test_and_release_gh_api.sh:3-68`; `.github/workflows/comprehensive-test-and-release.yml:42-57,284-287`; `.github/workflows/test-and-mark-stable.yml:495,616,822,1298,2533`; `scripts/dispatch_and_watch_workflow_run.sh:5-7`  
+  **Severity:** Low  
+  **Category tag:** `consistency`  
+  **Description:** The comprehensive release/test control plane uses a custom `gh_api_safe*` wrapper instead of the repo-standard GH helpers. The custom wrapper only special-cases stderr containing “rate limit”, while `scripts/gh_helpers.sh:391-562` already centralizes retry policy, JSON validation, and error classification. This makes GH API behavior inconsistent across workflows that should share the same control-plane semantics.  
+  **Recommended fix:** Replace `gh_api_safe*` callsites with `gh_retry`, `gh_retry_to_file`, and `gh_api_json_to_file`, or refactor `gh_api_safe*` into a thin compatibility layer over those helpers so there is one retry/error-policy source of truth.
+
+No `TODO`, `FIXME`, `HACK`, or `XXX` markers surfaced in `.github/workflows` or `scripts/` during this pass.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 1 | SEC-001 |
+| Medium | 5 | BATCH-001, API-002, DUP-001, DUP-004, EXPR-001 |
+| Low | 5 | API-001, BATCH-002, DUP-002, DUP-003, CONSIST-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 1 | Small |
+| API call optimization | 4 | Medium |
+| Code modularization | 9 | Large |
+| Expression size reduction | 2 | Medium |
+| Medium/Low fixes | 4 | Small |
