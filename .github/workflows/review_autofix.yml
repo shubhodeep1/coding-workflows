@@ -4584,6 +4584,12 @@ jobs:
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          # REPOSITORY is referenced as ${REPOSITORY} in the run: block under
+          # set -u. The codex-agent job has no job-level REPOSITORY and it is
+          # never exported to $GITHUB_ENV, so it must be declared per-step here
+          # (matching the rb_judge / review-blocked-label steps). Omitting it
+          # aborts the force tick with "REPOSITORY: unbound variable".
+          REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           HELPER="${SUPPORT_SCRIPTS_DIR}/orchestrate_force_tick.sh"
@@ -5432,6 +5438,12 @@ jobs:
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          # REPOSITORY is referenced as ${REPOSITORY} in the run: block under
+          # set -u. The codex-agent job has no job-level REPOSITORY and it is
+          # never exported to $GITHUB_ENV, so it must be declared per-step here
+          # (matching the rb_judge / review-blocked-label steps). Omitting it
+          # aborts the force tick with "REPOSITORY: unbound variable".
+          REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           HELPER="${SUPPORT_SCRIPTS_DIR}/orchestrate_force_tick.sh"
