@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.9,
+  "details": "Several merged runs touched both core scripts and the surrounding workflow YAML, README, or agents docs. When a change affects operator-visible behavior, plan for validation coverage and brief documentation updates so the repo stays internally consistent.",
+  "fingerprint": "4d8eefba5eda4882aa61b08086d9dfa7a8bd0e7076e568827402fcb95991ab4f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27999403262",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27999403262",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3416",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3418",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3420",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3422",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3432",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3417",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3419",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3421",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3423",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3433"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260623030921_d6e8db1c4c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow changes usually need paired updates to tests and docs, not just the shell/Python implementation.",
+  "timestamps": {
+    "created_at": "2026-06-23T03:09:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
