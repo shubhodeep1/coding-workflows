@@ -5,13 +5,25 @@
   "entry_id": "processed_command_3475_4775732717_approved",
   "issue_number": 3475,
   "metadata": {
+    "branch": "ai/issue-3475",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/orchestrate.yml",
+      "scripts/write_guard.sh",
+      "tests/test_workflow_gh_retry_fallback_contract.py"
+    ],
+    "issue_number": 3475,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/3475",
+    "pr_number": 3476,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/3476",
+    "run_attempt": "1",
+    "run_id": "28003341138",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/28003341138"
   },
   "run_attempt": 1,
   "run_id": "28003341138",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-06-23T05:01:07Z",
+  "status": "completed",
+  "timestamp": "2026-06-23T05:06:47Z",
   "workflow": "implement"
 }
