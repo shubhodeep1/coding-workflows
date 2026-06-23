@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan\n\n### Ref context\n- HEAD: `191fdfb52750de6c56f3792936750b7101bf95b5`\n- Resolved checkout ref: `main`\n- Symbolic ref: `main`\n- Integration branch metadata was not present in the planning context, so no integration-branch mismatch was detected.\n\n### Clarification mapping\n- No `Q1`/`Q2`/etc. were asked.\n- The `/answer [auto-answered-by-clarify]` comment is interpreted as: the task is fully specified and no human clarification is required.\n\n### Assumptions\n- Follow the issue literally: overwrite the existing canary file with the requested three lines and do not broaden scope.\n- The note about `openai/gpt-5.4` is run metadata only; it does not require any repository/config change.\n\n### 1. Files likely to change\n- `tests/e2e_smoke_canary.txt`\n  - Existing file already present.\n  - Replace its current contents so the file is exactly:\n    - `status: ok`\n    - `run_id: alt-27998838763`\n    - `updated-by: ai-pipeline`\n  - Preserve the trailing newline.\n- No other files should change.\n- Do not modify `tests/e2e_smoke_canary_spec.txt`, scripts, workflows, or tests.\n\n### 2. Functions or modules to implement\n- No functions/modules change.\n- This is a single-file content overwrite.\n- Representative existing pattern: `scripts/review_apply_fixes.sh` already writes the canary in the canonical 3-line shape with a final newline; use that same byte shape, but with the issue\u2019s requested literal `run_id: alt-27998838763`.\n\n### 3. Data structures affected\n- Plain-text canary payload in `tests/e2e_smoke_canary.txt`.\n- Contract to preserve:\n  - exactly 3 lines\n  - LF newlines\n  - final trailing newline\n  - no extra whitespace or marker lines\n\n### 4. API or interface changes\n- None.\n- No workflow, CLI, env var, schema, or external interface changes.\n- No model-selection/config file changes.\n\n### 5. Potential risks / edge cases\n- Byte-exactness matters: extra whitespace, CRLF, or missing final newline would violate the issue.\n- Scope is strict: touching any file besides `tests/e2e_smoke_canary.txt` would violate the task.\n- The requested `alt-...` run_id conflicts with current smoke-contract expectations in the repo:\n  - `tests/e2e_smoke_canary_spec.txt:2` uses `run_id: __RUN_ID__`\n  - `tests/test_e2e_editor_smoke_canary.py:79-100` enforces a numeric expected run id\n  - `scripts/review_conflict_prepare.sh:620-627` describes `run_id: alt-<run_id>` as bait content to discard\n- Because the issue explicitly constrains scope to one file, the plan is to make the requested file-only change and surface this conflict rather than broaden scope.\n\n### 6. Testing considerations\n- Primary verification: byte-exact compare of `tests/e2e_smoke_canary.txt` against the requested 3-line payload, including trailing newline.\n- Secondary verification: `git diff --stat` should show only `tests/e2e_smoke_canary.txt`.\n- Do not treat unrelated spec/template or harness edits as part of this issue.\n- If a Phase 4b smoke check runs and flags the `alt-...` value, that should be reviewed as the known contract conflict above, not \u201cfixed\u201d by expanding scope in this issue.\n\n### 7. Missing-context notes\n- No human clarification answers existed beyond the auto-continue comment.\n- No integration-branch metadata was provided to compare against `main`.\n\n## Pre-execution self-check\nPLAN_SELF_CHECK: WARNING: Requested `run_id: alt-27998838763` intentionally diverges from the repo\u2019s current numeric-run-id smoke contract (`tests/e2e_smoke_canary_spec.txt:2`, `tests/test_e2e_editor_smoke_canary.py:79-100`, `scripts/review_conflict_prepare.sh:620-627`); plan keeps scope to the single-file overwrite required by the issue.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "ca8ea7af179406c1d80e99d6f0658cfc283dc3a495b39a6f47842a0d5eef77c6",
+  "lineage": {
+    "issue_number": 3461,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27998934723",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27998934723",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3461"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260623025944_a91e320a7f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3461,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "27998934723"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3461",
+  "timestamps": {
+    "created_at": "2026-06-23T02:59:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
