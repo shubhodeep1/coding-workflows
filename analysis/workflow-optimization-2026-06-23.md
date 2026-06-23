@@ -468,3 +468,130 @@ No `TODO`, `FIXME`, `HACK`, or `XXX` markers surfaced in `.github/workflows` or 
 | Code modularization | 9 | Large |
 | Expression size reduction | 2 | Medium |
 | Medium/Low fixes | 4 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-06-23)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the overlap is local and explicit enough that implement can collapse it directly without changing behavior. `NEEDS_VERIFICATION` means the redundancy is plausible, but runtime parity still has to be proven first. `RISKY_SKIP` means the duplication is visible, but the call sits in paginated, poller, retry-sensitive, or race-defense code that this pass must not auto-change.
+
+### Consolidation Candidates (MERGE-###)
+
+- **ID:** `MERGE-001`  
+  **Safety tag:** `NEEDS_VERIFICATION`  
+  **Files:** `.github/workflows/test-and-mark-stable.yml:1022-1024`, `.github/workflows/test-and-mark-stable.yml:1051-1056`  
+  **Current / proposed call count:** common stable-head success path `3 → 2` calls to the same PR endpoint.  
+  **Endpoint(s):** `GET /repos/{owner}/{repo}/pulls/{pull_number}`  
+  **Evidence:** the step reads the same PR twice for `.head.sha`, then immediately reads the full PR again for state/merge guard data.
+  ```sh
+  HEAD_A=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null || echo "")
+  sleep 3
+  HEAD_B=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null || echo "")
+  ...
+  PR_META=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" 2>/dev/null || echo "")
+  PR_STATE=$(printf '%s' "${PR_META}" | jq -r '.state // ""' 2>/dev/null || echo "")
+  PR_MERGED=$(printf '%s' "${PR_META}" | jq -r '.merged // false' 2>/dev/null || echo "false")
+  ```
+  **Proposed fix:** promote the second stability read to a full PR JSON fetch, compare `.head.sha` locally, and reuse that same payload as `PR_META`; keep a final fallback fetch only if the loop exits without a reusable full payload.  
+  **Safety rationale:** same step and same endpoint, but the guard was added to catch a PR-close/auto-merge race, so parity must be proven before removing the extra read.  
+  **Downstream signal:** Verify two cases before merging: `(1)` PR stays open after the stability loop, `(2)` PR closes/merges between the second stability read and the current guard read; confirm identical `status=pr_already_closed` behavior.
+
+- **ID:** `MERGE-002`  
+  **Safety tag:** `RISKY_SKIP`  
+  **Files:** `scripts/orchestrate_poll_process.sh:7199-7205`  
+  **Current / proposed call count:** `2 → 1` per `final_pr` check.  
+  **Endpoint(s):** `GET /repos/{owner}/{repo}/pulls/{pull_number}`  
+  **Evidence:** the poller reads `.state` and `.merged_at` from the same PR in back-to-back API calls.
+  ```sh
+  existing_pr_state="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.state' || echo "")"
+  existing_pr_merged="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${final_pr}" --jq '.merged_at != null' || echo "")"
+  ```
+  **Proposed fix:** fetch the PR JSON once and derive both `existing_pr_state` and `existing_pr_merged` locally.  
+  **Safety rationale:** this sits inside `orchestrate_poll_process.sh` final-merge recovery logic, which the prompt explicitly treats as `RISKY_SKIP` even when the duplication is obvious.  
+  **Downstream signal:** Do not auto-implement; manually confirm the final-merge recovery path preserves the same race/error behavior and log output when both fields come from one payload.
+
+- **ID:** `MERGE-003`  
+  **Safety tag:** `RISKY_SKIP`  
+  **Files:** `scripts/orchestrate_poll_process.sh:9929-9931`, `scripts/orchestrate_poll_process.sh:12000-12008`, `scripts/orchestrate_poll_process.sh:16179-16181`  
+  **Current / proposed call count:** `2 → 1` at each cited branch (`6 → 3` if all three branches run in one poll cycle).  
+  **Endpoint(s):** `GET /repos/{owner}/{repo}/issues/{issue_number}`  
+  **Evidence:** three poller reissue paths split title/body reads into separate calls against the same issue endpoint.
+  ```sh
+  orig_title="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.title // ""' || echo "")"
+  orig_body="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.body // ""' || echo "")"
+  ```
+  The same pattern repeats at `12007-12008` and `16180-16181`.  
+  **Proposed fix:** at each site, fetch one issue JSON blob (or one `--jq '{title:(.title // ""), body:(.body // "")}'` object) and extract both fields locally.  
+  **Safety rationale:** all three sites are inside `orchestrate_poll_process.sh` stall-recovery / reissue paths that explicitly defend against upstream races, so this pass must not auto-change them.  
+  **Downstream signal:** Do not auto-implement; manually exercise each cited reissue branch and confirm the single-fetch replacement preserves current fail-open behavior under transient API faults.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID:** `REUSE-001`  
+  **Safety tag:** `SAFE_TO_MERGE`  
+  **Files:** `scripts/orchestrate_force_tick.sh:57-67`, `scripts/orchestrate_force_tick.sh:69-100`, `scripts/orchestrate_force_tick.sh:103-115`, `scripts/orchestrate_force_tick.sh:274-292`  
+  **Current / proposed call count:** on the “`ISSUE_NUMBER` is a PR number, but tracking issue is still unresolved after PR parsing” path, `2 → 1`.  
+  **Endpoint(s):** `GET /repos/{owner}/{repo}/pulls/{pull_number}`, `GET /repos/{owner}/{repo}/issues/{issue_number}`  
+  **Evidence:** the first fetch already gives the PR body, and the extractor already searches that body for the tracking marker before the script falls back to a second issue-body fetch.
+  ```sh
+  if ! pr_json="$(_force_tick_fetch_pull_request_json "${REPOSITORY}" "${ISSUE_NUMBER}")"; then
+    pr_lookup_failed="true"
+    pr_json=""
+  fi
+  TRACKING_ISSUE="$(_force_tick_extract_tracking_issue_from_pull_request_json "${pr_json}")"
+  ...
+  if [ -z "${TRACKING_ISSUE}" ] && [ -n "${ISSUE_NUMBER}" ]; then
+    issue_body=""
+    if ! issue_body="$(_force_tick_fetch_issue_body "${REPOSITORY}" "${ISSUE_NUMBER}")"; then
+  ```
+  ```py
+  body = payload.get("body") or ""
+  match = body_re.search(body)
+  if match:
+      print(match.group(1))
+  ```
+  **Proposed fix:** in the second fallback block, skip `_force_tick_fetch_issue_body` when `pr_json` was successfully fetched; keep the issue-body fetch only for true non-PR inputs or PR-lookup failures.  
+  **Safety rationale:** same function, no intervening mutation, no pagination/retry-loop/auth probe, and the non-PR fallback path remains intact.  
+  **Downstream signal:** Implement directly: gate `_force_tick_fetch_issue_body` behind `pr_lookup_failed=true` (or empty `pr_json`) and do not re-fetch the body after a successful PR lookup.
+
+### Dead Calls (DEAD-API-###)
+
+- **ID:** `DEAD-API-001`  
+  **Safety tag:** `RISKY_SKIP`  
+  **Files:** `scripts/orchestrate_poll_process.sh:17641-17654`  
+  **Current / proposed call count:** `1 → 0` per standalone conflict-sweep invocation.  
+  **Endpoint(s):** `GET /repos/{owner}/{repo}`  
+  **Evidence:** the standalone conflict sweep assigns `DEFAULT_BRANCH`, then immediately iterates on `S_PR`, `S_HEAD`, and `S_BASE`; the block never reads `DEFAULT_BRANCH` before it ends.
+  ```sh
+  STANDALONE_COUNT="$(echo "${STANDALONE_PRS}" | jq 'length')"
+  echo "Found ${STANDALONE_COUNT} open PR(s) to scan."
+
+  CONFLICT_SWEEP_FIXED=0
+  DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+
+  for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
+    S_PR="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].number")"
+    S_HEAD="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].headRefName")"
+    S_BASE="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].baseRefName")"
+  ```
+  **Proposed fix:** remove the late `DEFAULT_BRANCH` fetch from the standalone conflict-sweep block.  
+  **Safety rationale:** the read is dead by static inspection, but it is inside `orchestrate_poll_process.sh`, so the prompt requires manual review instead of auto-removal.  
+  **Downstream signal:** Do not auto-remove; manually confirm no later standalone-sweep branch or callee relies on the global `DEFAULT_BRANCH` value, then delete the fetch.
+
+### Cross-References to Deep Audit Section
+
+- API-001: `RISKY_SKIP` — correct hotspot, but it is a `--paginate`d control-plane sweep, so page-boundary and active-run parity need manual review before consolidation.
+- BATCH-001: `NEEDS_VERIFICATION` — batching fallback-linked issue label lookups through the existing GraphQL helper is directionally right, but the fallback issue-number set still needs parity testing.
+- API-002: `SAFE_TO_MERGE` — same run endpoint, same loop iteration, and the later code in the same step already demonstrates the one-fetch/two-field pattern.
+- BATCH-002: `RISKY_SKIP` — the fallback starts from a paginated timeline read, so replacing per-PR enrichments with a batch helper changes page/ordering semantics and needs manual validation.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 1 | REUSE-001 |
+| NEEDS_VERIFICATION | 1 | MERGE-001 |
+| RISKY_SKIP | 3 | MERGE-002, MERGE-003, DEAD-API-001 |
+
+### Implement-Stage Handoff
+
+- REUSE-001
