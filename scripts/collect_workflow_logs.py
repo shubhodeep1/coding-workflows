@@ -43,9 +43,37 @@ except ModuleNotFoundError:
     )
 
 try:
-    from cost_audit import aggregate_run_cost_telemetry, build_run_cost_telemetry
+    from cost_audit import (
+        BREAK_GLASS_RE,
+        CONTEXT_BUDGET_WARN_RE,
+        MCP_FALLBACK_GENERIC_RE,
+        MCP_PROBE_GENERIC_RE,
+        MCP_QUERY_GENERIC_RE,
+        OPENROUTER_RE,
+        SEMBLE_FALLBACK_RE,
+        SEMBLE_QUERY_RE,
+        SERENA_FALLBACK_RE,
+        SERENA_PROBE_RE,
+        SERENA_QUERY_RE,
+        aggregate_run_cost_telemetry,
+        build_run_cost_telemetry,
+    )
 except ModuleNotFoundError:
-    from scripts.cost_audit import aggregate_run_cost_telemetry, build_run_cost_telemetry
+    from scripts.cost_audit import (
+        BREAK_GLASS_RE,
+        CONTEXT_BUDGET_WARN_RE,
+        MCP_FALLBACK_GENERIC_RE,
+        MCP_PROBE_GENERIC_RE,
+        MCP_QUERY_GENERIC_RE,
+        OPENROUTER_RE,
+        SEMBLE_FALLBACK_RE,
+        SEMBLE_QUERY_RE,
+        SERENA_FALLBACK_RE,
+        SERENA_PROBE_RE,
+        SERENA_QUERY_RE,
+        aggregate_run_cost_telemetry,
+        build_run_cost_telemetry,
+    )
 
 SCHEMA_VERSION = "workflow_log_collector.v2"
 LOG_EXPORT_CATEGORIES = ("errors", "slow", "recent")
@@ -68,6 +96,19 @@ RETRY_MARKERS = (
 )
 WORKFLOW_LOG_CACHE_SCHEMA_VERSION = "v1"
 WORKFLOW_LOG_CACHE_SEEN_SET_LIMIT = 500
+STRUCTURED_COST_TELEMETRY_PATTERNS = (
+    OPENROUTER_RE,
+    SEMBLE_QUERY_RE,
+    SEMBLE_FALLBACK_RE,
+    SERENA_QUERY_RE,
+    SERENA_FALLBACK_RE,
+    SERENA_PROBE_RE,
+    MCP_QUERY_GENERIC_RE,
+    MCP_FALLBACK_GENERIC_RE,
+    MCP_PROBE_GENERIC_RE,
+    BREAK_GLASS_RE,
+    CONTEXT_BUDGET_WARN_RE,
+)
 
 
 def _parse_iso8601(value: str | None) -> datetime | None:
@@ -1143,6 +1184,101 @@ def _full_logs_to_text(full_logs: list[dict[str, str]]) -> str:
     return "\n".join(parts)
 
 
+def _structured_cost_telemetry_line_key(line: str) -> str | None:
+    if not isinstance(line, str):
+        return None
+    line_text = line.rstrip("\r\n")
+    if not line_text:
+        return None
+    if any(pattern.search(line_text) for pattern in STRUCTURED_COST_TELEMETRY_PATTERNS):
+        return line_text
+    return None
+
+
+def _normalized_full_log_step(step: Any) -> dict[str, str] | None:
+    if not isinstance(step, dict):
+        return None
+    step_name = step.get("step_name")
+    content = step.get("content")
+    return {
+        "step_name": step_name if isinstance(step_name, str) else "",
+        "content": content if isinstance(content, str) else "",
+    }
+
+
+def _step_name_path_parts(step_name: str) -> tuple[str, ...]:
+    normalized = step_name.strip("/")
+    if not normalized:
+        return ()
+    return tuple(part for part in normalized.split("/") if part)
+
+
+def _step_name_has_descendant_match(step_name: str, candidate_step_names: set[str]) -> bool:
+    current_parts = _step_name_path_parts(step_name)
+    if not current_parts:
+        return False
+
+    for candidate_step_name in candidate_step_names:
+        if candidate_step_name == step_name:
+            continue
+        candidate_parts = _step_name_path_parts(candidate_step_name)
+        if len(candidate_parts) <= len(current_parts):
+            continue
+        if candidate_parts[: len(current_parts)] == current_parts:
+            return True
+    return False
+
+
+def _dedupe_structured_cost_telemetry_full_logs(full_logs: list[dict[str, str]]) -> list[dict[str, str]]:
+    if not isinstance(full_logs, list):
+        return []
+
+    structured_line_step_names: dict[str, set[str]] = {}
+    normalized_full_logs: list[dict[str, str]] = []
+    for raw_step in full_logs:
+        step = _normalized_full_log_step(raw_step)
+        if step is None:
+            continue
+        normalized_full_logs.append(step)
+        step_name = step["step_name"]
+        content = step["content"]
+        if not content:
+            continue
+        for line in content.splitlines(keepends=True):
+            line_key = _structured_cost_telemetry_line_key(line)
+            if line_key is None:
+                continue
+            structured_line_step_names.setdefault(line_key, set()).add(step_name)
+
+    deduped_full_logs: list[dict[str, str]] = []
+    for step in normalized_full_logs:
+        step_name = step["step_name"]
+        content = step["content"]
+        if not content:
+            deduped_full_logs.append(dict(step))
+            continue
+
+        filtered_lines: list[str] = []
+        for line in content.splitlines(keepends=True):
+            line_key = _structured_cost_telemetry_line_key(line)
+            if line_key is not None and _step_name_has_descendant_match(
+                step_name,
+                structured_line_step_names.get(line_key, set()),
+            ):
+                continue
+            filtered_lines.append(line)
+
+        step_copy = dict(step)
+        step_copy["content"] = "".join(filtered_lines)
+        deduped_full_logs.append(step_copy)
+
+    return deduped_full_logs
+
+
+def _cost_telemetry_text_from_full_logs(full_logs: list[dict[str, str]]) -> str:
+    return _full_logs_to_text(_dedupe_structured_cost_telemetry_full_logs(full_logs))
+
+
 def _run_wall_clock_ms(run: dict[str, Any]) -> int | None:
     duration_seconds = _to_int(run.get("duration_seconds"), 0)
     if duration_seconds <= 0:
@@ -1152,7 +1288,7 @@ def _run_wall_clock_ms(run: dict[str, Any]) -> int | None:
 
 def _apply_cost_telemetry_from_full_logs(run: dict[str, Any], full_logs: list[dict[str, str]]) -> None:
     telemetry = build_run_cost_telemetry(
-        _full_logs_to_text(full_logs),
+        _cost_telemetry_text_from_full_logs(full_logs),
         fallback_wall_clock_ms=_run_wall_clock_ms(run),
     )
     run["cost_telemetry"] = telemetry
