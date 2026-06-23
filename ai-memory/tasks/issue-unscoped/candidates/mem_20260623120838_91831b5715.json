@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/collect_workflow_logs.py:1188-1190 | severity=medium | confidence=5\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: `rstrip()` now strips all trailing whitespace, causing otherwise identical telemetry lines that differ only by spaces or tabs to deduplicate as the same key.\n  WHY: Both reviewers reported that wrapper-step and child-step telemetry lines with differing trailing whitespace were being treated as distinct before the fix, and the change now collapses them together.\n- scripts/collect_workflow_logs.py:1234-1312 | severity=low | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: Malformed `full_logs` entries such as `None` values for entries, `step_name`, or `content` are now tolerated instead of crashing or misbehaving.\n  WHY: The reviewer said the function previously could raise `AttributeError` or otherwise handle malformed entries incorrectly, and the updated code covers those cases.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Validate and land the safe subset of the 2026-06-16 to 2026-06-23 workflow-optimization findings (the PR title and validation comment).\n  expected_change_site: The six optimization source docs have already been removed; the single concrete landed sibling change cited in those docs (review-autofix support-script bootstrap + workspace manifest under `${RUNNER_TEMP}`) is already present on HEAD.\n  confidence=[2]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: No new implementation in LAST RUN DIFF; the autofix only touches dedup whitespace, and the editor already explicitly called out \u201calready satisfied\u201d for the bootstrap and manifest fixes.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/collect_workflow_logs.py:1188-1190 in _structured_cost_telemetry_line_key() | severity=MAJOR | confidence=5\n  PROBLEM: Previously, _structured_cost_telemetry_line_key() only stripped \"\\r\\n\" from line endings, leaving trailing spaces and tabs intact.\n  WHY: This caused identical telemetry lines with different trailing whitespace to be deduplicated as distinct keys, leading to wrapper vs child double-counting in OR/Semble/Serena telemetry counters until the fix.\n- scripts/collect_workflow_logs.py:1234-1312 in _dedupe_structured_cost_telemetry_full_logs() and related functions | severity=NIT | confidence=4\n  PROBLEM: Malformed full_logs entries are now tolerated.\n  WHY: Previously, the function could crash on None entries or dicts with None values for step_name or content.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- scripts/collect_workflow_logs.py:~1190 (`_structured_cost_telemetry_line_key`) | severity=MAJOR | confidence=5\n  PROBLEM: `line.rstrip()` (now removes all trailing whitespace) vs. the previous `rstrip(\"\\r\\n\")` causes identical telemetry lines that differ only by spaces/tabs to collapse into the same key.\n  WHY: Wrapper-step logs (step-001) and per-step logs (step-045) emit the exact same openrouter/Semble/Serena lines; deduplication now drops the child copy, under-counting OR calls and inflating the \u201cwrapper duplicate\u201d false-positive rate the previous reviewer noted.\n- Requirement: Validate and land the safe subset of the 2026-06-16 to 2026-06-23 workflow-optimization findings (the PR title and validation comment).\n  Expected change site: The six optimization source docs have already been removed (as expected). The single concrete landed sibling change cited in those docs (review-autofix support-script bootstrap + workspace manifest under `${RUNNER_TEMP}`) is already present on HEAD.\n  Evidence of absence: No new implementation in LAST RUN DIFF; the autofix only touches dedup whitespace. The editor already explicitly called out \u201calready satisfied\u201d for the bootstrap and manifest fixes.\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "3e8d0885c978aa697a2a0cdad6ffbf6fe1e33f61044adc97cad607a0555d2bf3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3479,
+    "run_id": "28022168317",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28022168317",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260623120838_91831b5715",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3479,
+    "run_id": "28022168317"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-23T12:08:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
