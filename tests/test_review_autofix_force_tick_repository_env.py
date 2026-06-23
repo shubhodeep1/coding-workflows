@@ -119,7 +119,8 @@ def test_named_force_tick_steps_bind_repository() -> None:
 			f"(consumer run 27995931397). Declared env keys: "
 			f"{sorted(env.keys())}"
 		)
-		assert "${{ github.repository }}" in str(env["REPOSITORY"]), (
+		normalized_repository_env = re.sub(r"\s+", "", str(env["REPOSITORY"]))
+		assert "${{github.repository}}" in normalized_repository_env, (
 			f"step {name!r} must bind REPOSITORY to ${{{{ github.repository }}}} "
 			f"(the value every other REPOSITORY-using step in this job uses; in "
 			f"a reusable workflow it resolves to the calling consumer repo, "
