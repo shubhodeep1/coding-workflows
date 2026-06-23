@@ -7,6 +7,7 @@
 .ai/validate.yml
 .claude/commands/analyze-log.md
 .claude/commands/apply-analysis.md
+.claude/commands/apply-url.md
 .claude/commands/audit-plans.md
 .claude/commands/deploy-activate.md
 .claude/commands/implement-plan-ai.md
@@ -506,6 +507,7 @@ tests/test_retrigger_inflight_direct_fallback.py
 tests/test_review_apply_fixes_smoke_deterministic.py
 tests/test_review_autofix_editor_noop_cascade_contract.py
 tests/test_review_autofix_failure_log_upload.py
+tests/test_review_autofix_force_tick_repository_env.py
 tests/test_review_autofix_last_run_diff_oscillation_guard.py
 tests/test_review_autofix_merge_precheck.py
 tests/test_review_autofix_phase_transition_contract.py
@@ -593,6 +595,7 @@ tests/test_write_codex_config.py
 unattended_system_instructions.md
 workflow-templates/.claude/commands/analyze-log.md
 workflow-templates/.claude/commands/apply-analysis.md
+workflow-templates/.claude/commands/apply-url.md
 workflow-templates/.claude/commands/audit-plans.md
 workflow-templates/.claude/commands/deploy-activate.md
 workflow-templates/.claude/commands/implement-plan-ai.md
