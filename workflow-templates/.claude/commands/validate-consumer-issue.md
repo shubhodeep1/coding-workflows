@@ -14,7 +14,7 @@ $ARGUMENTS
    - **`[BOTH]`** — a coordinated defect; judge each side by its matching rule.
 
    ### Resolving the upstream pin (for the `[UPSTREAM]` / `[BOTH]` side)
-   Inspect this repo's `.github/workflows/*.yml` for every `uses:` / `ref:` that references `shubhodeep1/coding-workflows`; the exact `ref` is the pin. Resolve it to `UPSTREAM_TAG` (the label) and `UPSTREAM_SHA` (the commit) — tag `@vX.Y.Z` via `get_tag` / `list_tags`; a direct SHA as-is; moving `@stable` via `list_tags`; branch `@main` to its current tip (note it may move). Pass `ref=<UPSTREAM_SHA>` on **every** upstream read. Validating an upstream report at `main` when this repo is pinned to a release is a bug — that ref may not match what this repo runs. (Exception: when `THIS_REPO == shubhodeep1/coding-workflows`, the upstream side *is* this repo and is validated + fixed at `main`.)
+   Inspect this repo's `.github/workflows/*.yml` for every `uses:` / `ref:` that references `shubhodeep1/coding-workflows`; the exact `ref` is the pin. Resolve it to `UPSTREAM_TAG` (the label) and `UPSTREAM_SHA` (the commit) — tag `@vX.Y.Z` via `get_tag` / `list_tags`; a direct SHA as-is; moving `@stable` via `list_tags`; branch `@main` to its current tip (note it may move). Pass `ref=<UPSTREAM_SHA>` on **every** upstream read. Validating an upstream report at `main` when this repo is pinned to a release is a bug — that ref may not match what this repo runs. (Exception: when `THIS_REPO == shubhodeep1/coding-workflows`, the upstream side *is* this repo and is validated at `main`; its fix lands on the `stable` branch — see the Decision Rule.)
 
 4. **Validate the ISSUE** at the ref for its side. Trace it in the code and, where feasible, reproduce it. Decide:
    - **VALID** — a genuine defect; cite the code path (`THIS_REPO`: `file:line`; upstream: `shubhodeep1/coding-workflows@UPSTREAM_TAG (short-sha):file:line`) and the repro result. State the side.
@@ -35,7 +35,7 @@ $ARGUMENTS
 Settle on the correct fix first (never apply a proposal you judged INCORRECT as-is — derive the real fix from the evidence, the `/investigate-issue` behaviour), classify every finding **EVIDENCE-BASED** vs **HYPOTHESIS**, then:
 
 - **Read-write side** — `[CONSUMER-INTERNAL]`, and `[UPSTREAM]` when `THIS_REPO == shubhodeep1/coding-workflows`:
-  - Issue **VALID**, the correct fix fully **EVIDENCE-BASED**, no §6/§10 hard gate, no cross-consumer break, and no missing/inaccessible resource blocking root cause or verification → apply the fix at `THIS_REPO@main` (or `shubhodeep1/coding-workflows@main` for the self-consuming case), verify (re-run the repro / failing test when feasible), commit, push, open a PR. Do not ask. Report with `Fix:` = applied + branch/PR.
+  - Issue **VALID**, the correct fix fully **EVIDENCE-BASED**, no §6/§10 hard gate, no cross-consumer break, and no missing/inaccessible resource blocking root cause or verification → apply the fix at `THIS_REPO@main` (or, for the self-consuming case where `THIS_REPO == shubhodeep1/coding-workflows`, at `shubhodeep1/coding-workflows@stable` — branch off `stable`), verify (re-run the repro / failing test when feasible), commit, push, open a PR. Set the PR base to `THIS_REPO`'s default branch for the consumer-internal side, and to `stable` for the self-consuming `shubhodeep1/coding-workflows` side — the latter always lands its fixes on `stable`, never `main`, unless the request explicitly names a different target branch. Do not ask. Report with `Fix:` = applied + branch/PR.
   - Any HYPOTHESIS finding, a §6 hard gate (the only correct fix needs an unaliased rename/removal of a public identifier), a §10 hard gate (a collection/index change without its `/db/contracts/*` update), a cross-consumer break, multiple plausible fixes with material tradeoffs, or a blocking inaccessible resource → stop before editing; report the verdicts and ask (CLAUDE.md §2 Q/A format for a §6/§10/tradeoff decision).
 - **Read-only side** — `[UPSTREAM]` when `THIS_REPO != shubhodeep1/coding-workflows`:
   - Do **NOT** edit — this session cannot push to the upstream library. Surface the correct fix as a proposed diff with `shubhodeep1/coding-workflows@<UPSTREAM_TAG> (<short-sha>):file:line` anchors and tell the user to open a `shubhodeep1/coding-workflows` session (where `/validate-consumer-issue` or `/investigate-issue` can land it).
@@ -77,9 +77,9 @@ Omit empty sections; every verdict carries a citation. When the fix was applied 
 
 **Writes (only on the read-write side per the [Decision Rule](#decision-rule)):**
 
-- **`Edit` / `Write`** — apply the correct fix against the local `THIS_REPO@main` checkout (or `shubhodeep1/coding-workflows@main` when this repo *is* the library), and add/extend the verifying test. **Never edit files on the read-only `[UPSTREAM]` side** — a different consumer's session cannot push there.
-- **`Bash`** — `git` (branch off `main`, commit, `push -u origin <branch>`) and re-running the repro / failing test to verify before pushing.
-- **`mcp__github__create_pull_request`** (or `gh pr create`) — open the PR ready for review against the default branch.
+- **`Edit` / `Write`** — apply the correct fix against the local `THIS_REPO@main` checkout (or the local `shubhodeep1/coding-workflows@stable` checkout when this repo *is* the library — branch off `stable`), and add/extend the verifying test. **Never edit files on the read-only `[UPSTREAM]` side** — a different consumer's session cannot push there.
+- **`Bash`** — `git` (branch off the target ref — `main` for the consumer-internal side, `stable` for the self-consuming `shubhodeep1/coding-workflows` side — commit, `push -u origin <branch>`) and re-running the repro / failing test to verify before pushing.
+- **`mcp__github__create_pull_request`** (or `gh pr create`) — open the PR ready for review against the default branch (consumer-internal side), or against the `stable` branch for the self-consuming `shubhodeep1/coding-workflows` side (override only when the request explicitly names another branch).
 
 ## Rules
 
