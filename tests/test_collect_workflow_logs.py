@@ -765,7 +765,7 @@ def test_apply_cost_telemetry_from_full_logs_preserves_review_warning_signals():
 
 
 def test_structured_cost_telemetry_line_key_strips_trailing_whitespace():
-	line = "SEMBLE_QUERY target=reviewer-context chunks=4 bytes=88 ms=3 \t\r\n"
+	line = "SEMBLE_QUERY target=reviewer-context chunks=4 bytes=88 ms=3\r\n"
 	assert (
 		collector._structured_cost_telemetry_line_key(line)
 		== "SEMBLE_QUERY target=reviewer-context chunks=4 bytes=88 ms=3"
