@@ -773,7 +773,7 @@ def test_structured_cost_telemetry_line_key_strips_trailing_whitespace():
 	line_with_space_and_tab = "SEMBLE_QUERY target=reviewer-context chunks=4 bytes=88 ms=3 \t\r\n"
 	assert (
 		collector._structured_cost_telemetry_line_key(line_with_space_and_tab)
-		== "SEMBLE_QUERY target=reviewer-context chunks=4 bytes=88 ms=3 \t"
+		== "SEMBLE_QUERY target=reviewer-context chunks=4 bytes=88 ms=3"
 	)
 
 
