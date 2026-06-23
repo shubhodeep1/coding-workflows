@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nReviewed `scripts/collect_workflow_logs.py`, `scripts/cost_audit.py`, `scripts/summarize_unselected_runs.py`, and the closest collector/parser tests.\n\nPlanning ref context\n- Commit: `c90ee7c85858db2cbec6e85ce2e1167eb7f9fe09`\n- Checked-out ref: `orchestrator/project-3472`\n- Integration metadata: `orchestrator/project-3472`\n- Integration branch mismatch: `false`\n- Clarification mapping: no clarification questions were asked; `/answer [auto-answered-by-orchestrator]` only confirms continuation.\n\nRepresentative path to follow\n- Collector flow: `extract_full_logs()` \u2192 `build_log_excerpts_from_full_logs()` / `_apply_cost_telemetry_from_full_logs()`\n- Closest tests: `test_apply_cost_telemetry_from_full_logs_preserves_review_warning_signals()` and `test_main_refetches_cached_logs_when_cost_telemetry_is_missing()`\n\n1. Files likely to change\n- `scripts/collect_workflow_logs.py` \u2014 primary fix.\n- `tests/test_collect_workflow_logs.py` \u2014 regression coverage for duplicate wrapper/child telemetry.\n- Preferred non-change: keep `scripts/cost_audit.py` unchanged unless a tiny shared helper is unavoidable.\n\n2. Functions or modules to implement\n- In `scripts/collect_workflow_logs.py`, add a new internal helper near `_full_logs_to_text()` / `_apply_cost_telemetry_from_full_logs()` that builds the text fed into `build_run_cost_telemetry()` from `full_logs` with dedupe rules:\n  - inspect each step log line-by-line;\n  - target the structured single-line telemetry that `cost_audit.py` already counts (at minimum `INFO: openrouter usage`, `SEMBLE_QUERY`, `SEMBLE_FALLBACK`);\n  - group by exact line text;\n  - dedupe only across wrapper/child ancestry chains inferred from slash-delimited `step_name` values from `_extract_step_name()`;\n  - keep the deepest/most specific step copy;\n  - keep unrelated sibling-step duplicates and non-telemetry text untouched.\n- Update `_apply_cost_telemetry_from_full_logs()` to use that deduped telemetry text while preserving the existing wall-clock fallback.\n- Do not change `extract_full_logs()`, `build_log_excerpts_from_full_logs()`, or log-bundle export behavior except as needed to route deduped text into derived telemetry.\n\n3. Data structures affected\n- Internal `full_logs` step list (`step_name`, `content`) in the collector.\n- Per-run `run[\"cost_telemetry\"]` values only.\n- Aggregated `report[\"summary\"][\"cost_telemetry\"]`.\n- Persisted cache rows: `rows_snapshot[*].cost_telemetry`.\n- Raw `log_excerpts` and exported `step-*.log` files must stay unchanged.\n\n4. API or interface changes\n- No schema changes.\n- No field-name changes.\n- Only behavioral change: `cost_telemetry` counts may decrease for runs where the same structured telemetry line was duplicated between wrapper and child step logs.\n- Standalone `scripts/cost_audit.py` parsing for flat log strings should remain backward-compatible.\n\n5. Potential risks or edge cases\n- Do not collapse identical lines from unrelated steps; only collapse wrapper/child duplicates.\n- Do not collapse repeated identical lines inside one step log unless the bug reproduces that shape.\n- Preserve the existing Semble contract-test vs runtime fallback split exactly.\n- Avoid changing the `extract_full_logs()` return shape; other tests/consumers assume the current `step_name`/`content` structure.\n- Scope note: `scripts/summarize_unselected_runs.py` has a similar concatenate-then-parse helper, but this issue\u2019s validated scope is `scripts/collect_workflow_logs.py`; leave the other script alone unless a shared internal helper can be reused without behavior change.\n\n6. Testing considerations\n- Add a direct collector regression beside `test_apply_cost_telemetry_from_full_logs_preserves_review_warning_signals()` with synthetic multi-step `full_logs` containing:\n  - duplicate `INFO: openrouter usage` lines in wrapper + child steps,\n  - duplicate `SEMBLE_QUERY` / `SEMBLE_FALLBACK` lines in wrapper + child steps,\n  - at least one distinct telemetry line that must still count separately.\n- Assert deduped per-run telemetry and deduped `report[\"summary\"][\"cost_telemetry\"]`.\n- Add or extend a `main()`-path regression to prove both raw step excerpts are still preserved while persisted `cost_telemetry` uses deduped counts.\n- Run:\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_collect_workflow_logs.py`\n  - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_cost_audit_semble_metrics.py`\n\n7. Pre-execution self-check\n- Clarification is sufficient.\n- Ref context matches integration metadata.\n- The plan stays surgical: collector + collector tests, with parser behavior preserved.\n- No blocking codebase conflicts found.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "5cce197911f91f3f9ffc6e66aab62e604dd5a79602180e5199ee9e38fa552647",
+  "lineage": {
+    "issue_number": 3474,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28003169615",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28003169615",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3474"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260623050032_ee653afbec",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3474,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "28003169615"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3474",
+  "timestamps": {
+    "created_at": "2026-06-23T05:00:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
