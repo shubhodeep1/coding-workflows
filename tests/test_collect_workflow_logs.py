@@ -764,6 +764,14 @@ def test_apply_cost_telemetry_from_full_logs_preserves_review_warning_signals():
 	assert report["summary"]["cost_telemetry"]["context_budget_warn_count"] == 1
 
 
+def test_structured_cost_telemetry_line_key_strips_trailing_whitespace():
+	line = "SEMBLE_QUERY target=reviewer-context chunks=4 bytes=88 ms=3 \t\r\n"
+	assert (
+		collector._structured_cost_telemetry_line_key(line)
+		== "SEMBLE_QUERY target=reviewer-context chunks=4 bytes=88 ms=3"
+	)
+
+
 def test_apply_cost_telemetry_from_full_logs_dedupes_wrapper_child_structured_lines_only():
 	duplicate_openrouter_line = (
 		"INFO: openrouter usage phase=review call=pass1 model=openai/gpt-5.4 "

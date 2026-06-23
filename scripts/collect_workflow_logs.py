@@ -1185,7 +1185,9 @@ def _full_logs_to_text(full_logs: list[dict[str, str]]) -> str:
 
 
 def _structured_cost_telemetry_line_key(line: str) -> str | None:
-    line_text = line.rstrip("\r\n")
+    if not isinstance(line, str):
+        return None
+    line_text = line.rstrip()
     if not line_text:
         return None
     if any(pattern.search(line_text) for pattern in STRUCTURED_COST_TELEMETRY_PATTERNS):
