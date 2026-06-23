@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_force_tick_repository_env.py:46-47,106-108,159 | severity=high | confidence=[4]\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: The test hard-codes exact step names, making the contract check brittle to harmless step renames.\n  WHY: A rename of either force-tick step would trigger `seen != want` even if the `REPOSITORY` binding and `${REPOSITORY}` reference remain correct.\n- tests/test_review_autofix_force_tick_repository_env.py:29-43 | severity=high | confidence=[4]\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The `_REPOSITORY_REF` regex does not match bare `$REPOSITORY` references, so those shell-variable usages can be overlooked.\n  WHY: Runs that reference `REPOSITORY` without braces would evade the check, leaving potential unbound-variable cases uncaught.\n- tests/test_review_autofix_force_tick_repository_env.py:112-129 | severity=low | confidence=[3]\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: The normalized repository environment assertion normalizes whitespace but not quoting style, so semantically equivalent env declarations can fail.\n  WHY: Valid forms like `REPOSITORY: \"${{ github.repository }}\"` versus `REPOSITORY: ${{ github.repository }}` are treated as different despite GitHub Actions equivalence.\n- tests/test_review_autofix_force_tick_repository_env.py:112-113,116-117 | severity=low | confidence=[4]\n  flagged_by: [qwen_qwen3_6-plus]\n  PROBLEM: The assertion error messages incorrectly reference `$shubhodeep1/coding-workflows` instead of the `${REPOSITORY}` shell variable being validated.\n  WHY: When the test fails, the message points developers at a repo-path string rather than the actual missing or unbound `REPOSITORY` reference, making debugging misleading.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- File: tests/test_review_autofix_force_tick_repository_env.py\n  Lines 46-47, 106-108, 159\n  Problem: Test brittleness \u2014 hard-coding exact step names makes the contract test fail on harmless step renames even though the env binding contract still holds.\n  Why it fails at runtime: Renaming a force-tick step in .github/workflows/review_autofix.yml would break CI for a cosmetic/no-functional change, reducing test robustness and maintainability.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- File: tests/test_review_autofix_force_tick_repository_env.py\n  Lines 29-43\n  Problem: The regex _REPOSITORY_REF does not match REPOSITORY inside ${REPOSITORY} (bare variable without braces), causing the symbol to be overlooked in run blocks that reference bare $REPOSITORY under set -u.\n  Why it fails at runtime: The regex pattern does not ensure exhaustive coverage of REPOSITORY references in shell contexts, leaving potential unbound-variable footguns uncaught when teams use the bare convention.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- File: tests/test_review_autofix_force_tick_repository_env.py\n  Lines 112-129\n  Problem: The normalized repository environment assertion normalizes away whitespace but does not normalize quoting style, allowing benign differences like REPOSITORY: \"${{ github.repository }}\" vs REPOSITORY: ${{ github.repository }} to fail assertions despite semantic equivalence.\n  Why it fails at runtime: The test rejects valid env declarations due to whitespace/quoting variation that GitHub Actions treats as equivalent, inflating CI brittleness without improving safety.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- File: tests/test_review_autofix_force_tick_repository_env.py\n  Lines 112-113, 116-117\n  Problem: The assertion error messages incorrectly reference `$shubhodeep1/coding-workflows` (a literal repo path string) when the actual validation is checking for the shell variable `${REPOSITORY}`.\n  Why it fails at runtime: When the test fails, the developer sees a misleading message about a repo path reference instead of the actual problem (the REPOSITORY shell variable is missing or unbound), which makes debugging harder.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- File: tests/test_review_autofix_force_tick_repository_env.py\n  Lines 106-108, 159\n  Problem: The test hard-codes exact step name strings in the `want` set and uses them both for name matching and in assertion error messages.\n  Why it fails at runtime: A harmless rename of either step will cause `seen != want`, triggering `AssertionError` even though the `REPOSITORY` env binding and `${REPOSITORY}` reference remain correct.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "67c52e88b06898b1edfae385198e1f3cbd1109aa98065c06e5b49416d866bad8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3480,
+    "run_id": "28008373127",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28008373127",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260623074254_1abba5325b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3480,
+    "run_id": "28008373127"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-23T07:42:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
