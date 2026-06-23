@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "Runs that modified guard logic also added dedicated dev tests and workflow validation files. When changing anything that restricts writes or automates fixes, expect to add or adjust tests that prove the guard still blocks and allows the right cases.",
+  "fingerprint": "b52bab7e560475490316a4f2f736f48fc8877e9d41ccda34e306bdfecc7dc10c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27999403262",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27999403262",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3416",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3418",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3420",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3422",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3432",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3417",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3419",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3421",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3423",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3433"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260623031104_e012712753",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Write-guard and safety-related workflow changes need explicit test coverage.",
+  "timestamps": {
+    "created_at": "2026-06-23T03:11:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
