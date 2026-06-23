@@ -349,6 +349,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_failure_log_upload.py
 
+      - name: Review autofix force-tick REPOSITORY env contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_force_tick_repository_env.py
+
       - name: Review autofix smoke editor override contract test
         run: |
           set -euo pipefail
