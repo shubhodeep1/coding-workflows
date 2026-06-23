@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Cross-workflow orchestration changes often ripple across multiple YAML files and shared helper scripts.",
   "timestamps": {
     "created_at": "2026-06-23T03:11:55Z",
