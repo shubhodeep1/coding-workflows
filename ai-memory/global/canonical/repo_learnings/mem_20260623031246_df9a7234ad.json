@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Labeling and metadata sync logic is tightly coupled to repository-wide automation.",
   "timestamps": {
     "created_at": "2026-06-23T03:12:46Z",
