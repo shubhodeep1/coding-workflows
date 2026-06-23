@@ -1195,6 +1195,17 @@ def _structured_cost_telemetry_line_key(line: str) -> str | None:
     return None
 
 
+def _normalized_full_log_step(step: Any) -> dict[str, str] | None:
+    if not isinstance(step, dict):
+        return None
+    step_name = step.get("step_name")
+    content = step.get("content")
+    return {
+        "step_name": step_name if isinstance(step_name, str) else "",
+        "content": content if isinstance(content, str) else "",
+    }
+
+
 def _step_name_path_parts(step_name: str) -> tuple[str, ...]:
     normalized = step_name.strip("/")
     if not normalized:
@@ -1219,10 +1230,18 @@ def _step_name_has_descendant_match(step_name: str, candidate_step_names: set[st
 
 
 def _dedupe_structured_cost_telemetry_full_logs(full_logs: list[dict[str, str]]) -> list[dict[str, str]]:
+    if not isinstance(full_logs, list):
+        return []
+
     structured_line_step_names: dict[str, set[str]] = {}
-    for step in full_logs:
-        step_name = str(step.get("step_name") or "")
-        content = str(step.get("content") or "")
+    normalized_full_logs: list[dict[str, str]] = []
+    for raw_step in full_logs:
+        step = _normalized_full_log_step(raw_step)
+        if step is None:
+            continue
+        normalized_full_logs.append(step)
+        step_name = step["step_name"]
+        content = step["content"]
         if not content:
             continue
         for line in content.splitlines(keepends=True):
@@ -1232,9 +1251,9 @@ def _dedupe_structured_cost_telemetry_full_logs(full_logs: list[dict[str, str]])
             structured_line_step_names.setdefault(line_key, set()).add(step_name)
 
     deduped_full_logs: list[dict[str, str]] = []
-    for step in full_logs:
-        step_name = str(step.get("step_name") or "")
-        content = str(step.get("content") or "")
+    for step in normalized_full_logs:
+        step_name = step["step_name"]
+        content = step["content"]
         if not content:
             deduped_full_logs.append(dict(step))
             continue

@@ -770,6 +770,11 @@ def test_structured_cost_telemetry_line_key_strips_trailing_whitespace():
 		collector._structured_cost_telemetry_line_key(line)
 		== "SEMBLE_QUERY target=reviewer-context chunks=4 bytes=88 ms=3"
 	)
+	line_with_space_and_tab = "SEMBLE_QUERY target=reviewer-context chunks=4 bytes=88 ms=3 \t\r\n"
+	assert (
+		collector._structured_cost_telemetry_line_key(line_with_space_and_tab)
+		== "SEMBLE_QUERY target=reviewer-context chunks=4 bytes=88 ms=3 \t"
+	)
 
 
 def test_apply_cost_telemetry_from_full_logs_dedupes_wrapper_child_structured_lines_only():
@@ -827,6 +832,12 @@ def test_apply_cost_telemetry_from_full_logs_dedupes_wrapper_child_structured_li
 		},
 	]
 
+	deduped_full_logs = collector._dedupe_structured_cost_telemetry_full_logs(full_logs)
+	assert duplicate_openrouter_line not in deduped_full_logs[0]["content"]
+	assert duplicate_query_line not in deduped_full_logs[0]["content"]
+	assert duplicate_openrouter_line in deduped_full_logs[1]["content"]
+	assert duplicate_query_line in deduped_full_logs[2]["content"]
+
 	collector._apply_cost_telemetry_from_full_logs(run, full_logs)
 	telemetry = run["cost_telemetry"]
 	assert telemetry["or_prompt_tokens"] == 200
@@ -850,6 +861,54 @@ def test_apply_cost_telemetry_from_full_logs_dedupes_wrapper_child_structured_li
 	assert summary["semble_fallbacks"] == 2
 	assert summary["semble_contract_test_fallbacks"] == 1
 	assert summary["semble_runtime_fallbacks"] == 1
+
+
+def test_apply_cost_telemetry_from_full_logs_keeps_sibling_duplicates():
+	duplicate_openrouter_line = (
+		"INFO: openrouter usage phase=review call=pass1 model=openai/gpt-5.4 "
+		"cache_enabled=true cache_breakpoint_enabled=false cache_breakpoint_fallback_retry=false "
+		"prompt_tokens=100 completion_tokens=25 total_tokens=125 "
+		"cache_creation_input_tokens=30 cache_read_input_tokens=40"
+	)
+	duplicate_query_line = "SEMBLE_QUERY target=reviewer-context chunks=4 bytes=88 ms=3"
+	run = {
+		"repository": "owner/repo",
+		"run_id": 412,
+		"conclusion": "failure",
+		"duration_seconds": 12,
+		"workflow_family": "review_autofix",
+	}
+	full_logs = [
+		{
+			"step_name": "review/pass1",
+			"content": "\n".join([duplicate_openrouter_line, duplicate_query_line, "pass1 detail"]) + "\n",
+		},
+		{
+			"step_name": "review/pass2",
+			"content": "\n".join([duplicate_openrouter_line, duplicate_query_line, "pass2 detail"]) + "\n",
+		},
+	]
+
+	collector._apply_cost_telemetry_from_full_logs(run, full_logs)
+	telemetry = run["cost_telemetry"]
+	assert telemetry["or_calls"] == 2
+	assert telemetry["or_total_tokens"] == 250
+	assert telemetry["semble_query_calls"] == 2
+	assert telemetry["semble_query_bytes"] == 176
+
+
+def test_dedupe_structured_cost_telemetry_full_logs_handles_malformed_inputs():
+	duplicate_query_line = "SEMBLE_QUERY target=reviewer-context chunks=4 bytes=88 ms=3"
+	deduped = collector._dedupe_structured_cost_telemetry_full_logs(
+		[
+			None,
+			{"step_name": "review", "content": None},
+			{"step_name": "review/pass1", "content": duplicate_query_line + "\n"},
+		]
+	)
+	assert deduped[0] == {"step_name": "review", "content": ""}
+	assert deduped[1] == {"step_name": "review/pass1", "content": duplicate_query_line + "\n"}
+	assert collector._dedupe_structured_cost_telemetry_full_logs(None) == []
 
 
 def test_fetch_run_log_archive_retries_transient_then_succeeds():
