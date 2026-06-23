@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/collect_workflow_logs.py:1187-1193 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: `_structured_cost_telemetry_line_key` only strips `\\r\\n`, so structured telemetry lines that differ only by trailing spaces or tabs are treated as distinct and can escape deduplication.\n  WHY: Exact-duplicate telemetry lines with trailing whitespace will produce different keys, causing double-counting instead of deduping.\n- scripts/collect_workflow_logs.py:1239 | severity=high | confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `_step_name_has_descendant_match` can misclassify ancestor/descendant relationships and suppress the wrong step copy, breaking the intended preference for the step-specific child line.\n  WHY: The reviewer reported two related blocker cases: the helper applies descendant checks too broadly, and the path-prefix logic can filter a child or parent incorrectly depending on step ordering.\n- scripts/collect_workflow_logs.py:1220 | severity=medium | confidence=4\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `_dedupe_structured_cost_telemetry_full_logs` does not guard against `None` or empty `full_logs`, so iterating can raise `TypeError`.\n  WHY: The function assumes iterable input; the reviewer flagged the missing validation as a robustness bug.\n- scripts/collect_workflow_logs.py:1218-1225 | severity=low | confidence=3\n  flagged_by: [mistralai_mistral-small-2603]\n  PROBLEM: `_structured_cost_telemetry_line_key` does not handle `None` or malformed/binary lines during regex matching, so key generation can raise.\n  WHY: If `line` is invalid, `pattern.search`/type handling can throw instead of safely skipping the line.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Stay inside the files_touched list.\"\n  expected_change_site: Only files declared in the issue's files_touched allowlist\n  confidence=3\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: The PR diff includes a mode change on `scripts/write_guard.sh` (100644 \u2192 100755) that is not described in the issue and is presumably an incidental artifact of the implementation environment. The file content is unchanged; only the execute permission bit differs.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/collect_workflow_logs.py:1187-1193 | severity=low | confidence=2\n  PROBLEM: `_structured_cost_telemetry_line_key` only strips `\\r\\n`, so structured telemetry lines that differ only by trailing spaces or tabs are treated as distinct and can escape deduplication.\n  WHY: Exact-duplicate telemetry lines with trailing whitespace will produce different keys, causing double-counting instead of deduping.\n- Requirement: \"Stay inside the files_touched list.\"\n  Expected change site: Only files declared in the issue's files_touched allowlist\n  Evidence of absence: The PR diff includes a mode change on `scripts/write_guard.sh` (100644 \u2192 100755) that is not described in the issue and is presumably an incidental artifact of the implementation environment. The file content is unchanged; only the execute permission bit differs.\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- scripts/collect_workflow_logs.py:1239 | severity=high | confidence=5\n  PROBLEM: `_step_name_has_descendant_match` can misclassify ancestor/descendant relationships and suppress the wrong step copy, breaking the intended preference for the step-specific child line. (2 related items)\n  WHY: The reviewer reported that the helper applies descendant checks too broadly and that the path-prefix logic can filter a child or parent incorrectly depending on step ordering.\n- scripts/collect_workflow_logs.py:1220 | severity=medium | confidence=4\n  PROBLEM: `_dedupe_structured_cost_telemetry_full_logs` does not guard against `None` or empty `full_logs`, so iterating can raise `TypeError`.\n  WHY: The function assumes iterable input; the reviewer flagged the missing validation as a robustness bug.\n- scripts/collect_workflow_logs.py:1218-1225 | severity=low | confidence=3\n  PROBLEM: `_structured_cost_telemetry_line_key` does not handle `None` or malformed/binary lines during regex matching, so key generation can raise.\n  WHY: If `line` is invalid, `pattern.search`/type handling can throw instead of safely skipping the line.\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "bdd1cb368dd83be492eb68d7f7927d39d5816b8a146ba08a31075d2e3c4cffd3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3478,
+    "run_id": "28003691932",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28003691932",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260623055137_0819e87e8b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3478,
+    "run_id": "28003691932"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-23T05:51:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
