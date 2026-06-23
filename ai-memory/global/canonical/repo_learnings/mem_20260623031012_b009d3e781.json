@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Prompt-rendering and memory-format changes should be treated as contract changes.",
   "timestamps": {
     "created_at": "2026-06-23T03:10:12Z",
