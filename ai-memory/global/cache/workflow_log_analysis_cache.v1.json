@@ -7,7 +7,7 @@
         203,
         204
       ],
-      "last_updated": "2026-06-23T05:07:24Z",
+      "last_updated": "2026-06-23T05:55:13Z",
       "logs_seen_set": [
         201,
         202
@@ -207,7 +207,7 @@
           "updated_at": "2026-04-10T11:05:00Z"
         }
       ],
-      "runs_window_start": "2026-06-16T05:07:17Z"
+      "runs_window_start": "2026-06-16T05:55:06Z"
     },
     "shubhodeep1/atlas-bridge.gd": {
       "jobs_seen_set": [
