@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/apply-url.md:1 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The no-URL fallback points users to `/deep-research`, but that slash command does not exist in this repo.\n  WHY: When `/apply-url` is invoked without a URL, the response will direct users to an unactionable command reference.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/commands/apply-url.md:1 | severity=NIT | confidence=4\n  PROBLEM: The command instructs the model to redirect users to `/deep-research` for open-ended research when no URL is provided, but `/deep-research` does not exist as a slash command in this repo (verified: `find` across the entire repo returns no `deep-research*` files; `grep -r` confirms the only references to the string \"deep-research\" are these two new `/apply-url` files themselves). The `/investigate-issue` alternative cited in the same clause does exist.\n  WHY: When a user invokes `/apply-url` with no URL, the model will tell the user to try `/deep-research`, which does not exist \u2014 an unactionable suggestion. The file is byte-identical in both `.claude/commands/` and `workflow-templates/.claude/commands/`, so this reference propagates to every consumer repo.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===",
+  "fingerprint": "f3a5eccdb61b37ca6ed315b83402bfa8955401fddd5e755ccdce321a2c19df29",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28003108747",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28003108747",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260623051113_142d21b69c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "28003108747"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-23T05:11:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
