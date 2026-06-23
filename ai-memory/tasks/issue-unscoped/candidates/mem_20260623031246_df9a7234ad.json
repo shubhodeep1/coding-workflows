@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "Changes to label helpers or sync jobs were paired with CI/workflow adjustments and tests. When planning label or metadata automation work, account for its effect on the broader pipeline rather than treating it as a standalone utility change.",
+  "fingerprint": "8b1a5b867ebb1a9198189eb66c40ec0c441880ba177e1bc98a2fca0acbd78ca9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "27999403262",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "27999403262",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3416",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3418",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3420",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3422",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3432",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3417",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3419",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3421",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3423",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3433"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260623031246_df9a7234ad",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Labeling and metadata sync logic is tightly coupled to repository-wide automation.",
+  "timestamps": {
+    "created_at": "2026-06-23T03:12:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
