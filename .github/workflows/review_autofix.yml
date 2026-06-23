@@ -4586,6 +4586,7 @@ jobs:
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           HELPER="${SUPPORT_SCRIPTS_DIR}/orchestrate_force_tick.sh"
@@ -5434,6 +5435,7 @@ jobs:
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           HELPER="${SUPPORT_SCRIPTS_DIR}/orchestrate_force_tick.sh"
