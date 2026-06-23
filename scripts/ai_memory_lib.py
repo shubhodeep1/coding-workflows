@@ -106,8 +106,10 @@ class RetrievalResult:
     context: str
     selected_record_ids: list[str]
     estimated_tokens: int
+    token_budget: int
     role: str
     keyword_method: str  # "llm", "plain", or "none"
+    miss_reason: str | None
 
 
 def parse_bool(value: Any, default: bool = False) -> bool:
@@ -2159,12 +2161,16 @@ def retrieve_memory_context(
     if not selected:
         lines.append("- none")
 
+    miss_reason = None if scored else "no_eligible_records"
+
     return RetrievalResult(
         context="\n".join(lines) + "\n",
         selected_record_ids=[str(item.get("record_id")) for item in selected],
         estimated_tokens=used_tokens,
+        token_budget=token_budget,
         role=resolved_role,
         keyword_method=keyword_method,
+        miss_reason=miss_reason,
     )
 
 

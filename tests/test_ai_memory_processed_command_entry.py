@@ -149,6 +149,13 @@ def _write_json_file(payload: dict, *, prefix: str) -> str:
 	return str(path)
 
 
+def _make_temp_output_file(*, prefix: str) -> Path:
+	tmp_dir = Path(tempfile.mkdtemp(prefix=prefix))
+	test_cleanup_paths = globals().setdefault("_TEST_CLEANUP_PATHS", [])
+	test_cleanup_paths.append(tmp_dir)
+	return tmp_dir / "output.txt"
+
+
 @contextlib.contextmanager
 def _patched_module_attrs(module, **replacements):
 	originals = {name: getattr(module, name) for name in replacements}
@@ -167,6 +174,15 @@ def _run_ai_memory_cli(argv: list[str]) -> tuple[int, str, str]:
 	with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
 		exit_code = ai_memory.main(argv)
 	return exit_code, stdout.getvalue(), stderr.getvalue()
+
+
+def _extract_ai_memory_telemetry(stderr: str) -> list[dict]:
+	prefix = "AI_MEMORY_TELEMETRY: "
+	entries = []
+	for line in stderr.splitlines():
+		if line.startswith(prefix):
+			entries.append(json.loads(line[len(prefix) :]))
+	return entries
 
 
 def _isolated_git_env(extra: dict[str, str] | None = None) -> dict[str, str]:
@@ -1429,6 +1445,200 @@ def test_tracking_issue_cli_validation_happens_before_memory_io() -> None:
 			assert exit_code == 2
 			assert stdout == ""
 			assert "tracking_issue must be a positive integer" in stderr
+
+
+def test_retrieve_cli_success_emits_additive_budget_and_miss_fields() -> None:
+	with _stub_ai_memory_cli_branch() as store_root:
+		memory_root = store_root / "ai-memory"
+		record = ai_memory_lib.record_candidate(
+			memory_root,
+			category="task_summaries",
+			summary="Implementation plan posted for issue #3473",
+			details="Capture additive retrieve telemetry without changing selection behavior.",
+			confidence=0.9,
+			workflow="implement",
+			run_id="4301",
+			run_attempt=1,
+			actor="octocat",
+			issue_number=3473,
+			pr_number=None,
+			source_refs=["issue-3473"],
+		)
+		output_file = _make_temp_output_file(prefix="ai-memory-retrieve-success-")
+		exit_code, stdout, stderr = _run_ai_memory_cli(
+			[
+				"retrieve",
+				"--memory-branch",
+				"ai-memory",
+				"--memory-root",
+				"ai-memory",
+				"--role",
+				"implementation",
+				"--issue-number",
+				"3473",
+				"--output-file",
+				str(output_file),
+			]
+		)
+
+	assert exit_code == 0
+	assert "AI MEMORY CONTEXT" not in stdout
+	payload = json.loads(stdout)
+	assert payload["ok"] is True
+	assert payload["enabled"] is True
+	assert payload["role"] == "implementation"
+	assert payload["records_selected"] == 1
+	assert payload["record_ids"] == [record["record_id"]]
+	assert payload["estimated_tokens"] > 0
+	assert payload["token_budget"] == 1600
+	assert payload["keyword_method"] == "none"
+	assert payload["miss_reason"] is None
+	context = output_file.read_text(encoding="utf-8")
+	assert context.startswith("AI MEMORY CONTEXT\nrole: implementation\n")
+	assert f"id={record['record_id']}" in context
+	telemetry_entries = _extract_ai_memory_telemetry(stderr)
+	assert len(telemetry_entries) == 1
+	telemetry = telemetry_entries[0]
+	assert telemetry["op"] == "retrieve"
+	assert telemetry["enabled"] is True
+	assert telemetry["records_selected"] == 1
+	assert telemetry["estimated_tokens"] == payload["estimated_tokens"]
+	assert telemetry["token_budget"] == 1600
+	assert telemetry["keyword_method"] == "none"
+	assert telemetry["miss_reason"] is None
+
+
+def test_retrieve_cli_zero_hit_reports_no_eligible_records() -> None:
+	with _stub_ai_memory_cli_branch():
+		output_file = _make_temp_output_file(prefix="ai-memory-retrieve-zero-hit-")
+		exit_code, stdout, stderr = _run_ai_memory_cli(
+			[
+				"retrieve",
+				"--memory-branch",
+				"ai-memory",
+				"--memory-root",
+				"ai-memory",
+				"--role",
+				"implementation",
+				"--issue-number",
+				"3473",
+				"--output-file",
+				str(output_file),
+			]
+		)
+
+	assert exit_code == 0
+	payload = json.loads(stdout)
+	assert payload["ok"] is True
+	assert payload["enabled"] is True
+	assert payload["records_selected"] == 0
+	assert payload["record_ids"] == []
+	assert payload["estimated_tokens"] == 0
+	assert payload["token_budget"] == 1600
+	assert payload["keyword_method"] == "none"
+	assert payload["miss_reason"] == "no_eligible_records"
+	context = output_file.read_text(encoding="utf-8")
+	assert "records_selected: 0" in context
+	assert "- none" in context
+	telemetry_entries = _extract_ai_memory_telemetry(stderr)
+	assert len(telemetry_entries) == 1
+	telemetry = telemetry_entries[0]
+	assert telemetry["records_selected"] == 0
+	assert telemetry["estimated_tokens"] == 0
+	assert telemetry["token_budget"] == 1600
+	assert telemetry["keyword_method"] == "none"
+	assert telemetry["miss_reason"] == "no_eligible_records"
+
+
+def test_retrieve_cli_disabled_keeps_json_stdout_and_context_file() -> None:
+	original = os.environ.get("AI_MEMORY_ENABLED")
+	output_file = _make_temp_output_file(prefix="ai-memory-retrieve-disabled-")
+
+	def _unexpected_memory_io(*_args, **_kwargs):
+		raise AssertionError("memory io should not run when AI memory is disabled")
+
+	os.environ["AI_MEMORY_ENABLED"] = "false"
+	try:
+		with _patched_module_attrs(ai_memory, read_memory_root_from_branch=_unexpected_memory_io):
+			exit_code, stdout, stderr = _run_ai_memory_cli(
+				[
+					"retrieve",
+					"--memory-branch",
+					"ai-memory",
+					"--memory-root",
+					"ai-memory",
+					"--role",
+					"implementation",
+					"--output-file",
+					str(output_file),
+				]
+			)
+	finally:
+		if original is None:
+			os.environ.pop("AI_MEMORY_ENABLED", None)
+		else:
+			os.environ["AI_MEMORY_ENABLED"] = original
+
+	assert exit_code == 0
+	assert "AI MEMORY CONTEXT" not in stdout
+	payload = json.loads(stdout)
+	assert payload["ok"] is True
+	assert payload["enabled"] is False
+	assert payload["records_selected"] == 0
+	assert payload["estimated_tokens"] == 0
+	assert payload["token_budget"] is None
+	assert payload["miss_reason"] == "disabled"
+	assert output_file.read_text(encoding="utf-8") == "AI MEMORY CONTEXT\nstatus: disabled\n"
+	telemetry_entries = _extract_ai_memory_telemetry(stderr)
+	assert len(telemetry_entries) == 1
+	telemetry = telemetry_entries[0]
+	assert telemetry["enabled"] is False
+	assert telemetry["records_selected"] == 0
+	assert telemetry["token_budget"] is None
+	assert telemetry["miss_reason"] == "disabled"
+
+
+def test_retrieve_cli_branch_unavailable_keeps_json_stdout_and_context_file() -> None:
+	output_file = _make_temp_output_file(prefix="ai-memory-retrieve-unavailable-")
+
+	def _raise_missing_memory_branch(*_args, **_kwargs):
+		raise ai_memory.MemoryGitError("fatal: couldn't find remote ref refs/heads/ai-memory")
+
+	with _patched_module_attrs(ai_memory, read_memory_root_from_branch=_raise_missing_memory_branch):
+		exit_code, stdout, stderr = _run_ai_memory_cli(
+			[
+				"retrieve",
+				"--memory-branch",
+				"ai-memory",
+				"--memory-root",
+				"ai-memory",
+				"--role",
+				"implementation",
+				"--output-file",
+				str(output_file),
+			]
+		)
+
+	assert exit_code == 0
+	assert "AI MEMORY CONTEXT" not in stdout
+	payload = json.loads(stdout)
+	assert payload["ok"] is True
+	assert payload["enabled"] is False
+	assert payload["records_selected"] == 0
+	assert payload["estimated_tokens"] == 0
+	assert payload["token_budget"] is None
+	assert payload["miss_reason"] == "branch_unavailable"
+	assert "couldn't find remote ref" in payload["warning"]
+	assert output_file.read_text(encoding="utf-8") == "AI MEMORY CONTEXT\nstatus: unavailable\n"
+	assert "AI_MEMORY_WARNING: fatal: couldn't find remote ref refs/heads/ai-memory" in stderr
+	telemetry_entries = _extract_ai_memory_telemetry(stderr)
+	assert len(telemetry_entries) == 1
+	telemetry = telemetry_entries[0]
+	assert telemetry["enabled"] is False
+	assert telemetry["records_selected"] == 0
+	assert telemetry["token_budget"] is None
+	assert telemetry["miss_reason"] == "branch_unavailable"
+	assert telemetry["warning"] == "branch_unavailable"
 
 
 def test_retrieve_cli_invalid_max_reports_flag_specific_error() -> None:
