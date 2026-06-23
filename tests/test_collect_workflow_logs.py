@@ -403,6 +403,162 @@ def test_main_refetches_cached_logs_when_cost_telemetry_is_missing() -> None:
 		assert persisted["payload"]["repositories"]["owner/repo"]["rows_snapshot"][0]["cost_telemetry"]["or_total_tokens"] == 15
 
 
+def test_main_refetches_cached_logs_preserves_excerpts_and_dedupes_wrapper_child_telemetry() -> None:
+	with tempfile.TemporaryDirectory(prefix="collector-cache-dedupe-test-") as td:
+		report_file = Path(td) / "report.json"
+		cached_run = {
+			"id": 503,
+			"name": "AI Review",
+			"path": ".github/workflows/review_autofix.yml",
+			"status": "completed",
+			"conclusion": "failure",
+			"run_attempt": 1,
+			"created_at": "2026-04-10T12:30:00Z",
+			"run_started_at": "2026-04-10T12:30:30Z",
+			"updated_at": "2026-04-10T12:35:30Z",
+			"_workflow_family": "review_autofix",
+		}
+		cached_row = collector.compute_run_metrics("owner/repo", cached_run, jobs=[])
+
+		cache_payload = {
+			"schema_version": "v1",
+			"repositories": {
+				"owner/repo": {
+					"runs_etag": "W/\"cached\"",
+					"runs_window_start": "2026-04-01T00:00:00Z",
+					"jobs_seen_set": [503],
+					"logs_seen_set": [503],
+					"last_updated": "2026-04-11T00:00:00Z",
+					"runs_snapshot": [cached_run],
+					"rows_snapshot": [cached_row],
+				}
+			},
+		}
+
+		duplicate_openrouter_line = (
+			"INFO: openrouter usage phase=review call=pass1 model=openai/gpt-5.4 "
+			"cache_enabled=true cache_breakpoint_enabled=false cache_breakpoint_fallback_retry=false "
+			"prompt_tokens=100 completion_tokens=25 total_tokens=125 "
+			"cache_creation_input_tokens=30 cache_read_input_tokens=40"
+		)
+		duplicate_query_line = "SEMBLE_QUERY target=reviewer-context chunks=4 bytes=88 ms=3"
+		duplicate_fallback_line = (
+			"SEMBLE_FALLBACK target=reviewer-context reason=timeout context=contract-test ms=1"
+		)
+		runtime_fallback_line = "SEMBLE_FALLBACK target=overflow reason=exit=7 raw failure from semble ms=11"
+		wrapper_content = "\n".join(
+			[
+				duplicate_openrouter_line,
+				duplicate_query_line,
+				duplicate_fallback_line,
+				"wrapper-only detail",
+			]
+		) + "\n"
+		child_pass1_content = "\n".join(
+			[
+				duplicate_openrouter_line,
+				duplicate_query_line,
+				duplicate_fallback_line,
+				"pass1 detail",
+			]
+		) + "\n"
+		child_pass2_content = "\n".join(
+			[
+				duplicate_openrouter_line,
+				duplicate_query_line,
+				runtime_fallback_line,
+				"pass2 detail",
+			]
+		) + "\n"
+
+		orig_cache_read = collector._cache_read_context
+		orig_cache_write = collector._cache_write_context
+		orig_list_runs = collector.list_runs_for_repo
+		orig_list_jobs = collector.list_jobs_for_run
+		orig_fetch_logs = collector._fetch_run_log_archive
+
+		calls = {"jobs": 0, "logs": 0}
+		persisted: dict[str, dict] = {}
+
+		def fake_cache_read_context(**_: object):
+			return cache_payload, None, None
+
+		def fake_cache_write_context(**kwargs: object):
+			payload = kwargs.get("payload")
+			if isinstance(payload, dict):
+				persisted["payload"] = payload
+			return True
+
+		def fake_list_runs_for_repo(*args: object, **kwargs: object):
+			assert kwargs.get("etag") == "W/\"cached\""
+			return [], False, {"not_modified": True, "etag": "W/\"cached\"", "status_code": 304}
+
+		def fake_list_jobs_for_run(*args: object, **kwargs: object):
+			calls["jobs"] += 1
+			raise AssertionError("jobs API should be skipped when cached row exists")
+
+		def fake_fetch_run_log_archive(repo: str, run_id: int, *, token: str, cache=None):
+			calls["logs"] += 1
+			assert repo == "owner/repo"
+			assert run_id == 503
+			buffer = io.BytesIO()
+			with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+				archive.writestr("logs/01_review.txt", wrapper_content)
+				archive.writestr("logs/01_review/02_pass1.txt", child_pass1_content)
+				archive.writestr("logs/01_review/03_pass2.txt", child_pass2_content)
+			return buffer.getvalue()
+
+		collector._cache_read_context = fake_cache_read_context
+		collector._cache_write_context = fake_cache_write_context
+		collector.list_runs_for_repo = fake_list_runs_for_repo
+		collector.list_jobs_for_run = fake_list_jobs_for_run
+		collector._fetch_run_log_archive = fake_fetch_run_log_archive
+		try:
+			rc = collector.main(
+				[
+					"--repo",
+					"owner/repo",
+					"--since",
+					"2026-04-01T00:00:00Z",
+					"--max-log-runs",
+					"1",
+					"--output",
+					str(report_file),
+				]
+			)
+		finally:
+			collector._cache_read_context = orig_cache_read
+			collector._cache_write_context = orig_cache_write
+			collector.list_runs_for_repo = orig_list_runs
+			collector.list_jobs_for_run = orig_list_jobs
+			collector._fetch_run_log_archive = orig_fetch_logs
+
+		assert rc == 0
+		assert calls == {"jobs": 0, "logs": 1}
+		report = json.loads(report_file.read_text(encoding="utf-8"))
+		run = report["runs"][0]
+		expected_excerpts = [
+			{"step_name": "review", "excerpt": wrapper_content},
+			{"step_name": "review/pass1", "excerpt": child_pass1_content},
+			{"step_name": "review/pass2", "excerpt": child_pass2_content},
+		]
+		assert run["run_id"] == 503
+		assert run["log_excerpts"] == expected_excerpts
+		assert run["cost_telemetry"]["or_calls"] == 2
+		assert run["cost_telemetry"]["or_total_tokens"] == 250
+		assert run["cost_telemetry"]["semble_query_calls"] == 2
+		assert run["cost_telemetry"]["semble_query_bytes"] == 176
+		assert run["cost_telemetry"]["semble_fallbacks"] == 2
+		assert run["cost_telemetry"]["semble_contract_test_fallbacks"] == 1
+		assert run["cost_telemetry"]["semble_runtime_fallbacks"] == 1
+		persisted_row = persisted["payload"]["repositories"]["owner/repo"]["rows_snapshot"][0]
+		assert persisted_row["log_excerpts"] == expected_excerpts
+		assert persisted_row["cost_telemetry"]["or_calls"] == 2
+		assert persisted_row["cost_telemetry"]["or_total_tokens"] == 250
+		assert persisted_row["cost_telemetry"]["semble_query_calls"] == 2
+		assert persisted_row["cost_telemetry"]["semble_fallbacks"] == 2
+
+
 def test_list_jobs_for_run_paginates():
 	orig = collector.gh_api_json
 	calls = []
@@ -606,6 +762,86 @@ def test_apply_cost_telemetry_from_full_logs_preserves_review_warning_signals():
 	assert report["summary"]["cost_telemetry"]["semble_contract_test_fallbacks"] == 1
 	assert report["summary"]["cost_telemetry"]["break_glass_count"] == 1
 	assert report["summary"]["cost_telemetry"]["context_budget_warn_count"] == 1
+
+
+def test_apply_cost_telemetry_from_full_logs_dedupes_wrapper_child_structured_lines_only():
+	duplicate_openrouter_line = (
+		"INFO: openrouter usage phase=review call=pass1 model=openai/gpt-5.4 "
+		"cache_enabled=true cache_breakpoint_enabled=false cache_breakpoint_fallback_retry=false "
+		"prompt_tokens=100 completion_tokens=25 total_tokens=125 "
+		"cache_creation_input_tokens=30 cache_read_input_tokens=40"
+	)
+	duplicate_query_line = "SEMBLE_QUERY target=reviewer-context chunks=4 bytes=88 ms=3"
+	duplicate_fallback_line = (
+		"SEMBLE_FALLBACK target=reviewer-context reason=timeout context=contract-test ms=5"
+	)
+	runtime_fallback_line = "SEMBLE_FALLBACK target=overflow reason=exit=7 raw failure from semble ms=11"
+	run = {
+		"repository": "owner/repo",
+		"run_id": 411,
+		"conclusion": "failure",
+		"duration_seconds": 12,
+		"workflow_family": "review_autofix",
+	}
+	full_logs = [
+		{
+			"step_name": "review",
+			"content": "\n".join(
+				[
+					duplicate_openrouter_line,
+					duplicate_query_line,
+					duplicate_fallback_line,
+					"wrapper-only detail",
+				]
+			) + "\n",
+		},
+		{
+			"step_name": "review/pass1",
+			"content": "\n".join(
+				[
+					duplicate_openrouter_line,
+					duplicate_query_line,
+					duplicate_fallback_line,
+					"pass1 detail",
+				]
+			) + "\n",
+		},
+		{
+			"step_name": "review/pass2",
+			"content": "\n".join(
+				[
+					duplicate_openrouter_line,
+					duplicate_query_line,
+					runtime_fallback_line,
+					"pass2 detail",
+				]
+			) + "\n",
+		},
+	]
+
+	collector._apply_cost_telemetry_from_full_logs(run, full_logs)
+	telemetry = run["cost_telemetry"]
+	assert telemetry["or_prompt_tokens"] == 200
+	assert telemetry["or_completion_tokens"] == 50
+	assert telemetry["or_total_tokens"] == 250
+	assert telemetry["or_calls"] == 2
+	assert telemetry["semble_query_calls"] == 2
+	assert telemetry["semble_query_bytes"] == 176
+	assert telemetry["semble_fallbacks"] == 2
+	assert telemetry["semble_contract_test_fallbacks"] == 1
+	assert telemetry["semble_runtime_fallbacks"] == 1
+	assert telemetry["wall_clock_p50_ms"] == 12000
+	assert telemetry["wall_clock_p99_ms"] == 12000
+
+	report = collector.build_report(["owner/repo"], [run], [])
+	summary = report["summary"]["cost_telemetry"]
+	assert summary["runs_with_log_telemetry"] == 1
+	assert summary["or_calls"] == 2
+	assert summary["or_total_tokens"] == 250
+	assert summary["semble_query_calls"] == 2
+	assert summary["semble_fallbacks"] == 2
+	assert summary["semble_contract_test_fallbacks"] == 1
+	assert summary["semble_runtime_fallbacks"] == 1
 
 
 def test_fetch_run_log_archive_retries_transient_then_succeeds():
