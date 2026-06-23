@@ -29,6 +29,9 @@ TARGET_STEPS = (
 	(".github/workflows/orchestrate_clarify_respond.yml", "Comment on issue failure"),
 	(".github/workflows/test-and-mark-stable.yml", "Verify CI passed on source branch"),
 )
+SAFE_FETCH_STEPS = (
+	(".github/workflows/orchestrate.yml", "Create integration branch"),
+)
 BOOTSTRAPPED_GH_HELPER_WORKFLOWS = (
 	".github/workflows/cancel_on_pr_close.yml",
 	".github/workflows/orchestrate_poll.yml",
@@ -88,6 +91,26 @@ def test_targeted_gh_retry_only_blocks_do_not_define_safe_gh_jq() -> None:
 		assert SAFE_GH_JQ_LINE not in block, (
 			f"{relative_path} :: {step_name} should stay gh_retry-only and not add an unused _safe_gh_jq shim"
 		)
+
+
+def test_safe_fetch_steps_define_canonical_safe_gh_jq_fallback() -> None:
+	for relative_path, step_name in SAFE_FETCH_STEPS:
+		block = _step_block(_workflow_text(relative_path), step_name)
+
+		assert SOURCE_LINE in block
+		assert FALLBACK_LINE in block
+		assert SAFE_GH_JQ_LINE in block
+		assert 'if ! _tmpf=$(mktemp "${TMPDIR:-/tmp}/_safe_gh_jq.XXXXXX" 2>/dev/null); then' in block
+		assert 'echo "::error::_safe_gh_jq: failed to create temp file (mktemp failed); aborting without running: $*" >&2' in block
+		assert 'if gh api "$@" > "${_tmpf}"; then' in block
+		assert 'type _safe_gh_jq >/dev/null 2>&1 || _safe_gh_jq() { gh api "$@"; }' not in block
+		assert 'if gh api "$@" > "${_tmpf}" 2>/dev/null; then' not in block
+		assert (
+			'DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}" --jq \'.default_branch\')"'
+		) in block
+		assert (
+			'BASE_SHA="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/git/ref/heads/${DEFAULT_BRANCH_REF}" --jq \'.object.sha\')"'
+		) in block
 
 
 def test_bootstrapped_gh_retry_workflows_require_staged_helper_with_main_fallback() -> None:

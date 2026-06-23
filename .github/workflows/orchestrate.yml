@@ -996,7 +996,20 @@ jobs:
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
-          type _safe_gh_jq >/dev/null 2>&1 || _safe_gh_jq() { gh api "$@"; }
+          type _safe_gh_jq >/dev/null 2>&1 || _safe_gh_jq() {
+            local _tmpf
+            if ! _tmpf=$(mktemp "${TMPDIR:-/tmp}/_safe_gh_jq.XXXXXX" 2>/dev/null); then
+              echo "::error::_safe_gh_jq: failed to create temp file (mktemp failed); aborting without running: $*" >&2
+              return 1
+            fi
+            if gh api "$@" > "${_tmpf}"; then
+              cat "${_tmpf}"
+              rm -f "${_tmpf}"
+              return 0
+            fi
+            rm -f "${_tmpf}"
+            return 1
+          }
 
           DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}" --jq '.default_branch')"
           DEFAULT_BRANCH_REF="$(printf '%s' "${DEFAULT_BRANCH}" | jq -sRr @uri)"
