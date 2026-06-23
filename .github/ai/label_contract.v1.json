@@ -99,7 +99,7 @@
     },
     "ai:resolver-escalated": {
       "color": "b60205",
-      "description": "Integration conflict resolver hit the escape threshold; orchestrator redispatch is paused until PR head changes"
+      "description": "Integration conflict resolver hit the escape threshold; redispatch waits for a new PR head"
     },
     "ai:harness-broken": {
       "color": "e11d48",
@@ -123,7 +123,7 @@
     },
     "ai:destructive-blocked": {
       "color": "b60205",
-      "description": "Implementation commit was refused for mass/destructive deletions — redispatch of this issue ID is blocked pending human review"
+      "description": "Implementation blocked for mass/destructive deletions; this issue ID now waits for human review"
     },
     "ai:scope-blocked": {
       "color": "b60205",

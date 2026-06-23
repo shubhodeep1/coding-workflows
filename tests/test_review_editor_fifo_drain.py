@@ -27,14 +27,15 @@ import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SCRIPT = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
+APPLY_FIXES_SCRIPT = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
+WATCHDOG_HELPERS_SCRIPT = REPO_ROOT / "scripts" / "watchdog_helpers.sh"
 
 
 def _extract_function(name: str) -> str:
 	"""Return the source of a top-level shell function via brace matching."""
-	text = SCRIPT.read_text(encoding="utf-8")
+	text = WATCHDOG_HELPERS_SCRIPT.read_text(encoding="utf-8")
 	start = re.search(rf"(?m)^{re.escape(name)}\(\)\s*\{{", text)
-	assert start is not None, f"function {name}() not found in {SCRIPT}"
+	assert start is not None, f"function {name}() not found in {WATCHDOG_HELPERS_SCRIPT}"
 	depth = 0
 	i = text.index("{", start.start())
 	for j in range(i, len(text)):
@@ -238,7 +239,7 @@ echo OK
 
 
 def test_editor_loop_bounds_the_drain_and_wires_the_reaper() -> None:
-	text = SCRIPT.read_text(encoding="utf-8")
+	text = APPLY_FIXES_SCRIPT.read_text(encoding="utf-8")
 	# Grace bound is configurable with a safe default.
 	assert 'EDITOR_DRAIN_GRACE_SECS="${EDITOR_DRAIN_GRACE_SECS:-60}"' in text
 	assert "''|*[!0-9]*|0|0[0-9]*)" in text
@@ -260,7 +261,7 @@ def test_editor_loop_bounds_the_drain_and_wires_the_reaper() -> None:
 
 def test_review_apply_fixes_script_syntax_is_valid() -> None:
 	res = subprocess.run(
-		["bash", "-n", str(SCRIPT)],
+		["bash", "-n", str(APPLY_FIXES_SCRIPT)],
 		capture_output=True,
 		text=True,
 	)

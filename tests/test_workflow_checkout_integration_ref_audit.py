@@ -20,6 +20,7 @@ REQUIRED_RESOLVER_WORKFLOWS = {
 # Explicit allow-list exceptions for checkout@v5 workflows that are not
 # orchestrator-managed issue execution paths.
 ALLOWLIST_EXCEPTIONS = {
+	"audit_consumer_drift.yml": "Consumer-wrapper drift audit is scheduled/manual repository maintenance, not an orchestrator issue-phase checkout path.",
 	"cancel_on_pr_close.yml": "PR-close cleanup cancels branch runs and has no orchestrator issue-phase checkout.",
 	"ci.yml": "PR CI validation has no orchestrator issue metadata.",
 	"integration-pr-readiness.yml": "Integration-PR readiness check runs on pull_request refs and posts commit status metadata, not orchestrator issue-phase checkout.",
@@ -31,6 +32,7 @@ ALLOWLIST_EXCEPTIONS = {
 	"orchestrate.yml": "Project bootstrap workflow has no integration-branch metadata at checkout time.",
 	"orchestrate_poll.yml": "Poller handles multiple tracking issues per run; a single checkout integration ref is undefined.",
 	"review_autofix.yml": "PR review/autofix operates on PR refs rather than orchestrator integration metadata.",
+	"sync_ai_labels.yml": "Repository label-sync maintenance manages ai:* labels and does not execute orchestrator issue phases.",
 	"test-and-mark-stable.yml": "Release test workflow checks specific refs/tags and is outside orchestrator phase execution.",
 	"comprehensive-test-and-release.yml": "Comprehensive release conductor dispatches downstream workflows and does not execute tracking-issue integration-ref checkout.",
 	"drift-audit.yml": "Scheduled maintenance workflow audits review-autofix logs and is not an orchestrator issue-phase checkout path.",

@@ -203,6 +203,11 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
 
         api_key = os.getenv("OPENROUTER_API_KEY")
 
+        try:
+            max_records = _safe_int(getattr(args, "max", None))
+        except ValueError as exc:
+            raise MemoryValidationError("--max must be an integer") from exc
+
         result = retrieve_memory_context(
             memory_root,
             profiles_path,
@@ -212,6 +217,9 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
             issue_title=getattr(args, "issue_title", None),
             issue_body=issue_body,
             api_key=api_key,
+            category_filter=getattr(args, "category", None),
+            scope_level_filter=getattr(args, "scope_level", None),
+            max_records=max_records,
         )
 
         if args.output_file:
@@ -585,6 +593,7 @@ def cmd_record_candidate(args: argparse.Namespace) -> int:
             parent_ids=parent_ids,
             supersedes=args.supersedes,
             sensitive=True if args.sensitive is True else None,
+            scope_level=getattr(args, "scope_level", None),
         )
         record_run_event(
             memory_root,
@@ -1951,6 +1960,9 @@ def build_parser() -> argparse.ArgumentParser:
     retrieve.add_argument("--retrieval-profiles", default=None)
     retrieve.add_argument("--issue-title", default=None)
     retrieve.add_argument("--issue-body-file", default=None)
+    retrieve.add_argument("--category", default=None)
+    retrieve.add_argument("--scope-level", default=None)
+    retrieve.add_argument("--max", default=None)
     retrieve.set_defaults(func=cmd_retrieve)
 
     event = subparsers.add_parser("record-run-event", help="Append run ledger event")
@@ -1982,6 +1994,7 @@ def build_parser() -> argparse.ArgumentParser:
     candidate.add_argument("--parent-ids", default="")
     candidate.add_argument("--supersedes", default=None)
     candidate.add_argument("--sensitive", action="store_true")
+    candidate.add_argument("--scope-level", default=None)
     candidate.set_defaults(func=cmd_record_candidate)
 
     promote = subparsers.add_parser("promote", help="Promote candidate records")

@@ -73,6 +73,44 @@ def test_render_prompt_sh_renders_implement_contract_defaults_and_env_values() -
 	)
 
 
+def test_render_prompt_sh_renders_header_with_empty_repo_learnings() -> None:
+	proc = subprocess.run(
+		["bash", str(RENDER_PROMPT_SH), str(REPO_ROOT / "prompts" / "header.txt")],
+		cwd=str(REPO_ROOT),
+		env={**_base_env(), "REPO_LEARNINGS": ""},
+		text=True,
+		capture_output=True,
+		timeout=60,
+	)
+
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stderr == ""
+	assert proc.stdout == "Role: AI pipeline phase agent. Goal: produce the artefact described below.\n\n"
+
+
+def test_render_prompt_sh_renders_header_with_populated_repo_learnings() -> None:
+	proc = subprocess.run(
+		["bash", str(RENDER_PROMPT_SH), str(REPO_ROOT / "prompts" / "header.txt")],
+		cwd=str(REPO_ROOT),
+		env={
+			**_base_env(),
+			"REPO_LEARNINGS": "Repository learnings from prior merged work:\n- Prefer bounded prompt injections\n- Keep memory extraction fail-open",
+		},
+		text=True,
+		capture_output=True,
+		timeout=60,
+	)
+
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stderr == ""
+	assert proc.stdout == (
+		"Role: AI pipeline phase agent. Goal: produce the artefact described below.\n"
+		"Repository learnings from prior merged work:\n"
+		"- Prefer bounded prompt injections\n"
+		"- Keep memory extraction fail-open\n"
+	)
+
+
 def test_render_prompt_py_renders_inline_placeholders_and_yaml_scalar_defaults() -> None:
 	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_inline_") as td:
 		repo_root = Path(td)
@@ -293,6 +331,8 @@ def test_render_prompt_py_reports_unknown_placeholder_contract_violation() -> No
 def main() -> int:
 	test_output_contract_reference_includes_status_update_cadence()
 	test_render_prompt_sh_renders_implement_contract_defaults_and_env_values()
+	test_render_prompt_sh_renders_header_with_empty_repo_learnings()
+	test_render_prompt_sh_renders_header_with_populated_repo_learnings()
 	test_render_prompt_py_renders_inline_placeholders_and_yaml_scalar_defaults()
 	test_render_prompt_sh_uses_trusted_backend_locations_only()
 	test_render_prompt_py_renders_reference_placeholders_and_mode_specific_append()

@@ -36,7 +36,7 @@ First settle on **the correct fix** — the change that actually resolves the va
 
 Then classify every finding — the issue diagnosis and the fix's correctness — as **EVIDENCE-BASED** (supported by code reading at `main` plus reproduction where feasible) or **HYPOTHESIS** (plausible but unverified). Then:
 
-- **Issue is VALID-UPSTREAM, the correct fix is fully EVIDENCE-BASED, it lands in THIS repo (`shubhodeep1/coding-workflows`), it triggers no §6/§10 hard gate and no cross-consumer break, and no missing/inaccessible resource blocks root cause or fix verification** → design the fix, apply it against `main`, verify it (re-run the repro / failing test when feasible), commit, push, open a PR. Do not ask. Then report using the [Output Format](#output-format) with `Fix:` = applied and the branch/PR link. Non-blocking gaps still get listed for transparency.
+- **Issue is VALID-UPSTREAM, the correct fix is fully EVIDENCE-BASED, it lands in THIS repo (`shubhodeep1/coding-workflows`), it triggers no §6/§10 hard gate and no cross-consumer break, and no missing/inaccessible resource blocks root cause or fix verification** → design the fix, branch off `stable` and apply it there, verify it (re-run the repro / failing test when feasible), commit, push, open a PR **with base = `stable`**. This command always lands its fixes on this repo's `stable` branch — never `main` or any other branch — **unless the request explicitly names a different target branch**. Do not ask. Then report using the [Output Format](#output-format) with `Fix:` = applied and the branch/PR link. Non-blocking gaps still get listed for transparency.
 - **Issue is CONSUMER-MISCONFIG** → do **not** edit this library; the remedy lives on the consumer's side. Report the exact configuration change the consumer must make. A code fix here would address the wrong layer — flag that.
 - **Issue is NOT-REPRODUCIBLE / INVALID** → do not edit; report and ask for what's needed to reproduce.
 - **Otherwise** — any HYPOTHESIS finding; a §6 hard gate (the only correct fix needs an unaliased rename/removal of a public identifier); a §10 hard gate (a collection/index change without its `/db/contracts/*` update); a fix that would break other consumers pinned to this library; multiple plausible fixes with material tradeoffs; or a missing/inaccessible resource that blocks root cause or fix verification → **stop before editing**. Report the two verdicts using the [Output Format](#output-format) and ask the user how to proceed (use the CLAUDE.md §2 Q/A format for a §6/§10/tradeoff decision).
@@ -73,9 +73,9 @@ Omit empty sections; every verdict carries a citation. When the fix was applied 
 
 **Writes (only when the [Decision Rule](#decision-rule) implement gate is met):**
 
-- **`Edit` / `Write`** — apply the correct fix against the local `main` checkout, and add/extend the test that verifies it.
-- **`Bash`** — `git` (branch off `main`, commit, `push -u origin <branch>`) and re-running the repro / failing test to verify the fix before pushing.
-- **`mcp__github__create_pull_request`** (or `gh pr create`) — open the PR ready for review against the default branch.
+- **`Edit` / `Write`** — apply the correct fix against the local `stable` checkout (branch off `stable`), and add/extend the test that verifies it.
+- **`Bash`** — `git` (branch off `stable`, commit, `push -u origin <branch>`) and re-running the repro / failing test to verify the fix before pushing.
+- **`mcp__github__create_pull_request`** (or `gh pr create`) — open the PR ready for review against the `stable` branch (this command's default and only target; override only when the request explicitly names another branch).
 
 ## Rules
 

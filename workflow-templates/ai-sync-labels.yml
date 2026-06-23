@@ -1,0 +1,23 @@
+# IMPORTANT: This file is managed by coding-workflows and may be overwritten
+# automatically when upstream templates change. To opt out of auto-updates,
+# set the ALLOW_WORKFLOW_EDITS repository variable to 'false'.
+name: AI Sync Labels
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Preview label changes without mutating repository labels"
+        required: false
+        default: false
+        type: boolean
+  repository_dispatch:
+    types: [coding-workflows-stable-released]
+permissions:
+  contents: read
+  issues: write
+jobs:
+  sync:
+    uses: shubhodeep1/coding-workflows/.github/workflows/sync_ai_labels.yml@stable
+    with:
+      dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+    secrets: inherit

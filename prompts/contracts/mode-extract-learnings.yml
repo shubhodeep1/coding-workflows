@@ -1,0 +1,7 @@
+required_vars: []
+optional_vars:
+  LEARNINGS_SOURCE_JSON: "[]"
+forbidden_vars:
+  - WORKFLOW_EDIT_RESTRICTION
+  - SEMBLE_PREFETCH
+  - SERENA_TOOL_HINTS
