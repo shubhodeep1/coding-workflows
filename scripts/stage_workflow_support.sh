@@ -244,6 +244,32 @@ if [ ! -f "${SUPPORT_PROMPTS_DIR}/mode-judge-interim.txt" ]; then
   fi
   install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/mode-judge-interim.txt"
 fi
+# The judge / reviewer prompts staged into the runtime bundle embed REFERENCE_*
+# placeholders (REFERENCE_OUTPUT_CONTRACT, REFERENCE_SEVERITY_CLASSIFICATION)
+# that render_prompt.py hydrates from <prompt-root>/prompts/references/<name>.txt.
+# review_rb_judge.sh and review_run_judge_interim.sh cd into SUPPORT_ROOT_DIR
+# before rendering, so the prompt root is SUPPORT_ROOT_DIR and the only path
+# render_prompt.py can resolve is SUPPORT_PROMPTS_DIR/references/ — the cwd /
+# .codex-workflow-src fallbacks point under SUPPORT_ROOT_DIR, where the support
+# checkout does not exist. Stage the reference assets here; without them the
+# review-blocked / interim judges fail with "Reference file for placeholder
+# 'REFERENCE_OUTPUT_CONTRACT' not found" and degrade to the recovery path.
+# Warn (do not exit 1) when a reference is unavailable so older support refs
+# keep degrading gracefully instead of hard-failing the whole bundle.
+for reference_asset in output-contract.txt severity-classification.txt; do
+  if [ ! -f "${SUPPORT_PROMPTS_DIR}/references/${reference_asset}" ]; then
+    src=".codex-workflow-src/prompts/references/${reference_asset}"
+    if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/references/${reference_asset}" ]; then
+      src=".codex-workflow-src-main/prompts/references/${reference_asset}"
+    fi
+    if [ -f "${src}" ]; then
+      mkdir -p "${SUPPORT_PROMPTS_DIR}/references"
+      install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/references/${reference_asset}"
+    else
+      echo "::warning::prompts/references/${reference_asset} not found in checked-out support sources for ${SCRIPT_REF}; review-blocked/interim judge will degrade (REFERENCE_* placeholder left unhydrated)."
+    fi
+  fi
+done
 if [ ! -f "${SUPPORT_PROMPTS_DIR}/behavioural-smoke-synthesise.txt" ]; then
   src=".codex-workflow-src/prompts/behavioural-smoke-synthesise.txt"
   if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/behavioural-smoke-synthesise.txt" ]; then
