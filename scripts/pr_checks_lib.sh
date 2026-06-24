@@ -75,8 +75,12 @@ _pr_required_check_names_for_base()
 	local repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
 	local contexts=""
 	if [ -n "${base_ref}" ]; then
+		local protection_ref
 		local protection_json
-		protection_json="$(gh_retry _safe_gh_jq "repos/${repo}/branches/${base_ref}/protection" 2>/dev/null || echo "")"
+		# GitHub treats the branch name as a single path segment here, so
+		# slash-containing refs (for example release/v1) must be URL-encoded.
+		protection_ref="$(printf '%s' "${base_ref}" | jq -sRr '@uri' 2>/dev/null || echo "")"
+		protection_json="$(gh_retry _safe_gh_jq "repos/${repo}/branches/${protection_ref:-${base_ref}}/protection" 2>/dev/null || echo "")"
 		if [ -n "${protection_json}" ]; then
 			contexts="$(printf '%s' "${protection_json}" | jq -r '
 				if (type == "object" and (.required_status_checks // null) != null) then

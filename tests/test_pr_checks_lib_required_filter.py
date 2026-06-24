@@ -55,7 +55,13 @@ set -uo pipefail
 gh_retry() {{ "$@"; }}
 _safe_gh_jq() {{
   case "$*" in
-    *"/protection"*) printf '%s' "${{PROT_JSON}}" ;;
+    *"/protection"*)
+      if [ -n "${{PROT_EXPECT_PATH:-}}" ] && [ "$*" != "${{PROT_EXPECT_PATH}}" ]; then
+        printf '%s' ''
+      else
+        printf '%s' "${{PROT_JSON}}"
+      fi
+      ;;
     *"/check-runs"*) printf '%s' "${{RUNS_JSON}}" ;;
     *"/pulls/"*) printf '%s' "${{PR_JSON}}" ;;
     *) printf '%s' '{{}}' ;;
@@ -177,6 +183,23 @@ def test_branch_protection_contexts_take_precedence() -> None:
 	runs = _page([{"name": "tests/integration", "status": "completed", "conclusion": "failure"}])
 	prot = json.dumps({"required_status_checks": {"contexts": ["CI", "tests/integration"]}})
 	rc, reason = _gate(runs_json=runs, args='5 "abc1234" "main"', prot_json=prot, env=REPO_ENV)
+	assert rc == 1 and reason == "blocking", (rc, reason)
+
+
+def test_branch_protection_lookup_url_encodes_slash_base_ref() -> None:
+	"""Slash-containing base refs must be URL-encoded for the protection
+	lookup or GitHub returns 404 and the gate falls back to defaults."""
+	runs = _page([{"name": "deploy-check", "status": "completed", "conclusion": "failure"}])
+	prot = json.dumps({"required_status_checks": {"contexts": ["deploy-check"]}})
+	rc, reason = _gate(
+		runs_json=runs,
+		args='5 "abc1234" "release/v1"',
+		prot_json=prot,
+		env={
+			**REPO_ENV,
+			"PROT_EXPECT_PATH": "repos/owner/repo/branches/release%2Fv1/protection",
+		},
+	)
 	assert rc == 1 and reason == "blocking", (rc, reason)
 
 
