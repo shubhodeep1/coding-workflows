@@ -128,8 +128,10 @@ def _render_review_blocked_prompt(*, stage_references: bool) -> subprocess.Compl
 					encoding="utf-8",
 				)
 
-		env = os.environ.copy()
-		env["PYTHONDONTWRITEBYTECODE"] = "1"
+		env = {
+			"PATH": os.environ.get("PATH", ""),
+			"PYTHONDONTWRITEBYTECODE": "1",
+		}
 		return subprocess.run(
 			[
 				"bash",
@@ -167,3 +169,27 @@ def test_review_blocked_prompt_fails_without_staged_references() -> None:
 		"Reference file for placeholder 'REFERENCE_OUTPUT_CONTRACT' not found"
 		in result.stderr
 	)
+
+
+def main() -> int:
+	tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+	passed = 0
+	failed = 0
+	for test in tests:
+		name = test.__name__
+		try:
+			test()
+			print(f"  PASS  {name}")
+			passed += 1
+		except AssertionError as exc:
+			print(f"  FAIL  {name}: {exc}")
+			failed += 1
+		except Exception as exc:
+			print(f"  ERROR {name}: {type(exc).__name__}: {exc}")
+			failed += 1
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
