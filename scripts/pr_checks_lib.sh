@@ -80,6 +80,21 @@ _pr_required_check_names_for_base()
 		# GitHub treats the branch name as a single path segment here, so
 		# slash-containing refs (for example release/v1) must be URL-encoded.
 		protection_ref="$(printf '%s' "${base_ref}" | jq -sRr '@uri' 2>/dev/null || echo "")"
+		# Fall back to Python's byte-safe encoder when the jq helper is not
+		# available. If no encoder is available for a slash-containing ref,
+		# fail closed to legacy "*" rather than probing the wrong unencoded
+		# protection path and silently downgrading branch-protection truth.
+		if [ -z "${protection_ref}" ]; then
+			protection_ref="$(printf '%s' "${base_ref}" | python3 -c 'import sys, urllib.parse; print(urllib.parse.quote_from_bytes(sys.stdin.buffer.read(), safe=""))' 2>/dev/null || echo "")"
+		fi
+		if [ -z "${protection_ref}" ]; then
+			case "${base_ref}" in
+				*/*)
+					echo "*"
+					return 0
+					;;
+			esac
+		fi
 		protection_json="$(gh_retry _safe_gh_jq "repos/${repo}/branches/${protection_ref:-${base_ref}}/protection" 2>/dev/null || echo "")"
 		if [ -n "${protection_json}" ]; then
 			contexts="$(printf '%s' "${protection_json}" | jq -r '

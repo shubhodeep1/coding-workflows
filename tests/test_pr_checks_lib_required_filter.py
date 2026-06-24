@@ -44,14 +44,26 @@ def _run(
 	runs_json: str = "{}",
 	prot_json: str = "",
 	pr_json: str = "{}",
+	jq_fail_uri_encode: bool = False,
 	env: dict[str, str] | None = None,
 ):
 	if shutil.which("jq") is None:
 		raise unittest.SkipTest("jq binary not available in test environment")
 	# Stub gh_retry/_safe_gh_jq so the gate reads fixtures instead of hitting
 	# the network. The router keys off the API path the helper requests.
+	jq_wrapper = ""
+	if jq_fail_uri_encode:
+		jq_wrapper = """
+jq() {
+  if [ "$#" -ge 2 ] && [ "$1" = "-sRr" ] && [ "$2" = "@uri" ]; then
+    return 127
+  fi
+  command jq "$@"
+}
+"""
 	preamble = f"""
 set -uo pipefail
+{jq_wrapper}
 gh_retry() {{ "$@"; }}
 _safe_gh_jq() {{
   case "$*" in
@@ -93,6 +105,7 @@ def _gate(
 	args: str,
 	prot_json: str = "",
 	pr_json: str = "{}",
+	jq_fail_uri_encode: bool = False,
 	env: dict[str, str] | None = None,
 ) -> tuple[int, str]:
 	"""Run _pr_checks_completed and return (rc, PR_CHECKS_LAST_REASON)."""
@@ -100,7 +113,14 @@ def _gate(
 		f'_pr_checks_completed {args} >/dev/null 2>&1; rc=$?; '
 		'printf "%s\\n" "${rc}:${PR_CHECKS_LAST_REASON}"'
 	)
-	res = _run(body, runs_json=runs_json, prot_json=prot_json, pr_json=pr_json, env=env)
+	res = _run(
+		body,
+		runs_json=runs_json,
+		prot_json=prot_json,
+		pr_json=pr_json,
+		jq_fail_uri_encode=jq_fail_uri_encode,
+		env=env,
+	)
 	assert res.returncode == 0, res.stderr
 	rc_str, _, reason = res.stdout.strip().partition(":")
 	return int(rc_str), reason
@@ -203,6 +223,24 @@ def test_branch_protection_lookup_url_encodes_slash_base_ref() -> None:
 	assert rc == 1 and reason == "blocking", (rc, reason)
 
 
+def test_branch_protection_lookup_falls_back_to_python_encoder() -> None:
+	"""If the jq @uri helper is unavailable, the slash-containing base ref
+	must still be URL-encoded before the protection lookup."""
+	runs = _page([{"name": "deploy-check", "status": "completed", "conclusion": "failure"}])
+	prot = json.dumps({"required_status_checks": {"contexts": ["deploy-check"]}})
+	rc, reason = _gate(
+		runs_json=runs,
+		args='5 "abc1234" "release/v1"',
+		prot_json=prot,
+		jq_fail_uri_encode=True,
+		env={
+			**REPO_ENV,
+			"PROT_EXPECT_PATH": "repos/owner/repo/branches/release%2Fv1/protection",
+		},
+	)
+	assert rc == 1 and reason == "blocking", (rc, reason)
+
+
 # ---------------------------------------------------------------------------
 # Self-run exclusion in the required-set branch (needed by review_rb_judge.sh).
 # ---------------------------------------------------------------------------
@@ -271,6 +309,20 @@ def test_unresolved_head_sha_reason() -> None:
 	# No head_sha arg → helper fetches PR JSON, which lacks .head.sha.
 	rc, reason = _gate(runs_json="{}", args='5 "" "main"', pr_json="{}", env=REPO_ENV)
 	assert rc == 1 and reason == "unresolved_head_sha", (rc, reason)
+
+
+def test_reason_side_channel_survives_env_prefixed_call() -> None:
+	"""review_rb_judge.sh calls the helper with inline env overrides
+	(PR_CHECKS_REPOSITORY=... PR_CHECKS_SELF_RUN_ID=... _pr_checks_completed).
+	The side-channel reason must still be readable afterward in the same shell."""
+	res = _run(
+		'PR_CHECKS_REPOSITORY="owner/repo" PR_CHECKS_SELF_RUN_ID="999" '
+		'_pr_checks_completed 5 "abc1234" "main" >/dev/null 2>&1; '
+		'printf "%s\\n" "${PR_CHECKS_LAST_REASON}"',
+		runs_json=_page([{"name": "CI", "status": "completed", "conclusion": "failure"}]),
+	)
+	assert res.returncode == 0, res.stderr
+	assert res.stdout.strip() == "blocking", res.stdout
 
 
 # ---------------------------------------------------------------------------
