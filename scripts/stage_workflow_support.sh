@@ -254,8 +254,9 @@ fi
 # checkout does not exist. Stage the reference assets here; without them the
 # review-blocked / interim judges fail with "Reference file for placeholder
 # 'REFERENCE_OUTPUT_CONTRACT' not found" and degrade to the recovery path.
-# Warn (do not exit 1) when a reference is unavailable so older support refs
-# keep degrading gracefully instead of hard-failing the whole bundle.
+# Warn (do not exit 1) when a reference is unavailable so bundle staging still
+# completes; if the staged prompt still requires the asset, the downstream
+# judge render will fail with the concrete missing-reference error.
 for reference_asset in output-contract.txt severity-classification.txt; do
   if [ ! -f "${SUPPORT_PROMPTS_DIR}/references/${reference_asset}" ]; then
     src=".codex-workflow-src/prompts/references/${reference_asset}"
@@ -266,7 +267,7 @@ for reference_asset in output-contract.txt severity-classification.txt; do
       mkdir -p "${SUPPORT_PROMPTS_DIR}/references"
       install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/references/${reference_asset}"
     else
-      echo "::warning::prompts/references/${reference_asset} not found in checked-out support sources for ${SCRIPT_REF}; review-blocked/interim judge will degrade (REFERENCE_* placeholder left unhydrated)."
+      echo "::warning::prompts/references/${reference_asset} not found in checked-out support sources for ${SCRIPT_REF}; bundle staging will continue, but downstream review-blocked/interim judge render will fail with a missing REFERENCE_* error if the staged prompt still requires this asset."
     fi
   fi
 done

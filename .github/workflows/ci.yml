@@ -421,6 +421,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_rb_judge_label_propagation.py
 
+      - name: Review-blocked judge reference staging regression tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_rb_judge_reference_staging.py
+
       - name: Review-blocked judge self-run exclusion regression tests
         run: |
           set -euo pipefail

@@ -2,7 +2,7 @@
 """Regression guard: judge prompt reference assets are staged into the bundle.
 
 Reported from consumer run 28009116022 (shubhodeep1/tele-funtoken-msg-scoring,
-PR #3434): the review-blocked judge degraded with
+PR #3434): the review-blocked judge failed with
 
   ERROR: Reference file for placeholder 'REFERENCE_OUTPUT_CONTRACT' not found:
   .../coding-workflows-runtime-.../prompts/references/output-contract.txt
@@ -24,7 +24,8 @@ Two tests pin the fix:
    output-contract.txt and severity-classification.txt into
    ${SUPPORT_PROMPTS_DIR}/references/ with the .codex-workflow-src ->
    .codex-workflow-src-main fallback, and warns (does not exit 1) when a
-   reference is unavailable so older support refs degrade gracefully.
+   reference is unavailable so bundle staging continues while any later
+   missing-reference failure is reported by render_prompt.py itself.
 
 2. A behavioural test that reproduces the bundle layout review_rb_judge.sh
    builds, renders the review-blocked prompt the same way (cd SUPPORT_ROOT_DIR
@@ -85,9 +86,10 @@ def test_stage_workflow_support_stages_judge_reference_assets() -> None:
 		'install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/references/${reference_asset}"'
 		in stage_helper
 	)
-	# Graceful degrade (warn, never exit 1) so older support refs still bootstrap.
+	# Warn, never exit 1, so bundle staging continues until render_prompt.py can
+	# surface any concrete missing-reference failure.
 	assert (
-		"review-blocked/interim judge will degrade (REFERENCE_* placeholder left unhydrated)"
+		"downstream review-blocked/interim judge render will fail with a missing REFERENCE_* error"
 		in stage_helper
 	)
 
@@ -130,6 +132,13 @@ def _render_review_blocked_prompt(*, stage_references: bool) -> subprocess.Compl
 
 		env = os.environ.copy()
 		env["PYTHONDONTWRITEBYTECODE"] = "1"
+		# The workflow judge path explicitly `cd`s into SUPPORT_ROOT_DIR before
+		# rendering. Local editor/review shells can export BASH_ENV/WORKSPACE_PATH
+		# helpers that auto-cd nested bash processes back to the repo root, which
+		# would let render_prompt.py fall back to the source-tree references and
+		# mask the missing-bundle regression this test is meant to catch.
+		env.pop("BASH_ENV", None)
+		env.pop("WORKSPACE_PATH", None)
 		return subprocess.run(
 			[
 				"bash",
@@ -167,3 +176,20 @@ def test_review_blocked_prompt_fails_without_staged_references() -> None:
 		"Reference file for placeholder 'REFERENCE_OUTPUT_CONTRACT' not found"
 		in result.stderr
 	)
+
+
+def main() -> int:
+	"""Keep this file runnable via `python3 tests/<file>.py`.
+
+	The repo's CI uses explicit direct-run allowlists rather than pytest
+	discovery, so this module must provide its own entrypoint.
+	"""
+	test_stage_workflow_support_stages_judge_reference_assets()
+	test_review_blocked_prompt_hydrates_references_from_bundle_layout()
+	test_review_blocked_prompt_fails_without_staged_references()
+	print("OK: review-blocked judge reference staging regression tests passed")
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
