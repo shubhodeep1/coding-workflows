@@ -2,7 +2,7 @@
 """Contract test: codex-agent force-tick steps must bind REPOSITORY.
 
 Regression guard for the `REPOSITORY: unbound variable` crash reported from
-consumer run 27995931397 (shubhodeep1/fun-token-multi-chain). Two steps in
+a downstream consumer workflow run. Two steps in
 the `codex-agent` job of .github/workflows/review_autofix.yml —
 
   * "Force orchestrate poll after review-blocked exhaustion"
@@ -116,7 +116,7 @@ def test_named_force_tick_steps_bind_repository() -> None:
 			f"omits REPOSITORY from its env: block. The codex-agent job has "
 			f"no job-level REPOSITORY and never exports it to $GITHUB_ENV, so "
 			f"this aborts the force tick with 'REPOSITORY: unbound variable' "
-			f"(consumer run 27995931397). Declared env keys: "
+			f"in downstream consumer runs. Declared env keys: "
 			f"{sorted(env.keys())}"
 		)
 		normalized_repository_env = re.sub(r"\s+", "", str(env["REPOSITORY"]))

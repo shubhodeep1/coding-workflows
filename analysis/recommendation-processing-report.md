@@ -2,7 +2,7 @@
 
 Grounding note: this report folds the prior recommendation triage into one final artifact. "Actioned" is based on current repository state on this ref, not on historical intent or external GitHub issue state.
 
-## Processed source docs (98)
+## Processed source docs (104)
 The filenames below are retained for provenance. The source docs listed below are no longer present under `analysis/` on this ref because their triage now lives here.
 
 - `analysis/workflow-optimization-2026-04-21.md`
@@ -101,6 +101,12 @@ The filenames below are retained for provenance. The source docs listed below ar
 - `analysis/workflow-optimization-2026-06-10.md`
 - `analysis/workflow-optimization-2026-06-11.md`
 - `analysis/workflow-optimization-2026-06-13.md`
+- `analysis/workflow-optimization-2026-06-16.md`
+- `analysis/workflow-optimization-2026-06-18.md`
+- `analysis/workflow-optimization-2026-06-22.md`
+- `analysis/workflow-optimization-2026-06-22-2.md`
+- `analysis/workflow-optimization-2026-06-22-3.md`
+- `analysis/workflow-optimization-2026-06-23.md`
 - `analysis/plan-workflow-log-analysis.md`
 - `analysis/e2e-smoke-failure-25126757724.md`
 
@@ -620,6 +626,78 @@ Status keys below are scoped as `<source doc> :: <recommendation id>` because ID
 - `INVALID`
   - None on this ref.
 
+## Outcome ledger for the 2026-06-16 through 2026-06-23 follow-up docs
+This batch mixes four deep-audit follow-up docs with two narrative optimization memos. Current HEAD already matches some of their premises, one concrete sibling implementation is now present on this ref, and the remaining items stay intentionally deferred because they still touch hot review/poller/runtime contracts. No recommendation in this six-doc batch needed a separate invalid/obsolete bucket once current repo state was re-checked.
+
+### `analysis/workflow-optimization-2026-06-16.md`
+- This source doc paired narrative critical-path / cost observations with an appendix whose own summary recorded `SAFE_TO_MERGE | 0`.
+- Already satisfied on this ref:
+  - `do-not-spend-time-on-Serena-cost-tuning-yet` — `.github/workflows/review_autofix.yml` and `.github/workflows/implement.yml` still default `SERENA_ENABLED=false`, so the source doc's “Serena is neutral, not a savings lever” conclusion still matches current HEAD.
+- Intentionally deferred:
+  - `ci-sharding-and-orchestrate-poll-fixed-overhead-trim` — `.github/workflows/ci.yml` still keeps the current fast-fail split rather than the broader 2–4-way sharding / setup surgery this doc proposed.
+  - `ai-memory-batching-and-validation-refresh-prefiltering` — the remaining work still changes common `plan` / `implement` bookkeeping and maintenance-job discovery behavior.
+  - `Semble-install-retrieval-and-prompt-cache-observability-tightening` — the doc's remaining cost ideas still change hot-path tooling and telemetry policy rather than closeout-safe provenance.
+  - `MERGE-001`, `MERGE-002`, `REUSE-001`, `REUSE-002`, and `DEAD-API-001` — the appendix itself left these as `NEEDS_VERIFICATION` or `RISKY_SKIP`, and current HEAD still keeps the cited review / poller reuse gaps live.
+
+### `analysis/workflow-optimization-2026-06-18.md`
+- This source doc was narrative-only, so repeated bullets are grouped below under stable short labels.
+- Already satisfied on this ref:
+  - `Serena-neutral-keep-disabled` — `.github/workflows/review_autofix.yml` and `.github/workflows/implement.yml` still default `SERENA_ENABLED=false`.
+  - `Semble-contract-test-fallback-noise-is-not-runtime-breakage` — `scripts/cost_audit.py` now tracks `semble_contract_test_fallbacks` separately from `semble_runtime_fallbacks`, so the memo's “healthy fail-open vs runtime breakage” distinction is already reflected in repo-local telemetry.
+- Intentionally deferred:
+  - `reviewer-risk-tiering-and-pass2-right-sizing` — `REVIEWER_RISK_TIER_ENABLED` still defaults to `0` and `ENABLE_REVIEWER_TWO_PASS` still defaults to `true` in `.github/workflows/review_autofix.yml`.
+  - `implement-first-pass-reasoning-downshift` — `.github/workflows/implement.yml` still defaults `MODEL_REASONING_EFFORT` to `xhigh`.
+  - `free-disk-gating` — `.github/workflows/review_autofix.yml` still runs `jlumbroso/free-disk-space@v1.3.1` unconditionally.
+  - `review-check-run-wait-shortening` — `CHECK_RUNS_WAIT_TIMEOUT_SECS` still defaults to `300`.
+  - `force-tick-duplicate-poller-suppression` — `scripts/orchestrate_force_tick.sh` still falls back to `_force_tick_fetch_issue_body` after a successful PR lookup when `TRACKING_ISSUE` remains blank.
+
+### `analysis/workflow-optimization-2026-06-22.md`
+- This source doc was also narrative-only, so its repeated bullets are grouped below under stable short labels.
+- Already satisfied on this ref:
+  - `keep-Serena-off-this-window` — `.github/workflows/review_autofix.yml` and `.github/workflows/implement.yml` still default `SERENA_ENABLED=false`, so the memo's “Serena is not a factor in this window” premise remains accurate.
+  - `Semble-runtime-vs-contract-test-telemetry-split` — `scripts/cost_audit.py` already reports separate contract-test and runtime fallback counters instead of one undifferentiated Semble alert stream.
+- Intentionally deferred:
+  - `review-autofix-stall-budget-and-post-processing-parallelism` — current `review_autofix` defaults still include the long settle-wait budget and the same broad post-processing path.
+  - `poller-setup-bookkeeping-trim`, `comment-trigger-pre-dispatch-gating`, and `late-skip-fanout-reduction` — these still require scheduler / startup behavior changes beyond this closeout-only cleanup.
+  - `implement-context-trimming`, `prompt-cache-measureability-and-stable-prefix`, and `plan-reasoning-downshift` — `.github/workflows/plan.yml` still defaults `MODEL_REASONING_EFFORT` to `xhigh`, and the broader prompt / cache reshaping work remains open.
+
+### `analysis/workflow-optimization-2026-06-22-2.md`
+- This source doc mixed narrative review-path tuning with a named deep audit whose summary recorded `SAFE_TO_MERGE | 0`.
+- Already satisfied on this ref:
+  - `linked-issue-fallback-hydration-groundwork` — `scripts/review_collect_pr_metadata.sh` now exposes `_fetch_linked_issue_bodies_graphql`, so the source doc's older “all fallback linked-issue hydration is per-issue REST” premise is no longer fully current.
+  - `Serena-is-not-yet-a-proven-cost-reducer` — `.github/workflows/review_autofix.yml` and `.github/workflows/implement.yml` still default `SERENA_ENABLED=false`, so the doc's “defer Serena tuning” conclusion still holds on this ref.
+- Intentionally deferred:
+  - `review-autofix-early-noop-exit`, `smoke-polling-collapse-and-fingerprint-fail-fast`, `review-gate-pr-files-dedupe`, and `workflow-log-analysis-breadth-trim` — these still change live review or analysis startup behavior and were not part of the sibling safe subset.
+  - `MERGE-001`, `MERGE-002`, `REUSE-001`, and `DEAD-API-001` — the appendix itself kept these at `NEEDS_VERIFICATION` or `RISKY_SKIP`, and current HEAD still retains the cited clarify / review / poller reads.
+  - `BUG-001`, `CONSIST-001`, `BATCH-001`, `BATCH-002`, `BATCH-003`, `DUP-001`, `DUP-002`, `DEAD-001`, and `SHELL-001` — the remaining deep-audit hotspots stay helper-parity or protected control-plane work rather than this closeout-only scope.
+
+### `analysis/workflow-optimization-2026-06-22-3.md`
+- This source doc paired narrative runtime / cost follow-ups with another deep audit. Its cross-reference section called one API overlap safe, but current HEAD still leaves the cited reads live.
+- Already satisfied on this ref:
+  - `Semble-runtime-vs-contract-test-fallback-separation` — `scripts/cost_audit.py` already tracks `semble_contract_test_fallbacks` separately from `semble_runtime_fallbacks`, matching the doc's “separate healthy fail-open behavior from broken rollout behavior” direction.
+  - `keep-Serena-off-the-hot-path` — `.github/workflows/review_autofix.yml` and `.github/workflows/implement.yml` still default `SERENA_ENABLED=false`.
+- Intentionally deferred:
+  - `review-autofix-early-gate-and-settle-wait-reduction` — `CHECK_RUNS_WAIT_TIMEOUT_SECS` still defaults to `300`.
+  - `stable-release-rerun-suppression`, `canary-preflight`, `maintenance-workflow-polling-trim`, `prompt-prefix-stabilization`, and `OR-telemetry-completeness` — these remain broader workflow / control-plane follow-up work.
+  - `API-001` — `.github/workflows/test-and-mark-stable.yml` still performs separate `.status` and `.conclusion` reads inside the cancel-on-close wait loop even though the source doc's cross-reference marked that overlap `SAFE_TO_MERGE`.
+  - `BUG-001`, `CONSIST-001`, `BATCH-001`, `BATCH-002`, `DUP-001`, `DUP-002`, `DEAD-001`, `MERGE-001`, `MERGE-002`, `REUSE-001`, `REUSE-002`, and `DEAD-API-001` — the remaining deep-audit items stay verification-gated or explicitly `RISKY_SKIP` on current HEAD.
+
+### `analysis/workflow-optimization-2026-06-23.md`
+- This source doc produced the clearest landed sibling fix in this closeout batch.
+- Implemented by sibling work:
+  - `review-autofix-support-script-bootstrap` — `.github/workflows/review_autofix.yml` now sources `${SUPPORT_SCRIPTS_DIR}/codex_helpers.sh` before Codex config assembly and preflights the staged helper files, matching the source doc's safe repair item.
+- Already satisfied on this ref:
+  - `dirty-worktree-checkout-fix` — `scripts/workspace_init.sh` now materializes workspaces under `${RUNNER_TEMP}` and writes `.ai/.workspace_source_manifest.txt` inside that temp workspace, so the earlier tracked-worktree premise is stale on current HEAD.
+  - `ci-image-independent-shell-block-check` — `.github/workflows/ci.yml` now explicitly uses `grep` instead of `ripgrep` for the shell-block anti-regression gate.
+  - `keep-Serena-disabled` — `.github/workflows/review_autofix.yml` and `.github/workflows/implement.yml` still default `SERENA_ENABLED=false`.
+  - `OpenRouter-and-cache-telemetry-parser-groundwork` — `scripts/cost_audit.py` already emits `or_*`, `cache_hit_rate`, `context_budget_warn`, and split Semble fallback counters; the remaining gap is runtime completeness rather than parser absence.
+- Intentionally deferred:
+  - `coarse-CI-sharding`, `first-pass-review-downshift`, `poller-work-discovery-before-checkout`, `queue-noop-fanout-reduction`, `duplicate-review-surfaces`, and `Semble-duplicate-context-suppression` — these remain broader workflow-policy or control-plane changes.
+  - `SEC-001` — `.github/workflows/update_workflows.yml` still fetches `scripts/tg_helpers.sh` from `${{ github.repository_owner }}/coding-workflows` at `ref=stable`.
+  - `API-002` — `.github/workflows/test-and-mark-stable.yml` still does separate `.status` / `.conclusion` reads inside the cancel-on-close wait loop even though the source doc marked that overlap `SAFE_TO_MERGE`.
+  - `REUSE-001` — `scripts/orchestrate_force_tick.sh` still re-fetches the issue body after a successful PR lookup when the tracking issue stays blank, so the source doc's `SAFE_TO_MERGE` handoff is not landed on this ref.
+  - `API-001`, `BATCH-001`, `BATCH-002`, `DUP-001`, `DUP-002`, `EXPR-001`, `CONSIST-001`, `MERGE-001`, `MERGE-002`, `MERGE-003`, and `DEAD-API-001` — the remaining named deep-audit items stay `NEEDS_VERIFICATION` or `RISKY_SKIP` on current HEAD.
+
 ## Preserved machine-maintained artifacts
 - `analysis/validation-selftest-status.json` (kept unchanged)
 - `analysis/last_collection_timestamp.txt` (kept unchanged)
@@ -635,3 +713,4 @@ Status keys below are scoped as `<source doc> :: <recommendation id>` because ID
 - PR `#3255` added `extract_repo_scoped_issue_refs_from_text` to `scripts/gh_helpers.sh`, and current HEAD retains that helper body while `.github/workflows/review_autofix.yml`, `scripts/review_collect_pr_metadata.sh`, and `scripts/review_rb_judge.sh` still reuse it for the strict repo-scoped fallback path.
 - `analysis/workflow-optimization-2026-06-11.md` repeated the same asks across Executive Summary / Speed / Cost / Reliability / AI Memory / GH API and mixed landed safe sub-changes with broader policy work, so this closeout classifies the named IDs once and splits the mixed repeated bullets under stable short labels instead of forcing one label across whole paragraphs.
 - With the earlier 2026-05-22/23 source docs, this pass's eight 2026-05-29/06-06 source docs, and `analysis/workflow-optimization-2026-06-08-2.md` now deleted, `.github/workflows/comprehensive-test-and-release.yml` will hit its existing fallback path to `analysis/recommendation-processing-report.md` on future runs.
+- `analysis/workflow-optimization-2026-06-23.md` marked `REUSE-001` as `SAFE_TO_MERGE`, but current HEAD still shows `scripts/orchestrate_force_tick.sh` re-fetching `issues/${ISSUE_NUMBER}` after a successful PR lookup when `TRACKING_ISSUE` remains blank, so this closeout records that item as intentionally deferred rather than actioned.

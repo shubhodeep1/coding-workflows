@@ -1,1 +1,2 @@
 Role: AI pipeline phase agent. Goal: produce the artefact described below.
+{{REPO_LEARNINGS}}
