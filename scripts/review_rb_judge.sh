@@ -47,6 +47,21 @@ source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 if ! command -v gh_retry >/dev/null 2>&1; then
   gh_retry() { "$@"; }
 fi
+# Shared PR check-runs merge gate (_pr_checks_completed). Single source of
+# truth shared with scripts/orchestrate_poll_process.sh so this judge's
+# merge_with_followup gate and the orchestrator's merge gates apply the
+# SAME required-checks filter and can never drift. Staged into
+# SUPPORT_SCRIPTS_DIR alongside gh_helpers.sh; fall back to a repo-relative
+# path for local/test invocations. If it cannot be sourced, the gate call
+# below leaves _pr_checks_completed undefined and the merge_with_followup
+# branch fails closed (no merge) — the safe direction.
+if [ -f "${SUPPORT_SCRIPTS_DIR}/pr_checks_lib.sh" ]; then
+  # shellcheck disable=SC1091
+  source "${SUPPORT_SCRIPTS_DIR}/pr_checks_lib.sh" 2>/dev/null || true
+elif [ -f "scripts/pr_checks_lib.sh" ]; then
+  # shellcheck disable=SC1091
+  source scripts/pr_checks_lib.sh 2>/dev/null || true
+fi
 if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   # Keep prompt sanitization available even when gh_helpers.sh was not
   # sourced. Large-diff truncation can still fall back to a raw byte prefix,
@@ -1921,6 +1936,7 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
       PR_MERGEABLE=""
       PR_MERGED=""
       PR_HEAD_SHA=""
+      PR_BASE_REF=""
       _mergeable_attempts="${PR_MERGEABLE_POLL_ATTEMPTS:-6}"
       _mergeable_sleep="${PR_MERGEABLE_POLL_SLEEP:-5}"
       _attempt=0
@@ -1939,6 +1955,10 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
         # the judge's decision and our merge attempt would otherwise
         # land unjudged code.
         PR_HEAD_SHA="$(printf '%s\n' "${_pr_json}" | jq -r '.head.sha // ""' | grep -xE '[a-f0-9]{7,40}' || echo "")"
+        # Capture the base ref so the check-runs gate can resolve the
+        # required-checks set (branch protection ∪ ORCH_FINAL_MERGE_REQUIRED_CHECKS)
+        # for it, matching the orchestrator's merge gates.
+        PR_BASE_REF="$(printf '%s\n' "${_pr_json}" | jq -r '.base.ref // ""' || echo "")"
         # Detect merged via `(.merged_at != null) or (.merged == true)`
         # — matches gh_helpers.sh + the orchestrator's `.merged_at !=
         # null` pattern and survives REST payloads that omit either
@@ -1986,79 +2006,55 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
         # that doesn't contain the PR's changes.
         echo "::warning::PR #${PR_NUMBER} is closed without merge (merged=false). Skipping follow-up creation; the deferred gap will not be tracked because the source PR's changes never landed."
       elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
-        # Check-runs gate: mirror the orchestrator's `_pr_checks_completed`
-        # helper. Fetches /repos/{owner}/{repo}/commits/{sha}/check-runs
-        # and refuses the merge while ANY check-run is still incomplete
-        # or has a non-success conclusion (not just branch-protection-
-        # required ones). This prevents merge_with_followup from
-        # creating a follow-up issue against code that fails an
-        # informational check later — `gh pr merge --squash` only
-        # waits for REQUIRED checks per branch protection, so without
-        # this gate the action could land code that subsequently fails
-        # validation. claude-branch-review consensus Finding (round
-        # 12): the standalone implementation must mirror the
-        # orchestrator's existing gate (see _pr_checks_completed at
-        # scripts/orchestrate_poll_process.sh:232).
+        # Check-runs gate: delegate to the shared `_pr_checks_completed`
+        # helper in scripts/pr_checks_lib.sh — the SAME gate the
+        # orchestrator's merge paths use, so the two can never drift.
+        # Pending check-runs always block (an in-flight workflow must not
+        # race the merge), but a FAILED non-required/advisory check
+        # (Copilot, optional reviewers, CodeQL when code scanning is
+        # disabled, etc.) no longer blocks: the required set is branch
+        # protection ∪ ORCH_FINAL_MERGE_REQUIRED_CHECKS, matching the
+        # final integration-merge path. This is the fix for the deadlock
+        # where a permanently-red environmental check (which can never go
+        # green) kept the judge refusing the merge, the issue stuck in
+        # ai:review-blocked, and stall recovery re-firing forever.
         if [ -z "${PR_HEAD_SHA}" ]; then
           echo "::warning::PR #${PR_NUMBER} head SHA could not be resolved from the PR JSON — refusing merge_with_followup. Without a known SHA the merge cannot be bound via --match-head-commit (a concurrent push could land unjudged code). Leaving linked issues in ai:review-blocked."
           echo "judge_skip_reason=unresolved_head_sha" >> "$GITHUB_OUTPUT"
         else
-          # Fallback to '{}' (NOT '[]') on API failure — same fail-
-          # closed rationale as orchestrate_poll_process.sh's
-          # _pr_checks_completed: '[]' would match the jq filter's
-          # array branch and yield incomplete=0 (fail-open, treating
-          # an API error as "no check-runs"), while '{}' matches
-          # neither branch and trips the numeric guard below for the
-          # "could not query" refusal path.
-          _check_runs_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" 2>/dev/null || echo '{}')"
-          # Self-run exclusion: this script runs inside the
-          # `review / codex-agent` job hosted by review_autofix.yml
-          # (or its dispatch wrapper). That job IS itself a check-run
-          # on PR_HEAD_SHA with status=in_progress while this gate
-          # executes, so a naive "any incomplete check-run blocks"
-          # filter self-deadlocks the merge_with_followup path —
-          # observed end-to-end in shubhodeep1/tele-funtoken-msg-scoring
-          # PR #2989 (run 25993440211): judge decided merge_with_followup
-          # at 14:32:30Z, gate at 14:32:32Z counted the still-in_progress
-          # codex-agent job (which completed at 14:33:01Z), refused the
-          # merge, and the workflow then posted the misleading
-          # "max autofix iterations" fallback comment. The orchestrator's
-          # `_pr_checks_completed` helper does NOT need this exclusion
-          # because it runs from a separate workflow (ai-orchestrate-
-          # poll.yml) whose host job is never on the polled SHA's
-          # check-run list. Match Actions-emitted check-runs by their
-          # `details_url` which always carries `/actions/runs/<run_id>/
-          # job/<job_id>`. Empty $self_run preserves the original
-          # behavior for non-Actions / test callers (no exclusion).
-          _self_run_id="${GITHUB_RUN_ID:-}"
-          # jq filter: --paginate --slurp emits an array of page
-          # response objects; the elif branch handles legacy single-
-          # object shape from tests / older callers. Either way we
-          # flatten every page check_runs and count items that have
-          # not yet completed with an acceptable conclusion AND are
-          # not the current GitHub Actions run hosting this script.
-          # Without pagination, commits with >100 check-runs would
-          # hide pending/failing runs on later pages and let the gate
-          # incorrectly report success. (Note: comments stay outside
-          # the jq script — apostrophes inside the heredoc-style
-          # single-quoted jq expression would terminate it early.)
-          _incomplete_checks="$(printf '%s' "${_check_runs_json}" | jq -r --arg self_run "${_self_run_id}" '
-            def _is_self_check_run: ($self_run != "") and ((.details_url // "") | test("/actions/runs/" + $self_run + "(/|$)"));
-            def _is_pending: .status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled");
-            if (type == "array") then
-              [.[]? | (.check_runs // [])[] | select(_is_pending and (_is_self_check_run | not))] | length
-            elif (type == "object" and (.check_runs | type == "array")) then
-              [.check_runs[] | select(_is_pending and (_is_self_check_run | not))] | length
+          # PR_CHECKS_SELF_RUN_ID excludes this script's own still-
+          # in_progress `review / codex-agent` host job from the blocking
+          # count — without it the gate self-deadlocks (the self-run
+          # exclusion fixed in PR #2703; observed on
+          # shubhodeep1/tele-funtoken-msg-scoring PR #2989, run
+          # 25993440211). PR_CHECKS_REPOSITORY points the helper at this
+          # PR's repo. The required-checks resolution, the "*"/"" sentinels,
+          # and the fail-closed-on-API-error rationale all live in
+          # scripts/pr_checks_lib.sh. Fail closed if the lib failed to load:
+          # _checks_ok stays false, so no merge is attempted.
+          _checks_ok="false"
+          _checks_reason="check_runs_query_failed"
+          if command -v _pr_checks_completed >/dev/null 2>&1; then
+            if PR_CHECKS_REPOSITORY="${REPOSITORY}" PR_CHECKS_SELF_RUN_ID="${GITHUB_RUN_ID:-}" \
+                 _pr_checks_completed "${PR_NUMBER}" "${PR_HEAD_SHA}" "${PR_BASE_REF}"; then
+              _checks_ok="true"
             else
-              empty
-            end
-          ' 2>/dev/null | tail -n1)"
-          if ! [[ "${_incomplete_checks}" =~ ^[0-9]+$ ]]; then
-            echo "::warning::PR #${PR_NUMBER} could not query check-runs for SHA ${PR_HEAD_SHA:0:7} — refusing merge_with_followup to avoid creating a follow-up against unvalidated code. Leaving linked issues in ai:review-blocked."
-            echo "judge_skip_reason=check_runs_query_failed" >> "$GITHUB_OUTPUT"
-          elif [ "${_incomplete_checks}" -gt 0 ]; then
-            echo "::warning::PR #${PR_NUMBER} has ${_incomplete_checks} blocking check-run(s) for SHA ${PR_HEAD_SHA:0:7} — refusing merge_with_followup until all checks complete with success/neutral/skipped/cancelled. Leaving linked issues in ai:review-blocked; stall recovery will re-fire the judge after checks settle."
-            echo "judge_skip_reason=blocking_check_runs" >> "$GITHUB_OUTPUT"
+              case "${PR_CHECKS_LAST_REASON:-}" in
+                blocking) _checks_reason="blocking_check_runs" ;;
+                *) _checks_reason="check_runs_query_failed" ;;
+              esac
+            fi
+          else
+            echo "::warning::PR #${PR_NUMBER} check-runs gate unavailable (scripts/pr_checks_lib.sh not sourced) — refusing merge_with_followup (fail-closed). Leaving linked issues in ai:review-blocked."
+          fi
+          if [ "${_checks_ok}" != "true" ]; then
+            if [ "${_checks_reason}" = "check_runs_query_failed" ]; then
+              echo "::warning::PR #${PR_NUMBER} could not query check-runs for SHA ${PR_HEAD_SHA:0:7} — refusing merge_with_followup to avoid creating a follow-up against unvalidated code. Leaving linked issues in ai:review-blocked."
+              echo "judge_skip_reason=check_runs_query_failed" >> "$GITHUB_OUTPUT"
+            else
+              echo "::warning::PR #${PR_NUMBER} has blocking required check-run(s) for SHA ${PR_HEAD_SHA:0:7} — refusing merge_with_followup until required checks complete with success/neutral/skipped/cancelled (non-required/advisory failures are ignored). Leaving linked issues in ai:review-blocked; stall recovery will re-fire the judge after checks settle."
+              echo "judge_skip_reason=blocking_check_runs" >> "$GITHUB_OUTPUT"
+            fi
           elif [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
             # Sync merge only — NEVER --auto enrollment. The whole point
             # of the conservative ladder is to ensure follow-up creation

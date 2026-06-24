@@ -1210,6 +1210,10 @@ def _build_merge_with_followup_harness(
 	    real script measures in seconds) doesn't slow tests.
 	"""
 	xpg_echo_line = "shopt -s xpg_echo\n\n" if enable_xpg_echo else ""
+	# The check-runs gate now delegates to the shared _pr_checks_completed
+	# helper in scripts/pr_checks_lib.sh; source it so the branch can call it
+	# (gh_retry/_safe_gh_jq are defined above, used by the helper at call time).
+	pr_checks_lib_path = (REPO_ROOT / "scripts" / "pr_checks_lib.sh").as_posix()
 	return f"""#!/usr/bin/env bash
 set -euo pipefail
 
@@ -1218,6 +1222,7 @@ ensure_label_exists() {{ printf '%s\\n' "$1" >> "${{ENSURE_LABELS_FILE}}"; }}
 _resilient_phase_swap() {{ :; }}
 _safe_gh_jq() {{ gh api "$@"; }}
 sleep() {{ :; }}
+source "{pr_checks_lib_path}"
 
 GITHUB_OUTPUT="{github_output}"
 
