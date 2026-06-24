@@ -2328,6 +2328,8 @@ jobs:
           echo "── Shell script syntax ──"
           bash -n scripts/orchestrate_poll_process.sh
           echo "OK: orchestrate_poll_process.sh"
+          bash -n scripts/pr_checks_lib.sh
+          echo "OK: pr_checks_lib.sh"
 
           # 5f: Label contract validation
           echo ""

@@ -21,8 +21,10 @@ REVIEW_AUTOFIX_WF = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 FULL_RM_LINE = (
     "rm -f scripts/ai_memory.py scripts/ai_memory_lib.py "
     "scripts/memory_helpers.sh scripts/openrouter_prompt_cache.py "
+    "scripts/cost_audit.py scripts/codex_heartbeat.sh "
     "scripts/review_run_reviewers.sh scripts/review_apply_fixes.sh "
-    "scripts/review_rb_judge.sh scripts/summarize_reviewer_consensus.sh "
+    "scripts/review_rb_judge.sh scripts/pr_checks_lib.sh "
+    "scripts/summarize_reviewer_consensus.sh "
     "scripts/check_external_branch_advance.sh 2>/dev/null || true"
 )
 

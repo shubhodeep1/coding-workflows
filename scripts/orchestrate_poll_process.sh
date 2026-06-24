@@ -29,6 +29,25 @@ if [ -f "scripts/memory_helpers.sh" ]; then
   # shellcheck disable=SC1091
   source scripts/memory_helpers.sh
 fi
+# shellcheck source=pr_checks_lib.sh
+# Shared PR check-runs merge gate (_pr_checks_completed /
+# _pr_required_check_names_for_base). Single source of truth shared with
+# scripts/review_rb_judge.sh so the orchestrator's merge gates and the
+# review-blocked judge's gate can never drift. Resolve relative to this
+# script's own directory first (robust when invoked or sourced from any
+# CWD — e.g. the test harness sources this script by absolute path), then
+# fall back to the CWD-relative staged path. A missing lib leaves
+# _pr_checks_completed undefined, so every gate call fails closed (no
+# merge) — the safe direction.
+_OPP_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "scripts")"
+if [ -f "${_OPP_LIB_DIR}/pr_checks_lib.sh" ]; then
+  # shellcheck disable=SC1091
+  source "${_OPP_LIB_DIR}/pr_checks_lib.sh"
+elif [ -f "scripts/pr_checks_lib.sh" ]; then
+  # shellcheck disable=SC1091
+  source scripts/pr_checks_lib.sh
+fi
+unset _OPP_LIB_DIR
 # shellcheck source=scripts/semble_helpers.sh
 SEMBLE_HELPERS_AVAILABLE="false"
 JUDGE_SEMBLE_MAX_CHUNKS="4"
@@ -301,194 +320,14 @@ assemble_judge_static_context() {
 }
 
 # ---------------------------------------------------------------
-# Helper: Check whether all check-runs on a PR's head commit have
-# completed AND none of the check-runs that count as "required"
-# are in an unacceptable conclusion (success/neutral/skipped/cancelled
-# are acceptable). Returns 0 when nothing is blocking, 1 otherwise
-# (including API errors).
-#
-# Layer 1 (Apr 2026): the gate's "required" set is no longer "every
-# check-run on the SHA". Instead it's resolved per call as:
-#   1. Branch protection's `required_status_checks.contexts` on the
-#      PR's base ref, when non-empty.
-#   2. Comma-separated names in ORCH_FINAL_MERGE_REQUIRED_CHECKS,
-#      otherwise.
-#   3. The built-in ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT, if the
-#      env var was never set.
-# Sentinel "*" restores legacy fail-closed-on-any-failure behaviour;
-# sentinel "" (env var explicitly empty) makes the gate allow-all.
-# See ORCH_FINAL_MERGE_REQUIRED_CHECKS docstring near MAX_FINAL_MERGE_ATTEMPTS.
-#
-# The check-runs API call still uses --paginate --slurp so commits
-# with >100 check-runs don't hide failures on later pages, matching
-# the canonical pattern at .github/workflows/review_autofix.yml's
-# "Collect PR check-run failures" step.
-#
-# Usage:  _pr_checks_completed <PR_NUMBER> [<HEAD_SHA>] [<BASE_REF>]
-#   HEAD_SHA optional: when omitted, fetched from the PR.
-#   BASE_REF optional: callers that pass it opt into the Layer-1
-#   required-checks filter. Legacy callers that omit BASE_REF keep the
-#   pre-Layer-1 "all check-runs must pass" behaviour.
+# _pr_checks_completed / _pr_required_check_names_for_base now live in
+# scripts/pr_checks_lib.sh (sourced near the top of this file) so the
+# orchestrator's merge gates and scripts/review_rb_judge.sh's
+# review-blocked judge gate share one definition and can never drift.
+# The required-checks resolution (branch protection ∪
+# ORCH_FINAL_MERGE_REQUIRED_CHECKS ∪ built-in default) and the "*"=legacy /
+# ""=allow-all sentinels are documented there.
 # ---------------------------------------------------------------
-_pr_checks_completed()
-{
-	local pr_number="$1"
-	local head_sha="${2:-}"
-	local base_ref="${3:-}"
-	local use_required_filter="false"
-	if [ "$#" -ge 3 ]; then
-		use_required_filter="true"
-	fi
-
-	# Fetch the PR JSON once if we need the head SHA from it. Callers only
-	# opt into required-check filtering when they pass BASE_REF explicitly;
-	# every legacy caller that omits BASE_REF keeps the original fail-closed
-	# "all check-runs on the head SHA must pass" behaviour.
-	if [ -z "${head_sha}" ] || [ "${head_sha}" = "null" ]; then
-		local pr_json
-		pr_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" || echo "")"
-		head_sha="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .head.sha?) then .head.sha else empty end' 2>/dev/null | tail -n1)"
-		if [ "${use_required_filter}" = "true" ] && [ -z "${base_ref}" ]; then
-			base_ref="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .base.ref?) then .base.ref else empty end' 2>/dev/null | tail -n1)"
-		fi
-	fi
-	if [ -z "${head_sha}" ] || [ "${head_sha}" = "null" ]; then
-		echo "  [check-runs] Could not resolve head SHA for PR #${pr_number}. Skipping merge."
-		return 1
-	fi
-
-	local required_names_csv
-	required_names_csv="*"
-	if [ "${use_required_filter}" = "true" ]; then
-		required_names_csv="$(_pr_required_check_names_for_base "${base_ref}")"
-	fi
-
-	local check_runs_json
-	# Fallback to '{}' (NOT '[]') on API failure. The jq filter below has
-	# two matching branches: `type == "array"` (production --paginate
-	# --slurp shape) and the elif `type == "object"` (legacy single-object
-	# shape). An empty object '{}' matches neither — falls through to
-	# `else empty`, the numeric guard below trips, and the helper returns
-	# 1 (fail-closed). An empty array '[]' would match the first branch
-	# and produce `incomplete=0`, fail-OPEN — treating an API error as "no
-	# check-runs" and letting the merge proceed.
-	check_runs_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${GITHUB_REPOSITORY}/commits/${head_sha}/check-runs?per_page=100" || echo "{}")"
-
-	# Allow-all sentinel: env var explicitly set to "" means treat every
-	# check-run as advisory. Branch protection (when present) is enforced
-	# server-side by GitHub at merge time.
-	if [ "${required_names_csv}" = "" ]; then
-		echo "  [check-runs] Required-checks gate is empty (allow-all); proceeding with merge for PR #${pr_number} (SHA ${head_sha:0:7})."
-		return 0
-	fi
-
-	local incomplete
-	if [ "${required_names_csv}" = "*" ]; then
-		# Legacy fail-closed-on-any-failure behaviour. Identical filter
-		# to the pre-Layer-1 implementation.
-		incomplete="$(printf '%s' "${check_runs_json}" | jq -r '
-			if (type == "array") then
-				[.[]? | (.check_runs // [])[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled"))] | length
-			elif (type == "object" and (.check_runs | type == "array")) then
-				[.check_runs[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled"))] | length
-			else
-				empty
-			end
-		' 2>/dev/null | tail -n1)"
-	else
-		# Required-set filter: pending check-runs (status != "completed")
-		# always block — autofix or any other in-flight workflow shouldn't
-		# race a merge — but FAILED check-runs only block when their
-		# `name` appears in required_names_csv. This preserves the original
-		# "pending blocks" semantic while letting non-required advisory
-		# failures (Copilot, optional reviewers, etc.) through. Whitespace
-		# around comma-separated tokens is trimmed so operators can format
-		# the env var with spaces after commas.
-		incomplete="$(printf '%s' "${check_runs_json}" | jq -r --arg names "${required_names_csv}" '
-			($names | split(",") | map(gsub("^\\s+|\\s+$"; ""))) as $required |
-			(
-				if (type == "array") then
-					[.[]? | (.check_runs // [])[]]
-				elif (type == "object" and (.check_runs | type == "array")) then
-					.check_runs
-				else
-					null
-				end
-			) as $runs |
-			if ($runs == null) then empty
-			else
-				[$runs[] | select(
-					(.status != "completed")
-					or (
-						(.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled")
-						and (.name as $n | $required | index($n))
-					)
-				)] | length
-			end
-		' 2>/dev/null | tail -n1)"
-	fi
-	if ! [[ "${incomplete}" =~ ^[0-9]+$ ]]; then
-		echo "  [check-runs] Could not query check-runs for PR #${pr_number} (SHA ${head_sha:0:7}). Skipping merge."
-		return 1
-	fi
-
-	if [ "${incomplete}" -gt 0 ]; then
-		if [ "${required_names_csv}" = "*" ]; then
-			echo "  [check-runs] PR #${pr_number} has ${incomplete} blocking check-run(s) (SHA ${head_sha:0:7}). Skipping merge."
-		else
-			echo "  [check-runs] PR #${pr_number} has ${incomplete} blocking required check-run(s) (SHA ${head_sha:0:7}, required-set=${required_names_csv}). Skipping merge."
-		fi
-		return 1
-	fi
-
-	if [ "${required_names_csv}" = "*" ]; then
-		echo "  [check-runs] All check-runs completed and acceptable for PR #${pr_number} (SHA ${head_sha:0:7}). Proceeding with merge."
-	else
-		echo "  [check-runs] All required check-runs completed and acceptable for PR #${pr_number} (SHA ${head_sha:0:7}). Proceeding with merge."
-	fi
-	return 0
-}
-
-# Helper: returns the comma-separated list of check-run names treated as
-# blocking for the given base ref. Resolution: branch protection's
-# required_status_checks.contexts first (server-side truth), then the
-# operator allowlist in ORCH_FINAL_MERGE_REQUIRED_CHECKS, then the
-# built-in default. Sentinels passed through verbatim: "*" = legacy mode,
-# "" = allow-all.
-#
-# §15 hygiene: this issues one extra `gh api` call per invocation when
-# the base ref is known. The call is fail-fast (gh_retry recognises
-# "Branch not protected" 404 as a non-retryable permanent failure), so
-# unprotected branches resolve in one round trip and fall through to
-# the env var.
-_pr_required_check_names_for_base()
-{
-	local base_ref="$1"
-	local contexts=""
-	if [ -n "${base_ref}" ]; then
-		local protection_json
-		protection_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/branches/${base_ref}/protection" 2>/dev/null || echo "")"
-		if [ -n "${protection_json}" ]; then
-			contexts="$(printf '%s' "${protection_json}" | jq -r '
-				if (type == "object" and (.required_status_checks // null) != null) then
-					(.required_status_checks.contexts // []) | join(",")
-				else
-					""
-				end
-			' 2>/dev/null | tail -n1)"
-		fi
-	fi
-	if [ -n "${contexts}" ]; then
-		echo "${contexts}"
-		return 0
-	fi
-	# ORCH_FINAL_MERGE_REQUIRED_CHECKS resolution: at startup the var is
-	# set to either the operator-provided value (possibly the empty string
-	# for allow-all) or ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT. We honour
-	# that resolved value verbatim — `${VAR-…}` not `${VAR:-…}` because an
-	# explicit empty string must remain empty (allow-all sentinel).
-	echo "${ORCH_FINAL_MERGE_REQUIRED_CHECKS-${ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT}}"
-}
 
 # ---------------------------------------------------------------
 # Layer 2: time-bounded ineligibility alerting.
@@ -15246,7 +15085,14 @@ sys.exit(1)
           PR_STATE="$(_jq_field "${_rb_merge_json}" '.state' 'open|closed|merged')"
           PR_MERGEABLE="$(_jq_field "${_rb_merge_json}" '.mergeable' 'true|false')"
           _rb_merge_sha="$(_jq_field "${_rb_merge_json}" '.head.sha')"
-		  if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}" "${_rb_merge_sha}"; then
+          # Pass the PR's base ref (3rd arg) so the gate uses the required-
+          # checks filter — branch protection ∪ ORCH_FINAL_MERGE_REQUIRED_CHECKS
+          # — instead of the legacy block-on-ANY-failing-check mode. Reuses
+          # the already-fetched PR JSON (no extra API call, §15). A red
+          # non-required/environmental check (e.g. CodeQL with code scanning
+          # disabled) no longer deadlocks the review-blocked merge.
+          _rb_merge_base="$(_jq_field "${_rb_merge_json}" '.base.ref')"
+		  if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}" "${_rb_merge_sha}" "${_rb_merge_base}"; then
 		    if gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto; then
 		      echo "  PR #${RB_PR} merge initiated (auto)."
 		      RB_MERGED="true"
@@ -15300,7 +15146,10 @@ sys.exit(1)
             PR_STATE="$(_jq_field "${_rb_fm_json}" '.state' 'open|closed|merged')"
             PR_MERGEABLE="$(_jq_field "${_rb_fm_json}" '.mergeable' 'true|false')"
             _rb_fm_sha="$(_jq_field "${_rb_fm_json}" '.head.sha')"
-				if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}" "${_rb_fm_sha}"; then
+            # Required-checks filter via the PR's base ref (see the merge)
+            # branch above) — no extra API call, reuses _rb_fm_json.
+            _rb_fm_base="$(_jq_field "${_rb_fm_json}" '.base.ref')"
+				if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}" "${_rb_fm_sha}" "${_rb_fm_base}"; then
 				  if gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto \
 				    || gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
 				    RB_FORCE_MERGED="true"
@@ -15564,7 +15413,10 @@ ${RB_FIX_DESC}
                   PR_STATE="$(_jq_field "${_rb_nofix_json}" '.state' 'open|closed|merged')"
                   PR_MERGEABLE="$(_jq_field "${_rb_nofix_json}" '.mergeable' 'true|false')"
                   _rb_nofix_sha="$(_jq_field "${_rb_nofix_json}" '.head.sha')"
-                  if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}" "${_rb_nofix_sha}"; then
+                  # Required-checks filter via the PR's base ref (see the
+                  # merge) branch above) — no extra API call, reuses _rb_nofix_json.
+                  _rb_nofix_base="$(_jq_field "${_rb_nofix_json}" '.base.ref')"
+                  if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}" "${_rb_nofix_sha}" "${_rb_nofix_base}"; then
                     if gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto \
                       || gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
                       tg_notify "Orchestrator judge merged PR #${RB_PR} (no fix changes needed, issue #${rb_issue})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "DEBUG"
@@ -15639,6 +15491,9 @@ ${RB_FIX_DESC}
             PR_MERGED_NOW="$(_jq_field "${_rb_mwf_json}" '(.merged_at != null) or (.merged == true)' 'true|false')"
             [ -n "${PR_MERGED_NOW}" ] || PR_MERGED_NOW="false"
             _rb_mwf_sha="$(_jq_field "${_rb_mwf_json}" '.head.sha')"
+            # Required-checks filter via the PR's base ref (see the merge)
+            # branch above) — no extra API call, reuses _rb_mwf_json.
+            _rb_mwf_base="$(_jq_field "${_rb_mwf_json}" '.base.ref')"
 
             MERGE_CONFIRMED="false"
             if [ "${PR_MERGED_NOW}" = "true" ]; then
@@ -15648,14 +15503,15 @@ ${RB_FIX_DESC}
               echo "::warning::PR #${RB_PR} closed without merge — skipping follow-up creation; deferred gap not tracked because source PR's changes never landed."
             elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ]; then
               # _pr_checks_completed gates the merge attempt the same
-              # way the existing orchestrator `merge)` action does
-              # (line 9758). The helper checks ALL check-runs on the
-              # PR head (not just branch-protection-required ones),
-              # so non-required CI is also waited for. This prevents
-              # merge_with_followup from creating a follow-up issue
-              # while informational checks are still running — same
-              # gating as the plain merge path.
-              if ! _pr_checks_completed "${RB_PR}" "${_rb_mwf_sha}"; then
+              # way the other orchestrator review-blocked merge actions
+              # do. Passing the PR's base ref (3rd arg) selects the
+              # required-checks filter — pending check-runs always block,
+              # but a FAILED non-required/advisory check (e.g. CodeQL
+              # when code scanning is disabled) no longer blocks, matching
+              # the final integration-merge path and unblocking the
+              # review-blocked-judge merge that previously deadlocked on a
+              # permanently-red environmental check.
+              if ! _pr_checks_completed "${RB_PR}" "${_rb_mwf_sha}" "${_rb_mwf_base}"; then
                 echo "::warning::PR #${RB_PR} mergeable=true but check-runs still pending/failing — leaving issue in ai:review-blocked. Next orchestrator poll cycle will re-fire the judge after checks complete; that run will hit the PR_MERGED_NOW=true short path (after the existing \`merge)\` action's auto-merge enrollment lands the PR)."
               elif [ -z "${_rb_mwf_sha}" ]; then
                 # Defensive: `_pr_checks_completed` may have re-fetched
@@ -15687,10 +15543,9 @@ ${RB_FIX_DESC}
                 # repos need one extra poll cycle to materialize the
                 # follow-up. Matches scripts/review_rb_judge.sh's
                 # merge_with_followup ladder behaviourally — both
-                # paths gate on check-runs (this branch via the
-                # shared `_pr_checks_completed` helper above; the
-                # standalone via its own inline check-runs query
-                # using the same fail-closed jq filter), and both
+                # paths gate on check-runs via the SAME shared
+                # `_pr_checks_completed` helper (scripts/pr_checks_lib.sh),
+                # so the required-checks filter is identical, and both
                 # bind the merge via --match-head-commit.
                 #
                 # NOTE: gh pr merge is intentionally NOT wrapped with
