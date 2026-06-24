@@ -64,6 +64,12 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RB_JUDGE_SCRIPT = REPO_ROOT / "scripts" / "review_rb_judge.sh"
+# The check-runs jq filter + self-run exclusion now live in the shared
+# scripts/pr_checks_lib.sh (_pr_checks_completed), sourced by both
+# review_rb_judge.sh and orchestrate_poll_process.sh so the two merge gates
+# cannot drift. The script-side filter-shape assertions therefore pin the
+# library; review_rb_judge.sh only has to thread GITHUB_RUN_ID into it.
+PR_CHECKS_LIB_SCRIPT = REPO_ROOT / "scripts" / "pr_checks_lib.sh"
 REVIEW_AUTOFIX_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 TEST_SUBPROCESS_ENV = {
 	"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
@@ -73,6 +79,10 @@ TEST_SUBPROCESS_ENV = {
 
 def _rb_judge_text() -> str:
 	return RB_JUDGE_SCRIPT.read_text(encoding="utf-8")
+
+
+def _pr_checks_lib_text() -> str:
+	return PR_CHECKS_LIB_SCRIPT.read_text(encoding="utf-8")
 
 
 def _review_autofix_text() -> str:
@@ -96,50 +106,68 @@ def _rb_judge_local_sanitize_fallback_block() -> str:
 
 
 def test_script_captures_github_run_id() -> None:
-	"""scripts/review_rb_judge.sh must capture ${GITHUB_RUN_ID:-} into a
-	local variable before invoking jq. A future refactor that drops the
-	capture would re-deadlock the merge_with_followup path because the
-	jq filter would have no value to compare details_url against."""
+	"""scripts/review_rb_judge.sh must thread ${GITHUB_RUN_ID:-} into the
+	shared check-runs gate via PR_CHECKS_SELF_RUN_ID. A future refactor
+	that drops it would re-deadlock the merge_with_followup path because
+	the gate's jq filter would have no value to compare details_url
+	against."""
 	src = _rb_judge_text()
-	assert '_self_run_id="${GITHUB_RUN_ID:-}"' in src, (
-		"scripts/review_rb_judge.sh must capture GITHUB_RUN_ID into "
-		"_self_run_id so the check-runs gate can exclude its own host "
-		"GitHub Actions run from the blocking-check-run count. Without "
-		"this capture, the merge_with_followup path self-deadlocks (see "
-		"tele-funtoken-msg-scoring PR #2989)."
+	assert 'PR_CHECKS_SELF_RUN_ID="${GITHUB_RUN_ID:-}"' in src, (
+		"scripts/review_rb_judge.sh must pass PR_CHECKS_SELF_RUN_ID="
+		"\"${GITHUB_RUN_ID:-}\" into the shared _pr_checks_completed gate "
+		"so it can exclude this script's own host GitHub Actions run from "
+		"the blocking-check-run count. Without it, the merge_with_followup "
+		"path self-deadlocks (see tele-funtoken-msg-scoring PR #2989)."
+	)
+
+
+def test_script_calls_shared_gate_with_base_ref() -> None:
+	"""scripts/review_rb_judge.sh must delegate to the shared
+	_pr_checks_completed helper, passing the PR's base ref (3rd arg) so the
+	required-checks filter is applied. This is what unblocks the merge when
+	a non-required/environmental check (e.g. CodeQL with code scanning
+	disabled) is permanently red."""
+	src = _rb_judge_text()
+	pat = re.compile(
+		r'_pr_checks_completed "\$\{PR_NUMBER\}" "\$\{PR_HEAD_SHA\}" "\$\{PR_BASE_REF\}"'
+	)
+	assert pat.search(src), (
+		"scripts/review_rb_judge.sh's merge_with_followup gate must call "
+		"`_pr_checks_completed \"${PR_NUMBER}\" \"${PR_HEAD_SHA}\" "
+		"\"${PR_BASE_REF}\"` (the shared helper from scripts/pr_checks_lib.sh) "
+		"with the base ref so non-required/advisory failing checks no longer "
+		"block the review-blocked-judge merge."
 	)
 
 
 def test_script_threads_self_run_into_jq_arg() -> None:
-	"""The jq invocation that counts incomplete check-runs must pass
-	_self_run_id via --arg self_run. Without the --arg threading, the
-	predicate has no value to compare and the gate self-deadlocks."""
-	src = _rb_judge_text()
-	# Anchor on the merge_with_followup gate's specific jq call —
-	# there are other jq calls in the file we don't want to match.
-	pat = re.compile(
-		r'_incomplete_checks="\$\(printf \'%s\' "\$\{_check_runs_json\}" \| '
-		r'jq -r --arg self_run "\$\{_self_run_id\}"',
+	"""The shared library's jq invocation that counts incomplete check-runs
+	must pass the self-run id via --arg self_run. Without the --arg
+	threading, the predicate has no value to compare and the gate
+	self-deadlocks."""
+	src = _pr_checks_lib_text()
+	assert 'jq -r --arg self_run "${self_run}"' in src, (
+		"scripts/pr_checks_lib.sh's legacy check-runs branch must invoke "
+		"jq with `--arg self_run \"${self_run}\"` so the filter can "
+		"identify and exclude the rb_judge's own host Actions run."
 	)
-	assert pat.search(src), (
-		"scripts/review_rb_judge.sh's merge_with_followup check-runs "
-		"gate must invoke jq with `--arg self_run \"${_self_run_id}\"` "
-		"so the filter can identify and exclude the rb_judge's own host "
-		"Actions run."
+	assert '--arg self_run "${self_run}"' in src, (
+		"scripts/pr_checks_lib.sh must thread the self-run id into the jq "
+		"filter (both the legacy and required-set branches)."
 	)
 
 
 def test_script_defines_self_check_run_predicate() -> None:
-	"""The jq filter must define a _is_self_check_run predicate that
-	matches an Actions check-run's details_url against the captured run
-	id. The /actions/runs/<id>(/|$) anchor prevents prefix collisions
-	(e.g. run id 12 matching run 123)."""
-	src = _rb_judge_text()
+	"""The shared library's jq filter must define a _is_self_check_run
+	predicate that matches an Actions check-run's details_url against the
+	captured run id. The /actions/runs/<id>(/|$) anchor prevents prefix
+	collisions (e.g. run id 12 matching run 123)."""
+	src = _pr_checks_lib_text()
 	assert (
 		'def _is_self_check_run: ($self_run != "") and '
 		'((.details_url // "") | test("/actions/runs/" + $self_run + "(/|$)"));'
 	) in src, (
-		"scripts/review_rb_judge.sh must define _is_self_check_run "
+		"scripts/pr_checks_lib.sh must define _is_self_check_run "
 		"in the check-runs jq filter exactly as documented; the "
 		"empty-$self_run guard preserves legacy behavior for non-Actions "
 		"callers and the (/|$) anchor prevents run-id prefix collisions."
@@ -147,20 +175,25 @@ def test_script_defines_self_check_run_predicate() -> None:
 
 
 def test_script_excludes_self_in_both_jq_branches() -> None:
-	"""Both jq filter branches (the production --paginate --slurp
-	array-of-pages shape and the legacy single-object shape) must
-	exclude self runs. Dropping the predicate from either branch would
-	leave a path where the gate still self-deadlocks."""
-	src = _rb_judge_text()
-	# The select clause must AND _is_pending with the negated self-check.
-	# We check that BOTH branch lines contain this exact AND clause.
-	expected = "select(_is_pending and (_is_self_check_run | not))"
-	occurrences = src.count(expected)
-	assert occurrences >= 2, (
-		f"scripts/review_rb_judge.sh must apply the self-run exclusion "
-		f"in both jq filter branches (paginated array and legacy single-"
-		f"object). Found {occurrences} occurrence(s) of "
-		f"`{expected}`; expected at least 2."
+	"""The shared library must apply the self-run exclusion in BOTH the
+	legacy (block-on-any) filter and the required-set filter. Dropping the
+	predicate from either would leave a path where the gate self-deadlocks."""
+	src = _pr_checks_lib_text()
+	# Legacy "*" branch: AND _is_pending with the negated self-check
+	# (paginated array + legacy single-object shapes => >=2 occurrences).
+	legacy = "select(_is_pending and (_is_self_check_run | not))"
+	legacy_occurrences = src.count(legacy)
+	assert legacy_occurrences >= 2, (
+		f"scripts/pr_checks_lib.sh's legacy filter must apply the self-run "
+		f"exclusion in both shapes. Found {legacy_occurrences} occurrence(s) "
+		f"of `{legacy}`; expected at least 2."
+	)
+	# Required-set branch: the select must AND the required-failure test
+	# with the negated self-check.
+	assert "and (_is_self_check_run | not)" in src, (
+		"scripts/pr_checks_lib.sh's required-set filter must also exclude "
+		"the self-run from the blocking count (`and (_is_self_check_run | "
+		"not)`)."
 	)
 
 
@@ -425,9 +458,10 @@ def test_workflow_merge_conflict_comment_is_branch_agnostic() -> None:
 # ---------------------------------------------------------------------------
 
 
-# Snapshot of the production jq filter. The text-shape tests above are
-# the change-detection guard against drift; keep this copy in sync with
-# scripts/review_rb_judge.sh when the live filter changes.
+# Snapshot of the production jq filter (the legacy block-on-any shape now
+# hosted in scripts/pr_checks_lib.sh's "*" branch). The text-shape tests
+# above are the change-detection guard against drift; keep this copy in
+# sync with scripts/pr_checks_lib.sh when the live filter changes.
 JQ_FILTER = '''
 def _is_self_check_run: ($self_run != "") and ((.details_url // "") | test("/actions/runs/" + $self_run + "(/|$)"));
 def _is_pending: .status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled");

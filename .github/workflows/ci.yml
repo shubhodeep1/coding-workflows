@@ -412,6 +412,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_rb_judge_label_propagation.py
 
+      - name: Shared PR check-runs merge gate (pr_checks_lib) tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_pr_checks_lib_required_filter.py
+
       - name: Review-blocked judge self-run exclusion regression tests
         run: |
           set -euo pipefail
