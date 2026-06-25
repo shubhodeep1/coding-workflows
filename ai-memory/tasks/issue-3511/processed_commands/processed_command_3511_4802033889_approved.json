@@ -5,13 +5,35 @@
   "entry_id": "processed_command_3511_4802033889_approved",
   "issue_number": 3511,
   "metadata": {
+    "branch": "ai/issue-3511",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/review_autofix.yml",
+      "README.md",
+      "agents.md",
+      "prompts/review-consolidator.txt",
+      "scripts/implement_diagnose_post_codex_failure.sh",
+      "scripts/render_prompt.py",
+      "scripts/review_consolidate.sh",
+      "scripts/review_run_reviewers.sh",
+      "scripts/slop_scan_local.py",
+      "tests/fixtures/slop_scan/empty_catch_around_os_unlink.py",
+      "tests/fixtures/slop_scan/safe_unlink_quiet_cleanup.py",
+      "tests/test_review_autofix_review_pipeline_contract.py",
+      "tests/test_slop_scan_local.py"
+    ],
+    "issue_number": 3511,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/3511",
+    "pr_number": 3512,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/3512",
+    "run_attempt": "1",
+    "run_id": "28185941575",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/28185941575"
   },
   "run_attempt": 1,
   "run_id": "28185941575",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-06-25T16:45:35Z",
+  "status": "completed",
+  "timestamp": "2026-06-25T17:01:58Z",
   "workflow": "implement"
 }
