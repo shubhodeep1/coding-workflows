@@ -62,7 +62,7 @@ Schema:
     {
       "file": "<path>",
       "line": <number|null>,
-      "function": "<function name or null>",
+      "function": <string|null>,
       "observation": "<what this evidence shows>"
     }
   ],

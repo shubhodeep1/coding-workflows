@@ -640,6 +640,66 @@ with open(output_file, "w", encoding="utf-8") as handle:
 PY
 }
 
+diagnose_trace_contract_enabled() {
+  local raw_value="${DIAGNOSE_TRACE_REQUIRED:-true}"
+  raw_value="$(printf '%s' "${raw_value}" | tr '[:upper:]' '[:lower:]')"
+  case "${raw_value}" in
+    0|false|no|off)
+      return 1
+      ;;
+  esac
+  return 0
+}
+
+normalize_diagnose_result_contract_fields() {
+  local result_file="$1"
+  local normalized_result_file=""
+  normalized_result_file="$(mktemp)"
+  if jq '
+    . + {
+      evidence_trace: (if (.evidence_trace? | type) == "array" then .evidence_trace else [] end),
+      hypothesis: (if (.hypothesis? | type) == "string" then .hypothesis else "" end)
+    }
+  ' "${result_file}" > "${normalized_result_file}"; then
+    mv "${normalized_result_file}" "${result_file}"
+    return 0
+  fi
+  rm -f "${normalized_result_file}"
+  return 1
+}
+
+diagnose_result_meets_trace_contract() {
+  local result_file="$1"
+  if ! diagnose_trace_contract_enabled; then
+    return 0
+  fi
+  jq -e '
+    (.evidence_trace | type) == "array"
+    and (.hypothesis | type) == "string"
+    and (
+      (.status // "") != "needs_fixes"
+      or ((.evidence_trace | length) > 0 and (.hypothesis | length) > 0)
+    )
+  ' "${result_file}" >/dev/null
+}
+
+format_diagnose_trace_section() {
+  local result_file="$1"
+  jq -r '
+    def format_trace_entry:
+      "- "
+      + (.file // "<unknown file>")
+      + (if .line == null then "" else ":" + (.line | tostring) end)
+      + (if (.function // "") == "" then "" else " in " + .function end)
+      + " — "
+      + (.observation // "No observation provided.");
+    "Evidence trace:\n"
+    + ((.evidence_trace // []) | if type == "array" and length > 0 then map(format_trace_entry) | join("\n") else "- none provided" end)
+    + "\n\nHypothesis:\n- "
+    + ((.hypothesis // "") | if length > 0 then . else "No hypothesis provided." end)
+  ' "${result_file}"
+}
+
 DIAGNOSE_SUCCESS=false
 if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   sanitize_codex_prompt_file "${IMPLEMENT_DIAGNOSE_PROMPT_FILE}"
@@ -648,7 +708,11 @@ if timeout "${IMPLEMENT_DIAGNOSE_TIMEOUT_SEC}"s codex --ask-for-approval never -
   < "${IMPLEMENT_DIAGNOSE_PROMPT_FILE}" > "${IMPLEMENT_DIAGNOSE_OUTPUT_FILE}" \
   2> >(tee -a "${IMPLEMENT_DIAGNOSE_LOG_FILE}" >&2); then
   if extract_last_json_with_key "${IMPLEMENT_DIAGNOSE_OUTPUT_FILE}" "status" "${IMPLEMENT_DIAGNOSE_RESULT_FILE}"; then
-    DIAGNOSE_SUCCESS=true
+    if normalize_diagnose_result_contract_fields "${IMPLEMENT_DIAGNOSE_RESULT_FILE}" && diagnose_result_meets_trace_contract "${IMPLEMENT_DIAGNOSE_RESULT_FILE}"; then
+      DIAGNOSE_SUCCESS=true
+    else
+      echo "::warning::Diagnose output missed required trace-contract fields; using deterministic fallback."
+    fi
   fi
 fi
 
@@ -658,14 +722,28 @@ if [ "${DIAGNOSE_SUCCESS}" != "true" ]; then
     RAW_CAPTURE_SNIPPET+=$'\n\n[truncated to first 50000 bytes]'
   fi
 
-  FALLBACK_BODY="$(printf 'Investigate post-Codex validation failure for issue #%s.\n\nThe diagnose step could not produce a valid JSON contract, so this deterministic fallback issue was generated with raw captured diagnostics.\n\n### Captured diagnostics\n\n```text\n%s\n```' "${ISSUE_NUMBER}" "${RAW_CAPTURE_SNIPPET}")"
+  FALLBACK_TRACE_OBSERVATION="Captured post-Codex diagnostics for ${FAILED_STEP_NAME} were available, but the diagnose step did not emit a contract-valid JSON result."
+  FALLBACK_HYPOTHESIS="The diagnose run failed before it could produce a trace-backed fix proposal, so the safest next step is a deterministic follow-up issue carrying the raw diagnostics."
+  FALLBACK_BODY="$(printf 'Investigate post-Codex validation failure for issue #%s.\n\nThe diagnose step could not produce a valid JSON contract, so this deterministic fallback issue was generated with raw captured diagnostics.\n\nEvidence trace:\n- %s — %s\n\nHypothesis:\n- %s\n\n### Captured diagnostics\n\n```text\n%s\n```' "${ISSUE_NUMBER}" "${CAPTURE_FILE}" "${FALLBACK_TRACE_OBSERVATION}" "${FALLBACK_HYPOTHESIS}" "${RAW_CAPTURE_SNIPPET}")"
 
   jq -n \
     --arg diagnosis "Codex diagnose failed or returned invalid JSON. Fallback fix-up issue created with raw captured diagnostics." \
     --arg body "${FALLBACK_BODY}" \
+    --arg capture_file "${CAPTURE_FILE}" \
+    --arg trace_observation "${FALLBACK_TRACE_OBSERVATION}" \
+    --arg hypothesis "${FALLBACK_HYPOTHESIS}" \
     '{
       status: "needs_fixes",
       diagnosis: $diagnosis,
+      evidence_trace: [
+        {
+          file: $capture_file,
+          line: null,
+          function: null,
+          observation: $trace_observation
+        }
+      ],
+      hypothesis: $hypothesis,
       fix_issues: [
         {
           id: "implement-post-codex-fallback",
@@ -690,13 +768,20 @@ case "${DIAG_STATUS}" in
       FIX_COUNT=0
     fi
     if [ "${FIX_COUNT}" -le 0 ]; then
+      EXISTING_EVIDENCE_TRACE_JSON="$(jq -c '(.evidence_trace // []) | if type == "array" then . else [] end' "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
+      EXISTING_HYPOTHESIS="$(jq -r '.hypothesis // ""' "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
+      EXISTING_TRACE_SECTION="$(format_diagnose_trace_section "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
       FIX_COUNT=1
       jq -n \
         --arg diagnosis "Diagnosis returned needs_fixes with empty fix_issues. Generated fallback issue payload." \
-        --arg body "No fix_issues were returned by diagnose output. Investigate implement workflow post-Codex failure handling and captured diagnostics in ${CAPTURE_FILE}." \
+        --arg body "No fix_issues were returned by diagnose output. Investigate implement workflow post-Codex failure handling and captured diagnostics in ${CAPTURE_FILE}.\n\n${EXISTING_TRACE_SECTION}" \
+        --arg hypothesis "${EXISTING_HYPOTHESIS}" \
+        --argjson evidence_trace "${EXISTING_EVIDENCE_TRACE_JSON}" \
         '{
           status: "needs_fixes",
           diagnosis: $diagnosis,
+          evidence_trace: $evidence_trace,
+          hypothesis: $hypothesis,
           fix_issues: [
             {
               id: "implement-post-codex-empty-fix-issues",

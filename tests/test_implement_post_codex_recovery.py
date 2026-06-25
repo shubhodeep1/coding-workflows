@@ -1755,6 +1755,10 @@ def test_diagnose_invokes_codex_when_capture_exists_and_issue_is_not_already_fai
 			codex_output={
 				"status": "needs_fixes",
 				"diagnosis": "diag",
+				"evidence_trace": [
+					{"file": "broken.yml", "line": 1, "function": "document", "observation": "error"},
+				],
+				"hypothesis": "diag hypothesis",
 				"fix_issues": [{"id": "fix-1", "title": "Fix 1", "body": "Body", "priority": 1, "depends_on": []}],
 				"harness_fixes": "",
 			},
@@ -1769,6 +1773,40 @@ def test_diagnose_invokes_codex_when_capture_exists_and_issue_is_not_already_fai
 		call_args = json.loads(call_lines[0])
 		assert "exec" in call_args
 		assert "--model" in call_args
+
+
+def test_diagnose_needs_fixes_missing_trace_contract_fields_uses_deterministic_fallback():
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		proc, state, _runtime_dir, paths = _run_diagnose_step(
+			tmp_path,
+			issue_labels=["ai:implementing"],
+			capture_contents="===== broken.yml =====\nerror\n",
+			codex_mode="success",
+			codex_output={
+				"status": "needs_fixes",
+				"diagnosis": "diag",
+				"fix_issues": [{"id": "fix-1", "title": "Fix 1", "body": "Body", "priority": 1, "depends_on": []}],
+				"harness_fixes": "",
+			},
+			failed_step_name="Validate syntax of changed files",
+			issue_body="Tracking issue: #829\n",
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "missed required trace-contract fields" in proc.stdout or "missed required trace-contract fields" in proc.stderr
+
+		result = json.loads(_read_file(paths["result_file"]))
+		assert result.get("status") == "needs_fixes"
+		assert result.get("evidence_trace")
+		assert isinstance(result.get("hypothesis"), str) and result["hypothesis"]
+
+		created_issues = state.get("created_issues", [])
+		assert len(created_issues) == 1
+		created = created_issues[0]
+		assert created["title"] == "Implement phase post-Codex validation failure fallback"
+		assert "Evidence trace:" in created["body"]
+		assert "Hypothesis:" in created["body"]
 
 
 def test_diagnose_reuses_matching_issue_meta_body_without_issue_api_fallback() -> None:
@@ -1909,6 +1947,10 @@ def test_diagnose_posts_dependency_notes_for_fix_issue_edges():
 			codex_output={
 				"status": "needs_fixes",
 				"diagnosis": "diag",
+				"evidence_trace": [
+					{"file": "broken.yml", "line": 1, "function": "document", "observation": "error"},
+				],
+				"hypothesis": "diag hypothesis",
 				"fix_issues": [
 					{"id": "fix-a", "title": "Fix A", "body": "Body A", "priority": 1, "depends_on": []},
 					{"id": "fix-b", "title": "Fix B", "body": "Body B", "priority": 2, "depends_on": ["fix-a"]},
@@ -2164,6 +2206,8 @@ def test_fallback_creates_deterministic_fixup_issue_when_diagnose_output_invalid
 			result = json.loads(_read_file(paths["result_file"]))
 			assert result.get("status") == "needs_fixes"
 			assert "Fallback fix-up issue created" in result.get("diagnosis", "")
+			assert result.get("evidence_trace")
+			assert isinstance(result.get("hypothesis"), str) and result["hypothesis"]
 
 			created_issues = state.get("created_issues", [])
 			assert len(created_issues) == 1
@@ -2174,6 +2218,8 @@ def test_fallback_creates_deterministic_fixup_issue_when_diagnose_output_invalid
 			assert "ai:implement-fix-up" in created["args"]
 			assert "ai:orchestrator-managed" not in created["args"]
 			assert "The diagnose step could not produce a valid JSON contract" in created["body"]
+			assert "Evidence trace:" in created["body"]
+			assert "Hypothesis:" in created["body"]
 			assert "yaml parse failed on alpha.yml" in created["body"]
 			assert "Type: implement-fix-up (post-codex-validation)" in created["body"]
 			assert "Tracking issue: #829" in created["body"]
