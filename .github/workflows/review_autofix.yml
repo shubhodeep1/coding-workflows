@@ -1384,10 +1384,48 @@ jobs:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
       - name: Install OS-level dependencies
+        shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y jq curl python3
+
+          # jq/curl/python3 are pre-installed on hosted ubuntu runners, so the
+          # common case needs no apt at all. Only reach for apt-get when a tool
+          # is genuinely missing: a bare `apt-get update` under `set -e` exits
+          # 100 whenever an unrelated pre-installed third-party apt source (e.g.
+          # packages.microsoft.com) transiently 403s, which would otherwise take
+          # the whole review pipeline down for a dependency this step never uses.
+          # Mirrors the "Install OS-level core tools" step in orchestrate.yml /
+          # orchestrate_poll.yml.
+          missing_tools=()
+          for tool in jq curl python3; do
+            command -v "$tool" >/dev/null 2>&1 || missing_tools+=("$tool")
+          done
+
+          if [ "${#missing_tools[@]}" -gt 0 ]; then
+            if ! command -v apt-get >/dev/null 2>&1; then
+              echo "Missing tools (${missing_tools[*]}), but apt-get is unavailable on this runner" >&2
+              exit 1
+            fi
+
+            apt_cmd=(apt-get)
+            if command -v sudo >/dev/null 2>&1; then
+              apt_cmd=(sudo apt-get)
+            elif [ "$(id -u)" -ne 0 ]; then
+              echo "Missing tools (${missing_tools[*]}), but sudo is unavailable and the current user is not root" >&2
+              exit 1
+            fi
+
+            "${apt_cmd[@]}" update || {
+              apt_update_rc=$?
+              echo "apt-get update failed (rc=${apt_update_rc}) while preparing to install missing tools: ${missing_tools[*]}" >&2
+              exit "${apt_update_rc}"
+            }
+            "${apt_cmd[@]}" install -y "${missing_tools[@]}" || {
+              apt_install_rc=$?
+              echo "apt-get install failed (rc=${apt_install_rc}) for: ${missing_tools[*]}" >&2
+              exit "${apt_install_rc}"
+            }
+          fi
 
       - name: Initialize runtime workspace
         run: |
