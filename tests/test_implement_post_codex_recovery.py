@@ -1589,11 +1589,26 @@ def test_diagnose_prompt_contract_round_trip_and_fixup_metadata():
 		codex_payload = {
 			"status": "needs_fixes",
 			"diagnosis": "Validator failed after Codex edits.",
+			"evidence_trace": [
+				{
+					"file": "broken.yml",
+					"line": 3,
+					"function": "document",
+					"observation": "The YAML scanner error occurs on the failing line captured by the validator.",
+				},
+				{
+					"file": "scripts/validate_changed_files_syntax.sh",
+					"line": 12,
+					"function": "parse_capture",
+					"observation": "The syntax validator is the entrypoint that surfaced the broken YAML capture.",
+				},
+			],
+			"hypothesis": "Repairing the syntax-capture parsing path will let the validator consume the failing YAML safely.",
 			"fix_issues": [
 				{
 					"id": "implement-fix-1",
 					"title": "Repair syntax capture and parsing",
-					"body": "Fix parser output and re-run implementation.",
+					"body": "Fix parser output and re-run implementation.\n\nEvidence trace:\n- broken.yml:3 in document — the YAML scanner error occurs on the failing line.\n- scripts/validate_changed_files_syntax.sh:12 in parse_capture — the validator surfaced the broken YAML capture.\n\nHypothesis:\n- Repairing the syntax-capture parsing path will let the validator consume the failing YAML safely.",
 					"priority": 1,
 					"depends_on": [],
 				}
@@ -1617,6 +1632,8 @@ def test_diagnose_prompt_contract_round_trip_and_fixup_metadata():
 		assert isinstance(result, dict)
 		assert result.get("status") in {"needs_fixes", "harness_error", "infeasible"}
 		assert isinstance(result.get("diagnosis"), str)
+		assert result.get("evidence_trace") == codex_payload["evidence_trace"]
+		assert result.get("hypothesis") == codex_payload["hypothesis"]
 		assert isinstance(result.get("fix_issues"), list)
 		assert isinstance(result.get("harness_fixes"), str)
 
@@ -1645,6 +1662,8 @@ def test_diagnose_prompt_contract_round_trip_and_fixup_metadata():
 		assert "Type: implement-fix-up (post-codex-validation)" in body
 		assert "Source issue: #948" in body
 		assert f"Failed step: {failed_step}" in body
+		assert "Evidence trace:" in body
+		assert "Hypothesis:" in body
 
 		created_labels = {entry.get("name") for entry in state.get("label_creates", [])}
 		assert "ai:clarification" in created_labels
@@ -1669,6 +1688,52 @@ def test_diagnose_prompt_contract_round_trip_and_fixup_metadata():
 		labels = state.get("issue_labels", [])
 		assert "ai:implementation-failed" in labels
 		assert "ai:awaiting-approval" not in labels
+
+
+def test_diagnose_prompt_includes_iron_law_trace_contract():
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		proc, _state, _runtime_dir, paths = _run_diagnose_step(
+			tmp_path,
+			issue_labels=["ai:implementing"],
+			capture_contents="===== broken.yml =====\nerror\n",
+			codex_mode="success",
+			codex_output={
+				"status": "needs_fixes",
+				"diagnosis": "diag",
+				"evidence_trace": [
+					{
+						"file": "broken.yml",
+						"line": 1,
+						"function": "document",
+						"observation": "error",
+					}
+				],
+				"hypothesis": "diag hypothesis",
+				"fix_issues": [
+					{
+						"id": "fix-1",
+						"title": "Fix 1",
+						"body": "Body\n\nEvidence trace:\n- broken.yml:1 in document — error\n\nHypothesis:\n- diag hypothesis",
+						"priority": 1,
+						"depends_on": [],
+					}
+				],
+				"harness_fixes": "",
+			},
+			failed_step_name="Validate syntax of changed files",
+			issue_body="Tracking issue: #829\n",
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		stdin_prompt = _read_file(paths["stdin_file"])
+		assert "Iron Law of Investigation" in stdin_prompt
+		assert "Trace requirement is enabled for this phase" in stdin_prompt
+		assert "`evidence_trace`" in stdin_prompt
+		assert "`hypothesis`" in stdin_prompt
+		assert "Repeat the relevant trace and hypothesis inside each `fix_issues[].body`" in stdin_prompt
+		assert "do not propose a 4th fix" in stdin_prompt
+		assert 'return `status: "infeasible"`' in stdin_prompt
 
 
 def test_diagnose_invokes_codex_when_capture_exists_and_issue_is_not_already_failed():

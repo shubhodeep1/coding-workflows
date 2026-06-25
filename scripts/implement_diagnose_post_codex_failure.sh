@@ -389,8 +389,9 @@ DIAGNOSE_MODE_PROMPT_TEMPLATE="prompts/mode-implement-diagnose.txt"
 if ! ensure_diagnose_asset "${DIAGNOSE_MODE_PROMPT_TEMPLATE}" "prompts/mode-implement-diagnose.txt"; then
   DIAGNOSE_MODE_PROMPT_TEMPLATE="${RUNTIME_DIR}/mode-implement-diagnose.fallback.txt"
   cat > "${DIAGNOSE_MODE_PROMPT_TEMPLATE}" <<'EOF'
-Diagnose this implementation failure and return a single JSON object with keys:
-status (needs_fixes|harness_error|infeasible), diagnosis, fix_issues, harness_fixes.
+Diagnose this implementation failure. Do not propose a fix without a traced evidence path and a supported hypothesis.
+Return a single JSON object with keys:
+status (needs_fixes|harness_error|infeasible), diagnosis, evidence_trace, hypothesis, fix_issues, harness_fixes.
 EOF
 fi
 
@@ -423,11 +424,15 @@ if [ ! -s "${DIAGNOSE_STATIC_PREFIX_FILE}" ]; then
   cat > "${DIAGNOSE_STATIC_PREFIX_FILE}" <<'EOF'
 You are diagnosing an AI implementation workflow failure.
 Return exactly one JSON object and no surrounding prose.
+Do not propose a fix without a traced evidence path and a supported hypothesis.
 The JSON object must use these keys:
 - status (needs_fixes|harness_error|infeasible)
 - diagnosis
+- evidence_trace
+- hypothesis
 - fix_issues
 - harness_fixes
+If the evidence is insufficient for a supported hypothesis, use status=infeasible instead of guessing.
 Keep the response focused on actionable diagnosis grounded in the supplied evidence.
 EOF
 fi
