@@ -5,13 +5,25 @@
   "entry_id": "processed_command_3508_4797983231_approved",
   "issue_number": 3508,
   "metadata": {
+    "branch": "ai/issue-3508",
+    "changed_files": [
+      "prompts/mode-implement-diagnose.txt",
+      "scripts/implement_diagnose_post_codex_failure.sh",
+      "scripts/render_prompt.py",
+      "tests/test_implement_post_codex_recovery.py"
+    ],
+    "issue_number": 3508,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/3508",
+    "pr_number": 3510,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/3510",
+    "run_attempt": "1",
+    "run_id": "28161978755",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/28161978755"
   },
   "run_attempt": 1,
   "run_id": "28161978755",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-06-25T09:55:49Z",
+  "status": "completed",
+  "timestamp": "2026-06-25T10:02:47Z",
   "workflow": "implement"
 }
