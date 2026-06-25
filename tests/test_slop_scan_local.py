@@ -19,12 +19,18 @@ def _result_for_fixture(path: Path) -> dict:
 
 
 def _temporary_test_dir():
+	import os
 	import tempfile
 
 	try:
 		return tempfile.TemporaryDirectory(prefix="slop-scan-local-")
-	except FileNotFoundError:
-		return tempfile.TemporaryDirectory(prefix=".slop-scan-local-", dir=REPO_ROOT)
+	except (FileNotFoundError, PermissionError):
+		runner_temp_dir = os.environ.get("RUNNER_TEMP")
+		fallback_dir = REPO_ROOT if os.access(REPO_ROOT, os.W_OK | os.X_OK) else runner_temp_dir
+		if not fallback_dir:
+			raise
+		prefix = ".slop-scan-local-" if fallback_dir == REPO_ROOT else "slop-scan-local-"
+		return tempfile.TemporaryDirectory(prefix=prefix, dir=fallback_dir)
 
 
 def test_empty_catch_around_os_unlink_fixture_emits_expected_finding() -> None:
