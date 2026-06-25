@@ -57,6 +57,7 @@ jobs:
       PROCESSED_ANSWER_CLAIMED: "false"
       PROCESSED_ANSWER_COMPLETED: "false"
       PLAN_SELF_CHECK_ENABLED: ${{ vars.PLAN_SELF_CHECK_ENABLED || 'true' }}
+      PLAN_SCOPE_MODE_REQUIRED: ${{ vars.PLAN_SCOPE_MODE_REQUIRED || 'true' }}
 
     steps:
       - name: Cache Codex CLI
@@ -1024,6 +1025,14 @@ jobs:
           5. Potential risks or edge cases
           6. Testing considerations
           7. A pre-execution self-check result
+          8. Scope-mode requirement gate (current render: `PLAN_SCOPE_MODE_REQUIRED={{PLAN_SCOPE_MODE_REQUIRED}}`): emit
+             `Scope-mode: <Expansion | Selective Expansion | Hold Scope | Reduction>` on its own line
+             when the current render is `true`; when the current render is `false`, this line is
+             optional but preferred.
+          9. Scope-mode requirement gate (current render: `PLAN_SCOPE_MODE_REQUIRED={{PLAN_SCOPE_MODE_REQUIRED}}`): emit
+             a one-paragraph `Scope-mode justification:` block immediately after the `Scope-mode:` line
+             when the current render is `true`; when the current render is `false`, include the block
+             whenever `Scope-mode:` is present.
 
           Rules:
 
@@ -1057,6 +1066,21 @@ jobs:
             on the current ref are NOT external inputs — they are codebase state the
             plan can address; note them under "Risks and edge cases" as a conflict (per
             the CONFLICT DETECTION rule above) and continue planning.
+          - Boil the Lake forcing question: if shipping the complete implementation
+            costs ≤30 LOC more and ≤10 minutes more than the shortcut, and neither
+            option adds a new dependency nor a new external interface, pick the
+            complete option and document it in the `Scope-mode justification:` block.
+            Cite §6 Core Priorities in `unattended_system_instructions.md` as
+            correctness > backward compatibility > operational clarity > performance
+            > speed; completeness moves correctness.
+          - Reduction safety net: Reduction mode is only valid when the original
+            request is genuinely ambiguous about scope. If reducing scope, emit a
+            clarification Q-ID under the plan-phase carve-out confirming the
+            proposed reduction before the plan can be treated as clear. Do not use
+            Reduction mode as a shortcut for implementation size or time pressure;
+            if the work is truly too large, use the existing
+            `BLOCKED: scope-too-large; estimate=<N> minutes; recommend splitting into sequential sub-issues`
+            behavior instead.
           - Surface the planning ref context (`git rev-parse HEAD` and symbolic branch)
             from the planning context and do not assume `main`.
           - If checked-out ref mismatches Integration branch metadata, emit exactly

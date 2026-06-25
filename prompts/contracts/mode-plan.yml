@@ -1,5 +1,6 @@
 required_vars: []
 optional_vars:
+  PLAN_SCOPE_MODE_REQUIRED: true
   REFERENCE_OUTPUT_CONTRACT: ""
 forbidden_vars:
   - WORKFLOW_EDIT_RESTRICTION

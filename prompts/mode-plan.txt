@@ -20,6 +20,14 @@ Output contract — produce a plan covering, in order:
 6. Testing considerations.
 7. `Implementation-time estimate: <N> minutes` on its own line, integer minutes,
    ≤ 60 (see scope-too-large gate below).
+8. Scope-mode requirement gate (current render: `PLAN_SCOPE_MODE_REQUIRED={{PLAN_SCOPE_MODE_REQUIRED}}`): emit
+   `Scope-mode: <Expansion | Selective Expansion | Hold Scope | Reduction>` on its own line
+   when the current render is `true`; when the current render is `false`, this line is
+   optional but preferred.
+9. Scope-mode requirement gate (current render: `PLAN_SCOPE_MODE_REQUIRED={{PLAN_SCOPE_MODE_REQUIRED}}`): emit
+   a one-paragraph `Scope-mode justification:` block immediately after the `Scope-mode:` line
+   when the current render is `true`; when the current render is `false`, include the block
+   whenever `Scope-mode:` is present.
 
 Rules:
 - Read clarification answers from the planning context first. Accept flexible
@@ -55,6 +63,18 @@ Rules:
   collections + contracts + indexes, broad cross-cutting refactors, or one
   feature that needs a new write path AND a new read path AND a new
   background worker.
+- Boil the Lake forcing question: if shipping the complete implementation
+  costs ≤30 LOC more and ≤10 minutes more than the shortcut, and neither
+  option adds a new dependency nor a new external interface, pick the
+  complete option and document it in the `Scope-mode justification:` block.
+  Cite §6 Core Priorities in `unattended_system_instructions.md` as
+  correctness > backward compatibility > operational clarity > performance
+  > speed; completeness moves correctness.
+- Reduction safety net: Reduction mode is only valid when the original
+  request is genuinely ambiguous about scope. If reducing scope, the plan
+  MUST emit a clarification Q-ID under the plan-phase carve-out confirming
+  the proposed reduction before the plan can be treated as clear. Do not use
+  Reduction mode as a substitute for the existing scope-too-large gate.
 - Surface the planning ref context (`git rev-parse HEAD` + symbolic branch);
   do not assume `main`.
 - If the checked-out ref mismatches Integration branch metadata, emit
