@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3508,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3508\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3510\",\"pr_number\":3510,\"branch\":\"ai/issue-3508\",\"run_id\":\"28161978755\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/28161978755\",\"changed_files\":[\"prompts/mode-implement-diagnose.txt\",\"scripts/implement_diagnose_post_codex_failure.sh\",\"scripts/render_prompt.py\",\"tests/test_implement_post_codex_recovery.py\"]}",
+  "fingerprint": "41467ee784975ac321efa3c7839fb62d0d98f0b630c1ed7dec1dd41229ae28d9",
+  "lineage": {
+    "issue_number": 3508,
+    "parent_ids": [],
+    "pr_number": 3510,
+    "run_id": "28161978755",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28161978755",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3510"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260625100223_f5dbd1f27e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3508,
+    "level": "run",
+    "pr_number": 3510,
+    "run_id": "28161978755"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3508: https://github.com/shubhodeep1/coding-workflows/pull/3510",
+  "timestamps": {
+    "created_at": "2026-06-25T10:02:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
