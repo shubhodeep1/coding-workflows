@@ -58,6 +58,7 @@ jobs:
       PROCESSED_ANSWER_COMPLETED: "false"
       PLAN_SELF_CHECK_ENABLED: ${{ vars.PLAN_SELF_CHECK_ENABLED || 'true' }}
       PLAN_SCOPE_MODE_REQUIRED: ${{ vars.PLAN_SCOPE_MODE_REQUIRED || 'true' }}
+      PLAN_REUSE_AUDIT_REQUIRED: ${{ vars.PLAN_REUSE_AUDIT_REQUIRED || 'true' }}
 
     steps:
       - name: Cache Codex CLI
@@ -1029,10 +1030,16 @@ jobs:
              `Scope-mode: <Expansion | Selective Expansion | Hold Scope | Reduction>` on its own line
              when the current render is `true`; when the current render is `false`, this line is
              optional but preferred.
-          9. Scope-mode requirement gate (current render: `PLAN_SCOPE_MODE_REQUIRED={{PLAN_SCOPE_MODE_REQUIRED}}`): emit
-             a one-paragraph `Scope-mode justification:` block immediately after the `Scope-mode:` line
-             when the current render is `true`; when the current render is `false`, include the block
-             whenever `Scope-mode:` is present.
+          9. Reuse-audit requirement gate (current render: `PLAN_REUSE_AUDIT_REQUIRED={{PLAN_REUSE_AUDIT_REQUIRED}}`): emit
+             `Reuse-audit: extends <existing-name>` on its own line immediately after the
+             `Scope-mode:` line when the current render is `true`; when the current render is
+             `false`, this line is optional but preferred. Only when Layer 3 is genuinely
+             necessary, emit `Reuse-audit: net-new (Layer 3) — <justification>` instead.
+          10. Scope-mode justification requirement gate (current render: `PLAN_SCOPE_MODE_REQUIRED={{PLAN_SCOPE_MODE_REQUIRED}}`): emit
+             a one-paragraph `Scope-mode justification:` block when the current render is
+             `true`. Place it immediately after the `Reuse-audit:` line when that line is
+             present; otherwise place it immediately after the `Scope-mode:` line. When the
+             current render is `false`, include the block whenever `Scope-mode:` is present.
 
           Rules:
 
@@ -1045,6 +1052,20 @@ jobs:
             in reasoning.
           - Map each interpreted answer back to its corresponding Q<ID> clarification question
             before creating the plan.
+          - Reuse audit (current render: `PLAN_REUSE_AUDIT_REQUIRED={{PLAN_REUSE_AUDIT_REQUIRED}}`):
+            - Layer 1: search for existing helpers before proposing new code. Reuse or
+              extend established helpers when they fit, including existing examples
+              `scripts/gh_helpers.sh` and `scripts/memory_helpers.sh`.
+            - Layer 2: if no helper is a fit, search for established repo patterns before
+              proposing net-new structure. Reuse or extend existing patterns when they
+              fit, including the batched GraphQL helpers
+              `_fetch_candidate_issue_details_graphql` and
+              `_fetch_linked_pr_status_graphql`, plus the cycle-local caches
+              `ACTIVE_WORKFLOW_ISSUES` and `STALL_MANAGED_LINKED_PR_CACHE`.
+            - Layer 3: only propose net-new code when Layers 1 and 2 genuinely fail to
+              satisfy the need. When Layer 3 is necessary, justify why repo reuse fails;
+              do not present net-new code as the default when a real reuse candidate
+              exists.
           - Review-blocked reissues: if the issue body contains
             `Type: review-blocked-reissue` (footer block produced by the review-blocked
             judge), the file paths and line numbers cited in the body refer to the

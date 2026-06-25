@@ -12,6 +12,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLAN_PROMPT = REPO_ROOT / "prompts" / "mode-plan.txt"
 PLAN_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "plan.yml"
+REUSE_AUDIT_CONTRACT_TEST = REPO_ROOT / "tests" / "test_plan_reuse_audit_contract.py"
 RENDER_PROMPT = REPO_ROOT / "scripts" / "render_prompt.py"
 
 
@@ -71,10 +72,23 @@ def test_plan_workflow_exports_flag_and_keeps_live_prompt_parity() -> None:
 	assert "existing scope-too-large gate" in workflow
 
 
+def test_reuse_audit_contract_script_runs_cleanly() -> None:
+	proc = subprocess.run(
+		[sys.executable, str(REUSE_AUDIT_CONTRACT_TEST)],
+		cwd=str(REPO_ROOT),
+		env=_base_env(),
+		text=True,
+		capture_output=True,
+		timeout=60,
+	)
+	assert proc.returncode == 0, proc.stderr or proc.stdout
+
+
 def main() -> int:
 	test_mode_plan_scope_mode_contract_defaults_on()
 	test_mode_plan_scope_mode_contract_relaxes_when_flag_disabled()
 	test_plan_workflow_exports_flag_and_keeps_live_prompt_parity()
+	test_reuse_audit_contract_script_runs_cleanly()
 	print("OK: plan scope-mode contract holds")
 	return 0
 
