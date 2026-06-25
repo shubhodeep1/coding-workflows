@@ -24,13 +24,19 @@ def _temporary_test_dir():
 
 	try:
 		return tempfile.TemporaryDirectory(prefix="slop-scan-local-")
-	except (FileNotFoundError, PermissionError):
-		runner_temp_dir = os.environ.get("RUNNER_TEMP")
-		fallback_dir = REPO_ROOT if os.access(REPO_ROOT, os.W_OK | os.X_OK) else runner_temp_dir
-		if not fallback_dir:
-			raise
-		prefix = ".slop-scan-local-" if fallback_dir == REPO_ROOT else "slop-scan-local-"
-		return tempfile.TemporaryDirectory(prefix=prefix, dir=fallback_dir)
+	except (FileNotFoundError, PermissionError) as first_error:
+		last_error = first_error
+		for fallback_dir, prefix in (
+			(REPO_ROOT, ".slop-scan-local-"),
+			(os.environ.get("RUNNER_TEMP"), "slop-scan-local-"),
+		):
+			if not fallback_dir:
+				continue
+			try:
+				return tempfile.TemporaryDirectory(prefix=prefix, dir=fallback_dir)
+			except (FileNotFoundError, PermissionError) as fallback_error:
+				last_error = fallback_error
+		raise last_error
 
 
 def test_empty_catch_around_os_unlink_fixture_emits_expected_finding() -> None:
@@ -134,6 +140,38 @@ def test_temporary_test_dir_falls_back_to_repo_root_when_system_temp_is_unusable
 			assert Path(td).parent == REPO_ROOT
 	finally:
 		tempfile.TemporaryDirectory = original_temporary_directory
+
+
+def test_temporary_test_dir_falls_back_to_runner_temp_when_repo_root_fails() -> None:
+	import os
+	import tempfile
+
+	original_temporary_directory = tempfile.TemporaryDirectory
+	original_runner_temp = os.environ.get("RUNNER_TEMP")
+
+	with _temporary_test_dir() as runner_temp_root:
+		attempted_dirs: list[Path] = []
+
+		def fake_temporary_directory(*args, **kwargs):
+			if "dir" not in kwargs:
+				raise FileNotFoundError("No usable temporary directory")
+			attempted_dirs.append(Path(kwargs["dir"]))
+			if Path(kwargs["dir"]) == REPO_ROOT:
+				raise PermissionError("repo root is not writable")
+			return original_temporary_directory(*args, **kwargs)
+
+		tempfile.TemporaryDirectory = fake_temporary_directory
+		os.environ["RUNNER_TEMP"] = runner_temp_root
+		try:
+			with _temporary_test_dir() as td:
+				assert Path(td).parent == Path(runner_temp_root)
+			assert attempted_dirs == [REPO_ROOT, Path(runner_temp_root)]
+		finally:
+			tempfile.TemporaryDirectory = original_temporary_directory
+			if original_runner_temp is None:
+				os.environ.pop("RUNNER_TEMP", None)
+			else:
+				os.environ["RUNNER_TEMP"] = original_runner_temp
 
 
 def main() -> int:
