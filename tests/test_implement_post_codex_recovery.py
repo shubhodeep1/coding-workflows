@@ -1739,6 +1739,7 @@ def test_diagnose_prompt_includes_iron_law_trace_contract():
 		assert "as a normal `fix_issues[]` entry" in stdin_prompt
 		assert "Do not add any new top-level JSON keys." in stdin_prompt
 		assert 'return `status: "infeasible"`' in stdin_prompt
+		assert "For `harness_error` or `infeasible`, they may be empty" in stdin_prompt
 		assert rendered_prompt
 		assert "DIAGNOSE_TRACE_REQUIRED=true" in rendered_prompt
 		assert "{{DIAGNOSE_TRACE_REQUIRED}}" not in rendered_prompt
@@ -2173,6 +2174,8 @@ def test_fallback_creates_deterministic_fixup_issue_when_diagnose_output_invalid
 			result = json.loads(_read_file(paths["result_file"]))
 			assert result.get("status") == "needs_fixes"
 			assert "Fallback fix-up issue created" in result.get("diagnosis", "")
+			assert result.get("evidence_trace")
+			assert isinstance(result.get("hypothesis"), str) and result["hypothesis"]
 
 			created_issues = state.get("created_issues", [])
 			assert len(created_issues) == 1
@@ -2183,10 +2186,56 @@ def test_fallback_creates_deterministic_fixup_issue_when_diagnose_output_invalid
 			assert "ai:implement-fix-up" in created["args"]
 			assert "ai:orchestrator-managed" not in created["args"]
 			assert "The diagnose step could not produce a valid JSON contract" in created["body"]
+			assert "Evidence trace:" in created["body"]
+			assert "Hypothesis:" in created["body"]
 			assert "yaml parse failed on alpha.yml" in created["body"]
 			assert "Type: implement-fix-up (post-codex-validation)" in created["body"]
 			assert "Tracking issue: #829" in created["body"]
 			assert "ai:implementation-failed" in state.get("issue_labels", [])
+
+
+def test_empty_fix_issues_fallback_preserves_trace_context():
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		evidence_trace = [
+			{
+				"file": "broken.yml",
+				"line": 1,
+				"function": "document",
+				"observation": "error",
+			}
+		]
+		hypothesis = "diag hypothesis"
+		proc, state, _runtime_dir, paths = _run_diagnose_step(
+			tmp_path,
+			issue_labels=["ai:implementing"],
+			capture_contents="===== broken.yml =====\nerror\n",
+			codex_mode="success",
+			codex_output={
+				"status": "needs_fixes",
+				"diagnosis": "diag",
+				"evidence_trace": evidence_trace,
+				"hypothesis": hypothesis,
+				"fix_issues": [],
+				"harness_fixes": "",
+			},
+			failed_step_name="Validate syntax of changed files",
+			issue_body="Tracking issue: #829\n",
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		result = json.loads(_read_file(paths["result_file"]))
+		assert result.get("evidence_trace") == evidence_trace
+		assert result.get("hypothesis") == hypothesis
+
+		created_issues = state.get("created_issues", [])
+		assert len(created_issues) == 1
+		created = created_issues[0]
+		assert created["title"] == "Implement phase diagnose returned empty fix_issues"
+		assert "Evidence trace:" in created["body"]
+		assert "- broken.yml:1 in document — error" in created["body"]
+		assert "Hypothesis:" in created["body"]
+		assert hypothesis in created["body"]
 
 
 def test_out_of_scope_noop_when_capture_file_missing():

@@ -81,9 +81,11 @@ Schema:
 
 `evidence_trace` and `hypothesis` are required top-level fields when
 `DIAGNOSE_TRACE_REQUIRED={{DIAGNOSE_TRACE_REQUIRED}}` renders to `true`.
-When it renders to `false`, both fields are optional but preferred. For
-`needs_fixes`, when the current render is `true`, both must be non-empty and
-every `fix_issues[].body` must restate the relevant trace and hypothesis.
+For `harness_error` or `infeasible`, they may be empty when the evidence does
+not support a traced fix proposal. When it renders to `false`, both fields are
+optional but preferred. For `needs_fixes`, when the current render is `true`,
+both must be non-empty and every `fix_issues[].body` must restate the relevant
+trace and hypothesis.
 
 Status semantics:
 - `needs_fixes` — repository code/config defects found; populate `fix_issues`.
