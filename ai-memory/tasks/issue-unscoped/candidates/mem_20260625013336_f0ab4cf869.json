@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "Multiple runs added or refined write-guard logic and corresponding tests, which suggests accidental writes are a common failure mode in this repo. When planning changes that touch generated files, commit steps, or AI-run outputs, verify guard behavior explicitly to avoid silent policy drift.",
+  "fingerprint": "562dc3bf73b0fd2d51be2685b00ae4e2f54f31a90ca5b1bf7c537688a0d618e1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28140851471",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28140851471",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3432",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3473",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3474",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3475",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3481",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3433",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3476",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3477",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3478",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3482"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260625013336_f0ab4cf869",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Guardrails around file writes are a recurring concern and should be treated as part of the core workflow contract.",
+  "timestamps": {
+    "created_at": "2026-06-25T01:33:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
