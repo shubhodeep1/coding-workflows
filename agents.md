@@ -55,6 +55,13 @@ Selective Expansion when the marginal completeness cost is small, and editors /
 reviewers must then stay surgical inside that approved scope rather than
 shrinking it ad hoc.
 
+Plan prompt note: `PLAN_DIAGRAMS_OPTIONAL` defaults to `true`, so plan outputs
+may include `Data flow:`, `State machines:`, and `Failure modes:` only when
+they materially help. Trivial plans should omit them, and `State machines:` is
+required only for changes touching the orchestrator phase machine
+(`ai:clarification` → `ai:planning` → `ai:awaiting-approval` →
+`ai:implementing` → `ai:done` → `ai:ready-to-merge` → `ai:merged`).
+
 ---
 
 ## Models in use (defaults; overridable via repo-vars)
