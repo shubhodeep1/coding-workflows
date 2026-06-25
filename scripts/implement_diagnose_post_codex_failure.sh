@@ -654,14 +654,17 @@ diagnose_trace_contract_enabled() {
 normalize_diagnose_result_contract_fields() {
   local result_file="$1"
   local normalized_result_file=""
-  normalized_result_file="$(mktemp)"
+  if ! diagnose_trace_contract_enabled; then
+    return 0
+  fi
+  [ -r "${result_file}" ] || return 1
+  normalized_result_file="$(mktemp "${TMPDIR:-/tmp}/implement-diagnose-result.XXXXXX")" || return 1
   if jq '
     . + {
       evidence_trace: (if (.evidence_trace? | type) == "array" then .evidence_trace else [] end),
       hypothesis: (if (.hypothesis? | type) == "string" then .hypothesis else "" end)
     }
-  ' "${result_file}" > "${normalized_result_file}"; then
-    mv "${normalized_result_file}" "${result_file}"
+  ' "${result_file}" > "${normalized_result_file}" && mv "${normalized_result_file}" "${result_file}"; then
     return 0
   fi
   rm -f "${normalized_result_file}"
@@ -692,7 +695,7 @@ format_diagnose_trace_section() {
       + (if .line == null then "" else ":" + (.line | tostring) end)
       + (if (.function // "") == "" then "" else " in " + .function end)
       + " — "
-      + (.observation // "No observation provided.");
+      + ((.observation // "") | if length > 0 then . else "No observation provided." end);
     "Evidence trace:\n"
     + ((.evidence_trace // []) | if type == "array" and length > 0 then map(format_trace_entry) | join("\n") else "- none provided" end)
     + "\n\nHypothesis:\n- "
