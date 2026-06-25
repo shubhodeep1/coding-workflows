@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.89,
+  "details": "Many merged changes touched scripts plus focused tests in the same area, especially for write guards, memory handling, and workflow retry behavior. When modifying shared automation, add or update contract tests so future runs catch regressions in orchestration logic rather than only in end-to-end CI.",
+  "fingerprint": "3c0b58e320b29ad13070944b79e20842d60d64a9f50157b21727cf5371535596",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28140851471",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28140851471",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3432",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3473",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3474",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3475",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3481",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3433",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3476",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3477",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3478",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3482"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260625013210_1ea750917c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow and helper changes usually need paired test updates to lock in contracts.",
+  "timestamps": {
+    "created_at": "2026-06-25T01:32:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
