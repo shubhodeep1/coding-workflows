@@ -396,7 +396,7 @@ def test_render_prompt_py_prepends_phase_c_persona_prefix_without_altering_legac
 		assert legacy_proc.stderr == ""
 
 		persona_env = _base_env()
-		persona_env.pop("PROMPT_PERSONA_PREFIX_ENABLED", None)
+		persona_env["PROMPT_PERSONA_PREFIX_ENABLED"] = "true"
 		persona_proc = _run_render_prompt_py(prompt_file, variables=variables, env=persona_env)
 		assert persona_proc.returncode == 0, f"{mode_name}/persona: {persona_proc.stderr}"
 		assert persona_proc.stderr == ""
@@ -406,6 +406,28 @@ def test_render_prompt_py_prepends_phase_c_persona_prefix_without_altering_legac
 		prefix = persona_proc.stdout[: len(persona_proc.stdout) - len(legacy_proc.stdout)]
 		assert prefix.startswith(sentinel), mode_name
 		assert prefix.endswith("\n\n"), mode_name
+
+		with tempfile.TemporaryDirectory(prefix=f"render_prompt_foundation_idempotent_{mode_name}_") as td:
+			rerender_prompt_file = Path(td) / f"{mode_name}.txt"
+			rerender_prompt_file.write_text(persona_proc.stdout, encoding="utf-8")
+			rerender_proc = _run_render_prompt_py(rerender_prompt_file, variables=variables, env=persona_env)
+		assert rerender_proc.returncode == 0, f"{mode_name}/rerender: {rerender_proc.stderr}"
+		assert rerender_proc.stderr == ""
+		assert rerender_proc.stdout == persona_proc.stdout
+
+
+def test_render_prompt_py_treats_blank_persona_env_value_as_disabled() -> None:
+	prompt_file = REPO_ROOT / "prompts" / "mode-plan.txt"
+	legacy_proc = _run_render_prompt_py(prompt_file)
+	assert legacy_proc.returncode == 0, legacy_proc.stderr
+	assert legacy_proc.stderr == ""
+
+	blank_env = _base_env()
+	blank_env["PROMPT_PERSONA_PREFIX_ENABLED"] = "  "
+	blank_proc = _run_render_prompt_py(prompt_file, env=blank_env)
+	assert blank_proc.returncode == 0, blank_proc.stderr
+	assert blank_proc.stderr == ""
+	assert blank_proc.stdout == legacy_proc.stdout
 
 
 def main() -> int:
@@ -420,6 +442,7 @@ def main() -> int:
 	test_render_prompt_py_reports_missing_reference_file()
 	test_render_prompt_py_reports_unknown_placeholder_contract_violation()
 	test_render_prompt_py_prepends_phase_c_persona_prefix_without_altering_legacy_body()
+	test_render_prompt_py_treats_blank_persona_env_value_as_disabled()
 	print("OK: render prompt foundation assertions hold")
 	return 0
 

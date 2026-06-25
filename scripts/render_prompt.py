@@ -673,14 +673,15 @@ def _workflow_edit_restriction_value() -> str:
 
 
 def _persona_prefix_enabled() -> bool:
-	return os.environ.get("PROMPT_PERSONA_PREFIX_ENABLED", "true").strip().lower() not in FALSEY_ENV_VALUES
+	raw_value = os.environ.get("PROMPT_PERSONA_PREFIX_ENABLED", "true").strip().lower()
+	return bool(raw_value) and raw_value not in FALSEY_ENV_VALUES
 
 
 def apply_phase_c_persona_prefix(prompt_text: str, *, mode_name: str) -> str:
 	if not _persona_prefix_enabled():
 		return prompt_text
 	prefix = PHASE_C_PERSONA_PREFIXES.get(mode_name)
-	if prefix is None:
+	if prefix is None or prompt_text.startswith(prefix):
 		return prompt_text
 	return prefix + prompt_text
 
