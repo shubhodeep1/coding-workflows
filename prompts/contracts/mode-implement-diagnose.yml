@@ -1,5 +1,6 @@
 required_vars: []
 optional_vars:
+  DIAGNOSE_TRACE_REQUIRED: true
   SERENA_TOOL_HINTS: ""
   REFERENCE_OUTPUT_CONTRACT: ""
 forbidden_vars:

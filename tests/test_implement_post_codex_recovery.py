@@ -423,8 +423,11 @@ def _copy_diagnose_assets(repo_dir: Path) -> None:
 	for rel in (
 		"scripts/gh_helpers.sh",
 		"scripts/implement_diagnose_post_codex_failure.sh",
+		"scripts/render_prompt.py",
 		"scripts/render_prompt.sh",
 		"scripts/validate_changed_files_syntax.sh",
+		"prompts/contracts/mode-implement-diagnose.yml",
+		"prompts/references/output-contract.txt",
 		"prompts/mode-implement-diagnose.txt",
 		"prompts/mode-implement-repair-syntax.txt",
 	):
@@ -1693,7 +1696,7 @@ def test_diagnose_prompt_contract_round_trip_and_fixup_metadata():
 def test_diagnose_prompt_includes_iron_law_trace_contract():
 	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
 		tmp_path = Path(td)
-		proc, _state, _runtime_dir, paths = _run_diagnose_step(
+		proc, _state, runtime_dir, paths = _run_diagnose_step(
 			tmp_path,
 			issue_labels=["ai:implementing"],
 			capture_contents="===== broken.yml =====\nerror\n",
@@ -1727,13 +1730,18 @@ def test_diagnose_prompt_includes_iron_law_trace_contract():
 
 		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
 		stdin_prompt = _read_file(paths["stdin_file"])
+		rendered_prompt = _read_file(str(runtime_dir / "mode-implement-diagnose.rendered.txt"))
 		assert "Iron Law of Investigation" in stdin_prompt
-		assert "Trace requirement is enabled for this phase" in stdin_prompt
 		assert "`evidence_trace`" in stdin_prompt
 		assert "`hypothesis`" in stdin_prompt
 		assert "Repeat the relevant trace and hypothesis inside each `fix_issues[].body`" in stdin_prompt
 		assert "do not propose a 4th fix" in stdin_prompt
 		assert 'return `status: "infeasible"`' in stdin_prompt
+		assert rendered_prompt
+		assert "DIAGNOSE_TRACE_REQUIRED=true" in rendered_prompt
+		assert "{{DIAGNOSE_TRACE_REQUIRED}}" not in rendered_prompt
+		assert "{{REFERENCE_OUTPUT_CONTRACT}}" not in rendered_prompt
+		assert "render_prompt.py not found" not in proc.stderr
 
 
 def test_diagnose_invokes_codex_when_capture_exists_and_issue_is_not_already_failed():
