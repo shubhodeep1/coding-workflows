@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Workflow and helper changes usually need paired test updates to lock in contracts.",
   "timestamps": {
     "created_at": "2026-06-25T01:32:10Z",
