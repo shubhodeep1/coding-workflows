@@ -1739,6 +1739,8 @@ def test_diagnose_prompt_includes_iron_law_trace_contract():
 		assert "`hypothesis`" in stdin_prompt
 		assert "Repeat the relevant trace and hypothesis inside each `fix_issues[].body`" in stdin_prompt
 		assert "do not propose a 4th fix" in stdin_prompt
+		assert "as a normal `fix_issues[]` entry" in stdin_prompt
+		assert "Do not add any new top-level JSON keys." in stdin_prompt
 		assert 'return `status: "infeasible"`' in stdin_prompt
 		assert rendered_prompt
 		assert "DIAGNOSE_TRACE_REQUIRED=true" in rendered_prompt
