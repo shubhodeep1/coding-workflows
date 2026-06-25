@@ -29,7 +29,7 @@ Output contract — produce a plan covering, in order:
    `Scope-mode:` line when the current render is `true`; when the current render is
    `false`, this line is optional but preferred. Only when Layer 3 is genuinely
    necessary, emit `Reuse-audit: net-new (Layer 3) — <justification>` instead.
-10. Scope-mode requirement gate (current render: `PLAN_SCOPE_MODE_REQUIRED={{PLAN_SCOPE_MODE_REQUIRED}}`): emit
+10. Scope-mode justification requirement gate (current render: `PLAN_SCOPE_MODE_REQUIRED={{PLAN_SCOPE_MODE_REQUIRED}}`): emit
    a one-paragraph `Scope-mode justification:` block when the current render is
    `true`. Place it immediately after the `Reuse-audit:` line when that line is
    present; otherwise place it immediately after the `Scope-mode:` line. When the

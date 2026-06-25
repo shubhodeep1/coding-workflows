@@ -44,6 +44,9 @@ def test_mode_plan_reuse_audit_contract_defaults_on() -> None:
 	assert "`_fetch_linked_pr_status_graphql`" in rendered
 	assert "`ACTIVE_WORKFLOW_ISSUES`" in rendered
 	assert "`STALL_MANAGED_LINKED_PR_CACHE`" in rendered
+	assert "only propose net-new code when Layers 1 and 2 genuinely fail to" in rendered
+	assert "When Layer 3 is necessary, justify why repo reuse fails;" in rendered
+	assert "do not present net-new code as the default when a real reuse candidate" in rendered
 
 	scope_idx = rendered.index("`Scope-mode: <Expansion | Selective Expansion | Hold Scope | Reduction>`")
 	reuse_idx = rendered.index("`Reuse-audit: extends <existing-name>`")
