@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/slop_scan_local.py:14-25 | severity=low | confidence=[1-5]\n  flagged_by: [mistralai_mistral-small-2603, x-ai_grok-4_20]\n  PROBLEM: HEREDOC_START_RE can miss Python heredoc blocks when the delimiter line has trailing shell content, so some blocks are not scanned.\n  WHY: Reviewers reported the regex skips valid heredoc forms with trailing shell operators/comments, reducing scan coverage.\n- tests/test_slop_scan_local.py:22-55 | severity=high | confidence=[1-5]\n  flagged_by: [qwen_qwen3_6-plus, x-ai_grok-4_20]\n  PROBLEM: _temporary_test_dir() can still propagate PermissionError when every temporary-directory fallback is unwritable, aborting the test suite before detector assertions run.\n  WHY: Both reviewers reproduced the same failure mode in restricted runners; they disagreed only on severity (NIT vs MAJOR), so the higher severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add the two plan-specified fixtures and a focused detector test. [...] Add `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_slop_scan_local.py` to CI.\"\n  expected_change_site: tests/test_slop_scan_local.py + .github/workflows/ci.yml + _temporary_test_dir()\n  confidence=[1-5]\n  flagged_by: [x-ai_grok-4_20]\n  EVIDENCE: The detector test still fails in restricted runners because `_temporary_test_dir()` does not fully absorb PermissionError before the test body, so the plan-specified CI test is not robustly implemented.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- File: scripts/slop_scan_local.py\n  Line or code reference: HEREDOC_START_RE regex (line 18-25)\n  Problem: Regex anchors to end-of-line after the closing heredoc quote, so heredoc blocks with trailing shell content can be skipped.\n  Why it fails at runtime: Real shell scripts with pipes/comments/operators after the heredoc delimiter would be missed by the slop-scan detector.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n- File: tests/test_slop_scan_local.py\n  Line or code reference: _temporary_test_dir() (lines 22-40)\n  Problem: The test harness can fail with an unhandled PermissionError when all temporary-directory fallbacks are unwritable, aborting the suite before assertions run.\n  Why it fails at runtime: In restricted environments, the initial tempdir and fallback locations can all fail, and the final error is re-raised from the helper.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n- Requirement: \"Add the two plan-specified fixtures and a focused detector test. [...] Add `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_slop_scan_local.py` to CI.\"\n  Expected change site: tests/test_slop_scan_local.py + .github/workflows/ci.yml + test harness in _temporary_test_dir().\n  Evidence of absence: Test now runs in CI but fails in real runners (PermissionError on /tmp and repo-root fallbacks); the `_temporary_test_dir()` helper does not fully absorb PermissionError before test body.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- File: tests/test_slop_scan_local.py (lines ~30-55, `_temporary_test_dir()` + callers in 5 test funcs)\n  Line or code reference: except block catches only first_error; nested loop overwrites last_error but re-raises it; `with _temporary_test_dir()` context in test helpers fails before assertions.\n  Problem: Temp dir creation can fail under restricted perms, causing the test suite to exit before detector tests run.\n  Why it fails at runtime: Real CI/sandbox runners hit PermissionError, producing 5 failing tests and breaking the focused detector-test contract.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- File: scripts/slop_scan_local.py (lines 14-25: HEREDOC_START_RE)\n  Line or code reference: regex `(?P=quote)(?:\\s+.*)?$`\n  Problem: The heredoc matcher can miss `python3 - <<'PY' | ...` and similar lines with trailing shell content after the closing quote.\n  Why it fails at runtime: Heredoc bodies in real shell scripts can be skipped, which means the slop-scan misses actual findings.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "3188b554c7480dd5d68f4c070aa421427fa63abe4479b2577ffd3118ef1dd0de",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3512,
+    "run_id": "28201392068",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28201392068",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260625222133_c8835efee7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3512,
+    "run_id": "28201392068"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-06-25T22:21:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
