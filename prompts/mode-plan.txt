@@ -68,8 +68,8 @@ Rules:
   option adds a new dependency nor a new external interface, pick the
   complete option and document it in the `Scope-mode justification:` block.
   Cite §6 Core Priorities in `unattended_system_instructions.md` as
-  correctness > backward compatibility > operational clarity > performance
-  > speed; completeness moves correctness.
+  Security > Correctness & safety > Backward compatibility
+  > Operational clarity > Performance > Speed; completeness moves correctness.
 - Reduction safety net: Reduction mode is only valid when the original
   request is genuinely ambiguous about scope. If reducing scope, the plan
   MUST emit a clarification Q-ID under the plan-phase carve-out confirming
