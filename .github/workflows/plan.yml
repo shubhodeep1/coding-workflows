@@ -1074,13 +1074,10 @@ jobs:
             correctness > backward compatibility > operational clarity > performance
             > speed; completeness moves correctness.
           - Reduction safety net: Reduction mode is only valid when the original
-            request is genuinely ambiguous about scope. If reducing scope, emit a
-            clarification Q-ID under the plan-phase carve-out confirming the
-            proposed reduction before the plan can be treated as clear. Do not use
-            Reduction mode as a shortcut for implementation size or time pressure;
-            if the work is truly too large, use the existing
-            `BLOCKED: scope-too-large; estimate=<N> minutes; recommend splitting into sequential sub-issues`
-            behavior instead.
+            request is genuinely ambiguous about scope. If reducing scope, the plan
+            MUST emit a clarification Q-ID under the plan-phase carve-out confirming
+            the proposed reduction before the plan can be treated as clear. Do not use
+            Reduction mode as a substitute for the existing scope-too-large gate.
           - Surface the planning ref context (`git rev-parse HEAD` and symbolic branch)
             from the planning context and do not assume `main`.
           - If checked-out ref mismatches Integration branch metadata, emit exactly

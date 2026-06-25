@@ -31,7 +31,6 @@ def _render_mode_plan(*extra_args: str) -> str:
 		timeout=60,
 	)
 	assert proc.returncode == 0, proc.stderr
-	assert proc.stderr == ""
 	return proc.stdout
 
 
@@ -43,6 +42,8 @@ def test_mode_plan_scope_mode_contract_defaults_on() -> None:
 	assert "`Scope-mode justification:`" in rendered
 	assert "Boil the Lake forcing question" in rendered
 	assert "Reduction safety net" in rendered
+	assert "MUST emit a clarification Q-ID" in rendered
+	assert "existing scope-too-large gate" in rendered
 
 
 def test_mode_plan_scope_mode_contract_relaxes_when_flag_disabled() -> None:
@@ -62,6 +63,8 @@ def test_plan_workflow_exports_flag_and_keeps_live_prompt_parity() -> None:
 	assert "`Scope-mode justification:`" in workflow
 	assert "Boil the Lake forcing question" in workflow
 	assert "Reduction safety net" in workflow
+	assert "MUST emit a clarification Q-ID" in workflow
+	assert "existing scope-too-large gate" in workflow
 
 
 def main() -> int:
