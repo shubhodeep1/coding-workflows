@@ -1415,11 +1415,16 @@ jobs:
               exit 1
             fi
 
-            "${apt_cmd[@]}" update
-            if ! "${apt_cmd[@]}" install -y "${missing_tools[@]}"; then
-              echo "apt-get install failed for: ${missing_tools[*]}" >&2
-              exit 1
-            fi
+            "${apt_cmd[@]}" update || {
+              apt_update_rc=$?
+              echo "apt-get update failed (rc=${apt_update_rc}) while preparing to install missing tools: ${missing_tools[*]}" >&2
+              exit "${apt_update_rc}"
+            }
+            "${apt_cmd[@]}" install -y "${missing_tools[@]}" || {
+              apt_install_rc=$?
+              echo "apt-get install failed (rc=${apt_install_rc}) for: ${missing_tools[*]}" >&2
+              exit "${apt_install_rc}"
+            }
           fi
 
       - name: Initialize runtime workspace
