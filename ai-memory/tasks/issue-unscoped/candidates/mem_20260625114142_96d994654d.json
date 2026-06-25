@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/render_prompt.py:680-685 | severity=high | confidence=4\n  flagged_by: [moonshotai_kimi-k2_5]\n  PROBLEM: `apply_phase_c_persona_prefix` does not handle unknown mode names and can concatenate `None` to `prompt_text`.\n  WHY: If `PHASE_C_PERSONA_PREFIXES.get(mode_name)` returns `None`, the function falls through and raises `TypeError: unsupported operand type(s) for +: 'NoneType' and 'str'`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n(No findings reported.)\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n- scripts/render_prompt.py:681-684 | severity=MAJOR | confidence=4\n  PROBLEM: `apply_phase_c_persona_prefix` has a logic flaw for unknown mode names because `prefix` can be `None`.\n  WHY: When `mode_name` is not found in `PHASE_C_PERSONA_PREFIXES`, the function can fall through to `return prefix + prompt_text`, which raises `TypeError`; this issue was also reported at `scripts/render_prompt.py:680-685` in the same review. (2 related items)\n\n- scripts/render_prompt.py:680-685 | severity=MAJOR | confidence=4\n  PROBLEM: `apply_phase_c_persona_prefix` lacks defensive handling for unknown mode names not present in `PHASE_C_PERSONA_PREFIXES`.\n  WHY: If `PHASE_C_PERSONA_PREFIXES.get(mode_name)` returns `None`, the function can return `None + prompt_text`, which raises `TypeError`; this overlaps the prior finding at `scripts/render_prompt.py:681-684`. (2 related items)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "edbf5c4ae48447c72ba601c1f94ec3a603239ec064a93d60bd4e6e48833010c1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3509,
+    "run_id": "28165129289",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28165129289",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260625114142_96d994654d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3509,
+    "run_id": "28165129289"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-25T11:41:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
