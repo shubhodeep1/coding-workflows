@@ -81,7 +81,12 @@ def _relative_path(path: Path, repo_root: Path) -> str:
 
 
 def _is_docstring_expr(node: ast.stmt) -> bool:
-	return isinstance(node, ast.Expr) and isinstance(getattr(node, "value", None), ast.Constant) and isinstance(node.value.value, str)
+	if not isinstance(node, ast.Expr):
+		return False
+	value_node = getattr(node, "value", None)
+	if isinstance(value_node, ast.Constant):
+		return isinstance(value_node.value, str)
+	return isinstance(value_node, ast.Str)
 
 
 def _dotted_name(node: ast.AST | None) -> str | None:
@@ -110,11 +115,7 @@ def _is_file_operation_call(call: ast.Call) -> bool:
 	dotted = _dotted_name(call.func)
 	if dotted in {"os.unlink", "os.remove"}:
 		return True
-	if isinstance(call.func, ast.Attribute) and call.func.attr == "unlink":
-		base = _dotted_name(call.func.value)
-		if base in {"Path", "pathlib.Path"}:
-			return True
-	return False
+	return isinstance(call.func, ast.Attribute) and call.func.attr == "unlink"
 
 
 def _is_process_kill_call(call: ast.Call) -> bool:
@@ -160,7 +161,7 @@ def _try_node_types() -> tuple[type[ast.AST], ...]:
 def _has_enclosing_try(node: ast.AST, stop_node: ast.AST, parent_map: dict[int, ast.AST]) -> bool:
 	current = parent_map.get(id(node))
 	while current is not None and current is not stop_node:
-		if isinstance(current, _try_node_types()):
+		if isinstance(current, _try_node_types()) or isinstance(current, (ast.With, ast.AsyncWith)):
 			return True
 		current = parent_map.get(id(current))
 	return False

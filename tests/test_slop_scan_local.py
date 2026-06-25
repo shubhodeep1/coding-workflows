@@ -38,6 +38,47 @@ def test_safe_unlink_quiet_cleanup_fixture_is_suppressed() -> None:
 	)
 
 
+def test_path_variable_unlink_is_treated_as_file_operation(tmp_path: Path) -> None:
+	python_file = tmp_path / "scripts" / "example.py"
+	python_file.parent.mkdir(parents=True, exist_ok=True)
+	python_file.write_text(
+		"from pathlib import Path\n\n\n"
+		"def remove_temp_file(path):\n"
+		"\ttarget = Path(path)\n"
+		"\ttry:\n"
+		"\t\ttarget.unlink()\n"
+		"\texcept:\n"
+		"\t\tpass\n",
+		encoding="utf-8",
+	)
+
+	result = slop_scan_local.collect_scan_result(["scripts/example.py"], tmp_path)
+
+	assert any(finding["rule_id"] == "empty_catch_file_op" for finding in result["findings"])
+
+
+def test_return_await_inside_async_with_is_not_flagged(tmp_path: Path) -> None:
+	python_file = tmp_path / "scripts" / "example.py"
+	python_file.parent.mkdir(parents=True, exist_ok=True)
+	python_file.write_text(
+		"class Response:\n"
+		"\tasync def __aenter__(self):\n"
+		"\t\treturn self\n\n"
+		"\tasync def __aexit__(self, exc_type, exc, tb):\n"
+		"\t\treturn False\n\n"
+		"\tasync def json(self):\n"
+		"\t\treturn {}\n\n\n"
+		"async def read_response():\n"
+		"\tasync with Response() as response:\n"
+		"\t\treturn await response.json()\n",
+		encoding="utf-8",
+	)
+
+	result = slop_scan_local.collect_scan_result(["scripts/example.py"], tmp_path)
+
+	assert all(finding["rule_id"] != "redundant_return_await" for finding in result["findings"])
+
+
 def test_python3_heredoc_findings_map_back_to_shell_line_numbers(tmp_path: Path) -> None:
 	shell_file = tmp_path / "scripts" / "example.sh"
 	shell_file.parent.mkdir(parents=True, exist_ok=True)
