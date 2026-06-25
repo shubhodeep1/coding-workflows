@@ -47,6 +47,14 @@ Phases of the unattended pipeline (each is a separate workflow file under
 12. **workflow log analysis** (`workflow-log-analysis.yml`,
     `mode-workflow-*.txt`) — periodic audit of workflow runs.
 
+Planner scope note: the Boil the Lake rule is a planner-side instruction for
+choosing the right scope mode up front, while CLAUDE.md §5 / the unattended
+minimal-change rules still bind implementers and reviewers after that choice is
+made. There is no conflict: planners may explicitly choose Expansion or
+Selective Expansion when the marginal completeness cost is small, and editors /
+reviewers must then stay surgical inside that approved scope rather than
+shrinking it ad hoc.
+
 ---
 
 ## Models in use (defaults; overridable via repo-vars)
