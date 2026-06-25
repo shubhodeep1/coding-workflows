@@ -101,3 +101,39 @@ def test_python3_heredoc_findings_map_back_to_shell_line_numbers(tmp_path: Path)
 	assert finding["path"] == "scripts/example.sh"
 	assert finding["line"] == 7
 	assert finding["source_kind"] == "python_heredoc"
+
+
+def main() -> int:
+	import inspect
+	import tempfile
+
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+	passed = 0
+	failed = 0
+
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			params = list(inspect.signature(func).parameters)
+			if not params:
+				func()
+			elif params == ["tmp_path"]:
+				with tempfile.TemporaryDirectory(prefix="slop-scan-local-") as td:
+					func(Path(td))
+			else:
+				raise TypeError(f"unsupported test signature for {name}: {params}")
+			print(f"  PASS  {name}")
+			passed += 1
+		except AssertionError as e:
+			print(f"  FAIL  {name}: {e}")
+			failed += 1
+		except Exception as e:
+			print(f"  ERROR {name}: {type(e).__name__}: {e}")
+			failed += 1
+
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
