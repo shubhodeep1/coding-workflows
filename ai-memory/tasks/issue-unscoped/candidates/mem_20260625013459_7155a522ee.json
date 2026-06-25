@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.81,
+  "details": "The merged work includes log collection, consumer drift auditing, and watchdog/stability-related workflows, which indicates these support scripts are part of normal maintenance rather than optional extras. When debugging or adding automation, prefer changes that preserve observability and stable diagnostics across workflow runs.",
+  "fingerprint": "c2d26118f345337cfc60de676eb983fb4042c4ad6450207d739898cbb4560648",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28140851471",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28140851471",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3432",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3473",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3474",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3475",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3481",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3433",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3476",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3477",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3478",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3482"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260625013459_7155a522ee",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Operational tooling for workflow logs, drift checks, and stability monitoring is a first-class part of the repo.",
+  "timestamps": {
+    "created_at": "2026-06-25T01:34:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
