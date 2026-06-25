@@ -1155,6 +1155,7 @@ jobs:
       REVIEWER_FILTER_UNINTERESTING_ENABLED: ${{ vars.REVIEWER_FILTER_UNINTERESTING_ENABLED || 'false' }}
       REVIEWER_FILTER_EXTRA_GLOBS: ${{ vars.REVIEWER_FILTER_EXTRA_GLOBS || '' }}
       REVIEWER_FILTER_EXEMPT_GLOBS: ${{ vars.REVIEWER_FILTER_EXEMPT_GLOBS || 'db/contracts/**,**/migrations/**,**/migrate/**' }}
+      SLOP_SCAN_ENABLED: ${{ vars.SLOP_SCAN_ENABLED || 'true' }}
       AGENTS_MD_MATERIALITY_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_ENABLED || '1' }}
       AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED || '0' }}
       AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-5.4-mini' }}
@@ -1459,6 +1460,7 @@ jobs:
             echo "PR_CHANGED_FILES_FILE=${RUNTIME_DIR}/pr_changed_files.txt"
             echo "LAST_COMMIT_STAT_FILE=${RUNTIME_DIR}/last_commit_stat.txt"
             echo "LAST_RUN_DIFF_STAT_FILE=${RUNTIME_DIR}/last_run_diff_stat.txt"
+            echo "SLOP_SCAN_FINDINGS_FILE=${GITHUB_WORKSPACE}/.ai/slop_scan/findings.json"
             echo "REVIEWER_PROMPT_BODY_FILE=${RUNTIME_DIR}/reviewer_prompt_body.txt"
             echo "EDITOR_PROMPT_BODY_FILE=${RUNTIME_DIR}/editor_prompt_body.txt"
             echo "REVIEWER_PROMPT_FILE=${RUNTIME_DIR}/reviewer_prompt.txt"
@@ -2393,6 +2395,67 @@ jobs:
             echo "FIRST_RUN_NO_PREVIOUS_AI_CHANGES" > "${LAST_RUN_DIFF_STAT_FILE}"
           fi
 
+      - name: Collect local slop-scan findings
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+
+          write_slop_scan_sentinel() {
+            local status="$1"
+            cat > "${SLOP_SCAN_FINDINGS_FILE}" <<EOF
+          {
+            "schema_version": 1,
+            "collection_status": "${status}",
+            "scanned_files": [],
+            "findings": [],
+            "suppressed_findings": []
+          }
+          EOF
+          }
+
+          mkdir -p "$(dirname "${SLOP_SCAN_FINDINGS_FILE}")"
+
+          case "$(printf '%s' "${SLOP_SCAN_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+            1|true|yes|on)
+              ;;
+            *)
+              write_slop_scan_sentinel "disabled"
+              exit 0
+              ;;
+          esac
+
+          slop_scan_script=""
+          for candidate in \
+            "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/slop_scan_local.py" \
+            "${GITHUB_WORKSPACE}/.codex-workflow-src-main/scripts/slop_scan_local.py" \
+            "${GITHUB_WORKSPACE}/scripts/slop_scan_local.py"
+          do
+            if [ -f "${candidate}" ]; then
+              slop_scan_script="${candidate}"
+              break
+            fi
+          done
+
+          if [ -z "${slop_scan_script}" ]; then
+            echo "::warning::slop_scan_local.py was not available in the workflow support checkout; continuing without slop-scan findings."
+            write_slop_scan_sentinel "scan_error"
+            exit 0
+          fi
+
+          if ! PYTHONDONTWRITEBYTECODE=1 python3 "${slop_scan_script}" \
+            --changed-files "${PR_CHANGED_FILES_FILE}" \
+            --repo-root "${GITHUB_WORKSPACE}" \
+            --output "${SLOP_SCAN_FINDINGS_FILE}"; then
+            echo "::warning::slop_scan_local.py failed; continuing without blocking review."
+            write_slop_scan_sentinel "scan_error"
+            exit 0
+          fi
+
+          if [ ! -s "${SLOP_SCAN_FINDINGS_FILE}" ]; then
+            echo "::warning::slop_scan_local.py wrote no findings artifact; continuing without blocking review."
+            write_slop_scan_sentinel "scan_error"
+          fi
+
       - name: Generate symbol-level diff summary
         run: |
           set -euo pipefail
@@ -3316,6 +3379,18 @@ jobs:
                 echo "::warning::Editor in-step retry also failed; downstream noop-comment path will fire."
               }
             fi
+          fi
+
+      - name: Remove slop-scan runtime artifact
+        if: always()
+        run: |
+          set -euo pipefail
+          expected_dir="${GITHUB_WORKSPACE}/.ai/slop_scan"
+          if [ -n "${SLOP_SCAN_FINDINGS_FILE:-}" ] && [ "$(dirname "${SLOP_SCAN_FINDINGS_FILE}")" = "${expected_dir}" ]; then
+            rm -f "${SLOP_SCAN_FINDINGS_FILE}"
+            rmdir "${expected_dir}" 2>/dev/null || true
+          elif [ -n "${SLOP_SCAN_FINDINGS_FILE:-}" ]; then
+            echo "::warning::Unexpected SLOP_SCAN_FINDINGS_FILE path (${SLOP_SCAN_FINDINGS_FILE}); skipping cleanup."
           fi
 
       - name: Log token usage

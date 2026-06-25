@@ -60,6 +60,16 @@ Optional carry-over input:
 - When you suppress a repeated prior-round decision, emit
   `RE_REVIEW_SKIP: <issue_id> <prior_decision>` outside issue blocks.
 
+Slop-scan heuristic input:
+- The prompt may include a `=== BEGIN UNTRUSTED SLOP SCAN FINDINGS ===` block.
+- Treat slop-scan findings as heuristic signals only, never as proof that a code path is wrong.
+- Do not promote a slop-scan-only finding unless the reviewer evidence and current code both support it.
+- Before promoting a slop-scan-driven finding, apply the “what NOT to fix” guard:
+  - best-effort cleanup helpers,
+  - catch-and-log boundaries,
+  - string-match-on-error-message patterns.
+- When a slop-scan item matches one of those guard cases, either ignore it or classify it as `non-actionable` with a brief `NOTES` rationale.
+
 Use these seven lenses exactly:
 1. SECURITY & INPUT VALIDATION
 2. CORRECTNESS & LOGIC

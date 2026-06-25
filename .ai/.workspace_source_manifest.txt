@@ -315,6 +315,7 @@ scripts/semantic_cache.py
 scripts/semble_helpers.sh
 scripts/serena_stats_emit.py
 scripts/setup_serena.sh
+scripts/slop_scan_local.py
 scripts/stage_workflow_support.sh
 scripts/summarize_reviewer_consensus.sh
 scripts/summarize_unselected_runs.py
@@ -401,6 +402,8 @@ tests/fixtures/selftest/python-mongo-flask/.ai/validate.yml
 tests/fixtures/selftest/python-mongo-flask/app.py
 tests/fixtures/selftest/python-mongo-flask/requirements.txt
 tests/fixtures/selftest/python-repo-checks-bootstrap/.validation-selftest-bootstrap-marker
+tests/fixtures/slop_scan/empty_catch_around_os_unlink.py
+tests/fixtures/slop_scan/safe_unlink_quiet_cleanup.py
 tests/fixtures/validation_harness/python_mongo_flask/Dockerfile.app
 tests/fixtures/validation_harness/python_mongo_flask/_lib/tap_helpers.sh
 tests/fixtures/validation_harness/python_mongo_flask/docker-compose.test.yml
@@ -490,6 +493,7 @@ tests/test_phase_skip_gate_telemetry_contract.py
 tests/test_plan_auto_answer_recommended_parser.py
 tests/test_plan_auto_approve_safe_state_fetch.py
 tests/test_plan_clarify_blocked_output.py
+tests/test_plan_diagrams_contract.py
 tests/test_plan_reuse_audit_contract.py
 tests/test_plan_scope_mode_contract.py
 tests/test_pr_checks_lib_required_filter.py
@@ -540,6 +544,7 @@ tests/test_semble_workflow_parity_contract.py
 tests/test_serena_stats_emit.py
 tests/test_session_start_extract_repo_slug.py
 tests/test_setup_serena_toml.py
+tests/test_slop_scan_local.py
 tests/test_stall_freshness_branch_fallback.py
 tests/test_stall_loop_and_churn_fixes.py
 tests/test_stall_recovery_pr_lookup.py

@@ -1474,6 +1474,7 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEWER_FILTER_UNINTERESTING_ENABLED: ${{ vars.REVIEWER_FILTER_UNINTERESTING_ENABLED || 'false' }}",
 		"REVIEWER_FILTER_EXTRA_GLOBS: ${{ vars.REVIEWER_FILTER_EXTRA_GLOBS || '' }}",
 		"REVIEWER_FILTER_EXEMPT_GLOBS: ${{ vars.REVIEWER_FILTER_EXEMPT_GLOBS || 'db/contracts/**,**/migrations/**,**/migrate/**' }}",
+		"SLOP_SCAN_ENABLED: ${{ vars.SLOP_SCAN_ENABLED || 'true' }}",
 		"AGENTS_MD_MATERIALITY_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_ENABLED || '1' }}",
 		"AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED || '0' }}",
 		"AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-5.4-mini' }}",
@@ -2379,6 +2380,37 @@ def test_review_consolidator_prompt_is_staged_for_review_runtime_support() -> No
 	assert 'review-consolidator.txt not found in checked-out support sources' in stage_helper
 	assert 'REVIEW_CONSOLIDATOR_ENABLED=true' in stage_helper
 	assert 'rm -f "${SUPPORT_PROMPTS_DIR}/review-consolidator.txt"' in stage_helper
+
+
+def test_review_pipeline_slop_scan_wiring_is_flagged_fail_open_and_pre_commit_cleaned() -> None:
+	workflow = _workflow_text()
+	collect_block = _step_block("Collect local slop-scan findings")
+	cleanup_block = _step_block("Remove slop-scan runtime artifact")
+
+	assert 'echo "SLOP_SCAN_FINDINGS_FILE=${GITHUB_WORKSPACE}/.ai/slop_scan/findings.json"' in workflow
+	assert "continue-on-error: true" in collect_block
+	assert 'write_slop_scan_sentinel "disabled"' in collect_block
+	assert 'write_slop_scan_sentinel "scan_error"' in collect_block
+	assert '"${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/slop_scan_local.py"' in collect_block
+	assert '--output "${SLOP_SCAN_FINDINGS_FILE}"' in collect_block
+	assert 'if: always()' in cleanup_block
+	assert 'rm -f "${SLOP_SCAN_FINDINGS_FILE}"' in cleanup_block
+	assert 'rmdir "${expected_dir}"' in cleanup_block
+	assert workflow.index("- name: Remove slop-scan runtime artifact") < workflow.index("- name: Commit changes")
+
+
+def test_reviewer_and_consolidator_slop_scan_context_is_wired() -> None:
+	reviewers = _reviewers_text()
+	consolidate = _consolidate_text()
+	prompt_text = (REPO_ROOT / "prompts" / "review-consolidator.txt").read_text(encoding="utf-8")
+
+	assert 'SLOP_SCAN_FINDINGS_FILE="${SLOP_SCAN_FINDINGS_FILE:-${GITHUB_WORKSPACE:-$(pwd)}/.ai/slop_scan/findings.json}"' in reviewers
+	assert '=== BEGIN UNTRUSTED ${SLOP_SCAN_FINDINGS_FILE} (heuristic local slop-scan findings' in reviewers
+	assert 'SLOP_SCAN_FINDINGS_FILE="${SLOP_SCAN_FINDINGS_FILE:-${GITHUB_WORKSPACE:-$PWD}/.ai/slop_scan/findings.json}"' in consolidate
+	assert "'SLOP SCAN FINDINGS'" in consolidate
+	assert "=== BEGIN UNTRUSTED SLOP SCAN FINDINGS ===" in prompt_text
+	assert "best-effort cleanup helpers" in prompt_text
+	assert "catch-and-log boundaries" in prompt_text
 
 
 def test_review_filter_smoke_fixtures_are_present() -> None:
@@ -3482,6 +3514,8 @@ def main() -> int:
 	test_reject_verifier_bootstrap_and_stage_order_contract()
 	test_support_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
 	test_review_pipeline_summary_step_is_local_only_and_grep_friendly()
+	test_review_pipeline_slop_scan_wiring_is_flagged_fail_open_and_pre_commit_cleaned()
+	test_reviewer_and_consolidator_slop_scan_context_is_wired()
 	test_auto_merge_guard_honours_configured_orchestrator_branch_pattern()
 	test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_codex_agent_path()
 	test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_deterministic_skip_path()

@@ -1091,6 +1091,7 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `CODEX_HEARTBEAT_ENABLED` | `1` | Enable the `codex_heartbeat.sh` wrapper on long-running review / validate Codex calls. |
 | `CODEX_HEARTBEAT_INTERVAL_SECS` | `30` | Silence interval (seconds) between emitted `CODEX_HEARTBEAT` lines. |
 | `MEMORY_LEARNINGS_EXTRACT_ENABLED` | `true` | Enable the fail-open merged-run `repo_learnings` extraction step before memory compaction |
+| `SLOP_SCAN_ENABLED` | `true` | Run the fail-open local slop-scan preflight in `review_autofix.yml` for PR-changed `scripts/*.py`, `scripts/*.sh`, and `validation/**/*.sh` Python heredocs. Findings are written to `${GITHUB_WORKSPACE}/.ai/slop_scan/findings.json` and passed to reviewer + consolidator prompts as advisory heuristic context only; scan failures or disabled runs write a sentinel artifact and never block review. |
 
 ## Semantic Cache (Clarification Only)
 
