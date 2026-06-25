@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Operational tooling for workflow logs, drift checks, and stability monitoring is a first-class part of the repo.",
   "timestamps": {
     "created_at": "2026-06-25T01:34:59Z",
