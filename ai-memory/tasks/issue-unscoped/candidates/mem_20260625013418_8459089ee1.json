@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.86,
+  "details": "Recent merges show the memory pipeline evolving alongside schema definitions, prompt text, and validation checks. This matters whenever a change affects how runs are recorded or extracted, because downstream consumers may rely on stable field shapes and prompt foundations.",
+  "fingerprint": "4349ea3545fd39278fd46acef4fdd5c95dfe86b541b589fa5a44205879b31013",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28140851471",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28140851471",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3432",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3473",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3474",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3475",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3481",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3433",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3476",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3477",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3478",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3482"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260625013418_8459089ee1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Memory-processing changes are sensitive to schema and prompt expectations, so update those together.",
+  "timestamps": {
+    "created_at": "2026-06-25T01:34:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
