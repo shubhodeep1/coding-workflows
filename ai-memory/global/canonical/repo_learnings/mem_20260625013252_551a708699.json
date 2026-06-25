@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Repository automation changes often require updating both workflow YAML and the shell/Python helpers they invoke.",
   "timestamps": {
     "created_at": "2026-06-25T01:32:52Z",
