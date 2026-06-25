@@ -1078,7 +1078,6 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `REVIEWER_FILTER_UNINTERESTING_ENABLED` | `false` | Enable pre-review stripping of low-signal lock/generated/minified files before reviewer fan-out. |
 | `REVIEWER_FILTER_EXTRA_GLOBS` | _(empty)_ | Optional comma-separated extra skip globs for `review_filter_uninteresting_files.sh`. |
 | `REVIEWER_FILTER_EXEMPT_GLOBS` | `db/contracts/**,**/migrations/**,**/migrate/**` | Comma-separated exemption globs that stay reviewer-visible even when they match a skip rule. |
-| `SLOP_SCAN_ENABLED` | `true` | Run the fail-open local slop-scan preflight in `review_autofix.yml` for PR-changed `scripts/*.py`, `scripts/*.sh`, and `validation/**/*.sh` Python heredocs. Findings are written to `${GITHUB_WORKSPACE}/.ai/slop_scan/findings.json` and passed to reviewer + consolidator prompts as advisory heuristic context only; scan failures or disabled runs write a sentinel artifact and never block review. |
 | `REVIEWER_CIRCUIT_BREAKER_ENABLED` | `0` | Enable per-reviewer health-state caching and same-family failback attempts. |
 | `REVIEWER_FAILBACK_MAX_RETRIES` | `1` | Retryable-failure budget before a reviewer slot consults `reviewer_failback_chains.json`. |
 | `REVIEWER_HEALTH_OPEN_THRESHOLD` | `3` | Consecutive retryable failures required to mark a reviewer slot `open` in the health cache. |
@@ -1092,6 +1091,7 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `CODEX_HEARTBEAT_ENABLED` | `1` | Enable the `codex_heartbeat.sh` wrapper on long-running review / validate Codex calls. |
 | `CODEX_HEARTBEAT_INTERVAL_SECS` | `30` | Silence interval (seconds) between emitted `CODEX_HEARTBEAT` lines. |
 | `MEMORY_LEARNINGS_EXTRACT_ENABLED` | `true` | Enable the fail-open merged-run `repo_learnings` extraction step before memory compaction |
+| `SLOP_SCAN_ENABLED` | `true` | Run the fail-open local slop-scan preflight in `review_autofix.yml` for PR-changed `scripts/*.py`, `scripts/*.sh`, and `validation/**/*.sh` Python heredocs. Findings are written to `${GITHUB_WORKSPACE}/.ai/slop_scan/findings.json` and passed to reviewer + consolidator prompts as advisory heuristic context only; scan failures or disabled runs write a sentinel artifact and never block review. |
 
 ## Semantic Cache (Clarification Only)
 

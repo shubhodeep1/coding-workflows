@@ -18,6 +18,15 @@ def _result_for_fixture(path: Path) -> dict:
 	return slop_scan_local.collect_scan_result([relative_path], REPO_ROOT, restrict_scope=False)
 
 
+def _temporary_test_dir():
+	import tempfile
+
+	try:
+		return tempfile.TemporaryDirectory(prefix="slop-scan-local-")
+	except FileNotFoundError:
+		return tempfile.TemporaryDirectory(prefix=".slop-scan-local-", dir=REPO_ROOT)
+
+
 def test_empty_catch_around_os_unlink_fixture_emits_expected_finding() -> None:
 	result = _result_for_fixture(FIXTURES_DIR / "empty_catch_around_os_unlink.py")
 
@@ -103,9 +112,26 @@ def test_python3_heredoc_findings_map_back_to_shell_line_numbers(tmp_path: Path)
 	assert finding["source_kind"] == "python_heredoc"
 
 
+def test_temporary_test_dir_falls_back_to_repo_root_when_system_temp_is_unusable() -> None:
+	import tempfile
+
+	original_temporary_directory = tempfile.TemporaryDirectory
+
+	def fake_temporary_directory(*args, **kwargs):
+		if "dir" not in kwargs:
+			raise FileNotFoundError("No usable temporary directory")
+		return original_temporary_directory(*args, **kwargs)
+
+	tempfile.TemporaryDirectory = fake_temporary_directory
+	try:
+		with _temporary_test_dir() as td:
+			assert Path(td).parent == REPO_ROOT
+	finally:
+		tempfile.TemporaryDirectory = original_temporary_directory
+
+
 def main() -> int:
 	import inspect
-	import tempfile
 
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
 	passed = 0
@@ -118,7 +144,7 @@ def main() -> int:
 			if not params:
 				func()
 			elif params == ["tmp_path"]:
-				with tempfile.TemporaryDirectory(prefix="slop-scan-local-") as td:
+				with _temporary_test_dir() as td:
 					func(Path(td))
 			else:
 				raise TypeError(f"unsupported test signature for {name}: {params}")
