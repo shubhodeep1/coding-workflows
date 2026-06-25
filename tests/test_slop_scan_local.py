@@ -105,7 +105,7 @@ def test_python3_heredoc_findings_map_back_to_shell_line_numbers(tmp_path: Path)
 	shell_file.parent.mkdir(parents=True, exist_ok=True)
 	shell_file.write_text(
 		"#!/usr/bin/env bash\n"
-		"python3 - <<'PY'\n"
+		"python3 - <<'PY'| cat\n"
 		"def remove_temp(path):\n"
 		"\ttry:\n"
 		"\t\timport os\n"

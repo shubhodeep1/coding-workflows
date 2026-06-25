@@ -20,7 +20,7 @@ HEREDOC_START_RE = re.compile(
 	(?P<quote>['"])
 	(?P<tag>[A-Za-z_][A-Za-z0-9_]*)
 	(?P=quote)
-	(?:\s+.*)?$
+	.*$
 	""",
 	re.VERBOSE,
 )
