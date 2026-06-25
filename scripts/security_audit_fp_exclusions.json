@@ -1,0 +1,137 @@
+{
+  "schema_version": "security_audit_fp_exclusions.v1",
+  "rules": [
+    {
+      "id": "gh-api-wrapper-not-rce",
+      "reason": "Repository-owned gh CLI API path construction is not remote code execution by itself.",
+      "fields": {
+        "file": "scripts/gh_helpers.sh",
+        "owasp_or_stride_category": "A03:2021-Injection"
+      },
+      "contains": {
+        "exploit_scenario": [
+          "gh api",
+          "rce"
+        ]
+      }
+    },
+    {
+      "id": "label-helper-cli-args-not-command-injection",
+      "reason": "Passing label values as gh CLI arguments in the helper is not shell interpolation by itself.",
+      "fields": {
+        "file": "scripts/label_helpers.sh",
+        "owasp_or_stride_category": "A03:2021-Injection"
+      },
+      "contains": {
+        "exploit_scenario": [
+          "gh label create",
+          "command injection"
+        ]
+      }
+    },
+    {
+      "id": "codex-config-default-path-not-secret-leak",
+      "reason": "Writing a local Codex config path is not a credential disclosure on its own.",
+      "fields": {
+        "file": "scripts/write_codex_config.sh"
+      },
+      "contains": {
+        "exploit_scenario": [
+          "config.toml",
+          "secret leak"
+        ]
+      }
+    },
+    {
+      "id": "workflow-default-branch-checkout-not-privilege-escalation",
+      "reason": "Checking out the default branch in a scheduled maintenance workflow is expected repository behavior.",
+      "fields": {
+        "file": ".github/workflows/security-audit.yml"
+      },
+      "contains": {
+        "exploit_scenario": [
+          "default branch",
+          "privilege escalation"
+        ]
+      }
+    },
+    {
+      "id": "render-prompt-reference-loading-not-ssrf",
+      "reason": "Local prompt-reference file discovery does not perform outbound network fetches.",
+      "fields": {
+        "file": "scripts/render_prompt.py"
+      },
+      "contains": {
+        "exploit_scenario": [
+          "reference",
+          "ssrf"
+        ]
+      }
+    },
+    {
+      "id": "local-workspace-hook-probes-not-rce-by-default",
+      "reason": "Optional workspace-hook discovery is a repo-owned local execution surface, not user-controlled shell input by itself.",
+      "fields": {
+        "file": "scripts/run_workspace_hook.sh"
+      },
+      "contains": {
+        "exploit_scenario": [
+          "workspace hook",
+          "rce"
+        ]
+      }
+    },
+    {
+      "id": "inventory-doc-references-not-path-traversal",
+      "reason": "Documentation references to tracked paths are not filesystem traversal sinks.",
+      "fields": {
+        "file": "tests/inventory_parity.py"
+      },
+      "contains": {
+        "exploit_scenario": [
+          "inventory",
+          "path traversal"
+        ]
+      }
+    },
+    {
+      "id": "codex-install-action-not-supply-chain-finding-alone",
+      "reason": "Pinned first-party Codex installation is expected bootstrap behavior unless a concrete integrity gap is shown.",
+      "fields": {
+        "file": ".github/actions/install-codex/action.yml"
+      },
+      "contains": {
+        "exploit_scenario": [
+          "install codex",
+          "supply chain"
+        ]
+      }
+    },
+    {
+      "id": "issue-tracker-html-markers-not-xss",
+      "reason": "Hidden HTML comment markers in issue bodies are inert metadata, not executable HTML.",
+      "fields": {
+        "file": "scripts/security_audit.sh"
+      },
+      "contains": {
+        "exploit_scenario": [
+          "html comment",
+          "xss"
+        ]
+      }
+    },
+    {
+      "id": "codex-sandbox-flag-not-vulnerability-alone",
+      "reason": "The Codex sandbox mode itself is an execution-policy choice, not a repository code vulnerability without an exploit path in repo code.",
+      "fields": {
+        "file": "scripts/security_audit.sh"
+      },
+      "contains": {
+        "exploit_scenario": [
+          "sandbox",
+          "vulnerability"
+        ]
+      }
+    }
+  ]
+}

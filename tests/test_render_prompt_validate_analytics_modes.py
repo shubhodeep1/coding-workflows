@@ -60,6 +60,10 @@ PASS_CASES = (
 		"SEMBLE_PREFETCH",
 		0,
 	),
+	PassCase(
+		"mode-security-audit",
+		"**Chief Security Officer.** Your job is to perform a default-branch security audit of this repository using OWASP Top 10 + STRIDE framing.",
+	),
 )
 SERENA_VALIDATION_MODES = (
 	"mode-validate-discover",
