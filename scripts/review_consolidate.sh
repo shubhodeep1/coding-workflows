@@ -228,6 +228,7 @@ JUDGE_INTERIM_PRIORS_FILE="${JUDGE_INTERIM_PRIORS_FILE:-${RUNTIME_DIR}/judge_int
 REVIEW_LEDGER_PATH="${REVIEW_LEDGER_PATH:-.ai/review_issue_ledger/pr-${PR_NUMBER:-0}.txt}"
 PRIOR_ROUND_DECISIONS_FILE="${RUNTIME_DIR}/prior_round_decisions.txt"
 CODEX_HEARTBEAT_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_heartbeat.sh"
+SLOP_SCAN_FINDINGS_FILE="${SLOP_SCAN_FINDINGS_FILE:-${GITHUB_WORKSPACE:-$PWD}/.ai/slop_scan/findings.json}"
 
 # Validate REVIEW_CONSOLIDATOR_REASONING is a known reasoning level.
 # Prevent invalid values from breaking TOML config or shell quoting.
@@ -290,6 +291,10 @@ render_prior_round_decisions_file "${REVIEW_LEDGER_PATH}" "${PRIOR_ROUND_DECISIO
 				printf 'UNTRUSTED_DATA: %s\n' "${line}"
 			done < "${PRIOR_ROUND_DECISIONS_FILE}"
 			echo "=== END PRIOR ROUND DECISIONS ==="
+			echo
+		fi
+		if [ -f "${SLOP_SCAN_FINDINGS_FILE}" ]; then
+			emit_consolidator_untrusted_file 'SLOP SCAN FINDINGS' "${SLOP_SCAN_FINDINGS_FILE}"
 			echo
 		fi
 	echo "=== REVIEWER BUNDLE ==="
