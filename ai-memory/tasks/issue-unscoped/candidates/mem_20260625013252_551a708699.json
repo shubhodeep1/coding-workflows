@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.9,
+  "details": "Several merges adjusted GitHub Actions definitions together with helper scripts such as label, memory, validation, and review utilities. This pattern matters when a behavior change spans job wiring and implementation details; changing only one layer can leave the workflow inconsistent or untestable.",
+  "fingerprint": "3f7f7a61c748e7e79c9e747f8162ad6633240ae24eb242a69b96d74601945f2f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28140851471",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28140851471",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3432",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3473",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3474",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3475",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3481",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3433",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3476",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3477",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3478",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3482"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260625013252_551a708699",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Repository automation changes often require updating both workflow YAML and the shell/Python helpers they invoke.",
+  "timestamps": {
+    "created_at": "2026-06-25T01:32:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
