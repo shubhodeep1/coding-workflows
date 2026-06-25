@@ -1875,6 +1875,36 @@ def test_diagnose_empty_trace_observation_uses_placeholder_in_generated_fix_issu
 		assert "No observation provided." in created["body"]
 
 
+def test_diagnose_non_string_trace_fields_do_not_abort_empty_fix_fallback():
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		proc, state, _runtime_dir, _paths = _run_diagnose_step(
+			tmp_path,
+			issue_labels=["ai:implementing"],
+			capture_contents="===== broken.yml =====\nerror\n",
+			codex_mode="success",
+			codex_output={
+				"status": "needs_fixes",
+				"diagnosis": "diag",
+				"evidence_trace": [
+					{"file": 17, "line": 1, "function": {"step": "parse"}, "observation": ["bad", "shape"]},
+				],
+				"hypothesis": "diag hypothesis",
+				"fix_issues": [],
+				"harness_fixes": "",
+			},
+			failed_step_name="Validate syntax of changed files",
+			issue_body="Tracking issue: #829\n",
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		created_issues = state.get("created_issues", [])
+		assert len(created_issues) == 1
+		created = created_issues[0]
+		assert created["title"] == "Implement phase diagnose returned empty fix_issues"
+		assert '- 17:1 in {"step":"parse"} — ["bad","shape"]' in created["body"]
+
+
 def test_diagnose_reuses_matching_issue_meta_body_without_issue_api_fallback() -> None:
 	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
 		tmp_path = Path(td)

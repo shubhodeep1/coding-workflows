@@ -691,15 +691,15 @@ format_diagnose_trace_section() {
   jq -r '
     def format_trace_entry:
       "- "
-      + (.file // "<unknown file>")
+      + ((.file // "<unknown file>") | tostring)
       + (if .line == null then "" else ":" + (.line | tostring) end)
-      + (if (.function // "") == "" then "" else " in " + .function end)
+      + (if (((.function // "") | tostring) == "") then "" else " in " + ((.function // "") | tostring) end)
       + " — "
-      + ((.observation // "") | if length > 0 then . else "No observation provided." end);
+      + (((.observation // "") | tostring) | if length > 0 then . else "No observation provided." end);
     "Evidence trace:\n"
     + ((.evidence_trace // []) | if type == "array" and length > 0 then map(format_trace_entry) | join("\n") else "- none provided" end)
     + "\n\nHypothesis:\n- "
-    + ((.hypothesis // "") | if length > 0 then . else "No hypothesis provided." end)
+    + (((.hypothesis // "") | tostring) | if length > 0 then . else "No hypothesis provided." end)
   ' "${result_file}"
 }
 
