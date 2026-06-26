@@ -347,6 +347,105 @@ flag_enabled() {
   esac
 }
 
+emit_review_rb_lessons_learned_records() {
+  local issue_number="${1:-}"
+  local pr_number="${2:-}"
+  local judge_json="${3:-}"
+  local telemetry_json=""
+
+  if ! flag_enabled "${AI_MEMORY_ENABLED:-true}" || ! flag_enabled "${LESSONS_LEARNED_ENABLED:-true}"; then
+    return 0
+  fi
+  [ -n "${judge_json}" ] || return 0
+  if ! command -v python3 >/dev/null 2>&1; then
+    return 0
+  fi
+
+  telemetry_json="$(printf '%s\n' "${judge_json}" | {
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}:${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 - "${PWD}" "${issue_number}" "${pr_number}" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+from ai_memory_lib import persist_memory_operation, record_lessons_learned, resolve_memory_root_dir
+
+
+def safe_int(value: str | None) -> int | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = int(text)
+    except ValueError:
+        return None
+    return parsed if parsed > 0 else None
+
+
+repo_root = Path(sys.argv[1]).resolve()
+issue_number = safe_int(sys.argv[2])
+pr_number = safe_int(sys.argv[3])
+memory_branch = str(os.environ.get("AI_MEMORY_BRANCH", "ai-memory") or "ai-memory").strip() or "ai-memory"
+memory_root_relative = str(os.environ.get("AI_MEMORY_ROOT", "ai-memory") or "ai-memory").strip() or "ai-memory"
+push_retries = safe_int(os.environ.get("AI_MEMORY_PUSH_RETRIES")) or 8
+
+payload = json.loads(sys.stdin.read())
+lessons_raw = payload.get("lessons_learned") if isinstance(payload, dict) else None
+if lessons_raw is None:
+    lessons = []
+elif not isinstance(lessons_raw, list):
+    raise ValueError("lessons_learned must be an array when present")
+else:
+    lessons = lessons_raw
+
+telemetry = {
+    "op": "write_lessons_learned",
+    "ok": True,
+    "phase": "judge",
+    "source": "review_rb_judge",
+    "issue_number": issue_number,
+    "pr_number": pr_number,
+    "count": 0,
+    "did_push": False,
+}
+
+if lessons:
+    def operation(clone_dir: Path) -> dict[str, object]:
+        memory_root = resolve_memory_root_dir(clone_dir, memory_root_relative)
+        records = record_lessons_learned(
+            memory_root,
+            issue_number=issue_number,
+            pr_number=pr_number,
+            phase="judge",
+            lessons=lessons,
+        )
+        return {"records": records}
+
+    result = persist_memory_operation(
+        repo_root,
+        memory_branch=memory_branch,
+        memory_root_relative=memory_root_relative,
+        push_retries=push_retries,
+        commit_message="ai-memory: record lessons learned [judge review_rb_judge]",
+        operation=operation,
+    )
+    records = (result.get("operation_result") or {}).get("records") or []
+    telemetry["count"] = len(records)
+    telemetry["did_push"] = bool(result.get("did_push", False))
+
+print(json.dumps(telemetry, ensure_ascii=True, sort_keys=True))
+PY
+  } 2>&1)" || {
+    echo "::warning::review_rb_judge lessons-learned write failed; continuing fail-open" >&2
+    echo 'AI_MEMORY_TELEMETRY: {"count":0,"fail_open":true,"ok":false,"op":"write_lessons_learned","phase":"judge","source":"review_rb_judge"}' >&2
+    return 0
+  }
+
+  [ -n "${telemetry_json}" ] && printf 'AI_MEMORY_TELEMETRY: %s\n' "${telemetry_json}" >&2
+}
+
 render_review_rb_prior_round_decisions_file() {
   local ledger_path="$1"
   local out_path="$2"
@@ -1455,6 +1554,8 @@ if [ -z "${JUDGE_JSON:-}" ]; then
   echo "judge_skip_reason=json_parse_failed" >> "$GITHUB_OUTPUT"
   exit 0
 fi
+
+emit_review_rb_lessons_learned_records "${FIRST_ISSUE:-}" "${PR_NUMBER:-}" "${JUDGE_JSON}"
 
 RB_ACTION="$(printf '%s\n' "${JUDGE_JSON}" | jq -r '.action')"
 RB_JUSTIFICATION="$(printf '%s\n' "${JUDGE_JSON}" | jq -r '.justification // "no justification"')"
