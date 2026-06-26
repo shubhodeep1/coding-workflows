@@ -45,6 +45,10 @@ env:
   # ALLOW_WORKFLOW_EDITS) because vars.* are not auto-exposed to the shell.
   ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
   ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
+  # Optional per-issue ai:scope:<glob> label. Default false during
+  # acceptance so existing implement behavior is unchanged until the
+  # feature is exercised on a real issue.
+  SCOPE_LOCK_LABEL_ENABLED: ${{ vars.SCOPE_LOCK_LABEL_ENABLED || 'false' }}
   # Destructive-commit guard knobs. Both guard shells (Preflight
   # destructive-commit guard + Commit changes) read these as bare
   # ${VAR:-default}, so they must be bound at workflow-env level to reach
@@ -1314,6 +1318,20 @@ jobs:
           ISSUE_NUMBER_JSON="$(jq -r '.number' "${ISSUE_META_FILE}")"
           ISSUE_URL_JSON="$(jq -r '.html_url' "${ISSUE_META_FILE}")"
           PR_BASE_BRANCH="${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+          ISSUE_SCOPE_LOCK_GLOB=""
+
+          if [ "${SCOPE_LOCK_LABEL_ENABLED:-false}" = "true" ]; then
+            mapfile -t issue_scope_lock_labels < <(jq -r '.labels[]?.name // empty | select(startswith("ai:scope:"))' "${ISSUE_META_FILE}" 2>/dev/null || true)
+            if [ "${#issue_scope_lock_labels[@]}" -gt 0 ]; then
+              ISSUE_SCOPE_LOCK_GLOB="${issue_scope_lock_labels[0]#ai:scope:}"
+              if [ -z "${ISSUE_SCOPE_LOCK_GLOB}" ]; then
+                echo "::warning::Issue #${ISSUE_NUMBER} carries an empty ai:scope: label; ignoring scope lock."
+              fi
+              if [ "${#issue_scope_lock_labels[@]}" -gt 1 ]; then
+                echo "::warning::Issue #${ISSUE_NUMBER} carries multiple ai:scope: labels; enforcing only the first label from issue metadata: ${issue_scope_lock_labels[0]}"
+              fi
+            fi
+          fi
 
           printf '%s\n' "${ISSUE_BODY}" > "${ISSUE_BODY_FILE}"
 
@@ -1324,6 +1342,9 @@ jobs:
             echo "ISSUE_NUMBER=${ISSUE_NUMBER_JSON}"
             echo "ISSUE_URL=${ISSUE_URL_JSON}"
             echo "PR_BASE_BRANCH=${PR_BASE_BRANCH}"
+            echo 'ISSUE_SCOPE_LOCK_GLOB<<EOF'
+            echo "${ISSUE_SCOPE_LOCK_GLOB}"
+            echo 'EOF'
             echo 'ISSUE_TITLE<<EOF'
             echo "${ISSUE_TITLE}"
             echo 'EOF'
@@ -1468,13 +1489,14 @@ jobs:
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
             exit 0
           fi
-          # Same circuit breaker for the files_touched scope guard: a prior
-          # out-of-scope rejection latches ai:scope-blocked onto the issue, and
-          # a human must remove it after auditing the earlier drift. See the
-          # "Destructive-commit guard — label + alert on rejection" step below
-          # for where the label is applied.
+          # Same circuit breaker for implementation scope guards: a prior
+          # files_touched rejection or ai:scope scope-lock rejection latches
+          # ai:scope-blocked onto the issue, and a human must remove it after
+          # auditing the earlier drift. See the "Destructive-commit guard —
+          # label + alert on rejection" step below for where the label is
+          # applied.
           if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:scope-blocked") != null' >/dev/null; then
-            echo "::warning::Issue #${ISSUE_NUMBER} carries ai:scope-blocked from a previous run — refusing to redispatch implementation. A human must inspect the earlier out-of-scope rejection, remove the label, and reapprove before this issue can run again."
+            echo "::warning::Issue #${ISSUE_NUMBER} carries ai:scope-blocked from a previous run — refusing to redispatch implementation. A human must inspect the earlier scope rejection, remove the label, and reapprove before this issue can run again."
             echo "AI_PHASE_GATE_V1 phase=implement gate=phase_validation reason=scope_blocked outcome=skip issue=${ISSUE_NUMBER}"
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
             exit 0
@@ -1621,6 +1643,15 @@ jobs:
             echo
             echo "APPROVED IMPLEMENTATION PLAN"
             cat "${PLAN_FILE}"
+            echo
+            echo "ACTIVE ISSUE SCOPE LOCK"
+            if [ -n "${ISSUE_SCOPE_LOCK_GLOB:-}" ]; then
+              printf 'Issue label: ai:scope:%s\n' "${ISSUE_SCOPE_LOCK_GLOB}"
+              echo "Only files matching this glob may be edited."
+              echo "Glob syntax follows bash with globstar enabled."
+            else
+              echo "(none)"
+            fi
             echo
             echo "ISSUE COMMENTS"
             jq -r 'sort_by(.created_at)[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' "${ISSUE_COMMENTS_FILE}"
@@ -3556,12 +3587,29 @@ jobs:
 
           RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
-          # files_touched scope-block branch. When the scope guard (preflight or
-          # commit-time) latched scope_violation_blocked, handle it here with a
-          # distinct ai:scope-blocked label + scope-specific comment/alert, then
-          # exit. The destructive-deletion branch below is unchanged and runs
-          # only when this was not a scope block.
+          # Scope-block branch. When either scope guard (files_touched preflight /
+          # commit-time, or the post-commit ai:scope label verifier) latched
+          # scope_violation_blocked, handle it here with a distinct
+          # ai:scope-blocked label + scope-specific comment/alert, then exit.
+          # The destructive-deletion branch below is unchanged and runs only
+          # when this was not a scope block.
           if [ -n "${SVB_REASON:-}" ]; then
+            SCOPE_HEADER="🚨 **files_touched scope guard rejected this implementation run.**"
+            SCOPE_COUNT_LABEL="Out-of-scope staged paths"
+            SCOPE_DETAIL_HEADING="Staged paths outside the issue's \`files_touched\` allowlist:"
+            SCOPE_ALLOWLIST_HEADING="Declared \`files_touched\` allowlist:"
+            SCOPE_COMMIT_STATE="The commit was **not** created and **not** pushed."
+            SCOPE_REDISPATCH_HINT="If these paths are legitimately in scope, add them to the issue's \`files_touched\` list (or rerun with \`ALLOW_OUT_OF_SCOPE_FILES=true\`) and remove \`ai:scope-blocked\`. **Note:** the orchestrator judge may still regenerate this task under a different issue number — the per-issue block does not cover judge-cycle regeneration."
+            SCOPE_TG_TITLE="🚨 CRITICAL: files_touched scope guard blocked implementation"
+            if [ "${SVB_REASON}" = "scope-lock-label" ]; then
+              SCOPE_HEADER="🚨 **Issue scope-lock rejected this implementation run.**"
+              SCOPE_COUNT_LABEL="Out-of-scope committed paths"
+              SCOPE_DETAIL_HEADING="Committed paths outside the active \`ai:scope:<glob>\` label:"
+              SCOPE_ALLOWLIST_HEADING="Active \`ai:scope:<glob>\` glob:"
+              SCOPE_COMMIT_STATE="The out-of-scope commit was created locally, rolled back before push, and **not** pushed."
+              SCOPE_REDISPATCH_HINT="If these paths are legitimately in scope, update or remove the issue's \`ai:scope:<glob>\` label, then remove \`ai:scope-blocked\` and redispatch. **Note:** the orchestrator judge may still regenerate this task under a different issue number — the per-issue block does not cover judge-cycle regeneration."
+              SCOPE_TG_TITLE="🚨 CRITICAL: ai:scope label blocked implementation"
+            fi
             gh label create 'ai:scope-blocked' \
               --repo "${{ github.repository }}" \
               --color 'b60205' \
@@ -3573,32 +3621,32 @@ jobs:
             gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
               --add-label 'ai:scope-blocked' 2>/dev/null || true
             {
-              echo "🚨 **files_touched scope guard rejected this implementation run.**"
+              echo "${SCOPE_HEADER}"
               echo
-              echo "- Out-of-scope staged paths: **${SVB_COUNT}**"
+              echo "- ${SCOPE_COUNT_LABEL}: **${SVB_COUNT}**"
               echo "- Workflow run: ${RUN_URL}"
               echo
-              echo "The commit was **not** created and **not** pushed. This issue is now labeled \`ai:scope-blocked\` and will be refused by the \`Validate approval phase\` step on any future redispatch of issue #${ISSUE_NUMBER} until a human removes the label."
+              echo "${SCOPE_COMMIT_STATE} This issue is now labeled \`ai:scope-blocked\` and will be refused by the \`Validate approval phase\` step on any future redispatch of issue #${ISSUE_NUMBER} until a human removes the label."
               echo
-              echo "Staged paths outside the issue's \`files_touched\` allowlist:"
+              echo "${SCOPE_DETAIL_HEADING}"
               echo
               echo '```'
               printf '%s\n' "${SVB_FILES}" | sed '/^$/d'
               echo '```'
               echo
-              echo "Declared \`files_touched\` allowlist:"
+              echo "${SCOPE_ALLOWLIST_HEADING}"
               echo
               echo '```'
               printf '%s\n' "${SVB_ALLOWLIST}" | sed '/^$/d'
               echo '```'
               echo
-              echo "If these paths are legitimately in scope, add them to the issue's \`files_touched\` list (or rerun with \`ALLOW_OUT_OF_SCOPE_FILES=true\`) and remove \`ai:scope-blocked\`. **Note:** the orchestrator judge may still regenerate this task under a different issue number — the per-issue block does not cover judge-cycle regeneration."
+              echo "${SCOPE_REDISPATCH_HINT}"
             } > /tmp/scope_comment.md
             gh issue comment "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
               --body-file /tmp/scope_comment.md 2>/dev/null || true
             if [ -n "${TG_BOT_SECRET:-}" ] && [ -n "${TG_ADMIN_CHAT_ID:-}" ]; then
               TG_MSG="$(printf '%s\n' \
-                "🚨 CRITICAL: files_touched scope guard blocked implementation" \
+                "${SCOPE_TG_TITLE}" \
                 "repo: ${{ github.repository }}" \
                 "issue: #${ISSUE_NUMBER}" \
                 "out-of-scope paths: ${SVB_COUNT}" \

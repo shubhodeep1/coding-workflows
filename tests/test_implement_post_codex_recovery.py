@@ -22,6 +22,7 @@ import textwrap
 REPO_ROOT = Path(__file__).resolve().parent.parent
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 IMPLEMENT_COMMIT_SCRIPT = REPO_ROOT / "scripts" / "implement_commit_changes.sh"
+FILES_TOUCHED_SCOPE_GUARD = REPO_ROOT / "scripts" / "files_touched_scope_guard.py"
 
 
 def _workflow_text() -> str:
@@ -1385,6 +1386,80 @@ def test_commit_helper_treats_unset_fetched_manifest_as_empty() -> None:
 		assert "did_commit=false" in github_output.read_text(encoding="utf-8")
 
 
+def test_commit_helper_rolls_back_post_commit_scope_lock_violation() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_scope_lock_") as td:
+		tmp_path = Path(td)
+		repo_dir = tmp_path / "repo"
+		_bootstrap_git_repo(repo_dir)
+		(repo_dir / "scripts").mkdir()
+		shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, repo_dir / "scripts" / "implement_commit_changes.sh")
+		shutil.copy2(FILES_TOUCHED_SCOPE_GUARD, repo_dir / "scripts" / "files_touched_scope_guard.py")
+		_git(["git", "add", "scripts/implement_commit_changes.sh", "scripts/files_touched_scope_guard.py"], cwd=repo_dir)
+		_git(["git", "commit", "-m", "add scope helpers"], cwd=repo_dir)
+		baseline_head = subprocess.run(
+			["git", "rev-parse", "HEAD"],
+			cwd=str(repo_dir),
+			env=_isolated_test_env(cwd=repo_dir),
+			check=True,
+			capture_output=True,
+			text=True,
+		).stdout.strip()
+
+		(repo_dir / "README.md").write_text("out of scope change\n", encoding="utf-8")
+		github_output = tmp_path / "github_output.txt"
+		github_output.write_text("", encoding="utf-8")
+		runtime_dir = tmp_path / "runtime"
+		runtime_dir.mkdir()
+		env = _isolated_test_env(
+			{
+				"GITHUB_OUTPUT": str(github_output),
+				"GITHUB_REPOSITORY": "owner/repo",
+				"ISSUE_NUMBER": "948",
+				"ISSUE_SCOPE_LOCK_GLOB": "scripts/**/*.sh",
+				"RUNTIME_DIR": str(runtime_dir),
+				"SCOPE_LOCK_LABEL_ENABLED": "true",
+				"SERENA_PROJECT_BOOTSTRAP_HASH": "",
+				"SERENA_PROJECT_PREEXISTED": "false",
+				"TMPDIR": str(runtime_dir),
+			},
+			cwd=repo_dir,
+		)
+
+		proc = subprocess.run(
+			["bash", "scripts/implement_commit_changes.sh"],
+			cwd=str(repo_dir),
+			env=env,
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+		assert proc.returncode != 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		output_text = github_output.read_text(encoding="utf-8")
+		assert "scope_violation_blocked=scope-lock-label" in output_text
+		assert "README.md" in output_text
+		assert "scripts/**/*.sh" in output_text
+
+		head_after = subprocess.run(
+			["git", "rev-parse", "HEAD"],
+			cwd=str(repo_dir),
+			env=_isolated_test_env(cwd=repo_dir),
+			check=True,
+			capture_output=True,
+			text=True,
+		).stdout.strip()
+		assert head_after == baseline_head, "scope-lock violation must roll back the local commit before push"
+
+		status = subprocess.run(
+			["git", "status", "--porcelain"],
+			cwd=str(repo_dir),
+			env=_isolated_test_env(cwd=repo_dir),
+			check=True,
+			capture_output=True,
+			text=True,
+		).stdout.strip()
+		assert status == "", "scope-lock rollback must leave the repo clean after rejecting the local commit"
+
+
 def test_validate_step_uses_reusable_validator_with_continue_on_error() -> None:
 	validate_block = _step_block_text("Validate syntax of changed files")
 	assert "continue-on-error: true" in validate_block
@@ -1514,12 +1589,28 @@ def test_scope_guard_allowlist_and_workflow_rollback_contracts_present() -> None
 	assert "total_deletions=999999" in commit_helper
 	assert "Non-numeric non-markdown deletion count" in commit_helper
 	assert "non_md_count=1" in commit_helper
+	assert "scope_violation_blocked=scope-lock-label" in commit_helper
+	assert "--allowlist-file" in commit_helper
+	assert "git diff-tree --no-commit-id --name-only --diff-filter=ACMRD -r --root --no-renames HEAD" in commit_helper
+	assert "git reset --hard HEAD^" in commit_helper
 
 	protect_block = _step_block_text("Protect workflow files from implementation edits")
 	assert 'git cat-file -e HEAD:.github/workflows >/dev/null 2>&1 || [ -d .github/workflows ]' in protect_block
 	assert 'git cat-file -e HEAD:.github/workflows >/dev/null 2>&1' in protect_block
 	assert "git restore --source=HEAD --staged --worktree .github/workflows" in protect_block
 	assert "git clean -fd -- .github/workflows" in protect_block
+
+
+def test_scope_lock_workflow_wiring_contracts_present() -> None:
+	wf = _workflow_text()
+	build_context_block = _step_block_text("Build implementation context")
+	scope_alert_block = _step_block_text("Destructive-commit guard — label + alert on rejection")
+	assert "SCOPE_LOCK_LABEL_ENABLED: ${{ vars.SCOPE_LOCK_LABEL_ENABLED || 'false' }}" in wf
+	assert 'select(startswith("ai:scope:"))' in wf
+	assert "ISSUE_SCOPE_LOCK_GLOB<<EOF" in wf
+	assert "ACTIVE ISSUE SCOPE LOCK" in build_context_block
+	assert "Issue label: ai:scope:" in build_context_block
+	assert "scope-lock-label" in scope_alert_block
 
 
 def test_protect_workflow_files_restores_deleted_workflow_directory() -> None:
@@ -2760,6 +2851,13 @@ def test_yaml_quoting_clause_in_implement_prompt() -> None:
 		"mode-implement.txt must reference the validator that enforces "
 		"the rule, so the model knows the cost of getting this wrong"
 	)
+
+
+def test_scope_lock_clause_in_implement_prompt() -> None:
+	body = (REPO_ROOT / "prompts" / "mode-implement.txt").read_text(encoding="utf-8")
+	assert "Scope-lock discipline" in body
+	assert "ai:scope:<glob>" in body
+	assert "`BLOCKED: scope-lock-violation file=<path>`" in body
 
 
 def test_validator_diagnostic_surfaces_offending_lines() -> None:
