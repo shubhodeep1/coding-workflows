@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.83,
+  "details": "Several recent changes focused on post-Codex failure diagnosis and recovery scripts. When improving implement or review pipelines, it matters to preserve actionable diagnostics and recovery steps, because those paths are likely to be exercised after partial failures rather than happy-path runs.",
+  "fingerprint": "e499bbd4aaa2649116c488518e76156d4c3ebcee6b6b729d9f3ff725ef8703c1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28217708175",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28217708175",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3507",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3508",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3511",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3513",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3515",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3509",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3510",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3512",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3514",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3516"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260626044919_203a6b219f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Operational recovery paths are a recurring concern; failure diagnostics should be treated as a first-class workflow surface.",
+  "timestamps": {
+    "created_at": "2026-06-26T04:49:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
