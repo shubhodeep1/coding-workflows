@@ -62,6 +62,23 @@ required only for changes touching the orchestrator phase machine
 (`ai:clarification` → `ai:planning` → `ai:awaiting-approval` →
 `ai:implementing` → `ai:done` → `ai:ready-to-merge` → `ai:merged`).
 
+## Implement scope-lock label
+
+- When `SCOPE_LOCK_LABEL_ENABLED=true`, `implement.yml` recognizes one active
+  dynamic issue label of the form `ai:scope:<glob>` and copies the glob into
+  the implementation context.
+- The glob follows Bash `globstar` semantics (for example `scripts/**/*.py` or
+  `prompts/mode-*.txt`) and is enforced after the local AI commit is created
+  but before push: `scripts/implement_commit_changes.sh` reuses
+  `scripts/files_touched_scope_guard.py` against the committed pathset and
+  rolls the unpushed local commit back on any out-of-glob path.
+- Multiple `ai:scope:` labels are not merged; the workflow enforces only the
+  first matching label from the issue metadata and logs a warning.
+- This is a runtime dynamic-label exception to the otherwise static
+  `.github/ai/label_contract.v1.json` contract. The glob-bearing
+  `ai:scope:<glob>` labels are intentionally not enumerated there and are not
+  part of contract-driven label repair.
+
 ---
 
 ## Models in use (defaults; overridable via repo-vars)

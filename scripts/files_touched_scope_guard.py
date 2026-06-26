@@ -17,6 +17,10 @@ Inputs:
   --issue-body-file PATH  File containing the issue body (the allowlist source).
                           Missing / empty / unreadable is treated as "no
                           allowlist" (skip), never as an error.
+  --allowlist-file PATH   Explicit allowlist entries, one per line. When set,
+                          this bypasses issue-body parsing and reuses the same
+                          matcher for externally-supplied scopes such as
+                          `ai:scope:<glob>` labels.
   --staged-file PATH      File with the staged paths, one per line (typically
                           `git diff --cached --name-only --diff-filter=ACMRD`).
                           Reads stdin when omitted.
@@ -165,14 +169,13 @@ def path_in_scope(path: str, allowlist: list[str]) -> bool:
 	return False
 
 
-def evaluate(issue_body: str, staged_paths: list[str]) -> tuple[str, list[str], list[str]]:
-	"""Classify the staged change set against the issue's files_touched allowlist.
+def evaluate_allowlist(allowlist_entries: list[str] | None, staged_paths: list[str]) -> tuple[str, list[str], list[str]]:
+	"""Classify staged paths against an explicit allowlist using the shared matcher.
 
 	Returns (status, allowlist, out_of_scope) where status is one of
 	STATUS_IN_SCOPE / STATUS_SKIP_NO_ALLOWLIST / STATUS_OUT_OF_SCOPE.
 	"""
-	raw_allowlist = extract_files_touched(issue_body or "")
-	allowlist = normalize_allowlist(raw_allowlist or [])
+	allowlist = normalize_allowlist(allowlist_entries or [])
 	if not allowlist:
 		return STATUS_SKIP_NO_ALLOWLIST, [], []
 
@@ -187,6 +190,18 @@ def evaluate(issue_body: str, staged_paths: list[str]) -> tuple[str, list[str], 
 	if out_of_scope:
 		return STATUS_OUT_OF_SCOPE, allowlist, out_of_scope
 	return STATUS_IN_SCOPE, allowlist, []
+
+
+def evaluate(issue_body: str, staged_paths: list[str], *, allowlist_entries: list[str] | None = None) -> tuple[str, list[str], list[str]]:
+	"""Classify the staged change set against issue-body or explicit allowlists.
+
+	Returns (status, allowlist, out_of_scope) where status is one of
+	STATUS_IN_SCOPE / STATUS_SKIP_NO_ALLOWLIST / STATUS_OUT_OF_SCOPE.
+	"""
+	if allowlist_entries is not None:
+		return evaluate_allowlist(allowlist_entries, staged_paths)
+	raw_allowlist = extract_files_touched(issue_body or "")
+	return evaluate_allowlist(raw_allowlist or [], staged_paths)
 
 
 def _read_text_file(path: str) -> str:
@@ -205,17 +220,23 @@ def _read_staged(path: str | None) -> list[str]:
 	return [line for line in text.splitlines() if line.strip()]
 
 
+def _read_allowlist(path: str) -> list[str]:
+	return [line for line in _read_text_file(path).splitlines() if line.strip()]
+
+
 def main(argv: list[str] | None = None) -> int:
 	parser = argparse.ArgumentParser(description="files_touched scope-enforcement guard")
 	parser.add_argument("--issue-body-file", default="")
+	parser.add_argument("--allowlist-file", default="")
 	parser.add_argument("--staged-file", default="")
 	parser.add_argument("--allowlist-out", default="")
 	args = parser.parse_args(argv)
 
 	issue_body = _read_text_file(args.issue_body_file) if args.issue_body_file else ""
 	staged_paths = _read_staged(args.staged_file or None)
+	allowlist_entries = _read_allowlist(args.allowlist_file) if args.allowlist_file else None
 
-	status, allowlist, out_of_scope = evaluate(issue_body, staged_paths)
+	status, allowlist, out_of_scope = evaluate(issue_body, staged_paths, allowlist_entries=allowlist_entries)
 
 	if args.allowlist_out:
 		try:
