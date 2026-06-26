@@ -458,6 +458,8 @@ def load_ai_memory_run_events(
     memory_branch: str,
     memory_root_relative: str,
 ) -> list[dict[str, Any]]:
+    diagnostics = {"json_decode_errors": 0, "non_dict_payloads": 0}
+    load_ai_memory_run_events.last_diagnostics = diagnostics
     branch_dir: Path | None = None
     try:
         branch_dir = read_memory_root_from_branch(
@@ -481,8 +483,10 @@ def load_ai_memory_run_events(
                         try:
                             payload = json.loads(line)
                         except json.JSONDecodeError:
+                            diagnostics["json_decode_errors"] += 1
                             continue
                         if not isinstance(payload, dict):
+                            diagnostics["non_dict_payloads"] += 1
                             continue
                         timestamp = _parse_iso8601(payload.get("timestamp"))
                         if timestamp is None or timestamp < since_utc or timestamp > until_utc:
@@ -581,6 +585,13 @@ def build_weekly_retro_payload(
     except Exception as exc:  # noqa: BLE001
         warnings.append(f"AI memory read failed open: {exc}")
         run_events = []
+
+    ledger_diagnostics = getattr(load_ai_memory_run_events, "last_diagnostics", {})
+    if _to_int(ledger_diagnostics.get("json_decode_errors"), 0) or _to_int(ledger_diagnostics.get("non_dict_payloads"), 0):
+        warnings.append(
+            "AI memory run ledger skipped malformed entries "
+            f"(json_decode_errors={_to_int(ledger_diagnostics.get('json_decode_errors'), 0)}, non_dict_payloads={_to_int(ledger_diagnostics.get('non_dict_payloads'), 0)})."
+        )
 
     review_iterations = _build_review_iteration_summary(merged_prs=merged_prs, run_events=run_events)
     stall_reasons = _extract_stall_reasons(runs)

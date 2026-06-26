@@ -182,6 +182,7 @@ def test_main_writes_deterministic_weekly_retro_context() -> None:
 		assert memory_branch == "ai-memory"
 		assert memory_root_relative == "ai-memory"
 		return run_events
+	_fake_load_ai_memory_run_events.last_diagnostics = {"json_decode_errors": 1, "non_dict_payloads": 0}
 
 	with tempfile.TemporaryDirectory(prefix="workflow-retro-test-") as td:
 		td_path = Path(td)
@@ -230,6 +231,9 @@ def test_main_writes_deterministic_weekly_retro_context() -> None:
 	assert payload["judge_cycle_proxy"]["count"] == 1
 	assert payload["cost_telemetry"]["or_total_tokens"] == 150
 	assert payload["cost_telemetry"]["cache_hit_rate"] == 0.25
+	assert payload["warnings"] == [
+		"AI memory run ledger skipped malformed entries (json_decode_errors=1, non_dict_payloads=0)."
+	]
 	assert {item["bucket"] for item in payload["stall_reasons"]} == {
 		"label_repair_failed",
 		"open_pr_label_repair",
@@ -237,6 +241,7 @@ def test_main_writes_deterministic_weekly_retro_context() -> None:
 	assert "# Weekly Workflow Retro Context" in markdown
 	assert "## Snapshot" in markdown
 	assert "## Stall Signals" in markdown
+	assert "Warning: AI memory run ledger skipped malformed entries" in markdown
 	assert "`2026-W26`" in markdown
 
 
@@ -352,6 +357,8 @@ def test_load_ai_memory_run_events_streams_ledger_files() -> None:
 			'\n'.join(
 				[
 					'{"timestamp":"2026-06-22T12:30:00Z","run_id":"review-1","workflow":"review_autofix","event_type":"phase_started","pr_number":11}',
+					'{not-json',
+					'[]',
 					'{"timestamp":"2026-06-28T12:30:00Z","run_id":"review-2"}',
 				]
 			)
@@ -372,15 +379,19 @@ def test_load_ai_memory_run_events_streams_ledger_files() -> None:
 			resolve_memory_root_dir=lambda *args, **kwargs: memory_root,
 		):
 			with _patched_path_read_text(_guarded_read_text):
-				events = workflow_retro.load_ai_memory_run_events(
-					repo_root=REPO_ROOT,
-					since_utc=workflow_retro._parse_iso8601("2026-06-19T09:00:00Z"),
-					until_utc=workflow_retro._parse_iso8601("2026-06-26T09:00:00Z"),
-					memory_branch="ai-memory",
-					memory_root_relative="ai-memory",
-				)
+					events = workflow_retro.load_ai_memory_run_events(
+						repo_root=REPO_ROOT,
+						since_utc=workflow_retro._parse_iso8601("2026-06-19T09:00:00Z"),
+						until_utc=workflow_retro._parse_iso8601("2026-06-26T09:00:00Z"),
+						memory_branch="ai-memory",
+						memory_root_relative="ai-memory",
+					)
 
 	assert [event["run_id"] for event in events] == ["review-1"]
+	assert getattr(workflow_retro.load_ai_memory_run_events, "last_diagnostics") == {
+		"json_decode_errors": 1,
+		"non_dict_payloads": 1,
+	}
 
 
 def main() -> int:
