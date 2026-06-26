@@ -1,0 +1,326 @@
+## Executive Summary
+
+- `review_autofix` is the main critical-path bottleneck: family p95 is `3470.1s`, and the longest runs were `28201392068` (`3920s`), `28212502752` (`3892s`), `28181478326` (`3652s`), `28165184542` (`3518s`), `28177807382` (`3466s`), `28189723820` (`3451s`), `28209731379` (`3437s`), and `28181492218` (`3404s`). Estimated impact: `10–30 min/run` faster PR cycles if optimized here first. Confidence: **high**.
+- `review_autofix` also wastes substantial stale work: `13` cancelled runs consumed `21,806s` (~`6.1h`) in this window, while PR-backed runs are intentionally `cancel-in-progress: false` in `.github/workflows/internal-review.yml`. Estimated impact: save ~`6h` runner time/window and return the freshest review `15–30 min` sooner during push bursts *(inference)*. Confidence: **high**.
+- Two `review_autofix` failures (`28147004758`, `28147019610`) were caused by checkout post-job cleanup inheriting `GIT_DIR`/`GIT_WORK_TREE`; both logs end with `git submodule ... cannot be used without a working tree.` Estimated impact: remove `2/99` review failures in this sample. Confidence: **high**.
+- CI reliability is dominated by one deterministic lint defect: runs `28206317872`, `28211580640`, `28215501481`, and `28216181255` all failed `CI → lint → Python lint (ruff)` on `scripts/slop_scan_local.py:425` with `E731`. Estimated impact: eliminate the current `4/18` CI failures and avoid reruns of a workflow whose p50 is `1691.5s` (~`28.2 min`). Confidence: **high**.
+- Semble is not the problem: only `9` real `SEMBLE_QUERY` events were found, totaling `100,724` bytes and `4.635s`; `0` Semble fallbacks were observed. Serena produced `0` query/fallback/probe events and appears disabled, not degraded. Estimated impact: prevents low-value tuning work. Confidence: **high**.
+- Prompt-cache / OpenRouter cost telemetry is effectively blind: deep-dive telemetry shows `76` OR calls (wider `analysis_context`: `100`), but all OR token/cache fields are `0` and `cache_hit_rate=null`. Estimated impact: unlocking this telemetry is prerequisite to credible cost tuning. Confidence: **high**.
+- Comment-trigger fan-out is noisy but secondary: `clarify` + `plan` + `implement` + `orchestrate_clarify_respond` produced `689` skipped runs, but only `2,185s` total runtime. Estimated impact: small speed gain, medium observability gain. Confidence: **high**.
+
+## Speed Optimizations
+
+1. **Critical-path: add a superseded-head soft exit before expensive PR review work**
+   - **Evidence:** `review_autofix` p95 is `3470.1s`; `13` cancelled runs consumed `21,806s`; the slow folders are centered on `step-001-{review_}codex-agent.log` for runs like `28165184542`, `28177807382`, `28181492218`, `28189723820`, `28201392068`, and `28212502752`. `.github/workflows/internal-review.yml:48-50` leaves PR-backed runs `cancel-in-progress: false`, and `.github/workflows/review_autofix.yml:1093-1117` keeps queued PR runs alive by design.
+   - **Root cause:** stale PR-head work is allowed to continue too far before the workflow discovers it has been superseded.
+   - **Exact change:** keep the current no-self-cancel design, but add an early live PR-head SHA check in the `gate` phase and again before reviewer pass 1; if the live PR head no longer matches the run head, soft-exit `0` with an explicit stale marker.
+   - **Estimated savings:** up to the `21,806s` of cancelled review time seen here; more practically, `15–30 min` fresher latest-review latency during synchronize bursts *(inference)*.
+   - **Implementation risk:** **low-medium**; fail open on API errors.
+
+2. **Critical-path: enable low-risk review tiers and lower reasoning on non-risky paths**
+   - **Evidence:** recent plan run `28216501931` used `MODEL_EDITOR: openai/gpt-5.4` and `MODEL_REASONING_EFFORT: xhigh` for `552s`. `review_autofix.yml` defaults to six reviewer models plus `EDITOR_REASONING_EFFORT: xhigh`, while `REVIEWER_RISK_TIER_ENABLED` is off.
+   - **Root cause:** full reviewer breadth and highest reasoning are applied by default, even when the workflow already has trivial/lite tier knobs.
+   - **Exact change:** turn on `REVIEWER_RISK_TIER_ENABLED`, populate `REVIEWER_TIER_TRIVIAL_MODELS` / `REVIEWER_TIER_LITE_MODELS`, and lower plan reasoning one notch for non-workflow/non-`scripts/` work. Keep the existing always-full regex for `.github/workflows/`, `scripts/`, `prompts/`, etc.
+   - **Estimated savings:** `10–20 min` on low-risk `review_autofix` runs and `1–2 min` on plan runs *(inference)*.
+   - **Implementation risk:** **medium**; use a repo variable rollout.
+
+3. **Critical-path: trim `post-merge-validate-dispatch` work in review/autofix**
+   - **Evidence:** evidence-grade `log_summary` for run `28216179473` says `review post-merge-validate-dispatch` dominated the `336s` run. In `.github/workflows/review_autofix.yml:824-887`, that step can fall back to GraphQL plus per-issue `gh issue view` calls.
+   - **Root cause:** linked-issue label data is not always carried into the dispatch step, forcing per-issue lookups in a late hot path.
+   - **Exact change:** always populate `POST_MERGE_LINKED_ISSUES_JSON` with labels so the dispatch step can decide from one payload and skip the `gh issue view` loop.
+   - **Estimated savings:** tens of seconds to a few minutes on merged-PR review runs with linked issues.
+   - **Implementation risk:** **low**.
+
+4. **Micro-optimization: reduce skip-heavy `issue_comment` fan-out**
+   - **Evidence:** `clarify` had `184` runs with `176` skipped, `plan` `176/168`, `implement` `176/169`, `orchestrate_clarify_respond` `176/176`. Combined skipped runtime was only `2,185s`, but this was `689` workflow runs. Wrapper files `.github/workflows/internal-clarify.yml`, `internal-orchestrate-clarify-respond.yml`, `internal-plan.yml`, and `internal-implement.yml` all trigger on `issue_comment.created`.
+   - **Root cause:** routing is done after workflow dispatch instead of before it.
+   - **Exact change:** move the obvious marker checks into the wrapper layer, or use one comment-router workflow that dispatches the correct reusable workflow.
+   - **Estimated savings:** ~`36 min` total runtime per `952`-run window, plus cleaner run history and less operator noise.
+   - **Implementation risk:** **low**.
+
+## Cost Optimizations
+
+1. **Turn on low-risk review tiering before adding more model work**
+   - **Evidence:** `review_autofix` is the longest family (`p95=3470.1s`), and `review_autofix.yml` runs a six-model reviewer panel with `xhigh` editor reasoning by default. Wider telemetry only proves `codex_tokens_used=20,262` across `14` calls; OR token totals are missing.
+   - **Root cause:** the expensive path is the default path.
+   - **Exact change:** enable the existing risk-tier controls and reduce reviewer breadth / reasoning on trivial and lite diffs, while preserving full scrutiny for workflow, automation, and prompt files.
+   - **Estimated savings:** `25–40%` LLM spend on low-risk review runs *(inference; OR token telemetry is currently blind)*.
+   - **Quality-risk notes:** **medium**; protect high-risk paths with the existing regex.
+
+2. **Stop paying for stale/cancelled review work**
+   - **Evidence:** `13` cancelled `review_autofix` runs consumed `21,806s`; the four biggest cancellations were `28165172221` (`3507s`), `28189741718` (`3415s`), `28195801261` (`3274s`), and `28173616084` (`3114s`).
+   - **Root cause:** PR-backed review runs keep running after newer synchronize events arrive.
+   - **Exact change:** add superseded-head soft exits early, not just late stale-base checks.
+   - **Estimated savings:** up to a full review run’s model spend on each long stale cancellation *(inference)*; hard lower bound is `6.1h` runner time in this sample.
+   - **Quality-risk notes:** **low** if the stale check fails open.
+
+3. **Repair OR token/cache telemetry, then stabilize prompt prefixes**
+   - **Evidence:** deep-dive summary shows `or_calls=76`, wider `analysis_context` shows `or_calls=100`, but `or_prompt_tokens=0`, `or_total_tokens=0`, `or_cache_read_tokens=0`, `or_cache_write_tokens=0`, and `cache_hit_rate=null` in both scopes. Meanwhile `plan.yml:856-863` and `review_autofix.yml:1680-1692` already try to build cacheable static prefixes.
+   - **Root cause:** telemetry emission/parser gap; possible prompt-prefix instability is currently unmeasurable.
+   - **Exact change:** plumb provider token/cache fields into the logs parsed by `cost_audit.py`, then keep volatile per-run text below the stable prefix.
+   - **Estimated savings:** unquantified today; likely `5–15%` repeated-run prompt savings once measurable *(inference)*.
+   - **Quality-risk notes:** **low**.
+
+4. **Keep Semble; it is targeted. Serena is currently a non-factor.**
+   - **Evidence:** real `SEMBLE_QUERY` telemetry found `6` `reviewer-context` calls (`81,565` bytes) and `3` `overflow` calls (`19,159` bytes) for only `4.635s` total; all `overflow` calls targeted `tests/test_implement_post_codex_recovery.py`. No `SEMBLE_FALLBACK` events were observed. Serena had `0` real query/fallback/probe events, and sampled review logs showed `SERENA_ENABLED:false`.
+   - **Root cause:** Semble is already being used as narrow retrieval, not as noisy bulk context.
+   - **Exact change:** do **not** remove Semble for cost reasons; instead trim comment/API churn (`clarify.yml:1163-1167`, `plan.yml:848-850`, `1132-1163`) and finish OR cache telemetry.
+   - **Estimated savings:** small direct spend reduction from comment/API churn; high avoided-risk from not removing a cheap context helper.
+   - **Quality-risk notes:** **low** for keeping Semble; Serena should stay off until explicitly rolled out.
+
+Also worth noting: avoidable reruns from the Ruff defect and the `GIT_WORK_TREE` bug are the clearest non-model cost savings available immediately.
+
+## Reliability Improvements
+
+1. **Scope `GIT_DIR` / `GIT_WORK_TREE` to shell steps only**
+   - **Failure evidence:** `review_autofix` runs `28147004758` (`234s`) and `28147019610` (`187s`) failed after job cleanup with `fatal: /usr/lib/git-core/git-submodule cannot be used without a working tree.` The logs also show `GIT_DIR=/home/runner/work/coding-workflows/coding-workflows/.git` and `GIT_WORK_TREE=/home/runner/work/_temp/workspaces/...`. The workflow currently exports both through `GITHUB_ENV` at `.github/workflows/review_autofix.yml:1563-1567`.
+   - **Root cause category:** environment leakage into action post-steps.
+   - **Exact fix:** keep `BASH_ENV` global, but move `GIT_DIR`/`GIT_WORK_TREE` into `workspace-shell.env` so only shell `run:` steps inherit them; alternatively unset them before actions’ post-job cleanup.
+   - **Expected reliability impact:** removes the two observed review failures and prevents similar checkout cleanup breakage.
+   - **Rollback / fail-open:** trivial; shell steps still get the split-worktree context.
+
+2. **Fix the deterministic Ruff violation in `scripts/slop_scan_local.py`**
+   - **Failure evidence:** runs `28206317872`, `28211580640`, `28215501481`, and `28216181255` all failed `CI → lint → Python lint (ruff)` with `E731` at `scripts/slop_scan_local.py:425`.
+   - **Root cause category:** deterministic source defect.
+   - **Exact fix:** replace the assigned `lambda` with a named `def`.
+   - **Expected reliability impact:** should eliminate the current `4/18` CI failures in this sample.
+   - **Rollback / fail-open:** none needed.
+
+3. **Add superseded-head exits to reduce stale review cancellations**
+   - **Failure evidence:** `review_autofix` had `13` cancellations; `.github/workflows/review_autofix.yml:1093-1117` intentionally queues PR-backed runs instead of cancelling them. Existing stale-base guards at `.github/workflows/review_autofix.yml:2627-2665`, `3060-3095`, and `4783-4809` are helpful but late.
+   - **Root cause category:** concurrency/update race.
+   - **Exact fix:** add a live head-SHA mismatch check before reviewer pass 1 and before editor work, with soft exit `0` and a clear stale marker.
+   - **Expected reliability impact:** fewer stale comments, fewer human reruns, less cancellation churn.
+   - **Rollback / fail-open:** fail open on API errors.
+
+4. **Reduce `validation_refresh` starvation**
+   - **Failure evidence:** run `28215278870` (`1483s`) reported `processed=13`, `green=9`, `red=1`, `skipped=3`, and skipped `shubhodeep1/bitsafe.io`, `shubhodeep1/hylifegroup.com`, and `shubhodeep1/radateeree-resort.com` because `remaining=811s/679s/662s` fell below `worst_case_single=900s`.
+   - **Root cause category:** serialized budget exhaustion.
+   - **Exact fix:** reorder targets by recent-change likelihood / historical runtime, and do a lighter first-pass discovery before reserving the full 900-second slot.
+   - **Expected reliability impact:** more consistent repo coverage per refresh cycle.
+   - **Rollback / fail-open:** keep current ordering as fallback.
+
+Other reliability signals were healthy:
+- `break_glass_count=0` and `context_budget_warn_count=0` in both deep-dive and wider telemetry.
+- No real `SEMBLE_FALLBACK`, `SERENA_FALLBACK`, or `SERENA_PROBE` events were observed.
+- Serena looks **disabled**, not **broken**.
+
+## AI Memory Health
+
+- AI memory telemetry was present in `11` runs: plan `28216501931` and review/autofix runs `28147004758`, `28147019610`, `28165184542`, `28177807382`, `28181478326`, `28181492218`, `28189723820`, `28201392068`, `28209731379`, and `28212502752`.
+- Deduped event count: `41`.
+  - `record-run-event`: `22`
+  - `record-candidate`: `7`
+  - `retrieve`: `9`
+  - `processed-command-check`: `1`
+  - `processed-command-claim`: `1`
+  - `processed-command-complete`: `1`
+- Retrieve health was strong:
+  - hit rate: `100%` (`9/9` had `records_selected > 0`)
+  - average `estimated_tokens`: `413`
+  - average `token_budget`: `1377.8`
+  - `keyword_method`: `llm=9`, `plain=0`, `none=0`
+  - `records_selected=0`: `0`
+  - `fail_open:true`: `0`
+  - `enabled:false`: `0`
+- One push-retry outlier appeared: run `28147019610` logged `record-run-event` with `push_attempts=2`.
+- No `finalize-task`, `promote`, or `compact` operations were observed in this sample. If those ops are expected in production, expand telemetry coverage so they appear in future bundles.
+
+## GH API Call Audit
+
+Exact per-run API call counts are **not** emitted today, so this audit is based on workflow code plus evidence-grade run summaries.
+
+| Workflow / step | Evidence | Current pattern | Recommended change | Estimated call reduction |
+|---|---|---|---|---|
+| `plan` | `plan.yml:395`, `434`, `500-508`, `666-668`, `848-850`, `1132-1163`; run `28216501931` took `552s` and the plan step dominated | 1 issue fetch, 1 paginated comments fetch, 1 paginated timeline fetch, progress-comment create + patches, per-comment deletes | Reuse one comments snapshot throughout the run; patch progress only on state transitions; avoid deleting every historic clarification comment | `3–6` calls per successful plan run, plus `N` DELETEs |
+| `clarify` | `clarify.yml:430-435`, `464-470`, `484-485`, `1125-1126`, `1163-1167` | Optional double comment fetch when semantic cache is on; two POST comments on clear path | Reuse the full thread response for both bounded context and cache canonicalization; collapse clear-text + `/answer` into one comment that starts with `/answer` | `1–2` calls per successful clarify run |
+| `review_autofix` `post-merge-validate-dispatch` | `review_autofix.yml:824-887`; run `28216179473` was dominated by this step | GraphQL/REST fallback plus per-linked-issue `gh issue view` lookups and edits | Always pass label arrays in `POST_MERGE_LINKED_ISSUES_JSON`; decide from one payload and skip `gh issue view` loop | Up to `1` lookup per linked issue |
+| `orchestrate_poll` `Find active tracking issues` | `orchestrate_poll.yml:145-160`; run `28216359646` found `1 active tracking issue` | One batched `gh issue list --json number,title --limit 20` call | No change; this is the right pattern | None |
+
+Best practice already present in this repo: batched `gh issue list --json` in `orchestrate_poll.yml` and GraphQL linked-issue aggregation in `review_autofix.yml`. Extend those patterns to late-stage label checks and comment handling.
+
+## Prompt Cache & Memory System
+
+- Good news: both `plan` and `review_autofix` already try to build stable prompt prefixes:
+  - `plan.yml:856-863` pre-assembles static context.
+  - `review_autofix.yml:1680-1692` pre-assembles unattended instructions / AGENTS / trimmed README.
+- Bad news: prompt-cache effectiveness is not observable right now.
+  - Deep-dive summary: `or_calls=76`, `or_cache_read_tokens=0`, `or_cache_write_tokens=0`, `cache_hit_rate=null`.
+  - Wider `analysis_context`: `or_calls=100`, same zero cache fields, same null hit rate.
+- The only cache hit clearly visible in logs was package/tooling cache, not prompt cache: plan run `28216501931` logged `Cache hit occurred on key setup-uv... not saving cache.`
+- There were **no** `CONTEXT_BUDGET_WARN` or `BREAK_GLASS` events. Run `28216179473` exposed `CONTEXT_BUDGET_WARN_RATIO: 0.7`, but no actual warn lines fired.
+- Memory retrieval itself looks healthy (see previous section), so the weak point is observability, not retrieval quality.
+- Recommended changes:
+  1. plumb OR token/cache fields into emitted telemetry;
+  2. keep dynamic progress text, IDs, and volatile status strings below the stable prefix where possible *(inference)*;
+  3. preserve Semble’s targeted retrieval, since its footprint is small and focused.
+- Estimated impact: once measurable, likely `5–15%` repeated-run token/latency savings *(inference)* plus earlier warning of prompt growth.
+
+## Orchestrator Health
+
+- `orchestrate_poll` looked healthy in this sample: `41/41` success, `p50=201s`, `p95=244s`. Evidence-grade summary for run `28216359646` shows a single batched query finding `1 active tracking issue`.
+- `clarify` has a sensible orchestrator fast path: `clarify.yml:395-398` defers orchestrator-managed issues, and `clarify.yml:472-485` relabels to `ai:planning` and auto-posts `/answer`.
+- The main orchestration pain point is **coverage/noise**, not hard failure:
+  - `orchestrate_clarify_respond` had `176` runs and `176` skips.
+  - No successful `orchestrate_clarify_respond` run was captured, so the unattended clarification auto-answer path lacks fresh smoke evidence.
+- `validation_refresh` is the main orchestrator-scale bottleneck: run `28215278870` spent `1483s` and skipped three target repos because of budget exhaustion.
+- No stuck-state or fallback-storm signature was visible:
+  - `break_glass_count=0`
+  - `context_budget_warn_count=0`
+  - no Semble fallback lines
+  - no Serena runtime/probe failures
+- Smallest safe mitigations:
+  1. add one smoke test that exercises a full successful `orchestrate_clarify_respond` path each release;
+  2. track `validation_refresh skipped_budget count`;
+  3. watch `review_autofix cancelled count` as the best stale-work signal.
+- Observable indicators teams should track:
+  - active tracking issue count
+  - `orchestrate_poll` p95 duration
+  - `validation_refresh` skipped-budget count
+  - `review_autofix` cancelled count
+  - `cache_hit_rate` once fixed
+  - `context_budget_warn_count`
+
+## Pipeline Flow Bottlenecks
+
+| Stage | Evidence | Dominant bottleneck | Recommendation |
+|---|---|---|---|
+| Clarify | `184` runs, `176` skipped, `p50=1s`, `p95=11s` | Event-routing noise, not compute | Consolidate wrapper routing later; not first priority |
+| Plan | `176` runs, `8` real successes; successful runs `377–605s`; run `28216501931` took `552s` with `gpt-5.4` `xhigh` | Model compute + GH comment orchestration | Lower reasoning on low-risk cases and trim progress-comment churn |
+| Implement | `176` runs, `7` real successes; successful runs include `1325s`, `1155s`, `862s`, `680s`, `580s` | AI compute, but less evidence than review | Keep as second-order target after review/autofix |
+| Review / Autofix | `99` runs, `p50=245s`, `p95=3470.1s`, `13` cancellations; top 8 longest runs all here | Dominant compute path (`codex-agent`) plus stale queued work | Add superseded-head exits and enable low-risk review tiering |
+| Validate / Orchestrate | CI `p50=1691.5s`, `p95=1790.2s`; `validation_refresh` run `28215278870` took `1483s`; `orchestrate_poll` much smaller | CI compute and refresh-budget exhaustion | Fix deterministic CI failure; rebalance refresh ordering/budget |
+
+Breakdown by bottleneck type:
+- **Queueing:** minor in sampled logs; e.g. slow cancelled run `28165172221` showed only brief runner wait.
+- **Compute:** `review_autofix` and `ci` dominate.
+- **Retry:** `plan.yml` can do up to 3 Codex attempts with `10s`/`20s` backoff; this is not the main sampled cost, but it lengthens bad runs.
+- **Merge/conflict overhead:** present in `review_autofix`, but the sampled hot late stage was `post-merge-validate-dispatch`, not conflict healing.
+
+Ordered by end-to-end impact:
+1. stale-review soft exits
+2. low-risk review tiering / reasoning reduction
+3. fix deterministic CI lint failure
+4. trim review post-merge validate-dispatch lookups
+5. rebalance validation refresh budget
+6. clean up comment-trigger fan-out
+
+## Per-Repo Breakdown
+
+### shubhodeep1/coding-workflows
+
+- **Top bottlenecks**
+  - `review_autofix`: `99` runs, `p95=3470.1s`, `13` cancellations
+  - `ci`: `18` runs, `p50=1691.5s`, `p95=1790.2s`
+  - `validation_refresh`: run `28215278870` at `1483s`
+- **Top failure modes**
+  - Ruff `E731` at `scripts/slop_scan_local.py:425` (`28206317872`, `28211580640`, `28215501481`, `28216181255`)
+  - checkout post-job cleanup failure from leaked `GIT_DIR`/`GIT_WORK_TREE` (`28147004758`, `28147019610`)
+  - stale/cancelled `review_autofix` work (`13` cancellations)
+- **Highest-cost drivers**
+  - six-model `review_autofix` path with `xhigh` editor reasoning
+  - `xhigh` plan run `28216501931`
+  - missing OR token/cache telemetry, which hides real prompt/model spend
+- **Top 3 prioritized actions**
+  1. scope `GIT_DIR`/`GIT_WORK_TREE` to shell steps only in `review_autofix`
+  2. add superseded-head exits and enable low-risk review tiering
+  3. fix the Ruff `E731` defect and repair OR token/cache telemetry emission
+
+## Metrics Appendix
+
+### Window summary
+
+| Scope | Total runs | Success | Failure | Cancelled | Skipped/other | Started success rate | Avg duration (s) | p50 (s) | p95 (s) | Total runtime (h) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| All sampled runs | 952 | 242 | 6 | 14 | 690 | 92.4% | 195.9 | 2.0 | 1716.0 | 51.8 |
+
+### Workflow-family metrics
+
+| Family | Total | Success | Failure | Cancelled | Other/skipped | p50 (s) | p95 (s) | Avg (s) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| review_autofix | 99 | 83 | 2 | 13 | 1 | 245.0 | 3470.1 | 1343.7 |
+| ci | 18 | 13 | 4 | 1 | 0 | 1691.5 | 1790.2 | 1326.5 |
+| orchestrate_poll | 41 | 41 | 0 | 0 | 0 | 201.0 | 244.0 | 205.3 |
+| validation_refresh | 1 | 1 | 0 | 0 | 0 | 1483.0 | 1483.0 | 1483.0 |
+| copilot_pull_request_reviewer | 22 | 22 | 0 | 0 | 0 | 247.5 | 382.6 | 263.4 |
+| plan | 176 | 8 | 0 | 0 | 168 | 1.0 | 14.0 | 25.3 |
+| implement | 176 | 7 | 0 | 0 | 169 | 1.0 | 11.0 | 35.5 |
+| clarify | 184 | 8 | 0 | 0 | 176 | 1.0 | 11.0 | 7.9 |
+| orchestrate_clarify_respond | 176 | 0 | 0 | 0 | 176 | 1.0 | 10.0 | 3.2 |
+| issue_pr_status | 11 | 11 | 0 | 0 | 0 | 69.0 | 80.0 | 56.4 |
+| integration_pr_readiness | 16 | 16 | 0 | 0 | 0 | 8.5 | 11.5 | 8.7 |
+| lint_pr_body_auto_close | 16 | 16 | 0 | 0 | 0 | 8.5 | 10.0 | 8.2 |
+| cancel_on_pr_close | 11 | 11 | 0 | 0 | 0 | 12.0 | 15.5 | 11.5 |
+| forward_merge_stable_to_main | 2 | 2 | 0 | 0 | 0 | 31.5 | 31.9 | 31.5 |
+| nightly_validation_selftest | 1 | 1 | 0 | 0 | 0 | 122.0 | 122.0 | 122.0 |
+| promote_main_to_stable | 1 | 1 | 0 | 0 | 0 | 31.0 | 31.0 | 31.0 |
+| workspace_cache_maintenance | 1 | 1 | 0 | 0 | 0 | 7.0 | 7.0 | 7.0 |
+
+### Telemetry coverage and cost metrics
+
+| Telemetry scope | Runs with log telemetry | Codex tokens | Codex calls | OR calls | OR prompt tokens | OR total tokens | OR cache read | OR cache write | `cache_hit_rate` | `wall_clock_p50_ms` | `wall_clock_p99_ms` | Semble calls | Semble bytes | Serena calls | Serena response bytes | `break_glass_count` | `context_budget_warn_count` |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Deep-dive `summary.json` bundle | 31 | 20262 | 14 | 76 | 0 | 0 | 0 | 0 | null | 71000 | 3911600 | 9 | 100724 | 0 | 0 | 0 | 0 |
+| Wider provided `analysis_context` | 116 | 20262 | 14 | 100 | 0 | 0 | 0 | 0 | null | 2000 | 3860800 | 15 | 157824 | 0 | 0 | 0 | 0 |
+
+Note: the deep-dive bundle is biased toward `errors/`, `slow/`, and `recent/`; the wider `analysis_context` includes more unselected runs, which explains the lower wall-clock p50 there.
+
+### Semble / Serena telemetry
+
+| Server | Target | Calls | Bytes / response bytes | Total ms | Avg ms | Fallbacks | Tool calls |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Semble | reviewer-context | 6 | 81565 | 3103 | 517.2 | 0 | n/a |
+| Semble | overflow | 3 | 19159 | 1532 | 510.7 | 0 | n/a |
+| Serena | all targets | 0 | 0 | 0 | 0.0 | 0 | 0 |
+
+### Per-target MCP availability
+
+| Server | Target | `probe_ok` | `probe_failed` | `probe_skipped` | Notes |
+|---|---|---:|---:|---:|---|
+| Serena | all targets | 0 | 0 | 0 | No real `SERENA_PROBE` lines observed; sampled review logs showed `SERENA_ENABLED:false` |
+| Semble | n/a | n/a | n/a | n/a | No probe telemetry family emitted for Semble in this bundle |
+
+**Other MCP servers observed:** none.
+
+### AI memory metrics
+
+| Metric | Value |
+|---|---|
+| Runs with AI memory telemetry | 11 |
+| Deduped telemetry events | 41 |
+| `retrieve` ops | 9 |
+| Retrieve hit rate | 100% |
+| Avg `estimated_tokens` | 413 |
+| Avg `token_budget` | 1377.8 |
+| `keyword_method` distribution | `llm=9`, `plain=0`, `none=0` |
+| `records_selected=0` | 0 |
+| `fail_open:true` | 0 |
+| `enabled:false` | 0 |
+| Push retries > 1 | 1 (`28147019610`) |
+
+### GH API hotspot summary
+
+| Workflow / step | Evidence | Observed pattern | Estimated avoidable calls |
+|---|---|---|---|
+| `plan` main path | `plan.yml:395`, `434`, `500-508`, `666-668`, `848-850`, `1132-1163`; run `28216501931` | repeated issue/comment/timeline reads, progress comment create+patch, per-comment deletes | `3–6` per successful plan run + `N` deletes |
+| `clarify` clear path | `clarify.yml:430-435`, `1163-1167` | optional duplicate comment fetch + two POST comments | `1–2` per successful clarify run |
+| `review_autofix` post-merge validate dispatch | `review_autofix.yml:824-887`; run `28216179473` | fallback GraphQL/REST plus per-linked-issue lookups | up to `1` per linked issue |
+| `orchestrate_poll` tracking scan | `orchestrate_poll.yml:155-160`; run `28216359646` | already batched | none |
+
+### Skip fan-out metrics
+
+| Family | Skipped count | Skipped total seconds | Avg skipped runtime (s) |
+|---|---:|---:|---:|
+| clarify | 176 | 589 | 3.35 |
+| plan | 168 | 473 | 2.82 |
+| implement | 169 | 561 | 3.32 |
+| orchestrate_clarify_respond | 176 | 562 | 3.19 |
+
+### Cancelled review waste
+
+| Metric | Value |
+|---|---:|
+| Cancelled `review_autofix` runs | 13 |
+| Total cancelled runtime | 21806 s |
+| Avg cancelled runtime | 1677.4 s |
+| Largest cancellations | `28165172221` 3507s; `28189741718` 3415s; `28195801261` 3274s; `28173616084` 3114s |
