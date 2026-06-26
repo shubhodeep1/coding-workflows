@@ -136,6 +136,7 @@ jobs:
           python3 -m py_compile scripts/ai_labels.py
           python3 -m py_compile scripts/collect_workflow_logs.py
           python3 -m py_compile scripts/analyze_workflow_logs.py
+          python3 -m py_compile scripts/workflow_retro.py
           python3 -m py_compile scripts/semantic_cache.py
           python3 -m py_compile scripts/check_workflow_script_refs.py
           # Phase 4b smoke-test fixture (only run from
@@ -550,6 +551,7 @@ jobs:
       - name: Workflow log analysis contract tests
         run: |
           set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_retro.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_log_analysis_failure_contract.py
 
       - name: JSON schema validation

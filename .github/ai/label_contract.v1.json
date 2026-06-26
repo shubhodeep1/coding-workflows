@@ -161,6 +161,10 @@
       "color": "5319e7",
       "description": "Stable tracker issue for periodic default-branch security audits"
     },
+    "ai:retro": {
+      "color": "5319e7",
+      "description": "Stable tracker issue for weekly workflow retrospectives"
+    },
     "ai:security": {
       "color": "0e8a16",
       "description": "Follow-up issue opened by the periodic security audit workflow"

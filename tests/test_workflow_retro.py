@@ -1,0 +1,301 @@
+#!/usr/bin/env python3
+"""Focused tests for scripts/workflow_retro.py."""
+
+from __future__ import annotations
+
+import contextlib
+import importlib.util
+import json
+import sys
+import tempfile
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SCRIPT_PATH = REPO_ROOT / "scripts" / "workflow_retro.py"
+if str(REPO_ROOT) not in sys.path:
+	sys.path.insert(0, str(REPO_ROOT))
+
+spec = importlib.util.spec_from_file_location("workflow_retro", SCRIPT_PATH)
+assert spec is not None and spec.loader is not None
+workflow_retro = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(workflow_retro)
+
+
+@contextlib.contextmanager
+def _patched_module_attrs(module, **replacements):
+	originals = {name: getattr(module, name) for name in replacements}
+	try:
+		for name, value in replacements.items():
+			setattr(module, name, value)
+		yield
+	finally:
+		for name, value in originals.items():
+			setattr(module, name, value)
+
+
+def _write_json(path: Path, payload: object) -> None:
+	path.parent.mkdir(parents=True, exist_ok=True)
+	path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _cost_telemetry(
+	*,
+	or_prompt_tokens: int,
+	or_completion_tokens: int,
+	or_total_tokens: int,
+	or_cache_write_tokens: int,
+	or_cache_read_tokens: int,
+	or_calls: int,
+) -> dict[str, object]:
+	return {
+		"log_parsed": True,
+		"or_prompt_tokens": or_prompt_tokens,
+		"or_completion_tokens": or_completion_tokens,
+		"or_total_tokens": or_total_tokens,
+		"or_cache_write_tokens": or_cache_write_tokens,
+		"or_cache_read_tokens": or_cache_read_tokens,
+		"or_calls": or_calls,
+		"break_glass_count": 0,
+		"context_budget_warn_count": 0,
+		"wall_clock_p50_ms": 1200,
+		"wall_clock_p99_ms": 1200,
+	}
+
+
+def test_main_writes_deterministic_weekly_retro_context() -> None:
+	report = {
+		"runs": [
+			{
+				"repository": "owner/repo",
+				"run_id": 101,
+				"workflow_name": "AI Review",
+				"workflow_family": "review_autofix",
+				"conclusion": "success",
+				"duration_seconds": 120,
+				"created_at": "2026-06-22T11:00:00Z",
+				"log_summary": "LABEL_REPAIR issue=41 issue_state=open pr_state=open pr_merged=false",
+				"cost_telemetry": _cost_telemetry(
+					or_prompt_tokens=60,
+					or_completion_tokens=20,
+					or_total_tokens=80,
+					or_cache_write_tokens=20,
+					or_cache_read_tokens=20,
+					or_calls=1,
+				),
+			},
+			{
+				"repository": "owner/repo",
+				"run_id": 102,
+				"workflow_name": "AI Orchestrate Poller",
+				"workflow_family": "orchestrate_poll",
+				"conclusion": "failure",
+				"duration_seconds": 300,
+				"created_at": "2026-06-23T10:00:00Z",
+				"log_excerpts": [
+					{
+						"step_name": "repair",
+						"excerpt": "::warning::LABEL_REPAIR issue=42 failed: mock failure",
+					}
+				],
+				"cost_telemetry": _cost_telemetry(
+					or_prompt_tokens=40,
+					or_completion_tokens=30,
+					or_total_tokens=70,
+					or_cache_write_tokens=0,
+					or_cache_read_tokens=20,
+					or_calls=1,
+				),
+			},
+			{
+				"repository": "other/repo",
+				"run_id": 999,
+				"workflow_name": "Ignored",
+				"workflow_family": "review_autofix",
+				"conclusion": "success",
+				"duration_seconds": 10,
+				"created_at": "2026-06-24T10:00:00Z",
+			},
+		],
+		"summary": {},
+		"scope": {"repositories": ["owner/repo"]},
+		"errors": [],
+	}
+
+	merged_prs = [
+		{
+			"number": 11,
+			"title": "Retro PR one",
+			"url": "https://github.com/owner/repo/pull/11",
+			"merged_at": "2026-06-22T12:00:00Z",
+		},
+		{
+			"number": 12,
+			"title": "Retro PR two",
+			"url": "https://github.com/owner/repo/pull/12",
+			"merged_at": "2026-06-24T12:00:00Z",
+		},
+	]
+
+	run_events = [
+		{
+			"workflow": "review_autofix",
+			"event_type": "phase_started",
+			"pr_number": 11,
+			"run_id": "review-1",
+			"timestamp": "2026-06-22T12:30:00Z",
+		},
+		{
+			"workflow": "review_autofix",
+			"event_type": "phase_started",
+			"pr_number": 11,
+			"run_id": "review-2",
+			"timestamp": "2026-06-22T13:00:00Z",
+		},
+		{
+			"workflow": "review_autofix",
+			"event_type": "phase_started",
+			"pr_number": 12,
+			"run_id": "review-3",
+			"timestamp": "2026-06-24T13:00:00Z",
+		},
+	]
+
+	def _fake_fetch_merged_pull_requests(*, repo: str, since_utc, until_utc):
+		assert repo == "owner/repo"
+		assert since_utc.strftime("%Y-%m-%dT%H:%M:%SZ") == "2026-06-19T09:00:00Z"
+		assert until_utc.strftime("%Y-%m-%dT%H:%M:%SZ") == "2026-06-26T09:00:00Z"
+		return merged_prs
+
+	def _fake_load_ai_memory_run_events(*, repo_root: Path, since_utc, until_utc, memory_branch: str, memory_root_relative: str):
+		assert repo_root == REPO_ROOT
+		assert memory_branch == "ai-memory"
+		assert memory_root_relative == "ai-memory"
+		return run_events
+
+	with tempfile.TemporaryDirectory(prefix="workflow-retro-test-") as td:
+		td_path = Path(td)
+		report_path = td_path / "workflow_log_report.json"
+		markdown_path = td_path / "retro.md"
+		json_path = td_path / "retro.json"
+		_write_json(report_path, report)
+
+		with _patched_module_attrs(
+			workflow_retro,
+			fetch_merged_pull_requests=_fake_fetch_merged_pull_requests,
+			load_ai_memory_run_events=_fake_load_ai_memory_run_events,
+		):
+			rc = workflow_retro.main(
+				[
+					"--report",
+					str(report_path),
+					"--output",
+					str(markdown_path),
+					"--json-output",
+					str(json_path),
+					"--repo",
+					"owner/repo",
+					"--repo-root",
+					str(REPO_ROOT),
+					"--lookback-days",
+					"7",
+					"--now",
+					"2026-06-26T09:00:00Z",
+				]
+			)
+
+		assert rc == 0
+		payload = json.loads(json_path.read_text(encoding="utf-8"))
+		markdown = markdown_path.read_text(encoding="utf-8")
+
+	assert payload["schema_version"] == "workflow_retro.v1"
+	assert payload["generated_at"] == "2026-06-26T09:00:00Z"
+	assert payload["repository"] == "owner/repo"
+	assert payload["window"]["week_label"] == "2026-W26"
+	assert payload["summary"]["total_runs"] == 2
+	assert payload["summary"]["failure_count"] == 1
+	assert payload["summary"]["merged_pr_count"] == 2
+	assert payload["review_autofix"]["counted_prs"] == 2
+	assert payload["review_autofix"]["median_iterations"] == 1.5
+	assert payload["judge_cycle_proxy"]["count"] == 1
+	assert payload["cost_telemetry"]["or_total_tokens"] == 150
+	assert payload["cost_telemetry"]["cache_hit_rate"] == 0.25
+	assert {item["bucket"] for item in payload["stall_reasons"]} == {
+		"label_repair_failed",
+		"open_pr_label_repair",
+	}
+	assert "# Weekly Workflow Retro Context" in markdown
+	assert "## Snapshot" in markdown
+	assert "## Stall Signals" in markdown
+	assert "`2026-W26`" in markdown
+
+
+def test_main_fails_open_on_pr_and_ai_memory_reads() -> None:
+	report = {
+		"runs": [
+			{
+				"repository": "owner/repo",
+				"run_id": 201,
+				"workflow_name": "AI Review",
+				"workflow_family": "review_autofix",
+				"conclusion": "success",
+				"duration_seconds": 90,
+				"created_at": "2026-06-22T11:00:00Z",
+			}
+		],
+		"summary": {},
+		"scope": {"repositories": ["owner/repo"]},
+		"errors": [],
+	}
+
+	with tempfile.TemporaryDirectory(prefix="workflow-retro-fail-open-") as td:
+		td_path = Path(td)
+		report_path = td_path / "workflow_log_report.json"
+		markdown_path = td_path / "retro.md"
+		json_path = td_path / "retro.json"
+		_write_json(report_path, report)
+
+		with _patched_module_attrs(
+			workflow_retro,
+			fetch_merged_pull_requests=lambda **_: (_ for _ in ()).throw(RuntimeError("gh unavailable")),
+			load_ai_memory_run_events=lambda **_: (_ for _ in ()).throw(RuntimeError("missing ai-memory branch")),
+		):
+			rc = workflow_retro.main(
+				[
+					"--report",
+					str(report_path),
+					"--output",
+					str(markdown_path),
+					"--json-output",
+					str(json_path),
+					"--repo",
+					"owner/repo",
+					"--repo-root",
+					str(REPO_ROOT),
+					"--lookback-days",
+					"7",
+					"--now",
+					"2026-06-26T09:00:00Z",
+				]
+			)
+
+		assert rc == 0
+		payload = json.loads(json_path.read_text(encoding="utf-8"))
+		markdown = markdown_path.read_text(encoding="utf-8")
+
+	assert payload["summary"]["merged_pr_count"] == 0
+	assert len(payload["warnings"]) == 2
+	assert "Merged PR query failed open" in payload["warnings"][0]
+	assert "AI memory read failed open" in payload["warnings"][1]
+	assert "Warning: Merged PR query failed open" in markdown
+	assert "Warning: AI memory read failed open" in markdown
+
+
+def main() -> int:
+	test_main_writes_deterministic_weekly_retro_context()
+	test_main_fails_open_on_pr_and_ai_memory_reads()
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

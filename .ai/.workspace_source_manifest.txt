@@ -86,6 +86,7 @@ ai-memory/examples/sample_task_lineage.v1.json
 ai-memory/schemas/actions_runs_cache.v1.json
 ai-memory/schemas/branch_rebuild_audit.v1.json
 ai-memory/schemas/fingerprint_quarantine.v1.json
+ai-memory/schemas/lessons_learned_record.v1.json
 ai-memory/schemas/memory_record.v1.json
 ai-memory/schemas/operator_bypass_audit.v1.json
 ai-memory/schemas/processed_command_entry.v1.json
