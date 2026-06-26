@@ -155,7 +155,7 @@ def test_bare_entry_matches_exact_path_and_descendants() -> None:
 def test_explicit_allowlist_entries_support_scope_lock_glob() -> None:
 	status, allow, oos = guard.evaluate(
 		"ignored because explicit allowlist entries are provided",
-		["scripts/orchestrate/deploy/run.sh", "README.md"],
+		["scripts/run.sh", "scripts/orchestrate/deploy/run.sh", "README.md"],
 		allowlist_entries=["scripts/**/*.sh"],
 	)
 	assert status == guard.STATUS_OUT_OF_SCOPE
@@ -210,7 +210,7 @@ def test_cli_explicit_allowlist_file_supports_scope_lock_glob() -> None:
 		allowlist_file = tdp / "allowlist.txt"
 		allowlist_file.write_text("scripts/**/*.sh\n", encoding="utf-8")
 		staged_file = tdp / "staged.txt"
-		staged_file.write_text("scripts/orchestrate/deploy/run.sh\nREADME.md\n", encoding="utf-8")
+		staged_file.write_text("scripts/run.sh\nscripts/orchestrate/deploy/run.sh\nREADME.md\n", encoding="utf-8")
 		allowlist_out = tdp / "allowlist_out.txt"
 		proc = subprocess.run(
 			[

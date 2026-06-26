@@ -38,7 +38,8 @@ Exit codes (the caller maps these; ANY other code => fail open / skip):
 Matching semantics (allowlist entry -> staged path):
   * leading "./" is stripped from both sides; surrounding whitespace trimmed.
   * an entry containing a glob metacharacter (`*`, `?`, `[`) is matched with
-    fnmatch (so `frontend/**` allows anything under `frontend/`).
+    Bash-style globstar semantics for `/`-separated paths (so `frontend/**`
+    allows anything under `frontend/`).
   * an entry ending in "/" is a directory prefix (`frontend/` allows
     `frontend/anything`).
   * a bare entry matches an exact path OR anything beneath it as a directory
@@ -53,6 +54,8 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+from functools import lru_cache
+from pathlib import PurePosixPath
 import re
 import sys
 
@@ -147,13 +150,39 @@ def is_lockfile(path: str) -> bool:
 	return path.rsplit("/", 1)[-1] in LOCKFILE_BASENAMES
 
 
+def _path_glob_matches(path: str, pattern: str) -> bool:
+	"""True when a normalized path matches a normalized glob pattern."""
+	if "/" not in pattern:
+		return fnmatch.fnmatchcase(path, pattern)
+	path_parts = PurePosixPath(path).parts
+	pattern_parts = PurePosixPath(pattern).parts
+
+	@lru_cache(maxsize=None)
+	def match_parts(path_idx: int, pattern_idx: int) -> bool:
+		while pattern_idx < len(pattern_parts):
+			pattern_part = pattern_parts[pattern_idx]
+			if pattern_part == "**":
+				if pattern_idx + 1 == len(pattern_parts):
+					return True
+				for next_path_idx in range(path_idx, len(path_parts) + 1):
+					if match_parts(next_path_idx, pattern_idx + 1):
+						return True
+				return False
+			if path_idx >= len(path_parts) or not fnmatch.fnmatchcase(path_parts[path_idx], pattern_part):
+				return False
+			path_idx += 1
+			pattern_idx += 1
+		return path_idx == len(path_parts)
+
+	return match_parts(0, 0)
+
+
 def entry_matches(entry: str, path: str) -> bool:
 	"""True when a single normalized allowlist entry covers a staged path."""
 	if not entry:
 		return False
 	if any(ch in entry for ch in _GLOB_CHARS):
-		# fnmatchcase keeps matching deterministic across runner OSes.
-		return fnmatch.fnmatchcase(path, entry)
+		return _path_glob_matches(path, entry)
 	if entry.endswith("/"):
 		return path.startswith(entry)
 	return path == entry or path.startswith(entry + "/")
