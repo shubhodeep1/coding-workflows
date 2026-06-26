@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.91,
+  "details": "Several merged changes updated prompt templates, workflow YAML, helper scripts, and contract tests together. Future runs should plan for cross-file consistency checks whenever a mode\u2019s behavior, inputs, or outputs are adjusted, especially in `plan`, `implement`, `review`, or `security-audit` flows.",
+  "fingerprint": "a4eadf22043aafbfa97dccbea52b2f5606fe7049e1166becf3a96ed9b6237676",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28217708175",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28217708175",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3507",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3508",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3511",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3513",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3515",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3509",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3510",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3512",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3514",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3516"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260626044559_36499faeb1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow prompts and contracts need to stay tightly aligned with tests and shell helpers when a mode changes.",
+  "timestamps": {
+    "created_at": "2026-06-26T04:45:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
