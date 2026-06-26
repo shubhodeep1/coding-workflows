@@ -2235,12 +2235,17 @@ def _embedding_search_records(
     if not record_texts:
         return [], model
 
-    record_embeddings = _create_memory_search_embeddings(
-        record_texts,
-        api_key=api_key,
-        model=model,
-        base_url=base_url,
-    )
+    embedding_batch_size = 32
+    record_embeddings: list[list[float]] = []
+    for start_idx in range(0, len(record_texts), embedding_batch_size):
+        record_embeddings.extend(
+            _create_memory_search_embeddings(
+                record_texts[start_idx : start_idx + embedding_batch_size],
+                api_key=api_key,
+                model=model,
+                base_url=base_url,
+            )
+        )
     scored: list[tuple[float, str, str, str, Path, dict[str, Any]]] = []
     for (source, path, record), record_embedding in zip(valid_records, record_embeddings):
         similarity = _cosine_similarity(query_embedding, record_embedding)
@@ -2540,7 +2545,7 @@ def mark_candidate_records_for_prune(
         "marked": marked,
         "already_marked": already_marked,
         "not_found": not_found,
-        "prune_marked_at": resolved_prune_marked_at,
+        "prune_marked_at": resolved_prune_marked_at if marked else None,
     }
 
 

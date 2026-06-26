@@ -266,6 +266,7 @@ def test_prune_is_idempotent_and_blocks_promotion() -> None:
 		payload = json.loads(stdout)
 		assert payload["marked"] == []
 		assert payload["already_marked"] == [record["record_id"]]
+		assert payload["prune_marked_at"] is None
 		assert payload["did_commit"] is False
 
 		promotion = ai_memory_lib.promote_candidates(memory_root, issue_number=77, record_id=record["record_id"])
@@ -398,6 +399,67 @@ def test_search_uses_embedding_ranking_when_openrouter_is_available() -> None:
 	assert payload["method"] == "embedding"
 	assert payload["results"][0]["record"]["record_id"] == target["record_id"]
 	assert payload["results"][1]["record"]["record_id"] == distant["record_id"]
+	telemetry = _extract_ai_memory_telemetry(stderr)
+	assert telemetry[0]["method"] == "embedding"
+
+
+def test_search_chunks_embedding_batches_for_large_record_sets() -> None:
+	with _stub_ai_memory_cli_branch() as store_root, _temporary_env(OPENROUTER_API_KEY="test-openrouter-key"):
+		memory_root = store_root / "ai-memory"
+		target = _write_candidate_record(
+			memory_root,
+			issue_number=151,
+			pr_number=None,
+			summary="Target record for chunked semantic search",
+			created_at=datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+		)
+		for issue_number in range(152, 185):
+			_write_candidate_record(
+				memory_root,
+				issue_number=issue_number,
+				pr_number=None,
+				summary=f"Background record {issue_number}",
+				created_at=datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+			)
+
+		batch_sizes: list[int] = []
+
+		def _fake_embeddings(texts: list[str], *, api_key: str, model: str, base_url: str) -> list[list[float]]:
+			assert api_key == "test-openrouter-key"
+			assert model
+			assert base_url
+			batch_sizes.append(len(texts))
+			results = []
+			for text in texts:
+				lowered = text.lower()
+				if "chunked semantic query" in lowered:
+					results.append([1.0, 0.0])
+				elif target["record_id"] in lowered or "target record for chunked semantic search" in lowered:
+					results.append([0.9, 0.1])
+				else:
+					results.append([0.0, 1.0])
+			return results
+
+		with _patched_module_attrs(ai_memory_lib, _create_memory_search_embeddings=_fake_embeddings):
+			exit_code, stdout, stderr = _run_ai_memory_cli(
+				[
+					"search",
+					"--memory-branch",
+					"ai-memory",
+					"--memory-root",
+					"ai-memory",
+					"--query",
+					"chunked semantic query",
+					"--max",
+					"5",
+				]
+			)
+
+	assert exit_code == 0
+	payload = json.loads(stdout)
+	assert payload["method"] == "embedding"
+	assert payload["results"][0]["record"]["record_id"] == target["record_id"]
+	assert batch_sizes == [1, 32, 2]
 	telemetry = _extract_ai_memory_telemetry(stderr)
 	assert telemetry[0]["method"] == "embedding"
 
