@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation Plan \u2014 Phase L scope-lock label\n\nPlanning ref: `orchestrator/project-3496` @ `e00cfbc359be56993457986b6bb98638d9d67dd4`  \nClarification mapping: no `Q1/Q2/...` batch was issued; `/answer [auto-answered-by-orchestrator]` adds no extra scope beyond the issue text.\n\nAutomation / wiring\n- Extends the existing `/approved` implement entrypoint in `.github/workflows/implement.yml`.\n- No new script, workflow entrypoint, supervisor, or DB work.\n- No `docs/scripts-pending-removal.md` entry needed.\n\nRepresentative existing pattern\n- Reuse the current `files_touched` scope-guard path as the model: `.github/workflows/implement.yml` + `scripts/implement_commit_changes.sh` + `scripts/files_touched_scope_guard.py` + `tests/test_files_touched_scope_guard.py`.\n\n1. Files likely to change\n- `.github/workflows/implement.yml`\n- `scripts/implement_commit_changes.sh`\n- `scripts/files_touched_scope_guard.py`\n- `prompts/mode-implement.txt`\n- `README.md`\n- `agents.md`\n- `tests/test_files_touched_scope_guard.py`\n- `tests/test_implement_post_codex_recovery.py`\n\n2. Functions / modules to implement\n- In `implement.yml`\u2019s issue-metadata path, extract one active `ai:scope:<glob>` label from cached `ISSUE_META_FILE`, gate it behind a new repo var `SCOPE_LOCK_LABEL_ENABLED`, and export a runtime value such as `ISSUE_SCOPE_LOCK_GLOB`.\n- In `Build implementation context`, append an \u201cactive scope lock\u201d section so the implement prompt sees the glob without adding a new prompt placeholder/contract.\n- In `prompts/mode-implement.txt`, add a narrow scope-lock clause near the existing scope/sibling-discipline text: when an active scope lock exists, stay inside it and emit exact `BLOCKED: scope-lock-violation file=<path>` if the needed fix is outside the glob.\n- In `scripts/files_touched_scope_guard.py`, add a reusable explicit-allowlist/label-glob path that reuses `normalize_allowlist`, `entry_matches`, and `path_in_scope` instead of adding a second matcher.\n- In `scripts/implement_commit_changes.sh`, add a post-commit verifier over the committed pathset (`HEAD` diff tree). Run it after `git commit` but before `did_commit=true`; on violation, emit `scope_violation_*` outputs, roll back the local unpushed commit, and exit non-zero so push/PR creation never runs.\n- In `implement.yml`\u2019s existing scope-block failure handling, generalize the `ai:scope-blocked` comment/alert copy so it can explain label-glob violations as well as `files_touched` violations.\n\n3. Data structures affected\n- New repo variable: `SCOPE_LOCK_LABEL_ENABLED` with default `false`.\n- New runtime/env value: `ISSUE_SCOPE_LOCK_GLOB` (blank when disabled/absent).\n- Existing `scope_violation_*` outputs may need a source/reason distinction so failure copy can say whether the block came from `files_touched` or `ai:scope:<glob>`.\n- `IMPLEMENTATION_CONTEXT_FILE` gains one new section for the active scope lock.\n- No schema / AI-memory contract change expected.\n\n4. API / interface changes\n- New optional issue label convention: `ai:scope:<glob>`.\n- New documented repo var: `SCOPE_LOCK_LABEL_ENABLED=false`.\n- No external API changes.\n- Do **not** add `ai:scope:<glob>` to `.github/ai/label_contract.v1.json` or `scripts/label_helpers.sh`; this phase should not become label-contract churn.\n\n5. Codebase conflicts to note\n- Current docs say `.github/ai/label_contract.v1.json` is the single source of truth for label definitions, but the requested `ai:scope:<glob>` is dynamic and cannot be enumerated there; docs must explicitly carve out that exception.\n- Current implement scope enforcement is pre-commit (`files_touched`) only; there is no post-commit scope-lock verifier today.\n- Current implement prompt/output contract is \u201crepository changes only\u201d; there is no workflow parser for `BLOCKED:` lines, so workflow-side verification/rollback must remain authoritative.\n\n6. Risks / edge cases\n- Multiple `ai:scope:` labels on one issue.\n- Empty/malformed glob after the prefix.\n- Shell/glob expansion if the label value is not treated strictly as data.\n- Deleted/renamed paths still need to be checked.\n- Rollback must happen before `Push branch`.\n- Default-off behavior must remain unchanged while `SCOPE_LOCK_LABEL_ENABLED=false`.\n\n7. Testing considerations\n- Keep coverage focused in existing guard/commit-helper suites.\n- Extend `tests/test_files_touched_scope_guard.py` for the reused matcher path (explicit label-glob cases).\n- Extend the existing `implement_commit_changes.sh` harness in `tests/test_implement_post_codex_recovery.py` to prove: enabled scope lock + out-of-scope committed path => non-zero exit, `scope_violation_*` outputs, and local commit rollback before push.\n- Add/adjust one prompt-text assertion so the exact `BLOCKED: scope-lock-violation file=<path>` wording stays pinned.\n- Targeted verification: `python3 tests/test_files_touched_scope_guard.py` and `python3 tests/test_implement_post_codex_recovery.py`.\n\nAssumptions\n- The exact `BLOCKED: scope-lock-violation file=<path>` requirement applies to the implement prompt, not to a new GitHub workflow protocol.\n- The label-based scope lock is additive to existing `files_touched` enforcement, not a replacement.\n- Conservative handling is preferred for multi-label/malformed-label cases.\n\nMissing-context notes\n- The issue does not specify how to combine multiple `ai:scope:` labels; implementation should choose an explicit conservative behavior rather than silently merging them.\n\nPLAN_SELF_CHECK: WARNING: The new `BLOCKED:` prompt escape hatch cannot be relied on by itself because the implement workflow does not natively interpret blocker text; the post-commit verifier/rollback must be the source of truth.\nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "aed49e67e5b0f85992df2a87227533c58d8f3109d9363de7ed05aafe3d4b8124",
+  "lineage": {
+    "issue_number": 3515,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28211835880",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28211835880",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3515"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20260626015216_d8a57c8fbc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3515,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "28211835880"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #3515",
+  "timestamps": {
+    "created_at": "2026-06-26T01:52:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
