@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/lessons_learned_record.v1.json",
+  "title": "LessonsLearnedRecordV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "record_id",
+    "schema_version",
+    "issue_number",
+    "pr_number",
+    "phase",
+    "lesson_kind",
+    "lesson_text",
+    "tags",
+    "discovered_at"
+  ],
+  "properties": {
+    "record_id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_.:-]+$"
+    },
+    "schema_version": {
+      "type": "string",
+      "const": "lessons_learned_record.v1"
+    },
+    "issue_number": {
+      "type": ["integer", "null"],
+      "minimum": 1
+    },
+    "pr_number": {
+      "type": ["integer", "null"],
+      "minimum": 1
+    },
+    "phase": {
+      "type": "string",
+      "enum": ["review_autofix", "implement", "judge"]
+    },
+    "lesson_kind": {
+      "type": "string",
+      "enum": [
+        "out_of_plan_fix",
+        "unexpected_judge_verdict",
+        "review_finding_outside_plan_scope"
+      ]
+    },
+    "lesson_text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 12000
+    },
+    "tags": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      }
+    },
+    "discovered_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

@@ -102,6 +102,7 @@ analysis/last_collection_timestamp.txt
 analysis/recommendation-processing-report.md
 analysis/validation-selftest-status.json
 analysis/workflow-optimization-2026-06-25.md
+analysis/workflow-optimization-2026-06-26.md
 codex.md
 docs/INVENTORY.md
 docs/ai-tools-future-improvements.md
@@ -216,6 +217,7 @@ prompts/references/validate-output-contract.txt
 prompts/references/verification-loop.txt
 prompts/review-consolidator.txt
 prompts/review-reviewer-checklist.txt
+pyproject.toml
 scripts/ai_context_utils.py
 scripts/ai_labels.py
 scripts/ai_memory.py
@@ -438,6 +440,7 @@ tests/prompt_size_budget.py
 tests/test_actions_runs_fetch_unconfirmed_warning.py
 tests/test_ai_label_precreation_contract.py
 tests/test_ai_labels.py
+tests/test_ai_memory_cli.py
 tests/test_ai_memory_git_env_isolation.py
 tests/test_ai_memory_processed_command_entry.py
 tests/test_ai_memory_push_retry_backoff.py

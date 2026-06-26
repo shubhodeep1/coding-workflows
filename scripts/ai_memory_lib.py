@@ -60,6 +60,7 @@ except ModuleNotFoundError:
 _log = logging.getLogger(__name__)
 
 MEMORY_RECORD_SCHEMA_VERSION = "memory_record.v1"
+LESSONS_LEARNED_RECORD_SCHEMA_VERSION = "lessons_learned_record.v1"
 RUN_LEDGER_SCHEMA_VERSION = "run_ledger_entry.v1"
 TASK_LINEAGE_SCHEMA_VERSION = "task_lineage.v1"
 PROCESSED_COMMAND_SCHEMA_VERSION = "processed_command_entry.v1"
@@ -87,6 +88,12 @@ ALLOWED_CATEGORIES = {
 }
 
 ALLOWED_SCOPE_LEVELS = {"global", "task", "run"}
+ALLOWED_LESSONS_LEARNED_PHASES = {"review_autofix", "implement", "judge"}
+ALLOWED_LESSONS_LEARNED_KINDS = {
+    "out_of_plan_fix",
+    "unexpected_judge_verdict",
+    "review_finding_outside_plan_scope",
+}
 
 SENSITIVE_CATEGORIES = {"incidents"}
 SENSITIVE_KEYWORDS = {
@@ -232,24 +239,26 @@ def resolve_memory_reference_source_dir(base_dir: Path, memory_root_relative: st
 
 
 def _sync_memory_reference_files(source_root: Path, destination_root: Path) -> None:
-    # Resolve schemas dir: prefer the consumer-repo source tree, then fall
-    # back to the workflow-source clone advertised via SUPPORT_AI_MEMORY_DIR.
-    # Symmetric with the config resolution below; protects validation when
-    # the consumer repo does not vendor ai-memory/schemas/.
+    # Resolve schemas dir: prefer the consumer-repo source tree, then backfill
+    # any missing schema files from the workflow-source clone advertised via
+    # SUPPORT_AI_MEMORY_DIR. This preserves consumer-owned schemas while still
+    # letting staged support scripts validate against additive schema files not
+    # yet vendored into the consumer repo.
     source_schemas: Path | None = None
+    support_schemas: Path | None = None
     if source_root.exists():
         candidate_schemas = source_root / "schemas"
         if candidate_schemas.exists():
             source_schemas = candidate_schemas
-    if source_schemas is None:
-        support_dir = os.environ.get("SUPPORT_AI_MEMORY_DIR")
-        if support_dir:
-            candidate_support_schemas = Path(support_dir) / "schemas"
-            if candidate_support_schemas.exists():
-                source_schemas = candidate_support_schemas
+    support_dir = os.environ.get("SUPPORT_AI_MEMORY_DIR")
+    if support_dir:
+        candidate_support_schemas = Path(support_dir) / "schemas"
+        if candidate_support_schemas.exists():
+            support_schemas = candidate_support_schemas
 
+    copied_schema_names: set[str] = set()
+    destination_schemas = destination_root / "schemas"
     if source_schemas is not None:
-        destination_schemas = destination_root / "schemas"
         for schema_file in sorted(source_schemas.glob("*.json")):
             if not schema_file.is_file():
                 continue
@@ -257,6 +266,21 @@ def _sync_memory_reference_files(source_root: Path, destination_root: Path) -> N
             destination_file = destination_schemas / schema_file.name
             if destination_file.is_symlink():
                 raise MemoryValidationError(f"Refusing to overwrite symlinked schema file: {destination_file}")
+            shutil.copy2(schema_file, destination_file)
+            copied_schema_names.add(schema_file.name)
+
+    if support_schemas is not None:
+        for schema_file in sorted(support_schemas.glob("*.json")):
+            if not schema_file.is_file():
+                continue
+            if schema_file.name in copied_schema_names:
+                continue
+            destination_schemas.mkdir(parents=True, exist_ok=True)
+            destination_file = destination_schemas / schema_file.name
+            if destination_file.is_symlink():
+                raise MemoryValidationError(f"Refusing to overwrite symlinked schema file: {destination_file}")
+            if destination_file.exists():
+                continue
             shutil.copy2(schema_file, destination_file)
 
     # Resolve retrieval_profiles.v1.json: prefer the consumer-repo source
@@ -437,6 +461,10 @@ def _schema_file(memory_root: Path, name: str) -> Path:
 
 def validate_memory_record(record: dict[str, Any], memory_root: Path) -> None:
     _validate_with_schema_file(record, _schema_file(memory_root, "memory_record.v1.json"))
+
+
+def validate_lessons_learned_record(record: dict[str, Any], memory_root: Path) -> None:
+    _validate_with_schema_file(record, _schema_file(memory_root, "lessons_learned_record.v1.json"))
 
 
 def validate_run_ledger_entry(entry: dict[str, Any], memory_root: Path) -> None:
@@ -621,6 +649,12 @@ def _record_path_for_candidate(memory_root: Path, record: dict[str, Any]) -> Pat
     return memory_root / "tasks" / issue_key / "candidates" / f"{record['record_id']}.json"
 
 
+def _lessons_learned_record_path(memory_root: Path, record: dict[str, Any]) -> Path:
+    issue_number = record.get("issue_number")
+    issue_key = f"issue-{int(issue_number)}" if issue_number else "issue-unscoped"
+    return memory_root / "tasks" / issue_key / "lessons_learned" / f"{record['record_id']}.json"
+
+
 def _record_path_for_canonical(memory_root: Path, record: dict[str, Any]) -> Path:
     category = sanitize_segment(str(record.get("category") or "uncategorized"), "uncategorized")
     return memory_root / "global" / "canonical" / category / f"{record['record_id']}.json"
@@ -778,6 +812,37 @@ def _normalize_optional_positive_int(value: Any, field_name: str) -> int | None:
     if value is None or str(value).strip() == "":
         return None
     return _validate_positive_int_field(value, field_name)
+
+
+def _normalize_lessons_learned_phase(value: Any) -> str:
+    normalized = _normalize_required_text(value, "phase").lower()
+    if normalized not in ALLOWED_LESSONS_LEARNED_PHASES:
+        raise MemoryValidationError(f"Unsupported lessons-learned phase: {value}")
+    return normalized
+
+
+def _normalize_lessons_learned_kind(value: Any) -> str:
+    normalized = _normalize_required_text(value, "lesson_kind").lower()
+    if normalized not in ALLOWED_LESSONS_LEARNED_KINDS:
+        raise MemoryValidationError(f"Unsupported lessons-learned kind: {value}")
+    return normalized
+
+
+def _normalize_lessons_learned_tags(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise MemoryValidationError("tags must be an array")
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        text = _normalize_required_text(item, "tags[]")[:256]
+        if text in seen:
+            continue
+        seen.add(text)
+        normalized.append(text)
+    return normalized
 
 
 def _normalize_datetime_utc(value: Any, field_name: str) -> str:
@@ -1708,6 +1773,49 @@ def record_candidate(
     validate_memory_record(record, memory_root)
     _atomic_write_json(_record_path_for_candidate(memory_root, record), record)
     return record
+
+
+def record_lessons_learned(
+    memory_root: Path,
+    *,
+    issue_number: int | None,
+    pr_number: int | None,
+    phase: str,
+    lessons: list[dict[str, Any]],
+    discovered_at: str | None = None,
+) -> list[dict[str, Any]]:
+    ensure_memory_layout(memory_root)
+    if not isinstance(lessons, list) or not lessons:
+        raise MemoryValidationError("lessons must be a non-empty array")
+
+    normalized_issue_number = _normalize_optional_positive_int(issue_number, "issue_number")
+    normalized_pr_number = _normalize_optional_positive_int(pr_number, "pr_number")
+    normalized_phase = _normalize_lessons_learned_phase(phase)
+    normalized_discovered_at = (
+        _normalize_datetime_utc(discovered_at, "discovered_at") if discovered_at is not None else utc_now_iso()
+    )
+
+    records: list[dict[str, Any]] = []
+    for lesson in lessons:
+        if not isinstance(lesson, dict):
+            raise MemoryValidationError("each lesson must be a JSON object")
+
+        record = {
+            "record_id": make_record_id("lesson"),
+            "schema_version": LESSONS_LEARNED_RECORD_SCHEMA_VERSION,
+            "issue_number": normalized_issue_number,
+            "pr_number": normalized_pr_number,
+            "phase": normalized_phase,
+            "lesson_kind": _normalize_lessons_learned_kind(lesson.get("lesson_kind")),
+            "lesson_text": _normalize_required_text(lesson.get("lesson_text"), "lesson_text")[:12000],
+            "tags": _normalize_lessons_learned_tags(lesson.get("tags")),
+            "discovered_at": normalized_discovered_at,
+        }
+        validate_lessons_learned_record(record, memory_root)
+        _atomic_write_json(_lessons_learned_record_path(memory_root, record), record)
+        records.append(record)
+
+    return records
 
 
 def _load_canonical_records(memory_root: Path) -> list[dict[str, Any]]:
