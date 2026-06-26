@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Workflow prompts and contracts need to stay tightly aligned with tests and shell helpers when a mode changes.",
   "timestamps": {
     "created_at": "2026-06-26T04:45:59Z",
