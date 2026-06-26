@@ -137,6 +137,9 @@ def test_lessons_learned_writer_persists_issue_scoped_schema_valid_record() -> N
 		ai_memory_lib.ensure_memory_layout(memory_root)
 		shutil.copytree(REPO_ROOT / "ai-memory" / "schemas", memory_root / "schemas", dirs_exist_ok=True)
 
+		long_tag = "nested/" + ("segment-" * 40)
+		long_lesson_text = "Validated autofix touched files outside the original change set. " + ("x" * 13000)
+
 		records = ai_memory_lib.record_lessons_learned(
 			memory_root,
 			issue_number=42,
@@ -145,8 +148,8 @@ def test_lessons_learned_writer_persists_issue_scoped_schema_valid_record() -> N
 			lessons=[
 				{
 					"lesson_kind": "out_of_plan_fix",
-					"lesson_text": "Validated autofix touched a file outside the original change set.",
-					"tags": ["scripts/review_apply_fixes.sh", "tests/test_memory_record_schema.py"],
+					"lesson_text": long_lesson_text,
+					"tags": [long_tag, "tests/test_memory_record_schema.py"],
 				}
 			],
 		)
@@ -165,7 +168,8 @@ def test_lessons_learned_writer_persists_issue_scoped_schema_valid_record() -> N
 		assert persisted["pr_number"] == 7
 		assert persisted["phase"] == "review_autofix"
 		assert persisted["lesson_kind"] == "out_of_plan_fix"
-		assert persisted["tags"] == ["scripts/review_apply_fixes.sh", "tests/test_memory_record_schema.py"]
+		assert persisted["lesson_text"] == long_lesson_text[:12000]
+		assert persisted["tags"] == [long_tag[:256], "tests/test_memory_record_schema.py"]
 
 
 def main() -> int:

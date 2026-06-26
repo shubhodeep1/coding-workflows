@@ -837,7 +837,7 @@ def _normalize_lessons_learned_tags(value: Any) -> list[str]:
     normalized: list[str] = []
     seen: set[str] = set()
     for item in value:
-        text = _normalize_required_text(item, "tags[]")
+        text = _normalize_required_text(item, "tags[]")[:256]
         if text in seen:
             continue
         seen.add(text)
@@ -1807,7 +1807,7 @@ def record_lessons_learned(
             "pr_number": normalized_pr_number,
             "phase": normalized_phase,
             "lesson_kind": _normalize_lessons_learned_kind(lesson.get("lesson_kind")),
-            "lesson_text": _normalize_required_text(lesson.get("lesson_text"), "lesson_text"),
+            "lesson_text": _normalize_required_text(lesson.get("lesson_text"), "lesson_text")[:12000],
             "tags": _normalize_lessons_learned_tags(lesson.get("tags")),
             "discovered_at": normalized_discovered_at,
         }
