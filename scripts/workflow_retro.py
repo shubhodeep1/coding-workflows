@@ -6,10 +6,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import statistics
 import subprocess
 import sys
+import time
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -34,6 +36,14 @@ MERGED_PR_LIST_LIMIT = 20
 REVIEW_ITERATION_LIST_LIMIT = 20
 STALL_REASON_LIMIT = 5
 WORKFLOW_FAMILY_LIMIT = 8
+GH_CLI_MAX_ATTEMPTS = 5
+GH_CLI_RETRYABLE_PATTERN = re.compile(
+    r"rate limit|abuse detection|secondary rate|http 429|http 5[0-9]{2}|"
+    r"bad gateway|timed out|timeout|connection reset|connection refused|tls handshake timeout",
+    re.IGNORECASE,
+)
+GH_CLI_RATE_LIMIT_PATTERN = re.compile(r"rate limit|abuse detection|secondary rate|http 429", re.IGNORECASE)
+GH_CLI_RATE_LIMIT_RESET_PATTERN = re.compile(r"^x-ratelimit-reset:\s*(\d+)\s*$", re.IGNORECASE | re.MULTILINE)
 
 
 def _parse_iso8601(value: str | None) -> datetime | None:
@@ -94,29 +104,72 @@ def _week_label(window_end_utc: datetime) -> str:
     return f"{iso_year}-W{iso_week:02d}"
 
 
-def _gh_json(args: list[str], *, stdin_text: str | None = None) -> Any:
+def _gh_error_text(exc: subprocess.CalledProcessError) -> str:
+    stderr = (exc.stderr or "").strip()
+    stdout = (exc.stdout or "").strip()
+    return stderr or stdout or f"gh exited with {exc.returncode}"
+
+
+def _gh_rate_limit_wait_seconds() -> int:
     try:
         proc = subprocess.run(
-            ["gh", *args],
-            input=stdin_text,
+            ["gh", "api", "-i", "/rate_limit"],
             capture_output=True,
             check=True,
             text=True,
             encoding="utf-8",
         )
-    except FileNotFoundError as exc:
-        raise RuntimeError("gh CLI not found in PATH") from exc
-    except subprocess.CalledProcessError as exc:
-        stderr = (exc.stderr or "").strip()
-        raise RuntimeError(stderr or f"gh exited with {exc.returncode}") from exc
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return 30
 
-    stdout = (proc.stdout or "").strip()
-    if not stdout:
-        return None
+    match = GH_CLI_RATE_LIMIT_RESET_PATTERN.search(proc.stdout or "")
+    if match is None:
+        return 30
     try:
-        return json.loads(stdout)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"gh returned invalid JSON: {exc}") from exc
+        reset_epoch = int(match.group(1))
+    except ValueError:
+        return 30
+
+    wait_seconds = max(1, reset_epoch - int(time.time()) + 1)
+    return min(wait_seconds, 600)
+
+
+def _gh_retry_delay_seconds(attempt: int, error_text: str) -> int:
+    if GH_CLI_RATE_LIMIT_PATTERN.search(error_text):
+        return _gh_rate_limit_wait_seconds()
+    return min(2 ** max(0, attempt - 1), 30)
+
+
+def _gh_json(args: list[str], *, stdin_text: str | None = None) -> Any:
+    last_error = "gh returned no output"
+    for attempt in range(1, GH_CLI_MAX_ATTEMPTS + 1):
+        try:
+            proc = subprocess.run(
+                ["gh", *args],
+                input=stdin_text,
+                capture_output=True,
+                check=True,
+                text=True,
+                encoding="utf-8",
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError("gh CLI not found in PATH") from exc
+        except subprocess.CalledProcessError as exc:
+            last_error = _gh_error_text(exc)
+            if attempt < GH_CLI_MAX_ATTEMPTS and GH_CLI_RETRYABLE_PATTERN.search(last_error):
+                time.sleep(_gh_retry_delay_seconds(attempt, last_error))
+                continue
+            raise RuntimeError(last_error) from exc
+
+        stdout = (proc.stdout or "").strip()
+        if not stdout:
+            return None
+        try:
+            return json.loads(stdout)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"gh returned invalid JSON: {exc}") from exc
+
+    raise RuntimeError(last_error)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -343,9 +396,11 @@ query($searchQuery: String!, $after: String) {
 }
 """.strip()
 
+    # GitHub search date qualifiers are day-granular, so extend the end date by
+    # one day and keep the exact timestamp bound in the mergedAt post-filter.
     search_query = (
         f"repo:{repo} is:pr is:merged "
-        f"merged:{since_utc.date().isoformat()}..{until_utc.date().isoformat()} sort:updated-desc"
+        f"merged:{since_utc.date().isoformat()}..{(until_utc + timedelta(days=1)).date().isoformat()} sort:updated-desc"
     )
 
     merged_prs: list[dict[str, Any]] = []

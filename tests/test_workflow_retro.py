@@ -291,9 +291,51 @@ def test_main_fails_open_on_pr_and_ai_memory_reads() -> None:
 	assert "Warning: AI memory read failed open" in markdown
 
 
+def test_fetch_merged_pull_requests_extends_search_end_day_but_post_filters_exact_window() -> None:
+	captured: dict[str, str] = {}
+
+	def _fake_gh_json(args, *, stdin_text=None):
+		assert stdin_text is None
+		for idx, item in enumerate(args):
+			if item == "-f" and idx + 1 < len(args) and args[idx + 1].startswith("searchQuery="):
+				captured["search_query"] = args[idx + 1].split("=", 1)[1]
+		return {
+			"data": {
+				"search": {
+					"pageInfo": {"hasNextPage": False, "endCursor": None},
+					"nodes": [
+						{
+							"number": 11,
+							"title": "Within window",
+							"url": "https://github.com/owner/repo/pull/11",
+							"mergedAt": "2026-06-26T08:59:59Z",
+						},
+						{
+							"number": 12,
+							"title": "After window",
+							"url": "https://github.com/owner/repo/pull/12",
+							"mergedAt": "2026-06-26T09:00:01Z",
+						},
+					],
+				}
+			}
+		}
+
+	with _patched_module_attrs(workflow_retro, _gh_json=_fake_gh_json):
+		results = workflow_retro.fetch_merged_pull_requests(
+			repo="owner/repo",
+			since_utc=workflow_retro._parse_iso8601("2026-06-19T09:00:00Z"),
+			until_utc=workflow_retro._parse_iso8601("2026-06-26T09:00:00Z"),
+		)
+
+	assert captured["search_query"] == "repo:owner/repo is:pr is:merged merged:2026-06-19..2026-06-27 sort:updated-desc"
+	assert [item["number"] for item in results] == [11]
+
+
 def main() -> int:
 	test_main_writes_deterministic_weekly_retro_context()
 	test_main_fails_open_on_pr_and_ai_memory_reads()
+	test_fetch_merged_pull_requests_extends_search_end_day_but_post_filters_exact_window()
 	return 0
 
 
