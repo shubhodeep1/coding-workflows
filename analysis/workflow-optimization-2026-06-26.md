@@ -324,3 +324,111 @@ Note: the deep-dive bundle is biased toward `errors/`, `slow/`, and `recent/`; t
 | Total cancelled runtime | 21806 s |
 | Avg cancelled runtime | 1677.4 s |
 | Largest cancellations | `28165172221` 3507s; `28189741718` 3415s; `28195801261` 3274s; `28173616084` 3114s |
+
+## Deep Audit — Workflows & Scripts (2026-06-26)
+
+### Section 1: Bug & Correctness Sweep
+
+I audited all `.github/workflows/*.yml` and `scripts/*.sh|*.py`; to avoid duplicating the current in-progress report, I omitted the already-documented stale-review, review-tiering, post-merge validation, `GIT_WORK_TREE`, Ruff, validation-refresh, and OpenRouter-telemetry items.
+
+#### BUG-001
+- **File path**: `scripts/tg_helpers.sh:167-205,240-276`
+- **Severity**: Medium
+- **Category tag**: `bug`
+- **Description**: `tg_store_msg_id()` and `tg_store_phase_msg_id()` both implement a read-comment → mutate-body → `PATCH` flow. If two notifications for the same issue/phase run concurrently, both can read the same old marker comment, append different Telegram IDs locally, and then race to overwrite the same GitHub comment; the last `PATCH` wins and silently drops the earlier ID. The cleanup paths later trust those stored IDs (`scripts/tg_helpers.sh:330-368,399-439`), so a lost update can strand Telegram messages and/or leave stale tracking comments behind.
+- **Recommended fix**: Stop coalescing multiple IDs into one mutable marker comment. The lowest-risk change is one tracking comment per message ID/phase ID (the cleanup loops already scan all matching comments), or add an optimistic re-read/retry loop before `PATCH` so conflicting writes are retried instead of overwritten.
+
+#### SEC-001
+- **File path**: `scripts/issue_attachment_bundle.py:129-171`
+- **Severity**: Medium
+- **Category tag**: `security`
+- **Description**: `_download()` allows both `http` and `https`, does not reject private/loopback hostnames before `urlopen`, and never validates the final redirect target after redirects complete. The safer attachment fetch path in `scripts/ai_context_utils.py:361-409` already rejects non-HTTPS URLs, private/loopback hosts, and redirect-to-private targets. This bundler is only syntax-checked in CI today (`.github/workflows/ci.yml:127-147`), so I did not prove a live workflow execution path. [NEEDS VERIFICATION]
+- **Recommended fix**: Replace `_download()` with a thin wrapper around `ai_context_utils.fetch_attachment()`, or port the exact hostname and post-redirect checks from `scripts/ai_context_utils.py:361-409` before any bytes are downloaded.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### API-001
+- **File path**: `scripts/review_rb_judge.sh:735-787`
+- **Severity**: Medium
+- **Category tag**: `api-batching`
+- **Description**: The judge first does one GraphQL call that fetches only closing-issue numbers (`735-740`), then loops over those numbers and calls `_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}"` until it finds a non-empty body while also harvesting labels (`772-786`). That is an N+1 hydration pattern in a latency-sensitive review-blocked path.
+- **Current call count**: 1 GraphQL call + up to `N` REST issue GETs (`N` = linked issues examined, capped at 50 by the upstream GraphQL query).
+- **Proposed call count**: 1 GraphQL call.
+- **Batching pattern to extend**: Promote the alias-based GraphQL hydration pattern already implemented in `scripts/review_collect_pr_metadata.sh:70-172` into a shared helper (ideally under `scripts/gh_helpers.sh`) so the judge can reuse it.
+- **Recommended fix**: Extend the initial GraphQL query to fetch `number`, `body`, and label names for each closing issue, then choose `FIRST_ISSUE`, `FIRST_ISSUE_BODY`, and `FIRST_ISSUE_LABELS_JSON` locally with no per-issue REST loop.
+
+#### API-002
+- **File path**: `scripts/pr_checks_lib.sh:67-119,143-178`
+- **Severity**: Medium
+- **Category tag**: `api-redundancy`
+- **Description**: `_pr_required_check_names_for_base()` explicitly issues one branch-protection GET per invocation (`67-71`), and `_pr_checks_completed()` calls it every time a base ref is supplied (`174-178`). In one `scripts/orchestrate_poll_process.sh` shell, the same helper is invoked at `7196`, `15095`, `15152`, `15419`, and `15514` against the same repo/base branch, so identical protection data can be re-fetched up to five times in one poll cycle; `scripts/review_rb_judge.sh:2037-2039` does the same in its own process.
+- **Current call count**: 1 protection GET per `_pr_checks_completed(..., base_ref)` call; currently up to 5 identical GETs in one orchestrator cycle, plus 1 more in the standalone judge.
+- **Proposed call count**: 1 GET per distinct `repo/base_ref` per process.
+- **Batching pattern to extend**: Extend the within-process state reuse already inherent in `scripts/orchestrate_poll_process.sh` by memoizing resolved required-check CSVs inside `pr_checks_lib.sh`.
+- **Recommended fix**: Add an associative-array or temp-file cache keyed by `${repo}:${base_ref}` inside `pr_checks_lib.sh`, and return the cached branch-protection contexts on subsequent calls in the same process.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001
+- **File path**: `.github/workflows/review_autofix.yml:4364-4398,4555-4588,5427-5445`
+- **Severity**: Low
+- **Category tag**: `duplication`
+- **Description**: `review_autofix.yml` carries three inline late-stage fallback implementations of `ensure_label_exists()` / `set_issue_phase_label_resilient()`: one for `ai:ready-to-merge`, one for `ai:review-blocked` after judge exhaustion, and one for workflow-failure labeling. The bodies are nearly identical but already diverge in label color/description and warning text, which raises drift risk in the most failure-prone part of the workflow.
+- **Recommended fix**: Extract one shared fallback helper into `scripts/label_helpers.sh` (or a dedicated `scripts/review_label_fallback.sh`) with a signature like `set_issue_phase_label_resilient <issue_number> <target_label> <repo> [color] [description]`, and update all three late-stage callers to use it.
+
+#### DUP-002
+- **File path**: `.github/workflows/review_autofix.yml:4401-4423,4591-4613,5450-5471`
+- **Severity**: Low
+- **Category tag**: `duplication`
+- **Description**: Three separate late-stage branches re-implement the same linked-issue resolution ladder: use `LINKED_ISSUES_JSON`, else `LINKED_ISSUE_FALLBACK_NUMBERS_JSON`, else mine `PR_META_FILE` / PR title+body for repo-scoped issue refs. Because the resolver is copied rather than shared, any future parsing or fallback fix must be kept in sync across ready-to-merge, review-blocked, and workflow-failure branches.
+- **Recommended fix**: Move this logic into `scripts/review_collect_pr_metadata.sh` or a new `scripts/linked_issue_helpers.sh` helper with an interface like `resolve_linked_issue_numbers <repo> <pr_number> <pr_meta_file>`, and have all three branches consume the same function.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+#### EXPR-001
+- **File path**: `.github/workflows/memory_maintenance.yml:45-391`
+- **Severity**: Medium
+- **Category tag**: `expression-limit`
+- **Description**: The `Run repository learnings extraction` step embeds a long shell wrapper plus two inline Python heredocs and several `${{ github.* }}` interpolations in one `run:` block. A raw step-template scan puts this block at about `15,168` characters from `run:` line 45 through line 391, leaving roughly `5,832` characters of headroom before GitHub’s `21,000`-character expression ceiling. That is above the requested `15,000`-character medium-risk threshold and close enough to prior repo history to be fragile.
+- **Recommended fix**: Extract the two inline Python programs into `scripts/` (for example `scripts/memory_extract_sources.py` and `scripts/memory_extract_learnings.py`) and keep the workflow step as a short shell wrapper that passes file paths and env vars.
+
+No other interpolated `run:` block in the audited workflows exceeded `15,000` characters, and no workflow file exceeded the `800 KB` warning threshold; the largest current workflow is `.github/workflows/review_autofix.yml` at `346,366` characters.
+
+### Section 5: Cross-Cutting Concerns
+
+#### CONSIST-001
+- **File path**: `scripts/tg_helpers.sh:169-205,241-276,332-368,401-439`
+- **Severity**: Low
+- **Category tag**: `consistency`
+- **Description**: `tg_helpers.sh` uses `curl_gh_api` for its read paths (`169-172`, `241-244`, `332-335`, `401-404`) but drops to raw `curl` for the corresponding POST/PATCH/DELETE writes (`175-179`, `194-198`, `201-205`, `246-250`, `266-270`, `272-276`, `364-368`, `435-439`). That bypasses the rate-limit/header-aware retry logic in `scripts/gh_helpers.sh:630-679`, and the trailing `|| true` makes transient write failures invisible.
+- **Recommended fix**: Route all GitHub REST writes in this helper through `curl_gh_api` (or a thin `gh_helpers.sh` wrapper for issue-comment create/update/delete) so reads and writes share the same retry and rate-limit handling.
+
+#### DEBT-001
+- **File path**: `scripts/comprehensive_test_and_release_gh_api.sh:3-68`
+- **Severity**: Medium
+- **Category tag**: `tech-debt`
+- **Description**: This script reimplements GitHub API retry as `gh_api_safe*`, but it only treats stderr containing `rate limit` as retriable and otherwise returns failure immediately. That duplicates a weaker version of functionality already centralized in `scripts/gh_helpers.sh:391-679` (permanent-failure classification, exponential backoff, reset-aware waits, JSON-safe wrappers). It is sourced in `.github/workflows/comprehensive-test-and-release.yml:56,287`, `.github/workflows/test-and-mark-stable.yml:495,616,822,1298,2535`, and `scripts/dispatch_and_watch_workflow_run.sh:5-7`, so GitHub failures are handled inconsistently across release/test flows.
+- **Recommended fix**: Retire `gh_api_safe*` in favor of sourcing `scripts/gh_helpers.sh` and keeping only truly workflow-specific convenience wrappers (for example, a thin `list_dispatch_runs()` around `gh_retry gh api ...`).
+
+No `TODO`, `FIXME`, or `HACK` markers were present under `.github/workflows` or `scripts`. Targeted shellcheck only surfaced low-signal SC2034/SC1007 notes, not a stronger standalone shellcheck defect beyond the findings above.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 0 | — |
+| Medium | 6 | BUG-001, SEC-001, API-001, API-002, EXPR-001, DEBT-001 |
+| Low | 3 | DUP-001, DUP-002, CONSIST-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 0 | Small |
+| API call optimization | 2-3 | Medium |
+| Code modularization | 2-4 | Medium |
+| Expression size reduction | 3 | Medium |
+| Medium/Low fixes | 4-6 | Medium |
