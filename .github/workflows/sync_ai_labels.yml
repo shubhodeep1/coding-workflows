@@ -116,27 +116,27 @@ jobs:
           fi
 
           if [ ! -s "${RESULT_JSON}" ]; then
-            python3 - <<'PY' "${RESULT_JSON}" "${rc}"
-            import json
-            import sys
-            from pathlib import Path
+          python3 - <<'PY' "${RESULT_JSON}" "${rc}"
+          import json
+          import sys
+          from pathlib import Path
 
-            result_path = Path(sys.argv[1])
-            exit_code = int(sys.argv[2])
-            payload = {
-                "created": 0,
-                "updated": 0,
-                "unchanged": 0,
-                "errors": [
-                    {
-                        "label": "*",
-                        "action": "command",
-                        "message": f"sync-labels produced no JSON output (exit={exit_code})",
-                    }
-                ],
-            }
-            result_path.write_text(json.dumps(payload, ensure_ascii=True, sort_keys=True), encoding="utf-8")
-            PY
+          result_path = Path(sys.argv[1])
+          exit_code = int(sys.argv[2])
+          payload = {
+              "created": 0,
+              "updated": 0,
+              "unchanged": 0,
+              "errors": [
+                  {
+                      "label": "*",
+                      "action": "command",
+                      "message": f"sync-labels produced no JSON output (exit={exit_code})",
+                  }
+              ],
+          }
+          result_path.write_text(json.dumps(payload, ensure_ascii=True, sort_keys=True), encoding="utf-8")
+          PY
           fi
 
           echo "result_json=${RESULT_JSON}" >> "${GITHUB_OUTPUT}"
