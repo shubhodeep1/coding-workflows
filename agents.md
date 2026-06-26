@@ -455,6 +455,10 @@ log analysis pipeline, semantic cache scope, wrapper pin policy) live in
 `./probably_unnecessary_but_read_if_stuck.md`. Read it only when needed —
 it is intentionally large.
 
+Future `CHANGELOG.md` entries also follow `docs/changelog-style.md`, which is
+the contributor-facing guide for release-summary structure, voice, and
+user-versus-contributor audience separation.
+
 ## Review pipeline consolidator + ledger contract
 
 - Review-pipeline helper stages are fail-open by contract. Floor rules, consolidator, parser, and ledger failures degrade to empty/advisory local artifacts and do not block the editor or reviewer loop.
