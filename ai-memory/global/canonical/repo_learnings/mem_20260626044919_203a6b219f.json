@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Operational recovery paths are a recurring concern; failure diagnostics should be treated as a first-class workflow surface.",
   "timestamps": {
     "created_at": "2026-06-26T04:49:19Z",
