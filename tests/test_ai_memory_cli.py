@@ -363,20 +363,24 @@ def test_search_uses_embedding_ranking_when_openrouter_is_available() -> None:
 			created_at=datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
 		)
 
-		def _fake_embedding(text: str, *, api_key: str, model: str, base_url: str) -> list[float]:
+		def _fake_embeddings(texts: list[str], *, api_key: str, model: str, base_url: str) -> list[list[float]]:
 			assert api_key == "test-openrouter-key"
 			assert model
 			assert base_url
-			lowered = text.lower()
-			if "semantic query" in lowered:
-				return [1.0, 0.0]
-			if target["record_id"] in lowered or "target record" in lowered:
-				return [0.9, 0.1]
-			if distant["record_id"] in lowered or "distant record" in lowered:
-				return [0.0, 1.0]
-			return [0.1, 0.1]
+			results = []
+			for text in texts:
+				lowered = text.lower()
+				if "semantic query" in lowered:
+					results.append([1.0, 0.0])
+				elif target["record_id"] in lowered or "target record" in lowered:
+					results.append([0.9, 0.1])
+				elif distant["record_id"] in lowered or "distant record" in lowered:
+					results.append([0.0, 1.0])
+				else:
+					results.append([0.1, 0.1])
+			return results
 
-		with _patched_module_attrs(ai_memory_lib, _create_memory_search_embedding=_fake_embedding):
+		with _patched_module_attrs(ai_memory_lib, _create_memory_search_embeddings=_fake_embeddings):
 			exit_code, stdout, stderr = _run_ai_memory_cli(
 				[
 					"search",

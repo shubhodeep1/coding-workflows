@@ -174,6 +174,8 @@ def _format_review_table(stale_records: list[dict[str, Any]], *, since_label: st
     for record in stale_records:
         issue_label = record.get("issue_number") if record.get("issue_number") is not None else "-"
         pr_label = record.get("pr_number") if record.get("pr_number") is not None else "-"
+        summary_text = str(record.get("summary") or "")
+        summary_clean = summary_text.replace("\t", " ").replace("\r", " ").replace("\n", " ")
         lines.append(
             "\t".join(
                 [
@@ -182,7 +184,7 @@ def _format_review_table(stale_records: list[dict[str, Any]], *, since_label: st
                     str(pr_label),
                     str(record.get("age_days") or ""),
                     str(record.get("created_at") or ""),
-                    str(record.get("summary") or ""),
+                    summary_clean,
                 ]
             )
         )

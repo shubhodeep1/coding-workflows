@@ -2100,17 +2100,19 @@ def _resolve_search_embedding_settings() -> tuple[str, str]:
     return model, base_url.rstrip("/")
 
 
-def _create_memory_search_embedding(
-    text: str,
+def _create_memory_search_embeddings(
+    texts: list[str],
     *,
     api_key: str,
     model: str,
     base_url: str,
-) -> list[float]:
+) -> list[list[float]]:
     if not api_key:
         raise RuntimeError("OPENROUTER_API_KEY is required for AI memory semantic search")
+    if not texts:
+        return []
 
-    payload = json.dumps({"model": model, "input": text}).encode("utf-8")
+    payload = json.dumps({"model": model, "input": texts}).encode("utf-8")
     request = urllib.request.Request(
         f"{base_url}/embeddings",
         data=payload,
@@ -2136,12 +2138,38 @@ def _create_memory_search_embedding(
 
     try:
         decoded = json.loads(response_body)
-        embedding_raw = decoded.get("data", [])[0].get("embedding")
-        if not isinstance(embedding_raw, list) or not embedding_raw:
-            raise ValueError("missing embedding array")
-        return [float(value) for value in embedding_raw]
+        data = decoded.get("data")
+        if not isinstance(data, list) or len(data) != len(texts):
+            raise ValueError("mismatched or missing data array")
+        embeddings: list[list[float]] = []
+        for item in data:
+            if not isinstance(item, dict):
+                raise ValueError("data item is not an object")
+            embedding_raw = item.get("embedding")
+            if not isinstance(embedding_raw, list) or not embedding_raw:
+                raise ValueError("missing embedding array")
+            embeddings.append([float(value) for value in embedding_raw])
+        return embeddings
     except Exception as exc:
         raise RuntimeError(f"Embeddings API parse error: {exc}") from exc
+
+
+def _create_memory_search_embedding(
+    text: str,
+    *,
+    api_key: str,
+    model: str,
+    base_url: str,
+) -> list[float]:
+    embeddings = _create_memory_search_embeddings(
+        [text],
+        api_key=api_key,
+        model=model,
+        base_url=base_url,
+    )
+    if not embeddings:
+        raise RuntimeError("Embeddings API parse error: missing embedding array")
+    return embeddings[0]
 
 
 def _keyword_search_records(
@@ -2185,23 +2213,36 @@ def _embedding_search_records(
     api_key: str,
 ) -> tuple[list[tuple[float, str, str, str, Path, dict[str, Any]]], str]:
     model, base_url = _resolve_search_embedding_settings()
-    query_embedding = _create_memory_search_embedding(
-        query,
+    query_embeddings = _create_memory_search_embeddings(
+        [query],
+        api_key=api_key,
+        model=model,
+        base_url=base_url,
+    )
+    if not query_embeddings:
+        return [], model
+    query_embedding = query_embeddings[0]
+
+    valid_records: list[tuple[str, Path, dict[str, Any]]] = []
+    record_texts: list[str] = []
+    for source, path, record in records:
+        text = _record_search_text(record)
+        if not text:
+            continue
+        valid_records.append((source, path, record))
+        record_texts.append(text)
+
+    if not record_texts:
+        return [], model
+
+    record_embeddings = _create_memory_search_embeddings(
+        record_texts,
         api_key=api_key,
         model=model,
         base_url=base_url,
     )
     scored: list[tuple[float, str, str, str, Path, dict[str, Any]]] = []
-    for source, path, record in records:
-        text = _record_search_text(record)
-        if not text:
-            continue
-        record_embedding = _create_memory_search_embedding(
-            text,
-            api_key=api_key,
-            model=model,
-            base_url=base_url,
-        )
+    for (source, path, record), record_embedding in zip(valid_records, record_embeddings):
         similarity = _cosine_similarity(query_embedding, record_embedding)
         if similarity < 0.0:
             continue
