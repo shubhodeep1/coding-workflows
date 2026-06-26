@@ -432,3 +432,140 @@ No `TODO`, `FIXME`, or `HACK` markers were present under `.github/workflows` or 
 | Code modularization | 2-4 | Medium |
 | Expression size reduction | 3 | Medium |
 | Medium/Low fixes | 4-6 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-06-26)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the consolidation is statically proven to preserve endpoint scope, filters, retry/error behavior, and local execution boundaries; `NEEDS_VERIFICATION` means the overlap is real but at least one pagination/live-data/error-path assumption still needs a human check; `RISKY_SKIP` means the redundancy sits in a retry/recovery/pagination/race-defense path and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001 — RISKY_SKIP
+- **File paths / lines:** `scripts/orchestrate_poll_process.sh:9769-9770`, `scripts/orchestrate_poll_process.sh:11846-11847`, `scripts/orchestrate_poll_process.sh:16035-16036`
+- **Current call count:** 6 REST GETs across the three sites (2 per site)
+- **Proposed call count:** 3 REST GETs across the three sites (1 per site)
+- **Endpoint(s):** `GET /repos/{repo}/issues/{issue_number}`
+- **Evidence:** each reissue branch fetches the same issue twice back-to-back, once for `.title` and once for `.body`.
+```sh
+orig_title="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.title // ""' || echo "")"
+orig_body="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.body // ""' || echo "")"
+
+orig_title="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.title' || echo "")"
+orig_body="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.body // ""' || echo "")"
+
+IF_TITLE="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.title' || echo "")"
+IF_BODY="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${if_issue}" --jq '.body' || echo "")"
+```
+- **Proposed fix:** add a tiny local helper in `scripts/orchestrate_poll_process.sh` that fetches the issue JSON once and extracts both title/body locally, then update all three reissue sites to consume that one payload.
+- **Safety rationale:** this is inside `scripts/orchestrate_poll_process.sh` reissue/stall-recovery code, which the policy explicitly treats as `RISKY_SKIP`; it also changes today's independent fail-open behavior where title and body can succeed/fail separately.
+- **Downstream signal:** Do not auto-implement; manual review must confirm that collapsing each title/body pair into one fetch preserves reissue behavior, fail-open semantics, and existing stall-recovery log output.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001 — NEEDS_VERIFICATION
+- **File paths / lines:** `.github/workflows/clarify.yml:430-435` (both comment fetches), `.github/workflows/clarify.yml:528-537` (bounded comments consumer)
+- **Current call count:** 2 GETs when `SEMANTIC_CACHE_BACKEND != none`
+- **Proposed call count:** 1 GET when `SEMANTIC_CACHE_BACKEND != none`
+- **Endpoint(s):** `GET /repos/{repo}/issues/{issue_number}/comments`
+- **Evidence:** clarify first fetches the first 50 comments for prompt context, then immediately re-fetches the full comment history for semantic-cache canonicalization in the same step.
+```sh
+# Keep clarify prompt context bounded to preserve historical behavior.
+gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=50" > "${ISSUE_COMMENTS_FILE}"
+
+# Build full thread history only when semantic cache is enabled.
+if ! gh_retry gh api --paginate --slurp "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=100" \
+  | jq -r 'add // [] | .[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' > "${THREAD_HISTORY_FILE}"; then
+```
+
+```sh
+echo "ISSUE COMMENTS"
+# Comments are already in chronological order (direction=asc fetch).
+jq -r '.[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' "${ISSUE_COMMENTS_FILE}"
+```
+- **Proposed fix:** in `Fetch issue comments`, when semantic cache is enabled, do one paginated fetch, flatten it once, write the first 50 chronological entries into `ISSUE_COMMENTS_FILE`, and write the full flattened history into `THREAD_HISTORY_FILE`; keep the current single 50-comment fetch on the no-semantic-cache path.
+- **Safety rationale:** both calls are in the same workflow step with no intervening mutation, but the current bounded prompt context depends on exact pagination/window semantics (`per_page=50` vs `--paginate --slurp per_page=100`), so this is not safe without verification.
+- **Downstream signal:** Verify on a test issue with more than 50 comments and `SEMANTIC_CACHE_BACKEND != none` that one paginated fetch reproduces the exact current `ISSUE_CONTEXT_FILE` first-50 comment window and `THREAD_HISTORY_FILE`, including the fail-open path when the full-history fetch errors.
+
+#### REUSE-002 — NEEDS_VERIFICATION
+- **File paths / lines:** `.github/workflows/issue_pr_status.yml:403-406` (earlier per-issue fallback fetch), `.github/workflows/issue_pr_status.yml:584-599` (later merged-alert re-fetch)
+- **Current call count:** on the incomplete-classification path, up to `K` fallback issue GETs in the classifier and then up to `K` more issue GETs in merged-alert suppression (`K` = linked issues retried later)
+- **Proposed call count:** `K + U`, where only unresolved `U <= K` issue numbers are retried in the alert step
+- **Endpoint(s):** `GET /repos/{repo}/issues/{issue_number}`
+- **Evidence:** when orchestrator classification falls back to per-issue REST and one lookup fails, the later Telegram step re-reads every linked issue instead of only retrying the unresolved ones.
+```sh
+while IFS= read -r _orch_num; do
+  [ -n "${_orch_num}" ] || continue
+  [[ "${_orch_num}" =~ ^[0-9]+$ ]] || continue
+  _orch_meta="$(gh_retry gh api "repos/${REPOSITORY}/issues/${_orch_num}" --jq '{labels:[.labels[].name], body:(.body // "")}' 2>/dev/null || echo '')"
+```
+
+```sh
+elif [ "${ORCHESTRATOR_CLASSIFICATION_COMPLETE:-false}" != "true" ] && [ -n "${LINKED_ISSUE_NUMBERS:-}" ]; then
+  echo "::warning::Reused orchestrator classification is incomplete; falling back to per-issue body lookup for PR merged alert suppression."
+  while IFS= read -r issue_number; do
+    [ -n "${issue_number}" ] || continue
+    ISSUE_IS_MANAGED="$(_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}" --jq '
+      ((.labels // []) | map(.name) | index("ai:orchestrator-tracking")) == null
+      and (
+        ((.labels // []) | map(.name) | index("ai:orchestrator-managed")) != null
+        or ((.body // "") | contains("Managed by: AI Orchestrator"))
+      )
+    ' || echo "")"
+```
+- **Proposed fix:** in `Update linked issue labels when PR closes`, export an unresolved-issue list (for example `UNRESOLVED_ORCHESTRATOR_ISSUES`) alongside `MANAGED_ISSUES`/`TRACKING_ISSUES`; in `Telegram PR merged notification`, retry only those unresolved issue numbers instead of looping all `LINKED_ISSUE_NUMBERS`.
+- **Safety rationale:** the later step only needs the same `labels/body` classification data, and the intervening logic does not mutate those fields, but this is a cross-step retry-after-failure path, so alert-suppression behavior must be verified before narrowing the retry set.
+- **Downstream signal:** Force one `_orch_meta` lookup failure in a PR with multiple linked issues, then verify that retrying only unresolved issue numbers still suppresses the merged alert when the failed issue is orchestrator-managed and still sends the alert when unresolved issues are standalone.
+
+#### REUSE-003 — RISKY_SKIP
+- **File paths / lines:** `scripts/orchestrate_poll_process.sh:11131-11132`, `scripts/orchestrate_poll_process.sh:11163-11168`, `scripts/orchestrate_poll_process.sh:11564-11567`, `scripts/orchestrate_poll_process.sh:12042-12049`
+- **Current call count:** +1 extra REST comments GET per standalone `auto_respond_clarify` action on top of the loop’s already-loaded comment snapshot
+- **Proposed call count:** +0 extra GETs; reuse the already-loaded `comments_json`
+- **Endpoint(s):** current extra call hits `GET /repos/{repo}/issues/{issue_number}/comments`; reusable upstream data already comes from `_fetch_candidate_issue_details_graphql` or the loop’s fallback `GET /repos/{repo}/issues/{issue_number}/comments?sort=created&direction=desc&per_page=100`
+- **Evidence:** the standalone stall loop already loads `comments_json` for each candidate, then `extract_recommended_answers()` re-fetches recent comments again before posting `/answer`.
+```sh
+_candidate_details_json="$(_fetch_candidate_issue_details_graphql "$(printf '%s' "${candidates}" | jq -c '[.[].number]')")"
+
+if printf '%s' "${_candidate_details_json}" | jq -e --arg n "${issue_num}" 'has($n)' >/dev/null 2>&1; then
+  labels_json="$(printf '%s' "${_candidate_details_json}" | jq -c --arg n "${issue_num}" '.[$n].labels // []')"
+  comments_json="$(printf '%s' "${_candidate_details_json}" | jq -c --arg n "${issue_num}" '.[$n].comments // []')"
+else
+  labels_json="$(get_issue_labels_json "${issue_num}")"
+  comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=100" | jq -s 'add // []' 2>/dev/null || echo '[]')"
+fi
+```
+
+```sh
+case "${action}" in
+  auto_respond_clarify)
+    rec_answers="$(extract_recommended_answers "${issue_num}")"
+```
+
+```sh
+extract_recommended_answers() {
+  local issue_num="$1"
+  local comments_json
+  comments_json="$(gh_retry gh api \
+    "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=50" \
+    2>/dev/null || echo "[]")"
+```
+- **Proposed fix:** extend `extract_recommended_answers` to accept optional preloaded `comments_json`; call it from the standalone loop with the already-loaded `comments_json`, and keep the current live fetch only as the helper’s fallback when no preloaded payload is supplied. This reuses the existing `_fetch_candidate_issue_details_graphql` comment payload shape.
+- **Safety rationale:** this lives inside `scripts/orchestrate_poll_process.sh` standalone stall recovery, which the policy marks `RISKY_SKIP`; it also changes a race-defense path that currently re-reads a newest-first live window before auto-answering.
+- **Downstream signal:** Do not auto-implement; manual review must confirm that the cached comment window (`comments(last:100)` or the existing REST fallback) always exposes the latest clarification-question marker and that no stall-recovery log keys or fail-open behaviors change.
+
+### Dead Calls (DEAD-API-###)
+No findings.
+
+### Cross-References to Deep Audit Section
+- API-001: NEEDS_VERIFICATION — agreed; batching the linked-issue body/label hydration into the first GraphQL query is directionally correct, but `FIRST_ISSUE`, `FIRST_ISSUE_BODY`, and `FIRST_ISSUE_LABELS_JSON` selection semantics should be spot-checked against the current first-non-empty-body loop.
+- API-002: NEEDS_VERIFICATION — agreed; process-local branch-protection memoization looks valid, but confirm no caller depends on a second live read after a first failure or after mid-process branch-protection edits.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 2 | REUSE-001, REUSE-002 |
+| RISKY_SKIP | 2 | MERGE-001, REUSE-003 |
+
+### Implement-Stage Handoff
+No SAFE_TO_MERGE findings in this pass.
