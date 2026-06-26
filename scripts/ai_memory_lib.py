@@ -35,6 +35,21 @@ except ModuleNotFoundError:
     from scripts.openrouter_prompt_cache import add_ephemeral_cache_breakpoint, should_retry_without_breakpoint
 
 try:
+    from semantic_cache import (
+        DEFAULT_EMBEDDING_BASE_URL as _SEARCH_EMBEDDING_BASE_URL_DEFAULT,
+        DEFAULT_EMBEDDING_MODEL as _SEARCH_EMBEDDING_MODEL_DEFAULT,
+    )
+except ModuleNotFoundError:
+    try:
+        from scripts.semantic_cache import (
+            DEFAULT_EMBEDDING_BASE_URL as _SEARCH_EMBEDDING_BASE_URL_DEFAULT,
+            DEFAULT_EMBEDDING_MODEL as _SEARCH_EMBEDDING_MODEL_DEFAULT,
+        )
+    except ModuleNotFoundError:
+        _SEARCH_EMBEDDING_MODEL_DEFAULT = "openai/text-embedding-3-small"
+        _SEARCH_EMBEDDING_BASE_URL_DEFAULT = "https://openrouter.ai/api/v1"
+
+try:
     from memory_injection_patterns import scan as _scan_memory_injection_patterns
 except ModuleNotFoundError:
     try:
@@ -609,6 +624,63 @@ def _record_path_for_candidate(memory_root: Path, record: dict[str, Any]) -> Pat
 def _record_path_for_canonical(memory_root: Path, record: dict[str, Any]) -> Path:
     category = sanitize_segment(str(record.get("category") or "uncategorized"), "uncategorized")
     return memory_root / "global" / "canonical" / category / f"{record['record_id']}.json"
+
+
+def _normalize_memory_record_schema_name(schema_name: str | None) -> str:
+    normalized = str(schema_name or MEMORY_RECORD_SCHEMA_VERSION).strip()
+    if normalized.endswith(".json"):
+        normalized = normalized[:-5]
+    if not normalized:
+        normalized = MEMORY_RECORD_SCHEMA_VERSION
+    if normalized != MEMORY_RECORD_SCHEMA_VERSION:
+        raise MemoryValidationError(f"Unsupported memory schema: {schema_name}")
+    return normalized
+
+
+def _parse_datetime_utc_or_none(value: Any) -> datetime | None:
+    text = _normalize_optional_text(value)
+    if text is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def _is_prune_marked(record: dict[str, Any]) -> bool:
+    timestamps = record.get("timestamps") or {}
+    return bool(str(timestamps.get("prune_marked_at") or "").strip())
+
+
+def _record_created_at_key(record: dict[str, Any]) -> str:
+    return str((record.get("timestamps") or {}).get("created_at") or "")
+
+
+def _record_search_text(record: dict[str, Any]) -> str:
+    summary = str(record.get("summary") or "").strip()
+    details = str(record.get("details") or "").strip()
+    if len(details) > 4000:
+        details = details[:4000]
+    return "\n\n".join(part for part in (summary, details) if part)
+
+
+def _record_matches_scope(record: dict[str, Any], *, issue_number: int | None, pr_number: int | None) -> bool:
+    lineage = record.get("lineage") or {}
+    scope = record.get("scope") or {}
+    if issue_number is not None and issue_number not in {
+        lineage.get("issue_number"),
+        scope.get("issue_number"),
+    }:
+        return False
+    if pr_number is not None and pr_number not in {
+        lineage.get("pr_number"),
+        scope.get("pr_number"),
+    }:
+        return False
+    return True
 
 
 def _lineage_path(memory_root: Path, issue_number: int) -> Path:
@@ -1664,6 +1736,25 @@ def _load_candidate_records(memory_root: Path, issue_number: int | None = None) 
     return results
 
 
+def _load_memory_record_entries(
+    memory_root: Path,
+    *,
+    issue_number: int | None = None,
+    include_candidates: bool = True,
+    include_canonical: bool = True,
+) -> list[tuple[str, Path, dict[str, Any]]]:
+    ensure_memory_layout(memory_root)
+    entries: list[tuple[str, Path, dict[str, Any]]] = []
+    if include_canonical:
+        canonical_root = memory_root / "global" / "canonical"
+        for path in _iter_json_files(canonical_root):
+            entries.append(("canonical", path, _load_json(path)))
+    if include_candidates:
+        for path, payload in _load_candidate_records(memory_root, issue_number=issue_number):
+            entries.append(("candidate", path, payload))
+    return entries
+
+
 def _governance_errors(record: dict[str, Any], canonical_by_fingerprint: dict[str, dict[str, Any]]) -> list[str]:
     errors: list[str] = []
 
@@ -1742,6 +1833,9 @@ def promote_candidates(
 
     for candidate_path, candidate in _load_candidate_records(memory_root, issue_number=issue_number):
         if record_id and candidate.get("record_id") != record_id:
+            continue
+        if _is_prune_marked(candidate):
+            skipped.append(str(candidate.get("record_id")))
             continue
         if candidate.get("status") not in {"candidate", "rejected"}:
             skipped.append(str(candidate.get("record_id")))
@@ -1981,6 +2075,141 @@ def _estimate_tokens(text: str) -> int:
     return max(1, math.ceil(len(text) / 4))
 
 
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    if len(a) != len(b) or not a:
+        return -1.0
+    dot = 0.0
+    magnitude_a = 0.0
+    magnitude_b = 0.0
+    for value_a, value_b in zip(a, b):
+        dot += value_a * value_b
+        magnitude_a += value_a * value_a
+        magnitude_b += value_b * value_b
+    if magnitude_a <= 0.0 or magnitude_b <= 0.0:
+        return -1.0
+    return dot / (math.sqrt(magnitude_a) * math.sqrt(magnitude_b))
+
+
+def _resolve_search_embedding_settings() -> tuple[str, str]:
+    model = (os.getenv("SEMANTIC_CACHE_EMBEDDING_MODEL") or _SEARCH_EMBEDDING_MODEL_DEFAULT).strip()
+    if not model:
+        model = _SEARCH_EMBEDDING_MODEL_DEFAULT
+    base_url = (os.getenv("SEMANTIC_CACHE_EMBEDDING_BASE_URL") or _SEARCH_EMBEDDING_BASE_URL_DEFAULT).strip()
+    if not base_url:
+        base_url = _SEARCH_EMBEDDING_BASE_URL_DEFAULT
+    return model, base_url.rstrip("/")
+
+
+def _create_memory_search_embedding(
+    text: str,
+    *,
+    api_key: str,
+    model: str,
+    base_url: str,
+) -> list[float]:
+    if not api_key:
+        raise RuntimeError("OPENROUTER_API_KEY is required for AI memory semantic search")
+
+    payload = json.dumps({"model": model, "input": text}).encode("utf-8")
+    request = urllib.request.Request(
+        f"{base_url}/embeddings",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            response_body = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        body = ""
+        try:
+            body = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        raise RuntimeError(f"Embeddings API HTTP {exc.code}: {body[:500]}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Embeddings API connection error: {exc}") from exc
+
+    try:
+        decoded = json.loads(response_body)
+        embedding_raw = decoded.get("data", [])[0].get("embedding")
+        if not isinstance(embedding_raw, list) or not embedding_raw:
+            raise ValueError("missing embedding array")
+        return [float(value) for value in embedding_raw]
+    except Exception as exc:
+        raise RuntimeError(f"Embeddings API parse error: {exc}") from exc
+
+
+def _keyword_search_records(
+    records: list[tuple[str, Path, dict[str, Any]]],
+    *,
+    query: str,
+    max_records: int,
+) -> list[tuple[float, str, str, str, Path, dict[str, Any]]]:
+    keywords = _extract_keywords_plain(query, "")
+    query_lower = query.strip().lower()
+    query_tokens = [
+        token
+        for token in re.findall(r"[a-z][a-z0-9_]+", query_lower)
+        if token not in _KEYWORD_STOP_WORDS and len(token) > 2
+    ]
+    scored: list[tuple[float, str, str, str, Path, dict[str, Any]]] = []
+    for source, path, record in records:
+        text = _record_search_text(record)
+        if not text:
+            continue
+        text_lower = text.lower()
+        overlap_score = _keyword_overlap_ratio(keywords, text_lower) if keywords else 0.0
+        token_overlap = 0.0
+        if query_tokens:
+            token_matches = sum(1 for token in query_tokens if token in text_lower)
+            token_overlap = token_matches / len(query_tokens)
+        phrase_bonus = 1.0 if query_lower and query_lower in text_lower else 0.0
+        score = max(overlap_score, token_overlap) + phrase_bonus
+        if score <= 0.0:
+            continue
+        scored.append((score, _record_created_at_key(record), str(record.get("record_id") or ""), source, path, record))
+    scored.sort(key=lambda item: (-item[0], item[1], item[2]))
+    return scored[:max_records]
+
+
+def _embedding_search_records(
+    records: list[tuple[str, Path, dict[str, Any]]],
+    *,
+    query: str,
+    max_records: int,
+    api_key: str,
+) -> tuple[list[tuple[float, str, str, str, Path, dict[str, Any]]], str]:
+    model, base_url = _resolve_search_embedding_settings()
+    query_embedding = _create_memory_search_embedding(
+        query,
+        api_key=api_key,
+        model=model,
+        base_url=base_url,
+    )
+    scored: list[tuple[float, str, str, str, Path, dict[str, Any]]] = []
+    for source, path, record in records:
+        text = _record_search_text(record)
+        if not text:
+            continue
+        record_embedding = _create_memory_search_embedding(
+            text,
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+        )
+        similarity = _cosine_similarity(query_embedding, record_embedding)
+        if similarity < 0.0:
+            continue
+        scored.append((similarity, _record_created_at_key(record), str(record.get("record_id") or ""), source, path, record))
+    scored.sort(key=lambda item: (-item[0], item[1], item[2]))
+    return scored[:max_records], model
+
+
 def _load_retrieval_profiles(profiles_path: Path) -> dict[str, Any]:
     payload = _load_json(profiles_path)
     if payload.get("schema_version") != RETRIEVAL_PROFILE_SCHEMA_VERSION:
@@ -2093,7 +2322,7 @@ def retrieve_memory_context(
 
     if issue_number is not None:
         for _path, record in _load_candidate_records(memory_root, issue_number=issue_number):
-            if record.get("status") in {"candidate", "active"}:
+            if record.get("status") in {"candidate", "active"} and not _is_prune_marked(record):
                 records.append(record)
 
     scored: list[tuple[float, str, str, dict[str, Any]]] = []
@@ -2172,6 +2401,210 @@ def retrieve_memory_context(
         keyword_method=keyword_method,
         miss_reason=miss_reason,
     )
+
+
+def list_stale_candidate_records(
+    memory_root: Path,
+    *,
+    older_than_days: float,
+    schema_name: str | None = None,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    ensure_memory_layout(memory_root)
+    if older_than_days < 0:
+        raise MemoryValidationError("older_than_days must be zero or greater")
+    schema_version = _normalize_memory_record_schema_name(schema_name)
+    now_utc = now or datetime.now(timezone.utc)
+    stale_records: list[dict[str, Any]] = []
+    for _candidate_path, record in _load_candidate_records(memory_root):
+        if record.get("schema_version") != schema_version:
+            continue
+        if record.get("status") != "candidate":
+            continue
+        if _is_prune_marked(record):
+            continue
+        try:
+            validate_memory_record(record, memory_root)
+        except MemoryValidationError:
+            continue
+        created_at_text = _record_created_at_key(record)
+        created_at = _parse_datetime_utc_or_none(created_at_text)
+        if created_at is None:
+            continue
+        age_days = (now_utc - created_at).total_seconds() / 86400.0
+        if age_days < older_than_days:
+            continue
+        lineage = record.get("lineage") or {}
+        stale_records.append(
+            {
+                "record_id": str(record.get("record_id") or ""),
+                "issue_number": lineage.get("issue_number"),
+                "pr_number": lineage.get("pr_number"),
+                "created_at": created_at_text,
+                "age_days": round(age_days, 1),
+                "summary": str(record.get("summary") or "").strip(),
+            }
+        )
+    stale_records.sort(key=lambda item: (-float(item["age_days"]), str(item["created_at"]), str(item["record_id"])))
+    return stale_records
+
+
+def mark_candidate_records_for_prune(
+    memory_root: Path,
+    *,
+    record_ids: list[str],
+    prune_marked_at: str | None = None,
+) -> dict[str, Any]:
+    ensure_memory_layout(memory_root)
+    normalized_ids: list[str] = []
+    seen_ids: set[str] = set()
+    for record_id in record_ids:
+        normalized_id = str(record_id or "").strip()
+        if not normalized_id or normalized_id in seen_ids:
+            continue
+        seen_ids.add(normalized_id)
+        normalized_ids.append(normalized_id)
+    if not normalized_ids:
+        raise MemoryValidationError("record_ids must contain at least one record id")
+
+    resolved_prune_marked_at = (
+        _normalize_datetime_utc(prune_marked_at, "prune_marked_at") if prune_marked_at is not None else utc_now_iso()
+    )
+    candidate_by_id: dict[str, tuple[Path, dict[str, Any]]] = {}
+    for candidate_path, candidate in _load_candidate_records(memory_root):
+        candidate_id = str(candidate.get("record_id") or "").strip()
+        if candidate_id and candidate_id not in candidate_by_id:
+            candidate_by_id[candidate_id] = (candidate_path, candidate)
+
+    marked: list[str] = []
+    already_marked: list[str] = []
+    not_found: list[str] = []
+    for normalized_id in normalized_ids:
+        candidate_entry = candidate_by_id.get(normalized_id)
+        if candidate_entry is None:
+            not_found.append(normalized_id)
+            continue
+        candidate_path, candidate = candidate_entry
+        validate_memory_record(candidate, memory_root)
+        timestamps = candidate.setdefault("timestamps", {})
+        if str(timestamps.get("prune_marked_at") or "").strip():
+            already_marked.append(normalized_id)
+            continue
+        timestamps["prune_marked_at"] = resolved_prune_marked_at
+        validate_memory_record(candidate, memory_root)
+        _atomic_write_json(candidate_path, candidate)
+        marked.append(normalized_id)
+
+    return {
+        "marked": marked,
+        "already_marked": already_marked,
+        "not_found": not_found,
+        "prune_marked_at": resolved_prune_marked_at,
+    }
+
+
+def search_memory_records(
+    memory_root: Path,
+    *,
+    query: str,
+    schema_name: str | None = None,
+    max_records: int = 10,
+    api_key: str | None = None,
+) -> dict[str, Any]:
+    ensure_memory_layout(memory_root)
+    query_text = _normalize_required_text(query, "query")
+    if max_records < 1:
+        raise MemoryValidationError("max_records must be a positive integer")
+    schema_version = _normalize_memory_record_schema_name(schema_name)
+
+    records: list[tuple[str, Path, dict[str, Any]]] = []
+    for source, path, record in _load_memory_record_entries(memory_root):
+        if record.get("schema_version") != schema_version:
+            continue
+        try:
+            validate_memory_record(record, memory_root)
+        except MemoryValidationError:
+            continue
+        records.append((source, path, record))
+
+    method = "keyword"
+    fallback_reason: str | None = None
+    embedding_model: str | None = None
+    if api_key and records:
+        try:
+            scored_records, embedding_model = _embedding_search_records(
+                records,
+                query=query_text,
+                max_records=max_records,
+                api_key=api_key,
+            )
+            method = "embedding"
+        except RuntimeError as exc:
+            fallback_reason = str(exc)
+            scored_records = _keyword_search_records(records, query=query_text, max_records=max_records)
+    else:
+        scored_records = _keyword_search_records(records, query=query_text, max_records=max_records)
+
+    results: list[dict[str, Any]] = []
+    for score, _created_at, _record_id, source, path, record in scored_records:
+        results.append(
+            {
+                "source": source,
+                "path": str(path.relative_to(memory_root)),
+                "score": round(float(score), 6),
+                "record": record,
+            }
+        )
+
+    payload: dict[str, Any] = {
+        "query": query_text,
+        "schema": schema_version,
+        "method": method,
+        "searched_record_count": len(records),
+        "results": results,
+    }
+    if fallback_reason is not None:
+        payload["fallback_reason"] = fallback_reason
+    if embedding_model is not None:
+        payload["embedding_model"] = embedding_model
+    return payload
+
+
+def export_memory_records(
+    memory_root: Path,
+    *,
+    issue_number: int | None,
+    pr_number: int | None,
+    schema_name: str | None = None,
+) -> list[dict[str, Any]]:
+    ensure_memory_layout(memory_root)
+    if issue_number is None and pr_number is None:
+        raise MemoryValidationError("issue_number or pr_number is required")
+    schema_version = _normalize_memory_record_schema_name(schema_name)
+    exported: list[dict[str, Any]] = []
+    for source, path, record in _load_memory_record_entries(memory_root):
+        if record.get("schema_version") != schema_version:
+            continue
+        try:
+            validate_memory_record(record, memory_root)
+        except MemoryValidationError:
+            continue
+        if not _record_matches_scope(record, issue_number=issue_number, pr_number=pr_number):
+            continue
+        exported.append(
+            {
+                "source": source,
+                "path": str(path.relative_to(memory_root)),
+                "record": record,
+            }
+        )
+    exported.sort(
+        key=lambda item: (
+            _record_created_at_key(item["record"]),
+            str(item["record"].get("record_id") or ""),
+        )
+    )
+    return exported
 
 
 def _load_lineage(memory_root: Path, issue_number: int) -> dict[str, Any] | None:
@@ -2316,14 +2749,15 @@ def compact_memory(
     for candidate_path in candidate_files:
         payload = _load_json(candidate_path)
         created_at = str((payload.get("timestamps") or {}).get("created_at") or "")
-        if not created_at.startswith(month_yyyy_mm):
+        prune_marked_at = str((payload.get("timestamps") or {}).get("prune_marked_at") or "")
+        if not created_at.startswith(month_yyyy_mm) and not prune_marked_at.startswith(month_yyyy_mm):
             continue
         relative = candidate_path.relative_to(memory_root)
         destination = archive_dir / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(candidate_path, destination)
         archived_candidates += 1
-        if prune and payload.get("status") in {"promoted", "rejected", "superseded"}:
+        if prune and (payload.get("status") in {"promoted", "rejected", "superseded"} or prune_marked_at):
             candidate_path.unlink(missing_ok=True)
             removed_candidates += 1
 
