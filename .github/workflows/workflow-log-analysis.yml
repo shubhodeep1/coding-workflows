@@ -471,7 +471,7 @@ jobs:
             --state all \
             --label "ai:retro" \
             --limit 50 \
-            --json number,title,body,state,url > "${TRACKER_CANDIDATES_JSON}"
+            --json number,title,body,state,updatedAt,url > "${TRACKER_CANDIDATES_JSON}"
 
           python3 - "${TRACKER_CANDIDATES_JSON}" "${TRACKER_MARKER}" > "${TRACKER_SELECTION_ENV}" <<'PY'
           from __future__ import annotations
@@ -489,16 +489,24 @@ jobs:
           except (OSError, json.JSONDecodeError) as exc:
               raise SystemExit(f"failed to load retro tracker candidates: {exc}")
 
-          selected = None
+          selected_candidates = []
           for candidate in candidates:
               if not isinstance(candidate, dict):
                   continue
               body = str(candidate.get("body") or "")
               if marker not in body:
                   continue
-              selected = candidate
-              if str(candidate.get("state") or "").upper() == "OPEN":
-                  break
+              selected_candidates.append(candidate)
+
+          selected_candidates.sort(
+              key=lambda candidate: (
+                  str(candidate.get("state") or "").upper() == "OPEN",
+                  str(candidate.get("updatedAt") or ""),
+                  int(candidate.get("number") or 0),
+              ),
+              reverse=True,
+          )
+          selected = selected_candidates[0] if selected_candidates else None
 
           number = ""
           state = ""

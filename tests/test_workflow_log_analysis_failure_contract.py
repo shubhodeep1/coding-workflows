@@ -58,6 +58,10 @@ def test_weekly_retro_path_is_schedule_gated_and_default_off() -> None:
 	assert "WORKFLOW_RETRO_REASONING: ${{ vars.WORKFLOW_RETRO_REASONING || 'medium' }}" in wf
 	assert "WORKFLOW_RETRO_CRON: ${{ vars.WORKFLOW_RETRO_CRON || '0 9 * * 1' }}" in wf
 	assert "github.event.schedule == env.WORKFLOW_RETRO_CRON" in wf
+	assert '--json number,title,body,state,updatedAt,url > "${TRACKER_CANDIDATES_JSON}"' in wf
+	assert "selected_candidates.sort(" in wf
+	assert 'str(candidate.get("state") or "").upper() == "OPEN"' in wf
+	assert 'str(candidate.get("updatedAt") or "")' in wf
 
 
 def test_semble_wiring_is_consistent_across_four_codex_jobs() -> None:
