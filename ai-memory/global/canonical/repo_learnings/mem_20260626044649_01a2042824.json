@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Scope-guard behavior is important for repository safety and should be verified with explicit tests.",
   "timestamps": {
     "created_at": "2026-06-26T04:46:49Z",
