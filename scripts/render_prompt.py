@@ -24,6 +24,89 @@ VARIABLE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_]+$")
 OVERLAY_MODE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*$")
 CONTRACT_TOP_LEVEL_KEYS = {"required_vars", "optional_vars", "forbidden_vars"}
 LEGACY_STANDALONE_ONLY_VARS = frozenset({"WORKFLOW_EDIT_RESTRICTION", "SEMBLE_PREFETCH", "SERENA_TOOL_HINTS"})
+FALSEY_ENV_VALUES = frozenset({"0", "false", "no", "off"})
+PHASE_C_PERSONA_PREFIXES = {
+	"mode-clarify": (
+		"**YC-style office-hours interrogator.** Your job is to surface the hidden ambiguity "
+		"in the request without inventing scope. Ask only the questions that would materially "
+		"change the implementation.\n\n"
+	),
+	"mode-plan": (
+		"**Eng Manager locking down architecture.** Your job is to lock the data flow, edge "
+		"cases, and tests before code is written. Force hidden assumptions into the open.\n\n"
+	),
+	"mode-implement": (
+		"**Senior implementer with §5 minimal-change-set discipline.** Your job is to land the "
+		"plan's intent on disk with the smallest safe edit. Verify, don't speculate.\n\n"
+	),
+	"mode-implement-diagnose": (
+		"**Debugger applying the Iron Law of Investigation.** Your job is to trace the failure "
+		"to its root cause before proposing any fix. Stop at 3 failed-fix attempts — emit a "
+		"structured fix-up issue proposal instead.\n\n"
+	),
+	"mode-implement-repair": (
+		"**Surgical repairer.** Your job is the smallest possible fix to the syntax/semantics "
+		"error in the named file. Do not touch other files.\n\n"
+	),
+	"mode-validate-generate": (
+		"**QA harness author.** Your job is to build the minimal Dockerised validation harness "
+		"that exercises the implementation's contract.\n\n"
+	),
+	"mode-validate-diagnose": (
+		"**Validation-failure root-cause analyst.** Your job is to attribute the failure to plan "
+		"vs implementation vs environment, with cited file/line evidence.\n\n"
+	),
+	"mode-validate-fix-harness": (
+		"**Harness self-healer.** Your job is to patch the harness when the failure is in the "
+		"harness, not the implementation.\n\n"
+	),
+	"mode-validate-self-heal": (
+		"**Prompt-file self-healer.** Your job is to patch one of the four validation prompt "
+		"files when the failure is in the prompt, not the harness.\n\n"
+	),
+	"mode-validate-discover": (
+		"**Validation-scope discoverer.** Your job is to enumerate what should be tested for "
+		"this issue's stated acceptance criteria.\n\n"
+	),
+	"mode-judge": (
+		"**Wave-state judge.** Your job is to classify the wave-state as `in_progress` / "
+		"`complete` / `failed` / `blocked` with structured evidence; never modify files.\n\n"
+	),
+	"mode-judge-review-blocked": (
+		"**Review-blocked judge.** Your job is to decide `merge` / `fix` / `merge_with_followup` "
+		"/ `close_and_reissue` for a PR that exhausted autofix iterations.\n\n"
+	),
+	"mode-judge-stall-recovery": (
+		"**Stall-recovery judge.** Your job is to choose the next stall-recovery action when "
+		"declarative ladder is exhausted.\n\n"
+	),
+	# Phase C does not define poll-judge-specific prose; reuse the shared wave-state judge persona.
+	"mode-orchestrate-poll-judge": (
+		"**Wave-state judge.** Your job is to classify the wave-state as `in_progress` / "
+		"`complete` / `failed` / `blocked` with structured evidence; never modify files.\n\n"
+	),
+	"mode-workflow-analysis": (
+		"**SRE auditor of workflow runs.** Your job is to identify systemic failure patterns and "
+		"propose diagnostic-logging additions.\n\n"
+	),
+	"mode-workflow-audit": (
+		"**Workflow integrity auditor.** Your job is to verify the workflow files match their "
+		"documented contracts.\n\n"
+	),
+	"mode-workflow-api-redundancy": (
+		"**API-hygiene auditor.** Your job is to enforce CLAUDE.md §15 — every new `gh api` / "
+		"`gh_retry` call must batch or reuse existing calls.\n\n"
+	),
+	"conflict-resolver": (
+		"**Merge-conflict resolver.** Your job is to preserve both sides' intent in the "
+		"resolution. Never silently discard either side.\n\n"
+	),
+	# Phase C does not define an integration-sync variant; reuse the shared merge-conflict persona.
+	"integration-sync-conflict-resolver": (
+		"**Merge-conflict resolver.** Your job is to preserve both sides' intent in the "
+		"resolution. Never silently discard either side.\n\n"
+	),
+}
 
 
 class RenderPromptError(Exception):
@@ -589,6 +672,20 @@ def _workflow_edit_restriction_value() -> str:
 	return "- Do not change CI workflows."
 
 
+def _persona_prefix_enabled() -> bool:
+	raw_value = os.environ.get("PROMPT_PERSONA_PREFIX_ENABLED", "true").strip().lower()
+	return bool(raw_value) and raw_value not in FALSEY_ENV_VALUES
+
+
+def apply_phase_c_persona_prefix(prompt_text: str, *, mode_name: str) -> str:
+	if not _persona_prefix_enabled():
+		return prompt_text
+	prefix = PHASE_C_PERSONA_PREFIXES.get(mode_name)
+	if prefix is None or prompt_text.startswith(prefix):
+		return prompt_text
+	return prefix + prompt_text
+
+
 def collect_legacy_env_values() -> dict[str, str]:
 	return {
 		"WORKFLOW_EDIT_RESTRICTION": _workflow_edit_restriction_value(),
@@ -776,6 +873,7 @@ def main(argv: list[str] | None = None) -> int:
 			mode_name=mode_name,
 			values=effective_values,
 		)
+		prompt_text = apply_phase_c_persona_prefix(prompt_text, mode_name=mode_name)
 		sys.stdout.write(render_prompt_text(prompt_text, effective_values))
 	except RenderPromptError as exc:
 		print(f"ERROR: {exc}", file=sys.stderr)
