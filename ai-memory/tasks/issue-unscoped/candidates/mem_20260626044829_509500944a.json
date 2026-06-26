@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "Changes to security audit and review autofix flows included tests for untrusted context contracts, label handling, and false-positive exclusions. When adjusting audit/review behavior, expect to update both workflow logic and the associated contract or fixture tests to keep the classification and filtering rules stable.",
+  "fingerprint": "3483d35c04f1dae177552329e42cb9a1d3b56889359e040d91a2bcdd2bf18aed",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28217708175",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28217708175",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3507",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3508",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3511",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3513",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3515",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3509",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3510",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3512",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3514",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3516"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260626044829_509500944a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Security-audit and review-related workflows rely on contract tests to prevent regressions in context handling and exclusions.",
+  "timestamps": {
+    "created_at": "2026-06-26T04:48:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
