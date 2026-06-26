@@ -2575,6 +2575,18 @@ def test_review_tier_resolver_routes_lite_standard_and_full_and_handles_override
 		+echo newest
 		"""
 	)
+	workflow_diff = textwrap.dedent(
+		"""\
+		diff --git a/.github/workflows/review.yml b/.github/workflows/review.yml
+		index 1111111..2222222 100644
+		--- a/.github/workflows/review.yml
+		+++ b/.github/workflows/review.yml
+		@@ -1 +1,2 @@
+		-name: Old review
+		+name: New review
+		+run-name: Reviewer update
+		"""
+	)
 	full_diff = textwrap.dedent(
 		"""\
 		diff --git a/scripts/review_helper.sh b/scripts/review_helper.sh
@@ -2616,6 +2628,10 @@ def test_review_tier_resolver_routes_lite_standard_and_full_and_handles_override
 		"x-ai/grok-4.20",
 	]
 	assert "REVIEW_CONSOLIDATOR_ENABLED=0\n" not in standard_result["github_env"]
+
+	workflow_result = _run_review_tier_harness(diff_text=workflow_diff)
+	assert workflow_result["REVIEW_TIER"] == "standard"
+	assert workflow_result["REVIEW_TIER_SCOPE"] == ".github/workflows/"
 
 	full_result = _run_review_tier_harness(diff_text=full_diff)
 	assert full_result["REVIEW_TIER"] == "full"

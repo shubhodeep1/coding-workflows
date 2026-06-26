@@ -1146,10 +1146,14 @@ classify_review_tier() {
     elif [[ "${has_pr_diff_raw}" == "0" || "${has_pr_diff_raw}" == "false" || "${has_pr_diff_raw}" == "no" || "${has_pr_diff_raw}" == "off" ]]; then
       REVIEW_TIER_REASON="pr_diff_unavailable"
     else
-      REVIEW_TIER_LOC="$(reviewer_count_diff_loc "${RAW_REVIEWER_PR_DIFF_FILE}")"
-      if ! path_metadata="$(reviewer_collect_review_tier_path_metadata "${RAW_REVIEWER_PR_CHANGED_FILES_FILE}")"; then
-        echo "::warning::Failed to classify review-tier paths from ${RAW_REVIEWER_PR_CHANGED_FILES_FILE}; failing open to full reviewer set." >&2
-        REVIEW_TIER_REASON="raw_changed_files_parse_failed"
+	  REVIEW_TIER_LOC="$(reviewer_count_diff_loc "${RAW_REVIEWER_PR_DIFF_FILE}")"
+	  if ! [[ "${REVIEW_TIER_LOC}" =~ ^[0-9]+$ ]]; then
+		echo "::warning::Invalid review-tier diff line count '${REVIEW_TIER_LOC}'. Failing closed to full tier." >&2
+		REVIEW_TIER_LOC=999999
+	  fi
+	  if ! path_metadata="$(reviewer_collect_review_tier_path_metadata "${RAW_REVIEWER_PR_CHANGED_FILES_FILE}")"; then
+		echo "::warning::Failed to classify review-tier paths from ${RAW_REVIEWER_PR_CHANGED_FILES_FILE}; failing open to full reviewer set." >&2
+		REVIEW_TIER_REASON="raw_changed_files_parse_failed"
       else
         while IFS='=' read -r key value; do
           case "${key}" in
