@@ -1,0 +1,51 @@
+name: Security Audit
+
+"on":
+  schedule:
+    # GitHub Actions schedules are literal YAML, not repo-variable driven.
+    # Keep README's SECURITY_AUDIT_CRON row aligned with this value.
+    - cron: "0 8 * * 0"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: security-audit-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  security-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Install Codex CLI
+        uses: ./.github/actions/install-codex
+
+      - name: Create Codex config
+        run: |
+          set -euo pipefail
+          bash scripts/write_codex_config.sh \
+            --model "openai/gpt-5.4" \
+            --reasoning xhigh
+          echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
+
+      - name: Run security audit
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          PYTHONDONTWRITEBYTECODE: "1"
+          SECURITY_AUDIT_ENABLED: ${{ vars.SECURITY_AUDIT_ENABLED || 'false' }}
+          SECURITY_AUDIT_CONFIDENCE_GATE: ${{ vars.SECURITY_AUDIT_CONFIDENCE_GATE || '8' }}
+          SECURITY_AUDIT_FP_EXCLUSIONS: ${{ vars.SECURITY_AUDIT_FP_EXCLUSIONS || 'scripts/security_audit_fp_exclusions.json' }}
+        run: |
+          set -euo pipefail
+          bash scripts/security_audit.sh

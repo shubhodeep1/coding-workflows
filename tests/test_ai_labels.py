@@ -43,6 +43,8 @@ ADDITIVE_LABELS = [
 	"ai:harness-broken",
 	"ai:force-merge",
 	"ai:integration-backpressure",
+	"ai:security-audit",
+	"ai:security",
 ]
 
 
