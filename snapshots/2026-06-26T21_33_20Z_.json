@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-06-24T00:14:45Z",
+  "tick_at": "2026-06-26T21:33:20Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -27,10 +27,10 @@
         "review_blocked": 0,
         "skipped": 0
       },
-      "number": 3472,
+      "number": 3496,
       "project_complete": false,
       "status": "in-progress",
-      "title": "[Orchestrator] Validate and land the safe subset of the 2026-06-16 to 2026-06-23 workflow-optimization findings",
+      "title": "[Orchestrator] gstack learnings rollout for the unattended pipeline (Phases A\u2013P)",
       "total_waves": 0,
       "wave_complete": false
     }
