@@ -34,6 +34,7 @@ except ModuleNotFoundError:
 SCHEMA_VERSION = "workflow_retro.v1"
 MERGED_PR_LIST_LIMIT = 20
 REVIEW_ITERATION_LIST_LIMIT = 20
+REVIEW_MISSING_PR_LIST_LIMIT = 20
 STALL_REASON_LIMIT = 5
 WORKFLOW_FAMILY_LIMIT = 8
 GH_CLI_MAX_ATTEMPTS = 5
@@ -96,6 +97,14 @@ def _percentile(values: list[int], pct: int) -> float:
     upper = min(lower + 1, len(sorted_values) - 1)
     weight = rank - lower
     return float(sorted_values[lower] * (1.0 - weight) + sorted_values[upper] * weight)
+
+
+def _truncate_list(items: list[Any], limit: int) -> tuple[list[Any], int]:
+    if limit < 0:
+        raise ValueError("limit must be >= 0")
+    if len(items) <= limit:
+        return list(items), 0
+    return list(items[:limit]), len(items) - limit
 
 
 def _week_label(window_end_utc: datetime) -> str:
@@ -599,12 +608,45 @@ def build_weekly_retro_payload(
     summary = _summarize_runs(runs)
     summary["merged_pr_count"] = len(merged_prs)
 
+    review_rows = [item for item in review_iterations.get("by_pr", []) if isinstance(item, dict)]
+    missing_review_data = review_iterations.get("merged_prs_without_review_data")
+    if not isinstance(missing_review_data, list):
+        missing_review_data = []
+
+    bounded_merged_prs, merged_prs_omitted = _truncate_list(merged_prs, MERGED_PR_LIST_LIMIT)
+    bounded_review_rows, review_rows_omitted = _truncate_list(review_rows, REVIEW_ITERATION_LIST_LIMIT)
+    bounded_missing_review_data, missing_review_data_omitted = _truncate_list(
+        missing_review_data,
+        REVIEW_MISSING_PR_LIST_LIMIT,
+    )
+    bounded_workflow_families, workflow_families_omitted = _truncate_list(workflow_families, WORKFLOW_FAMILY_LIMIT)
+
     if not merged_prs:
         data_gaps.append("No merged pull requests were found in the selected window.")
     if review_iterations["counted_prs"] == 0:
         data_gaps.append("No merged pull request in the window had review_autofix phase_started events in ai-memory.")
     if not stall_reasons:
         data_gaps.append("No LABEL_REPAIR signals were captured in the available collector evidence for this window.")
+    if merged_prs_omitted > 0:
+        data_gaps.append(
+            f"Truncated merged_prs JSON list to the first {MERGED_PR_LIST_LIMIT} entries; "
+            f"{merged_prs_omitted} additional merged PR(s) were omitted to keep the retro prompt bounded."
+        )
+    if review_rows_omitted > 0:
+        data_gaps.append(
+            f"Truncated review_autofix.by_pr JSON list to the first {REVIEW_ITERATION_LIST_LIMIT} entries; "
+            f"{review_rows_omitted} additional PR iteration row(s) were omitted to keep the retro prompt bounded."
+        )
+    if missing_review_data_omitted > 0:
+        data_gaps.append(
+            f"Truncated merged_prs_without_review_data JSON list to the first {REVIEW_MISSING_PR_LIST_LIMIT} PR numbers; "
+            f"{missing_review_data_omitted} additional PR(s) were omitted to keep the retro prompt bounded."
+        )
+    if workflow_families_omitted > 0:
+        data_gaps.append(
+            f"Truncated workflow_families JSON list to the first {WORKFLOW_FAMILY_LIMIT} rows; "
+            f"{workflow_families_omitted} additional workflow family row(s) were omitted to keep the retro prompt bounded."
+        )
 
     cost_telemetry = aggregate_run_cost_telemetry(runs)
     judge_cycle_proxy_count = sum(
@@ -623,15 +665,41 @@ def build_weekly_retro_payload(
         },
         "warnings": warnings,
         "data_gaps": data_gaps,
+        "bounded_lists": {
+            "merged_prs": {
+                "limit": MERGED_PR_LIST_LIMIT,
+                "returned": len(bounded_merged_prs),
+                "omitted": merged_prs_omitted,
+            },
+            "review_autofix_by_pr": {
+                "limit": REVIEW_ITERATION_LIST_LIMIT,
+                "returned": len(bounded_review_rows),
+                "omitted": review_rows_omitted,
+            },
+            "review_autofix_missing_prs": {
+                "limit": REVIEW_MISSING_PR_LIST_LIMIT,
+                "returned": len(bounded_missing_review_data),
+                "omitted": missing_review_data_omitted,
+            },
+            "workflow_families": {
+                "limit": WORKFLOW_FAMILY_LIMIT,
+                "returned": len(bounded_workflow_families),
+                "omitted": workflow_families_omitted,
+            },
+        },
         "summary": summary,
-        "merged_prs": merged_prs,
-        "review_autofix": review_iterations,
+        "merged_prs": bounded_merged_prs,
+        "review_autofix": {
+            **review_iterations,
+            "by_pr": bounded_review_rows,
+            "merged_prs_without_review_data": bounded_missing_review_data,
+        },
         "judge_cycle_proxy": {
             "workflow_family": "orchestrate_poll",
             "count": judge_cycle_proxy_count,
         },
         "stall_reasons": stall_reasons,
-        "workflow_families": workflow_families,
+        "workflow_families": bounded_workflow_families,
         "cost_telemetry": cost_telemetry,
         "reviewer_finding_categories": {
             "available": False,
@@ -658,6 +726,7 @@ def render_retro_context_markdown(payload: dict[str, Any]) -> str:
     review_rows = [item for item in (payload.get("review_autofix") or {}).get("by_pr", []) if isinstance(item, dict)]
     workflow_rows = [item for item in payload.get("workflow_families", []) if isinstance(item, dict)]
     stall_rows = [item for item in payload.get("stall_reasons", []) if isinstance(item, dict)]
+    bounds = payload.get("bounded_lists") if isinstance(payload.get("bounded_lists"), dict) else {}
     warnings = [str(item) for item in payload.get("warnings", []) if str(item).strip()]
     data_gaps = [str(item) for item in payload.get("data_gaps", []) if str(item).strip()]
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
@@ -665,6 +734,17 @@ def render_retro_context_markdown(payload: dict[str, Any]) -> str:
     review_summary = payload.get("review_autofix") if isinstance(payload.get("review_autofix"), dict) else {}
     judge_cycle_proxy = payload.get("judge_cycle_proxy") if isinstance(payload.get("judge_cycle_proxy"), dict) else {}
     window = payload.get("window") if isinstance(payload.get("window"), dict) else {}
+
+    def _bounded_omitted_count(key: str) -> int:
+        entry = bounds.get(key)
+        if not isinstance(entry, dict):
+            return 0
+        return _to_int(entry.get("omitted"), 0)
+
+    merged_prs_omitted = _bounded_omitted_count("merged_prs")
+    review_rows_omitted = _bounded_omitted_count("review_autofix_by_pr")
+    missing_review_data_omitted = _bounded_omitted_count("review_autofix_missing_prs")
+    workflow_families_omitted = _bounded_omitted_count("workflow_families")
 
     lines = [
         "# Weekly Workflow Retro Context",
@@ -702,9 +782,9 @@ def render_retro_context_markdown(payload: dict[str, Any]) -> str:
             lines.append(
                 f"| #{_to_int(pr.get('number'), 0)} | {str(pr.get('title') or '').replace('|', '\\|')} | {pr.get('merged_at', '')} |"
             )
-        if len(merged_prs) > MERGED_PR_LIST_LIMIT:
+        if merged_prs_omitted > 0:
             lines.append("")
-            lines.append(f"- {len(merged_prs) - MERGED_PR_LIST_LIMIT} additional merged PR(s) omitted for brevity.")
+            lines.append(f"- {merged_prs_omitted} additional merged PR(s) omitted for brevity.")
     else:
         lines.append("- None")
 
@@ -716,9 +796,9 @@ def render_retro_context_markdown(payload: dict[str, Any]) -> str:
             lines.append(
                 f"| #{_to_int(row.get('number'), 0)} | {_to_int(row.get('iterations'), 0)} | {str(row.get('title') or '').replace('|', '\\|')} |"
             )
-        if len(review_rows) > REVIEW_ITERATION_LIST_LIMIT:
+        if review_rows_omitted > 0:
             lines.append("")
-            lines.append(f"- {len(review_rows) - REVIEW_ITERATION_LIST_LIMIT} additional PR iteration row(s) omitted for brevity.")
+            lines.append(f"- {review_rows_omitted} additional PR iteration row(s) omitted for brevity.")
     else:
         lines.append("- No merged PRs in the window had review_autofix iteration data.")
 
@@ -729,6 +809,10 @@ def render_retro_context_markdown(payload: dict[str, Any]) -> str:
             "- Merged PRs without review_autofix iteration data: "
             + ", ".join(f"#{_to_int(value, 0)}" for value in missing_review_data if _to_int(value, 0) > 0)
         )
+        if missing_review_data_omitted > 0:
+            lines.append(
+                f"- {missing_review_data_omitted} additional merged PR(s) without review_autofix data omitted for brevity."
+            )
 
     lines.extend(["", "## Workflow Families"])
     if workflow_rows:
@@ -744,6 +828,9 @@ def render_retro_context_markdown(payload: dict[str, Any]) -> str:
                     p95=_fmt_float(float(row.get("p95_duration_seconds") or 0.0)),
                 )
             )
+        if workflow_families_omitted > 0:
+            lines.append("")
+            lines.append(f"- {workflow_families_omitted} additional workflow family row(s) omitted for brevity.")
     else:
         lines.append("- None")
 

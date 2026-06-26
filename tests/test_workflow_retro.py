@@ -394,11 +394,98 @@ def test_load_ai_memory_run_events_streams_ledger_files() -> None:
 	}
 
 
+def test_build_weekly_retro_payload_truncates_prompt_facing_lists() -> None:
+	total_merged_prs = workflow_retro.MERGED_PR_LIST_LIMIT + 25
+	reviewed_prs = workflow_retro.REVIEW_ITERATION_LIST_LIMIT + 2
+	report = {
+		"runs": [
+			{
+				"repository": "owner/repo",
+				"run_id": idx + 1,
+				"workflow_name": f"Workflow {idx + 1}",
+				"workflow_family": f"family-{idx + 1:02d}",
+				"conclusion": "success" if idx % 2 == 0 else "failure",
+				"duration_seconds": 60 + idx,
+				"created_at": "2026-06-22T11:00:00Z",
+			}
+			for idx in range(workflow_retro.WORKFLOW_FAMILY_LIMIT + 3)
+		],
+		"summary": {},
+		"scope": {"repositories": ["owner/repo"]},
+		"errors": [],
+	}
+	merged_prs = [
+		{
+			"number": idx + 1,
+			"title": f"Retro PR {idx + 1}",
+			"url": f"https://github.com/owner/repo/pull/{idx + 1}",
+			"merged_at": "2026-06-22T12:00:00Z",
+		}
+		for idx in range(total_merged_prs)
+	]
+	run_events = [
+		{
+			"workflow": "review_autofix",
+			"event_type": "phase_started",
+			"pr_number": idx + 1,
+			"run_id": f"review-{idx + 1}",
+			"timestamp": "2026-06-22T12:30:00Z",
+		}
+		for idx in range(reviewed_prs)
+	]
+
+	def _fake_fetch_merged_pull_requests(*, repo: str, since_utc, until_utc):
+		assert repo == "owner/repo"
+		return merged_prs
+
+	def _fake_load_ai_memory_run_events(*, repo_root: Path, since_utc, until_utc, memory_branch: str, memory_root_relative: str):
+		assert repo_root == REPO_ROOT
+		return run_events
+
+	with _patched_module_attrs(
+		workflow_retro,
+		fetch_merged_pull_requests=_fake_fetch_merged_pull_requests,
+		load_ai_memory_run_events=_fake_load_ai_memory_run_events,
+	):
+		payload = workflow_retro.build_weekly_retro_payload(
+			report,
+			repo="owner/repo",
+			since_utc=workflow_retro._parse_iso8601("2026-06-19T09:00:00Z"),
+			until_utc=workflow_retro._parse_iso8601("2026-06-26T09:00:00Z"),
+			repo_root=REPO_ROOT,
+			memory_branch="ai-memory",
+			memory_root_relative="ai-memory",
+		)
+
+	bounds = payload["bounded_lists"]
+	assert payload["summary"]["merged_pr_count"] == total_merged_prs
+	assert len(payload["merged_prs"]) == workflow_retro.MERGED_PR_LIST_LIMIT
+	assert bounds["merged_prs"]["omitted"] == total_merged_prs - workflow_retro.MERGED_PR_LIST_LIMIT
+	assert payload["review_autofix"]["counted_prs"] == reviewed_prs
+	assert len(payload["review_autofix"]["by_pr"]) == workflow_retro.REVIEW_ITERATION_LIST_LIMIT
+	assert bounds["review_autofix_by_pr"]["omitted"] == reviewed_prs - workflow_retro.REVIEW_ITERATION_LIST_LIMIT
+	assert len(payload["review_autofix"]["merged_prs_without_review_data"]) == workflow_retro.REVIEW_MISSING_PR_LIST_LIMIT
+	assert bounds["review_autofix_missing_prs"]["omitted"] == 3
+	assert len(payload["workflow_families"]) == workflow_retro.WORKFLOW_FAMILY_LIMIT
+	assert bounds["workflow_families"]["omitted"] == 3
+	assert any("Truncated merged_prs JSON list" in item for item in payload["data_gaps"])
+	assert any("Truncated review_autofix.by_pr JSON list" in item for item in payload["data_gaps"])
+	assert any("Truncated merged_prs_without_review_data JSON list" in item for item in payload["data_gaps"])
+	assert any("Truncated workflow_families JSON list" in item for item in payload["data_gaps"])
+
+	markdown = workflow_retro.render_retro_context_markdown(payload)
+	assert "additional merged PR(s) omitted for brevity." in markdown
+	assert "additional PR iteration row(s) omitted for brevity." in markdown
+	assert "additional merged PR(s) without review_autofix data omitted for brevity." in markdown
+	assert "additional workflow family row(s) omitted for brevity." in markdown
+
+
 def main() -> int:
 	test_main_writes_deterministic_weekly_retro_context()
 	test_main_fails_open_on_pr_and_ai_memory_reads()
 	test_fetch_merged_pull_requests_extends_search_end_day_but_post_filters_exact_window()
 	test_load_ai_memory_run_events_streams_ledger_files()
+	test_build_weekly_retro_payload_truncates_prompt_facing_lists()
 	return 0
 
 
