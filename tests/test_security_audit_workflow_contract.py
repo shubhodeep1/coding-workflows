@@ -190,6 +190,17 @@ def test_security_audit_workflow_wires_codex_and_audit_env() -> None:
 	assert 'bash scripts/security_audit.sh' in content
 
 
+def test_security_audit_script_uses_read_only_codex_and_retry_wrappers() -> None:
+	content = SCRIPT_PATH.read_text(encoding="utf-8")
+	assert '--sandbox read-only' in content
+	assert 'gh_retry gh issue list' in content
+	assert 'gh_retry gh issue create' in content
+	assert 'gh_retry gh issue comment' in content
+	assert 'gh_retry gh issue edit' in content
+	assert 'gh_retry gh issue reopen' in content
+	assert 'marker_regex = re.compile(re.escape(followup_marker_prefix) + r"([^>]+) -->")' in content
+
+
 def test_internal_clarify_skips_security_audit_tracker_issues() -> None:
 	content = INTERNAL_CLARIFY_PATH.read_text(encoding="utf-8")
 	assert "if: ${{ !contains(github.event.issue.labels.*.name, 'ai:security-audit') }}" in content
@@ -285,6 +296,9 @@ def test_security_audit_filters_findings_and_caps_followups() -> None:
 
 	assert proc.returncode == 0, proc.stderr
 	assert "tracker=#9100 findings=2 followups_created=1" in proc.stdout
+	codex_args = final_state.get("codex_calls", [[]])[0]
+	assert "--sandbox" in codex_args
+	assert codex_args[codex_args.index("--sandbox") + 1] == "read-only"
 	assert len(final_state.get("label_create_args", [])) == 2
 	assert len(final_state.get("issue_create_args", [])) == 2
 	tracker_create_args = final_state["issue_create_args"][0]

@@ -91,20 +91,20 @@ cat > "${TRACKER_BODY_FILE}" <<EOF
 ${TRACKER_MARKER}
 # ${TRACKER_TITLE}
 
-This issue is managed by `.github/workflows/security-audit.yml`.
+This issue is managed by \`.github/workflows/security-audit.yml\`.
 
 It collects weekly and ad-hoc default-branch OWASP Top 10 + STRIDE audit results.
-Follow-up issues created from this tracker use the additive label `ai:security`.
+Follow-up issues created from this tracker use the additive label \`ai:security\`.
 EOF
 
 # No existing prefetch/cache exists in this standalone workflow. One bulk
 # issue-list call covers tracker discovery without per-issue follow-up probes.
-gh issue list \
+gh_retry gh issue list \
 	--repo "${GITHUB_REPOSITORY}" \
 	--state all \
 	--label "ai:security-audit" \
 	--limit 50 \
-	--json number,title,body,state,url > "${TRACKER_CANDIDATES_JSON}"
+		--json number,title,body,state,url > "${TRACKER_CANDIDATES_JSON}"
 
 python3 - "${TRACKER_CANDIDATES_JSON}" "${TRACKER_MARKER}" > "${TRACKER_SELECTION_ENV}" <<'PY'
 from __future__ import annotations
@@ -147,7 +147,7 @@ PY
 source "${TRACKER_SELECTION_ENV}"
 
 if [ -z "${TRACKER_NUMBER}" ]; then
-	TRACKER_URL="$(gh issue create \
+	TRACKER_URL="$(gh_retry gh issue create \
 		--repo "${GITHUB_REPOSITORY}" \
 		--title "${TRACKER_TITLE}" \
 		--label "ai:security-audit" \
@@ -155,9 +155,9 @@ if [ -z "${TRACKER_NUMBER}" ]; then
 	TRACKER_NUMBER="${TRACKER_URL##*/}"
 else
 	if [ "$(printf '%s' "${TRACKER_STATE}" | tr '[:lower:]' '[:upper:]')" = "CLOSED" ]; then
-		gh issue reopen "${TRACKER_NUMBER}" --repo "${GITHUB_REPOSITORY}"
+		gh_retry gh issue reopen "${TRACKER_NUMBER}" --repo "${GITHUB_REPOSITORY}"
 	fi
-	gh issue edit "${TRACKER_NUMBER}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:security-audit"
+	gh_retry gh issue edit "${TRACKER_NUMBER}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:security-audit"
 fi
 
 {
@@ -173,7 +173,7 @@ codex --ask-for-approval never \
 	exec \
 	--skip-git-repo-check \
 	--model "openai/gpt-5.4" \
-	--sandbox danger-full-access < "${RENDERED_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}"
+	--sandbox read-only < "${RENDERED_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}"
 
 python3 - \
 	"${REPO_ROOT}" \
@@ -435,12 +435,12 @@ PY
 
 # Standalone workflow: no cycle-local issue cache exists here. Fetch existing
 # follow-up issues once and reuse the result for weekly-cap accounting + dedupe.
-gh issue list \
+gh_retry gh issue list \
 	--repo "${GITHUB_REPOSITORY}" \
 	--state all \
 	--label "ai:security" \
 	--limit 200 \
-	--json number,title,body,createdAt,url > "${EXISTING_FOLLOWUPS_JSON}"
+		--json number,title,body,createdAt,url > "${EXISTING_FOLLOWUPS_JSON}"
 
 python3 - \
 	"${FILTERED_FINDINGS_FILE}" \
@@ -508,7 +508,7 @@ existing_followups = load_json(existing_followups_path, label="existing follow-u
 if not isinstance(findings, list) or not isinstance(summary, dict) or not isinstance(existing_followups, list):
 	raise SystemExit("security-audit summary generation received invalid JSON payloads")
 
-marker_regex = re.compile(r"<!-- ai:security-finding:([^>]+) -->")
+marker_regex = re.compile(re.escape(followup_marker_prefix) + r"([^>]+) -->")
 existing_finding_ids: set[str] = set()
 weekly_existing_count = 0
 now_utc = datetime.now(timezone.utc)
@@ -616,13 +616,13 @@ followup_summary_env_path.write_text(
 )
 PY
 
-gh issue comment "${TRACKER_NUMBER}" \
+gh_retry gh issue comment "${TRACKER_NUMBER}" \
 	--repo "${GITHUB_REPOSITORY}" \
 	--body-file "${TRACKER_COMMENT_FILE}"
 
 while IFS=$'\t' read -r FOLLOWUP_BODY_PATH FOLLOWUP_TITLE; do
 	[ -n "${FOLLOWUP_BODY_PATH}" ] || continue
-	gh issue create \
+	gh_retry gh issue create \
 		--repo "${GITHUB_REPOSITORY}" \
 		--title "${FOLLOWUP_TITLE}" \
 		--label "ai:security" \
