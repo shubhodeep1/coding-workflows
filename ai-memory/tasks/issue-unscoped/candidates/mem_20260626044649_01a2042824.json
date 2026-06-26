@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "Updates around touched-files scope guarding and related recovery logic show that guardrails are part of the product, not just implementation detail. When changing write paths, recovery scripts, or commit steps, add or adjust tests that prove the guard still blocks unexpected file changes and handles failure modes cleanly.",
+  "fingerprint": "69a6aed076206718d3ae90e1a2d61a5725e773b792ccf1f528c48419808a6a00",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28217708175",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28217708175",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3507",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3508",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3511",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3513",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3515",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3509",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3510",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3512",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3514",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3516"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260626044649_01a2042824",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Scope-guard behavior is important for repository safety and should be verified with explicit tests.",
+  "timestamps": {
+    "created_at": "2026-06-26T04:46:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
