@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3517,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3517\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3521\",\"pr_number\":3521,\"branch\":\"ai/issue-3517\",\"run_id\":\"28216796491\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/28216796491\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"agents.md\",\"ai-memory/examples/sample_memory_record.v1.json\",\"ai-memory/schemas/memory_record.v1.json\",\"pyproject.toml\",\"scripts/ai_memory.py\",\"scripts/ai_memory_lib.py\",\"scripts/files_touched_scope_guard.py\",\"scripts/implement_commit_changes.sh\",\"scripts/implement_diagnose_post_codex_failure.sh\",\"scripts/label_helpers.sh\",\"scripts/render_prompt.py\",\"tests/test_ai_memory_cli.py\",\"tests/test_memory_record_schema.py\"]}",
+  "fingerprint": "3ddf232400d1a856c2059ed36efaad273aa879512aefb69d10c79946f2ff3f42",
+  "lineage": {
+    "issue_number": 3517,
+    "parent_ids": [],
+    "pr_number": 3521,
+    "run_id": "28216796491",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28216796491",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3521"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260626043052_5e4499174e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3517,
+    "level": "run",
+    "pr_number": 3521,
+    "run_id": "28216796491"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3517: https://github.com/shubhodeep1/coding-workflows/pull/3521",
+  "timestamps": {
+    "created_at": "2026-06-26T04:30:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
