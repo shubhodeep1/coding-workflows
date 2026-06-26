@@ -74,6 +74,55 @@ def test_memory_record_schema_accepts_repo_learnings_without_version_bump() -> N
 		schema_payload = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
 		assert schema_payload["properties"]["schema_version"]["const"] == "memory_record.v1"
 		assert "repo_learnings" in schema_payload["properties"]["category"]["enum"]
+		assert "prune_marked_at" in schema_payload["properties"]["timestamps"]["properties"]
+
+
+def test_memory_record_schema_accepts_optional_prune_marked_at_timestamp() -> None:
+	with tempfile.TemporaryDirectory(prefix="memory-record-prune-schema-") as td:
+		memory_root = Path(td) / "ai-memory"
+		ai_memory_lib.ensure_memory_layout(memory_root)
+		shutil.copytree(REPO_ROOT / "ai-memory" / "schemas", memory_root / "schemas", dirs_exist_ok=True)
+
+		record = {
+			"record_id": "mem-test-prune-marker",
+			"schema_version": ai_memory_lib.MEMORY_RECORD_SCHEMA_VERSION,
+			"category": "task_summaries",
+			"status": "candidate",
+			"scope": {
+				"level": "task",
+				"issue_number": 42,
+				"pr_number": None,
+				"run_id": None,
+			},
+			"summary": "Prune-marked candidates stay schema-valid until maintenance archives them",
+			"details": "The optional prune_marked_at timestamp lets compact() archive old records in the current month.",
+			"confidence": 0.8,
+			"sensitive": False,
+			"fingerprint": "1" * 64,
+			"provenance": {
+				"workflow": "ai-implement",
+				"run_id": "run-456",
+				"run_attempt": 1,
+				"actor": "codex-bot",
+				"source_refs": [],
+			},
+			"lineage": {
+				"issue_number": 42,
+				"pr_number": None,
+				"run_id": None,
+				"parent_ids": [],
+				"supersedes": None,
+				"superseded_by": None,
+			},
+			"timestamps": {
+				"created_at": "2026-06-21T00:00:00Z",
+				"promoted_at": None,
+				"prune_marked_at": "2026-06-26T00:00:00Z",
+				"superseded_at": None,
+			},
+		}
+
+		ai_memory_lib.validate_memory_record(record, memory_root)
 
 
 def test_build_scope_treats_blank_override_as_unset() -> None:
@@ -83,8 +132,9 @@ def test_build_scope_treats_blank_override_as_unset() -> None:
 
 def main() -> int:
 	test_memory_record_schema_accepts_repo_learnings_without_version_bump()
+	test_memory_record_schema_accepts_optional_prune_marked_at_timestamp()
 	test_build_scope_treats_blank_override_as_unset()
-	print("OK: memory record schema accepts repo_learnings additively")
+	print("OK: memory record schema accepts repo_learnings and prune markers additively")
 	return 0
 
 

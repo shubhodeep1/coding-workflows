@@ -62,6 +62,7 @@
 .github/workflows/review_autofix.yml
 .github/workflows/review_autofix_sweep.yml
 .github/workflows/review_rb_judge_dispatch.yml
+.github/workflows/security-audit.yml
 .github/workflows/sync_ai_labels.yml
 .github/workflows/test-and-mark-stable.yml
 .github/workflows/update_workflows.yml
@@ -161,6 +162,7 @@ prompts/contracts/mode-orchestrate.yml
 prompts/contracts/mode-plan.yml
 prompts/contracts/mode-review-apply-fixes-continuation.yml
 prompts/contracts/mode-review-conflict-resolver-continuation.yml
+prompts/contracts/mode-security-audit.yml
 prompts/contracts/mode-validate-diagnose.yml
 prompts/contracts/mode-validate-discover.yml
 prompts/contracts/mode-validate-fix-harness.yml
@@ -194,6 +196,7 @@ prompts/mode-orchestrate.txt
 prompts/mode-plan.txt
 prompts/mode-review-apply-fixes-continuation.txt
 prompts/mode-review-conflict-resolver-continuation.txt
+prompts/mode-security-audit.txt
 prompts/mode-validate-diagnose.txt
 prompts/mode-validate-discover.txt
 prompts/mode-validate-fix-harness.txt
@@ -310,6 +313,8 @@ scripts/review_synthesise_smoke.sh
 scripts/reviewer_failback_chains.json
 scripts/run_validation_repo_checks.sh
 scripts/run_workspace_hook.sh
+scripts/security_audit.sh
+scripts/security_audit_fp_exclusions.json
 scripts/self_heal_validation.sh
 scripts/semantic_cache.py
 scripts/semble_helpers.sh
@@ -538,6 +543,7 @@ tests/test_review_semble_contract.py
 tests/test_review_surface_prompt_hardening.py
 tests/test_review_synthesise_smoke.py
 tests/test_run_substate_ledger.py
+tests/test_security_audit_workflow_contract.py
 tests/test_semantic_cache.py
 tests/test_semble_helpers.py
 tests/test_semble_workflow_parity_contract.py
