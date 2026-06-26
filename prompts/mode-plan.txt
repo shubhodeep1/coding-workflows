@@ -9,6 +9,9 @@ Read-only exploration sub-phase:
 - Allowed read-only operations in this sub-phase: grep/glob discovery, targeted file reads, manifest inspection, lockfile detection, and preview-only patch planning.
 - Use the exploration pass to identify likely files, confirm surrounding context, and outline intended non-writing patch shapes.
 - No write-mode tools are allowed during this sub-phase.
+- If the planning context already surfaces `lessons_learned_record.v1`
+  entries for the same files, review up to the 5 most recent before
+  drafting and treat them as soft priors, not gospel.
 
 {{REFERENCE_OUTPUT_CONTRACT}}
 Output contract — produce a plan covering, in order:
