@@ -34,6 +34,16 @@ def _patched_module_attrs(module, **replacements):
 			setattr(module, name, value)
 
 
+@contextlib.contextmanager
+def _patched_path_read_text(replacement):
+	original = Path.read_text
+	Path.read_text = replacement
+	try:
+		yield
+	finally:
+		Path.read_text = original
+
+
 def _write_json(path: Path, payload: object) -> None:
 	path.parent.mkdir(parents=True, exist_ok=True)
 	path.write_text(json.dumps(payload), encoding="utf-8")
@@ -332,10 +342,52 @@ def test_fetch_merged_pull_requests_extends_search_end_day_but_post_filters_exac
 	assert [item["number"] for item in results] == [11]
 
 
+def test_load_ai_memory_run_events_streams_ledger_files() -> None:
+	with tempfile.TemporaryDirectory(prefix="workflow-retro-ledger-") as td:
+		branch_dir = Path(td) / "branch-root"
+		memory_root = branch_dir / "ai-memory"
+		ledger_path = memory_root / "runs" / "run-1" / "ledger" / "events.jsonl"
+		ledger_path.parent.mkdir(parents=True, exist_ok=True)
+		ledger_path.write_text(
+			'\n'.join(
+				[
+					'{"timestamp":"2026-06-22T12:30:00Z","run_id":"review-1","workflow":"review_autofix","event_type":"phase_started","pr_number":11}',
+					'{"timestamp":"2026-06-28T12:30:00Z","run_id":"review-2"}',
+				]
+			)
+			+ '\n',
+			encoding="utf-8",
+		)
+
+		original_read_text = Path.read_text
+
+		def _guarded_read_text(self, *args, **kwargs):
+			if self == ledger_path:
+				raise AssertionError("load_ai_memory_run_events should stream ledger files")
+			return original_read_text(self, *args, **kwargs)
+
+		with _patched_module_attrs(
+			workflow_retro,
+			read_memory_root_from_branch=lambda *args, **kwargs: branch_dir,
+			resolve_memory_root_dir=lambda *args, **kwargs: memory_root,
+		):
+			with _patched_path_read_text(_guarded_read_text):
+				events = workflow_retro.load_ai_memory_run_events(
+					repo_root=REPO_ROOT,
+					since_utc=workflow_retro._parse_iso8601("2026-06-19T09:00:00Z"),
+					until_utc=workflow_retro._parse_iso8601("2026-06-26T09:00:00Z"),
+					memory_branch="ai-memory",
+					memory_root_relative="ai-memory",
+				)
+
+	assert [event["run_id"] for event in events] == ["review-1"]
+
+
 def main() -> int:
 	test_main_writes_deterministic_weekly_retro_context()
 	test_main_fails_open_on_pr_and_ai_memory_reads()
 	test_fetch_merged_pull_requests_extends_search_end_day_but_post_filters_exact_window()
+	test_load_ai_memory_run_events_streams_ledger_files()
 	return 0
 
 

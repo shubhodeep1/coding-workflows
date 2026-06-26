@@ -473,23 +473,23 @@ def load_ai_memory_run_events(
         events: list[dict[str, Any]] = []
         for ledger_path in sorted(runs_dir.glob("*/ledger/events.jsonl")):
             try:
-                raw_lines = ledger_path.read_text(encoding="utf-8").splitlines()
+                with ledger_path.open("r", encoding="utf-8") as handle:
+                    for raw_line in handle:
+                        line = raw_line.strip()
+                        if not line:
+                            continue
+                        try:
+                            payload = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if not isinstance(payload, dict):
+                            continue
+                        timestamp = _parse_iso8601(payload.get("timestamp"))
+                        if timestamp is None or timestamp < since_utc or timestamp > until_utc:
+                            continue
+                        events.append(payload)
             except OSError:
                 continue
-            for raw_line in raw_lines:
-                line = raw_line.strip()
-                if not line:
-                    continue
-                try:
-                    payload = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(payload, dict):
-                    continue
-                timestamp = _parse_iso8601(payload.get("timestamp"))
-                if timestamp is None or timestamp < since_utc or timestamp > until_utc:
-                    continue
-                events.append(payload)
         events.sort(key=lambda item: (str(item.get("timestamp") or ""), str(item.get("run_id") or "")))
         return events
     finally:
