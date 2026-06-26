@@ -75,6 +75,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `REVIEW_CONSOLIDATOR_REASONING` | No | `xhigh` | review_autofix | Reasoning effort for the consolidator stage. |
 | `REVIEW_CONSOLIDATOR_TIMEOUT_SECS` | No | `300` | review_autofix | Wall-clock timeout for the consolidator model call. |
 | `REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT` | No | `16000` | review_autofix | Max output tokens requested from the consolidator model. |
+| `REVIEW_DIATAXIS_LENS_ENABLED` | No | `true` | review_autofix | Documentation-only contract row for the advisory `DOCS COVERAGE (DIATAXIS)` consolidator lens. Current branch behavior is prompt-defined in `prompts/review-consolidator.txt` (no separate workflow toggle yet): keep it `low` severity, ground it in reviewer evidence plus touched files for user-visible changes, and name only still-missing `Reference` / `How-to` / `Tutorial` / `Explanation` updates. |
 | `REVIEW_PARSER_FAILOPEN` | No | `1` | review_autofix | When enabled, parser failures downgrade to empty / passthrough advisory artifacts and the editor continues from the raw reviewer bundle. |
 | `REVIEW_LEDGER_ENABLED` | No | `1` | review_autofix | Enable per-PR ledger persistence and emit `ledger_status.txt` for cross-iteration issue tracking. |
 | `REVIEW_LEDGER_PERSIST_LIMIT` | No | `2` | review_autofix | Persist-count threshold for promoting still-open advisory issues to `accepted-residual`. |
@@ -1063,6 +1064,7 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `REVIEW_CONSOLIDATOR_REASONING` | `xhigh` | Reasoning effort for the consolidator model call. |
 | `REVIEW_CONSOLIDATOR_TIMEOUT_SECS` | `300` | Timeout (seconds) for the consolidator model call. |
 | `REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT` | `16000` | Max output tokens requested from the consolidator model. |
+| `REVIEW_DIATAXIS_LENS_ENABLED` | `true` | Documentation-only contract row for the advisory `DOCS COVERAGE (DIATAXIS)` consolidator lens. Current branch behavior is prompt-defined only (no separate workflow toggle yet): keep it `low` severity and name only still-missing `Reference` / `How-to` / `Tutorial` / `Explanation` updates. |
 | `REVIEW_PARSER_FAILOPEN` | `1` | Parser kill switch: malformed / missing consolidator structure degrades to advisory fail-open artifacts instead of stopping the editor. |
 | `REVIEW_REVIEWER_CHECKLIST_ENABLED` | `1` | Append the reviewer checklist block to prompts when the checklist template is available. |
 | `REVIEW_REVIEWER_ITERATION_SCOPING` | `1` | Allow later reviewer passes to scope from last-run changed files plus actionable ledger rows; first pass remains full-diff. |
