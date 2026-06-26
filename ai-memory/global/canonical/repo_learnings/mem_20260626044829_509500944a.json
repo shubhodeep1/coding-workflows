@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Security-audit and review-related workflows rely on contract tests to prevent regressions in context handling and exclusions.",
   "timestamps": {
     "created_at": "2026-06-26T04:48:29Z",
