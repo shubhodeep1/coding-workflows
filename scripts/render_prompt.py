@@ -780,7 +780,7 @@ def _workflow_edit_restriction_value() -> str:
 
 
 def _persona_prefix_enabled() -> bool:
-	raw_value = os.environ.get("PROMPT_PERSONA_PREFIX_ENABLED", "true").strip().lower()
+	raw_value = os.environ.get("PROMPT_PERSONA_PREFIX_ENABLED", "false").strip().lower()
 	return bool(raw_value) and raw_value not in FALSEY_ENV_VALUES
 
 

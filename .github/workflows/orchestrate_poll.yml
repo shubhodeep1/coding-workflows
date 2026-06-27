@@ -410,7 +410,7 @@ jobs:
             install -m 0644 "${src}" "prompts/${pf}"
           done
 
-          for prompt_assembly_asset in _prelude_common.txt _prelude_semble.txt _prelude_output_contract.txt _templates/mode-judge.txt _templates/mode-judge-review-blocked.txt _templates/mode-judge-stall-recovery.txt; do
+          for prompt_assembly_asset in _prelude_common.txt _prelude_semble.txt _prelude_output_contract.txt _templates/mode-judge.txt _templates/mode-judge-review-blocked.txt _templates/mode-judge-stall-recovery.txt _templates/mode-orchestrate-poll-judge.txt; do
             asset_src=".codex-workflow-src/prompts/${prompt_assembly_asset}"
             if [ ! -f "${asset_src}" ] && [ -f ".codex-workflow-src-main/prompts/${prompt_assembly_asset}" ]; then
               asset_src=".codex-workflow-src-main/prompts/${prompt_assembly_asset}"
