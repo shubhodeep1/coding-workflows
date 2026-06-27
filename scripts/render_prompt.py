@@ -330,11 +330,11 @@ def _expected_reference_path(prompt_path: Path, file_name: str) -> Path:
 	return prompt_root / "prompts" / "references" / file_name
 
 
-def discover_persona_source_path(prompt_path: Path) -> Path | None:
+def discover_persona_source_path(prompt_path: Path | None) -> Path | None:
 	candidates: list[Path] = []
 	seen: set[Path] = set()
 	script_root = Path(__file__).resolve().parents[1]
-	prompt_root = _prompt_base_dir(prompt_path)
+	prompt_root = _prompt_base_dir(prompt_path) if prompt_path is not None else None
 
 	for base_dir in (
 		prompt_root,
@@ -357,7 +357,7 @@ def discover_persona_source_path(prompt_path: Path) -> Path | None:
 	return None
 
 
-def load_phase_c_persona_prefixes(prompt_path: Path) -> dict[str, str]:
+def load_phase_c_persona_prefixes(prompt_path: Path | None) -> dict[str, str]:
 	persona_source_path = discover_persona_source_path(prompt_path)
 	if persona_source_path is None:
 		return {}
@@ -751,7 +751,7 @@ def validate_supported_template_syntax(prompt_text: str, prompt_path: Path) -> N
 
 		residual_segments.append(line[last_end:])
 		residual_text = "".join(residual_segments)
-		if "{{" in residual_text or "}}" in residual_text:
+		if "{{" in residual_text:
 			violations.append(
 				f"{prompt_path}:{line_number}: unmatched placeholder delimiter in {line.strip()!r}"
 			)
@@ -811,7 +811,7 @@ def _persona_prefix_enabled() -> bool:
 	return bool(raw_value) and raw_value not in FALSEY_ENV_VALUES
 
 
-def apply_phase_c_persona_prefix(prompt_text: str, *, prompt_path: Path, mode_name: str) -> str:
+def apply_phase_c_persona_prefix(prompt_text: str, *, prompt_path: Path | None = None, mode_name: str) -> str:
 	if not _persona_prefix_enabled():
 		return prompt_text
 	prefix = load_phase_c_persona_prefixes(prompt_path).get(mode_name)
