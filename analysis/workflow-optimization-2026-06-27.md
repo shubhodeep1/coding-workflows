@@ -348,3 +348,160 @@
 |---|---|---:|---:|---:|---|
 | Serena | all observed runs | 0 | 0 | 0 | inactive in this window |
 | Semble | all observed runs | n/a | n/a | n/a | no probe counters emitted; availability only surfaced via env/log flags in `28282341733` |
+
+## Deep Audit — Workflows & Scripts (2026-06-27)
+
+### Section 1: Bug & Correctness Sweep
+
+#### BUG-001
+- **ID:** `BUG-001`
+- **File path:** `.github/workflows/implement.yml:3564-3598`
+- **Severity:** High
+- **Category tag:** `bug`
+- **Description:** The `SVB_REASON` / `ai:scope-blocked` branch creates the repo label, edits the issue, and posts the blocking comment with best-effort `2>/dev/null || true` calls only. In the same block, the human-facing comment says the issue “is now labeled `ai:scope-blocked`,” but there is no post-write verification that the label actually exists on the issue. This is a correctness gap because the safer `ai:destructive-blocked` path in the same workflow already does a read-back verification at `.github/workflows/implement.yml:3648-3700`. If `gh label create` or `gh issue edit` fails, the job still exits red while operators are told redispatch is blocked when it may not be.
+- **Recommended fix:** Reuse the destructive-block pattern for scope blocks: ensure the label exists, apply it with `gh_retry`, then verify with `gh issue view --json labels` before claiming the latch is active. The cleanest fix is a shared helper such as `scripts/label_helpers.sh::latch_issue_label <repo> <issue> <label> [remove_label]` and using it for both `ai:scope-blocked` and `ai:destructive-blocked`.
+
+#### BUG-002
+- **ID:** `BUG-002`
+- **File path:** `.github/workflows/test-and-mark-stable.yml:2934-2944`
+- **Severity:** Medium
+- **Category tag:** `bug`
+- **Description:** The cancel-on-close wait loop turns transient GitHub API misses into a hard 600-second timeout. Each iteration fetches the same run twice (`.status` then `.conclusion`), and both commands fall back to `""` on failure. The loop exits only when `EXISTING_STATUS=completed`, so any transient fetch error resets status to empty and keeps the loop spinning until the deadline. Because status and conclusion come from separate responses, the loop can also observe inconsistent state.
+- **Recommended fix:** Fetch `repos/${TEST_REPO}/actions/runs/${EXISTING_RUN_ID}` once per iteration, parse both fields from the same payload, and only overwrite the last-known-good values on a successful fetch. On fetch failure, retry within the iteration or emit an explicit API-error outcome instead of silently converting the state to empty strings.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+#### API-001
+- **ID:** `API-001`
+- **File path:** `.github/workflows/review_autofix.yml:852-887`
+- **Severity:** Medium
+- **Category tag:** `api-batching`
+- **Description:** In the PR-body/title fallback path, `issue_nodes_json` is initialized with `labels: null`, then the workflow enters a `while` loop and runs `gh issue view "${issue_number}" --json labels` for each candidate issue whose labels are unknown. That is a per-issue REST fetch inside the loop, even though the workflow only needs a boolean “has `ai:orchestrator-validate-required` label” answer for each candidate.
+- **Current call count:** `N` extra REST calls for `N` fallback-linked issues.
+- **Proposed call count:** `1` aliased GraphQL query for all candidate issue numbers.
+- **Batching pattern to extend:** `scripts/orchestrate_poll_process.sh::_fetch_candidate_issue_details_graphql`
+- **Recommended fix:** Batch-hydrate the fallback issue metadata once, up front, by extending the existing GraphQL batching helper to request each issue’s label names and feed that JSON into the existing loop.
+
+#### API-002
+- **ID:** `API-002`
+- **File path:** `.github/workflows/test-and-mark-stable.yml:2934-2944`
+- **Severity:** Low
+- **Category tag:** `api-redundancy`
+- **Description:** The cancel-on-close poll loop calls the same endpoint twice per iteration: once for `.status` and once for `.conclusion`. Over the 600-second budget and 5-second sleep interval, that doubles the steady-state API traffic for no additional information.
+- **Current call count:** `2` calls per iteration, up to about `240` calls over the full wait budget.
+- **Proposed call count:** `1` call per iteration, up to about `120` calls.
+- **Batching pattern to extend:** single-fetch parsing in `scripts/gh_helpers.sh::_safe_gh_jq`
+- **Recommended fix:** Capture the run JSON once per iteration and parse both fields locally.
+
+#### API-003
+- **ID:** `API-003`
+- **File path:** `scripts/review_rb_judge.sh:735-786`
+- **Severity:** Medium
+- **Category tag:** `api-batching`
+- **Description:** `review_rb_judge.sh` already does one GraphQL query to get `closingIssuesReferences.nodes[].number`, but then loops over those numbers and performs `_safe_gh_jq "repos/${REPOSITORY}/issues/${issue_number}"` calls until it finds the first linked issue body. The script only uses the first issue’s body and labels, so the second round-trip layer is redundant.
+- **Current call count:** `1 + N` calls (`1` GraphQL query plus up to `N` REST issue fetches).
+- **Proposed call count:** `1` GraphQL query.
+- **Batching pattern to extend:** `scripts/orchestrate_poll_process.sh::_fetch_candidate_issue_details_graphql`
+- **Recommended fix:** Extend the initial GraphQL query to request each linked issue’s `body` and `labels { nodes { name } }`, then stop after the first populated node without issuing per-issue REST GETs.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+#### DUP-001
+- **ID:** `DUP-001`
+- **File path:** `scripts/review_apply_fixes.sh:577-586`  
+  `scripts/review_conflict_prepare.sh:493-502`  
+  `scripts/review_run_reviewers.sh:1060-1069`
+- **Severity:** Low
+- **Category tag:** `duplication`
+- **Description:** `append_semble_query_section()` appears three times with the same signature and body: `-s` guard, `head -c "${max_bytes}"`, and trailing newline emission. This is exact helper duplication in review-side prompt assembly code.
+- **Shared module / signature:** `scripts/semble_helpers.sh::append_semble_query_section <label> <path> [max_bytes]`
+- **Callers:** `scripts/review_apply_fixes.sh`, `scripts/review_conflict_prepare.sh`, `scripts/review_run_reviewers.sh`
+- **Recommended fix:** Add the helper to the existing `scripts/semble_helpers.sh`, source it in the three callers, and delete the inline copies.
+
+#### DUP-002
+- **ID:** `DUP-002`
+- **File path:** `scripts/review_run_reviewers.sh:78-108`  
+  `scripts/review_conflict_resolve.sh:127-187`  
+  `scripts/review_rb_judge.sh:115-129`
+- **Severity:** Medium
+- **Category tag:** `duplication`
+- **Description:** Review runtime plumbing is duplicated across multiple entrypoints. `resolve_ledger_substate_helper()` appears in both `review_run_reviewers.sh` and `review_conflict_resolve.sh`, while `read_codex_stall_guard_state()` appears in all three files. This is control-path logic for stall detection and ledger emission; drift here will be subtle and hard to test.
+- **Shared module / signature:** new `scripts/review_runtime_helpers.sh` with `resolve_ledger_substate_helper [support_scripts_dir]` and `read_codex_stall_guard_state <status_file>`
+- **Callers:** `scripts/review_run_reviewers.sh`, `scripts/review_conflict_resolve.sh`, `scripts/review_rb_judge.sh`
+- **Recommended fix:** Move both helpers into one sourced runtime helper module and update the three scripts to import it.
+
+#### DUP-003
+- **ID:** `DUP-003`
+- **File path:** `scripts/label_helpers.sh:120-154`  
+  `scripts/orchestrate_poll_process.sh:2133-2188`
+- **Severity:** Medium
+- **Category tag:** `duplication`
+- **Description:** The repo has two different `ensure_label_exists()` implementations with the same intent but drifted semantics. `scripts/label_helpers.sh` accepts an explicit repo, uses hard-coded label maps, and returns `1` on genuine failures; `scripts/orchestrate_poll_process.sh` hard-codes `GITHUB_REPOSITORY`, consults `.github/ai/label_contract.v1.json`, caches ensured labels, and still returns `0` after warning on failure. Same name plus different failure behavior is a maintenance trap.
+- **Shared module / signature:** make `scripts/label_helpers.sh::ensure_label_exists <label> [repo]` canonical, with optional contract lookup/cache behavior added there
+- **Callers:** `scripts/orchestrate_poll_process.sh` and any workflow/script currently re-implementing label creation
+- **Recommended fix:** Consolidate on one helper in `scripts/label_helpers.sh`, fold the orchestrator-only contract/cache features into it, and remove the local copy from `scripts/orchestrate_poll_process.sh`.
+
+#### DUP-004
+- **ID:** `DUP-004`
+- **File path:** `.github/workflows/mark-stable.yml:314-345`  
+  `.github/workflows/test-and-mark-stable.yml:3446-3477`  
+  `.github/workflows/mark-stable.yml:468-489`  
+  `.github/workflows/test-and-mark-stable.yml:4748-4769`
+- **Severity:** Low
+- **Category tag:** `duplication`
+- **Description:** Two release workflows carry exact duplicate shell blocks: the “Script-workflow cross-reference” block and the “Tag version and update stable pointer” block. This is near-duplicate workflow structure, so release-policy changes must be hand-applied in both places.
+- **Shared module / signature:** `python3 scripts/check_workflow_script_refs.py` for cross-reference validation, plus new `scripts/publish_release_tags.sh <version> [remote]`
+- **Callers:** `.github/workflows/mark-stable.yml`, `.github/workflows/test-and-mark-stable.yml`
+- **Recommended fix:** Replace the inline blocks with shared script calls so both workflows reuse one implementation.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+#### EXPR-001
+- **ID:** `EXPR-001`
+- **File path:** `.github/workflows/memory_maintenance.yml:45-391`
+- **Severity:** Medium
+- **Category tag:** `expression-limit`
+- **Description:** The repository-learnings extraction step is a large inline `run:` block with `${{ }}` interpolations plus substantial shell and two embedded Python heredocs. Measured expression body size is about `15,152` characters, leaving roughly `5,848` characters before GitHub’s `21,000`-character hard failure limit. This repo has already hit the expression ceiling elsewhere, so this step is already in the warning zone.
+- **Recommended fix:** Extract the learnings-extraction logic to `scripts/memory_extract_repo_learnings.sh` and move the embedded Python into dedicated scripts/modules. That keeps the workflow expression small and makes future prompt/logic growth safer.
+
+No workflow file exceeded `800 KB` in this scan, and no other `run:`/`if:` expression crossed the `15,000`-character warning threshold.
+
+### Section 5: Cross-Cutting Concerns
+
+#### SHELL-001
+- **ID:** `SHELL-001`
+- **File path:** `scripts/codex_thread_reuse.sh:492-557,806-856`
+- **Severity:** Low
+- **Category tag:** `shellcheck`
+- **Description:** The script uses `cmd` as an array in `codex_thread_reuse_direct_run()` (`local -a cmd=()` and `${cmd[@]}`) and then reuses `cmd` as a scalar in `codex_thread_reuse_main()` (`local cmd="${1:-}"`). This is the ShellCheck collision behind SC2178/SC2128: the same identifier carries array and scalar meanings in one file, making `${cmd}` / `${cmd[@]}` handling fragile.
+- **Recommended fix:** Rename the scalar in `codex_thread_reuse_main()` to `subcommand` and keep `cmd` reserved for the array command-builder path.
+
+#### CONSIST-001
+- **ID:** `CONSIST-001`
+- **File path:** `.github/workflows/review_autofix.yml:950-966`  
+  `scripts/label_helpers.sh:120-154`
+- **Severity:** Low
+- **Category tag:** `consistency`
+- **Description:** `review_autofix.yml` defines an inline `gh_retry()` and `ensure_label_exists()` for the deterministic-skip-merge path instead of using the repo’s canonical helpers. The inline version retries blindly and swallows label-create failures with `|| true`, while `scripts/label_helpers.sh` preserves warning behavior and central label metadata. That gives one workflow different retry/label semantics from the rest of the repo.
+- **Recommended fix:** Move this block into a repo script or source a minimal helper shim that delegates to the canonical `gh_retry` and `ensure_label_exists` implementations.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 1 | BUG-001 |
+| Medium | 6 | BUG-002, API-001, API-003, DUP-002, DUP-003, EXPR-001 |
+| Low | 5 | API-002, DUP-001, DUP-004, SHELL-001, CONSIST-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---:|---|
+| Critical/High bug fixes | 2-3 | Medium |
+| API call optimization | 3-4 | Medium |
+| Code modularization | 10+ | Large |
+| Expression size reduction | 2-3 | Medium |
+| Medium/Low fixes | 2 | Small |
