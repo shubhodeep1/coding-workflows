@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "Merged runs show workflow YAML, label helpers, README/agent docs, and contract tests changing together. When updating labels or workflow gating, plan for corresponding documentation and contract assertions to keep operator-facing guidance and CI behavior consistent.",
+  "fingerprint": "7aefd7c1b6c733b03c64c08038bd1f085c6672f6905e17ff235594909e7ba1fa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28282971909",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28282971909",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3531",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3533",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3535",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3537",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3540",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3532",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3534",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3536",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3538",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3541"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260627075241_6b2f37be38",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow and label contract changes usually cascade into docs and contract tests, so treat them as cross-cutting updates.",
+  "timestamps": {
+    "created_at": "2026-06-27T07:52:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
