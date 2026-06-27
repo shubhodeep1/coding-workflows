@@ -854,7 +854,7 @@ jobs:
 
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh lint_pr_body_auto_close.py; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh lint_pr_body_auto_close.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -997,6 +997,8 @@ jobs:
             --schema-path "ai-memory/schemas/workflow_overlay.v1.json" \
             --github-env "${GITHUB_ENV}"
 
+          echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${{ vars.PROMPT_PRELUDE_REFACTOR_ENABLED || 'false' }}" >> "$GITHUB_ENV"
+
           for f in unattended_system_instructions.md ai_pipeline.md; do
             if [ ! -f "${f}" ]; then
               src=".codex-workflow-src/${f}"
@@ -1014,7 +1016,7 @@ jobs:
             fi
           done
 
-          mkdir -p prompts prompts/contracts
+          mkdir -p prompts prompts/contracts prompts/_templates
           if [ ! -f prompts/mode-implement-diagnose.txt ]; then
             src=".codex-workflow-src/prompts/mode-implement-diagnose.txt"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/mode-implement-diagnose.txt" ]; then
@@ -1080,6 +1082,25 @@ jobs:
             install -m 0644 "${src}" "prompts/contracts/${f}"
             if [ "${is_self_repo}" = "false" ]; then
               echo "prompts/contracts/${f}" >> "${FETCHED_MANIFEST}"
+            fi
+          done
+
+          for prompt_assembly_asset in _prelude_common.txt _prelude_serena.txt _prelude_output_contract.txt _templates/mode-implement-diagnose.txt _templates/mode-implement-diagnose-continuation.txt _templates/mode-implement-repair.txt _templates/mode-implement-repair-continuation.txt _templates/mode-validate-self-heal-continuation.txt; do
+            if [ -f "prompts/${prompt_assembly_asset}" ]; then
+              continue
+            fi
+            src=".codex-workflow-src/prompts/${prompt_assembly_asset}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/${prompt_assembly_asset}" ]; then
+              src=".codex-workflow-src-main/prompts/${prompt_assembly_asset}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::error::Failed to stage required file prompts/${prompt_assembly_asset}"
+              exit 1
+            fi
+            mkdir -p "$(dirname -- "prompts/${prompt_assembly_asset}")"
+            install -m 0644 "${src}" "prompts/${prompt_assembly_asset}"
+            if [ "${is_self_repo}" = "false" ]; then
+              echo "prompts/${prompt_assembly_asset}" >> "${FETCHED_MANIFEST}"
             fi
           done
 

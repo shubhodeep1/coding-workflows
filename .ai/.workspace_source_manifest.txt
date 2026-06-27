@@ -108,6 +108,7 @@ codex.md
 docs/INVENTORY.md
 docs/ai-tools-future-improvements.md
 docs/awesome-cc-future-improvements.md
+docs/changelog-style.md
 docs/completed/ai-code-review-learnings-plan.md
 docs/completed/apply-ai-tools-learnings-plan.md
 docs/completed/integration-sync-resolver-self-heal-plan.md
@@ -344,6 +345,7 @@ scripts/validation_selftest_status.py
 scripts/validation_template_bootstrap.py
 scripts/verify_integration_fingerprints.py
 scripts/watchdog_helpers.sh
+scripts/workflow_retro.py
 scripts/workspace_init.sh
 scripts/workspace_safety_check.sh
 scripts/write_codex_config.sh
@@ -502,6 +504,7 @@ tests/test_phase_skip_gate_telemetry_contract.py
 tests/test_plan_auto_answer_recommended_parser.py
 tests/test_plan_auto_approve_safe_state_fetch.py
 tests/test_plan_clarify_blocked_output.py
+tests/test_plan_clarify_header_prompt_staging.py
 tests/test_plan_diagrams_contract.py
 tests/test_plan_reuse_audit_contract.py
 tests/test_plan_scope_mode_contract.py
@@ -602,6 +605,7 @@ tests/test_workflow_gh_retry_fallback_contract.py
 tests/test_workflow_log_analysis_failure_contract.py
 tests/test_workflow_overlay_core.py
 tests/test_workflow_overlay_orchestrator.py
+tests/test_workflow_retro.py
 tests/test_workspace_cache_maintenance.py
 tests/test_workspace_hooks.py
 tests/test_workspace_init.py

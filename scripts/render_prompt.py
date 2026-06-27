@@ -20,6 +20,7 @@ except ImportError:  # pragma: no cover - dependency is optional
 
 PLACEHOLDER_PATTERN = re.compile(r"\{\{([A-Za-z0-9_]+)\}\}")
 STANDALONE_PLACEHOLDER_PATTERN = re.compile(r"^[ \t]*\{\{([A-Za-z0-9_]+)\}\}[ \t]*$")
+INCLUDE_DIRECTIVE_PATTERN = re.compile(r'^[ \t]*\{%[ \t]*include[ \t]+"([^"\n]+)"[ \t]*%\}[ \t]*$')
 VARIABLE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_]+$")
 OVERLAY_MODE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*$")
 CONTRACT_TOP_LEVEL_KEYS = {"required_vars", "optional_vars", "forbidden_vars"}
@@ -117,6 +118,10 @@ class PromptLoadError(RenderPromptError):
 	"""Raised when the prompt file cannot be loaded."""
 
 
+class PromptAssemblyError(RenderPromptError):
+	"""Raised when a prompt template include cannot be assembled."""
+
+
 class CliValueError(RenderPromptError):
 	"""Raised when CLI-provided variable mappings are invalid."""
 
@@ -131,6 +136,14 @@ class ContractViolationError(RenderPromptError):
 
 class WorkflowOverlayError(RenderPromptError):
 	"""Raised when workflow-overlay prompt overrides are invalid."""
+
+
+@dataclass(frozen=True)
+class PromptFragment:
+	"""One prompt fragment before include assembly."""
+
+	path: Path
+	text: str
 
 
 @dataclass(frozen=True)
@@ -169,6 +182,16 @@ def build_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser(description="Render prompt templates with optional mode contracts")
 	parser.add_argument("prompt_file", help="Path to the prompt template file")
 	parser.add_argument(
+		"--assemble-only",
+		action="store_true",
+		help="Expand include directives and workflow overlays but do not render placeholders",
+	)
+	parser.add_argument(
+		"--input-already-assembled",
+		action="store_true",
+		help="Treat the input file as already overlay-expanded and include-assembled",
+	)
+	parser.add_argument(
 		"--legacy-mode-name",
 		default=None,
 		help="Optional mode-name override for legacy shims",
@@ -198,6 +221,90 @@ def load_prompt(prompt_path: Path) -> str:
 		return _normalize_prompt_text(prompt_path.read_text(encoding="utf-8"))
 	except OSError as exc:
 		raise PromptLoadError(f"Unable to read prompt file '{prompt_path}': {exc}") from exc
+
+
+def _find_prompt_root(prompt_path: Path) -> Path | None:
+	resolved_prompt_path = prompt_path.resolve()
+	for candidate in (resolved_prompt_path.parent, *resolved_prompt_path.parents):
+		if candidate.name == "prompts":
+			return candidate
+	return None
+
+
+def _prompt_base_dir(prompt_path: Path) -> Path | None:
+	prompt_root = _find_prompt_root(prompt_path)
+	if prompt_root is None:
+		return None
+	return prompt_root.parent
+
+
+def _unique_paths(paths: list[Path]) -> tuple[Path, ...]:
+	ordered_paths: list[Path] = []
+	seen_paths: set[Path] = set()
+	for candidate in paths:
+		if candidate in seen_paths:
+			continue
+		seen_paths.add(candidate)
+		ordered_paths.append(candidate)
+	return tuple(ordered_paths)
+
+
+def _resolve_include_path(current_path: Path, include_target: str) -> Path:
+	include_path = Path(include_target.strip())
+	if not include_target.strip():
+		raise PromptAssemblyError(f"Empty include target in '{current_path}'")
+	if include_path.is_absolute():
+		raise PromptAssemblyError(
+			f"Absolute include paths are not allowed in '{current_path}': {include_target}"
+		)
+
+	prompt_root = _find_prompt_root(current_path)
+	candidate_paths = [
+		(current_path.parent / include_path).resolve(),
+	]
+	if prompt_root is not None:
+		candidate_paths.append((prompt_root / include_path).resolve())
+
+	for candidate in _unique_paths(candidate_paths):
+		if prompt_root is not None:
+			try:
+				candidate.relative_to(prompt_root)
+			except ValueError:
+				continue
+		if candidate.is_file():
+			return candidate
+
+	raise PromptAssemblyError(
+		f"Included prompt fragment not found from '{current_path}': {include_target}"
+	)
+
+
+def _assemble_prompt_fragment(fragment: PromptFragment, *, stack: tuple[Path, ...]) -> str:
+	assembled_lines: list[str] = []
+	for raw_line in fragment.text.splitlines():
+		include_match = INCLUDE_DIRECTIVE_PATTERN.fullmatch(raw_line)
+		if include_match is None:
+			assembled_lines.append(f"{raw_line}\n")
+			continue
+
+		include_path = _resolve_include_path(fragment.path, include_match.group(1))
+		if include_path in stack:
+			include_chain = " -> ".join(str(path) for path in (*stack, include_path))
+			raise PromptAssemblyError(f"Cyclic prompt include detected: {include_chain}")
+		assembled_lines.append(
+			_assemble_prompt_fragment(
+				PromptFragment(path=include_path, text=load_prompt(include_path)),
+				stack=(*stack, include_path),
+			)
+		)
+	return "".join(assembled_lines)
+
+
+def assemble_prompt_fragments(fragments: tuple[PromptFragment, ...]) -> str:
+	return "".join(
+		_assemble_prompt_fragment(fragment, stack=(fragment.path.resolve(),))
+		for fragment in fragments
+	)
 
 
 def resolve_mode_name(prompt_path: Path, legacy_mode_name: str | None) -> str:
@@ -246,7 +353,7 @@ def discover_contract_path(prompt_path: Path, mode_name: str) -> Path | None:
 	candidates: list[Path] = []
 	seen: set[Path] = set()
 	script_root = Path(__file__).resolve().parents[1]
-	prompt_root = prompt_path.parent.parent if prompt_path.parent.name == "prompts" else None
+	prompt_root = _prompt_base_dir(prompt_path)
 
 	_append_contract_candidate(candidates, seen, prompt_root, mode_name)
 	_append_contract_candidate(candidates, seen, Path.cwd(), mode_name)
@@ -279,7 +386,7 @@ def discover_reference_path(prompt_path: Path, file_name: str) -> Path | None:
 	candidates: list[Path] = []
 	seen: set[Path] = set()
 	script_root = Path(__file__).resolve().parents[1]
-	prompt_root = prompt_path.parent.parent if prompt_path.parent.name == "prompts" else None
+	prompt_root = _prompt_base_dir(prompt_path)
 
 	_append_reference_candidate(candidates, seen, prompt_root, file_name)
 	_append_reference_candidate(candidates, seen, Path.cwd(), file_name)
@@ -294,7 +401,7 @@ def discover_reference_path(prompt_path: Path, file_name: str) -> Path | None:
 
 
 def _expected_reference_path(prompt_path: Path, file_name: str) -> Path:
-	prompt_root = prompt_path.parent.parent if prompt_path.parent.name == "prompts" else Path.cwd()
+	prompt_root = _prompt_base_dir(prompt_path) or Path.cwd()
 	return prompt_root / "prompts" / "references" / file_name
 
 
@@ -798,14 +905,19 @@ def _resolve_overlay_fragment_path(repo_root: Path, raw_path: str) -> Path:
 	return fragment_path
 
 
-def apply_workflow_overlay(prompt_text: str, *, mode_name: str) -> str:
+def apply_workflow_overlay(
+	prompt_path: Path,
+	prompt_text: str,
+	*,
+	mode_name: str,
+) -> tuple[PromptFragment, ...]:
 	overlay = load_workflow_overlay_from_env()
 	if overlay is None or not overlay.overrides:
-		return prompt_text
+		return (PromptFragment(path=prompt_path, text=prompt_text),)
 
 	matches = [override for override in overlay.overrides if override.mode_name == mode_name]
 	if not matches:
-		return prompt_text
+		return (PromptFragment(path=prompt_path, text=prompt_text),)
 	if len(matches) > 1:
 		raise WorkflowOverlayError(
 			f"Multiple workflow-overlay prompt overrides matched mode '{mode_name}'"
@@ -814,14 +926,17 @@ def apply_workflow_overlay(prompt_text: str, *, mode_name: str) -> str:
 	match = matches[0]
 	if match.replace_path is not None:
 		replacement_path = _resolve_overlay_fragment_path(overlay.repo_root, match.replace_path)
-		return load_prompt(replacement_path)
+		return (PromptFragment(path=replacement_path, text=load_prompt(replacement_path)),)
 
 	if match.append_path is None:
 		raise WorkflowOverlayError(
 			f"Workflow-overlay prompt override for mode '{mode_name}' is missing append/replace path"
 		)
 	append_path = _resolve_overlay_fragment_path(overlay.repo_root, match.append_path)
-	return prompt_text + load_prompt(append_path)
+	return (
+		PromptFragment(path=prompt_path, text=prompt_text),
+		PromptFragment(path=append_path, text=load_prompt(append_path)),
+	)
 
 
 def _render_inline_placeholders(line: str, values: dict[str, str]) -> str:
@@ -852,9 +967,19 @@ def main(argv: list[str] | None = None) -> int:
 	prompt_path = Path(args.prompt_file)
 
 	try:
-		prompt_text = load_prompt(prompt_path)
 		mode_name = resolve_mode_name(prompt_path, args.legacy_mode_name)
-		prompt_text = apply_workflow_overlay(prompt_text, mode_name=mode_name)
+		if args.input_already_assembled:
+			prompt_text = load_prompt(prompt_path)
+		else:
+			prompt_fragments = apply_workflow_overlay(
+				prompt_path,
+				load_prompt(prompt_path),
+				mode_name=mode_name,
+			)
+			prompt_text = assemble_prompt_fragments(prompt_fragments)
+		if args.assemble_only:
+			sys.stdout.write(prompt_text)
+			return 0
 		provided_values = parse_cli_variables(args.variables)
 		legacy_env_values = collect_legacy_env_values()
 		contract_path = discover_contract_path(prompt_path, mode_name)

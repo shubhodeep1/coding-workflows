@@ -29,6 +29,7 @@ def test_validate_workflow_bootstrap_uses_shared_helper_and_lists_template_asset
 	required_snippets = [
 		'helper_path="scripts/stage_workflow_support.sh"',
 		'bash "${helper_path}" validate --manifest "${manifest_path}"',
+		"scripts/assemble_prompt.sh",
 		"scripts/render_prompt.py",
 		"scripts/render_validation_templates.py",
 		"scripts/templates/slot_manifest.schema.json",
@@ -90,6 +91,22 @@ def test_validate_workflow_bootstrap_uses_shared_helper_and_lists_template_asset
 		"workflow-templates/validation-harness/python-mongo-repo-checks/tests/_lib/import_audit.py.j2",
 	]
 	for snippet in required_snippets:
+		assert snippet in wf
+
+
+def test_validate_workflow_bootstrap_lists_prompt_assembly_assets() -> None:
+	wf = _workflow_text()
+	for snippet in (
+		"prompts/_prelude_common.txt",
+		"prompts/_prelude_common_large.txt",
+		"prompts/_prelude_serena.txt",
+		"prompts/_prelude_output_contract.txt",
+		"prompts/_templates/mode-validate-diagnose.txt",
+		"prompts/_templates/mode-validate-discover.txt",
+		"prompts/_templates/mode-validate-fix-harness.txt",
+		"prompts/_templates/mode-validate-self-heal.txt",
+		"prompts/_templates/mode-validate-self-heal-continuation.txt",
+	):
 		assert snippet in wf
 
 
@@ -216,6 +233,7 @@ def test_run_validation_repo_checks_default_commands_do_not_reparse_shell_metach
 
 def main() -> int:
 	test_validate_workflow_bootstrap_uses_shared_helper_and_lists_template_assets()
+	test_validate_workflow_bootstrap_lists_prompt_assembly_assets()
 	test_stage_workflow_support_helper_runs_overlay_loader_for_validate()
 	test_stage_workflow_support_helper_uses_portable_copy_guard_and_optional_main_checkout()
 	test_validate_workflow_passes_template_default_env()

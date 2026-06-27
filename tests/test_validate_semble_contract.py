@@ -38,6 +38,19 @@ OPTIONAL_PRESERVED_VALIDATE_PROMPTS = (
 	"prompts/mode-validate-self-heal.txt",
 	"prompts/mode-validate-self-heal-continuation.txt",
 )
+REQUIRED_VALIDATE_ASSEMBLY_ASSETS = (
+	"prompts/_prelude_common.txt",
+	"prompts/_prelude_common_large.txt",
+	"prompts/_prelude_serena.txt",
+	"prompts/_prelude_output_contract.txt",
+	"prompts/_templates/mode-validate-diagnose.txt",
+	"prompts/_templates/mode-validate-discover.txt",
+	"prompts/_templates/mode-validate-fix-harness.txt",
+)
+OPTIONAL_VALIDATE_ASSEMBLY_ASSETS = (
+	"prompts/_templates/mode-validate-self-heal.txt",
+	"prompts/_templates/mode-validate-self-heal-continuation.txt",
+)
 STAGED_VALIDATE_WORKSPACE_PROMPTS = STAGED_REQUIRED_VALIDATE_PROMPTS + OPTIONAL_PRESERVED_VALIDATE_PROMPTS
 RENDER_PROMPT_MODULE_NAME = "_validate_semble_render_prompt"
 REFERENCE_PATH_RE = re.compile(r"(?P<path>[^\s'\"]*/prompts/references/[^\s:'\"]+\.txt)")
@@ -79,23 +92,27 @@ def _import_render_prompt(script_path: Path = SCRIPTS_DIR / "render_prompt.py", 
 	return render_prompt
 
 
-def _manifest_required_prompts() -> list[str]:
+def _manifest_string_array(key: str) -> list[str]:
 	workflow_text = _workflow_text()
-	key = '"required_prompts"'
+	key = json.dumps(key)
 	key_index = workflow_text.find(key)
 	if key_index == -1:
-		raise AssertionError("validate.yml support manifest is missing a required_prompts array")
+		raise AssertionError(f"validate.yml support manifest is missing a {json.loads(key)} array")
 	field_start = workflow_text.find(":", key_index + len(key))
 	array_start = workflow_text.find("[", field_start)
 	if field_start == -1 or array_start == -1:
-		raise AssertionError("validate.yml support manifest is missing a required_prompts array")
+		raise AssertionError(f"validate.yml support manifest is missing a {json.loads(key)} array")
 	try:
-		required_prompts, _ = json.JSONDecoder().raw_decode(workflow_text[array_start:])
+		values, _ = json.JSONDecoder().raw_decode(workflow_text[array_start:])
 	except json.JSONDecodeError as exc:
-		raise AssertionError("validate.yml support manifest contains an invalid required_prompts array") from exc
-	if not isinstance(required_prompts, list) or not all(isinstance(item, str) for item in required_prompts):
-		raise AssertionError("validate.yml support manifest required_prompts must be a string array")
-	return required_prompts
+		raise AssertionError(f"validate.yml support manifest contains an invalid {json.loads(key)} array") from exc
+	if not isinstance(values, list) or not all(isinstance(item, str) for item in values):
+		raise AssertionError(f"validate.yml support manifest {json.loads(key)} must be a string array")
+	return values
+
+
+def _manifest_required_prompts() -> list[str]:
+	return _manifest_string_array("required_prompts")
 
 
 def _missing_reference_path_from_error(error_text: str) -> Path | None:
@@ -169,6 +186,17 @@ def test_validate_manifest_stages_reference_dependencies() -> None:
 		assert (REPO_ROOT / "prompts" / "references" / file_name).is_file(), (
 			f"prompts/references/{file_name} is staged by the manifest but does not exist on disk"
 		)
+
+
+def test_validate_manifest_stages_prompt_assembly_assets() -> None:
+	required_prompts = _manifest_required_prompts()
+	optional_preserve = _manifest_string_array("optional_preserve_files_after_prompts")
+	for repo_path in REQUIRED_VALIDATE_ASSEMBLY_ASSETS:
+		assert repo_path in required_prompts, repo_path
+		assert (REPO_ROOT / repo_path).is_file(), repo_path
+	for repo_path in OPTIONAL_VALIDATE_ASSEMBLY_ASSETS:
+		assert repo_path in optional_preserve, repo_path
+		assert (REPO_ROOT / repo_path).is_file(), repo_path
 
 
 def test_validate_prompts_include_serena_placeholder() -> None:
@@ -315,6 +343,7 @@ def main() -> int:
 	failures: list[str] = []
 	for test_fn in (
 		test_validate_manifest_stages_reference_dependencies,
+		test_validate_manifest_stages_prompt_assembly_assets,
 		test_validate_prompts_include_serena_placeholder,
 		test_validate_workflow_lists_semble_support_files_in_helper_manifest,
 		test_validate_workflow_lists_serena_support_files_in_helper_manifest,

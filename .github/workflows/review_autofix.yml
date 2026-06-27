@@ -1341,6 +1341,7 @@ jobs:
             echo "::error::stage_workflow_support.sh not found in checked-out support sources (${SCRIPT_REF} and optional main snapshot) in shubhodeep1/coding-workflows."
             exit 1
           fi
+          echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${{ vars.PROMPT_PRELUDE_REFACTOR_ENABLED || 'false' }}" >> "$GITHUB_ENV"
           CURRENT_REPOSITORY="${{ github.repository }}" \
           WORKFLOW_SOURCE_REPO="shubhodeep1/coding-workflows" \
           bash "${helper}"
@@ -2647,6 +2648,7 @@ jobs:
           check_required_file "${SUPPORT_SCRIPTS_DIR}/watchdog_helpers.sh"
           check_required_file "${SUPPORT_SCRIPTS_DIR}/review_run_reviewers.sh"
           check_required_file "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh"
+          check_required_file "${SUPPORT_SCRIPTS_DIR}/assemble_prompt.sh"
           check_soft_file "${SUPPORT_SCRIPTS_DIR}/render_prompt.py"
           check_required_nonempty_file "${SUPPORT_INSTRUCTIONS_FILE}"
           check_required_file "./pre_assembled_static.txt"
