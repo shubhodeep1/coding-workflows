@@ -53,14 +53,28 @@ RENDER_PROMPT_SH = REPO_ROOT / "scripts" / "render_prompt.sh"
 HEADER_PROMPT = REPO_ROOT / "prompts" / "header.txt"
 
 # The bare-path render invocation that requires prompts/header.txt on disk.
-HEADER_RENDER_RE = re.compile(r"render_prompt\.sh\s+prompts/header\.txt")
+HEADER_RENDER_RE = re.compile(
+	r"\bbash\s+scripts/render_prompt\.sh\s+prompts/header\.txt\b"
+)
+
+
+def _workflow_has_header_render_invocation(workflow_text: str) -> bool:
+	"""True when a workflow executes, not merely comments about, the render."""
+	for line in workflow_text.splitlines():
+		if line.lstrip().startswith("#"):
+			continue
+		if HEADER_RENDER_RE.search(line):
+			return True
+	return False
 
 
 def _workflows_rendering_header() -> list[Path]:
 	"""Reusable workflows that render the bare prompts/header.txt path."""
 	matches: list[Path] = []
 	for yml in sorted(WORKFLOW_DIR.glob("*.yml")):
-		if HEADER_RENDER_RE.search(yml.read_text(encoding="utf-8")):
+		if _workflow_has_header_render_invocation(
+			yml.read_text(encoding="utf-8")
+		):
 			matches.append(yml)
 	return matches
 
@@ -107,10 +121,20 @@ def test_render_callers_stage_header_prompt() -> None:
 			f"{yml.name}: header staging must hard-fail when the fragment is "
 			f"unavailable (it is required for prompt assembly)"
 		)
+		assert re.search(
+			r'echo "::error::Failed to stage required file prompts/header\.txt"\n\s+exit 1',
+			text,
+		), (
+			f"{yml.name}: header staging must exit immediately when neither "
+			f"support checkout carries the fragment"
+		)
 
 
 def _render_header(
-	*, stage_header: bool, prefer_main_snapshot: bool = False
+	*,
+	stage_header: bool,
+	prefer_main_snapshot: bool = False,
+	support_header_available: bool = True,
 ) -> subprocess.CompletedProcess[str]:
 	"""Render prompts/header.txt the way plan.yml / clarify.yml do.
 
@@ -119,7 +143,9 @@ def _render_header(
 	until the staging block runs. When ``stage_header`` is true the exact
 	staging snippet from the workflows runs before the render. When
 	``prefer_main_snapshot`` is true the header exists only in the
-	.codex-workflow-src-main fallback checkout.
+	.codex-workflow-src-main fallback checkout. When
+	``support_header_available`` is false, neither support checkout carries the
+	header fragment and the staging block must hard-fail.
 	"""
 	with tempfile.TemporaryDirectory(prefix="plan-header-staging-") as td:
 		root = Path(td)
@@ -149,12 +175,13 @@ def _render_header(
 		)
 		# The header fragment exists only in the support checkout, mirroring a
 		# consumer repo that ships none of these files.
-		header_prompt_dir = (
-			support_prompts_main if prefer_main_snapshot else support_prompts
-		)
-		(header_prompt_dir / "header.txt").write_text(
-			HEADER_PROMPT.read_text(encoding="utf-8"), encoding="utf-8"
-		)
+		if support_header_available:
+			header_prompt_dir = (
+				support_prompts_main if prefer_main_snapshot else support_prompts
+			)
+			(header_prompt_dir / "header.txt").write_text(
+				HEADER_PROMPT.read_text(encoding="utf-8"), encoding="utf-8"
+			)
 		(runtime_dir / "repo_learnings.txt").write_text(
 			"Learned: prefer batched GraphQL.\n", encoding="utf-8"
 		)
@@ -205,15 +232,29 @@ def test_header_renders_when_staged() -> None:
 			stage_header=True, prefer_main_snapshot=prefer_main_snapshot
 		)
 		assert result.returncode == 0, (
-			f"render failed unexpectedly: rc={result.returncode}\nstderr={result.stderr}"
+			f"render failed unexpectedly (prefer_main_snapshot={prefer_main_snapshot}): "
+			f"rc={result.returncode}\nstderr={result.stderr}"
 		)
-		assert "Prompt file not found" not in result.stderr
+		assert "Prompt file not found" not in result.stderr, (
+			f"staged render still hit the missing-header path "
+			f"(prefer_main_snapshot={prefer_main_snapshot})"
+		)
 		assert "{{REPO_LEARNINGS}}" not in result.stdout, (
-			"placeholder left unhydrated in rendered header"
+			f"placeholder left unhydrated in rendered header "
+			f"(prefer_main_snapshot={prefer_main_snapshot})"
 		)
 		assert "Learned: prefer batched GraphQL." in result.stdout, (
-			"REPO_LEARNINGS env value not injected into the rendered header"
+			f"REPO_LEARNINGS env value not injected into the rendered header "
+			f"(prefer_main_snapshot={prefer_main_snapshot})"
 		)
+
+
+def test_header_staging_hard_fails_without_any_support_copy() -> None:
+	"""When neither support checkout has header.txt, staging must stop first."""
+	result = _render_header(stage_header=True, support_header_available=False)
+	assert result.returncode != 0
+	assert "::error::Failed to stage required file prompts/header.txt" in result.stdout
+	assert "Prompt file not found: prompts/header.txt" not in result.stderr
 
 
 def test_header_render_fails_without_staging() -> None:
