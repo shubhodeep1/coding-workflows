@@ -70,7 +70,22 @@ Slop-scan heuristic input:
   - string-match-on-error-message patterns.
 - When a slop-scan item matches one of those guard cases, either ignore it or classify it as `non-actionable` with a brief `NOTES` rationale.
 
-Use these seven lenses exactly:
+Diataxis docs-coverage lens:
+- Keep the first seven lens names byte-for-byte and in the same order.
+- Add one eighth lens: `DOCS COVERAGE (DIATAXIS)`.
+- Use this lens only for user-visible behavior changes already grounded by reviewer evidence or the touched files (for example: new env vars, workflows, prompt phases, schemas, or contract changes).
+- Never infer a docs gap from reviewer silence, from files absent from the bundle, or from the mere fact that a docs file was not touched.
+- This lens is advisory only: use `SEVERITY: low` and normally `CLASSIFICATION: nice-to-have`.
+- In `SUGGESTED_APPROACH` or `NOTES`, name only the specific Diataxis categories that still need updates: `Reference`, `How-to`, `Tutorial`, `Explanation`.
+- Category guide:
+  - `Reference` — env-var tables, prompt-contract reference, schema/contract reference.
+  - `How-to` — operator runbooks such as `probably_unnecessary_but_read_if_stuck.md`.
+  - `Tutorial` — consumer-repo onboarding or workflow-template wrapper guidance.
+  - `Explanation` — design rationale such as `docs/plans/*-plan.md` or `agents.md`.
+- Do not enumerate categories that already look covered in the diff.
+- If the relevant docs are already touched, omit the issue or say `Docs coverage: complete` in `NOTES` instead of fabricating a docs gap.
+
+Use these eight lenses exactly:
 1. SECURITY & INPUT VALIDATION
 2. CORRECTNESS & LOGIC
 3. CONCURRENCY / RACES / IDEMPOTENCY
@@ -78,6 +93,7 @@ Use these seven lenses exactly:
 5. PERFORMANCE & RESOURCE USE
 6. INDEX-CONTRACT / DB RULES
 7. NAMING / BACKWARD COMPATIBILITY
+8. DOCS COVERAGE (DIATAXIS)
 
 {{REFERENCE_SEVERITY_CLASSIFICATION}}
 Output format contract:
@@ -122,8 +138,8 @@ NOTES:
 === END ISSUE NNN ===
 
 Allowed values:
-- LENS: one of the seven lenses above.
-- SEVERITY: blocker | high | med | low. Reviewer-side `BLOCKER` maps to `blocker`; `MAJOR` maps to `high`; `NIT` maps to `med`. `low` is reserved for advisory-only consolidator-internal downgrades and is never emitted by reviewers.
+- LENS: one of the eight lenses above. The first seven stay byte-for-byte stable; the eighth is the additive Diataxis advisory lens.
+- SEVERITY: blocker | high | med | low. Reviewer-side `BLOCKER` maps to `blocker`; `MAJOR` maps to `high`; `NIT` maps to `med`. `low` is reserved for advisory-only consolidator output (including `DOCS COVERAGE (DIATAXIS)`) and is never emitted by reviewers.
 - CLASSIFICATION: must-fix | nice-to-have | unclassified | duplicate-of:<issue_id> | non-actionable.
 - `non-actionable` must include a NOTES justification plus exactly one of:
   - `REJECTION_KIND: already-fixed` + `EVIDENCE_DIFF_HUNK` with `file:` and `lines:`.
