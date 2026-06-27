@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.9,
+  "details": "Several merged runs changed `scripts/render_prompt.py` alongside prompt templates, agent docs, or workflow contracts. When a mode\u2019s inputs, labels, or judge behavior change, future work should expect prompt rendering to be the first place where assumptions break and add/adjust tests there rather than only editing the template text.",
+  "fingerprint": "fd16f5c913a0145f7204fde99e0772cf9d8772871953e5ae7ca3389b179fc142",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28282971909",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28282971909",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3531",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3533",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3535",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3537",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3540",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3532",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3534",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3536",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3538",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3541"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260627074902_80258584a9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Prompt rendering logic is a central compatibility point and usually needs paired test updates whenever mode contracts change.",
+  "timestamps": {
+    "created_at": "2026-06-27T07:49:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
