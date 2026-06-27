@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.91,
+  "details": "Runs that changed AI memory behavior updated schema files, `scripts/ai_memory.py`, `scripts/ai_memory_lib.py`, examples, and schema-focused tests in the same PR. When extending repository memory formats, plan for coordinated changes so validation stays aligned with serialization and sample records.",
+  "fingerprint": "6e1784cb5b3231aa289f320c416845e3e8711133e5f688430b2c0ac59d89e873",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28282971909",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28282971909",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3531",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3533",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3535",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3537",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3540",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3532",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3534",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3536",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3538",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3541"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260627075052_5a243c5a3c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Memory/schema work tends to require synchronized updates across schemas, CLI code, examples, and schema tests.",
+  "timestamps": {
+    "created_at": "2026-06-27T07:50:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
