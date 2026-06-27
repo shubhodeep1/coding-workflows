@@ -398,6 +398,41 @@ def test_render_prompt_py_renders_security_audit_mode_contract() -> None:
 	assert "{{REFERENCE_OUTPUT_CONTRACT}}" not in proc.stdout
 
 
+def test_render_prompt_py_rejects_unsupported_placeholder_expression() -> None:
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_template_syntax_") as td:
+		prompt_file = Path(td) / "prompt.txt"
+		prompt_file.write_text("Before\n{{FOO|lower}}\nAfter\n", encoding="utf-8")
+
+		proc = _run_render_prompt_py(prompt_file)
+
+	assert proc.returncode == 1
+	assert proc.stdout == ""
+	assert "Unsupported template syntax" in proc.stderr
+	assert "{{FOO|lower}}" in proc.stderr
+
+
+def test_render_prompt_py_uses_checked_in_persona_source() -> None:
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_persona_source_") as td:
+		repo_root = Path(td)
+		prompt_file = repo_root / "prompts" / "mode-sample.txt"
+		persona_file = repo_root / "prompts" / "_prelude_role_persona.txt"
+		prompt_file.parent.mkdir(parents=True, exist_ok=True)
+		prompt_file.write_text("Body\n", encoding="utf-8")
+		persona_file.write_text(
+			'{\n  "mode-sample": "**Sample persona from checked-in source.**\\n\\n"\n}\n',
+			encoding="utf-8",
+		)
+
+		persona_env = os.environ.copy()
+		persona_env["PYTHONDONTWRITEBYTECODE"] = "1"
+		persona_env.pop("PROMPT_PERSONA_PREFIX_ENABLED", None)
+		proc = _run_render_prompt_py(prompt_file, env=persona_env, cwd=repo_root)
+
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stderr == ""
+	assert proc.stdout == "**Sample persona from checked-in source.**\n\nBody\n"
+
+
 def test_render_prompt_py_prepends_phase_c_persona_prefix_without_altering_legacy_body() -> None:
 	for mode_name, sentinel in PHASE_C_PERSONA_SENTINELS.items():
 		prompt_file = REPO_ROOT / "prompts" / f"{mode_name}.txt"
@@ -471,6 +506,8 @@ def main() -> int:
 	test_render_prompt_py_reports_missing_reference_file()
 	test_render_prompt_py_reports_unknown_placeholder_contract_violation()
 	test_render_prompt_py_renders_security_audit_mode_contract()
+	test_render_prompt_py_rejects_unsupported_placeholder_expression()
+	test_render_prompt_py_uses_checked_in_persona_source()
 	test_render_prompt_py_prepends_phase_c_persona_prefix_without_altering_legacy_body()
 	test_render_prompt_py_enables_phase_c_persona_prefix_by_default()
 	test_render_prompt_py_treats_blank_persona_env_value_as_disabled()

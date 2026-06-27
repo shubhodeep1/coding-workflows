@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Any
 
 from ai_memory_lib import (
-    MEMORY_RECORD_SCHEMA_VERSION,
     MemoryGitError,
     MemoryValidationError,
     append_operator_bypass_audit_entry,
@@ -26,7 +25,6 @@ from ai_memory_lib import (
     compute_normalized_sha256,
     complete_processed_command,
     evaluate_clarify_loop_guard,
-    export_memory_records,
     finalize_task_lineage,
     get_actions_runs_cache,
     get_branch_rebuild_audit,
@@ -36,8 +34,6 @@ from ai_memory_lib import (
     get_revalidate_events,
     get_validation_discovery,
     get_validation_history,
-    list_stale_candidate_records,
-    mark_candidate_records_for_prune,
     list_processed_command_entries,
     parse_bool,
     persist_memory_operation,
@@ -51,7 +47,6 @@ from ai_memory_lib import (
     resolve_memory_root_dir,
     retrieve_memory_context,
     scan_candidate_text_for_injection,
-    search_memory_records,
     summarize_candidate_for_event,
 )
 
@@ -139,56 +134,6 @@ def _safe_float(value: str | None, default: float) -> float:
     if value is None or str(value).strip() == "":
         return default
     return float(value)
-
-
-def _require_optional_positive_int(value: str | None, field_name: str) -> int | None:
-    if value is None or str(value).strip() == "":
-        return None
-    return _require_positive_int(value, field_name)
-
-
-def _parse_duration_days(value: str | None, field_name: str) -> float:
-    text = (value or "").strip().lower()
-    if not text:
-        raise MemoryValidationError(f"{field_name} is required")
-    match = re.fullmatch(r"(\d+)([dhw]?)", text)
-    if match is None:
-        raise MemoryValidationError(f"{field_name} must be a duration like 90d, 12h, or 2w")
-    amount = int(match.group(1))
-    if amount < 0:
-        raise MemoryValidationError(f"{field_name} must be zero or greater")
-    unit = match.group(2) or "d"
-    if unit == "h":
-        return amount / 24.0
-    if unit == "w":
-        return float(amount * 7)
-    return float(amount)
-
-
-def _format_review_table(stale_records: list[dict[str, Any]], *, since_label: str, threshold_days: float) -> str:
-    heading = f"AI memory stale candidate review (older than {since_label or f'{threshold_days:g}d'})"
-    if not stale_records:
-        return f"{heading}\n- none"
-
-    lines = [heading, "record_id\tissue\tpr\tage_days\tcreated_at\tsummary"]
-    for record in stale_records:
-        issue_label = record.get("issue_number") if record.get("issue_number") is not None else "-"
-        pr_label = record.get("pr_number") if record.get("pr_number") is not None else "-"
-        summary_text = str(record.get("summary") or "")
-        summary_clean = summary_text.replace("\t", " ").replace("\r", " ").replace("\n", " ")
-        lines.append(
-            "\t".join(
-                [
-                    str(record.get("record_id") or ""),
-                    str(issue_label),
-                    str(pr_label),
-                    str(record.get("age_days") or ""),
-                    str(record.get("created_at") or ""),
-                    summary_clean,
-                ]
-            )
-        )
-    return "\n".join(lines)
 
 
 def _split_csv(value: str | None) -> list[str]:
@@ -904,309 +849,6 @@ def cmd_compact(args: argparse.Namespace) -> int:
         did_push=result.get("did_push", False),
     )
     return 0
-
-
-def cmd_review(args: argparse.Namespace) -> int:
-    args = _read_env_defaults(args)
-    since_days = _parse_duration_days(args.since, "since")
-    if not args.enabled:
-        table = _format_review_table([], since_label=args.since, threshold_days=since_days)
-        _print_json(
-            {
-                "ok": True,
-                "enabled": False,
-                "schema": args.schema or MEMORY_RECORD_SCHEMA_VERSION,
-                "since": args.since,
-                "stale_count": 0,
-                "records": [],
-                "table": table,
-            }
-        )
-        _emit_telemetry("review", ok=True, enabled=False, stale_count=0, since=args.since)
-        return 0
-
-    repo_root = _resolve_repo_root(args.repo_root)
-    branch_dir = None
-    try:
-        branch_dir = read_memory_root_from_branch(
-            repo_root,
-            memory_branch=args.memory_branch,
-            memory_root_relative=args.memory_root,
-        )
-        memory_root = _resolve_memory_root(branch_dir, args.memory_root)
-        records = list_stale_candidate_records(
-            memory_root,
-            older_than_days=since_days,
-            schema_name=args.schema,
-        )
-        table = _format_review_table(records, since_label=args.since, threshold_days=since_days)
-        _print_json(
-            {
-                "ok": True,
-                "enabled": True,
-                "schema": args.schema or MEMORY_RECORD_SCHEMA_VERSION,
-                "since": args.since,
-                "stale_count": len(records),
-                "records": records,
-                "table": table,
-            }
-        )
-        _emit_telemetry("review", ok=True, enabled=True, stale_count=len(records), since=args.since)
-        return 0
-    except MemoryGitError as exc:
-        error_text = _sanitize_git_error(str(exc))
-        table = _format_review_table([], since_label=args.since, threshold_days=since_days)
-        if _is_missing_memory_branch_error(error_text):
-            _print_json(
-                {
-                    "ok": True,
-                    "enabled": False,
-                    "schema": args.schema or MEMORY_RECORD_SCHEMA_VERSION,
-                    "since": args.since,
-                    "stale_count": 0,
-                    "records": [],
-                    "table": table,
-                    "warning": error_text,
-                }
-            )
-            _emit_telemetry("review", ok=True, enabled=False, stale_count=0, since=args.since, warning="branch_unavailable")
-            return 0
-        _print_json(
-            {
-                "ok": True,
-                "enabled": True,
-                "schema": args.schema or MEMORY_RECORD_SCHEMA_VERSION,
-                "since": args.since,
-                "stale_count": 0,
-                "records": [],
-                "table": table,
-                "warning_code": "review_read_failed",
-                "warning": error_text,
-            }
-        )
-        _emit_telemetry("review", ok=True, enabled=True, stale_count=0, since=args.since, warning="review_read_failed")
-        return 0
-    finally:
-        if branch_dir:
-            shutil.rmtree(branch_dir, ignore_errors=True)
-
-
-def cmd_prune(args: argparse.Namespace) -> int:
-    args = _read_env_defaults(args)
-    record_ids = [str(record_id or "").strip() for record_id in (args.record_id or []) if str(record_id or "").strip()]
-    if not record_ids:
-        raise MemoryValidationError("record_id is required")
-
-    if not args.enabled:
-        _print_json(
-            {
-                "ok": True,
-                "enabled": False,
-                "marked": [],
-                "already_marked": [],
-                "not_found": record_ids,
-                "prune_marked_at": None,
-                "did_commit": False,
-                "did_push": False,
-                "commit_sha": None,
-                "push_attempts": 0,
-            }
-        )
-        _emit_telemetry("prune", ok=True, enabled=False, marked=0, already_marked=0, not_found=len(record_ids))
-        return 0
-
-    repo_root = _resolve_repo_root(args.repo_root)
-
-    def _op(clone_dir: Path) -> dict[str, Any]:
-        memory_root = _resolve_memory_root(clone_dir, args.memory_root)
-        return mark_candidate_records_for_prune(memory_root, record_ids=record_ids)
-
-    try:
-        result = persist_memory_operation(
-            repo_root,
-            memory_branch=args.memory_branch,
-            memory_root_relative=args.memory_root,
-            push_retries=int(args.push_retries),
-            commit_message="ai-memory: prune candidate records",
-            operation=_op,
-        )
-        op_result = result.get("operation_result") or {}
-        _print_json(
-            {
-                "ok": True,
-                "enabled": True,
-                "marked": op_result.get("marked") or [],
-                "already_marked": op_result.get("already_marked") or [],
-                "not_found": op_result.get("not_found") or [],
-                "prune_marked_at": op_result.get("prune_marked_at"),
-                **result,
-            }
-        )
-        _emit_telemetry(
-            "prune",
-            ok=True,
-            enabled=True,
-            marked=len(op_result.get("marked") or []),
-            already_marked=len(op_result.get("already_marked") or []),
-            not_found=len(op_result.get("not_found") or []),
-            did_push=result.get("did_push", False),
-        )
-        return 0
-    except (MemoryValidationError, json.JSONDecodeError, OSError, ValueError, MemoryGitError) as exc:
-        warning = _sanitize_git_error(str(exc))
-        _print_json(
-            {
-                "ok": True,
-                "enabled": True,
-                "marked": [],
-                "already_marked": [],
-                "not_found": [],
-                "prune_marked_at": None,
-                "warning": warning,
-            }
-        )
-        _emit_telemetry("prune", ok=True, enabled=True, marked=0, already_marked=0, not_found=0, warning="prune_write_failed")
-        return 0
-
-
-def cmd_search(args: argparse.Namespace) -> int:
-    args = _read_env_defaults(args)
-    max_records = _require_positive_int(args.max, "max")
-    if not args.enabled:
-        _print_json(
-            {
-                "ok": True,
-                "enabled": False,
-                "query": _require_nonempty(args.query, "query"),
-                "schema": args.schema or MEMORY_RECORD_SCHEMA_VERSION,
-                "method": "keyword",
-                "searched_record_count": 0,
-                "results": [],
-            }
-        )
-        _emit_telemetry("search", ok=True, enabled=False, method="keyword", result_count=0)
-        return 0
-
-    repo_root = _resolve_repo_root(args.repo_root)
-    branch_dir = None
-    try:
-        branch_dir = read_memory_root_from_branch(
-            repo_root,
-            memory_branch=args.memory_branch,
-            memory_root_relative=args.memory_root,
-        )
-        memory_root = _resolve_memory_root(branch_dir, args.memory_root)
-        payload = search_memory_records(
-            memory_root,
-            query=_require_nonempty(args.query, "query"),
-            schema_name=args.schema,
-            max_records=max_records,
-            api_key=os.getenv("OPENROUTER_API_KEY"),
-        )
-        _print_json({"ok": True, "enabled": True, **payload})
-        _emit_telemetry(
-            "search",
-            ok=True,
-            enabled=True,
-            method=payload.get("method"),
-            result_count=len(payload.get("results") or []),
-            fallback_reason=payload.get("fallback_reason"),
-        )
-        return 0
-    except MemoryGitError as exc:
-        error_text = _sanitize_git_error(str(exc))
-        base_payload = {
-            "ok": True,
-            "query": _require_nonempty(args.query, "query"),
-            "schema": args.schema or MEMORY_RECORD_SCHEMA_VERSION,
-            "method": "keyword",
-            "searched_record_count": 0,
-            "results": [],
-        }
-        if _is_missing_memory_branch_error(error_text):
-            _print_json({"enabled": False, **base_payload, "warning": error_text})
-            _emit_telemetry("search", ok=True, enabled=False, method="keyword", result_count=0, warning="branch_unavailable")
-            return 0
-        _print_json({"enabled": True, **base_payload, "warning_code": "search_read_failed", "warning": error_text})
-        _emit_telemetry("search", ok=True, enabled=True, method="keyword", result_count=0, warning="search_read_failed")
-        return 0
-    finally:
-        if branch_dir:
-            shutil.rmtree(branch_dir, ignore_errors=True)
-
-
-def cmd_export(args: argparse.Namespace) -> int:
-    args = _read_env_defaults(args)
-    issue_number = _require_optional_positive_int(args.issue, "issue")
-    pr_number = _require_optional_positive_int(args.pr, "pr")
-    if issue_number is None and pr_number is None:
-        raise MemoryValidationError("issue or pr is required")
-    export_format = _require_nonempty(args.format, "format").lower()
-    if export_format != "json":
-        raise MemoryValidationError("format must be json")
-
-    if not args.enabled:
-        _print_json(
-            {
-                "ok": True,
-                "enabled": False,
-                "issue": issue_number,
-                "pr": pr_number,
-                "format": export_format,
-                "record_count": 0,
-                "records": [],
-            }
-        )
-        _emit_telemetry("export", ok=True, enabled=False, issue=issue_number, pr=pr_number, record_count=0)
-        return 0
-
-    repo_root = _resolve_repo_root(args.repo_root)
-    branch_dir = None
-    try:
-        branch_dir = read_memory_root_from_branch(
-            repo_root,
-            memory_branch=args.memory_branch,
-            memory_root_relative=args.memory_root,
-        )
-        memory_root = _resolve_memory_root(branch_dir, args.memory_root)
-        records = export_memory_records(
-            memory_root,
-            issue_number=issue_number,
-            pr_number=pr_number,
-        )
-        _print_json(
-            {
-                "ok": True,
-                "enabled": True,
-                "issue": issue_number,
-                "pr": pr_number,
-                "format": export_format,
-                "record_count": len(records),
-                "records": records,
-            }
-        )
-        _emit_telemetry("export", ok=True, enabled=True, issue=issue_number, pr=pr_number, record_count=len(records))
-        return 0
-    except MemoryGitError as exc:
-        error_text = _sanitize_git_error(str(exc))
-        base_payload = {
-            "ok": True,
-            "issue": issue_number,
-            "pr": pr_number,
-            "format": export_format,
-            "record_count": 0,
-            "records": [],
-        }
-        if _is_missing_memory_branch_error(error_text):
-            _print_json({"enabled": False, **base_payload, "warning": error_text})
-            _emit_telemetry("export", ok=True, enabled=False, issue=issue_number, pr=pr_number, record_count=0, warning="branch_unavailable")
-            return 0
-        _print_json({"enabled": True, **base_payload, "warning_code": "export_read_failed", "warning": error_text})
-        _emit_telemetry("export", ok=True, enabled=True, issue=issue_number, pr=pr_number, record_count=0, warning="export_read_failed")
-        return 0
-    finally:
-        if branch_dir:
-            shutil.rmtree(branch_dir, ignore_errors=True)
 
 
 def cmd_actions_runs_cache_get(args: argparse.Namespace) -> int:
@@ -2416,31 +2058,6 @@ def build_parser() -> argparse.ArgumentParser:
     compact.add_argument("--month", default=None)
     compact.add_argument("--prune", default="false")
     compact.set_defaults(func=cmd_compact)
-
-    review = subparsers.add_parser("review", help="List stale candidate AI-memory records")
-    _add_shared_args(review)
-    review.add_argument("--since", default="90d")
-    review.add_argument("--schema", default=MEMORY_RECORD_SCHEMA_VERSION)
-    review.set_defaults(func=cmd_review)
-
-    prune = subparsers.add_parser("prune", help="Mark candidate AI-memory records for archival")
-    _add_shared_args(prune)
-    prune.add_argument("--record-id", action="append", required=True)
-    prune.set_defaults(func=cmd_prune)
-
-    search = subparsers.add_parser("search", help="Search AI-memory records")
-    _add_shared_args(search)
-    search.add_argument("--query", required=True)
-    search.add_argument("--schema", default=MEMORY_RECORD_SCHEMA_VERSION)
-    search.add_argument("--max", default="10")
-    search.set_defaults(func=cmd_search)
-
-    export = subparsers.add_parser("export", help="Export AI-memory records by scope")
-    _add_shared_args(export)
-    export.add_argument("--issue", default=None)
-    export.add_argument("--pr", default=None)
-    export.add_argument("--format", default="json")
-    export.set_defaults(func=cmd_export)
 
     actions_runs_cache = subparsers.add_parser("actions-runs-cache", help="Read/write actions runs cache")
     actions_runs_cache_subparsers = actions_runs_cache.add_subparsers(dest="actions_runs_cache_command", required=True)

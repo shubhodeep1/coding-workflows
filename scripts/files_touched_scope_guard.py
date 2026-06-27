@@ -17,10 +17,6 @@ Inputs:
   --issue-body-file PATH  File containing the issue body (the allowlist source).
                           Missing / empty / unreadable is treated as "no
                           allowlist" (skip), never as an error.
-  --allowlist-file PATH   Explicit allowlist entries, one per line. When set,
-                          this bypasses issue-body parsing and reuses the same
-                          matcher for externally-supplied scopes such as
-                          `ai:scope:<glob>` labels.
   --staged-file PATH      File with the staged paths, one per line (typically
                           `git diff --cached --name-only --diff-filter=ACMRD`).
                           Reads stdin when omitted.
@@ -38,8 +34,7 @@ Exit codes (the caller maps these; ANY other code => fail open / skip):
 Matching semantics (allowlist entry -> staged path):
   * leading "./" is stripped from both sides; surrounding whitespace trimmed.
   * an entry containing a glob metacharacter (`*`, `?`, `[`) is matched with
-    Bash-style globstar semantics for `/`-separated paths (so `frontend/**`
-    allows anything under `frontend/`).
+    fnmatch (so `frontend/**` allows anything under `frontend/`).
   * an entry ending in "/" is a directory prefix (`frontend/` allows
     `frontend/anything`).
   * a bare entry matches an exact path OR anything beneath it as a directory
@@ -54,8 +49,6 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
-from functools import lru_cache
-from pathlib import PurePosixPath
 import re
 import sys
 
@@ -150,39 +143,13 @@ def is_lockfile(path: str) -> bool:
 	return path.rsplit("/", 1)[-1] in LOCKFILE_BASENAMES
 
 
-def _path_glob_matches(path: str, pattern: str) -> bool:
-	"""True when a normalized path matches a normalized glob pattern."""
-	if "/" not in pattern:
-		return fnmatch.fnmatchcase(path, pattern)
-	path_parts = PurePosixPath(path).parts
-	pattern_parts = PurePosixPath(pattern).parts
-
-	@lru_cache(maxsize=None)
-	def match_parts(path_idx: int, pattern_idx: int) -> bool:
-		while pattern_idx < len(pattern_parts):
-			pattern_part = pattern_parts[pattern_idx]
-			if pattern_part == "**":
-				if pattern_idx + 1 == len(pattern_parts):
-					return True
-				for next_path_idx in range(path_idx, len(path_parts) + 1):
-					if match_parts(next_path_idx, pattern_idx + 1):
-						return True
-				return False
-			if path_idx >= len(path_parts) or not fnmatch.fnmatchcase(path_parts[path_idx], pattern_part):
-				return False
-			path_idx += 1
-			pattern_idx += 1
-		return path_idx == len(path_parts)
-
-	return match_parts(0, 0)
-
-
 def entry_matches(entry: str, path: str) -> bool:
 	"""True when a single normalized allowlist entry covers a staged path."""
 	if not entry:
 		return False
 	if any(ch in entry for ch in _GLOB_CHARS):
-		return _path_glob_matches(path, entry)
+		# fnmatchcase keeps matching deterministic across runner OSes.
+		return fnmatch.fnmatchcase(path, entry)
 	if entry.endswith("/"):
 		return path.startswith(entry)
 	return path == entry or path.startswith(entry + "/")
@@ -198,13 +165,14 @@ def path_in_scope(path: str, allowlist: list[str]) -> bool:
 	return False
 
 
-def evaluate_allowlist(allowlist_entries: list[str] | None, staged_paths: list[str]) -> tuple[str, list[str], list[str]]:
-	"""Classify staged paths against an explicit allowlist using the shared matcher.
+def evaluate(issue_body: str, staged_paths: list[str]) -> tuple[str, list[str], list[str]]:
+	"""Classify the staged change set against the issue's files_touched allowlist.
 
 	Returns (status, allowlist, out_of_scope) where status is one of
 	STATUS_IN_SCOPE / STATUS_SKIP_NO_ALLOWLIST / STATUS_OUT_OF_SCOPE.
 	"""
-	allowlist = normalize_allowlist(allowlist_entries or [])
+	raw_allowlist = extract_files_touched(issue_body or "")
+	allowlist = normalize_allowlist(raw_allowlist or [])
 	if not allowlist:
 		return STATUS_SKIP_NO_ALLOWLIST, [], []
 
@@ -219,18 +187,6 @@ def evaluate_allowlist(allowlist_entries: list[str] | None, staged_paths: list[s
 	if out_of_scope:
 		return STATUS_OUT_OF_SCOPE, allowlist, out_of_scope
 	return STATUS_IN_SCOPE, allowlist, []
-
-
-def evaluate(issue_body: str, staged_paths: list[str], *, allowlist_entries: list[str] | None = None) -> tuple[str, list[str], list[str]]:
-	"""Classify the staged change set against issue-body or explicit allowlists.
-
-	Returns (status, allowlist, out_of_scope) where status is one of
-	STATUS_IN_SCOPE / STATUS_SKIP_NO_ALLOWLIST / STATUS_OUT_OF_SCOPE.
-	"""
-	if allowlist_entries is not None:
-		return evaluate_allowlist(allowlist_entries, staged_paths)
-	raw_allowlist = extract_files_touched(issue_body or "")
-	return evaluate_allowlist(raw_allowlist or [], staged_paths)
 
 
 def _read_text_file(path: str) -> str:
@@ -249,23 +205,17 @@ def _read_staged(path: str | None) -> list[str]:
 	return [line for line in text.splitlines() if line.strip()]
 
 
-def _read_allowlist(path: str) -> list[str]:
-	return [line for line in _read_text_file(path).splitlines() if line.strip()]
-
-
 def main(argv: list[str] | None = None) -> int:
 	parser = argparse.ArgumentParser(description="files_touched scope-enforcement guard")
 	parser.add_argument("--issue-body-file", default="")
-	parser.add_argument("--allowlist-file", default="")
 	parser.add_argument("--staged-file", default="")
 	parser.add_argument("--allowlist-out", default="")
 	args = parser.parse_args(argv)
 
 	issue_body = _read_text_file(args.issue_body_file) if args.issue_body_file else ""
 	staged_paths = _read_staged(args.staged_file or None)
-	allowlist_entries = _read_allowlist(args.allowlist_file) if args.allowlist_file else None
 
-	status, allowlist, out_of_scope = evaluate(issue_body, staged_paths, allowlist_entries=allowlist_entries)
+	status, allowlist, out_of_scope = evaluate(issue_body, staged_paths)
 
 	if args.allowlist_out:
 		try:

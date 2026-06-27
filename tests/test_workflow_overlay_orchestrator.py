@@ -25,6 +25,7 @@ WORKFLOW_EXPECTATIONS = {
 
 ORCHESTRATE_PROMPT_ASSETS = (
 	"_prelude_common.txt",
+	"_prelude_role_persona.txt",
 	"_prelude_output_contract.txt",
 	"_templates/mode-orchestrate.txt",
 )

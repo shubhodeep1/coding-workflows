@@ -66,7 +66,9 @@ Prompt assembly note: the migrated shared-prelude prompt family keeps the
 legacy runtime bodies in `prompts/mode-*.txt` and stores the include-based
 sources in `prompts/_templates/*.txt`. `scripts/assemble_prompt.sh` is a thin
 wrapper over `render_prompt.py --assemble-only`, and `scripts/render_prompt.sh`
-uses it only when `PROMPT_PRELUDE_REFACTOR_ENABLED=true`.
+uses it only when `PROMPT_PRELUDE_REFACTOR_ENABLED=true`. Default persona
+prefixes come from the checked-in JSON map at `prompts/_prelude_role_persona.txt`
+unless `PROMPT_PERSONA_PREFIX_ENABLED` is disabled.
 
 ## Implement scope-lock label
 

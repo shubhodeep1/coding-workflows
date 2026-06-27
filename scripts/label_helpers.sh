@@ -59,9 +59,6 @@ declare -A _AI_LABEL_COLORS=(
 	["ai:comprehensive-test-pending"]="1d76db"
 	["ai:needs-prompt-review"]="fbca04"
 	["ai:review-skipped"]="c2e0c6"
-	["ai:retro"]="5319e7"
-	["ai:security-audit"]="5319e7"
-	["ai:security"]="0e8a16"
 	["force-review"]="fbca04"
 	["e2e-smoke-test"]="5319e7"
 )
@@ -106,9 +103,6 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:comprehensive-test-pending"]="Pending comprehensive release callback dispatch."
 	["ai:needs-prompt-review"]="Validation prompt self-heal PR awaiting manual review"
 	["ai:review-skipped"]="Reviewer panel + editor cycle skipped by deterministic gate (doc-only or under size threshold)"
-	["ai:retro"]="Stable tracker issue for weekly workflow retrospectives"
-	["ai:security-audit"]="Stable tracker issue for periodic default-branch security audits"
-	["ai:security"]="Follow-up issue opened by the periodic security audit workflow"
 	["force-review"]="Force a full review_autofix cycle, bypassing the deterministic pre-review skip"
 	["e2e-smoke-test"]="E2E smoke test PR — review_autofix skips auto-merge"
 )

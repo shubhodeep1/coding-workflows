@@ -19,95 +19,15 @@ except ImportError:  # pragma: no cover - dependency is optional
 
 
 PLACEHOLDER_PATTERN = re.compile(r"\{\{([A-Za-z0-9_]+)\}\}")
+PLACEHOLDER_EXPRESSION_PATTERN = re.compile(r"\{\{(.*?)\}\}")
 STANDALONE_PLACEHOLDER_PATTERN = re.compile(r"^[ \t]*\{\{([A-Za-z0-9_]+)\}\}[ \t]*$")
 INCLUDE_DIRECTIVE_PATTERN = re.compile(r'^[ \t]*\{%[ \t]*include[ \t]+"([^"\n]+)"[ \t]*%\}[ \t]*$')
 VARIABLE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_]+$")
 OVERLAY_MODE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*$")
 CONTRACT_TOP_LEVEL_KEYS = {"required_vars", "optional_vars", "forbidden_vars"}
+PERSONA_SOURCE_FILE_NAME = "_prelude_role_persona.txt"
 LEGACY_STANDALONE_ONLY_VARS = frozenset({"WORKFLOW_EDIT_RESTRICTION", "SEMBLE_PREFETCH", "SERENA_TOOL_HINTS"})
 FALSEY_ENV_VALUES = frozenset({"0", "false", "no", "off"})
-PHASE_C_PERSONA_PREFIXES = {
-	"mode-clarify": (
-		"**YC-style office-hours interrogator.** Your job is to surface the hidden ambiguity "
-		"in the request without inventing scope. Ask only the questions that would materially "
-		"change the implementation.\n\n"
-	),
-	"mode-plan": (
-		"**Eng Manager locking down architecture.** Your job is to lock the data flow, edge "
-		"cases, and tests before code is written. Force hidden assumptions into the open.\n\n"
-	),
-	"mode-implement": (
-		"**Senior implementer with §5 minimal-change-set discipline.** Your job is to land the "
-		"plan's intent on disk with the smallest safe edit. Verify, don't speculate.\n\n"
-	),
-	"mode-implement-diagnose": (
-		"**Debugger applying the Iron Law of Investigation.** Your job is to trace the failure "
-		"to its root cause before proposing any fix. Stop at 3 failed-fix attempts — emit a "
-		"structured fix-up issue proposal instead.\n\n"
-	),
-	"mode-implement-repair": (
-		"**Surgical repairer.** Your job is the smallest possible fix to the syntax/semantics "
-		"error in the named file. Do not touch other files.\n\n"
-	),
-	"mode-validate-generate": (
-		"**QA harness author.** Your job is to build the minimal Dockerised validation harness "
-		"that exercises the implementation's contract.\n\n"
-	),
-	"mode-validate-diagnose": (
-		"**Validation-failure root-cause analyst.** Your job is to attribute the failure to plan "
-		"vs implementation vs environment, with cited file/line evidence.\n\n"
-	),
-	"mode-validate-fix-harness": (
-		"**Harness self-healer.** Your job is to patch the harness when the failure is in the "
-		"harness, not the implementation.\n\n"
-	),
-	"mode-validate-self-heal": (
-		"**Prompt-file self-healer.** Your job is to patch one of the four validation prompt "
-		"files when the failure is in the prompt, not the harness.\n\n"
-	),
-	"mode-validate-discover": (
-		"**Validation-scope discoverer.** Your job is to enumerate what should be tested for "
-		"this issue's stated acceptance criteria.\n\n"
-	),
-	"mode-judge": (
-		"**Wave-state judge.** Your job is to classify the wave-state as `in_progress` / "
-		"`complete` / `failed` / `blocked` with structured evidence; never modify files.\n\n"
-	),
-	"mode-judge-review-blocked": (
-		"**Review-blocked judge.** Your job is to decide `merge` / `fix` / `merge_with_followup` "
-		"/ `close_and_reissue` for a PR that exhausted autofix iterations.\n\n"
-	),
-	"mode-judge-stall-recovery": (
-		"**Stall-recovery judge.** Your job is to choose the next stall-recovery action when "
-		"declarative ladder is exhausted.\n\n"
-	),
-	# Phase C does not define poll-judge-specific prose; reuse the shared wave-state judge persona.
-	"mode-orchestrate-poll-judge": (
-		"**Wave-state judge.** Your job is to classify the wave-state as `in_progress` / "
-		"`complete` / `failed` / `blocked` with structured evidence; never modify files.\n\n"
-	),
-	"mode-workflow-analysis": (
-		"**SRE auditor of workflow runs.** Your job is to identify systemic failure patterns and "
-		"propose diagnostic-logging additions.\n\n"
-	),
-	"mode-workflow-audit": (
-		"**Workflow integrity auditor.** Your job is to verify the workflow files match their "
-		"documented contracts.\n\n"
-	),
-	"mode-workflow-api-redundancy": (
-		"**API-hygiene auditor.** Your job is to enforce CLAUDE.md §15 — every new `gh api` / "
-		"`gh_retry` call must batch or reuse existing calls.\n\n"
-	),
-	"conflict-resolver": (
-		"**Merge-conflict resolver.** Your job is to preserve both sides' intent in the "
-		"resolution. Never silently discard either side.\n\n"
-	),
-	# Phase C does not define an integration-sync variant; reuse the shared merge-conflict persona.
-	"integration-sync-conflict-resolver": (
-		"**Merge-conflict resolver.** Your job is to preserve both sides' intent in the "
-		"resolution. Never silently discard either side.\n\n"
-	),
-}
 
 
 class RenderPromptError(Exception):
@@ -116,6 +36,10 @@ class RenderPromptError(Exception):
 
 class PromptLoadError(RenderPromptError):
 	"""Raised when the prompt file cannot be loaded."""
+
+
+class TemplateSyntaxError(RenderPromptError):
+	"""Raised when unsupported template syntax is present in a prompt."""
 
 
 class PromptAssemblyError(RenderPromptError):
@@ -403,6 +327,67 @@ def discover_reference_path(prompt_path: Path, file_name: str) -> Path | None:
 def _expected_reference_path(prompt_path: Path, file_name: str) -> Path:
 	prompt_root = _prompt_base_dir(prompt_path) or Path.cwd()
 	return prompt_root / "prompts" / "references" / file_name
+
+
+def discover_persona_source_path(prompt_path: Path) -> Path | None:
+	candidates: list[Path] = []
+	seen: set[Path] = set()
+	script_root = Path(__file__).resolve().parents[1]
+	prompt_root = _prompt_base_dir(prompt_path)
+
+	for base_dir in (
+		prompt_root,
+		Path.cwd(),
+		script_root,
+		Path.cwd() / ".codex-workflow-src",
+		Path.cwd() / ".codex-workflow-src-main",
+	):
+		if base_dir is None:
+			continue
+		candidate = (base_dir / "prompts" / PERSONA_SOURCE_FILE_NAME).resolve()
+		if candidate in seen:
+			continue
+		seen.add(candidate)
+		candidates.append(candidate)
+
+	for candidate in candidates:
+		if candidate.is_file():
+			return candidate
+	return None
+
+
+def load_phase_c_persona_prefixes(prompt_path: Path) -> dict[str, str]:
+	persona_source_path = discover_persona_source_path(prompt_path)
+	if persona_source_path is None:
+		return {}
+	try:
+		payload = json.loads(persona_source_path.read_text(encoding="utf-8"))
+	except OSError as exc:
+		raise PromptLoadError(
+			f"Unable to read persona source '{persona_source_path}': {exc}"
+		) from exc
+	except json.JSONDecodeError as exc:
+		raise PromptLoadError(
+			f"Invalid JSON persona source '{persona_source_path}' at line {exc.lineno}, column {exc.colno}: {exc.msg}"
+		) from exc
+
+	if not isinstance(payload, dict):
+		raise PromptLoadError(
+			f"Persona source '{persona_source_path}' must decode to an object mapping mode names to prefixes"
+		)
+
+	prefixes: dict[str, str] = {}
+	for raw_mode_name, raw_prefix in payload.items():
+		if not isinstance(raw_mode_name, str) or OVERLAY_MODE_NAME_PATTERN.fullmatch(raw_mode_name) is None:
+			raise PromptLoadError(
+				f"Persona source '{persona_source_path}' contains invalid mode name {raw_mode_name!r}"
+			)
+		if not isinstance(raw_prefix, str):
+			raise PromptLoadError(
+				f"Persona source '{persona_source_path}' must use string prefixes for mode '{raw_mode_name}'"
+			)
+		prefixes[raw_mode_name] = raw_prefix
+	return prefixes
 
 
 def _reference_file_name_for_placeholder(placeholder_name: str) -> str | None:
@@ -737,6 +722,47 @@ def collect_placeholders(prompt_text: str) -> tuple[str, ...]:
 	return tuple(sorted(set(PLACEHOLDER_PATTERN.findall(prompt_text))))
 
 
+def _placeholder_expression_allowed_as_literal(line: str, match: re.Match[str]) -> bool:
+	placeholder_expression = match.group(1)
+	if match.start() > 0 and line[match.start() - 1] == "$":
+		return True
+	return placeholder_expression.strip().startswith(".")
+
+
+def validate_supported_template_syntax(prompt_text: str, prompt_path: Path) -> None:
+	violations: list[str] = []
+	for line_number, line in enumerate(prompt_text.splitlines(), start=1):
+		matches = list(PLACEHOLDER_EXPRESSION_PATTERN.finditer(line))
+		last_end = 0
+		residual_segments: list[str] = []
+
+		for match in matches:
+			residual_segments.append(line[last_end:match.start()])
+			last_end = match.end()
+			placeholder_expression = match.group(1)
+			if VARIABLE_NAME_PATTERN.fullmatch(placeholder_expression) is not None:
+				continue
+			if _placeholder_expression_allowed_as_literal(line, match):
+				continue
+			violations.append(
+				f"{prompt_path}:{line_number}: unsupported placeholder expression '{{{{{placeholder_expression}}}}}'"
+			)
+
+		residual_segments.append(line[last_end:])
+		residual_text = "".join(residual_segments)
+		if "{{" in residual_text or "}}" in residual_text:
+			violations.append(
+				f"{prompt_path}:{line_number}: unmatched placeholder delimiter in {line.strip()!r}"
+			)
+		if "{%" in line or "%}" in line:
+			violations.append(
+				f"{prompt_path}:{line_number}: unsupported template tag syntax {line.strip()!r}"
+			)
+
+	if violations:
+		raise TemplateSyntaxError("Unsupported template syntax:\n" + "\n".join(violations))
+
+
 def validate_contract(contract: PromptContract, prompt_text: str, values: dict[str, str]) -> None:
 	placeholders = collect_placeholders(prompt_text)
 	violations: list[tuple[str, list[str]]] = []
@@ -784,10 +810,10 @@ def _persona_prefix_enabled() -> bool:
 	return bool(raw_value) and raw_value not in FALSEY_ENV_VALUES
 
 
-def apply_phase_c_persona_prefix(prompt_text: str, *, mode_name: str) -> str:
+def apply_phase_c_persona_prefix(prompt_text: str, *, prompt_path: Path, mode_name: str) -> str:
 	if not _persona_prefix_enabled():
 		return prompt_text
-	prefix = PHASE_C_PERSONA_PREFIXES.get(mode_name)
+	prefix = load_phase_c_persona_prefixes(prompt_path).get(mode_name)
 	if prefix is None or prompt_text.startswith(prefix):
 		return prompt_text
 	return prefix + prompt_text
@@ -977,6 +1003,7 @@ def main(argv: list[str] | None = None) -> int:
 				mode_name=mode_name,
 			)
 			prompt_text = assemble_prompt_fragments(prompt_fragments)
+		validate_supported_template_syntax(prompt_text, prompt_path)
 		if args.assemble_only:
 			sys.stdout.write(prompt_text)
 			return 0
@@ -998,7 +1025,7 @@ def main(argv: list[str] | None = None) -> int:
 			mode_name=mode_name,
 			values=effective_values,
 		)
-		prompt_text = apply_phase_c_persona_prefix(prompt_text, mode_name=mode_name)
+		prompt_text = apply_phase_c_persona_prefix(prompt_text, prompt_path=prompt_path, mode_name=mode_name)
 		sys.stdout.write(render_prompt_text(prompt_text, effective_values))
 	except RenderPromptError as exc:
 		print(f"ERROR: {exc}", file=sys.stderr)

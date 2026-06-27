@@ -272,11 +272,12 @@ for reference_asset in output-contract.txt severity-classification.txt; do
   fi
 done
 # When the shared-prelude refactor is enabled, the staged judge prompts resolve
-# sibling templates under prompts/_templates/ and shared fragments under
-# prompts/_prelude*.txt. Stage the exact assets those support-bundle renders
-# need so the assembled path works from SUPPORT_ROOT_DIR without a support
-# checkout on disk.
-for prompt_assembly_asset in _prelude_common.txt _prelude_semble.txt _prelude_output_contract.txt _templates/mode-judge.txt _templates/mode-judge-interim.txt _templates/mode-judge-review-blocked.txt _templates/mode-judge-stall-recovery.txt _templates/mode-orchestrate-poll-judge.txt; do
+# sibling templates under prompts/_templates/, shared fragments under
+# prompts/_prelude*.txt, and default persona prefixes from the checked-in
+# prompts/_prelude_role_persona.txt map. Stage the exact assets those support-
+# bundle renders need so the assembled path works from SUPPORT_ROOT_DIR without
+# a support checkout on disk.
+for prompt_assembly_asset in _prelude_common.txt _prelude_role_persona.txt _prelude_semble.txt _prelude_output_contract.txt _templates/mode-judge.txt _templates/mode-judge-interim.txt _templates/mode-judge-review-blocked.txt _templates/mode-judge-stall-recovery.txt _templates/mode-orchestrate-poll-judge.txt; do
   if [ ! -f "${SUPPORT_PROMPTS_DIR}/${prompt_assembly_asset}" ]; then
     src=".codex-workflow-src/prompts/${prompt_assembly_asset}"
     if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/${prompt_assembly_asset}" ]; then
