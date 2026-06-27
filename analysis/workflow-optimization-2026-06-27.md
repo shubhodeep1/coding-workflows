@@ -505,3 +505,122 @@ No workflow file exceeded `800 KB` in this scan, and no other `run:`/`if:` expre
 | Code modularization | 10+ | Large |
 | Expression size reduction | 2-3 | Medium |
 | Medium/Low fixes | 2 | Small |
+
+## API Call Consolidation & Dead-Call Analysis (2026-06-27)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the duplicate call can be removed now without changing endpoint scope, filters, retry/error semantics, cache contracts, or concurrency behavior. `NEEDS_VERIFICATION` means the overlap is real but freshness, job-boundary, or fail-closed semantics still need a human check. `RISKY_SKIP` means the redundancy sits in a retry/poll/race-defense path and must not be auto-implemented without manual review.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001 — `RISKY_SKIP`
+- **File path and line ranges:** `.github/workflows/test-and-mark-stable.yml:1022-1024`, `.github/workflows/test-and-mark-stable.yml:1051-1056`
+- **Current call count:** `2 × stability_attempts + 1` calls per execution of this block (minimum `3`)
+- **Proposed call count:** `2 × stability_attempts` if the final successful stability sample is reused for state/merged checks
+- **Endpoint(s):** `GET /repos/{owner}/{repo}/pulls/{pull_number}`
+- **Evidence:**
+  ```sh
+  # .github/workflows/test-and-mark-stable.yml:1022-1025
+  HEAD_A=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null || echo "")
+  sleep 3
+  HEAD_B=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null || echo "")
+  ```
+  ```sh
+  # .github/workflows/test-and-mark-stable.yml:1051-1056
+  PR_META=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" 2>/dev/null || echo "")
+  PR_STATE=$(printf '%s' "${PR_META}" | jq -r '.state // ""' 2>/dev/null || echo "")
+  PR_MERGED=$(printf '%s' "${PR_META}" | jq -r '.merged // false' 2>/dev/null || echo "false")
+  ```
+  The third fetch hits the same PR endpoint immediately after the two SHA-stability reads and consumes overlapping data from the final read.
+- **Proposed fix:** If a maintainer accepts the race tradeoff, change the second stability read to capture full PR JSON, derive `HEAD_B`, `PR_STATE`, and `PR_MERGED` from that same response, and drop the separate `PR_META` fetch.
+- **Safety rationale:** `RISKY_SKIP` because the surrounding comments at `.github/workflows/test-and-mark-stable.yml:1013-1019` and `:1032-1049` explicitly document this block as upstream-race defense.
+- **Downstream signal:** Do not auto-implement; manual review must decide whether the post-loop closed/merged check can safely use the final stability sample without reopening the documented race with auto-merge or late PR closure.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001 — `NEEDS_VERIFICATION`
+- **File path and line ranges:** `.github/workflows/review_autofix.yml:1441-1448`, `scripts/review_collect_pr_metadata.sh:209-234`, `.github/workflows/review_autofix.yml:4756-4765`, `scripts/review_enable_auto_merge.sh:127-139`, `scripts/review_enable_auto_merge.sh:192-214`
+- **Current call count:** `2` PR-metadata GETs on the PR-backed auto-merge path
+- **Proposed call count:** `1` on cache hit (`2` only if a verified cache-miss/live-fallback path is retained)
+- **Endpoint(s):** `GET /repos/{owner}/{repo}/pulls/{pull_number}`
+- **Evidence:**
+  ```sh
+  # .github/workflows/review_autofix.yml:1446-1447
+  echo "PR_PAYLOAD_FILE=${RUNTIME_DIR}/pr_payload.json"
+  echo "PR_META_FILE=${RUNTIME_DIR}/pr_meta.json"
+  ```
+  ```sh
+  # scripts/review_collect_pr_metadata.sh:209-234
+  gh_retry "${PR_PAYLOAD_FILE}" api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"
+  jq '{
+    title: (.title // ""),
+    body: (.body // ""),
+    baseRefName: (.base.ref // ""),
+    headRefName: (.head.ref // ""),
+    headRepoFullName: (.head.repo.full_name // "")
+  }' "${PR_PAYLOAD_FILE}" > "${PR_META_FILE}"
+  ```
+  ```sh
+  # scripts/review_enable_auto_merge.sh:127-136,192
+  if ! _ORCH_PR_META_JSON="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" 2>"${_orch_pr_meta_err_file}")"; then
+  ...
+  _orch_pr_head_ref="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.head.ref // ""' 2>/dev/null || echo "")"
+  _orch_pr_body="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.body // ""' 2>/dev/null || echo "")"
+  ```
+  The helper re-fetches the same PR resource even though the job already created `PR_META_FILE` with the two fields it later reads (`headRefName`, `body`).
+- **Proposed fix:** Extend `scripts/review_enable_auto_merge.sh` to accept `PR_META_FILE` as an input, read `headRefName` and `body` from that file first, and keep the current live `gh_retry gh api` fetch only as a cache-miss/parse-failure fallback.
+- **Safety rationale:** `NEEDS_VERIFICATION` because the helper is intentionally fail-closed and runs late in a long job with deferred push behavior, so cached metadata might not be an acceptable freshness substitute.
+- **Downstream signal:** Verify all three before changing this path: (1) `PR_META_FILE` always survives until the auto-merge step, (2) forward-merge/orchestrator suppression only depends on `headRefName` and `body`, and (3) skipping the live fetch on cache hit does not weaken the existing fail-closed behavior during transient API failures.
+
+#### REUSE-002 — `NEEDS_VERIFICATION`
+- **File path and line ranges:** `.github/workflows/review_autofix.yml:202-211`, `.github/workflows/review_autofix.yml:289-304`, `.github/workflows/review_autofix.yml:1722-1727`, `scripts/review_collect_pr_metadata.sh:209-234`, `.github/workflows/review_autofix.yml:1826-1827`
+- **Current call count:** `2` PR-metadata GETs on each PR-backed `review_autofix` run that reaches `codex-agent`
+- **Proposed call count:** `1` on snapshot hit (`2` only if downstream live fallback is retained)
+- **Endpoint(s):** `GET /repos/{owner}/{repo}/pulls/{pull_number}`
+- **Evidence:**
+  ```sh
+  # .github/workflows/review_autofix.yml:289-304
+  if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
+    --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), title: (.title // ""), body: (.body // "")}' \
+    2>/dev/null)"; then
+  ```
+  ```yaml
+  # .github/workflows/review_autofix.yml:202-211
+  outputs:
+    head_ref: ${{ steps.evaluate.outputs.head_ref }}
+    post_merge_pr_text_json: ${{ steps.evaluate.outputs.post_merge_pr_text_json }}
+    post_merge_linked_issues_json: ${{ steps.evaluate.outputs.post_merge_linked_issues_json }}
+  ```
+  ```sh
+  # scripts/review_collect_pr_metadata.sh:209-234
+  gh_retry "${PR_PAYLOAD_FILE}" api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"
+  ...
+  ```
+  ```sh
+  # .github/workflows/review_autofix.yml:1826-1827
+  PR_TITLE=$(jq -r '.title // ""' "${PR_PAYLOAD_FILE}")
+  PR_BODY=$(jq -r '.body // ""' "${PR_PAYLOAD_FILE}")
+  ```
+  The gate job already fetches `state`, `merged`, `head_ref`, `labels`, `additions`, `deletions`, `title`, and `body`, but only `head_ref` and post-merge caches are exported, so `codex-agent` refetches the same PR again to rebuild files.
+- **Proposed fix:** Extend the gate handoff with a compact PR snapshot (for example `title`, `body`, `base.ref`, `head.ref`, `head.repo.full_name`, and any still-needed gate fields), then teach `review_collect_pr_metadata.sh` to materialize `PR_META_FILE`/`PR_PAYLOAD_FILE` from that snapshot before falling back to a live fetch.
+- **Safety rationale:** `NEEDS_VERIFICATION` because this reuse crosses a job boundary, and PR title/body/base/head may legitimately change between `gate` and `codex-agent`.
+- **Downstream signal:** Verify on real PR-backed runs that (1) gate-time and codex-agent-time values for `title`, `body`, `base.ref`, `head.ref`, and `head.repo.full_name` are acceptably stable, and (2) the proposed snapshot fits step-output or artifact size limits before removing the second fetch.
+
+### Dead Calls (DEAD-API-###)
+No findings.
+
+### Cross-References to Deep Audit Section
+- API-001: `NEEDS_VERIFICATION` — batching the fallback issue-label lookups is plausible, but it changes per-issue fail-open behavior inside a linked-issue inference path.
+- API-002: `RISKY_SKIP` — the duplicate run-state fetch is inside a bounded poll/wait control path, so consolidation changes race and polling semantics.
+- API-003: `NEEDS_VERIFICATION` — folding first-issue body/labels into the existing GraphQL query is attractive, but partial GraphQL results and “first populated issue” selection need proof.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 2 | REUSE-001, REUSE-002 |
+| RISKY_SKIP | 1 | MERGE-001 |
+
+### Implement-Stage Handoff
+No SAFE_TO_MERGE findings in this pass.
