@@ -7,6 +7,7 @@
 .ai/validate.yml
 .claude/commands/analyze-log.md
 .claude/commands/apply-analysis.md
+.claude/commands/apply-url.md
 .claude/commands/audit-plans.md
 .claude/commands/deploy-activate.md
 .claude/commands/implement-plan-ai.md
@@ -99,12 +100,8 @@ ai_pipeline.md
 analysis/last_collection_timestamp.txt
 analysis/recommendation-processing-report.md
 analysis/validation-selftest-status.json
-analysis/workflow-optimization-2026-06-16.md
-analysis/workflow-optimization-2026-06-18.md
-analysis/workflow-optimization-2026-06-22-2.md
-analysis/workflow-optimization-2026-06-22-3.md
-analysis/workflow-optimization-2026-06-22.md
-analysis/workflow-optimization-2026-06-23.md
+analysis/workflow-optimization-2026-06-25.md
+analysis/workflow-optimization-2026-06-26.md
 codex.md
 docs/INVENTORY.md
 docs/ai-tools-future-improvements.md
@@ -289,6 +286,7 @@ scripts/orchestrate_parse_and_post_answer.sh
 scripts/orchestrate_poll_process.sh
 scripts/orchestrate_state_v2.py
 scripts/post_review_comment.sh
+scripts/pr_checks_lib.sh
 scripts/render_prompt.py
 scripts/render_prompt.sh
 scripts/render_validation_templates.py
@@ -493,6 +491,8 @@ tests/test_phase_skip_gate_telemetry_contract.py
 tests/test_plan_auto_answer_recommended_parser.py
 tests/test_plan_auto_approve_safe_state_fetch.py
 tests/test_plan_clarify_blocked_output.py
+tests/test_plan_clarify_header_prompt_staging.py
+tests/test_pr_checks_lib_required_filter.py
 tests/test_prompt_compaction.py
 tests/test_render_prompt_core_modes.py
 tests/test_render_prompt_foundation.py
@@ -506,6 +506,7 @@ tests/test_retrigger_inflight_direct_fallback.py
 tests/test_review_apply_fixes_smoke_deterministic.py
 tests/test_review_autofix_editor_noop_cascade_contract.py
 tests/test_review_autofix_failure_log_upload.py
+tests/test_review_autofix_force_tick_repository_env.py
 tests/test_review_autofix_last_run_diff_oscillation_guard.py
 tests/test_review_autofix_merge_precheck.py
 tests/test_review_autofix_phase_transition_contract.py
@@ -524,6 +525,7 @@ tests/test_review_judge_interim_round_trip.py
 tests/test_review_parse_consolidator.py
 tests/test_review_pipeline_integration.py
 tests/test_review_rb_judge_label_propagation.py
+tests/test_review_rb_judge_reference_staging.py
 tests/test_review_rb_judge_reissue_baseline.py
 tests/test_review_rb_judge_self_run_exclusion.py
 tests/test_review_reject_verify.py
@@ -593,6 +595,7 @@ tests/test_write_codex_config.py
 unattended_system_instructions.md
 workflow-templates/.claude/commands/analyze-log.md
 workflow-templates/.claude/commands/apply-analysis.md
+workflow-templates/.claude/commands/apply-url.md
 workflow-templates/.claude/commands/audit-plans.md
 workflow-templates/.claude/commands/deploy-activate.md
 workflow-templates/.claude/commands/implement-plan-ai.md
