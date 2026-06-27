@@ -109,21 +109,32 @@ def test_render_callers_stage_header_prompt() -> None:
 		)
 
 
-def _render_header(*, stage_header: bool) -> subprocess.CompletedProcess[str]:
+def _render_header(
+	*, stage_header: bool, prefer_main_snapshot: bool = False
+) -> subprocess.CompletedProcess[str]:
 	"""Render prompts/header.txt the way plan.yml / clarify.yml do.
 
 	Reproduces the consumer runtime layout: scripts/ staged into the working
 	tree, the support checkout under .codex-workflow-src, and prompts/ absent
 	until the staging block runs. When ``stage_header`` is true the exact
-	staging snippet from the workflows runs before the render.
+	staging snippet from the workflows runs before the render. When
+	``prefer_main_snapshot`` is true the header exists only in the
+	.codex-workflow-src-main fallback checkout.
 	"""
 	with tempfile.TemporaryDirectory(prefix="plan-header-staging-") as td:
 		root = Path(td)
 		scripts_dir = root / "scripts"
 		support_prompts = root / ".codex-workflow-src" / "prompts"
+		support_prompts_main = root / ".codex-workflow-src-main" / "prompts"
 		support_scripts = root / ".codex-workflow-src" / "scripts"
 		runtime_dir = root / "rt"
-		for d in (scripts_dir, support_prompts, support_scripts, runtime_dir):
+		for d in (
+			scripts_dir,
+			support_prompts,
+			support_prompts_main,
+			support_scripts,
+			runtime_dir,
+		):
 			d.mkdir(parents=True)
 
 		# Stage the renderer (shim + python backend) as the workflows do.
@@ -138,7 +149,10 @@ def _render_header(*, stage_header: bool) -> subprocess.CompletedProcess[str]:
 		)
 		# The header fragment exists only in the support checkout, mirroring a
 		# consumer repo that ships none of these files.
-		(support_prompts / "header.txt").write_text(
+		header_prompt_dir = (
+			support_prompts_main if prefer_main_snapshot else support_prompts
+		)
+		(header_prompt_dir / "header.txt").write_text(
 			HEADER_PROMPT.read_text(encoding="utf-8"), encoding="utf-8"
 		)
 		(runtime_dir / "repo_learnings.txt").write_text(
@@ -153,7 +167,7 @@ def _render_header(*, stage_header: bool) -> subprocess.CompletedProcess[str]:
 			'    src=".codex-workflow-src-main/prompts/header.txt"\n'
 			'  fi\n'
 			'  if [ ! -f "${src}" ]; then\n'
-			'    echo "::error::Failed to stage required file prompts/header.txt" >&2\n'
+			'    echo "::error::Failed to stage required file prompts/header.txt"\n'
 			'    exit 1\n'
 			'  fi\n'
 			'  install -m 0644 "${src}" prompts/header.txt\n'
@@ -168,10 +182,12 @@ def _render_header(*, stage_header: bool) -> subprocess.CompletedProcess[str]:
 			+ "bash scripts/render_prompt.sh prompts/header.txt\n"
 		)
 
-		env = {
-			"PATH": os.environ.get("PATH", ""),
-			"PYTHONDONTWRITEBYTECODE": "1",
-		}
+		env = os.environ.copy()
+		env["PYTHONDONTWRITEBYTECODE"] = "1"
+		for key in ("BASH_ENV", "ENV", "WORKSPACE_PATH"):
+			env.pop(key, None)
+		env["PWD"] = str(root)
+		env.pop("OLDPWD", None)
 		return subprocess.run(
 			["bash", "-c", script],
 			cwd=str(root),
@@ -184,17 +200,20 @@ def _render_header(*, stage_header: bool) -> subprocess.CompletedProcess[str]:
 
 def test_header_renders_when_staged() -> None:
 	"""With the staging block, the header renders and {{REPO_LEARNINGS}} hydrates."""
-	result = _render_header(stage_header=True)
-	assert result.returncode == 0, (
-		f"render failed unexpectedly: rc={result.returncode}\nstderr={result.stderr}"
-	)
-	assert "Prompt file not found" not in result.stderr
-	assert "{{REPO_LEARNINGS}}" not in result.stdout, (
-		"placeholder left unhydrated in rendered header"
-	)
-	assert "Learned: prefer batched GraphQL." in result.stdout, (
-		"REPO_LEARNINGS env value not injected into the rendered header"
-	)
+	for prefer_main_snapshot in (False, True):
+		result = _render_header(
+			stage_header=True, prefer_main_snapshot=prefer_main_snapshot
+		)
+		assert result.returncode == 0, (
+			f"render failed unexpectedly: rc={result.returncode}\nstderr={result.stderr}"
+		)
+		assert "Prompt file not found" not in result.stderr
+		assert "{{REPO_LEARNINGS}}" not in result.stdout, (
+			"placeholder left unhydrated in rendered header"
+		)
+		assert "Learned: prefer batched GraphQL." in result.stdout, (
+			"REPO_LEARNINGS env value not injected into the rendered header"
+		)
 
 
 def test_header_render_fails_without_staging() -> None:
