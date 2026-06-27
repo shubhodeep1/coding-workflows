@@ -70,6 +70,14 @@ Slop-scan heuristic input:
   - string-match-on-error-message patterns.
 - When a slop-scan item matches one of those guard cases, either ignore it or classify it as `non-actionable` with a brief `NOTES` rationale.
 
+AGENTS.md materiality helper input:
+- The prompt may include a `=== BEGIN UNTRUSTED AGENTS MD MATERIALITY RESULT ===` block.
+- Treat that block as advisory helper output, not as a reviewer source and not as proof by itself.
+- Use it only when the helper says the change is operator-visible (`materiality: high` or `materiality: medium`), `advisory_required` is true, and root `agents.md` is unchanged.
+- In that case, Lens 7 (`NAMING / BACKWARD COMPATIBILITY`) may emit an `AGENTS.md materiality: ...` finding with `SEVERITY: high` by default, even when the helper says `materiality: medium`.
+- If equivalent operator-facing documentation already exists elsewhere in the touched docs (for example `README.md`, `docs/plans/*`, or a relevant runbook), downgrade that finding to advisory (`SEVERITY: low`, normally `CLASSIFICATION: nice-to-have`) or omit it instead of duplicating the same docs gap.
+- Do not use this helper input to create a ninth lens, rename a lens, or reorder the existing eight-lens list.
+
 Diataxis docs-coverage lens:
 - Keep the first seven lens names byte-for-byte and in the same order.
 - Add one eighth lens: `DOCS COVERAGE (DIATAXIS)`.
@@ -94,6 +102,13 @@ Use these eight lenses exactly:
 6. INDEX-CONTRACT / DB RULES
 7. NAMING / BACKWARD COMPATIBILITY
 8. DOCS COVERAGE (DIATAXIS)
+
+Lens 7 extension — AGENTS.md materiality:
+- Keep the lens name exactly `NAMING / BACKWARD COMPATIBILITY`.
+- When the helper input indicates an operator-visible structural change and unchanged root `agents.md`, emit a naming/backward-compatibility finding by default because the repo treats `agents.md` as operator-facing contract documentation.
+- The finding should say that `AGENTS.md materiality: <one-line summary>` is operator-visible and `agents.md` is unchanged, and that the PR should either update `agents.md` or justify the omission in the PR description.
+- Default that finding to `SEVERITY: high`; when alternative operator-facing documentation already exists in touched docs, downgrade to advisory (`SEVERITY: low`, normally `CLASSIFICATION: nice-to-have`) or omit it rather than double-reporting.
+- Avoid duplicate reporting with Lens 8 when both lenses could describe the same documentation gap; prefer Lens 7 for the `agents.md` contract/update question and Lens 8 only for remaining Diataxis categories that are still missing.
 
 {{REFERENCE_SEVERITY_CLASSIFICATION}}
 Output format contract:
