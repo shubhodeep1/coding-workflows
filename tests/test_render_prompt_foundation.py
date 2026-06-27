@@ -428,6 +428,23 @@ def test_render_prompt_py_prepends_phase_c_persona_prefix_without_altering_legac
 		assert rerender_proc.stdout == persona_proc.stdout
 
 
+def test_render_prompt_py_enables_phase_c_persona_prefix_by_default() -> None:
+	prompt_file = REPO_ROOT / "prompts" / "mode-plan.txt"
+	disabled_proc = _run_render_prompt_py(prompt_file)
+	assert disabled_proc.returncode == 0, disabled_proc.stderr
+	assert disabled_proc.stderr == ""
+
+	default_env = os.environ.copy()
+	default_env["PYTHONDONTWRITEBYTECODE"] = "1"
+	default_env.pop("PROMPT_PERSONA_PREFIX_ENABLED", None)
+	default_proc = _run_render_prompt_py(prompt_file, env=default_env)
+	assert default_proc.returncode == 0, default_proc.stderr
+	assert default_proc.stderr == ""
+	assert default_proc.stdout.endswith(disabled_proc.stdout)
+	assert default_proc.stdout != disabled_proc.stdout
+	assert default_proc.stdout.startswith(PHASE_C_PERSONA_SENTINELS["mode-plan"])
+
+
 def test_render_prompt_py_treats_blank_persona_env_value_as_disabled() -> None:
 	prompt_file = REPO_ROOT / "prompts" / "mode-plan.txt"
 	legacy_proc = _run_render_prompt_py(prompt_file)
@@ -455,6 +472,7 @@ def main() -> int:
 	test_render_prompt_py_reports_unknown_placeholder_contract_violation()
 	test_render_prompt_py_renders_security_audit_mode_contract()
 	test_render_prompt_py_prepends_phase_c_persona_prefix_without_altering_legacy_body()
+	test_render_prompt_py_enables_phase_c_persona_prefix_by_default()
 	test_render_prompt_py_treats_blank_persona_env_value_as_disabled()
 	print("OK: render prompt foundation assertions hold")
 	return 0

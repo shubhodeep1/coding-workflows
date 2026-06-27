@@ -108,10 +108,10 @@ def test_assemble_prompt_reports_missing_fragment() -> None:
 			timeout=60,
 		)
 
-	assert proc.returncode == 1
-	assert proc.stdout == ""
-	assert "Included prompt fragment not found" in proc.stderr
-	assert "_prelude_common.txt" in proc.stderr
+		assert proc.returncode == 1
+		assert proc.stdout == ""
+		assert "Included prompt fragment not found" in proc.stderr
+		assert "_prelude_common.txt" in proc.stderr
 
 
 def test_render_prompt_sh_flag_false_uses_legacy_prompt_even_when_template_exists() -> None:

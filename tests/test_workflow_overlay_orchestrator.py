@@ -23,9 +23,10 @@ WORKFLOW_EXPECTATIONS = {
 	"orchestrate_clarify_respond.yml": 'bash scripts/render_prompt.sh prompts/mode-clarify-respond.txt',
 }
 
-ORCHESTRATE_PROMPT_ASSET_LOOP = (
-	"for prompt_assembly_asset in _prelude_common.txt "
-	"_prelude_output_contract.txt _templates/mode-orchestrate.txt; do"
+ORCHESTRATE_PROMPT_ASSETS = (
+	"_prelude_common.txt",
+	"_prelude_output_contract.txt",
+	"_templates/mode-orchestrate.txt",
 )
 
 TEMPLATE_EXPECTATIONS = {
@@ -72,7 +73,9 @@ def test_orchestrator_wrapper_templates_match_reusable_workflow_targets() -> Non
 
 def test_orchestrate_workflow_stages_prompt_assembly_assets() -> None:
 	workflow_text = _read(WORKFLOWS_DIR / "orchestrate.yml")
-	assert ORCHESTRATE_PROMPT_ASSET_LOOP in workflow_text
+	assert "for prompt_assembly_asset in " in workflow_text
+	for prompt_asset in ORCHESTRATE_PROMPT_ASSETS:
+		assert prompt_asset in workflow_text
 
 
 def main() -> int:
