@@ -1,0 +1,19 @@
+{
+  "entries": [
+    {
+      "context": "validation passed",
+      "cycle": 1,
+      "outcome": "passed",
+      "raw_conclusion": "success",
+      "raw_status": "pass",
+      "recorded_at": "2026-06-27T18:56:12Z",
+      "run_attempt": null,
+      "run_id": null,
+      "run_url": null,
+      "source": "orchestrate_poll.mark_validation_complete"
+    }
+  ],
+  "integration_sha": "69be90a259b6736c6985c6c7ff9b622700824203",
+  "repository": "shubhodeep1/coding-workflows",
+  "schema_version": "v1"
+}
