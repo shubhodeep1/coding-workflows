@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "Multiple runs modified `scripts/files_touched_scope_guard.py` together with implement/recovery scripts and tests. This indicates the repo relies on scope checks to prevent unsafe or out-of-bound changes, so any automation that writes files should preserve and test those guards before broadening behavior.",
+  "fingerprint": "da4a3d98f06cf55892df430b42fc05d26a08c4d381d610aeda78b70c495625f1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28282971909",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28282971909",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3531",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3533",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3535",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3537",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3540",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3532",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3534",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3536",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3538",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3541"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260627075146_61cfa4fddd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "File-scope guarding is an important safety boundary for automated edits and should be covered by dedicated tests.",
+  "timestamps": {
+    "created_at": "2026-06-27T07:51:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
