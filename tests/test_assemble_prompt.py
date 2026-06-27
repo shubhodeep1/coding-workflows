@@ -141,7 +141,7 @@ def test_render_prompt_sh_flag_false_uses_legacy_prompt_even_when_template_exist
 		_copy_prompt_runtime_scripts(repo_root)
 		(repo_root / "prompts" / "mode-sample.txt").parent.mkdir(parents=True, exist_ok=True)
 		(repo_root / "prompts" / "_templates").mkdir(parents=True, exist_ok=True)
-		(repo_root / "prompts" / "mode-sample.txt").write_text("legacy\n", encoding="utf-8")
+		(repo_root / "prompts" / "mode-sample.txt").write_text("docker inspect --format='{{.State.ExitCode}}'\n", encoding="utf-8")
 		(repo_root / "prompts" / "_prelude_common.txt").write_text("template\n", encoding="utf-8")
 		(repo_root / "prompts" / "_templates" / "mode-sample.txt").write_text(
 			'{% include "_prelude_common.txt" %}\nbody\n',
@@ -161,7 +161,7 @@ def test_render_prompt_sh_flag_false_uses_legacy_prompt_even_when_template_exist
 
 	assert proc.returncode == 0, proc.stderr
 	assert proc.stderr == ""
-	assert proc.stdout == "legacy\n"
+	assert proc.stdout == "docker inspect --format='{{.State.ExitCode}}'\n"
 
 
 def test_render_prompt_sh_flag_true_uses_assembled_template_when_present() -> None:
