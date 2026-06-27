@@ -5,13 +5,36 @@
   "entry_id": "processed_command_3540_4814654912_approved",
   "issue_number": 3540,
   "metadata": {
+    "branch": "ai/issue-3540",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/review_autofix.yml",
+      "README.md",
+      "agents.md",
+      "prompts/review-consolidator.txt",
+      "scripts/ai_memory.py",
+      "scripts/ai_memory_lib.py",
+      "scripts/files_touched_scope_guard.py",
+      "scripts/implement_commit_changes.sh",
+      "scripts/implement_diagnose_post_codex_failure.sh",
+      "scripts/label_helpers.sh",
+      "scripts/render_prompt.py",
+      "scripts/review_consolidate.sh",
+      "tests/test_render_prompt_review_judge_modes.py",
+      "tests/test_review_autofix_review_pipeline_contract.py"
+    ],
+    "issue_number": 3540,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/3540",
+    "pr_number": 3541,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/3541",
+    "run_attempt": "1",
+    "run_id": "28275218113",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/28275218113"
   },
   "run_attempt": 1,
   "run_id": "28275218113",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-06-27T02:02:03Z",
+  "status": "completed",
+  "timestamp": "2026-06-27T02:09:51Z",
   "workflow": "implement"
 }
