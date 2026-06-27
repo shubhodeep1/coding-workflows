@@ -52,6 +52,7 @@ REFERENCES_DIR = REPO_ROOT / "prompts" / "references"
 JUDGE_REFERENCE_ASSETS = ("output-contract.txt", "severity-classification.txt")
 JUDGE_TEMPLATE_ASSETS = (
 	"_prelude_common.txt",
+	"_prelude_role_persona.txt",
 	"_prelude_semble.txt",
 	"_prelude_output_contract.txt",
 	"_templates/mode-judge.txt",

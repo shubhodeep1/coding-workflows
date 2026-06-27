@@ -408,7 +408,7 @@ jobs:
           fi
           install -m 0644 "${prompt_src}" prompts/mode-orchestrate.txt
 
-          for prompt_assembly_asset in _prelude_common.txt _prelude_output_contract.txt _templates/mode-orchestrate.txt; do
+          for prompt_assembly_asset in _prelude_common.txt _prelude_role_persona.txt _prelude_output_contract.txt _templates/mode-orchestrate.txt; do
             asset_src=".codex-workflow-src/prompts/${prompt_assembly_asset}"
             if [ ! -f "${asset_src}" ] && [ -f ".codex-workflow-src-main/prompts/${prompt_assembly_asset}" ]; then
               asset_src=".codex-workflow-src-main/prompts/${prompt_assembly_asset}"

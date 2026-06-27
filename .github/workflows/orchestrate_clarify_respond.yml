@@ -359,9 +359,9 @@ jobs:
               printf '%s\n' "${_fetched_scripts[@]}" .gitignore
             } > scripts/.gitignore
           fi
-          # Fetch the clarify-respond prompt
+          # Fetch the clarify-respond prompt and its shared-prelude assets.
           PROMPT_SOURCE="prompts/mode-clarify-respond.txt"
-          mkdir -p prompts
+          mkdir -p prompts prompts/_templates
           if [ ! -f "${PROMPT_SOURCE}" ]; then
             src=".codex-workflow-src/${PROMPT_SOURCE}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/${PROMPT_SOURCE}" ]; then
@@ -373,6 +373,19 @@ jobs:
             fi
             install -m 0644 "${src}" "${PROMPT_SOURCE}"
           fi
+          for prompt_support_asset in _prelude_common.txt _prelude_output_contract.txt _prelude_role_persona.txt _templates/mode-clarify-respond.txt; do
+            if [ ! -f "prompts/${prompt_support_asset}" ]; then
+              src=".codex-workflow-src/prompts/${prompt_support_asset}"
+              if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/${prompt_support_asset}" ]; then
+                src=".codex-workflow-src-main/prompts/${prompt_support_asset}"
+              fi
+              if [ ! -f "${src}" ]; then
+                echo "::error::Missing required support file prompts/${prompt_support_asset}"
+                exit 1
+              fi
+              install -m 0644 "${src}" "prompts/${prompt_support_asset}"
+            fi
+          done
 
           # Keep canonical static instructions available in caller repos where
           # these files may not exist yet.

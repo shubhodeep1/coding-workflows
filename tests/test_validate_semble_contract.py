@@ -41,8 +41,11 @@ OPTIONAL_PRESERVED_VALIDATE_PROMPTS = (
 REQUIRED_VALIDATE_ASSEMBLY_ASSETS = (
 	"prompts/_prelude_common.txt",
 	"prompts/_prelude_common_large.txt",
+	"prompts/_prelude_common_xl.txt",
+	"prompts/_prelude_role_persona.txt",
 	"prompts/_prelude_serena.txt",
 	"prompts/_prelude_output_contract.txt",
+	"prompts/_templates/mode-validate-generate.txt",
 	"prompts/_templates/mode-validate-diagnose.txt",
 	"prompts/_templates/mode-validate-discover.txt",
 	"prompts/_templates/mode-validate-fix-harness.txt",
