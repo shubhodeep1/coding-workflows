@@ -23,6 +23,7 @@ PLACEHOLDER_EXPRESSION_PATTERN = re.compile(r"\{\{(.*?)\}\}")
 STANDALONE_PLACEHOLDER_PATTERN = re.compile(r"^[ \t]*\{\{([A-Za-z0-9_]+)\}\}[ \t]*$")
 INCLUDE_DIRECTIVE_PATTERN = re.compile(r'^[ \t]*\{%[ \t]*include[ \t]+"([^"\n]+)"[ \t]*%\}[ \t]*$')
 VARIABLE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_]+$")
+LITERAL_DOT_EXPRESSION_PATTERN = re.compile(r"^\s*\.[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\s*$")
 OVERLAY_MODE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*$")
 CONTRACT_TOP_LEVEL_KEYS = {"required_vars", "optional_vars", "forbidden_vars"}
 PERSONA_SOURCE_FILE_NAME = "_prelude_role_persona.txt"
@@ -726,7 +727,7 @@ def _placeholder_expression_allowed_as_literal(line: str, match: re.Match[str]) 
 	placeholder_expression = match.group(1)
 	if match.start() > 0 and line[match.start() - 1] == "$":
 		return True
-	return placeholder_expression.strip().startswith(".")
+	return LITERAL_DOT_EXPRESSION_PATTERN.fullmatch(placeholder_expression) is not None
 
 
 def validate_supported_template_syntax(prompt_text: str, prompt_path: Path) -> None:

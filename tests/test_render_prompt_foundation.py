@@ -411,6 +411,31 @@ def test_render_prompt_py_rejects_unsupported_placeholder_expression() -> None:
 	assert "{{FOO|lower}}" in proc.stderr
 
 
+def test_render_prompt_py_rejects_dot_prefixed_filter_expression() -> None:
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_dot_filter_") as td:
+		prompt_file = Path(td) / "prompt.txt"
+		prompt_file.write_text("Before\n{{ .foo|default(\"x\") }}\nAfter\n", encoding="utf-8")
+
+		proc = _run_render_prompt_py(prompt_file)
+
+	assert proc.returncode == 1
+	assert proc.stdout == ""
+	assert "Unsupported template syntax" in proc.stderr
+	assert "{{ .foo|default(\"x\") }}" in proc.stderr
+
+
+def test_render_prompt_py_allows_literal_dot_field_expression() -> None:
+	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_dot_literal_") as td:
+		prompt_file = Path(td) / "prompt.txt"
+		prompt_file.write_text("docker inspect --format='{{.State.ExitCode}}'\n", encoding="utf-8")
+
+		proc = _run_render_prompt_py(prompt_file)
+
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stderr == ""
+	assert proc.stdout == "docker inspect --format='{{.State.ExitCode}}'\n"
+
+
 def test_render_prompt_py_uses_checked_in_persona_source() -> None:
 	with tempfile.TemporaryDirectory(prefix="render_prompt_foundation_persona_source_") as td:
 		repo_root = Path(td)
@@ -507,6 +532,8 @@ def main() -> int:
 	test_render_prompt_py_reports_unknown_placeholder_contract_violation()
 	test_render_prompt_py_renders_security_audit_mode_contract()
 	test_render_prompt_py_rejects_unsupported_placeholder_expression()
+	test_render_prompt_py_rejects_dot_prefixed_filter_expression()
+	test_render_prompt_py_allows_literal_dot_field_expression()
 	test_render_prompt_py_uses_checked_in_persona_source()
 	test_render_prompt_py_prepends_phase_c_persona_prefix_without_altering_legacy_body()
 	test_render_prompt_py_enables_phase_c_persona_prefix_by_default()
