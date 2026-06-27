@@ -157,6 +157,18 @@
       "color": "c2e0c6",
       "description": "Reviewer panel + editor cycle skipped by deterministic gate (doc-only or under size threshold)"
     },
+    "ai:security-audit": {
+      "color": "5319e7",
+      "description": "Stable tracker issue for periodic default-branch security audits"
+    },
+    "ai:retro": {
+      "color": "5319e7",
+      "description": "Stable tracker issue for weekly workflow retrospectives"
+    },
+    "ai:security": {
+      "color": "0e8a16",
+      "description": "Follow-up issue opened by the periodic security audit workflow"
+    },
     "force-review": {
       "color": "fbca04",
       "description": "Force a full review_autofix cycle, bypassing the deterministic pre-review skip"

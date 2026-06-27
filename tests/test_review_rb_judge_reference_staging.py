@@ -43,12 +43,24 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 STAGE_HELPER = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
+ASSEMBLE_PROMPT_SH = REPO_ROOT / "scripts" / "assemble_prompt.sh"
 RENDER_PROMPT_PY = REPO_ROOT / "scripts" / "render_prompt.py"
 RENDER_PROMPT_SH = REPO_ROOT / "scripts" / "render_prompt.sh"
 REVIEW_BLOCKED_PROMPT = REPO_ROOT / "prompts" / "mode-judge-review-blocked.txt"
 REVIEW_BLOCKED_CONTRACT = REPO_ROOT / "prompts" / "contracts" / "mode-judge-review-blocked.yml"
 REFERENCES_DIR = REPO_ROOT / "prompts" / "references"
 JUDGE_REFERENCE_ASSETS = ("output-contract.txt", "severity-classification.txt")
+JUDGE_TEMPLATE_ASSETS = (
+	"_prelude_common.txt",
+	"_prelude_role_persona.txt",
+	"_prelude_semble.txt",
+	"_prelude_output_contract.txt",
+	"_templates/mode-judge.txt",
+	"_templates/mode-judge-interim.txt",
+	"_templates/mode-judge-review-blocked.txt",
+	"_templates/mode-judge-stall-recovery.txt",
+	"_templates/mode-orchestrate-poll-judge.txt",
+)
 
 
 def _stage_helper_text() -> str:
@@ -90,6 +102,10 @@ def test_stage_workflow_support_stages_judge_reference_assets() -> None:
 		"review-blocked/interim judge will degrade (REFERENCE_* placeholder left unhydrated)"
 		in stage_helper
 	)
+	assert "assemble_prompt.sh" in stage_helper
+	assert "for prompt_assembly_asset in " in stage_helper
+	for prompt_asset in JUDGE_TEMPLATE_ASSETS:
+		assert prompt_asset in stage_helper
 
 
 def _render_review_blocked_prompt(*, stage_references: bool) -> subprocess.CompletedProcess[str]:
@@ -109,15 +125,21 @@ def _render_review_blocked_prompt(*, stage_references: bool) -> subprocess.Compl
 		contracts_dir.mkdir(parents=True)
 
 		# Stage the renderer + prompt + contract exactly as the bundle does.
-		for src in (RENDER_PROMPT_PY, RENDER_PROMPT_SH):
+		for src in (RENDER_PROMPT_PY, RENDER_PROMPT_SH, ASSEMBLE_PROMPT_SH):
 			(scripts_dir / src.name).write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
-		(scripts_dir / "render_prompt.sh").chmod(0o755)
+		for script_name in ("render_prompt.sh", "assemble_prompt.sh"):
+			(scripts_dir / script_name).chmod(0o755)
 		(prompts_dir / REVIEW_BLOCKED_PROMPT.name).write_text(
 			REVIEW_BLOCKED_PROMPT.read_text(encoding="utf-8"), encoding="utf-8"
 		)
 		(contracts_dir / REVIEW_BLOCKED_CONTRACT.name).write_text(
 			REVIEW_BLOCKED_CONTRACT.read_text(encoding="utf-8"), encoding="utf-8"
 		)
+		for prompt_asset in JUDGE_TEMPLATE_ASSETS:
+			source_path = REPO_ROOT / "prompts" / prompt_asset
+			target_path = prompts_dir / prompt_asset
+			target_path.parent.mkdir(parents=True, exist_ok=True)
+			target_path.write_text(source_path.read_text(encoding="utf-8"), encoding="utf-8")
 
 		if stage_references:
 			references_dir = prompts_dir / "references"
@@ -131,6 +153,7 @@ def _render_review_blocked_prompt(*, stage_references: bool) -> subprocess.Compl
 		env = {
 			"PATH": os.environ.get("PATH", ""),
 			"PYTHONDONTWRITEBYTECODE": "1",
+			"PROMPT_PRELUDE_REFACTOR_ENABLED": "true",
 		}
 		return subprocess.run(
 			[

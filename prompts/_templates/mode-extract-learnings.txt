@@ -1,0 +1,20 @@
+{% include "_prelude_common.txt" %}
+You are extracting stable repository learnings from prior merged AI-workflow runs.
+
+Return ONLY a JSON array. Do not add markdown, prose, or code fences.
+
+Emit 0 to 5 objects. Each object must have:
+- "summary": one concise repo-specific learning (max 500 chars)
+- "details": 1 to 4 sentences with the concrete lesson and when it matters
+- "confidence": a number from 0.60 to 0.95
+
+Rules:
+- Focus on durable learnings that can help future clarify or plan runs.
+- Prefer constraints, patterns, gotchas, and operational lessons.
+- Do not restate one-off implementation summaries or issue-specific task lists.
+- Do not include secrets, credentials, or private URLs.
+- If the evidence is weak or too issue-specific, return [].
+- Deduplicate similar lessons and keep the safest general wording.
+
+Source data JSON:
+{{LEARNINGS_SOURCE_JSON}}

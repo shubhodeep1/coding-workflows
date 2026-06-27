@@ -51,6 +51,12 @@ Prefer append-only edits in shared docs (`README.md`, `agents.md`, CHANGELOG)
 under existing `<!-- anchor:NAME -->` HTML anchors rather than reflowing
 prose. Do not delete, rename, or reorder anchors.
 
+Scope-lock discipline: if the implementation context says an `ai:scope:<glob>`
+label is active for this issue, edit only files matching that glob. If the
+required fix needs any file outside the active glob, emit exactly
+`BLOCKED: scope-lock-violation file=<path>` using the first required
+out-of-scope path and stop instead of making out-of-scope edits.
+
 Dependency / lockfile discipline: if your patch edits a dependency manifest
 (`package.json`, `pyproject.toml`/`requirements*.in`, `go.mod`, `Cargo.toml`),
 update the matching lockfile in the same patch (`package-lock.json` /

@@ -389,8 +389,9 @@ DIAGNOSE_MODE_PROMPT_TEMPLATE="prompts/mode-implement-diagnose.txt"
 if ! ensure_diagnose_asset "${DIAGNOSE_MODE_PROMPT_TEMPLATE}" "prompts/mode-implement-diagnose.txt"; then
   DIAGNOSE_MODE_PROMPT_TEMPLATE="${RUNTIME_DIR}/mode-implement-diagnose.fallback.txt"
   cat > "${DIAGNOSE_MODE_PROMPT_TEMPLATE}" <<'EOF'
-Diagnose this implementation failure and return a single JSON object with keys:
-status (needs_fixes|harness_error|infeasible), diagnosis, fix_issues, harness_fixes.
+Diagnose this implementation failure. Do not propose a fix without a traced evidence path and a supported hypothesis.
+Return a single JSON object with keys:
+status (needs_fixes|harness_error|infeasible), diagnosis, evidence_trace, hypothesis, fix_issues, harness_fixes.
 EOF
 fi
 
@@ -423,11 +424,15 @@ if [ ! -s "${DIAGNOSE_STATIC_PREFIX_FILE}" ]; then
   cat > "${DIAGNOSE_STATIC_PREFIX_FILE}" <<'EOF'
 You are diagnosing an AI implementation workflow failure.
 Return exactly one JSON object and no surrounding prose.
+Do not propose a fix without a traced evidence path and a supported hypothesis.
 The JSON object must use these keys:
 - status (needs_fixes|harness_error|infeasible)
 - diagnosis
+- evidence_trace
+- hypothesis
 - fix_issues
 - harness_fixes
+If the evidence is insufficient for a supported hypothesis, use status=infeasible instead of guessing.
 Keep the response focused on actionable diagnosis grounded in the supplied evidence.
 EOF
 fi
@@ -635,6 +640,23 @@ with open(output_file, "w", encoding="utf-8") as handle:
 PY
 }
 
+format_diagnose_trace_section() {
+  local result_file="$1"
+  jq -r '
+    def format_trace_entry:
+      "- "
+      + ((.file // "<unknown file>") | tostring)
+      + (if .line == null then "" else ":" + (.line | tostring) end)
+      + (if (((.function // "") | tostring) == "") then "" else " in " + ((.function // "") | tostring) end)
+      + " — "
+      + (((.observation // "") | tostring) | if length > 0 then . else "No observation provided." end);
+    "Evidence trace:\n"
+    + ((.evidence_trace // []) | if type == "array" and length > 0 then map(format_trace_entry) | join("\n") else "- none provided" end)
+    + "\n\nHypothesis:\n- "
+    + (((.hypothesis // "") | tostring) | if length > 0 then . else "No hypothesis provided." end)
+  ' "${result_file}"
+}
+
 DIAGNOSE_SUCCESS=false
 if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   sanitize_codex_prompt_file "${IMPLEMENT_DIAGNOSE_PROMPT_FILE}"
@@ -653,14 +675,28 @@ if [ "${DIAGNOSE_SUCCESS}" != "true" ]; then
     RAW_CAPTURE_SNIPPET+=$'\n\n[truncated to first 50000 bytes]'
   fi
 
-  FALLBACK_BODY="$(printf 'Investigate post-Codex validation failure for issue #%s.\n\nThe diagnose step could not produce a valid JSON contract, so this deterministic fallback issue was generated with raw captured diagnostics.\n\n### Captured diagnostics\n\n```text\n%s\n```' "${ISSUE_NUMBER}" "${RAW_CAPTURE_SNIPPET}")"
+  FALLBACK_TRACE_OBSERVATION="Captured post-Codex diagnostics for ${FAILED_STEP_NAME} were available, but the diagnose step did not emit a contract-valid JSON result."
+  FALLBACK_HYPOTHESIS="The diagnose run failed before it could produce a trace-backed fix proposal, so the safest next step is a deterministic follow-up issue carrying the raw diagnostics."
+  FALLBACK_BODY="$(printf 'Investigate post-Codex validation failure for issue #%s.\n\nThe diagnose step could not produce a valid JSON contract, so this deterministic fallback issue was generated with raw captured diagnostics.\n\nEvidence trace:\n- %s — %s\n\nHypothesis:\n- %s\n\n### Captured diagnostics\n\n```text\n%s\n```' "${ISSUE_NUMBER}" "${CAPTURE_FILE}" "${FALLBACK_TRACE_OBSERVATION}" "${FALLBACK_HYPOTHESIS}" "${RAW_CAPTURE_SNIPPET}")"
 
   jq -n \
     --arg diagnosis "Codex diagnose failed or returned invalid JSON. Fallback fix-up issue created with raw captured diagnostics." \
     --arg body "${FALLBACK_BODY}" \
+    --arg capture_file "${CAPTURE_FILE}" \
+    --arg trace_observation "${FALLBACK_TRACE_OBSERVATION}" \
+    --arg hypothesis "${FALLBACK_HYPOTHESIS}" \
     '{
       status: "needs_fixes",
       diagnosis: $diagnosis,
+      evidence_trace: [
+        {
+          file: $capture_file,
+          line: null,
+          function: null,
+          observation: $trace_observation
+        }
+      ],
+      hypothesis: $hypothesis,
       fix_issues: [
         {
           id: "implement-post-codex-fallback",
@@ -685,13 +721,20 @@ case "${DIAG_STATUS}" in
       FIX_COUNT=0
     fi
     if [ "${FIX_COUNT}" -le 0 ]; then
+      EXISTING_EVIDENCE_TRACE_JSON="$(jq -c '(.evidence_trace // []) | if type == "array" then . else [] end' "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
+      EXISTING_HYPOTHESIS="$(jq -r '.hypothesis // ""' "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
+      EXISTING_TRACE_SECTION="$(format_diagnose_trace_section "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"
       FIX_COUNT=1
       jq -n \
         --arg diagnosis "Diagnosis returned needs_fixes with empty fix_issues. Generated fallback issue payload." \
-        --arg body "No fix_issues were returned by diagnose output. Investigate implement workflow post-Codex failure handling and captured diagnostics in ${CAPTURE_FILE}." \
+        --arg body "No fix_issues were returned by diagnose output. Investigate implement workflow post-Codex failure handling and captured diagnostics in ${CAPTURE_FILE}.\n\n${EXISTING_TRACE_SECTION}" \
+        --arg hypothesis "${EXISTING_HYPOTHESIS}" \
+        --argjson evidence_trace "${EXISTING_EVIDENCE_TRACE_JSON}" \
         '{
           status: "needs_fixes",
           diagnosis: $diagnosis,
+          evidence_trace: $evidence_trace,
+          hypothesis: $hypothesis,
           fix_issues: [
             {
               id: "implement-post-codex-empty-fix-issues",

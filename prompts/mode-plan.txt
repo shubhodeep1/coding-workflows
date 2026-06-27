@@ -9,6 +9,9 @@ Read-only exploration sub-phase:
 - Allowed read-only operations in this sub-phase: grep/glob discovery, targeted file reads, manifest inspection, lockfile detection, and preview-only patch planning.
 - Use the exploration pass to identify likely files, confirm surrounding context, and outline intended non-writing patch shapes.
 - No write-mode tools are allowed during this sub-phase.
+- If the planning context already surfaces `lessons_learned_record.v1`
+  entries for the same files, review up to the 5 most recent before
+  drafting and treat them as soft priors, not gospel.
 
 {{REFERENCE_OUTPUT_CONTRACT}}
 Output contract — produce a plan covering, in order:
@@ -20,6 +23,36 @@ Output contract — produce a plan covering, in order:
 6. Testing considerations.
 7. `Implementation-time estimate: <N> minutes` on its own line, integer minutes,
    ≤ 60 (see scope-too-large gate below).
+8. Scope-mode requirement gate (current render: `PLAN_SCOPE_MODE_REQUIRED={{PLAN_SCOPE_MODE_REQUIRED}}`): emit
+   `Scope-mode: <Expansion | Selective Expansion | Hold Scope | Reduction>` on its own line
+   when the current render is `true`; when the current render is `false`, this line is
+   optional but preferred.
+9. Reuse-audit requirement gate (current render: `PLAN_REUSE_AUDIT_REQUIRED={{PLAN_REUSE_AUDIT_REQUIRED}}`): emit
+   `Reuse-audit: extends <existing-name>` on its own line immediately after the
+   `Scope-mode:` line when the current render is `true`; when the current render is
+   `false`, this line is optional but preferred. Only when Layer 3 is genuinely
+   necessary, emit `Reuse-audit: net-new (Layer 3) — <justification>` instead.
+10. Scope-mode justification requirement gate (current render: `PLAN_SCOPE_MODE_REQUIRED={{PLAN_SCOPE_MODE_REQUIRED}}`): emit
+   a one-paragraph `Scope-mode justification:` block when the current render is
+   `true`. Place it immediately after the `Reuse-audit:` line when that line is
+   present; otherwise place it immediately after the `Scope-mode:` line. When the
+   current render is `false`, include the block whenever `Scope-mode:` is present.
+11. Diagrams/failure-modes requirement gate (current render: `PLAN_DIAGRAMS_OPTIONAL={{PLAN_DIAGRAMS_OPTIONAL}}`):
+   when the current render is `true`, plans may include the following sections
+   between `API/interface changes.` and `Risks and edge cases.` only when they
+   materially help the implementer or reviewer:
+   - `Data flow:` — include when the change introduces or modifies a multi-step
+     flow. Use ASCII art or numbered prose, ≤ 20 lines.
+   - `State machines:` — include when the change touches a state machine. Name
+     the states, transitions, and trigger for each transition.
+   - `Failure modes:` — include for any change with non-trivial error paths.
+     Each entry should list trigger, observable symptom, and recovery path.
+   These fields are optional. Do not pad a trivial PR with diagrams or extra
+   prose; simple plans should stay terse. For changes to the orchestrator phase
+   machine (`ai:clarification` → `ai:planning` → `ai:awaiting-approval` →
+   `ai:implementing` → `ai:done` → `ai:ready-to-merge` → `ai:merged`), the
+   `State machines:` field is required, not optional. When the current render is
+   `false`, do not emit `Data flow:`, `State machines:`, or `Failure modes:`.
 
 Rules:
 - Read clarification answers from the planning context first. Accept flexible
@@ -27,6 +60,20 @@ Rules:
 - If any answer is missing, contradictory, or unclear: emit clarification
   questions in the mandatory `Q<ID>` / Choices format (see Mandatory Question
   Format below).
+- Reuse audit (current render: `PLAN_REUSE_AUDIT_REQUIRED={{PLAN_REUSE_AUDIT_REQUIRED}}`):
+  - Layer 1: search for existing helpers before proposing new code. Reuse or
+    extend established helpers when they fit, including existing examples
+    `scripts/gh_helpers.sh` and `scripts/memory_helpers.sh`.
+  - Layer 2: if no helper is a fit, search for established repo patterns before
+    proposing net-new structure. Reuse or extend existing patterns when they
+    fit, including the batched GraphQL helpers
+    `_fetch_candidate_issue_details_graphql` and
+    `_fetch_linked_pr_status_graphql`, plus the cycle-local caches
+    `ACTIVE_WORKFLOW_ISSUES` and `STALL_MANAGED_LINKED_PR_CACHE`.
+  - Layer 3: only propose net-new code when Layers 1 and 2 genuinely fail to
+    satisfy the need. When Layer 3 is necessary, justify why repo reuse fails;
+    do not present net-new code as the default when a real reuse candidate
+    exists.
 - Review-blocked reissues: if the issue body contains
   `Type: review-blocked-reissue` (footer block produced by the review-blocked
   judge), the file paths and line numbers cited in the body refer to the
@@ -55,6 +102,18 @@ Rules:
   collections + contracts + indexes, broad cross-cutting refactors, or one
   feature that needs a new write path AND a new read path AND a new
   background worker.
+- Boil the Lake forcing question: if shipping the complete implementation
+  costs ≤30 LOC more and ≤10 minutes more than the shortcut, and neither
+  option adds a new dependency nor a new external interface, pick the
+  complete option and document it in the `Scope-mode justification:` block.
+  Cite §6 Core Priorities in `unattended_system_instructions.md` as
+  Security > Correctness & safety > Backward compatibility
+  > Operational clarity > Performance > Speed; completeness moves correctness.
+- Reduction safety net: Reduction mode is only valid when the original
+  request is genuinely ambiguous about scope. If reducing scope, the plan
+  MUST emit a clarification Q-ID under the plan-phase carve-out confirming
+  the proposed reduction before the plan can be treated as clear. Do not use
+  Reduction mode as a substitute for the existing scope-too-large gate.
 - Surface the planning ref context (`git rev-parse HEAD` + symbolic branch);
   do not assume `main`.
 - If the checked-out ref mismatches Integration branch metadata, emit

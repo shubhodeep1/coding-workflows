@@ -60,6 +60,9 @@ Rules:
   `assessment`, or any generated `new_issues[].body`, use explicit
   `SEVERITY: BLOCKER|MAJOR|NIT` labels rather than implicit wording.
 - Include a `justification` explaining why you are requesting another cycle.
+- When the merged outcome diverges from the approved plan's stated direction,
+  you may include a grounded `lessons_learned` array for future planners to
+  treat as soft priors rather than hard requirements.
 
 Audit-gate carve-out (`npm run audit:ci`): if evidence shows validator semantics/normalization churn rather than a concrete defect, do not create a generic fix-up. `new_issues[].body` must NOT instruct implementers to:
 - `make npm audit deterministic`
@@ -92,9 +95,20 @@ text:
       "depends_on": ["<local-id of existing issues if any>"]
     }
   ],
+  "lessons_learned": [
+    {
+      "lesson_kind": "unexpected_judge_verdict",
+      "lesson_text": "<grounded lesson for future runs>",
+      "tags": ["<file or subsystem tag>"]
+    }
+  ],
   "issues_to_revert": ["<github issue number of PRs to revert, if any>"]
 }
 
 `new_issues`: empty array if no fixes needed.
+`lessons_learned`: optional; omit this field or use `[]` when there is no
+grounded plan-divergence lesson to carry forward. When present,
+`lesson_kind` should be one of `out_of_plan_fix`,
+`unexpected_judge_verdict`, or `review_finding_outside_plan_scope`.
 `issues_to_revert`: empty array unless a merged PR is actively breaking the
 build or contradicting the spec. Revert is a last resort.

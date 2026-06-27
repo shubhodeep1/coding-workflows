@@ -152,6 +152,17 @@ def test_bare_entry_matches_exact_path_and_descendants() -> None:
 	assert status == guard.STATUS_IN_SCOPE, oos
 
 
+def test_explicit_allowlist_entries_support_scope_lock_glob() -> None:
+	status, allow, oos = guard.evaluate(
+		"ignored because explicit allowlist entries are provided",
+		["scripts/run.sh", "scripts/orchestrate/deploy/run.sh", "README.md"],
+		allowlist_entries=["scripts/**/*.sh"],
+	)
+	assert status == guard.STATUS_OUT_OF_SCOPE
+	assert allow == ["scripts/**/*.sh"]
+	assert oos == ["README.md"]
+
+
 # --------------------------------------------------------------------------
 # Layer 1b — CLI exit-code contract
 # --------------------------------------------------------------------------
@@ -191,6 +202,33 @@ def test_cli_exit_codes_and_allowlist_dump() -> None:
 
 	rc, _out = _run_cli("no allowlist here", ["whatever.ts"])
 	assert rc == guard.EXIT_SKIP_NO_ALLOWLIST
+
+
+def test_cli_explicit_allowlist_file_supports_scope_lock_glob() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		tdp = Path(td)
+		allowlist_file = tdp / "allowlist.txt"
+		allowlist_file.write_text("scripts/**/*.sh\n", encoding="utf-8")
+		staged_file = tdp / "staged.txt"
+		staged_file.write_text("scripts/run.sh\nscripts/orchestrate/deploy/run.sh\nREADME.md\n", encoding="utf-8")
+		allowlist_out = tdp / "allowlist_out.txt"
+		proc = subprocess.run(
+			[
+				sys.executable,
+				str(GUARD_SCRIPT),
+				"--allowlist-file",
+				str(allowlist_file),
+				"--staged-file",
+				str(staged_file),
+				"--allowlist-out",
+				str(allowlist_out),
+			],
+			capture_output=True,
+			text=True,
+		)
+		assert proc.returncode == guard.EXIT_OUT_OF_SCOPE
+		assert proc.stdout.split() == ["README.md"]
+		assert allowlist_out.read_text(encoding="utf-8").strip() == "scripts/**/*.sh"
 
 
 # --------------------------------------------------------------------------
@@ -337,8 +375,9 @@ def test_both_guard_sites_invoke_script_and_emit_outputs() -> None:
 	combined_text = text + "\n" + commit_text
 	assert text.count("files_touched scope-enforcement guard (preflight)") >= 1
 	assert commit_text.count("files_touched scope-enforcement guard (commit)") >= 1
-	assert combined_text.count("python3 scripts/files_touched_scope_guard.py") == 2
+	assert combined_text.count("python3 scripts/files_touched_scope_guard.py") == 3
 	assert combined_text.count("scope_violation_blocked=out-of-scope") == 2
+	assert "scope_violation_blocked=scope-lock-label" in commit_text
 
 
 def test_alert_step_handles_scope() -> None:

@@ -136,6 +136,7 @@ jobs:
           python3 -m py_compile scripts/ai_labels.py
           python3 -m py_compile scripts/collect_workflow_logs.py
           python3 -m py_compile scripts/analyze_workflow_logs.py
+          python3 -m py_compile scripts/workflow_retro.py
           python3 -m py_compile scripts/semantic_cache.py
           python3 -m py_compile scripts/check_workflow_script_refs.py
           # Phase 4b smoke-test fixture (only run from
@@ -234,6 +235,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_refresh_workflow_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_checkout_integration_ref_audit.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_drift_audit_job.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_security_audit_workflow_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_audit_consumer_drift.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fingerprint_quarantine.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_retry_state.py
@@ -344,6 +346,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_review_pipeline_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_slop_scan_local.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_editor_noop_cascade_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_editor_audit.py
 
@@ -397,6 +400,7 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_memory_record_schema.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_foundation.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_assemble_prompt.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_core_modes.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_review_judge_modes.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_validate_analytics_modes.py
@@ -450,6 +454,8 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_auto_approve_safe_state_fetch.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_gh_retry_fallback_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_auto_answer_recommended_parser.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_diagrams_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_scope_mode_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_skip_gate_telemetry_contract.py
 
       - name: Update workflows guardrails contract test
@@ -547,6 +553,7 @@ jobs:
       - name: Workflow log analysis contract tests
         run: |
           set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_retro.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_log_analysis_failure_contract.py
 
       - name: JSON schema validation
