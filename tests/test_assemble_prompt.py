@@ -209,6 +209,37 @@ def test_render_prompt_sh_flag_true_applies_workflow_overlay_once() -> None:
 	assert proc.returncode == 0, proc.stderr
 	assert proc.stderr == ""
 	assert proc.stdout == "template\nbody\noverlay\n"
+	assert list((repo_root / "prompts").glob(".mode-sample.txt.assembled.*")) == []
+
+
+def test_render_prompt_sh_flag_true_cleans_up_assembled_temp_file() -> None:
+	with tempfile.TemporaryDirectory(prefix="render_prompt_cleanup_") as td:
+		repo_root = Path(td)
+		_copy_prompt_runtime_scripts(repo_root)
+		(repo_root / "prompts" / "mode-sample.txt").parent.mkdir(parents=True, exist_ok=True)
+		(repo_root / "prompts" / "_templates").mkdir(parents=True, exist_ok=True)
+		(repo_root / "prompts" / "mode-sample.txt").write_text("legacy\n", encoding="utf-8")
+		(repo_root / "prompts" / "_prelude_common.txt").write_text("template\n", encoding="utf-8")
+		(repo_root / "prompts" / "_templates" / "mode-sample.txt").write_text(
+			'{% include "_prelude_common.txt" %}\nbody\n',
+			encoding="utf-8",
+		)
+
+		env = _base_env()
+		env["PROMPT_PRELUDE_REFACTOR_ENABLED"] = "true"
+		proc = subprocess.run(
+			["bash", str(repo_root / "scripts" / "render_prompt.sh"), "prompts/mode-sample.txt"],
+			cwd=str(repo_root),
+			env=env,
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stderr == ""
+	assert proc.stdout == "template\nbody\n"
+	assert list((repo_root / "prompts").glob(".mode-sample.txt.assembled.*")) == []
 
 
 def main() -> int:

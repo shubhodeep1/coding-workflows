@@ -267,4 +267,9 @@ while IFS= read -r placeholder_name; do
 	fi
 done < <(collect_prompt_placeholders "${PLACEHOLDER_SOURCE_FILE}")
 
+if [ -n "${ASSEMBLED_PROMPT_FILE}" ]; then
+	"${RENDER_ARGS[@]}"
+	exit 0
+fi
+
 exec "${RENDER_ARGS[@]}"

@@ -276,7 +276,7 @@ done
 # prompts/_prelude*.txt. Stage the exact assets those support-bundle renders
 # need so the assembled path works from SUPPORT_ROOT_DIR without a support
 # checkout on disk.
-for prompt_assembly_asset in _prelude_common.txt _prelude_semble.txt _prelude_output_contract.txt _templates/mode-judge-interim.txt _templates/mode-judge-review-blocked.txt; do
+for prompt_assembly_asset in _prelude_common.txt _prelude_semble.txt _prelude_output_contract.txt _templates/mode-judge.txt _templates/mode-judge-interim.txt _templates/mode-judge-review-blocked.txt _templates/mode-judge-stall-recovery.txt _templates/mode-orchestrate-poll-judge.txt; do
   if [ ! -f "${SUPPORT_PROMPTS_DIR}/${prompt_assembly_asset}" ]; then
     src=".codex-workflow-src/prompts/${prompt_assembly_asset}"
     if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/${prompt_assembly_asset}" ]; then

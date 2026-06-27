@@ -54,8 +54,11 @@ JUDGE_TEMPLATE_ASSETS = (
 	"_prelude_common.txt",
 	"_prelude_semble.txt",
 	"_prelude_output_contract.txt",
+	"_templates/mode-judge.txt",
 	"_templates/mode-judge-interim.txt",
 	"_templates/mode-judge-review-blocked.txt",
+	"_templates/mode-judge-stall-recovery.txt",
+	"_templates/mode-orchestrate-poll-judge.txt",
 )
 
 
@@ -99,7 +102,7 @@ def test_stage_workflow_support_stages_judge_reference_assets() -> None:
 		in stage_helper
 	)
 	assert "assemble_prompt.sh" in stage_helper
-	assert "for prompt_assembly_asset in _prelude_common.txt _prelude_semble.txt _prelude_output_contract.txt _templates/mode-judge-interim.txt _templates/mode-judge-review-blocked.txt; do" in stage_helper
+	assert "for prompt_assembly_asset in " in stage_helper
 	for prompt_asset in JUDGE_TEMPLATE_ASSETS:
 		assert prompt_asset in stage_helper
 
