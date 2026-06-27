@@ -1176,6 +1176,7 @@ Operational behavior:
 - **Observed support (route-dependent):** `openai/gpt-5.4` via OpenRouter Responses API can benefit from provider-managed prefix caching, but availability/reporting can vary by routed provider/model.
 - Caching is provider-managed prefix caching (automatic when request prefixes are identical and long enough).
 - In this repo, cache-friendly prompt shaping is enabled by design: a static pre-assembled prefix is placed first, and dynamic issue/PR/runtime content is appended after it.
+- For the Phase O shared-prelude rollout, migrated mode prompts keep their legacy bodies in `prompts/mode-*.txt` while `prompts/_templates/*.txt` plus `scripts/assemble_prompt.sh` provide the flag-gated include expansion path. `scripts/render_prompt.sh` uses that path only when `PROMPT_PRELUDE_REFACTOR_ENABLED=true`; the acceptance default remains `false`.
 
 ### What Codex CLI can and cannot control
 

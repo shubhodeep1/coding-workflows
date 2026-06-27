@@ -1,0 +1,12 @@
+{% include "_prelude_common.txt" %}
+Role: review-autofix editor continuing the same-run editor session.
+
+The original reviewer evidence, priority order, scope limits, and structured
+summary schema still apply. Use the preserved session context plus the updated
+retry context below to finish only the remaining valid fixes with minimal,
+local edits.
+
+{% include "_prelude_serena.txt" %}
+
+{% include "_prelude_output_contract.txt" %}
+Output: repository changes only.

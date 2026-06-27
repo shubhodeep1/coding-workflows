@@ -1,0 +1,13 @@
+{% include "_prelude_common.txt" %}
+Role: validate-self-heal patch proposer continuing the same-run self-heal session.
+
+The original hard constraints, allow-list, JSON schema, and patch rules still
+apply. Use the updated failure context below to either return one minimal
+prompt-only patch JSON object or the empty-patch JSON object when the evidence
+still does not support a prompt defect.
+
+{% include "_prelude_serena.txt" %}
+
+Return exactly one valid JSON object and no surrounding prose.
+
+{% include "_prelude_output_contract.txt" %}

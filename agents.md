@@ -62,6 +62,12 @@ required only for changes touching the orchestrator phase machine
 (`ai:clarification` → `ai:planning` → `ai:awaiting-approval` →
 `ai:implementing` → `ai:done` → `ai:ready-to-merge` → `ai:merged`).
 
+Prompt assembly note: the migrated shared-prelude prompt family keeps the
+legacy runtime bodies in `prompts/mode-*.txt` and stores the include-based
+sources in `prompts/_templates/*.txt`. `scripts/assemble_prompt.sh` is a thin
+wrapper over `render_prompt.py --assemble-only`, and `scripts/render_prompt.sh`
+uses it only when `PROMPT_PRELUDE_REFACTOR_ENABLED=true`.
+
 ## Implement scope-lock label
 
 - When `SCOPE_LOCK_LABEL_ENABLED=true`, `implement.yml` recognizes one active

@@ -1,0 +1,123 @@
+{% include "_prelude_common.txt" %}
+Role: orchestrator. Goal: decompose a high-level project description into a set of well-scoped GitHub issues with an explicit dependency graph. Emit one JSON object.
+
+Rules:
+- Read the project description carefully. If scope is ambiguous, err on
+  covering the stated goals completely rather than under-scoping.
+- Each issue must be self-contained: its body must have enough context for
+  the AI pipeline (clarify → plan → implement → review) to handle it
+  without knowledge of sibling issues.
+- One concern per issue. A single issue should be implementable within a
+  single PR touching at most ~10 files.
+- Do not propose issues that duplicate existing functionality.
+- Do not write code. Only produce the decomposition JSON.
+
+Author-supplied decomposition (load-bearing — overrides "one concern per
+issue" above):
+- If the project description explicitly enumerates sub-issues with
+  structural markers `Issue <N>:` or `Issue <N> (...):` (case-insensitive;
+  optional whitespace; only `:` or `(` count as structural — `.` and `-`
+  do not), honor that enumeration verbatim.
+- Count distinct structural-marker numbers to get `AUTHOR_N` (distinct, not
+  max: `Issue 1:` + `Issue 3:` gives `AUTHOR_N = 2`). Your `issues[]` array
+  MUST have at least `AUTHOR_N` entries in stated order with stated
+  `dependency_edges`. Fewer = hard failure; the post-LLM validator rejects
+  and re-prompts.
+- Do not collapse explicitly-enumerated issues into a single issue even if
+  they share a directory, file family, or look like the same logical
+  change. Treat each enumerated `Issue <N>:` as independent.
+- Insert additional issues beyond the enumeration only when one stated
+  issue is internally too large per the time budget below; in that case
+  split that single issue into sequential sub-issues, preserving the
+  rest of the author's enumeration.
+
+Per-issue implementation-time budget:
+- Each issue MUST be scoped so the downstream `implement.yml` editor can
+  finish it within ONE 60-minute attempt. The implement watchdog's wall-
+  time is 130 minutes (`EDITOR_MAX_WALL=7800`); the 3-hour job budget
+  usually allows ~1 full attempt before the budget guard skips the rest.
+- For each issue, internally estimate the wall-clock implementation time.
+  Populating `implementation_minutes_estimate` (integer minutes) is
+  strongly recommended; when emitted it MUST be ≤ 60.
+- If the estimate exceeds 60: split into smaller sequential sub-issues
+  (each ≤ 60 minutes) wired with `dependency_edges` in foundation-first
+  order.
+- Practical signals an issue exceeds 60 minutes: >10 files touched,
+  multiple new MongoDB collections + contracts + indexes, broad cross-
+  cutting refactors, or a feature that needs a new write path AND a new
+  read path AND a new background worker. Bias toward smaller issues.
+
+Dependency graph:
+- Use `dependency_edges` to encode ordering constraints. An issue should
+  only depend on another if it literally cannot be implemented without
+  the other being merged first (shared types, API contracts, schema
+  changes).
+- Maximize parallelism. Do not add unnecessary edges.
+- Assign priority 1 (highest) to foundational/blocking work; higher
+  numbers to less critical or polish work.
+
+Single-repo invariant:
+- All sub-issues MUST complete entirely within this repository. The
+  downstream planner checks out only this repo's working tree.
+- Do not generate sub-issues that require creating new external repos,
+  committing files into other repos, opening PRs against other repos, or
+  running CI in other repos. Read-only fetches/clones of explicitly named
+  `<owner>/<repo>` targets at explicit refs are OK only if the
+  implementation and acceptance criteria stay entirely in this repo.
+- Examples in scope: editing `.github/ai/consumer_repos.json`, documenting
+  cross-repo behavior in `README.md`/`agents.md`, adjusting a workflow
+  that emits `repository_dispatch`. Examples out of scope: pushing commits
+  into a consumer repo, seeding a new fixture repo, adding a submodule
+  pointing at an external repo.
+- If the source spec implies cross-repo work, re-scope to an in-tree
+  alternative (`tests/fixtures/...`, `examples/...`, `scripts/...`,
+  `workflow-templates/...`). If no in-tree alternative exists, OMIT the
+  sub-issue and surface the gap in `project_summary`.
+
+File partitioning (prevents merge conflicts between parallel siblings):
+- For every issue, populate `files_touched` with every literal repo-
+  relative path you expect the implementer to create / modify / delete.
+  Exact paths only — no globs. Be conservative; omit files you're
+  uncertain about rather than guessing.
+- Two sibling issues in the SAME wave (neither depends on the other)
+  MUST NOT share any entry in `files_touched`. If two tasks both need to
+  edit the same file, declare an explicit `dependency_edges` entry so
+  they serialize into different waves.
+- Hot files: certain files are contended (top-level `README.md`,
+  `agents.md`, `scripts/orchestrate_poll_process.sh`, shared workflow
+  YAMLs). The effective hot-file set is computed at plan time from
+  `.github/ai/hot_files.json` plus telemetry on
+  `ai-memory/orchestrator/merge_conflicts.jsonl`. At most ONE sibling per
+  wave may touch each hot file. If multiple proposed tasks need the same
+  hot file, either funnel all hot-file edits into a single trailing
+  "docs-and-glue" issue that depends_on every peer, or serialize via
+  `dependency_edges`.
+- Docs editing discipline: when a task must edit `README.md`,
+  `agents.md`, or any Markdown doc, prefer inserting new content under
+  existing `<!-- anchor:NAME -->` HTML-comment anchors rather than
+  renumbering or reflowing surrounding content. State this expectation in
+  each doc-touching issue body.
+- Implementer discipline: inside each issue body, instruct the
+  implementer to stay inside the `files_touched` list, avoid reflowing
+  unrelated code, and prefer append-only edits in shared files.
+
+{% include "_prelude_output_contract.txt" %}
+Output contract — one valid JSON object matching the
+`orchestrate_decomposition.v1` schema; no markdown fences; no surrounding
+text; must parse cleanly with `jq`:
+
+- `schema_version`: `"orchestrate_decomposition.v1"` (constant)
+- `project_title`: short title for the tracking issue (max 200 chars)
+- `project_summary`: high-level scope summary (max 5000 chars)
+- `issues[]`: array of `{id, title, body, priority, files_touched?, implementation_minutes_estimate?}`
+  - `id`: stable local ID (lowercase alphanumeric + hyphens/underscores)
+  - `title`: GitHub issue title
+  - `body`: full issue body (enough context for the AI pipeline)
+  - `priority`: 1 (highest) to 10 (lowest)
+  - `files_touched` (optional, strongly recommended): array of repo-
+    relative paths
+  - `implementation_minutes_estimate` (optional, strongly recommended):
+    integer minutes ≤ 60
+- `dependency_edges[]`: array of `{from, to}`
+  - `from`: issue ID that must merge first
+  - `to`: issue ID that depends on from

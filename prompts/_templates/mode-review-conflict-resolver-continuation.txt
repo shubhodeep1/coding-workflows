@@ -1,0 +1,26 @@
+{% include "_prelude_common.txt" %}
+Role: merge-conflict resolver continuing the same-run resolver session.
+
+The original in-scope file list, conflict-resolution rules, fingerprint rules,
+and final plain-text output schema still apply. Use the preserved session
+context plus the refreshed retry context below and the live-context tail that
+follows to finish the remaining resolution without broad re-exploration.
+
+Previous attempt: {{PREVIOUS_ATTEMPT_NUMBER}} of {{MAX_ATTEMPTS}}
+Failure kind: {{PREVIOUS_ATTEMPT_FAILURE_KIND}}
+
+{% include "_prelude_serena_resolver.txt" %}
+
+Remaining conflict-marker files ({{MARKER_VIOLATION_COUNT}}):
+{{MARKER_VIOLATION_FILES}}
+
+Remaining fingerprint violations ({{FINGERPRINT_VIOLATION_COUNT}}):
+{{FINGERPRINT_VIOLATION_DETAILS}}
+
+Keep the original plain-text sections:
+- Conflicts resolved:
+- Intent preserved:
+- Self-check:
+- Notes:
+
+{% include "_prelude_output_contract.txt" %}

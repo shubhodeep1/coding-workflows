@@ -20,93 +20,11 @@ except ImportError:  # pragma: no cover - dependency is optional
 
 PLACEHOLDER_PATTERN = re.compile(r"\{\{([A-Za-z0-9_]+)\}\}")
 STANDALONE_PLACEHOLDER_PATTERN = re.compile(r"^[ \t]*\{\{([A-Za-z0-9_]+)\}\}[ \t]*$")
+INCLUDE_DIRECTIVE_PATTERN = re.compile(r'^[ \t]*\{%[ \t]*include[ \t]+"([^"\n]+)"[ \t]*%\}[ \t]*$')
 VARIABLE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_]+$")
 OVERLAY_MODE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*$")
 CONTRACT_TOP_LEVEL_KEYS = {"required_vars", "optional_vars", "forbidden_vars"}
 LEGACY_STANDALONE_ONLY_VARS = frozenset({"WORKFLOW_EDIT_RESTRICTION", "SEMBLE_PREFETCH", "SERENA_TOOL_HINTS"})
-FALSEY_ENV_VALUES = frozenset({"0", "false", "no", "off"})
-PHASE_C_PERSONA_PREFIXES = {
-	"mode-clarify": (
-		"**YC-style office-hours interrogator.** Your job is to surface the hidden ambiguity "
-		"in the request without inventing scope. Ask only the questions that would materially "
-		"change the implementation.\n\n"
-	),
-	"mode-plan": (
-		"**Eng Manager locking down architecture.** Your job is to lock the data flow, edge "
-		"cases, and tests before code is written. Force hidden assumptions into the open.\n\n"
-	),
-	"mode-implement": (
-		"**Senior implementer with §5 minimal-change-set discipline.** Your job is to land the "
-		"plan's intent on disk with the smallest safe edit. Verify, don't speculate.\n\n"
-	),
-	"mode-implement-diagnose": (
-		"**Debugger applying the Iron Law of Investigation.** Your job is to trace the failure "
-		"to its root cause before proposing any fix. Stop at 3 failed-fix attempts — emit a "
-		"structured fix-up issue proposal instead.\n\n"
-	),
-	"mode-implement-repair": (
-		"**Surgical repairer.** Your job is the smallest possible fix to the syntax/semantics "
-		"error in the named file. Do not touch other files.\n\n"
-	),
-	"mode-validate-generate": (
-		"**QA harness author.** Your job is to build the minimal Dockerised validation harness "
-		"that exercises the implementation's contract.\n\n"
-	),
-	"mode-validate-diagnose": (
-		"**Validation-failure root-cause analyst.** Your job is to attribute the failure to plan "
-		"vs implementation vs environment, with cited file/line evidence.\n\n"
-	),
-	"mode-validate-fix-harness": (
-		"**Harness self-healer.** Your job is to patch the harness when the failure is in the "
-		"harness, not the implementation.\n\n"
-	),
-	"mode-validate-self-heal": (
-		"**Prompt-file self-healer.** Your job is to patch one of the four validation prompt "
-		"files when the failure is in the prompt, not the harness.\n\n"
-	),
-	"mode-validate-discover": (
-		"**Validation-scope discoverer.** Your job is to enumerate what should be tested for "
-		"this issue's stated acceptance criteria.\n\n"
-	),
-	"mode-judge": (
-		"**Wave-state judge.** Your job is to classify the wave-state as `in_progress` / "
-		"`complete` / `failed` / `blocked` with structured evidence; never modify files.\n\n"
-	),
-	"mode-judge-review-blocked": (
-		"**Review-blocked judge.** Your job is to decide `merge` / `fix` / `merge_with_followup` "
-		"/ `close_and_reissue` for a PR that exhausted autofix iterations.\n\n"
-	),
-	"mode-judge-stall-recovery": (
-		"**Stall-recovery judge.** Your job is to choose the next stall-recovery action when "
-		"declarative ladder is exhausted.\n\n"
-	),
-	# Phase C does not define poll-judge-specific prose; reuse the shared wave-state judge persona.
-	"mode-orchestrate-poll-judge": (
-		"**Wave-state judge.** Your job is to classify the wave-state as `in_progress` / "
-		"`complete` / `failed` / `blocked` with structured evidence; never modify files.\n\n"
-	),
-	"mode-workflow-analysis": (
-		"**SRE auditor of workflow runs.** Your job is to identify systemic failure patterns and "
-		"propose diagnostic-logging additions.\n\n"
-	),
-	"mode-workflow-audit": (
-		"**Workflow integrity auditor.** Your job is to verify the workflow files match their "
-		"documented contracts.\n\n"
-	),
-	"mode-workflow-api-redundancy": (
-		"**API-hygiene auditor.** Your job is to enforce CLAUDE.md §15 — every new `gh api` / "
-		"`gh_retry` call must batch or reuse existing calls.\n\n"
-	),
-	"conflict-resolver": (
-		"**Merge-conflict resolver.** Your job is to preserve both sides' intent in the "
-		"resolution. Never silently discard either side.\n\n"
-	),
-	# Phase C does not define an integration-sync variant; reuse the shared merge-conflict persona.
-	"integration-sync-conflict-resolver": (
-		"**Merge-conflict resolver.** Your job is to preserve both sides' intent in the "
-		"resolution. Never silently discard either side.\n\n"
-	),
-}
 
 
 class RenderPromptError(Exception):
@@ -115,6 +33,10 @@ class RenderPromptError(Exception):
 
 class PromptLoadError(RenderPromptError):
 	"""Raised when the prompt file cannot be loaded."""
+
+
+class PromptAssemblyError(RenderPromptError):
+	"""Raised when a prompt template include cannot be assembled."""
 
 
 class CliValueError(RenderPromptError):
@@ -131,6 +53,14 @@ class ContractViolationError(RenderPromptError):
 
 class WorkflowOverlayError(RenderPromptError):
 	"""Raised when workflow-overlay prompt overrides are invalid."""
+
+
+@dataclass(frozen=True)
+class PromptFragment:
+	"""One prompt fragment before include assembly."""
+
+	path: Path
+	text: str
 
 
 @dataclass(frozen=True)
@@ -169,6 +99,16 @@ def build_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser(description="Render prompt templates with optional mode contracts")
 	parser.add_argument("prompt_file", help="Path to the prompt template file")
 	parser.add_argument(
+		"--assemble-only",
+		action="store_true",
+		help="Expand include directives and workflow overlays but do not render placeholders",
+	)
+	parser.add_argument(
+		"--input-already-assembled",
+		action="store_true",
+		help="Treat the input file as already overlay-expanded and include-assembled",
+	)
+	parser.add_argument(
 		"--legacy-mode-name",
 		default=None,
 		help="Optional mode-name override for legacy shims",
@@ -198,6 +138,90 @@ def load_prompt(prompt_path: Path) -> str:
 		return _normalize_prompt_text(prompt_path.read_text(encoding="utf-8"))
 	except OSError as exc:
 		raise PromptLoadError(f"Unable to read prompt file '{prompt_path}': {exc}") from exc
+
+
+def _find_prompt_root(prompt_path: Path) -> Path | None:
+	resolved_prompt_path = prompt_path.resolve()
+	for candidate in (resolved_prompt_path.parent, *resolved_prompt_path.parents):
+		if candidate.name == "prompts":
+			return candidate
+	return None
+
+
+def _prompt_base_dir(prompt_path: Path) -> Path | None:
+	prompt_root = _find_prompt_root(prompt_path)
+	if prompt_root is None:
+		return None
+	return prompt_root.parent
+
+
+def _unique_paths(paths: list[Path]) -> tuple[Path, ...]:
+	ordered_paths: list[Path] = []
+	seen_paths: set[Path] = set()
+	for candidate in paths:
+		if candidate in seen_paths:
+			continue
+		seen_paths.add(candidate)
+		ordered_paths.append(candidate)
+	return tuple(ordered_paths)
+
+
+def _resolve_include_path(current_path: Path, include_target: str) -> Path:
+	include_path = Path(include_target.strip())
+	if not include_target.strip():
+		raise PromptAssemblyError(f"Empty include target in '{current_path}'")
+	if include_path.is_absolute():
+		raise PromptAssemblyError(
+			f"Absolute include paths are not allowed in '{current_path}': {include_target}"
+		)
+
+	prompt_root = _find_prompt_root(current_path)
+	candidate_paths = [
+		(current_path.parent / include_path).resolve(),
+	]
+	if prompt_root is not None:
+		candidate_paths.append((prompt_root / include_path).resolve())
+
+	for candidate in _unique_paths(candidate_paths):
+		if prompt_root is not None:
+			try:
+				candidate.relative_to(prompt_root)
+			except ValueError:
+				continue
+		if candidate.is_file():
+			return candidate
+
+	raise PromptAssemblyError(
+		f"Included prompt fragment not found from '{current_path}': {include_target}"
+	)
+
+
+def _assemble_prompt_fragment(fragment: PromptFragment, *, stack: tuple[Path, ...]) -> str:
+	assembled_lines: list[str] = []
+	for raw_line in fragment.text.splitlines():
+		include_match = INCLUDE_DIRECTIVE_PATTERN.fullmatch(raw_line)
+		if include_match is None:
+			assembled_lines.append(f"{raw_line}\n")
+			continue
+
+		include_path = _resolve_include_path(fragment.path, include_match.group(1))
+		if include_path in stack:
+			include_chain = " -> ".join(str(path) for path in (*stack, include_path))
+			raise PromptAssemblyError(f"Cyclic prompt include detected: {include_chain}")
+		assembled_lines.append(
+			_assemble_prompt_fragment(
+				PromptFragment(path=include_path, text=load_prompt(include_path)),
+				stack=(*stack, include_path),
+			)
+		)
+	return "".join(assembled_lines)
+
+
+def assemble_prompt_fragments(fragments: tuple[PromptFragment, ...]) -> str:
+	return "".join(
+		_assemble_prompt_fragment(fragment, stack=(fragment.path.resolve(),))
+		for fragment in fragments
+	)
 
 
 def resolve_mode_name(prompt_path: Path, legacy_mode_name: str | None) -> str:
@@ -246,7 +270,7 @@ def discover_contract_path(prompt_path: Path, mode_name: str) -> Path | None:
 	candidates: list[Path] = []
 	seen: set[Path] = set()
 	script_root = Path(__file__).resolve().parents[1]
-	prompt_root = prompt_path.parent.parent if prompt_path.parent.name == "prompts" else None
+	prompt_root = _prompt_base_dir(prompt_path)
 
 	_append_contract_candidate(candidates, seen, prompt_root, mode_name)
 	_append_contract_candidate(candidates, seen, Path.cwd(), mode_name)
@@ -279,7 +303,7 @@ def discover_reference_path(prompt_path: Path, file_name: str) -> Path | None:
 	candidates: list[Path] = []
 	seen: set[Path] = set()
 	script_root = Path(__file__).resolve().parents[1]
-	prompt_root = prompt_path.parent.parent if prompt_path.parent.name == "prompts" else None
+	prompt_root = _prompt_base_dir(prompt_path)
 
 	_append_reference_candidate(candidates, seen, prompt_root, file_name)
 	_append_reference_candidate(candidates, seen, Path.cwd(), file_name)
@@ -294,7 +318,7 @@ def discover_reference_path(prompt_path: Path, file_name: str) -> Path | None:
 
 
 def _expected_reference_path(prompt_path: Path, file_name: str) -> Path:
-	prompt_root = prompt_path.parent.parent if prompt_path.parent.name == "prompts" else Path.cwd()
+	prompt_root = _prompt_base_dir(prompt_path) or Path.cwd()
 	return prompt_root / "prompts" / "references" / file_name
 
 
@@ -672,20 +696,6 @@ def _workflow_edit_restriction_value() -> str:
 	return "- Do not change CI workflows."
 
 
-def _persona_prefix_enabled() -> bool:
-	raw_value = os.environ.get("PROMPT_PERSONA_PREFIX_ENABLED", "true").strip().lower()
-	return bool(raw_value) and raw_value not in FALSEY_ENV_VALUES
-
-
-def apply_phase_c_persona_prefix(prompt_text: str, *, mode_name: str) -> str:
-	if not _persona_prefix_enabled():
-		return prompt_text
-	prefix = PHASE_C_PERSONA_PREFIXES.get(mode_name)
-	if prefix is None or prompt_text.startswith(prefix):
-		return prompt_text
-	return prefix + prompt_text
-
-
 def collect_legacy_env_values() -> dict[str, str]:
 	return {
 		"WORKFLOW_EDIT_RESTRICTION": _workflow_edit_restriction_value(),
@@ -798,14 +808,19 @@ def _resolve_overlay_fragment_path(repo_root: Path, raw_path: str) -> Path:
 	return fragment_path
 
 
-def apply_workflow_overlay(prompt_text: str, *, mode_name: str) -> str:
+def apply_workflow_overlay(
+	prompt_path: Path,
+	prompt_text: str,
+	*,
+	mode_name: str,
+) -> tuple[PromptFragment, ...]:
 	overlay = load_workflow_overlay_from_env()
 	if overlay is None or not overlay.overrides:
-		return prompt_text
+		return (PromptFragment(path=prompt_path, text=prompt_text),)
 
 	matches = [override for override in overlay.overrides if override.mode_name == mode_name]
 	if not matches:
-		return prompt_text
+		return (PromptFragment(path=prompt_path, text=prompt_text),)
 	if len(matches) > 1:
 		raise WorkflowOverlayError(
 			f"Multiple workflow-overlay prompt overrides matched mode '{mode_name}'"
@@ -814,14 +829,17 @@ def apply_workflow_overlay(prompt_text: str, *, mode_name: str) -> str:
 	match = matches[0]
 	if match.replace_path is not None:
 		replacement_path = _resolve_overlay_fragment_path(overlay.repo_root, match.replace_path)
-		return load_prompt(replacement_path)
+		return (PromptFragment(path=replacement_path, text=load_prompt(replacement_path)),)
 
 	if match.append_path is None:
 		raise WorkflowOverlayError(
 			f"Workflow-overlay prompt override for mode '{mode_name}' is missing append/replace path"
 		)
 	append_path = _resolve_overlay_fragment_path(overlay.repo_root, match.append_path)
-	return prompt_text + load_prompt(append_path)
+	return (
+		PromptFragment(path=prompt_path, text=prompt_text),
+		PromptFragment(path=append_path, text=load_prompt(append_path)),
+	)
 
 
 def _render_inline_placeholders(line: str, values: dict[str, str]) -> str:
@@ -852,9 +870,19 @@ def main(argv: list[str] | None = None) -> int:
 	prompt_path = Path(args.prompt_file)
 
 	try:
-		prompt_text = load_prompt(prompt_path)
 		mode_name = resolve_mode_name(prompt_path, args.legacy_mode_name)
-		prompt_text = apply_workflow_overlay(prompt_text, mode_name=mode_name)
+		if args.input_already_assembled:
+			prompt_text = load_prompt(prompt_path)
+		else:
+			prompt_fragments = apply_workflow_overlay(
+				prompt_path,
+				load_prompt(prompt_path),
+				mode_name=mode_name,
+			)
+			prompt_text = assemble_prompt_fragments(prompt_fragments)
+		if args.assemble_only:
+			sys.stdout.write(prompt_text)
+			return 0
 		provided_values = parse_cli_variables(args.variables)
 		legacy_env_values = collect_legacy_env_values()
 		contract_path = discover_contract_path(prompt_path, mode_name)
@@ -873,7 +901,6 @@ def main(argv: list[str] | None = None) -> int:
 			mode_name=mode_name,
 			values=effective_values,
 		)
-		prompt_text = apply_phase_c_persona_prefix(prompt_text, mode_name=mode_name)
 		sys.stdout.write(render_prompt_text(prompt_text, effective_values))
 	except RenderPromptError as exc:
 		print(f"ERROR: {exc}", file=sys.stderr)
