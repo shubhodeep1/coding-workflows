@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":3542,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/3542\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/3543\",\"pr_number\":3543,\"branch\":\"ai/issue-3542\",\"run_id\":\"28280902629\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/28280902629\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/ci.yml\",\".github/workflows/clarify.yml\",\".github/workflows/implement.yml\",\".github/workflows/mark-stable.yml\",\".github/workflows/orchestrate.yml\",\".github/workflows/orchestrate_clarify_respond.yml\",\".github/workflows/orchestrate_poll.yml\",\".github/workflows/plan.yml\",\".github/workflows/review_autofix.yml\",\".github/workflows/test-and-mark-stable.yml\",\".github/workflows/validate.yml\",\"README.md\",\"agents.md\",\"prompts/_prelude_clarify_and_plan.txt\",\"prompts/_prelude_common.txt\",\"prompts/_prelude_common_large.txt\",\"prompts/_prelude_output_contract.txt\",\"prompts/_prelude_semble.txt\",\"prompts/_prelude_serena.txt\",\"prompts/_prelude_serena_resolver.txt\",\"prompts/_templates/mode-clarify.txt\",\"prompts/_templates/mode-implement-diagnose-continuation.txt\",\"prompts/_templates/mode-implement-diagnose.txt\",\"prompts/_templates/mode-implement-repair-continuation.txt\",\"prompts/_templates/mode-implement-repair-syntax.txt\",\"prompts/_templates/mode-implement-repair.txt\",\"prompts/_templates/mode-implement.txt\",\"prompts/_templates/mode-judge-interim.txt\",\"prompts/_templates/mode-judge-review-blocked.txt\",\"prompts/_templates/mode-judge-stall-recovery.txt\",\"prompts/_templates/mode-judge.txt\",\"prompts/_templates/mode-orchestrate-poll-judge.txt\",\"prompts/_templates/mode-orchestrate.txt\",\"prompts/_templates/mode-plan.txt\",\"prompts/_templates/mode-review-apply-fixes-continuation.txt\",\"prompts/_templates/mode-review-conflict-resolver-continuation.txt\",\"prompts/_templates/mode-validate-diagnose.txt\",\"prompts/_templates/mode-validate-discover.txt\",\"prompts/_templates/mode-validate-fix-harness.txt\",\"prompts/_templates/mode-validate-self-heal-continuation.txt\",\"prompts/_templates/mode-validate-self-heal.txt\",\"scripts/ai_memory.py\",\"scripts/ai_memory_lib.py\",\"scripts/assemble_prompt.sh\",\"scripts/files_touched_scope_guard.py\",\"scripts/implement_commit_changes.sh\",\"scripts/implement_diagnose_post_codex_failure.sh\",\"scripts/label_helpers.sh\",\"scripts/render_prompt.py\",\"scripts/render_prompt.sh\",\"scripts/run_validation_repo_checks.sh\",\"scripts/stage_workflow_support.sh\",\"tests/test_assemble_prompt.py\",\"tests/test_review_rb_judge_reference_staging.py\",\"tests/test_review_semble_contract.py\",\"tests/test_validate_semble_contract.py\",\"tests/test_validate_workflow_validate_bootstrap.py\"]}",
+  "fingerprint": "eefc5ddd1b7ae2457687453a8388e848efb33efcb03b94c8701e6fbd82215aea",
+  "lineage": {
+    "issue_number": 3542,
+    "parent_ids": [],
+    "pr_number": 3543,
+    "run_id": "28280902629",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28280902629",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/3543"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20260627064042_c6af57c4f7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 3542,
+    "level": "run",
+    "pr_number": 3543,
+    "run_id": "28280902629"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #3542: https://github.com/shubhodeep1/coding-workflows/pull/3543",
+  "timestamps": {
+    "created_at": "2026-06-27T06:40:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
