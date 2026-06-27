@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "File-scope guarding is an important safety boundary for automated edits and should be covered by dedicated tests.",
   "timestamps": {
     "created_at": "2026-06-27T07:51:46Z",
