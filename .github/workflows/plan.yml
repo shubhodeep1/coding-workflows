@@ -366,6 +366,28 @@ jobs:
             fi
           done
 
+          # Stage prompts/header.txt so the prompt-assembly step's
+          # `render_prompt.sh prompts/header.txt` invocation resolves a
+          # working-tree file. render_prompt.sh checks the bare path before
+          # delegating to render_prompt.py, so the fragment must land in
+          # ./prompts/ alongside the staged scripts/. header.txt carries
+          # only the {{REPO_LEARNINGS}} placeholder (resolved from the
+          # REPO_LEARNINGS env var at render time) and has no contract, so
+          # staging the single file is sufficient. The `if [ ! -f ]` guard
+          # preserves the self-repo's own checked-in copy.
+          mkdir -p prompts
+          if [ ! -f prompts/header.txt ]; then
+            src=".codex-workflow-src/prompts/header.txt"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/header.txt" ]; then
+              src=".codex-workflow-src-main/prompts/header.txt"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::error::Failed to stage required file prompts/header.txt"
+              exit 1
+            fi
+            install -m 0644 "${src}" prompts/header.txt
+          fi
+
           rm -rf .codex-workflow-src-main
 
       - name: Create runtime workspace
