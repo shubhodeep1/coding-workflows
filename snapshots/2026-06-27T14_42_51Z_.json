@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-06-25T02:59:04Z",
+  "tick_at": "2026-06-27T14:42:51Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -15,11 +15,10 @@
   },
   "tracking_issues": [
     {
-      "current_wave": 1,
-      "integration_ahead_by": "0",
+      "current_wave": 0,
       "issue_counts": {
         "closed": 0,
-        "done": 1,
+        "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
         "merged": 0,
@@ -32,7 +31,7 @@
       "project_complete": false,
       "status": "in-progress",
       "title": "[Orchestrator] gstack learnings rollout for the unattended pipeline (Phases A\u2013P)",
-      "total_waves": 15,
+      "total_waves": 0,
       "wave_complete": false
     }
   ]
