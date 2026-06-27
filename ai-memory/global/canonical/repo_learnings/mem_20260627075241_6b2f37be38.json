@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Workflow and label contract changes usually cascade into docs and contract tests, so treat them as cross-cutting updates.",
   "timestamps": {
     "created_at": "2026-06-27T07:52:41Z",
