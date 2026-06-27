@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Prompt rendering logic is a central compatibility point and usually needs paired test updates whenever mode contracts change.",
   "timestamps": {
     "created_at": "2026-06-27T07:49:02Z",
