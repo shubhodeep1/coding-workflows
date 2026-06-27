@@ -49,6 +49,16 @@ DIATAXIS_CATEGORY_SENTINEL = (
 DIATAXIS_COMPLETE_SENTINEL = (
 	"If the relevant docs are already touched, omit the issue or say `Docs coverage: complete` in `NOTES` instead of fabricating a docs gap."
 )
+AGENTS_MD_MATERIALITY_BLOCK_SENTINEL = "=== BEGIN UNTRUSTED AGENTS MD MATERIALITY RESULT ==="
+AGENTS_MD_MATERIALITY_HIGH_SENTINEL = (
+	"may emit an `AGENTS.md materiality: ...` finding with `SEVERITY: high` by default"
+)
+AGENTS_MD_MATERIALITY_ADVISORY_SENTINEL = (
+	"downgrade that finding to advisory (`SEVERITY: low`, normally `CLASSIFICATION: nice-to-have`) or omit it"
+)
+AGENTS_MD_MATERIALITY_LENS_SENTINEL = (
+	"Keep the lens name exactly `NAMING / BACKWARD COMPATIBILITY`."
+)
 
 CONTRACT_NAMES = (
 	"mode-judge.yml",
@@ -224,6 +234,10 @@ def test_review_consolidator_renders_additive_diataxis_lens_contract() -> None:
 	assert DIATAXIS_GROUNDING_SENTINEL in rendered
 	assert DIATAXIS_CATEGORY_SENTINEL in rendered
 	assert DIATAXIS_COMPLETE_SENTINEL in rendered
+	assert AGENTS_MD_MATERIALITY_BLOCK_SENTINEL in rendered
+	assert AGENTS_MD_MATERIALITY_HIGH_SENTINEL in rendered
+	assert AGENTS_MD_MATERIALITY_ADVISORY_SENTINEL in rendered
+	assert AGENTS_MD_MATERIALITY_LENS_SENTINEL in rendered
 
 
 def test_conflict_resolver_renders_required_values_and_optional_hints(
