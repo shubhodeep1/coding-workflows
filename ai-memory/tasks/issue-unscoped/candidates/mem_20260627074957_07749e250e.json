@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.87,
+  "details": "Merged changes touched `.github/workflows/review_autofix.yml`, `scripts/review_consolidate.sh`, `scripts/review_run_reviewers.sh`, and related tests together. This suggests the review pipeline has tight coupling between workflow orchestration and shell helpers, so edits in one stage should be checked against the full contract, not just the modified script.",
+  "fingerprint": "8da4cba94ec4191c52ec98c4228ef1215af3f3d39e07362175c39edb122c5cd3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28282971909",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28282971909",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3531",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3533",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3535",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3537",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3540",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3532",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3534",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3536",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3538",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3541"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260627074957_07749e250e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Review-autofix and review-consolidation flows are contract-sensitive; small pipeline changes should be validated end-to-end.",
+  "timestamps": {
+    "created_at": "2026-06-27T07:49:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
