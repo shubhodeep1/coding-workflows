@@ -75,7 +75,6 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `REVIEW_CONSOLIDATOR_REASONING` | No | `xhigh` | review_autofix | Reasoning effort for the consolidator stage. |
 | `REVIEW_CONSOLIDATOR_TIMEOUT_SECS` | No | `300` | review_autofix | Wall-clock timeout for the consolidator model call. |
 | `REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT` | No | `16000` | review_autofix | Max output tokens requested from the consolidator model. |
-| `REVIEW_DIATAXIS_LENS_ENABLED` | No | `true` | review_autofix | Documentation-only contract row for the advisory `DOCS COVERAGE (DIATAXIS)` consolidator lens. Current branch behavior is prompt-defined in `prompts/review-consolidator.txt` (no separate workflow toggle yet): keep it `low` severity, ground it in reviewer evidence plus touched files for user-visible changes, and name only still-missing `Reference` / `How-to` / `Tutorial` / `Explanation` updates. |
 | `REVIEW_PARSER_FAILOPEN` | No | `1` | review_autofix | When enabled, parser failures downgrade to empty / passthrough advisory artifacts and the editor continues from the raw reviewer bundle. |
 | `REVIEW_LEDGER_ENABLED` | No | `1` | review_autofix | Enable per-PR ledger persistence and emit `ledger_status.txt` for cross-iteration issue tracking. |
 | `REVIEW_LEDGER_PERSIST_LIMIT` | No | `2` | review_autofix | Persist-count threshold for promoting still-open advisory issues to `accepted-residual`. |
@@ -201,6 +200,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `SECURITY_AUDIT_CRON` | No | `0 8 * * 0` | security-audit (source repo only; documentation-only) | Documentation mirror for the literal weekly schedule in `.github/workflows/security-audit.yml`. GitHub Actions `on.schedule` cannot consume repo vars, so this value is not read at runtime; keep the docs row aligned with the workflow's hard-coded cron. |
 | `SECURITY_AUDIT_CONFIDENCE_GATE` | No | `8` | security-audit (source repo only) | Minimum confidence score (1-10) a finding must meet before `scripts/security_audit.sh` surfaces it on the tracker or creates a follow-up issue. Applied before the false-positive exclusion catalog. |
 | `SECURITY_AUDIT_FP_EXCLUSIONS` | No | `scripts/security_audit_fp_exclusions.json` | security-audit (source repo only) | Path to the editable JSON false-positive exclusion catalog consumed by `scripts/security_audit.sh`. Missing or malformed catalogs fail the run closed rather than silently bypassing exclusions. |
+| `REVIEW_DIATAXIS_LENS_ENABLED` | No | `true` | review_autofix | Documentation-only contract row for the advisory `DOCS COVERAGE (DIATAXIS)` consolidator lens. Current branch behavior is prompt-defined in `prompts/review-consolidator.txt` (no separate workflow toggle yet): keep it `low` severity, ground it in reviewer evidence plus touched files for user-visible changes, and name only still-missing `Reference` / `How-to` / `Tutorial` / `Explanation` updates. |
 
 **Thinking levels** — control the model's reasoning effort per phase. Valid values: `xhigh`, `high`, `medium`, `low`, `none`. Most `openai/gpt-5.4` phases default to `xhigh` — see the table below. **Conflict resolver exception:** `THINKING_LEVEL_CONFLICT_RESOLVER` defaults to `high` (lowered from `xhigh` after `timeout`-killed retries on degenerate orchestrator-stack integrations — see the row's description for the originating runs). No cycle-based downgrades are applied — every phase uses the configured reasoning effort for all cycles. **E2E smoke test exception:** when an issue or PR title contains `[E2E Smoke Test]`, the clarify, plan, and reviewer phases force `low` reasoning; the editor phase keeps `medium`; the implement phase keeps its production default (now `xhigh`) unmodified. The review-blocked judge is not overridden and retains its configured reasoning level. See `agents.md` for the authoritative per-phase reasoning/verbosity table.
 
@@ -1064,7 +1064,6 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `REVIEW_CONSOLIDATOR_REASONING` | `xhigh` | Reasoning effort for the consolidator model call. |
 | `REVIEW_CONSOLIDATOR_TIMEOUT_SECS` | `300` | Timeout (seconds) for the consolidator model call. |
 | `REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT` | `16000` | Max output tokens requested from the consolidator model. |
-| `REVIEW_DIATAXIS_LENS_ENABLED` | `true` | Documentation-only contract row for the advisory `DOCS COVERAGE (DIATAXIS)` consolidator lens. Current branch behavior is prompt-defined only (no separate workflow toggle yet): keep it `low` severity and name only still-missing `Reference` / `How-to` / `Tutorial` / `Explanation` updates. |
 | `REVIEW_PARSER_FAILOPEN` | `1` | Parser kill switch: malformed / missing consolidator structure degrades to advisory fail-open artifacts instead of stopping the editor. |
 | `REVIEW_REVIEWER_CHECKLIST_ENABLED` | `1` | Append the reviewer checklist block to prompts when the checklist template is available. |
 | `REVIEW_REVIEWER_ITERATION_SCOPING` | `1` | Allow later reviewer passes to scope from last-run changed files plus actionable ledger rows; first pass remains full-diff. |
@@ -1109,6 +1108,7 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `SECURITY_AUDIT_CRON` | `0 8 * * 0` | Documentation-only mirror of the literal weekly `security-audit.yml` schedule; GitHub Actions schedules cannot read repo vars, so keep this row aligned manually |
 | `SECURITY_AUDIT_CONFIDENCE_GATE` | `8` | Minimum confidence score required before the security audit surfaces a finding |
 | `SECURITY_AUDIT_FP_EXCLUSIONS` | `scripts/security_audit_fp_exclusions.json` | Editable JSON catalog of false-positive suppression rules for the security audit |
+| `REVIEW_DIATAXIS_LENS_ENABLED` | `true` | Documentation-only contract row for the advisory `DOCS COVERAGE (DIATAXIS)` consolidator lens. Current branch behavior is prompt-defined only (no separate workflow toggle yet): keep it `low` severity and name only still-missing `Reference` / `How-to` / `Tutorial` / `Explanation` updates. |
 
 ## Semantic Cache (Clarification Only)
 
