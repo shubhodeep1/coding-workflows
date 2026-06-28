@@ -82,17 +82,18 @@ name: Test & Mark Stable Release
         default: 60
       review_step_timeout:
         description: >
-          Step-runtime cap consulted after the review_timeout inactivity
-          threshold fires. GitHub's
+          Max minutes a single in-progress step of the review run may take
+          before the wait loop treats it as a genuine stall. GitHub's
           /actions/jobs/{id}/logs endpoint does not stream an in-progress
           step's output, so a long LLM step (reviewer models / editor)
           freezes every cached activity signal the loop watches. While the
           review run is in_progress and its current step has been running
           for less than this cap, the loop defers the inactivity-stall
           decision; once the step reaches this cap, the normal stall path
-          continues. Defaults to 50 minutes; set it above review_timeout
+          continues. Defaults to 50 minutes; set it explicitly if you want
+          a different per-step cap (for example, above `review_timeout`
           when a long single step should extend the wait past the
-          inactivity window.
+          inactivity window).
         required: false
         type: number
         default: 50
@@ -349,9 +350,12 @@ jobs:
       PHASE_TIMEOUT: ${{ inputs.phase_timeout || 30 }}
       PLAN_PHASE_TIMEOUT: ${{ inputs.plan_timeout || inputs.phase_timeout || 60 }}
       REVIEW_TIMEOUT: ${{ inputs.review_timeout || inputs.phase_timeout || 60 }}
-      # Per-step grace cap (minutes) consulted after REVIEW_TIMEOUT's
-      # inactivity window fires. GitHub's /actions/jobs/{id}/logs endpoint
-      # does NOT
+      # Per-step wall-clock cap (minutes) for the review run's currently
+      # in-progress step. For normal workflow_dispatch runs this comes from
+      # the dedicated review_step_timeout input (default 50); it does not
+      # auto-track review_timeout. The review_timeout/phase_timeout fallbacks
+      # below are only a defensive backstop for unexpected falsey/missing values.
+      # GitHub's /actions/jobs/{id}/logs endpoint does NOT
       # stream an in-progress step's output, so during a single long LLM step
       # (e.g. "Run reviewer models" can run >40m for 6 two-pass reviewers)
       # every cached activity signal the wait loop watches (log byte size,
@@ -364,7 +368,7 @@ jobs:
       # treats the silence as a healthy long step and defers that inactivity
       # stall decision; a genuinely hung step still falls through once the
       # cap is exceeded, so stuck-run detection is preserved.
-      REVIEW_STEP_TIMEOUT: ${{ inputs.review_step_timeout || 50 }}
+      REVIEW_STEP_TIMEOUT: ${{ inputs.review_step_timeout || inputs.review_timeout || inputs.phase_timeout || 50 }}
       POLL_INTERVAL: 10
       # Wrapper-workflow filename used by the smoke gate to dispatch
       # / poll review_autofix runs. Defaults to the source repo's
@@ -1782,7 +1786,9 @@ jobs:
               # 52333b) rather than a genuine stall. Defer the stall check
               # and keep polling. Once the step reaches the cap (or its
               # timestamp cannot be trusted), execution falls through to the
-              # normal stall path below.
+              # normal stall path below, so a truly-hung run still fails —
+              # just bounded by REVIEW_STEP_TIMEOUT instead of the global
+              # inactivity window.
               if [ "${RUN_STATUS:-}" = "in_progress" ] && [ -n "${CURRENT_STEP_STARTED_AT:-}" ]; then
                 STEP_STARTED_EPOCH=$(date -d "${CURRENT_STEP_STARTED_AT}" +%s 2>/dev/null || echo 0)
                 if [ "$STEP_STARTED_EPOCH" -gt 0 ]; then
