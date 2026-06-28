@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/check_failure_triage.sh:315-320 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The codex invocation uses `env -u` to unset sensitive variables, but the previous autofix round already addressed this by adding `env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID`.\n  WHY: N/A - this was already fixed in the last run.\n- scripts/check_failure_triage.sh:221-226 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m2_5]\n  PROBLEM: The paginated API approach uses `--paginate` which should handle >100 issues, but the jq pipeline `jq -s 'add // []'` flattens all pages.\n  WHY: N/A - this was already fixed in the last run.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR added the new labels `ai:check-triage` and `ai:check-triage-escalated`, but did not update `.github/ai/label_contract.v1.json` with the required `link_template` fields for these labels.\n  expected_change_site: `.github/ai/label_contract.v1.json` for the entries `\"ai:check-triage\"` and `\"ai:check-triage-escalated\"`\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The modified `.github/ai/label_contract.v1.json` diff shows only added colors and descriptions; no `link_template` lines were inserted under either new label.\n- requirement: The PR claims `CHECK_TRIAGE` is a new log prefix, but `.github/ai/label_contract.v1.json` section `behavioral_observations.validated_prefixes` was not updated to include the new prefix string `CHECK_TRIAGE`.\n  expected_change_site: `.github/ai/label_contract.v1.json` under `\"behavioral_observations\":{\"validated_prefixes\":[...]}`\n  confidence=5\n  flagged_by: [mistralai_mistral-small-2603]\n  EVIDENCE: The inlined diff for `.github/ai/label_contract.v1.json` lists `CHECK_TRIAGE` only in the `LOG_PREFIX.name` list, not in the validated_prefixes inner array.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m2_5 ===\n- File: scripts/check_failure_triage.sh\n  Line or code reference: 315-320\n  Problem: The codex invocation uses `env -u` to unset sensitive variables, but the previous autofix round already addressed this by adding `env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID`. The OPENROUTER_API_KEY is correctly preserved for the model call.\n  Why it fails at runtime: N/A - this was already fixed in the last run.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- File: scripts/check_failure_triage.sh\n  Line or code reference: 221-226\n  Problem: The paginated API approach uses `--paginate` which should handle >100 issues, but the jq pipeline `jq -s 'add // []'` flattens all pages. This is the correct fix for the duplicate-check scanning issue identified in previous reviews.\n  Why it fails at runtime: N/A - this was already fixed in the last run.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m2_5 ===\n\n=== FINDINGS FROM mistralai_mistral-small-2603 ===\n- Task-gap: The PR added the new labels `ai:check-triage` and `ai:check-triage-escalated`, but did not update `.github/ai/label_contract.v1.json` with the required `link_template` fields for these labels. This omission breaks contract validation and risk label field detection for `ai:check-triage*` labels in downstream pipelines.\n  Expected change site: `.github/ai/label_contract.v1.json` for the entries `\"ai:check-triage\"` and `\"ai:check-triage-escalated\"`\n  Evidence of absence: The modified `.github/ai/label_contract.v1.json` diff shows only added colors and descriptions; no `link_template` lines were inserted under either new label.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- Task-gap: The PR claims `CHECK_TRIAGE` is a new log prefix, but `.github/ai/label_contract.v1.json` section `behavioral_observations.validated_prefixes` was not updated to include the new prefix string `CHECK_TRIAGE`.\n  Expected change site: `.github/ai/label_contract.v1.json` under `\"behavioral_observations\":{\"validated_prefixes\":[...]}`\n  Evidence of absence: The inlined diff for `.github/ai/label_contract.v1.json` lists `CHECK_TRIAGE` only in the `LOG_PREFIX.name` list, not in the validated_prefixes inner array.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM mistralai_mistral-small-2603 ===\n\n=== FINDINGS FROM moonshotai_kimi-k2_5 ===\n(No findings reported.)\n=== END FINDINGS FROM moonshotai_kimi-k2_5 ===\n\n=== FINDINGS FROM qwen_qwen3_6-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_6-plus ===\n\n=== FINDINGS FROM x-ai_grok-4_20 ===\n(No findings reported.)\n=== END FINDINGS FROM x-ai_grok-4_20 ===",
+  "fingerprint": "4e7b87431a364a29ef615f2c767a2eefe0a9d080f2db5434764bae812176cc09",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 3555,
+    "run_id": "28316655888",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28316655888",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20260628092353_d8b222ca5d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 3555,
+    "run_id": "28316655888"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-06-28T09:23:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
