@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-06-25T19:54:46Z",
+  "tick_at": "2026-06-28T06:09:33Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -11,15 +11,14 @@
       "output": 0,
       "total": 0
     },
-    "tracking_issues": 1
+    "tracking_issues": 2
   },
   "tracking_issues": [
     {
-      "current_wave": 5,
-      "integration_ahead_by": "8",
+      "current_wave": 0,
       "issue_counts": {
         "closed": 0,
-        "done": 1,
+        "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
         "merged": 0,
@@ -32,7 +31,28 @@
       "project_complete": false,
       "status": "in-progress",
       "title": "[Orchestrator] gstack learnings rollout for the unattended pipeline (Phases A\u2013P)",
-      "total_waves": 15,
+      "total_waves": 0,
+      "wave_complete": false
+    },
+    {
+      "current_wave": 1,
+      "integration_ahead_by": "0",
+      "issue_counts": {
+        "closed": 0,
+        "done": 0,
+        "implementation_failed": 0,
+        "in_progress": 0,
+        "merged": 0,
+        "not_created": 0,
+        "ready_to_merge": 0,
+        "review_blocked": 1,
+        "skipped": 0
+      },
+      "number": 3566,
+      "project_complete": false,
+      "status": "in-progress",
+      "title": "[E2E Smoke Test] Review-Blocked Simulation (run 28311883052)",
+      "total_waves": 1,
       "wave_complete": false
     }
   ]
