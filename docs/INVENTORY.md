@@ -5,6 +5,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 
 ## Phase prompts
 
+- `prompts/mode-check-failure-triage.txt` — Role: CI failure triager. Goal: analyze a failing pull-request check and write a GitHub issue body describing the likely root cause and suggested fix.
 - `prompts/mode-clarify-respond.txt` — You are an AI assistant resolving clarification questions on behalf of the project orchestrator.
 - `prompts/mode-clarify.txt` — Role: clarify-phase auditor. Goal: emit `STATUS: CLEAR` or a `Q1`/`Q2` batch of blocking clarification questions.
 - `prompts/mode-extract-learnings.txt` — Extract stable repository learnings from prior merged AI-workflow runs as a machine-readable JSON array.
@@ -40,6 +41,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 
 - `.github/workflows/audit_consumer_drift.yml` — GitHub Actions workflow: Audit Consumer Drift.
 - `.github/workflows/cancel_on_pr_close.yml` — GitHub Actions workflow: AI Cancel Runs on PR Close.
+- `.github/workflows/check_failure_triage.yml` — GitHub Actions workflow: AI Check Failure Triage (Reusable).
 - `.github/workflows/ci.yml` — GitHub Actions workflow: CI.
 - `.github/workflows/clarify.yml` — GitHub Actions workflow: AI Clarify (Reusable).
 - `.github/workflows/comprehensive-test-and-release.yml` — GitHub Actions workflow: Workflow Log Analysis And Improvement.
@@ -48,6 +50,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/implement.yml` — GitHub Actions workflow: AI Implement.
 - `.github/workflows/integration-pr-readiness.yml` — GitHub Actions workflow: Integration PR readiness check.
 - `.github/workflows/internal-cancel-on-pr-close.yml` — GitHub Actions workflow: Internal: Cancel on PR Close.
+- `.github/workflows/internal-check-failure-triage.yml` — GitHub Actions workflow: Internal: AI Check Failure Triage.
 - `.github/workflows/internal-clarify.yml` — GitHub Actions workflow: Internal: AI Clarify.
 - `.github/workflows/internal-implement.yml` — GitHub Actions workflow: Internal: AI Implement.
 - `.github/workflows/internal-issue-pr-status.yml` — GitHub Actions workflow: Internal: Issue-PR Status Sync.
@@ -98,6 +101,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/build_state_snapshot.py` — Python helper for build state snapshot.
 - `scripts/build_static_context.sh` — codex-cli phases.
 - `scripts/check_external_branch_advance.sh` — branch has advanced past a pinned local SHA due to a non-autofix push.
+- `scripts/check_failure_triage.sh` — Diagnose a failing pull-request check, enforce triage dedup/lineage rules, and open the follow-up triage issue.
 - `scripts/check_integration_pr_readiness.py` — Check whether an orchestrator integration PR is ready to merge based on the tracking issue's sub-issue checkbox state.
 - `scripts/check_resolver_diff.sh` — Validate the output of the AI conflict-resolver step before committing.
 - `scripts/check_workflow_script_refs.py` — Verify every script referenced by a workflow file exists in scripts/.

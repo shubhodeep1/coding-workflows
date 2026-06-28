@@ -71,8 +71,11 @@ jobs:
     needs: derive_check_name_key
     # Cost gate: do nothing unless the consumer repo has explicitly opted in,
     # and only for genuine failure conclusions on a real PR. The job is skipped
-    # (no checkout / no codex install) when disabled.
+    # (no checkout / no codex install) when disabled. always() preserves the
+    # triage run if the hash-only dependency fails transiently; the
+    # concurrency key then falls back to the check-run id.
     if: >-
+      always() &&
       vars.CHECK_FAILURE_TRIAGE_ENABLED == 'true' &&
       inputs.pr_number != '' &&
       contains(fromJson('["failure","timed_out"]'), inputs.check_conclusion) &&
@@ -86,7 +89,7 @@ jobs:
       # cancel-in-progress: false means a check that is already being triaged
       # keeps its run; a second event queues and then no-ops via the
       # open-issue dedup in the script.
-      group: ai-check-triage-${{ github.repository }}-${{ inputs.pr_number }}-${{ needs.derive_check_name_key.outputs.check_name_key }}
+      group: ai-check-triage-${{ github.repository }}-${{ inputs.pr_number }}-${{ needs.derive_check_name_key.outputs.check_name_key || inputs.check_run_id || github.run_id }}
       cancel-in-progress: false
     env:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
