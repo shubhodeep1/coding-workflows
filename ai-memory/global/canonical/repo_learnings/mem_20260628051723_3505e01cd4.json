@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Review/autofix flows benefit from consolidation and staged-recovery steps, so failure handling should be designed as a pipeline, not a single retry.",
   "timestamps": {
     "created_at": "2026-06-28T05:17:23Z",
