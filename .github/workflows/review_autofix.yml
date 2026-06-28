@@ -116,6 +116,11 @@ env:
   REVIEWER_PASS2_DIFF_LARGE_LOC: ${{ vars.REVIEWER_PASS2_DIFF_LARGE_LOC || '200' }}
   REVIEWER_PASS2_REASONING_SMALL: ${{ vars.REVIEWER_PASS2_REASONING_SMALL || 'high' }}
   REVIEWER_PASS2_REASONING_LARGE: ${{ vars.REVIEWER_PASS2_REASONING_LARGE || 'xhigh' }}
+  REVIEW_TIER_RESOLVER_ENABLED: ${{ vars.REVIEW_TIER_RESOLVER_ENABLED || 'false' }}
+  REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}
+  REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || 'qwen/qwen3.6-plus' }}
+  REVIEW_TIER_STANDARD_MAX_LOC: ${{ vars.REVIEW_TIER_STANDARD_MAX_LOC || '200' }}
+  REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m2.5,deepseek/deepseek-v4-pro,x-ai/grok-4.20' }}
   REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}
   REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}
   REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}
@@ -163,6 +168,7 @@ env:
   AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED || '0' }}
   AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-5.4-mini' }}
   AGENTS_MD_MATERIALITY_REASONING: ${{ vars.AGENTS_MD_MATERIALITY_REASONING || 'medium' }}
+  REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED: ${{ vars.REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED || 'true' }}
   # Cross-reviewer consensus summariser: after each pass (pass-1 feeds pass-2,
   # pass-2 feeds the editor), all reviewer outputs are fed to one codex-cli
   # call that emits a consolidated ledger. Hard-fails the workflow on repeat
@@ -206,6 +212,7 @@ jobs:
       deterministic_skip: ${{ steps.evaluate.outputs.deterministic_skip }}
       det_skip_reason: ${{ steps.evaluate.outputs.det_skip_reason }}
       claude_branch_review: ${{ steps.evaluate.outputs.claude_branch_review }}
+      force_full_review_tier: ${{ steps.evaluate.outputs.force_full_review_tier }}
       head_ref: ${{ steps.evaluate.outputs.head_ref }}
       post_merge_pr_text_json: ${{ steps.evaluate.outputs.post_merge_pr_text_json }}
       post_merge_linked_issues_json: ${{ steps.evaluate.outputs.post_merge_linked_issues_json }}
@@ -254,6 +261,7 @@ jobs:
           SKIP_REASON=""
           POST_MERGE_PR_TEXT_JSON='{"title":"","body":""}'
           POST_MERGE_LINKED_ISSUES_JSON='[]'
+          FORCE_FULL_REVIEW_TIER="false"
 
           pr_state=""
           pr_merged="false"
@@ -461,6 +469,7 @@ jobs:
                 *,force-review,*) FORCE_REVIEW="true" ;;
               esac
             fi
+            FORCE_FULL_REVIEW_TIER="${FORCE_REVIEW}"
 
             if [ "${FORCE_REVIEW}" = "true" ]; then
               echo "AUTOFIX_GATE_DET_SKIP_OVERRIDE pr=${PR_NUMBER} reason=force_review_marker"
@@ -771,6 +780,7 @@ jobs:
           echo "deterministic_skip=${DETERMINISTIC_SKIP}" >> "${GITHUB_OUTPUT}"
           echo "det_skip_reason=${DET_SKIP_REASON}" >> "${GITHUB_OUTPUT}"
           echo "claude_branch_review=${CLAUDE_BRANCH_REVIEW}" >> "${GITHUB_OUTPUT}"
+          echo "force_full_review_tier=${FORCE_FULL_REVIEW_TIER}" >> "${GITHUB_OUTPUT}"
           # Propagate head ref so downstream jobs (deterministic-skip-merge)
           # can apply the same head-ref-keyed auto-merge suppressors without
           # repeating the /pulls/{n} fetch above (§15 API hygiene). May be
@@ -1140,6 +1150,12 @@ jobs:
       REVIEW_BREAK_GLASS_ENABLED: ${{ vars.REVIEW_BREAK_GLASS_ENABLED || 'false' }}
       REVIEW_REVIEWER_CHECKLIST_ENABLED: ${{ vars.REVIEW_REVIEWER_CHECKLIST_ENABLED || '1' }}
       REVIEW_REVIEWER_ITERATION_SCOPING: ${{ vars.REVIEW_REVIEWER_ITERATION_SCOPING || '1' }}
+      FORCE_FULL_REVIEW_TIER: ${{ needs.gate.outputs.force_full_review_tier || 'false' }}
+      REVIEW_TIER_RESOLVER_ENABLED: ${{ vars.REVIEW_TIER_RESOLVER_ENABLED || 'false' }}
+      REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}
+      REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || 'qwen/qwen3.6-plus' }}
+      REVIEW_TIER_STANDARD_MAX_LOC: ${{ vars.REVIEW_TIER_STANDARD_MAX_LOC || '200' }}
+      REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m2.5,deepseek/deepseek-v4-pro,x-ai/grok-4.20' }}
       REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}
       REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}
       REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}
@@ -1155,10 +1171,12 @@ jobs:
       REVIEWER_FILTER_UNINTERESTING_ENABLED: ${{ vars.REVIEWER_FILTER_UNINTERESTING_ENABLED || 'false' }}
       REVIEWER_FILTER_EXTRA_GLOBS: ${{ vars.REVIEWER_FILTER_EXTRA_GLOBS || '' }}
       REVIEWER_FILTER_EXEMPT_GLOBS: ${{ vars.REVIEWER_FILTER_EXEMPT_GLOBS || 'db/contracts/**,**/migrations/**,**/migrate/**' }}
+      SLOP_SCAN_ENABLED: ${{ vars.SLOP_SCAN_ENABLED || 'true' }}
       AGENTS_MD_MATERIALITY_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_ENABLED || '1' }}
       AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED || '0' }}
       AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-5.4-mini' }}
       AGENTS_MD_MATERIALITY_REASONING: ${{ vars.AGENTS_MD_MATERIALITY_REASONING || 'medium' }}
+      REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED: ${{ vars.REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED || 'true' }}
       JUDGE_INTERIM_ENABLED: ${{ vars.JUDGE_INTERIM_ENABLED || 'false' }}
       JUDGE_INTERIM_REASONING: ${{ vars.JUDGE_INTERIM_REASONING || 'low' }}
       JUDGE_INTERIM_TIMEOUT_S: ${{ vars.JUDGE_INTERIM_TIMEOUT_S || '120' }}
@@ -1323,6 +1341,7 @@ jobs:
             echo "::error::stage_workflow_support.sh not found in checked-out support sources (${SCRIPT_REF} and optional main snapshot) in shubhodeep1/coding-workflows."
             exit 1
           fi
+          echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${{ vars.PROMPT_PRELUDE_REFACTOR_ENABLED || 'false' }}" >> "$GITHUB_ENV"
           CURRENT_REPOSITORY="${{ github.repository }}" \
           WORKFLOW_SOURCE_REPO="shubhodeep1/coding-workflows" \
           bash "${helper}"
@@ -1459,6 +1478,7 @@ jobs:
             echo "PR_CHANGED_FILES_FILE=${RUNTIME_DIR}/pr_changed_files.txt"
             echo "LAST_COMMIT_STAT_FILE=${RUNTIME_DIR}/last_commit_stat.txt"
             echo "LAST_RUN_DIFF_STAT_FILE=${RUNTIME_DIR}/last_run_diff_stat.txt"
+            echo "SLOP_SCAN_FINDINGS_FILE=${GITHUB_WORKSPACE}/.ai/slop_scan/findings.json"
             echo "REVIEWER_PROMPT_BODY_FILE=${RUNTIME_DIR}/reviewer_prompt_body.txt"
             echo "EDITOR_PROMPT_BODY_FILE=${RUNTIME_DIR}/editor_prompt_body.txt"
             echo "REVIEWER_PROMPT_FILE=${RUNTIME_DIR}/reviewer_prompt.txt"
@@ -2393,6 +2413,67 @@ jobs:
             echo "FIRST_RUN_NO_PREVIOUS_AI_CHANGES" > "${LAST_RUN_DIFF_STAT_FILE}"
           fi
 
+      - name: Collect local slop-scan findings
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+
+          write_slop_scan_sentinel() {
+            local status="$1"
+            cat > "${SLOP_SCAN_FINDINGS_FILE}" <<EOF
+          {
+            "schema_version": 1,
+            "collection_status": "${status}",
+            "scanned_files": [],
+            "findings": [],
+            "suppressed_findings": []
+          }
+          EOF
+          }
+
+          mkdir -p "$(dirname "${SLOP_SCAN_FINDINGS_FILE}")"
+
+          case "$(printf '%s' "${SLOP_SCAN_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+            1|true|yes|on)
+              ;;
+            *)
+              write_slop_scan_sentinel "disabled"
+              exit 0
+              ;;
+          esac
+
+          slop_scan_script=""
+          for candidate in \
+            "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/slop_scan_local.py" \
+            "${GITHUB_WORKSPACE}/.codex-workflow-src-main/scripts/slop_scan_local.py" \
+            "${GITHUB_WORKSPACE}/scripts/slop_scan_local.py"
+          do
+            if [ -f "${candidate}" ]; then
+              slop_scan_script="${candidate}"
+              break
+            fi
+          done
+
+          if [ -z "${slop_scan_script}" ]; then
+            echo "::warning::slop_scan_local.py was not available in the workflow support checkout; continuing without slop-scan findings."
+            write_slop_scan_sentinel "scan_error"
+            exit 0
+          fi
+
+          if ! PYTHONDONTWRITEBYTECODE=1 python3 "${slop_scan_script}" \
+            --changed-files "${PR_CHANGED_FILES_FILE}" \
+            --repo-root "${GITHUB_WORKSPACE}" \
+            --output "${SLOP_SCAN_FINDINGS_FILE}"; then
+            echo "::warning::slop_scan_local.py failed; continuing without blocking review."
+            write_slop_scan_sentinel "scan_error"
+            exit 0
+          fi
+
+          if [ ! -s "${SLOP_SCAN_FINDINGS_FILE}" ]; then
+            echo "::warning::slop_scan_local.py wrote no findings artifact; continuing without blocking review."
+            write_slop_scan_sentinel "scan_error"
+          fi
+
       - name: Generate symbol-level diff summary
         run: |
           set -euo pipefail
@@ -2567,6 +2648,7 @@ jobs:
           check_required_file "${SUPPORT_SCRIPTS_DIR}/watchdog_helpers.sh"
           check_required_file "${SUPPORT_SCRIPTS_DIR}/review_run_reviewers.sh"
           check_required_file "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh"
+          check_required_file "${SUPPORT_SCRIPTS_DIR}/assemble_prompt.sh"
           check_soft_file "${SUPPORT_SCRIPTS_DIR}/render_prompt.py"
           check_required_nonempty_file "${SUPPORT_INSTRUCTIONS_FILE}"
           check_required_file "./pre_assembled_static.txt"
@@ -3316,6 +3398,18 @@ jobs:
                 echo "::warning::Editor in-step retry also failed; downstream noop-comment path will fire."
               }
             fi
+          fi
+
+      - name: Remove slop-scan runtime artifact
+        if: always()
+        run: |
+          set -euo pipefail
+          expected_dir="${GITHUB_WORKSPACE}/.ai/slop_scan"
+          if [ -n "${SLOP_SCAN_FINDINGS_FILE:-}" ] && [ "$(dirname "${SLOP_SCAN_FINDINGS_FILE}")" = "${expected_dir}" ]; then
+            rm -f "${SLOP_SCAN_FINDINGS_FILE}"
+            rmdir "${expected_dir}" 2>/dev/null || true
+          elif [ -n "${SLOP_SCAN_FINDINGS_FILE:-}" ]; then
+            echo "::warning::Unexpected SLOP_SCAN_FINDINGS_FILE path (${SLOP_SCAN_FINDINGS_FILE}); skipping cleanup."
           fi
 
       - name: Log token usage

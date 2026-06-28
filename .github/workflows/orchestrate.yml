@@ -343,7 +343,7 @@ jobs:
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh label_helpers.sh git_ref_health_check.sh orchestrate_lib.py render_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh; do
+          for f in gh_helpers.sh label_helpers.sh git_ref_health_check.sh orchestrate_lib.py render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -395,7 +395,9 @@ jobs:
             --schema-path "ai-memory/schemas/workflow_overlay.v1.json" \
             --github-env "${GITHUB_ENV}"
 
-          mkdir -p prompts
+          echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${{ vars.PROMPT_PRELUDE_REFACTOR_ENABLED || 'false' }}" >> "$GITHUB_ENV"
+
+          mkdir -p prompts prompts/_templates
           prompt_src=".codex-workflow-src/prompts/mode-orchestrate.txt"
           if [ ! -f "${prompt_src}" ] && [ -f ".codex-workflow-src-main/prompts/mode-orchestrate.txt" ]; then
             prompt_src=".codex-workflow-src-main/prompts/mode-orchestrate.txt"
@@ -405,6 +407,18 @@ jobs:
             exit 1
           fi
           install -m 0644 "${prompt_src}" prompts/mode-orchestrate.txt
+
+          for prompt_assembly_asset in _prelude_common.txt _prelude_role_persona.txt _prelude_output_contract.txt _templates/mode-orchestrate.txt; do
+            asset_src=".codex-workflow-src/prompts/${prompt_assembly_asset}"
+            if [ ! -f "${asset_src}" ] && [ -f ".codex-workflow-src-main/prompts/${prompt_assembly_asset}" ]; then
+              asset_src=".codex-workflow-src-main/prompts/${prompt_assembly_asset}"
+            fi
+            if [ ! -f "${asset_src}" ]; then
+              echo "::error::Missing required support file prompts/${prompt_assembly_asset}"
+              exit 1
+            fi
+            install -m 0644 "${asset_src}" "prompts/${prompt_assembly_asset}"
+          done
 
           mkdir -p .github/ai
           schema_src=".codex-workflow-src/.github/ai/orchestrate_schema.v1.json"

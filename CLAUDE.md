@@ -691,6 +691,10 @@ project's planned phases never shipped (see
 full forensic timeline in
 `docs/postmortems/2026-05-18-project-2734-stall.md`).
 
+## §20. CHANGELOG Style
+
+All `CHANGELOG.md` entries follow `docs/changelog-style.md`. PR review checks new entries against that guide's structure, voice rules, and audience split.
+
 ---
 
 ## FINAL REMINDER

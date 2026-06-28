@@ -21,6 +21,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `prompts/mode-orchestrate-poll-judge.txt` — Role: orchestrate-poll judge. Goal: evaluate whether the current wave is progressing correctly.
 - `prompts/mode-orchestrate.txt` — Role: orchestrator. Goal: decompose a high-level project description into a set of well-scoped GitHub issues with an explicit dependency graph.
 - `prompts/mode-plan.txt` — Role: planning-phase auditor. Goal: emit a structured implementation plan or `BLOCKED:` line.
+- `prompts/mode-security-audit.txt` — Role: Chief Security Officer. Goal: emit a JSON-array security audit for default-branch scope.
 - `prompts/mode-review-apply-fixes-continuation.txt` — Role: review-autofix editor continuing the same-run editor session.
 - `prompts/mode-review-conflict-resolver-continuation.txt` — Role: merge-conflict resolver continuing the same-run resolver session.
 - `prompts/mode-validate-diagnose.txt` — Role: validate-diagnose. Goal: analyze runtime validation failures and emit one JSON object with structured fix-up issue proposals.
@@ -71,6 +72,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/review_autofix.yml` — GitHub Actions workflow: Codex PR Self-Healing Semantic Agent.
 - `.github/workflows/review_autofix_sweep.yml` — GitHub Actions workflow: Internal: AI Review Autofix Sweep.
 - `.github/workflows/review_rb_judge_dispatch.yml` — GitHub Actions workflow: Internal: Review-Blocked Judge Dispatch.
+- `.github/workflows/security-audit.yml` — GitHub Actions workflow: Security Audit.
 - `.github/workflows/sync_ai_labels.yml` — GitHub Actions workflow: AI Sync Labels.
 - `.github/workflows/test-and-mark-stable.yml` — GitHub Actions workflow: Test & Mark Stable Release.
 - `.github/workflows/update_workflows.yml` — GitHub Actions workflow: Update Workflow Wrappers.
@@ -181,6 +183,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/run_workspace_hook.sh` — Shell helper for run workspace hook.
 - `scripts/self_heal_validation.sh` — failure context, then signalling validate_process.sh to re-run.
 - `scripts/semantic_cache.py` — Semantic cache helper for clarify-phase workflows.
+- `scripts/security_audit.sh` — security_audit.sh — Run the default-branch OWASP Top 10 + STRIDE security audit.
+- `scripts/security_audit_fp_exclusions.json` — JSON asset for editable security-audit false-positive exclusions.
 - `scripts/semble_helpers.sh` — semble_helpers.sh — shared, sourceable Semble query helpers.
 - `scripts/serena_stats_emit.py` — Aggregate Serena tool-call rollups from Codex logs.
 - `scripts/setup_serena.sh` — setup_serena.sh — fail-soft Serena bootstrapper for Codex MCP usage.
@@ -236,6 +240,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `prompts/contracts/mode-orchestrate-poll-judge.yml` — Strict render contract for mode-orchestrate-poll-judge.
 - `prompts/contracts/mode-orchestrate.yml` — Strict render contract for mode-orchestrate.
 - `prompts/contracts/mode-plan.yml` — Strict render contract for mode-plan.
+- `prompts/contracts/mode-security-audit.yml` — Strict render contract for mode-security-audit.
 - `prompts/contracts/mode-review-apply-fixes-continuation.yml` — Strict render contract for mode-review-apply-fixes-continuation.
 - `prompts/contracts/mode-review-conflict-resolver-continuation.yml` — Strict render contract for mode-review-conflict-resolver-continuation.
 - `prompts/contracts/mode-validate-diagnose.yml` — Strict render contract for mode-validate-diagnose.

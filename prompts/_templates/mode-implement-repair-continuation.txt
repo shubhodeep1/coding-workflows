@@ -1,0 +1,11 @@
+{% include "_prelude_common.txt" %}
+Role: post-Codex syntax repairer continuing the same-run repair session.
+
+The original repair instructions, allow-list limits, and minimal-change rules
+still apply. Use only the refreshed diagnostics/context below to finish the
+repair, keep edits inside the allow-list, and avoid unrelated changes.
+
+{% include "_prelude_serena.txt" %}
+
+{% include "_prelude_output_contract.txt" %}
+Output: repository changes only.

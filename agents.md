@@ -47,6 +47,46 @@ Phases of the unattended pipeline (each is a separate workflow file under
 12. **workflow log analysis** (`workflow-log-analysis.yml`,
     `mode-workflow-*.txt`) — periodic audit of workflow runs.
 
+Planner scope note: the Boil the Lake rule is a planner-side instruction for
+choosing the right scope mode up front, while CLAUDE.md §5 / the unattended
+minimal-change rules still bind implementers and reviewers after that choice is
+made. There is no conflict: planners may explicitly choose Expansion or
+Selective Expansion when the marginal completeness cost is small, and editors /
+reviewers must then stay surgical inside that approved scope rather than
+shrinking it ad hoc.
+
+Plan prompt note: `PLAN_DIAGRAMS_OPTIONAL` defaults to `true`, so plan outputs
+may include `Data flow:`, `State machines:`, and `Failure modes:` only when
+they materially help. Trivial plans should omit them, and `State machines:` is
+required only for changes touching the orchestrator phase machine
+(`ai:clarification` → `ai:planning` → `ai:awaiting-approval` →
+`ai:implementing` → `ai:done` → `ai:ready-to-merge` → `ai:merged`).
+
+Prompt assembly note: the migrated shared-prelude prompt family keeps the
+legacy runtime bodies in `prompts/mode-*.txt` and stores the include-based
+sources in `prompts/_templates/*.txt`. `scripts/assemble_prompt.sh` is a thin
+wrapper over `render_prompt.py --assemble-only`, and `scripts/render_prompt.sh`
+uses it only when `PROMPT_PRELUDE_REFACTOR_ENABLED=true`. Default persona
+prefixes come from the checked-in JSON map at `prompts/_prelude_role_persona.txt`
+unless `PROMPT_PERSONA_PREFIX_ENABLED` is disabled.
+
+## Implement scope-lock label
+
+- When `SCOPE_LOCK_LABEL_ENABLED=true`, `implement.yml` recognizes one active
+  dynamic issue label of the form `ai:scope:<glob>` and copies the glob into
+  the implementation context.
+- The glob follows Bash `globstar` semantics (for example `scripts/**/*.py` or
+  `prompts/mode-*.txt`) and is enforced after the local AI commit is created
+  but before push: `scripts/implement_commit_changes.sh` reuses
+  `scripts/files_touched_scope_guard.py` against the committed pathset and
+  rolls the unpushed local commit back on any out-of-glob path.
+- Multiple `ai:scope:` labels are not merged; the workflow enforces only the
+  first matching label from the issue metadata and logs a warning.
+- This is a runtime dynamic-label exception to the otherwise static
+  `.github/ai/label_contract.v1.json` contract. The glob-bearing
+  `ai:scope:<glob>` labels are intentionally not enumerated there and are not
+  part of contract-driven label repair.
+
 ---
 
 ## Models in use (defaults; overridable via repo-vars)
@@ -423,6 +463,10 @@ log analysis pipeline, semantic cache scope, wrapper pin policy) live in
 `./probably_unnecessary_but_read_if_stuck.md`. Read it only when needed —
 it is intentionally large.
 
+Future `CHANGELOG.md` entries also follow `docs/changelog-style.md`, which is
+the contributor-facing guide for release-summary structure, voice, and
+user-versus-contributor audience separation.
+
 ## Review pipeline consolidator + ledger contract
 
 - Review-pipeline helper stages are fail-open by contract. Floor rules, consolidator, parser, and ledger failures degrade to empty/advisory local artifacts and do not block the editor or reviewer loop.
@@ -434,10 +478,14 @@ it is intentionally large.
 - `REVIEW_LEDGER_PERSIST_LIMIT` controls the `PERSISTING -> accepted-residual` transition. Once the threshold is reached, `review_issues.txt` is rewritten to residual stubs while the durable ledger retains the full history.
 - The ≥2-reviewer floor rule is non-overridable at classification time: `scripts/review_floor_rules.sh` promotes same-file, nearby findings from distinct reviewers into `FLOOR_MULTI_REVIEWER`, and those tags remain non-skippable even if the consolidator down-ranks the issue.
 - The review-autofix reviewer pass remains model-diversity-first. The consolidator's seven lenses are this repo's equivalent of Cloudflare's seven specialised review sub-agents; the pipeline does not run one fixed model per lens.
+- Additive Phase M note: `prompts/review-consolidator.txt` now appends an eighth `DOCS COVERAGE (DIATAXIS)` lens after those original seven. The first seven lens names and order stay byte-for-byte stable; the new lens is advisory-only (`SEVERITY: low`, normally `CLASSIFICATION: nice-to-have`), is grounded in reviewer evidence plus touched files for user-visible changes, and names only still-missing `Reference` / `How-to` / `Tutorial` / `Explanation` updates (or `Docs coverage: complete` when already covered).
 - Reviewer prompts now carry explicit anti-rules in both `prompts/review-reviewer-checklist.txt` (`WHAT NOT TO FLAG` under each lens) and the shared `COMMON ANTI-RULES` block rendered by `scripts/review_run_reviewers.sh`.
+- `scripts/review_run_reviewers.sh` also carries an additive, default-off Phase I `lite | standard | full` review-tier resolver. `lite` requires the existing doc-only path set plus `REVIEW_TIER_LITE_MAX_LOC`; `standard` requires one allowed top-level directory (`scripts/`, `prompts/`, `.github/workflows/`, or `tests/`) plus `REVIEW_TIER_STANDARD_MAX_LOC`; `full` is the force-review and fail-open tier. When enabled, `lite` uses one configured reviewer slug, `standard` uses a configured reviewer subset, `full` keeps the full live roster, `AUTOFIX_SKIP_*` fast paths stay authoritative, `[force-review]` / `force-review` still force full review, and `lite` reuses `REVIEW_CONSOLIDATOR_ENABLED=0` to skip the consolidator.
 - `scripts/review_run_reviewers.sh` can classify a PR into `trivial | lite | full` reviewer tiers from reviewer-visible diff LOC/file counts, with `REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX` forcing `full` on sensitive paths. Default tier fan-out follows the live `REVIEWER_MODELS` order from `.github/workflows/review_autofix.yml`: trivial = first reviewer, lite = first two reviewers, full = the complete configured set.
 - `scripts/review_filter_uninteresting_files.sh` strips low-signal lock/generated/minified paths before reviewer fan-out and emits `REVIEWER_FILTER_SKIP: <path> <reason>` for each skipped file. Default exemptions remain `db/contracts/**`, `**/migrations/**`, and `**/migrate/**`.
+- `.github/workflows/review_autofix.yml` now runs a fail-open local slop-scan preflight (gated by `SLOP_SCAN_ENABLED`, default `true`) on PR-changed `scripts/*.py`, `scripts/*.sh`, and `validation/**/*.sh` Python heredocs. It writes `.ai/slop_scan/findings.json`, feeds that JSON to reviewer and consolidator prompts as advisory untrusted context, and removes the runtime artifact before commit-producing steps so it cannot leak into staged changes.
 - `scripts/review_agents_md_materiality.sh` is deterministic-path-glob v1: it writes a JSON result payload plus a non-blocking PR comment headed `## AI Materiality Advisory` when materiality is `high` or `medium` and root `agents.md` is unchanged. `AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED` is reserved only; enabling it still does not trigger a model call in the current shipped script.
+- When `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED=true`, `scripts/review_consolidate.sh` feeds that helper JSON into the consolidator prompt as advisory untrusted context. This is the Lens 7 companion to the separate advisory comment path controlled by `AGENTS_MD_MATERIALITY_ENABLED`. Lens 7 (`NAMING / BACKWARD COMPATIBILITY`) may then emit a default-`high` `AGENTS.md materiality` finding when operator-visible structural changes leave root `agents.md` unchanged, but downgrades or omits it when equivalent touched docs already cover the behavior.
 - `REVIEW_LEDGER_REREVIEW_ENABLED` gates consolidator-side suppression of repeated `accepted-residual` / `won't-fix` findings from the existing review ledger and the review-blocked judge's ledger-fed prior-round decision input. `scripts/review_rb_judge.sh` renders that `=== BEGIN PRIOR ROUND DECISIONS ===` block via `render_review_rb_prior_round_decisions_file`, and `prompts/mode-judge-review-blocked.txt` treats it as advisory history rather than fresh reviewer evidence.
 - `REVIEWER_CIRCUIT_BREAKER_ENABLED` persists reviewer health under `.ai/review_runtime/pr-<PR>/reviewer_health_state.json`. Retryable reviewer failures first retry with cheaper reasoning, then consult `scripts/reviewer_failback_chains.json`; unmapped reviewers fail open via `REVIEWER_FAILBACK_UNMAPPED`. The current mapping file covers `deepseek/deepseek-v4-pro -> deepseek/deepseek-v3.2`, `qwen/qwen3.6-plus -> qwen/qwen3-coder-plus`, and `x-ai/grok-4.20 -> x-ai/grok-4.1-fast`; `minimax/minimax-m2.5`, `moonshotai/kimi-k2.5`, and `mistralai/mistral-small-2603` remain intentionally unmapped until the catalog ships same-family alternates.
 - `scripts/cost_audit.py` now parses additive review telemetry fields `cache_hit_rate`, `wall_clock_p50_ms`, `wall_clock_p99_ms`, `break_glass_count`, and `context_budget_warn_count`. `CONTEXT_BUDGET_WARN` is emitted pre-flight from review / consolidator / judge paths when a prompt exceeds the configured per-model context threshold.
@@ -471,6 +519,11 @@ it is intentionally large.
 | `REVIEW_LEDGER_REREVIEW_ENABLED` | `false` | Enable ledger-aware re-review suppression in the consolidator and the review-blocked judge's prior-round-decision input. |
 | `REVIEW_APPROVAL_RUBRIC_ENABLED` | `false` | Enable logical review-state output from the review-blocked judge and outbound PR-review mapping through `post_review_comment.sh --review-state`. |
 | `REVIEW_BREAK_GLASS_ENABLED` | `false` | Enable the anchored `@codex break-glass` override scan; when active it downgrades only the outbound `REQUEST_CHANGES` event to comment-only. |
+| `REVIEW_TIER_RESOLVER_ENABLED` | `false` | Enable the additive Phase I `lite \| standard \| full` review-tier resolver. While `false`, existing reviewer routing is unchanged. |
+| `REVIEW_TIER_LITE_MAX_LOC` | `50` | Maximum total diff LOC for `lite` review-tier resolution. `lite` also requires the existing doc-only path set. |
+| `REVIEW_TIER_LITE_REVIEWER_SLUG` | `qwen/qwen3.6-plus` | Reviewer slug used for the `lite` review tier when the Phase I resolver is enabled. Unknown or unavailable slugs fail open to `full`. |
+| `REVIEW_TIER_STANDARD_MAX_LOC` | `200` | Maximum total diff LOC for `standard` review-tier resolution. `standard` also requires changes confined to one allowed top-level directory. |
+| `REVIEW_TIER_STANDARD_REVIEWER_SLUGS` | `minimax/minimax-m2.5,deepseek/deepseek-v4-pro,x-ai/grok-4.20` | Comma-separated reviewer subset for the `standard` review tier when the Phase I resolver is enabled. Unknown or unavailable slugs fail open to `full`. |
 | `REVIEWER_RISK_TIER_ENABLED` | `0` | Enable deterministic `trivial | lite | full` reviewer fan-out by reviewer-visible diff LOC/file count. |
 | `REVIEWER_RISK_TIER_TRIVIAL_LOC` | `10` | Trivial-tier LOC threshold. |
 | `REVIEWER_RISK_TIER_TRIVIAL_FILES` | `20` | Trivial-tier changed-file threshold. |
@@ -486,7 +539,7 @@ it is intentionally large.
 | `REVIEWER_FAILBACK_MAX_RETRIES` | `1` | Retryable-failure budget before a reviewer slot consults the failback chain. |
 | `REVIEWER_HEALTH_OPEN_THRESHOLD` | `3` | Consecutive retryable failures required to mark a reviewer slot `open` in the health cache. |
 | `REVIEWER_HEALTH_OPEN_TTL_SECS` | `1800` | Seconds an `open` reviewer-health entry suppresses dispatch before automatic expiry. |
-| `AGENTS_MD_MATERIALITY_ENABLED` | `1` | Post the deterministic, non-blocking AGENTS.md materiality advisory when a material change omits an agents.md update (on by default; set `0` to disable). |
+| `AGENTS_MD_MATERIALITY_ENABLED` | `1` | Post the deterministic, non-blocking `AGENTS.md` materiality advisory comment when a material change omits an `agents.md` update (on by default; set `0` to disable). |
 | `AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED` | `0` | Reserved only; deterministic v1 still makes no materiality model call when this flag is on. |
 | `AGENTS_MD_MATERIALITY_MODEL` | `openai/gpt-5.4-mini` | Reserved future materiality fallback model slug. |
 | `AGENTS_MD_MATERIALITY_REASONING` | `medium` | Reserved future materiality fallback reasoning effort. |
@@ -494,6 +547,8 @@ it is intentionally large.
 | `MAX_PROMPT_TOKENS_FOR_PHASE` | `(empty)` | Absolute prompt-token override that takes precedence over `CONTEXT_BUDGET_WARN_RATIO`; phase-specific `MAX_PROMPT_TOKENS_FOR_<PHASE>` overrides remain supported. |
 | `CODEX_HEARTBEAT_ENABLED` | `1` | Enable the `codex_heartbeat.sh` wrapper on long-running review / validate Codex calls. |
 | `CODEX_HEARTBEAT_INTERVAL_SECS` | `30` | Silence interval (seconds) between emitted `CODEX_HEARTBEAT` lines. |
+| `REVIEW_DIATAXIS_LENS_ENABLED` | `true` | Documentation-only contract row for the advisory `DOCS COVERAGE (DIATAXIS)` consolidator lens. Current branch behavior is prompt-defined only (no separate workflow toggle yet): keep it `low` severity and name only still-missing `Reference` / `How-to` / `Tutorial` / `Explanation` updates. |
+| `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED` | `true` | Enable the consolidator-side companion `AGENTS.md` materiality finding. Unlike `AGENTS_MD_MATERIALITY_ENABLED`, which controls the separate advisory comment helper, this flag only controls whether `review_consolidate.sh` passes the helper JSON into Lens 7 (`NAMING / BACKWARD COMPATIBILITY`). |
 
 ## Integration-sync verifier + bootstrap contract
 
@@ -501,6 +556,8 @@ it is intentionally large.
 - `.github/workflows/review_autofix.yml` stages `verify_integration_fingerprints.py`, `review_conflict_prepare.sh`, and `review_conflict_resolve.sh` through `MAIN_PRIMARY_BOOTSTRAP_SCRIPTS` (main snapshot first, branch fallback). `OPTIONAL_BOOTSTRAP_SCRIPTS` is reserved for genuinely optional helpers only.
 - `scripts/review_conflict_resolve.sh` persists one `AUTOFIX_RESOLVER_RETRY_STATE_V1` PR-body block per final PR/head SHA, keyed by normalized fingerprint failure signature. `RESOLVER_ESCAPE_THRESHOLD_N` is the per-tier same-head, same-signature step size: multiples advance `strict` → `ratio` → `count_only` → `warn_only`, emit `FINGERPRINT_TIER_DOWNGRADED_V1`, and after the next multiple the script labels the **final PR issue** `ai:resolver-escalated` and records `escalated_at` for poller-side suppression / branch-rebuild gating.
 - `scripts/verify_integration_fingerprints.py` uses `FINGERPRINT_QUARANTINE_RUNS_M` to move stable unchanged drift into ai-memory quarantine and emits `FINGERPRINT_QUARANTINED_V1` markers when the skip path activates. `.github/workflows/drift-audit.yml` (cron `0 3 * * *`, gated by `DRIFT_AUDIT_ENABLED`) scans `PRE_EXISTING_FINGERPRINT_DRIFT_V1` / `FINGERPRINT_QUARANTINED_V1` markers and maintains tracker issues for persistent clusters. The audit skips any cluster whose fingerprint path is absent from the repository checkout, so markers echoed from test fixtures or PR diffs (synthetic paths such as `scripts/example.py`) do not open tracker issues. Every enabled run posts a Telegram run summary (`tg_send_msg`, gated by `TG_BOT_SECRET` / `TG_ADMIN_CHAT_ID`) linking to the run and writes a GitHub Actions job summary.
+- `.github/workflows/security-audit.yml` (weekly `0 8 * * 0` plus `workflow_dispatch`, gated by `SECURITY_AUDIT_ENABLED=false`) is a source-repo-only default-branch maintenance audit. It runs `scripts/security_audit.sh` with `prompts/mode-security-audit.txt`, appends dated findings sections to the stable `AI Security Audit Tracker` issue (`ai:security-audit`, marker `<!-- ai:security-audit-tracker:v1 -->`), and opens up to 3 weekly `ai:security` follow-up issues after confidence-gate + false-positive-exclusion filtering. `.github/workflows/internal-clarify.yml` skips `ai:security-audit` issues so tracker bookkeeping never recurses into the normal clarify/plan pipeline.
+- `.github/workflows/workflow-log-analysis.yml` now also has a source-repo-only weekly retro path (cron `0 9 * * 1`, gated by `WORKFLOW_RETRO_ENABLED=false` during acceptance). `WORKFLOW_RETRO_CRON` defaults to the same cron string and must stay in sync with the trigger because GitHub does not interpolate vars into `on.schedule`. The workflow builds retro context with `scripts/workflow_retro.py`, renders the narrative through `prompts/mode-workflow-analysis.txt` in retro mode using `WORKFLOW_RETRO_MODEL` / `WORKFLOW_RETRO_REASONING` (defaults `openai/gpt-5.4-mini` / `medium`), and posts into the stable `AI Workflow Weekly Retro` tracker issue (`ai:retro`, marker `<!-- ai:retro-tracker:v1 -->`). `.github/workflows/internal-clarify.yml` skips `ai:retro` issues so tracker upkeep never recurses into the normal clarify/plan pipeline.
 - `scripts/orchestrate_poll_process.sh` gates last-resort `orchestrator/project-*` branch rebuilds behind `BRANCH_REBUILD_ENABLED`, `BRANCH_REBUILD_THRESHOLD_HOURS`, and `BRANCH_REBUILD_COOLDOWN_HOURS`. Audit snapshots are persisted as `BranchRebuildAuditV1` in `ai-memory/schemas/branch_rebuild_audit.v1.json` (this shipped artifact supersedes the old plan placeholder name `BRANCH_REBUILD_AUDIT_V1`; there is no literal runtime marker with that string).
 
 ## Operational lessons learned (categorised)
@@ -524,6 +581,8 @@ it is intentionally large.
 **Memory subsystem**
 - The `ai-memory` branch is the canonical backing store; consumers must fail open when memory reads or writes are unavailable. Pointers: `scripts/memory_helpers.sh`, `scripts/ai_memory.py`.
 - `AI_MEMORY_TELEMETRY` and the per-PR review ledger are continuity surfaces, not hard gates; preserve ledger identity across reruns. Pointers: `scripts/ai_memory.py`, `scripts/review_issue_ledger.sh`.
+- Lessons-learned memory uses the standalone schema `ai-memory/schemas/lessons_learned_record.v1.json`; review-autofix writes issue-scoped records under `ai-memory/tasks/issue-*/lessons_learned/` via `scripts/ai_memory_lib.py::record_lessons_learned`, and plan-mode prompts treat surfaced same-file lessons as soft priors rather than hard requirements.
+- Operator-facing memory hygiene lives in `scripts/ai_memory.py`: `review --since <duration>` lists stale task candidates, `prune --record-id <id>` marks task candidates for the existing monthly `compact --prune true` archival path, `search --query <text>` prefers OpenRouter embeddings when `OPENROUTER_API_KEY` is set and otherwise falls back to keyword ranking, and `export --issue <n>` / `--pr <n>` dumps matching memory records as JSON. `prune` is intentionally additive: it writes a `timestamps.prune_marked_at` marker on candidate records instead of introducing a second maintenance channel.
 
 **Validation harness Docker lifecycle**
 - Validation containers distinguish `/bin/sh -c` from `/bin/sh -lc`; shell choice is part of harness correctness, not a cosmetic variation. Pointers: `scripts/validation_lint.py`, `prompts/mode-validate-generate.txt`.
