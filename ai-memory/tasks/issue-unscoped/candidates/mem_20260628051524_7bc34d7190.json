@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "Several merged changes updated documentation and prompt preludes/templates in the same PR as workflow logic. This matters when task framing or execution semantics change, because stale docs or prompts can cause future runs to follow outdated instructions even if code paths are correct.",
+  "fingerprint": "cf3b8f0fe2b0caca56965c83d5fb19d575361243d3badcd093881ff7a3cf3ce9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28312223219",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28312223219",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3535",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3537",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3540",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3542",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3552",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3536",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3538",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3541",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3543",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3553"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260628051524_7bc34d7190",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Keep prompt templates, workflow definitions, and README/agents docs aligned; these files evolve together to preserve behavior and operator expectations.",
+  "timestamps": {
+    "created_at": "2026-06-28T05:15:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
