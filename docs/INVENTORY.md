@@ -90,8 +90,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/ai_memory_lib.py` — Shared AI memory helpers for GitHub workflows.
 - `scripts/analyze_soft_errors.py` — Soft-error log analyzer for the release-gate smoke test.
 - `scripts/analyze_workflow_logs.py` — Prepare aggregated workflow telemetry context for the Codex analysis pass.
-- `scripts/assemble_prompt.sh` — Shell wrapper over render_prompt.py --assemble-only for shared-prelude prompt assembly.
 - `scripts/apply_audit_gate_assets.py` — Apply canonical audit-gate assets atomically to a repository.
+- `scripts/assemble_prompt.sh` — Shell wrapper over render_prompt.py --assemble-only for shared-prelude prompt assembly.
 - `scripts/audit_consumer_drift.py` — Audit consumer workflow-wrapper drift against checked-in templates.
 - `scripts/blocker_check.py` — Python helper for blocker check.
 - `scripts/build_semble_wrapper.sh` — build_semble_wrapper.sh — fail-soft Semble BM25 wrapper builder.
