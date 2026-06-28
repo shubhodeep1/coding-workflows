@@ -22,6 +22,7 @@ import textwrap
 REPO_ROOT = Path(__file__).resolve().parent.parent
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 IMPLEMENT_COMMIT_SCRIPT = REPO_ROOT / "scripts" / "implement_commit_changes.sh"
+FILES_TOUCHED_SCOPE_GUARD = REPO_ROOT / "scripts" / "files_touched_scope_guard.py"
 
 
 def _workflow_text() -> str:
@@ -423,8 +424,11 @@ def _copy_diagnose_assets(repo_dir: Path) -> None:
 	for rel in (
 		"scripts/gh_helpers.sh",
 		"scripts/implement_diagnose_post_codex_failure.sh",
+		"scripts/render_prompt.py",
 		"scripts/render_prompt.sh",
 		"scripts/validate_changed_files_syntax.sh",
+		"prompts/contracts/mode-implement-diagnose.yml",
+		"prompts/references/output-contract.txt",
 		"prompts/mode-implement-diagnose.txt",
 		"prompts/mode-implement-repair-syntax.txt",
 	):
@@ -1382,6 +1386,80 @@ def test_commit_helper_treats_unset_fetched_manifest_as_empty() -> None:
 		assert "did_commit=false" in github_output.read_text(encoding="utf-8")
 
 
+def test_commit_helper_rolls_back_post_commit_scope_lock_violation() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_scope_lock_") as td:
+		tmp_path = Path(td)
+		repo_dir = tmp_path / "repo"
+		_bootstrap_git_repo(repo_dir)
+		(repo_dir / "scripts").mkdir()
+		shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, repo_dir / "scripts" / "implement_commit_changes.sh")
+		shutil.copy2(FILES_TOUCHED_SCOPE_GUARD, repo_dir / "scripts" / "files_touched_scope_guard.py")
+		_git(["git", "add", "scripts/implement_commit_changes.sh", "scripts/files_touched_scope_guard.py"], cwd=repo_dir)
+		_git(["git", "commit", "-m", "add scope helpers"], cwd=repo_dir)
+		baseline_head = subprocess.run(
+			["git", "rev-parse", "HEAD"],
+			cwd=str(repo_dir),
+			env=_isolated_test_env(cwd=repo_dir),
+			check=True,
+			capture_output=True,
+			text=True,
+		).stdout.strip()
+
+		(repo_dir / "README.md").write_text("out of scope change\n", encoding="utf-8")
+		github_output = tmp_path / "github_output.txt"
+		github_output.write_text("", encoding="utf-8")
+		runtime_dir = tmp_path / "runtime"
+		runtime_dir.mkdir()
+		env = _isolated_test_env(
+			{
+				"GITHUB_OUTPUT": str(github_output),
+				"GITHUB_REPOSITORY": "owner/repo",
+				"ISSUE_NUMBER": "948",
+				"ISSUE_SCOPE_LOCK_GLOB": "scripts/**/*.sh",
+				"RUNTIME_DIR": str(runtime_dir),
+				"SCOPE_LOCK_LABEL_ENABLED": "true",
+				"SERENA_PROJECT_BOOTSTRAP_HASH": "",
+				"SERENA_PROJECT_PREEXISTED": "false",
+				"TMPDIR": str(runtime_dir),
+			},
+			cwd=repo_dir,
+		)
+
+		proc = subprocess.run(
+			["bash", "scripts/implement_commit_changes.sh"],
+			cwd=str(repo_dir),
+			env=env,
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+		assert proc.returncode != 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		output_text = github_output.read_text(encoding="utf-8")
+		assert "scope_violation_blocked=scope-lock-label" in output_text
+		assert "README.md" in output_text
+		assert "scripts/**/*.sh" in output_text
+
+		head_after = subprocess.run(
+			["git", "rev-parse", "HEAD"],
+			cwd=str(repo_dir),
+			env=_isolated_test_env(cwd=repo_dir),
+			check=True,
+			capture_output=True,
+			text=True,
+		).stdout.strip()
+		assert head_after == baseline_head, "scope-lock violation must roll back the local commit before push"
+
+		status = subprocess.run(
+			["git", "status", "--porcelain"],
+			cwd=str(repo_dir),
+			env=_isolated_test_env(cwd=repo_dir),
+			check=True,
+			capture_output=True,
+			text=True,
+		).stdout.strip()
+		assert status == "", "scope-lock rollback must leave the repo clean after rejecting the local commit"
+
+
 def test_validate_step_uses_reusable_validator_with_continue_on_error() -> None:
 	validate_block = _step_block_text("Validate syntax of changed files")
 	assert "continue-on-error: true" in validate_block
@@ -1511,12 +1589,28 @@ def test_scope_guard_allowlist_and_workflow_rollback_contracts_present() -> None
 	assert "total_deletions=999999" in commit_helper
 	assert "Non-numeric non-markdown deletion count" in commit_helper
 	assert "non_md_count=1" in commit_helper
+	assert "scope_violation_blocked=scope-lock-label" in commit_helper
+	assert "--allowlist-file" in commit_helper
+	assert "git diff-tree --no-commit-id --name-only --diff-filter=ACMRD -r --root --no-renames HEAD" in commit_helper
+	assert "git reset --hard HEAD^" in commit_helper
 
 	protect_block = _step_block_text("Protect workflow files from implementation edits")
 	assert 'git cat-file -e HEAD:.github/workflows >/dev/null 2>&1 || [ -d .github/workflows ]' in protect_block
 	assert 'git cat-file -e HEAD:.github/workflows >/dev/null 2>&1' in protect_block
 	assert "git restore --source=HEAD --staged --worktree .github/workflows" in protect_block
 	assert "git clean -fd -- .github/workflows" in protect_block
+
+
+def test_scope_lock_workflow_wiring_contracts_present() -> None:
+	wf = _workflow_text()
+	build_context_block = _step_block_text("Build implementation context")
+	scope_alert_block = _step_block_text("Destructive-commit guard — label + alert on rejection")
+	assert "SCOPE_LOCK_LABEL_ENABLED: ${{ vars.SCOPE_LOCK_LABEL_ENABLED || 'false' }}" in wf
+	assert 'select(startswith("ai:scope:"))' in wf
+	assert "ISSUE_SCOPE_LOCK_GLOB<<EOF" in wf
+	assert "ACTIVE ISSUE SCOPE LOCK" in build_context_block
+	assert "Issue label: ai:scope:" in build_context_block
+	assert "scope-lock-label" in scope_alert_block
 
 
 def test_protect_workflow_files_restores_deleted_workflow_directory() -> None:
@@ -1589,11 +1683,26 @@ def test_diagnose_prompt_contract_round_trip_and_fixup_metadata():
 		codex_payload = {
 			"status": "needs_fixes",
 			"diagnosis": "Validator failed after Codex edits.",
+			"evidence_trace": [
+				{
+					"file": "broken.yml",
+					"line": 3,
+					"function": "document",
+					"observation": "The YAML scanner error occurs on the failing line captured by the validator.",
+				},
+				{
+					"file": "scripts/validate_changed_files_syntax.sh",
+					"line": 12,
+					"function": "parse_capture",
+					"observation": "The syntax validator is the entrypoint that surfaced the broken YAML capture.",
+				},
+			],
+			"hypothesis": "Repairing the syntax-capture parsing path will let the validator consume the failing YAML safely.",
 			"fix_issues": [
 				{
 					"id": "implement-fix-1",
 					"title": "Repair syntax capture and parsing",
-					"body": "Fix parser output and re-run implementation.",
+					"body": "Fix parser output and re-run implementation.\n\nEvidence trace:\n- broken.yml:3 in document — the YAML scanner error occurs on the failing line.\n- scripts/validate_changed_files_syntax.sh:12 in parse_capture — the validator surfaced the broken YAML capture.\n\nHypothesis:\n- Repairing the syntax-capture parsing path will let the validator consume the failing YAML safely.",
 					"priority": 1,
 					"depends_on": [],
 				}
@@ -1617,6 +1726,8 @@ def test_diagnose_prompt_contract_round_trip_and_fixup_metadata():
 		assert isinstance(result, dict)
 		assert result.get("status") in {"needs_fixes", "harness_error", "infeasible"}
 		assert isinstance(result.get("diagnosis"), str)
+		assert result.get("evidence_trace") == codex_payload["evidence_trace"]
+		assert result.get("hypothesis") == codex_payload["hypothesis"]
 		assert isinstance(result.get("fix_issues"), list)
 		assert isinstance(result.get("harness_fixes"), str)
 
@@ -1645,6 +1756,8 @@ def test_diagnose_prompt_contract_round_trip_and_fixup_metadata():
 		assert "Type: implement-fix-up (post-codex-validation)" in body
 		assert "Source issue: #948" in body
 		assert f"Failed step: {failed_step}" in body
+		assert "Evidence trace:" in body
+		assert "Hypothesis:" in body
 
 		created_labels = {entry.get("name") for entry in state.get("label_creates", [])}
 		assert "ai:clarification" in created_labels
@@ -1671,6 +1784,60 @@ def test_diagnose_prompt_contract_round_trip_and_fixup_metadata():
 		assert "ai:awaiting-approval" not in labels
 
 
+def test_diagnose_prompt_includes_iron_law_trace_contract():
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		proc, _state, runtime_dir, paths = _run_diagnose_step(
+			tmp_path,
+			issue_labels=["ai:implementing"],
+			capture_contents="===== broken.yml =====\nerror\n",
+			codex_mode="success",
+			codex_output={
+				"status": "needs_fixes",
+				"diagnosis": "diag",
+				"evidence_trace": [
+					{
+						"file": "broken.yml",
+						"line": 1,
+						"function": "document",
+						"observation": "error",
+					}
+				],
+				"hypothesis": "diag hypothesis",
+				"fix_issues": [
+					{
+						"id": "fix-1",
+						"title": "Fix 1",
+						"body": "Body\n\nEvidence trace:\n- broken.yml:1 in document — error\n\nHypothesis:\n- diag hypothesis",
+						"priority": 1,
+						"depends_on": [],
+					}
+				],
+				"harness_fixes": "",
+			},
+			failed_step_name="Validate syntax of changed files",
+			issue_body="Tracking issue: #829\n",
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		stdin_prompt = _read_file(paths["stdin_file"])
+		rendered_prompt = _read_file(str(runtime_dir / "mode-implement-diagnose.rendered.txt"))
+		assert "Iron Law of Investigation" in stdin_prompt
+		assert "`evidence_trace`" in stdin_prompt
+		assert "`hypothesis`" in stdin_prompt
+		assert "Repeat the relevant trace and hypothesis inside each `fix_issues[].body`" in stdin_prompt
+		assert "do not propose a 4th fix" in stdin_prompt
+		assert "as a normal `fix_issues[]` entry" in stdin_prompt
+		assert "Do not add any new top-level JSON keys." in stdin_prompt
+		assert 'return `status: "infeasible"`' in stdin_prompt
+		assert "For `harness_error` or `infeasible`, they may be empty" in stdin_prompt
+		assert rendered_prompt
+		assert "DIAGNOSE_TRACE_REQUIRED=true" in rendered_prompt
+		assert "{{DIAGNOSE_TRACE_REQUIRED}}" not in rendered_prompt
+		assert "{{REFERENCE_OUTPUT_CONTRACT}}" not in rendered_prompt
+		assert "render_prompt.py not found" not in proc.stderr
+
+
 def test_diagnose_invokes_codex_when_capture_exists_and_issue_is_not_already_failed():
 	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
 		tmp_path = Path(td)
@@ -1682,6 +1849,10 @@ def test_diagnose_invokes_codex_when_capture_exists_and_issue_is_not_already_fai
 			codex_output={
 				"status": "needs_fixes",
 				"diagnosis": "diag",
+				"evidence_trace": [
+					{"file": "broken.yml", "line": 1, "function": "document", "observation": "error"},
+				],
+				"hypothesis": "diag hypothesis",
 				"fix_issues": [{"id": "fix-1", "title": "Fix 1", "body": "Body", "priority": 1, "depends_on": []}],
 				"harness_fixes": "",
 			},
@@ -1696,7 +1867,6 @@ def test_diagnose_invokes_codex_when_capture_exists_and_issue_is_not_already_fai
 		call_args = json.loads(call_lines[0])
 		assert "exec" in call_args
 		assert "--model" in call_args
-
 
 def test_diagnose_reuses_matching_issue_meta_body_without_issue_api_fallback() -> None:
 	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
@@ -1836,6 +2006,10 @@ def test_diagnose_posts_dependency_notes_for_fix_issue_edges():
 			codex_output={
 				"status": "needs_fixes",
 				"diagnosis": "diag",
+				"evidence_trace": [
+					{"file": "broken.yml", "line": 1, "function": "document", "observation": "error"},
+				],
+				"hypothesis": "diag hypothesis",
 				"fix_issues": [
 					{"id": "fix-a", "title": "Fix A", "body": "Body A", "priority": 1, "depends_on": []},
 					{"id": "fix-b", "title": "Fix B", "body": "Body B", "priority": 2, "depends_on": ["fix-a"]},
@@ -2091,6 +2265,8 @@ def test_fallback_creates_deterministic_fixup_issue_when_diagnose_output_invalid
 			result = json.loads(_read_file(paths["result_file"]))
 			assert result.get("status") == "needs_fixes"
 			assert "Fallback fix-up issue created" in result.get("diagnosis", "")
+			assert result.get("evidence_trace")
+			assert isinstance(result.get("hypothesis"), str) and result["hypothesis"]
 
 			created_issues = state.get("created_issues", [])
 			assert len(created_issues) == 1
@@ -2101,10 +2277,56 @@ def test_fallback_creates_deterministic_fixup_issue_when_diagnose_output_invalid
 			assert "ai:implement-fix-up" in created["args"]
 			assert "ai:orchestrator-managed" not in created["args"]
 			assert "The diagnose step could not produce a valid JSON contract" in created["body"]
+			assert "Evidence trace:" in created["body"]
+			assert "Hypothesis:" in created["body"]
 			assert "yaml parse failed on alpha.yml" in created["body"]
 			assert "Type: implement-fix-up (post-codex-validation)" in created["body"]
 			assert "Tracking issue: #829" in created["body"]
 			assert "ai:implementation-failed" in state.get("issue_labels", [])
+
+
+def test_empty_fix_issues_fallback_preserves_trace_context():
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		evidence_trace = [
+			{
+				"file": "broken.yml",
+				"line": 1,
+				"function": "document",
+				"observation": "error",
+			}
+		]
+		hypothesis = "diag hypothesis"
+		proc, state, _runtime_dir, paths = _run_diagnose_step(
+			tmp_path,
+			issue_labels=["ai:implementing"],
+			capture_contents="===== broken.yml =====\nerror\n",
+			codex_mode="success",
+			codex_output={
+				"status": "needs_fixes",
+				"diagnosis": "diag",
+				"evidence_trace": evidence_trace,
+				"hypothesis": hypothesis,
+				"fix_issues": [],
+				"harness_fixes": "",
+			},
+			failed_step_name="Validate syntax of changed files",
+			issue_body="Tracking issue: #829\n",
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		result = json.loads(_read_file(paths["result_file"]))
+		assert result.get("evidence_trace") == evidence_trace
+		assert result.get("hypothesis") == hypothesis
+
+		created_issues = state.get("created_issues", [])
+		assert len(created_issues) == 1
+		created = created_issues[0]
+		assert created["title"] == "Implement phase diagnose returned empty fix_issues"
+		assert "Evidence trace:" in created["body"]
+		assert "- broken.yml:1 in document — error" in created["body"]
+		assert "Hypothesis:" in created["body"]
+		assert hypothesis in created["body"]
 
 
 def test_out_of_scope_noop_when_capture_file_missing():
@@ -2629,6 +2851,13 @@ def test_yaml_quoting_clause_in_implement_prompt() -> None:
 		"mode-implement.txt must reference the validator that enforces "
 		"the rule, so the model knows the cost of getting this wrong"
 	)
+
+
+def test_scope_lock_clause_in_implement_prompt() -> None:
+	body = (REPO_ROOT / "prompts" / "mode-implement.txt").read_text(encoding="utf-8")
+	assert "Scope-lock discipline" in body
+	assert "ai:scope:<glob>" in body
+	assert "`BLOCKED: scope-lock-violation file=<path>`" in body
 
 
 def test_validator_diagnostic_surfaces_offending_lines() -> None:

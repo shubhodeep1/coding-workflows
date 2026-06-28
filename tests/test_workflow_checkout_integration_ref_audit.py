@@ -32,6 +32,7 @@ ALLOWLIST_EXCEPTIONS = {
 	"orchestrate.yml": "Project bootstrap workflow has no integration-branch metadata at checkout time.",
 	"orchestrate_poll.yml": "Poller handles multiple tracking issues per run; a single checkout integration ref is undefined.",
 	"review_autofix.yml": "PR review/autofix operates on PR refs rather than orchestrator integration metadata.",
+	"security-audit.yml": "Scheduled/manual default-branch security audit is a source-repo maintenance workflow, not an orchestrator issue-phase checkout path.",
 	"sync_ai_labels.yml": "Repository label-sync maintenance manages ai:* labels and does not execute orchestrator issue phases.",
 	"test-and-mark-stable.yml": "Release test workflow checks specific refs/tags and is outside orchestrator phase execution.",
 	"comprehensive-test-and-release.yml": "Comprehensive release conductor dispatches downstream workflows and does not execute tracking-issue integration-ref checkout.",

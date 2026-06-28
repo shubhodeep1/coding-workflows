@@ -33,11 +33,20 @@ on:
         required: false
         default: ""
         type: string
+  schedule:
+    - cron: "0 9 * * 1"
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   ALERT_MSG_LEVEL: ${{ (github.event.inputs.alert_msg_level || '') != '' && github.event.inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
+  WORKFLOW_RETRO_ENABLED: ${{ vars.WORKFLOW_RETRO_ENABLED || 'false' }}
+  WORKFLOW_RETRO_MODEL: ${{ vars.WORKFLOW_RETRO_MODEL || 'openai/gpt-5.4-mini' }}
+  WORKFLOW_RETRO_REASONING: ${{ vars.WORKFLOW_RETRO_REASONING || 'medium' }}
+  # GitHub does not interpolate vars into `on.schedule`, so this default must
+  # stay aligned with the literal cron above. The job gate uses it to fail
+  # closed if a future schedule is added without updating the retro path.
+  WORKFLOW_RETRO_CRON: ${{ vars.WORKFLOW_RETRO_CRON || '0 9 * * 1' }}
 
 permissions:
   contents: write
@@ -50,6 +59,7 @@ concurrency:
 
 jobs:
   collect-logs:
+    if: ${{ github.event_name != 'schedule' || ((vars.WORKFLOW_RETRO_ENABLED || 'false') == 'true' && github.event.schedule == (vars.WORKFLOW_RETRO_CRON || '0 9 * * 1')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -73,7 +83,9 @@ jobs:
 
           declare -a repos=()
 
-          if [ -n "${OVERRIDE_INPUT//[[:space:]]/}" ]; then
+          if [ "${GITHUB_EVENT_NAME}" = "schedule" ]; then
+            repos+=("${GITHUB_REPOSITORY}")
+          elif [ -n "${OVERRIDE_INPUT//[[:space:]]/}" ]; then
             IFS=',' read -r -a override_repos <<< "${OVERRIDE_INPUT}"
             for raw_repo in "${override_repos[@]}"; do
               repo="$(printf '%s' "${raw_repo}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
@@ -175,8 +187,424 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  weekly-retro:
+    needs: collect-logs
+    if: ${{ github.event_name == 'schedule' && (vars.WORKFLOW_RETRO_ENABLED || 'false') == 'true' && github.event.schedule == (vars.WORKFLOW_RETRO_CRON || '0 9 * * 1') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Cache Codex CLI
+        id: cache-codex
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.tool_cache }}/codex
+          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}-v2
+
+      - name: Install Codex CLI
+        if: steps.cache-codex.outputs.cache-hit != 'true'
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
+        with:
+          codex_version: ${{ env.CODEX_VERSION }}
+
+      - name: Persist Codex CLI to tool cache
+        if: steps.cache-codex.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          NPM_GLOBAL_ROOT="$(npm root -g)"
+          mkdir -p "${{ runner.tool_cache }}/codex"
+          [ -d "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64" ] || {
+            echo "::error::Codex platform package @openai/codex-linux-x64 missing after install"
+            exit 1
+          }
+          cp -r "${NPM_GLOBAL_ROOT}/@openai/codex"           "${{ runner.tool_cache }}/codex/package"
+          cp -r "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64" "${{ runner.tool_cache }}/codex/codex-linux-x64"
+
+      - name: Restore Codex CLI from cache
+        if: steps.cache-codex.outputs.cache-hit == 'true'
+        run: |
+          set -euo pipefail
+          NPM_GLOBAL_ROOT="$(npm root -g)"
+          NPM_GLOBAL_PREFIX="$(npm prefix -g)"
+          mkdir -p "${NPM_GLOBAL_ROOT}/@openai" "${NPM_GLOBAL_PREFIX}/bin"
+          rm -rf "${NPM_GLOBAL_ROOT}/@openai/codex" "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64"
+          cp -r "${{ runner.tool_cache }}/codex/package" "${NPM_GLOBAL_ROOT}/@openai/codex"
+          cp -r "${{ runner.tool_cache }}/codex/codex-linux-x64" "${NPM_GLOBAL_ROOT}/@openai/codex-linux-x64"
+          ln -sf "${NPM_GLOBAL_ROOT}/@openai/codex/bin/codex.js" "${NPM_GLOBAL_PREFIX}/bin/codex"
+          codex --version
+
+      - name: Create Codex config
+        run: |
+          set -euo pipefail
+          bash scripts/write_codex_config.sh \
+            --model "${WORKFLOW_RETRO_MODEL}" \
+            --reasoning "${WORKFLOW_RETRO_REASONING}"
+          echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
+
+      - name: Setup uv (Semble)
+        if: env.SEMBLE_ENABLED == 'true'
+        continue-on-error: true
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install semble
+        if: env.SEMBLE_ENABLED == 'true'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"
+          bash scripts/install_semble.sh
+
+      - name: Build semble index
+        if: env.SEMBLE_ENABLED == 'true'
+        continue-on-error: true
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+          SEMBLE_INDEX_PATH: ${{ runner.temp }}/.semble-index
+        run: |
+          set -euo pipefail
+          if [ -f scripts/build_semble_wrapper.sh ]; then
+            bash scripts/build_semble_wrapper.sh
+          else
+            echo "::notice::scripts/build_semble_wrapper.sh not present; continuing without Semble index."
+            echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: Download workflow log report artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: workflow-log-report
+          path: .
+
+      - name: Build weekly retro context
+        id: retro_context
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+
+          RETRO_CONTEXT_FILE="${RUNNER_TEMP:-/tmp}/workflow-weekly-retro-context.md"
+          RETRO_JSON_FILE="${RUNNER_TEMP:-/tmp}/workflow-weekly-retro-context.json"
+
+          python3 scripts/workflow_retro.py \
+            --report workflow_log_report.json \
+            --output "${RETRO_CONTEXT_FILE}" \
+            --json-output "${RETRO_JSON_FILE}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --repo-root "${GITHUB_WORKSPACE}"
+
+          echo "retro_context_file=${RETRO_CONTEXT_FILE}" >> "$GITHUB_OUTPUT"
+          echo "retro_json_file=${RETRO_JSON_FILE}" >> "$GITHUB_OUTPUT"
+          echo "week_label=$(jq -r '.window.week_label' "${RETRO_JSON_FILE}")" >> "$GITHUB_OUTPUT"
+          echo "window_since=$(jq -r '.window.since' "${RETRO_JSON_FILE}")" >> "$GITHUB_OUTPUT"
+
+      - name: Run weekly retro pass
+        id: retro
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          MAX_CODEX_ATTEMPTS: ${{ vars.MAX_CODEX_ATTEMPTS || '3' }}
+          CODEX_RETRY_BACKOFF_BASE_SECS: ${{ vars.CODEX_RETRY_BACKOFF_BASE_SECS || '10' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+          RETRO_CONTEXT_FILE: ${{ steps.retro_context.outputs.retro_context_file }}
+          RETRO_JSON_FILE: ${{ steps.retro_context.outputs.retro_json_file }}
+        run: |
+          set -euo pipefail
+
+          source scripts/gh_helpers.sh 2>/dev/null || true
+
+          RETRO_BODY_FILE="${RUNNER_TEMP:-/tmp}/workflow-weekly-retro.md"
+          CODEX_PROMPT_FILE="$(mktemp)"
+          trap 'rm -f "${CODEX_PROMPT_FILE}"' EXIT
+
+          RETRO_SEMBLE_PREFETCH=""
+          if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] && [ -f scripts/semble_helpers.sh ]; then
+            # shellcheck disable=SC1091
+            source scripts/semble_helpers.sh || true
+            if type semble_query_block >/dev/null 2>&1; then
+              retro_query_text="$(head -c 6000 "${RETRO_CONTEXT_FILE}" 2>/dev/null | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null || true)"
+              if [ -n "${retro_query_text}" ]; then
+                RETRO_SEMBLE_PREFETCH="$(semble_query_block "${retro_query_text}" 6 "Workflow Weekly Retro Context" 2>/dev/null || true)"
+              fi
+            fi
+          fi
+
+          {
+            echo "Mode: retro"
+            SEMBLE_PREFETCH="${RETRO_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-workflow-analysis.txt
+            echo
+            echo "=== WEEKLY RETRO CONTEXT ==="
+            cat "${RETRO_CONTEXT_FILE}"
+            echo
+            echo "=== WEEKLY RETRO JSON ==="
+            cat "${RETRO_JSON_FILE}"
+          } > "${CODEX_PROMPT_FILE}"
+
+          max_attempts="${MAX_CODEX_ATTEMPTS}"
+          if ! [[ "${max_attempts}" =~ ^[0-9]+$ ]] || [ "${max_attempts}" -lt 1 ]; then
+            echo "::warning::MAX_CODEX_ATTEMPTS must be a positive integer (got: ${max_attempts}); defaulting to 3."
+            max_attempts="3"
+          fi
+          backoff_base="${CODEX_RETRY_BACKOFF_BASE_SECS}"
+          if ! [[ "${backoff_base}" =~ ^[0-9]+$ ]] || [ "${backoff_base}" -lt 1 ]; then
+            echo "::warning::CODEX_RETRY_BACKOFF_BASE_SECS must be a positive integer (got: ${backoff_base}); defaulting to 10."
+            backoff_base=10
+          fi
+
+          RETRO_EXIT=0
+          for attempt in $(seq 1 "${max_attempts}"); do
+            if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+              sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
+            fi
+            set +e
+            bash scripts/codex_heartbeat.sh \
+              --phase workflow_weekly_retro \
+              --stdout-file "${RETRO_BODY_FILE}" \
+              -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_RETRO_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-weekly-retro-codex.log >&2)
+            RETRO_EXIT=$?
+            set -e
+            if [ "${RETRO_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${RETRO_BODY_FILE}"; then
+              break
+            fi
+            if [ "${attempt}" -lt "${max_attempts}" ]; then
+              sleep_secs=$((backoff_base * (2 ** (attempt - 1))))
+              sleep "${sleep_secs}"
+            else
+              if [ "${RETRO_EXIT}" -eq 0 ]; then
+                echo "::error::Weekly retro Codex returned empty output after ${max_attempts} attempts."
+                exit 1
+              fi
+              echo "::error::Weekly retro Codex failed after ${max_attempts} attempts with exit code ${RETRO_EXIT}."
+              exit "${RETRO_EXIT}"
+            fi
+          done
+
+          if ! head -n1 "${RETRO_BODY_FILE}" | grep -qx '## Weekly Retro'; then
+            echo "::error::Weekly retro Codex output did not start with the required '## Weekly Retro' heading."
+            head -n5 "${RETRO_BODY_FILE}" >&2 || true
+            exit 1
+          fi
+
+          required_headings=(
+            "## Weekly Retro"
+            "### What Worked"
+            "### Failure Modes"
+            "### Next Week Recommendation"
+            "### Metrics Snapshot"
+          )
+          previous_heading_line=0
+          for heading in "${required_headings[@]}"; do
+            heading_line="$(grep -nFx "${heading}" "${RETRO_BODY_FILE}" | head -n1 | cut -d: -f1 || true)"
+            if [ -z "${heading_line}" ]; then
+              echo "::error::Weekly retro Codex output is missing required heading: ${heading}"
+              exit 1
+            fi
+            if [ "${heading_line}" -le "${previous_heading_line}" ]; then
+              echo "::error::Weekly retro Codex output has headings out of order at: ${heading}"
+              exit 1
+            fi
+            previous_heading_line="${heading_line}"
+          done
+
+          echo "retro_status=completed" >> "$GITHUB_OUTPUT"
+          echo "retro_body_file=${RETRO_BODY_FILE}" >> "$GITHUB_OUTPUT"
+
+      - name: Upsert weekly retro tracker comment
+        id: post_retro
+        if: steps.retro.outputs.retro_status == 'completed'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          RETRO_BODY_FILE: ${{ steps.retro.outputs.retro_body_file }}
+          RETRO_WEEK_LABEL: ${{ steps.retro_context.outputs.week_label }}
+          RETRO_WINDOW_SINCE: ${{ steps.retro_context.outputs.window_since }}
+        run: |
+          set -euo pipefail
+
+          if [ ! -s "${RETRO_BODY_FILE}" ]; then
+            echo "::error::Weekly retro body file missing: ${RETRO_BODY_FILE}"
+            exit 1
+          fi
+
+          # shellcheck disable=SC1091
+          source scripts/label_helpers.sh
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+
+          TRACKER_TITLE="AI Workflow Weekly Retro"
+          TRACKER_MARKER="<!-- ai:retro-tracker:v1 -->"
+          COMMENT_MARKER="<!-- ai:workflow-retro:${RETRO_WEEK_LABEL} -->"
+          RETRO_RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          RETRO_RUNTIME_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/workflow-weekly-retro.XXXXXX")"
+          trap 'rm -rf "${RETRO_RUNTIME_DIR}"' EXIT
+          TRACKER_BODY_FILE="${RETRO_RUNTIME_DIR}/tracker-issue-body.md"
+          TRACKER_CANDIDATES_JSON="${RETRO_RUNTIME_DIR}/tracker-candidates.json"
+          TRACKER_SELECTION_ENV="${RETRO_RUNTIME_DIR}/tracker-selection.env"
+          TRACKER_COMMENTS_JSON="${RETRO_RUNTIME_DIR}/tracker-comments.json"
+          TRACKER_COMMENT_FILE="${RETRO_RUNTIME_DIR}/tracker-comment.md"
+          TRACKER_COMMENT_PAYLOAD="${RETRO_RUNTIME_DIR}/tracker-comment-payload.json"
+
+          cat > "${TRACKER_BODY_FILE}" <<EOF
+          ${TRACKER_MARKER}
+          # ${TRACKER_TITLE}
+
+          This issue is managed by .github/workflows/workflow-log-analysis.yml.
+
+          It collects source-repo weekly workflow retrospectives posted by the
+          schedule-gated retro path.
+          EOF
+
+          ensure_label_exists "ai:retro" "${GITHUB_REPOSITORY}"
+
+          gh_retry gh issue list \
+            --repo "${GITHUB_REPOSITORY}" \
+            --state all \
+            --label "ai:retro" \
+            --limit 50 \
+            --json number,title,body,state,updatedAt,url > "${TRACKER_CANDIDATES_JSON}"
+
+          python3 - "${TRACKER_CANDIDATES_JSON}" "${TRACKER_MARKER}" > "${TRACKER_SELECTION_ENV}" <<'PY'
+          from __future__ import annotations
+
+          import json
+          import shlex
+          import sys
+          from pathlib import Path
+
+          candidates_path = Path(sys.argv[1])
+          marker = sys.argv[2]
+
+          try:
+              candidates = json.loads(candidates_path.read_text(encoding="utf-8"))
+          except (OSError, json.JSONDecodeError) as exc:
+              raise SystemExit(f"failed to load retro tracker candidates: {exc}")
+
+          selected_candidates = []
+          for candidate in candidates:
+              if not isinstance(candidate, dict):
+                  continue
+              body = str(candidate.get("body") or "")
+              if marker not in body:
+                  continue
+              selected_candidates.append(candidate)
+
+          selected_candidates.sort(
+              key=lambda candidate: (
+                  str(candidate.get("state") or "").upper() == "OPEN",
+                  str(candidate.get("updatedAt") or ""),
+                  int(candidate.get("number") or 0),
+              ),
+              reverse=True,
+          )
+          selected = selected_candidates[0] if selected_candidates else None
+
+          number = ""
+          state = ""
+          if isinstance(selected, dict):
+              number = str(selected.get("number") or "").strip()
+              state = str(selected.get("state") or "").strip()
+
+          print(f"TRACKER_NUMBER={shlex.quote(number)}")
+          print(f"TRACKER_STATE={shlex.quote(state)}")
+          PY
+
+          # shellcheck disable=SC1090
+          source "${TRACKER_SELECTION_ENV}"
+
+          if [ -z "${TRACKER_NUMBER}" ]; then
+            TRACKER_URL="$(gh_retry gh issue create \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "${TRACKER_TITLE}" \
+              --label "ai:retro" \
+              --body-file "${TRACKER_BODY_FILE}")"
+            TRACKER_NUMBER="${TRACKER_URL##*/}"
+          else
+            if [ "$(printf '%s' "${TRACKER_STATE}" | tr '[:lower:]' '[:upper:]')" = "CLOSED" ]; then
+              gh_retry gh issue reopen "${TRACKER_NUMBER}" --repo "${GITHUB_REPOSITORY}"
+            fi
+            gh_retry gh issue edit "${TRACKER_NUMBER}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:retro" >/dev/null
+          fi
+
+          {
+            echo "${COMMENT_MARKER}"
+            echo
+            echo "_Workflow run: ${RETRO_RUN_URL}_"
+            echo
+            cat "${RETRO_BODY_FILE}"
+          } > "${TRACKER_COMMENT_FILE}"
+
+          # Query only the current retro window so the week-scoped comment upsert
+          # stays bounded even as the tracker grows over time.
+          gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKER_NUMBER}/comments?since=${RETRO_WINDOW_SINCE}&per_page=100" > "${TRACKER_COMMENTS_JSON}"
+
+          existing_comment_id="$(jq -r --arg marker "${COMMENT_MARKER}" '([.[] | select(((.body // "") | contains($marker))) | {id: ((.id // 0) | tonumber), body: (.body // "")}] | sort_by(.id) | last | .id) // empty' "${TRACKER_COMMENTS_JSON}" 2>/dev/null || echo "")"
+          existing_comment_body="$(jq -r --arg marker "${COMMENT_MARKER}" '([.[] | select(((.body // "") | contains($marker))) | {id: ((.id // 0) | tonumber), body: (.body // "")}] | sort_by(.id) | last | .body) // ""' "${TRACKER_COMMENTS_JSON}" 2>/dev/null || echo "")"
+
+          if [ -n "${existing_comment_id}" ] && [ "${existing_comment_body}" = "$(cat "${TRACKER_COMMENT_FILE}")" ]; then
+            echo "Weekly retro comment already up to date (#${existing_comment_id})."
+            exit 0
+          fi
+
+          jq -n --rawfile body "${TRACKER_COMMENT_FILE}" '{body: $body}' > "${TRACKER_COMMENT_PAYLOAD}"
+
+          if [ -n "${existing_comment_id}" ] && [[ "${existing_comment_id}" =~ ^[0-9]+$ ]]; then
+            if gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing_comment_id}" --input "${TRACKER_COMMENT_PAYLOAD}" >/dev/null 2>&1; then
+              echo "Weekly retro comment refreshed (#${existing_comment_id}) on issue #${TRACKER_NUMBER}."
+              exit 0
+            fi
+            echo "::warning::Failed to refresh weekly retro comment #${existing_comment_id}; will try posting a new comment."
+          fi
+
+          gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${TRACKER_NUMBER}/comments" --input "${TRACKER_COMMENT_PAYLOAD}" >/dev/null
+          echo "Weekly retro comment posted on issue #${TRACKER_NUMBER}."
+
+      - name: Send Telegram notification
+        if: always()
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_ADMIN_CHAT_ID:-}" ]; then
+            echo "::warning::Telegram not configured (TG_BOT_SECRET or TG_ADMIN_CHAT_ID missing) — skipping notification."
+            exit 0
+          fi
+
+          if [ ! -f scripts/tg_helpers.sh ]; then
+            echo "::warning::scripts/tg_helpers.sh not found — skipping Telegram notification."
+            exit 0
+          fi
+
+          source scripts/tg_helpers.sh
+
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          RETRO_STEP_OUTCOME="${{ steps.retro.outcome || 'skipped' }}"
+          POST_STEP_OUTCOME="${{ steps.post_retro.outcome || 'skipped' }}"
+          if [ "${RETRO_STEP_OUTCOME}" = "success" ] && [ "${POST_STEP_OUTCOME}" = "success" ]; then
+            MSG="Weekly workflow retro posted for ${{ github.repository }}"
+            ALERT_LEVEL="DEBUG"
+          else
+            MSG="Weekly workflow retro FAILED for ${{ github.repository }} (retro=${RETRO_STEP_OUTCOME}, post=${POST_STEP_OUTCOME})"
+            ALERT_LEVEL="CRITICAL"
+          fi
+          MSG+=$'\n'
+          MSG+="Run: ${RUN_URL}"
+          tg_send_msg "${MSG}" "${ALERT_LEVEL}" >/dev/null
+
   analyze-commit-notify:
     needs: collect-logs
+    if: ${{ github.event_name != 'schedule' }}
     runs-on: ubuntu-latest
     # Run #25558885206 cancelled at 30m 14s on this job (Codex pass alone
     # ran ~26m 31s — start 13:47:06, ##[error]The operation was canceled
@@ -824,7 +1252,7 @@ jobs:
 
   deep-audit:
     needs: analyze-commit-notify
-    if: success() && needs.analyze-commit-notify.outputs.analysis_status == 'completed'
+    if: ${{ github.event_name != 'schedule' && success() && needs.analyze-commit-notify.outputs.analysis_status == 'completed' }}
     runs-on: ubuntu-latest
     # Bumped 30 → 45 after run #25088541089 cancelled at 30m 16s — the
     # original 30m budget gave no headroom for LLM latency variance, and
@@ -1301,7 +1729,7 @@ jobs:
 
   api-redundancy:
     needs: [analyze-commit-notify, deep-audit]
-    if: success() && needs.deep-audit.outputs.audit_status == 'completed'
+    if: ${{ github.event_name != 'schedule' && success() && needs.deep-audit.outputs.audit_status == 'completed' }}
     runs-on: ubuntu-latest
     # Bumped 30 → 60 after run 25115192726 cancelled at 30m19s on this job
     # — Codex was still mid-analysis ("considering whether I can combine

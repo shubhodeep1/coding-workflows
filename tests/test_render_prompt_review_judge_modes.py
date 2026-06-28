@@ -27,6 +27,38 @@ CONSOLIDATOR_ALIAS_SENTINEL = (
 	"Reviewer-side `BLOCKER` maps to `blocker`; `MAJOR` maps to `high`; `NIT` maps to `med`."
 )
 JUDGE_SEVERITY_SENTINEL = "SEVERITY: BLOCKER|MAJOR|NIT"
+CONSOLIDATOR_LENS_ORDER = (
+	"1. SECURITY & INPUT VALIDATION",
+	"2. CORRECTNESS & LOGIC",
+	"3. CONCURRENCY / RACES / IDEMPOTENCY",
+	"4. ERROR PATHS & EDGE CASES",
+	"5. PERFORMANCE & RESOURCE USE",
+	"6. INDEX-CONTRACT / DB RULES",
+	"7. NAMING / BACKWARD COMPATIBILITY",
+	"8. DOCS COVERAGE (DIATAXIS)",
+)
+DIATAXIS_ADVISORY_SENTINEL = (
+	"This lens is advisory only: use `SEVERITY: low` and normally `CLASSIFICATION: nice-to-have`."
+)
+DIATAXIS_GROUNDING_SENTINEL = (
+	"Use this lens only for user-visible behavior changes already grounded by reviewer evidence or the touched files"
+)
+DIATAXIS_CATEGORY_SENTINEL = (
+	"In `SUGGESTED_APPROACH` or `NOTES`, name only the specific Diataxis categories that still need updates: `Reference`, `How-to`, `Tutorial`, `Explanation`."
+)
+DIATAXIS_COMPLETE_SENTINEL = (
+	"If the relevant docs are already touched, omit the issue or say `Docs coverage: complete` in `NOTES` instead of fabricating a docs gap."
+)
+AGENTS_MD_MATERIALITY_BLOCK_SENTINEL = "=== BEGIN UNTRUSTED AGENTS MD MATERIALITY RESULT ==="
+AGENTS_MD_MATERIALITY_HIGH_SENTINEL = (
+	"may emit an `AGENTS.md materiality: ...` finding with `SEVERITY: high` by default"
+)
+AGENTS_MD_MATERIALITY_ADVISORY_SENTINEL = (
+	"downgrade that finding to advisory (`SEVERITY: low`, normally `CLASSIFICATION: nice-to-have`) or omit it"
+)
+AGENTS_MD_MATERIALITY_LENS_SENTINEL = (
+	"Keep the lens name exactly `NAMING / BACKWARD COMPATIBILITY`."
+)
 
 CONTRACT_NAMES = (
 	"mode-judge.yml",
@@ -192,6 +224,22 @@ def test_reference_backed_review_and_judge_prompts_render_shared_blocks() -> Non
 			assert "SEVERITY: BLOCKER | MAJOR | NIT" in proc.stdout
 
 
+def test_review_consolidator_renders_additive_diataxis_lens_contract() -> None:
+	proc = _run_render(PROMPTS_DIR / "review-consolidator.txt")
+	_assert_success(proc)
+	rendered = proc.stdout
+	positions = [rendered.index(lens) for lens in CONSOLIDATOR_LENS_ORDER]
+	assert positions == sorted(positions)
+	assert DIATAXIS_ADVISORY_SENTINEL in rendered
+	assert DIATAXIS_GROUNDING_SENTINEL in rendered
+	assert DIATAXIS_CATEGORY_SENTINEL in rendered
+	assert DIATAXIS_COMPLETE_SENTINEL in rendered
+	assert AGENTS_MD_MATERIALITY_BLOCK_SENTINEL in rendered
+	assert AGENTS_MD_MATERIALITY_HIGH_SENTINEL in rendered
+	assert AGENTS_MD_MATERIALITY_ADVISORY_SENTINEL in rendered
+	assert AGENTS_MD_MATERIALITY_LENS_SENTINEL in rendered
+
+
 def test_conflict_resolver_renders_required_values_and_optional_hints(
 ) -> None:
 	for resolver_hints in (
@@ -308,6 +356,7 @@ def main() -> int:
 	test_judge_prompts_render_under_current_contracts()
 	test_shell_wrapper_renders_review_blocked_judge_under_current_contracts()
 	test_reference_backed_review_and_judge_prompts_render_shared_blocks()
+	test_review_consolidator_renders_additive_diataxis_lens_contract()
 	test_conflict_resolver_renders_required_values_and_optional_hints()
 	test_integration_sync_conflict_resolver_renders_all_expected_values()
 	test_conflict_resolver_reports_missing_required_contract_violation()

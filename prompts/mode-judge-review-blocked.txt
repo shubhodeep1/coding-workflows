@@ -178,6 +178,9 @@ Autonomous decision-making: you are the decision-maker — there is no human in 
   `remaining_issues_summary`, `fix_description`, `new_issue.body`, or
   `followup_issue.body`, use explicit `SEVERITY: BLOCKER|MAJOR|NIT`
   labels instead of implicit wording.
+- When the review-blocked verdict diverges from the approved plan's stated
+  direction, you may include a grounded `lessons_learned` array for future
+  planners to treat as soft priors rather than hard requirements.
 
 {{REFERENCE_SEVERITY_CLASSIFICATION}}
 {{REFERENCE_OUTPUT_CONTRACT}}
@@ -198,6 +201,13 @@ Output contract:
         "symptom": "<brief grounded gap>"
       }
     ],
+    "lessons_learned": [
+      {
+        "lesson_kind": "unexpected_judge_verdict",
+        "lesson_text": "<grounded lesson for future runs>",
+        "tags": ["<file or subsystem tag>"]
+      }
+    ],
     "fix_description": "<if action=fix: precise description of files, line ranges, and changes for the downstream write-mode editor to apply. else: empty>",
     "new_issue": {
       "title": "<only if action=close_and_reissue>",
@@ -216,6 +226,10 @@ Output contract:
   grounded `remaining_issues[]` list is sufficient to scope a surgical follow-up.
 - remaining_issues: always include; use `[]` when you cannot ground file/line
   anchors. Never invent paths or line numbers.
+- lessons_learned: optional; omit this field or use `[]` when there is no
+  grounded plan-divergence lesson to carry forward. When present,
+  `lesson_kind` should be one of `out_of_plan_fix`,
+  `unexpected_judge_verdict`, or `review_finding_outside_plan_scope`.
 - fix_description: empty string unless action is fix.
 - Primary deliverable: this JSON object IS your output. Emit it before
   you exhaust your context window or tool-call budget. An empty

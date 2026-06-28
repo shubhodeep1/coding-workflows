@@ -89,10 +89,11 @@ name: Test & Mark Stable Release
           freezes every cached activity signal the loop watches. While the
           review run is in_progress and its current step has been running
           for less than this cap, the loop defers the inactivity-stall
-          check; a step that exceeds the cap still fails, preserving
-          stuck-run detection. Defaults to 50 minutes; set it explicitly
-          if you want a different per-step cap (for example, to match
-          `review_timeout`).
+          decision; once the step reaches this cap, the normal stall path
+          continues. Defaults to 50 minutes; set it explicitly if you want
+          a different per-step cap (for example, above `review_timeout`
+          when a long single step should extend the wait past the
+          inactivity window).
         required: false
         type: number
         default: 50
@@ -364,9 +365,9 @@ jobs:
       # was pinned at 52333b the whole time, and the run nonetheless completed
       # success ~6m after the poller gave up. While the run is in_progress and
       # its current step has been running for less than this cap, the loop
-      # treats the silence as a healthy long step and defers the stall check;
-      # a genuinely hung step still trips once it exceeds the cap, so
-      # stuck-run detection is preserved.
+      # treats the silence as a healthy long step and defers that inactivity
+      # stall decision; a genuinely hung step still falls through once the
+      # cap is exceeded, so stuck-run detection is preserved.
       REVIEW_STEP_TIMEOUT: ${{ inputs.review_step_timeout || inputs.review_timeout || inputs.phase_timeout || 50 }}
       POLL_INTERVAL: 10
       # Wrapper-workflow filename used by the smoke gate to dispatch
@@ -1326,6 +1327,9 @@ jobs:
           echo "Per-step stall cap: ${REVIEW_STEP_TIMEOUT} minutes"
           LAST_ACTIVITY=$(date +%s)
           PREV_STATE=""
+          LAST_STEP_GUARD_RUN_ID=""
+          LAST_STEP_GUARD_NAME=""
+          LAST_STEP_GUARD_STARTED_AT=""
           ELAPSED=0
           RATE_LIMIT_BACKOFF=0
           # Mutable pin tracking the head SHA the loop is currently polling
@@ -1697,17 +1701,35 @@ jobs:
             #    see the REVIEW_STEP_TIMEOUT guard below.
             CURRENT_STEP=""
             CURRENT_STEP_STARTED_AT=""
+            STEP_METADATA_FETCH_OK=0
             if [ "$RUN_ID" != "unknown" ]; then
               if [ -n "${JOBS_JSON:-}" ]; then
                 CURRENT_STEP=$(echo "$JOBS_JSON" | jq -r '[.jobs[].steps[] | select(.status == "in_progress")] | last | .name // ""' 2>/dev/null || echo "")
                 CURRENT_STEP_STARTED_AT=$(echo "$JOBS_JSON" | jq -r '[.jobs[].steps[] | select(.status == "in_progress")] | last | .started_at // ""' 2>/dev/null || echo "")
+                if [ -n "${CURRENT_STEP_STARTED_AT:-}" ]; then
+                  STEP_METADATA_FETCH_OK=1
+                fi
               else
                 JOBS_STEP_JSON=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs/${RUN_ID}/jobs?per_page=10" || echo "")
                 if [ -n "$JOBS_STEP_JSON" ]; then
                   CURRENT_STEP=$(echo "$JOBS_STEP_JSON" | jq -r '[.jobs[].steps[] | select(.status == "in_progress")] | last | .name // ""' 2>/dev/null || echo "")
                   CURRENT_STEP_STARTED_AT=$(echo "$JOBS_STEP_JSON" | jq -r '[.jobs[].steps[] | select(.status == "in_progress")] | last | .started_at // ""' 2>/dev/null || echo "")
+                  if [ -n "${CURRENT_STEP_STARTED_AT:-}" ]; then
+                    STEP_METADATA_FETCH_OK=1
+                  fi
                 fi
               fi
+            fi
+            if [ -n "${CURRENT_STEP_STARTED_AT:-}" ]; then
+              LAST_STEP_GUARD_RUN_ID="$RUN_ID"
+              LAST_STEP_GUARD_NAME="${CURRENT_STEP:-}"
+              LAST_STEP_GUARD_STARTED_AT="$CURRENT_STEP_STARTED_AT"
+            elif [ "${RUN_STATUS:-}" = "in_progress" ] && [ "$STEP_METADATA_FETCH_OK" != "1" ] && [ "${LAST_STEP_GUARD_RUN_ID:-}" = "$RUN_ID" ] && [ -n "${LAST_STEP_GUARD_STARTED_AT:-}" ] && { [ -z "${CURRENT_STEP:-}" ] || [ "${CURRENT_STEP}" = "${LAST_STEP_GUARD_NAME:-}" ]; }; then
+              CURRENT_STEP_STARTED_AT="$LAST_STEP_GUARD_STARTED_AT"
+              CURRENT_STEP="${CURRENT_STEP:-${LAST_STEP_GUARD_NAME:-}}"
+              echo "  ⚠ Jobs API returned no in-progress step timing for run ${RUN_ID}; reusing last-seen step metadata for this poll" >&2
+            elif [ "${RUN_STATUS:-}" = "in_progress" ] && [ "$STEP_METADATA_FETCH_OK" != "1" ]; then
+              echo "  ⚠ Jobs API returned no in-progress step timing for run ${RUN_ID}; per-step stall guard is unavailable this poll" >&2
             fi
 
             # 2) Commit count on PR branch — editor pushes trigger changes
@@ -1762,10 +1784,11 @@ jobs:
               # long healthy step (e.g. "Run reviewer models", which ran
               # 41m on v1.20.1 run 28282500673 with log_sz frozen at
               # 52333b) rather than a genuine stall. Defer the stall check
-              # and keep polling. A step that exceeds the cap falls through
-              # to the normal stall path below, so a truly-hung run still
-              # fails — just bounded by REVIEW_STEP_TIMEOUT instead of the
-              # global inactivity window.
+              # and keep polling. Once the step reaches the cap (or its
+              # timestamp cannot be trusted), execution falls through to the
+              # normal stall path below, so a truly-hung run still fails —
+              # just bounded by REVIEW_STEP_TIMEOUT instead of the global
+              # inactivity window.
               if [ "${RUN_STATUS:-}" = "in_progress" ] && [ -n "${CURRENT_STEP_STARTED_AT:-}" ]; then
                 STEP_STARTED_EPOCH=$(date -d "${CURRENT_STEP_STARTED_AT}" +%s 2>/dev/null || echo 0)
                 if [ "$STEP_STARTED_EPOCH" -gt 0 ]; then
@@ -1777,6 +1800,8 @@ jobs:
                     ELAPSED=$((ELAPSED + POLL_INTERVAL))
                     continue
                   fi
+                else
+                  echo "  ⚠ Could not parse in-progress step started_at='${CURRENT_STEP_STARTED_AT}' for run ${RUN_ID}; per-step stall guard is unavailable this poll" >&2
                 fi
               fi
               # jq's `last` on an empty array yields the literal string
@@ -3453,6 +3478,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mark_stable_release_tag_refspec_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_targeted_file_context.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_prompt_untrusted_context_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_security_audit_workflow_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_detect_editor_changes_lost.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_review_pipeline_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_editor_noop_cascade_contract.py
@@ -3482,6 +3508,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_scripts.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_memory_record_schema.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_foundation.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_assemble_prompt.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_core_modes.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_review_judge_modes.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_validate_analytics_modes.py

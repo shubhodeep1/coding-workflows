@@ -149,9 +149,11 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	# wrapper was extracted to a shared script (semble 0.1.3 ships no
 	# index/query CLI). The Python render-prompt backend also stays optional so
 	# shim-adopting branches bootstrap without breaking main-based callers.
+	assert "assemble_prompt.sh" in required_bootstrap_line
 	assert "render_prompt.py" not in required_bootstrap_line
 	assert 'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh render_prompt.py"' in stage_helper
 	assert 'check_required_file "${SUPPORT_SCRIPTS_DIR}/render_prompt.sh"' in preflight_block
+	assert 'check_required_file "${SUPPORT_SCRIPTS_DIR}/assemble_prompt.sh"' in preflight_block
 	assert 'check_soft_file "${SUPPORT_SCRIPTS_DIR}/render_prompt.py"' in preflight_block
 	assert "for f in setup_serena.sh serena_stats_emit.py mcp_handshake_probe.py; do" in stage_helper
 	assert 'Optional Serena support asset ${f} is unavailable in checked-out support sources; Serena bootstrap remains disabled.' in stage_helper

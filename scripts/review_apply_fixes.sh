@@ -45,6 +45,7 @@ fi
 
 CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
 WORKSPACE_SAFETY_CHECK_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/workspace_safety_check.sh"
+LESSONS_LEARNED_ENABLED="${LESSONS_LEARNED_ENABLED:-true}"
 
 run_editor_codex_attempt() {
   local prompt_file="$1"
@@ -107,6 +108,158 @@ PY
   if [ -n "${warn_line}" ]; then
     printf '%s\n' "${warn_line}"
   fi
+}
+
+lessons_learned_truthy() {
+  local normalized
+  normalized="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  case "${normalized}" in
+    1|true|yes|on)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+emit_lessons_learned_for_out_of_plan_fix() {
+  local current_diff_paths=""
+  local telemetry_json=""
+
+  if ! lessons_learned_truthy "${AI_MEMORY_ENABLED:-true}" || ! lessons_learned_truthy "${LESSONS_LEARNED_ENABLED:-true}"; then
+    return 0
+  fi
+  if [ ! -s "${PR_CHANGED_FILES_FILE:-}" ] || ! command -v python3 >/dev/null 2>&1; then
+    return 0
+  fi
+
+  current_diff_paths="$(git diff --name-only HEAD 2>/dev/null || true)"
+  [ -n "${current_diff_paths}" ] || return 0
+
+  telemetry_json="$(printf '%s\n' "${current_diff_paths}" | {
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}:${PWD}/scripts${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 - "${PWD}" "${PR_CHANGED_FILES_FILE}" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+from ai_memory_lib import persist_memory_operation, record_lessons_learned, resolve_memory_root_dir
+
+
+def safe_int(value: str | None) -> int | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = int(text)
+    except ValueError:
+        return None
+    return parsed if parsed > 0 else None
+
+
+def first_linked_issue_number() -> int | None:
+    for raw_payload, object_key in (
+        (os.environ.get("LINKED_ISSUES_JSON", "[]"), "number"),
+        (os.environ.get("LINKED_ISSUE_FALLBACK_NUMBERS_JSON", "[]"), None),
+    ):
+        try:
+            payload = json.loads(raw_payload)
+        except Exception:
+            payload = []
+        if not isinstance(payload, list) or not payload:
+            continue
+        first = payload[0]
+        if object_key is not None:
+            if not isinstance(first, dict):
+                continue
+            first = first.get(object_key)
+        if isinstance(first, int) and first > 0:
+            return first
+    return None
+
+
+def unique_paths(lines: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for raw_line in lines:
+        path = raw_line.strip()
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        ordered.append(path)
+    return ordered
+
+
+repo_root = Path(sys.argv[1]).resolve()
+baseline_file = Path(sys.argv[2])
+current_paths = unique_paths(sys.stdin.read().splitlines())
+baseline_paths = unique_paths(baseline_file.read_text(encoding="utf-8", errors="replace").splitlines())
+baseline_set = set(baseline_paths)
+extra_paths = [path for path in current_paths if path not in baseline_set]
+
+issue_number = first_linked_issue_number()
+pr_number = safe_int(os.environ.get("PR_NUMBER"))
+memory_branch = str(os.environ.get("AI_MEMORY_BRANCH", "ai-memory") or "ai-memory").strip() or "ai-memory"
+memory_root_relative = str(os.environ.get("AI_MEMORY_ROOT", "ai-memory") or "ai-memory").strip() or "ai-memory"
+push_retries = safe_int(os.environ.get("AI_MEMORY_PUSH_RETRIES")) or 8
+
+telemetry = {
+    "op": "write_lessons_learned",
+    "ok": True,
+    "phase": "review_autofix",
+    "source": "review_apply_fixes",
+    "issue_number": issue_number,
+    "pr_number": pr_number,
+    "count": 0,
+    "did_push": False,
+}
+
+if extra_paths:
+    lesson = {
+        "lesson_kind": "out_of_plan_fix",
+        "lesson_text": (
+            "Validated review autofix edited files outside the PR's prior changed-file set: "
+            + ", ".join(extra_paths)
+            + "."
+        ),
+        "tags": extra_paths,
+    }
+
+    def operation(clone_dir: Path) -> dict[str, object]:
+        memory_root = resolve_memory_root_dir(clone_dir, memory_root_relative)
+        records = record_lessons_learned(
+            memory_root,
+            issue_number=issue_number,
+            pr_number=pr_number,
+            phase="review_autofix",
+            lessons=[lesson],
+        )
+        return {"records": records}
+
+    result = persist_memory_operation(
+        repo_root,
+        memory_branch=memory_branch,
+        memory_root_relative=memory_root_relative,
+        push_retries=push_retries,
+        commit_message="ai-memory: record lessons learned [review_autofix apply]",
+        operation=operation,
+    )
+    records = (result.get("operation_result") or {}).get("records") or []
+    telemetry["count"] = len(records)
+    telemetry["did_push"] = bool(result.get("did_push", False))
+
+print(json.dumps(telemetry, ensure_ascii=True, sort_keys=True))
+PY
+  } 2>&1)" || {
+    echo "::warning::review_apply_fixes lessons-learned write failed; continuing fail-open" >&2
+    echo 'AI_MEMORY_TELEMETRY: {"count":0,"fail_open":true,"ok":false,"op":"write_lessons_learned","phase":"review_autofix","source":"review_apply_fixes"}' >&2
+    return 0
+  }
+
+  [ -n "${telemetry_json}" ] && printf 'AI_MEMORY_TELEMETRY: %s\n' "${telemetry_json}" >&2
 }
 
 # Filter workflow-generated Serena runtime artifacts from the editor
@@ -1892,6 +2045,7 @@ while [ "${attempt}" -le 3 ]; do
           rm -f "${attempt_prompt_file}"
           echo "Editor succeeded on attempt ${attempt}."
           emit_editor_substate "Succeeded" "${attempt}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err"
+          emit_lessons_learned_for_out_of_plan_fix
           # Diagnostic: capture working tree state at the very last moment
           # before this script exits.  Combined with checkpoints at the
           # start of the Commit step and just before the touched-file

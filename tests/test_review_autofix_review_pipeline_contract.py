@@ -899,6 +899,95 @@ def _run_reviewer_risk_tier_harness(
 		}
 
 
+def _run_review_tier_harness(
+	*,
+	diff_text: str,
+	current_changed_paths: list[str] | None = None,
+	raw_changed_paths: list[str] | None = None,
+	extra_env: dict[str, str] | None = None,
+) -> dict[str, str | list[str]]:
+	helper_block = _reviewer_risk_tier_helper_block()
+	with tempfile.TemporaryDirectory(prefix="review-tier-") as td:
+		tmp = Path(td)
+		files = {
+			"pr_diff": tmp / "pr_diff.patch",
+			"pr_changed": tmp / "pr_changed_files.txt",
+			"raw_pr_changed": tmp / "raw_pr_changed_files.txt",
+			"state": tmp / "review_tier_state.txt",
+			"review_tier": tmp / "review_tier.txt",
+			"active_models": tmp / "reviewer_active_models.txt",
+			"github_env": tmp / "github_env.txt",
+		}
+		files["pr_diff"].write_text(diff_text, encoding="utf-8")
+		visible_paths = current_changed_paths if current_changed_paths is not None else _diff_changed_paths(diff_text)
+		files["pr_changed"].write_text("\n".join(visible_paths) + ("\n" if visible_paths else ""), encoding="utf-8")
+		raw_paths = raw_changed_paths if raw_changed_paths is not None else visible_paths
+		files["raw_pr_changed"].write_text("\n".join(raw_paths) + ("\n" if raw_paths else ""), encoding="utf-8")
+		files["github_env"].write_text("", encoding="utf-8")
+
+		env = os.environ.copy()
+		env.update({
+			"SUPPORT_ROOT_DIR": str(REPO_ROOT),
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+			"RUNTIME_DIR": str(tmp),
+			"PR_NUMBER": "123",
+			"HAS_PR_DIFF": "true",
+			"REVIEW_TIER_RESOLVER_ENABLED": "true",
+			"REVIEW_TIER_LITE_MAX_LOC": "50",
+			"REVIEW_TIER_LITE_REVIEWER_SLUG": "qwen/qwen3.6-plus",
+			"REVIEW_TIER_STANDARD_MAX_LOC": "200",
+			"REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "minimax/minimax-m2.5,deepseek/deepseek-v4-pro,x-ai/grok-4.20",
+			"REVIEWER_MODELS": "\n".join(_workflow_reviewer_models()) + "\n",
+			"PR_DIFF_FILE": str(files["pr_diff"]),
+			"ORIGINAL_PR_DIFF_FILE": str(files["pr_diff"]),
+			"RAW_REVIEWER_PR_DIFF_FILE": str(files["pr_diff"]),
+			"RAW_REVIEWER_ORIGINAL_PR_DIFF_FILE": str(files["pr_diff"]),
+			"PR_CHANGED_FILES_FILE": str(files["pr_changed"]),
+			"RAW_REVIEWER_PR_CHANGED_FILES_FILE": str(files["raw_pr_changed"]),
+			"GITHUB_ENV": str(files["github_env"]),
+			"STATE_FILE": str(files["state"]),
+		})
+		if extra_env:
+			env.update(extra_env)
+
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				f"{helper_block}\n"
+				"classify_review_tier\n"
+				"{\n"
+				"\tprintf 'REVIEW_TIER=%s\\n' \"${REVIEW_TIER}\"\n"
+				"\tprintf 'REVIEW_TIER_REASON=%s\\n' \"${REVIEW_TIER_REASON}\"\n"
+				"\tprintf 'REVIEW_TIER_FORCED_FULL=%s\\n' \"${REVIEW_TIER_FORCED_FULL}\"\n"
+				"\tprintf 'REVIEW_TIER_LOC=%s\\n' \"${REVIEW_TIER_LOC}\"\n"
+				"\tprintf 'REVIEW_TIER_SCOPE=%s\\n' \"${REVIEW_TIER_SCOPE}\"\n"
+				"\tprintf 'REVIEW_TIER_ACTIVE_MODELS_SOURCE=%s\\n' \"${REVIEW_TIER_ACTIVE_MODELS_SOURCE}\"\n"
+				"} > \"${STATE_FILE}\"\n",
+			],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+		state: dict[str, str] = {}
+		for raw_line in files["state"].read_text(encoding="utf-8").splitlines():
+			if "=" not in raw_line:
+				continue
+			key, value = raw_line.split("=", 1)
+			state[key] = value
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			**state,
+			"review_tier_file": files["review_tier"].read_text(encoding="utf-8").strip(),
+			"active_models": files["active_models"].read_text(encoding="utf-8").splitlines(),
+			"github_env": files["github_env"].read_text(encoding="utf-8"),
+		}
+
+
 def _run_agents_md_materiality_harness(
 	*,
 	diff_text: str,
@@ -1455,6 +1544,12 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEW_LEDGER_PATH: ${{ vars.REVIEW_LEDGER_PATH || format('.ai/review_issue_ledger/pr-{0}.txt', inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number || '0') }}",
 		"REVIEW_REVIEWER_CHECKLIST_ENABLED: ${{ vars.REVIEW_REVIEWER_CHECKLIST_ENABLED || '1' }}",
 		"REVIEW_REVIEWER_ITERATION_SCOPING: ${{ vars.REVIEW_REVIEWER_ITERATION_SCOPING || '1' }}",
+		"FORCE_FULL_REVIEW_TIER: ${{ needs.gate.outputs.force_full_review_tier || 'false' }}",
+		"REVIEW_TIER_RESOLVER_ENABLED: ${{ vars.REVIEW_TIER_RESOLVER_ENABLED || 'false' }}",
+		"REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}",
+		"REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || 'qwen/qwen3.6-plus' }}",
+		"REVIEW_TIER_STANDARD_MAX_LOC: ${{ vars.REVIEW_TIER_STANDARD_MAX_LOC || '200' }}",
+		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m2.5,deepseek/deepseek-v4-pro,x-ai/grok-4.20' }}",
 		"REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}",
 		"REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}",
 		"REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}",
@@ -1474,10 +1569,12 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEWER_FILTER_UNINTERESTING_ENABLED: ${{ vars.REVIEWER_FILTER_UNINTERESTING_ENABLED || 'false' }}",
 		"REVIEWER_FILTER_EXTRA_GLOBS: ${{ vars.REVIEWER_FILTER_EXTRA_GLOBS || '' }}",
 		"REVIEWER_FILTER_EXEMPT_GLOBS: ${{ vars.REVIEWER_FILTER_EXEMPT_GLOBS || 'db/contracts/**,**/migrations/**,**/migrate/**' }}",
+		"SLOP_SCAN_ENABLED: ${{ vars.SLOP_SCAN_ENABLED || 'true' }}",
 		"AGENTS_MD_MATERIALITY_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_ENABLED || '1' }}",
 		"AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED || '0' }}",
 		"AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-5.4-mini' }}",
 		"AGENTS_MD_MATERIALITY_REASONING: ${{ vars.AGENTS_MD_MATERIALITY_REASONING || 'medium' }}",
+		"REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED: ${{ vars.REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED || 'true' }}",
 	):
 		assert expected in workflow, f"Missing codex-agent env wiring: {expected}"
 
@@ -1493,6 +1590,11 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 	assert "cost_audit.py" in required_bootstrap_line, required_bootstrap_line
 
 	for expected in (
+		"REVIEW_TIER_RESOLVER_ENABLED: ${{ vars.REVIEW_TIER_RESOLVER_ENABLED || 'false' }}",
+		"REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}",
+		"REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || 'qwen/qwen3.6-plus' }}",
+		"REVIEW_TIER_STANDARD_MAX_LOC: ${{ vars.REVIEW_TIER_STANDARD_MAX_LOC || '200' }}",
+		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m2.5,deepseek/deepseek-v4-pro,x-ai/grok-4.20' }}",
 		"REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}",
 		"REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}",
 		"REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}",
@@ -1509,6 +1611,7 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED || '0' }}",
 		"AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-5.4-mini' }}",
 		"AGENTS_MD_MATERIALITY_REASONING: ${{ vars.AGENTS_MD_MATERIALITY_REASONING || 'medium' }}",
+		"REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED: ${{ vars.REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED || 'true' }}",
 	):
 		assert workflow.count(expected) >= 2, f"Missing workflow-level + codex-agent env wiring: {expected}"
 
@@ -2381,6 +2484,37 @@ def test_review_consolidator_prompt_is_staged_for_review_runtime_support() -> No
 	assert 'rm -f "${SUPPORT_PROMPTS_DIR}/review-consolidator.txt"' in stage_helper
 
 
+def test_review_pipeline_slop_scan_wiring_is_flagged_fail_open_and_pre_commit_cleaned() -> None:
+	workflow = _workflow_text()
+	collect_block = _step_block("Collect local slop-scan findings")
+	cleanup_block = _step_block("Remove slop-scan runtime artifact")
+
+	assert 'echo "SLOP_SCAN_FINDINGS_FILE=${GITHUB_WORKSPACE}/.ai/slop_scan/findings.json"' in workflow
+	assert "continue-on-error: true" in collect_block
+	assert 'write_slop_scan_sentinel "disabled"' in collect_block
+	assert 'write_slop_scan_sentinel "scan_error"' in collect_block
+	assert '"${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/slop_scan_local.py"' in collect_block
+	assert '--output "${SLOP_SCAN_FINDINGS_FILE}"' in collect_block
+	assert 'if: always()' in cleanup_block
+	assert 'rm -f "${SLOP_SCAN_FINDINGS_FILE}"' in cleanup_block
+	assert 'rmdir "${expected_dir}"' in cleanup_block
+	assert workflow.index("- name: Remove slop-scan runtime artifact") < workflow.index("- name: Commit changes")
+
+
+def test_reviewer_and_consolidator_slop_scan_context_is_wired() -> None:
+	reviewers = _reviewers_text()
+	consolidate = _consolidate_text()
+	prompt_text = (REPO_ROOT / "prompts" / "review-consolidator.txt").read_text(encoding="utf-8")
+
+	assert 'SLOP_SCAN_FINDINGS_FILE="${SLOP_SCAN_FINDINGS_FILE:-${GITHUB_WORKSPACE:-$(pwd)}/.ai/slop_scan/findings.json}"' in reviewers
+	assert '=== BEGIN UNTRUSTED ${SLOP_SCAN_FINDINGS_FILE} (heuristic local slop-scan findings' in reviewers
+	assert 'SLOP_SCAN_FINDINGS_FILE="${SLOP_SCAN_FINDINGS_FILE:-${GITHUB_WORKSPACE:-$PWD}/.ai/slop_scan/findings.json}"' in consolidate
+	assert "'SLOP SCAN FINDINGS'" in consolidate
+	assert "=== BEGIN UNTRUSTED SLOP SCAN FINDINGS ===" in prompt_text
+	assert "best-effort cleanup helpers" in prompt_text
+	assert "catch-and-log boundaries" in prompt_text
+
+
 def test_review_filter_smoke_fixtures_are_present() -> None:
 	assert PHASE_A_ANTI_RULES_FIXTURE.exists(), f"missing fixture: {PHASE_A_ANTI_RULES_FIXTURE}"
 	assert PHASE_C_FILTER_FIXTURE.exists(), f"missing fixture: {PHASE_C_FILTER_FIXTURE}"
@@ -2414,6 +2548,123 @@ def test_reviewer_risk_tier_classifier_honours_thresholds_and_always_full_regex(
 
 	always_full_result = _run_reviewer_risk_tier_harness(diff_text=PHASE_B_RISK_TIER_ALWAYS_FULL_FIXTURE.read_text(encoding="utf-8"))
 	assert "matched_path=scripts/review_helper.sh" in always_full_result["stdout"]
+
+
+def test_review_tier_resolver_routes_lite_standard_and_full_and_handles_overrides() -> None:
+	reviewer_models = _workflow_reviewer_models()
+	lite_diff = textwrap.dedent(
+		"""\
+		diff --git a/README.md b/README.md
+		index 1111111..2222222 100644
+		--- a/README.md
+		+++ b/README.md
+		@@ -1 +1,2 @@
+		-old line
+		+new line
+		+second line
+		"""
+	)
+	standard_diff = textwrap.dedent(
+		"""\
+		diff --git a/scripts/review_helper.sh b/scripts/review_helper.sh
+		index 1111111..2222222 100644
+		--- a/scripts/review_helper.sh
+		+++ b/scripts/review_helper.sh
+		@@ -1 +1,3 @@
+		-echo old
+		+echo new
+		+echo newer
+		+echo newest
+		"""
+	)
+	workflow_diff = textwrap.dedent(
+		"""\
+		diff --git a/.github/workflows/review.yml b/.github/workflows/review.yml
+		index 1111111..2222222 100644
+		--- a/.github/workflows/review.yml
+		+++ b/.github/workflows/review.yml
+		@@ -1 +1,2 @@
+		-name: Old review
+		+name: New review
+		+run-name: Reviewer update
+		"""
+	)
+	full_diff = textwrap.dedent(
+		"""\
+		diff --git a/scripts/review_helper.sh b/scripts/review_helper.sh
+		index 1111111..2222222 100644
+		--- a/scripts/review_helper.sh
+		+++ b/scripts/review_helper.sh
+		@@ -1 +1,2 @@
+		-echo old
+		+echo new
+		+echo newer
+		diff --git a/tests/test_review_helper.py b/tests/test_review_helper.py
+		index 3333333..4444444 100644
+		--- a/tests/test_review_helper.py
+		+++ b/tests/test_review_helper.py
+		@@ -1 +1,2 @@
+		-old_test()
+		+new_test()
+		+more_test()
+		"""
+	)
+
+	lite_result = _run_review_tier_harness(diff_text=lite_diff)
+	assert lite_result["REVIEW_TIER"] == "lite"
+	assert lite_result["REVIEW_TIER_REASON"] == "doc_only_<=50_loc"
+	assert lite_result["review_tier_file"] == "lite"
+	assert lite_result["active_models"] == ["qwen/qwen3.6-plus"]
+	assert lite_result["REVIEW_TIER_FORCED_FULL"] == "false"
+	assert "REVIEW_CONSOLIDATOR_ENABLED=0\n" in lite_result["github_env"]
+	assert "REVIEW_TIER: tier=lite" in lite_result["stdout"]
+
+	standard_result = _run_review_tier_harness(diff_text=standard_diff)
+	assert standard_result["REVIEW_TIER"] == "standard"
+	assert standard_result["REVIEW_TIER_REASON"] == "code_<=200_loc_single_dir"
+	assert standard_result["REVIEW_TIER_SCOPE"] == "scripts/"
+	assert standard_result["review_tier_file"] == "standard"
+	assert standard_result["active_models"] == [
+		"minimax/minimax-m2.5",
+		"deepseek/deepseek-v4-pro",
+		"x-ai/grok-4.20",
+	]
+	assert "REVIEW_CONSOLIDATOR_ENABLED=0\n" not in standard_result["github_env"]
+
+	workflow_result = _run_review_tier_harness(diff_text=workflow_diff)
+	assert workflow_result["REVIEW_TIER"] == "standard"
+	assert workflow_result["REVIEW_TIER_SCOPE"] == ".github/workflows/"
+
+	full_result = _run_review_tier_harness(diff_text=full_diff)
+	assert full_result["REVIEW_TIER"] == "full"
+	assert full_result["REVIEW_TIER_REASON"] == "default"
+	assert full_result["review_tier_file"] == "full"
+	assert full_result["active_models"] == reviewer_models
+
+	force_full_result = _run_review_tier_harness(
+		diff_text=lite_diff,
+		extra_env={"FORCE_FULL_REVIEW_TIER": "true"},
+	)
+	assert force_full_result["REVIEW_TIER"] == "full"
+	assert force_full_result["REVIEW_TIER_REASON"] == "force_review_marker"
+	assert force_full_result["REVIEW_TIER_FORCED_FULL"] == "true"
+	assert force_full_result["active_models"] == reviewer_models
+
+	invalid_lite_result = _run_review_tier_harness(
+		diff_text=lite_diff,
+		extra_env={"REVIEW_TIER_LITE_REVIEWER_SLUG": "unknown/model"},
+	)
+	assert invalid_lite_result["REVIEW_TIER"] == "full"
+	assert invalid_lite_result["REVIEW_TIER_REASON"] == "invalid_lite_reviewer_slug"
+	assert invalid_lite_result["active_models"] == reviewer_models
+
+	invalid_standard_result = _run_review_tier_harness(
+		diff_text=standard_diff,
+		extra_env={"REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "unknown/model"},
+	)
+	assert invalid_standard_result["REVIEW_TIER"] == "full"
+	assert invalid_standard_result["REVIEW_TIER_REASON"] == "invalid_standard_reviewer_slugs"
+	assert invalid_standard_result["active_models"] == reviewer_models
 
 
 def test_review_filter_helper_wiring_is_flag_gated_and_fail_open() -> None:
@@ -2483,19 +2734,26 @@ def test_agents_md_materiality_classifier_and_workflow_wiring() -> None:
 
 	workflow = _workflow_text()
 	stage_helper = _stage_helper_text()
+	consolidate = _consolidate_text()
 	preflight_block = _step_block('"Preflight: Verify required files before reviewer invocation"')
 	reviewer_block = _step_block("Run reviewer models")
 	advisory_block = _step_block("Post AI Materiality Advisory comment")
 	gate_block = _step_block("Evaluate review gate")
+	prompt_text = (REPO_ROOT / "prompts" / "review-consolidator.txt").read_text(encoding="utf-8")
 
 	assert "AGENTS_MD_MATERIALITY_RESULT_FILE=${RUNTIME_DIR}/agents_md_materiality_result.json" in workflow
 	assert "AGENTS_MD_MATERIALITY_COMMENT_FILE=${RUNTIME_DIR}/agents_md_materiality_comment.md" in workflow
+	assert "REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED: ${{ vars.REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED || 'true' }}" in workflow
 	assert 'if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh" ]; then' in stage_helper
 	assert 'src=".codex-workflow-src/scripts/review_agents_md_materiality.sh"' in stage_helper
 	assert 'src=".codex-workflow-src-main/scripts/review_agents_md_materiality.sh"' in stage_helper
 	assert 'install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh"' in stage_helper
 	assert 'review_agents_md_materiality.sh not found in checked-out support sources' in stage_helper
 	assert 'check_soft_file "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh"' in preflight_block
+	assert 'REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED="${REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED:-true}"' in consolidate
+	assert 'AGENTS_MD_MATERIALITY_RESULT_FILE="${AGENTS_MD_MATERIALITY_RESULT_FILE:-${RUNTIME_DIR}/agents_md_materiality_result.json}"' in consolidate
+	assert 'if is_truthy "${REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED}" && [ -s "${AGENTS_MD_MATERIALITY_RESULT_FILE}" ]; then' in consolidate
+	assert "'AGENTS MD MATERIALITY RESULT'" in consolidate
 	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh" &' in reviewer_block
 	assert 'materiality_pid="$!"' in reviewer_block
 	assert 'AGENTS_MD_MATERIALITY_ENABLED:-0' in reviewer_block
@@ -2507,6 +2765,8 @@ def test_agents_md_materiality_classifier_and_workflow_wiring() -> None:
 	assert 'AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=agents_md_materiality' in gate_block
 	assert 'AGENTS_MD_MATERIALITY_ENABLED:-0' in gate_block
 	assert 'PR_FILES_JSON="${pr_files_json}" python3 - <<\'PY\'' in gate_block
+	assert "=== BEGIN UNTRUSTED AGENTS MD MATERIALITY RESULT ===" in prompt_text
+	assert "SEVERITY: high` by default" in prompt_text
 
 
 def test_reviewer_failback_wiring_stages_asset_and_restores_cache_before_reviewers() -> None:
@@ -3212,6 +3472,19 @@ def test_gate_emits_head_ref_output_for_forward_merge_suppressor_reuse() -> None
 	assert "post_merge_pr_text_json: ${{ steps.evaluate.outputs.post_merge_pr_text_json }}" in wf, (
 		"Gate job must expose cached PR title/body for the post-merge validation dispatch"
 	)
+
+
+def test_gate_emits_force_full_review_tier_output_for_phase_i_resolver() -> None:
+	wf = _workflow_text()
+	assert "force_full_review_tier: ${{ steps.evaluate.outputs.force_full_review_tier }}" in wf, (
+		"Gate job must expose the force-full review-tier signal for downstream reviewer routing"
+	)
+	assert 'echo "force_full_review_tier=${FORCE_FULL_REVIEW_TIER}"' in wf, (
+		"Gate evaluate step must emit the force-full review-tier signal to GITHUB_OUTPUT"
+	)
+	assert "FORCE_FULL_REVIEW_TIER: ${{ needs.gate.outputs.force_full_review_tier || 'false' }}" in wf, (
+		"codex-agent must consume the gate's force-full review-tier output"
+	)
 	assert "post_merge_linked_issues_json: ${{ steps.evaluate.outputs.post_merge_linked_issues_json }}" in wf, (
 		"Gate job must expose cached linked-issue labels for the post-merge validation dispatch"
 	)
@@ -3482,10 +3755,14 @@ def main() -> int:
 	test_reject_verifier_bootstrap_and_stage_order_contract()
 	test_support_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
 	test_review_pipeline_summary_step_is_local_only_and_grep_friendly()
+	test_review_pipeline_slop_scan_wiring_is_flagged_fail_open_and_pre_commit_cleaned()
+	test_reviewer_and_consolidator_slop_scan_context_is_wired()
+	test_review_tier_resolver_routes_lite_standard_and_full_and_handles_overrides()
 	test_auto_merge_guard_honours_configured_orchestrator_branch_pattern()
 	test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_codex_agent_path()
 	test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_deterministic_skip_path()
 	test_gate_emits_head_ref_output_for_forward_merge_suppressor_reuse()
+	test_gate_emits_force_full_review_tier_output_for_phase_i_resolver()
 	test_reviewer_prompt_output_rules_still_forbid_scripts()
 	test_reviewer_iteration_scope_first_iteration_keeps_full_diff_context()
 	test_reviewer_iteration_scope_valid_artifacts_narrow_to_last_run_and_actionable_ledger_files()
