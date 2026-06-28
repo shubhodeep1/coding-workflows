@@ -190,11 +190,14 @@ case "${PARENT_ISSUE}" in
 esac
 
 if [ -n "${PARENT_ISSUE}" ]; then
-	if PARENT_BODY="$(_safe_gh_jq "repos/${REPO}/issues/${PARENT_ISSUE}" --jq '.body // ""' 2>/dev/null)"; then
-		:
-	else
-		log "warn parent_body_fetch_failed issue=${PARENT_ISSUE}"
-		PARENT_BODY=""
+	PARENT_ISSUE_JSON_FILE="${RUNTIME_DIR}/parent_issue_${PARENT_ISSUE}.json"
+	if ! gh_api_json_to_file "${PARENT_ISSUE_JSON_FILE}" gh api "repos/${REPO}/issues/${PARENT_ISSUE}"; then
+		log "error parent_body_fetch_failed issue=${PARENT_ISSUE}"
+		exit 1
+	fi
+	if ! PARENT_BODY="$(jq -r '.body // ""' "${PARENT_ISSUE_JSON_FILE}" 2>/dev/null)"; then
+		log "error parent_body_parse_failed issue=${PARENT_ISSUE}"
+		exit 1
 	fi
 	PGEN="$(printf '%s' "${PARENT_BODY}" | sed -n "s/.*${MARKER_PREFIX}gen=\([0-9]\{1,\}\).*/\1/p" | head -1)"
 	PROOT="$(printf '%s' "${PARENT_BODY}" | sed -n "s/.*${MARKER_PREFIX}root=\([0-9a-f]\{64\}\).*/\1/p" | head -1)"

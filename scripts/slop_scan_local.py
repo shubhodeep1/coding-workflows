@@ -422,13 +422,15 @@ def collect_scan_result(
 			suppressed_findings.extend(block_suppressed)
 			errors.extend(block_errors)
 
-	sort_key = lambda finding: (finding["path"], finding["line"], finding["rule_id"])
+	def finding_sort_key(finding: dict[str, Any]) -> tuple[str, int, str]:
+		return (finding["path"], finding["line"], finding["rule_id"])
+
 	result: dict[str, Any] = {
 		"schema_version": 1,
 		"collection_status": "ok",
 		"scanned_files": sorted(scanned_files),
-		"findings": sorted(findings, key=sort_key),
-		"suppressed_findings": sorted(suppressed_findings, key=sort_key),
+		"findings": sorted(findings, key=finding_sort_key),
+		"suppressed_findings": sorted(suppressed_findings, key=finding_sort_key),
 	}
 	if errors:
 		result["errors"] = sorted(
