@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.9,
+  "details": "Multiple merged runs touched workflow YAMLs, prompt templates, and the render/validation helpers together, with tests added or updated to lock the expected output contract. This matters whenever a change can affect how AI tasks are invoked, parsed, or judged, because breakage often shows up at the boundaries rather than in the core logic.",
+  "fingerprint": "1cc7baaebfa95019e4ec36ee69afe4cf6b8df58e38906844953c038d9181daf9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "28312223219",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "28312223219",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/3535",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3537",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3540",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3542",
+      "https://github.com/shubhodeep1/coding-workflows/issues/3552",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3536",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3538",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3541",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3543",
+      "https://github.com/shubhodeep1/coding-workflows/pull/3553"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20260628051322_b428dff962",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow changes in this repo should be guarded by contract tests that pin the prompt/runner interface, especially when altering orchestration or judge modes.",
+  "timestamps": {
+    "created_at": "2026-06-28T05:13:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
