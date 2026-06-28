@@ -1,10 +1,10 @@
-Given a reference to a **completed** project in `$ARGUMENTS` — a GitHub issue (number / URL), a PR, a plan doc, or a clearly-named feature — walk me through **deploying it and making it active** in this repo (`shubhodeep1/coding-workflows`), **one step at a time**, starting from a **fresh MacBook with no GitHub repos synced**. This is the action companion to `/verify-activation`: that command only diagnoses (LIVE / DORMANT / INCOMPLETE); this one drives a DORMANT-but-complete project all the way to LIVE. Interactive by contract: emit **exactly one step**, then **stop and wait** for me to paste the command output (or say `done` / `next`) before emitting the next step. The deploy commands run on **my** machine — you guide, I execute and paste back; never run the mutating deploy steps yourself. `$ARGUMENTS` should contain at least one concrete reference (`#1234`, an issue/PR URL, a plan path, or a clearly-named feature).
+Given a reference to a **completed** project in `$ARGUMENTS` — a GitHub issue (number / URL), a PR, a plan doc, or a clearly-named feature — walk me through **deploying it and making it active** in this repo (`shubhodeep1/coding-workflows`), **one step at a time**, starting from a **fresh MacBook with no GitHub repos synced**. This is the action companion to `/verify-activation`: that command only diagnoses (LIVE / DORMANT / INCOMPLETE); this one drives a DORMANT-but-complete project all the way to LIVE. Interactive by contract: emit **exactly one step**, then **stop and wait** for me to paste the command output (or say `done` / `next`) before emitting the next step. The deploy commands run on **my** machine — you guide, I execute and paste back; never run the mutating deploy steps yourself. `$ARGUMENTS` should contain at least one concrete reference (`#1234`, an issue/PR URL, a plan path, or a clearly-named feature). **Resumable across sessions:** progress is persisted to a per-project activation log in the repo (`docs/deploy-activation/<ref-slug>.md`). Before emitting any step you **read that log first** and resume from the first not-yet-done step; after each completed step you update and push the log, so a fresh session — new machine, re-cloned container, or a later day — picks up exactly where the last one stopped instead of restarting the runbook. See [Activation Log](#activation-log).
 
 $ARGUMENTS
 
 ## Procedure
 
-1. **Parse `$ARGUMENTS`.** Extract the issue number / URL, PR refs, plan-doc path, or feature name. If there is no concrete reference — just vague prose — stop and ask for one. Restate the parsed reference in the opening summary.
+1. **Parse `$ARGUMENTS`, then load the activation log.** Extract the issue number / URL, PR refs, plan-doc path, or feature name. If there is no concrete reference — just vague prose — stop and ask for one. Restate the parsed reference in the opening summary. Then **read the activation log first** (see [Activation Log](#activation-log)): compute the log path from the reference and read `docs/deploy-activation/<ref-slug>.md`. If a log exists, it is the source of truth for progress — resume from the first step not marked `[x]`, skip the steps already done (and say so), and if it shows `Status: LIVE` report LIVE and stop. If I instead paste a plain statement of which steps are completed / remaining, reconcile that into the log before resuming. If no log exists, you will create one when you emit Step 1.
 
 2. **Build the full deploy plan internally, before emitting Step 1.** Do all the read-only analysis up front so the runbook is stable; only the *delivery* is one-at-a-time.
 
@@ -35,14 +35,50 @@ This is the load-bearing behavior — honor it strictly:
 
 - **One step per turn.** Emit a single step, then **end the turn**. Never include Step k+1 in the same message as Step k. Each step states: a short title; the **exact** command(s) to paste into a Mac terminal; what **success** looks like; and the literal ask — *"paste the output (or say `done`) and I'll give you the next step."*
 - **Wait, then react to the pasted output.** On my reply, read what I pasted. If it shows success → advance to the next step. If it shows an **error or unexpected state** → do **not** advance; diagnose and emit a **corrective step** (still one at a time). If I say `done` with no output, trust me, but where a cheap read-only check settles it, verify before moving on.
-- **Track progress visibly.** Each turn, show a compact checklist of the runbook (done ✓ / current ▶ / remaining) so I always see where we are, e.g. `Step 4 of ~9`. The count may grow if a step fails and needs a fix-up — say so.
+- **Track progress visibly, and persist it.** Each turn, show a compact checklist of the runbook (done ✓ / current ▶ / remaining) so I always see where we are, e.g. `Step 4 of ~9`. The count may grow if a step fails and needs a fix-up — say so. The same checklist is mirrored into the activation log: after each step is confirmed, mark it `[x]` in `docs/deploy-activation/<ref-slug>.md`, then **commit and push the log** so the next session can resume (see [Activation Log](#activation-log)).
 - **Adapt to reality.** If pasted output proves a gate is already satisfied (var already `1`, PR already merged, secret already present), **skip** that step and say why.
 - **Never bundle, never auto-execute.** Do not merge steps to "save time," and do not run the mutating deploy commands yourself — they run on my machine. Read-only verification commands against your own checkout (or `mcp__github__*` / `gh ... --json` reads) are fine.
 - **Stop conditions.** STOP and ask in Q/A format if a step needs a decision with material tradeoffs, would rename/remove a §6 identifier, or is otherwise ambiguous. STOP and report if the project turns out to be incomplete mid-run.
 
+## Activation Log
+
+This command is **resumable**. Progress for each project is persisted to a per-project log committed in the repo, so a fresh session — new machine, re-cloned container, or just a later day — picks up at the exact next step instead of restarting the runbook.
+
+- **Path.** `docs/deploy-activation/<ref-slug>.md`, one file per project. Derive `<ref-slug>` deterministically from the parsed reference so the same project always maps to the same file:
+  - issue → `issue-<N>`  ·  PR → `pr-<N>`  ·  plan doc → `plan-<basename-without-extension>`  ·  bare feature name → `feature-<kebab-case>`.
+  - If `$ARGUMENTS` carries more than one reference, key the slug off the primary one in this priority: issue → PR → plan doc → feature name, and record the secondary references inside the file.
+- **Read first (mandatory).** Before emitting any step, read this file. If it exists it is the source of truth for what is done: resume from the first step not marked `[x]`, skip the `[x]` steps (say that you are skipping them), and if `Status: LIVE` just report LIVE and stop. If it does not exist, create it when you emit Step 1.
+- **Accept a pasted progress statement.** If I paste a list of steps already completed / still remaining (rather than raw command output), reconcile it into the log — mark the named steps `[x]`, leave the rest open — and resume from the first open step.
+- **Update after every step.** When a step's pasted output (or a `done`) confirms success, mark it `[x]` with a one-line evidence note and the date, mark the next step current, refresh `Last updated` and `Last note`, then **commit and push the log** (below). On full completion set `Status: LIVE`; if a step is blocked, set `Status: BLOCKED` and record why in `Last note`.
+- **Persistence (commit & push).** The log only helps a future session if it survives this container, so writing the file is not enough — commit it and `git push` to the working branch. This is the command's own bookkeeping, **not** a mutating deploy step, so it is fine to run yourself: it never touches `shubhodeep1/coding-workflows` settings, secrets, vars, merges, or release tags. Use the date from the session context for timestamps.
+
+**Log file format:**
+
+```
+# Deploy-Activation Log — <project in one phrase>
+
+- Reference: <#1234 / URL / plan path / feature>   (+ any secondary refs)
+- Deploy target: shubhodeep1/coding-workflows
+- How it runs: <cron «expr» from default branch | push | pull_request | repository_dispatch | supervisor>
+- Status: IN_PROGRESS | BLOCKED | LIVE
+- Last updated: <YYYY-MM-DD>
+- Last note: <one line — where the last session stopped / why blocked>
+
+## Runbook
+1. [x] Prereqs: Homebrew, git, gh, auth, clone + checkout   — done <YYYY-MM-DD>: <evidence>
+2. [x] Set repo-var X=1 (read at file:line, default 0)      — done <YYYY-MM-DD>: var now 1
+3. [ ] Merge PR #N to main (cron needs default branch)
+4. [ ] Verify LIVE
+
+## Notes
+- <free-form: errors hit, steps skipped because already-satisfied and why, decisions made>
+```
+
 ## Output Format
 
 **Opening message (plan preview, then Step 1):**
+
+When resuming from an existing log, the checklist below shows the already-done steps as `[x]` (carried over from the log), say "Resuming from Step k per `docs/deploy-activation/<ref-slug>.md`", and emit the first not-yet-done step instead of Step 1.
 
 ```
 Summary: <parsed reference; project in one phrase; deploy target: shubhodeep1/coding-workflows>
@@ -84,6 +120,7 @@ The deploy is executed by **me** on my Mac; your tools are for building and adap
 
 ## Rules
 
+- **Read the log first, always.** Never emit Step 1 before reading `docs/deploy-activation/<ref-slug>.md` for the parsed reference. If it exists, resume from the first not-done step; if it shows `Status: LIVE`, report LIVE and stop. After every confirmed step, update the log and `git push` it so the next session resumes correctly (see [Activation Log](#activation-log)).
 - **One step, then wait — always.** The whole value of this command is the paced, paste-driven loop. Emitting multiple steps at once, or racing ahead before I confirm, breaks it.
 - **You guide; I execute.** Never run the mutating deploy commands (`gh variable set`, `gh secret set`, merge, tag, dispatch) yourself — they run on my machine and I paste the result. Read-only inspection on your side is encouraged to keep the next step accurate.
 - **Completed projects only.** If the project is not fully implemented / merge-ready, stop and route me to `/implement-plan-claude` or `/implement-plan-ai` (Procedure 2b) — do not improvise a deploy for incomplete code.
