@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Workflow changes in this repo should be guarded by contract tests that pin the prompt/runner interface, especially when altering orchestration or judge modes.",
   "timestamps": {
     "created_at": "2026-06-28T05:13:22Z",
