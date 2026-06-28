@@ -1,6 +1,3 @@
-status: BROKEN_BY_E2E_BAIT_28311883052
-run_id: WRONG_VALUE_SHOULD_BE_28311883052
-updated-by: e2e-bait-injector
-extra: this line violates the issue spec
-also: another line that must be removed
-# E2E_EDITOR_BAIT_28311883052: canary corrupted; restore to linked issue spec (smoke gate)
+status: ok
+run_id: 28311883052
+updated-by: ai-pipeline
