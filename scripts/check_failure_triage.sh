@@ -210,8 +210,9 @@ if [ -n "${PARENT_ISSUE}" ]; then
 		GEN=$((PGEN + 1))
 		[ -n "${PROOT}" ] && ROOT="${PROOT}"
 		log "lineage parent_issue=${PARENT_ISSUE} parent_gen=${PGEN} gen=${GEN} root=${ROOT}"
-	elif [ -n "${PGEN}" ]; then
-		log "warn malformed_parent_generation parent_issue=${PARENT_ISSUE} raw=${PGEN}"
+	else
+		log "error parent_generation_missing_or_malformed issue=${PARENT_ISSUE}"
+		exit 1
 	fi
 fi
 

@@ -73,7 +73,8 @@ jobs:
     # and only for genuine failure conclusions on a real PR. The job is skipped
     # (no checkout / no codex install) when disabled. always() preserves the
     # triage run if the hash-only dependency fails transiently; the
-    # concurrency key then falls back to the check-run id.
+    # concurrency key then falls back to the check-run id, then the raw check
+    # name for direct callers that omit check_run_id.
     if: >-
       always() &&
       vars.CHECK_FAILURE_TRIAGE_ENABLED == 'true' &&
@@ -89,7 +90,7 @@ jobs:
       # cancel-in-progress: false means a check that is already being triaged
       # keeps its run; a second event queues and then no-ops via the
       # open-issue dedup in the script.
-      group: ai-check-triage-${{ github.repository }}-${{ inputs.pr_number }}-${{ needs.derive_check_name_key.outputs.check_name_key || inputs.check_run_id || github.run_id }}
+      group: ai-check-triage-${{ github.repository }}-${{ inputs.pr_number }}-${{ needs.derive_check_name_key.outputs.check_name_key || inputs.check_run_id || inputs.check_name || github.run_id }}
       cancel-in-progress: false
     env:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
