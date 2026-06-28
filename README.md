@@ -1150,11 +1150,6 @@ the way to a fix PR without human action.
 | `CODEX_HEARTBEAT_ENABLED` | `1` | Enable the `codex_heartbeat.sh` wrapper on long-running review / validate Codex calls. |
 | `CODEX_HEARTBEAT_INTERVAL_SECS` | `30` | Silence interval (seconds) between emitted `CODEX_HEARTBEAT` lines. |
 | `MEMORY_LEARNINGS_EXTRACT_ENABLED` | `true` | Enable the fail-open merged-run `repo_learnings` extraction step before memory compaction |
-| `CHECK_FAILURE_TRIAGE_ENABLED` | `false` | Opt-in switch for the check-failure triage workflow. When `true`, a failing PR check is analysed by the diagnosis model, which opens an `ai:check-triage` issue for the pipeline to fix. Off by default. |
-| `CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH` | `3` | Max auto-fix generations in a single failure lineage before the chain is escalated (`ai:check-triage-escalated` + Telegram) instead of opening another issue. |
-| `WORKFLOW_CHECK_TRIAGE_MODEL` | `WORKFLOW_EDITOR_MODEL` (`openai/gpt-5.4`) | Diagnosis model for check-failure triage. |
-| `THINKING_LEVEL_CHECK_TRIAGE` | `xhigh` | Reasoning effort for the check-failure triage diagnosis call. |
-| `VERBOSITY_CHECK_TRIAGE` | `low` | Codex verbosity for the check-failure triage diagnosis call. |
 | `SLOP_SCAN_ENABLED` | `true` | Run the fail-open local slop-scan preflight in `review_autofix.yml` for PR-changed `scripts/*.py`, `scripts/*.sh`, and `validation/**/*.sh` Python heredocs. Findings are written to `${GITHUB_WORKSPACE}/.ai/slop_scan/findings.json` and passed to reviewer + consolidator prompts as advisory heuristic context only; scan failures or disabled runs write a sentinel artifact and never block review. |
 | `SECURITY_AUDIT_ENABLED` | `false` | Opt-in gate for the weekly/manual `security-audit.yml` workflow; when enabled it posts surviving default-branch security findings to a stable tracker issue and opens bounded follow-ups |
 | `SECURITY_AUDIT_CRON` | `0 8 * * 0` | Documentation-only mirror of the literal weekly `security-audit.yml` schedule; GitHub Actions schedules cannot read repo vars, so keep this row aligned manually |
@@ -1162,6 +1157,11 @@ the way to a fix PR without human action.
 | `SECURITY_AUDIT_FP_EXCLUSIONS` | `scripts/security_audit_fp_exclusions.json` | Editable JSON catalog of false-positive suppression rules for the security audit |
 | `REVIEW_DIATAXIS_LENS_ENABLED` | `true` | Documentation-only contract row for the advisory `DOCS COVERAGE (DIATAXIS)` consolidator lens. Current branch behavior is prompt-defined only (no separate workflow toggle yet): keep it `low` severity and name only still-missing `Reference` / `How-to` / `Tutorial` / `Explanation` updates. |
 | `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED` | `true` | Enable the consolidator-side companion `AGENTS.md` materiality finding. Unlike `AGENTS_MD_MATERIALITY_ENABLED`, which controls the separate advisory comment helper, this flag only controls whether `review_consolidate.sh` passes the helper JSON into Lens 7 (`NAMING / BACKWARD COMPATIBILITY`). |
+| `CHECK_FAILURE_TRIAGE_ENABLED` | `false` | Opt-in switch for the check-failure triage workflow. When `true`, a failing PR check is analysed by the diagnosis model, which opens an `ai:check-triage` issue for the pipeline to fix. Off by default. |
+| `CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH` | `3` | Max auto-fix generations in a single failure lineage before the chain is escalated (`ai:check-triage-escalated` + Telegram) instead of opening another issue. |
+| `WORKFLOW_CHECK_TRIAGE_MODEL` | `WORKFLOW_EDITOR_MODEL` (`openai/gpt-5.4`) | Diagnosis model for check-failure triage. |
+| `THINKING_LEVEL_CHECK_TRIAGE` | `xhigh` | Reasoning effort for the check-failure triage diagnosis call. |
+| `VERBOSITY_CHECK_TRIAGE` | `low` | Codex verbosity for the check-failure triage diagnosis call. |
 
 ## Semantic Cache (Clarification Only)
 
