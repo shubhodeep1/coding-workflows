@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Keep prompt templates, workflow definitions, and README/agents docs aligned; these files evolve together to preserve behavior and operator expectations.",
   "timestamps": {
     "created_at": "2026-06-28T05:15:24Z",
